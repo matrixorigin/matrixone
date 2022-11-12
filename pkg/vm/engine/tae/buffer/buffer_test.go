@@ -17,8 +17,8 @@ package buffer
 import (
 	"testing"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -52,7 +52,7 @@ func newTestNodeHandle(mgr *nodeManager, id common.ID, size uint64, t *testing.T
 }
 
 func TestHandle(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	maxsize := uint64(100)
 	evicter := NewSimpleEvictHolder()
 	mgr := NewNodeManager(maxsize, evicter)

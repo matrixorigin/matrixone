@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -36,7 +35,7 @@ import (
 )
 
 func TestTables1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -99,7 +98,7 @@ func TestTables1(t *testing.T) {
 }
 
 func TestTxn1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -185,7 +184,7 @@ func TestTxn1(t *testing.T) {
 }
 
 func TestTxn2(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -209,7 +208,7 @@ func TestTxn2(t *testing.T) {
 }
 
 func TestTxn4(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -236,7 +235,7 @@ func TestTxn4(t *testing.T) {
 }
 
 func TestTxn5(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -307,7 +306,7 @@ func TestTxn5(t *testing.T) {
 }
 
 func TestTxn6(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -425,7 +424,7 @@ func TestTxn6(t *testing.T) {
 }
 
 func TestMergeBlocks1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
 	db := initDB(t, opts)
@@ -529,7 +528,7 @@ func TestMergeBlocks1(t *testing.T) {
 }
 
 func TestMergeBlocks2(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -576,7 +575,7 @@ func TestMergeBlocks2(t *testing.T) {
 }
 
 func TestCompaction1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -636,7 +635,7 @@ func TestCompaction1(t *testing.T) {
 }
 
 func TestCompaction2(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	db := initDB(t, opts)
@@ -694,7 +693,7 @@ func TestCompaction2(t *testing.T) {
 // TestCompaction3 is a case for testing block refcount,
 // which requires modification of the data block to test.
 /*func TestCompaction3(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	db := initDB(t, opts)

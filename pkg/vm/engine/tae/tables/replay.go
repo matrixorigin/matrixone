@@ -46,6 +46,7 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 	}
 	return blk.replayImmutIndex()
 }
+
 func (blk *dataBlock) ReplayImmutIndex() (err error) {
 	blk.mvcc.Lock()
 	defer blk.mvcc.Unlock()
@@ -54,6 +55,7 @@ func (blk *dataBlock) ReplayImmutIndex() (err error) {
 			return
 		}
 	}
+	blk.dataFlushed = true
 	return blk.replayImmutIndex()
 }
 
