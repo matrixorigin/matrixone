@@ -129,10 +129,6 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		}), nil
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
-		if vec.Typ.Oid == types.T_any {
-			return vec, nil
-		}
-		// it's bug, why vec is a T_any, but the expr's type is int32
 		if vec.IsScalarNull() {
 			vec.Typ = types.T(expr.Typ.GetId()).ToType()
 		}

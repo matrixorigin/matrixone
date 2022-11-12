@@ -63,6 +63,10 @@ type Vector struct {
 	idx any
 }
 
+func (v *Vector) IsEmptpData() bool {
+	return v.data == nil
+}
+
 func (v *Vector) SetIsBin(isBin bool) {
 	v.isBin = isBin
 }

@@ -97,7 +97,17 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 	ctr.n = len(bat.Vecs)
 	ctr.poses = ctr.poses[:0]
 	for _, f := range ap.Fs {
+		// notice that, if order by col+1,and col is T_any,it
+		// may result the type of the corresponding vector change.
+		// But we can see whether the 'data' of vector is nil,
+		// then distinguish it's an origin T_any type.
+		// Because for evalExpr(T_any), the result should be also T_any,
+		// But In fact it's not so, very strange
 		vec, err := colexec.EvalExpr(bat, proc, f.Expr)
+		// reset it back to T_any
+		if len(bat.Zs) != 0 && vec.IsEmptpData() {
+			vec.Typ.Oid = types.T_any
+		}
 		if err != nil {
 			return err
 		}
