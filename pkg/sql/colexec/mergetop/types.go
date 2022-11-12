@@ -18,17 +18,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type container struct {
-	n     int // result vector number
-	sels  []int64
-	poses []int32           // sorted list of attributes
-	cmps  []compare.Compare // compare structure used to do sort work
-
-	bat *batch.Batch // bat stores the final result of merge-top
+	n             int // result vector number
+	sels          []int64
+	poses         []int32             // sorted list of attributes
+	cmps          []compare.Compare   // compare structure used to do sort work
+	NullIdxs      map[uint32]struct{} // records which attr type is T_any
+	finishNullIdx bool                // flag to tell the NullIdxs has been filled
+	tempVecs      []*vector.Vector
+	bat           *batch.Batch // bat stores the final result of merge-top
 }
 
 type Argument struct {
@@ -54,6 +57,11 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 
 func (ctr *container) compare(vi, vj int, i, j int64) int {
 	for _, pos := range ctr.poses {
+		// for order by cols, if there is a T_any type in cols,
+		// we won't init a compare
+		if ctr.cmps[pos] == nil {
+			continue
+		}
 		if r := ctr.cmps[pos].Compare(vi, vj, i, j); r != 0 {
 			return r
 		}
@@ -82,4 +90,42 @@ func (ctr *container) Pop() interface{} {
 	x := ctr.sels[n]
 	ctr.sels = ctr.sels[:n]
 	return x
+}
+
+func (ctr *container) SplitTAny() {
+	if ctr.bat == nil {
+		return
+	}
+	for i := range ctr.NullIdxs {
+		ctr.tempVecs = append(ctr.tempVecs, ctr.bat.Vecs[i])
+	}
+	tempVecs := ctr.bat.Vecs
+	ctr.bat.Vecs = nil
+	for i := 0; i < len(tempVecs); i++ {
+		if _, ok := ctr.NullIdxs[uint32(i)]; !ok {
+			ctr.bat.Vecs = append(ctr.bat.Vecs, tempVecs[i])
+		}
+	}
+}
+
+func (ctr *container) Reset() {
+	defer func() {
+		ctr.tempVecs = nil
+	}()
+	if ctr.bat == nil {
+		return
+	}
+	tempVecs := ctr.bat.Vecs
+	ctr.bat.Vecs = nil
+	j := 0
+	k := 0
+	for i := 0; i < len(tempVecs)+len(ctr.tempVecs); i++ {
+		if _, ok := ctr.NullIdxs[uint32(i)]; !ok {
+			ctr.bat.Vecs = append(ctr.bat.Vecs, tempVecs[j])
+			j++
+		} else {
+			ctr.bat.Vecs = append(ctr.bat.Vecs, ctr.tempVecs[k])
+			k++
+		}
+	}
 }

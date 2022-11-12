@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -42,6 +43,7 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.NullIdxs = make(map[uint32]struct{})
 	if ap.Limit > 1024 {
 		ap.ctr.sels = make([]int64, 0, 1024)
 	} else {
@@ -121,6 +123,14 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 		for i, vec := range bat.Vecs {
 			ctr.bat.Vecs[i] = vector.New(vec.Typ)
 		}
+		if !ctr.finishNullIdx && ctr.bat != nil {
+			for i := 0; i < len(ctr.bat.Vecs); i++ {
+				if ctr.bat.Vecs[i].Typ.Oid == types.T_any {
+					ctr.NullIdxs[uint32(i)] = struct{}{}
+				}
+				ctr.finishNullIdx = true
+			}
+		}
 		ctr.cmps = make([]compare.Compare, len(bat.Vecs))
 		for i := range ctr.cmps {
 			var desc, nullsLast bool
@@ -153,6 +163,9 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 		}
 		for i := int64(0); i < start; i++ {
 			for j, vec := range ctr.bat.Vecs {
+				if vec.Typ.Oid == types.T_any {
+					continue
+				}
 				if err := vector.UnionOne(vec, bat.Vecs[j], i, proc.Mp()); err != nil {
 					return err
 				}
@@ -171,6 +184,9 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 
 	// bat is still have items
 	for i, cmp := range ctr.cmps {
+		if bat.Vecs[i].Typ.Oid == types.T_any {
+			continue
+		}
 		cmp.Set(1, bat.Vecs[i])
 	}
 	for i, j := start, length; i < j; i++ {
@@ -192,20 +208,28 @@ func (ctr *container) eval(limit int64, proc *process.Process) error {
 		ctr.sort()
 	}
 	for i, cmp := range ctr.cmps {
+		if ctr.bat.Vecs[i].Typ.Oid == types.T_any {
+			continue
+		}
 		ctr.bat.Vecs[i] = cmp.Vector()
 	}
 	sels := make([]int64, len(ctr.sels))
 	for i, j := 0, len(ctr.sels); i < j; i++ {
 		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
 	}
+	// split the T_any vecs
+	ctr.SplitTAny()
+	// shuffle can't process T_any
 	if err := ctr.bat.Shuffle(sels, proc.Mp()); err != nil {
 		return err
 	}
+	ctr.Reset()
 	for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
 		vector.Clean(ctr.bat.Vecs[i], proc.Mp())
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 	ctr.bat.ExpandNulls()
+	ctr.ExpandTAny()
 	proc.Reg.InputBatch = ctr.bat
 	ctr.bat = nil
 	return nil
@@ -214,6 +238,9 @@ func (ctr *container) eval(limit int64, proc *process.Process) error {
 // do sort work for heap, and result order will be set in container.sels
 func (ctr *container) sort() {
 	for i, cmp := range ctr.cmps {
+		if ctr.bat.Vecs[i].Typ.Oid == types.T_any {
+			continue
+		}
 		cmp.Set(0, ctr.bat.Vecs[i])
 	}
 	heap.Init(ctr)

@@ -383,7 +383,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			ss[i].appendInstruction(vm.Instruction{
 				Op: vm.Connector,
 				Arg: &connector.Argument{
-					Reg: s.Proc.Reg.MergeReceivers[i],
+					Reg: s.Proc.Reg.MergeReceivers[j],
 				},
 			})
 			j++

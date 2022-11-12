@@ -1277,7 +1277,9 @@ func UnionOne(v, w *Vector, sel int64, m *mpool.MPool) (err error) {
 	if v.original {
 		return moerr.NewInternalError("UnionOne cannot be performed on orig vector")
 	}
-
+	// if v.Typ.Oid == types.T_any {
+	// 	return nil
+	// }
 	if err = v.extend(1, m); err != nil {
 		return err
 	}

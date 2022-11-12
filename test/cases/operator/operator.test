@@ -150,3 +150,10 @@ drop table if exists t1;
 create table t1 (a tinyint);
 insert into t1 values (2);
 select a << 20 from t1;
+
+create view schemata as SELECT dat_catalog_name AS CATALOG_NAME,NULL AS SQL_PATH FROM mo_catalog.mo_database;
+SELECT * FROM schemata order by catalog_name,sql_path+1 limit 5;
+SELECT * FROM schemata order by sql_path+1 limit 5;
+SELECT * FROM schemata order by sql_path limit 5;
+SELECT * FROM schemata order by catalog_name limit 5;
+drop view schemata;
