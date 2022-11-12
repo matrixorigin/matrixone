@@ -20,7 +20,7 @@ services:
       - "6002"
     restart: on-failure
     volumes:
-      - ../../etc/launch-tae-compose/config:/config
+      - ../../etc/launch-mo-compose-minio/config:/config
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
@@ -47,7 +47,7 @@ services:
     profiles:
       - launch-tae-multi-CN-tae-DN
     volumes:
-      - ../../etc/launch-tae-compose/config:/config
+      - ../../etc/launch-mo-compose-minio/config:/config
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
@@ -75,7 +75,7 @@ services:
     restart: on-failure
     tty: true
     volumes:
-      - ../../etc/launch-tae-compose/config:/config
+      - ../../etc/launch-mo-compose-minio/config:/config
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
@@ -107,7 +107,7 @@ services:
       # - AWS_REGION=${AWS_REGION}
     restart: on-failure
     volumes:
-      - ../../etc/launch-tae-compose/config:/config
+      - ../../etc/launch-mo-compose-minio/config:/config
     tty: true    
     networks:
       monet:
