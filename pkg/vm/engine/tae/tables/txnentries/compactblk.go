@@ -55,7 +55,7 @@ func NewCompactBlockEntry(
 		if deletes != nil && !deletes.IsEmpty() {
 			delCnt := deletes.GetCardinality()
 			for i, idx := range sortIdx {
-				if i < len(offsetMapping) {
+				if int(idx) < len(offsetMapping) {
 					sortIdx[i] = offsetMapping[idx]
 				} else {
 					sortIdx[i] = idx + uint32(delCnt)
