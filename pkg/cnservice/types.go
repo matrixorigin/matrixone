@@ -178,6 +178,12 @@ func (c *Config) Validate() error {
 	if c.TaskRunner.RetryInterval.Duration == 0 {
 		c.TaskRunner.RetryInterval.Duration = time.Second
 	}
+	if c.Engine.Type == "" {
+		c.Engine.Type = EngineDistributedTAE
+	}
+	if c.Engine.Logstore == "" {
+		c.Engine.Logstore = options.LogstoreLogservice
+	}
 	return nil
 }
 
