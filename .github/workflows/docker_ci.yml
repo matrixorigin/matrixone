@@ -8,6 +8,10 @@ on:
       - published
   workflow_dispatch:
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   docker:
     runs-on: ubuntu-latest
@@ -35,6 +39,7 @@ jobs:
           # Set output parameters.
           echo ::set-output name=tags::${TAGS}
           echo ::set-output name=docker_image::${DOCKER_IMAGE}
+          echo ::set-output name=version::${VERSION}
           
       - name: Get image info
         run: |
@@ -52,25 +57,25 @@ jobs:
         with:
             buildkitd-flags: --debug
 
-      - name: Login to DockerHub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v1
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # - name: Login to DockerHub
+      #   if: github.event_name != 'pull_request'
+      #   uses: docker/login-action@v1
+      #   with:
+      #     username: ${{ secrets.DOCKERHUB_USERNAME }}
+      #     password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build
-        uses: docker/build-push-action@v2
-        with:
-          builder: ${{ steps.buildx.outputs.name }}
-          context: .
-          file: ./optools/images/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.prep.outputs.tags }}
+      # - name: Build
+      #   uses: docker/build-push-action@v2
+      #   with:
+      #     builder: ${{ steps.buildx.outputs.name }}
+      #     context: .
+      #     file: ./optools/images/Dockerfile
+      #     platforms: linux/amd64,linux/arm64
+      #     push: true
+      #     tags: ${{ steps.prep.outputs.tags }}
 
       # push image to ecr
       - uses: ./.github/actions/ecr
         with:
           role: ${{ secrets.AWS_ROLE }}
-          tag:  ${{ steps.prep.outputs.tags }}
+          tag:  ${{ steps.prep.outputs.version }}
