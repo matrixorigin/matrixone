@@ -89,7 +89,12 @@ func (blk *dataBlock) replayImmutIndex() error {
 	}
 	for i := range schema.ColDefs {
 		index := indexwrapper.NewImmutableIndex()
-		if err := index.ReadFrom(blk, schema.ColDefs[i], uint16(i)); err != nil {
+		if err := index.ReadFrom(
+			blk.bufMgr,
+			blk.fs,
+			blk.meta.AsCommonID(),
+			blk.meta.GetMetaLoc(),
+			schema.ColDefs[i]); err != nil {
 			return err
 		}
 		blk.indexes[i] = index
