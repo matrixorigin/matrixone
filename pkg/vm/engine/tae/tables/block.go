@@ -806,10 +806,29 @@ func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error)
 		}
 		return
 	}
+
 	rows, err := blk.pkIndex.GetActiveRow(key)
-	if err != nil {
+	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrNotFound) {
 		return
 	}
+
+	waitFn := func(n *updates.AppendNode) {
+		txn := n.Txn
+		if txn != nil {
+			blk.mvcc.RUnlock()
+			txn.GetTxnState(true)
+			blk.mvcc.RLock()
+		}
+	}
+	if anyWaitable := blk.mvcc.CollectUncommittedANodesPreparedBefore(
+		ts,
+		waitFn); anyWaitable {
+		rows, err = blk.pkIndex.GetActiveRow(key)
+		if err != nil {
+			return
+		}
+	}
+
 	for i := len(rows) - 1; i >= 0; i-- {
 		row = rows[i]
 		appendnode := blk.GetAppendNodeByRow(row)

@@ -409,11 +409,11 @@ type response320 struct {
 func (mp *MysqlProtocolImpl) SendPrepareResponse(stmt *PrepareStmt) error {
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
-		return moerr.NewInternalError("can not get prepare plan in prepareStmt")
+		return moerr.NewInternalError("can not get Prepare plan in prepareStmt")
 	}
 	stmtID, err := GetPrepareStmtID(stmt.Name)
 	if err != nil {
-		return moerr.NewInternalError("can not get prepare stmtID")
+		return moerr.NewInternalError("can not get Prepare stmtID")
 	}
 	paramTypes := dcPrepare.Prepare.ParamTypes
 	numParams := len(paramTypes)
@@ -484,7 +484,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(stmt *PrepareStmt) error {
 func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
-		err = moerr.NewInternalError("can not get prepare plan in prepareStmt")
+		err = moerr.NewInternalError("can not get Prepare plan in prepareStmt")
 		return
 	}
 	numParams := len(dcPrepare.Prepare.ParamTypes)
@@ -497,7 +497,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 	}
 	if flag != 0 {
 		// TODO only support CURSOR_TYPE_NO_CURSOR flag now
-		err = moerr.NewInvalidInput("unsupported prepare flag '%v'", flag)
+		err = moerr.NewInvalidInput("unsupported Prepare flag '%v'", flag)
 		return
 	}
 

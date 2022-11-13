@@ -319,4 +319,12 @@ func (it *relBlockIt) Next() {
 	}
 	seg := it.segmentIt.GetSegment()
 	it.blockIt = seg.MakeBlockIt()
+	for !it.blockIt.Valid() {
+		it.segmentIt.Next()
+		if !it.segmentIt.Valid() {
+			return
+		}
+		seg := it.segmentIt.GetSegment()
+		it.blockIt = seg.MakeBlockIt()
+	}
 }
