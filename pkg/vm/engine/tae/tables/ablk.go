@@ -3,22 +3,68 @@ package tables
 import (
 	"bytes"
 	"fmt"
+	"time"
+
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type ablock struct {
 	baseBlock
+	intents atomic.Int32
+}
+
+func (blk *ablock) ApplyAppendQuota() bool {
+	for old := blk.intents.Load(); old >= 0; old = blk.intents.Load() {
+		if blk.intents.CompareAndSwap(old, old+1) {
+			return true
+		}
+	}
+	return false
+}
+
+func (blk *ablock) ReturnAppendQuota() {
+	blk.intents.Add(-1)
+}
+
+func (blk *ablock) TryFreezeAppend() bool {
+	return blk.intents.CompareAndSwap(0, -1)
+}
+
+func (blk *ablock) IsAppendFrozen() bool {
+	return blk.intents.Load() < 0
+}
+
+func (blk *ablock) PrepareCompact() bool {
+	if blk.intents.Load() > 0 {
+		return false
+	}
+	blk.TryFreezeAppend()
+	if !blk.meta.PrepareCompact() {
+		return false
+	}
+	return blk.IsAppendFrozen()
+}
+
+func (blk *ablock) Pin() *common.PinnedItem[*ablock] {
+	blk.Ref()
+	return &common.PinnedItem[*ablock]{
+		Val: blk,
+	}
 }
 
 func (blk *ablock) GetColumnDataById(
@@ -466,4 +512,101 @@ func (blk *ablock) BatchDedup(
 		return blk.persistedBatchDedup(pnode.Item(), txn.GetStartTS(), keys, rowmask)
 	}
 	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
+}
+
+func (blk *ablock) inMemoryCollectAppendInRange(
+	mnode *memoryNode,
+	start, end types.TS,
+	withAborted bool) (bat *containers.Batch, err error) {
+	blk.RLock()
+	defer blk.RUnlock()
+	minRow, maxRow, commitTSVec, abortVec, abortedMap :=
+		blk.mvcc.CollectAppend(start, end)
+	if bat, err = mnode.GetDataWindow(minRow, maxRow); err != nil {
+		return
+	}
+	bat.AddVector(catalog.AttrCommitTs, commitTSVec)
+	if withAborted {
+		bat.AddVector(catalog.AttrAborted, abortVec)
+	} else {
+		bat.Deletes = abortedMap
+		bat.Compact()
+	}
+	return
+}
+
+func (blk *ablock) CollectAppendInRange(
+	start, end types.TS,
+	withAborted bool) (*containers.Batch, error) {
+	mnode, pnode := blk.PinNode()
+	if mnode != nil {
+		defer mnode.Close()
+		return blk.inMemoryCollectAppendInRange(
+			mnode.Item(),
+			start,
+			end,
+			withAborted)
+	} else if pnode != nil {
+		defer pnode.Close()
+		panic("TODO: persistedCollectAppendInRange")
+	}
+	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
+}
+
+func (blk *ablock) BuildCompactionTaskFactory() (
+	factory tasks.TxnTaskFactory,
+	taskType tasks.TaskType,
+	scopes []common.ID,
+	err error) {
+
+	if !blk.PrepareCompact() {
+		return
+	}
+
+	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
+	taskType = tasks.DataCompactionTask
+	scopes = append(scopes, *blk.meta.AsCommonID())
+	return
+}
+
+func (blk *ablock) RunCalibration() (score int) {
+	score, _ = blk.estimateRawScore()
+	return
+}
+
+func (blk *ablock) estimateRawScore() (score int, dropped bool) {
+	if blk.meta.HasDropCommitted() {
+		dropped = true
+		return
+	}
+	blk.meta.RLock()
+	atLeastOneCommitted := blk.meta.HasCommittedNode()
+	blk.meta.RUnlock()
+	if !atLeastOneCommitted {
+		score = 1
+		return
+	}
+
+	rows := blk.Rows()
+	if rows == int(blk.meta.GetSchema().BlockMaxRows) {
+		score = 100
+		return
+	}
+
+	if blk.mvcc.GetChangeNodeCnt() == 0 && rows == 0 {
+		score = 0
+	} else {
+		score = 1
+	}
+
+	if score > 0 {
+		if _, terminated := blk.meta.GetTerminationTS(); terminated {
+			score = 100
+		}
+	}
+	return
+}
+
+func (blk *ablock) EstimateScore(ttl time.Duration, force bool) int {
+	return blk.adjustScore(blk.estimateRawScore, ttl, force)
 }

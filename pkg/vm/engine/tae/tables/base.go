@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -19,19 +20,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
+type BlockT[T common.IRef] interface {
+	common.IRef
+	Pin() *common.PinnedItem[T]
+	GetID() *common.ID
+}
+
 type baseBlock struct {
+	common.RefHelper
 	*sync.RWMutex
-	bufMgr  base.INodeManager
-	fs      *objectio.ObjectFS
-	meta    *catalog.BlockEntry
-	mvcc    *updates.MVCCHandle
-	storage struct {
+	bufMgr    base.INodeManager
+	fs        *objectio.ObjectFS
+	scheduler tasks.TaskScheduler
+	meta      *catalog.BlockEntry
+	mvcc      *updates.MVCCHandle
+	storage   struct {
 		mu    sync.RWMutex
 		mnode *common.PinnedItem[*memoryNode]
 		pnode *common.PinnedItem[*persistedNode]
 	}
+	ttl time.Time
 }
 
 func (blk *baseBlock) PinNode() (
@@ -214,4 +226,91 @@ func (blk *baseBlock) PPString(level common.PPLevel, depth int, prefix string) s
 		}
 	}
 	return s
+}
+
+func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool) {
+	blk.RLock()
+	defer blk.RUnlock()
+	found = blk.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
+	return
+}
+
+func (blk *baseBlock) CollectAppendLogIndexes(startTs, endTs types.TS) (indexes []*wal.Index, err error) {
+	blk.RLock()
+	defer blk.RUnlock()
+	return blk.mvcc.CollectAppendLogIndexesLocked(startTs, endTs)
+}
+
+func (blk *baseBlock) CollectChangesInRange(startTs, endTs types.TS) (view *model.BlockView, err error) {
+	view = model.NewBlockView(endTs)
+	blk.RLock()
+	defer blk.RUnlock()
+	deleteChain := blk.mvcc.GetDeleteChain()
+	view.DeleteMask, view.DeleteLogIndexes, err =
+		deleteChain.CollectDeletesInRange(startTs, endTs, blk.RWMutex)
+	return
+}
+
+func (blk *baseBlock) CollectDeleteInRange(
+	start, end types.TS,
+	withAborted bool) (bat *containers.Batch, err error) {
+	rowID, ts, abort, abortedMap := blk.mvcc.CollectDelete(start, end)
+	if rowID == nil {
+		return
+	}
+	bat = containers.NewBatch()
+	bat.AddVector(catalog.PhyAddrColumnName, rowID)
+	bat.AddVector(catalog.AttrCommitTs, ts)
+	if withAborted {
+		bat.AddVector(catalog.AttrAborted, abort)
+	} else {
+		bat.Deletes = abortedMap
+		bat.Compact()
+	}
+	return
+}
+
+func (blk *baseBlock) adjustScore(
+	rawScoreFn func() (int, bool),
+	ttl time.Duration,
+	force bool) int {
+	score, dropped := rawScoreFn()
+	if dropped {
+		return 0
+	}
+	if force {
+		score = 100
+	}
+	if score == 0 || score > 1 {
+		return score
+	}
+	var ratio float32
+	if blk.meta.IsAppendable() {
+		currRows := uint32(blk.Rows())
+		ratio = float32(currRows) / float32(blk.meta.GetSchema().BlockMaxRows)
+		if ratio >= 0 && ratio < 0.2 {
+			ttl *= 4
+		} else if ratio >= 0.2 && ratio < 0.4 {
+			ttl *= 3
+		} else if ratio >= 0.4 && ratio < 0.6 {
+			ttl *= 2
+		}
+	}
+
+	deleteCnt := blk.mvcc.GetDeleteCnt()
+	ratio = float32(deleteCnt) / float32(blk.meta.GetSchema().BlockMaxRows)
+	if ratio <= 1 && ratio > 0.5 {
+		ttl /= 10
+	} else if ratio <= 0.5 && ratio > 0.3 {
+		ttl /= 5
+	} else if ratio <= 0.3 && ratio > 0.2 {
+		ttl /= 3
+	} else if ratio <= 0.2 && ratio > 0.1 {
+		ttl /= 2
+	}
+
+	if time.Now().After(blk.ttl.Add(ttl)) {
+		return 100
+	}
+	return 1
 }

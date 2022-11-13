@@ -110,7 +110,7 @@ func (node *memoryNode) GetColumnDataWindow(
 	return
 }
 
-func (node *memoryNode) CloneWindow(
+func (node *memoryNode) GetDataWindow(
 	from, to uint32) (bat *containers.Batch, err error) {
 	bat = node.data.CloneWindow(
 		int(from),
