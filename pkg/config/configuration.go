@@ -258,6 +258,8 @@ type FrontendParameters struct {
 	//default is 1
 	DNReplicaID uint64 `toml:"dnreplicalid"`
 
+	EnableDoComQueryInProgress bool `toml:"comQueryInProgress"`
+
 	//timeout of the session. the default is 10minutes
 	SessionTimeout toml.Duration `toml:"sessionTimeout"`
 
