@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -261,6 +262,11 @@ func (store *txnStore) UnsafeGetDatabase(id uint64) (h handle.Database, err erro
 }
 
 func (store *txnStore) GetDatabase(name string) (h handle.Database, err error) {
+	defer func() {
+		if err == moerr.GetOkExpectedEOB() {
+			err = moerr.NewBadDB(name)
+		}
+	}()
 	meta, err := store.catalog.TxnGetDBEntryByName(name, store.txn)
 	if err != nil {
 		return

@@ -21,15 +21,20 @@ jobs:
         id: buildnumber
         uses: einaregilsson/build-number@v3 
         with:
-          token: ${{secrets.github_token}}       
-    
+          token: ${{secrets.github_token}}   
 
+      - name: Print new build number
+        run: echo "Build number is $BUILD_NUMBER"  
+  
       - name: docker compose launch-tae-multi-CN-tae-DN
         run: |
           docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
           # wait for ready
           sleep 10
       
+      - name: show mo verison
+        run: |
+          docker exec -it cn-1 /mo-service -version
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
