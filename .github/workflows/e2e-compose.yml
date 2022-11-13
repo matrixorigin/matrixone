@@ -15,16 +15,10 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v3 
 
-      - name: Generate build number
-        id: buildnumber
-        uses: einaregilsson/build-number@v3 
-        with:
-          token: ${{secrets.github_token}}   
-
-      - name: Print new build number
-        run: echo "Build number is $BUILD_NUMBER"  
+      - name: Print run attempt
+        run: echo "run attempt is ${{ github.run_attempt }}
   
       - name: docker compose launch-tae-multi-CN-tae-DN
         run: |
@@ -34,7 +28,7 @@ jobs:
       
       - name: show mo verison
         run: |
-          docker exec -it cn-1 /mo-service -version
+          docker exec -T cn-1 /mo-service -version
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
@@ -61,12 +55,12 @@ jobs:
       - name: export log
         if: ${{ always() }}
         run: |
-          mkdir  -p ${{ github.workspace }}/docker-compose-log-${{ steps.buildnumber.outputs.build_number }}
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0 >   ${{ github.workspace }}/docker-compose-log-${{ steps.buildnumber.outputs.build_number }}/cn-0.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-1 >   ${{ github.workspace }}/docker-compose-log-${{ steps.buildnumber.outputs.build_number }}/cn-1.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn >  ${{ github.workspace }}/docker-compose-log-${{ steps.buildnumber.outputs.build_number }}/dn.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logService >  ${{ github.workspace }}/docker-compose-log-${{ steps.buildnumber.outputs.build_number }}/logService.log
-          mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log-${{ steps.buildnumber.outputs.build_number }}
+          mkdir  -p ${{ github.workspace }}/docker-compose-log-${{ github.run_attempt }}
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0 >   ${{ github.workspace }}/docker-compose-log-${{ github.run_attempt }}/cn-0.log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-1 >   ${{ github.workspace }}/docker-compose-log-${{ github.run_attempt }}/cn-1.log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn >  ${{ github.workspace }}/docker-compose-log-${{ github.run_attempt }}/dn.log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logService >  ${{ github.workspace }}/docker-compose-log-${{ github.run_attempt }}/logService.log
+          mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log-${{ github.run_attempt }}
 
       - name: shutdown containers
         if: ${{ always() }}
@@ -80,5 +74,5 @@ jobs:
         with:
           name: multi-cn-e2e_docker-compose
           path: |
-             ${{ github.workspace }}/docker-compose-log-${{ steps.buildnumber.outputs.build_number }}
+             ${{ github.workspace }}/docker-compose-log-${{ github.run_attempt }}
           retention-days: 7
