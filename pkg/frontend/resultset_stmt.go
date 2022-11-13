@@ -189,7 +189,7 @@ func (sve *ShowVariablesExecutor) Compile(requestCtx context.Context, u interfac
 }
 
 func (sve *ShowVariablesExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return doShowVariables(ses, sve.proc, sve.sv)
+	return doShowVariables(ses, sve.GetProcess(), sve.sv)
 }
 
 type ShowErrorsExecutor struct {

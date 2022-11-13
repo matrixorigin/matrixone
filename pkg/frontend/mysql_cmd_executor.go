@@ -2071,6 +2071,7 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 }
 
 var _ ComputationWrapper = &TxnComputationWrapper{}
+var _ ComputationWrapper = &NullComputationWrapper{}
 
 type TxnComputationWrapper struct {
 	stmt    tree.Statement
@@ -2094,6 +2095,10 @@ func InitTxnComputationWrapper(ses *Session, stmt tree.Statement, proc *process.
 
 func (cwft *TxnComputationWrapper) GetAst() tree.Statement {
 	return cwft.stmt
+}
+
+func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
+	return cwft.proc
 }
 
 func (cwft *TxnComputationWrapper) SetDatabaseName(db string) error {
@@ -2246,11 +2251,57 @@ func (cwft *TxnComputationWrapper) GetUUID() []byte {
 }
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) error {
-	return nil
+	return cwft.compile.Run(ts)
 }
 
 func (cwft *TxnComputationWrapper) GetLoadTag() bool {
 	return cwft.plan.GetQuery().GetLoadTag()
+}
+
+type NullComputationWrapper struct {
+	*TxnComputationWrapper
+}
+
+func InitNullComputationWrapper(ses *Session, stmt tree.Statement, proc *process.Process) *NullComputationWrapper {
+	return &NullComputationWrapper{
+		TxnComputationWrapper: InitTxnComputationWrapper(ses, stmt, proc),
+	}
+}
+
+func (ncw *NullComputationWrapper) GetAst() tree.Statement {
+	return ncw.stmt
+}
+
+func (ncw *NullComputationWrapper) SetDatabaseName(db string) error {
+	return nil
+}
+
+func (ncw *NullComputationWrapper) GetColumns() ([]interface{}, error) {
+	return []interface{}{}, nil
+}
+
+func (ncw *NullComputationWrapper) GetAffectedRows() uint64 {
+	return 0
+}
+
+func (ncw *NullComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
+func (ncw *NullComputationWrapper) RecordExecPlan(ctx context.Context) error {
+	return nil
+}
+
+func (ncw *NullComputationWrapper) GetUUID() []byte {
+	return ncw.uuid[:]
+}
+
+func (ncw *NullComputationWrapper) Run(ts uint64) error {
+	return nil
+}
+
+func (ncw *NullComputationWrapper) GetLoadTag() bool {
+	return false
 }
 
 func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
@@ -2359,7 +2410,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 	for _, stmt := range stmts {
 		cw := InitTxnComputationWrapper(ses, stmt, proc)
 		base := &baseStmtExecutor{}
-		base.TxnComputationWrapper = cw
+		base.ComputationWrapper = cw
 		switch st := stmt.(type) {
 		//PART 1: the statements with the result set
 		case *tree.Select:
@@ -2461,6 +2512,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				ef: st,
 			})
 		case *tree.ExplainStmt:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&ExplainStmtExecutor{
 				resultSetStmtExecutor: &resultSetStmtExecutor{
 					base,
@@ -2468,6 +2520,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				es: st,
 			})
 		case *tree.ShowVariables:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&ShowVariablesExecutor{
 				resultSetStmtExecutor: &resultSetStmtExecutor{
 					base,
@@ -2475,6 +2528,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				sv: st,
 			})
 		case *tree.ShowErrors:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&ShowErrorsExecutor{
 				resultSetStmtExecutor: &resultSetStmtExecutor{
 					base,
@@ -2482,6 +2536,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				se: st,
 			})
 		case *tree.ShowWarnings:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&ShowWarningsExecutor{
 				resultSetStmtExecutor: &resultSetStmtExecutor{
 					base,
@@ -2489,6 +2544,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				sw: st,
 			})
 		case *tree.AnalyzeStmt:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&AnalyzeStmtExecutor{
 				resultSetStmtExecutor: &resultSetStmtExecutor{
 					base,
@@ -2503,6 +2559,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				ea: st,
 			})
 		case *InternalCmdFieldList:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&InternalCmdFieldListExecutor{
 				resultSetStmtExecutor: &resultSetStmtExecutor{
 					base,
@@ -2511,6 +2568,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 			})
 		//PART 2: the statement with the status only
 		case *tree.BeginTransaction:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&BeginTxnExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2518,6 +2576,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				bt: st,
 			})
 		case *tree.CommitTransaction:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&CommitTxnExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2525,6 +2584,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				ct: st,
 			})
 		case *tree.RollbackTransaction:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&RollbackTxnExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2532,6 +2592,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				rt: st,
 			})
 		case *tree.SetRole:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&SetRoleExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2539,6 +2600,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				sr: st,
 			})
 		case *tree.Use:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&UseExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2555,6 +2617,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				dd: st,
 			})
 		case *tree.Import:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&ImportExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2562,6 +2625,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				i: st,
 			})
 		case *tree.PrepareStmt:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&PrepareStmtExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2569,6 +2633,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				ps: st,
 			})
 		case *tree.PrepareString:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&PrepareStringExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2576,6 +2641,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				ps: st,
 			})
 		case *tree.Deallocate:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&DeallocateExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2583,6 +2649,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				d: st,
 			})
 		case *tree.SetVar:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&SetVarExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2604,6 +2671,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				u: st,
 			})
 		case *tree.CreateAccount:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&CreateAccountExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2611,6 +2679,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				ca: st,
 			})
 		case *tree.DropAccount:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&DropAccountExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2625,6 +2694,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				aa: st,
 			})
 		case *tree.CreateUser:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&CreateUserExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2632,6 +2702,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				cu: st,
 			})
 		case *tree.DropUser:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&DropUserExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2646,6 +2717,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				au: st,
 			})
 		case *tree.CreateRole:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&CreateRoleExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2653,6 +2725,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				cr: st,
 			})
 		case *tree.DropRole:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&DropRoleExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2660,6 +2733,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				dr: st,
 			})
 		case *tree.Grant:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&GrantExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,
@@ -2667,6 +2741,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				g: st,
 			})
 		case *tree.Revoke:
+			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 			appendStmtExec(&RevokeExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
 					base,

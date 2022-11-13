@@ -166,7 +166,7 @@ handleRet:
 
 // baseStmtExecutor the base class for the statement execution
 type baseStmtExecutor struct {
-	*TxnComputationWrapper
+	ComputationWrapper
 	mu sync.Mutex
 
 	tenantName string
@@ -190,7 +190,7 @@ func (bse *baseStmtExecutor) SetStatus(err error) {
 
 func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) error {
 	var txnErr error
-	stmt := bse.stmt
+	stmt := bse.GetAst()
 	tenant := bse.tenantName
 	incStatementCounter(tenant, stmt)
 	if bse.GetStatus() == stmtExecSuccess {
@@ -232,12 +232,7 @@ func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Sessi
 }
 
 func (bse *baseStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	if bse.compile != nil {
-		var runner ComputationRunner
-		runner = bse.compile
-		return runner.Run(0)
-	}
-	return nil
+	return bse.Run(0)
 }
 
 func (bse *baseStmtExecutor) Setup(ctx context.Context, ses *Session) error {
@@ -254,9 +249,9 @@ func (bse *baseStmtExecutor) VerifyPrivilege(ctx context.Context, ses *Session) 
 	var err error
 	bse.tenantName = sysAccountName
 	//skip PREPARE statement here
-	if ses.GetTenantInfo() != nil && !IsPrepareStatement(bse.stmt) {
+	if ses.GetTenantInfo() != nil && !IsPrepareStatement(bse.GetAst()) {
 		bse.tenantName = ses.GetTenantInfo().GetTenant()
-		err = authenticateUserCanExecuteStatement(ctx, ses, bse.stmt)
+		err = authenticateUserCanExecuteStatement(ctx, ses, bse.GetAst())
 		if err != nil {
 			return err
 		}
@@ -281,7 +276,7 @@ func (bse *baseStmtExecutor) VerifyTxn(ctx context.Context, ses *Session) error 
 		                     <- has active transaction
 	*/
 	if ses.InActiveTransaction() {
-		stmt := bse.stmt
+		stmt := bse.GetAst()
 		can, err = StatementCanBeExecutedInUncommittedTransaction(ses, stmt)
 		if err != nil {
 			return err
@@ -313,7 +308,7 @@ func (bse *baseStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Session
 		if err = ses.GetMysqlProtocol().SendResponse(resp); err != nil {
 			trace.EndStatement(ctx, err)
 			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err)
-			logStatementStatus(ctx, ses, bse.stmt, fail, retErr)
+			logStatementStatus(ctx, ses, bse.GetAst(), fail, retErr)
 			return retErr
 		}
 	}
