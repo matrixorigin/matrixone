@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -129,7 +128,7 @@ func getLsn(e entry.Entry) (group uint32, lsn uint64) {
 // ckp C
 // check whether UC is checkpointed
 func TestCheckpointUC(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	driver, dir := initWal(t)
 
 	wg := &sync.WaitGroup{}

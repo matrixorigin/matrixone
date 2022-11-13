@@ -123,7 +123,8 @@ func (s *Scope) MergeRun(c *Compile) error {
 // if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
-	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() || s.NodeInfo.Addr == Address {
+	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
+		s.NodeInfo.Addr == c.addr || len(c.addr) == 0 {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
