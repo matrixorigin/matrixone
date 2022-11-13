@@ -17,11 +17,19 @@ jobs:
       - name: checkout
         uses: actions/checkout@v3
 
+      - name: Generate build number
+        id: buildnumber
+        uses: einaregilsson/build-number@v3 
+        with:
+          token: ${{secrets.github_token}}       
+    
+
       - name: docker compose launch-tae-multi-CN-tae-DN
         run: |
           docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
           # wait for ready
           sleep 10
+      
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
@@ -48,12 +56,12 @@ jobs:
       - name: export log
         if: ${{ always() }}
         run: |
-          mkdir  -p ${{ github.workspace }}/docker-compose-log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0 >   ${{ github.workspace }}/docker-compose-log/cn-0.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-1 >   ${{ github.workspace }}/docker-compose-log/cn-1.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn >  ${{ github.workspace }}/docker-compose-log/dn.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logService >  ${{ github.workspace }}/docker-compose-log/logService.log
-          mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
+          mkdir  -p ${{ github.workspace }}/docker-compose-log-${{ steps.buildnumber.outputs.build_number }}
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0 >   ${{ github.workspace }}/docker-compose-log-${{ steps.buildnumber.outputs.build_number }}/cn-0.log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-1 >   ${{ github.workspace }}/docker-compose-log-${{ steps.buildnumber.outputs.build_number }}/cn-1.log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn >  ${{ github.workspace }}/docker-compose-log-${{ steps.buildnumber.outputs.build_number }}/dn.log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logService >  ${{ github.workspace }}/docker-compose-log-${{ steps.buildnumber.outputs.build_number }}/logService.log
+          mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log-${{ steps.buildnumber.outputs.build_number }}
 
       - name: shutdown containers
         if: ${{ always() }}
@@ -67,5 +75,5 @@ jobs:
         with:
           name: multi-cn-e2e_docker-compose
           path: |
-             ${{ github.workspace }}/docker-compose-log
+             ${{ github.workspace }}/docker-compose-log-${{ steps.buildnumber.outputs.build_number }}
           retention-days: 7
