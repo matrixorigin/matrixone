@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 var (
@@ -38,7 +39,7 @@ var (
 	defaultIncrementalInterval = time.Minute
 	defaultGlobalInterval      = time.Minute * 60
 	defaultMinCount            = int64(100)
-	defaultLogBackend          = "batchstore"
+	defaultLogBackend          = string(options.LogstoreLogservice)
 
 	storageDir     = "storage"
 	defaultDataDir = "./mo-data"
