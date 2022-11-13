@@ -99,6 +99,16 @@ func NewCustomizedMetaOptions(dir string, cst CacheSizeType, blockRows uint32, b
 	return opts
 }
 
+func WithQuickScanAndCKPOpts2(in *options.Options, factor int) (opts *options.Options) {
+	opts = WithQuickScanAndCKPOpts(in)
+	opts.CheckpointCfg.ScanInterval *= time.Duration(factor)
+	opts.CheckpointCfg.FlushInterval *= time.Duration(factor)
+	opts.CheckpointCfg.MinCount = int64(factor)
+	opts.CheckpointCfg.IncrementalInterval *= time.Duration(factor)
+	opts.CheckpointCfg.GlobalInterval *= time.Duration(factor)
+	return opts
+}
+
 func WithQuickScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	if in == nil {
 		opts = new(options.Options)
