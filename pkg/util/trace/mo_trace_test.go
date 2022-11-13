@@ -151,6 +151,7 @@ func TestSpanContext_MarshalTo(t *testing.T) {
 			c := &SpanContext{
 				TraceID: tt.fields.TraceID,
 				SpanID:  tt.fields.SpanID,
+				Kind:    SpanKindRemote,
 			}
 			got, err := c.MarshalTo(tt.args.dAtA)
 			require.Equal(t, nil, err)
