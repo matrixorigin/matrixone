@@ -44,5 +44,3 @@ port = 6001
 
 [observability]
 statusPort = 9001
-disableTrace = true
-disableMetric = true
