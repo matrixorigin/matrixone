@@ -218,11 +218,12 @@ func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferre
 	for _, row := range rows {
 		rowID, ok := page.Transfer(row)
 		if !ok {
-			err = moerr.NewTxnWWConflict()
-			logutil.Warnf("[Txn=%s]TransferDelete %s Row=%d, Err=%v",
-				tbl.store.txn.Repr(),
-				id.BlockString(),
-				row,
+			err = moerr.NewTxnWriteConflict("table-%d blk-%d delete row %d",
+				id.TableID,
+				id.BlockID,
+				row)
+			logutil.Warnf("[ts=%s]TransferDelete: %v",
+				tbl.store.txn.GetStartTS().ToString(),
 				err)
 			return
 		}
@@ -545,9 +546,25 @@ func (tbl *txnTable) IsLocalDeleted(row uint32) bool {
 }
 
 func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
+	defer func() {
+		if err == nil {
+			return
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			moerr.NewTxnWriteConflict("table-%d blk-%d delete rows from %d to %d",
+				id.TableID,
+				id.BlockID,
+				start,
+				end)
+		}
+		if err != nil {
+			logutil.Infof("[ts=%s]: %s", tbl.store.txn.GetStartTS().ToString(), err)
+		}
+	}()
 	// logutil.Infof("RangeDelete ID=%s, Start=%d, End=%d", id.BlockString(), start, end)
 	if isLocalSegment(id) {
-		return tbl.RangeDeleteLocalRows(start, end)
+		err = tbl.RangeDeleteLocalRows(start, end)
+		return
 	}
 	node := tbl.deleteNodes[*id]
 	if node != nil {

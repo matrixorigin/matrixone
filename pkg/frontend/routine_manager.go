@@ -87,6 +87,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	pro.SetSkipCheckUser(rm.GetSkipCheckUser())
 	exe := NewMysqlCmdExecutor()
 	exe.SetRoutineManager(rm)
+	exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
 
 	routine := NewRoutine(rm.getCtx(), pro, exe, pu)
 	routine.SetRoutineMgr(rm)

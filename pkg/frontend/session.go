@@ -747,6 +747,11 @@ func (ses *Session) GetConnectionID() uint32 {
 	return ses.GetMysqlProtocol().ConnectionID()
 }
 
+func (ses *Session) GetPeer() (string, string) {
+	rh, rp, _, _ := ses.GetMysqlProtocol().Peer()
+	return rh, rp
+}
+
 func (ses *Session) SetOptionBits(bit uint32) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1900,8 +1905,9 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	if ctx == nil {
 		ctx = bh.ses.GetRequestContext()
 	}
+	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 	//logutil.Debugf("-->bh:%s", sql)
-	err := bh.mce.doComQuery(ctx, sql)
+	err := bh.mce.GetDoQueryFunc()(ctx, sql)
 	if err != nil {
 		return err
 	}
