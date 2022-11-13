@@ -18,7 +18,7 @@ jobs:
         uses: actions/checkout@v3 
 
       - name: Print run attempt
-        run: echo "run attempt is ${{ github.run_attempt }}
+        run: echo "run attempt is ${{ github.run_attempt }}"
   
       - name: docker compose launch-tae-multi-CN-tae-DN
         run: |
@@ -55,12 +55,12 @@ jobs:
       - name: export log
         if: ${{ always() }}
         run: |
-          mkdir  -p ${{ github.workspace }}/docker-compose-log-${{ github.run_attempt }}
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0 >   ${{ github.workspace }}/docker-compose-log-${{ github.run_attempt }}/cn-0.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-1 >   ${{ github.workspace }}/docker-compose-log-${{ github.run_attempt }}/cn-1.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn >  ${{ github.workspace }}/docker-compose-log-${{ github.run_attempt }}/dn.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logService >  ${{ github.workspace }}/docker-compose-log-${{ github.run_attempt }}/logService.log
-          mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log-${{ github.run_attempt }}
+          mkdir  -p ${{ github.workspace }}/docker-compose-log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0 >   ${{ github.workspace }}/docker-compose-log/cn-0.log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-1 >   ${{ github.workspace }}/docker-compose-log/cn-1.log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn >  ${{ github.workspace }}/docker-compose-log/dn.log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logService >  ${{ github.workspace }}/docker-compose-log/logService.log
+          mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
 
       - name: shutdown containers
         if: ${{ always() }}
@@ -72,7 +72,7 @@ jobs:
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:
-          name: multi-cn-e2e_docker-compose
+          name: e2e_docker-compose
           path: |
-             ${{ github.workspace }}/docker-compose-log-${{ github.run_attempt }}
+             ${{ github.workspace }}/docker-compose-log
           retention-days: 7
