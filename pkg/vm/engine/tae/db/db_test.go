@@ -481,7 +481,7 @@ func TestCompactBlock1(t *testing.T) {
 		blkMeta := getOneBlockMeta(rel)
 		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, db.Scheduler)
 		assert.Nil(t, err)
-		preparer, err := task.PrepareData(blkMeta.MakeKey())
+		preparer, _, err := task.PrepareData()
 		assert.Nil(t, err)
 		assert.NotNil(t, preparer.Columns)
 		defer preparer.Close()
@@ -512,7 +512,7 @@ func TestCompactBlock1(t *testing.T) {
 		blkMeta := block.GetMeta().(*catalog.BlockEntry)
 		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, nil)
 		assert.Nil(t, err)
-		preparer, err := task.PrepareData(blkMeta.MakeKey())
+		preparer, _, err := task.PrepareData()
 		assert.Nil(t, err)
 		defer preparer.Close()
 		assert.Equal(t, bat.Vecs[0].Length()-1, preparer.Columns.Vecs[0].Length())
@@ -535,7 +535,7 @@ func TestCompactBlock1(t *testing.T) {
 		}
 		task, err = jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, nil)
 		assert.Nil(t, err)
-		preparer, err = task.PrepareData(blkMeta.MakeKey())
+		preparer, _, err = task.PrepareData()
 		assert.Nil(t, err)
 		defer preparer.Close()
 		assert.Equal(t, bat.Vecs[0].Length()-1, preparer.Columns.Vecs[0].Length())
@@ -549,7 +549,7 @@ func TestCompactBlock1(t *testing.T) {
 			blkMeta := blk.GetMeta().(*catalog.BlockEntry)
 			task, err = jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, nil)
 			assert.Nil(t, err)
-			preparer, err := task.PrepareData(blkMeta.MakeKey())
+			preparer, _, err := task.PrepareData()
 			assert.Nil(t, err)
 			defer preparer.Close()
 			assert.Equal(t, bat.Vecs[0].Length()-3, preparer.Columns.Vecs[0].Length())
@@ -4320,6 +4320,50 @@ func TestTransfer2(t *testing.T) {
 	assert.Equal(t, expectV, v)
 	assert.NoError(t, err)
 	_ = txn2.Commit()
+}
+
+func TestCompactEmptyBlock(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 3
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 6)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+	assert.NoError(t, tae.deleteAll(true))
+	tae.checkRowsByScan(0, true)
+
+	tae.compactBlocks(false)
+
+	tae.checkRowsByScan(0, true)
+
+	blkCnt := 0
+	p := &catalog.LoopProcessor{}
+	p.BlockFn = func(be *catalog.BlockEntry) error {
+		blkCnt++
+		return nil
+	}
+
+	_, rel := tae.getRelation()
+	err := rel.GetMeta().(*catalog.TableEntry).RecurLoop(p)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, blkCnt)
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	tae.restart()
+
+	blkCnt = 0
+	_, rel = tae.getRelation()
+	err = rel.GetMeta().(*catalog.TableEntry).RecurLoop(p)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, blkCnt)
+	tae.checkRowsByScan(0, true)
+	t.Log(tae.Catalog.SimplePPString(3))
 }
 
 func TestTransfer3(t *testing.T) {

@@ -294,25 +294,23 @@ func releaseChecksum(checksum *xxhash.Digest) {
 }
 
 func skip(n int, out *buf.ByteBuf) int {
-	idx := out.GetWriteIndex()
-	out.Grow(n)
-	out.SetWriteIndex(idx + n)
-	return idx
+	_, offset := setWriterIndexAfterGow(out, n)
+	return offset
 }
 
 func writeIntAt(offset int, out *buf.ByteBuf, value int) {
-	buf.Int2BytesTo(value, out.RawSlice(offset, offset+4))
+	idx := out.GetReadIndex() + offset
+	buf.Int2BytesTo(value, out.RawSlice(idx, idx+4))
 }
 
 func writeUint64At(offset int, out *buf.ByteBuf, value uint64) {
-	buf.Uint64ToBytesTo(value, out.RawSlice(offset, offset+8))
+	idx := out.GetReadIndex() + offset
+	buf.Uint64ToBytesTo(value, out.RawSlice(idx, idx+8))
 }
 
 func writeBody(out *buf.ByteBuf, msg Message) (int, []byte, error) {
 	size := msg.Size()
-	index := out.GetWriteIndex()
-	out.Grow(size)
-	out.SetWriteIndex(index + size)
+	index, _ := setWriterIndexAfterGow(out, size)
 	data := out.RawSlice(index, index+size)
 	if _, err := msg.MarshalTo(data); err != nil {
 		return 0, nil, err
@@ -325,6 +323,7 @@ func writePayload(out *buf.ByteBuf, payload []byte, conn io.Writer, copyBuffer i
 		return nil
 	}
 
+	// reset here to avoid buffer expansion as much as possible
 	defer out.Reset()
 
 	// first, write header and body to socket
@@ -421,4 +420,11 @@ func readMessage(flag byte, data []byte, offset int, expectChecksum uint64, payl
 		msg.Message.(PayloadMessage).SetPayloadField(payload)
 	}
 	return nil
+}
+
+func setWriterIndexAfterGow(out *buf.ByteBuf, n int) (int, int) {
+	offset := out.Readable()
+	out.Grow(n)
+	out.SetWriteIndex(out.GetReadIndex() + offset + n)
+	return out.GetReadIndex() + offset, offset
 }
