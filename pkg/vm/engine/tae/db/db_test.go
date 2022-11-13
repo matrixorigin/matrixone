@@ -4452,6 +4452,7 @@ func TestUpdate(t *testing.T) {
 		}
 	}
 	p, _ := ants.NewPool(5)
+	defer p.Release()
 	loop := 1000
 	for i := 0; i < loop; i++ {
 		wg.Add(1)
