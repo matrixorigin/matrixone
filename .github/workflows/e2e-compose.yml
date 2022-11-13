@@ -34,7 +34,7 @@ jobs:
       
       - name: show mo verison
         run: |
-          docker exec -it cn-1 /mo-service -version
+          docker exec -T cn-1 /mo-service -version
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
