@@ -41,7 +41,6 @@ global-interval = "100000s"
 
 [cn.frontend]
 port = 6001
-comQueryInProgress = true
 
 [observability]
 statusPort = 9001

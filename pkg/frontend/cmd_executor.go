@@ -71,7 +71,7 @@ type StmtExecutor interface {
 	// ResponseBeforeExec responses the client before the execution starts
 	ResponseBeforeExec(ctx context.Context, ses *Session) error
 
-	// ExecuteImpl runs concrete logic. every statement has its implementation
+	// ExecuteImpl runs the concrete logic of the statement. every statement has its implementation
 	ExecuteImpl(ctx context.Context, ses *Session) error
 
 	// ResponseAfterExec responses the client after the execution ends
@@ -88,7 +88,7 @@ var _ StmtExecutor = &baseStmtExecutor{}
 var _ StmtExecutor = &statusStmtExecutor{}
 var _ StmtExecutor = &resultSetStmtExecutor{}
 
-// Execute runs the execution framework
+// Execute runs the statement executor
 func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec StmtExecutor, beginInstant time.Time, envStmt string, useEnv bool) error {
 	var err, err2 error
 	var cmpBegin, runBegin time.Time
