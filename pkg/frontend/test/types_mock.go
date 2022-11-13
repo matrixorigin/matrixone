@@ -12,6 +12,7 @@ import (
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	types "github.com/matrixorigin/matrixone/pkg/container/types"
 	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	process "github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // MockComputationRunner is a mock of ComputationRunner interface.
@@ -144,6 +145,20 @@ func (m *MockComputationWrapper) GetLoadTag() bool {
 func (mr *MockComputationWrapperMockRecorder) GetLoadTag() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLoadTag", reflect.TypeOf((*MockComputationWrapper)(nil).GetLoadTag))
+}
+
+// GetProcess mocks base method.
+func (m *MockComputationWrapper) GetProcess() *process.Process {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetProcess")
+	ret0, _ := ret[0].(*process.Process)
+	return ret0
+}
+
+// GetProcess indicates an expected call of GetProcess.
+func (mr *MockComputationWrapperMockRecorder) GetProcess() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetProcess", reflect.TypeOf((*MockComputationWrapper)(nil).GetProcess))
 }
 
 // GetUUID mocks base method.

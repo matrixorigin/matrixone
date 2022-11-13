@@ -518,7 +518,7 @@ func TestTransaction2(t *testing.T) {
 	t.Log(dropped.String())
 
 	_, err = txn2.GetDatabase(name)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadDB))
 	t.Log(err)
 
 	txn3, _ := mgr.StartTxn(nil)
@@ -801,9 +801,9 @@ func TestDedup1(t *testing.T) {
 		assert.Nil(t, txn3.Commit())
 
 		err = rel.Append(bats[3])
-		// TODO: should be w-w error
-		assert.Error(t, err)
-		_ = txn.Rollback()
+		assert.NoError(t, err)
+		err = txn.Commit()
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 	}
 	t.Log(c.SimplePPString(common.PPL1))
 }
