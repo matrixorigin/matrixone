@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -154,7 +153,6 @@ type PrepareStmtExecutor struct {
 
 func (pse *PrepareStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
 	var err2, retErr error
-	fmt.Println("--->", ses.GetCmd(), "prepare stmt")
 	if ses.GetCmd() == COM_STMT_PREPARE {
 		if err2 = ses.GetMysqlProtocol().SendPrepareResponse(pse.prepareStmt); err2 != nil {
 			trace.EndStatement(ctx, err2)
