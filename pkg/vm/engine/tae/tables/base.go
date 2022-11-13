@@ -195,6 +195,72 @@ func (blk *baseBlock) FillPersistedDeletes(
 	return nil
 }
 
+func (blk *baseBlock) ResolvePersistedColumnData(
+	pnode *persistedNode,
+	ts types.TS,
+	colIdx int,
+	buffer *bytes.Buffer,
+	skipDeletes bool) (view *model.ColumnView, err error) {
+	view = model.NewColumnView(ts, colIdx)
+	vec, err := blk.LoadPersistedColumnData(colIdx, buffer)
+	if err != nil {
+		return
+	}
+	view.SetData(vec)
+
+	if skipDeletes {
+		return
+	}
+
+	defer func() {
+		if err != nil {
+			view.Close()
+		}
+	}()
+
+	if err = blk.FillPersistedDeletes(view); err != nil {
+		return
+	}
+
+	blk.RLock()
+	defer blk.RUnlock()
+	err = blk.FillInMemoryDeletesLocked(view, blk.RWMutex)
+	return
+}
+
+func (blk *baseBlock) PersistedBatchDedup(
+	pnode *persistedNode,
+	ts types.TS,
+	keys containers.Vector,
+	rowmask *roaring.Bitmap,
+	dedupClosure func(
+		containers.Vector,
+		*roaring.Bitmap,
+		*catalog.ColDef,
+	) func(any, int) error) (err error) {
+	sels, err := pnode.BatchDedup(
+		keys,
+		nil,
+	)
+	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+		return
+	}
+	def := blk.meta.GetSchema().GetSingleSortKey()
+	view, err := blk.ResolvePersistedColumnData(
+		pnode,
+		ts,
+		def.Idx,
+		nil,
+		false)
+	if err != nil {
+		return
+	}
+	defer view.Close()
+	dedupFn := dedupClosure(view.GetData(), view.DeleteMask, def)
+	err = keys.Foreach(dedupFn, sels)
+	return
+}
+
 func (blk *baseBlock) DeletesInfo() string {
 	blk.RLock()
 	defer blk.RUnlock()

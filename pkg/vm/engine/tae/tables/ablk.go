@@ -95,7 +95,7 @@ func (blk *ablock) resolveColumnData(
 			skipDeletes)
 	} else if pnode != nil {
 		defer pnode.Close()
-		return blk.resolvePersistedColumnData(
+		return blk.ResolvePersistedColumnData(
 			pnode.Item(),
 			ts,
 			colIdx,
@@ -104,33 +104,6 @@ func (blk *ablock) resolveColumnData(
 		)
 	}
 	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
-}
-
-func (blk *ablock) resolvePersistedColumnData(
-	pnode *persistedNode,
-	ts types.TS,
-	colIdx int,
-	buffer *bytes.Buffer,
-	skipDeletes bool) (view *model.ColumnView, err error) {
-	view = model.NewColumnView(ts, colIdx)
-	vec, err := blk.LoadPersistedColumnData(colIdx, buffer)
-	if err != nil {
-		return
-	}
-	view.SetData(vec)
-
-	if skipDeletes {
-		return
-	}
-
-	defer func() {
-		if err != nil {
-			view.Close()
-		}
-	}()
-
-	err = blk.FillPersistedDeletes(view)
-	return
 }
 
 // Note: With PinNode Context
@@ -207,7 +180,7 @@ func (blk *ablock) getPersistedValue(
 		err = moerr.NewNotFound()
 		return
 	}
-	view2, err := blk.resolvePersistedColumnData(pnode, ts, col, nil, true)
+	view2, err := blk.ResolvePersistedColumnData(pnode, ts, col, nil, true)
 	if err != nil {
 		return
 	}
@@ -432,45 +405,6 @@ func (blk *ablock) checkConflictAndDupClosure(
 	}
 }
 
-func (blk *ablock) persistedBatchDedup(
-	pnode *persistedNode,
-	ts types.TS,
-	keys containers.Vector,
-	rowmask *roaring.Bitmap) (err error) {
-	sels, err := pnode.BatchDedup(
-		keys,
-		nil,
-	)
-	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
-		return
-	}
-	def := blk.meta.GetSchema().GetSingleSortKey()
-	view, err := blk.resolvePersistedColumnData(
-		pnode,
-		ts,
-		def.Idx,
-		nil,
-		false)
-	if err != nil {
-		return
-	}
-	defer view.Close()
-	deduplicate := func(v1 any, _ int) error {
-		return view.GetData().Foreach(func(v2 any, row int) error {
-			if view.DeleteMask != nil && view.DeleteMask.ContainsInt(row) {
-				return nil
-			}
-			if compute.CompareGeneric(v1, v2, keys.GetType()) == 0 {
-				entry := common.TypeStringValue(keys.GetType(), v1)
-				return moerr.NewDuplicateEntry(entry, def.Name)
-			}
-			return nil
-		}, nil)
-	}
-	err = keys.Foreach(deduplicate, sels)
-	return
-}
-
 func (blk *ablock) inMemoryBatchDedup(
 	mnode *memoryNode,
 	ts types.TS,
@@ -494,6 +428,24 @@ func (blk *ablock) inMemoryBatchDedup(
 	return moerr.NewDuplicateEntry(entry, def.Name)
 }
 
+func (blk *ablock) dedupClosure(
+	vec containers.Vector,
+	mask *roaring.Bitmap,
+	def *catalog.ColDef) func(any, int) error {
+	return func(v1 any, _ int) (err error) {
+		return vec.Foreach(func(v2 any, row int) error {
+			if mask != nil && mask.ContainsInt(row) {
+				return nil
+			}
+			if compute.CompareGeneric(v1, v2, vec.GetType()) == 0 {
+				entry := common.TypeStringValue(vec.GetType(), v1)
+				return moerr.NewDuplicateEntry(entry, def.Name)
+			}
+			return nil
+		}, nil)
+	}
+}
+
 func (blk *ablock) BatchDedup(
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
@@ -509,7 +461,12 @@ func (blk *ablock) BatchDedup(
 		return blk.inMemoryBatchDedup(mnode.Item(), txn.GetStartTS(), keys, rowmask)
 	} else if pnode != nil {
 		defer pnode.Close()
-		return blk.persistedBatchDedup(pnode.Item(), txn.GetStartTS(), keys, rowmask)
+		return blk.PersistedBatchDedup(
+			pnode.Item(),
+			txn.GetStartTS(),
+			keys,
+			rowmask,
+			blk.dedupClosure)
 	}
 	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
 }
