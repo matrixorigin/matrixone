@@ -1,13 +1,29 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package frontend
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // statusStmtExecutor represents the execution without outputting result set to the client
@@ -18,10 +34,6 @@ type statusStmtExecutor struct {
 type BeginTxnExecutor struct {
 	*statusStmtExecutor
 	bt *tree.BeginTransaction
-}
-
-func (bte *BeginTxnExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
 }
 
 func (bte *BeginTxnExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
@@ -38,10 +50,6 @@ type CommitTxnExecutor struct {
 	ct *tree.CommitTransaction
 }
 
-func (cte *CommitTxnExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
-}
-
 func (cte *CommitTxnExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	return ses.TxnCommit()
 }
@@ -49,10 +57,6 @@ func (cte *CommitTxnExecutor) ExecuteImpl(ctx context.Context, ses *Session) err
 type RollbackTxnExecutor struct {
 	*statusStmtExecutor
 	rt *tree.RollbackTransaction
-}
-
-func (rte *RollbackTxnExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
 }
 
 func (rte *RollbackTxnExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
@@ -64,10 +68,6 @@ type SetRoleExecutor struct {
 	sr *tree.SetRole
 }
 
-func (sre *SetRoleExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
-}
-
 func (sre *SetRoleExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	return doSwitchRole(ctx, ses, sre.sr)
 }
@@ -75,10 +75,6 @@ func (sre *SetRoleExecutor) ExecuteImpl(ctx context.Context, ses *Session) error
 type UseExecutor struct {
 	*statusStmtExecutor
 	u *tree.Use
-}
-
-func (ue *UseExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
 }
 
 func (ue *UseExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
@@ -104,17 +100,13 @@ type ImportExecutor struct {
 	result *LoadResult
 }
 
-func (ie *ImportExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
-}
-
 func (ie *ImportExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	var err error
 	ie.result, err = doLoadData(ctx, ses, ie.GetProcess(), ie.i)
 	return err
 }
 
-func (ie *ImportExecutor) ResponseAfter(ctx context.Context, ses *Session) error {
+func (ie *ImportExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
 	var err error
 	result := ie.result
 	info := moerr.NewLoadInfo(result.Records, result.Deleted, result.Skipped, result.Warnings, result.WriteTimeout).Error()
@@ -160,12 +152,9 @@ type PrepareStmtExecutor struct {
 	prepareStmt *PrepareStmt
 }
 
-func (pse *PrepareStmtExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
-}
-
-func (pse *PrepareStmtExecutor) ResponseAfter(ctx context.Context, ses *Session) error {
+func (pse *PrepareStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
 	var err2, retErr error
+	fmt.Println("--->", ses.GetCmd(), "prepare stmt")
 	if ses.GetCmd() == COM_STMT_PREPARE {
 		if err2 = ses.GetMysqlProtocol().SendPrepareResponse(pse.prepareStmt); err2 != nil {
 			trace.EndStatement(ctx, err2)
@@ -200,11 +189,7 @@ type PrepareStringExecutor struct {
 	prepareStmt *PrepareStmt
 }
 
-func (pse *PrepareStringExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
-}
-
-func (pse *PrepareStringExecutor) ResponseAfter(ctx context.Context, ses *Session) error {
+func (pse *PrepareStringExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
 	var err2, retErr error
 	if ses.GetCmd() == COM_STMT_PREPARE {
 		if err2 = ses.GetMysqlProtocol().SendPrepareResponse(pse.prepareStmt); err2 != nil {
@@ -240,11 +225,7 @@ type DeallocateExecutor struct {
 	d *tree.Deallocate
 }
 
-func (de *DeallocateExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
-}
-
-func (de *DeallocateExecutor) ResponseAfter(ctx context.Context, ses *Session) error {
+func (de *DeallocateExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
 	var err2, retErr error
 	//we will not send response in COM_STMT_CLOSE command
 	if ses.GetCmd() != COM_STMT_CLOSE {
@@ -263,13 +244,52 @@ func (de *DeallocateExecutor) ExecuteImpl(ctx context.Context, ses *Session) err
 	return doDeallocate(ctx, ses, de.d)
 }
 
+type ExecuteExecutor struct {
+	*baseStmtExecutor
+	actualStmtExec StmtExecutor
+	ses            *Session
+	proc           *process.Process
+	e              *tree.Execute
+}
+
+func (ee *ExecuteExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	var err error
+	var ret interface{}
+	ret, err = ee.baseStmtExecutor.Compile(requestCtx, u, fill)
+	if err != nil {
+		return nil, err
+	}
+
+	ee.actualStmtExec, err = getStmtExecutor(ee.ses, ee.proc, ee.baseStmtExecutor, ee.GetAst())
+	if err != nil {
+		return nil, err
+	}
+	return ret, err
+}
+
+func (ee *ExecuteExecutor) ResponseBeforeExec(ctx context.Context, ses *Session) error {
+	return ee.actualStmtExec.ResponseBeforeExec(ctx, ses)
+}
+
+func (ee *ExecuteExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	return ee.actualStmtExec.ExecuteImpl(ctx, ses)
+}
+
+func (ee *ExecuteExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
+	return ee.actualStmtExec.ResponseAfterExec(ctx, ses)
+}
+
+func (ee *ExecuteExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) error {
+	return ee.actualStmtExec.CommitOrRollbackTxn(ctx, ses)
+}
+
+func (ee *ExecuteExecutor) Close(ctx context.Context, ses *Session) error {
+	return ee.actualStmtExec.Close(ctx, ses)
+}
+
 type SetVarExecutor struct {
 	*statusStmtExecutor
 	sv *tree.SetVar
-}
-
-func (sve *SetVarExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
 }
 
 func (sve *SetVarExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
@@ -309,10 +329,6 @@ type CreateAccountExecutor struct {
 	ca *tree.CreateAccount
 }
 
-func (cae *CreateAccountExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
-}
-
 func (cae *CreateAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	return InitGeneralTenant(ctx, ses, cae.ca)
 }
@@ -320,10 +336,6 @@ func (cae *CreateAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session)
 type DropAccountExecutor struct {
 	*statusStmtExecutor
 	da *tree.DropAccount
-}
-
-func (dae *DropAccountExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
 }
 
 func (dae *DropAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
@@ -340,10 +352,6 @@ type CreateUserExecutor struct {
 	cu *tree.CreateUser
 }
 
-func (cue *CreateUserExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
-}
-
 func (cue *CreateUserExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	tenant := ses.GetTenantInfo()
 	return InitUser(ctx, tenant, cue.cu)
@@ -352,10 +360,6 @@ func (cue *CreateUserExecutor) ExecuteImpl(ctx context.Context, ses *Session) er
 type DropUserExecutor struct {
 	*statusStmtExecutor
 	du *tree.DropUser
-}
-
-func (due *DropUserExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
 }
 
 func (due *DropUserExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
@@ -372,10 +376,6 @@ type CreateRoleExecutor struct {
 	cr *tree.CreateRole
 }
 
-func (cre *CreateRoleExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
-}
-
 func (cre *CreateRoleExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	tenant := ses.GetTenantInfo()
 
@@ -388,10 +388,6 @@ type DropRoleExecutor struct {
 	dr *tree.DropRole
 }
 
-func (dre *DropRoleExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
-}
-
 func (dre *DropRoleExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	return doDropRole(ctx, ses, dre.dr)
 }
@@ -399,10 +395,6 @@ func (dre *DropRoleExecutor) ExecuteImpl(ctx context.Context, ses *Session) erro
 type GrantExecutor struct {
 	*statusStmtExecutor
 	g *tree.Grant
-}
-
-func (ge *GrantExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
 }
 
 func (ge *GrantExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
@@ -418,10 +410,6 @@ func (ge *GrantExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 type RevokeExecutor struct {
 	*statusStmtExecutor
 	r *tree.Revoke
-}
-
-func (re *RevokeExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
 }
 
 func (re *RevokeExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {

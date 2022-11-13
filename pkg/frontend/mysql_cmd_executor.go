@@ -2384,8 +2384,446 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 	return cw, nil
 }
 
+func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor, stmt tree.Statement) (StmtExecutor, error) {
+	var err error
+	var ret StmtExecutor
+	switch st := stmt.(type) {
+	//PART 1: the statements with the result set
+	case *tree.Select:
+		ret = (&SelectExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			sel: st,
+		})
+	case *tree.ShowCreateTable:
+		ret = (&ShowCreateTableExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			sct: st,
+		})
+	case *tree.ShowCreateDatabase:
+		ret = (&ShowCreateDatabaseExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			scd: st,
+		})
+	case *tree.ShowTables:
+		ret = (&ShowTablesExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			st: st,
+		})
+	case *tree.ShowDatabases:
+		ret = (&ShowDatabasesExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			sd: st,
+		})
+	case *tree.ShowColumns:
+		ret = (&ShowColumnsExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			sc: st,
+		})
+	case *tree.ShowProcessList:
+		ret = (&ShowProcessListExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			spl: st,
+		})
+	case *tree.ShowStatus:
+		ret = (&ShowStatusExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			ss: st,
+		})
+	case *tree.ShowTableStatus:
+		ret = (&ShowTableStatusExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			sts: st,
+		})
+	case *tree.ShowGrants:
+		ret = (&ShowGrantsExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			sg: st,
+		})
+	case *tree.ShowIndex:
+		ret = (&ShowIndexExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			si: st,
+		})
+	case *tree.ShowCreateView:
+		ret = (&ShowCreateViewExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			scv: st,
+		})
+	case *tree.ShowTarget:
+		ret = (&ShowTargetExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			st: st,
+		})
+	case *tree.ExplainFor:
+		ret = (&ExplainForExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			ef: st,
+		})
+	case *tree.ExplainStmt:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&ExplainStmtExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			es: st,
+		})
+	case *tree.ShowVariables:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&ShowVariablesExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			sv: st,
+		})
+	case *tree.ShowErrors:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&ShowErrorsExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			se: st,
+		})
+	case *tree.ShowWarnings:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&ShowWarningsExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			sw: st,
+		})
+	case *tree.AnalyzeStmt:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&AnalyzeStmtExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			as: st,
+		})
+	case *tree.ExplainAnalyze:
+		ret = (&ExplainAnalyzeExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			ea: st,
+		})
+	case *InternalCmdFieldList:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&InternalCmdFieldListExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			icfl: st,
+		})
+	//PART 2: the statement with the status only
+	case *tree.BeginTransaction:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&BeginTxnExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			bt: st,
+		})
+	case *tree.CommitTransaction:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&CommitTxnExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			ct: st,
+		})
+	case *tree.RollbackTransaction:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&RollbackTxnExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			rt: st,
+		})
+	case *tree.SetRole:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&SetRoleExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			sr: st,
+		})
+	case *tree.Use:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&UseExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			u: st,
+		})
+	case *tree.MoDump:
+		//TODO:
+		err = moerr.NewInternalError("needs to add modump")
+	case *tree.DropDatabase:
+		ret = (&DropDatabaseExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			dd: st,
+		})
+	case *tree.Import:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&ImportExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			i: st,
+		})
+	case *tree.PrepareStmt:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&PrepareStmtExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			ps: st,
+		})
+	case *tree.PrepareString:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&PrepareStringExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			ps: st,
+		})
+	case *tree.Deallocate:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&DeallocateExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			d: st,
+		})
+	case *tree.SetVar:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&SetVarExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			sv: st,
+		})
+	case *tree.Delete:
+		ret = (&DeleteExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			d: st,
+		})
+	case *tree.Update:
+		ret = (&UpdateExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			u: st,
+		})
+	case *tree.CreateAccount:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&CreateAccountExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			ca: st,
+		})
+	case *tree.DropAccount:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&DropAccountExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			da: st,
+		})
+	case *tree.AlterAccount:
+		ret = (&AlterAccountExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			aa: st,
+		})
+	case *tree.CreateUser:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&CreateUserExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			cu: st,
+		})
+	case *tree.DropUser:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&DropUserExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			du: st,
+		})
+	case *tree.AlterUser:
+		ret = (&AlterUserExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			au: st,
+		})
+	case *tree.CreateRole:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&CreateRoleExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			cr: st,
+		})
+	case *tree.DropRole:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&DropRoleExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			dr: st,
+		})
+	case *tree.Grant:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&GrantExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			g: st,
+		})
+	case *tree.Revoke:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&RevokeExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			r: st,
+		})
+	case *tree.CreateTable:
+		ret = (&CreateTableExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			ct: st,
+		})
+	case *tree.DropTable:
+		ret = (&DropTableExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			dt: st,
+		})
+	case *tree.CreateDatabase:
+		ret = (&CreateDatabaseExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			cd: st,
+		})
+	case *tree.CreateIndex:
+		ret = (&CreateIndexExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			ci: st,
+		})
+	case *tree.DropIndex:
+		ret = (&DropIndexExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			di: st,
+		})
+	case *tree.CreateView:
+		ret = (&CreateViewExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			cv: st,
+		})
+	case *tree.DropView:
+		ret = (&DropViewExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			dv: st,
+		})
+	case *tree.Insert:
+		ret = (&InsertExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			i: st,
+		})
+	case *tree.Load:
+		ret = (&LoadExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			l: st,
+		})
+	case *tree.SetDefaultRole:
+		ret = (&SetDefaultRoleExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			sdr: st,
+		})
+	case *tree.SetPassword:
+		ret = (&SetPasswordExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			sp: st,
+		})
+	case *tree.TruncateTable:
+		ret = (&TruncateTableExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			tt: st,
+		})
+	//PART 3: hybrid
+	case *tree.Execute:
+		ret = &ExecuteExecutor{
+			baseStmtExecutor: base,
+			e:                st,
+		}
+	default:
+		return nil, moerr.NewInternalError("no such statement %s", stmt.String())
+	}
+	return ret, err
+}
+
 var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]StmtExecutor, error) {
 	var stmtExecList []StmtExecutor = nil
+	var stmtExec StmtExecutor
 	var stmts []tree.Statement = nil
 	var cmdFieldStmt *InternalCmdFieldList
 	var err error
@@ -2411,430 +2849,11 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 		cw := InitTxnComputationWrapper(ses, stmt, proc)
 		base := &baseStmtExecutor{}
 		base.ComputationWrapper = cw
-		switch st := stmt.(type) {
-		//PART 1: the statements with the result set
-		case *tree.Select:
-			appendStmtExec(&SelectExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				sel: st,
-			})
-		case *tree.ShowCreateTable:
-			appendStmtExec(&ShowCreateTableExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				sct: st,
-			})
-		case *tree.ShowCreateDatabase:
-			appendStmtExec(&ShowCreateDatabaseExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				scd: st,
-			})
-		case *tree.ShowTables:
-			appendStmtExec(&ShowTablesExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				st: st,
-			})
-		case *tree.ShowDatabases:
-			appendStmtExec(&ShowDatabasesExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				sd: st,
-			})
-		case *tree.ShowColumns:
-			appendStmtExec(&ShowColumnsExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				sc: st,
-			})
-		case *tree.ShowProcessList:
-			appendStmtExec(&ShowProcessListExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				spl: st,
-			})
-		case *tree.ShowStatus:
-			appendStmtExec(&ShowStatusExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				ss: st,
-			})
-		case *tree.ShowTableStatus:
-			appendStmtExec(&ShowTableStatusExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				sts: st,
-			})
-		case *tree.ShowGrants:
-			appendStmtExec(&ShowGrantsExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				sg: st,
-			})
-		case *tree.ShowIndex:
-			appendStmtExec(&ShowIndexExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				si: st,
-			})
-		case *tree.ShowCreateView:
-			appendStmtExec(&ShowCreateViewExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				scv: st,
-			})
-		case *tree.ShowTarget:
-			appendStmtExec(&ShowTargetExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				st: st,
-			})
-		case *tree.ExplainFor:
-			appendStmtExec(&ExplainForExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				ef: st,
-			})
-		case *tree.ExplainStmt:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&ExplainStmtExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				es: st,
-			})
-		case *tree.ShowVariables:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&ShowVariablesExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				sv: st,
-			})
-		case *tree.ShowErrors:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&ShowErrorsExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				se: st,
-			})
-		case *tree.ShowWarnings:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&ShowWarningsExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				sw: st,
-			})
-		case *tree.AnalyzeStmt:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&AnalyzeStmtExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				as: st,
-			})
-		case *tree.ExplainAnalyze:
-			appendStmtExec(&ExplainAnalyzeExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				ea: st,
-			})
-		case *InternalCmdFieldList:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&InternalCmdFieldListExecutor{
-				resultSetStmtExecutor: &resultSetStmtExecutor{
-					base,
-				},
-				icfl: st,
-			})
-		//PART 2: the statement with the status only
-		case *tree.BeginTransaction:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&BeginTxnExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				bt: st,
-			})
-		case *tree.CommitTransaction:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&CommitTxnExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				ct: st,
-			})
-		case *tree.RollbackTransaction:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&RollbackTxnExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				rt: st,
-			})
-		case *tree.SetRole:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&SetRoleExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				sr: st,
-			})
-		case *tree.Use:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&UseExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				u: st,
-			})
-		case *tree.MoDump:
-			//TODO:
-		case *tree.DropDatabase:
-			appendStmtExec(&DropDatabaseExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				dd: st,
-			})
-		case *tree.Import:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&ImportExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				i: st,
-			})
-		case *tree.PrepareStmt:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&PrepareStmtExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				ps: st,
-			})
-		case *tree.PrepareString:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&PrepareStringExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				ps: st,
-			})
-		case *tree.Deallocate:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&DeallocateExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				d: st,
-			})
-		case *tree.SetVar:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&SetVarExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				sv: st,
-			})
-		case *tree.Delete:
-			appendStmtExec(&DeleteExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				d: st,
-			})
-		case *tree.Update:
-			appendStmtExec(&UpdateExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				u: st,
-			})
-		case *tree.CreateAccount:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&CreateAccountExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				ca: st,
-			})
-		case *tree.DropAccount:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&DropAccountExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				da: st,
-			})
-		case *tree.AlterAccount:
-			appendStmtExec(&AlterAccountExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				aa: st,
-			})
-		case *tree.CreateUser:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&CreateUserExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				cu: st,
-			})
-		case *tree.DropUser:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&DropUserExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				du: st,
-			})
-		case *tree.AlterUser:
-			appendStmtExec(&AlterUserExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				au: st,
-			})
-		case *tree.CreateRole:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&CreateRoleExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				cr: st,
-			})
-		case *tree.DropRole:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&DropRoleExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				dr: st,
-			})
-		case *tree.Grant:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&GrantExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				g: st,
-			})
-		case *tree.Revoke:
-			base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-			appendStmtExec(&RevokeExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				r: st,
-			})
-		case *tree.CreateTable:
-			appendStmtExec(&CreateTableExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				ct: st,
-			})
-		case *tree.DropTable:
-			appendStmtExec(&DropTableExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				dt: st,
-			})
-		case *tree.CreateDatabase:
-			appendStmtExec(&CreateDatabaseExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				cd: st,
-			})
-		case *tree.CreateIndex:
-			appendStmtExec(&CreateIndexExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				ci: st,
-			})
-		case *tree.DropIndex:
-			appendStmtExec(&DropIndexExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				di: st,
-			})
-		case *tree.CreateView:
-			appendStmtExec(&CreateViewExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				cv: st,
-			})
-		case *tree.DropView:
-			appendStmtExec(&DropViewExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				dv: st,
-			})
-		case *tree.Insert:
-			appendStmtExec(&InsertExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				i: st,
-			})
-		case *tree.Load:
-			appendStmtExec(&LoadExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				l: st,
-			})
-		case *tree.SetDefaultRole:
-			appendStmtExec(&SetDefaultRoleExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				sdr: st,
-			})
-		case *tree.SetPassword:
-			appendStmtExec(&SetPasswordExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				sp: st,
-			})
-		case *tree.TruncateTable:
-			appendStmtExec(&TruncateTableExecutor{
-				statusStmtExecutor: &statusStmtExecutor{
-					base,
-				},
-				tt: st,
-			})
-		default:
-			return nil, moerr.NewInternalError("no such statement %s", stmt.String())
+		stmtExec, err = getStmtExecutor(ses, proc, base, stmt)
+		if err != nil {
+			return nil, err
 		}
+		appendStmtExec(stmtExec)
 	}
 	return stmtExecList, nil
 }

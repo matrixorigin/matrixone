@@ -1,9 +1,22 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package frontend
 
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -170,10 +183,6 @@ type ExplainStmtExecutor struct {
 	es *tree.ExplainStmt
 }
 
-func (ese *ExplainStmtExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
-}
-
 func (ese *ExplainStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	//TODO
 	return nil
@@ -182,10 +191,6 @@ func (ese *ExplainStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) e
 type ShowVariablesExecutor struct {
 	*resultSetStmtExecutor
 	sv *tree.ShowVariables
-}
-
-func (sve *ShowVariablesExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
 }
 
 func (sve *ShowVariablesExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
@@ -197,10 +202,6 @@ type ShowErrorsExecutor struct {
 	se *tree.ShowErrors
 }
 
-func (see *ShowErrorsExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
-}
-
 func (see *ShowErrorsExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	return doShowErrors(ses)
 }
@@ -210,10 +211,6 @@ type ShowWarningsExecutor struct {
 	sw *tree.ShowWarnings
 }
 
-func (swe *ShowWarningsExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
-}
-
 func (swe *ShowWarningsExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	return doShowErrors(ses)
 }
@@ -221,10 +218,6 @@ func (swe *ShowWarningsExecutor) ExecuteImpl(ctx context.Context, ses *Session) 
 type AnalyzeStmtExecutor struct {
 	*resultSetStmtExecutor
 	as *tree.AnalyzeStmt
-}
-
-func (ase *AnalyzeStmtExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
 }
 
 func (ase *AnalyzeStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
@@ -262,10 +255,6 @@ func (eae *ExplainAnalyzeExecutor) ExecuteImpl(ctx context.Context, ses *Session
 type InternalCmdFieldListExecutor struct {
 	*resultSetStmtExecutor
 	icfl *InternalCmdFieldList
-}
-
-func (icfle *InternalCmdFieldListExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	return nil, nil
 }
 
 func (icfle *InternalCmdFieldListExecutor) ResponseBeforeExec(ctx context.Context, ses *Session) error {

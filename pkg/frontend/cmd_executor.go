@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -167,12 +166,9 @@ handleRet:
 // baseStmtExecutor the base class for the statement execution
 type baseStmtExecutor struct {
 	ComputationWrapper
-	mu sync.Mutex
-
 	tenantName string
-
-	status stmtExecStatus
-	err    error
+	status     stmtExecStatus
+	err        error
 }
 
 func (bse *baseStmtExecutor) GetStatus() stmtExecStatus {
