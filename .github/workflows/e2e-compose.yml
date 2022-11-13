@@ -41,16 +41,17 @@ jobs:
           export LC_ALL="C.UTF-8"
           locale
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/test/distributed/cases 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/test/distributed/cases -s /test/distributed/resources 2>&1
 
       - name: export log
         if: ${{ always() }}
         run: |
-          mkdir ${{ github.workspace }}/docker-compose-log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0 > docker-compose-log/cn-0.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-1 > docker-compose-log/cn-1.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn > docker-compose-log/dn.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logService > docker-compose-log/logService.log
+          mkdir $GITHUB_WORKSPACE/docker-compose-log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0 >  $GITHUB_WORKSPACE/docker-compose-log/cn-0.log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-1 >  $GITHUB_WORKSPACE/docker-compose-log/cn-1.log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn >  $GITHUB_WORKSPACE/docker-compose-log/dn.log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logService >  $GITHUB_WORKSPACE/docker-compose-log/logService.log
+          mv $GITHUB_WORKSPACE/mo-tester/report docker-compose-log
 
       - name: shutdown containers
         if: ${{ always() }}
@@ -64,5 +65,5 @@ jobs:
         with:
           name: multi-cn-e2e_docker-compose
           path: |
-            docker-compose-log
+             $GITHUB_WORKSPACE/docker-compose-log
           retention-days: 7
