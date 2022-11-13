@@ -43,6 +43,7 @@ func commitTxn(txn *txnbase.Txn) {
 }
 
 func TestDeleteChain1(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	schema := catalog.MockSchema(1, 0)
 	c := catalog.MockCatalog(nil)
@@ -156,6 +157,7 @@ func TestDeleteChain1(t *testing.T) {
 }
 
 func TestDeleteChain2(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	controller := NewMVCCHandle(nil)
 	chain := NewDeleteChain(nil, controller)

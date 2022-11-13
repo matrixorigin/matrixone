@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -64,9 +65,7 @@ func (chain *DeleteChain) StringLocked() string {
 	line := 1
 	chain.LoopChain(func(vn txnif.MVCCNode) bool {
 		n := vn.(*DeleteNode)
-		n.chain.mvcc.RLock()
 		msg = fmt.Sprintf("%s\n%d. %s", msg, line, n.StringLocked())
-		n.chain.mvcc.RUnlock()
 		line++
 		return true
 	})
@@ -96,6 +95,7 @@ func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (er
 			overlap := n.HasOverlapLocked(start, end)
 			if overlap {
 				err = n.CheckConflict(ts)
+				logutil.Infof("[TS=%s] Delete W-W Start=%d End=%d BLK-%d", ts.ToString(), start, end, chain.mvcc.meta.ID)
 				if err == nil {
 					err = moerr.NewNotFound()
 				}

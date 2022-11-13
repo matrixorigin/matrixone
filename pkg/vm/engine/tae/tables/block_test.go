@@ -22,10 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestGetActiveRow(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	ts1 := types.BuildTS(1, 0)
 	ts2 := types.BuildTS(2, 0)
 	mvcc := updates.NewMVCCHandle(nil)

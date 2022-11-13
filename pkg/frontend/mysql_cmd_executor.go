@@ -68,6 +68,10 @@ func parameterModificationInTxnErrorInfo() string {
 	return "Uncommitted transaction exists. Please commit or rollback first."
 }
 
+func abortTransactionErrorInfo() string {
+	return "Previous DML conflicts with existing constraints or data format. This transaction has to be aborted"
+}
+
 var (
 	errorOnlyCreateStatement        = moerr.NewInternalError(onlyCreateStatementErrorInfo())
 	errorAdministrativeStatement    = moerr.NewInternalError("administrative command is unsupported in transactions")
@@ -214,6 +218,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stm.Report(ctx)
 	}
 	sc := trace.SpanContextWithID(trace.TraceID(stmID))
+	reqCtx := ses.GetRequestContext()
+	ses.SetRequestContext(trace.ContextWithSpanContext(reqCtx, sc))
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
@@ -433,20 +439,25 @@ func handleShowColumns(ses *Session) error {
 			}
 			def := &plan.Default{}
 			defaultData := d[4].([]uint8)
-			if err := types.Decode(defaultData, def); err != nil {
-				return err
-			}
-			originString := def.GetOriginString()
-			switch originString {
-			case "uuid()":
-				row[4] = "UUID"
-			case "current_timestamp()":
-				row[4] = "CURRENT_TIMESTAMP"
-			case "":
+			if string(defaultData) == "" {
 				row[4] = "NULL"
-			default:
-				row[4] = originString
+			} else {
+				if err := types.Decode(defaultData, def); err != nil {
+					return err
+				}
+				originString := def.GetOriginString()
+				switch originString {
+				case "uuid()":
+					row[4] = "UUID"
+				case "current_timestamp()":
+					row[4] = "CURRENT_TIMESTAMP"
+				case "":
+					row[4] = "NULL"
+				default:
+					row[4] = originString
+				}
 			}
+
 			row[5] = ""
 			row[6] = d[6]
 			mrs.AddRow(row)
@@ -473,20 +484,25 @@ func handleShowColumns(ses *Session) error {
 			}
 			def := &plan.Default{}
 			defaultData := d[5].([]uint8)
-			if err := types.Decode(defaultData, def); err != nil {
-				return err
-			}
-			originString := def.GetOriginString()
-			switch originString {
-			case "uuid()":
-				row[5] = "UUID"
-			case "current_timestamp()":
-				row[5] = "CURRENT_TIMESTAMP"
-			case "":
+			if string(defaultData) == "" {
 				row[5] = "NULL"
-			default:
-				row[5] = originString
+			} else {
+				if err := types.Decode(defaultData, def); err != nil {
+					return err
+				}
+				originString := def.GetOriginString()
+				switch originString {
+				case "uuid()":
+					row[5] = "UUID"
+				case "current_timestamp()":
+					row[5] = "CURRENT_TIMESTAMP"
+				case "":
+					row[5] = "NULL"
+				default:
+					row[5] = originString
+				}
 			}
+
 			row[6] = ""
 			row[7] = d[7]
 			row[8] = d[8]
@@ -2150,8 +2166,12 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 			return nil, err
 		}
 	}
+	addr := ""
+	if len(cwft.ses.GetParameterUnit().ClusterNodes) > 0 {
+		addr = cwft.ses.GetParameterUnit().ClusterNodes[0].Addr
+	}
 	cwft.proc.FileService = cwft.ses.GetParameterUnit().FileService
-	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
+	cwft.compile = compile.New(addr, cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
 		fill = func(obj interface{}, bat *batch.Batch) error { return nil }
@@ -2282,6 +2302,9 @@ func incTransactionCounter(tenant string) {
 }
 
 func incTransactionErrorsCounter(tenant string, t metric.SQLType) {
+	if t == metric.SQLTypeRollback {
+		return
+	}
 	metric.TransactionErrorsCounter(tenant, t).Inc()
 }
 
@@ -2408,7 +2431,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		Host:          pu.SV.Host,
 		ConnectionID:  uint64(proto.ConnectionID()),
 		Database:      ses.GetDatabaseName(),
-		Version:       "8.0.30-MatrixOne-v" + serverVersion.Load().(string),
+		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
 		TimeZone:      ses.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
 	}
@@ -3022,6 +3045,19 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	handleFailed:
 		incStatementCounter(tenant, stmt)
 		incStatementErrorsCounter(tenant, stmt)
+		/*
+			Cases    | set Autocommit = 1/0 | BEGIN statement |
+			---------------------------------------------------
+			Case1      1                       Yes
+			Case2      1                       No
+			Case3      0                       Yes
+			Case4      0                       No
+			---------------------------------------------------
+			update error message in Case1,Case3,Case4.
+		*/
+		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
+			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
+		}
 		trace.EndStatement(requestCtx, err)
 		logError(ses.GetConciseProfile(), err.Error())
 		if !fromLoadData {
@@ -3053,6 +3089,8 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		}
 	}()
 
+	var sql string
+	var procID uint64
 	ses := mce.GetSession()
 	logDebugf(ses.GetCompleteProfile(), "cmd %v", req.GetCmd())
 	ses.SetCmd(req.GetCmd())
@@ -3086,7 +3124,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 				Then, the client quit this connection.
 			*/
 			procIdStr := seps[len(seps)-1]
-			procID, err := strconv.ParseUint(procIdStr, 10, 64)
+			procID, err = strconv.ParseUint(procIdStr, 10, 64)
 			if err != nil {
 				resp = NewGeneralErrorResponse(COM_QUERY, err)
 				return resp, nil
@@ -3094,13 +3132,13 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 			err = mce.GetRoutineManager().killStatement(procID)
 			if err != nil {
 				resp = NewGeneralErrorResponse(COM_QUERY, err)
-				return resp, err
+				return resp, nil
 			}
 			resp = NewGeneralOkResponse(COM_QUERY)
 			return resp, nil
 		}
 
-		err := mce.doComQuery(requestCtx, query)
+		err = mce.doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_QUERY, err)
 		}
@@ -3109,7 +3147,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		var dbname = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		query := "use `" + dbname + "`"
-		err := mce.doComQuery(requestCtx, query)
+		err = mce.doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_INIT_DB, err)
 		}
@@ -3119,7 +3157,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		var payload = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		query := makeCmdFieldListSql(payload)
-		err := mce.doComQuery(requestCtx, query)
+		err = mce.doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_FIELD_LIST, err)
 		}
@@ -3132,7 +3170,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 
 	case COM_STMT_PREPARE:
 		ses.SetCmd(COM_STMT_PREPARE)
-		sql := string(req.GetData().([]byte))
+		sql = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 
 		// rewrite to "prepare stmt_name from 'xxx'"
@@ -3141,7 +3179,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
 		logInfo(ses.GetConciseProfile(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
-		err := mce.doComQuery(requestCtx, sql)
+		err = mce.doComQuery(requestCtx, sql)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, err)
 		}
@@ -3150,7 +3188,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 	case COM_STMT_EXECUTE:
 		ses.SetCmd(COM_STMT_EXECUTE)
 		data := req.GetData().([]byte)
-		sql, err := mce.parseStmtExecute(data)
+		sql, err = mce.parseStmtExecute(data)
 		if err != nil {
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, err), nil
 		}
@@ -3166,18 +3204,17 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		// rewrite to "deallocate prepare stmt_name"
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
-		sql := fmt.Sprintf("deallocate prepare %s", stmtName)
+		sql = fmt.Sprintf("deallocate prepare %s", stmtName)
 		logInfo(ses.GetConciseProfile(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
-		err := mce.doComQuery(requestCtx, sql)
+		err = mce.doComQuery(requestCtx, sql)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, err)
 		}
 		return resp, nil
 
 	default:
-		err := moerr.NewInternalError("unsupported command. 0x%x", req.GetCmd())
-		resp = NewGeneralErrorResponse(req.GetCmd(), err)
+		resp = NewGeneralErrorResponse(req.GetCmd(), moerr.NewInternalError("unsupported command. 0x%x", req.GetCmd()))
 	}
 	return resp, nil
 }
@@ -3223,25 +3260,7 @@ func (mce *MysqlCmdExecutor) setCancelRequestFunc(cancelFunc context.CancelFunc)
 	mce.cancelRequestFunc = cancelFunc
 }
 
-func (mce *MysqlCmdExecutor) getCancelRequestFunc() context.CancelFunc {
-	mce.mu.Lock()
-	defer mce.mu.Unlock()
-	return mce.cancelRequestFunc
-}
-
-func (mce *MysqlCmdExecutor) Close() {
-	cancelRequestFunc := mce.getCancelRequestFunc()
-	if cancelRequestFunc != nil {
-		cancelRequestFunc()
-	}
-	ses := mce.GetSession()
-	if ses != nil {
-		err := ses.TxnRollback()
-		if err != nil {
-			logErrorf(ses.GetConciseProfile(), "rollback txn in mce.Close failed.error:%v", err)
-		}
-	}
-}
+func (mce *MysqlCmdExecutor) Close() {}
 
 /*
 StatementCanBeExecutedInUncommittedTransaction checks the statement can be executed in an active transaction.
@@ -3349,14 +3368,14 @@ func IsPrepareStatement(stmt tree.Statement) bool {
 }
 
 /*
-IsStatementToBeCommittedInActiveTransaction checks the statement that need to be committed
+NeedToBeCommittedInActiveTransaction checks the statement that need to be committed
 in an active transaction.
 
 Currently, it includes the drop statement, the administration statement ,
 
 	the parameter modification statement.
 */
-func IsStatementToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
+func NeedToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
 	if stmt == nil {
 		return false
 	}

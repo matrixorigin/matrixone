@@ -517,7 +517,7 @@ func (ses *Session) GetTenantInfo() *TenantInfo {
 
 // GetTenantName return tenant name according to GetTenantInfo and stmt.
 //
-// With stmt = nil, should be only called in TxnBegin, TxnCommit, TxnRollback
+// With stmt = nil, should be only called in TxnHandler.NewTxn, TxnHandler.CommitTxn, TxnHandler.RollbackTxn
 func (ses *Session) GetTenantName(stmt tree.Statement) string {
 	tenant := sysAccountName
 	if ses.GetTenantInfo() != nil && (stmt == nil || !IsPrepareStatement(stmt)) {
@@ -787,10 +787,27 @@ func (ses *Session) ServerStatusIsSet(bit uint16) bool {
 InMultiStmtTransactionMode checks the session is in multi-statement transaction mode.
 OPTION_NOT_AUTOCOMMIT: After the autocommit is off, the multi-statement transaction is
 started implicitly by the first statement of the transaction.
-OPTION_BEGAN: Whenever the autocommit is on or off, the multi-statement transaction is
+OPTION_BEGIN: Whenever the autocommit is on or off, the multi-statement transaction is
 started explicitly by the BEGIN statement.
 
 But it does not denote the transaction is active or not.
+
+Cases    | set Autocommit = 1/0 | BEGIN statement |
+---------------------------------------------------
+Case1      1                       Yes
+Case2      1                       No
+Case3      0                       Yes
+Case4      0                       No
+---------------------------------------------------
+
+If it is Case1,Case3,Cass4, Then
+
+	InMultiStmtTransactionMode returns true.
+	Also, the bit SERVER_STATUS_IN_TRANS will be set.
+
+If it is Case2, Then
+
+	InMultiStmtTransactionMode returns false
 */
 func (ses *Session) InMultiStmtTransactionMode() bool {
 	return ses.OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN)
@@ -843,6 +860,23 @@ func (ses *Session) TxnStart() error {
 
 /*
 TxnCommitSingleStatement commits the single statement transaction.
+
+Cases    | set Autocommit = 1/0 | BEGIN statement |
+---------------------------------------------------
+Case1      1                       Yes
+Case2      1                       No
+Case3      0                       Yes
+Case4      0                       No
+---------------------------------------------------
+
+If it is Case1,Case3,Cass4, Then
+
+	InMultiStmtTransactionMode returns true.
+	Also, the bit SERVER_STATUS_IN_TRANS will be set.
+
+If it is Case2, Then
+
+	InMultiStmtTransactionMode returns false
 */
 func (ses *Session) TxnCommitSingleStatement(stmt tree.Statement) error {
 	var err error
@@ -855,45 +889,49 @@ func (ses *Session) TxnCommitSingleStatement(stmt tree.Statement) error {
 				the transaction need to be committed at the end of the statement.
 	*/
 	if !ses.InMultiStmtTransactionMode() ||
-		ses.InActiveTransaction() && IsStatementToBeCommittedInActiveTransaction(stmt) {
+		ses.InActiveTransaction() && NeedToBeCommittedInActiveTransaction(stmt) {
 		err = ses.GetTxnHandler().CommitTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
-		// metric count
-		tenant := ses.GetTenantName(stmt)
-		incTransactionCounter(tenant)
-		if err != nil {
-			incTransactionErrorsCounter(tenant, metric.SQLTypeAutoCommit)
-		}
 	}
 	return err
 }
 
 /*
 TxnRollbackSingleStatement rollbacks the single statement transaction.
+
+Cases    | set Autocommit = 1/0 | BEGIN statement |
+---------------------------------------------------
+Case1      1                       Yes
+Case2      1                       No
+Case3      0                       Yes
+Case4      0                       No
+---------------------------------------------------
+
+If it is Case1,Case3,Cass4, Then
+
+	InMultiStmtTransactionMode returns true.
+	Also, the bit SERVER_STATUS_IN_TRANS will be set.
+
+If it is Case2, Then
+
+	InMultiStmtTransactionMode returns false
 */
 func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 	var err error
 	/*
-		Rollback Rules:
-		1, if it is in single-statement mode:
-			it rollbacks.
-		2, if it is in multi-statement mode:
-			if the statement is the one can be executed in the active transaction,
-				the transaction need to be rollback at the end of the statement.
+			Rollback Rules:
+			1, if it is in single-statement mode (Case2):
+				it rollbacks.
+			2, if it is in multi-statement mode (Case1,Case3,Case4):
+		        the transaction need to be rollback at the end of the statement.
+				(every error will abort the transaction.)
 	*/
 	if !ses.InMultiStmtTransactionMode() ||
-		ses.InActiveTransaction() && IsStatementToBeCommittedInActiveTransaction(stmt) {
+		ses.InActiveTransaction() {
 		err = ses.GetTxnHandler().RollbackTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
-		// metric count
-		tenant := ses.GetTenantName(stmt)
-		incTransactionCounter(tenant)
-		incTransactionErrorsCounter(tenant, metric.SQLTypeOther) // exec rollback cnt
-		if err != nil {
-			incTransactionErrorsCounter(tenant, metric.SQLTypeAutoRollback)
-		}
 	}
 	return err
 }
@@ -904,25 +942,17 @@ It commits the current transaction implicitly.
 */
 func (ses *Session) TxnBegin() error {
 	var err error
-	tenant := ses.GetTenantName(nil)
 	if ses.InMultiStmtTransactionMode() {
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		err = ses.GetTxnHandler().CommitTxn()
-		// metric count: last txn
-		incTransactionCounter(tenant)
 	}
 	ses.ClearOptionBits(OPTION_BEGIN)
 	if err != nil {
-		// metric count: last txn commit failed.
-		incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
 		return err
 	}
 	ses.SetOptionBits(OPTION_BEGIN)
 	ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
 	err = ses.GetTxnHandler().NewTxn()
-	if err != nil {
-		incTransactionErrorsCounter(tenant, metric.SQLTypeBegin)
-	}
 	return err
 }
 
@@ -933,12 +963,6 @@ func (ses *Session) TxnCommit() error {
 	err = ses.GetTxnHandler().CommitTxn()
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 	ses.ClearOptionBits(OPTION_BEGIN)
-	// metric count
-	tenant := ses.GetTenantName(nil)
-	incTransactionCounter(tenant)
-	if err != nil {
-		incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
-	}
 	return err
 }
 
@@ -948,13 +972,6 @@ func (ses *Session) TxnRollback() error {
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY)
 	err = ses.GetTxnHandler().RollbackTxn()
 	ses.ClearOptionBits(OPTION_BEGIN)
-	// metric count
-	tenant := ses.GetTenantName(nil)
-	incTransactionCounter(tenant)
-	incTransactionErrorsCounter(tenant, metric.SQLTypeOther)
-	if err != nil {
-		incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
-	}
 	return err
 }
 
@@ -1225,6 +1242,12 @@ func (th *TxnHandler) NewTxn() error {
 		}
 	}
 	th.SetInvalid()
+	defer func() {
+		if err != nil {
+			tenant := th.ses.GetTenantName(nil)
+			incTransactionErrorsCounter(tenant, metric.SQLTypeBegin)
+		}
+	}()
 	err = th.TxnClientNew()
 	if err != nil {
 		return err
@@ -1239,7 +1262,8 @@ func (th *TxnHandler) NewTxn() error {
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
-	return storage.New(ctx, th.GetTxnOperator())
+	err = storage.New(ctx, th.GetTxnOperator())
+	return err
 }
 
 // IsValidTxn checks the transaction is true or not.
@@ -1286,6 +1310,14 @@ func (th *TxnHandler) CommitTxn() error {
 	)
 	defer cancel()
 	var err, err2 error
+	defer func() {
+		// metric count
+		tenant := ses.GetTenantName(nil)
+		incTransactionCounter(tenant)
+		if err != nil {
+			incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
+		}
+	}()
 	txnOp := th.GetTxnOperator()
 	if txnOp == nil {
 		logErrorf(sessionProfile, "CommitTxn: txn operator is null")
@@ -1330,6 +1362,15 @@ func (th *TxnHandler) RollbackTxn() error {
 	)
 	defer cancel()
 	var err, err2 error
+	defer func() {
+		// metric count
+		tenant := ses.GetTenantName(nil)
+		incTransactionCounter(tenant)
+		incTransactionErrorsCounter(tenant, metric.SQLTypeOther) // exec rollback cnt
+		if err != nil {
+			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
+		}
+	}()
 	txnOp := th.GetTxnOperator()
 	if txnOp == nil {
 		logErrorf(sessionProfile, "RollbackTxn: txn operator is null")

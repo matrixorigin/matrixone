@@ -32,6 +32,7 @@ import (
 )
 
 func TestStaticFilterIndex(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	//bufManager := buffer.NewNodeManager(1024*1024, nil)
 	var err error
 	//var res bool

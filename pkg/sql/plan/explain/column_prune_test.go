@@ -418,7 +418,7 @@ func TestNestedQueryPrune(t *testing.T) {
 		},
 		{
 			name: "Test02",
-			sql:  "SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)",
+			sql:  "SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY = N_REGIONKEY)",
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",

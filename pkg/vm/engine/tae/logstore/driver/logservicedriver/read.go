@@ -17,6 +17,7 @@ package logservicedriver
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -144,14 +145,15 @@ func (d *LogServiceDriver) readFromLogService(lsn uint64, size int) (nextLsn uin
 	if err != nil {
 		panic(err)
 	}
+	t0 := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
-	records, nextLsn, err = client.c.Read(ctx, lsn, d.config.ReadMaxSize)
+	records, nextLsn, err = client.c.Read(ctx, lsn, uint64(size))
 	cancel()
 	if err != nil {
 		err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
 			logutil.Infof("LogService Driver: retry read err is %v", err)
 			ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
-			records, nextLsn, err = client.c.Read(ctx, lsn, d.config.ReadMaxSize)
+			records, nextLsn, err = client.c.Read(ctx, lsn, uint64(size))
 			cancel()
 			return err == nil
 		})
@@ -159,5 +161,6 @@ func (d *LogServiceDriver) readFromLogService(lsn uint64, size int) (nextLsn uin
 			panic(err)
 		}
 	}
+	d.readDuration += time.Since(t0)
 	return
 }

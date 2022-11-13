@@ -3,7 +3,7 @@
 -- @desc:test for decimal datatype
 -- @label:bvt
 
-#Basic insert table test with format yyyy-mm-dd hh:mm:ss(.msec)
+#Basic insert table test with format string "yyyy-mm-dd hh:mm:ss(.msec)"
 drop table if exists t1;
 create table t1(t time(3));
 insert into t1 values("100:00:20");
@@ -12,22 +12,40 @@ insert into t1 values("2012-12-12 12:00:20");
 insert into t1 values("2012-12-12 12:00:20.1234");
 insert into t1 values("2012-12-12 12:00:20.1235");
 select * from t1;
-insert into t1 values("839:00:00");
 
-#Basic insert table test with format yyyymmddhhmmss(.msec)
+#Basic insert table test with format different short length input string
 drop table if exists t1;
 create table t1(t time(3));
-insert into t1 values("20201122112233");
-insert into t1 values("20201122112233.1234");
-insert into t1 values("20201122112233.1235");
-select * from t1;
-
-#Basic insert table test with format different length input 
-drop table if exists t1;
-create table t1(t time(3));
+insert into t1 values("");
 insert into t1 values("1"), ("11"), ("112"), ("1122"), ("11223"),("112233"),("-1"), ("-11"), ("-112"), ("-1122"), ("-11223"),("-112233");
 insert into t1 values("112233.4445"),("-112233.4445");
 select * from t1;
+
+#Basic insert table test with format different long length input string
+drop table if exists t1;
+create table t1(t time(3));
+insert into t1 values("2020112211");
+insert into t1 values("2020112211.1234");
+insert into t1 values("2020112211.1235");
+select * from t1;
+
+#Basic insert table test with short
+drop table if exists t1;
+create table t1(t time);
+insert into t1 values(1), (11), (112), (1122), (11223),(112233),(-1), (-11), (-112), (-1122), (-11223),(-112233);
+select * from t1;
+
+#Basic insert table test with long int and decimal
+drop table if exists t1;
+create table t1(t time);
+insert into t1 values(20770101112233);
+insert into t1 values(112233.4445);
+select * from t1;
+
+#Basic insert table test with outrange 
+drop table if exists t1;
+create table t1(t time);
+insert into t1 values(25620477880000);
 
 #Date to time cast
 drop table if exists t1;
@@ -52,6 +70,7 @@ select * from t1;
 select time("2012-12-12 12:00:20");
 select time("20201122112233");
 select time("11223");
+select time("20201122112233.1234");
 select cast('11:22:33.445566' as time(0));
 select cast('11:22:33.445566' as time(3));
 select cast('123.445' as time(6));
@@ -61,6 +80,22 @@ select adddate(time'00:00:00', interval 1 hour);
 select adddate(time'00:00:00', interval 1 minute);
 select adddate(time'00:00:00', interval 1 second);
 select adddate(time'800:00:00', interval 1 hour);
-select adddate(time'838:00:00', interval 1 hour);
+select adddate(time'2562047787:00:00', interval 1 hour);
 select adddate(time'100:00:00', interval -100 minute);
 select adddate(time'100:00:00', interval -1000 second);
+
+#Cast time to numeric/decimal
+select cast(time("11:22:33") as BIGINT);
+select cast(time("-11:22:33") as BIGINT);
+select cast(time("11:22:33") as DECIMAL);
+select cast(time("-11:22:33") as DECIMAL);
+
+#Basic compare test
+drop table if exists t1;
+create table t1(t time);
+insert into t1 values("0"), ("10"), ("50"), ("1000"), ("5500"), ("100000"), ("990000");
+insert into t1 values("-10"), ("-50"), ("-1000"), ("-5500"), ("-100000"), ("-990000");
+select * from t1 where t > 100000;
+select * from t1 where t < -100000; 
+select * from t1 where t >= 0;
+select * from t1 where t < 0;

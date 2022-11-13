@@ -57,31 +57,26 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	defer anal.Stop()
 	ap := arg.(*Argument)
 	ctr := ap.ctr
-	for {
-		switch ctr.state {
-		case Build:
-			if ap.Limit == 0 {
-				ctr.state = End
-				proc.Reg.InputBatch = nil
-				return true, nil
-			}
-			if err := ctr.build(ap, proc, anal); err != nil {
-				ctr.state = End
-				return true, err
-			}
-			ctr.state = Eval
-		case Eval:
-			ctr.state = End
-			if ctr.bat == nil {
-				proc.SetInputBatch(nil)
-				return true, nil
-			}
-			return true, ctr.eval(ap.Limit, proc, anal)
-		default:
-			proc.SetInputBatch(nil)
-			return true, nil
-		}
+
+	if ap.Limit == 0 {
+		ap.Free(proc, false)
+		proc.SetInputBatch(nil)
+		return true, nil
 	}
+
+	if err := ctr.build(ap, proc, anal); err != nil {
+		ap.Free(proc, true)
+		return false, err
+	}
+
+	if ctr.bat == nil {
+		ap.Free(proc, false)
+		proc.SetInputBatch(nil)
+		return true, nil
+	}
+	err := ctr.eval(ap.Limit, proc, anal)
+	ap.Free(proc, err != nil)
+	return err == nil, err
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
@@ -91,8 +86,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 		for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
 			reg := proc.Reg.MergeReceivers[i]
-			bat := <-reg.Ch
-			if bat == nil {
+			bat, ok := <-reg.Ch
+			if !ok || bat == nil {
 				proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:i], proc.Reg.MergeReceivers[i+1:]...)
 				i--
 				continue
@@ -214,8 +209,7 @@ func (ctr *container) eval(limit int64, proc *process.Process, anal process.Anal
 		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
 	}
 	if err := ctr.bat.Shuffle(sels, proc.Mp()); err != nil {
-		ctr.bat.Clean(proc.Mp())
-		ctr.bat = nil
+		return err
 	}
 	for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
 		vector.Clean(ctr.bat.Vecs[i], proc.Mp())

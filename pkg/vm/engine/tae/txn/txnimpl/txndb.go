@@ -121,6 +121,17 @@ func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
 	return table.Append(bat)
 }
 
+func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {
+	changed, nid, nrow, err := table.TransferDeleteIntent(id, row)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return table.RangeDelete(id, row, row, dt)
+	}
+	return table.RangeDelete(nid, nrow, nrow, dt)
+}
+
 func (db *txnDB) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
@@ -129,7 +140,15 @@ func (db *txnDB) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteT
 	if table.IsDeleted() {
 		return moerr.NewNotFound()
 	}
-	return table.RangeDelete(id, start, end, dt)
+	if start == end {
+		return db.DeleteOne(table, id, start, dt)
+	}
+	for i := start; i <= end; i++ {
+		if err = db.DeleteOne(table, id, i, dt); err != nil {
+			return
+		}
+	}
+	return
 }
 
 func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
@@ -441,6 +460,11 @@ func (db *txnDB) PrePrepare() (err error) {
 				return
 			}
 			delete(db.tables, table.GetID())
+		}
+	}
+	for _, table := range db.tables {
+		if err = table.PrePreareTransfer(); err != nil {
+			return
 		}
 	}
 	for _, table := range db.tables {
