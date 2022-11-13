@@ -46,6 +46,23 @@ type baseBlock struct {
 	ttl time.Time
 }
 
+func newBaseBlock(
+	meta *catalog.BlockEntry,
+	bufMgr base.INodeManager,
+	fs *objectio.ObjectFS,
+	scheduler tasks.TaskScheduler) *baseBlock {
+	blk := &baseBlock{
+		bufMgr:    bufMgr,
+		fs:        fs,
+		scheduler: scheduler,
+		meta:      meta,
+		ttl:       time.Now(),
+	}
+	blk.mvcc = updates.NewMVCCHandle(meta)
+	blk.RWMutex = blk.mvcc.RWMutex
+	return blk
+}
+
 func (blk *baseBlock) PinNode() (
 	mnode *common.PinnedItem[*memoryNode],
 	pnode *common.PinnedItem[*persistedNode]) {

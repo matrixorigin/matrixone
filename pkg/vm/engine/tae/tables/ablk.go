@@ -11,6 +11,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -24,8 +26,45 @@ import (
 )
 
 type ablock struct {
-	baseBlock
+	*baseBlock
 	intents atomic.Int32
+}
+
+func newABlock(
+	meta *catalog.BlockEntry,
+	fs *objectio.ObjectFS,
+	bufMgr base.INodeManager,
+	scheduler tasks.TaskScheduler) *ablock {
+	base := newBaseBlock(meta, bufMgr, fs, scheduler)
+	blk := &ablock{
+		baseBlock: base,
+	}
+	base.mvcc.SetAppendListener(blk.OnApplyAppend)
+	base.mvcc.SetDeletesListener(blk.OnApplyDelete)
+	if blk.meta.HasDropCommitted() {
+		node := newPersistedNode(base)
+		pinned := node.Pin()
+		blk.storage.pnode = pinned
+	} else {
+		node := newMemoryNode(base)
+		pinned := node.Pin()
+		blk.storage.mnode = pinned
+	}
+	return blk
+}
+
+func (blk *ablock) OnApplyAppend(n txnif.AppendNode) (err error) {
+	blk.meta.GetSegment().GetTable().AddRows(uint64(n.GetMaxRow() -
+		n.GetStartRow()))
+	return
+}
+
+func (blk *ablock) OnApplyDelete(
+	deleted uint64,
+	gen common.RowGen,
+	ts types.TS) (err error) {
+	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
+	return
 }
 
 func (blk *ablock) ApplyAppendQuota() bool {

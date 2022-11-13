@@ -13,10 +13,26 @@ import (
 
 type persistedNode struct {
 	common.RefHelper
-	block    *baseBlock
-	pkIndex  indexwrapper.Index
-	indexes  map[int]indexwrapper.Index
-	OnZeroCB common.OnZeroCB
+	block   *baseBlock
+	pkIndex indexwrapper.Index
+	indexes map[int]indexwrapper.Index
+}
+
+func newPersistedNode(block *baseBlock) *persistedNode {
+	node := &persistedNode{
+		block: block,
+	}
+	node.initIndexes(block.meta.GetSchema())
+	return node
+}
+
+func (node *persistedNode) close() {
+	for i, index := range node.indexes {
+		index.Close()
+		node.indexes[i] = nil
+	}
+	node.indexes = nil
+	return
 }
 
 func (node *persistedNode) initIndexes(schema *catalog.Schema) {

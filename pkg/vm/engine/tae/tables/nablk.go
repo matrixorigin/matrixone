@@ -5,17 +5,45 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type block struct {
-	baseBlock
+	*baseBlock
+}
+
+func newNABlock(
+	meta *catalog.BlockEntry,
+	fs *objectio.ObjectFS,
+	bufMgr base.INodeManager,
+	scheduler tasks.TaskScheduler) *block {
+	base := newBaseBlock(meta, bufMgr, fs, scheduler)
+	blk := &block{
+		baseBlock: base,
+	}
+	base.mvcc.SetDeletesListener(blk.OnApplyDelete)
+	node := newPersistedNode(base)
+	pinned := node.Pin()
+	blk.storage.pnode = pinned
+	return blk
+}
+
+func (blk *block) OnApplyDelete(
+	deleted uint64,
+	gen common.RowGen,
+	ts types.TS) (err error) {
+	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
+	return
 }
 
 func (blk *block) PrepareCompact() bool {

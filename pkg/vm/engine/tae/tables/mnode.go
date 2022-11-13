@@ -21,8 +21,6 @@ type memoryNode struct {
 
 	pkIndex indexwrapper.Index
 	indexes map[int]indexwrapper.Index
-
-	OnZeroCB common.OnZeroCB
 }
 
 func newMemoryNode(block *baseBlock) *memoryNode {
@@ -73,6 +71,8 @@ func (node *memoryNode) close() {
 		node.indexes[i] = nil
 	}
 	node.indexes = nil
+	node.pkIndex = nil
+	node.block = nil
 	return
 }
 
