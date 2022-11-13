@@ -19,9 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type PageT[T common.IRef] interface {
@@ -125,13 +123,4 @@ func (table *TransferTable[T]) Close() {
 		item.Close()
 	}
 	table.pages = make(map[common.ID]*common.PinnedItem[T])
-}
-
-func NewRowIDVector() containers.Vector {
-	return containers.MakeVector(
-		types.T_Rowid.ToType(),
-		false,
-		&containers.Options{
-			Allocator: common.CacheAllocator,
-		})
 }

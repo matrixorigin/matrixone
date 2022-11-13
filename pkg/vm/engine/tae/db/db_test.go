@@ -4399,3 +4399,74 @@ func TestTransfer3(t *testing.T) {
 	err = txn1.Commit()
 	assert.NoError(t, err)
 }
+
+func TestUpdate(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithQuickScanAndCKPOpts2(nil, 5)
+	// opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(5, 3)
+	schema.BlockMaxRows = 100
+	schema.SegmentMaxBlocks = 4
+	tae.bindSchema(schema)
+
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	bat.Vecs[2].Update(0, int32(0))
+
+	tae.createRelAndAppend(bat, true)
+
+	var wg sync.WaitGroup
+
+	var expectV atomic.Int32
+	expectV.Store(bat.Vecs[2].Get(0).(int32))
+	filter := handle.NewEQFilter(bat.Vecs[3].Get(0))
+	updateFn := func() {
+		defer wg.Done()
+		txn, rel := tae.getRelation()
+		id, offset, err := rel.GetByFilter(filter)
+		assert.NoError(t, err)
+		v, err := rel.GetValue(id, offset, 2)
+		assert.NoError(t, err)
+		err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
+		if err != nil {
+			t.Logf("range delete %v, rollbacking", err)
+			_ = txn.Rollback()
+			return
+		}
+		tuples := bat.CloneWindow(0, 1)
+		defer tuples.Close()
+		updatedV := v.(int32) + 1
+		tuples.Vecs[2].Update(0, updatedV)
+		err = rel.Append(tuples)
+		assert.NoError(t, err)
+
+		err = txn.Commit()
+		if err != nil {
+			t.Logf("commit update %v", err)
+		} else {
+			expectV.CompareAndSwap(v.(int32), updatedV)
+			t.Logf("%v committed", updatedV)
+		}
+	}
+	p, _ := ants.NewPool(5)
+	defer p.Release()
+	loop := 1000
+	for i := 0; i < loop; i++ {
+		wg.Add(1)
+		// updateFn()
+		_ = p.Submit(updateFn)
+	}
+	wg.Wait()
+	t.Logf("Final: %v", expectV.Load())
+	{
+		txn, rel := tae.getRelation()
+		v, err := rel.GetValueByFilter(filter, 2)
+		assert.NoError(t, err)
+		assert.Equal(t, v.(int32), expectV.Load())
+		checkAllColRowsByScan(t, rel, 1, true)
+		assert.NoError(t, txn.Commit())
+	}
+}
