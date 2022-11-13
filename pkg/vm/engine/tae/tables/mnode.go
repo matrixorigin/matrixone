@@ -3,6 +3,7 @@ package tables
 import (
 	"bytes"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -73,6 +74,16 @@ func (node *memoryNode) close() {
 	}
 	node.indexes = nil
 	return
+}
+
+func (node *memoryNode) BatchDedup(
+	keys containers.Vector,
+	skipFn func(row uint32) error) (sels *roaring.Bitmap, err error) {
+	return node.pkIndex.BatchDedup(keys, skipFn)
+}
+
+func (node *memoryNode) GetValueByRow(row, col int) (v any) {
+	return node.data.Vecs[col].Get(row)
 }
 
 func (node *memoryNode) GetRowsByKey(key any) (rows []uint32, err error) {

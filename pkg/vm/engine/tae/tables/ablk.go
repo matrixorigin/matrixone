@@ -3,11 +3,13 @@ package tables
 import (
 	"bytes"
 	"fmt"
-	"sync"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -17,56 +19,6 @@ import (
 
 type ablock struct {
 	baseBlock
-	storage struct {
-		mu    sync.RWMutex
-		mnode *common.PinnedItem[*memoryNode]
-		pnode *common.PinnedItem[*persistedNode]
-	}
-}
-
-func (blk *ablock) Rows() int {
-	mnode, pnode := blk.PinNode()
-	if mnode != nil {
-		defer mnode.Close()
-		blk.RLock()
-		defer blk.RUnlock()
-		return int(mnode.Item().Rows())
-	} else if pnode != nil {
-		defer pnode.Close()
-		return int(pnode.Item().Rows())
-	}
-	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
-}
-
-func (blk *ablock) PinNode() (
-	mnode *common.PinnedItem[*memoryNode],
-	pnode *common.PinnedItem[*persistedNode]) {
-	blk.storage.mu.RLock()
-	defer blk.storage.mu.RUnlock()
-	if blk.storage.mnode != nil {
-		mnode = blk.storage.mnode.Item().Pin()
-	} else if blk.storage.pnode != nil {
-		pnode = blk.storage.pnode.Item().Pin()
-	}
-	return
-}
-
-func (blk *ablock) GetColumnData(
-	from uint32,
-	to uint32,
-	colIdx int,
-	buffer *bytes.Buffer) (vec containers.Vector, err error) {
-	mnode, pnode := blk.PinNode()
-	if mnode != nil {
-		defer mnode.Close()
-		blk.RLock()
-		defer blk.RUnlock()
-		return mnode.Item().GetColumnDataWindow(from, to, colIdx, buffer)
-	} else if pnode != nil {
-		defer pnode.Close()
-		return pnode.Item().GetColumnDataWindow(from, to, colIdx, buffer)
-	}
-	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
 }
 
 func (blk *ablock) GetColumnDataById(
@@ -270,6 +222,69 @@ func (blk *ablock) getPersistedRowByFilter(
 	pnode *persistedNode,
 	ts types.TS,
 	filter *handle.Filter) (row uint32, err error) {
+	ok, err := pnode.ContainsKey(filter.Val)
+	if err != nil {
+		return
+	}
+	if !ok {
+		err = moerr.NewNotFound()
+		return
+	}
+	sortKey, err := blk.LoadPersistedColumnData(
+		blk.meta.GetSchema().GetSingleSortKeyIdx(),
+		nil,
+	)
+	if err != nil {
+		return
+	}
+	defer sortKey.Close()
+	rows := make([]uint32, 0)
+	err = sortKey.Foreach(func(v any, offset int) error {
+		if compute.CompareGeneric(v, filter.Val, sortKey.GetType()) == 0 {
+			row := uint32(offset)
+			rows = append(rows, row)
+			return nil
+		}
+		return nil
+	}, nil)
+	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
+		return
+	}
+	if len(rows) == 0 {
+		err = moerr.NewNotFound()
+		return
+	}
+
+	// Load persisted commit ts
+	commitTSVec, err := blk.LoadPersistedCommitTS()
+	if err != nil {
+		return
+	}
+	defer commitTSVec.Close()
+
+	// Load persisted deletes
+	view := model.NewColumnView(ts, 0)
+	if err = blk.FillPersistedDeletes(view); err != nil {
+		return
+	}
+
+	exist := false
+	var deleted bool
+	for _, offset := range rows {
+		commitTS := commitTSVec.Get(int(offset)).(types.TS)
+		if commitTS.Greater(ts) {
+			break
+		}
+		deleted = view.IsDeleted(int(offset))
+		if !deleted {
+			exist = true
+			row = offset
+			break
+		}
+	}
+	if !exist {
+		err = moerr.NewNotFound()
+	}
 	return
 }
 
@@ -324,4 +339,131 @@ func (blk *ablock) getInMemoryRowByFilter(
 		}
 	}
 	return 0, moerr.NewNotFound()
+}
+
+func (blk *ablock) checkConflictAndDupClosure(
+	ts types.TS,
+	dupRow *uint32,
+	rowmask *roaring.Bitmap) func(row uint32) error {
+	return func(row uint32) (err error) {
+		if rowmask != nil && rowmask.Contains(row) {
+			return nil
+		}
+		appendnode := blk.mvcc.GetAppendNodeByRow(row)
+		needWait, txn := appendnode.NeedWaitCommitting(ts)
+		if needWait {
+			blk.mvcc.RUnlock()
+			txn.GetTxnState(true)
+			blk.mvcc.RLock()
+		}
+		if appendnode.IsAborted() || !appendnode.IsVisible(ts) {
+			if err = appendnode.CheckConflict(ts); err != nil {
+				return
+			}
+			return nil
+		}
+		deleteNode := blk.mvcc.GetDeleteNodeByRow(row)
+		if deleteNode == nil {
+			*dupRow = row
+			return moerr.GetOkExpectedDup()
+		}
+		needWait, txn = deleteNode.NeedWaitCommitting(ts)
+		if needWait {
+			blk.mvcc.RUnlock()
+			txn.GetTxnState(true)
+			blk.mvcc.RLock()
+		}
+		if deleteNode.IsAborted() || !deleteNode.IsVisible(ts) {
+			return moerr.GetOkExpectedDup()
+		}
+		if err = appendnode.CheckConflict(ts); err != nil {
+			return
+		}
+		if err = deleteNode.CheckConflict(ts); err != nil {
+			return
+		}
+		return nil
+	}
+}
+
+func (blk *ablock) persistedBatchDedup(
+	pnode *persistedNode,
+	ts types.TS,
+	keys containers.Vector,
+	rowmask *roaring.Bitmap) (err error) {
+	sels, err := pnode.BatchDedup(
+		keys,
+		nil,
+	)
+	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+		return
+	}
+	def := blk.meta.GetSchema().GetSingleSortKey()
+	view, err := blk.resolvePersistedColumnData(
+		pnode,
+		ts,
+		def.Idx,
+		nil,
+		false)
+	if err != nil {
+		return
+	}
+	defer view.Close()
+	deduplicate := func(v1 any, _ int) error {
+		return view.GetData().Foreach(func(v2 any, row int) error {
+			if view.DeleteMask != nil && view.DeleteMask.ContainsInt(row) {
+				return nil
+			}
+			if compute.CompareGeneric(v1, v2, keys.GetType()) == 0 {
+				entry := common.TypeStringValue(keys.GetType(), v1)
+				return moerr.NewDuplicateEntry(entry, def.Name)
+			}
+			return nil
+		}, nil)
+	}
+	err = keys.Foreach(deduplicate, sels)
+	return
+}
+
+func (blk *ablock) inMemoryBatchDedup(
+	mnode *memoryNode,
+	ts types.TS,
+	keys containers.Vector,
+	rowmask *roaring.Bitmap) (err error) {
+	var dupRow uint32
+	blk.RLock()
+	defer blk.RUnlock()
+	_, err = mnode.BatchDedup(
+		keys,
+		blk.checkConflictAndDupClosure(ts, &dupRow, rowmask))
+
+	// definitely no duplicate
+	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
+		return
+	}
+
+	def := blk.meta.GetSchema().GetSingleSortKey()
+	v := mnode.GetValueByRow(int(dupRow), def.Idx)
+	entry := common.TypeStringValue(keys.GetType(), v)
+	return moerr.NewDuplicateEntry(entry, def.Name)
+}
+
+func (blk *ablock) BatchDedup(
+	txn txnif.AsyncTxn,
+	keys containers.Vector,
+	rowmask *roaring.Bitmap) (err error) {
+	defer func() {
+		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+			logutil.Infof("BatchDedup BLK-%d: %v", blk.meta.ID, err)
+		}
+	}()
+	mnode, pnode := blk.PinNode()
+	if mnode != nil {
+		defer mnode.Close()
+		return blk.inMemoryBatchDedup(mnode.Item(), txn.GetStartTS(), keys, rowmask)
+	} else if pnode != nil {
+		defer pnode.Close()
+		return blk.persistedBatchDedup(pnode.Item(), txn.GetStartTS(), keys, rowmask)
+	}
+	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
 }

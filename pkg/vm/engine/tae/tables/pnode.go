@@ -3,6 +3,7 @@ package tables
 import (
 	"bytes"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -50,6 +51,12 @@ func (node *persistedNode) Pin() *common.PinnedItem[*persistedNode] {
 func (node *persistedNode) Rows() uint32 {
 	location := node.block.GetMeta().(catalog.BlockEntry).GetMetaLoc()
 	return uint32(ReadPersistedBlockRow(location))
+}
+
+func (node *persistedNode) BatchDedup(
+	keys containers.Vector,
+	skipFn func(row uint32) error) (sels *roaring.Bitmap, err error) {
+	return node.pkIndex.BatchDedup(keys, skipFn)
 }
 
 func (node *persistedNode) Dedup(key any) (err error) {
