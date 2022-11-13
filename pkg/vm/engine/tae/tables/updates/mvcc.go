@@ -155,10 +155,12 @@ func (n *MVCCHandle) IsDeletedLocked(row uint32, ts types.TS, rwlocker *sync.RWM
 	return n.deletes.IsDeleted(row, ts, rwlocker)
 }
 
-//     1         2        3       4      5       6
-//   [----] [---------] [----][------][-----] [-----]
+//	  1         2        3       4      5       6
+//	[----] [---------] [----][------][-----] [-----]
+//
 // -----------+------------------+---------------------->
-//          start               end
+//
+//	start               end
 func (n *MVCCHandle) CollectUncommittedANodesPreparedBefore(
 	ts types.TS,
 	fn func(*AppendNode)) (anyWaitable bool) {
