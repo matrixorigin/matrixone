@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -27,7 +26,7 @@ import (
 )
 
 func TestStaticFilterNumeric(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.T_int32}
 	data := containers.MockVector2(typ, 40000, 0)
@@ -104,7 +103,7 @@ func TestNewBinaryFuseFilter(t *testing.T) {
 }
 
 func TestStaticFilterString(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.T_varchar}
 	data := containers.MockVector2(typ, 40000, 0)

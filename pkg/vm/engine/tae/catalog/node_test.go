@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -40,7 +40,7 @@ func compareTestNode(n, on *testNode) int {
 }
 
 func TestDLNode(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	link := common.NewGenericSortedDList(compareTestNode)
 	now := time.Now()
 	var node *common.GenericDLNode[*testNode]

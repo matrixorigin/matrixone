@@ -332,7 +332,7 @@ func TestStream(t *testing.T) {
 			return conn.Write(msg, goetty.WriteOptions{Flush: true})
 		},
 		func(b *remoteBackend) {
-			st, err := b.NewStream()
+			st, err := b.NewStream(false)
 			assert.NoError(t, err)
 			defer func() {
 				assert.NoError(t, st.Close())
@@ -367,7 +367,7 @@ func TestStreamSendWillPanicIfDeadlineNotSet(t *testing.T) {
 			return conn.Write(msg, goetty.WriteOptions{Flush: true})
 		},
 		func(b *remoteBackend) {
-			st, err := b.NewStream()
+			st, err := b.NewStream(false)
 			assert.NoError(t, err)
 			defer func() {
 				assert.NoError(t, st.Close())
@@ -397,7 +397,7 @@ func TestStreamClosedByConnReset(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 			defer cancel()
 
-			st, err := b.NewStream()
+			st, err := b.NewStream(false)
 			assert.NoError(t, err)
 			defer func() {
 				assert.NoError(t, st.Close())
@@ -461,7 +461,7 @@ func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
 		},
 		func(s *stream) {},
 		func() {})
-	s.init(1)
+	s.init(1, false)
 	assert.NoError(t, s.Send(ctx, &testMessage{id: s.ID()}))
 	assert.NoError(t, s.Close())
 	assert.Nil(t, <-c)
@@ -477,7 +477,7 @@ func TestGCStream(t *testing.T) {
 		},
 		func(s *stream) {},
 		func() {})
-	s.init(1)
+	s.init(1, false)
 	s = nil
 	debug.FreeOSMemory()
 	_, ok := <-c
@@ -540,7 +540,7 @@ func TestLastActiveWithStream(t *testing.T) {
 
 			t1 := b.LastActiveTime()
 
-			st, err := b.NewStream()
+			st, err := b.NewStream(false)
 			assert.NoError(t, err)
 			defer func() {
 				assert.NoError(t, st.Close())
@@ -628,6 +628,23 @@ func TestTCPProxyExample(t *testing.T) {
 		WithBackendConnectWhenCreate())
 }
 
+func TestLockedStream(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			assert.False(t, b.Locked())
+			b.Lock()
+			st, err := b.NewStream(true)
+			assert.NoError(t, err)
+			assert.True(t, b.Locked())
+			assert.NoError(t, st.Close())
+			assert.False(t, b.Locked())
+		},
+		WithBackendConnectWhenCreate())
+}
+
 func testBackendSend(t *testing.T,
 	handleFunc func(goetty.IOSession, interface{}, uint64) error,
 	testFunc func(b *remoteBackend),
@@ -702,6 +719,7 @@ type testBackend struct {
 	busy       bool
 	activeTime time.Time
 	closed     bool
+	locked     bool
 }
 
 func (b *testBackend) Send(ctx context.Context, request Message) (*Future, error) {
@@ -711,19 +729,23 @@ func (b *testBackend) Send(ctx context.Context, request Message) (*Future, error
 	return f, nil
 }
 
-func (b *testBackend) NewStream() (Stream, error) {
+func (b *testBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	b.active()
 	st := newStream(make(chan Message, 1),
 		func(m backendSendMessage) error { return nil },
-		func(s *stream) {},
+		func(s *stream) {
+			if s.unlockAfterClose {
+				b.Unlock()
+			}
+		},
 		b.active)
-	st.init(1)
+	st.init(1, false)
 	return st, nil
 }
 
 func (b *testBackend) Close() {
-	b.Lock()
-	defer b.Unlock()
+	b.RWMutex.Lock()
+	defer b.RWMutex.Unlock()
 	b.closed = true
 }
 func (b *testBackend) Busy() bool { return b.busy }
@@ -733,9 +755,33 @@ func (b *testBackend) LastActiveTime() time.Time {
 	return b.activeTime
 }
 
+func (b *testBackend) Lock() {
+	b.RWMutex.Lock()
+	defer b.RWMutex.Unlock()
+	if b.locked {
+		panic("backend is already locked")
+	}
+	b.locked = true
+}
+
+func (b *testBackend) Unlock() {
+	b.RWMutex.Lock()
+	defer b.RWMutex.Unlock()
+	if !b.locked {
+		panic("backend is not locked")
+	}
+	b.locked = false
+}
+
+func (b *testBackend) Locked() bool {
+	b.RLock()
+	defer b.RUnlock()
+	return b.locked
+}
+
 func (b *testBackend) active() {
-	b.Lock()
-	defer b.Unlock()
+	b.RWMutex.Lock()
+	defer b.RWMutex.Unlock()
 	b.activeTime = time.Now()
 }
 

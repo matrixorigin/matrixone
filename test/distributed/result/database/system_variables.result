@@ -99,6 +99,10 @@ primary key(a)
 );
 show indexes from t;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
+t    1    PRIMARY    1    a    A    0    NULL    NULL    NO            YES    NULL
+t    0    b    1    b    A    0    NULL    NULL    NO            YES    NULL
+t    0    c    1    c    A    0    NULL    NULL    NO            YES    NULL
+t    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    YES        Physical address    NO    NULL
 use information_schema;
 show tables;
 tables_in_information_schema

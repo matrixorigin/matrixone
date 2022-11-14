@@ -293,7 +293,7 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,,,,,{},0,,,span1,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}"
+			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,,,,,{},0,,,span1,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",internal
 `,
 		},
 		{
@@ -301,14 +301,14 @@ func Test_genCsvData(t *testing.T) {
 			args: args{
 				in: []IBuffer2SqlItem{
 					&MOSpan{
-						SpanConfig: SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _1SpanID}, parent: noopSpan{}},
+						SpanConfig: SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _1SpanID, Kind: SpanKindStatement}, parent: noopSpan{}},
 						Name:       *bytes.NewBuffer([]byte("span1")),
 						StartTime:  zeroTime,
 						EndTime:    zeroTime.Add(time.Microsecond),
 						tracer:     gTracer.(*MOTracer),
 					},
 					&MOSpan{
-						SpanConfig: SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _2SpanID}, parent: noopSpan{}},
+						SpanConfig: SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _2SpanID, Kind: SpanKindRemote}, parent: noopSpan{}},
 						Name:       *bytes.NewBuffer([]byte("span2")),
 						StartTime:  zeroTime.Add(time.Microsecond),
 						EndTime:    zeroTime.Add(time.Millisecond),
@@ -317,8 +317,8 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,,,,,{},0,,,span1,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}"
-span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,,,,,{},0,,,span2,0,0001-01-01 00:00:00.000001,0001-01-01 00:00:00.001000,999000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}"
+			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,,,,,{},0,,,span1,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",statement
+span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,,,,,{},0,,,span2,0,0001-01-01 00:00:00.000001,0001-01-01 00:00:00.001000,999000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",remote
 `,
 		},
 		{
@@ -336,7 +336,7 @@ span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-00000000
 				},
 				buf: buf,
 			},
-			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:912,info message,{},0,,,,0,,,0,{}
+			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:912,info message,{},0,,,,0,,,0,{},internal
 `,
 		},
 		{
@@ -362,8 +362,8 @@ span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-00000000
 				},
 				buf: buf,
 			},
-			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:939,info message,{},0,,,,0,,,0,{}
-log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.001001,debug,trace/buffer_pipe_sql_test.go:939,debug message,{},0,,,,0,,,0,{}
+			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:939,info message,{},0,,,,0,,,0,{},internal
+log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.001001,debug,trace/buffer_pipe_sql_test.go:939,debug message,{},0,,,,0,,,0,{},internal
 `,
 		},
 		{
@@ -436,7 +436,7 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 				},
 				buf: buf,
 			},
-			want: `error_info,node_uuid,Standalone,0,0,,0001-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,,,0,{}
+			want: `error_info,node_uuid,Standalone,0,0,,0001-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,,,0,{},
 `,
 		},
 		{
@@ -448,8 +448,8 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 				},
 				buf: buf,
 			},
-			want: `error_info,node_uuid,Standalone,0,0,,0001-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,,,0,{}
-error_info,node_uuid,Standalone,0,0,,0001-01-01 00:00:00.001001,,,,{},20101,test2: internal error: test1,test2: internal error: test1,,0,,,0,{}
+			want: `error_info,node_uuid,Standalone,0,0,,0001-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,,,0,{},
+error_info,node_uuid,Standalone,0,0,,0001-01-01 00:00:00.001001,,,,{},20101,test2: internal error: test1,test2: internal error: test1,,0,,,0,{},
 `,
 		},
 	}
