@@ -26,7 +26,8 @@ import (
 )
 
 const (
-	blobsize = 65536 // 2^16-1
+	sizeGB   = 1 << (10 * 3)
+	blobsize = sizeGB
 )
 
 func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
