@@ -214,6 +214,10 @@ func (node *Load) Format(ctx *FmtCtx) {
 				ctx.WriteString("'filepath'='" + node.Param.S3option[i+1] + "'")
 			case "compression":
 				ctx.WriteString("'compression'='" + node.Param.S3option[i+1] + "'")
+			case "format":
+				ctx.WriteString("'format'='" + node.Param.S3option[i+1] + "'")
+			case "jsondata":
+				ctx.WriteString("'jsondata'='" + node.Param.S3option[i+1] + "'")
 			}
 			if i != len(node.Param.S3option)-2 {
 				ctx.WriteString(", ")

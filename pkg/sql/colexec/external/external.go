@@ -142,6 +142,19 @@ func InitS3Param(param *tree.ExternParam) error {
 			param.Filepath = param.S3option[i+1]
 		case "compression":
 			param.CompressType = param.S3option[i+1]
+		case "format":
+			format := strings.ToLower(param.S3option[i+1])
+			if format != tree.CSV && format != tree.JSONLINE {
+				return moerr.NewBadConfig("the format '%s' is not supported", format)
+			}
+			param.Format = format
+		case "jsondata":
+			jsondata := strings.ToLower(param.S3option[i+1])
+			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
+				return moerr.NewBadConfig("the jsondata '%s' is not supported", jsondata)
+			}
+			param.JsonData = jsondata
+
 		default:
 			return moerr.NewBadConfig("the keyword '%s' is not support", strings.ToLower(param.S3option[i]))
 		}
