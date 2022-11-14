@@ -432,7 +432,7 @@ import (
 //%type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
-%type <strs> enum_values force_quote_opt force_quote_list s3param s3params
+%type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params
 %type <str> sql_id charset_keyword db_name db_name_opt
 %type <str> not_keyword func_not_keyword
 %type <str> reserved_keyword non_reserved_keyword
@@ -4488,75 +4488,31 @@ load_param_opt:
             Format: tree.CSV,
         }
     }
-|   INFILE '{' STRING '=' STRING '}'
+|   INFILE '{' infile_or_s3_params '}'
     {
-        if strings.ToLower($3) != "filepath" {
-                yylex.Error(fmt.Sprintf("can not recognize the '%s'", $3))
-                return 1
-            }
-        $$ = &tree.ExternParam{
-            Filepath: $5,
-            CompressType: tree.AUTO,
-            Format: tree.CSV,
-        }
-    }
-|   INFILE '{' STRING '=' STRING ',' STRING '=' STRING '}'
-    {
-        if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "compression" {
-                yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' ", $3, $7))
-                return 1
-            }
-        $$ = &tree.ExternParam{
-            Filepath: $5,
-            CompressType: $9,
-            Format: tree.CSV,
-        }
-    }
-|   INFILE '{' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING '}'
-    {
-	if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "format" || strings.ToLower($11) != "jsondata" {
-		yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' or '%s'", $3, $7, $11))
-		return 1
-	    }
 	$$ = &tree.ExternParam{
-	    Filepath: $5,
-	    CompressType: tree.AUTO,
-	    Format: strings.ToLower($9),
-	    JsonData: strings.ToLower($13),
+	    Option: $3,
 	}
     }
-|   INFILE '{' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING '}'
-    {
-    	if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "compression" || strings.ToLower($11) != "format" || strings.ToLower($15) != "jsondata" {
-    		yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' or '%s' or '%s'", $3, $7, $11, $15))
-    		return 1
-    	}
-    	$$ = &tree.ExternParam{
-    	    Filepath: $5,
-    	    CompressType: $9,
-    	    Format: strings.ToLower($13),
-    	    JsonData: strings.ToLower($17),
-    	}
-    }
-|   URL S3OPTION '{' s3params '}'
+|   URL S3OPTION '{' infile_or_s3_params '}'
     {
         $$ = &tree.ExternParam{
             ScanType: tree.S3,
-            S3option: $4,
+            Option: $4,
         }
     }
 
-s3params:
-    s3param
+infile_or_s3_params:
+    infile_or_s3_param
     {
         $$ = $1
     }
-|   s3params ',' s3param
+|   infile_or_s3_params ',' infile_or_s3_param
     {
         $$ = append($1, $3...)
     }
 
-s3param:
+infile_or_s3_param:
     {
         $$ = []string{}
     }
