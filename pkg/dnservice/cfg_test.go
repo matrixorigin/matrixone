@@ -31,7 +31,7 @@ func TestValidate(t *testing.T) {
 	assert.Equal(t, StorageTAE, c.Txn.Storage.Backend)
 	assert.Equal(t, defaultZombieTimeout, c.Txn.ZombieTimeout.Duration)
 	assert.Equal(t, defaultDiscoveryTimeout, c.HAKeeper.DiscoveryTimeout.Duration)
-	assert.Equal(t, defaultHeatbeatDuration, c.HAKeeper.HeatbeatDuration.Duration)
+	assert.Equal(t, defaultHeatbeatInterval, c.HAKeeper.HeatbeatInterval.Duration)
 	assert.Equal(t, defaultHeatbeatTimeout, c.HAKeeper.HeatbeatTimeout.Duration)
 	assert.Equal(t, defaultConnectTimeout, c.LogService.ConnectTimeout.Duration)
 }

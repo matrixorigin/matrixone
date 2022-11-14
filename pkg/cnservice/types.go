@@ -107,8 +107,8 @@ type Config struct {
 
 	// HAKeeper configuration
 	HAKeeper struct {
-		// HeatbeatDuration heartbeat duration to send message to hakeeper. Default is 1s
-		HeatbeatDuration toml.Duration `toml:"hakeeper-heartbeat-duration"`
+		// HeatbeatInterval heartbeat interval to send message to hakeeper. Default is 1s
+		HeatbeatInterval toml.Duration `toml:"hakeeper-heartbeat-interval"`
 		// HeatbeatTimeout heartbeat request timeout. Default is 500ms
 		HeatbeatTimeout toml.Duration `toml:"hakeeper-heartbeat-timeout"`
 		// DiscoveryTimeout discovery HAKeeper service timeout. Default is 30s
@@ -148,8 +148,8 @@ func (c *Config) Validate() error {
 	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
 		c.HAKeeper.DiscoveryTimeout.Duration = time.Second * 30
 	}
-	if c.HAKeeper.HeatbeatDuration.Duration == 0 {
-		c.HAKeeper.HeatbeatDuration.Duration = time.Second
+	if c.HAKeeper.HeatbeatInterval.Duration == 0 {
+		c.HAKeeper.HeatbeatInterval.Duration = time.Second
 	}
 	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
 		c.HAKeeper.HeatbeatTimeout.Duration = time.Second * 3
