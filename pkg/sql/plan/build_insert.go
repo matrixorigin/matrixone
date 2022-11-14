@@ -205,9 +205,8 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 }
 
 func MakeInsertError(id types.T, col *ColDef, rows []tree.Exprs, colIdx, rowIdx int, err error) error {
-	moer := err.(*moerr.Error)
-	if moer.ErrorCode() == moerr.ErrFileNotFound {
-		return moer
+	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		return err
 	}
 	var str string
 	if rows[rowIdx] == nil || len(rows[rowIdx]) < colIdx {
