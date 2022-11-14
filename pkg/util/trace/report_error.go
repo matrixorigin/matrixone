@@ -65,8 +65,9 @@ func (h *MOErrorHolder) CsvFields(row *export.Row) []string {
 	}
 	if ct := errutil.GetContextTracer(h.Error); ct != nil && ct.Context() != nil {
 		span := SpanFromContext(ct.Context())
-		row.SetColumnVal(stmtIDCol, span.SpanContext().TraceID.String())
+		row.SetColumnVal(traceIDCol, span.SpanContext().TraceID.String())
 		row.SetColumnVal(spanIDCol, span.SpanContext().SpanID.String())
+		row.SetColumnVal(spanKindCol, span.SpanContext().Kind.String())
 	}
 	return row.ToStrings()
 }

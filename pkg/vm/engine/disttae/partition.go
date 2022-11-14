@@ -453,20 +453,6 @@ func (p *Partition) IterDeletedRowIDs(ctx context.Context, blockIDs []uint64, ts
 	}
 }
 
-func copyBlk(blk ModifyBlockMeta) ModifyBlockMeta {
-	newBlk := ModifyBlockMeta{
-		meta: BlockMeta{
-			Rows:    blk.meta.Rows,
-			Info:    blk.meta.Info,
-			Zonemap: make([][64]byte, len(blk.meta.Zonemap)),
-		},
-		deletes: make([]int, len(blk.deletes)),
-	}
-	copy(newBlk.deletes, blk.deletes)
-	copy(newBlk.meta.Zonemap, blk.meta.Zonemap)
-	return newBlk
-}
-
 func (p *Partition) NewReader(
 	ctx context.Context,
 	readerNumber int,
@@ -535,7 +521,7 @@ func (p *Partition) NewReader(
 				ctx:      ctx,
 				tableDef: tableDef,
 				sels:     make([]int64, 0, 1024),
-				blks:     []ModifyBlockMeta{copyBlk(blks[i])},
+				blks:     []ModifyBlockMeta{blks[i]},
 			})
 		}
 		return []engine.Reader{&mergeReader{readers}}, nil
@@ -548,7 +534,7 @@ func (p *Partition) NewReader(
 				ctx:      ctx,
 				tableDef: tableDef,
 				sels:     make([]int64, 0, 1024),
-				blks:     []ModifyBlockMeta{copyBlk(blks[i])},
+				blks:     []ModifyBlockMeta{blks[i]},
 			}
 		}
 		for j := len(blks) + 1; j < readerNumber; j++ {
@@ -561,17 +547,13 @@ func (p *Partition) NewReader(
 		step = 1
 	}
 	for i := 1; i < readerNumber; i++ {
-		newBlks := make([]ModifyBlockMeta, len(blks))
-		for i, item := range blks {
-			newBlks[i] = copyBlk(item)
-		}
 		if i == readerNumber-1 {
 			readers[i] = &blockMergeReader{
 				fs:       fs,
 				ts:       ts,
 				ctx:      ctx,
 				tableDef: tableDef,
-				blks:     newBlks[(i-1)*step:],
+				blks:     blks[(i-1)*step:],
 				sels:     make([]int64, 0, 1024),
 			}
 		} else {
@@ -580,7 +562,7 @@ func (p *Partition) NewReader(
 				ts:       ts,
 				ctx:      ctx,
 				tableDef: tableDef,
-				blks:     newBlks[(i-1)*step : i*step],
+				blks:     blks[(i-1)*step : i*step],
 				sels:     make([]int64, 0, 1024),
 			}
 		}

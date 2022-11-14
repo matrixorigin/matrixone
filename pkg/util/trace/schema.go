@@ -38,6 +38,7 @@ const (
 
 	uuidColType        = "varchar(36)"
 	spanIDType         = "varchar(16)"
+	spanKindType       = "varchar(32)"
 	datetime6Type      = "datetime(6)"
 	bigintUnsignedType = "bigint unsigned"
 	stringType         = "varchar(1024)"
@@ -112,7 +113,9 @@ var (
 	extraCol        = export.Column{Name: "extra", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "log dynamic fields"}
 	errCodeCol      = export.Column{Name: "err_code", Type: stringType, Default: "0"}
 	stackCol        = export.Column{Name: "stack", Type: "varchar(4096)"}
+	traceIDCol      = export.Column{Name: "trace_id", Type: uuidColType, Default: "0", Comment: "trace uniq id"}
 	spanIDCol       = export.Column{Name: "span_id", Type: spanIDType, Default: "0", Comment: "span uniq id"}
+	spanKindCol     = export.Column{Name: "span_kind", Type: spanKindType, Default: "", Comment: "span kind, enum: internal, statement, remote"}
 	parentSpanIDCol = export.Column{Name: "parent_span_id", Type: spanIDType, Default: "0", Comment: "parent span uniq id"}
 	spanNameCol     = export.Column{Name: "span_name", Type: stringType, Default: "", Comment: "span name, for example: step name of execution plan, function name in code, ..."}
 	startTimeCol    = export.Column{Name: "start_time", Type: datetime6Type, Default: ""}
@@ -128,7 +131,7 @@ var (
 			nodeUUIDCol,
 			nodeTypeCol,
 			spanIDCol,
-			stmtIDCol,
+			traceIDCol,
 			loggerNameCol,
 			timestampCol,
 			levelCol,
@@ -144,6 +147,7 @@ var (
 			endTimeCol,
 			durationCol,
 			resourceCol,
+			spanKindCol,
 		},
 		PrimaryKeyColumn: nil,
 		Engine:           export.ExternalTableEngine,
@@ -159,8 +163,9 @@ var (
 		Table:       logInfoTbl,
 		OriginTable: SingleRowLogTable,
 		Columns: []export.Column{
-			stmtIDCol,
+			traceIDCol,
 			spanIDCol,
+			spanKindCol,
 			nodeUUIDCol,
 			nodeTypeCol,
 			timestampCol,
@@ -189,8 +194,6 @@ var (
 		Condition: &export.ViewSingleCondition{Column: rawItemCol, Table: errorInfoTbl},
 	}
 
-	traceIDCol = export.Column{Name: stmtIDCol.Name, Type: stmtIDCol.Type, Default: stmtIDCol.Default, Comment: "trace uniq id", Alias: "trace_id"}
-
 	spanView = &export.View{
 		Database:    StatsDatabase,
 		Table:       spanInfoTbl,
@@ -199,6 +202,7 @@ var (
 			traceIDCol,
 			spanIDCol,
 			parentSpanIDCol,
+			spanKindCol,
 			nodeUUIDCol,
 			nodeTypeCol,
 			spanNameCol,
