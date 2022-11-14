@@ -25,13 +25,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
-
-	"math"
-	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -154,10 +153,14 @@ func InitS3Param(param *tree.ExternParam) error {
 				return moerr.NewBadConfig("the jsondata '%s' is not supported", jsondata)
 			}
 			param.JsonData = jsondata
+			param.Format = tree.JSONLINE
 
 		default:
 			return moerr.NewBadConfig("the keyword '%s' is not support", strings.ToLower(param.S3option[i]))
 		}
+	}
+	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
+		return moerr.NewBadConfig("the jsondata must be specified")
 	}
 	return nil
 }
