@@ -163,12 +163,12 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 				} else {
 					planExpr, err := binders[j].BindExpr(row[idx], 0, false)
 					if err != nil {
-						err = MakeInsertError(types.T(col.Typ.Id), col, rows, j, i)
+						err = MakeInsertError(types.T(col.Typ.Id), col, rows, j, i, err)
 						return nil, err
 					}
 					resExpr, err := makePlan2CastExpr(planExpr, col.Typ)
 					if err != nil {
-						err = MakeInsertError(types.T(col.Typ.Id), col, rows, j, i)
+						err = MakeInsertError(types.T(col.Typ.Id), col, rows, j, i, err)
 						return nil, err
 					}
 					columns[idx].Column = append(columns[idx].Column, resExpr)
@@ -204,7 +204,11 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	}, nil
 }
 
-func MakeInsertError(id types.T, col *ColDef, rows []tree.Exprs, colIdx, rowIdx int) error {
+func MakeInsertError(id types.T, col *ColDef, rows []tree.Exprs, colIdx, rowIdx int, err error) error {
+	moer := err.(*moerr.Error)
+	if moer.ErrorCode() == moerr.ErrFileNotFound {
+		return moer
+	}
 	var str string
 	if rows[rowIdx] == nil || len(rows[rowIdx]) < colIdx {
 		str = col.Default.OriginString
