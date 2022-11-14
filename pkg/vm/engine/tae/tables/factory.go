@@ -58,7 +58,7 @@ func (factory *DataFactory) MakeBlockFactory() catalog.BlockDataFactory {
 		if meta.IsAppendable() {
 			return newABlock(meta, factory.fs, factory.appendBufMgr, factory.scheduler)
 		} else {
-			return newNABlock(meta, factory.fs, factory.appendBufMgr, factory.scheduler)
+			return newBlock(meta, factory.fs, factory.appendBufMgr, factory.scheduler)
 		}
 	}
 }
