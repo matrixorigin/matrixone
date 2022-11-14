@@ -109,7 +109,7 @@ func TestLoadFile(t *testing.T) {
 	}
 
 	// Test Error
-	size := 1024 * 1024 * 1
+	size := 1<<(10*3) + 1
 	data := make([]byte, size)
 	filepath = dir + "bigfile"
 	fs, readPath, err = fileservice.GetForETL(proc.FileService, filepath)
