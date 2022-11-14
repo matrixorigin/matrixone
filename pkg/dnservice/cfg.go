@@ -30,7 +30,7 @@ var (
 	defaultServiceAddress   = "127.0.0.1:22000"
 	defaultZombieTimeout    = time.Hour
 	defaultDiscoveryTimeout = time.Second * 30
-	defaultHeatbeatDuration = time.Second
+	defaultHeatbeatInterval = time.Second
 	defaultConnectTimeout   = time.Second * 30
 	defaultHeatbeatTimeout  = time.Second * 3
 
@@ -59,9 +59,9 @@ type Config struct {
 
 	// HAKeeper configuration
 	HAKeeper struct {
-		// HeatbeatDuration heartbeat duration to send message to hakeeper. Default is 1s
-		HeatbeatDuration toml.Duration `toml:"hakeeper-heartbeat-duration"`
-		// HeatbeatTimeout heartbeat request timeout. Default is 500ms
+		// HeatbeatInterval heartbeat interval to send message to hakeeper. Default is 1s
+		HeatbeatInterval toml.Duration `toml:"hakeeper-heartbeat-interval"`
+		// HeatbeatTimeout heartbeat request timeout. Default is 3s
 		HeatbeatTimeout toml.Duration `toml:"hakeeper-heartbeat-timeout"`
 		// DiscoveryTimeout discovery HAKeeper service timeout. Default is 30s
 		DiscoveryTimeout toml.Duration `toml:"hakeeper-discovery-timeout"`
@@ -135,8 +135,8 @@ func (c *Config) Validate() error {
 	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
 		c.HAKeeper.DiscoveryTimeout.Duration = defaultDiscoveryTimeout
 	}
-	if c.HAKeeper.HeatbeatDuration.Duration == 0 {
-		c.HAKeeper.HeatbeatDuration.Duration = defaultHeatbeatDuration
+	if c.HAKeeper.HeatbeatInterval.Duration == 0 {
+		c.HAKeeper.HeatbeatInterval.Duration = defaultHeatbeatInterval
 	}
 	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
 		c.HAKeeper.HeatbeatTimeout.Duration = defaultHeatbeatTimeout

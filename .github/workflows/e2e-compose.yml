@@ -15,7 +15,11 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v3 
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: '3'
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Print run attempt
         run: echo "run attempt is ${{ github.run_attempt }}"
@@ -25,10 +29,6 @@ jobs:
           docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
           # wait for ready
           sleep 10
-      
-      - name: show mo verison
-        run: |
-            docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN exec -T logservice /mo-service -version
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2

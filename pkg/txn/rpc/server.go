@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
 
@@ -114,6 +115,8 @@ func (s *server) RegisterMethodHandler(m txn.TxnMethod, h TxnRequestHandleFunc) 
 
 // onMessage a client connection has a separate read goroutine. The onMessage invoked in this read goroutine.
 func (s *server) onMessage(ctx context.Context, request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+	ctx, span := trace.Debug(ctx, "server.onMessage")
+	defer span.End()
 	m, ok := request.(*txn.TxnRequest)
 	if !ok {
 		s.logger.Fatal("received invalid message", zap.Any("message", request))
