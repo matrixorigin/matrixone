@@ -2033,6 +2033,13 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 		canPushdown = filters
 		for _, filter := range node.FilterList {
 			canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(filter))...)
+			keys := checkDNF(filter)
+			for _, key := range keys {
+				extraFilter := walkThroughDNF(filter, key)
+				if extraFilter != nil {
+					canPushdown = append(canPushdown, DeepCopyExpr(extraFilter))
+				}
+			}
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown)

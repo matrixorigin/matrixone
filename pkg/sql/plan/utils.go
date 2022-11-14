@@ -292,6 +292,113 @@ func applyDistributivity(expr *plan.Expr) *plan.Expr {
 	return expr
 }
 
+func unionSlice(left, right []string) []string {
+	if len(left) < 1 {
+		return right
+	}
+	if len(right) < 1 {
+		return left
+	}
+	m := make(map[string]bool, len(left)+len(right))
+	for _, s := range left {
+		m[s] = true
+	}
+	for _, s := range right {
+		m[s] = true
+	}
+	ret := make([]string, 0)
+	for s := range m {
+		ret = append(ret, s)
+	}
+	return ret
+}
+
+func intersectSlice(left, right []string) []string {
+	if len(left) < 1 || len(right) < 1 {
+		return left
+	}
+	m := make(map[string]bool, len(left)+len(right))
+	for _, s := range left {
+		m[s] = true
+	}
+	ret := make([]string, 0)
+	for _, s := range right {
+		if _, ok := m[s]; ok {
+			ret = append(ret, s)
+		}
+	}
+	return ret
+}
+
+func checkDNF(expr *plan.Expr) []string {
+	var ret []string
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F.Func.ObjName == "or" {
+			left := checkDNF(exprImpl.F.Args[0])
+			right := checkDNF(exprImpl.F.Args[0])
+			return intersectSlice(left, right)
+		}
+		for _, arg := range exprImpl.F.Args {
+			ret = unionSlice(ret, checkDNF(arg))
+		}
+		return ret
+
+	case *plan.Expr_Corr:
+		ret = append(ret, exprImpl.Corr.String())
+	case *plan.Expr_Col:
+		ret = append(ret, exprImpl.Col.String())
+	}
+	return ret
+}
+
+func walkThroughDNF(expr *plan.Expr, keywords string) *plan.Expr {
+	var retExpr *plan.Expr = nil
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F.Func.ObjName == "or" {
+			left := walkThroughDNF(exprImpl.F.Args[0], keywords)
+			right := walkThroughDNF(exprImpl.F.Args[1], keywords)
+			if left != nil && right != nil {
+				retExpr, _ = bindFuncExprImplByPlanExpr("or", []*plan.Expr{left, right})
+				return retExpr
+			}
+		} else if exprImpl.F.Func.ObjName == "and" {
+			left := walkThroughDNF(exprImpl.F.Args[0], keywords)
+			right := walkThroughDNF(exprImpl.F.Args[1], keywords)
+			if left == nil {
+				return right
+			} else if right == nil {
+				return left
+			} else {
+				retExpr, _ = bindFuncExprImplByPlanExpr("and", []*plan.Expr{left, right})
+				return retExpr
+			}
+		} else {
+			for _, arg := range exprImpl.F.Args {
+				if walkThroughDNF(arg, keywords) == nil {
+					return nil
+				}
+			}
+			return expr
+		}
+
+	case *plan.Expr_Corr:
+		if exprImpl.Corr.String() == keywords {
+			return expr
+		} else {
+			return nil
+		}
+	case *plan.Expr_Col:
+		if exprImpl.Col.String() == keywords {
+			return expr
+		} else {
+			return nil
+		}
+	}
+	return expr
+}
+
 func splitPlanConjunction(expr *plan.Expr) []*plan.Expr {
 	var exprs []*plan.Expr
 	switch exprImpl := expr.Expr.(type) {
