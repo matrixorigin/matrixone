@@ -67,8 +67,9 @@ func (m *MOZapLog) GetRow() *export.Row { return logView.OriginTable.GetRow() }
 func (m *MOZapLog) CsvFields(row *export.Row) []string {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, logView.Table)
-	row.SetColumnVal(stmtIDCol, m.SpanContext.TraceID.String())
+	row.SetColumnVal(traceIDCol, m.SpanContext.TraceID.String())
 	row.SetColumnVal(spanIDCol, m.SpanContext.SpanID.String())
+	row.SetColumnVal(spanKindCol, m.SpanContext.Kind.String())
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
 	row.SetColumnVal(timestampCol, time2DatetimeString(m.Timestamp))

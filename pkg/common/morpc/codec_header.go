@@ -66,9 +66,7 @@ func (hc *traceCodec) Encode(msg *RPCMessage, out *buf.ByteBuf) (int, error) {
 	c := span.SpanContext()
 	n := c.Size()
 	out.MustWriteByte(byte(n))
-	out.Grow(n)
-	idx := out.GetWriteIndex()
-	out.SetWriteIndex(idx + n)
+	idx, _ := setWriterIndexAfterGow(out, n)
 	c.MarshalTo(out.RawSlice(idx, idx+n))
 	return 1 + n, nil
 }

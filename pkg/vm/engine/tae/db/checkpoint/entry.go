@@ -17,6 +17,7 @@ package checkpoint
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -122,7 +123,7 @@ func (e *CheckpointEntry) String() string {
 func (e *CheckpointEntry) Replay(
 	c *catalog.Catalog,
 	fs *objectio.ObjectFS,
-	dataFactory catalog.DataFactory) (err error) {
+	dataFactory catalog.DataFactory) (readDuration, applyDuration time.Duration, err error) {
 	reader, err := blockio.NewCheckpointReader(fs.Service, e.location)
 	if err != nil {
 		return
@@ -130,10 +131,14 @@ func (e *CheckpointEntry) Replay(
 
 	data := logtail.NewCheckpointData()
 	defer data.Close()
+	t0 := time.Now()
 	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
 		return
 	}
+	readDuration = time.Since(t0)
+	t0 = time.Now()
 	err = data.ApplyReplayTo(c, dataFactory)
+	applyDuration = time.Since(t0)
 	return
 }
 

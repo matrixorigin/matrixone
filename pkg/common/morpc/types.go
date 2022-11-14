@@ -80,7 +80,7 @@ type RPCClient interface {
 	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
 	// If the underlying connection is reset during the duration of the stream, then the stream will
 	// be closed.
-	NewStream(backend string) (Stream, error)
+	NewStream(backend string, lock bool) (Stream, error)
 	// Close close the client
 	Close() error
 }
@@ -138,7 +138,7 @@ type Backend interface {
 	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
 	// If the underlying connection is reset during the duration of the stream, then the stream will
 	// be closed.
-	NewStream() (Stream, error)
+	NewStream(unlockAfterClose bool) (Stream, error)
 	// Close close the backend.
 	Close()
 	// Busy the backend receives a lot of requests concurrently during operation, but when the number
@@ -146,6 +146,12 @@ type Backend interface {
 	Busy() bool
 	// LastActiveTime returns last active time
 	LastActiveTime() time.Time
+	// Lock other I/O operations can not use this backend if the backend is locked
+	Lock()
+	// Unlock the backend can used by other I/O operations after unlock
+	Unlock()
+	// Locked indicates if backend is locked
+	Locked() bool
 }
 
 // Stream used to asynchronous stream of sending and receiving messages

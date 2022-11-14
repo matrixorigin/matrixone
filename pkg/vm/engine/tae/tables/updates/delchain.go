@@ -19,7 +19,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
@@ -93,10 +92,7 @@ func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (er
 			n := vn.(*DeleteNode)
 			overlap := n.HasOverlapLocked(start, end)
 			if overlap {
-				err = n.CheckConflict(ts)
-				if err == nil {
-					err = moerr.NewNotFound()
-				}
+				err = txnif.ErrTxnWWConflict
 				return false
 			}
 			return true

@@ -218,8 +218,13 @@ func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferre
 	for _, row := range rows {
 		rowID, ok := page.Transfer(row)
 		if !ok {
-			err = moerr.NewTxnWWConflict()
-			logutil.Warnf("TransferDelete %s Row=%d, Err=%v", id.BlockString(), row, err)
+			err = moerr.NewTxnWriteConflict("table-%d blk-%d delete row %d",
+				id.TableID,
+				id.BlockID,
+				row)
+			logutil.Warnf("[ts=%s]TransferDelete: %v",
+				tbl.store.txn.GetStartTS().ToString(),
+				err)
 			return
 		}
 		segmentID, blockID, offset := model.DecodePhyAddrKey(rowID)
@@ -541,9 +546,25 @@ func (tbl *txnTable) IsLocalDeleted(row uint32) bool {
 }
 
 func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
+	defer func() {
+		if err == nil {
+			return
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			moerr.NewTxnWriteConflict("table-%d blk-%d delete rows from %d to %d",
+				id.TableID,
+				id.BlockID,
+				start,
+				end)
+		}
+		if err != nil {
+			logutil.Infof("[ts=%s]: %s", tbl.store.txn.GetStartTS().ToString(), err)
+		}
+	}()
 	// logutil.Infof("RangeDelete ID=%s, Start=%d, End=%d", id.BlockString(), start, end)
 	if isLocalSegment(id) {
-		return tbl.RangeDeleteLocalRows(start, end)
+		err = tbl.RangeDeleteLocalRows(start, end)
+		return
 	}
 	node := tbl.deleteNodes[*id]
 	if node != nil {
@@ -687,11 +708,38 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 	}
 	pks := tbl.localSegment.GetPKColumn()
 	defer pks.Close()
-	err = tbl.DoDedup(pks, true)
+	err = tbl.PreCommitDedup(pks, true)
 	return
 }
 
-func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) {
+func (tbl *txnTable) Dedup(keys containers.Vector) (err error) {
+	h := newRelation(tbl)
+	it := newRelationBlockIt(h)
+	for it.Valid() {
+		blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+		blkData := blk.GetBlockData()
+		if blkData == nil {
+			it.Next()
+			continue
+		}
+		var rowmask *roaring.Bitmap
+		if len(tbl.deleteNodes) > 0 {
+			fp := blk.AsCommonID()
+			deleteNode := tbl.deleteNodes[*fp]
+			if deleteNode != nil {
+				rowmask = deleteNode.GetRowMaskRefLocked()
+			}
+		}
+		if err = blkData.BatchDedup(tbl.store.txn, keys, rowmask); err != nil {
+			// logutil.Infof("%s, %s, %v", blk.String(), rowmask, err)
+			return
+		}
+		it.Next()
+	}
+	return
+}
+
+func (tbl *txnTable) PreCommitDedup(pks containers.Vector, preCommit bool) (err error) {
 	segIt := tbl.entry.MakeSegmentIt(false)
 	for segIt.Valid() {
 		seg := segIt.Get().GetPayload()
@@ -746,6 +794,9 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 			blkData := blk.GetBlockData()
 			var rowmask *roaring.Bitmap
 			if len(tbl.deleteNodes) > 0 {
+				if tbl.store.warChecker.HasConflict(blk.ID) {
+					continue
+				}
 				fp := blk.AsCommonID()
 				deleteNode := tbl.deleteNodes[*fp]
 				if deleteNode != nil {
@@ -753,9 +804,6 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 				}
 			}
 			if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask); err != nil {
-				// if rowmask == nil && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-				// 	transferred, err := tbl.TransferDelete(tbl.store.txn.GetStartTS())
-				// }
 				return
 			}
 			blkIt.Next()
@@ -783,7 +831,7 @@ func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 		}
 	}
 
-	err = tbl.DoDedup(key, false)
+	err = tbl.Dedup(key)
 	return
 }
 

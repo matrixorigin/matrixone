@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -81,14 +80,14 @@ func (un *TxnMVCCNode) CheckConflict(ts types.TS) error {
 		if un.IsSameTxn(ts) {
 			return nil
 		}
-		return moerr.NewTxnWWConflict()
+		return txnif.ErrTxnWWConflict
 	}
 
 	// For a committed node, it is w-w conflict if ts is lt the node commit ts
 	// -------+-------------+-------------------->
 	//        ts         CommitTs            time
 	if un.End.Greater(ts) {
-		return moerr.NewTxnWWConflict()
+		return txnif.ErrTxnWWConflict
 	}
 	return nil
 }

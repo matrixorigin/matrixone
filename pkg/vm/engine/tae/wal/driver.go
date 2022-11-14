@@ -84,10 +84,11 @@ func NewDriverWithStore(impl store.Store, own bool, ckpDuration time.Duration) D
 	driver.cancelContext, driver.cancelfn = context.WithCancel(context.Background())
 	driver.logInfoQueue.Start()
 	driver.wg.Add(1)
-	go driver.checkpointTicker()
 	return driver
 }
-
+func (driver *walDriver) Start() {
+	go driver.checkpointTicker()
+}
 func (driver *walDriver) GetCheckpointed() uint64 {
 	return driver.impl.GetCheckpointed(GroupPrepare)
 }
