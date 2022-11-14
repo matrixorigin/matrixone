@@ -260,7 +260,7 @@ var (
 			"datname AS SCHEMA_NAME," +
 			"'utf8mb4' AS DEFAULT_CHARACTER_SET_NAME," +
 			"'utf8mb4_0900_ai_ci' AS DEFAULT_COLLATION_NAME," +
-			"NULL AS SQL_PATH," +
+			"'' AS SQL_PATH," +
 			"'NO' AS DEFAULT_ENCRYPTION " +
 			"FROM mo_catalog.mo_database;",
 		"CREATE TABLE IF NOT EXISTS CHARACTER_SETS(" +
