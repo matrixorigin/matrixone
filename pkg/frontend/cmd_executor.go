@@ -14,7 +14,16 @@
 
 package frontend
 
-import "context"
+import (
+	"context"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 // CmdExecutor handle the command from the client
 type CmdExecutor interface {
@@ -28,4 +37,276 @@ type CmdExecutor interface {
 
 type CmdExecutorImpl struct {
 	CmdExecutor
+}
+
+type doComQueryFunc func(context.Context, string) error
+
+type stmtExecStatus int
+
+const (
+	stmtExecSuccess stmtExecStatus = iota
+	stmtExecFail
+)
+
+// StmtExecutor represents the single statement execution.
+// it is also independent of the protocol
+type StmtExecutor interface {
+	ComputationWrapper
+
+	// GetStatus returns the execution status
+	GetStatus() stmtExecStatus
+
+	// SetStatus sets the execution status
+	SetStatus(err error)
+
+	// Setup does preparation
+	Setup(ctx context.Context, ses *Session) error
+
+	// VerifyPrivilege ensures the user can execute this statement
+	VerifyPrivilege(ctx context.Context, ses *Session) error
+
+	// VerifyTxn checks the restriction of the transaction
+	VerifyTxn(ctx context.Context, ses *Session) error
+
+	// ResponseBeforeExec responses the client before the execution starts
+	ResponseBeforeExec(ctx context.Context, ses *Session) error
+
+	// ExecuteImpl runs the concrete logic of the statement. every statement has its implementation
+	ExecuteImpl(ctx context.Context, ses *Session) error
+
+	// ResponseAfterExec responses the client after the execution ends
+	ResponseAfterExec(ctx context.Context, ses *Session) error
+
+	// CommitOrRollbackTxn commits or rollbacks the transaction based on the status
+	CommitOrRollbackTxn(ctx context.Context, ses *Session) error
+
+	// Close does clean
+	Close(ctx context.Context, ses *Session) error
+}
+
+var _ StmtExecutor = &baseStmtExecutor{}
+var _ StmtExecutor = &statusStmtExecutor{}
+var _ StmtExecutor = &resultSetStmtExecutor{}
+
+// Execute runs the statement executor
+func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec StmtExecutor, beginInstant time.Time, envStmt string, useEnv bool) error {
+	var err, err2 error
+	var cmpBegin, runBegin time.Time
+	pu := ses.GetParameterUnit()
+	ctx = RecordStatement(ctx, ses, proc, stmtExec, beginInstant, envStmt, useEnv)
+	err = stmtExec.Setup(ctx, ses)
+	if err != nil {
+		goto handleRet
+	}
+
+	err = stmtExec.VerifyPrivilege(ctx, ses)
+	if err != nil {
+		goto handleRet
+	}
+
+	err = stmtExec.VerifyTxn(ctx, ses)
+	if err != nil {
+		goto handleRet
+	}
+
+	ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
+
+	if err = stmtExec.SetDatabaseName(ses.GetDatabaseName()); err != nil {
+		goto handleRet
+	}
+
+	cmpBegin = time.Now()
+
+	//TODO: selfhandle statements do not need to compile
+	if _, err = stmtExec.Compile(ctx, ses, ses.GetOutputCallback()); err != nil {
+		goto handleRet
+	}
+
+	if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
+		logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
+	}
+
+	err = stmtExec.ResponseBeforeExec(ctx, ses)
+	if err != nil {
+		goto handleRet
+	}
+
+	runBegin = time.Now()
+
+	err = stmtExec.ExecuteImpl(ctx, ses)
+	if err != nil {
+		goto handleRet
+	}
+
+	if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
+		logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
+	}
+
+	_ = stmtExec.RecordExecPlan(ctx)
+
+handleRet:
+	stmtExec.SetStatus(err)
+	err2 = stmtExec.CommitOrRollbackTxn(ctx, ses)
+	if err2 != nil {
+		return err2
+	}
+
+	err2 = stmtExec.ResponseAfterExec(ctx, ses)
+	if err2 != nil {
+		return err2
+	}
+
+	err2 = stmtExec.Close(ctx, ses)
+	if err2 != nil {
+		return err2
+	}
+	return err
+}
+
+// baseStmtExecutor the base class for the statement execution
+type baseStmtExecutor struct {
+	ComputationWrapper
+	tenantName string
+	status     stmtExecStatus
+	err        error
+}
+
+func (bse *baseStmtExecutor) GetStatus() stmtExecStatus {
+	return bse.status
+}
+
+func (bse *baseStmtExecutor) SetStatus(err error) {
+	bse.err = err
+	bse.status = stmtExecSuccess
+	if err != nil {
+		bse.status = stmtExecFail
+	}
+
+}
+
+func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) error {
+	var txnErr error
+	stmt := bse.GetAst()
+	tenant := bse.tenantName
+	incStatementCounter(tenant, stmt)
+	if bse.GetStatus() == stmtExecSuccess {
+		txnErr = ses.TxnCommitSingleStatement(stmt)
+		if txnErr != nil {
+			incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
+			trace.EndStatement(ctx, txnErr)
+			logStatementStatus(ctx, ses, stmt, fail, txnErr)
+			return txnErr
+		}
+		trace.EndStatement(ctx, nil)
+		logStatementStatus(ctx, ses, stmt, success, nil)
+	} else {
+		incStatementErrorsCounter(tenant, stmt)
+		/*
+			Cases    | set Autocommit = 1/0 | BEGIN statement |
+			---------------------------------------------------
+			Case1      1                       Yes
+			Case2      1                       No
+			Case3      0                       Yes
+			Case4      0                       No
+			---------------------------------------------------
+			update error message in Case1,Case3,Case4.
+		*/
+		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
+			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
+		}
+		trace.EndStatement(ctx, bse.err)
+		logutil.Error(bse.err.Error())
+		txnErr = ses.TxnRollbackSingleStatement(stmt)
+		if txnErr != nil {
+			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
+			logStatementStatus(ctx, ses, stmt, fail, txnErr)
+			return txnErr
+		}
+		logStatementStatus(ctx, ses, stmt, fail, bse.err)
+	}
+	return nil
+}
+
+func (bse *baseStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	return bse.Run(0)
+}
+
+func (bse *baseStmtExecutor) Setup(ctx context.Context, ses *Session) error {
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+	return nil
+}
+
+func (bse *baseStmtExecutor) Close(ctx context.Context, ses *Session) error {
+	ses.SetMysqlResultSet(nil)
+	return nil
+}
+
+func (bse *baseStmtExecutor) VerifyPrivilege(ctx context.Context, ses *Session) error {
+	var err error
+	bse.tenantName = sysAccountName
+	//skip PREPARE statement here
+	if ses.GetTenantInfo() != nil && !IsPrepareStatement(bse.GetAst()) {
+		bse.tenantName = ses.GetTenantInfo().GetTenant()
+		err = authenticateUserCanExecuteStatement(ctx, ses, bse.GetAst())
+		if err != nil {
+			return err
+		}
+	}
+	return err
+}
+
+func (bse *baseStmtExecutor) VerifyTxn(ctx context.Context, ses *Session) error {
+	var err error
+	var can bool
+	/*
+			if it is in an active or multi-statement transaction, we check the type of the statement.
+			Then we decide that if we can execute the statement.
+
+		If we check the active transaction, it will generate the case below.
+		case:
+		set autocommit = 0;  <- no active transaction
+		                     <- no active transaction
+		drop table test1;    <- no active transaction, no error
+		                     <- has active transaction
+		drop table test1;    <- has active transaction, error
+		                     <- has active transaction
+	*/
+	if ses.InActiveTransaction() {
+		stmt := bse.GetAst()
+		can, err = StatementCanBeExecutedInUncommittedTransaction(ses, stmt)
+		if err != nil {
+			return err
+		}
+		if !can {
+			//is ddl statement
+			if IsDDL(stmt) {
+				return errorOnlyCreateStatement
+			} else if IsAdministrativeStatement(stmt) {
+				return errorAdministrativeStatement
+			} else if IsParameterModificationStatement(stmt) {
+				return errorParameterModificationInTxn
+			} else {
+				return errorUnclassifiedStatement
+			}
+		}
+	}
+	return err
+}
+
+func (bse *baseStmtExecutor) ResponseBeforeExec(ctx context.Context, ses *Session) error {
+	return nil
+}
+
+func (bse *baseStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
+	var err, retErr error
+	if bse.GetStatus() == stmtExecSuccess {
+		resp := NewOkResponse(bse.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
+		if err = ses.GetMysqlProtocol().SendResponse(resp); err != nil {
+			trace.EndStatement(ctx, err)
+			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err)
+			logStatementStatus(ctx, ses, bse.GetAst(), fail, retErr)
+			return retErr
+		}
+	}
+	return nil
 }

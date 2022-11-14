@@ -109,6 +109,42 @@ func (r *Reader) LoadBlkColumnsByMeta(
 	return bat, nil
 }
 
+func (r *Reader) LoadBlkColumnsByMetaAndIdx(
+	colTypes []types.Type,
+	colNames []string,
+	nullables []bool,
+	block objectio.BlockObject,
+	idx int) (*containers.Batch, error) {
+	bat := containers.NewBatch()
+
+	for i := range colNames {
+		if block.GetExtent().End() == 0 {
+			continue
+		}
+		col, err := block.GetColumn(uint16(idx))
+		if err != nil {
+			return bat, err
+		}
+		data, err := col.GetData(r.readCxt, nil)
+		if err != nil {
+			return bat, err
+		}
+		pkgVec := vector.New(colTypes[i])
+		if err = pkgVec.Read(data.Entries[0].Object.([]byte)); err != nil && !errors.Is(err, io.EOF) {
+			return bat, err
+		}
+		var vec containers.Vector
+		if pkgVec.Length() == 0 {
+			vec = containers.MakeVector(colTypes[i], nullables[i])
+		} else {
+			vec = containers.NewVectorWithSharedMemory(pkgVec, nullables[i])
+		}
+		bat.AddVector(colNames[i], vec)
+		bat.Vecs[i] = vec
+	}
+	return bat, nil
+}
+
 func (r *Reader) ReadMeta(m *mpool.MPool) (objectio.BlockObject, error) {
 	extents := make([]objectio.Extent, 1)
 	extents[0] = r.meta.GetLoc()

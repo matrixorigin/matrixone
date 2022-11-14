@@ -16,17 +16,27 @@ package merge
 
 import (
 	"bytes"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"reflect"
 )
 
 func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString(" union all ")
 }
 
-func Prepare(_ *process.Process, arg any) error {
+func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.receiverListener = make([]reflect.SelectCase, len(proc.Reg.MergeReceivers))
+	for i, mr := range proc.Reg.MergeReceivers {
+		ap.ctr.receiverListener[i] = reflect.SelectCase{
+			Dir:  reflect.SelectRecv,
+			Chan: reflect.ValueOf(mr.Ch),
+		}
+	}
+	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
 	return nil
 }
 
@@ -35,19 +45,24 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	anal.Start()
 	defer anal.Stop()
 	ap := arg.(*Argument)
+	ctr := ap.ctr
+
 	for {
-		if len(proc.Reg.MergeReceivers) == 0 {
+		if ctr.aliveMergeReceiver == 0 {
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
-		reg := proc.Reg.MergeReceivers[ap.ctr.i]
 
-		bat, ok := <-reg.Ch
-		if !ok || bat == nil {
-			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:ap.ctr.i], proc.Reg.MergeReceivers[ap.ctr.i+1:]...)
-			if ap.ctr.i >= len(proc.Reg.MergeReceivers) {
-				ap.ctr.i = 0
-			}
+		chosen, value, ok := reflect.Select(ctr.receiverListener)
+		if !ok {
+			return false, moerr.NewInternalError("pipeline closed unexpectedly")
+		}
+
+		pointer := value.UnsafePointer()
+		bat := (*batch.Batch)(pointer)
+		if bat == nil {
+			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
+			ctr.aliveMergeReceiver--
 			continue
 		}
 		if bat.Length() == 0 {
@@ -56,9 +71,6 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		anal.Input(bat)
 		anal.Output(bat)
 		proc.SetInputBatch(bat)
-		if ap.ctr.i = ap.ctr.i + 1; ap.ctr.i >= len(proc.Reg.MergeReceivers) {
-			ap.ctr.i = 0
-		}
 		return false, nil
 	}
 }
