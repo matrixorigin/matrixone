@@ -16,12 +16,13 @@ package dispatch
 
 import (
 	"bytes"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"sync/atomic"
 )
 
 func String(arg any, buf *bytes.Buffer) {
@@ -78,8 +79,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		reg := ap.Regs[ap.ctr.i]
 		select {
 		case <-reg.Ctx.Done():
-			// XXX is that suitable ? should we return err
-			return false, moerr.NewInternalError("pipeline context has done.")
+			ap.ctr.i++
 		case reg.Ch <- bat:
 			ap.ctr.i++
 			return false, nil
