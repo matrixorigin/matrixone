@@ -144,7 +144,7 @@ func TestBlockMetaMarshal(t *testing.T) {
 	require.Equal(t, meta, meta0)
 }
 
-func TestCheckExprIsMonotonical(t *testing.T) {
+func TestCheckExprIsMonotonic(t *testing.T) {
 	type asserts = struct {
 		result bool
 		expr   *plan.Expr
@@ -166,11 +166,11 @@ func TestCheckExprIsMonotonical(t *testing.T) {
 		})},
 	}
 
-	t.Run("test checkExprIsMonotonical", func(t *testing.T) {
+	t.Run("test checkExprIsMonotonic", func(t *testing.T) {
 		for i, testCase := range testCases {
-			isMonotonical := checkExprIsMonotonical(testCase.expr)
-			if isMonotonical != testCase.result {
-				t.Fatalf("checkExprIsMonotonical testExprs[%d] is different with expected", i)
+			isMonotonic := checkExprIsMonotonic(testCase.expr)
+			if isMonotonic != testCase.result {
+				t.Fatalf("checkExprIsMonotonic testExprs[%d] is different with expected", i)
 			}
 		}
 	})

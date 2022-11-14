@@ -701,7 +701,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 		bat.Clean(proc.Mp())
 		return ifNeed
 	}
-	if !checkExprIsMonotonical(expr) {
+	if !checkExprIsMonotonic(expr) {
 		return true
 	}
 
