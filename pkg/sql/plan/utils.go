@@ -330,6 +330,18 @@ func intersectSlice(left, right []string) []string {
 	return ret
 }
 
+/*
+DNF means disjunctive normal form, for example (a and b) or (c and d) or (e and f)
+if we have a DNF filter, for example (c1=1 and c2=1) or (c1=2 and c2=2)
+we can have extra filter: (c1=1 or c1=2) and (c2=1 or c2=2), which can be pushed down to optimize join
+
+checkDNF scan the expr and return all groups of cond
+for example (c1=1 and c2=1) or (c1=2 and c3=2), c1 is a group because it appears in all disjunctives
+and c2,c3 is not a group
+
+walkThroughDNF accept a keyword string, walk through the expr,
+and extract all the conds which contains the keyword
+*/
 func checkDNF(expr *plan.Expr) []string {
 	var ret []string
 	switch exprImpl := expr.Expr.(type) {
