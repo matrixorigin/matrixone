@@ -322,9 +322,8 @@ func (c *SpanContext) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	return nil
 }
 
-// SpanContextWithID with default Kind: SpanKindStatement
-func SpanContextWithID(id TraceID) SpanContext {
-	return SpanContext{TraceID: id, Kind: SpanKindStatement}
+func SpanContextWithID(id TraceID, kind SpanKind) SpanContext {
+	return SpanContext{TraceID: id, Kind: kind}
 }
 
 // SpanContextWithIDs with default Kind: SpanKindInternal
