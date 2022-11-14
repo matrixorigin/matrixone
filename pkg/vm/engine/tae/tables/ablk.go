@@ -220,7 +220,7 @@ func (blk *ablock) GetValue(
 	if mnode != nil {
 		defer mnode.Close()
 		return blk.getInMemoryValue(mnode.Item(), ts, row, col)
-	} else {
+	} else if pnode != nil {
 		defer pnode.Close()
 		return blk.getPersistedValue(
 			pnode.Item(),
