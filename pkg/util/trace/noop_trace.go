@@ -42,6 +42,10 @@ func (t noopTracer) Start(ctx context.Context, name string, _ ...SpanOption) (co
 	return ContextWithSpan(ctx, span), span
 }
 
+func (t noopTracer) Debug(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
+	return t.Start(ctx, name, opts...)
+}
+
 // noopSpan is an implementation of Span that preforms no operations.
 type noopSpan struct{}
 

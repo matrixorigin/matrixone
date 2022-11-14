@@ -106,6 +106,13 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (
 	return ContextWithSpan(ctx, span), span
 }
 
+func (t *MOTracer) Debug(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
+	if !t.provider.debugMode {
+		return ctx, noopSpan{}
+	}
+	return t.Start(ctx, name, opts...)
+}
+
 var _ Span = (*MOSpan)(nil)
 var _ IBuffer2SqlItem = (*MOSpan)(nil)
 var _ CsvFields = (*MOSpan)(nil)
@@ -162,7 +169,8 @@ func (s *MOSpan) CsvFields(row *export.Row) []string {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, spanView.Table)
 	row.SetColumnVal(spanIDCol, s.SpanID.String())
-	row.SetColumnVal(stmtIDCol, s.TraceID.String())
+	row.SetColumnVal(traceIDCol, s.TraceID.String())
+	row.SetColumnVal(spanKindCol, s.Kind.String())
 	row.SetColumnVal(parentSpanIDCol, s.parent.SpanContext().SpanID.String())
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
