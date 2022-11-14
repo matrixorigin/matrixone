@@ -15,17 +15,17 @@ select @val;
 @val
 0
 SET @val = CAST("2022-10-10" AS date);
-[unknown result because it is related to issue#6328]
 select @val;
-[unknown result because it is related to issue#6328]
+@val
+2022-10-10
 SET @val = CAST("2022-10-10" AS datetime);
-[unknown result because it is related to issue#6328]
 select @val;
-[unknown result because it is related to issue#6328]
+@val
+2022-10-10 00:00:00
 SET @val = CAST("2022-10-10" AS timestamp);
-[unknown result because it is related to issue#6328]
 select @val;
-[unknown result because it is related to issue#6328]
+@val
+2022-10-10 00:00:00.000000 UTC
 SET @val = CAST('0' AS text);
 select @val;
 @val
