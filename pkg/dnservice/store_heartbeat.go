@@ -81,8 +81,9 @@ func (s *store) handleCommands(cmds []logservicepb.ScheduleCommand) {
 			case logservicepb.RemoveReplica, logservicepb.StopReplica:
 				s.handleRemoveReplica(cmd)
 			}
-		}
-		if cmd.CreateTaskService != nil {
+		} else if cmd.GetShutdownStore() != nil {
+			s.handleShutdownStore(cmd)
+		} else if cmd.CreateTaskService != nil {
 			s.createTaskService(cmd.CreateTaskService)
 		}
 	}
@@ -109,5 +110,11 @@ func (s *store) handleRemoveReplica(cmd logservicepb.ScheduleCommand) {
 	shardID := cmd.ConfigChange.Replica.ShardID
 	if err := s.removeReplica(shardID); err != nil {
 		s.logger.Error("failed to remove replica", zap.Error(err))
+	}
+}
+
+func (s *store) handleShutdownStore(_ logservicepb.ScheduleCommand) {
+	if err := s.Close(); err != nil {
+		s.logger.Error("failed to shutdown store", zap.Error(err))
 	}
 }
