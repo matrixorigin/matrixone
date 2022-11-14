@@ -209,7 +209,7 @@ var builtins = map[int]Functions{
 	},
 	DATE: {
 		Id:     DATE,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -736,7 +736,7 @@ var builtins = map[int]Functions{
 	},
 	YEAR: {
 		Id:     YEAR,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
