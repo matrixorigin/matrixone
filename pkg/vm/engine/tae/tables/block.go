@@ -71,7 +71,11 @@ type dataBlock struct {
 	dataFlushed  bool
 }
 
-func newBlock(meta *catalog.BlockEntry, fs *objectio.ObjectFS, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
+func newBlock(
+	meta *catalog.BlockEntry,
+	fs *objectio.ObjectFS,
+	bufMgr base.INodeManager,
+	scheduler tasks.TaskScheduler) *dataBlock {
 	schema := meta.GetSchema()
 	var node *appendableNode
 	block := &dataBlock{
@@ -400,10 +404,10 @@ func (blk *dataBlock) FillColumnDeletes(view *model.ColumnView, rwlocker *sync.R
 }
 
 func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
-	if !blk.meta.IsAppendable() {
-		panic("can not create appender on non-appendable block")
-	}
-	appender = newAppender(blk.node)
+	// if !blk.meta.IsAppendable() {
+	// 	panic("can not create appender on non-appendable block")
+	// }
+	// appender = newAppender(blk.node)
 	return
 }
 

@@ -5,6 +5,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -64,6 +65,7 @@ func (node *memoryNode) Pin() *common.PinnedItem[*memoryNode] {
 }
 
 func (node *memoryNode) close() {
+	logutil.Infof("Releasing Memorynode BLK-%d", node.block.meta.ID)
 	node.data.Close()
 	node.data = nil
 	for i, index := range node.indexes {
@@ -73,7 +75,6 @@ func (node *memoryNode) close() {
 	node.indexes = nil
 	node.pkIndex = nil
 	node.block = nil
-	return
 }
 
 func (node *memoryNode) BatchDedup(

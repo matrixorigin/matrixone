@@ -17,17 +17,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type ablock struct {
 	*baseBlock
-	intents atomic.Int32
+	frozen atomic.Bool
 }
 
 func newABlock(
@@ -35,18 +35,16 @@ func newABlock(
 	fs *objectio.ObjectFS,
 	bufMgr base.INodeManager,
 	scheduler tasks.TaskScheduler) *ablock {
-	base := newBaseBlock(meta, bufMgr, fs, scheduler)
-	blk := &ablock{
-		baseBlock: base,
-	}
-	base.mvcc.SetAppendListener(blk.OnApplyAppend)
-	base.mvcc.SetDeletesListener(blk.OnApplyDelete)
+	blk := &ablock{}
+	blk.baseBlock = newBaseBlock(blk, meta, bufMgr, fs, scheduler)
+	blk.mvcc.SetAppendListener(blk.OnApplyAppend)
+	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
 	if blk.meta.HasDropCommitted() {
-		node := newPersistedNode(base)
+		node := newPersistedNode(blk.baseBlock)
 		pinned := node.Pin()
 		blk.storage.pnode = pinned
 	} else {
-		node := newMemoryNode(base)
+		node := newMemoryNode(blk.baseBlock)
 		pinned := node.Pin()
 		blk.storage.mnode = pinned
 	}
@@ -67,36 +65,35 @@ func (blk *ablock) OnApplyDelete(
 	return
 }
 
-func (blk *ablock) ApplyAppendQuota() bool {
-	for old := blk.intents.Load(); old >= 0; old = blk.intents.Load() {
-		if blk.intents.CompareAndSwap(old, old+1) {
-			return true
-		}
-	}
-	return false
-}
-
-func (blk *ablock) ReturnAppendQuota() {
-	blk.intents.Add(-1)
-}
-
-func (blk *ablock) TryFreezeAppend() bool {
-	return blk.intents.CompareAndSwap(0, -1)
+func (blk *ablock) FreezeAppend() {
+	blk.frozen.Store(true)
 }
 
 func (blk *ablock) IsAppendFrozen() bool {
-	return blk.intents.Load() < 0
+	return blk.frozen.Load()
+}
+
+func (blk *ablock) IsAppendable() bool {
+	if blk.IsAppendFrozen() {
+		return false
+	}
+	mnode := blk.PinMemoryNode()
+	if mnode == nil {
+		return false
+	}
+	defer mnode.Close()
+	return mnode.Item().Rows() < blk.meta.GetSchema().BlockMaxRows
 }
 
 func (blk *ablock) PrepareCompact() bool {
-	if blk.intents.Load() > 0 {
+	if blk.RefCount() > 0 {
 		return false
 	}
-	blk.TryFreezeAppend()
+	blk.FreezeAppend()
 	if !blk.meta.PrepareCompact() {
 		return false
 	}
-	return blk.IsAppendFrozen()
+	return blk.RefCount() == 0
 }
 
 func (blk *ablock) Pin() *common.PinnedItem[*ablock] {
@@ -104,6 +101,14 @@ func (blk *ablock) Pin() *common.PinnedItem[*ablock] {
 	return &common.PinnedItem[*ablock]{
 		Val: blk,
 	}
+}
+
+func (blk *ablock) GetColumnDataByName(
+	txn txnif.AsyncTxn,
+	attr string,
+	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
+	colIdx := blk.meta.GetSchema().GetColIdx(attr)
+	return blk.GetColumnDataById(txn, colIdx, buffer)
 }
 
 func (blk *ablock) GetColumnDataById(
@@ -153,9 +158,10 @@ func (blk *ablock) resolveInMemoryColumnData(
 	buffer *bytes.Buffer,
 	skipDeletes bool) (view *model.ColumnView, err error) {
 	blk.RLock()
+	defer blk.RUnlock()
 	maxRow, visible, deSels, err := blk.mvcc.GetVisibleRowLocked(ts)
 	if !visible || err != nil {
-		blk.RUnlock()
+		// blk.RUnlock()
 		return
 	}
 
@@ -167,17 +173,17 @@ func (blk *ablock) resolveInMemoryColumnData(
 		colIdx,
 		buffer)
 	if err != nil {
-		blk.RUnlock()
+		// blk.RUnlock()
 		return
 	}
 	view.SetData(data)
 	if skipDeletes {
-		blk.RUnlock()
+		// blk.RUnlock()
 		return
 	}
 
 	err = blk.FillInMemoryDeletesLocked(view, blk.RWMutex)
-	blk.RUnlock()
+	// blk.RUnlock()
 	if err != nil {
 		return
 	}
@@ -202,30 +208,14 @@ func (blk *ablock) GetValue(
 		return blk.getInMemoryValue(mnode.Item(), ts, row, col)
 	} else {
 		defer pnode.Close()
-		return blk.getPersistedValue(pnode.Item(), ts, row, col)
+		return blk.getPersistedValue(
+			pnode.Item(),
+			ts,
+			row,
+			col,
+			true)
 	}
 	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
-}
-
-func (blk *ablock) getPersistedValue(
-	pnode *persistedNode,
-	ts types.TS,
-	row, col int) (v any, err error) {
-	view := model.NewColumnView(ts, col)
-	if err = blk.FillPersistedDeletes(view); err != nil {
-		return
-	}
-	if view.DeleteMask != nil && view.DeleteMask.ContainsInt(row) {
-		err = moerr.NewNotFound()
-		return
-	}
-	view2, err := blk.ResolvePersistedColumnData(pnode, ts, col, nil, true)
-	if err != nil {
-		return
-	}
-	defer view2.Close()
-	v = view2.GetValue(row)
-	return
 }
 
 // With PinNode Context
@@ -234,8 +224,8 @@ func (blk *ablock) getInMemoryValue(
 	ts types.TS,
 	row, col int) (v any, err error) {
 	blk.RLock()
-	defer blk.RUnlock()
 	deleted, err := blk.mvcc.IsDeletedLocked(uint32(row), ts, blk.RWMutex)
+	blk.RUnlock()
 	if err != nil {
 		return
 	}
@@ -361,9 +351,9 @@ func (blk *ablock) getInMemoryRowByFilter(
 	waitFn := func(n *updates.AppendNode) {
 		txn := n.Txn
 		if txn != nil {
-			blk.mvcc.RUnlock()
+			blk.RUnlock()
 			txn.GetTxnState(true)
-			blk.mvcc.RLock()
+			blk.RLock()
 		}
 	}
 	if anyWaitable := blk.mvcc.CollectUncommittedANodesPreparedBefore(
@@ -380,9 +370,9 @@ func (blk *ablock) getInMemoryRowByFilter(
 		appendnode := blk.mvcc.GetAppendNodeByRow(row)
 		needWait, txn := appendnode.NeedWaitCommitting(ts)
 		if needWait {
-			blk.mvcc.RUnlock()
+			blk.RUnlock()
 			txn.GetTxnState(true)
-			blk.mvcc.RLock()
+			blk.RLock()
 		}
 		if appendnode.IsAborted() || !appendnode.IsVisible(ts) {
 			continue
@@ -549,27 +539,6 @@ func (blk *ablock) CollectAppendInRange(
 	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
 }
 
-func (blk *ablock) BuildCompactionTaskFactory() (
-	factory tasks.TxnTaskFactory,
-	taskType tasks.TaskType,
-	scopes []common.ID,
-	err error) {
-
-	if !blk.PrepareCompact() {
-		return
-	}
-
-	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
-	taskType = tasks.DataCompactionTask
-	scopes = append(scopes, *blk.meta.AsCommonID())
-	return
-}
-
-func (blk *ablock) RunCalibration() (score int) {
-	score, _ = blk.estimateRawScore()
-	return
-}
-
 func (blk *ablock) estimateRawScore() (score int, dropped bool) {
 	if blk.meta.HasDropCommitted() {
 		dropped = true
@@ -603,6 +572,37 @@ func (blk *ablock) estimateRawScore() (score int, dropped bool) {
 	return
 }
 
+func (blk *ablock) RunCalibration() (score int) {
+	score, _ = blk.estimateRawScore()
+	return
+}
+
 func (blk *ablock) EstimateScore(ttl time.Duration, force bool) int {
 	return blk.adjustScore(blk.estimateRawScore, ttl, force)
 }
+
+func (blk *ablock) OnReplayAppend(node txnif.AppendNode) (err error) {
+	an := node.(*updates.AppendNode)
+	blk.mvcc.OnReplayAppendNode(an)
+	return
+}
+
+func (blk *ablock) OnReplayAppendPayload(bat *containers.Batch) (err error) {
+	appender, err := blk.MakeAppender()
+	if err != nil {
+		return
+	}
+	_, err = appender.ReplayAppend(bat, nil)
+	return
+}
+
+func (blk *ablock) MakeAppender() (appender data.BlockAppender, err error) {
+	if blk == nil {
+		err = moerr.GetOkExpectedEOB()
+		return
+	}
+	appender = newAppender(blk)
+	return
+}
+
+func (blk *ablock) Init() (err error) { return }

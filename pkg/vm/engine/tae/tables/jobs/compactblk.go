@@ -291,7 +291,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 			return
 		}
 	}
-	if err = newBlkData.ReplayIndex(); err != nil {
+	if err = newBlkData.Init(); err != nil {
 		return
 	}
 	return

@@ -16,9 +16,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -43,15 +45,18 @@ type baseBlock struct {
 		mnode *common.PinnedItem[*memoryNode]
 		pnode *common.PinnedItem[*persistedNode]
 	}
-	ttl time.Time
+	ttl  time.Time
+	impl data.Block
 }
 
 func newBaseBlock(
+	impl data.Block,
 	meta *catalog.BlockEntry,
 	bufMgr base.INodeManager,
 	fs *objectio.ObjectFS,
 	scheduler tasks.TaskScheduler) *baseBlock {
 	blk := &baseBlock{
+		impl:      impl,
 		bufMgr:    bufMgr,
 		fs:        fs,
 		scheduler: scheduler,
@@ -61,6 +66,19 @@ func newBaseBlock(
 	blk.mvcc = updates.NewMVCCHandle(meta)
 	blk.RWMutex = blk.mvcc.RWMutex
 	return blk
+}
+
+func (blk *baseBlock) Close() {
+	// TODO
+}
+
+func (blk *baseBlock) PinMemoryNode() *common.PinnedItem[*memoryNode] {
+	blk.storage.mu.RLock()
+	defer blk.storage.mu.RUnlock()
+	if blk.storage.mnode != nil {
+		return blk.storage.mnode.Item().Pin()
+	}
+	return nil
 }
 
 func (blk *baseBlock) PinNode() (
@@ -108,8 +126,22 @@ func (blk *baseBlock) Rows() int {
 	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
 }
 
+func (blk *baseBlock) TryUpgrade() (err error) {
+	blk.storage.mu.Lock()
+	defer blk.storage.mu.Unlock()
+	if blk.storage.mnode != nil {
+		blk.storage.mnode.Close()
+		blk.storage.mnode = nil
+	}
+	if blk.storage.pnode == nil {
+		blk.storage.pnode = newPersistedNode(blk).Pin()
+	}
+	return
+}
+
 func (blk *baseBlock) GetMeta() any                 { return blk.meta }
 func (blk *baseBlock) GetBufMgr() base.INodeManager { return blk.bufMgr }
+func (blk *baseBlock) GetFs() *objectio.ObjectFS    { return blk.fs }
 func (blk *baseBlock) GetID() *common.ID            { return blk.meta.AsCommonID() }
 
 func (blk *baseBlock) FillInMemoryDeletesLocked(
@@ -278,6 +310,36 @@ func (blk *baseBlock) PersistedBatchDedup(
 	return
 }
 
+func (blk *baseBlock) getPersistedValue(
+	pnode *persistedNode,
+	ts types.TS,
+	row, col int,
+	skipMemory bool) (v any, err error) {
+	view := model.NewColumnView(ts, col)
+	if err = blk.FillPersistedDeletes(view); err != nil {
+		return
+	}
+	if !skipMemory {
+		blk.RLock()
+		err = blk.FillInMemoryDeletesLocked(view, blk.RWMutex)
+		blk.RUnlock()
+		if err != nil {
+			return
+		}
+	}
+	if view.DeleteMask != nil && view.DeleteMask.ContainsInt(row) {
+		err = moerr.NewNotFound()
+		return
+	}
+	view2, err := blk.ResolvePersistedColumnData(pnode, ts, col, nil, true)
+	if err != nil {
+		return
+	}
+	defer view2.Close()
+	v = view2.GetValue(row)
+	return
+}
+
 func (blk *baseBlock) DeletesInfo() string {
 	blk.RLock()
 	defer blk.RUnlock()
@@ -396,4 +458,82 @@ func (blk *baseBlock) adjustScore(
 		return 100
 	}
 	return 1
+}
+
+func (blk *baseBlock) OnReplayDelete(node txnif.DeleteNode) (err error) {
+	blk.mvcc.OnReplayDeleteNode(node)
+	err = node.OnApply()
+	return
+}
+
+func (blk *baseBlock) OnReplayAppend(_ txnif.AppendNode) (err error) {
+	panic("not supported")
+}
+
+func (blk *baseBlock) OnReplayAppendPayload(_ *containers.Batch) (err error) {
+	panic("not supported")
+}
+
+func (blk *baseBlock) MakeAppender() (appender data.BlockAppender, err error) {
+	panic("not supported")
+}
+
+func (blk *baseBlock) GetRowsOnReplay() uint64 {
+	rows := uint64(blk.mvcc.GetTotalRow())
+	metaLoc := blk.meta.GetMetaLoc()
+	if metaLoc == "" {
+		return rows
+	}
+	meta, err := blockio.DecodeMetaLocToMeta(metaLoc)
+	if err != nil {
+		panic(err)
+	}
+	fileRows := uint64(meta.GetRows())
+	if rows > fileRows {
+		return rows
+	}
+	return fileRows
+}
+
+func (blk *baseBlock) GetTotalChanges() int {
+	return int(blk.mvcc.GetChangeNodeCnt())
+}
+
+func (blk *baseBlock) IsAppendable() bool { return false }
+
+func (blk *baseBlock) MutationInfo() string {
+	rows := blk.Rows()
+	totalChanges := blk.mvcc.GetChangeNodeCnt()
+	s := fmt.Sprintf("Block %s Mutation Info: Changes=%d/%d",
+		blk.meta.AsCommonID().BlockString(),
+		totalChanges,
+		rows)
+	if totalChanges == 0 {
+		return s
+	}
+	deleteCnt := blk.mvcc.GetDeleteCnt()
+	if deleteCnt != 0 {
+		s = fmt.Sprintf("%s, Del:%d/%d", s, deleteCnt, rows)
+	}
+	return s
+}
+
+func (blk *baseBlock) BuildCompactionTaskFactory() (
+	factory tasks.TxnTaskFactory,
+	taskType tasks.TaskType,
+	scopes []common.ID,
+	err error) {
+
+	if !blk.impl.PrepareCompact() {
+		return
+	}
+
+	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
+	taskType = tasks.DataCompactionTask
+	scopes = append(scopes, *blk.meta.AsCommonID())
+	return
+}
+
+func (blk *baseBlock) CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.Batch, error) {
+	return nil, nil
 }

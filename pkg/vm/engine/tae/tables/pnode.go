@@ -5,7 +5,6 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
@@ -22,7 +21,10 @@ func newPersistedNode(block *baseBlock) *persistedNode {
 	node := &persistedNode{
 		block: block,
 	}
-	node.initIndexes(block.meta.GetSchema())
+	node.OnZeroCB = node.close
+	if block.meta.HasPersistedData() {
+		node.init()
+	}
 	return node
 }
 
@@ -32,10 +34,11 @@ func (node *persistedNode) close() {
 		node.indexes[i] = nil
 	}
 	node.indexes = nil
-	return
 }
 
-func (node *persistedNode) initIndexes(schema *catalog.Schema) {
+func (node *persistedNode) init() {
+	node.indexes = make(map[int]indexwrapper.Index)
+	schema := node.block.meta.GetSchema()
 	pkIdx := -1
 	if schema.HasPK() {
 		pkIdx = schema.GetSingleSortKeyIdx()
@@ -65,7 +68,7 @@ func (node *persistedNode) Pin() *common.PinnedItem[*persistedNode] {
 }
 
 func (node *persistedNode) Rows() uint32 {
-	location := node.block.GetMeta().(catalog.BlockEntry).GetMetaLoc()
+	location := node.block.meta.GetMetaLoc()
 	return uint32(ReadPersistedBlockRow(location))
 }
 

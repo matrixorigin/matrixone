@@ -2,6 +2,7 @@ package tables
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -13,6 +14,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -27,15 +29,20 @@ func newNABlock(
 	fs *objectio.ObjectFS,
 	bufMgr base.INodeManager,
 	scheduler tasks.TaskScheduler) *block {
-	base := newBaseBlock(meta, bufMgr, fs, scheduler)
-	blk := &block{
-		baseBlock: base,
-	}
-	base.mvcc.SetDeletesListener(blk.OnApplyDelete)
-	node := newPersistedNode(base)
+	blk := &block{}
+	blk.baseBlock = newBaseBlock(blk, meta, bufMgr, fs, scheduler)
+	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
+	node := newPersistedNode(blk.baseBlock)
 	pinned := node.Pin()
 	blk.storage.pnode = pinned
 	return blk
+}
+
+func (blk *block) Init() (err error) {
+	_, pnode := blk.PinNode()
+	defer pnode.Close()
+	pnode.Item().init()
+	return
 }
 
 func (blk *block) OnApplyDelete(
@@ -55,6 +62,14 @@ func (blk *block) Pin() *common.PinnedItem[*block] {
 	return &common.PinnedItem[*block]{
 		Val: blk,
 	}
+}
+
+func (blk *block) GetColumnDataByName(
+	txn txnif.AsyncTxn,
+	attr string,
+	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
+	colIdx := blk.meta.GetSchema().GetColIdx(attr)
+	return blk.GetColumnDataById(txn, colIdx, buffer)
 }
 
 func (blk *block) GetColumnDataById(
@@ -101,4 +116,105 @@ func (blk *block) dedupClosure(
 		}
 		return nil
 	}
+}
+
+func (blk *block) GetValue(
+	txn txnif.AsyncTxn,
+	row, col int) (v any, err error) {
+	ts := txn.GetStartTS()
+	_, pnode := blk.PinNode()
+	defer pnode.Close()
+	return blk.getPersistedValue(
+		pnode.Item(),
+		ts,
+		row,
+		col,
+		false)
+}
+
+func (blk *block) RunCalibration() (score int) {
+	score, _ = blk.estimateRawScore()
+	return
+}
+
+func (blk *block) estimateRawScore() (score int, dropped bool) {
+	if blk.meta.HasDropCommitted() {
+		dropped = true
+		return
+	}
+	if blk.mvcc.GetChangeNodeCnt() == 0 {
+		// No deletes found
+		score = 0
+	} else {
+		// Any delete
+		score = 1
+	}
+
+	// If any delete found and the table or database of the block had
+	// been deleted. Force checkpoint the block
+	if score > 0 {
+		if _, terminated := blk.meta.GetTerminationTS(); terminated {
+			score = 100
+		}
+	}
+	return
+}
+
+func (blk *block) EstimateScore(ttl time.Duration, force bool) int {
+	return blk.adjustScore(blk.estimateRawScore, ttl, force)
+}
+
+func (blk *block) GetByFilter(
+	txn txnif.AsyncTxn,
+	filter *handle.Filter) (offset uint32, err error) {
+	if filter.Op != handle.FilterEq {
+		panic("logic error")
+	}
+	if blk.meta.GetSchema().SortKey == nil {
+		_, _, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
+		return
+	}
+	ts := txn.GetStartTS()
+
+	_, pnode := blk.PinNode()
+	defer pnode.Close()
+	return blk.getPersistedRowByFilter(pnode.Item(), ts, filter)
+}
+
+func (blk *block) getPersistedRowByFilter(
+	pnode *persistedNode,
+	ts types.TS,
+	filter *handle.Filter) (offset uint32, err error) {
+	ok, err := pnode.ContainsKey(filter.Val)
+	if err != nil {
+		return
+	}
+	if !ok {
+		err = moerr.NewNotFound()
+		return
+	}
+	var sortKey containers.Vector
+	if sortKey, err = blk.LoadPersistedColumnData(
+		blk.meta.GetSchema().GetSingleSortKeyIdx(),
+		nil); err != nil {
+		return
+	}
+	defer sortKey.Close()
+	off, existed := compute.GetOffsetByVal(sortKey, filter.Val, nil)
+	if !existed {
+		err = moerr.NewNotFound()
+		return
+	}
+	offset = uint32(off)
+
+	blk.mvcc.RLock()
+	defer blk.mvcc.RUnlock()
+	deleted, err := blk.mvcc.IsDeletedLocked(offset, ts, blk.mvcc.RWMutex)
+	if err != nil {
+		return
+	}
+	if deleted {
+		err = moerr.NewNotFound()
+	}
+	return
 }
