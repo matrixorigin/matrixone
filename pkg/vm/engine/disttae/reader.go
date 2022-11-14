@@ -148,10 +148,12 @@ func (r *blockMergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) 
 		return nil, err
 	}
 	r.sels = r.sels[:0]
-	sort.Ints(r.blks[0].deletes)
+	deletes := make([]int, len(r.blks[0].deletes))
+	copy(deletes, r.blks[0].deletes)
+	sort.Ints(deletes)
 	for i := 0; i < bat.Length(); i++ {
-		if len(r.blks[0].deletes) > 0 && i == r.blks[0].deletes[0] {
-			r.blks[0].deletes = r.blks[0].deletes[1:]
+		if len(deletes) > 0 && i == deletes[0] {
+			deletes = deletes[1:]
 			continue
 		}
 		r.sels = append(r.sels, int64(i))
