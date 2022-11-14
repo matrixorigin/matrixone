@@ -1845,7 +1845,7 @@ var operators = map[int]Functions{
 
 	LIKE: {
 		Id:     LIKE,
-		Flag:   plan.Function_MONOTONICAL,
+		Flag:   plan.Function_STRICT,
 		Layout: BINARY_LOGICAL_OPERATOR,
 		Overloads: []Function{
 			{
