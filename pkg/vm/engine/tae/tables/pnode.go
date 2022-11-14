@@ -128,3 +128,19 @@ func (node *persistedNode) GetColumnDataWindow(
 	}
 	return
 }
+
+func (node *persistedNode) GetDataWindow(
+	from, to uint32) (bat *containers.Batch, err error) {
+	data, err := node.block.LoadPersistedData()
+	if err != nil {
+		return
+	}
+
+	if to-from == uint32(data.Length()) {
+		bat = data
+	} else {
+		bat = data.CloneWindow(int(from), int(to-from), common.DefaultAllocator)
+		data.Close()
+	}
+	return
+}

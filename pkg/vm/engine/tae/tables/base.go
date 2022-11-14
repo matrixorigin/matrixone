@@ -207,6 +207,26 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	return
 }
 
+func (blk *baseBlock) LoadPersistedData() (bat *containers.Batch, err error) {
+	schema := blk.meta.GetSchema()
+	bat = containers.NewBatch()
+	defer func() {
+		if err != nil {
+			bat.Close()
+		}
+	}()
+
+	var vec containers.Vector
+	for i, col := range schema.ColDefs {
+		vec, err = blk.LoadPersistedColumnData(i, nil)
+		if err != nil {
+			return
+		}
+		bat.AddVector(col.Name, vec)
+	}
+	return
+}
+
 func (blk *baseBlock) LoadPersistedColumnData(
 	colIdx int,
 	buffer *bytes.Buffer,

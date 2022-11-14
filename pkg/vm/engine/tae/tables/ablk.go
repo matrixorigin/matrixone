@@ -514,6 +514,28 @@ func (blk *ablock) BatchDedup(
 	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
 }
 
+func (blk *ablock) persistedCollectAppendInRange(
+	pnode *persistedNode,
+	start, end types.TS,
+	withAborted bool) (bat *containers.Batch, err error) {
+	// FIXME: we'll gc mvcc after being persisted. refactor it later
+	blk.RLock()
+	minRow, maxRow, commitTSVec, abortVec, abortedMap :=
+		blk.mvcc.CollectAppend(start, end)
+	defer blk.RUnlock()
+	if bat, err = pnode.GetDataWindow(minRow, maxRow); err != nil {
+		return
+	}
+	bat.AddVector(catalog.AttrCommitTs, commitTSVec)
+	if withAborted {
+		bat.AddVector(catalog.AttrAborted, abortVec)
+	} else {
+		bat.Deletes = abortedMap
+		bat.Compact()
+	}
+	return
+}
+
 func (blk *ablock) inMemoryCollectAppendInRange(
 	mnode *memoryNode,
 	start, end types.TS,
@@ -548,7 +570,11 @@ func (blk *ablock) CollectAppendInRange(
 			withAborted)
 	} else if pnode != nil {
 		defer pnode.Close()
-		panic("TODO: persistedCollectAppendInRange")
+		return blk.persistedCollectAppendInRange(
+			pnode.Item(),
+			start,
+			end,
+			withAborted)
 	}
 	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
 }
