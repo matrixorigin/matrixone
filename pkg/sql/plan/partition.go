@@ -721,7 +721,7 @@ func buildRangePartitionDefinitions(partitionBinder *PartitionBinder, defs []*tr
 		}
 		partitionInfo.Partitions[i] = partitionItem
 	}
-	return nil
+	return buildRangePartitionItem(partitionBinder, partitionInfo, defs)
 }
 
 func buildListPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tree.Partition, partitionInfo *plan.PartitionInfo) error {
@@ -749,7 +749,8 @@ func buildListPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tre
 		}
 		partitionInfo.Partitions[i] = partitionItem
 	}
-	return nil
+	return buildListPartitionItem(partitionBinder, partitionInfo, defs)
+	//return nil
 }
 
 func buildHashPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tree.Partition, partitionInfo *plan.PartitionInfo) error {
