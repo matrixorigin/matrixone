@@ -955,7 +955,7 @@ var builtins = map[int]Functions{
 	},
 	PI: {
 		Id:     PI,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{

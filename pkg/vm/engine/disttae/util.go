@@ -56,7 +56,7 @@ func checkExprIsMonotonical(expr *plan.Expr) bool {
 			}
 		}
 
-		isMonotonical, _ := function.GetFunctionIsMonotonicalById(exprImpl.F.Func.GetObj())
+		isMonotonical, _ := function.GetFunctionIsMonotonicById(exprImpl.F.Func.GetObj())
 		if !isMonotonical {
 			return false
 		}

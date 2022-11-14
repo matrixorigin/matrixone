@@ -224,7 +224,7 @@ func GetFunctionAppendHideArgByID(overloadID int64) bool {
 	return function.AppendHideArg
 }
 
-func GetFunctionIsMonotonicalById(overloadID int64) (bool, error) {
+func GetFunctionIsMonotonicById(overloadID int64) (bool, error) {
 	function, err := GetFunctionByID(overloadID)
 	if err != nil {
 		return false, err
@@ -233,7 +233,7 @@ func GetFunctionIsMonotonicalById(overloadID int64) (bool, error) {
 	if function.Volatile {
 		return false, nil
 	}
-	isMonotonical := (function.GetFlag() & plan.Function_MONOTONICAL) != 0
+	isMonotonical := (function.GetFlag() & plan.Function_MONOTONIC) != 0
 	return isMonotonical, nil
 }
 
