@@ -230,6 +230,9 @@ func TestNeedRead(t *testing.T) {
 				makeColExprForTest(3, types.T_int64),
 			}),
 		})},
+		{true, []string{"a"}, makeFunctionExprForTest("abs", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
+		})},
 	}
 
 	t.Run("test needRead", func(t *testing.T) {
