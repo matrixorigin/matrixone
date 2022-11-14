@@ -701,6 +701,9 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 		bat.Clean(proc.Mp())
 		return ifNeed
 	}
+	if !checkExprIsMonotonical(expr) {
+		return true
+	}
 
 	maxCol := 0
 	useColumn := len(columnMap)
