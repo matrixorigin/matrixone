@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -79,12 +78,21 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		reg := ap.Regs[ap.ctr.i]
 		select {
 		case <-reg.Ctx.Done():
-			ap.ctr.i++
+			for len(reg.Ch) > 0 { // free memory
+				bat := <-reg.Ch
+				if bat == nil {
+					break
+				}
+				bat.Clean(proc.Mp())
+			}
+			ap.Regs = append(ap.Regs[:ap.ctr.i], ap.Regs[ap.ctr.i+1:]...)
+			if ap.ctr.i >= len(ap.Regs) {
+				ap.ctr.i = 0
+			}
 		case reg.Ch <- bat:
 			ap.ctr.i++
 			return false, nil
 		}
 	}
-	logutil.Warnf("no pipeline to receive the batch from dispatch. but still get batch need to send.")
 	return true, nil
 }
