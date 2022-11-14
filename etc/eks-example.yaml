@@ -1,0 +1,93 @@
+apiVersion: core.matrixorigin.io/v1alpha1
+kind: MatrixOneCluster
+metadata:
+  name: # fill this with unique name
+  namespace: # fill this with $namespace
+    # run the following command to create a new namespace
+    # kubectl create namespace $namespace
+spec:
+
+  dn:
+    replicas: 1
+    cacheVolume:
+      size: 1Gi
+    config: |
+
+      [dn.Ckp]
+      flush-interval = "60s"
+      min-count = 100
+      scan-interval = "5s"
+      incremental-interval = "60s"
+      global-interval = "100000s"
+
+      [dn.Txn.Storage]
+      backend = "TAE"
+      log-backend = "logservice"
+
+      [dn.rpc]
+      max-message-size = "100mb"
+
+      [observability]
+      disableTrace = true
+      disableMetric = true
+
+      [log]
+      level = "info"
+
+  logService:
+    replicas: 3
+    sharedStorage:
+      s3:
+        path: # fill this with bucket/prefix
+          # bucket must be in us-west-2
+        region: us-west-2
+        secretRef:
+          name: awshn
+            # run the following command to set this secret
+            # kubectl -n $namespace create secret generic awshn --from-literal=AWS_ACCESS_KEY_ID=$key --from-literal=AWS_SECRET_ACCESS_KEY=$secret
+    volume:
+      size: 1Gi
+    config: |
+
+      [log]
+      level = "info"
+      format = "json"
+      max-size = 512
+
+      [observability]
+      disableTrace = true
+      disableMetric = true
+
+    storeFailureTimeout: 5m0s
+    pvcRetentionPolicy: Delete
+    initialConfig:
+      dnShards: 1
+      logShardReplicas: 3
+      logShards: 1
+
+  tp:
+    replicas: 2
+    cacheVolume:
+      size: 1Gi
+    config: |
+
+      [cn.Engine]
+      type = "distributed-tae"
+
+      [cn.rpc]
+      max-message-size = "100mb"
+
+      [log]
+      level = "info"
+      format = "json"
+      max-size = 512
+
+      [observability]
+      disableTrace = true
+      disableMetric = true
+
+    serviceType: ClusterIP
+
+  imageRepository: matrixorigin/matrixone
+  version: nightly-b9c225f4
+
