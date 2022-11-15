@@ -161,7 +161,7 @@ func (blk *txnBlock) Fingerprint() *common.ID { return blk.entry.AsCommonID() }
 func (blk *txnBlock) BatchDedup(pks containers.Vector, invisibility *roaring.Bitmap) (err error) {
 	blkData := blk.entry.GetBlockData()
 	blk.Txn.GetStore().LogBlockID(blk.getDBID(), blk.entry.GetSegment().GetTable().GetID(), blk.entry.GetID())
-	return blkData.BatchDedup(blk.Txn, pks, invisibility)
+	return blkData.BatchDedup(blk.Txn, pks, invisibility, false)
 }
 
 func (blk *txnBlock) getDBID() uint64 {

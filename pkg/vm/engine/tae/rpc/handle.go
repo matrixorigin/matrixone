@@ -15,23 +15,28 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
@@ -163,6 +168,7 @@ func (h *Handle) HandleRollback(
 	}
 	var txn moengine.Txn
 	txn, err = h.eng.GetTxnByID(meta.GetID())
+
 	if err != nil {
 		return err
 	}
@@ -338,6 +344,7 @@ func (h *Handle) HandlePreCommitWrite(
 	var e any
 
 	es := req.EntryList
+
 	for len(es) > 0 {
 		e, es, err = catalog.ParseEntryList(es)
 		if err != nil {
@@ -421,6 +428,7 @@ func (h *Handle) HandlePreCommitWrite(
 				TableName:    pe.GetTableName(),
 				Batch:        moBat,
 			}
+
 			if err = h.CacheTxnRequest(ctx, meta, req,
 				new(db.WriteResp)); err != nil {
 				return err
@@ -448,6 +456,12 @@ func (h *Handle) HandleCreateDatabase(
 	if err != nil {
 		return err
 	}
+
+	logutil.Infof("[precommit] create database: %+v\n txn: %s\n", req, txn.String())
+	defer func() {
+		logutil.Infof("[precommit] create database end txn: %s\n", txn.String())
+	}()
+
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
@@ -470,6 +484,12 @@ func (h *Handle) HandleDropDatabase(
 	if err != nil {
 		return err
 	}
+
+	logutil.Infof("[precommit] drop database: %+v\n txn: %s\n", req, txn.String())
+	defer func() {
+		logutil.Infof("[precommit] drop database end: %s\n", txn.String())
+	}()
+
 	if err = h.eng.DropDatabaseByID(ctx, req.ID, txn); err != nil {
 		return
 	}
@@ -488,6 +508,11 @@ func (h *Handle) HandleCreateRelation(
 	if err != nil {
 		return
 	}
+
+	logutil.Infof("[precommit] create relation: %+v\n txn: %s\n", req, txn.String())
+	defer func() {
+		logutil.Infof("[precommit] create relation end txn: %s\n", txn.String())
+	}()
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
@@ -518,6 +543,11 @@ func (h *Handle) HandleDropOrTruncateRelation(
 		return
 	}
 
+	logutil.Infof("[precommit] drop/truncate relation: %+v\n txn: %s\n", req, txn.String())
+	defer func() {
+		logutil.Infof("[precommit] drop/truncate relation end txn: %s\n", txn.String())
+	}()
+
 	db, err := h.eng.GetDatabaseByID(ctx, req.DatabaseID, txn)
 	if err != nil {
 		return
@@ -546,6 +576,16 @@ func (h *Handle) HandleWrite(
 	if err != nil {
 		return err
 	}
+
+	logutil.Infof("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",
+		req.Type, req.TableID,
+		req.TableName, req.DatabaseId, req.DatabaseName,
+		txn.String(),
+	)
+	logutil.Debugf("[precommit] write batch: %s\n", debugMoBatch(req.Batch))
+	defer func() {
+		logutil.Infof("[precommit] handle write end txn: %s\n", txn.String())
+	}()
 
 	dbase, err := h.eng.GetDatabaseByID(ctx, req.DatabaseId, txn)
 	if err != nil {
@@ -577,6 +617,87 @@ func (h *Handle) HandleWrite(
 	err = tb.DeleteByPhyAddrKeys(ctx, req.Batch.GetVector(0))
 	return
 
+}
+
+func vec2Str[T types.FixedSizeT](vec []T, typ types.Type, originalLen int) string {
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("[%d]: ", originalLen))
+	first := true
+	for i := 0; i < len(vec); i++ {
+		if !first {
+			_ = w.WriteByte(',')
+		}
+		_, _ = w.WriteString(common.TypeStringValue(typ, vec[i]))
+		first = false
+	}
+	return w.String()
+}
+
+func moVec2String(v *vector.Vector, printN int) string {
+	switch v.Typ.Oid {
+	case types.T_bool:
+		return vec2Str(vector.MustTCols[bool](v)[:printN], v.Typ, v.Length())
+	case types.T_int8:
+		return vec2Str(vector.MustTCols[int8](v)[:printN], v.Typ, v.Length())
+	case types.T_int16:
+		return vec2Str(vector.MustTCols[int16](v)[:printN], v.Typ, v.Length())
+	case types.T_int32:
+		return vec2Str(vector.MustTCols[int32](v)[:printN], v.Typ, v.Length())
+	case types.T_int64:
+		return vec2Str(vector.MustTCols[int64](v)[:printN], v.Typ, v.Length())
+	case types.T_uint8:
+		return vec2Str(vector.MustTCols[uint8](v)[:printN], v.Typ, v.Length())
+	case types.T_uint16:
+		return vec2Str(vector.MustTCols[uint16](v)[:printN], v.Typ, v.Length())
+	case types.T_uint32:
+		return vec2Str(vector.MustTCols[uint32](v)[:printN], v.Typ, v.Length())
+	case types.T_uint64:
+		return vec2Str(vector.MustTCols[uint64](v)[:printN], v.Typ, v.Length())
+	case types.T_float32:
+		return vec2Str(vector.MustTCols[float32](v)[:printN], v.Typ, v.Length())
+	case types.T_float64:
+		return vec2Str(vector.MustTCols[float64](v)[:printN], v.Typ, v.Length())
+	case types.T_date:
+		return vec2Str(vector.MustTCols[types.Date](v)[:printN], v.Typ, v.Length())
+	case types.T_datetime:
+		return vec2Str(vector.MustTCols[types.Datetime](v)[:printN], v.Typ, v.Length())
+	case types.T_time:
+		return vec2Str(vector.MustTCols[types.Time](v)[:printN], v.Typ, v.Length())
+	case types.T_timestamp:
+		return vec2Str(vector.MustTCols[types.Timestamp](v)[:printN], v.Typ, v.Length())
+	case types.T_decimal64:
+		return vec2Str(vector.MustTCols[types.Decimal64](v)[:printN], v.Typ, v.Length())
+	case types.T_decimal128:
+		return vec2Str(vector.MustTCols[types.Decimal128](v)[:printN], v.Typ, v.Length())
+	case types.T_uuid:
+		return vec2Str(vector.MustTCols[types.Uuid](v)[:printN], v.Typ, v.Length())
+	case types.T_TS:
+		return vec2Str(vector.MustTCols[types.TS](v)[:printN], v.Typ, v.Length())
+	case types.T_Rowid:
+		return vec2Str(vector.MustTCols[types.Rowid](v)[:printN], v.Typ, v.Length())
+	}
+	return fmt.Sprintf("unkown type vec... %v", v.Typ)
+}
+
+func debugMoBatch(moBat *batch.Batch) string {
+	if !logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		return "not debug level"
+	}
+	printN := moBat.Length()
+	if printN > logtail.PrintN {
+		printN = logtail.PrintN
+	}
+	buf := new(bytes.Buffer)
+	for i, vec := range moBat.Vecs {
+		if vec.Typ.IsVarlen() {
+			vs := vector.MustStrCols(vec)
+			fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], vs[:printN])
+		} else {
+
+			fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], moVec2String(vec, printN))
+		}
+	}
+	return buf.String()
 }
 
 func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {

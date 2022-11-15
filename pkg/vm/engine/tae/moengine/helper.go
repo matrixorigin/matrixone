@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -34,10 +33,9 @@ func txnBindAccessInfoFromCtx(txn txnif.AsyncTxn, ctx context.Context) {
 		return
 	}
 	tid, okt := ctx.Value(defines.TenantIDKey{}).(uint32)
-	uid, oku := ctx.Value(defines.UserIDKey{}).(uint32)
-	rid, okr := ctx.Value(defines.RoleIDKey{}).(uint32)
-	logutil.Debugf("try set %X txn access info to t%d(%v) u%d(%v) r%d(%v), ", txn.GetID(), tid, okt, uid, oku, rid, okr)
-	if okt { // TODO: tenantID is required, or all need to be ok?
+	uid, _ := ctx.Value(defines.UserIDKey{}).(uint32)
+	rid, _ := ctx.Value(defines.RoleIDKey{}).(uint32)
+	if okt {
 		txn.BindAccessInfo(tid, uid, rid)
 	}
 }
