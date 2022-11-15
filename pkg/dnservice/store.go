@@ -183,6 +183,7 @@ func (s *store) Start() error {
 	if err := s.server.Start(); err != nil {
 		return err
 	}
+	s.logger.Info("dn heartbeat task started")
 	return s.stopper.RunTask(s.heartbeatTask)
 }
 
@@ -245,69 +246,6 @@ func (s *store) getDNShardInfo() []logservicepb.DNShardInfo {
 		return true
 	})
 	return shards
-}
-
-func (s *store) heartbeatTask(ctx context.Context) {
-	ticker := time.NewTicker(s.cfg.HAKeeper.HeatbeatDuration.Duration)
-	defer ticker.Stop()
-
-	s.logger.Info("DNShard heartbeat started")
-	for {
-		select {
-		case <-ctx.Done():
-			s.logger.Info("DNShard heartbeat stopped")
-			return
-		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HAKeeper.HeatbeatTimeout.Duration)
-			commands, err := s.hakeeperClient.SendDNHeartbeat(ctx, logservicepb.DNStoreHeartbeat{
-				UUID:               s.cfg.UUID,
-				ServiceAddress:     s.cfg.ServiceAddress,
-				Shards:             s.getDNShardInfo(),
-				TaskServiceCreated: s.taskServiceCreated(),
-			})
-			cancel()
-
-			if err != nil {
-				s.logger.Error("send DNShard heartbeat request failed",
-					zap.Error(err))
-				continue
-			}
-
-			for _, cmd := range commands.Commands {
-				s.logger.Debug("received hakeeper command",
-					zap.String("cmd", cmd.LogString()))
-
-				if cmd.ServiceType != logservicepb.DNService {
-					s.logger.Fatal("receive invalid schedule command",
-						zap.String("type", cmd.ServiceType.String()))
-				}
-				if cmd.ConfigChange != nil {
-					var err error
-					switch cmd.ConfigChange.ChangeType {
-					case logservicepb.AddReplica, logservicepb.StartReplica:
-						err = s.createReplica(metadata.DNShard{
-							DNShardRecord: metadata.DNShardRecord{
-								ShardID:    cmd.ConfigChange.Replica.ShardID,
-								LogShardID: cmd.ConfigChange.Replica.LogShardID,
-							},
-							ReplicaID: cmd.ConfigChange.Replica.ReplicaID,
-							Address:   s.cfg.ServiceAddress,
-						})
-					case logservicepb.RemoveReplica, logservicepb.StopReplica:
-						err = s.removeReplica(cmd.ConfigChange.Replica.ShardID)
-					}
-					if err != nil {
-						s.logger.Error("handle schedule command failed",
-							zap.String("command", cmd.String()),
-							zap.Error(err))
-					}
-				}
-				if cmd.CreateTaskService != nil {
-					s.createTaskService(cmd.CreateTaskService)
-				}
-			}
-		}
-	}
 }
 
 func (s *store) createReplica(shard metadata.DNShard) error {
