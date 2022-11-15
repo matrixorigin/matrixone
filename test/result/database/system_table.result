@@ -12,7 +12,7 @@ SELECT * FROM `information_schema`.`profiling` LIMIT 0,1000;
 query_id    seq    state    duration    cpu_user    cpu_system    context_voluntary    context_involuntary    block_ops_in    block_ops_out    messages_sent    messages_received    page_faults_major    page_faults_minor    swaps    source_function    source_file    source_line
 SELECT * FROM `information_schema`.`schemata` where schema_name = 'information_schema';
 catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
-def    information_schema    utf8mb4    utf8mb4_0900_ai_ci    null    NO
+def    information_schema    utf8mb4    utf8mb4_0900_ai_ci        NO
 SELECT * FROM `information_schema`.`tables` LIMIT 0,1000;
 table_catalog    table_schema    table_name    table_type    engine    version    row_format    table_rows    avg_row_length    data_length    max_data_length    index_length    data_free    AUTO_INCREMENT    create_time    update_time    check_time    table_collation    checksum    create_options    table_comment
 SELECT * FROM `information_schema`.`triggers` LIMIT 0,1000;

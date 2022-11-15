@@ -214,7 +214,7 @@ catalog_name    VARCHAR    YES        NULL
 schema_name    VARCHAR    YES        NULL        
 default_character_set_name    VARCHAR    YES        NULL        
 default_collation_name    VARCHAR    YES        NULL        
-sql_path    ANY    YES        NULL        
+sql_path    VARCHAR    YES        NULL        
 default_encryption    VARCHAR    YES        NULL        
 select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task';
 catalog_name    schema_name
