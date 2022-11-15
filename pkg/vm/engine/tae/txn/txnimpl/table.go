@@ -191,7 +191,63 @@ func (tbl *txnTable) TransferDeletes(ts types.TS) (err error) {
 	return
 }
 
+func (tbl *txnTable) recurTransferDelete(
+	memo map[uint64]*common.PinnedItem[*model.TransferHashPage],
+	page *model.TransferHashPage,
+	id *common.ID,
+	row uint32,
+	depth int) (err error) {
+
+	var page2 *common.PinnedItem[*model.TransferHashPage]
+
+	rowID, ok := page.Transfer(row)
+	if !ok {
+		err = moerr.NewTxnWWConflict()
+		msg := fmt.Sprintf("table-%d blk-%d delete row-%d depth-%d",
+			id.TableID,
+			id.BlockID,
+			row,
+			depth)
+		logutil.Warnf("[ts=%s]TransferDelete: %v",
+			tbl.store.txn.GetStartTS().ToString(),
+			msg)
+		return
+	}
+	segmentID, blockID, offset := model.DecodePhyAddrKey(rowID)
+	newID := &common.ID{
+		TableID:   id.TableID,
+		SegmentID: segmentID,
+		BlockID:   blockID,
+	}
+	if page2, ok = memo[blockID]; !ok {
+		if page2, err = tbl.store.transferTable.Pin(*newID); err != nil {
+			err = nil
+		} else {
+			memo[blockID] = page2
+		}
+	}
+	if page2 != nil {
+		return tbl.recurTransferDelete(
+			memo,
+			page2.Item(),
+			newID,
+			offset,
+			depth+1)
+	}
+	if err = tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
+		return
+	}
+	logutil.Infof("depth-%d transfer delete from blk-%d row-%d to blk-%d row-%d",
+		depth,
+		id.BlockID,
+		row,
+		blockID,
+		offset)
+	return
+}
+
 func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferred bool, err error) {
+	memo := make(map[uint64]*common.PinnedItem[*model.TransferHashPage])
 	logutil.Info("[Start]",
 		common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
 		common.OperationField("transfer-deletes"),
@@ -202,7 +258,11 @@ func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferre
 			common.OperationField("transfer-deletes"),
 			common.OperandField(id.BlockString()),
 			common.ErrorField(err))
+		for _, m := range memo {
+			m.Close()
+		}
 	}()
+
 	pinned, err := tbl.store.transferTable.Pin(*id)
 	// cannot find a transferred record. maybe the transferred record was TTL'ed
 	// here we can convert the error back to r-w conflict
@@ -210,30 +270,14 @@ func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferre
 		err = moerr.NewTxnRWConflict()
 		return
 	}
-	defer pinned.Close()
+	memo[id.BlockID] = pinned
 
 	rows := node.DeletedRows()
 	// logutil.Infof("TransferDelete deletenode %s", node.DeleteNode.(*updates.DeleteNode).GeneralVerboseString())
 	page := pinned.Item()
+	depth := 0
 	for _, row := range rows {
-		rowID, ok := page.Transfer(row)
-		if !ok {
-			err = moerr.NewTxnWriteConflict("table-%d blk-%d delete row %d",
-				id.TableID,
-				id.BlockID,
-				row)
-			logutil.Warnf("[ts=%s]TransferDelete: %v",
-				tbl.store.txn.GetStartTS().ToString(),
-				err)
-			return
-		}
-		segmentID, blockID, offset := model.DecodePhyAddrKey(rowID)
-		newID := &common.ID{
-			TableID:   id.TableID,
-			SegmentID: segmentID,
-			BlockID:   blockID,
-		}
-		if err = tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
+		if err = tbl.recurTransferDelete(memo, page, id, row, depth); err != nil {
 			return
 		}
 	}
@@ -550,18 +594,23 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		if err == nil {
 			return
 		}
-		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-			moerr.NewTxnWriteConflict("table-%d blk-%d delete rows from %d to %d",
+		// if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+		// 	moerr.NewTxnWriteConflict("table-%d blk-%d delete rows from %d to %d",
+		// 		id.TableID,
+		// 		id.BlockID,
+		// 		start,
+		// 		end)
+		// }
+		if err != nil {
+			logutil.Infof("[ts=%s]: table-%d blk-%d delete rows from %d to %d %v",
+				tbl.store.txn.GetStartTS().ToString(),
 				id.TableID,
 				id.BlockID,
 				start,
-				end)
-		}
-		if err != nil {
-			logutil.Infof("[ts=%s]: %s", tbl.store.txn.GetStartTS().ToString(), err)
+				end,
+				err)
 		}
 	}()
-	// logutil.Infof("RangeDelete ID=%s, Start=%d, End=%d", id.BlockString(), start, end)
 	if isLocalSegment(id) {
 		err = tbl.RangeDeleteLocalRows(start, end)
 		return
