@@ -960,6 +960,13 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 				return
 			}
 			defer sortKey.Close()
+			if rowmask != nil {
+				if sortKey.DeleteMask == nil {
+					sortKey.DeleteMask = rowmask
+				} else {
+					sortKey.DeleteMask.Or(rowmask)
+				}
+			}
 			deduplicate := func(v1 any, _ int) error {
 				return sortKey.GetData().Foreach(func(v2 any, row int) error {
 					if sortKey.DeleteMask != nil && sortKey.DeleteMask.ContainsInt(row) {
