@@ -4178,7 +4178,7 @@ func TestDelete4(t *testing.T) {
 			defer view.Close()
 			view.ApplyDeletes()
 			if view.Length() != 0 {
-				t.Logf("block-%d, data=%s", blk.ID(), logtail.VectorToString(view.GetData()))
+				t.Logf("block-%d, data=%s", blk.ID(), logtail.ToStringTemplate(view.GetData(), -1))
 			}
 			it.Next()
 		}
