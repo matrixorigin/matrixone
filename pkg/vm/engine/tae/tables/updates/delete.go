@@ -81,6 +81,12 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 		dt:          dt,
 		viewNodes:   make(map[uint32]*common.GenericDLNode[txnif.MVCCNode]),
 	}
+	if n.dt == handle.DT_MergeCompact {
+		_, err := n.TxnMVCCNode.PrepareCommit()
+		if err != nil {
+			panic(err)
+		}
+	}
 	return n
 }
 
@@ -184,13 +190,6 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	node.chain.mvcc.Lock()
 	defer node.chain.mvcc.Unlock()
-	if node.dt == handle.DT_MergeCompact {
-		_, err = node.TxnMVCCNode.PrepareCommit()
-		if err != nil {
-			return
-		}
-		node.chain.UpdateLocked(node)
-	}
 	_, err = node.TxnMVCCNode.ApplyCommit(index)
 	if err != nil {
 		return
