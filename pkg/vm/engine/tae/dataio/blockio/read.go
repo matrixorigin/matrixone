@@ -32,19 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
-/*
-
-Notes:
- 1. in BlockReadInner function, tae vector is used, because it is easy to to apply deletion,
-    and in BlockRead, the result batch from BlockReadInner will be converted to mo batch without copying
-
- 2. in BlockReadInner, rowid column is generated locally, its memory allocation happens in MPool,
- 	so the corresponding mo vector's 'original' field is False, when its Free() is called, the memory will be freed.
-	Other columns are read from objectio.Reader, but for now, it memory is managed by golang runtime, so their 'original' fields are True, which means nothing to do when its Free() is Called.
-	Later, the mpool will be added to objectio.Reader, and let the mpool hold columns data. After that, all orginal fields will be False.
-
-*/
-
 // BlockRead read block data from storage and apply deletes according given timestamp. Caller make sure metaloc is not empty
 func BlockRead(
 	ctx context.Context,
@@ -68,7 +55,6 @@ func BlockRead(
 		return nil, err
 	}
 
-	// convert to mo vec, no copy
 	bat := batch.NewWithSize(len(columns))
 	bat.Attrs = columns
 	for i, vec := range columnBatch.Vecs {
@@ -126,11 +112,10 @@ func readColumnBatchByMetaloc(
 	colTyps []types.Type,
 	colNulls []bool,
 	fs fileservice.FileService,
-	pool *mpool.MPool) (*containers.Batch, error) {
+	pool *mpool.MPool) (bat *containers.Batch, err error) {
 	name, extent, rows := DecodeMetaLoc(metaloc)
 	idxsWithouRowid := make([]uint16, 0, len(colIdxs))
 	var rowidData containers.Vector
-	var err error
 	// sift rowid column
 	for i, typ := range colTyps {
 		if typ.Oid == types.T_Rowid {
@@ -146,12 +131,17 @@ func readColumnBatchByMetaloc(
 			if err != nil {
 				return nil, err
 			}
+			defer func() {
+				if err != nil {
+					rowidData.Close()
+				}
+			}()
 		} else {
 			idxsWithouRowid = append(idxsWithouRowid, colIdxs[i])
 		}
 	}
 
-	bat := containers.NewBatch()
+	bat = containers.NewBatch()
 
 	// only read rowid column, return early
 	if len(idxsWithouRowid) == 0 {
@@ -167,8 +157,6 @@ func readColumnBatchByMetaloc(
 		return nil, err
 	}
 
-	// TODO: objectio will add mpool later
-	// the ioResult is managed by golang itself.
 	ioResult, err := reader.Read(ctx, extent, idxsWithouRowid, nil)
 	if err != nil {
 		return nil, err
@@ -182,6 +170,7 @@ func readColumnBatchByMetaloc(
 			vec := vector.New(colTyps[i])
 			err := vec.Read(entry[0].Object.([]byte))
 			if err != nil {
+				bat.Close()
 				return nil, err
 			}
 			bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(vec, colNulls[i]))
