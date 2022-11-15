@@ -59,6 +59,8 @@ type Attribute struct {
 	Comment string
 	// AutoIncrement is auto incr or not
 	AutoIncrement bool
+	// column is not nullable, default false, means nullable
+	NotNullable bool
 }
 
 type PrimaryIndexDef struct {

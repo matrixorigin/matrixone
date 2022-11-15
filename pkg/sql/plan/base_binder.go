@@ -252,6 +252,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 	relPos := NotFound
 	colPos := NotFound
+	notNullable := false
 	var typ *plan.Type
 
 	if len(table) == 0 {
@@ -260,6 +261,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				relPos = binding.tag
 				colPos = binding.colIdByName[col]
 				typ = binding.types[colPos]
+				notNullable = binding.notNullables[colPos]
 				table = binding.table
 			} else {
 				return nil, moerr.NewInvalidInput("ambiguous column reference '%v'", name)
@@ -275,6 +277,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			}
 			if colPos != NotFound {
 				typ = binding.types[colPos]
+				notNullable = binding.notNullables[colPos]
 				relPos = binding.tag
 			} else {
 				err = moerr.NewInvalidInput("column '%s' does not exist", name)
@@ -288,7 +291,8 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		b.boundCols = append(b.boundCols, table+"."+col)
 
 		expr = &plan.Expr{
-			Typ: typ,
+			Typ:         typ,
+			NotNullable: notNullable,
 		}
 
 		if depth == 0 {

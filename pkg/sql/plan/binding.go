@@ -26,14 +26,15 @@ func (b *Binding) FindColumn(col string) int32 {
 	return NotFound
 }
 
-func NewBinding(tag, nodeID int32, table string, cols []string, types []*plan.Type) *Binding {
+func NewBinding(tag, nodeID int32, table string, cols []string, types []*plan.Type, notNullables []bool) *Binding {
 	binding := &Binding{
-		tag:     tag,
-		nodeId:  nodeID,
-		table:   table,
-		cols:    cols,
-		types:   types,
-		refCnts: make([]uint, len(cols)),
+		tag:          tag,
+		nodeId:       nodeID,
+		table:        table,
+		cols:         cols,
+		types:        types,
+		notNullables: notNullables,
+		refCnts:      make([]uint, len(cols)),
 	}
 
 	binding.colIdByName = make(map[string]int32)

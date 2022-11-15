@@ -261,13 +261,14 @@ const (
 )
 
 type Binding struct {
-	tag         int32
-	nodeId      int32
-	table       string
-	cols        []string
-	types       []*plan.Type
-	refCnts     []uint
-	colIdByName map[string]int32
+	tag          int32
+	nodeId       int32
+	table        string
+	cols         []string
+	types        []*plan.Type
+	notNullables []bool
+	refCnts      []uint
+	colIdByName  map[string]int32
 }
 
 const (
