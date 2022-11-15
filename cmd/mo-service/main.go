@@ -281,6 +281,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 				trace.WithExportInterval(SV.TraceExportInterval),
 				trace.WithLongQueryTime(SV.LongQueryTime),
 				trace.WithSQLExecutor(nil),
+				trace.DebugMode(SV.EnableTraceDebug),
 			); err != nil {
 				panic(err)
 			}

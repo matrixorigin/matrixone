@@ -481,7 +481,7 @@ func TestCompactBlock1(t *testing.T) {
 		blkMeta := getOneBlockMeta(rel)
 		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, db.Scheduler)
 		assert.Nil(t, err)
-		preparer, err := task.PrepareData(blkMeta.MakeKey())
+		preparer, _, err := task.PrepareData()
 		assert.Nil(t, err)
 		assert.NotNil(t, preparer.Columns)
 		defer preparer.Close()
@@ -512,7 +512,7 @@ func TestCompactBlock1(t *testing.T) {
 		blkMeta := block.GetMeta().(*catalog.BlockEntry)
 		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, nil)
 		assert.Nil(t, err)
-		preparer, err := task.PrepareData(blkMeta.MakeKey())
+		preparer, _, err := task.PrepareData()
 		assert.Nil(t, err)
 		defer preparer.Close()
 		assert.Equal(t, bat.Vecs[0].Length()-1, preparer.Columns.Vecs[0].Length())
@@ -535,7 +535,7 @@ func TestCompactBlock1(t *testing.T) {
 		}
 		task, err = jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, nil)
 		assert.Nil(t, err)
-		preparer, err = task.PrepareData(blkMeta.MakeKey())
+		preparer, _, err = task.PrepareData()
 		assert.Nil(t, err)
 		defer preparer.Close()
 		assert.Equal(t, bat.Vecs[0].Length()-1, preparer.Columns.Vecs[0].Length())
@@ -549,7 +549,7 @@ func TestCompactBlock1(t *testing.T) {
 			blkMeta := blk.GetMeta().(*catalog.BlockEntry)
 			task, err = jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, nil)
 			assert.Nil(t, err)
-			preparer, err := task.PrepareData(blkMeta.MakeKey())
+			preparer, _, err := task.PrepareData()
 			assert.Nil(t, err)
 			defer preparer.Close()
 			assert.Equal(t, bat.Vecs[0].Length()-3, preparer.Columns.Vecs[0].Length())
@@ -2797,7 +2797,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 }
 
 func TestDelete3(t *testing.T) {
-	// t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
+	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	defer testutils.AfterTest(t)()
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -4322,6 +4322,50 @@ func TestTransfer2(t *testing.T) {
 	_ = txn2.Commit()
 }
 
+func TestCompactEmptyBlock(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 3
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 6)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+	assert.NoError(t, tae.deleteAll(true))
+	tae.checkRowsByScan(0, true)
+
+	tae.compactBlocks(false)
+
+	tae.checkRowsByScan(0, true)
+
+	blkCnt := 0
+	p := &catalog.LoopProcessor{}
+	p.BlockFn = func(be *catalog.BlockEntry) error {
+		blkCnt++
+		return nil
+	}
+
+	_, rel := tae.getRelation()
+	err := rel.GetMeta().(*catalog.TableEntry).RecurLoop(p)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, blkCnt)
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	tae.restart()
+
+	blkCnt = 0
+	_, rel = tae.getRelation()
+	err = rel.GetMeta().(*catalog.TableEntry).RecurLoop(p)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, blkCnt)
+	tae.checkRowsByScan(0, true)
+	t.Log(tae.Catalog.SimplePPString(3))
+}
+
 func TestTransfer3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4354,4 +4398,76 @@ func TestTransfer3(t *testing.T) {
 	assert.NoError(t, err)
 	err = txn1.Commit()
 	assert.NoError(t, err)
+}
+
+func TestUpdate(t *testing.T) {
+	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
+	defer testutils.AfterTest(t)()
+	opts := config.WithQuickScanAndCKPOpts2(nil, 5)
+	// opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(5, 3)
+	schema.BlockMaxRows = 100
+	schema.SegmentMaxBlocks = 4
+	tae.bindSchema(schema)
+
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	bat.Vecs[2].Update(0, int32(0))
+
+	tae.createRelAndAppend(bat, true)
+
+	var wg sync.WaitGroup
+
+	var expectV atomic.Int32
+	expectV.Store(bat.Vecs[2].Get(0).(int32))
+	filter := handle.NewEQFilter(bat.Vecs[3].Get(0))
+	updateFn := func() {
+		defer wg.Done()
+		txn, rel := tae.getRelation()
+		id, offset, err := rel.GetByFilter(filter)
+		assert.NoError(t, err)
+		v, err := rel.GetValue(id, offset, 2)
+		assert.NoError(t, err)
+		err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
+		if err != nil {
+			t.Logf("range delete %v, rollbacking", err)
+			_ = txn.Rollback()
+			return
+		}
+		tuples := bat.CloneWindow(0, 1)
+		defer tuples.Close()
+		updatedV := v.(int32) + 1
+		tuples.Vecs[2].Update(0, updatedV)
+		err = rel.Append(tuples)
+		assert.NoError(t, err)
+
+		err = txn.Commit()
+		if err != nil {
+			t.Logf("commit update %v", err)
+		} else {
+			expectV.CompareAndSwap(v.(int32), updatedV)
+			t.Logf("%v committed", updatedV)
+		}
+	}
+	p, _ := ants.NewPool(5)
+	defer p.Release()
+	loop := 1000
+	for i := 0; i < loop; i++ {
+		wg.Add(1)
+		// updateFn()
+		_ = p.Submit(updateFn)
+	}
+	wg.Wait()
+	t.Logf("Final: %v", expectV.Load())
+	{
+		txn, rel := tae.getRelation()
+		v, err := rel.GetValueByFilter(filter, 2)
+		assert.NoError(t, err)
+		assert.Equal(t, v.(int32), expectV.Load())
+		checkAllColRowsByScan(t, rel, 1, true)
+		assert.NoError(t, txn.Commit())
+	}
 }

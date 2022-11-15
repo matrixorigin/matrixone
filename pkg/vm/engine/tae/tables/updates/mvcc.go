@@ -155,6 +155,33 @@ func (n *MVCCHandle) IsDeletedLocked(row uint32, ts types.TS, rwlocker *sync.RWM
 	return n.deletes.IsDeleted(row, ts, rwlocker)
 }
 
+//	  1         2        3       4      5       6
+//	[----] [---------] [----][------][-----] [-----]
+//
+// -----------+------------------+---------------------->
+//
+//	start               end
+func (n *MVCCHandle) CollectUncommittedANodesPreparedBefore(
+	ts types.TS,
+	fn func(*AppendNode)) (anyWaitable bool) {
+	if n.appends.IsEmpty() {
+		return
+	}
+	n.appends.ForEach(func(un txnif.MVCCNode) bool {
+		an := un.(*AppendNode)
+		needWait, txn := an.NeedWaitCommitting(ts)
+		if txn == nil {
+			return false
+		}
+		if needWait {
+			fn(an)
+			anyWaitable = true
+		}
+		return true
+	}, false)
+	return
+}
+
 func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs types.TS) (indexes []*wal.Index, err error) {
 	if n.appends.IsEmpty() {
 		return
