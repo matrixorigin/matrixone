@@ -12,7 +12,7 @@ inputs:
   region:
     description: "aws region of ecr"
     required: true
-    default: "us-west-2"
+    default: "us-east-1"
   role: 
     description: "ecr push role"
     required: true
@@ -23,7 +23,7 @@ runs:
 
 # ref: https://github.com/aws-actions/amazon-ecr-login
   steps:
-      # github OICD https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services
+      # github OIDC https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v1 # More information on this action can be found below in the 'AWS Credentials' section
         with:
