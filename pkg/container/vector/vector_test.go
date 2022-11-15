@@ -486,6 +486,14 @@ func TestUnionOne(t *testing.T) {
 	v10vals = GetStrVectorValues(v10)
 	require.Equal(t, []string{"hello", "hello", "hello", "nihao"}, v10vals)
 
+	w101 := New(types.Type{Oid: types.T(types.T_char)})
+	AppendString(w101, []string{"thanks"}, mp)
+	w101.isConst = true
+	err = UnionOne(v10, w101, 2, mp)
+	require.NoError(t, err)
+	v10vals = GetStrVectorValues(v10)
+	require.Equal(t, []string{"hello", "hello", "hello", "nihao", "thanks"}, v10vals)
+
 	// Long string test
 	astr := "a123456789012345678901234567890"
 	bstr := "b123456789012345678901234567890AKQJ1098765432"
