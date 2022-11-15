@@ -17,6 +17,10 @@ inputs:
     description: "ecr push role"
     required: true
     default: ""
+  alias:
+    description:  "ecr public repo alias"
+    required: true
+    default: "p4n7f8j9"
 
 runs:
   using: "composite"
@@ -43,16 +47,17 @@ runs:
           aws-region: ${{ inputs.region }}
       
       - name: Login to Amazon ECR
-        id: login-ecr
+        id: login-ecr-public
         uses: aws-actions/amazon-ecr-login@v1
         with:
           registry-type: public
 
-      - name: Build, tag, and push docker image to Amazon ECR
+      - name: Build, tag, and push docker image to Amazon ECR Public
         shell: bash
         env:
           REGISTRY: ${{ steps.login-ecr-public.outputs.registry }}
+          REGISTRY_ALIAS: ${{ inputs.alias }}
           REPOSITORY: ${{ inputs.repo }}
           IMAGE_TAG: ${{ inputs.tag }}
         run: |
-            docker buildx build --platform linux/arm64,linux/amd64 -f ./optools/images/Dockerfile -t $REGISTRY/$REPOSITORY:$IMAGE_TAG --push .
+            docker buildx build --platform linux/arm64,linux/amd64 -f ./optools/images/Dockerfile -t $REGISTRY/$REGISTRY_ALIAS/$REPOSITORY:$IMAGE_TAG --push .

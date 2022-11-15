@@ -40,11 +40,11 @@ jobs:
           echo ::set-output name=tags::${TAGS}
           echo ::set-output name=docker_image::${DOCKER_IMAGE}
           echo ::set-output name=version::${VERSION}
-          
+
       - name: Get image info
         run: |
           echo image-tags: ${{ steps.prep.outputs.tags }}
-    
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@master
         with:
