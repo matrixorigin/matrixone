@@ -45,7 +45,7 @@ import (
 
 var (
 	defaultWaitInterval = 100 * time.Millisecond
-	defaultTestTimeout  = time.Minute
+	defaultTestTimeout  = 3 * time.Minute
 )
 
 // Cluster describes behavior of test framework.

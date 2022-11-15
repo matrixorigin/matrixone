@@ -77,7 +77,7 @@ var (
 	//the root directory of the storage
 	defaultStorePath = "./store"
 
-	defaultServerVersionPrefix = ""
+	defaultServerVersionPrefix = "8.0.30-MatrixOne-v"
 
 	//the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
 	defaultLengthOfQueryPrinted = 200000

@@ -38,12 +38,12 @@ func updatePartition(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	if err != nil {
 		return err
 	}
-	logTails, err := getLogTail(op, reqs)
+	logTails, err := getLogTail(ctx, op, reqs)
 	if err != nil {
 		return err
 	}
 	for i := range logTails {
-		if consumeLogTail(idx, primaryIdx, tbl, ts, ctx, db, mvcc, logTails[i]); err != nil {
+		if err := consumeLogTail(idx, primaryIdx, tbl, ts, ctx, db, mvcc, logTails[i]); err != nil {
 			logutil.Errorf("consume %d-%s logtail error: %v\n", tbl.tableId, tbl.tableName, err)
 			return err
 		}
@@ -51,8 +51,8 @@ func updatePartition(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	return nil
 }
 
-func getLogTail(op client.TxnOperator, reqs []txn.TxnRequest) ([]*api.SyncLogTailResp, error) {
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute)
+func getLogTail(ctx context.Context, op client.TxnOperator, reqs []txn.TxnRequest) ([]*api.SyncLogTailResp, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	result, err := op.Read(ctx, reqs)
 	if err != nil {

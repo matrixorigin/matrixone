@@ -328,20 +328,20 @@ const (
 
 // server status
 const (
-	SERVER_STATUS_IN_TRANS             uint16 = 0x0001
-	SERVER_STATUS_AUTOCOMMIT           uint16 = 0x0002
-	SERVER_MORE_RESULTS_EXISTS         uint16 = 0x0008
+	SERVER_STATUS_IN_TRANS             uint16 = 0x0001 // A transaction is currently active
+	SERVER_STATUS_AUTOCOMMIT           uint16 = 0x0002 // Autocommit mode is set
+	SERVER_MORE_RESULTS_EXISTS         uint16 = 0x0008 // More results exists (more packet follow)
 	SERVER_STATUS_NO_GOOD_INDEX_USED   uint16 = 0x0010
 	SERVER_STATUS_NO_INDEX_USED        uint16 = 0x0020
-	SERVER_STATUS_CURSOR_EXISTS        uint16 = 0x0040
-	SERVER_STATUS_LAST_ROW_SENT        uint16 = 0x0080
-	SERVER_STATUS_DB_DROPPED           uint16 = 0x0100
-	SERVER_STATUS_NO_BACKSLASH_ESCAPES uint16 = 0x0200
-	SERVER_STATUS_METADATA_CHANGED     uint16 = 0x0400
+	SERVER_STATUS_CURSOR_EXISTS        uint16 = 0x0040 // When using COM_STMT_FETCH, indicate that current cursor still has result
+	SERVER_STATUS_LAST_ROW_SENT        uint16 = 0x0080 // When using COM_STMT_FETCH, indicate that current cursor has finished to send results
+	SERVER_STATUS_DB_DROPPED           uint16 = 0x0100 // Database has been dropped
+	SERVER_STATUS_NO_BACKSLASH_ESCAPES uint16 = 0x0200 // Current escape mode is "no backslash escape"
+	SERVER_STATUS_METADATA_CHANGED     uint16 = 0x0400 // A DDL change did have an impact on an existing PREPARE (an automatic reprepare has been executed)
 	SERVER_QUERY_WAS_SLOW              uint16 = 0x0800
-	SERVER_PS_OUT_PARAMS               uint16 = 0x1000
-	SERVER_STATUS_IN_TRANS_READONLY    uint16 = 0x2000
-	SERVER_SESSION_STATE_CHANGED       uint16 = 0x4000
+	SERVER_PS_OUT_PARAMS               uint16 = 0x1000 // This resultset contain stored procedure output parameter
+	SERVER_STATUS_IN_TRANS_READONLY    uint16 = 0x2000 // Current transaction is a read-only transaction
+	SERVER_SESSION_STATE_CHANGED       uint16 = 0x4000 // Session state change. see Session change type for more information
 )
 
 type CommandType uint8

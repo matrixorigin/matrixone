@@ -106,8 +106,10 @@ func (s *Service) handleKillZombie(cmd pb.ScheduleCommand) {
 	s.store.removeMetadata(shardID, replicaID)
 }
 
-func (s *Service) handleShutdownStore(cmd pb.ScheduleCommand) {
-	panic("not implemented")
+func (s *Service) handleShutdownStore(_ pb.ScheduleCommand) {
+	if err := s.Close(); err != nil {
+		s.logger.Error("failed to shutdown replica", zap.Error(err))
+	}
 }
 
 func (s *Service) heartbeatWorker(ctx context.Context) {
