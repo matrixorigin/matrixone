@@ -305,7 +305,19 @@ func (vec *StrVector[T]) adjustOffsetLen(from int, delta int) {
 	}
 }
 
+func (vec *StrVector[T]) BatchDelete(rowGen common.RowGen, cnt int) {
+	vec.vdata.BatchDelete(rowGen, cnt)
+}
+func (vec *StrVector[T]) BatchDeleteUint32s(sels ...uint32) {
+	vec.vdata.BatchDeleteUint32s(sels...)
+}
+func (vec *StrVector[T]) BatchDeleteInts(sels ...int) {
+	vec.vdata.BatchDeleteInts(sels...)
+}
+
 func (vec *StrVector[T]) RangeDelete(offset, length int) {
+	vec.rangeDeleteNoArea(offset, length)
+	return
 	if vec.area.Length() == 0 {
 		vec.rangeDeleteNoArea(offset, length)
 		return

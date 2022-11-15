@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compute
+package common
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-func InplaceDeleteRowsFromSlice[T types.FixedSizeT](v any, rowGen common.RowGen) any {
+func InplaceDeleteRowsFromSlice[T types.FixedSizeT](v any, rowGen RowGen) any {
 	if !rowGen.HasNext() {
 		return v
 	}
@@ -38,7 +37,7 @@ func InplaceDeleteRowsFromSlice[T types.FixedSizeT](v any, rowGen common.RowGen)
 	return slice[:currPos]
 }
 
-func InplaceDeleteRows(orig any, rowGen common.RowGen) any {
+func InplaceDeleteRows(orig any, rowGen RowGen) any {
 	if !rowGen.HasNext() {
 		return orig
 	}
@@ -82,6 +81,8 @@ func InplaceDeleteRows(orig any, rowGen common.RowGen) any {
 		return InplaceDeleteRowsFromSlice[types.TS](arr, rowGen)
 	case []types.Rowid:
 		return InplaceDeleteRowsFromSlice[types.Rowid](arr, rowGen)
+	case []types.Varlena:
+		return InplaceDeleteRowsFromSlice[types.Varlena](arr, rowGen)
 	}
 	panic("not support")
 }
