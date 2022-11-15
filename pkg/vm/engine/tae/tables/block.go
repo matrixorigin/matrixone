@@ -856,22 +856,22 @@ func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error)
 func (blk *dataBlock) onCheckConflictAndDedup(
 	dupRow *uint32,
 	rowmask *roaring.Bitmap,
-	ts types.TS) func(row uint32) (err error) {
+	dedupTS, conflictTS types.TS) func(row uint32) (err error) {
 	return func(row uint32) (err error) {
 		if rowmask != nil && rowmask.Contains(row) {
 			return nil
 		}
 		appendnode := blk.GetAppendNodeByRow(row)
-		needWait, txn := appendnode.NeedWaitCommitting(ts)
+		needWait, txn := appendnode.NeedWaitCommitting(dedupTS)
 		if needWait {
 			blk.mvcc.RUnlock()
 			txn.GetTxnState(true)
 			blk.mvcc.RLock()
 		}
-		if appendnode.IsAborted() || !appendnode.IsVisible(ts) {
-			if err = appendnode.CheckConflict(ts); err != nil {
-				return
-			}
+		if err = appendnode.CheckConflict(conflictTS); err != nil {
+			return
+		}
+		if appendnode.IsAborted() || !appendnode.IsVisible(dedupTS) {
 			return nil
 		}
 		deleteNode := blk.GetDeleteNodeByRow(row).(*updates.DeleteNode)
@@ -879,20 +879,17 @@ func (blk *dataBlock) onCheckConflictAndDedup(
 			*dupRow = row
 			return moerr.GetOkExpectedDup()
 		}
-		needWait, txn = deleteNode.NeedWaitCommitting(ts)
+		needWait, txn = deleteNode.NeedWaitCommitting(dedupTS)
 		if needWait {
 			blk.mvcc.RUnlock()
 			txn.GetTxnState(true)
 			blk.mvcc.RLock()
 		}
-		if deleteNode.IsAborted() || !deleteNode.IsVisible(ts) {
+		if err = deleteNode.CheckConflict(conflictTS); err != nil {
+			return
+		}
+		if deleteNode.IsAborted() || !deleteNode.IsVisible(dedupTS) {
 			return moerr.GetOkExpectedDup()
-		}
-		if err = appendnode.CheckConflict(ts); err != nil {
-			return
-		}
-		if err = deleteNode.CheckConflict(ts); err != nil {
-			return
 		}
 		return nil
 	}
@@ -900,7 +897,7 @@ func (blk *dataBlock) onCheckConflictAndDedup(
 
 func (blk *dataBlock) dedupWithPK(
 	keys containers.Vector,
-	ts types.TS,
+	dedupTS, conflictTS types.TS,
 	rowmask *roaring.Bitmap) (selects *roaring.Bitmap, dupRow uint32, err error) {
 	blk.mvcc.RLock()
 	defer blk.mvcc.RUnlock()
@@ -909,7 +906,8 @@ func (blk *dataBlock) dedupWithPK(
 		blk.onCheckConflictAndDedup(
 			&dupRow,
 			rowmask,
-			ts),
+			dedupTS,
+			conflictTS),
 	)
 	return
 }
@@ -924,19 +922,22 @@ func (blk *dataBlock) DumpData(attr string) (view *model.ColumnView, err error) 
 	return
 }
 
-func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap) (err error) {
+func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap, precommit bool) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 			logutil.Infof("BatchDedup BLK-%d: %v", blk.meta.ID, err)
 		}
 	}()
+	ts := txn.GetStartTS()
+	if precommit {
+		ts = txn.GetPrepareTS()
+	}
 	var dupRow uint32
 	if blk.meta.IsAppendable() {
-		ts := txn.GetStartTS()
 		blk.mvcc.RLock()
 		defer blk.mvcc.RUnlock()
 		var keyselects *roaring.Bitmap
-		keyselects, err = blk.pkIndex.BatchDedup(pks, blk.onCheckConflictAndDedup(&dupRow, rowmask, ts))
+		keyselects, err = blk.pkIndex.BatchDedup(pks, blk.onCheckConflictAndDedup(&dupRow, rowmask, ts, txn.GetStartTS()))
 		if err == nil {
 			return
 		}
@@ -949,13 +950,20 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 			var sortKey *model.ColumnView
 			sortKey, err = blk.ResolveColumnFromMeta(
 				metaLoc,
-				txn.GetStartTS(),
+				ts,
 				pkDef.Idx,
 				nil)
 			if err != nil {
 				return
 			}
 			defer sortKey.Close()
+			if rowmask != nil {
+				if sortKey.DeleteMask == nil {
+					sortKey.DeleteMask = rowmask
+				} else {
+					sortKey.DeleteMask.Or(rowmask)
+				}
+			}
 			deduplicate := func(v1 any, _ int) error {
 				return sortKey.GetData().Foreach(func(v2 any, row int) error {
 					if sortKey.DeleteMask != nil && sortKey.DeleteMask.ContainsInt(row) {
@@ -977,7 +985,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 		return err
 	}
 
-	keyselects, _, err := blk.dedupWithPK(pks, txn.GetStartTS(), rowmask)
+	keyselects, _, err := blk.dedupWithPK(pks, ts, txn.GetStartTS(), rowmask)
 	if err == nil {
 		return
 	}
@@ -988,11 +996,18 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 	metaLoc := blk.meta.GetMetaLoc()
 	sortKey, err := blk.ResolveColumnFromMeta(
 		metaLoc,
-		txn.GetStartTS(),
+		ts,
 		pkDef.Idx,
 		nil)
 	if err != nil {
 		return
+	}
+	if rowmask != nil {
+		if sortKey.DeleteMask == nil {
+			sortKey.DeleteMask = rowmask
+		} else {
+			sortKey.DeleteMask.Or(rowmask)
+		}
 	}
 	defer sortKey.Close()
 	deduplicate := func(v any, _ int) error {

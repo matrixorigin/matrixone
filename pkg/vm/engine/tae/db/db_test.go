@@ -2792,12 +2792,12 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	_, err = meta.GetBlockData().GetByFilter(txn, filter)
 	assert.NoError(t, err)
 
-	err = meta.GetBlockData().BatchDedup(txn, bat.Vecs[1], nil)
+	err = meta.GetBlockData().BatchDedup(txn, bat.Vecs[1], nil, false)
 	assert.Error(t, err)
 }
 
 func TestDelete3(t *testing.T) {
-	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
+	// t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	defer testutils.AfterTest(t)()
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
