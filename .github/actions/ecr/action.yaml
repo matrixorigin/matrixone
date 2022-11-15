@@ -51,7 +51,7 @@ runs:
       - name: Build, tag, and push docker image to Amazon ECR
         shell: bash
         env:
-          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REGISTRY: ${{ steps.login-ecr-public.outputs.registry }}
           REPOSITORY: ${{ inputs.repo }}
           IMAGE_TAG: ${{ inputs.tag }}
         run: |
