@@ -1285,25 +1285,33 @@ func UnionOne(v, w *Vector, sel int64, m *mpool.MPool) (err error) {
 	if v.GetType().IsTuple() {
 		vs := v.Col.([][]interface{})
 		ws := w.Col.([][]interface{})
+		if w.IsScalar() {
+			sel = 0
+		}
 		v.Col = append(vs, ws[sel])
 		return nil
 	}
 
-	if nulls.Contains(w.Nsp, uint64(sel)) {
+	if w.IsScalarNull() || nulls.Contains(w.Nsp, uint64(sel)) {
 		pos := uint64(v.Length() - 1)
 		nulls.Add(v.Nsp, pos)
-	} else if v.GetType().IsVarlen() {
-		bs := w.GetBytes(sel)
-		tgt := MustTCols[types.Varlena](v)
-		nele := len(tgt)
-		tgt[nele-1], v.area, err = types.BuildVarlena(bs, v.area, m)
-		if err != nil {
-			return err
-		}
 	} else {
-		src := w.getRawValueAt(sel)
-		tgt := v.getRawValueAt(-1)
-		copy(tgt, src)
+		if w.IsScalar() {
+			sel = 0
+		}
+		if v.GetType().IsVarlen() {
+			bs := w.GetBytes(sel)
+			tgt := MustTCols[types.Varlena](v)
+			nele := len(tgt)
+			tgt[nele-1], v.area, err = types.BuildVarlena(bs, v.area, m)
+			if err != nil {
+				return err
+			}
+		} else {
+			src := w.getRawValueAt(sel)
+			tgt := v.getRawValueAt(-1)
+			copy(tgt, src)
+		}
 	}
 	return nil
 }
