@@ -17,9 +17,11 @@ package checkpoint
 import (
 	"context"
 	"sort"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -42,6 +44,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		return
 	}
 	metaFiles := make([]*metaFile, 0)
+	var readDuration, applyDuration time.Duration
 	for i, dir := range dirs {
 		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
 		metaFiles = append(metaFiles, &metaFile{
@@ -68,6 +71,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	colNames := CheckpointSchema.Attrs()
 	colTypes := CheckpointSchema.Types()
 	nullables := CheckpointSchema.Nullables()
+	t0 := time.Now()
 	for i := range colNames {
 		if bs[0].GetExtent().End() == 0 {
 			continue
@@ -92,6 +96,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		}
 		bat.AddVector(colNames[i], vec)
 	}
+	readDuration += time.Since(t0)
 	for i := 0; i < bat.Length(); i++ {
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
@@ -103,13 +108,20 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			state:    ST_Finished,
 		}
 		r.tryAddNewCheckpointEntry(checkpointEntry)
-		if err = checkpointEntry.Replay(r.catalog, r.fs, dataFactory); err != nil {
+		var applyEntry, readEntry time.Duration
+		if readEntry, applyEntry, err = checkpointEntry.Replay(r.catalog, r.fs, dataFactory); err != nil {
 			return
 		}
+		readDuration += readEntry
+		applyDuration += applyEntry
 		if maxTs.Less(checkpointEntry.end) {
 			maxTs = checkpointEntry.end
 		}
 	}
+	logutil.Info("open-tae", common.OperationField("replay"),
+		common.OperandField("checkpoint"),
+		common.AnyField("apply cost", applyDuration),
+		common.AnyField("read cost", readDuration))
 	r.source.Init(maxTs)
 	return
 }

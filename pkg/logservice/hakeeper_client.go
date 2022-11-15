@@ -498,8 +498,7 @@ func (c *hakeeperClient) checkIsHAKeeper(ctx context.Context) (bool, error) {
 
 func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Response, error) {
 	if c == nil {
-		return pb.Response{},
-			moerr.NewInternalError("hakeeper client is nil")
+		return pb.Response{}, moerr.NewNoHAKeeper()
 	}
 	r := c.pool.Get().(*RPCRequest)
 	r.Request = req

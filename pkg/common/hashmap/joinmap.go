@@ -22,8 +22,9 @@ import (
 )
 
 func NewJoinMap(sels [][]int64, expr *plan.Expr, mp *StrHashMap, hasNull bool, idx *index.LowCardinalityIndex) *JoinMap {
+	cnt := int64(1)
 	return &JoinMap{
-		cnt:     1,
+		cnt:     &cnt,
 		mp:      mp,
 		expr:    expr,
 		sels:    sels,
@@ -69,17 +70,17 @@ func (jm *JoinMap) Dup() *JoinMap {
 		expr:    jm.expr,
 		sels:    jm.sels,
 		hasNull: jm.hasNull,
-		cnt:     atomic.LoadInt64(&jm.cnt),
+		cnt:     jm.cnt,
 		idx:     jm.idx,
 	}
 }
 
 func (jm *JoinMap) IncRef(ref int64) {
-	atomic.AddInt64(&jm.cnt, ref)
+	atomic.AddInt64(jm.cnt, ref)
 }
 
 func (jm *JoinMap) Free() {
-	if atomic.AddInt64(&jm.cnt, -1) != 0 {
+	if atomic.AddInt64(jm.cnt, -1) != 0 {
 		return
 	}
 	jm.mp.Free()

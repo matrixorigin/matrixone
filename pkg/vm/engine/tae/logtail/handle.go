@@ -389,13 +389,11 @@ func (b *TableLogtailRespBuilder) Close() {
 }
 
 func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData bool) {
-	var latestCommittedNode *catalog.MetadataMVCCNode
 	newEnd := b.end
 	e.RLock()
 	// try to find new end
 	if newest := e.GetLatestCommittedNode(); newest != nil {
-		latestCommittedNode = newest.CloneAll().(*catalog.MetadataMVCCNode)
-		latestPrepareTs := latestCommittedNode.GetPrepare()
+		latestPrepareTs := newest.CloneAll().(*catalog.MetadataMVCCNode).GetPrepare()
 		if latestPrepareTs.Greater(b.end) {
 			newEnd = latestPrepareTs
 		}
@@ -410,14 +408,15 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 		}
 	}
 
-	if latestCommittedNode != nil {
+	if n := len(mvccNodes); n > 0 {
+		newest := mvccNodes[n-1].(*catalog.MetadataMVCCNode)
 		if e.IsAppendable() {
-			if latestCommittedNode.MetaLoc != "" {
+			if newest.MetaLoc != "" {
 				// appendable block has been flushed, no need to collect data
 				return true
 			}
 		} else {
-			if latestCommittedNode.DeltaLoc != "" && latestCommittedNode.GetEnd().GreaterEq(b.end) {
+			if newest.DeltaLoc != "" && newest.GetEnd().GreaterEq(b.end) {
 				// non-appendable block has newer delta data on s3, no need to collect data
 				return true
 			}

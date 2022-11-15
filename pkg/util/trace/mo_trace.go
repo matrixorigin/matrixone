@@ -97,13 +97,21 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (
 		span.TraceID, span.SpanID = t.provider.idGenerator.NewIDs()
 		span.parent = noopSpan{}
 	} else if span.SpanID.IsZero() {
-		span.TraceID, span.SpanID = parent.SpanContext().TraceID, t.provider.idGenerator.NewSpanID()
+		span.TraceID, span.SpanID, span.Kind = parent.SpanContext().TraceID, t.provider.idGenerator.NewSpanID(), parent.SpanContext().Kind
 		span.parent = parent
 	} else {
+		span.Kind = parent.SpanContext().Kind
 		span.parent = parent
 	}
 
 	return ContextWithSpan(ctx, span), span
+}
+
+func (t *MOTracer) Debug(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
+	if !t.provider.debugMode {
+		return ctx, noopSpan{}
+	}
+	return t.Start(ctx, name, opts...)
 }
 
 var _ Span = (*MOSpan)(nil)
@@ -162,7 +170,8 @@ func (s *MOSpan) CsvFields(row *export.Row) []string {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, spanView.Table)
 	row.SetColumnVal(spanIDCol, s.SpanID.String())
-	row.SetColumnVal(stmtIDCol, s.TraceID.String())
+	row.SetColumnVal(traceIDCol, s.TraceID.String())
+	row.SetColumnVal(spanKindCol, s.Kind.String())
 	row.SetColumnVal(parentSpanIDCol, s.parent.SpanContext().SpanID.String())
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)

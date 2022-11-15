@@ -17,12 +17,13 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"math"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 
@@ -3930,7 +3931,6 @@ handleFailed:
 // Algorithm 1
 func isRoleGrantedToUserWGO(ctx context.Context, bh BackgroundExec, roleId, UserId int64) (bool, error) {
 	var err error
-
 	var erArray []ExecResult
 	sql := getSqlForCheckUserGrantWGO(roleId, UserId)
 	bh.ClearExecResultSet()
@@ -3955,7 +3955,6 @@ func isRoleGrantedToUserWGO(ctx context.Context, bh BackgroundExec, roleId, User
 // Algorithm 2
 func getRoleSetThatRoleGrantedToWGO(ctx context.Context, bh BackgroundExec, roleId int64, RVisited, RkPlusOne *btree.Set[int64]) (*btree.Set[int64], error) {
 	var err error
-
 	var erArray []ExecResult
 	var id int64
 	rset := &btree.Set[int64]{}
@@ -4094,7 +4093,6 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 // The algorithm 3
 func getRoleSetThatPrivilegeGrantedToWGO(ctx context.Context, bh BackgroundExec, privType PrivilegeType) (*btree.Set[int64], error) {
 	var err error
-
 	var erArray []ExecResult
 	var id int64
 	rset := &btree.Set[int64]{}
@@ -4622,7 +4620,6 @@ func createTablesInInformationSchema(ctx context.Context, bh BackgroundExec, ten
 
 func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.ParameterUnit, userName string) (bool, error) {
 	var sqlForCheckTenant string
-
 	var erArray []ExecResult
 	var err error
 	sqlForCheckTenant = getSqlForCheckTenant(userName)
@@ -4755,7 +4752,6 @@ handleFailed:
 func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, ca *tree.CreateAccount) (*TenantInfo, context.Context, int64, error) {
 	var err error
 	var initMoAccount string
-
 	var erArray []ExecResult
 	var newTenantID int64
 	var newUserId int64
@@ -5039,7 +5035,6 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 		if err != nil {
 			goto handleFailed
 		}
-
 		erArray, err = getResultSet(bh)
 		if err != nil {
 			goto handleFailed

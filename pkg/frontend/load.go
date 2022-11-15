@@ -1978,14 +1978,7 @@ func PrintThreadInfo(handler *ParseLineHandler, close *CloseFlag, a time.Duratio
 /*
 LoadLoop reads data from stream, extracts the fields, and saves into the table
 */
-func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, proc *process.Process, load *tree.Import, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
-	ses := mce.GetSession()
-
-	//begin:=  time.Now()
-	//defer func() {
-	//	logutil.Infof("-----load loop exit %s",time.Since(begin))
-	//}()
-
+func LoadLoop(requestCtx context.Context, ses *Session, proc *process.Process, load *tree.Import, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
 	result := &LoadResult{}
 
 	/*

@@ -31,6 +31,7 @@ type VFile interface {
 	RUnlock()
 	SizeLocked() int
 	Destroy() error
+	Close() error
 	Id() int
 	Name() string
 	String() string
