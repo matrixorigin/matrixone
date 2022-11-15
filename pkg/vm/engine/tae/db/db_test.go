@@ -2797,7 +2797,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 }
 
 func TestDelete3(t *testing.T) {
-	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
+	// t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	defer testutils.AfterTest(t)()
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
