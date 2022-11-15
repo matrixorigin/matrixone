@@ -542,7 +542,7 @@ func TestStrVector3(t *testing.T) {
 	vec.Append([]byte(h6))
 
 	assert.Equal(t, 6, vec.Length())
-	vec.RangeDelete(1, 2)
+	vec.BatchDeleteInts(1, 2)
 	assert.Equal(t, 4, vec.Length())
 	assert.Equal(t, h1, string(vec.Get(0)))
 	assert.Equal(t, h4, string(vec.Get(1)))
