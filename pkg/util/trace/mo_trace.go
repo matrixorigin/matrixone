@@ -97,9 +97,10 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (
 		span.TraceID, span.SpanID = t.provider.idGenerator.NewIDs()
 		span.parent = noopSpan{}
 	} else if span.SpanID.IsZero() {
-		span.TraceID, span.SpanID = parent.SpanContext().TraceID, t.provider.idGenerator.NewSpanID()
+		span.TraceID, span.SpanID, span.Kind = parent.SpanContext().TraceID, t.provider.idGenerator.NewSpanID(), parent.SpanContext().Kind
 		span.parent = parent
 	} else {
+		span.Kind = parent.SpanContext().Kind
 		span.parent = parent
 	}
 
