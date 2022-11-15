@@ -7,8 +7,8 @@ services:
       context: ../../
       dockerfile: ./optools/images/Dockerfile
       args:
-        GOPROXY: "https://proxy.golang.com.cn,direct"
-    image: matrixorigin/matrixone:nightly-2af3bb11
+        GOPROXY: "https://proxy.golang.org,direct"
+    image: matrixorigin/matrixone:nightly-a464424e
     entrypoint: ["/mo-service", "-cfg", "/config/cn-0.toml"]
     profiles:
       - launch-tae-CN-tae-DN
@@ -21,6 +21,7 @@ services:
     restart: on-failure
     volumes:
       - ../../etc/launch-tae-compose/config:/config
+      - ../../test:/test
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
@@ -35,8 +36,8 @@ services:
       context: ../../
       dockerfile: ./optools/images/Dockerfile
       args:
-        GOPROXY: "https://proxy.golang.com.cn,direct"
-    image: matrixorigin/matrixone:nightly-2af3bb11
+        GOPROXY: "https://proxy.golang.org,direct"
+    image: matrixorigin/matrixone:nightly-a464424e
     entrypoint: ["/mo-service", "-cfg", "/config/cn-1.toml"]
     depends_on:
       - dn
@@ -48,6 +49,7 @@ services:
       - launch-tae-multi-CN-tae-DN
     volumes:
       - ../../etc/launch-tae-compose/config:/config
+      - ../../test:/test
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
@@ -62,8 +64,8 @@ services:
       context: ../../
       dockerfile: ./optools/images/Dockerfile
       args:
-        GOPROXY: "https://proxy.golang.com.cn,direct"
-    image: matrixorigin/matrixone:nightly-2af3bb11
+        GOPROXY: "https://proxy.golang.org,direct"
+    image: matrixorigin/matrixone:nightly-a464424e
     entrypoint: ["/mo-service", "-cfg", "/config/dn.toml"]
     profiles:
       - launch-tae-CN-tae-DN
@@ -76,6 +78,7 @@ services:
     tty: true
     volumes:
       - ../../etc/launch-tae-compose/config:/config
+      - ../../test:/test
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
@@ -89,8 +92,8 @@ services:
       context: ../../
       dockerfile: ./optools/images/Dockerfile
       args:
-        GOPROXY: "https://proxy.golang.com.cn,direct"
-    image: matrixorigin/matrixone:nightly-2af3bb11
+        GOPROXY: "https://proxy.golang.org,direct"
+    image: matrixorigin/matrixone:nightly-a464424e
     profiles:
       - launch-tae-CN-tae-DN
       - launch-tae-multi-CN-tae-DN
@@ -108,6 +111,7 @@ services:
     restart: on-failure
     volumes:
       - ../../etc/launch-tae-compose/config:/config
+      - ../../test:/test
     tty: true    
     networks:
       monet:
