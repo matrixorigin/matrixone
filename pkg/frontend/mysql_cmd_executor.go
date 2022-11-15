@@ -238,7 +238,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
 	}
-	sc := trace.SpanContextWithID(trace.TraceID(stmID))
+	sc := trace.SpanContextWithID(trace.TraceID(stmID), trace.SpanKindStatement)
 	reqCtx := ses.GetRequestContext()
 	ses.SetRequestContext(trace.ContextWithSpanContext(reqCtx, sc))
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
@@ -281,7 +281,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 		StatementTag:         "", // fixme: (Reserved)
 		RequestAt:            envBegin,
 	}
-	sc := trace.SpanContextWithID(trace.TraceID(stmID))
+	sc := trace.SpanContextWithID(trace.TraceID(stmID), trace.SpanKindStatement)
 	ctx = trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 	trace.EndStatement(ctx, err)
 	incStatementCounter(tenant.GetTenant(), nil)
