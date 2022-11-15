@@ -16,8 +16,6 @@ package left
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -128,11 +126,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].Typ)
 		} else {
 			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].Typ)
-		}
-	}
-	for _, v := range bat.Vecs {
-		if types.IsString(v.Typ.Oid) {
-			println("len(v) area is ", len(v.GetArea()), ", len(zs) is ", len(bat.Zs))
 		}
 	}
 
