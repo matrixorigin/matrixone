@@ -128,7 +128,6 @@ func TestString2Bytes(t *testing.T) {
 }
 
 func TestPathBuilder(t *testing.T) {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
 	type field struct {
 		builder PathBuilder
 	}
@@ -193,4 +192,8 @@ func TestPathBuilder(t *testing.T) {
 			require.Equal(t, tt.wantLogFN, gotLogFN)
 		})
 	}
+}
+
+func init() {
+	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
 }
