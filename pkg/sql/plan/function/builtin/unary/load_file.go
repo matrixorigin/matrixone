@@ -59,6 +59,9 @@ func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
 	fs, readPath, err := fileservice.GetForETL(fs, Filepath)
+	if fs == nil || err != nil {
+		return nil, err
+	}
 	var r io.ReadCloser
 	ctx := context.TODO()
 	vec := fileservice.IOVector{
