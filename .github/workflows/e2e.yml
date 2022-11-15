@@ -30,7 +30,7 @@ jobs:
           cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD
 
-      - name : echo dn.toml
+      - name: echo dn.toml
         run: |
           cd $GITHUB_WORKSPACE/head
           cat ./etc/launch-tae-CN-tae-DN/dn.toml
@@ -66,7 +66,7 @@ jobs:
         if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
-      
+
       - name: generate upload files
         if: ${{ always() }}
         continue-on-error: true
@@ -108,7 +108,7 @@ jobs:
           cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD
 
-      - name : echo dn.toml
+      - name: echo dn.toml
         run: |
           cd $GITHUB_WORKSPACE/head
           cat ./etc/launch-tae-CN-tae-DN/dn.toml
@@ -144,7 +144,7 @@ jobs:
         if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
-      
+
       - name: generate upload files
         if: ${{ always() }}
         continue-on-error: true
