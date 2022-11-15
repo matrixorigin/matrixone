@@ -14,7 +14,15 @@
 
 package data
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+)
+
+var (
+	ErrAppendableBlockNotFound   = moerr.NewAppendableBlockNotFound()
+	ErrAppendableSegmentNotFound = moerr.NewAppendableSegmentNotFound()
+)
 
 type TableHandle interface {
 	GetAppender() (BlockAppender, error)

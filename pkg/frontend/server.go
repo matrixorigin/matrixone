@@ -16,11 +16,12 @@ package frontend
 
 import (
 	"context"
+	"sync/atomic"
+	"syscall"
+
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"sync/atomic"
-	"syscall"
 )
 
 // RelationName counter for the new connection
@@ -83,6 +84,7 @@ func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MO
 		goetty.WithAppSessionOptions(
 			goetty.WithSessionCodec(codec),
 			goetty.WithSessionLogger(logutil.GetGlobalLogger()),
+			goetty.WithSessionDisableCompactAfterGrow(),
 			goetty.WithSessionRWBUfferSize(1024*1024, 1024*1024)),
 		goetty.WithAppSessionAware(rm))
 	if err != nil {

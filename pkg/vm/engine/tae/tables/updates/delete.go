@@ -152,6 +152,10 @@ func (node *DeleteNode) IsDeletedLocked(row uint32) bool {
 }
 
 func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
+	// logutil.Debugf("RangeDelete BLK-%d Start=%d End=%d",
+	// 	node.chain.mvcc.meta.ID,
+	// 	start,
+	// 	end)
 	node.mask.AddRange(uint64(start), uint64(end+1))
 	for i := start; i < end+1; i++ {
 		node.chain.InsertInDeleteView(i, node)

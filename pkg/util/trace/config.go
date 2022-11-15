@@ -62,7 +62,7 @@ type tracerProviderConfig struct {
 	// resource contains attributes representing an entity that produces telemetry.
 	resource *Resource // WithMOVersion, WithNode,
 
-	// TODO: can check span's END
+	// debugMode used in Tracer.Debug
 	debugMode bool // DebugMode
 
 	batchProcessMode string // WithBatchProcessMode
@@ -267,6 +267,8 @@ func ContextField(ctx context.Context) zap.Field {
 type SpanContext struct {
 	TraceID TraceID `json:"trace_id"`
 	SpanID  SpanID  `json:"span_id"`
+	// Kind default SpanKindInternal
+	Kind SpanKind `json:"span_kind"`
 }
 
 func (c *SpanContext) Size() (n int) {
@@ -283,6 +285,7 @@ func (c *SpanContext) MarshalTo(dAtA []byte) (int, error) {
 	return c.Size(), nil
 }
 
+// Unmarshal with default Kind: SpanKindRemote
 func (c *SpanContext) Unmarshal(dAtA []byte) error {
 	l := cap(dAtA)
 	if l < c.Size() {
@@ -290,6 +293,7 @@ func (c *SpanContext) Unmarshal(dAtA []byte) error {
 	}
 	copy(c.TraceID[:], dAtA[0:16])
 	copy(c.SpanID[:], dAtA[16:24])
+	c.Kind = SpanKindRemote
 	return nil
 }
 
@@ -300,6 +304,7 @@ func (c SpanContext) GetIDs() (TraceID, SpanID) {
 func (c *SpanContext) Reset() {
 	c.TraceID = nilTraceID
 	c.SpanID = nilSpanID
+	c.Kind = SpanKindInternal
 }
 
 func (c *SpanContext) IsEmpty() bool {
@@ -317,12 +322,14 @@ func (c *SpanContext) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	return nil
 }
 
+// SpanContextWithID with default Kind: SpanKindStatement
 func SpanContextWithID(id TraceID) SpanContext {
-	return SpanContext{TraceID: id}
+	return SpanContext{TraceID: id, Kind: SpanKindStatement}
 }
 
+// SpanContextWithIDs with default Kind: SpanKindInternal
 func SpanContextWithIDs(tid TraceID, sid SpanID) SpanContext {
-	return SpanContext{TraceID: tid, SpanID: sid}
+	return SpanContext{TraceID: tid, SpanID: sid, Kind: SpanKindInternal}
 }
 
 // SpanConfig is a group of options for a Span.
@@ -409,4 +416,32 @@ const NodeTypeStandalone = "Standalone"
 type MONodeResource struct {
 	NodeUuid string `json:"node_uuid"`
 	NodeType string `json:"node_type"`
+}
+
+// SpanKind is the role a Span plays in a Trace.
+type SpanKind int
+
+const (
+	// SpanKindInternal is a SpanKind for a Span that represents an internal
+	// operation within MO.
+	SpanKindInternal SpanKind = 0
+	// SpanKindStatement is a SpanKind for a Span that represents the operation
+	// belong to statement query
+	SpanKindStatement SpanKind = 1
+	// SpanKindRemote is a SpanKind for a Span that represents the operation
+	// cross rpc
+	SpanKindRemote SpanKind = 2
+)
+
+func (k SpanKind) String() string {
+	switch k {
+	case SpanKindInternal:
+		return "internal"
+	case SpanKindStatement:
+		return "statement"
+	case SpanKindRemote:
+		return "remote"
+	default:
+		return "unknown"
+	}
 }

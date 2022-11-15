@@ -17,12 +17,12 @@ package common
 import (
 	"testing"
 
-	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestFile(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	mf := NewMemFile(0)
 	stat := mf.Stat()
 	assert.Equal(t, stat.Size(), int64(0))

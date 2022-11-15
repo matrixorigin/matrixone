@@ -34,12 +34,12 @@ func (m *Message) SetID(id uint64) {
 }
 
 func (m *Message) DebugString() string {
+	errInfo := "none"
 	if len(m.Err) > 0 {
 		me := moerr.Error{}
-		errStr := me.UnmarshalBinary(m.Err).Error()
-		return fmt.Sprintf("sid: %v, cmd: %v, data: %s, err: %s", m.Sid, m.Cmd, m.Data, errStr)
+		errInfo = me.UnmarshalBinary(m.Err).Error()
 	}
-	return fmt.Sprintf("sid: %v, cmd: %v, data: %s", m.Sid, m.Cmd, m.Data)
+	return fmt.Sprintf("MessageSize: %d, sid: %d, ErrInfo: %s, batchSize: %d", m.Size(), m.Sid, errInfo, len(m.Data))
 }
 
 func (m *Message) IsEndMessage() bool {

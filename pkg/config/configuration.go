@@ -130,7 +130,7 @@ var (
 	defaultPathBuilder = "AccountDate"
 
 	// defaultSessionTimeout default: 10 minutes
-	defaultSessionTimeout = 10 * time.Minute
+	defaultSessionTimeout = 24 * time.Hour
 )
 
 // FrontendParameters of the frontend
@@ -257,6 +257,8 @@ type FrontendParameters struct {
 
 	//default is 1
 	DNReplicaID uint64 `toml:"dnreplicalid"`
+
+	EnableDoComQueryInProgress bool `toml:"comQueryInProgress"`
 
 	//timeout of the session. the default is 10minutes
 	SessionTimeout toml.Duration `toml:"sessionTimeout"`

@@ -20,10 +20,10 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"
 )
@@ -53,7 +53,7 @@ func withAllocator(opt *Options) *Options {
 // }
 
 func TestVector1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opt := withAllocator(nil)
 	vec := MakeVector(types.T_int32.ToType(), false, opt)
 	vec.Append(int32(12))
@@ -80,7 +80,7 @@ func TestVector1(t *testing.T) {
 }
 
 func TestVector2(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opt := withAllocator(nil)
 	vec := MakeVector(types.T_int64.ToType(), true, opt)
 	t.Log(vec.String())
@@ -137,7 +137,7 @@ func TestVector2(t *testing.T) {
 }
 
 func TestVector3(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec1 := MakeVector(types.T_int32.ToType(), false, opts)
 	for i := 0; i < 100; i++ {
@@ -164,7 +164,7 @@ func TestVector3(t *testing.T) {
 }
 
 func TestVector4(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	for _, vecType := range vecTypes {
 		vec := MockVector(vecType, 1000, false, true, nil)
@@ -210,7 +210,7 @@ func TestVector4(t *testing.T) {
 }
 
 func TestVector5(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	sels := roaring.BitmapOf(2, 6)
 	for _, vecType := range vecTypes {
@@ -251,7 +251,7 @@ func TestVector5(t *testing.T) {
 }
 
 func TestVector6(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	sels := roaring.BitmapOf(2, 6)
 	f := func(vecType types.Type, nullable bool) {
@@ -338,7 +338,7 @@ func TestVector6(t *testing.T) {
 }
 
 func TestVector7(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	testF := func(typ types.Type, nullable bool) {
 		vec := MockVector(typ, 10, false, nullable, nil)
@@ -383,7 +383,7 @@ func TestVector7(t *testing.T) {
 }
 
 func TestVector8(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	vec := MakeVector(types.T_int32.ToType(), true)
 	defer vec.Close()
 	vec.Append(int32(0))
@@ -412,7 +412,7 @@ func TestVector8(t *testing.T) {
 }
 
 func TestVector9(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := MakeVector(types.T_varchar.ToType(), true, opts)
 	vec.Append([]byte("h1"))
@@ -431,7 +431,7 @@ func TestVector9(t *testing.T) {
 }
 
 func TestCloneWithBuffer(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := MakeVector(types.T_varchar.ToType(), true, opts)
 	vec.Append([]byte("h1"))
@@ -454,7 +454,7 @@ func TestCloneWithBuffer(t *testing.T) {
 }
 
 func TestCompact(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := MakeVector(types.T_varchar.ToType(), true, opts)
 
