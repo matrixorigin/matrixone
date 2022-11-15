@@ -868,10 +868,10 @@ func (blk *dataBlock) onCheckConflictAndDedup(
 			txn.GetTxnState(true)
 			blk.mvcc.RLock()
 		}
+		if err = appendnode.CheckConflict(conflictTS); err != nil {
+			return
+		}
 		if appendnode.IsAborted() || !appendnode.IsVisible(dedupTS) {
-			if err = appendnode.CheckConflict(conflictTS); err != nil {
-				return
-			}
 			return nil
 		}
 		deleteNode := blk.GetDeleteNodeByRow(row).(*updates.DeleteNode)
@@ -885,14 +885,11 @@ func (blk *dataBlock) onCheckConflictAndDedup(
 			txn.GetTxnState(true)
 			blk.mvcc.RLock()
 		}
-		if deleteNode.IsAborted() || !deleteNode.IsVisible(dedupTS) {
-			return moerr.GetOkExpectedDup()
-		}
-		if err = appendnode.CheckConflict(conflictTS); err != nil {
-			return
-		}
 		if err = deleteNode.CheckConflict(conflictTS); err != nil {
 			return
+		}
+		if deleteNode.IsAborted() || !deleteNode.IsVisible(dedupTS) {
+			return moerr.GetOkExpectedDup()
 		}
 		return nil
 	}
