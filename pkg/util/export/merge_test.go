@@ -17,6 +17,7 @@ package export
 import (
 	"context"
 	"errors"
+	"github.com/lni/goutils/leaktest"
 	"path"
 	"strings"
 	"testing"
@@ -227,6 +228,7 @@ func TestNewMerge(t *testing.T) {
 }
 
 func TestMergeTaskExecutorFactory(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	t.Logf("tmpDir: %s/%s", t.TempDir(), t.Name())
 	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, path.Join(t.TempDir(), t.Name()))
 	require.Nil(t, err)

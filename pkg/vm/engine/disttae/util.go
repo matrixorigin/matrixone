@@ -46,18 +46,18 @@ const (
 	MAX_RANGE_SIZE int64  = 200
 )
 
-func checkExprIsMonotonical(expr *plan.Expr) bool {
+func checkExprIsMonotonic(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			isMonotonical := checkExprIsMonotonical(arg)
-			if !isMonotonical {
+			isMonotonic := checkExprIsMonotonic(arg)
+			if !isMonotonic {
 				return false
 			}
 		}
 
-		isMonotonical, _ := function.GetFunctionIsMonotonicalById(exprImpl.F.Func.GetObj())
-		if !isMonotonical {
+		isMonotonic, _ := function.GetFunctionIsMonotonicById(exprImpl.F.Func.GetObj())
+		if !isMonotonic {
 			return false
 		}
 
