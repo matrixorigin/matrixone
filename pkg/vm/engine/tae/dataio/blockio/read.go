@@ -126,7 +126,7 @@ func readColumnBatchByMetaloc(
 				prefix,
 				0,
 				rows,
-				nil,
+				pool,
 			)
 			if err != nil {
 				return nil, err
