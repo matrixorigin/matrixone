@@ -365,7 +365,7 @@ func checkDNF(expr *plan.Expr) []string {
 }
 
 func walkThroughDNF(expr *plan.Expr, keywords string) *plan.Expr {
-	var retExpr *plan.Expr = nil
+	var retExpr *plan.Expr
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		if exprImpl.F.Func.ObjName == "or" {
