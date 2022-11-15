@@ -1554,10 +1554,6 @@ func (mce *MysqlCmdExecutor) handleSetVar(ctx context.Context, sv *tree.SetVar) 
 		return err
 	}
 
-	resp := NewOkResponse(0, 0, 0, 0, int(COM_QUERY), "")
-	if err = ses.GetMysqlProtocol().SendResponse(resp); err != nil {
-		return moerr.NewInternalError("routine send response failed. error:%v ", err)
-	}
 	return nil
 }
 
@@ -3587,7 +3583,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
-			resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
+			resp := mce.setResponse(i, len(cws), rspLen)
 			if _, ok := stmt.(*tree.Insert); ok {
 				resp.lastInsertId = 1
 			}
@@ -3732,6 +3728,17 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		}
 	}
 	return err
+}
+
+func (mce *MysqlCmdExecutor) setResponse(cwIndex, cwsLen int, rspLen uint64) *Response {
+
+	//if the stmt has next stmt, should set the server status equals to 10
+	if cwIndex < cwsLen-1 {
+		return NewOkResponse(rspLen, 0, 0, SERVER_MORE_RESULTS_EXISTS, int(COM_QUERY), "")
+	} else {
+		return NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
+	}
+
 }
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
@@ -3914,16 +3921,6 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(data []byte) (string, error) {
 	return sql, nil
 }
 
-func (mce *MysqlCmdExecutor) setResponse(cwIndex, cwsLen int, rspLen uint64) *Response {
-
-	//if the stmt has next stmt, should set the server status equals to 10
-	if cwIndex < cwsLen-1 {
-		return NewOkResponse(rspLen, 0, 0, 10, int(COM_QUERY), "")
-	} else {
-		return NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
-	}
-
-}
 func (mce *MysqlCmdExecutor) setCancelRequestFunc(cancelFunc context.CancelFunc) {
 	mce.mu.Lock()
 	defer mce.mu.Unlock()
