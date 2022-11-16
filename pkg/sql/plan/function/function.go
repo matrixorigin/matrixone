@@ -224,17 +224,17 @@ func GetFunctionAppendHideArgByID(overloadID int64) bool {
 	return function.AppendHideArg
 }
 
-func GetFunctionIsMonotonicalById(overloadID int64) (bool, error) {
+func GetFunctionIsMonotonicById(overloadID int64) (bool, error) {
 	function, err := GetFunctionByID(overloadID)
 	if err != nil {
 		return false, err
 	}
-	// if function cann't be fold, we think that will be not monotonical
+	// if function cann't be fold, we think that will be not monotonic
 	if function.Volatile {
 		return false, nil
 	}
-	isMonotonical := (function.GetFlag() & plan.Function_MONOTONICAL) != 0
-	return isMonotonical, nil
+	isMonotonic := (function.GetFlag() & plan.Function_MONOTONIC) != 0
+	return isMonotonic, nil
 }
 
 // GetFunctionByName check a function exist or not according to input function name and arg types,

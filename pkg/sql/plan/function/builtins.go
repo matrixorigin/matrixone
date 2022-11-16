@@ -209,7 +209,7 @@ var builtins = map[int]Functions{
 	},
 	DATE: {
 		Id:     DATE,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -736,7 +736,7 @@ var builtins = map[int]Functions{
 	},
 	YEAR: {
 		Id:     YEAR,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -834,7 +834,7 @@ var builtins = map[int]Functions{
 	// variadic functions
 	CEIL: {
 		Id:     CEIL,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -883,7 +883,7 @@ var builtins = map[int]Functions{
 	},
 	FLOOR: {
 		Id:     FLOOR,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -955,7 +955,7 @@ var builtins = map[int]Functions{
 	},
 	PI: {
 		Id:     PI,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -968,7 +968,7 @@ var builtins = map[int]Functions{
 	},
 	ROUND: {
 		Id:     ROUND,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
