@@ -581,6 +581,7 @@ func LoadCheckpointEntries(
 			errMu.Unlock()
 			return
 		}
+		datas[i] = data
 	}
 	wg.Add(len(locations))
 	for i := range locations {
