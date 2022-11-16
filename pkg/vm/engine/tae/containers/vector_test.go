@@ -465,7 +465,6 @@ func TestCompact(t *testing.T) {
 	vec.Compact(deletes)
 	//{}
 	assert.Equal(t, 0, vec.Length())
-	return
 
 	vec.Append(types.Null{})
 	vec.Append(types.Null{})
