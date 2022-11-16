@@ -45,10 +45,15 @@ func (m TxnResponse) HasFlag(flag uint32) bool {
 
 // DebugString returns debug string
 func (m TxnRequest) DebugString() string {
+	return m.DebugStringWithPayload(true)
+}
+
+// DebugStringWithPayload returns debug string with payload bytes if
+// withPayload is true
+func (m TxnRequest) DebugStringWithPayload(withPayload bool) string {
 	var buffer bytes.Buffer
 
-	buffer.WriteString(fmt.Sprintf("%d: ",
-		m.RequestID))
+	buffer.WriteString(fmt.Sprintf("%d: ", m.RequestID))
 
 	buffer.WriteString("<")
 	buffer.WriteString(m.Txn.DebugString())
@@ -60,7 +65,7 @@ func (m TxnRequest) DebugString() string {
 
 	if m.CNRequest != nil {
 		buffer.WriteString("/<")
-		buffer.WriteString(m.CNRequest.DebugString())
+		buffer.WriteString(m.CNRequest.DebugString(withPayload))
 		buffer.WriteString(">")
 	}
 	buffer.WriteString("/=><")
@@ -105,8 +110,12 @@ func (m TxnResponse) DebugString() string {
 }
 
 // DebugString returns debug string
-func (m CNOpRequest) DebugString() string {
-	return fmt.Sprintf("O:%d-D:%d", m.OpCode, len(m.Payload))
+func (m CNOpRequest) DebugString(withPayload bool) string {
+	if withPayload {
+		return fmt.Sprintf("O:%d-D:%d", m.OpCode, len(m.Payload))
+	} else {
+		return fmt.Sprintf("O:%d", m.OpCode)
+	}
 }
 
 // DebugString returns debug string
@@ -205,12 +214,12 @@ func (m *TxnResponse) GetID() uint64 {
 }
 
 // RequestsDebugString returns requests debug string
-func RequestsDebugString(requests []TxnRequest) string {
+func RequestsDebugString(requests []TxnRequest, withPayload bool) string {
 	n := len(requests)
 	var buf bytes.Buffer
 	buf.WriteString("[")
 	for idx, req := range requests {
-		buf.WriteString(req.DebugString())
+		buf.WriteString(req.DebugStringWithPayload(withPayload))
 		if idx < n-1 {
 			buf.WriteString(", ")
 		}
