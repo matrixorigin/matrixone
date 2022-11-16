@@ -348,7 +348,7 @@ func checkDNF(expr *plan.Expr) []string {
 	case *plan.Expr_F:
 		if exprImpl.F.Func.ObjName == "or" {
 			left := checkDNF(exprImpl.F.Args[0])
-			right := checkDNF(exprImpl.F.Args[0])
+			right := checkDNF(exprImpl.F.Args[1])
 			return intersectSlice(left, right)
 		}
 		for _, arg := range exprImpl.F.Args {
