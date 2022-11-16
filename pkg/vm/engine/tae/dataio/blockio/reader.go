@@ -129,17 +129,17 @@ func (r *Reader) LoadBlkColumnsByMetaAndIdx(
 	if err != nil {
 		return bat, err
 	}
-	pkgVec := vector.New(colTypes[idx])
+	pkgVec := vector.New(colTypes[0])
 	if err = pkgVec.Read(data.Entries[0].Object.([]byte)); err != nil && !errors.Is(err, io.EOF) {
 		return bat, err
 	}
 	var vec containers.Vector
 	if pkgVec.Length() == 0 {
-		vec = containers.MakeVector(colTypes[idx], nullables[idx])
+		vec = containers.MakeVector(colTypes[0], nullables[0])
 	} else {
-		vec = containers.NewVectorWithSharedMemory(pkgVec, nullables[idx])
+		vec = containers.NewVectorWithSharedMemory(pkgVec, nullables[0])
 	}
-	bat.AddVector(colNames[idx], vec)
+	bat.AddVector(colNames[0], vec)
 	return bat, nil
 }
 
