@@ -80,21 +80,21 @@ func (r *Reader) LoadBlkColumnsByMeta(
 	nullables []bool,
 	block objectio.BlockObject) (*containers.Batch, error) {
 	bat := containers.NewBatch()
+	if block.GetExtent().End() == 0 {
+		return bat, nil
+	}
+	idxs := make([]uint16, len(colNames))
+	for i := range colNames {
+		idxs[i] = uint16(i)
+	}
+	ioResult, err := r.reader.Read(r.readCxt, block.GetExtent(), idxs, nil)
+	if err != nil {
+		return nil, err
+	}
 
 	for i := range colNames {
-		if block.GetExtent().End() == 0 {
-			continue
-		}
-		col, err := block.GetColumn(uint16(i))
-		if err != nil {
-			return bat, err
-		}
-		data, err := col.GetData(r.readCxt, nil)
-		if err != nil {
-			return bat, err
-		}
 		pkgVec := vector.New(colTypes[i])
-		if err = pkgVec.Read(data.Entries[0].Object.([]byte)); err != nil && !errors.Is(err, io.EOF) {
+		if err = pkgVec.Read(ioResult.Entries[i].Object.([]byte)); err != nil && !errors.Is(err, io.EOF) {
 			return bat, err
 		}
 		var vec containers.Vector
@@ -105,6 +105,7 @@ func (r *Reader) LoadBlkColumnsByMeta(
 		}
 		bat.AddVector(colNames[i], vec)
 		bat.Vecs[i] = vec
+
 	}
 	return bat, nil
 }
