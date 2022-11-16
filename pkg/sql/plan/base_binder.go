@@ -1026,6 +1026,25 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		args = append(args, makePlan2NullConstExprWithType())
 	}
 
+	notNullable := false
+	function, err := function.GetFunctionByID(funcID)
+	if function.TestFlag(plan.Function_PRODUCE_NULL) {
+		notNullable = false
+	} else if function.TestFlag(plan.Function_PRODUCE_NO_NULL) {
+		notNullable = true
+	} else {
+		allArgsNotNull := true
+		for _, arg := range args {
+			if !arg.NotNullable {
+				allArgsNotNull = false
+				break
+			}
+		}
+		if allArgsNotNull {
+			notNullable = true
+		}
+	}
+
 	// return new expr
 	return &Expr{
 		Expr: &plan.Expr_F{
@@ -1034,7 +1053,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				Args: args,
 			},
 		},
-		Typ: makePlan2Type(&returnType),
+		Typ:         makePlan2Type(&returnType),
+		NotNullable: notNullable,
 	}, nil
 }
 
