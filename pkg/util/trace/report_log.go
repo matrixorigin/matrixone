@@ -15,21 +15,19 @@
 package trace
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
-
 	"go.uber.org/zap"
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
 )
 
 var _ batchpipe.HasName = (*MOZapLog)(nil)
-var _ IBuffer2SqlItem = (*MOZapLog)(nil)
-var _ CsvFields = (*MOZapLog)(nil)
 
+// MOZapLog implement export.IBuffer2SqlItem and export.CsvFields
 type MOZapLog struct {
 	Level       zapcore.Level `json:"Level"`
 	SpanContext *SpanContext  `json:"span"`
@@ -62,9 +60,9 @@ func (m *MOZapLog) Free() {
 	m.Extra = ""
 }
 
-func (m *MOZapLog) GetRow() *export.Row { return logView.OriginTable.GetRow() }
+func (m *MOZapLog) GetRow() *table.Row { return logView.OriginTable.GetRow() }
 
-func (m *MOZapLog) CsvFields(row *export.Row) []string {
+func (m *MOZapLog) CsvFields(row *table.Row) []string {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, logView.Table)
 	row.SetColumnVal(traceIDCol, m.SpanContext.TraceID.String())
@@ -72,7 +70,7 @@ func (m *MOZapLog) CsvFields(row *export.Row) []string {
 	row.SetColumnVal(spanKindCol, m.SpanContext.Kind.String())
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
-	row.SetColumnVal(timestampCol, time2DatetimeString(m.Timestamp))
+	row.SetColumnVal(timestampCol, Time2DatetimeString(m.Timestamp))
 	row.SetColumnVal(loggerNameCol, m.LoggerName)
 	row.SetColumnVal(levelCol, m.Level.String())
 	row.SetColumnVal(callerCol, m.Caller)
@@ -119,6 +117,6 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 	}
 	buffer, err := jsonEncoder.EncodeEntry(entry, fields[:endIdx+1])
 	log.Extra = buffer.String()
-	export.GetGlobalBatchProcessor().Collect(DefaultContext(), log)
+	GetGlobalBatchProcessor().Collect(DefaultContext(), log)
 	return buffer, err
 }

@@ -34,6 +34,7 @@ func defaultMOTracerProvider() *MOTracerProvider {
 			resource:         newResource(),
 			idGenerator:      &moIDGenerator{},
 			batchProcessMode: FileService,
+			batchProcessor:   noopBatchProcessor{},
 		},
 	}
 	WithNode("node_uuid", NodeTypeStandalone).apply(&pTracer.tracerProviderConfig)
