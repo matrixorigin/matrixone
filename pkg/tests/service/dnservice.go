@@ -161,7 +161,7 @@ func buildDNConfig(
 	}
 	cfg.DataDir = filepath.Join(opt.rootDataDir, cfg.UUID)
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
-	cfg.HAKeeper.HeatbeatDuration.Duration = opt.heartbeat.dn
+	cfg.HAKeeper.HeatbeatInterval.Duration = opt.heartbeat.dn
 	cfg.Txn.Storage.Backend = opt.storage.dnStorage
 	cfg.Txn.Storage.LogBackend = "logservice"
 

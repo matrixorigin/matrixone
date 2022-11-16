@@ -176,7 +176,7 @@ func runDNStoreTestWithFileServiceFactory(
 			return mem.NewMemLog(), nil
 		}),
 		WithConfigAdjust(func(c *Config) {
-			c.HAKeeper.HeatbeatDuration.Duration = time.Millisecond * 10
+			c.HAKeeper.HeatbeatInterval.Duration = time.Millisecond * 10
 			c.Txn.Storage.Backend = StorageMEMKV
 		}))
 

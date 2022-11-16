@@ -16,7 +16,6 @@ package cnservice
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -34,9 +33,15 @@ func (s *service) startCNStoreHeartbeat() error {
 }
 
 func (s *service) heartbeatTask(ctx context.Context) {
+	if s.cfg.HAKeeper.HeatbeatInterval.Duration == 0 {
+		panic("invalid heartbeat interval")
+	}
 	defer logutil.LogAsyncTask(s.logger, "cnservice/heartbeat-task")()
+	defer func() {
+		s.logger.Info("cn heartbeat task stopped")
+	}()
 
-	ticker := time.NewTicker(s.cfg.HAKeeper.HeatbeatDuration.Duration)
+	ticker := time.NewTicker(s.cfg.HAKeeper.HeatbeatInterval.Duration)
 	defer ticker.Stop()
 
 	for {
@@ -44,30 +49,44 @@ func (s *service) heartbeatTask(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HAKeeper.HeatbeatTimeout.Duration)
-			batch, err := s._hakeeperClient.SendCNHeartbeat(ctx, logservicepb.CNStoreHeartbeat{
-				UUID:               s.cfg.UUID,
-				ServiceAddress:     s.cfg.ServiceAddress,
-				SQLAddress:         s.cfg.SQLAddress,
-				Role:               s.metadata.Role,
-				TaskServiceCreated: s.GetTaskRunner() != nil,
-			})
-			cancel()
-			if err != nil {
-				s.logger.Error("send CNShard heartbeat request failed",
-					zap.Error(err))
-				break
+			s.heartbeat(ctx)
+			// see pkg/logservice/service_commands.go#130
+			select {
+			case <-ctx.Done():
+				return
+			default:
 			}
-			for _, command := range batch.Commands {
-				if command.ServiceType != logservicepb.CNService {
-					panic(fmt.Sprintf("received a Non-CN Schedule Command: %s", command.ServiceType.String()))
-				}
-				s.logger.Info("applying schedule command", zap.String("command", command.LogString()))
-				if command.CreateTaskService != nil {
-					s.createTaskService(command.CreateTaskService)
-				}
-			}
-			s.logger.Debug("send DNShard heartbeat request completed")
+		}
+	}
+}
+
+func (s *service) heartbeat(ctx context.Context) {
+	ctx2, cancel := context.WithTimeout(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration)
+	defer cancel()
+
+	hb := logservicepb.CNStoreHeartbeat{
+		UUID:               s.cfg.UUID,
+		ServiceAddress:     s.cfg.ServiceAddress,
+		SQLAddress:         s.cfg.SQLAddress,
+		Role:               s.metadata.Role,
+		TaskServiceCreated: s.GetTaskRunner() != nil,
+	}
+	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
+	if err != nil {
+		s.logger.Error("failed to send cn heartbeat", zap.Error(err))
+		return
+	}
+	s.handleCommands(cb.Commands)
+}
+
+func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
+	for _, cmd := range cmds {
+		if cmd.ServiceType != logservicepb.CNService {
+			s.logger.Fatal("received invalid command", zap.String("command", cmd.LogString()))
+		}
+		s.logger.Info("applying schedule command", zap.String("command", cmd.LogString()))
+		if cmd.CreateTaskService != nil {
+			s.createTaskService(cmd.CreateTaskService)
 		}
 	}
 }
