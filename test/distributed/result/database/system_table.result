@@ -176,7 +176,7 @@ command    VARCHAR    NO        ''
 db    VARCHAR    YES        null        
 host    VARCHAR    NO        ''        
 id    BIGINT UNSIGNED    NO        '0'        
-info    BLOB    YES        NULL        
+info    TEXT    YES        NULL        
 state    VARCHAR    YES        null        
 time    INT    NO        '0'        
 user    VARCHAR    NO        ''        
