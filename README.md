@@ -195,8 +195,8 @@ The **main** branch is the default branch, the code on the main branch is always
 
     ```
     git clone https://github.com/matrixorigin/matrixone.git
-    git checkout 0.5.1
     cd matrixone
+    git checkout 0.5.1
     ```
 
 2. You can run `make debug`, `make clean`, or anything else our Makefile offers.
