@@ -3,7 +3,7 @@ name: MatrixOne Compose Test
 on:
   pull_request:
     types: [ opened, synchronize, reopened ]
-    branches: [ main ]
+    branches: [ main, '[0-9]+.[0-9]+.[0-9]+' ]
 
   workflow_dispatch:
 
