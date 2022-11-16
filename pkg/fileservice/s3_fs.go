@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"net/url"
 	pathpkg "path"
 	"sort"
@@ -30,7 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -181,6 +182,18 @@ func newS3FS(
 		return nil, err
 	}
 
+	s3Options = append(s3Options,
+		func(opt *s3.Options) {
+			opt.HTTPClient = &http.Client{
+				Transport: &http.Transport{
+					MaxIdleConns:        0, // no limit
+					MaxIdleConnsPerHost: 4096,
+					MaxConnsPerHost:     0, // no limit
+				},
+			}
+		},
+	)
+
 	client := s3.NewFromConfig(
 		cfg,
 		s3Options...,
@@ -290,7 +303,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 		},
 	)
 	if err != nil {
-		var httpError *http.ResponseError
+		var httpError *awshttp.ResponseError
 		if errors.As(err, &httpError) {
 			if httpError.Response.StatusCode == 404 {
 				// key not exists, ok
@@ -680,7 +693,7 @@ func (s *S3FS) mapError(err error, path string) error {
 	if err == nil {
 		return nil
 	}
-	var httpError *http.ResponseError
+	var httpError *awshttp.ResponseError
 	if errors.As(err, &httpError) {
 		if httpError.Response.StatusCode == 404 {
 			return moerr.NewFileNotFound(path)
