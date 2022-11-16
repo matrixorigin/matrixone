@@ -1834,7 +1834,6 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				cols[i] = col.Name
 			}
 			types[i] = col.Typ
-
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
