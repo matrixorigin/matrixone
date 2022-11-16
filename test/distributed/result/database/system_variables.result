@@ -189,7 +189,7 @@ command    VARCHAR    NO        ''
 db    VARCHAR    YES        null        
 host    VARCHAR    NO        ''        
 id    BIGINT UNSIGNED    NO        '0'        
-info    BLOB    YES        NULL        
+info    TEXT    YES        NULL        
 state    VARCHAR    YES        null        
 time    INT    NO        '0'        
 user    VARCHAR    NO        ''        
@@ -240,7 +240,7 @@ collation_connection    VARCHAR    YES        NULL
 event_manipulation    VARCHAR    YES        NULL        
 event_object_table    VARCHAR    YES        NULL        
 action_reference_old_row    VARCHAR    YES        NULL        
-action_statement    BLOB    YES        NULL        
+action_statement    TEXT    YES        NULL        
 database_collation    VARCHAR    YES        NULL        
 action_condition    VARCHAR    YES        NULL        
 action_timing    VARCHAR    YES        NULL        

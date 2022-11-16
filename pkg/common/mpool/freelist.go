@@ -37,12 +37,6 @@ func make_freelist(cap int32) *freelist {
 	return &fl
 }
 
-/*
-func (fl *freelist) destroy() {
-	fl.ptrs = nil
-}
-*/
-
 // ring buffer next
 func (fl *freelist) next(i int32) int32 {
 	if i == fl.cap {
@@ -74,9 +68,10 @@ func (fl *freelist) get() unsafe.Pointer {
 			return nil
 		}
 		next := fl.next(pos)
+		ptr := atomic.LoadPointer(&fl.ptrs[pos])
 		ok := fl.head.CompareAndSwap(pos, next)
 		if ok {
-			return atomic.LoadPointer(&fl.ptrs[pos])
+			return ptr
 		}
 	}
 }

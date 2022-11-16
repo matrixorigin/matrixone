@@ -197,7 +197,7 @@ db    VARCHAR    YES        null
 command    VARCHAR    NO        ''        
 time    INT    NO        '0'        
 state    VARCHAR    YES        null        
-info    BLOB    YES        NULL        
+info    TEXT    YES        NULL        
 select * from `PROCESSLIST` limit 2;
 id    user    host    db    command    time    state    info
 desc user_privileges;
@@ -239,7 +239,7 @@ event_object_schema    VARCHAR    YES        NULL
 event_object_table    VARCHAR    YES        NULL        
 action_order    INT UNSIGNED    YES        NULL        
 action_condition    VARCHAR    YES        NULL        
-action_statement    BLOB    YES        NULL        
+action_statement    TEXT    YES        NULL        
 action_orientation    VARCHAR    YES        NULL        
 action_timing    VARCHAR    YES        NULL        
 action_reference_old_table    VARCHAR    YES        NULL        

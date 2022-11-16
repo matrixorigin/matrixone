@@ -80,8 +80,6 @@ func TestFreelist(t *testing.T) {
 		fl.put(unsafe.Pointer(&items[i]))
 	}
 
-	require.Equal(t, fl.head.Load(), fl.next(fl.tail.Load()), "freelist should be full")
-
 	// let 20 threads run for it, each looping 1 million times.
 	type result struct {
 		okCount   int64
@@ -163,4 +161,28 @@ func TestReportMemUsage(t *testing.T) {
 	t.Logf("mem usage: %s", j1)
 	t.Logf("global mem usage: %s", j2)
 	t.Logf("testjson mem usage: %s", j3)
+}
+
+func TestMP(t *testing.T) {
+	pool, err := NewMPool("default", 0, Large)
+	if err != nil {
+		panic(err)
+	}
+	var wg sync.WaitGroup
+	run := func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			buf, err := pool.Alloc(10)
+			if err != nil {
+				panic(err)
+			}
+			pool.Free(buf)
+		}
+	}
+	for i := 0; i < 800; i++ {
+		wg.Add(1)
+		go run()
+	}
+	wg.Wait()
+
 }
