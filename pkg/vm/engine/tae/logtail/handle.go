@@ -48,9 +48,9 @@ func HandleSyncLogTailReq(
 	mgr *LogtailMgr,
 	c *catalog.Catalog,
 	req api.SyncLogTailReq) (resp api.SyncLogTailResp, err error) {
-	logutil.Debugf("[Logtail] begin handle %v\n", req)
+	logutil.Debugf("[Logtail] begin handle %+v", req)
 	defer func() {
-		logutil.Debugf("[Logtail] end handle err %v\n", err)
+		logutil.Debugf("[Logtail] end handle %d entries[%q], err %v", len(resp.Commands), resp.CkpLocation, err)
 	}()
 	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
 	end := types.BuildTS(req.CnWant.PhysicalTime, req.CnWant.LogicalTime)
@@ -70,7 +70,6 @@ func HandleSyncLogTailReq(
 	ckpLoc, checkpointed := ckpClient.CollectCheckpointsInRange(start, end)
 
 	if checkpointed.GreaterEq(end) {
-		logutil.Debugf("[Logtail] only send ckp %q\n", ckpLoc)
 		return api.SyncLogTailResp{
 			CkpLocation: ckpLoc,
 		}, err
@@ -240,6 +239,7 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 
 	if b.insBatch.Length() > 0 {
 		bat, err := containersBatchToProtoBatch(b.insBatch)
+		logutil.Debugf("[logtail] catalog insert to %d-%s, %s", tblID, tableName, DebugBatchToString("catalog", b.insBatch, true))
 		if err != nil {
 			return api.SyncLogTailResp{}, err
 		}
@@ -255,6 +255,7 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	}
 	if b.delBatch.Length() > 0 {
 		bat, err := containersBatchToProtoBatch(b.delBatch)
+		logutil.Debugf("[logtail] catalog delete from %d-%s, %s", tblID, tableName, DebugBatchToString("catalog", b.delBatch, false))
 		if err != nil {
 			return api.SyncLogTailResp{}, err
 		}
@@ -389,13 +390,11 @@ func (b *TableLogtailRespBuilder) Close() {
 }
 
 func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData bool) {
-	var latestCommittedNode *catalog.MetadataMVCCNode
 	newEnd := b.end
 	e.RLock()
 	// try to find new end
 	if newest := e.GetLatestCommittedNode(); newest != nil {
-		latestCommittedNode = newest.CloneAll().(*catalog.MetadataMVCCNode)
-		latestPrepareTs := latestCommittedNode.GetPrepare()
+		latestPrepareTs := newest.CloneAll().(*catalog.MetadataMVCCNode).GetPrepare()
 		if latestPrepareTs.Greater(b.end) {
 			newEnd = latestPrepareTs
 		}
@@ -410,14 +409,15 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 		}
 	}
 
-	if latestCommittedNode != nil {
+	if n := len(mvccNodes); n > 0 {
+		newest := mvccNodes[n-1].(*catalog.MetadataMVCCNode)
 		if e.IsAppendable() {
-			if latestCommittedNode.MetaLoc != "" {
+			if newest.MetaLoc != "" {
 				// appendable block has been flushed, no need to collect data
 				return true
 			}
 		} else {
-			if latestCommittedNode.DeltaLoc != "" && latestCommittedNode.GetEnd().GreaterEq(b.end) {
+			if newest.DeltaLoc != "" && newest.GetEnd().GreaterEq(b.end) {
 				// non-appendable block has newer delta data on s3, no need to collect data
 				return true
 			}
@@ -500,6 +500,12 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			tableName = fmt.Sprintf("_%d_meta", b.tid)
 			logutil.Infof("[Logtail] send block meta for %q", b.tname)
 		}
+		if metaChange {
+			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname, DebugBatchToString("meta", batch, true))
+		} else {
+			logutil.Debugf("[logtail] table data [%v] %d-%s: %s", typ, b.tid, b.tname, DebugBatchToString("data", batch, false))
+		}
+
 		entry := &api.Entry{
 			EntryType:    typ,
 			TableId:      b.tid,

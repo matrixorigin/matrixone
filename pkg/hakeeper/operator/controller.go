@@ -108,134 +108,176 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
 	dnState pb.DNState, cnState pb.CNState) (commands []pb.ScheduleCommand) {
 	for _, op := range ops {
 		c.operators[op.shardID] = append(c.operators[op.shardID], op)
-		step := op.Check(logState, dnState, cnState)
-		var cmd pb.ScheduleCommand
-		switch st := step.(type) {
-		case AddLogService:
-			cmd = pb.ScheduleCommand{
-				UUID: st.Target,
-				ConfigChange: &pb.ConfigChange{
-					Replica: pb.Replica{
-						UUID:      st.UUID,
-						ShardID:   st.ShardID,
-						ReplicaID: st.ReplicaID,
-						Epoch:     st.Epoch,
-					},
-					ChangeType: pb.AddReplica,
-				},
-				ServiceType: pb.LogService,
-			}
-		case RemoveLogService:
-			cmd = pb.ScheduleCommand{
-				UUID: st.Target,
-				ConfigChange: &pb.ConfigChange{
-					Replica: pb.Replica{
-						UUID:      st.UUID,
-						ShardID:   st.ShardID,
-						ReplicaID: st.ReplicaID,
-						Epoch:     st.Epoch,
-					},
-					ChangeType: pb.RemoveReplica,
-				},
-				ServiceType: pb.LogService,
-			}
-		case StartLogService:
-			cmd = pb.ScheduleCommand{
-				UUID: st.UUID,
-				ConfigChange: &pb.ConfigChange{
-					Replica: pb.Replica{
-						UUID:      st.UUID,
-						ShardID:   st.ShardID,
-						ReplicaID: st.ReplicaID,
-					},
-					ChangeType: pb.StartReplica,
-				},
-				ServiceType: pb.LogService,
-			}
-		case StopLogService:
-			cmd = pb.ScheduleCommand{
-				UUID: st.UUID,
-				ConfigChange: &pb.ConfigChange{
-					Replica: pb.Replica{
-						UUID:    st.UUID,
-						ShardID: st.ShardID,
-						Epoch:   st.Epoch,
-					},
-					ChangeType: pb.RemoveReplica,
-				},
-				ServiceType: pb.LogService,
-			}
-		case KillLogZombie:
-			cmd = pb.ScheduleCommand{
-				UUID:          st.UUID,
-				Bootstrapping: false,
-				ConfigChange: &pb.ConfigChange{
-					Replica: pb.Replica{
-						UUID:      st.UUID,
-						ShardID:   st.ShardID,
-						ReplicaID: st.ReplicaID,
-					},
-					ChangeType: pb.KillZombie,
-				},
-				ServiceType: pb.LogService,
-			}
-		case AddDnReplica:
-			cmd = pb.ScheduleCommand{
-				UUID: st.StoreID,
-				ConfigChange: &pb.ConfigChange{
-					Replica: pb.Replica{
-						UUID:       st.StoreID,
-						ShardID:    st.ShardID,
-						ReplicaID:  st.ReplicaID,
-						LogShardID: st.LogShardID,
-					},
-					ChangeType: pb.StartReplica,
-				},
-				ServiceType: pb.DNService,
-			}
-		case RemoveDnReplica:
-			cmd = pb.ScheduleCommand{
-				UUID: st.StoreID,
-				ConfigChange: &pb.ConfigChange{
-					Replica: pb.Replica{
-						UUID:       st.StoreID,
-						ShardID:    st.ShardID,
-						ReplicaID:  st.ReplicaID,
-						LogShardID: st.LogShardID,
-					},
-					ChangeType: pb.StopReplica,
-				},
-				ServiceType: pb.DNService,
-			}
-		case StopDnStore:
-			cmd = pb.ScheduleCommand{
-				UUID: st.StoreID,
-				ShutdownStore: &pb.ShutdownStore{
-					StoreID: st.StoreID,
-				},
-				ServiceType: pb.DNService,
-			}
-		case StopLogStore:
-			cmd = pb.ScheduleCommand{
-				UUID: st.StoreID,
-				ShutdownStore: &pb.ShutdownStore{
-					StoreID: st.StoreID,
-				},
-				ServiceType: pb.LogService,
-			}
-		case CreateTaskService:
-			cmd = pb.ScheduleCommand{
-				UUID:        st.StoreID,
-				ServiceType: st.StoreType,
-				CreateTaskService: &pb.CreateTaskService{
-					User:         st.TaskUser,
-					TaskDatabase: "mo_task",
-				},
-			}
+		if step := op.Check(logState, dnState, cnState); step != nil {
+			commands = append(commands, generateScheduleCommand(step))
 		}
-
-		commands = append(commands, cmd)
 	}
-
 	return
+}
+
+func generateScheduleCommand(step OpStep) pb.ScheduleCommand {
+	switch st := step.(type) {
+	case AddLogService:
+		return addLogService(st)
+	case RemoveLogService:
+		return removeLogService(st)
+	case StartLogService:
+		return startLogService(st)
+	case StopLogService:
+		return stopLogService(st)
+	case KillLogZombie:
+		return killLogZombie(st)
+	case AddDnReplica:
+		return addDnReplica(st)
+	case RemoveDnReplica:
+		return removeDnReplica(st)
+	case StopDnStore:
+		return stopDnStore(st)
+	case StopLogStore:
+		return stopLogStore(st)
+	case CreateTaskService:
+		return createTaskService(st)
+	}
+	panic("invalid schedule command")
+}
+
+func addLogService(st AddLogService) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID: st.Target,
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
+				UUID:      st.UUID,
+				ShardID:   st.ShardID,
+				ReplicaID: st.ReplicaID,
+				Epoch:     st.Epoch,
+			},
+			ChangeType: pb.AddReplica,
+		},
+		ServiceType: pb.LogService,
+	}
+}
+
+func removeLogService(st RemoveLogService) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID: st.Target,
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
+				UUID:      st.UUID,
+				ShardID:   st.ShardID,
+				ReplicaID: st.ReplicaID,
+				Epoch:     st.Epoch,
+			},
+			ChangeType: pb.RemoveReplica,
+		},
+		ServiceType: pb.LogService,
+	}
+}
+
+func startLogService(st StartLogService) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID: st.UUID,
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
+				UUID:      st.UUID,
+				ShardID:   st.ShardID,
+				ReplicaID: st.ReplicaID,
+			},
+			ChangeType: pb.StartReplica,
+		},
+		ServiceType: pb.LogService,
+	}
+}
+
+func stopLogService(st StopLogService) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID: st.UUID,
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
+				UUID:    st.UUID,
+				ShardID: st.ShardID,
+				Epoch:   st.Epoch,
+			},
+			ChangeType: pb.RemoveReplica,
+		},
+		ServiceType: pb.LogService,
+	}
+}
+
+func killLogZombie(st KillLogZombie) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID:          st.UUID,
+		Bootstrapping: false,
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
+				UUID:      st.UUID,
+				ShardID:   st.ShardID,
+				ReplicaID: st.ReplicaID,
+			},
+			ChangeType: pb.KillZombie,
+		},
+		ServiceType: pb.LogService,
+	}
+}
+
+func addDnReplica(st AddDnReplica) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID: st.StoreID,
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
+				UUID:       st.StoreID,
+				ShardID:    st.ShardID,
+				ReplicaID:  st.ReplicaID,
+				LogShardID: st.LogShardID,
+			},
+			ChangeType: pb.StartReplica,
+		},
+		ServiceType: pb.DNService,
+	}
+}
+
+func removeDnReplica(st RemoveDnReplica) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID: st.StoreID,
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
+				UUID:       st.StoreID,
+				ShardID:    st.ShardID,
+				ReplicaID:  st.ReplicaID,
+				LogShardID: st.LogShardID,
+			},
+			ChangeType: pb.StopReplica,
+		},
+		ServiceType: pb.DNService,
+	}
+}
+
+func stopDnStore(st StopDnStore) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID: st.StoreID,
+		ShutdownStore: &pb.ShutdownStore{
+			StoreID: st.StoreID,
+		},
+		ServiceType: pb.DNService,
+	}
+}
+
+func stopLogStore(st StopLogStore) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID: st.StoreID,
+		ShutdownStore: &pb.ShutdownStore{
+			StoreID: st.StoreID,
+		},
+		ServiceType: pb.LogService,
+	}
+}
+
+func createTaskService(st CreateTaskService) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID:        st.StoreID,
+		ServiceType: st.StoreType,
+		CreateTaskService: &pb.CreateTaskService{
+			User:         st.TaskUser,
+			TaskDatabase: "mo_task",
+		},
+	}
 }

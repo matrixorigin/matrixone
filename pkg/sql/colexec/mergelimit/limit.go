@@ -42,15 +42,12 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 
 	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
 		reg := proc.Reg.MergeReceivers[i]
-		bat := <-reg.Ch
-
-		// 1. the last batch at this receiver
-		if bat == nil {
+		bat, ok := <-reg.Ch
+		if !ok || bat == nil {
 			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:i], proc.Reg.MergeReceivers[i+1:]...)
 			i--
 			continue
 		}
-		// 2. an empty batch
 		if bat.Length() == 0 {
 			i--
 			continue
@@ -58,7 +55,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		anal.Input(bat)
 		if ap.ctr.seen >= ap.Limit {
 			bat.Clean(proc.Mp())
-			break
+			continue
 		}
 		newSeen := ap.ctr.seen + uint64(bat.Length())
 		if newSeen < ap.Limit {

@@ -100,6 +100,11 @@ func waitSignalToStop(stopper *stopper.Stopper) {
 	sig := <-sigchan
 	logutil.GetGlobalLogger().Info("Starting shutdown...", zap.String("signal", sig.String()))
 	stopper.Stop()
+	if cnProxy != nil {
+		if err := cnProxy.Stop(); err != nil {
+			logutil.GetGlobalLogger().Error("shutdown cn proxy failed", zap.Error(err))
+		}
+	}
 }
 
 func startService(cfg *Config, stopper *stopper.Stopper) error {
@@ -276,6 +281,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 				trace.WithExportInterval(SV.TraceExportInterval),
 				trace.WithLongQueryTime(SV.LongQueryTime),
 				trace.WithSQLExecutor(nil),
+				trace.DebugMode(SV.EnableTraceDebug),
 			); err != nil {
 				panic(err)
 			}

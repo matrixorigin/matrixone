@@ -69,7 +69,7 @@ type Response struct {
 	//the category of the response
 	category int
 	//the status of executing the peer request
-	status int
+	status uint16
 	//the command type which generates the response
 	cmd int
 	//the data of the response
@@ -82,7 +82,7 @@ type Response struct {
 	warnings                   uint16
 }
 
-func NewResponse(category, status, cmd int, d interface{}) *Response {
+func NewResponse(category int, status uint16, cmd int, d interface{}) *Response {
 	return &Response{
 		category: category,
 		status:   status,
@@ -99,7 +99,7 @@ func NewGeneralOkResponse(cmd CommandType) *Response {
 	return NewResponse(OkResponse, 0, int(cmd), nil)
 }
 
-func NewOkResponse(affectedRows, lastInsertId uint64, warnings uint16, status, cmd int, d interface{}) *Response {
+func NewOkResponse(affectedRows, lastInsertId uint64, warnings, status uint16, cmd int, d interface{}) *Response {
 	resp := &Response{
 		category:     OkResponse,
 		status:       status,
@@ -121,11 +121,11 @@ func (resp *Response) SetData(data interface{}) {
 	resp.data = data
 }
 
-func (resp *Response) GetStatus() int {
+func (resp *Response) GetStatus() uint16 {
 	return resp.status
 }
 
-func (resp *Response) SetStatus(status int) {
+func (resp *Response) SetStatus(status uint16) {
 	resp.status = status
 }
 
@@ -331,6 +331,16 @@ func (mp *MysqlProtocolImpl) GetRequest(payload []byte) *Request {
 	return req
 }
 
+func (mp *MysqlProtocolImpl) getAbortTransactionErrorInfo() string {
+	ses := mp.GetSession()
+	//update error message in Case1,Case3,Case4.
+	if ses != nil && ses.OptionBitsIsSet(OPTION_ATTACH_ABORT_TRANSACTION_ERROR) {
+		ses.ClearOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
+		return abortTransactionErrorInfo()
+	}
+	return ""
+}
+
 func (mp *MysqlProtocolImpl) SendResponse(resp *Response) error {
 	mp.GetLock().Lock()
 	defer mp.GetLock().Unlock()
@@ -349,6 +359,7 @@ func (mp *MysqlProtocolImpl) SendResponse(resp *Response) error {
 		if err == nil {
 			return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
 		}
+		attachAbort := mp.getAbortTransactionErrorInfo()
 		switch myerr := err.(type) {
 		case *moerr.Error:
 			var code uint16
@@ -357,9 +368,19 @@ func (mp *MysqlProtocolImpl) SendResponse(resp *Response) error {
 			} else {
 				code = myerr.ErrorCode()
 			}
-			return mp.sendErrPacket(code, myerr.SqlState(), myerr.Error())
+			errMsg := myerr.Error()
+			if attachAbort != "" {
+				errMsg = fmt.Sprintf("%s\n%s", myerr.Error(), attachAbort)
+			}
+			return mp.sendErrPacket(code, myerr.SqlState(), errMsg)
 		}
-		return mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, fmt.Sprintf("%v", err))
+		errMsg := ""
+		if attachAbort != "" {
+			errMsg = fmt.Sprintf("%s\n%s", err, attachAbort)
+		} else {
+			errMsg = fmt.Sprintf("%v", err)
+		}
+		return mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, errMsg)
 	case ResultResponse:
 		mer := resp.data.(*MysqlExecutionResult)
 		if mer == nil {

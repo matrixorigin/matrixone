@@ -77,6 +77,8 @@ var (
 	//the root directory of the storage
 	defaultStorePath = "./store"
 
+	defaultServerVersionPrefix = "8.0.30-MatrixOne-v"
+
 	//the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
 	defaultLengthOfQueryPrinted = 200000
 
@@ -128,7 +130,7 @@ var (
 	defaultPathBuilder = "AccountDate"
 
 	// defaultSessionTimeout default: 10 minutes
-	defaultSessionTimeout = 10 * time.Minute
+	defaultSessionTimeout = 24 * time.Hour
 )
 
 // FrontendParameters of the frontend
@@ -186,6 +188,9 @@ type FrontendParameters struct {
 
 	//the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID
 	StorePath string `toml:"storePath"`
+
+	//the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID
+	ServerVersionPrefix string `toml:"serverVersionPrefix"`
 
 	//the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
 	LengthOfQueryPrinted int64 `toml:"lengthOfQueryPrinted"`
@@ -253,6 +258,8 @@ type FrontendParameters struct {
 	//default is 1
 	DNReplicaID uint64 `toml:"dnreplicalid"`
 
+	EnableDoComQueryInProgress bool `toml:"comQueryInProgress"`
+
 	//timeout of the session. the default is 10minutes
 	SessionTimeout toml.Duration `toml:"sessionTimeout"`
 
@@ -319,6 +326,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.StorePath == "" {
 		fp.StorePath = defaultStorePath
+	}
+
+	if fp.ServerVersionPrefix == "" {
+		fp.ServerVersionPrefix = defaultServerVersionPrefix
 	}
 
 	if fp.LengthOfQueryPrinted == 0 {

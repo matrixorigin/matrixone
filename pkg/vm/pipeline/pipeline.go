@@ -122,20 +122,20 @@ func (p *Pipeline) MergeRun(proc *process.Process) (end bool, err error) {
 	}
 
 	if err = vm.Prepare(p.instructions, proc); err != nil {
-		p.cleanup(proc, true)
 		proc.Cancel()
+		p.cleanup(proc, true)
 		return false, err
 	}
 	for {
 		end, err = vm.Run(p.instructions, proc)
 		if err != nil {
-			p.cleanup(proc, true)
 			proc.Cancel()
+			p.cleanup(proc, true)
 			return end, err
 		}
 		if end {
-			p.cleanup(proc, false)
 			proc.Cancel()
+			p.cleanup(proc, false)
 			return end, nil
 		}
 	}

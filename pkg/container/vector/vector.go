@@ -1285,25 +1285,33 @@ func UnionOne(v, w *Vector, sel int64, m *mpool.MPool) (err error) {
 	if v.GetType().IsTuple() {
 		vs := v.Col.([][]interface{})
 		ws := w.Col.([][]interface{})
+		if w.IsScalar() {
+			sel = 0
+		}
 		v.Col = append(vs, ws[sel])
 		return nil
 	}
 
-	if nulls.Contains(w.Nsp, uint64(sel)) {
+	if w.IsScalarNull() || nulls.Contains(w.Nsp, uint64(sel)) {
 		pos := uint64(v.Length() - 1)
 		nulls.Add(v.Nsp, pos)
-	} else if v.GetType().IsVarlen() {
-		bs := w.GetBytes(sel)
-		tgt := MustTCols[types.Varlena](v)
-		nele := len(tgt)
-		tgt[nele-1], v.area, err = types.BuildVarlena(bs, v.area, m)
-		if err != nil {
-			return err
-		}
 	} else {
-		src := w.getRawValueAt(sel)
-		tgt := v.getRawValueAt(-1)
-		copy(tgt, src)
+		if w.IsScalar() {
+			sel = 0
+		}
+		if v.GetType().IsVarlen() {
+			bs := w.GetBytes(sel)
+			tgt := MustTCols[types.Varlena](v)
+			nele := len(tgt)
+			tgt[nele-1], v.area, err = types.BuildVarlena(bs, v.area, m)
+			if err != nil {
+				return err
+			}
+		} else {
+			src := w.getRawValueAt(sel)
+			tgt := v.getRawValueAt(-1)
+			copy(tgt, src)
+		}
 	}
 	return nil
 }
@@ -1419,18 +1427,7 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPo
 		}
 	}
 
-	getUnionCount := func(flags []uint8) int {
-		var numAdd = 0
-		for _, flg := range flags {
-			if flg > 0 {
-				numAdd++
-			}
-		}
-		return numAdd
-	}
-
-	if nulls.Any(w.Nsp) {
-		v.TryExpandNulls(int(oldLen) + getUnionCount(flags))
+	if w.Nsp != nil {
 		for idx, flg := range flags {
 			if flg > 0 {
 				if nulls.Contains(w.Nsp, uint64(offset)+uint64(idx)) {
@@ -1439,10 +1436,6 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPo
 				// Advance oldLen regardless if it is null
 				oldLen += 1
 			}
-		}
-	} else {
-		if nulls.Any(v.Nsp) {
-			nulls.TryExpand(v.Nsp, getUnionCount(flags))
 		}
 	}
 

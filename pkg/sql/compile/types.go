@@ -90,6 +90,9 @@ type Scope struct {
 	// IsEnd means the pipeline is end
 	IsEnd bool
 
+	// IsRemote means the pipeline is remote
+	IsRemote bool
+
 	Plan *plan.Plan
 	// DataSource stores information about data source.
 	DataSource *Source
@@ -142,6 +145,8 @@ type Compile struct {
 	fill func(any, *batch.Batch) error
 	//affectRows stores the number of rows affected while insert / update / delete
 	affectRows uint64
+	// cn address
+	addr string
 	// db current database name.
 	db string
 	// uid the user who initiated the sql.

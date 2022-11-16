@@ -328,20 +328,20 @@ const (
 
 // server status
 const (
-	SERVER_STATUS_IN_TRANS             uint16 = 0x0001
-	SERVER_STATUS_AUTOCOMMIT           uint16 = 0x0002
-	SERVER_MORE_RESULTS_EXISTS         uint16 = 0x0008
+	SERVER_STATUS_IN_TRANS             uint16 = 0x0001 // A transaction is currently active
+	SERVER_STATUS_AUTOCOMMIT           uint16 = 0x0002 // Autocommit mode is set
+	SERVER_MORE_RESULTS_EXISTS         uint16 = 0x0008 // More results exists (more packet follow)
 	SERVER_STATUS_NO_GOOD_INDEX_USED   uint16 = 0x0010
 	SERVER_STATUS_NO_INDEX_USED        uint16 = 0x0020
-	SERVER_STATUS_CURSOR_EXISTS        uint16 = 0x0040
-	SERVER_STATUS_LAST_ROW_SENT        uint16 = 0x0080
-	SERVER_STATUS_DB_DROPPED           uint16 = 0x0100
-	SERVER_STATUS_NO_BACKSLASH_ESCAPES uint16 = 0x0200
-	SERVER_STATUS_METADATA_CHANGED     uint16 = 0x0400
+	SERVER_STATUS_CURSOR_EXISTS        uint16 = 0x0040 // When using COM_STMT_FETCH, indicate that current cursor still has result
+	SERVER_STATUS_LAST_ROW_SENT        uint16 = 0x0080 // When using COM_STMT_FETCH, indicate that current cursor has finished to send results
+	SERVER_STATUS_DB_DROPPED           uint16 = 0x0100 // Database has been dropped
+	SERVER_STATUS_NO_BACKSLASH_ESCAPES uint16 = 0x0200 // Current escape mode is "no backslash escape"
+	SERVER_STATUS_METADATA_CHANGED     uint16 = 0x0400 // A DDL change did have an impact on an existing PREPARE (an automatic reprepare has been executed)
 	SERVER_QUERY_WAS_SLOW              uint16 = 0x0800
-	SERVER_PS_OUT_PARAMS               uint16 = 0x1000
-	SERVER_STATUS_IN_TRANS_READONLY    uint16 = 0x2000
-	SERVER_SESSION_STATE_CHANGED       uint16 = 0x4000
+	SERVER_PS_OUT_PARAMS               uint16 = 0x1000 // This resultset contain stored procedure output parameter
+	SERVER_STATUS_IN_TRANS_READONLY    uint16 = 0x2000 // Current transaction is a read-only transaction
+	SERVER_SESSION_STATE_CHANGED       uint16 = 0x4000 // Session state change. see Session change type for more information
 )
 
 type CommandType uint8
@@ -441,20 +441,21 @@ func (ct CommandType) String() string {
 
 // reference to sql/query_options.h in mysql server 8.0.23
 const (
-	OPTION_AUTOCOMMIT        uint32 = 1 << 8
-	OPTION_BIG_SELECTS       uint32 = 1 << 9
-	OPTION_LOG_OFF           uint32 = 1 << 10
-	OPTION_QUOTE_SHOW_CREATE uint32 = 1 << 11
-	TMP_TABLE_ALL_COLUMNS    uint32 = 1 << 12
-	OPTION_WARNINGS          uint32 = 1 << 13
-	OPTION_AUTO_IS_NULL      uint32 = 1 << 14
-	OPTION_FOUND_COMMENT     uint32 = 1 << 15
-	OPTION_SAFE_UPDATES      uint32 = 1 << 16
-	OPTION_BUFFER_RESULT     uint32 = 1 << 17
-	OPTION_BIN_LOG           uint32 = 1 << 18
-	OPTION_NOT_AUTOCOMMIT    uint32 = 1 << 19
-	OPTION_BEGIN             uint32 = 1 << 20
-	OPTION_TABLE_LOCK        uint32 = 1 << 21
-	OPTION_QUICK             uint32 = 1 << 22
-	OPTION_NO_CONST_TABLES   uint32 = 1 << 23
+	OPTION_AUTOCOMMIT                     uint32 = 1 << 8
+	OPTION_BIG_SELECTS                    uint32 = 1 << 9
+	OPTION_LOG_OFF                        uint32 = 1 << 10
+	OPTION_QUOTE_SHOW_CREATE              uint32 = 1 << 11
+	TMP_TABLE_ALL_COLUMNS                 uint32 = 1 << 12
+	OPTION_WARNINGS                       uint32 = 1 << 13
+	OPTION_AUTO_IS_NULL                   uint32 = 1 << 14
+	OPTION_FOUND_COMMENT                  uint32 = 1 << 15
+	OPTION_SAFE_UPDATES                   uint32 = 1 << 16
+	OPTION_BUFFER_RESULT                  uint32 = 1 << 17
+	OPTION_BIN_LOG                        uint32 = 1 << 18
+	OPTION_NOT_AUTOCOMMIT                 uint32 = 1 << 19
+	OPTION_BEGIN                          uint32 = 1 << 20
+	OPTION_TABLE_LOCK                     uint32 = 1 << 21
+	OPTION_QUICK                          uint32 = 1 << 22
+	OPTION_NO_CONST_TABLES                uint32 = 1 << 23
+	OPTION_ATTACH_ABORT_TRANSACTION_ERROR uint32 = 1 << 24 //defined in mo
 )

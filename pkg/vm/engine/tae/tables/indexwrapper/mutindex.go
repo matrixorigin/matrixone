@@ -45,8 +45,8 @@ func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx,
 		return
 	}
 	// logutil.Infof("Pre: %s", idx.art.String())
-	// logutil.Infof("Post: %s", idx.art.String())
 	err = idx.art.BatchInsert(keysCtx, uint32(offset))
+	// logutil.Infof("Post: %s", idx.art.String())
 	return
 }
 

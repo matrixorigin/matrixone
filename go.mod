@@ -14,7 +14,7 @@ require (
 	github.com/axiomhq/hyperloglog v0.0.0-20220105174342-98591331716a
 	github.com/cespare/xxhash/v2 v2.1.2
 	github.com/docker/go-units v0.4.0
-	github.com/fagongzi/goetty/v2 v2.0.3-0.20221103025002-a4c7a0d38815
+	github.com/fagongzi/goetty/v2 v2.0.3-0.20221112031939-24c732da4b95
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/gogo/protobuf v1.3.2
@@ -33,8 +33,9 @@ require (
 	github.com/plar/go-adaptive-radix-tree v1.0.4
 	github.com/prashantv/gostub v1.1.0
 	github.com/robfig/cron/v3 v3.0.1
+	github.com/samber/lo v1.33.0
 	github.com/smartystreets/goconvey v1.7.2
-	github.com/stretchr/testify v1.7.5
+	github.com/stretchr/testify v1.8.0
 	github.com/tidwall/btree v1.4.3
 	github.com/tidwall/pretty v1.2.1
 	github.com/yireyun/go-queue v0.0.0-20220725040158-a4dd64810e1e
@@ -71,7 +72,6 @@ require (
 	github.com/hashicorp/golang-lru v0.5.4 // indirect
 	github.com/hashicorp/memberlist v0.3.1 // indirect
 	github.com/miekg/dns v1.1.26 // indirect
-	github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e // indirect
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect

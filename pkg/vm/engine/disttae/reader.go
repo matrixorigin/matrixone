@@ -121,11 +121,21 @@ func (r *blockMergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) 
 			r.colTypes = make([]types.Type, len(cols))
 			r.colNulls = make([]bool, len(cols))
 			for i, column := range cols {
-				r.colIdxs[i] = uint16(r.tableDef.Name2ColIndex[column])
-				colDef := r.tableDef.Cols[r.colIdxs[i]]
-				r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
-				if colDef.Default != nil {
-					r.colNulls[i] = colDef.Default.NullAbility
+				// sometimes Name2ColIndex have no row_id， sometimes have one
+				if column == catalog.Row_ID {
+					if colIdx, ok := r.tableDef.Name2ColIndex[column]; ok {
+						r.colIdxs[i] = uint16(colIdx)
+					} else {
+						r.colIdxs[i] = uint16(len(r.tableDef.Name2ColIndex))
+					}
+					r.colTypes[i] = types.T_Rowid.ToType()
+				} else {
+					r.colIdxs[i] = uint16(r.tableDef.Name2ColIndex[column])
+					colDef := r.tableDef.Cols[r.colIdxs[i]]
+					r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
+					if colDef.Default != nil {
+						r.colNulls[i] = colDef.Default.NullAbility
+					}
 				}
 			}
 		} else {
@@ -138,10 +148,12 @@ func (r *blockMergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) 
 		return nil, err
 	}
 	r.sels = r.sels[:0]
-	sort.Ints(r.blks[0].deletes)
+	deletes := make([]int, len(r.blks[0].deletes))
+	copy(deletes, r.blks[0].deletes)
+	sort.Ints(deletes)
 	for i := 0; i < bat.Length(); i++ {
-		if len(r.blks[0].deletes) > 0 && i == r.blks[0].deletes[0] {
-			r.blks[0].deletes = r.blks[0].deletes[1:]
+		if len(deletes) > 0 && i == deletes[0] {
+			deletes = deletes[1:]
 			continue
 		}
 		r.sels = append(r.sels, int64(i))

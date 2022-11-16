@@ -35,6 +35,14 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
+func Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span) {
+	return gTracer.Start(ctx, spanName, opts...)
+}
+
+func Debug(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span) {
+	return gTracer.Debug(ctx, spanName, opts...)
+}
+
 var gTracerProvider atomic.Value
 var gTracer Tracer
 var gTraceContext atomic.Value
@@ -43,7 +51,9 @@ var gSpanContext atomic.Value
 func init() {
 	SetDefaultSpanContext(&SpanContext{})
 	SetDefaultContext(context.Background())
-	SetTracerProvider(newMOTracerProvider(EnableTracer(false)))
+	tp := newMOTracerProvider(EnableTracer(false))
+	gTracer = tp.Tracer("default")
+	SetTracerProvider(tp)
 }
 
 var inited uint32
@@ -149,10 +159,6 @@ func Shutdown(ctx context.Context) error {
 
 	// fixme: need stop timeout
 	return export.GetGlobalBatchProcessor().Stop(true)
-}
-
-func Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span) {
-	return gTracer.Start(ctx, spanName, opts...)
 }
 
 type contextHolder struct {

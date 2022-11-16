@@ -25,6 +25,7 @@ import (
 )
 
 func TestCompactBlockCmd(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	from := &common.ID{TableID: 1, SegmentID: 2, BlockID: 3}
 	to := &common.ID{TableID: 1, SegmentID: 3, BlockID: 1}
@@ -54,6 +55,7 @@ func checkIDIsEqual(t *testing.T, id1, id2 *common.ID) {
 }
 
 func TestMergeBlocksCmd(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	droppedSegs := []*common.ID{{TableID: 1, SegmentID: 2}, {TableID: 1, SegmentID: 2}}
 	createdSegs := []*common.ID{{TableID: 1, SegmentID: 3}}
@@ -62,7 +64,17 @@ func TestMergeBlocksCmd(t *testing.T) {
 	mapping := []uint32{3445, 4253, 425, 45, 123, 34, 42, 42, 2, 5, 0}
 	fromAddr := []uint32{40000, 40000, 40000, 42}
 	toAddr := []uint32{40000, 40000, 242}
-	cmd := newMergeBlocksCmd(0, droppedSegs, createdSegs, droppedBlks, createdBlks, mapping, fromAddr, toAddr, nil, 0)
+	cmd := newMergeBlocksCmd(
+		0,
+		droppedSegs,
+		createdSegs,
+		droppedBlks,
+		createdBlks,
+		mapping,
+		fromAddr,
+		toAddr,
+		nil,
+		0)
 
 	var w bytes.Buffer
 	_, err := cmd.WriteTo(&w)

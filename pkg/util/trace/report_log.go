@@ -38,6 +38,7 @@ type MOZapLog struct {
 	Caller      string `json:"caller"` // like "util/trace/trace.go:666"
 	Message     string `json:"message"`
 	Extra       string `json:"extra"` // like json text
+	Stack       string `json:"stack"`
 }
 
 func newMOZap() *MOZapLog {
@@ -66,8 +67,9 @@ func (m *MOZapLog) GetRow() *export.Row { return logView.OriginTable.GetRow() }
 func (m *MOZapLog) CsvFields(row *export.Row) []string {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, logView.Table)
-	row.SetColumnVal(stmtIDCol, m.SpanContext.TraceID.String())
+	row.SetColumnVal(traceIDCol, m.SpanContext.TraceID.String())
 	row.SetColumnVal(spanIDCol, m.SpanContext.SpanID.String())
+	row.SetColumnVal(spanKindCol, m.SpanContext.Kind.String())
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
 	row.SetColumnVal(timestampCol, time2DatetimeString(m.Timestamp))
@@ -76,6 +78,7 @@ func (m *MOZapLog) CsvFields(row *export.Row) []string {
 	row.SetColumnVal(callerCol, m.Caller)
 	row.SetColumnVal(messageCol, m.Message)
 	row.SetColumnVal(extraCol, m.Extra)
+	row.SetColumnVal(stackCol, m.Stack)
 	return row.ToStrings()
 }
 
@@ -91,9 +94,22 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 	log.Caller = entry.Caller.TrimmedPath()
 	log.Timestamp = entry.Time
 	log.SpanContext = DefaultSpanContext()
-	for _, v := range fields {
+	log.Stack = entry.Stack
+	// find SpanContext
+	endIdx := len(fields) - 1
+	for idx, v := range fields {
 		if IsSpanField(v) {
 			log.SpanContext = v.Interface.(*SpanContext)
+			// find endIdx
+			for ; idx < endIdx && IsSpanField(fields[endIdx]); endIdx-- {
+			}
+			if idx <= endIdx {
+				fields[idx], fields[endIdx] = fields[endIdx], fields[idx]
+				endIdx--
+			}
+			continue
+		}
+		if idx == endIdx {
 			break
 		}
 	}
@@ -101,7 +117,7 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 		log.Free()
 		return jsonEncoder.EncodeEntry(entry, []zap.Field{})
 	}
-	buffer, err := jsonEncoder.EncodeEntry(entry, fields)
+	buffer, err := jsonEncoder.EncodeEntry(entry, fields[:endIdx+1])
 	log.Extra = buffer.String()
 	export.GetGlobalBatchProcessor().Collect(DefaultContext(), log)
 	return buffer, err

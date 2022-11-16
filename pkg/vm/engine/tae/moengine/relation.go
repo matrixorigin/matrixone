@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -89,6 +90,9 @@ func (rel *baseRelation) GetPrimaryKeys(_ context.Context) ([]*engine.Attribute,
 
 func (rel *baseRelation) GetHideKeys(_ context.Context) ([]*engine.Attribute, error) {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	if schema.PhyAddrKey == nil {
+		return nil, moerr.NewNotSupported("system table has no rowid")
+	}
 	key := new(engine.Attribute)
 	key.Name = schema.PhyAddrKey.Name
 	key.Type = schema.PhyAddrKey.Type

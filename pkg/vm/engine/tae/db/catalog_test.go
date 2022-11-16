@@ -31,6 +31,7 @@ import (
 )
 
 func TestCatalog1(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -73,6 +74,7 @@ func TestCatalog1(t *testing.T) {
 }
 
 func TestShowDatabaseNames(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -141,6 +143,7 @@ func TestShowDatabaseNames(t *testing.T) {
 }
 
 func TestCheckpointCatalog2(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -155,6 +158,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 
 	pool, _ := ants.NewPool(20)
+	defer pool.Release()
 	var wg sync.WaitGroup
 	mockRes := func() {
 		defer wg.Done()

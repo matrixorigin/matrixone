@@ -6686,6 +6686,11 @@ literal:
     {
         $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
     }
+|   UNDERSCORE_BINARY STRING
+    {
+        $$ = tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_ScoreBinary)
+    }
+
 
 column_type:
     numeric_type unsigned_opt zero_fill_opt
@@ -7173,7 +7178,7 @@ char_type:
                 Family: tree.BlobFamily,
                 FamilyString: $1,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_TINY_BLOB),
+                Oid:    uint32(defines.MYSQL_TYPE_TEXT),
             },
         }
     }
@@ -7185,7 +7190,7 @@ char_type:
                 Family: tree.BlobFamily,
                 FamilyString: $1,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_MEDIUM_BLOB),
+                Oid:    uint32(defines.MYSQL_TYPE_TEXT),
             },
         }
     }
@@ -7197,7 +7202,7 @@ char_type:
                 Family: tree.BlobFamily,
                 FamilyString: $1,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_LONG_BLOB),
+                Oid:    uint32(defines.MYSQL_TYPE_TEXT),
             },
         }
     }

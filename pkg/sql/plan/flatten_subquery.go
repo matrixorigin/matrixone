@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 var (
@@ -68,6 +69,10 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		return 0, nil, err
 	}
 
+	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
+		return 0, nil, moerr.NewNYI("aggregation with non equal predicate in %s subquery  will be supported in future version", subquery.Typ.String())
+	}
+
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
 
 	if len(filterPreds) > 0 && subquery.Typ >= plan.SubqueryRef_SCALAR {
@@ -76,9 +81,12 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 
 	switch subquery.Typ {
 	case plan.SubqueryRef_SCALAR:
+		var rewrite bool
 		// Uncorrelated subquery
 		if len(joinPreds) == 0 {
 			joinPreds = append(joinPreds, constTrue)
+		} else if builder.findAggrCount(subCtx.aggregates) {
+			rewrite = true
 		}
 
 		joinType := plan.Node_SINGLE
@@ -101,7 +109,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			}, ctx)
 		}
 
-		return nodeID, &plan.Expr{
+		retExpr := &plan.Expr{
 			Typ: subCtx.results[0].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -109,7 +117,37 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 					ColPos: 0,
 				},
 			},
-		}, nil
+		}
+		if rewrite {
+			argsType := make([]types.Type, 1)
+			argsType[0] = makeTypeByPlan2Expr(retExpr)
+			funcID, returnType, _, _ := function.GetFunctionByName("isnull", argsType)
+			isNullExpr := &Expr{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: getFunctionObjRef(funcID, "isnull"),
+						Args: []*Expr{retExpr},
+					},
+				},
+				Typ: makePlan2Type(&returnType),
+			}
+			zeroExpr := makePlan2Int64ConstExprWithType(0)
+			argsType = make([]types.Type, 3)
+			argsType[0] = makeTypeByPlan2Expr(isNullExpr)
+			argsType[1] = makeTypeByPlan2Expr(zeroExpr)
+			argsType[2] = makeTypeByPlan2Expr(retExpr)
+			funcID, returnType, _, _ = function.GetFunctionByName("case", argsType)
+			retExpr = &Expr{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: getFunctionObjRef(funcID, "case"),
+						Args: []*Expr{isNullExpr, zeroExpr, DeepCopyExpr(retExpr)},
+					},
+				},
+				Typ: makePlan2Type(&returnType),
+			}
+		}
+		return nodeID, retExpr, nil
 
 	case plan.SubqueryRef_EXISTS:
 		// Uncorrelated subquery
@@ -343,6 +381,30 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 			},
 		})
 	}
+}
+
+func (builder *QueryBuilder) findAggrCount(aggrs []*plan.Expr) bool {
+	for _, aggr := range aggrs {
+		switch exprImpl := aggr.Expr.(type) {
+		case *plan.Expr_F:
+			if exprImpl.F.Func.ObjName == "count" || exprImpl.F.Func.ObjName == "starcount" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (builder *QueryBuilder) findNonEqPred(preds []*plan.Expr) bool {
+	for _, pred := range preds {
+		switch exprImpl := pred.Expr.(type) {
+		case *plan.Expr_F:
+			if exprImpl.F.Func.ObjName != "=" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeID int32, ctx *BindContext) (int32, []*plan.Expr, error) {
