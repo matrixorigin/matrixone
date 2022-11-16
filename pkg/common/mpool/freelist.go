@@ -55,7 +55,7 @@ func (fl *freelist) put(ptr unsafe.Pointer) {
 		}
 		next := fl.next(curr)
 		ptr := fl.ptrs[curr]
-		if ptr != nil {
+		if ptr != nil { // ensure that get don't have any possibility read garbage values
 			continue
 		}
 		ok := fl.tail.CompareAndSwap(curr, next)
@@ -76,7 +76,7 @@ func (fl *freelist) get() unsafe.Pointer {
 		next := fl.next(pos)
 		ptr := fl.ptrs[pos]
 		if ptr == nil {
-			continue
+			return nil
 		}
 		ok := fl.head.CompareAndSwap(pos, next)
 		if ok {
