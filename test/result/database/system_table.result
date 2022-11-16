@@ -179,7 +179,7 @@ db    VARCHAR    YES        null
 command    VARCHAR    NO        ''        
 time    INT    NO        '0'        
 state    VARCHAR    YES        null        
-info    BLOB    YES        NULL        
+info    TEXT    YES        NULL        
 show columns from `USER_PRIVILEGES`;
 no such table information_schema.USER_PRIVILEGES
 show columns from `SCHEMATA`;
