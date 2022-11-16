@@ -50,10 +50,17 @@ func (fl *freelist) next(i int32) int32 {
 func (fl *freelist) put(ptr unsafe.Pointer) {
 	for {
 		curr := fl.tail.Load()
+		if head := fl.head.Load(); curr-head >= fl.cap { // is full
+			return
+		}
 		next := fl.next(curr)
+		ptr := fl.ptrs[curr]
+		if ptr != nil {
+			continue
+		}
 		ok := fl.tail.CompareAndSwap(curr, next)
 		if ok {
-			atomic.StorePointer(&fl.ptrs[curr], ptr)
+			fl.ptrs[curr] = ptr
 			return
 		}
 	}
@@ -63,14 +70,17 @@ func (fl *freelist) put(ptr unsafe.Pointer) {
 func (fl *freelist) get() unsafe.Pointer {
 	for {
 		pos := fl.head.Load()
-		if pos == fl.tail.Load() {
-			// empty
+		if tail := fl.tail.Load(); pos == tail || tail < pos { // is empty
 			return nil
 		}
 		next := fl.next(pos)
-		ptr := atomic.LoadPointer(&fl.ptrs[pos])
+		ptr := fl.ptrs[pos]
+		if ptr == nil {
+			continue
+		}
 		ok := fl.head.CompareAndSwap(pos, next)
 		if ok {
+			fl.ptrs[pos] = nil
 			return ptr
 		}
 	}
