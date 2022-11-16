@@ -139,8 +139,8 @@ type Function struct {
 	layout FuncExplainLayout
 }
 
-func (f *Function) GetFlag() plan.Function_FuncFlag {
-	return f.flag
+func (f *Function) TestFlag(funcFlag plan.Function_FuncFlag) bool {
+	return f.flag&funcFlag != 0
 }
 
 func (f *Function) GetLayout() FuncExplainLayout {
@@ -161,7 +161,7 @@ func (f Function) VecFn(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 }
 
 func (f Function) IsAggregate() bool {
-	return f.GetFlag() == plan.Function_AGG
+	return f.TestFlag(plan.Function_AGG)
 }
 
 func (f Function) isFunction() bool {
@@ -233,7 +233,7 @@ func GetFunctionIsMonotonicById(overloadID int64) (bool, error) {
 	if function.Volatile {
 		return false, nil
 	}
-	isMonotonic := (function.GetFlag() & plan.Function_MONOTONIC) != 0
+	isMonotonic := function.TestFlag(plan.Function_MONOTONIC)
 	return isMonotonic, nil
 }
 
