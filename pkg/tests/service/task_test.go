@@ -179,7 +179,6 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 		t.Logf("task %d is running", task.ID)
 		select {
 		case <-ctx.Done():
-			close(halt)
 		case <-halt:
 		}
 		return nil
@@ -190,6 +189,7 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	defer func(c Cluster, halt chan bool) {
 		halt <- true
 		require.NoError(t, c.Close())
+		close(halt)
 	}(c, halt)
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
@@ -306,10 +306,9 @@ func TestCronTask(t *testing.T) {
 
 	// start the cluster
 	require.NoError(t, c.Start())
-	defer func(c Cluster, ch chan int) {
-		//close(ch)
+	defer func(c Cluster) {
 		require.NoError(t, c.Close())
-	}(c, ch)
+	}(c)
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
@@ -323,14 +322,13 @@ func TestCronTask(t *testing.T) {
 	taskService, ok := indexed.GetTaskService()
 	require.True(t, ok)
 
-	err = taskService.CreateCronTask(context.TODO(),
+	require.NoError(t, taskService.CreateCronTask(context.TODO(),
 		task.TaskMetadata{
 			ID:       "a",
 			Executor: uint32(task.TaskCode_TestOnly),
 		},
 		"*/1 * * * * *", // every 1 second
-	)
-	require.NoError(t, err)
+	))
 
 	waitChannelFull(t, ctx, ch, 3)
 }
