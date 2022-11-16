@@ -779,7 +779,7 @@ func (tbl *txnTable) Dedup(keys containers.Vector) (err error) {
 				rowmask = deleteNode.GetRowMaskRefLocked()
 			}
 		}
-		if err = blkData.BatchDedup(tbl.store.txn, keys, rowmask); err != nil {
+		if err = blkData.BatchDedup(tbl.store.txn, keys, rowmask, false); err != nil {
 			// logutil.Infof("%s, %s, %v", blk.String(), rowmask, err)
 			return
 		}
@@ -852,7 +852,7 @@ func (tbl *txnTable) PreCommitDedup(pks containers.Vector, preCommit bool) (err 
 					rowmask = deleteNode.GetRowMaskRefLocked()
 				}
 			}
-			if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask); err != nil {
+			if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask, true); err != nil {
 				return
 			}
 			blkIt.Next()

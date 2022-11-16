@@ -164,6 +164,15 @@ func newS3FS(
 	configOptions = append(configOptions,
 		config.WithSharedConfigProfile(sharedConfigProfile),
 		config.WithLogger(logutil.GetS3Logger()),
+		config.WithClientLogMode(
+			aws.LogSigning|
+				aws.LogRetries|
+				aws.LogRequest|
+				aws.LogResponse|
+				aws.LogDeprecatedUsage|
+				aws.LogRequestEventMessage|
+				aws.LogResponseEventMessage,
+		),
 	)
 	cfg, err := config.LoadDefaultConfig(ctx,
 		configOptions...,
