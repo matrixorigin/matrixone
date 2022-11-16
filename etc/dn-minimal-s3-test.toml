@@ -30,9 +30,6 @@ backend = "S3"
 endpoint = "s3 endpoint"
 bucket = "s3 bucket"
 key-prefix = "s3 key preifx"
-[fileservice.cache]
-memory-capacity = "128MB"
-disk-capacity = "1GB"
 
 [[fileservice]]
 name = "ETL"
