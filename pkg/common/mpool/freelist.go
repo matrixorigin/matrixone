@@ -71,7 +71,6 @@ func (fl *freelist) get() unsafe.Pointer {
 		ptr := atomic.LoadPointer(&fl.ptrs[pos])
 		ok := fl.head.CompareAndSwap(pos, next)
 		if ok {
-			atomic.StorePointer(&fl.ptrs[pos], nil)
 			return ptr
 		}
 	}
