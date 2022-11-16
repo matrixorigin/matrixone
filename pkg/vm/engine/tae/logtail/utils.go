@@ -444,6 +444,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.metaBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, MetaSchema.Types()...),
 			append(BaseAttr, MetaSchema.AllNames()...),
@@ -455,6 +456,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.dbInsBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, catalog.SystemDBSchema.Types()...),
 			append(BaseAttr, catalog.SystemDBSchema.AllNames()...),
@@ -466,6 +468,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.dbInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, TxnNodeSchema.Types()...),
 			append(BaseAttr, TxnNodeSchema.AllNames()...),
@@ -477,6 +480,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.dbDelBatch, err = reader.LoadBlkColumnsByMeta(
 			BaseTypes,
 			BaseAttr,
@@ -488,6 +492,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.dbDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, DBDNSchema.Types()...),
 			append(BaseAttr, DBDNSchema.AllNames()...),
@@ -499,6 +504,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.tblInsBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, catalog.SystemTableSchema.Types()...),
 			append(BaseAttr, catalog.SystemTableSchema.AllNames()...),
@@ -510,6 +516,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.tblInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, TblDNSchema.Types()...),
 			append(BaseAttr, TblDNSchema.AllNames()...),
@@ -521,6 +528,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.tblDelBatch, err = reader.LoadBlkColumnsByMeta(
 			BaseTypes,
 			BaseAttr,
@@ -532,6 +540,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.tblDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, TblDNSchema.Types()...),
 			append(BaseAttr, TblDNSchema.AllNames()...),
@@ -543,6 +552,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.tblColInsBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, catalog.SystemColumnSchema.Types()...),
 			append(BaseAttr, catalog.SystemColumnSchema.AllNames()...),
@@ -554,6 +564,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.tblColDelBatch, err = reader.LoadBlkColumnsByMeta(
 			BaseTypes,
 			BaseAttr,
@@ -565,6 +576,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.segInsBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, SegSchema.Types()...),
 			append(BaseAttr, SegSchema.AllNames()...),
@@ -576,6 +588,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.segInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, SegDNSchema.Types()...),
 			append(BaseAttr, SegDNSchema.AllNames()...),
@@ -587,6 +600,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.segDelBatch, err = reader.LoadBlkColumnsByMeta(
 			BaseTypes,
 			BaseAttr,
@@ -598,6 +612,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.segDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, SegDNSchema.Types()...),
 			append(BaseAttr, SegDNSchema.AllNames()...),
@@ -609,6 +624,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.blkMetaInsBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, BlkMetaSchema.Types()...),
 			append(BaseAttr, BlkMetaSchema.AllNames()...),
@@ -620,6 +636,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.blkMetaInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, BlkDNSchema.Types()...),
 			append(BaseAttr, BlkDNSchema.AllNames()...),
@@ -631,6 +648,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.blkMetaDelBatch, err = reader.LoadBlkColumnsByMeta(
 			BaseTypes,
 			BaseAttr,
@@ -642,6 +660,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.blkMetaDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, BlkDNSchema.Types()...),
 			append(BaseAttr, BlkDNSchema.AllNames()...),
@@ -653,6 +672,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.blkDNMetaInsBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, BlkMetaSchema.Types()...),
 			append(BaseAttr, BlkMetaSchema.AllNames()...),
@@ -664,6 +684,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.blkDNMetaInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, BlkDNSchema.Types()...),
 			append(BaseAttr, BlkDNSchema.AllNames()...),
@@ -675,6 +696,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.blkDNMetaDelBatch, err = reader.LoadBlkColumnsByMeta(
 			BaseTypes,
 			BaseAttr,
@@ -686,6 +708,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.blkDNMetaDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, BlkDNSchema.Types()...),
 			append(BaseAttr, BlkDNSchema.AllNames()...),
@@ -697,6 +720,7 @@ func (data *CheckpointData) ReadFrom(
 	wg.Add(1)
 	pool.Submit(func() {
 		defer wg.Done()
+		var err error
 		if data.blkCNMetaInsBatch, err = reader.LoadBlkColumnsByMeta(
 			append(BaseTypes, BlkMetaSchema.Types()...),
 			append(BaseAttr, BlkMetaSchema.AllNames()...),
