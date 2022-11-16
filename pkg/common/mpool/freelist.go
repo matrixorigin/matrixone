@@ -22,44 +22,37 @@ import (
 // Poor man's sync.Pool.  golang's sync.Pool is not good for our usage
 // because it has no guanrantees, it may silently drop entries.
 //
-// The freelist is implemented as a ring buffer.  Both put and get spin.
+// The freelist is implemented as a stack.  Both put and get spin.
+// i replaced the original ring with the simplest non-locking stack
 type freelist struct {
-	cap        int32
-	head, tail atomic.Int32
-	ptrs       []unsafe.Pointer
+	cap int32
+	len atomic.Int32
+	top atomic.Pointer[node]
+}
+
+type node struct {
+	next *node
+	val  unsafe.Pointer
 }
 
 func make_freelist(cap int32) *freelist {
 	var fl freelist
 	fl.cap = cap
-	// +1 so that we can tell empty from full.
-	fl.ptrs = make([]unsafe.Pointer, cap+1)
 	return &fl
-}
-
-/*
-func (fl *freelist) destroy() {
-	fl.ptrs = nil
-}
-*/
-
-// ring buffer next
-func (fl *freelist) next(i int32) int32 {
-	if i == fl.cap {
-		return 0
-	}
-	return i + 1
 }
 
 // put always succeeds.  It is caller's job to make sure
 // we never overflow the freelist
 func (fl *freelist) put(ptr unsafe.Pointer) {
+	n := node{val: ptr}
+	if fl.len.Load() == fl.cap {
+		return
+	}
 	for {
-		curr := fl.tail.Load()
-		next := fl.next(curr)
-		ok := fl.tail.CompareAndSwap(curr, next)
-		if ok {
-			atomic.StorePointer(&fl.ptrs[curr], ptr)
+		top := fl.top.Load()
+		n.next = top
+		if fl.top.CompareAndSwap(top, &n) {
+			fl.len.Add(1)
 			return
 		}
 	}
@@ -68,15 +61,14 @@ func (fl *freelist) put(ptr unsafe.Pointer) {
 // get may return nil if there is no free item
 func (fl *freelist) get() unsafe.Pointer {
 	for {
-		pos := fl.head.Load()
-		if pos == fl.tail.Load() {
-			// empty
+		top := fl.top.Load()
+		if top == nil {
 			return nil
 		}
-		next := fl.next(pos)
-		ok := fl.head.CompareAndSwap(pos, next)
-		if ok {
-			return atomic.LoadPointer(&fl.ptrs[pos])
+		next := top.next
+		if fl.top.CompareAndSwap(top, next) {
+			fl.len.Add(-1)
+			return top.val
 		}
 	}
 }
