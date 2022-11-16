@@ -390,11 +390,17 @@ func computeRangeByNonIntPk(expr *plan.Expr, pkIdx int32) (bool, uint64) {
 	return true, pkHashValue
 }
 
+type pkRange struct {
+	isRange bool
+	items   []int64
+	ranges  [2]int64
+}
+
 // computeRangeByIntPk compute primaryKey range by Expr
 // only under the following conditions：
 // 1、function named ["and", "or", ">", "<", ">=", "<=", "="]
 // 2、if function name is not "and", "or".  then one arg is column, the other is constant
-func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, [][2]int64) {
+func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, *pkRange) {
 	type argType int
 	var typeConstant argType = 0
 	var typeColumn argType = 1
@@ -443,9 +449,9 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 			}
 
 			if funName == "and" {
-				return true, _computeAnd(leftRange, rightRange)
+				return _computeAnd(leftRange, rightRange)
 			} else {
-				return true, _computeOr(leftRange, rightRange)
+				return _computeOr(leftRange, rightRange)
 			}
 
 		case ">", "<", ">=", "<=", "=":
@@ -461,7 +467,10 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 				if subExpr.Col.ColPos != pkIdx {
 					// if  pk > 10 and noPk < 10.  we just use pk > 10
 					if parentFun == "and" {
-						return true, [][2]int64{}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  [2]int64{},
+						}
 					}
 					// if pk > 10 or noPk < 10,   we use all list
 					return false, nil
@@ -481,15 +490,30 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 					}
 					switch funName {
 					case ">":
-						return true, [][2]int64{{rightConstat + 1, math.MaxInt64}}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  [2]int64{rightConstat + 1, math.MaxInt64},
+						}
 					case ">=":
-						return true, [][2]int64{{rightConstat, math.MaxInt64}}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  [2]int64{rightConstat, math.MaxInt64},
+						}
 					case "<":
-						return true, [][2]int64{{math.MinInt64, rightConstat - 1}}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  [2]int64{math.MinInt64, rightConstat - 1},
+						}
 					case "<=":
-						return true, [][2]int64{{math.MinInt64, rightConstat}}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  [2]int64{math.MinInt64, rightConstat},
+						}
 					case "=":
-						return true, [][2]int64{{rightConstat, rightConstat}}
+						return true, &pkRange{
+							isRange: false,
+							items:   []int64{rightConstat},
+						}
 					}
 					return false, nil
 				}
@@ -497,7 +521,10 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 				if subExpr.Col.ColPos != pkIdx {
 					// if  pk > 10 and noPk < 10.  we just use pk > 10
 					if parentFun == "and" {
-						return true, [][2]int64{}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  [2]int64{},
+						}
 					}
 					// if pk > 10 or noPk < 10,   we use all list
 					return false, nil
@@ -506,15 +533,30 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 				if leftArg == typeConstant {
 					switch funName {
 					case ">":
-						return true, [][2]int64{{math.MinInt64, leftConstant - 1}}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  [2]int64{math.MinInt64, leftConstant - 1},
+						}
 					case ">=":
-						return true, [][2]int64{{math.MinInt64, leftConstant}}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  [2]int64{math.MinInt64, leftConstant},
+						}
 					case "<":
-						return true, [][2]int64{{leftConstant + 1, math.MaxInt64}}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  [2]int64{leftConstant + 1, math.MaxInt64},
+						}
 					case "<=":
-						return true, [][2]int64{{leftConstant, math.MaxInt64}}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  [2]int64{leftConstant, math.MaxInt64},
+						}
 					case "=":
-						return true, [][2]int64{{leftConstant, leftConstant}}
+						return true, &pkRange{
+							isRange: false,
+							items:   []int64{leftConstant},
+						}
 					}
 					return false, nil
 				}
@@ -525,57 +567,10 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 	return false, nil
 }
 
-func _computeAnd(leftRange [][2]int64, rightRange [][2]int64) [][2]int64 {
-	if len(leftRange) == 0 {
-		return rightRange
-	} else if len(rightRange) == 0 {
-		return leftRange
-	}
-
-	compute := func(left [2]int64, right [2]int64) (bool, [2]int64) {
-		min := left[0]
-		max := left[1]
-
-		if min > right[1] {
-			// eg: a > 10 and a < 2
-			return false, left
-		} else if max < right[0] {
-			// eg: a < 2 and a > 10
-			return false, left
-		} else {
-			// eg: a > 2 and a < 10
-			// a > 2 and a > 10
-			// a > 2 and a = -2
-			if right[0] > min {
-				min = right[0]
-			}
-			if right[1] < max {
-				max = right[1]
-			}
-			return true, [2]int64{min, max}
-		}
-
-	}
-
-	// eg: (a >3 or a=1) and (a < 10 or a =11)
-	var newRange [][2]int64
-	for _, left := range leftRange {
-		for _, right := range rightRange {
-			ok, tmp := compute(left, right)
-			if ok {
-				newRange = append(newRange, tmp)
-			}
-		}
-	}
-
-	return newRange
-}
-
-func _computeOr(leftRange [][2]int64, rightRange [][2]int64) [][2]int64 {
-	if len(leftRange) == 0 {
-		return rightRange
-	} else if len(rightRange) == 0 {
-		return leftRange
+func _computeOr(left *pkRange, right *pkRange) (bool, *pkRange) {
+	result := &pkRange{
+		isRange: false,
+		items:   []int64{},
 	}
 
 	compute := func(left [2]int64, right [2]int64) [][2]int64 {
@@ -601,17 +596,201 @@ func _computeOr(leftRange [][2]int64, rightRange [][2]int64) [][2]int64 {
 		}
 	}
 
-	// eg: (a>10 or a=1) or (a<5 or a=6)
-	var newRange [][2]int64
-	for _, left := range leftRange {
-		for _, right := range rightRange {
-			tmp := compute(left, right)
-			newRange = append(newRange, tmp...)
+	if !left.isRange {
+		if !right.isRange {
+			result.items = append(left.items, right.items...)
+			return len(result.items) < int(MAX_RANGE_SIZE), result
+		} else {
+			if right.ranges[1]-right.ranges[0] > MAX_RANGE_SIZE {
+				return false, nil
+			}
+			for i := right.ranges[0]; i <= right.ranges[1]; i++ {
+				result.items = append(result.items, i)
+			}
+			return len(result.items) < int(MAX_RANGE_SIZE), result
+		}
+	} else {
+		if !right.isRange {
+			if left.ranges[1]-left.ranges[0] > MAX_RANGE_SIZE {
+				return false, nil
+			}
+			for i := left.ranges[0]; i <= left.ranges[1]; i++ {
+				result.items = append(result.items, i)
+			}
+			return len(result.items) < int(MAX_RANGE_SIZE), result
+		} else {
+			newRange := compute(left.ranges, right.ranges)
+			for _, r := range newRange {
+				if r[0] == math.MinInt64 || r[0] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
+					return false, nil
+				}
+				for i := r[0]; i <= r[1]; i++ {
+					result.items = append(result.items, i)
+				}
+			}
+			return len(result.items) < int(MAX_RANGE_SIZE), result
+		}
+	}
+}
+
+func _computeAnd(left *pkRange, right *pkRange) (bool, *pkRange) {
+	result := &pkRange{
+		isRange: false,
+		items:   []int64{},
+	}
+
+	compute := func(left [2]int64, right [2]int64) (bool, [2]int64) {
+		min := left[0]
+		max := left[1]
+
+		if min > right[1] {
+			// eg: a > 10 and a < 2
+			return false, left
+		} else if max < right[0] {
+			// eg: a < 2 and a > 10
+			return false, left
+		} else {
+			// eg: a > 2 and a < 10
+			// a > 2 and a > 10
+			// a > 2 and a = -2
+			if right[0] > min {
+				min = right[0]
+			}
+			if right[1] < max {
+				max = right[1]
+			}
+			return true, [2]int64{min, max}
 		}
 	}
 
-	return newRange
+	if !left.isRange {
+		if !right.isRange {
+			result.items = append(left.items, right.items...)
+			return len(result.items) < int(MAX_RANGE_SIZE), result
+		} else {
+			if right.ranges[1]-right.ranges[0] > MAX_RANGE_SIZE {
+				return false, nil
+			}
+			for i := right.ranges[0]; i <= right.ranges[1]; i++ {
+				result.items = append(result.items, i)
+			}
+			return len(result.items) < int(MAX_RANGE_SIZE), result
+		}
+	} else {
+		if !right.isRange {
+			if left.ranges[1]-left.ranges[0] > MAX_RANGE_SIZE {
+				return false, nil
+			}
+			for i := left.ranges[0]; i <= left.ranges[1]; i++ {
+				result.items = append(result.items, i)
+			}
+			return len(result.items) < int(MAX_RANGE_SIZE), result
+		} else {
+			ok, r := compute(left.ranges, right.ranges)
+			if !ok {
+				return false, nil
+			}
+			if r[0] == math.MinInt64 || r[0] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
+				return false, nil
+			}
+			for i := r[0]; i <= r[1]; i++ {
+				result.items = append(result.items, i)
+			}
+			return len(result.items) < int(MAX_RANGE_SIZE), result
+		}
+	}
 }
+
+// func _computeAnd(leftRange [][2]int64, rightRange [][2]int64) [][2]int64 {
+// 	if len(leftRange) == 0 {
+// 		return rightRange
+// 	} else if len(rightRange) == 0 {
+// 		return leftRange
+// 	}
+
+// 	compute := func(left [2]int64, right [2]int64) (bool, [2]int64) {
+// 		min := left[0]
+// 		max := left[1]
+
+// 		if min > right[1] {
+// 			// eg: a > 10 and a < 2
+// 			return false, left
+// 		} else if max < right[0] {
+// 			// eg: a < 2 and a > 10
+// 			return false, left
+// 		} else {
+// 			// eg: a > 2 and a < 10
+// 			// a > 2 and a > 10
+// 			// a > 2 and a = -2
+// 			if right[0] > min {
+// 				min = right[0]
+// 			}
+// 			if right[1] < max {
+// 				max = right[1]
+// 			}
+// 			return true, [2]int64{min, max}
+// 		}
+
+// 	}
+
+// 	// eg: (a >3 or a=1) and (a < 10 or a =11)
+// 	var newRange [][2]int64
+// 	for _, left := range leftRange {
+// 		for _, right := range rightRange {
+// 			ok, tmp := compute(left, right)
+// 			if ok {
+// 				newRange = append(newRange, tmp)
+// 			}
+// 		}
+// 	}
+
+// 	return newRange
+// }
+
+// func _computeOr(leftRange [][2]int64, rightRange [][2]int64) [][2]int64 {
+// 	if len(leftRange) == 0 {
+// 		return rightRange
+// 	} else if len(rightRange) == 0 {
+// 		return leftRange
+// 	}
+
+// 	compute := func(left [2]int64, right [2]int64) [][2]int64 {
+// 		min := left[0]
+// 		max := left[1]
+// 		if min > right[1] {
+// 			// eg: a > 10 or a < 2
+// 			return [][2]int64{left, right}
+// 		} else if max < right[0] {
+// 			// eg: a < 2 or a > 10
+// 			return [][2]int64{left, right}
+// 		} else {
+// 			// eg: a > 2 or a < 10
+// 			// a > 2 or a > 10
+// 			// a > 2 or a = -2
+// 			if right[0] < min {
+// 				min = right[0]
+// 			}
+// 			if right[1] > max {
+// 				max = right[1]
+// 			}
+// 			return [][2]int64{{min, max}}
+// 		}
+// 	}
+
+// 	// eg: (a>10 or a=1) or (a<5 or a=6)
+// 	var newRange [][2]int64
+// 	for _, left := range leftRange {
+// 		for _, right := range rightRange {
+// 			tmp := compute(left, right)
+// 			newRange = append(newRange, tmp...)
+// 			if len(tmp) > 1 {
+// 				break
+// 			}
+// 		}
+// 	}
+
+// 	return leftRange
+// }
 
 func getHashValue(buf []byte) uint64 {
 	buf = append([]byte{0}, buf...)
@@ -623,7 +802,7 @@ func getHashValue(buf []byte) uint64 {
 	return states[0]
 }
 
-func getListByRange[T DNStore](list []T, pkRange [][2]int64) []int {
+func getListByItems[T DNStore](list []T, items []int64) []int {
 	fullList := func() []int {
 		dnList := make([]int, len(list))
 		for i := range list {
@@ -631,25 +810,25 @@ func getListByRange[T DNStore](list []T, pkRange [][2]int64) []int {
 		}
 		return dnList
 	}
+
 	listLen := uint64(len(list))
-	if listLen == 1 || len(pkRange) == 0 {
+	if listLen == 1 {
 		return []int{0}
 	}
 
+	if len(items) == 0 || int64(len(items)) > MAX_RANGE_SIZE {
+		return fullList()
+	}
+
 	listMap := make(map[uint64]struct{})
-	for _, r := range pkRange {
-		if r[1]-r[0] > MAX_RANGE_SIZE {
+	for _, item := range items {
+		keys := make([]byte, 8)
+		binary.LittleEndian.PutUint64(keys, uint64(item))
+		val := getHashValue(keys)
+		modVal := val % listLen
+		listMap[modVal] = struct{}{}
+		if len(listMap) == int(listLen) {
 			return fullList()
-		}
-		for i := r[0]; i <= r[1]; i++ {
-			keys := make([]byte, 8)
-			binary.LittleEndian.PutUint64(keys, uint64(i))
-			val := getHashValue(keys)
-			modVal := val % listLen
-			listMap[modVal] = struct{}{}
-			if len(listMap) == int(listLen) {
-				return fullList()
-			}
 		}
 	}
 	dnList := make([]int, len(listMap))
@@ -660,6 +839,44 @@ func getListByRange[T DNStore](list []T, pkRange [][2]int64) []int {
 	}
 	return dnList
 }
+
+// func getListByRange[T DNStore](list []T, pkRange [][2]int64) []int {
+// 	fullList := func() []int {
+// 		dnList := make([]int, len(list))
+// 		for i := range list {
+// 			dnList[i] = i
+// 		}
+// 		return dnList
+// 	}
+// 	listLen := uint64(len(list))
+// 	if listLen == 1 || len(pkRange) == 0 {
+// 		return []int{0}
+// 	}
+
+// 	listMap := make(map[uint64]struct{})
+// 	for _, r := range pkRange {
+// 		if r[1]-r[0] > MAX_RANGE_SIZE {
+// 			return fullList()
+// 		}
+// 		for i := r[0]; i <= r[1]; i++ {
+// 			keys := make([]byte, 8)
+// 			binary.LittleEndian.PutUint64(keys, uint64(i))
+// 			val := getHashValue(keys)
+// 			modVal := val % listLen
+// 			listMap[modVal] = struct{}{}
+// 			if len(listMap) == int(listLen) {
+// 				return fullList()
+// 			}
+// 		}
+// 	}
+// 	dnList := make([]int, len(listMap))
+// 	i := 0
+// 	for idx := range listMap {
+// 		dnList[i] = int(idx)
+// 		i++
+// 	}
+// 	return dnList
+// }
 
 func checkIfDataInBlock(data any, meta BlockMeta, colIdx int, typ types.Type) (bool, error) {
 	zm := index.NewZoneMap(typ)
