@@ -306,8 +306,8 @@ github.com/labstack/gommon v0.3.0/go.mod h1:MULnywXg0yavhxWKc+lOruYdAhDwPK9wf0OL
 github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 h1:6E+4a0GO5zZEnZ81pIr0yLvtUWk2if982qA3F3QD6H4=
 github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0/go.mod h1:zJYVVT2jmtg6P3p1VtQj7WsuWi/y4VnjVBn7F8KPB3I=
 github.com/magiconair/properties v1.8.0/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czPbwD3XqdrwzmxQ=
-github.com/matrixorigin/dragonboat/v4 v4.0.0-20221031100441-62f1755ca7ab h1:UK0Awi/SCT8OjSlVk34Dc4nVI2jUU8Ty+BWCcX3rB+0=
-github.com/matrixorigin/dragonboat/v4 v4.0.0-20221031100441-62f1755ca7ab/go.mod h1:bR6ZGoUwApH4/P4+AezNGT0xehljg+j+Z/Q2Fz+Y4a0=
+github.com/matrixorigin/dragonboat/v4 v4.0.0-20221116064434-34611fc96385 h1:x4k92fYYDFXqkYI5AL+A8ykry7Gq0R9EQPa+06si2uk=
+github.com/matrixorigin/dragonboat/v4 v4.0.0-20221116064434-34611fc96385/go.mod h1:bR6ZGoUwApH4/P4+AezNGT0xehljg+j+Z/Q2Fz+Y4a0=
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4 h1:+SmZP2bG+YcO/ntzjCleCu6hFTJiue7Oj2tftpJKTlU=
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4/go.mod h1:LIHvF0fflR+zyXUQFQOiHPpKANf3UIr7DFIv5CBPOoU=
 github.com/matrixorigin/memberlist v0.4.1-0.20221101065119-bb7bce164406 h1:/OUpnb/8qjNhxQeSJuYuFzzNQMaYrWbC5vVp2iiJqEI=
