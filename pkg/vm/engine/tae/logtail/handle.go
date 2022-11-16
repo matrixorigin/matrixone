@@ -474,7 +474,13 @@ func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error
 	block := e.GetBlockData()
 	insBatch, err := block.CollectAppendInRange(b.start, b.end, false)
 	if err != nil {
-		return
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			logutil.Infof("[logtail] found race and collect meta again")
+			// do it again,  it is ok to insert duplicate entries
+			b.visitBlkMeta(e)
+		} else {
+			return
+		}
 	}
 	if insBatch != nil && insBatch.Length() > 0 {
 		b.dataInsBatch.Extend(insBatch)

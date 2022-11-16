@@ -128,8 +128,7 @@ func (node *appendableNode) GetData(minRow, maxRow uint32) (bat *containers.Batc
 		return
 	}
 	node.block.RUnlock()
-	bat, err = node.getPersistedData(minRow, maxRow)
-	return
+	return nil, moerr.GetOkExpectedEOB()
 }
 
 func (node *appendableNode) GetColumnData(
