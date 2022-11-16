@@ -21,14 +21,17 @@ docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi
 ## Check log
 
 ```shell
-# cn
-docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn
+# cn-0
+docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0
+
+# cn-1 
+docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-1
 
 # dn
 docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn
 
 # logService
-docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logService
+docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logservice
 ```
 
 ## minio as s3 service
