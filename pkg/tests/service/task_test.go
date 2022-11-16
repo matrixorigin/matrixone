@@ -92,11 +92,12 @@ func TestTaskServiceCanCreate(t *testing.T) {
 		WithLogShardNum(1))
 	require.NoError(t, err)
 
-	// start the cluster
-	require.NoError(t, c.Start())
+	// close the cluster
 	defer func(c Cluster) {
 		require.NoError(t, c.Close())
 	}(c)
+	// start the cluster
+	require.NoError(t, c.Start())
 
 	t.Log("cluster log svcs length:", len(c.(*testCluster).log.svcs))
 
@@ -121,11 +122,12 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
-	// start the cluster
-	require.NoError(t, c.Start())
+	// close the cluster
 	defer func(c Cluster) {
 		require.NoError(t, c.Close())
 	}(c)
+	// start the cluster
+	require.NoError(t, c.Start())
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
@@ -184,13 +186,13 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 		return nil
 	}
 
-	// start the cluster
-	require.NoError(t, c.Start())
 	defer func(c Cluster, halt chan bool) {
 		halt <- true
 		require.NoError(t, c.Close())
 		close(halt)
 	}(c, halt)
+	// start the cluster
+	require.NoError(t, c.Start())
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
@@ -249,12 +251,12 @@ func TestTaskRunner(t *testing.T) {
 	c, err := NewCluster(t, opt.WithLogLevel(zap.DebugLevel))
 	require.NoError(t, err)
 
-	// start the cluster
-	require.NoError(t, c.Start())
 	// close the cluster
 	defer func(c Cluster) {
 		require.NoError(t, c.Close())
 	}(c)
+	// start the cluster
+	require.NoError(t, c.Start())
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
@@ -304,11 +306,12 @@ func TestCronTask(t *testing.T) {
 		return nil
 	}
 
-	// start the cluster
-	require.NoError(t, c.Start())
+	// close the cluster
 	defer func(c Cluster) {
 		require.NoError(t, c.Close())
 	}(c)
+	// start the cluster
+	require.NoError(t, c.Start())
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
