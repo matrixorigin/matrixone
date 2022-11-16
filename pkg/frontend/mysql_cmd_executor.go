@@ -238,7 +238,10 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
 	}
-	sc := trace.SpanContextWithID(trace.TraceID(stmID), trace.SpanKindStatement)
+	var sc trace.SpanContext
+	if sc = trace.SpanFromContext(ctx).SpanContext(); sc.IsEmpty() || sc.Kind != trace.SpanKindBackground {
+		sc = trace.SpanContextWithID(trace.TraceID(stmID), trace.SpanKindStatement)
+	}
 	reqCtx := ses.GetRequestContext()
 	ses.SetRequestContext(trace.ContextWithSpanContext(reqCtx, sc))
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)

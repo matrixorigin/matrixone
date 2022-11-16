@@ -4684,6 +4684,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	bh := NewBackgroundHandler(ctx, mp, pu)
 	defer bh.Close()
 
+	if sc := trace.SpanFromContext(ctx).SpanContext(); !sc.IsEmpty() {
+		sc.Kind = trace.SpanKindBackground
+		ctx = trace.ContextWithSpanContext(ctx, sc)
+	}
+
 	//USE the mo_catalog
 	err = bh.Exec(ctx, "use mo_catalog;")
 	if err != nil {
