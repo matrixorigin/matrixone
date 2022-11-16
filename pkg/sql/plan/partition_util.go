@@ -56,6 +56,9 @@ func checkListColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionInfo *
 
 			switch tuple := val.Expr.(type) {
 			case *plan.Expr_List:
+				if len(colTypes) != len(tuple.List.List) {
+					return moerr.NewInternalError("Inconsistency in usage of column lists for partitioning")
+				}
 				for i, elem := range tuple.List.List {
 					switch elem.Expr.(type) {
 					case *plan.Expr_C:
@@ -66,53 +69,59 @@ func checkListColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionInfo *
 
 					colType := colTypes[i]
 					// Check val.ConvertTo(colType) doesn't work, so we need this case by case check.
-					vkind := elem.Typ
-					switch types.T(colType.Id) {
-					case types.T_date, types.T_datetime:
-						switch types.T(vkind.Id) {
-						case types.T_varchar, types.T_char:
-						default:
-							return moerr.NewInternalError("Partition column values of incorrect type")
-						}
-					case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-						switch types.T(vkind.Id) {
-						case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_any:
-						default:
-							return moerr.NewInternalError("Partition column values of incorrect type")
-						}
-					case types.T_float32, types.T_float64:
-						switch types.T(vkind.Id) {
-						case types.T_float32, types.T_float64, types.T_any:
-						default:
-							return moerr.NewInternalError("Partition column values of incorrect type")
-						}
-					case types.T_varchar, types.T_char:
-						switch types.T(vkind.Id) {
-						case types.T_varchar, types.T_char, types.T_any:
-						default:
-							return moerr.NewInternalError("Partition column values of incorrect type")
-						}
+					err = partitionValueTypeCheck(colType, elem.Typ)
+					if err != nil {
+						return err
 					}
 				}
-			case *plan.Expr_C:
+			case *plan.Expr_C, *plan.Expr_F:
 				if len(colTypes) != 1 {
-					return moerr.NewInternalError("Inconsistency in usage of column lists for partitioning near %s", colExpr.String())
+					return moerr.NewInternalError("Inconsistency in usage of column lists for partitioning")
+				} else {
+					err = partitionValueTypeCheck(colTypes[0], val.Typ)
+					if err != nil {
+						return err
+					}
 				}
-
-			case *plan.Expr_F:
-				if len(colTypes) != 1 {
-					return moerr.NewInternalError("Inconsistency in usage of column lists for partitioning near %s", colExpr.String())
-				}
-
 			default:
 				return moerr.NewInternalError("This partition function is not allowed")
 			}
-
 		}
 		return nil
 	} else {
 		return moerr.NewInternalError("list partition function is not values in expression")
 	}
+}
+
+// check whether the types of partition functions and partition values match
+func partitionValueTypeCheck(funcTyp *Type, valueTyp *Type) error {
+	switch types.T(funcTyp.Id) {
+	case types.T_date, types.T_datetime:
+		switch types.T(valueTyp.Id) {
+		case types.T_varchar, types.T_char:
+		default:
+			return moerr.NewInternalError("Partition column values of incorrect type")
+		}
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		switch types.T(valueTyp.Id) {
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_any:
+		default:
+			return moerr.NewInternalError("Partition column values of incorrect type")
+		}
+	case types.T_float32, types.T_float64:
+		switch types.T(valueTyp.Id) {
+		case types.T_float32, types.T_float64, types.T_any:
+		default:
+			return moerr.NewInternalError("Partition column values of incorrect type")
+		}
+	case types.T_varchar, types.T_char:
+		switch types.T(valueTyp.Id) {
+		case types.T_varchar, types.T_char, types.T_any:
+		default:
+			return moerr.NewInternalError("Partition column values of incorrect type")
+		}
+	}
+	return nil
 }
 
 func checkListPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partition, info *plan.PartitionInfo) error {
@@ -445,3 +454,127 @@ func EvalPlanExpr(expr *plan.Expr) (*plan.Expr, error) {
 //		return nil
 //	}
 //}
+
+func checkPartitionExprAllowed(tb *TableDef, e tree.Expr) error {
+	switch v := e.(type) {
+	case *tree.FuncExpr:
+		funcRef, ok := v.Func.FunctionReference.(*tree.UnresolvedName)
+		if !ok {
+			return moerr.NewNYI("function expr '%v'", v)
+		}
+		funcName := funcRef.Parts[0]
+		if _, ok = AllowedPartitionFuncMap[funcName]; ok {
+			return nil
+		}
+	case *tree.BinaryExpr:
+		if _, ok := AllowedPartition4BinaryOpMap[v.Op]; ok {
+			return nil
+		}
+	case *tree.UnaryExpr:
+		if _, ok := AllowedPartition4UnaryOpMap[v.Op]; ok {
+			return nil
+		}
+	case *tree.ParenExpr, *tree.MaxValue, *tree.UnresolvedName:
+		return nil
+	}
+	return moerr.NewInternalError("This partition function is not allowed")
+}
+
+// AllowedPartitionFuncMap stores functions which can be used in the partition expression.
+var AllowedPartitionFuncMap = map[string]int{
+	"to_days":        1,
+	"to_seconds":     1,
+	"dayofmonth":     1,
+	"month":          1,
+	"dayofyear":      1,
+	"quarter":        1,
+	"yearweek":       1,
+	"year":           1,
+	"weekday":        1,
+	"dayofweek":      1,
+	"day":            1,
+	"hour":           1,
+	"minute":         1,
+	"second":         1,
+	"time_to_sec":    1,
+	"microsecond":    1,
+	"unix_timestamp": 1,
+	"from_days":      1,
+	"extract":        1,
+	"abs":            1,
+	"ceiling":        1,
+	"ceil":           1,
+	"datediff":       1,
+	"floor":          1,
+	"mod":            1,
+}
+
+// AllowedPartition4BinaryOpMap store the operator for Binary Expr
+// link ref:https://dev.mysql.com/doc/refman/8.0/en/partitioning-limitations.html
+var AllowedPartition4BinaryOpMap = map[tree.BinaryOp]string{
+	tree.PLUS:        "+",
+	tree.MINUS:       "-",
+	tree.MULTI:       "*",
+	tree.INTEGER_DIV: "div",
+	tree.MOD:         "%",
+}
+
+// AllowedPartition4UnaryOpMap store the operator for Unary Expr
+var AllowedPartition4UnaryOpMap = map[tree.UnaryOp]string{
+	tree.UNARY_PLUS:  "+",
+	tree.UNARY_MINUS: "-",
+}
+
+/*
+func checkNoTimestampArgs(tbInfo *TableDef, exprs ...ast.ExprNode) error {
+	argsType, err := collectArgsType(tbInfo, exprs...)
+	if err != nil {
+		return err
+	}
+	if hasTimestampArgs(argsType...) {
+		return errors.Trace(dbterror.ErrWrongExprInPartitionFunc)
+	}
+	return nil
+}
+
+func collectArgsType(tblInfo *TableDef, exprs ...tree.Expr) ([]byte, error) {
+	ts := make([]byte, 0, len(exprs))
+	for _, arg := range exprs {
+		col, ok := arg.(*ast.ColumnNameExpr)
+		if !ok {
+			continue
+		}
+		columnInfo := findColumnByName(col.Name.Name.L, tblInfo)
+		if columnInfo == nil {
+			return nil, errors.Trace(dbterror.ErrBadField.GenWithStackByArgs(col.Name.Name.L, "partition function"))
+		}
+		ts = append(ts, columnInfo.GetType())
+	}
+
+	return ts, nil
+}
+
+func hasDateArgs(argsType ...byte) bool {
+	return slice.AnyOf(argsType, func(i int) bool {
+		return argsType[i] == mysql.TypeDate || argsType[i] == mysql.TypeDatetime
+	})
+}
+
+func hasTimeArgs(argsType ...byte) bool {
+	return slice.AnyOf(argsType, func(i int) bool {
+		return argsType[i] == mysql.TypeDuration || argsType[i] == mysql.TypeDatetime
+	})
+}
+
+func hasTimestampArgs(argsType ...byte) bool {
+	return slice.AnyOf(argsType, func(i int) bool {
+		return argsType[i] == mysql.TypeTimestamp
+	})
+}
+
+func hasDatetimeArgs(argsType ...byte) bool {
+	return slice.AnyOf(argsType, func(i int) bool {
+		return argsType[i] == mysql.TypeDatetime
+	})
+}
+*/

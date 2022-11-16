@@ -1349,6 +1349,36 @@ func TestListPartitionFunction(t *testing.T) {
 			PARTITION p1 VALUES IN( (0,1), (0,4+2) ),
 			PARTITION p2 VALUES IN( (1,0), (2,0) )
 		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST(a) (
+			PARTITION p0 VALUES IN(0, NULL ),
+			PARTITION p1 VALUES IN(1, 2),
+			PARTITION p2 VALUES IN(3, 4)
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST COLUMNS(b) (
+			PARTITION p0 VALUES IN( 0,NULL ),
+			PARTITION p1 VALUES IN( 1,2 ),
+			PARTITION p2 VALUES IN( 3,4 )
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST COLUMNS(b) (
+			PARTITION p0 VALUES IN( 0,NULL ),
+			PARTITION p1 VALUES IN( 1,1+1 ),
+			PARTITION p2 VALUES IN( 3,4 )
+		);`,
 	}
 
 	mock := NewMockOptimizer()
@@ -1364,7 +1394,7 @@ func TestListPartitionFunction(t *testing.T) {
 
 func TestListPartitionFunctionError(t *testing.T) {
 	sqls := []string{
-		`create table pt_table_1(
+		`create table pt_table_45(
 			col1 tinyint,
 			col2 smallint,
 			col3 int,
@@ -1376,13 +1406,21 @@ func TestListPartitionFunctionError(t *testing.T) {
 			col9 float,
 			col10 double,
 			col11 varchar(255),
-			primary key(col4,col3,col11)
-		)
+			col12 Date,
+			col13 DateTime,
+			col14 timestamp,
+			col15 bool,
+			col16 decimal(5,2),
+			col17 text,
+			col18 varchar(255),
+			col19 varchar(255),
+			col20 text,
+			primary key(col4,col3,col11))
 		partition by list(col3) (
-		PARTITION r0 VALUES IN (1, 10, 9, 13, -3, 21),
-		PARTITION r1 VALUES IN (2, 6, 11, 14/2, 18, 22),
-		PARTITION r2 VALUES IN (3, 5, 17, 15, 19, 23),
-		PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
+			PARTITION r0 VALUES IN (1, 5*2, 9, 13, 17-20, 21),
+			PARTITION r1 VALUES IN (2, 6, 10, 14/2, 18, 22),
+			PARTITION r2 VALUES IN (3, 7, 11+6, 15, 19, 23),
+			PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
 		);`,
 
 		`CREATE TABLE lc (
@@ -1402,6 +1440,46 @@ func TestListPartitionFunctionError(t *testing.T) {
 		PARTITION BY LIST COLUMNS(a,b) (
 			PARTITION p0 VALUES IN( (0,0), (NULL,NULL) ),
 			PARTITION p1 VALUES IN( (0,1), (0,4.2) ),
+			PARTITION p2 VALUES IN( (1,0), (2,0) )
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST COLUMNS(a,b) (
+			PARTITION p0 VALUES IN( 0,NULL ),
+			PARTITION p1 VALUES IN( 0,1 ),
+			PARTITION p2 VALUES IN( 1,0 )
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST(a) (
+			PARTITION p0 VALUES IN(0, NULL ),
+			PARTITION p1 VALUES IN(1, 4/2),
+			PARTITION p2 VALUES IN(3, 4)
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST COLUMNS(b) (
+			PARTITION p0 VALUES IN( 0,NULL ),
+			PARTITION p1 VALUES IN( 1,4/2 ),
+			PARTITION p2 VALUES IN( 3,4 )
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST COLUMNS(a,b) (
+			PARTITION p0 VALUES IN( (0,0), (NULL,NULL) ),
+			PARTITION p1 VALUES IN( (0,1,3), (0,4,5) ),
 			PARTITION p2 VALUES IN( (1,0), (2,0) )
 		);`,
 	}
