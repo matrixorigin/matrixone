@@ -15,6 +15,8 @@
 package common
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -77,6 +79,8 @@ func InplaceDeleteRows(orig any, rowGen RowGen) any {
 		return InplaceDeleteRowsFromSlice[types.Date](arr, rowGen)
 	case []types.Datetime:
 		return InplaceDeleteRowsFromSlice[types.Datetime](arr, rowGen)
+	case []types.Time:
+		return InplaceDeleteRowsFromSlice[types.Time](arr, rowGen)
 	case []types.TS:
 		return InplaceDeleteRowsFromSlice[types.TS](arr, rowGen)
 	case []types.Rowid:
@@ -84,5 +88,5 @@ func InplaceDeleteRows(orig any, rowGen RowGen) any {
 	case []types.Varlena:
 		return InplaceDeleteRowsFromSlice[types.Varlena](arr, rowGen)
 	}
-	panic("not support")
+	panic(fmt.Sprintf("not support: %T", orig))
 }
