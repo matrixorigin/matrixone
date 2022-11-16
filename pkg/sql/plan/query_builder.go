@@ -17,6 +17,7 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1318,7 +1319,18 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) && len(projectionBinder.boundCols) > 0 {
-		return 0, moerr.NewSyntaxError("column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0])
+		mode, err := builder.compCtx.ResolveVariable("sql_mode", true, false)
+		if err != nil {
+			return 0, err
+		}
+		if strings.Contains(mode.(string), "ONLY_FULL_GROUP_BY") {
+			return 0, moerr.NewSyntaxError("column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0])
+		}
+
+		// For MySQL compatibility, wrap bare ColRefs in any_value()
+		for i, proj := range ctx.projects {
+			ctx.projects[i] = builder.wrapBareColRefsInAnyValue(proj, ctx)
+		}
 	}
 
 	// FIXME: delete this when SINGLE join is ready

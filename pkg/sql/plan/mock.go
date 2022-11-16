@@ -30,6 +30,8 @@ type MockCompilerContext struct {
 	tables  map[string]*TableDef
 	costs   map[string]*Cost
 	pks     map[string][]int
+
+	mysqlCompatible bool
 }
 
 func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -41,6 +43,12 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	dec, _ := types.ParseStringToDecimal128("200.001", 2, 2, false)
 	vars["decimal_var"] = dec
 	vars["null_var"] = nil
+
+	if m.mysqlCompatible {
+		vars["sql_mode"] = ""
+	} else {
+		vars["sql_mode"] = "ONLY_FULL_GROUP_BY"
+	}
 
 	if result, ok := vars[varName]; ok {
 		return result, nil

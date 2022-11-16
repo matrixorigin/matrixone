@@ -166,3 +166,8 @@ delete from t1;
 insert into t1 values('12');
 insert into t2 select * from t1;
 select * from t2;
+
+drop table if exists text_02;
+create table text_02(t1 text,t2 tinytext,t3 mediumtext,t4 longtext,t5 text);
+insert into text_02 values("cat","yellow 芝士","2020-10-09","0001-01-01 00:00:00.000000","1970-01-01 00:00:01.0000");
+select * from text_02;
