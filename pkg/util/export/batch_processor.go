@@ -374,7 +374,6 @@ func (c *MOCollector) Stop(graceful bool) error {
 	c.stopOnce.Do(func() {
 		for len(c.awakeCollect) > 0 {
 			logutil.Debug(fmt.Sprintf("doCollect left %d job", len(c.awakeCollect)), logutil.NoReportFiled())
-			fmt.Printf("doCollect left %d jobs\n", len(c.awakeCollect))
 			time.Sleep(250 * time.Second)
 		}
 		c.mux.Lock()
