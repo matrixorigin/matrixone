@@ -33,10 +33,8 @@ type freelist struct {
 }
 
 type node struct {
-	val unsafe.Pointer
-	//	next unsafe.Pointer
-	//	next atomic.Pointer[*node]
 	next *node
+	val  unsafe.Pointer
 }
 
 func make_freelist(cap int32) *freelist {
