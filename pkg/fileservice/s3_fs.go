@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
@@ -212,6 +213,8 @@ func (s *S3FS) Name() string {
 }
 
 func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
+	ctx, span := trace.Start(ctx, "S3FS.List")
+	defer span.End()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -272,6 +275,8 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 }
 
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
+	ctx, span := trace.Start(ctx, "S3FS.Write")
+	defer span.End()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -310,6 +315,8 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 }
 
 func (s *S3FS) write(ctx context.Context, vector IOVector) error {
+	ctx, span := trace.Start(ctx, "S3FS.write")
+	defer span.End()
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
@@ -350,6 +357,8 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
+	ctx, span := trace.Start(ctx, "S3FS.Read")
+	defer span.End()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -371,6 +380,8 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
 }
 
 func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
+	ctx, span := trace.Start(ctx, "S3FS.read")
+	defer span.End()
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
@@ -399,6 +410,8 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 	// a function to get an io.ReadCloser
 	getReader := func(readToEnd bool, min int64, max int64) (io.ReadCloser, error) {
+		ctx, span := trace.Start(ctx, "S3FS.read.getReader")
+		defer span.End()
 		if readToEnd {
 			rang := fmt.Sprintf("bytes=%d-", min)
 			output, err := s.client.GetObject(
@@ -587,6 +600,8 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 }
 
 func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
+	ctx, span := trace.Start(ctx, "S3FS.Delete")
+	defer span.End()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -619,6 +634,8 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 }
 
 func (s *S3FS) deleteMultiObj(ctx context.Context, objs []types.ObjectIdentifier) error {
+	ctx, span := trace.Start(ctx, "S3FS.deleteMultiObj")
+	defer span.End()
 	output, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 		Bucket: ptrTo(s.bucket),
 		Delete: &types.Delete{
@@ -648,6 +665,8 @@ func (s *S3FS) deleteMultiObj(ctx context.Context, objs []types.ObjectIdentifier
 }
 
 func (s *S3FS) deleteSingle(ctx context.Context, filePath string) error {
+	ctx, span := trace.Start(ctx, "S3FS.deleteSingle")
+	defer span.End()
 	path, err := ParsePathAtService(filePath, s.name)
 	if err != nil {
 		return err
