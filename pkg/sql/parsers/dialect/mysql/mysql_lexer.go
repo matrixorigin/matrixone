@@ -29,6 +29,9 @@ func Parse(sql string) ([]tree.Statement, error) {
 	if yyParse(lexer) != 0 {
 		return nil, lexer.scanner.LastError
 	}
+	if len(lexer.stmts) == 0 {
+		return nil, moerr.NewParseError("Query was empty")
+	}
 	return lexer.stmts, nil
 }
 
@@ -38,7 +41,7 @@ func ParseOne(sql string) (tree.Statement, error) {
 		return nil, lexer.scanner.LastError
 	}
 	if len(lexer.stmts) != 1 {
-		return nil, moerr.NewInternalError("syntax error, or too many sql to parse")
+		return nil, moerr.NewParseError("syntax error, or too many sql to parse")
 	}
 	return lexer.stmts[0], nil
 }
