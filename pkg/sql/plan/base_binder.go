@@ -1040,7 +1040,6 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			notNullable = true
 		}
 	}
-
 	// return new expr
 	Typ := makePlan2Type(&returnType)
 	Typ.NotNullable = notNullable
