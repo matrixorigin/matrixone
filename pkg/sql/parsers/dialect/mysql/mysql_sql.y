@@ -6658,7 +6658,7 @@ literal:
     }
 |   NULL
     {
-        $$ = tree.NewNumValWithType(constant.MakeUnknown(), "null", false, tree.P_null)
+        $$ = tree.NewNumValWithType(constant.MakeString($1), "null", false, tree.P_nulltext)
     }
 |   HEXNUM
     {

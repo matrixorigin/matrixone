@@ -14761,7 +14761,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:6660
 		{
-			yyLOCAL = tree.NewNumValWithType(constant.MakeUnknown(), "null", false, tree.P_null)
+			yyLOCAL = tree.NewNumValWithType(constant.MakeString(yyDollar[1].str), "null", false, tree.P_nulltext)
 		}
 		yyVAL.union = yyLOCAL
 	case 1155:

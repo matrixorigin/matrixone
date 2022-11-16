@@ -177,6 +177,13 @@ func makePlan2StringConstExpr(v string, isBin ...bool) *plan.Expr_C {
 	return c
 }
 
+func makePlan2NullTextConstExpr(v string) *plan.Expr_C {
+	c := &plan.Expr_C{C: &plan.Const{
+		Isnull: true,
+	}}
+	return c
+}
+
 var MakePlan2StringConstExprWithType = makePlan2StringConstExprWithType
 
 func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
@@ -185,6 +192,18 @@ func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 		Typ: &plan.Type{
 			Id:       int32(types.T_varchar),
 			Nullable: false,
+			Size:     4,
+			Width:    int32(len(v)),
+		},
+	}
+}
+
+func makePlan2NullTextConstExprWithType(v string) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2NullTextConstExpr(v),
+		Typ: &plan.Type{
+			Id:       int32(types.T_text),
+			Nullable: true,
 			Size:     4,
 			Width:    int32(len(v)),
 		},
