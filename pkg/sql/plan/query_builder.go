@@ -2045,6 +2045,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 		canPushdown = filters
 		for _, filter := range node.FilterList {
 			canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(filter))...)
+		}
+
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown)
+
+		var extraFilters []*plan.Expr
+		for _, filter := range cantPushdownChild {
 			switch exprImpl := filter.Expr.(type) {
 			case *plan.Expr_F:
 				if exprImpl.F.Func.ObjName == "or" {
@@ -2052,14 +2058,13 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 					for _, key := range keys {
 						extraFilter := walkThroughDNF(filter, key)
 						if extraFilter != nil {
-							canPushdown = append(canPushdown, DeepCopyExpr(extraFilter))
+							extraFilters = append(extraFilters, DeepCopyExpr(extraFilter))
 						}
 					}
 				}
 			}
 		}
-
-		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown)
+		builder.pushdownFilters(node.Children[0], extraFilters)
 
 		if len(cantPushdownChild) > 0 {
 			node.Children[0] = childID
