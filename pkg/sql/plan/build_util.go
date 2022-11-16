@@ -244,7 +244,7 @@ func isNullAstExpr(expr tree.Expr) bool {
 		return false
 	}
 	v, ok := expr.(*tree.NumVal)
-	return ok && v.ValType == tree.P_null
+	return ok && (v.ValType == tree.P_null || v.ValType == tree.P_nulltext)
 }
 
 func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
