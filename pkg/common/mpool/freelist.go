@@ -15,7 +15,7 @@
 package mpool
 
 import (
-	"sync/atomic"
+	"sync"
 	"unsafe"
 )
 
@@ -23,52 +23,45 @@ import (
 // because it has no guanrantees, it may silently drop entries.
 //
 // The freelist is implemented as a stack.  Both put and get spin.
-// i replaced the original ring with the simplest non-locking stack
-type freelist struct {
-	cap int32
-	len atomic.Int32
-	top atomic.Pointer[node]
-}
-
 type node struct {
 	next *node
-	val  unsafe.Pointer
 }
 
-func make_freelist(cap int32) *freelist {
+type freelist struct {
+	mut    sync.Mutex
+	poolid int64
+	head   *node
+}
+
+func make_freelist(poolid int64) *freelist {
 	var fl freelist
-	fl.cap = cap
+	fl.poolid = poolid
 	return &fl
 }
 
 // put always succeeds.  It is caller's job to make sure
 // we never overflow the freelist
-func (fl *freelist) put(ptr unsafe.Pointer) {
-	n := node{val: ptr}
-	if fl.len.Load() == fl.cap {
-		return
-	}
-	for {
-		top := fl.top.Load()
-		n.next = top
-		if fl.top.CompareAndSwap(top, &n) {
-			fl.len.Add(1)
-			return
-		}
-	}
+func (fl *freelist) put(ptr *memHdr) {
+	fl.mut.Lock()
+	defer fl.mut.Unlock()
+
+	n := (*node)(unsafe.Pointer(ptr))
+	n.next = fl.head
+	fl.head = n
 }
 
 // get may return nil if there is no free item
-func (fl *freelist) get() unsafe.Pointer {
-	for {
-		top := fl.top.Load()
-		if top == nil {
-			return nil
-		}
-		next := top.next
-		if fl.top.CompareAndSwap(top, next) {
-			fl.len.Add(-1)
-			return top.val
-		}
+func (fl *freelist) get() *memHdr {
+	fl.mut.Lock()
+	defer fl.mut.Unlock()
+
+	if fl.head == nil {
+		return nil
 	}
+
+	n := fl.head
+	fl.head = n.next
+	ret := (*memHdr)(unsafe.Pointer(n))
+	ret.poolId = fl.poolid
+	return ret
 }

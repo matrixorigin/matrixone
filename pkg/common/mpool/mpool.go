@@ -185,7 +185,7 @@ func (fp *fixedPool) initPool(tag string, poolid int64, idx int, eleCnt int, cap
 		return 0, moerr.NewOOM()
 	}
 
-	fp.flist = make_freelist(int32(eleCnt))
+	fp.flist = make_freelist(poolid)
 
 	// Really allocate buffer, and put hdr of each slot into pool.
 	// nb is always 8x,
@@ -201,7 +201,7 @@ func (fp *fixedPool) initPool(tag string, poolid int64, idx int, eleCnt int, cap
 		pHdr.allocSz = -1
 		pHdr.SetGuard()
 
-		fp.flist.put(hdr)
+		fp.flist.put(pHdr)
 	}
 	return int64(nb), nil
 }
@@ -479,7 +479,8 @@ func (fp *fixedPool) alloc(sz int) []byte {
 	}
 	// We have already done the accounting when we init the fixed pool
 	// so we don't do any global, or mpool level accounting.
-	hdr := fp.flist.get()
+	pHdr := fp.flist.get()
+	hdr := unsafe.Pointer(pHdr)
 	if hdr != nil {
 		// alloc from fixed pool, record alloc bytes
 		fp.stats.RecordAlloc("", int64(sz))
@@ -489,7 +490,6 @@ func (fp *fixedPool) alloc(sz int) []byte {
 		return nil
 	}
 
-	pHdr := (*memHdr)(hdr)
 	pHdr.allocSz = int32(sz)
 	bPtr := (*byte)(unsafe.Add(hdr, kMemHdrSz))
 
@@ -558,7 +558,7 @@ func (fp *fixedPool) free(hdr unsafe.Pointer) {
 		panic(moerr.NewInternalError("free size -1, possible double free"))
 	}
 	pHdr.allocSz = -1
-	fp.flist.put(hdr)
+	fp.flist.put(pHdr)
 }
 
 func (mp *MPool) Free(bs []byte) {

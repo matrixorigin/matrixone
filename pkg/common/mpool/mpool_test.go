@@ -71,13 +71,14 @@ func TestFreelist(t *testing.T) {
 
 	// a list of ten items
 	type item struct {
+		memHdr
 		lastWriter  int32
 		updateCount int64
 	}
 	var items [10]item
 	fl := make_freelist(10)
 	for i := 0; i < 10; i++ {
-		fl.put(unsafe.Pointer(&items[i]))
+		fl.put(&items[i].memHdr)
 	}
 
 	// let 20 threads run for it, each looping 1 million times.
@@ -97,7 +98,7 @@ func TestFreelist(t *testing.T) {
 					results[ii].missCount += 1
 				} else {
 					results[ii].okCount += 1
-					pitem := (*item)(ptr)
+					pitem := (*item)(unsafe.Pointer(ptr))
 					pitem.lastWriter = int32(ii)
 					// this must be atomic -- the following could possibly
 					// lost an update count.
