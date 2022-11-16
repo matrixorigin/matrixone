@@ -15,7 +15,6 @@
 package mpool
 
 import (
-	"sync"
 	"sync/atomic"
 	"unsafe"
 )
@@ -26,7 +25,6 @@ import (
 // The freelist is implemented as a stack.  Both put and get spin.
 // i replaced the original ring with the simplest non-locking stack
 type freelist struct {
-	sync.Mutex
 	cap int32
 	len atomic.Int32
 	top atomic.Pointer[node]
