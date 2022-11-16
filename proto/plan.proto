@@ -24,8 +24,8 @@ option (gogoproto.sizer_all) = false;
 option (gogoproto.protosizer_all) = true;
 
 message Type {
-	int32 id           = 1;
-	bool nullable		= 2;
+	int32 id            = 1;
+	bool notNullable	= 2;
 	bool auto_incr      = 3;
 	int32 width			= 4;
 	int32 precision		= 5;
@@ -181,7 +181,6 @@ message Expr {
 		ExprList	list	= 10;
 		MaxValue max = 11;
 	}
-	bool notNullable = 12;
 }
 
 enum CompressType {
@@ -209,7 +208,6 @@ message ColDef {
 	bool is_cPkey 		= 8;
 	OnUpdate on_update  = 9;
 	bool low_cardinality = 10;
-	bool notNullable 	= 11;
 }
 
 message Default {

@@ -709,7 +709,7 @@ func (s *Schema) AppendPKColWithAttribute(attr engine.Attribute, idx int) error 
 		SortKey:       true,
 		Primary:       true,
 		Comment:       attr.Comment,
-		NullAbility:   !attr.NotNullable,
+		NullAbility:   attrDefault.NullAbility,
 		Default:       attrDefault,
 		AutoIncrement: attr.AutoIncrement,
 		OnUpdate:      attrOnUpdate,
@@ -767,7 +767,7 @@ func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 		SortIdx:       -1,
 		Comment:       attr.Comment,
 		Default:       attrDefault,
-		NullAbility:   !attr.NotNullable,
+		NullAbility:   attrDefault.NullAbility,
 		AutoIncrement: attr.AutoIncrement,
 		OnUpdate:      attrOnUpdate,
 	}

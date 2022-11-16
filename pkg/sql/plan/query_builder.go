@@ -285,9 +285,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: &plan.Type{
-					Id:       int32(types.T_bool),
-					Nullable: true,
-					Size:     1,
+					Id:          int32(types.T_bool),
+					NotNullable: false,
+					Size:        1,
 				},
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
@@ -1798,7 +1798,6 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		return nil
 	}
 
-	var notNullables []bool
 	var cols []string
 	var types []*plan.Type
 	var binding *Binding
@@ -1825,7 +1824,6 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 
 		cols = make([]string, len(node.TableDef.Cols))
 		types = make([]*plan.Type, len(node.TableDef.Cols))
-		notNullables = make([]bool, len(node.TableDef.Cols))
 
 		tag := node.BindingTags[0]
 
@@ -1836,13 +1834,12 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				cols[i] = col.Name
 			}
 			types[i] = col.Typ
-			notNullables[i] = col.NotNullable
 
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, cols, types, notNullables)
+		binding = NewBinding(tag, nodeID, table, cols, types)
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
@@ -1867,7 +1864,6 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 
 		cols = make([]string, len(headings))
 		types = make([]*plan.Type, len(headings))
-		notNullables = make([]bool, len(headings))
 
 		for i, col := range headings {
 			if i < len(alias.Cols) {
@@ -1876,13 +1872,12 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				cols[i] = col
 			}
 			types[i] = projects[i].Typ
-			notNullables[i] = projects[i].NotNullable
 
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, cols, types, notNullables)
+		binding = NewBinding(tag, nodeID, table, cols, types)
 	}
 
 	ctx.bindings = append(ctx.bindings, binding)

@@ -252,7 +252,6 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 	relPos := NotFound
 	colPos := NotFound
-	notNullable := false
 	var typ *plan.Type
 
 	if len(table) == 0 {
@@ -261,7 +260,6 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				relPos = binding.tag
 				colPos = binding.colIdByName[col]
 				typ = binding.types[colPos]
-				notNullable = binding.notNullables[colPos]
 				table = binding.table
 			} else {
 				return nil, moerr.NewInvalidInput("ambiguous column reference '%v'", name)
@@ -277,7 +275,6 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			}
 			if colPos != NotFound {
 				typ = binding.types[colPos]
-				notNullable = binding.notNullables[colPos]
 				relPos = binding.tag
 			} else {
 				err = moerr.NewInvalidInput("column '%s' does not exist", name)
@@ -291,8 +288,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		b.boundCols = append(b.boundCols, table+"."+col)
 
 		expr = &plan.Expr{
-			Typ:         typ,
-			NotNullable: notNullable,
+			Typ: typ,
 		}
 
 		if depth == 0 {
@@ -368,9 +364,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	if astExpr.Exists {
 		returnExpr.Typ = &plan.Type{
-			Id:       int32(types.T_bool),
-			Nullable: false,
-			Size:     1,
+			Id:          int32(types.T_bool),
+			NotNullable: true,
+			Size:        1,
 		}
 		returnExpr.Expr.(*plan.Expr_Sub).Sub.Typ = plan.SubqueryRef_EXISTS
 	} else if rowSize == 1 {
@@ -868,8 +864,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 		if args[0].Typ.Id == int32(types.T_uint64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
-				Id:       int32(types.T_decimal128),
-				Nullable: false,
+				Id:          int32(types.T_decimal128),
+				NotNullable: true,
 			})
 			if err != nil {
 				return nil, err
@@ -881,8 +877,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
-				Id:       int32(types.T_float64),
-				Nullable: false,
+				Id:          int32(types.T_float64),
+				NotNullable: true,
 			})
 			if err != nil {
 				return nil, err
@@ -1027,25 +1023,27 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	}
 
 	notNullable := false
-	function, err := function.GetFunctionByID(funcID)
+	function, _ := function.GetFunctionByID(funcID)
 	if function.TestFlag(plan.Function_PRODUCE_NULL) {
 		notNullable = false
 	} else if function.TestFlag(plan.Function_PRODUCE_NO_NULL) {
 		notNullable = true
 	} else {
-		allArgsNotNull := true
+		allArgsNotNullable := true
 		for _, arg := range args {
-			if !arg.NotNullable {
-				allArgsNotNull = false
+			if !arg.Typ.NotNullable {
+				allArgsNotNullable = false
 				break
 			}
 		}
-		if allArgsNotNull {
+		if allArgsNotNullable {
 			notNullable = true
 		}
 	}
 
 	// return new expr
+	Typ := makePlan2Type(&returnType)
+	Typ.NotNullable = notNullable
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
@@ -1053,8 +1051,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				Args: args,
 			},
 		},
-		Typ:         makePlan2Type(&returnType),
-		NotNullable: notNullable,
+		Typ: Typ,
 	}, nil
 }
 
@@ -1154,11 +1151,11 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				},
 			},
 			Typ: &plan.Type{
-				Id:        int32(types.T_decimal128),
-				Width:     34,
-				Scale:     scale,
-				Precision: 34,
-				Nullable:  false,
+				Id:          int32(types.T_decimal128),
+				Width:       34,
+				Scale:       scale,
+				Precision:   34,
+				NotNullable: true,
 			},
 		}, nil
 	case tree.P_float64:

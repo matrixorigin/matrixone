@@ -1595,11 +1595,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					AutoIncr:  attr.Attr.AutoIncrement,
 					Table:     tableName,
 				},
-				Primary:     attr.Attr.Primary,
-				Default:     attr.Attr.Default,
-				OnUpdate:    attr.Attr.OnUpdate,
-				Comment:     attr.Attr.Comment,
-				NotNullable: attr.Attr.NotNullable,
+				Primary:  attr.Attr.Primary,
+				Default:  attr.Attr.Default,
+				OnUpdate: attr.Attr.OnUpdate,
+				Comment:  attr.Attr.Comment,
 			}
 			if isCPkey {
 				col.IsCPkey = isCPkey
