@@ -837,7 +837,7 @@ func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
 		}
 		if intPkRange.isRange {
 			r := intPkRange.ranges
-			if r[0] == math.MinInt64 || r[0] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
+			if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
 				return fullList()
 			}
 			intPkRange.isRange = false

@@ -393,7 +393,7 @@ func computeRangeByNonIntPk(expr *plan.Expr, pkIdx int32) (bool, uint64) {
 type pkRange struct {
 	isRange bool
 	items   []int64
-	ranges  [2]int64
+	ranges  []int64
 }
 
 // computeRangeByIntPk compute primaryKey range by Expr
@@ -468,8 +468,7 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 					// if  pk > 10 and noPk < 10.  we just use pk > 10
 					if parentFun == "and" {
 						return true, &pkRange{
-							isRange: true,
-							ranges:  [2]int64{},
+							isRange: false,
 						}
 					}
 					// if pk > 10 or noPk < 10,   we use all list
@@ -492,22 +491,22 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 					case ">":
 						return true, &pkRange{
 							isRange: true,
-							ranges:  [2]int64{rightConstat + 1, math.MaxInt64},
+							ranges:  []int64{rightConstat + 1, math.MaxInt64},
 						}
 					case ">=":
 						return true, &pkRange{
 							isRange: true,
-							ranges:  [2]int64{rightConstat, math.MaxInt64},
+							ranges:  []int64{rightConstat, math.MaxInt64},
 						}
 					case "<":
 						return true, &pkRange{
 							isRange: true,
-							ranges:  [2]int64{math.MinInt64, rightConstat - 1},
+							ranges:  []int64{math.MinInt64, rightConstat - 1},
 						}
 					case "<=":
 						return true, &pkRange{
 							isRange: true,
-							ranges:  [2]int64{math.MinInt64, rightConstat},
+							ranges:  []int64{math.MinInt64, rightConstat},
 						}
 					case "=":
 						return true, &pkRange{
@@ -522,8 +521,7 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 					// if  pk > 10 and noPk < 10.  we just use pk > 10
 					if parentFun == "and" {
 						return true, &pkRange{
-							isRange: true,
-							ranges:  [2]int64{},
+							isRange: false,
 						}
 					}
 					// if pk > 10 or noPk < 10,   we use all list
@@ -535,22 +533,22 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 					case ">":
 						return true, &pkRange{
 							isRange: true,
-							ranges:  [2]int64{math.MinInt64, leftConstant - 1},
+							ranges:  []int64{math.MinInt64, leftConstant - 1},
 						}
 					case ">=":
 						return true, &pkRange{
 							isRange: true,
-							ranges:  [2]int64{math.MinInt64, leftConstant},
+							ranges:  []int64{math.MinInt64, leftConstant},
 						}
 					case "<":
 						return true, &pkRange{
 							isRange: true,
-							ranges:  [2]int64{leftConstant + 1, math.MaxInt64},
+							ranges:  []int64{leftConstant + 1, math.MaxInt64},
 						}
 					case "<=":
 						return true, &pkRange{
 							isRange: true,
-							ranges:  [2]int64{leftConstant, math.MaxInt64},
+							ranges:  []int64{leftConstant, math.MaxInt64},
 						}
 					case "=":
 						return true, &pkRange{
@@ -573,15 +571,15 @@ func _computeOr(left *pkRange, right *pkRange) (bool, *pkRange) {
 		items:   []int64{},
 	}
 
-	compute := func(left [2]int64, right [2]int64) [][2]int64 {
+	compute := func(left []int64, right []int64) [][]int64 {
 		min := left[0]
 		max := left[1]
 		if min > right[1] {
 			// eg: a > 10 or a < 2
-			return [][2]int64{left, right}
+			return [][]int64{left, right}
 		} else if max < right[0] {
 			// eg: a < 2 or a > 10
-			return [][2]int64{left, right}
+			return [][]int64{left, right}
 		} else {
 			// eg: a > 2 or a < 10
 			// a > 2 or a > 10
@@ -592,7 +590,7 @@ func _computeOr(left *pkRange, right *pkRange) (bool, *pkRange) {
 			if right[1] > max {
 				max = right[1]
 			}
-			return [][2]int64{{min, max}}
+			return [][]int64{{min, max}}
 		}
 	}
 
@@ -601,9 +599,11 @@ func _computeOr(left *pkRange, right *pkRange) (bool, *pkRange) {
 			result.items = append(left.items, right.items...)
 			return len(result.items) < int(MAX_RANGE_SIZE), result
 		} else {
-			if right.ranges[1]-right.ranges[0] > MAX_RANGE_SIZE {
+			r := right.ranges
+			if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
 				return false, nil
 			}
+			result.items = append(result.items, left.items...)
 			for i := right.ranges[0]; i <= right.ranges[1]; i++ {
 				result.items = append(result.items, i)
 			}
@@ -611,9 +611,11 @@ func _computeOr(left *pkRange, right *pkRange) (bool, *pkRange) {
 		}
 	} else {
 		if !right.isRange {
-			if left.ranges[1]-left.ranges[0] > MAX_RANGE_SIZE {
+			r := left.ranges
+			if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
 				return false, nil
 			}
+			result.items = append(result.items, right.items...)
 			for i := left.ranges[0]; i <= left.ranges[1]; i++ {
 				result.items = append(result.items, i)
 			}
@@ -621,7 +623,7 @@ func _computeOr(left *pkRange, right *pkRange) (bool, *pkRange) {
 		} else {
 			newRange := compute(left.ranges, right.ranges)
 			for _, r := range newRange {
-				if r[0] == math.MinInt64 || r[0] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
+				if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
 					return false, nil
 				}
 				for i := r[0]; i <= r[1]; i++ {
@@ -639,7 +641,7 @@ func _computeAnd(left *pkRange, right *pkRange) (bool, *pkRange) {
 		items:   []int64{},
 	}
 
-	compute := func(left [2]int64, right [2]int64) (bool, [2]int64) {
+	compute := func(left []int64, right []int64) (bool, []int64) {
 		min := left[0]
 		max := left[1]
 
@@ -659,7 +661,7 @@ func _computeAnd(left *pkRange, right *pkRange) (bool, *pkRange) {
 			if right[1] < max {
 				max = right[1]
 			}
-			return true, [2]int64{min, max}
+			return true, []int64{min, max}
 		}
 	}
 
@@ -668,9 +670,11 @@ func _computeAnd(left *pkRange, right *pkRange) (bool, *pkRange) {
 			result.items = append(left.items, right.items...)
 			return len(result.items) < int(MAX_RANGE_SIZE), result
 		} else {
-			if right.ranges[1]-right.ranges[0] > MAX_RANGE_SIZE {
+			r := right.ranges
+			if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
 				return false, nil
 			}
+			result.items = append(result.items, left.items...)
 			for i := right.ranges[0]; i <= right.ranges[1]; i++ {
 				result.items = append(result.items, i)
 			}
@@ -678,9 +682,11 @@ func _computeAnd(left *pkRange, right *pkRange) (bool, *pkRange) {
 		}
 	} else {
 		if !right.isRange {
-			if left.ranges[1]-left.ranges[0] > MAX_RANGE_SIZE {
+			r := left.ranges
+			if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
 				return false, nil
 			}
+			result.items = append(result.items, right.items...)
 			for i := left.ranges[0]; i <= left.ranges[1]; i++ {
 				result.items = append(result.items, i)
 			}
@@ -690,7 +696,7 @@ func _computeAnd(left *pkRange, right *pkRange) (bool, *pkRange) {
 			if !ok {
 				return false, nil
 			}
-			if r[0] == math.MinInt64 || r[0] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
+			if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
 				return false, nil
 			}
 			for i := r[0]; i <= r[1]; i++ {
