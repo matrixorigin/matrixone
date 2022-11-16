@@ -389,3 +389,5 @@ drop table if exists t1;
 SELECT WORD FROM INFORMATION_SCHEMA.KEYWORDS WHERE RESERVED=1 ORDER BY WORD limit 1;
 word
 ACCESSIBLE
+;
+SQL parser error: Query was empty
