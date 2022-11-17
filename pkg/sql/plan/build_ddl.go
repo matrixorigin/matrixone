@@ -570,6 +570,11 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		if isView {
 			return nil, moerr.NewNoSuchTable(truncateTable.Database, truncateTable.Table)
 		}
+		indexInfos := BuildIndexInfos(ctx, truncateTable.Database, tableDef.Defs)
+		truncateTable.IndexTableNames = make([]string, len(indexInfos))
+		for i := range indexInfos {
+			truncateTable.IndexTableNames[i] = indexInfos[i].TableName
+		}
 	}
 
 	return &Plan{
