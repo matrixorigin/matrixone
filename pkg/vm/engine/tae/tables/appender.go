@@ -22,37 +22,37 @@ import (
 )
 
 type blockAppender struct {
-	node        *appendableNode
+	blk         *ablock
 	placeholder uint32
 	rows        uint32
 }
 
-func newAppender(node *appendableNode) *blockAppender {
+func newAppender(ablk *ablock) *blockAppender {
 	appender := new(blockAppender)
-	appender.node = node
-	appender.rows = node.Rows()
+	appender.blk = ablk
+	appender.rows = uint32(ablk.Rows())
 	return appender
 }
 
 func (appender *blockAppender) GetMeta() any {
-	return appender.node.block.meta
+	return appender.blk.meta
 }
 
 func (appender *blockAppender) GetID() *common.ID {
-	return appender.node.block.meta.AsCommonID()
+	return appender.blk.meta.AsCommonID()
 }
 
 func (appender *blockAppender) IsAppendable() bool {
-	return appender.rows+appender.placeholder < appender.node.block.meta.GetSchema().BlockMaxRows
+	return appender.rows+appender.placeholder < appender.blk.meta.GetSchema().BlockMaxRows
 }
 
 func (appender *blockAppender) Close() {
-	appender.node.block.Unref()
+	appender.blk.Unref()
 }
 func (appender *blockAppender) PrepareAppend(
 	rows uint32,
 	txn txnif.AsyncTxn) (node txnif.AppendNode, created bool, n uint32, err error) {
-	left := appender.node.block.meta.GetSchema().BlockMaxRows - appender.rows - appender.placeholder
+	left := appender.blk.meta.GetSchema().BlockMaxRows - appender.rows - appender.placeholder
 	if left == 0 {
 		// n = rows
 		return
@@ -63,9 +63,9 @@ func (appender *blockAppender) PrepareAppend(
 		n = rows
 	}
 	appender.placeholder += n
-	appender.node.block.mvcc.Lock()
-	defer appender.node.block.mvcc.Unlock()
-	node, created = appender.node.block.mvcc.AddAppendNodeLocked(
+	appender.blk.Lock()
+	defer appender.blk.Unlock()
+	node, created = appender.blk.mvcc.AddAppendNodeLocked(
 		txn,
 		appender.rows,
 		appender.placeholder+appender.rows)
@@ -78,17 +78,19 @@ func (appender *blockAppender) ReplayAppend(
 		return
 	}
 	// TODO: Remove ReplayAppend
-	appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(bat.Length()))
+	appender.blk.meta.GetSegment().GetTable().AddRows(uint64(bat.Length()))
 	return
 }
 func (appender *blockAppender) ApplyAppend(
 	bat *containers.Batch,
 	txn txnif.AsyncTxn) (from int, err error) {
-	appender.node.block.mvcc.Lock()
-	defer appender.node.block.mvcc.Unlock()
-	from, err = appender.node.ApplyAppend(bat, txn)
+	node := appender.blk.PinMemoryNode()
+	defer node.Close()
+	appender.blk.Lock()
+	defer appender.blk.Unlock()
+	from, err = node.Item().ApplyAppend(bat, txn)
 
-	schema := appender.node.block.meta.GetSchema()
+	schema := appender.blk.meta.GetSchema()
 	keysCtx := new(index.KeysCtx)
 	keysCtx.Count = bat.Length()
 	for _, colDef := range schema.ColDefs {
@@ -96,7 +98,7 @@ func (appender *blockAppender) ApplyAppend(
 			continue
 		}
 		keysCtx.Keys = bat.Vecs[colDef.Idx]
-		if err = appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from); err != nil {
+		if err = node.Item().indexes[colDef.Idx].BatchUpsert(keysCtx, from); err != nil {
 			panic(err)
 		}
 	}
