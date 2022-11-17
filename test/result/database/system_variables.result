@@ -159,13 +159,13 @@ PRIVILEGES    VARCHAR    YES        NULL
 column_comment    VARCHAR    YES        NULL        
 generation_expression    VARCHAR    YES        NULL        
 srs_id    BIGINT    YES        NULL        
-select table_name, column_name from columns where table_schema = 'mo_catalog' limit 5;
+select table_name, column_name from columns where table_schema = 'mo_catalog' order by table_name, column_name limit 5;
 table_name    column_name
-mo_database    dat_id
-mo_database    datname
-mo_database    dat_catalog_name
-mo_database    dat_createsql
-mo_database    owner
+mo_account    account_id
+mo_account    account_name
+mo_account    comments
+mo_account    created_time
+mo_account    status
 desc profiling;
 Field    Type    Null    Key    Default    Extra    Comment
 query_id    INT    NO        '0'        
@@ -216,7 +216,7 @@ default_character_set_name    VARCHAR    YES        NULL
 default_collation_name    VARCHAR    YES        NULL        
 sql_path    VARCHAR    YES        NULL        
 default_encryption    VARCHAR    YES        NULL        
-select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task';
+select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' order by catalog_name, schema_name;
 catalog_name    schema_name
 def    mo_catalog
 def    mo_task
