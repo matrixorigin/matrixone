@@ -525,8 +525,8 @@ func (blk *ablock) persistedCollectAppendInRange(
 	// FIXME: we'll gc mvcc after being persisted. refactor it later
 	blk.RLock()
 	minRow, maxRow, commitTSVec, abortVec, abortedMap :=
-		blk.mvcc.CollectAppend(start, end)
-	defer blk.RUnlock()
+		blk.mvcc.CollectAppendLocked(start, end)
+	blk.RUnlock()
 	if bat, err = pnode.GetDataWindow(minRow, maxRow); err != nil {
 		return
 	}
@@ -545,12 +545,13 @@ func (blk *ablock) inMemoryCollectAppendInRange(
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, err error) {
 	blk.RLock()
-	defer blk.RUnlock()
 	minRow, maxRow, commitTSVec, abortVec, abortedMap :=
-		blk.mvcc.CollectAppend(start, end)
+		blk.mvcc.CollectAppendLocked(start, end)
 	if bat, err = mnode.GetDataWindow(minRow, maxRow); err != nil {
+		blk.RUnlock()
 		return
 	}
+	blk.RUnlock()
 	bat.AddVector(catalog.AttrCommitTs, commitTSVec)
 	if withAborted {
 		bat.AddVector(catalog.AttrAborted, abortVec)
