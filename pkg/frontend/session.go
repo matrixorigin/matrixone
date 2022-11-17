@@ -1282,11 +1282,6 @@ func (th *TxnHandler) NewTxn() error {
 		panic("context should not be nil")
 	}
 	storage := th.GetStorage()
-	ctx, cancel := context.WithTimeout(
-		ctx,
-		storage.Hints().CommitOrRollbackTimeout,
-	)
-	defer cancel()
 	err = storage.New(ctx, th.GetTxnOperator())
 	return err
 }
