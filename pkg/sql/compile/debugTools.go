@@ -16,11 +16,12 @@ package compile
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
 )
 
 var debugInstructionNames = map[int]string{

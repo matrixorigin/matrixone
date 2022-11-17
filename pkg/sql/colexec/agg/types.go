@@ -16,6 +16,7 @@ package agg
 
 import (
 	"encoding"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -66,7 +67,8 @@ type Aggregate struct {
 // Agg agg interface
 type Agg[T any] interface {
 	encoding.BinaryMarshaler
-	encoding.BinaryUnmarshaler
+	//encoding.BinaryUnmarshaler
+	UnmarshalBinary(data []byte, m *mpool.MPool) error
 
 	// Dup will duplicate a new agg with the same type.
 	Dup() Agg[any]
