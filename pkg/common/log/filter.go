@@ -23,7 +23,9 @@ var (
 	filters = []logFilter{sampleFilter}
 
 	// all SampleType register here.
-	samples = map[SampleType]*sampleValue{}
+	samples = map[SampleType]*sampleValue{
+		ExampleSample: {},
+	}
 )
 
 func sampleFilter(ctx LogContext) bool {

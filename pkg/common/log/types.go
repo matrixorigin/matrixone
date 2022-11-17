@@ -14,6 +14,8 @@
 
 package log
 
+import "math"
+
 // ServiceType used to describe which type of service the log belongs to
 type ServiceType string
 
@@ -71,6 +73,8 @@ type SampleType int
 
 var (
 	noneSample = SampleType(0)
+	// ExampleSample used in examples
+	ExampleSample = SampleType(math.MaxInt)
 )
 
 // logFilter used to filter the print log, returns false to abort this print
