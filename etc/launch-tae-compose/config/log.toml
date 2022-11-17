@@ -20,10 +20,6 @@ bucket = "mo-test"
 endpoint = "http://minio:9000"
 key-prefix = "server/data"
 
-[fileservice.cache]
-memory-capacity = "512MB"
-disk-capacity = "8GB"
-
 [[fileservice]]
 backend = "MINIO"
 name = "ETL"
