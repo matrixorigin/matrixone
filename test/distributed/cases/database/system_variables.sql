@@ -114,5 +114,7 @@ set sql_select_limit = 100000;
 show variables like 'sql_select_limit';
 set sql_select_limit = 1;
 show variables like 'sql_select_limit';
-SET SQL_SELECT_LIMIT = DEFAULT;
+-- @bvt:issue#6743
+SET SQL_SELECT_LIMIT = Default;
 show variables like 'sql_select_limit';
+-- @bvt:issue
