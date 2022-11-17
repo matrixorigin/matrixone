@@ -109,22 +109,7 @@ func (r *ObjectReader) Read(ctx context.Context, extent Extent, idxs []uint16, m
 			Offset: int64(col.GetMeta().location.Offset()),
 			Size:   int64(col.GetMeta().location.Length()),
 
-			ToObject: func(reader io.Reader, data []byte) (any, int64, error) {
-				// decompress
-				var err error
-				if len(data) == 0 {
-					data, err = io.ReadAll(reader)
-					if err != nil {
-						return nil, 0, err
-					}
-				}
-				decompressed := make([]byte, col.GetMeta().location.OriginSize())
-				decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
-				if err != nil {
-					return nil, 0, err
-				}
-				return decompressed, int64(len(decompressed)), nil
-			},
+			ToObject: newDecompressToObject(int64(col.GetMeta().location.OriginSize())),
 		})
 	}
 
@@ -223,45 +208,21 @@ func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, siz
 type ToObjectFunc = func(r io.Reader, buf []byte) (any, int64, error)
 
 // newDecompressToObject the decompression function passed to fileservice
-func newDecompressToObject(object []byte, size int64, m *mpool.MPool) ToObjectFunc {
-	return func(read io.Reader, buf []byte) (any, int64, error) {
+func newDecompressToObject(size int64) ToObjectFunc {
+	return func(reader io.Reader, data []byte) (any, int64, error) {
+		// decompress
 		var err error
-		var data []byte
-		data = buf
-		if len(buf) == 0 {
-			data, err = io.ReadAll(read)
+		if len(data) == 0 {
+			data, err = io.ReadAll(reader)
 			if err != nil {
 				return nil, 0, err
 			}
 		}
-		object, err = allocData(size, m)
+		decompressed := make([]byte, size)
+		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
 		if err != nil {
 			return nil, 0, err
 		}
-		object, err = compress.Decompress(data, object, compress.Lz4)
-		if err != nil {
-			freeData(buf, m)
-			return nil, 0, err
-		}
-		return object, int64(len(object)), nil
-	}
-}
-
-func allocData(size int64, m *mpool.MPool) (data []byte, err error) {
-	if m != nil {
-		data, err = m.Alloc(int(size))
-		if err != nil {
-			return
-		}
-	} else {
-		// Because the external caller may not use mpool
-		data = make([]byte, size)
-	}
-	return data, nil
-}
-
-func freeData(buf []byte, m *mpool.MPool) {
-	if m != nil {
-		m.Free(buf)
+		return decompressed, int64(len(decompressed)), nil
 	}
 }
