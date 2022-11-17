@@ -331,87 +331,6 @@ func findColumnByName(colName string, tbdef *TableDef) *ColDef {
 	return nil
 }
 
-//func checkPartitionExprAllowed(_ sessionctx.Context, tb *model.TableInfo, e ast.ExprNode) error {
-//	switch v := e.(type) {
-//	case *ast.FuncCallExpr:
-//		if _, ok := expression.AllowedPartitionFuncMap[v.FnName.L]; ok {
-//			return nil
-//		}
-//	case *ast.BinaryOperationExpr:
-//		if _, ok := expression.AllowedPartition4BinaryOpMap[v.Op]; ok {
-//			return errors.Trace(checkNoTimestampArgs(tb, v.L, v.R))
-//		}
-//	case *ast.UnaryOperationExpr:
-//		if _, ok := expression.AllowedPartition4UnaryOpMap[v.Op]; ok {
-//			return errors.Trace(checkNoTimestampArgs(tb, v.V))
-//		}
-//	case *ast.ColumnNameExpr, *ast.ParenthesesExpr, *driver.ValueExpr, *ast.MaxValueExpr,
-//		*ast.TimeUnitExpr:
-//		return nil
-//	}
-//	return errors.Trace(dbterror.ErrPartitionFunctionIsNotAllowed)
-//}
-
-/*
-func isConstant(e *plan.Expr) bool {
-	switch ef := e.Expr.(type) {
-	case *plan.Expr_C, *plan.Expr_T:
-		return true
-	case *plan.Expr_F:
-		overloadID := ef.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadID)
-		if err != nil {
-			return false
-		}
-		if f.Volatile { // function cannot be fold
-			return false
-		}
-		for i := range ef.F.Args {
-			if !isConstant(ef.F.Args[i]) {
-				return false
-			}
-		}
-		return true
-	default:
-		return false
-	}
-}
-
-func getConstantValue(vec *vector.Vector) *plan.Const {
-	if nulls.Any(vec.Nsp) {
-		return &plan.Const{Isnull: true}
-	}
-	switch vec.Typ.Oid {
-	case types.T_bool:
-		return &plan.Const{
-			Value: &plan.Const_Bval{
-				Bval: vec.Col.([]bool)[0],
-			},
-		}
-	case types.T_int64:
-		return &plan.Const{
-			Value: &plan.Const_Ival{
-				Ival: vec.Col.([]int64)[0],
-			},
-		}
-	case types.T_float64:
-		return &plan.Const{
-			Value: &plan.Const_Dval{
-				Dval: vec.Col.([]float64)[0],
-			},
-		}
-	case types.T_varchar:
-		return &plan.Const{
-			Value: &plan.Const_Sval{
-				Sval: vec.GetString(0),
-			},
-		}
-	default:
-		return nil
-	}
-}
-*/
-
 func EvalPlanExpr(expr *plan.Expr) (*plan.Expr, error) {
 	switch expr.Expr.(type) {
 	case *plan.Expr_C:
@@ -434,26 +353,117 @@ func EvalPlanExpr(expr *plan.Expr) (*plan.Expr, error) {
 }
 
 // checkPartitionFuncValid checks partition function validly.
-//func checkPartitionFuncValid(ctx sessionctx.Context, tblInfo *model.TableInfo, expr ast.ExprNode) error {
-//	if expr == nil {
-//		return nil
-//	}
-//	exprChecker := newPartitionExprChecker(ctx, tblInfo, checkPartitionExprArgs, checkPartitionExprAllowed)
-//	expr.Accept(exprChecker)
-//	if exprChecker.err != nil {
-//		return errors.Trace(exprChecker.err)
-//	}
-//	if len(exprChecker.columns) == 0 {
-//		return errors.Trace(dbterror.ErrWrongExprInPartitionFunc)
-//	}
-//	return nil
-//}
-//
-//func checkPartitionFuncValid(tableDef *TableDef, partby tree.PartitionBy) error {
-//	if partby.PType == nil {
-//		return nil
-//	}
-//}
+func checkPartitionFuncValid(tbdef *TableDef, partby tree.PartitionBy) error {
+	if partby.PType == nil {
+		return nil
+	}
+
+	checker := &partitionExprChecker{
+		processors: []partitionExprProcessor{checkPartitionExprAllowed},
+		tbdef:      tbdef,
+		err:        nil,
+	}
+
+	switch partitionType := partby.PType.(type) {
+	case *tree.KeyType:
+		if partitionType.ColumnList != nil {
+			for _, expr := range partitionType.ColumnList {
+				PartitionExprSemanticCheck(tbdef, expr, checker)
+				if checker.err != nil {
+					return checker.err
+				}
+			}
+		}
+	case *tree.HashType:
+		PartitionExprSemanticCheck(tbdef, partitionType.Expr, checker)
+		if checker.err != nil {
+			return checker.err
+		}
+	case *tree.RangeType:
+		if partitionType.ColumnList != nil {
+			for _, expr := range partitionType.ColumnList {
+				PartitionExprSemanticCheck(tbdef, expr, checker)
+				if checker.err != nil {
+					return checker.err
+				}
+			}
+		} else {
+			PartitionExprSemanticCheck(tbdef, partitionType.Expr, checker)
+			if checker.err != nil {
+				return checker.err
+			}
+		}
+	case *tree.ListType:
+		if partitionType.ColumnList != nil {
+			for _, expr := range partitionType.ColumnList {
+				PartitionExprSemanticCheck(tbdef, expr, checker)
+				if checker.err != nil {
+					return checker.err
+				}
+			}
+		} else {
+			PartitionExprSemanticCheck(tbdef, partitionType.Expr, checker)
+			if checker.err != nil {
+				return checker.err
+			}
+		}
+	}
+	return nil
+}
+
+type partitionExprProcessor func(def *TableDef, expr tree.Expr) error
+type partitionExprChecker struct {
+	processors []partitionExprProcessor
+	tbdef      *TableDef
+	err        error
+}
+
+func PartitionExprSemanticCheck(tbdef *TableDef, expr tree.Expr, checker *partitionExprChecker) (canNext bool) {
+	for _, processor := range checker.processors {
+		if err := processor(tbdef, expr); err != nil {
+			checker.err = err
+			return false
+		}
+	}
+
+	switch v := expr.(type) {
+	case *tree.FuncExpr:
+		for _, e := range v.Exprs {
+			next := PartitionExprSemanticCheck(tbdef, e, checker)
+			if !next {
+				return next
+			}
+		}
+	case *tree.BinaryExpr:
+		next := PartitionExprSemanticCheck(tbdef, v.Left, checker)
+		if !next {
+			return next
+		}
+
+		next = PartitionExprSemanticCheck(tbdef, v.Right, checker)
+		if !next {
+			return next
+		}
+	case *tree.UnaryExpr:
+		next := PartitionExprSemanticCheck(tbdef, v.Expr, checker)
+		if !next {
+			return next
+		}
+	case *tree.ParenExpr:
+		next := PartitionExprSemanticCheck(tbdef, v.Expr, checker)
+		if !next {
+			return next
+		}
+	case *tree.UnresolvedName:
+		return false
+	case *tree.MaxValue:
+		return false
+	default:
+		checker.err = moerr.NewInternalError("This partition function is not allowed")
+		return false
+	}
+	return true
+}
 
 func checkPartitionExprAllowed(tb *TableDef, e tree.Expr) error {
 	switch v := e.(type) {
@@ -468,16 +478,71 @@ func checkPartitionExprAllowed(tb *TableDef, e tree.Expr) error {
 		}
 	case *tree.BinaryExpr:
 		if _, ok := AllowedPartition4BinaryOpMap[v.Op]; ok {
-			return nil
+			return checkNoTimestampArgs(tb, v.Left, v.Right)
 		}
 	case *tree.UnaryExpr:
 		if _, ok := AllowedPartition4UnaryOpMap[v.Op]; ok {
-			return nil
+			return checkNoTimestampArgs(tb, v.Expr)
 		}
 	case *tree.ParenExpr, *tree.MaxValue, *tree.UnresolvedName:
 		return nil
 	}
 	return moerr.NewInternalError("This partition function is not allowed")
+}
+
+func checkNoTimestampArgs(tbInfo *TableDef, exprs ...tree.Expr) error {
+	argsType, err := collectArgsType(tbInfo, exprs...)
+	if err != nil {
+		return err
+	}
+	if hasTimestampArgs(argsType...) {
+		return moerr.NewInternalError("Constant, random or timezone-dependent expressions in (sub)partitioning function are not allowed")
+	}
+	return nil
+}
+
+func collectArgsType(tblInfo *TableDef, exprs ...tree.Expr) ([]*Type, error) {
+	ts := make([]*Type, 0, len(exprs))
+	for _, arg := range exprs {
+		col, ok := arg.(*tree.UnresolvedName)
+		if !ok {
+			continue
+		}
+		columnInfo := findColumnByName(col.Parts[0], tblInfo)
+		if columnInfo == nil {
+			return nil, moerr.NewInternalError("Unknown column '%-.192s' in '%-.192s'", col.Parts[0], "partition function")
+		}
+		ts = append(ts, columnInfo.GetTyp())
+	}
+	return ts, nil
+}
+
+func hasDateArgs(argsType ...*Type) bool {
+	for _, t := range argsType {
+		return t.Id == int32(types.T_date) || t.Id == int32(types.T_datetime)
+	}
+	return false
+}
+
+func hasTimeArgs(argsType ...*Type) bool {
+	for _, t := range argsType {
+		return t.Id == int32(types.T_time) || t.Id == int32(types.T_datetime)
+	}
+	return false
+}
+
+func hasTimestampArgs(argsType ...*Type) bool {
+	for _, t := range argsType {
+		return t.Id == int32(types.T_timestamp)
+	}
+	return false
+}
+
+func hasDatetimeArgs(argsType ...*Type) bool {
+	for _, t := range argsType {
+		return t.Id == int32(types.T_datetime)
+	}
+	return false
 }
 
 // AllowedPartitionFuncMap stores functions which can be used in the partition expression.
@@ -524,57 +589,3 @@ var AllowedPartition4UnaryOpMap = map[tree.UnaryOp]string{
 	tree.UNARY_PLUS:  "+",
 	tree.UNARY_MINUS: "-",
 }
-
-/*
-func checkNoTimestampArgs(tbInfo *TableDef, exprs ...ast.ExprNode) error {
-	argsType, err := collectArgsType(tbInfo, exprs...)
-	if err != nil {
-		return err
-	}
-	if hasTimestampArgs(argsType...) {
-		return errors.Trace(dbterror.ErrWrongExprInPartitionFunc)
-	}
-	return nil
-}
-
-func collectArgsType(tblInfo *TableDef, exprs ...tree.Expr) ([]byte, error) {
-	ts := make([]byte, 0, len(exprs))
-	for _, arg := range exprs {
-		col, ok := arg.(*ast.ColumnNameExpr)
-		if !ok {
-			continue
-		}
-		columnInfo := findColumnByName(col.Name.Name.L, tblInfo)
-		if columnInfo == nil {
-			return nil, errors.Trace(dbterror.ErrBadField.GenWithStackByArgs(col.Name.Name.L, "partition function"))
-		}
-		ts = append(ts, columnInfo.GetType())
-	}
-
-	return ts, nil
-}
-
-func hasDateArgs(argsType ...byte) bool {
-	return slice.AnyOf(argsType, func(i int) bool {
-		return argsType[i] == mysql.TypeDate || argsType[i] == mysql.TypeDatetime
-	})
-}
-
-func hasTimeArgs(argsType ...byte) bool {
-	return slice.AnyOf(argsType, func(i int) bool {
-		return argsType[i] == mysql.TypeDuration || argsType[i] == mysql.TypeDatetime
-	})
-}
-
-func hasTimestampArgs(argsType ...byte) bool {
-	return slice.AnyOf(argsType, func(i int) bool {
-		return argsType[i] == mysql.TypeTimestamp
-	})
-}
-
-func hasDatetimeArgs(argsType ...byte) bool {
-	return slice.AnyOf(argsType, func(i int) bool {
-		return argsType[i] == mysql.TypeDatetime
-	})
-}
-*/
