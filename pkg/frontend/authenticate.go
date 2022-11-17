@@ -4622,6 +4622,8 @@ func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.P
 	var sqlForCheckTenant string
 	var erArray []ExecResult
 	var err error
+	ctx, span := trace.Debug(ctx, "checkTenantExistsOrNot")
+	defer span.End()
 	sqlForCheckTenant = getSqlForCheckTenant(userName)
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sqlForCheckTenant)
@@ -4647,6 +4649,8 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
 	var newUserId int64
+	ctx, span := trace.Debug(ctx, "InitGeneralTenant")
+	defer span.End()
 	tenant := ses.GetTenantInfo()
 	pu := config.GetParameterUnit(ctx)
 
@@ -4668,14 +4672,22 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(tenant.GetUserID()))
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(tenant.GetDefaultRoleID()))
 
+	_, st := trace.Debug(ctx, "InitGeneralTenant.init_general_tenant")
 	mp, err := mpool.NewMPool("init_general_tenant", 0, mpool.NoFixed)
 	if err != nil {
+		st.End()
 		return err
 	}
+	st.End()
 	defer mpool.DeleteMPool(mp)
 
 	bh := NewBackgroundHandler(ctx, mp, pu)
 	defer bh.Close()
+
+	if sc := trace.SpanFromContext(ctx).SpanContext(); !sc.IsEmpty() {
+		sc.Kind = trace.SpanKindBackground
+		ctx = trace.ContextWithSpanContext(ctx, sc)
+	}
 
 	//USE the mo_catalog
 	err = bh.Exec(ctx, "use mo_catalog;")
@@ -4758,6 +4770,8 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	var comment = ""
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
+	ctx, span := trace.Debug(ctx, "createTablesInMoCatalogOfGeneralTenant")
+	defer span.End()
 
 	if nameIsInvalid(ca.Name) {
 		err = moerr.NewInternalError("the account name is invalid")
@@ -4825,6 +4839,8 @@ handleFailed:
 func createTablesInMoCatalogOfGeneralTenant2(tenant *TenantInfo, bh BackgroundExec, ca *tree.CreateAccount, newTenantCtx context.Context, newTenantID, newUserId int64) error {
 	var err error
 	var initDataSqls []string
+	newTenantCtx, span := trace.Debug(newTenantCtx, "createTablesInMoCatalogOfGeneralTenant2")
+	defer span.End()
 	//create tables for the tenant
 	for _, sql := range createSqls {
 		//only the SYS tenant has the table mo_account
@@ -4915,6 +4931,8 @@ func createTablesInMoCatalogOfGeneralTenant2(tenant *TenantInfo, bh BackgroundEx
 
 // createTablesInSystemOfGeneralTenant creates the database system and system_metrics as the external tables.
 func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, newTenant *TenantInfo) error {
+	ctx, span := trace.Debug(ctx, "createTablesInSystemOfGeneralTenant")
+	defer span.End()
 	//with new tenant
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, newTenant.GetUserID())
@@ -4943,6 +4961,8 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
 func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, newTenant *TenantInfo) error {
+	ctx, span := trace.Debug(ctx, "createTablesInInformationSchemaOfGeneralTenant")
+	defer span.End()
 	//with new tenant
 	//TODO: when we have the auto_increment column, we need new strategy.
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
