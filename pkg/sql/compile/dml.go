@@ -186,7 +186,6 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 		for j, expr := range p.Columns[i].Column {
 			vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 			if err != nil {
-				vec.Free(proc.Mp())
 				return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
 			}
 			if vec.Size() == 0 {
