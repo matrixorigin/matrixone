@@ -322,9 +322,8 @@ func (c *SpanContext) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	return nil
 }
 
-// SpanContextWithID with default Kind: SpanKindStatement
-func SpanContextWithID(id TraceID) SpanContext {
-	return SpanContext{TraceID: id, Kind: SpanKindStatement}
+func SpanContextWithID(id TraceID, kind SpanKind) SpanContext {
+	return SpanContext{TraceID: id, Kind: kind}
 }
 
 // SpanContextWithIDs with default Kind: SpanKindInternal
@@ -428,9 +427,12 @@ const (
 	// SpanKindStatement is a SpanKind for a Span that represents the operation
 	// belong to statement query
 	SpanKindStatement SpanKind = 1
+	// SpanKindBackground is a SpanKind for a Span that represents the operation
+	// belong to BackgroundSession query.
+	SpanKindBackground SpanKind = 2
 	// SpanKindRemote is a SpanKind for a Span that represents the operation
 	// cross rpc
-	SpanKindRemote SpanKind = 2
+	SpanKindRemote SpanKind = 3
 )
 
 func (k SpanKind) String() string {
@@ -439,6 +441,8 @@ func (k SpanKind) String() string {
 		return "internal"
 	case SpanKindStatement:
 		return "statement"
+	case SpanKindBackground:
+		return "background"
 	case SpanKindRemote:
 		return "remote"
 	default:

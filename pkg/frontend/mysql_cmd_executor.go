@@ -238,7 +238,10 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
 	}
-	sc := trace.SpanContextWithID(trace.TraceID(stmID))
+	var sc trace.SpanContext
+	if sc = trace.SpanFromContext(ctx).SpanContext(); sc.IsEmpty() || sc.Kind != trace.SpanKindBackground {
+		sc = trace.SpanContextWithID(trace.TraceID(stmID), trace.SpanKindStatement)
+	}
 	reqCtx := ses.GetRequestContext()
 	ses.SetRequestContext(trace.ContextWithSpanContext(reqCtx, sc))
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
@@ -281,7 +284,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 		StatementTag:         "", // fixme: (Reserved)
 		RequestAt:            envBegin,
 	}
-	sc := trace.SpanContextWithID(trace.TraceID(stmID))
+	sc := trace.SpanContextWithID(trace.TraceID(stmID), trace.SpanKindStatement)
 	ctx = trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 	trace.EndStatement(ctx, err)
 	incStatementCounter(tenant.GetTenant(), nil)
@@ -1554,10 +1557,6 @@ func (mce *MysqlCmdExecutor) handleSetVar(ctx context.Context, sv *tree.SetVar) 
 		return err
 	}
 
-	resp := NewOkResponse(0, 0, 0, 0, int(COM_QUERY), "")
-	if err = ses.GetMysqlProtocol().SendResponse(resp); err != nil {
-		return moerr.NewInternalError("routine send response failed. error:%v ", err)
-	}
 	return nil
 }
 
@@ -2915,6 +2914,8 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 
 // authenticateUserCanExecuteStatement checks the user can execute the statement
 func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
+	requestCtx, span := trace.Debug(requestCtx, "authenticateUserCanExecuteStatement")
+	defer span.End()
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
@@ -3041,7 +3042,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		retErr = moerr.NewParseError(err.Error())
+		retErr = err
+		if _, ok := err.(*moerr.Error); !ok {
+			retErr = moerr.NewParseError(err.Error())
+		}
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, retErr)
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
 		return retErr
@@ -3064,7 +3068,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var mrs *MysqlResultSet
 
 	singleStatement := len(cws) == 1
-	for _, cw := range cws {
+	for i, cw := range cws {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sql, singleStatement)
@@ -3587,7 +3591,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
-			resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
+			resp := mce.setResponse(i, len(cws), rspLen)
 			if _, ok := stmt.(*tree.Insert); ok {
 				resp.lastInsertId = 1
 			}
@@ -3607,7 +3611,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					return retErr
 				}
 			} else {
-				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
+				resp := mce.setResponse(i, len(cws), rspLen)
 				if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(resp); err2 != nil {
 					trace.EndStatement(requestCtx, err2)
 					retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
@@ -3616,10 +3620,16 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				}
 			}
 
+		case *tree.SetVar:
+			resp := mce.setResponse(i, len(cws), rspLen)
+			if err = proto.SendResponse(resp); err != nil {
+				return moerr.NewInternalError("routine send response failed. error:%v ", err)
+			}
+
 		case *tree.Deallocate:
 			//we will not send response in COM_STMT_CLOSE command
 			if ses.GetCmd() != COM_STMT_CLOSE {
-				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
+				resp := mce.setResponse(i, len(cws), rspLen)
 				if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(resp); err2 != nil {
 					trace.EndStatement(requestCtx, err2)
 					retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
@@ -3726,6 +3736,17 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		}
 	}
 	return err
+}
+
+func (mce *MysqlCmdExecutor) setResponse(cwIndex, cwsLen int, rspLen uint64) *Response {
+
+	//if the stmt has next stmt, should set the server status equals to 10
+	if cwIndex < cwsLen-1 {
+		return NewOkResponse(rspLen, 0, 0, SERVER_MORE_RESULTS_EXISTS, int(COM_QUERY), "")
+	} else {
+		return NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
+	}
+
 }
 
 // ExecRequest the server execute the commands from the client following the mysql's routine

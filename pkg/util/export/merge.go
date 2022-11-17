@@ -372,7 +372,7 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 			return nil, err
 		}
 		if cnt < BatchReadRows {
-			s.reader.Close()
+			//s.reader.Close() // just empty op and never end.
 			s.reader = nil
 			s.raw.Close()
 			s.raw = nil

@@ -112,9 +112,12 @@ func (d *LogServiceDriver) Close() error {
 }
 
 func (d *LogServiceDriver) Replay(h driver.ApplyHandle) error {
+	d.PreReplay()
 	r := newReplayer(h, ReplayReadSize, d)
 	r.replay()
 	d.onReplay(r)
+	r.d.resetReadCache()
+	d.PostReplay()
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("wal"),
 		common.AnyField("backend", "logservice"),

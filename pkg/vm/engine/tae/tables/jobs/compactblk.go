@@ -234,10 +234,12 @@ func (task *compactBlockTask) Execute() (err error) {
 	}
 	createdStr := "nil"
 	if task.created != nil {
-		task.created.Fingerprint().BlockString()
+		createdStr = task.created.Fingerprint().BlockString()
 	}
 	logutil.Info("[Done]",
+		common.AnyField("txn-start-ts", task.txn.GetStartTS().ToString()),
 		common.OperationField(task.Name()),
+		common.AnyField("compacted", task.meta.Repr()),
 		common.AnyField("created", createdStr),
 		common.DurationField(time.Since(now)))
 	return
