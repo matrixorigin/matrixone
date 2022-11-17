@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -53,6 +54,9 @@ func (c LogContext) Log(msg string, fields ...zap.Field) bool {
 			c.fields = fields
 		} else {
 			c.fields = append(c.fields, fields...)
+		}
+		if c.ctx != nil {
+			c.fields = append(c.fields, trace.ContextField(c.ctx))
 		}
 
 		ce.Write(c.fields...)
