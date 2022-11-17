@@ -133,7 +133,8 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	// Truncate Index Tables if needed
 	for _, name := range tqry.IndexTableNames {
-		err := dbSource.Truncate(c.ctx, name)
+		var err error
+		err = dbSource.Truncate(c.ctx, name)
 		if err != nil {
 			return err
 		}
