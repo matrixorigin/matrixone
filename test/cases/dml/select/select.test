@@ -203,3 +203,7 @@ create table if not exists t1(a int auto_increment primary key);
 drop table if exists t1;
 SELECT WORD FROM INFORMATION_SCHEMA.KEYWORDS WHERE RESERVED=1 ORDER BY WORD limit 1;
 ;
+drop table if exists t1;
+create table t1 (a int primary key, b int);
+select * from t1 WHERE (a IN ('1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','20','21','26','27','28','29') AND b = 0) ORDER BY `a` ASC;
+drop table if exists t1;
