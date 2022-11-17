@@ -47,6 +47,7 @@ type driverInfo struct {
 	appended   *common.ClosedIntervals
 	appendedMu sync.RWMutex
 	commitCond sync.Cond
+	inReplay   bool
 }
 
 func newDriverInfo() *driverInfo {
@@ -61,6 +62,15 @@ func newDriverInfo() *driverInfo {
 	}
 }
 
+func (info *driverInfo) PreReplay() {
+	info.inReplay = true
+}
+func (info *driverInfo) PostReplay() {
+	info.inReplay = false
+}
+func (info *driverInfo) IsReplaying() bool {
+	return info.inReplay
+}
 func (info *driverInfo) onReplay(r *replayer) {
 	info.driverLsn = r.maxDriverLsn
 	info.synced = r.maxDriverLsn
