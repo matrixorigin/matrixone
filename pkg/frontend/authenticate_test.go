@@ -6634,7 +6634,7 @@ func Test_DropDatabaseOfAccount(t *testing.T) {
 
 		has := func(s string) bool {
 			for _, sql := range sqlsForDropDatabases {
-				if strings.Index(sql, s) >= 0 {
+				if strings.Contains(sql, s) {
 					return true
 				}
 			}
