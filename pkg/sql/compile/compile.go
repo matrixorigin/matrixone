@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"runtime"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -886,6 +885,7 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 		if err != nil {
 			panic(err)
 		}
+		defer vec.Free(c.proc.Mp())
 		return c.compileTop(n, vec.Col.([]int64)[0], ss)
 	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileOrder(n, ss)
@@ -894,10 +894,12 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 		if err != nil {
 			panic(err)
 		}
+		defer vec1.Free(c.proc.Mp())
 		vec2, err := colexec.EvalExpr(constBat, c.proc, n.Offset)
 		if err != nil {
 			panic(err)
 		}
+		defer vec2.Free(c.proc.Mp())
 		limit, offset := vec1.Col.([]int64)[0], vec2.Col.([]int64)[0]
 		topN := limit + offset
 		if topN <= 8192*2 {
@@ -1202,7 +1204,8 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 
 // Number of cpu's available on the current machine
 func (c *Compile) NumCPU() int {
-	return runtime.NumCPU()
+	//	return runtime.NumCPU()
+	return 1
 }
 
 func (c *Compile) initAnalyze(qry *plan.Query) {

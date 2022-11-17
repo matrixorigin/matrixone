@@ -320,7 +320,8 @@ func (e *Engine) Nodes() (engine.Nodes, error) {
 	var nodes engine.Nodes
 	for _, store := range clusterDetails.CNStores {
 		nodes = append(nodes, engine.Node{
-			Mcpu: 10, // TODO
+			//Mcpu: 10, // TODO
+			Mcpu: 1,
 			Id:   store.UUID,
 			Addr: store.ServiceAddress,
 		})
