@@ -264,6 +264,9 @@ func (c *compare[T]) Compare(veci, vecj int, vi, vj int64) int {
 	if cmp != 0 {
 		return cmp
 	}
+	if nulls.Contains(c.vs[veci].Nsp, uint64(vi)) && nulls.Contains(c.vs[veci].Nsp, uint64(vj)) {
+		return 0
+	}
 	return c.cmp(c.xs[veci][vi], c.xs[vecj][vj])
 }
 

@@ -132,9 +132,6 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, 3, len(indexes))
 	assert.Equal(t, "test index 0", string(indexes[0].(*BloomFilter).buf))
 	assert.False(t, nb0 == pool.CurrNB())
-	for i := range vec.Entries {
-		pool.Free(vec.Entries[i].Object.([]byte))
-	}
 	assert.False(t, nb0 == pool.CurrNB())
 	for i := range indexes {
 		pool.Free(indexes[i].(*BloomFilter).buf)
@@ -174,9 +171,6 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, 3, len(indexes))
 	assert.Equal(t, "test index 0", string(indexes[0].(*BloomFilter).buf))
 	assert.False(t, nb0 == pool.CurrNB())
-	for i := range vec.Entries {
-		pool.Free(vec.Entries[i].Object.([]byte))
-	}
 	assert.False(t, nb0 == pool.CurrNB())
 	for i := range indexes {
 		pool.Free(indexes[i].(*BloomFilter).buf)
