@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"strings"
+	"sync"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -552,17 +553,46 @@ func LoadCheckpointEntries(
 	}
 
 	locations := strings.Split(metLoc, ";")
-	entries = make([]*api.Entry, 0)
-	for _, location := range locations {
-		reader, err := blockio.NewCheckpointReader(fs, location)
-		if err != nil {
-			return nil, err
+	datas := make([]*CheckpointData, len(locations))
+	defer func() {
+		for _, data := range datas {
+			if data != nil {
+				data.Close()
+			}
+		}
+	}()
+	var errMu sync.Mutex
+	var wg sync.WaitGroup
+	readfn := func(i int) {
+		defer wg.Done()
+		location := locations[i]
+		reader, err2 := blockio.NewCheckpointReader(fs, location)
+		if err2 != nil {
+			errMu.Lock()
+			err = err2
+			errMu.Unlock()
+			return
 		}
 		data := NewCheckpointData()
-		defer data.Close()
-		if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
-			return nil, err
+		if err2 = data.ReadFrom(reader, common.DefaultAllocator); err2 != nil {
+			errMu.Lock()
+			err = err2
+			errMu.Unlock()
+			return
 		}
+		datas[i] = data
+	}
+	wg.Add(len(locations))
+	for i := range locations {
+		go readfn(i)
+	}
+	wg.Wait()
+	if err != nil {
+		return
+	}
+	entries = make([]*api.Entry, 0)
+	for i := range locations {
+		data := datas[i]
 		ins, del, cnIns, err := data.GetTableData(tableID)
 		if err != nil {
 			return nil, err

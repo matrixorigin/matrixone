@@ -776,6 +776,9 @@ func (m *mysqlTaskStorage) getDB() (*sql.DB, func() error, error) {
 }
 
 func (m *mysqlTaskStorage) useDB(db *sql.DB) error {
+	if err := db.Ping(); err != nil {
+		return errNotReady
+	}
 	for _, err := db.Exec("use " + m.dbname); err != nil; _, err = db.Exec("use " + m.dbname) {
 		me, ok := err.(*mysql.MySQLError)
 		if !ok || me.Number != moerr.ER_BAD_DB_ERROR {
