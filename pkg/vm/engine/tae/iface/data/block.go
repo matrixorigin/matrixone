@@ -65,9 +65,6 @@ type Block interface {
 	CheckpointUnit
 	BlockReplayer
 
-	DumpData(attr string) (view *model.ColumnView, err error)
-	LoadCommitTS() containers.Vector
-	LoadDeleteCommitTS() containers.Vector
 	DeletesInfo() string
 
 	GetRowsOnReplay() uint64
@@ -96,14 +93,12 @@ type Block interface {
 	GetValue(txn txnif.AsyncTxn, row, col int) (any, error)
 	PPString(level common.PPLevel, depth int, prefix string) string
 
-	Destroy() error
-	ReplayIndex() error
-	ReplayImmutIndex() error
-	FreeData()
+	Init() error
+	TryUpgrade() error
 	CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.Batch, error)
 	CollectDeleteInRange(start, end types.TS, withAborted bool) (*containers.Batch, error)
-	GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
-	GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
+	// GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
+	// GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 	GetFs() *objectio.ObjectFS
 
 	Close()

@@ -208,40 +208,6 @@ func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalo
 	wg.Wait()
 }
 
-func getSegmentFileNames(e *DB) (names map[uint64]string) {
-	names = make(map[uint64]string)
-	return
-	/*files, err := os.ReadDir(e.Fs.Dir)
-	if err != nil {
-		panic(err)
-	}
-	for _, f := range files {
-		name := f.Name()
-		id, err := decodeSegName(name)
-		if err != nil {
-			continue
-		}
-		names[id] = name
-	}
-	return*/
-}
-
-func getBlockFileNames(e *DB) (names []string) {
-	names = make([]string, 0)
-	return
-	/*files, err := os.ReadDir(e.Fs.Dir)
-	if err != nil {
-		panic(err)
-	}
-	for _, f := range files {
-		name := f.Name()
-		if strings.HasSuffix(name, ".blk") {
-			names = append(names, name)
-		}
-	}
-	return*/
-}
-
 func lenOfBats(bats []*containers.Batch) int {
 	rows := 0
 	for _, bat := range bats {
