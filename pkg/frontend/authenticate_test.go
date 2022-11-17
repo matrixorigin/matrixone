@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -5781,7 +5782,7 @@ func Test_doDropAccount(t *testing.T) {
 		sql = getSqlForDeleteAccountFromMoAccount(stmt.Name)
 		bh.sql2result[sql] = nil
 
-		for _, sql = range getSqlForDropTablesOfAccount() {
+		for _, sql = range getSqlForDropAccount() {
 			bh.sql2result[sql] = nil
 		}
 
@@ -5817,7 +5818,7 @@ func Test_doDropAccount(t *testing.T) {
 		sql = getSqlForDeleteAccountFromMoAccount(stmt.Name)
 		bh.sql2result[sql] = nil
 
-		for _, sql = range getSqlForDropTablesOfAccount() {
+		for _, sql = range getSqlForDropAccount() {
 			bh.sql2result[sql] = nil
 		}
 
@@ -5852,7 +5853,7 @@ func Test_doDropAccount(t *testing.T) {
 		sql = getSqlForDeleteAccountFromMoAccount(stmt.Name)
 		bh.sql2result[sql] = nil
 
-		for _, sql = range getSqlForDropTablesOfAccount() {
+		for _, sql = range getSqlForDropAccount() {
 			bh.sql2result[sql] = nil
 		}
 
@@ -6599,5 +6600,49 @@ func Test_cache(t *testing.T) {
 			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
 			convey.So(ret, convey.ShouldBeFalse)
 		}
+	})
+}
+
+func Test_DropDatabaseOfAccount(t *testing.T) {
+	convey.Convey("drop account", t, func() {
+		var db string
+		databases := map[string]int8{
+			"abc":        0,
+			"mo_catalog": 0,
+			"system":     0,
+			"ABC":        0,
+		}
+		var sqlsForDropDatabases []string
+		prefix := "drop database if exists "
+		for db = range databases {
+			if db == "mo_catalog" {
+				continue
+			}
+			bb := &bytes.Buffer{}
+			bb.WriteString(prefix)
+			//handle the database annotated by '`'
+			if db != strings.ToLower(db) {
+				bb.WriteString("`")
+				bb.WriteString(db)
+				bb.WriteString("`")
+			} else {
+				bb.WriteString(db)
+			}
+			bb.WriteString(";")
+			sqlsForDropDatabases = append(sqlsForDropDatabases, bb.String())
+		}
+
+		has := func(s string) bool {
+			for _, sql := range sqlsForDropDatabases {
+				if strings.Index(sql, s) >= 0 {
+					return true
+				}
+			}
+			return false
+		}
+
+		convey.So(has("ABC"), convey.ShouldBeTrue)
+		convey.So(has("system"), convey.ShouldBeTrue)
+		convey.So(has("mo_catalog"), convey.ShouldBeFalse)
 	})
 }
