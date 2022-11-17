@@ -20,10 +20,6 @@ import (
 	"time"
 )
 
-type dummyContextKey int
-
-var dummyCKKey = dummyContextKey(0)
-
 func TestString2Bytes(t *testing.T) {
 	type args struct {
 		s string

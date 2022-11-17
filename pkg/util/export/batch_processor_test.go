@@ -299,14 +299,13 @@ func TestMOCollector_HangBug(t *testing.T) {
 	var ctrlC = make(chan *bufferHolder, 1)
 	var ctrlTimeoutCnt = 0
 	_stubAwakeBuffer := gostub.Stub(&awakeBuffer, func(c *MOCollector) func(holder *bufferHolder) {
-		var ctrlTimer = time.NewTimer(timeo)
 		return func(holder *bufferHolder) {
+			var ctrlTimer = time.NewTimer(timeo)
 			//c.awakeGenerate <- holder
 			select {
 			case ctrlC <- holder:
 			case <-ctrlTimer.C:
 				ctrlTimeoutCnt += 1
-				ctrlTimer = time.NewTimer(timeo)
 			}
 		}
 	})

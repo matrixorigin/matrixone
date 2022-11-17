@@ -72,14 +72,6 @@ var dummyTable = &Table{
 	TableOptions:     nil,
 }
 
-func dummyFillTable(str string, i int64, f float64) *Row {
-	row := dummyTable.GetRow()
-	row.SetVal(dummyStrColumn.Name, str)
-	row.SetInt64(dummyInt64Column.Name, i)
-	row.SetFloat64(dummyFloat64Column.Name, f)
-	return row
-}
-
 var dummyTableCreateExistsSql = "CREATE EXTERNAL TABLE IF NOT EXISTS `db_dummy`.`tbl_dummy`(" +
 	"\n" + dummyStrCreateSql +
 	",\n" + dummyInt64CreateSql +
