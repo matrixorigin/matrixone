@@ -14,7 +14,32 @@
 
 package common
 
+type OffsetT interface {
+	int | uint32
+}
+
 type RowGen interface {
 	HasNext() bool
 	Next() uint32
+}
+
+type RowGenWrapper[T OffsetT] struct {
+	Sels []T
+	Idx  int
+}
+
+func NewRowGenWrapper[T OffsetT](sels ...T) *RowGenWrapper[T] {
+	return &RowGenWrapper[T]{
+		Sels: sels,
+	}
+}
+
+func (wrapper *RowGenWrapper[T]) HasNext() bool {
+	return wrapper.Idx < len(wrapper.Sels)
+}
+
+func (wrapper *RowGenWrapper[T]) Next() uint32 {
+	row := wrapper.Sels[wrapper.Idx]
+	wrapper.Idx++
+	return uint32(row)
 }

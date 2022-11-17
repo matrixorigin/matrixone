@@ -16,6 +16,8 @@ package containers
 
 import (
 	"bytes"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -540,7 +542,7 @@ func TestStrVector3(t *testing.T) {
 	vec.Append([]byte(h6))
 
 	assert.Equal(t, 6, vec.Length())
-	vec.RangeDelete(1, 2)
+	vec.BatchDeleteInts(1, 2)
 	assert.Equal(t, 4, vec.Length())
 	assert.Equal(t, h1, string(vec.Get(0)))
 	assert.Equal(t, h4, string(vec.Get(1)))
@@ -618,4 +620,34 @@ func TestStrVector4(t *testing.T) {
 	t.Log(time.Since(now))
 	vec.Close()
 	assert.Zero(t, opts.Allocator.CurrNB())
+}
+
+func TestStrVector5(t *testing.T) {
+	strs := [][]byte{}
+	for i := 1; i < 10; i++ {
+		str := strings.Repeat(fmt.Sprintf("%d", i), i*4)
+		strs = append(strs, []byte(str))
+	}
+	opts := withAllocator(nil)
+	vec := NewStrVector[[]byte](opts)
+	defer vec.Close()
+	size := 40000
+	for cnt := 0; cnt < size; cnt++ {
+		p := cnt % len(strs)
+		vec.Append(strs[p])
+	}
+	deleteCnt := 200
+	step := size / deleteCnt
+	deletes := []int{}
+	for i := 0; i < size; i += step {
+		deletes = append(deletes, i)
+	}
+	now := time.Now()
+	// for i := len(deletes) - 1; i >= 0; i-- {
+	// 	vec.Delete(deletes[i])
+	// }
+	vec.BatchDeleteInts(deletes...)
+	t.Log(time.Since(now))
+	// t.Log(vec.String())
+
 }

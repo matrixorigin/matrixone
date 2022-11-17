@@ -191,6 +191,25 @@ func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 	}
 }
 
+func makePlan2NullTextConstExpr(v string) *plan.Expr_C {
+	c := &plan.Expr_C{C: &plan.Const{
+		Isnull: true,
+	}}
+	return c
+}
+
+func MakePlan2NullTextConstExprWithType(v string) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2NullTextConstExpr(v),
+		Typ: &plan.Type{
+			Id:       int32(types.T_text),
+			Nullable: true,
+			Size:     4,
+			Width:    int32(len(v)),
+		},
+	}
+}
+
 func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil

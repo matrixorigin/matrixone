@@ -141,7 +141,18 @@ func (e *CheckpointEntry) Replay(
 	applyDuration = time.Since(t0)
 	return
 }
+func (e *CheckpointEntry) Read(fs *objectio.ObjectFS) (data *logtail.CheckpointData, err error) {
+	reader, err := blockio.NewCheckpointReader(fs.Service, e.location)
+	if err != nil {
+		return
+	}
 
+	data = logtail.NewCheckpointData()
+	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
+		return
+	}
+	return
+}
 func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns *api.Batch, err error) {
 	reader, err := blockio.NewCheckpointReader(fs.Service, e.location)
 	if err != nil {
