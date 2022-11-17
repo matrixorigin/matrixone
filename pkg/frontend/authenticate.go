@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -1236,7 +1237,7 @@ func getSqlForDeleteRole(roleId int64) []string {
 	}
 }
 
-func getSqlForDropTablesOfAccount() []string {
+func getSqlForDropAccount() []string {
 	return dropSqls
 }
 
@@ -1891,7 +1892,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var err error
-	var sql string
+	var sql, db string
 	var erArray []ExecResult
 
 	var deleteCtx context.Context
@@ -1955,7 +1956,57 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		//step 4 : drop table mo_user_grant
 		//step 5 : drop table mo_role_grant
 		//step 6 : drop table mo_role_privs
-		for _, sql = range getSqlForDropTablesOfAccount() {
+		for _, sql = range getSqlForDropAccount() {
+			err = bh.Exec(deleteCtx, sql)
+			if err != nil {
+				return err
+			}
+		}
+
+		//drop databases created by user
+		databases := make(map[string]int8)
+		dbSql := "show databases;"
+		bh.ClearExecResultSet()
+		err = bh.Exec(deleteCtx, dbSql)
+		if err != nil {
+			return err
+		}
+
+		erArray, err = getResultSet(bh)
+		if err != nil {
+			return err
+		}
+
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			db, err = erArray[0].GetString(i, 0)
+			if err != nil {
+				return err
+			}
+			databases[db] = 0
+		}
+
+		var sqlsForDropDatabases []string
+		prefix := "drop database if exists "
+
+		for db = range databases {
+			if db == "mo_catalog" {
+				continue
+			}
+			bb := &bytes.Buffer{}
+			bb.WriteString(prefix)
+			//handle the database annotated by '`'
+			if db != strings.ToLower(db) {
+				bb.WriteString("`")
+				bb.WriteString(db)
+				bb.WriteString("`")
+			} else {
+				bb.WriteString(db)
+			}
+			bb.WriteString(";")
+			sqlsForDropDatabases = append(sqlsForDropDatabases, bb.String())
+		}
+
+		for _, sql = range sqlsForDropDatabases {
 			err = bh.Exec(deleteCtx, sql)
 			if err != nil {
 				return err
@@ -4674,7 +4725,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	}
 	defer mpool.DeleteMPool(mp)
 
-	bh := NewBackgroundHandler(ctx, mp, pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//USE the mo_catalog
@@ -4990,7 +5041,7 @@ func checkUserExistsOrNot(ctx context.Context, pu *config.ParameterUnit, tenantN
 }
 
 // InitUser creates new user for the tenant
-func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) error {
+func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.CreateUser) error {
 	var err error
 	var exists int
 	var erArray []ExecResult
@@ -5011,14 +5062,13 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 		}
 	}
 
-	pu := config.GetParameterUnit(ctx)
 	mp, err := mpool.NewMPool("init_user", 0, mpool.NoFixed)
 	if err != nil {
 		return err
 	}
 	defer mpool.DeleteMPool(mp)
 
-	bh := NewBackgroundHandler(ctx, mp, pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -5206,7 +5256,7 @@ handleFailed:
 }
 
 // InitRole creates the new role
-func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) error {
+func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.CreateRole) error {
 	var err error
 	var exists int
 	var erArray []ExecResult
@@ -5214,13 +5264,8 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 	if err != nil {
 		return err
 	}
-	pu := config.GetParameterUnit(ctx)
 
-	mp, err := mpool.NewMPool("init_role", 0, mpool.NoFixed)
-	if err != nil {
-		return err
-	}
-	bh := NewBackgroundHandler(ctx, mp, pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")

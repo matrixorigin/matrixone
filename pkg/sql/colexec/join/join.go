@@ -137,8 +137,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				continue
 			}
 			sels := mSels[vals[k]-1]
-			for _, sel := range sels {
-				if ap.Cond != nil {
+			if ap.Cond != nil {
+				for _, sel := range sels {
 					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
 					if err != nil {
 						return err
@@ -149,21 +149,38 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						continue
 					}
 					vec.Free(proc.Mp())
+					for j, rp := range ap.Result {
+						if rp.Rel == 0 {
+							if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
+								rbat.Clean(proc.Mp())
+								return err
+							}
+						} else {
+							if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
+								rbat.Clean(proc.Mp())
+								return err
+							}
+						}
+					}
+					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 				}
+			} else {
 				for j, rp := range ap.Result {
 					if rp.Rel == 0 {
-						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
+						if err := vector.UnionMulti(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), len(sels), proc.Mp()); err != nil {
 							rbat.Clean(proc.Mp())
 							return err
 						}
 					} else {
-						if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
+						if err := vector.Union(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sels, true, proc.Mp()); err != nil {
 							rbat.Clean(proc.Mp())
 							return err
 						}
 					}
 				}
-				rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
+				for _, sel := range sels {
+					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
+				}
 			}
 		}
 	}
