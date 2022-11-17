@@ -368,7 +368,9 @@ func Test_checkUserExistsOrNot(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 
-		err = InitUser(ctx, tenant, &tree.CreateUser{IfNotExists: true, Users: []*tree.User{{Username: "test"}}})
+		ses := &Session{}
+
+		err = InitUser(ctx, ses, tenant, &tree.CreateUser{IfNotExists: true, Users: []*tree.User{{Username: "test"}}})
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -431,7 +433,8 @@ func Test_initUser(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 
-		err := InitUser(ctx, tenant, cu)
+		ses := &Session{}
+		err := InitUser(ctx, ses, tenant, cu)
 		convey.So(err, convey.ShouldBeError)
 	})
 }
@@ -473,8 +476,9 @@ func Test_initRole(t *testing.T) {
 				{UserName: "r2"},
 			},
 		}
+		ses := &Session{}
 
-		err := InitRole(ctx, tenant, cr)
+		err := InitRole(ctx, ses, tenant, cr)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -6037,7 +6041,7 @@ func newSes(priv *privilege) *Session {
 
 	proto := NewMysqlClientProtocol(0, nil, 1024, pu.SV)
 
-	ses := NewSession(proto, nil, pu, gSysVariables)
+	ses := NewSession(proto, nil, pu, gSysVariables, false)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,
