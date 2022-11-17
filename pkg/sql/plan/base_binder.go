@@ -1198,6 +1198,7 @@ func appendCastBeforeExpr(expr *Expr, toType *Type, isBin ...bool) (*Expr, error
 	if expr.Typ.Id == int32(types.T_any) {
 		return expr, nil
 	}
+	toType.NotNullable = expr.Typ.NotNullable
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),

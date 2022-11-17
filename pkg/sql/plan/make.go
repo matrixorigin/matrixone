@@ -195,6 +195,7 @@ func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
 	}
+	targetType.NotNullable = expr.Typ.NotNullable
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if types.T(expr.Typ.Id) == types.T_any {
 		expr.Typ = targetType
