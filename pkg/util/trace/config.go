@@ -427,12 +427,9 @@ const (
 	// SpanKindStatement is a SpanKind for a Span that represents the operation
 	// belong to statement query
 	SpanKindStatement SpanKind = 1
-	// SpanKindBackground is a SpanKind for a Span that represents the operation
-	// belong to BackgroundSession query.
-	SpanKindBackground SpanKind = 2
 	// SpanKindRemote is a SpanKind for a Span that represents the operation
 	// cross rpc
-	SpanKindRemote SpanKind = 3
+	SpanKindRemote SpanKind = 2
 )
 
 func (k SpanKind) String() string {
@@ -441,8 +438,6 @@ func (k SpanKind) String() string {
 		return "internal"
 	case SpanKindStatement:
 		return "statement"
-	case SpanKindBackground:
-		return "background"
 	case SpanKindRemote:
 		return "remote"
 	default:
