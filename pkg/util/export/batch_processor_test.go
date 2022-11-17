@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 
 	"github.com/google/gops/agent"
+	"github.com/lni/goutils/leaktest"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zapcore"
@@ -273,6 +274,7 @@ func TestNewMOCollector(t *testing.T) {
 }
 
 func TestMOCollector_HangBug(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	ch := make(chan string, 3)
 	errutil.SetErrorReporter(func(ctx context.Context, err error, i int) {
 		t.Logf("TestNewMOCollector::ErrorReport: %+v", err)
@@ -306,6 +308,7 @@ func TestMOCollector_HangBug(t *testing.T) {
 	Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
 	collector := NewMOCollector()
 	collector.Start()
+	defer collector.Stop(true)
 
 	t.Logf("fill up the buffer")
 	collector.Collect(DefaultContext(), newDummy(1))
@@ -347,4 +350,7 @@ loop:
 		}
 	}
 
+	for _, holder := range collector.buffers {
+		holder.FlushAndReset()
+	}
 }

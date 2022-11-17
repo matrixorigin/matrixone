@@ -2,6 +2,7 @@ name: PR Unit Test Coverage
 on:
   pull_request_target:
     types: [ opened, synchronize ]
+    branches: [ main,'[0-9]+.[0-9]+.[0-9]+' ]
 
 concurrency: 
   group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}

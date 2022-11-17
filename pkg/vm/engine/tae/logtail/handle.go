@@ -48,9 +48,9 @@ func HandleSyncLogTailReq(
 	mgr *LogtailMgr,
 	c *catalog.Catalog,
 	req api.SyncLogTailReq) (resp api.SyncLogTailResp, err error) {
-	logutil.Debugf("[Logtail] begin handle %v\n", req)
+	logutil.Debugf("[Logtail] begin handle %+v", req)
 	defer func() {
-		logutil.Debugf("[Logtail] end handle err %v\n", err)
+		logutil.Debugf("[Logtail] end handle %d entries[%q], err %v", len(resp.Commands), resp.CkpLocation, err)
 	}()
 	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
 	end := types.BuildTS(req.CnWant.PhysicalTime, req.CnWant.LogicalTime)
@@ -70,7 +70,6 @@ func HandleSyncLogTailReq(
 	ckpLoc, checkpointed := ckpClient.CollectCheckpointsInRange(start, end)
 
 	if checkpointed.GreaterEq(end) {
-		logutil.Debugf("[Logtail] only send ckp %q\n", ckpLoc)
 		return api.SyncLogTailResp{
 			CkpLocation: ckpLoc,
 		}, err
@@ -240,6 +239,7 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 
 	if b.insBatch.Length() > 0 {
 		bat, err := containersBatchToProtoBatch(b.insBatch)
+		logutil.Debugf("[logtail] catalog insert to %d-%s, %s", tblID, tableName, DebugBatchToString("catalog", b.insBatch, true))
 		if err != nil {
 			return api.SyncLogTailResp{}, err
 		}
@@ -255,6 +255,7 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	}
 	if b.delBatch.Length() > 0 {
 		bat, err := containersBatchToProtoBatch(b.delBatch)
+		logutil.Debugf("[logtail] catalog delete from %d-%s, %s", tblID, tableName, DebugBatchToString("catalog", b.delBatch, false))
 		if err != nil {
 			return api.SyncLogTailResp{}, err
 		}
@@ -500,6 +501,12 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			tableName = fmt.Sprintf("_%d_meta", b.tid)
 			logutil.Infof("[Logtail] send block meta for %q", b.tname)
 		}
+		if metaChange {
+			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname, DebugBatchToString("meta", batch, true))
+		} else {
+			logutil.Debugf("[logtail] table data [%v] %d-%s: %s", typ, b.tid, b.tname, DebugBatchToString("data", batch, false))
+		}
+
 		entry := &api.Entry{
 			EntryType:    typ,
 			TableId:      b.tid,

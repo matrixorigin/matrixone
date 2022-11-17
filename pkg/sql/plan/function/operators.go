@@ -603,7 +603,7 @@ var operators = map[int]Functions{
 
 	EQUAL: {
 		Id:          EQUAL,
-		Flag:        plan.Function_STRICT,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      COMPARISON_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -810,7 +810,7 @@ var operators = map[int]Functions{
 
 	GREAT_THAN: {
 		Id:          GREAT_THAN,
-		Flag:        plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      COMPARISON_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -1017,7 +1017,7 @@ var operators = map[int]Functions{
 
 	GREAT_EQUAL: {
 		Id:          GREAT_EQUAL,
-		Flag:        plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      COMPARISON_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -1224,7 +1224,7 @@ var operators = map[int]Functions{
 
 	LESS_THAN: {
 		Id:          LESS_THAN,
-		Flag:        plan.Function_STRICT,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      COMPARISON_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -1431,7 +1431,7 @@ var operators = map[int]Functions{
 
 	LESS_EQUAL: {
 		Id:          LESS_EQUAL,
-		Flag:        plan.Function_STRICT,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      COMPARISON_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -1880,7 +1880,7 @@ var operators = map[int]Functions{
 
 	BETWEEN: {
 		Id:          BETWEEN,
-		Flag:        plan.Function_STRICT,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      BETWEEN_AND_EXPRESSION,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -1997,7 +1997,7 @@ var operators = map[int]Functions{
 
 	IN: {
 		Id:     IN,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: IN_PREDICATE,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
 			if len(inputs) == 2 && inputs[1] == types.T_tuple {
@@ -2034,7 +2034,7 @@ var operators = map[int]Functions{
 	// logic operator
 	AND: {
 		Id:     AND,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: BINARY_LOGICAL_OPERATOR,
 		Overloads: []Function{
 			{
@@ -2051,7 +2051,7 @@ var operators = map[int]Functions{
 
 	OR: {
 		Id:     OR,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: BINARY_LOGICAL_OPERATOR,
 		Overloads: []Function{
 			{
@@ -2102,7 +2102,7 @@ var operators = map[int]Functions{
 	// arithmetic operator
 	PLUS: {
 		Id:          PLUS,
-		Flag:        plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      BINARY_ARITHMETIC_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -2189,7 +2189,7 @@ var operators = map[int]Functions{
 
 	MINUS: {
 		Id:          MINUS,
-		Flag:        plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      BINARY_ARITHMETIC_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -2282,7 +2282,7 @@ var operators = map[int]Functions{
 
 	MULTI: {
 		Id:          MULTI,
-		Flag:        plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      BINARY_ARITHMETIC_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -2363,7 +2363,7 @@ var operators = map[int]Functions{
 
 	DIV: {
 		Id:          DIV,
-		Flag:        plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      BINARY_ARITHMETIC_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn2,
 		Overloads: []Function{
@@ -2396,7 +2396,7 @@ var operators = map[int]Functions{
 
 	INTEGER_DIV: {
 		Id:          INTEGER_DIV,
-		Flag:        plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      BINARY_ARITHMETIC_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn2,
 		Overloads: []Function{
@@ -2486,7 +2486,7 @@ var operators = map[int]Functions{
 
 	UNARY_PLUS: {
 		Id:     UNARY_PLUS,
-		Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: UNARY_ARITHMETIC_OPERATOR,
 		Overloads: []Function{
 			{
@@ -2614,7 +2614,7 @@ var operators = map[int]Functions{
 
 	UNARY_MINUS: {
 		Id:     UNARY_MINUS,
-		Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:   plan.Function_STRICT,
 		Layout: UNARY_ARITHMETIC_OPERATOR,
 		Overloads: []Function{
 			{

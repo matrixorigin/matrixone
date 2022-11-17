@@ -22,6 +22,8 @@
 package trace
 
 import (
+	"context"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -36,11 +38,13 @@ var _1SpanID SpanID = [8]byte{0, 0, 0, 0, 0, 0, 0, 1}
 var _2SpanID SpanID = [8]byte{0, 0, 0, 0, 0, 0, 0, 2}
 var _16SpanID SpanID = [8]byte{0, 0, 0, 0, 0, 0x12, 0x34, 0x56}
 
-/*
-func TestMOTracer_Start(t1 *testing.T) {
+func TestMOTracer_Start(t *testing.T) {
+	if runtime.GOOS == `linux` {
+		t.Skip()
+		return
+	}
 	type fields struct {
-		TracerConfig TracerConfig
-		Enable       bool
+		Enable bool
 	}
 	type args struct {
 		ctx  context.Context
@@ -48,6 +52,17 @@ func TestMOTracer_Start(t1 *testing.T) {
 		opts []SpanOption
 	}
 	rootCtx := ContextWithSpanContext(context.Background(), SpanContextWithIDs(_1TraceID, _1SpanID))
+	stmCtx := ContextWithSpanContext(context.Background(), SpanContextWithID(_1TraceID, SpanKindStatement))
+	dAtA := make([]byte, 24)
+	span := SpanFromContext(stmCtx)
+	c := span.SpanContext()
+	cnt, err := c.MarshalTo(dAtA)
+	require.Nil(t, err)
+	require.Equal(t, 24, cnt)
+	sc := &SpanContext{}
+	err = sc.Unmarshal(dAtA)
+	require.Nil(t, err)
+	remoteCtx := ContextWithSpanContext(context.Background(), *sc)
 	tests := []struct {
 		name             string
 		fields           fields
@@ -55,46 +70,53 @@ func TestMOTracer_Start(t1 *testing.T) {
 		wantNewRoot      bool
 		wantTraceId      TraceID
 		wantParentSpanId SpanID
+		wantKind         SpanKind
 	}{
 		{
-			name: "normal",
-			fields: fields{
-				TracerConfig: TracerConfig{Name: "normal"},
-				Enable:       true,
-			},
-			args: args{
-				ctx:  rootCtx,
-				name: "normal",
-				opts: []SpanOption{},
-			},
+			name:             "normal",
+			fields:           fields{Enable: true},
+			args:             args{ctx: rootCtx, name: "normal", opts: []SpanOption{}},
 			wantNewRoot:      false,
 			wantTraceId:      _1TraceID,
 			wantParentSpanId: _1SpanID,
+			wantKind:         SpanKindInternal,
 		},
 		{
-			name: "newRoot",
-			fields: fields{
-				TracerConfig: TracerConfig{Name: "newRoot"},
-				Enable:       true,
-			},
-			args: args{
-				ctx:  rootCtx,
-				name: "newRoot",
-				opts: []SpanOption{WithNewRoot(true)},
-			},
+			name:             "newRoot",
+			fields:           fields{Enable: true},
+			args:             args{ctx: rootCtx, name: "newRoot", opts: []SpanOption{WithNewRoot(true)}},
 			wantNewRoot:      true,
 			wantTraceId:      _1TraceID,
 			wantParentSpanId: _1SpanID,
+			wantKind:         SpanKindInternal,
+		},
+		{
+			name:             "statement",
+			fields:           fields{Enable: true},
+			args:             args{ctx: stmCtx, name: "newStmt", opts: []SpanOption{}},
+			wantNewRoot:      false,
+			wantTraceId:      _1TraceID,
+			wantParentSpanId: nilSpanID,
+			wantKind:         SpanKindStatement,
+		},
+		{
+			name:             "remote",
+			fields:           fields{Enable: true},
+			args:             args{ctx: remoteCtx, name: "remoteCtx", opts: []SpanOption{}},
+			wantNewRoot:      false,
+			wantTraceId:      _1TraceID,
+			wantParentSpanId: nilSpanID,
+			wantKind:         SpanKindRemote,
 		},
 	}
+	tracer := &MOTracer{
+		TracerConfig: TracerConfig{Name: "motrace_test"},
+		provider:     defaultMOTracerProvider(),
+	}
 	for _, tt := range tests {
-		t1.Run(tt.name, func(t1 *testing.T) {
-			t := &MOTracer{
-				TracerConfig: tt.fields.TracerConfig,
-				provider:     defaultMOTracerProvider(),
-			}
-			t.provider.enable = tt.fields.Enable
-			newCtx, span := t.Start(tt.args.ctx, tt.args.name, tt.args.opts...)
+		t.Run(tt.name, func(t1 *testing.T) {
+			tracer.provider.enable = tt.fields.Enable
+			newCtx, span := tracer.Start(tt.args.ctx, tt.args.name, tt.args.opts...)
 			if !tt.wantNewRoot {
 				require.Equal(t1, tt.wantTraceId, span.SpanContext().TraceID)
 				require.Equal(t1, tt.wantParentSpanId, span.ParentSpanContext().SpanID)
@@ -104,9 +126,10 @@ func TestMOTracer_Start(t1 *testing.T) {
 				require.NotEqual(t1, tt.wantParentSpanId, span.ParentSpanContext().SpanID)
 				require.NotEqual(t1, tt.wantParentSpanId, SpanFromContext(newCtx).ParentSpanContext().SpanID)
 			}
+			require.Equal(t1, tt.wantKind, SpanFromContext(newCtx).ParentSpanContext().Kind)
 		})
 	}
-}*/
+}
 
 func TestSpanContext_MarshalTo(t *testing.T) {
 	type fields struct {
