@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 
@@ -254,6 +255,9 @@ type BackgroundSession struct {
 func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *BackgroundSession {
 	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars)
 	ses.SetOutputCallback(fakeDataSetFetcher)
+	if stmt := trace.StatementFromContext(ctx); stmt != nil {
+		ses.uuid = stmt.SessionID
+	}
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(ctx)
 	ses.SetRequestContext(cancelBackgroundCtx)
 	backSes := &BackgroundSession{
