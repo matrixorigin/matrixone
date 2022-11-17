@@ -1210,6 +1210,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("tx_read_only", 0, 1, false),
 		Default:           int64(0),
 	},
+	"sql_select_limit": {
+		Name:              "sql_select_limit",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableUintType("sql_select_limit", 0, 18446744073709551615),
+		Default:           uint64(18446744073709551615),
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {
