@@ -86,7 +86,9 @@ select * from `PROCESSLIST` limit 2;
 desc user_privileges;
 select grantee, table_catalog from user_privileges limit 2;
 desc schemata;
+-- @bvt:issue#6715
 select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task';
+-- @bvt:issue
 desc character_sets;
 select character_set_name, description, maxlen from character_sets limit 5;
 desc triggers;
