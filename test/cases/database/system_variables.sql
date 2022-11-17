@@ -109,9 +109,10 @@ desc tables_priv;
 select host, table_name from tables_priv limit 5;
 
 -- sql_select_limit
-show variables like 'sql%';
 show variables like 'sql_select_limit';
 set sql_select_limit = 100000;
 show variables like 'sql_select_limit';
 set sql_select_limit = 1;
+show variables like 'sql_select_limit';
+SET SQL_SELECT_LIMIT = DEFAULT;
 show variables like 'sql_select_limit';

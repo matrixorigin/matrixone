@@ -401,11 +401,6 @@ column_priv    VARCHAR    NO        ''
 __mo_cpkey_004host002db004user010table_name    VARCHAR    NO    PRI    NULL        
 select host, table_name from tables_priv limit 5;
 host    table_name
-show variables like 'sql%';
-Variable_name    Value
-sql_mode    ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION
-sql_safe_updates    0
-sql_select_limit    18446744073709551615
 show variables like 'sql_select_limit';
 Variable_name    Value
 sql_select_limit    18446744073709551615
@@ -417,3 +412,6 @@ set sql_select_limit = 1;
 show variables like 'sql_select_limit';
 Variable_name    Value
 sql_select_limit    1
+SET SQL_SELECT_LIMIT = DEFAULT;
+show variables like 'sql_select_limit';
+null
