@@ -577,6 +577,7 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	if err != nil {
 		panic(err)
 	}
+	defer vec.Free(proc.Mp())
 	return &limit.Argument{
 		Limit: uint64(vec.Col.([]int64)[0]),
 	}
@@ -666,6 +667,7 @@ func constructMergeOffset(n *plan.Node, proc *process.Process) *mergeoffset.Argu
 	if err != nil {
 		panic(err)
 	}
+	defer vec.Free(proc.Mp())
 	return &mergeoffset.Argument{
 		Offset: uint64(vec.Col.([]int64)[0]),
 	}
@@ -676,6 +678,7 @@ func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argume
 	if err != nil {
 		panic(err)
 	}
+	defer vec.Free(proc.Mp())
 	return &mergelimit.Argument{
 		Limit: uint64(vec.Col.([]int64)[0]),
 	}
