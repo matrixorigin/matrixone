@@ -348,3 +348,41 @@ insert into t1 values (2);
 select a << 20 from t1;
 a<<20
 2097152
+drop table if exists t1;
+create table t1(a text);
+insert into t1 values("b"),("a"),("f"),("e"),("d");
+select * from t1;
+a
+b
+a
+f
+e
+d
+create view schemata as select a as catalog_name, NULL as sql_path from t1;
+SELECT * FROM schemata order by catalog_name,sql_path+1 limit 5;
+catalog_name    sql_path
+a    NULL
+b    NULL
+d    NULL
+e    NULL
+f    NULL
+SELECT * FROM schemata order by catalog_name limit 5;
+catalog_name    sql_path
+a    NULL
+b    NULL
+d    NULL
+e    NULL
+f    NULL
+SELECT * FROM schemata order by sql_path,catalog_name limit 5;
+catalog_name    sql_path
+a    NULL
+b    NULL
+d    NULL
+e    NULL
+f    NULL
+SELECT * FROM schemata order by sql_path,catalog_name  limit 3;
+catalog_name    sql_path
+a    NULL
+b    NULL
+d    NULL
+drop view schemata;
