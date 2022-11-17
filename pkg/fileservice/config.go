@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
 const (
@@ -34,10 +35,10 @@ type Config struct {
 	Name string `toml:"name"`
 	// Backend fileservice backend. [MEM|DISK|DISK-ETL|S3|MINIO]
 	Backend string `toml:"backend"`
+	// CacheMemCapacityBytes cache memory capacity bytes
+	CacheMemCapacityBytes toml.ByteSize `toml:"cache-mem-capacity-bytes"`
 	// S3 used to create fileservice using s3 as the backend
 	S3 S3Config `toml:"s3"`
-	// Cache specifies configs for cache
-	Cache CacheConfig `toml:"cache"`
 	// DataDir used to create fileservice using DISK as the backend
 	DataDir string `toml:"data-dir"`
 }
@@ -75,7 +76,7 @@ func newDiskFileService(cfg Config) (FileService, error) {
 	fs, err := NewLocalFS(
 		cfg.Name,
 		cfg.DataDir,
-		int64(cfg.Cache.MemoryCapacity),
+		int64(cfg.CacheMemCapacityBytes),
 	)
 	if err != nil {
 		return nil, err
@@ -101,7 +102,7 @@ func newMinioFileService(cfg Config) (FileService, error) {
 		cfg.S3.Endpoint,
 		cfg.S3.Bucket,
 		cfg.S3.KeyPrefix,
-		int64(cfg.Cache.MemoryCapacity),
+		int64(cfg.CacheMemCapacityBytes),
 	)
 	if err != nil {
 		return nil, err
@@ -116,7 +117,7 @@ func newS3FileService(cfg Config) (FileService, error) {
 		cfg.S3.Endpoint,
 		cfg.S3.Bucket,
 		cfg.S3.KeyPrefix,
-		int64(cfg.Cache.MemoryCapacity),
+		int64(cfg.CacheMemCapacityBytes),
 	)
 	if err != nil {
 		return nil, err
