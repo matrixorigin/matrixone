@@ -1998,7 +1998,7 @@ func Test_resultset(t *testing.T) {
 		}
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
@@ -2031,7 +2031,7 @@ func Test_resultset(t *testing.T) {
 		}
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
@@ -2064,7 +2064,7 @@ func Test_resultset(t *testing.T) {
 		}
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
@@ -2100,7 +2100,7 @@ func Test_resultset(t *testing.T) {
 		}
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
 		ses.Cmd = COM_STMT_EXECUTE
 		proto.ses = ses

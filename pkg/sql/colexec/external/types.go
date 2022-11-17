@@ -16,9 +16,10 @@ package external
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"io"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
