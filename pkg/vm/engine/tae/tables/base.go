@@ -338,6 +338,13 @@ func (blk *baseBlock) PersistedBatchDedup(
 	if err != nil {
 		return
 	}
+	if rowmask != nil {
+		if view.DeleteMask == nil {
+			view.DeleteMask = rowmask
+		} else {
+			view.DeleteMask.Or(rowmask)
+		}
+	}
 	defer view.Close()
 	dedupFn := dedupClosure(view.GetData(), view.DeleteMask, def)
 	err = keys.Foreach(dedupFn, sels)

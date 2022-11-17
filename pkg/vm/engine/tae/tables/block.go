@@ -103,17 +103,22 @@ func (blk *block) GetColumnDataById(
 func (blk *block) BatchDedup(
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
-	rowmask *roaring.Bitmap) (err error) {
+	rowmask *roaring.Bitmap,
+	precommit bool) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 			logutil.Infof("BatchDedup BLK-%d: %v", blk.meta.ID, err)
 		}
 	}()
+	ts := txn.GetStartTS()
+	if precommit {
+		ts = txn.GetPrepareTS()
+	}
 	_, pnode := blk.PinNode()
 	defer pnode.Close()
 	return blk.PersistedBatchDedup(
 		pnode.Item(),
-		txn.GetStartTS(),
+		ts,
 		keys,
 		rowmask,
 		blk.dedupClosure)

@@ -404,7 +404,8 @@ func (blk *ablock) getInMemoryRowByFilter(
 }
 
 func (blk *ablock) checkConflictAndDupClosure(
-	ts types.TS,
+	dedupTS types.TS,
+	conflictTS types.TS,
 	dupRow *uint32,
 	rowmask *roaring.Bitmap) func(row uint32) error {
 	return func(row uint32) (err error) {
@@ -412,16 +413,16 @@ func (blk *ablock) checkConflictAndDupClosure(
 			return nil
 		}
 		appendnode := blk.mvcc.GetAppendNodeByRow(row)
-		needWait, txn := appendnode.NeedWaitCommitting(ts)
+		needWait, txn := appendnode.NeedWaitCommitting(dedupTS)
 		if needWait {
 			blk.mvcc.RUnlock()
 			txn.GetTxnState(true)
 			blk.mvcc.RLock()
 		}
-		if appendnode.IsAborted() || !appendnode.IsVisible(ts) {
-			if err = appendnode.CheckConflict(ts); err != nil {
-				return
-			}
+		if err = appendnode.CheckConflict(conflictTS); err != nil {
+			return
+		}
+		if appendnode.IsAborted() || !appendnode.IsVisible(dedupTS) {
 			return nil
 		}
 		deleteNode := blk.mvcc.GetDeleteNodeByRow(row)
@@ -429,20 +430,17 @@ func (blk *ablock) checkConflictAndDupClosure(
 			*dupRow = row
 			return moerr.GetOkExpectedDup()
 		}
-		needWait, txn = deleteNode.NeedWaitCommitting(ts)
+		needWait, txn = deleteNode.NeedWaitCommitting(dedupTS)
 		if needWait {
 			blk.mvcc.RUnlock()
 			txn.GetTxnState(true)
 			blk.mvcc.RLock()
 		}
-		if deleteNode.IsAborted() || !deleteNode.IsVisible(ts) {
+		if err = deleteNode.CheckConflict(conflictTS); err != nil {
+			return
+		}
+		if deleteNode.IsAborted() || !deleteNode.IsVisible(dedupTS) {
 			return moerr.GetOkExpectedDup()
-		}
-		if err = appendnode.CheckConflict(ts); err != nil {
-			return
-		}
-		if err = deleteNode.CheckConflict(ts); err != nil {
-			return
 		}
 		return nil
 	}
@@ -450,7 +448,8 @@ func (blk *ablock) checkConflictAndDupClosure(
 
 func (blk *ablock) inMemoryBatchDedup(
 	mnode *memoryNode,
-	ts types.TS,
+	dedupTS types.TS,
+	conflictTS types.TS,
 	keys containers.Vector,
 	rowmask *roaring.Bitmap) (err error) {
 	var dupRow uint32
@@ -458,7 +457,7 @@ func (blk *ablock) inMemoryBatchDedup(
 	defer blk.RUnlock()
 	_, err = mnode.BatchDedup(
 		keys,
-		blk.checkConflictAndDupClosure(ts, &dupRow, rowmask))
+		blk.checkConflictAndDupClosure(dedupTS, conflictTS, &dupRow, rowmask))
 
 	// definitely no duplicate
 	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
@@ -492,21 +491,26 @@ func (blk *ablock) dedupClosure(
 func (blk *ablock) BatchDedup(
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
-	rowmask *roaring.Bitmap) (err error) {
+	rowmask *roaring.Bitmap,
+	precommit bool) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 			logutil.Infof("BatchDedup BLK-%d: %v", blk.meta.ID, err)
 		}
 	}()
+	dedupTS := txn.GetStartTS()
+	if precommit {
+		dedupTS = txn.GetPrepareTS()
+	}
 	mnode, pnode := blk.PinNode()
 	if mnode != nil {
 		defer mnode.Close()
-		return blk.inMemoryBatchDedup(mnode.Item(), txn.GetStartTS(), keys, rowmask)
+		return blk.inMemoryBatchDedup(mnode.Item(), dedupTS, txn.GetStartTS(), keys, rowmask)
 	} else if pnode != nil {
 		defer pnode.Close()
 		return blk.PersistedBatchDedup(
 			pnode.Item(),
-			txn.GetStartTS(),
+			dedupTS,
 			keys,
 			rowmask,
 			blk.dedupClosure)
