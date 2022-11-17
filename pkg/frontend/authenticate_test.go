@@ -5786,6 +5786,9 @@ func Test_doDropAccount(t *testing.T) {
 			bh.sql2result[sql] = nil
 		}
 
+		sql = "show databases;"
+		bh.sql2result[sql] = newMrsForSqlForShowDatabases([][]interface{}{})
+
 		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
@@ -6094,6 +6097,21 @@ func (bt *backgroundExecTest) ClearExecResultSet() {
 }
 
 var _ BackgroundExec = &backgroundExecTest{}
+
+func newMrsForSqlForShowDatabases(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("Database")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
 
 func newMrsForSqlForCheckUserHasRole(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
