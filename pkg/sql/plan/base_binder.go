@@ -1022,27 +1022,9 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		args = append(args, makePlan2NullConstExprWithType())
 	}
 
-	notNullable := false
-	function, _ := function.GetFunctionByID(funcID)
-	if function.TestFlag(plan.Function_PRODUCE_NULL) {
-		notNullable = false
-	} else if function.TestFlag(plan.Function_PRODUCE_NO_NULL) {
-		notNullable = true
-	} else {
-		allArgsNotNullable := true
-		for _, arg := range args {
-			if !arg.Typ.NotNullable {
-				allArgsNotNullable = false
-				break
-			}
-		}
-		if allArgsNotNullable {
-			notNullable = true
-		}
-	}
 	// return new expr
 	Typ := makePlan2Type(&returnType)
-	Typ.NotNullable = notNullable
+	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
