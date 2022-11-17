@@ -4674,7 +4674,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	}
 	defer mpool.DeleteMPool(mp)
 
-	bh := NewBackgroundHandler(ctx, mp, pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//USE the mo_catalog
@@ -4990,7 +4990,7 @@ func checkUserExistsOrNot(ctx context.Context, pu *config.ParameterUnit, tenantN
 }
 
 // InitUser creates new user for the tenant
-func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) error {
+func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.CreateUser) error {
 	var err error
 	var exists int
 	var erArray []ExecResult
@@ -5011,14 +5011,13 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 		}
 	}
 
-	pu := config.GetParameterUnit(ctx)
 	mp, err := mpool.NewMPool("init_user", 0, mpool.NoFixed)
 	if err != nil {
 		return err
 	}
 	defer mpool.DeleteMPool(mp)
 
-	bh := NewBackgroundHandler(ctx, mp, pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -5206,7 +5205,7 @@ handleFailed:
 }
 
 // InitRole creates the new role
-func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) error {
+func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.CreateRole) error {
 	var err error
 	var exists int
 	var erArray []ExecResult
@@ -5214,13 +5213,8 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 	if err != nil {
 		return err
 	}
-	pu := config.GetParameterUnit(ctx)
 
-	mp, err := mpool.NewMPool("init_role", 0, mpool.NoFixed)
-	if err != nil {
-		return err
-	}
-	bh := NewBackgroundHandler(ctx, mp, pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
