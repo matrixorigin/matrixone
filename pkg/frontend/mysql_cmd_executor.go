@@ -3037,7 +3037,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		retErr = moerr.NewParseError(err.Error())
+		retErr = err
+		if _, ok := err.(*moerr.Error); !ok {
+			retErr = moerr.NewParseError(err.Error())
+		}
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, retErr)
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
 		return retErr
