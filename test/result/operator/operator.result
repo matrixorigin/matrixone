@@ -367,6 +367,7 @@ d    NULL
 e    NULL
 f    NULL
 SELECT * FROM schemata order by catalog_name limit 5;
+catalog_name    sql_path
 a    NULL
 b    NULL
 d    NULL
