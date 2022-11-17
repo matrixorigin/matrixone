@@ -171,7 +171,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		d, marshalErr := agg0.MarshalBinary()
 		require.NoError(t, marshalErr)
 		agg1, _ := agg.New(c.op, c.isDistinct, c.inputTyp)
-		unmarshalErr := agg1.UnmarshalBinary(d)
+		unmarshalErr := agg1.UnmarshalBinary(d, m)
 		require.NoError(t, unmarshalErr)
 
 		// Fill() after marshal and unmarshal
@@ -217,7 +217,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		d, marshalErr := agg0.MarshalBinary()
 		require.NoError(t, marshalErr)
 		mAgg, _ := agg.New(c.op, c.isDistinct, c.inputTyp)
-		unmarshalErr := mAgg.UnmarshalBinary(d)
+		unmarshalErr := mAgg.UnmarshalBinary(d, m)
 		require.NoError(t, unmarshalErr)
 
 		// Merge()
