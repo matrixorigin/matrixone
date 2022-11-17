@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"math"
 	"strings"
 	"time"
 
@@ -830,11 +831,21 @@ func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
 	}
 	pkIndex := tableDef.Name2ColIndex[pk.Name]
 	if pk.Type.IsIntOrUint() {
-		canComputeRange, pkRange := computeRangeByIntPk(expr, pkIndex, "")
+		canComputeRange, intPkRange := computeRangeByIntPk(expr, pkIndex, "")
 		if !canComputeRange {
 			return fullList()
 		}
-		return getListByRange(dnStores, pkRange)
+		if intPkRange.isRange {
+			r := intPkRange.ranges
+			if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
+				return fullList()
+			}
+			intPkRange.isRange = false
+			for i := intPkRange.ranges[0]; i <= intPkRange.ranges[1]; i++ {
+				intPkRange.items = append(intPkRange.items, i)
+			}
+		}
+		return getListByItems(dnStores, intPkRange.items)
 	}
 	canComputeRange, hashVal := computeRangeByNonIntPk(expr, pkIndex)
 	if !canComputeRange {
