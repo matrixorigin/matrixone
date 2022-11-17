@@ -90,7 +90,7 @@ func (d *LogServiceDriver) appendRecords(records []logservice.LogRecord, firstls
 		lsn := firstlsn + uint64(i)
 		cnt++
 		if maxsize != 0 {
-			if cnt >= d.config.ClientPoolMaxSize {
+			if cnt > maxsize {
 				break
 			}
 		}
@@ -118,10 +118,17 @@ func (d *LogServiceDriver) dropRecords() {
 func (d *LogServiceDriver) dropRecordByLsn(lsn uint64) {
 	delete(d.records, lsn)
 }
+
+func (d *LogServiceDriver) resetReadCache() {
+	for lsn := range d.records {
+		delete(d.records, lsn)
+	}
+}
+
 func (d *LogServiceDriver) readSmallBatchFromLogService(lsn uint64) {
 	_, records := d.readFromLogService(lsn, int(d.config.ReadMaxSize))
-	d.appendRecords(records, lsn, nil, d.config.ReadCacheSize)
-	if len(d.lsns) > d.config.ReadCacheSize {
+	d.appendRecords(records, lsn, nil, 1)
+	if !d.IsReplaying() && len(d.lsns) > d.config.ReadCacheSize {
 		d.dropRecords()
 	}
 }
