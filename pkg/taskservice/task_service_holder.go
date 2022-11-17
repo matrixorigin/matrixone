@@ -323,16 +323,16 @@ func (s *refreshableTaskStorage) refresh(lastAddress string) {
 	}
 	connectAddress, err := s.addressFactory()
 	if err != nil {
-		s.logger.Error("refresh task storage failed",
+		s.logger.Error("failed to refresh task storage",
 			zap.Error(err))
 		return
 	}
 
 	s.mu.lastAddress = connectAddress
-	s.logger.Debug("try to refresh task storage", zap.String("address", connectAddress))
+	s.logger.Debug("trying to refresh task storage", zap.String("address", connectAddress))
 	store, err := s.storeFactory.Create(connectAddress)
 	if err != nil {
-		s.logger.Error("refresh task storage failed",
+		s.logger.Error("failed to refresh task storage",
 			zap.String("address", connectAddress),
 			zap.Error(err))
 		return

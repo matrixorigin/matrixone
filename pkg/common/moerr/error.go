@@ -187,7 +187,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 
 	// Warn
 	ErrWarn:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "warning: %s"},
-	ErrWarnDataTruncated: {WARN_DATA_TRUNCATED, []string{MySQLDefaultSqlState}, "warning: data trucncated"},
+	ErrWarnDataTruncated: {WARN_DATA_TRUNCATED, []string{MySQLDefaultSqlState}, "warning: data truncated"},
 
 	// Group 1: Internal errors
 	ErrStart:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: error code start"},
@@ -221,8 +221,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrNoSuchTable:                  {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such table %s.%s"},
 	ErrEmptyVector:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "empty vector"},
 	ErrFileNotFound:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s is not found"},
-	ErrFileAlreadyExists:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s alread exists"},
-	ErrUnexpectedEOF:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unexpteded end of file %s"},
+	ErrFileAlreadyExists:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s already exists"},
+	ErrUnexpectedEOF:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unexpected end of file %s"},
 	ErrEmptyRange:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "empty range of file %s"},
 	ErrSizeNotMatch:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s size does not match"},
 	ErrNoProgress:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s has no io progress"},
@@ -410,7 +410,7 @@ func ConvertGoError(err error) error {
 		return err
 	}
 
-	// alread a moerr, return it as is
+	// already a moerr, return it as is
 	if _, ok := err.(*Error); ok {
 		return err
 	}
@@ -445,8 +445,8 @@ func (e *Error) Succeeded() bool {
 // They are both fast, one with less typing and the other is consistent
 // with other error code checking.
 var errOkStopCurrRecur = Error{OkStopCurrRecur, 0, "StopCurrRecur", "00000"}
-var errOkExptededEOF = Error{OkExpectedEOF, 0, "ExpectedEOF", "00000"}
-var errOkExptededEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000"}
+var errOkExpectedEOF = Error{OkExpectedEOF, 0, "ExpectedEOF", "00000"}
+var errOkExpectedEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000"}
 var errOkExpectedDup = Error{OkExpectedDup, 0, "ExpectedDup", "00000"}
 var errOkExpectedPossibleDup = Error{OkExpectedPossibleDup, 0, "OkExpectedPossibleDup", "00000"}
 
@@ -464,11 +464,11 @@ func GetOkStopCurrRecur() *Error {
 }
 
 func GetOkExpectedEOF() *Error {
-	return &errOkExptededEOF
+	return &errOkExpectedEOF
 }
 
 func GetOkExpectedEOB() *Error {
-	return &errOkExptededEOB
+	return &errOkExpectedEOB
 }
 
 func GetOkExpectedDup() *Error {
