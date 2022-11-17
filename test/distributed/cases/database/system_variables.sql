@@ -74,7 +74,9 @@ show tables;
 desc key_column_usage;
 select table_name, column_name from key_column_usage limit 2;
 desc columns;
+-- @bvt:issue#6714
 select table_name, column_name from columns where table_schema = 'mo_catalog' limit 5;
+-- @bvt:issue
 desc profiling;
 select seq, state from profiling;
 
@@ -103,3 +105,11 @@ desc columns_priv;
 select table_name, column_name from columns_priv limit 5;
 desc tables_priv;
 select host, table_name from tables_priv limit 5;
+
+-- sql_select_limit
+show variables like 'sql%';
+show variables like 'sql_select_limit';
+set sql_select_limit = 100000;
+show variables like 'sql_select_limit';
+set sql_select_limit = 1;
+show variables like 'sql_select_limit';
