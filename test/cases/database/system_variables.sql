@@ -103,3 +103,14 @@ desc columns_priv;
 select table_name, column_name from columns_priv limit 5;
 desc tables_priv;
 select host, table_name from tables_priv limit 5;
+
+-- sql_select_limit
+show variables like 'sql_select_limit';
+set sql_select_limit = 100000;
+show variables like 'sql_select_limit';
+set sql_select_limit = 1;
+show variables like 'sql_select_limit';
+-- @bvt:issue#6743
+SET SQL_SELECT_LIMIT = Default;
+show variables like 'sql_select_limit';
+-- @bvt:issue
