@@ -16,8 +16,10 @@ package logservice
 
 import (
 	"context"
+	"time"
 
 	"github.com/lni/dragonboat/v4"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -69,7 +71,21 @@ func (w *WrappedService) SetInitialClusterInfo(
 }
 
 func (w *WrappedService) CreateInitTasks() error {
-	return w.svc.createInitTasks(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	for i := 0; i < checkBootstrapCycles; i++ {
+		select {
+		case <-ctx.Done():
+			return moerr.NewInternalError("failed to create init tasks")
+		default:
+		}
+		if err := w.svc.createInitTasks(ctx); err == nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	return nil
 }
 
 func (w *WrappedService) GetTaskService() (taskservice.TaskService, bool) {
