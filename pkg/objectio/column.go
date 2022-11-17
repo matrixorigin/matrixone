@@ -185,9 +185,3 @@ func (cb *ColumnBlock) UnMarshalMate(cache *bytes.Buffer) error {
 	}
 	return err
 }
-
-func (cb *ColumnBlock) freeData(buf []byte, m *mpool.MPool) {
-	if m != nil {
-		m.Free(buf)
-	}
-}

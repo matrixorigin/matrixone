@@ -226,22 +226,3 @@ func newDecompressToObject(size int64) ToObjectFunc {
 		return decompressed, int64(len(decompressed)), nil
 	}
 }
-
-func allocData(size int64, m *mpool.MPool) (data []byte, err error) {
-	if m != nil {
-		data, err = m.Alloc(int(size))
-		if err != nil {
-			return
-		}
-	} else {
-		// Because the external caller may not use mpool
-		data = make([]byte, size)
-	}
-	return data, nil
-}
-
-func freeData(buf []byte, m *mpool.MPool) {
-	if m != nil {
-		m.Free(buf)
-	}
-}
