@@ -31,6 +31,7 @@ import (
 )
 
 func makeColExprForTest(idx int32, typ types.T) *plan.Expr {
+	schema := []string{"a", "b", "c", "d"}
 	containerType := typ.ToType()
 	exprType := plan2.MakePlan2Type(&containerType)
 
@@ -40,7 +41,7 @@ func makeColExprForTest(idx int32, typ types.T) *plan.Expr {
 			Col: &plan.ColRef{
 				RelPos: 0,
 				ColPos: idx,
-				Name:   "a",
+				Name:   schema[idx],
 			},
 		},
 	}
