@@ -92,6 +92,13 @@ func (view *ColumnView) GetValue(row int) any {
 	return view.data.Get(row)
 }
 
+func (view *ColumnView) IsDeleted(row int) bool {
+	if view.DeleteMask == nil {
+		return false
+	}
+	return view.DeleteMask.ContainsInt(row)
+}
+
 func (view *ColumnView) Close() {
 	if view.data != nil {
 		view.data.Close()
