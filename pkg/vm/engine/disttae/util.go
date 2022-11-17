@@ -390,12 +390,6 @@ func computeRangeByNonIntPk(expr *plan.Expr, pkIdx int32) (bool, uint64) {
 	return true, pkHashValue
 }
 
-type pkRange struct {
-	isRange bool
-	items   []int64
-	ranges  []int64
-}
-
 // computeRangeByIntPk compute primaryKey range by Expr
 // only under the following conditions：
 // 1、function named ["and", "or", ">", "<", ">=", "<=", "="]
@@ -706,97 +700,6 @@ func _computeAnd(left *pkRange, right *pkRange) (bool, *pkRange) {
 		}
 	}
 }
-
-// func _computeAnd(leftRange [][2]int64, rightRange [][2]int64) [][2]int64 {
-// 	if len(leftRange) == 0 {
-// 		return rightRange
-// 	} else if len(rightRange) == 0 {
-// 		return leftRange
-// 	}
-
-// 	compute := func(left [2]int64, right [2]int64) (bool, [2]int64) {
-// 		min := left[0]
-// 		max := left[1]
-
-// 		if min > right[1] {
-// 			// eg: a > 10 and a < 2
-// 			return false, left
-// 		} else if max < right[0] {
-// 			// eg: a < 2 and a > 10
-// 			return false, left
-// 		} else {
-// 			// eg: a > 2 and a < 10
-// 			// a > 2 and a > 10
-// 			// a > 2 and a = -2
-// 			if right[0] > min {
-// 				min = right[0]
-// 			}
-// 			if right[1] < max {
-// 				max = right[1]
-// 			}
-// 			return true, [2]int64{min, max}
-// 		}
-
-// 	}
-
-// 	// eg: (a >3 or a=1) and (a < 10 or a =11)
-// 	var newRange [][2]int64
-// 	for _, left := range leftRange {
-// 		for _, right := range rightRange {
-// 			ok, tmp := compute(left, right)
-// 			if ok {
-// 				newRange = append(newRange, tmp)
-// 			}
-// 		}
-// 	}
-
-// 	return newRange
-// }
-
-// func _computeOr(leftRange [][2]int64, rightRange [][2]int64) [][2]int64 {
-// 	if len(leftRange) == 0 {
-// 		return rightRange
-// 	} else if len(rightRange) == 0 {
-// 		return leftRange
-// 	}
-
-// 	compute := func(left [2]int64, right [2]int64) [][2]int64 {
-// 		min := left[0]
-// 		max := left[1]
-// 		if min > right[1] {
-// 			// eg: a > 10 or a < 2
-// 			return [][2]int64{left, right}
-// 		} else if max < right[0] {
-// 			// eg: a < 2 or a > 10
-// 			return [][2]int64{left, right}
-// 		} else {
-// 			// eg: a > 2 or a < 10
-// 			// a > 2 or a > 10
-// 			// a > 2 or a = -2
-// 			if right[0] < min {
-// 				min = right[0]
-// 			}
-// 			if right[1] > max {
-// 				max = right[1]
-// 			}
-// 			return [][2]int64{{min, max}}
-// 		}
-// 	}
-
-// 	// eg: (a>10 or a=1) or (a<5 or a=6)
-// 	var newRange [][2]int64
-// 	for _, left := range leftRange {
-// 		for _, right := range rightRange {
-// 			tmp := compute(left, right)
-// 			newRange = append(newRange, tmp...)
-// 			if len(tmp) > 1 {
-// 				break
-// 			}
-// 		}
-// 	}
-
-// 	return leftRange
-// }
 
 func getHashValue(buf []byte) uint64 {
 	buf = append([]byte{0}, buf...)

@@ -482,6 +482,23 @@ func TestComputeRangeByIntPk(t *testing.T) {
 				plan2.MakePlan2Int64ConstExprWithType(25),
 			}),
 		})},
+		// a > 20 and a <=25 and b > 100   todo： unsupport now。  when compute a <=25 and b > 10, we get items too much.
+		{false, []int64{21, 22, 23, 24, 25}, makeFunctionExprForTest("and", []*plan.Expr{
+			makeFunctionExprForTest(">", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(20),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("<=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(25),
+				}),
+				makeFunctionExprForTest(">", []*plan.Expr{
+					makeColExprForTest(1, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(100),
+				}),
+			}),
+		})},
 		// a > 20 and a < 10  => empty
 		{false, []int64{}, makeFunctionExprForTest("and", []*plan.Expr{
 			makeFunctionExprForTest(">", []*plan.Expr{
@@ -521,7 +538,7 @@ func TestComputeRangeByIntPk(t *testing.T) {
 				}),
 			}),
 		})},
-		// (a >5 or a=1) and (a < 8 or a =11) => 1,6,7,11  todo,  now can't compute
+		// (a >5 or a=1) and (a < 8 or a =11) => 1,6,7,11  todo,  now can't compute now
 		{false, []int64{6, 7, 11, 1}, makeFunctionExprForTest("and", []*plan.Expr{
 			makeFunctionExprForTest("or", []*plan.Expr{
 				makeFunctionExprForTest(">", []*plan.Expr{
