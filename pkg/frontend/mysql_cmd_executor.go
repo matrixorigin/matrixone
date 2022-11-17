@@ -238,7 +238,10 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
 	}
-	sc := trace.SpanContextWithID(trace.TraceID(stmID), trace.SpanKindStatement)
+	var sc trace.SpanContext
+	if sc = trace.SpanFromContext(ctx).SpanContext(); sc.IsEmpty() || sc.Kind != trace.SpanKindBackground {
+		sc = trace.SpanContextWithID(trace.TraceID(stmID), trace.SpanKindStatement)
+	}
 	reqCtx := ses.GetRequestContext()
 	ses.SetRequestContext(trace.ContextWithSpanContext(reqCtx, sc))
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
@@ -2911,6 +2914,8 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 
 // authenticateUserCanExecuteStatement checks the user can execute the statement
 func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
+	requestCtx, span := trace.Debug(requestCtx, "authenticateUserCanExecuteStatement")
+	defer span.End()
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
