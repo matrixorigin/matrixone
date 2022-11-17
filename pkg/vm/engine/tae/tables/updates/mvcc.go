@@ -265,9 +265,11 @@ func (n *MVCCHandle) GetTotalRow() uint32 {
 	return an.maxRow - n.deletes.cnt.Load()
 }
 
-func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, commitTSVec, abortVec containers.Vector, abortedBitmap *roaring.Bitmap) {
-	n.RLock()
-	defer n.RUnlock()
+func (n *MVCCHandle) CollectAppendLocked(
+	start, end types.TS) (
+	minRow, maxRow uint32,
+	commitTSVec, abortVec containers.Vector,
+	abortedBitmap *roaring.Bitmap) {
 	startOffset, node := n.appends.GetNodeToReadByPrepareTS(start)
 	if node != nil && node.GetPrepare().Less(start) {
 		startOffset++

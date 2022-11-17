@@ -131,11 +131,6 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(indexes))
 	assert.Equal(t, "test index 0", string(indexes[0].(*BloomFilter).buf))
-	assert.False(t, nb0 == pool.CurrNB())
-	assert.False(t, nb0 == pool.CurrNB())
-	for i := range indexes {
-		pool.Free(indexes[i].(*BloomFilter).buf)
-	}
 	assert.True(t, nb0 == pool.CurrNB())
 
 	fs := NewObjectFS(service, dir)
@@ -170,11 +165,6 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(indexes))
 	assert.Equal(t, "test index 0", string(indexes[0].(*BloomFilter).buf))
-	assert.False(t, nb0 == pool.CurrNB())
-	assert.False(t, nb0 == pool.CurrNB())
-	for i := range indexes {
-		pool.Free(indexes[i].(*BloomFilter).buf)
-	}
 	assert.True(t, nb0 == pool.CurrNB())
 
 }

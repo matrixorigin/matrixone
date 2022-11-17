@@ -55,6 +55,10 @@ func (factory *DataFactory) MakeSegmentFactory() catalog.SegmentDataFactory {
 
 func (factory *DataFactory) MakeBlockFactory() catalog.BlockDataFactory {
 	return func(meta *catalog.BlockEntry) data.Block {
-		return newBlock(meta, factory.fs, factory.appendBufMgr, factory.scheduler)
+		if meta.IsAppendable() {
+			return newABlock(meta, factory.fs, factory.appendBufMgr, factory.scheduler)
+		} else {
+			return newBlock(meta, factory.fs, factory.appendBufMgr, factory.scheduler)
+		}
 	}
 }

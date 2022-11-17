@@ -317,12 +317,6 @@ func (entry *SegmentEntry) PrepareRollback() (err error) {
 		if err = entry.GetTable().RemoveEntry(entry); err != nil {
 			return
 		}
-		//TODO: maybe scheduled?
-		// entry.GetCatalog().GetScheduler().ScheduleScopedFn(nil, tasks.IOTask, entry.AsCommonID(), entry.DestroyData)
-		if err = entry.DestroyData(); err != nil {
-			logutil.Fatalf("Cannot destroy uncommitted segment [%s] data: %v", entry.Repr(), err)
-			return
-		}
 	}
 	return
 }
@@ -375,13 +369,6 @@ func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *MetaBaseEnt
 		blkIt.Next()
 	}
 	return blks
-}
-
-func (entry *SegmentEntry) DestroyData() (err error) {
-	if entry.segData != nil {
-		err = entry.segData.Destroy()
-	}
-	return
 }
 
 // IsActive is coarse API: no consistency check
