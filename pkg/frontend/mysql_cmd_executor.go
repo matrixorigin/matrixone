@@ -1953,7 +1953,7 @@ func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.Crea
 	tenant := ses.GetTenantInfo()
 
 	//step1 : create the user
-	return InitUser(ctx, tenant, cu)
+	return InitUser(ctx, ses, tenant, cu)
 }
 
 // handleDropUser drops the user for the tenant
@@ -1967,7 +1967,7 @@ func (mce *MysqlCmdExecutor) handleCreateRole(ctx context.Context, cr *tree.Crea
 	tenant := ses.GetTenantInfo()
 
 	//step1 : create the role
-	return InitRole(ctx, tenant, cr)
+	return InitRole(ctx, ses, tenant, cr)
 }
 
 // handleDropRole drops the role
