@@ -322,6 +322,7 @@ func (c *testCluster) Start() error {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 
+	c.mu.running = true
 	// start log services first
 	if err := c.startLogServices(ctx); err != nil {
 		return err
@@ -337,7 +338,6 @@ func (c *testCluster) Start() error {
 		return err
 	}
 
-	c.mu.running = true
 	return nil
 }
 

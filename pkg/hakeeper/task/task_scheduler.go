@@ -61,7 +61,7 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 
 	runningTasks := s.queryTasks(task.TaskStatus_Running)
 	createdTasks := s.queryTasks(task.TaskStatus_Created)
-	s.logger.Debug("task schdule query tasks", zap.Int("created", len(createdTasks)),
+	s.logger.Debug("task schedule query tasks", zap.Int("created", len(createdTasks)),
 		zap.Int("running", len(runningTasks)))
 	if len(runningTasks) == 0 && len(createdTasks) == 0 {
 		return
@@ -80,13 +80,13 @@ func (s *scheduler) Create(ctx context.Context, tasks []task.TaskMetadata) error
 		return moerr.NewInternalError("failed to get task service")
 	}
 	if err := ts.CreateBatch(ctx, tasks); err != nil {
-		s.logger.Error("new tasks create failed", zap.Error(err))
+		s.logger.Error("failed to create new tasks", zap.Error(err))
 		return err
 	}
 	s.logger.Debug("new tasks created", zap.Int("created", len(tasks)))
-	v, err := ts.GetStorage().Query(ctx)
+	v, err := ts.QueryTask(ctx)
 	if len(v) == 0 && err == nil {
-		panic("created tasks cannot read")
+		panic("cannot read created tasks")
 	}
 	s.logger.Debug("new tasks created, query", zap.Int("created", len(v)), zap.Error(err))
 	return nil
