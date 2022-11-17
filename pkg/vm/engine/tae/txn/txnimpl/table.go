@@ -757,7 +757,7 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 	}
 	pks := tbl.localSegment.GetPKColumn()
 	defer pks.Close()
-	err = tbl.PreCommitDedup(pks, true)
+	err = tbl.DoPrecommitDedup(pks)
 	return
 }
 
@@ -788,11 +788,11 @@ func (tbl *txnTable) Dedup(keys containers.Vector) (err error) {
 	return
 }
 
-func (tbl *txnTable) PreCommitDedup(pks containers.Vector, preCommit bool) (err error) {
+func (tbl *txnTable) DoPrecommitDedup(pks containers.Vector) (err error) {
 	segIt := tbl.entry.MakeSegmentIt(false)
 	for segIt.Valid() {
 		seg := segIt.Get().GetPayload()
-		if preCommit && seg.GetID() < tbl.maxSegId {
+		if seg.GetID() < tbl.maxSegId {
 			return
 		}
 		{
@@ -824,16 +824,12 @@ func (tbl *txnTable) PreCommitDedup(pks containers.Vector, preCommit bool) (err 
 		blkIt := seg.MakeBlockIt(false)
 		for blkIt.Valid() {
 			blk := blkIt.Get().GetPayload()
-			if preCommit && blk.GetID() < tbl.maxBlkId {
+			if blk.GetID() < tbl.maxBlkId {
 				return
 			}
 			{
 				blk.RLock()
-				if preCommit {
-					shouldSkip = blk.HasDropCommittedLocked() || blk.IsCreatingOrAborted()
-				} else {
-					shouldSkip = blk.HasDropCommittedLocked() || !blk.HasCommittedNode()
-				}
+				shouldSkip = blk.HasDropCommittedLocked() || blk.IsCreatingOrAborted()
 				blk.RUnlock()
 				if shouldSkip {
 					blkIt.Next()
