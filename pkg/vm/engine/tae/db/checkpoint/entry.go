@@ -148,12 +148,10 @@ func (e *CheckpointEntry) Read(fs *objectio.ObjectFS) (data *logtail.CheckpointD
 		return
 	}
 
-	t0 := time.Now()
 	data = logtail.NewCheckpointData()
 	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
 		return
 	}
-	logutil.Infof("xxxx read location %q cost %v\n", e.location, time.Since(t0))
 	return
 }
 func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns *api.Batch, err error) {
