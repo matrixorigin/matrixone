@@ -14,15 +14,8 @@
 
 package fileservice
 
-import "github.com/matrixorigin/matrixone/pkg/util/toml"
-
 type CacheKey struct {
 	Path   string
 	Offset int64
 	Size   int64
-}
-
-type CacheConfig struct {
-	MemoryCapacity toml.ByteSize `toml:"memory-capacity"`
-	DiskCapacity   toml.ByteSize `toml:"disk-capacity"`
 }
