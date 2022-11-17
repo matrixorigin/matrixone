@@ -121,7 +121,6 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			location: metaloc,
 			state:    ST_Finished,
 		}
-		r.tryAddNewCheckpointEntry(checkpointEntry)
 		var err2 error
 		if datas[i], err2 = checkpointEntry.Read(r.fs); err2 != nil {
 			errMu.Lock()
@@ -143,6 +142,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	t0 = time.Now()
 	for i := 0; i < bat.Length(); i++ {
 		checkpointEntry := entries[i]
+		r.tryAddNewCheckpointEntry(checkpointEntry)
 		err = datas[i].ApplyReplayTo(r.catalog, dataFactory)
 		if err != nil {
 			return
