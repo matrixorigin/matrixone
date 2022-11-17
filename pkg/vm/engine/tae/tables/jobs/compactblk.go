@@ -217,6 +217,13 @@ func (task *compactBlockTask) Execute() (err error) {
 		// 	return err
 		// }
 	}
+	if !table.GetSchema().HasSortKey() && task.created != nil {
+		n := task.created.Rows()
+		task.mapping = make([]uint32, n)
+		for i := 0; i < n; i++ {
+			task.mapping[i] = uint32(i)
+		}
+	}
 	txnEntry := txnentries.NewCompactBlockEntry(
 		task.txn,
 		task.compacted,
