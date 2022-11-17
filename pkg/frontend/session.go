@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 
@@ -158,13 +159,17 @@ type Session struct {
 	profiles [8]string
 
 	mu sync.Mutex
+
+	flag bool
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
 func (ses *Session) Dispose() {
-	mp := ses.GetMemPool()
-	mpool.DeleteMPool(mp)
-	ses.SetMemPool(mp)
+	if ses.flag {
+		mp := ses.GetMemPool()
+		mpool.DeleteMPool(mp)
+		ses.SetMemPool(mp)
+	}
 }
 
 type errInfo struct {
@@ -186,22 +191,7 @@ func (e *errInfo) length() int {
 	return len(e.codes)
 }
 
-func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
-	var err error
-	if mp == nil {
-		// If no mp, we create one for session.  Use GuestMmuLimitation as cap.
-		// fixed pool size can be another param, or should be computed from cap,
-		// but here, too lazy, just use Mid.
-		//
-		// XXX MPOOL
-		// We don't have a way to close a session, so the only sane way of creating
-		// a mpool is to use NoFixed
-		mp, err = mpool.NewMPool("session", PU.SV.GuestMmuLimitation, mpool.NoFixed)
-		if err != nil {
-			panic(err)
-		}
-	}
-
+func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables, flag bool) *Session {
 	txnHandler := InitTxnHandler(PU.StorageEngine, PU.TxnClient)
 	ses := &Session{
 		protocol: proto,
@@ -214,16 +204,13 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 		},
 		txnHandler: txnHandler,
 		//TODO:fix database name after the catalog is ready
-		txnCompileCtx:   InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
-		storage:         PU.StorageEngine,
-		sysVars:         gSysVars.CopySysVarsToSession(),
-		userDefinedVars: make(map[string]interface{}),
-		gSysVars:        gSysVars,
+		txnCompileCtx: InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
+		storage:       PU.StorageEngine,
+		gSysVars:      gSysVars,
 
 		serverStatus: 0,
 		optionBits:   0,
 
-		prepareStmts:   make(map[string]*PrepareStmt),
 		outputCallback: getDataFromPipeline,
 		timeZone:       time.Local,
 		errInfo: &errInfo{
@@ -233,10 +220,31 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 		},
 		cache: &privilegeCache{},
 	}
+	if flag {
+		ses.sysVars = gSysVars.CopySysVarsToSession()
+		ses.userDefinedVars = make(map[string]interface{})
+		ses.prepareStmts = make(map[string]*PrepareStmt)
+	}
+	ses.flag = flag
 	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.GetTxnCompileCtx().SetSession(ses)
 	ses.GetTxnHandler().SetSession(ses)
+
+	var err error
+	if ses.Mp == nil {
+		// If no mp, we create one for session.  Use GuestMmuLimitation as cap.
+		// fixed pool size can be another param, or should be computed from cap,
+		// but here, too lazy, just use Mid.
+		//
+		// XXX MPOOL
+		// We don't have a way to close a session, so the only sane way of creating
+		// a mpool is to use NoFixed
+		ses.Mp, err = mpool.NewMPool("pipeline-"+ses.GetUUIDString(), PU.SV.GuestMmuLimitation, mpool.NoFixed)
+		if err != nil {
+			panic(err)
+		}
+	}
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Dispose()
@@ -252,8 +260,11 @@ type BackgroundSession struct {
 
 // NewBackgroundSession generates an independent background session executing the sql
 func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *BackgroundSession {
-	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars)
+	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars, false)
 	ses.SetOutputCallback(fakeDataSetFetcher)
+	if stmt := trace.StatementFromContext(ctx); stmt != nil {
+		ses.uuid = stmt.SessionID
+	}
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(ctx)
 	ses.SetRequestContext(cancelBackgroundCtx)
 	backSes := &BackgroundSession{
@@ -267,6 +278,19 @@ func (bgs *BackgroundSession) Close() {
 	if bgs.cancel != nil {
 		bgs.cancel()
 	}
+
+	if bgs.Session != nil {
+		bgs.Session.ep = nil
+		bgs.Session.errInfo.codes = nil
+		bgs.Session.errInfo.msgs = nil
+		bgs.Session.errInfo = nil
+		bgs.Session.cache.invalidate()
+		bgs.Session.cache = nil
+		bgs.Session.txnCompileCtx = nil
+		bgs.Session.txnHandler = nil
+		bgs.Session.gSysVars = nil
+	}
+	bgs = nil
 }
 
 func (ses *Session) makeProfile(profileTyp profileType) {
@@ -1262,11 +1286,6 @@ func (th *TxnHandler) NewTxn() error {
 		panic("context should not be nil")
 	}
 	storage := th.GetStorage()
-	ctx, cancel := context.WithTimeout(
-		ctx,
-		storage.Hints().CommitOrRollbackTimeout,
-	)
-	defer cancel()
 	err = storage.New(ctx, th.GetTxnOperator())
 	return err
 }
