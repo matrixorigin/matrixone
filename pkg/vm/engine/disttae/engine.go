@@ -19,6 +19,7 @@ import (
 	"container/heap"
 	"context"
 	"math"
+	"runtime"
 	"sync"
 	"time"
 
@@ -320,8 +321,7 @@ func (e *Engine) Nodes() (engine.Nodes, error) {
 	var nodes engine.Nodes
 	for _, store := range clusterDetails.CNStores {
 		nodes = append(nodes, engine.Node{
-			//Mcpu: 10, // TODO
-			Mcpu: 1,
+			Mcpu: runtime.NumCPU(),
 			Id:   store.UUID,
 			Addr: store.ServiceAddress,
 		})

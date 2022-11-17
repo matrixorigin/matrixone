@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1204,8 +1205,7 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 
 // Number of cpu's available on the current machine
 func (c *Compile) NumCPU() int {
-	//	return runtime.NumCPU()
-	return 1
+	return runtime.NumCPU()
 }
 
 func (c *Compile) initAnalyze(qry *plan.Query) {
