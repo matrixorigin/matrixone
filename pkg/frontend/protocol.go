@@ -69,7 +69,7 @@ type Response struct {
 	//the category of the response
 	category int
 	//the status of executing the peer request
-	status int
+	status uint16
 	//the command type which generates the response
 	cmd int
 	//the data of the response
@@ -82,7 +82,7 @@ type Response struct {
 	warnings                   uint16
 }
 
-func NewResponse(category, status, cmd int, d interface{}) *Response {
+func NewResponse(category int, status uint16, cmd int, d interface{}) *Response {
 	return &Response{
 		category: category,
 		status:   status,
@@ -99,7 +99,7 @@ func NewGeneralOkResponse(cmd CommandType) *Response {
 	return NewResponse(OkResponse, 0, int(cmd), nil)
 }
 
-func NewOkResponse(affectedRows, lastInsertId uint64, warnings uint16, status, cmd int, d interface{}) *Response {
+func NewOkResponse(affectedRows, lastInsertId uint64, warnings, status uint16, cmd int, d interface{}) *Response {
 	resp := &Response{
 		category:     OkResponse,
 		status:       status,
@@ -121,11 +121,11 @@ func (resp *Response) SetData(data interface{}) {
 	resp.data = data
 }
 
-func (resp *Response) GetStatus() int {
+func (resp *Response) GetStatus() uint16 {
 	return resp.status
 }
 
-func (resp *Response) SetStatus(status int) {
+func (resp *Response) SetStatus(status uint16) {
 	resp.status = status
 }
 

@@ -15315,7 +15315,7 @@ yydefault:
 					Family:       tree.BlobFamily,
 					FamilyString: yyDollar[1].str,
 					Locale:       &locale,
-					Oid:          uint32(defines.MYSQL_TYPE_TINY_BLOB),
+					Oid:          uint32(defines.MYSQL_TYPE_TEXT),
 				},
 			}
 		}
@@ -15331,7 +15331,7 @@ yydefault:
 					Family:       tree.BlobFamily,
 					FamilyString: yyDollar[1].str,
 					Locale:       &locale,
-					Oid:          uint32(defines.MYSQL_TYPE_MEDIUM_BLOB),
+					Oid:          uint32(defines.MYSQL_TYPE_TEXT),
 				},
 			}
 		}
@@ -15347,7 +15347,7 @@ yydefault:
 					Family:       tree.BlobFamily,
 					FamilyString: yyDollar[1].str,
 					Locale:       &locale,
-					Oid:          uint32(defines.MYSQL_TYPE_LONG_BLOB),
+					Oid:          uint32(defines.MYSQL_TYPE_TEXT),
 				},
 			}
 		}
