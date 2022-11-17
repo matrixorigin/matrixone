@@ -256,7 +256,7 @@ func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.Param
 	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars)
 	ses.SetOutputCallback(fakeDataSetFetcher)
 	if stmt := trace.StatementFromContext(ctx); stmt != nil {
-		ses.uuid = stmt.SessionID
+		logutil.Infof("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
 	}
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(ctx)
 	ses.SetRequestContext(cancelBackgroundCtx)
