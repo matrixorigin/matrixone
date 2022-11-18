@@ -335,3 +335,9 @@ func (w *workspaceRow) Indexes() []memtable.Tuple {
 func (w *workspaceRow) UniqueIndexes() []memtable.Tuple {
 	return nil
 }
+
+type pkRange struct {
+	isRange bool
+	items   []int64
+	ranges  []int64
+}

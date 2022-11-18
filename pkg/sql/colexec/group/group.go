@@ -352,7 +352,7 @@ func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) err
 			return err
 		}
 	}
-	if err := vector.Union(ctr.bat.Vecs[0], ctr.vecs[0], groups, proc.Mp()); err != nil {
+	if err := vector.Union(ctr.bat.Vecs[0], ctr.vecs[0], groups, false, proc.Mp()); err != nil {
 		return err
 	}
 	for i, ag := range ctr.bat.Aggs {

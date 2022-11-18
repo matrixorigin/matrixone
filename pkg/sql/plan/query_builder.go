@@ -1133,7 +1133,24 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					As:   selectExpr.As,
 				})
 			}
+		case *tree.NumVal:
+			if expr.ValType == tree.P_null {
+				expr.ValType = tree.P_nulltext
+			}
 
+			if len(selectExpr.As) > 0 {
+				ctx.headings = append(ctx.headings, string(selectExpr.As))
+			} else {
+				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+			}
+			newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
+			if err != nil {
+				return 0, err
+			}
+			selectList = append(selectList, tree.SelectExpr{
+				Expr: newExpr,
+				As:   selectExpr.As,
+			})
 		default:
 			if len(selectExpr.As) > 0 {
 				ctx.headings = append(ctx.headings, string(selectExpr.As))
