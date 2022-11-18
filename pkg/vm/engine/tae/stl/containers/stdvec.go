@@ -177,10 +177,21 @@ func (vec *StdVector[T]) Delete(i int) (deleted T) {
 	return
 }
 
-func (vec *StdVector[T]) RangeDelete(offset, length int) {
-	vec.slice = append(vec.slice[:offset], vec.slice[offset+length:]...)
-	size := len(vec.buf) - stl.SizeOfMany[T](length)
+func (vec *StdVector[T]) BatchDelete(rowGen common.RowGen, cnt int) {
+	common.InplaceDeleteRows(vec.slice, rowGen)
+	size := len(vec.buf) - stl.SizeOfMany[T](cnt)
+	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), len(vec.slice)-cnt)
 	vec.buf = vec.buf[:size]
+}
+
+func (vec *StdVector[T]) BatchDeleteUint32s(sels ...uint32) {
+	gen := common.NewRowGenWrapper(sels...)
+	vec.BatchDelete(gen, len(sels))
+}
+
+func (vec *StdVector[T]) BatchDeleteInts(sels ...int) {
+	gen := common.NewRowGenWrapper(sels...)
+	vec.BatchDelete(gen, len(sels))
 }
 
 func (vec *StdVector[T]) AppendMany(vals ...T) {
