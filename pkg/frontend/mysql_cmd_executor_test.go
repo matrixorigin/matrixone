@@ -231,6 +231,11 @@ func Test_mce(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 
 		ses := NewSession(proto, nil, pu, &gSys, true)
+		ses.txnHandler = &TxnHandler{
+			storage:   &engine.EntireEngine{Engine: pu.StorageEngine},
+			txnClient: pu.TxnClient,
+		}
+		ses.txnHandler.SetSession(ses)
 		ses.SetRequestContext(ctx)
 
 		ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)

@@ -44,32 +44,22 @@ import (
 // New is used to new an object of compile
 func New(addr, db string, sql string, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
-	ee, ok := e.(*engine.EntireEngine)
-	if !ok {
-		return &Compile{
-			e:    e,
-			db:   db,
-			ctx:  ctx,
-			uid:  uid,
-			sql:  sql,
-			proc: proc,
-			stmt: stmt,
-		}
-	} else {
-		return &Compile{
-			e:    ee,
-			db:   db,
-			ctx:  ctx,
-			uid:  uid,
-			sql:  sql,
-			proc: proc,
-			stmt: stmt,
-		}
+	return &Compile{
+		e:    e,
+		db:   db,
+		ctx:  ctx,
+		uid:  uid,
+		sql:  sql,
+		proc: proc,
+		stmt: stmt,
 	}
 }
 
 // helper function to judge if init temporary engine is needed
-func (c *Compile) NeedInitTempEngine() bool {
+func (c *Compile) NeedInitTempEngine(InitTempEngine bool) bool {
+	if InitTempEngine {
+		return false
+	}
 	ddl := c.scope.Plan.GetDdl()
 	if ddl != nil {
 		qry := ddl.GetCreateTable()
@@ -647,6 +637,9 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 	var s *Scope
 	var tblDef *plan.TableDef
 	var ts timestamp.Timestamp
+	var db engine.Database
+	var rel engine.Relation
+	var err error
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
@@ -656,16 +649,22 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		ts = c.proc.TxnOperator.Txn().SnapshotTS
 	}
 	{
-		var err error
 		var cols []*plan.ColDef
-
-		db, err := c.e.Database(c.ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+		db, err = c.e.Database(c.ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
 			panic(err)
 		}
-		rel, err := db.Relation(c.ctx, n.TableDef.Name)
+		rel, err = db.Relation(c.ctx, n.TableDef.Name)
 		if err != nil {
-			panic(err)
+			var e error // avoid contamination of error messages
+			db, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
+			if e != nil {
+				panic(e)
+			}
+			rel, e = db.Relation(c.ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
+			if e != nil {
+				panic(e)
+			}
 		}
 		defs, err := rel.TableDefs(c.ctx)
 		if err != nil {
@@ -1289,16 +1288,23 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	rel, err = db.Relation(c.ctx, n.TableDef.Name)
 	if err != nil {
 		var e error // avoid contamination of error messages
-		db, e = c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+		db, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
 		if e != nil {
 			return nil, e
 		}
-		rel, e = db.Relation(c.ctx, n.TableDef.Name)
+
+		rel, e = db.Relation(c.ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
 		if e != nil {
 			return nil, err
 		}
+		c.isTemporaryScan = true
 	}
-
+	if c.isTemporaryScan {
+		c.isTemporaryScan = false
+		for i := 0; i < len(c.cnList); i++ {
+			c.cnList[i].Addr = ""
+		}
+	}
 	ranges, err = rel.Ranges(c.ctx, colexec.RewriteFilterExprList(n.FilterList))
 	if err != nil {
 		return nil, err

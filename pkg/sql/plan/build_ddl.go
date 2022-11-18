@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
@@ -739,6 +740,9 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 }
 
 func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan, error) {
+	if string(stmt.Name) == engine.TEMPORARY_DBNAME {
+		return nil, moerr.NewInternalError("this database name is used by mo temporary engine")
+	}
 	createDB := &plan.CreateDatabase{
 		IfNotExists: stmt.IfNotExists,
 		Database:    string(stmt.Name),

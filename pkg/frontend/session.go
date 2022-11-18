@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -73,10 +74,21 @@ type TxnHandler struct {
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
 	h := &TxnHandler{
-		storage:   storage,
+		storage:   &engine.EntireEngine{Engine: storage},
 		txnClient: txnClient,
 	}
 	return h
+}
+
+// we don't need to lock. TxnHandler is holded by one session.
+func (th *TxnHandler) SetTempEngine(te engine.Engine) {
+	ee := th.storage.(*engine.EntireEngine)
+	ee.TempEngine = te
+}
+
+func (th *TxnHandler) SetTempClient(tc client.TxnClient) {
+	ec := th.txnClient.(*client.EntireClient)
+	ec.TempClient = tc
 }
 
 type profileType uint8
@@ -171,6 +183,7 @@ type Session struct {
 	skipAuth bool
 
 	sqlSourceType string
+	InitTempEngine bool
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
@@ -377,6 +390,12 @@ func (ses *Session) GetConciseProfile() string {
 
 func (ses *Session) GetCompleteProfile() string {
 	return ses.getProfile(profileTypeAll)
+}
+
+func (ses *Session) IfNeedInitTempEngine() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.InitTempEngine
 }
 
 func (ses *Session) GetPrivilegeCache() *privilegeCache {
@@ -778,6 +797,17 @@ func (ses *Session) IsTaeEngine() bool {
 	} else {
 		_, ok := ses.storage.(moengine.TxnEngine)
 		return ok
+	}
+}
+
+func (ses *Session) IsEntireEngine() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	_, isEntire := ses.storage.(*engine.EntireEngine)
+	if isEntire {
+		return true
+	} else {
+		return false
 	}
 }
 
@@ -1643,7 +1673,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 	//open table
 	table, err := db.Relation(ctx, tableName)
 	if err != nil {
-		tmpTable, e := tcc.getTmpRelation(ctx, tableName)
+		tmpTable, e := tcc.getTmpRelation(ctx, engine.GetTempTableName(dbName, tableName))
 		if e != nil {
 			logutil.Errorf("get table %v error %v", tableName, err)
 			return nil, err
@@ -1655,11 +1685,12 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 }
 
 func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName string) (engine.Relation, error) {
-	e := tcc.ses.storage.(*engine.EntireEngine).TempEngine
-	if e == nil {
-		return nil, errors.New("temporary engine not init yet")
+	e := tcc.ses.storage
+	txn, err := tcc.txnHandler.GetTxn()
+	if err != nil {
+		return nil, err
 	}
-	db, err := e.Database(ctx, "temp-db", tcc.txnHandler.GetTxn())
+	db, err := e.Database(ctx, engine.TEMPORARY_DBNAME, txn)
 	if err != nil {
 		logutil.Errorf("get temp database error %v", err)
 		return nil, err
