@@ -51,3 +51,12 @@ internal error: Can't cast column from VARCHAR type to CHAR type because of one 
 select length(cast(uuid() as text));
 length(cast(uuid() as text))
 36
+CREATE TABLE ratings (   `book_id` bigint,   `user_id` bigint,   `score` tinyint,   `rated_at` datetime DEFAULT NOW(),   PRIMARY KEY (`book_id`,`user_id`) );
+desc ratings;
+Field    Type    Null    Key    Default    Extra    Comment
+book_id    BIGINT    YES        NULL
+user_id    BIGINT    YES        NULL
+score    TINYINT    YES        NULL
+rated_at    DATETIME    YES        CURRENT_TIMESTAMP
+__mo_cpkey_007book_id007user_id    VARCHAR    NO    PRI    NULL
+drop table ratings;
