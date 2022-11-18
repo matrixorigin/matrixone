@@ -16,8 +16,11 @@ package log
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -25,41 +28,79 @@ import (
 
 // GetServiceLogger returns service logger, it will using the service as the logger name, and
 // append FieldNameServiceUUID field to the logger
-func GetServiceLogger(logger *zap.Logger, service ServiceType, uuid string) *zap.Logger {
-	return logger.Named(string(service)).With(zap.String(FieldNameServiceUUID, uuid))
+func GetServiceLogger(logger *zap.Logger, service metadata.ServiceType, uuid string) MOLogger {
+	return wrap(logger.Named(fmt.Sprintf("%s-service", strings.ToLower(service.String()))).With(zap.String(FieldNameServiceUUID, uuid)))
 }
 
 // GetModuleLogger returns the module logger, it will add ".module" to logger name.
 // e.g. if the logger's name is cn-service, module is txn, the new logger's name is
 // "cn-service.txn".
-func GetModuleLogger(logger *zap.Logger, module Module) *zap.Logger {
-	return logger.Named(string(module))
+func GetModuleLogger(logger MOLogger, module Module) MOLogger {
+	return wrap(logger.logger.Named(string(module)))
+}
+
+// Info shortcuts to print info log
+func (l MOLogger) Info(msg string, fields ...zap.Field) bool {
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.InfoLevel), fields...)
+}
+
+// InfoAction shortcuts to print info action log
+func (l MOLogger) InfoAction(msg string, fields ...zap.Field) func() {
+	return l.LogAction(msg, DefaultLogOptions().WithLevel(zap.InfoLevel), fields...)
+}
+
+// Debug shortcuts to  print debug log
+func (l MOLogger) Debug(msg string, fields ...zap.Field) bool {
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.DebugLevel), fields...)
+}
+
+// InfoDebugAction shortcuts to print debug action log
+func (l MOLogger) InfoDebugAction(msg string, fields ...zap.Field) func() {
+	return l.LogAction(msg, DefaultLogOptions().WithLevel(zap.DebugLevel), fields...)
+}
+
+// Error shortcuts to  print error log
+func (l MOLogger) Error(msg string, fields ...zap.Field) bool {
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.ErrorLevel), fields...)
+}
+
+// Warn shortcuts to  print warn log
+func (l MOLogger) Warn(msg string, fields ...zap.Field) bool {
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.WarnLevel), fields...)
+}
+
+// Panic shortcuts to  print panic log
+func (l MOLogger) Panic(msg string, fields ...zap.Field) bool {
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.PanicLevel), fields...)
+}
+
+// Fatal shortcuts to print fatal log
+func (l MOLogger) Fatal(msg string, fields ...zap.Field) bool {
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.FatalLevel), fields...)
 }
 
 // Log is the entry point for mo log printing. Return true to indicate that the log
 // is being recorded by the current LogContext.
-func (c LogContext) Log(msg string, fields ...zap.Field) bool {
-	if c.logger == nil {
+func (l MOLogger) Log(msg string, opts LogOptions, fields ...zap.Field) bool {
+	if l.logger == nil {
 		panic("missing logger")
 	}
 
 	for _, fiter := range filters {
-		if !fiter(c) {
+		if !fiter(opts) {
 			return false
 		}
 	}
 
-	if ce := c.logger.Check(c.level, msg); ce != nil {
-		if len(c.fields) == 0 {
-			c.fields = fields
-		} else {
-			c.fields = append(c.fields, fields...)
+	if ce := l.logger.Check(opts.level, msg); ce != nil {
+		if len(opts.fields) > 0 {
+			fields = append(fields, opts.fields...)
 		}
-		if c.ctx != nil {
-			c.fields = append(c.fields, trace.ContextField(c.ctx))
+		if l.ctx != nil {
+			fields = append(fields, trace.ContextField(l.ctx))
 		}
 
-		ce.Write(c.fields...)
+		ce.Write(fields...)
 		return true
 	}
 	return false
@@ -76,85 +117,74 @@ func (c LogContext) Log(msg string, fields ...zap.Field) bool {
 //
 // This method should often be used to log the elapsed time of a function and, as the
 // logs appear in pairs, can also be used to check whether a function has been executed.
-func (c LogContext) LogAction(action string, fields ...zap.Field) func() {
+func (l MOLogger) LogAction(action string, opts LogOptions, fields ...zap.Field) func() {
 	startAt := time.Now()
-	if !c.Log(action, fields...) {
+	if !l.Log(action, opts, fields...) {
 		return nothing
 	}
 	return func() {
 		fields = append(fields, zap.Duration(FieldNameCost, time.Since(startAt)))
-		c.Log(action, fields...)
+		l.Log(action, opts, fields...)
 	}
 }
 
-// LogContext used to describe how log are recorded
-type LogContext struct {
-	logger          *zap.Logger
-	ctx             context.Context
-	level           zapcore.Level
-	fields          []zap.Field
-	sampleType      SampleType
-	samplefrequency uint64
+func wrap(logger *zap.Logger) MOLogger {
+	return wrapWithContext(logger, nil)
 }
 
-// WithContext aappend ctx to the log context. Used to log trace information, e.g. trace id.
-func (c LogContext) WithContext(ctx context.Context) LogContext {
-	c.ctx = ctx
-	return c
+func wrapWithContext(logger *zap.Logger, ctx context.Context) MOLogger {
+	if logger == nil {
+		panic("zap logger is nil")
+	}
+	if ctx != nil &&
+		(ctx == context.TODO() || ctx == context.Background()) {
+		panic("TODO and Background are not supported")
+	}
+
+	return MOLogger{
+		logger: logger,
+		ctx:    ctx,
+	}
+}
+
+func nothing() {}
+
+// DefaultLogOptions default log options
+func DefaultLogOptions() LogOptions {
+	return LogOptions{}
+}
+
+// WithContext set log trace context.
+func (opts LogOptions) WithContext(ctx context.Context) LogOptions {
+	if ctx == nil {
+		panic("context is nil")
+	}
+	if ctx == context.TODO() || ctx == context.Background() {
+		panic("TODO and Background contexts are not supported")
+	}
+
+	opts.ctx = ctx
+	return opts
+}
+
+// WithLevel set log print level
+func (opts LogOptions) WithLevel(level zapcore.Level) LogOptions {
+	opts.level = level
+	return opts
+}
+
+// WithSample sample print the log, using log counts as sampling frequency. First time must output.
+func (opts LogOptions) WithSample(sampleType SampleType) LogOptions {
+	opts.sampleType = sampleType
+	return opts
 }
 
 // WithProcess if the current log belongs to a certain process, the process name and process ID
 // can be recorded. When analyzing the log, all related logs can be retrieved according to the
 // process ID.
-func (c LogContext) WithProcess(process Process, processID string) LogContext {
-	c.fields = append(c.fields,
+func (opts LogOptions) WithProcess(process Process, processID string) LogOptions {
+	opts.fields = append(opts.fields,
 		zap.String(FieldNameProcess, string(process)),
 		zap.String(FieldNameProcessID, processID))
-	return c
+	return opts
 }
-
-// WithSampleLog sample print the log, using log counts as sampling frequency
-func (c LogContext) WithSampleLog(sampleType SampleType, frequency uint64) LogContext {
-	c.sampleType = sampleType
-	c.samplefrequency = frequency
-	return c
-}
-
-// Info info log context
-func Info(logger *zap.Logger) LogContext {
-	return defaultLogContext(logger, zap.InfoLevel)
-}
-
-// Error errror log context
-func Error(logger *zap.Logger) LogContext {
-	return defaultLogContext(logger, zap.ErrorLevel)
-}
-
-// Debug debug log context
-func Debug(logger *zap.Logger) LogContext {
-	return defaultLogContext(logger, zap.DebugLevel)
-}
-
-// Warn warn log context
-func Warn(logger *zap.Logger) LogContext {
-	return defaultLogContext(logger, zap.WarnLevel)
-}
-
-// Panic panic log context
-func Panic(logger *zap.Logger) LogContext {
-	return defaultLogContext(logger, zap.PanicLevel)
-}
-
-// Fatal fatal log context
-func Fatal(logger *zap.Logger) LogContext {
-	return defaultLogContext(logger, zap.FatalLevel)
-}
-
-func defaultLogContext(logger *zap.Logger, level zapcore.Level) LogContext {
-	return LogContext{
-		logger: logger,
-		level:  level,
-	}
-}
-
-func nothing() {}
