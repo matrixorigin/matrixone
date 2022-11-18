@@ -441,20 +441,20 @@ func dupScope(s *Scope) *Scope {
 func dupScopeList(ss []*Scope) []*Scope {
 	rs := make([]*Scope, len(ss))
 	for i := range rs {
-		rs[i] = dupScope(ss[i])
+		rs[i] = dupScope2(ss[i])
 	}
 	return rs
 }
 
 func dupScope2(s *Scope) *Scope {
-	ctx := &scopeContext{
-		id:     0,
-		parent: nil,
-		regs:   make(map[*process.WaitRegister]int32),
-	}
-	ctx.root = ctx
+	regMap := make(map[*process.WaitRegister]*process.WaitRegister)
 
-	newScope, err := copyScope(s, nil, nil)
+	newScope, err := copyScope(s, nil, regMap, s.IsRemote)
+	if err != nil {
+		return nil
+	}
+
+	err = fillInstructionsByCopyScope(newScope, s, regMap)
 	if err != nil {
 		return nil
 	}
@@ -462,13 +462,13 @@ func dupScope2(s *Scope) *Scope {
 	return newScope
 }
 
-func copyScope(srcScope *Scope, parentProc *process.Process, analNodes []*process.AnalyzeInfo) (*Scope, error) {
+func copyScope(srcScope *Scope, analNodes []*process.AnalyzeInfo, regMap map[*process.WaitRegister]*process.WaitRegister, isRemote bool) (*Scope, error) {
 	var err error
 	newScope := &Scope{
 		Magic:        srcScope.Magic,
 		IsJoin:       srcScope.IsJoin,
 		IsEnd:        srcScope.IsEnd,
-		IsRemote:     srcScope.IsRemote,
+		IsRemote:     isRemote,
 		Plan:         srcScope.Plan, // we do not deep copy plan. because it's read only
 		PreScopes:    make([]*Scope, len(srcScope.PreScopes)),
 		Instructions: make([]vm.Instruction, len(srcScope.Instructions)),
@@ -528,430 +528,452 @@ func copyScope(srcScope *Scope, parentProc *process.Process, analNodes []*proces
 
 	}
 
-	newProc := process.NewWithAnalyze(srcScope.Proc, srcScope.Proc.Ctx, int(len(srcScope.PreScopes)), nil)
-	newScope.Proc = newProc
+	newScope.Proc = process.NewWithAnalyze(srcScope.Proc, srcScope.Proc.Ctx, int(len(srcScope.PreScopes)), nil)
+	for i := range srcScope.Proc.Reg.MergeReceivers {
+		regMap[srcScope.Proc.Reg.MergeReceivers[i]] = newScope.Proc.Reg.MergeReceivers[i]
+	}
 
 	//copy prescopes
 	for i := range srcScope.PreScopes {
-		newScope.PreScopes[i], err = copyScope(srcScope.PreScopes[i], newProc, analNodes)
+		newScope.PreScopes[i], err = copyScope(srcScope.PreScopes[i], analNodes, regMap, isRemote)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	for i, src := range srcScope.Instructions {
-		in := vm.Instruction{
-			Op:  src.Op,
-			Idx: src.Idx,
+	return newScope, nil
+}
+
+func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
+	regMap map[*process.WaitRegister]*process.WaitRegister) error {
+	var err error
+
+	for i := range srcScope.PreScopes {
+		if err = fillInstructionsByCopyScope(targetScope.PreScopes[i], srcScope.PreScopes[i], regMap); err != nil {
+			return err
 		}
-		switch t := src.Arg.(type) {
-		case *anti.Argument:
-			arg := &anti.Argument{
-				Ibucket:    t.Ibucket,
-				Nbucket:    t.Nbucket,
-				Result:     t.Result,
-				Typs:       make([]types.Type, len(t.Typs)),
-				Cond:       plan.DeepCopyExpr(t.Cond),
-				Conditions: make([][]*plan.Expr, len(t.Conditions)),
-			}
-			copy(arg.Typs, t.Typs)
-			for i, es := range t.Conditions {
-				arg.Conditions[i] = make([]*plan.Expr, len(es))
-				for j, e := range es {
-					arg.Conditions[i][j] = plan.DeepCopyExpr(e)
-				}
-			}
-			in.Arg = arg
-
-		case *dispatch.Argument:
-			arg := &dispatch.Argument{
-				All:  t.All,
-				Regs: make([]*process.WaitRegister, len(t.Regs)),
-			}
-			// need confirm
-			for i := range t.Regs {
-				// id := srv.RegistConnector(parentProc.Reg.MergeReceivers[i])
-				arg.Regs[i] = parentProc.Reg.MergeReceivers[i]
-			}
-			in.Arg = arg
-
-		case *group.Argument:
-			arg := &group.Argument{
-				NeedEval: t.NeedEval,
-				Ibucket:  t.Ibucket,
-				Nbucket:  t.Nbucket,
-				Exprs:    make([]*plan.Expr, len(t.Exprs)),
-				Types:    make([]types.Type, len(t.Types)),
-				Aggs:     make([]agg.Aggregate, len(t.Aggs)),
-			}
-			copy(arg.Types, t.Types)
-			for i, e := range t.Exprs {
-				arg.Exprs[i] = plan.DeepCopyExpr(e)
-			}
-			for i, a := range t.Aggs {
-				arg.Aggs[i] = agg.Aggregate{
-					Op:   a.Op,
-					Dist: a.Dist,
-					E:    plan.DeepCopyExpr(a.E),
-				}
-			}
-			in.Arg = arg
-
-		case *join.Argument:
-			arg := &join.Argument{
-				Ibucket:    t.Ibucket,
-				Nbucket:    t.Nbucket,
-				Result:     make([]colexec.ResultPos, len(t.Result)),
-				Typs:       make([]types.Type, len(t.Typs)),
-				Cond:       plan.DeepCopyExpr(t.Cond),
-				Conditions: make([][]*plan.Expr, len(t.Conditions)),
-			}
-			copy(arg.Result, t.Result)
-			copy(arg.Typs, t.Typs)
-			for i, es := range t.Conditions {
-				arg.Conditions[i] = make([]*plan.Expr, len(es))
-				for j, e := range es {
-					arg.Conditions[i][j] = plan.DeepCopyExpr(e)
-				}
-			}
-			in.Arg = arg
-
-		case *left.Argument:
-			arg := &left.Argument{
-				Ibucket:    t.Ibucket,
-				Nbucket:    t.Nbucket,
-				Result:     make([]colexec.ResultPos, len(t.Result)),
-				Typs:       make([]types.Type, len(t.Typs)),
-				Cond:       plan.DeepCopyExpr(t.Cond),
-				Conditions: make([][]*plan.Expr, len(t.Conditions)),
-			}
-			copy(arg.Result, t.Result)
-			copy(arg.Typs, t.Typs)
-			for i, es := range t.Conditions {
-				arg.Conditions[i] = make([]*plan.Expr, len(es))
-				for j, e := range es {
-					arg.Conditions[i][j] = plan.DeepCopyExpr(e)
-				}
-			}
-			in.Arg = arg
-
-		case *limit.Argument:
-			arg := &limit.Argument{
-				Seen:  t.Seen,
-				Limit: t.Limit,
-			}
-			in.Arg = arg
-
-		case *loopanti.Argument:
-			arg := &loopanti.Argument{
-				Result: make([]int32, len(t.Result)),
-				Cond:   plan.DeepCopyExpr(t.Cond),
-				Typs:   make([]types.Type, len(t.Typs)),
-			}
-			copy(arg.Result, t.Result)
-			copy(arg.Typs, t.Typs)
-			in.Arg = arg
-
-		case *loopjoin.Argument:
-			arg := &loopjoin.Argument{
-				Result: make([]colexec.ResultPos, len(t.Result)),
-				Cond:   plan.DeepCopyExpr(t.Cond),
-				Typs:   make([]types.Type, len(t.Typs)),
-			}
-			copy(arg.Result, t.Result)
-			copy(arg.Typs, t.Typs)
-			in.Arg = arg
-
-		case *loopleft.Argument:
-			arg := &loopleft.Argument{
-				Result: make([]colexec.ResultPos, len(t.Result)),
-				Cond:   plan.DeepCopyExpr(t.Cond),
-				Typs:   make([]types.Type, len(t.Typs)),
-			}
-			copy(arg.Result, t.Result)
-			copy(arg.Typs, t.Typs)
-			in.Arg = arg
-
-		case *loopsemi.Argument:
-			arg := &loopsemi.Argument{
-				Result: make([]int32, len(t.Result)),
-				Cond:   plan.DeepCopyExpr(t.Cond),
-				Typs:   make([]types.Type, len(t.Typs)),
-			}
-			copy(arg.Result, t.Result)
-			copy(arg.Typs, t.Typs)
-			in.Arg = arg
-
-		case *loopsingle.Argument:
-			arg := &loopsingle.Argument{
-				Result: make([]colexec.ResultPos, len(t.Result)),
-				Cond:   plan.DeepCopyExpr(t.Cond),
-				Typs:   make([]types.Type, len(t.Typs)),
-			}
-			copy(arg.Result, t.Result)
-			copy(arg.Typs, t.Typs)
-			in.Arg = arg
-
-		case *offset.Argument:
-			arg := &offset.Argument{
-				Seen:   t.Seen,
-				Offset: t.Offset,
-			}
-			in.Arg = arg
-
-		case *order.Argument:
-			arg := &order.Argument{
-				Fs: make([]*plan.OrderBySpec, len(t.Fs)),
-			}
-			for i, f := range t.Fs {
-				arg.Fs[i] = plan.DeepCopyOrderBy(f)
-			}
-			in.Arg = arg
-
-		case *product.Argument:
-			arg := &product.Argument{
-				Result: make([]colexec.ResultPos, len(t.Result)),
-				Typs:   make([]types.Type, len(t.Typs)),
-			}
-			copy(arg.Result, t.Result)
-			copy(arg.Typs, t.Typs)
-			in.Arg = arg
-
-		case *projection.Argument:
-			arg := &projection.Argument{
-				Es: make([]*plan.Expr, len(t.Es)),
-			}
-			for i, e := range t.Es {
-				arg.Es[i] = plan.DeepCopyExpr(e)
-			}
-			in.Arg = arg
-
-		case *restrict.Argument:
-			arg := &restrict.Argument{
-				E: plan.DeepCopyExpr(t.E),
-			}
-			in.Arg = arg
-
-		case *semi.Argument:
-			arg := &semi.Argument{
-				Ibucket:    t.Ibucket,
-				Nbucket:    t.Nbucket,
-				Result:     make([]int32, len(t.Result)),
-				Typs:       make([]types.Type, len(t.Typs)),
-				Cond:       plan.DeepCopyExpr(t.Cond),
-				Conditions: make([][]*plan.Expr, len(t.Conditions)),
-			}
-			copy(arg.Result, t.Result)
-			copy(arg.Typs, t.Typs)
-			for i, es := range t.Conditions {
-				arg.Conditions[i] = make([]*plan.Expr, len(es))
-				for j, e := range es {
-					arg.Conditions[i][j] = plan.DeepCopyExpr(e)
-				}
-			}
-			in.Arg = arg
-
-		case *single.Argument:
-			arg := &single.Argument{
-				Ibucket:    t.Ibucket,
-				Nbucket:    t.Nbucket,
-				Result:     make([]colexec.ResultPos, len(t.Result)),
-				Typs:       make([]types.Type, len(t.Typs)),
-				Cond:       plan.DeepCopyExpr(t.Cond),
-				Conditions: make([][]*plan.Expr, len(t.Conditions)),
-			}
-			copy(arg.Result, t.Result)
-			copy(arg.Typs, t.Typs)
-			for i, es := range t.Conditions {
-				arg.Conditions[i] = make([]*plan.Expr, len(es))
-				for j, e := range es {
-					arg.Conditions[i][j] = plan.DeepCopyExpr(e)
-				}
-			}
-			in.Arg = arg
-
-		case *top.Argument:
-			arg := &top.Argument{
-				Limit: t.Limit,
-				Fs:    make([]*plan.OrderBySpec, len(t.Fs)),
-			}
-			for i, f := range t.Fs {
-				arg.Fs[i] = plan.DeepCopyOrderBy(f)
-			}
-			in.Arg = arg
-
-		case *intersect.Argument: // 1
-			arg := &intersect.Argument{
-				IBucket: t.IBucket,
-				NBucket: t.NBucket,
-			}
-			in.Arg = arg
-
-		case *minus.Argument: // 2
-			arg := &minus.Argument{
-				IBucket: t.IBucket,
-				NBucket: t.NBucket,
-			}
-			in.Arg = arg
-
-		case *intersectall.Argument:
-			arg := &intersectall.Argument{
-				IBucket: t.IBucket,
-				NBucket: t.NBucket,
-			}
-			in.Arg = arg
-
-		case *merge.Argument:
-			arg := &merge.Argument{}
-			in.Arg = arg
-
-		case *mergegroup.Argument:
-			arg := &mergegroup.Argument{
-				NeedEval: t.NeedEval,
-			}
-			in.Arg = arg
-
-		case *mergelimit.Argument:
-			arg := &mergelimit.Argument{
-				Limit: t.Limit,
-			}
-			in.Arg = arg
-
-		case *mergeoffset.Argument:
-			arg := &mergeoffset.Argument{
-				Offset: t.Offset,
-			}
-			in.Arg = arg
-
-		case *mergetop.Argument:
-			arg := &mergetop.Argument{
-				Limit: t.Limit,
-				Fs:    make([]*plan.OrderBySpec, len(t.Fs)),
-			}
-			for i, f := range t.Fs {
-				arg.Fs[i] = plan.DeepCopyOrderBy(f)
-			}
-			in.Arg = arg
-
-		case *mergeorder.Argument:
-			arg := &mergeorder.Argument{
-				Fs: make([]*plan.OrderBySpec, len(t.Fs)),
-			}
-			for i, f := range t.Fs {
-				arg.Fs[i] = plan.DeepCopyOrderBy(f)
-			}
-			in.Arg = arg
-
-		case *connector.Argument:
-			arg := &connector.Argument{
-				Reg: &process.WaitRegister{},
-			}
-			// need confirm
-			arg.Reg = parentProc.Reg.MergeReceivers[0]
-			in.Arg = arg
-
-		case *mark.Argument:
-			arg := &mark.Argument{
-				Ibucket:      t.Ibucket,
-				Nbucket:      t.Nbucket,
-				OutputNull:   t.OutputNull,
-				OutputMark:   t.OutputMark,
-				MarkMeaning:  t.MarkMeaning,
-				OutputAnyway: t.OutputAnyway,
-				Cond:         plan.DeepCopyExpr(t.Cond),
-				Result:       make([]int32, len(t.Result)),
-				Conditions:   make([][]*plan.Expr, len(t.Conditions)),
-				Typs:         make([]types.Type, len(t.Typs)),
-				OnList:       make([]*plan.Expr, len(t.OnList)),
-			}
-			copy(arg.Result, t.Result)
-			copy(arg.Typs, t.Typs)
-			for i, es := range t.Conditions {
-				arg.Conditions[i] = make([]*plan.Expr, len(es))
-				for j, e := range es {
-					arg.Conditions[i][j] = plan.DeepCopyExpr(e)
-				}
-			}
-			for i, e := range t.OnList {
-				arg.OnList[i] = plan.DeepCopyExpr(e)
-			}
-			in.Arg = arg
-
-		case *unnest.Argument:
-			arg := &unnest.Argument{
-				Es: &unnest.Param{
-					ColName:  t.Es.ColName,
-					Attrs:    make([]string, len(t.Es.Attrs)),
-					Cols:     make([]*plan.ColDef, len(t.Es.Cols)),
-					ExprList: make([]*plan.Expr, len(t.Es.ExprList)),
-				},
-			}
-			for i, e := range t.Es.ExprList {
-				arg.Es.ExprList[i] = plan.DeepCopyExpr(e)
-			}
-			for i, col := range t.Es.Cols {
-				arg.Es.Cols[i] = plan.DeepCopyColDef(col)
-			}
-			in.Arg = arg
-
-		case *generate_series.Argument:
-			arg := &generate_series.Argument{
-				Es: &generate_series.Param{
-					Attrs:    make([]string, len(t.Es.Attrs)),
-					ExprList: make([]*plan.Expr, len(t.Es.ExprList)),
-				},
-			}
-			for i, e := range t.Es.ExprList {
-				arg.Es.ExprList[i] = plan.DeepCopyExpr(e)
-			}
-			in.Arg = arg
-
-		case *hashbuild.Argument:
-			arg := &hashbuild.Argument{
-				NeedExpr:    t.NeedExpr,
-				NeedHashMap: t.NeedHashMap,
-				Ibucket:     t.Ibucket,
-				Nbucket:     t.Nbucket,
-				Typs:        make([]types.Type, len(t.Typs)),
-				Conditions:  make([]*plan.Expr, len(t.Conditions)),
-			}
-			copy(arg.Typs, t.Typs)
-			for i, e := range t.Conditions {
-				arg.Conditions[i] = plan.DeepCopyExpr(e)
-			}
-			in.Arg = arg
-
-		case *external.Argument:
-			arg := &external.Argument{
-				Es: &external.ExternalParam{
-					CreateSql:     t.Es.CreateSql,
-					Ctx:           t.Es.Ctx,
-					IgnoreLine:    t.Es.IgnoreLine,
-					IgnoreLineTag: t.Es.IgnoreLineTag,
-					Fileparam: &external.ExternalFileparam{
-						End:       t.Es.Fileparam.End,
-						FileCnt:   t.Es.Fileparam.FileCnt,
-						FileFin:   t.Es.Fileparam.FileFin,
-						FileIndex: t.Es.Fileparam.FileIndex,
-					},
-					Attrs:         make([]string, len(t.Es.Attrs)),
-					FileList:      make([]string, len(t.Es.FileList)),
-					Cols:          make([]*plan.ColDef, len(t.Es.Cols)),
-					Name2ColIndex: make(map[string]int32),
-				},
-			}
-			copy(arg.Es.Attrs, t.Es.Attrs)
-			copy(arg.Es.FileList, t.Es.FileList)
-			for i, col := range t.Es.Cols {
-				arg.Es.Cols[i] = plan.DeepCopyColDef(col)
-			}
-			for k, v := range t.Es.Name2ColIndex {
-				arg.Es.Name2ColIndex[k] = v
-			}
-			in.Arg = arg
-		}
-		newScope.Instructions[i] = in
 	}
 
-	return newScope, nil
+	for i := range srcScope.Instructions {
+		if targetScope.Instructions[i], err = copyInstructions(srcScope.Instructions[i], regMap); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func copyInstructions(src vm.Instruction, regMap map[*process.WaitRegister]*process.WaitRegister) (vm.Instruction, error) {
+	in := vm.Instruction{
+		Op:  src.Op,
+		Idx: src.Idx,
+	}
+	switch t := src.Arg.(type) {
+	case *anti.Argument:
+		arg := &anti.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Typs:       make([]types.Type, len(t.Typs)),
+			Cond:       plan.DeepCopyExpr(t.Cond),
+			Conditions: make([][]*plan.Expr, len(t.Conditions)),
+		}
+		copy(arg.Typs, t.Typs)
+		for i, es := range t.Conditions {
+			arg.Conditions[i] = make([]*plan.Expr, len(es))
+			for j, e := range es {
+				arg.Conditions[i][j] = plan.DeepCopyExpr(e)
+			}
+		}
+		in.Arg = arg
+
+	case *dispatch.Argument:
+		arg := &dispatch.Argument{
+			All:  t.All,
+			Regs: make([]*process.WaitRegister, len(t.Regs)),
+		}
+		// need confirm
+		for i := range t.Regs {
+			arg.Regs[i] = regMap[t.Regs[i]]
+		}
+		in.Arg = arg
+
+	case *group.Argument:
+		arg := &group.Argument{
+			NeedEval: t.NeedEval,
+			Ibucket:  t.Ibucket,
+			Nbucket:  t.Nbucket,
+			Exprs:    make([]*plan.Expr, len(t.Exprs)),
+			Types:    make([]types.Type, len(t.Types)),
+			Aggs:     make([]agg.Aggregate, len(t.Aggs)),
+		}
+		copy(arg.Types, t.Types)
+		for i, e := range t.Exprs {
+			arg.Exprs[i] = plan.DeepCopyExpr(e)
+		}
+		for i, a := range t.Aggs {
+			arg.Aggs[i] = agg.Aggregate{
+				Op:   a.Op,
+				Dist: a.Dist,
+				E:    plan.DeepCopyExpr(a.E),
+			}
+		}
+		in.Arg = arg
+
+	case *join.Argument:
+		arg := &join.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     make([]colexec.ResultPos, len(t.Result)),
+			Typs:       make([]types.Type, len(t.Typs)),
+			Cond:       plan.DeepCopyExpr(t.Cond),
+			Conditions: make([][]*plan.Expr, len(t.Conditions)),
+		}
+		copy(arg.Result, t.Result)
+		copy(arg.Typs, t.Typs)
+		for i, es := range t.Conditions {
+			arg.Conditions[i] = make([]*plan.Expr, len(es))
+			for j, e := range es {
+				arg.Conditions[i][j] = plan.DeepCopyExpr(e)
+			}
+		}
+		in.Arg = arg
+
+	case *left.Argument:
+		arg := &left.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     make([]colexec.ResultPos, len(t.Result)),
+			Typs:       make([]types.Type, len(t.Typs)),
+			Cond:       plan.DeepCopyExpr(t.Cond),
+			Conditions: make([][]*plan.Expr, len(t.Conditions)),
+		}
+		copy(arg.Result, t.Result)
+		copy(arg.Typs, t.Typs)
+		for i, es := range t.Conditions {
+			arg.Conditions[i] = make([]*plan.Expr, len(es))
+			for j, e := range es {
+				arg.Conditions[i][j] = plan.DeepCopyExpr(e)
+			}
+		}
+		in.Arg = arg
+
+	case *limit.Argument:
+		arg := &limit.Argument{
+			Seen:  t.Seen,
+			Limit: t.Limit,
+		}
+		in.Arg = arg
+
+	case *loopanti.Argument:
+		arg := &loopanti.Argument{
+			Result: make([]int32, len(t.Result)),
+			Cond:   plan.DeepCopyExpr(t.Cond),
+			Typs:   make([]types.Type, len(t.Typs)),
+		}
+		copy(arg.Result, t.Result)
+		copy(arg.Typs, t.Typs)
+		in.Arg = arg
+
+	case *loopjoin.Argument:
+		arg := &loopjoin.Argument{
+			Result: make([]colexec.ResultPos, len(t.Result)),
+			Cond:   plan.DeepCopyExpr(t.Cond),
+			Typs:   make([]types.Type, len(t.Typs)),
+		}
+		copy(arg.Result, t.Result)
+		copy(arg.Typs, t.Typs)
+		in.Arg = arg
+
+	case *loopleft.Argument:
+		arg := &loopleft.Argument{
+			Result: make([]colexec.ResultPos, len(t.Result)),
+			Cond:   plan.DeepCopyExpr(t.Cond),
+			Typs:   make([]types.Type, len(t.Typs)),
+		}
+		copy(arg.Result, t.Result)
+		copy(arg.Typs, t.Typs)
+		in.Arg = arg
+
+	case *loopsemi.Argument:
+		arg := &loopsemi.Argument{
+			Result: make([]int32, len(t.Result)),
+			Cond:   plan.DeepCopyExpr(t.Cond),
+			Typs:   make([]types.Type, len(t.Typs)),
+		}
+		copy(arg.Result, t.Result)
+		copy(arg.Typs, t.Typs)
+		in.Arg = arg
+
+	case *loopsingle.Argument:
+		arg := &loopsingle.Argument{
+			Result: make([]colexec.ResultPos, len(t.Result)),
+			Cond:   plan.DeepCopyExpr(t.Cond),
+			Typs:   make([]types.Type, len(t.Typs)),
+		}
+		copy(arg.Result, t.Result)
+		copy(arg.Typs, t.Typs)
+		in.Arg = arg
+
+	case *offset.Argument:
+		arg := &offset.Argument{
+			Seen:   t.Seen,
+			Offset: t.Offset,
+		}
+		in.Arg = arg
+
+	case *order.Argument:
+		arg := &order.Argument{
+			Fs: make([]*plan.OrderBySpec, len(t.Fs)),
+		}
+		for i, f := range t.Fs {
+			arg.Fs[i] = plan.DeepCopyOrderBy(f)
+		}
+		in.Arg = arg
+
+	case *product.Argument:
+		arg := &product.Argument{
+			Result: make([]colexec.ResultPos, len(t.Result)),
+			Typs:   make([]types.Type, len(t.Typs)),
+		}
+		copy(arg.Result, t.Result)
+		copy(arg.Typs, t.Typs)
+		in.Arg = arg
+
+	case *projection.Argument:
+		arg := &projection.Argument{
+			Es: make([]*plan.Expr, len(t.Es)),
+		}
+		for i, e := range t.Es {
+			arg.Es[i] = plan.DeepCopyExpr(e)
+		}
+		in.Arg = arg
+
+	case *restrict.Argument:
+		arg := &restrict.Argument{
+			E: plan.DeepCopyExpr(t.E),
+		}
+		in.Arg = arg
+
+	case *semi.Argument:
+		arg := &semi.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     make([]int32, len(t.Result)),
+			Typs:       make([]types.Type, len(t.Typs)),
+			Cond:       plan.DeepCopyExpr(t.Cond),
+			Conditions: make([][]*plan.Expr, len(t.Conditions)),
+		}
+		copy(arg.Result, t.Result)
+		copy(arg.Typs, t.Typs)
+		for i, es := range t.Conditions {
+			arg.Conditions[i] = make([]*plan.Expr, len(es))
+			for j, e := range es {
+				arg.Conditions[i][j] = plan.DeepCopyExpr(e)
+			}
+		}
+		in.Arg = arg
+
+	case *single.Argument:
+		arg := &single.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     make([]colexec.ResultPos, len(t.Result)),
+			Typs:       make([]types.Type, len(t.Typs)),
+			Cond:       plan.DeepCopyExpr(t.Cond),
+			Conditions: make([][]*plan.Expr, len(t.Conditions)),
+		}
+		copy(arg.Result, t.Result)
+		copy(arg.Typs, t.Typs)
+		for i, es := range t.Conditions {
+			arg.Conditions[i] = make([]*plan.Expr, len(es))
+			for j, e := range es {
+				arg.Conditions[i][j] = plan.DeepCopyExpr(e)
+			}
+		}
+		in.Arg = arg
+
+	case *top.Argument:
+		arg := &top.Argument{
+			Limit: t.Limit,
+			Fs:    make([]*plan.OrderBySpec, len(t.Fs)),
+		}
+		for i, f := range t.Fs {
+			arg.Fs[i] = plan.DeepCopyOrderBy(f)
+		}
+		in.Arg = arg
+
+	case *intersect.Argument: // 1
+		arg := &intersect.Argument{
+			IBucket: t.IBucket,
+			NBucket: t.NBucket,
+		}
+		in.Arg = arg
+
+	case *minus.Argument: // 2
+		arg := &minus.Argument{
+			IBucket: t.IBucket,
+			NBucket: t.NBucket,
+		}
+		in.Arg = arg
+
+	case *intersectall.Argument:
+		arg := &intersectall.Argument{
+			IBucket: t.IBucket,
+			NBucket: t.NBucket,
+		}
+		in.Arg = arg
+
+	case *merge.Argument:
+		arg := &merge.Argument{}
+		in.Arg = arg
+
+	case *mergegroup.Argument:
+		arg := &mergegroup.Argument{
+			NeedEval: t.NeedEval,
+		}
+		in.Arg = arg
+
+	case *mergelimit.Argument:
+		arg := &mergelimit.Argument{
+			Limit: t.Limit,
+		}
+		in.Arg = arg
+
+	case *mergeoffset.Argument:
+		arg := &mergeoffset.Argument{
+			Offset: t.Offset,
+		}
+		in.Arg = arg
+
+	case *mergetop.Argument:
+		arg := &mergetop.Argument{
+			Limit: t.Limit,
+			Fs:    make([]*plan.OrderBySpec, len(t.Fs)),
+		}
+		for i, f := range t.Fs {
+			arg.Fs[i] = plan.DeepCopyOrderBy(f)
+		}
+		in.Arg = arg
+
+	case *mergeorder.Argument:
+		arg := &mergeorder.Argument{
+			Fs: make([]*plan.OrderBySpec, len(t.Fs)),
+		}
+		for i, f := range t.Fs {
+			arg.Fs[i] = plan.DeepCopyOrderBy(f)
+		}
+		in.Arg = arg
+
+	case *connector.Argument:
+		arg := &connector.Argument{}
+		// need confirm
+		if t.Reg != nil {
+			arg.Reg = regMap[t.Reg]
+		}
+		in.Arg = arg
+
+	case *mark.Argument:
+		arg := &mark.Argument{
+			Ibucket:      t.Ibucket,
+			Nbucket:      t.Nbucket,
+			OutputNull:   t.OutputNull,
+			OutputMark:   t.OutputMark,
+			MarkMeaning:  t.MarkMeaning,
+			OutputAnyway: t.OutputAnyway,
+			Cond:         plan.DeepCopyExpr(t.Cond),
+			Result:       make([]int32, len(t.Result)),
+			Conditions:   make([][]*plan.Expr, len(t.Conditions)),
+			Typs:         make([]types.Type, len(t.Typs)),
+			OnList:       make([]*plan.Expr, len(t.OnList)),
+		}
+		copy(arg.Result, t.Result)
+		copy(arg.Typs, t.Typs)
+		for i, es := range t.Conditions {
+			arg.Conditions[i] = make([]*plan.Expr, len(es))
+			for j, e := range es {
+				arg.Conditions[i][j] = plan.DeepCopyExpr(e)
+			}
+		}
+		for i, e := range t.OnList {
+			arg.OnList[i] = plan.DeepCopyExpr(e)
+		}
+		in.Arg = arg
+
+	case *unnest.Argument:
+		arg := &unnest.Argument{
+			Es: &unnest.Param{
+				ColName:  t.Es.ColName,
+				Attrs:    make([]string, len(t.Es.Attrs)),
+				Cols:     make([]*plan.ColDef, len(t.Es.Cols)),
+				ExprList: make([]*plan.Expr, len(t.Es.ExprList)),
+			},
+		}
+		copy(arg.Es.Attrs, t.Es.Attrs)
+
+		for i, e := range t.Es.ExprList {
+			arg.Es.ExprList[i] = plan.DeepCopyExpr(e)
+		}
+		for i, col := range t.Es.Cols {
+			arg.Es.Cols[i] = plan.DeepCopyColDef(col)
+		}
+		in.Arg = arg
+
+	case *generate_series.Argument:
+		arg := &generate_series.Argument{
+			Es: &generate_series.Param{
+				Attrs:    make([]string, len(t.Es.Attrs)),
+				ExprList: make([]*plan.Expr, len(t.Es.ExprList)),
+			},
+		}
+		for i, e := range t.Es.ExprList {
+			arg.Es.ExprList[i] = plan.DeepCopyExpr(e)
+		}
+		in.Arg = arg
+
+	case *hashbuild.Argument:
+		arg := &hashbuild.Argument{
+			NeedExpr:    t.NeedExpr,
+			NeedHashMap: t.NeedHashMap,
+			Ibucket:     t.Ibucket,
+			Nbucket:     t.Nbucket,
+			Typs:        make([]types.Type, len(t.Typs)),
+			Conditions:  make([]*plan.Expr, len(t.Conditions)),
+		}
+		copy(arg.Typs, t.Typs)
+		for i, e := range t.Conditions {
+			arg.Conditions[i] = plan.DeepCopyExpr(e)
+		}
+		in.Arg = arg
+
+	case *external.Argument:
+		arg := &external.Argument{
+			Es: &external.ExternalParam{
+				CreateSql:     t.Es.CreateSql,
+				Ctx:           t.Es.Ctx,
+				IgnoreLine:    t.Es.IgnoreLine,
+				IgnoreLineTag: t.Es.IgnoreLineTag,
+				Fileparam: &external.ExternalFileparam{
+					End:       t.Es.Fileparam.End,
+					FileCnt:   t.Es.Fileparam.FileCnt,
+					FileFin:   t.Es.Fileparam.FileFin,
+					FileIndex: t.Es.Fileparam.FileIndex,
+				},
+				Attrs:         make([]string, len(t.Es.Attrs)),
+				FileList:      make([]string, len(t.Es.FileList)),
+				Cols:          make([]*plan.ColDef, len(t.Es.Cols)),
+				Name2ColIndex: make(map[string]int32),
+			},
+		}
+		copy(arg.Es.Attrs, t.Es.Attrs)
+		copy(arg.Es.FileList, t.Es.FileList)
+		for i, col := range t.Es.Cols {
+			arg.Es.Cols[i] = plan.DeepCopyColDef(col)
+		}
+		for k, v := range t.Es.Name2ColIndex {
+			arg.Es.Name2ColIndex[k] = v
+		}
+		in.Arg = arg
+	}
+	return in, nil
 }
