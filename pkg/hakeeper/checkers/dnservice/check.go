@@ -56,12 +56,6 @@ func Check(
 	currTick uint64,
 	logger *zap.Logger,
 ) []*operator.Operator {
-	logger.Debug("dn checker entrance",
-		zap.Any("cluster information", cluster),
-		zap.Any("dn state", dnState),
-		zap.Uint64("current tick", currTick),
-	)
-
 	stores, reportedShards := parseDnState(cfg, dnState, currTick)
 	logger.Debug("reported dn shards in cluster",
 		zap.Any("dn shard IDs", reportedShards.shardIDs),
