@@ -288,28 +288,35 @@ func getConstantExprHashValue(constExpr *plan.Expr) (bool, uint64) {
 	return true, uint64(list[0])
 }
 
-func getPkExpr(expr *plan.Expr, pkIdx int32) (bool, *plan.Expr) {
+func compPkCol(colName string, pkName string) bool {
+	dotIdx := strings.Index(colName, ".")
+	colName = colName[dotIdx+1:]
+	return colName == pkName
+}
+
+func getPkExpr(expr *plan.Expr, pkName string) (bool, *plan.Expr) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funName := exprImpl.F.Func.ObjName
 		switch funName {
 		case "and":
-			canCompute, pkBytes := getPkExpr(exprImpl.F.Args[0], pkIdx)
+			canCompute, pkBytes := getPkExpr(exprImpl.F.Args[0], pkName)
 			if canCompute {
 				return canCompute, pkBytes
 			}
-			return getPkExpr(exprImpl.F.Args[1], pkIdx)
+			return getPkExpr(exprImpl.F.Args[1], pkName)
 
 		case "=":
 			switch leftExpr := exprImpl.F.Args[0].Expr.(type) {
 			case *plan.Expr_C:
 				if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
-					if rightExpr.Col.ColPos == pkIdx {
+					if compPkCol(rightExpr.Col.Name, pkName) {
 						return true, exprImpl.F.Args[0]
 					}
 				}
+
 			case *plan.Expr_Col:
-				if leftExpr.Col.ColPos == pkIdx {
+				if compPkCol(leftExpr.Col.Name, pkName) {
 					if _, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_C); ok {
 						return true, exprImpl.F.Args[1]
 					}
@@ -326,8 +333,8 @@ func getPkExpr(expr *plan.Expr, pkIdx int32) (bool, *plan.Expr) {
 	return false, nil
 }
 
-func getPkValueByExpr(expr *plan.Expr, pkIdx int32, oid types.T) (bool, any) {
-	canCompute, valExpr := getPkExpr(expr, pkIdx)
+func getPkValueByExpr(expr *plan.Expr, pkName string, oid types.T) (bool, any) {
+	canCompute, valExpr := getPkExpr(expr, pkName)
 	if !canCompute {
 		return canCompute, nil
 	}
@@ -378,8 +385,8 @@ func getPkValueByExpr(expr *plan.Expr, pkIdx int32, oid types.T) (bool, any) {
 // only support function :["and", "="]
 // support eg: pk="a",  pk="a" and noPk > 200
 // unsupport eg: pk>"a", pk=otherFun("a"),  pk="a" or noPk > 200,
-func computeRangeByNonIntPk(expr *plan.Expr, pkIdx int32) (bool, uint64) {
-	canCompute, valExpr := getPkExpr(expr, pkIdx)
+func computeRangeByNonIntPk(expr *plan.Expr, pkName string) (bool, uint64) {
+	canCompute, valExpr := getPkExpr(expr, pkName)
 	if !canCompute {
 		return canCompute, 0
 	}
@@ -394,7 +401,7 @@ func computeRangeByNonIntPk(expr *plan.Expr, pkIdx int32) (bool, uint64) {
 // only under the following conditions：
 // 1、function named ["and", "or", ">", "<", ">=", "<=", "="]
 // 2、if function name is not "and", "or".  then one arg is column, the other is constant
-func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, *pkRange) {
+func computeRangeByIntPk(expr *plan.Expr, pkName string, parentFun string) (bool, *pkRange) {
 	type argType int
 	var typeConstant argType = 0
 	var typeColumn argType = 1
@@ -432,12 +439,12 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 		funName := exprImpl.F.Func.ObjName
 		switch funName {
 		case "and", "or":
-			canCompute, leftRange := computeRangeByIntPk(exprImpl.F.Args[0], pkIdx, funName)
+			canCompute, leftRange := computeRangeByIntPk(exprImpl.F.Args[0], pkName, funName)
 			if !canCompute {
 				return canCompute, nil
 			}
 
-			canCompute, rightRange := computeRangeByIntPk(exprImpl.F.Args[1], pkIdx, funName)
+			canCompute, rightRange := computeRangeByIntPk(exprImpl.F.Args[1], pkName, funName)
 			if !canCompute {
 				return canCompute, nil
 			}
@@ -458,7 +465,7 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 				leftArg = typeConstant
 
 			case *plan.Expr_Col:
-				if subExpr.Col.ColPos != pkIdx {
+				if !compPkCol(subExpr.Col.Name, pkName) {
 					// if  pk > 10 and noPk < 10.  we just use pk > 10
 					if parentFun == "and" {
 						return true, &pkRange{
@@ -511,7 +518,7 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 					return false, nil
 				}
 			case *plan.Expr_Col:
-				if subExpr.Col.ColPos != pkIdx {
+				if !compPkCol(subExpr.Col.Name, pkName) {
 					// if  pk > 10 and noPk < 10.  we just use pk > 10
 					if parentFun == "and" {
 						return true, &pkRange{

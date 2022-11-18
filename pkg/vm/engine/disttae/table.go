@@ -385,8 +385,8 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 		}
 	*/
 	if tbl.primaryIdx >= 0 && expr != nil {
-		ok, v := getPkValueByExpr(expr, int32(tbl.primaryIdx),
-			types.T(tbl.tableDef.Cols[tbl.primaryIdx].Typ.Id))
+		pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
+		ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
 		if ok {
 			index = memtable.Tuple{
 				index_PrimaryKey,
