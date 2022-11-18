@@ -56,7 +56,7 @@ func NewReader(cxt context.Context, fs *objectio.ObjectFS, key string) (*Reader,
 	}, nil
 }
 
-func NewCheckpointReader(fs fileservice.FileService, key string) (*Reader, error) {
+func NewCheckpointReader(cxt context.Context, fs fileservice.FileService, key string) (*Reader, error) {
 	name, locs, err := DecodeMetaLocToMetas(key)
 	if err != nil {
 		return nil, err
@@ -66,11 +66,12 @@ func NewCheckpointReader(fs fileservice.FileService, key string) (*Reader, error
 		return nil, err
 	}
 	return &Reader{
-		fs:     objectio.NewObjectFS(fs, ""),
-		reader: reader,
-		key:    key,
-		name:   name,
-		locs:   locs,
+		fs:      objectio.NewObjectFS(fs, ""),
+		reader:  reader,
+		key:     key,
+		name:    name,
+		locs:    locs,
+		readCxt: cxt,
 	}, nil
 }
 

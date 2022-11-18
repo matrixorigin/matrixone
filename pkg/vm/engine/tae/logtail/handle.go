@@ -21,6 +21,7 @@ an application on logtail mgr: build reponse to SyncLogTailRequest
 */
 
 import (
+	"context"
 	"fmt"
 	"hash/fnv"
 	"strings"
@@ -542,6 +543,7 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 }
 
 func LoadCheckpointEntries(
+	ctx context.Context,
 	metLoc string,
 	tableID uint64,
 	tableName string,
@@ -566,7 +568,7 @@ func LoadCheckpointEntries(
 	readfn := func(i int) {
 		defer wg.Done()
 		location := locations[i]
-		reader, err2 := blockio.NewCheckpointReader(fs, location)
+		reader, err2 := blockio.NewCheckpointReader(ctx, fs, location)
 		if err2 != nil {
 			errMu.Lock()
 			err = err2

@@ -38,6 +38,7 @@ type metaFile struct {
 }
 
 func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err error) {
+	ctx := context.Background()
 	dirs, err := r.fs.ListDir(CheckpointDir)
 	if err != nil {
 		return
@@ -64,7 +65,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	if err != nil {
 		return
 	}
-	bs, err := reader.ReadAllMeta(context.Background(), dir.Size, common.DefaultAllocator)
+	bs, err := reader.ReadAllMeta(ctx, dir.Size, common.DefaultAllocator)
 	if err != nil {
 		return
 	}
@@ -82,7 +83,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		if err2 != nil {
 			return types.TS{}, err2
 		}
-		data, err2 := col.GetData(context.Background(), nil)
+		data, err2 := col.GetData(ctx, nil)
 		if err2 != nil {
 			return types.TS{}, err2
 		}
@@ -124,7 +125,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			state:    ST_Finished,
 		}
 		var err2 error
-		if datas[i], err2 = checkpointEntry.Read(r.fs); err2 != nil {
+		if datas[i], err2 = checkpointEntry.Read(ctx, r.fs); err2 != nil {
 			errMu.Lock()
 			err = err2
 			errMu.Unlock()
