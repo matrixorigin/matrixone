@@ -1,3 +1,4 @@
+set time_zone='+00:00';
 --env prepare statement
 drop table if exists trun_table_01;
 drop table if exists trun_table_02;
