@@ -35,6 +35,7 @@ var (
 			Typ: &plan.Type{
 				Id:          int32(types.T_int32),
 				NotNullable: false,
+				Width:       4,
 			},
 		},
 		{
@@ -56,6 +57,7 @@ var (
 			Typ: &plan.Type{
 				Id:          int32(types.T_int32),
 				NotNullable: false,
+				Width:       4,
 			},
 		},
 		{
