@@ -44,32 +44,22 @@ import (
 // New is used to new an object of compile
 func New(db string, sql string, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
-	ee, ok := e.(*engine.EntireEngine)
-	if !ok {
-		return &Compile{
-			e:    e,
-			db:   db,
-			ctx:  ctx,
-			uid:  uid,
-			sql:  sql,
-			proc: proc,
-			stmt: stmt,
-		}
-	} else {
-		return &Compile{
-			e:    ee,
-			db:   db,
-			ctx:  ctx,
-			uid:  uid,
-			sql:  sql,
-			proc: proc,
-			stmt: stmt,
-		}
+	return &Compile{
+		e:    e,
+		db:   db,
+		ctx:  ctx,
+		uid:  uid,
+		sql:  sql,
+		proc: proc,
+		stmt: stmt,
 	}
 }
 
 // helper function to judge if init temporary engine is needed
-func (c *Compile) NeedInitTempEngine() bool {
+func (c *Compile) NeedInitTempEngine(InitTempEngine bool) bool {
+	if InitTempEngine {
+		return false
+	}
 	ddl := c.scope.Plan.GetDdl()
 	if ddl != nil {
 		qry := ddl.GetCreateTable()
@@ -1271,16 +1261,23 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	rel, err = db.Relation(c.ctx, n.TableDef.Name)
 	if err != nil {
 		var e error // avoid contamination of error messages
-		db, e = c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+		db, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
 		if e != nil {
 			return nil, e
 		}
-		rel, e = db.Relation(c.ctx, n.TableDef.Name)
+
+		rel, e = db.Relation(c.ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
 		if e != nil {
 			return nil, err
 		}
+		c.isTemporaryScan = true
 	}
-
+	if c.isTemporaryScan {
+		c.isTemporaryScan = false
+		for i := 0; i < len(c.cnList); i++ {
+			c.cnList[i].Addr = ""
+		}
+	}
 	ranges, err = rel.Ranges(c.ctx, colexec.RewriteFilterExprList(n.FilterList))
 	if err != nil {
 		return nil, err

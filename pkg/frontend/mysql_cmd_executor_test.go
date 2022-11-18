@@ -17,15 +17,16 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
+	"testing"
+	"time"
+
 	"github.com/google/uuid"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
-	"os"
-	"strconv"
-	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 
@@ -229,6 +230,11 @@ func Test_mce(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 
 		ses := NewSession(proto, nil, pu, &gSys)
+		ses.txnHandler = &TxnHandler{
+			storage:   &engine.EntireEngine{Engine: pu.StorageEngine},
+			txnClient: pu.TxnClient,
+		}
+		ses.txnHandler.SetSession(ses)
 		ses.SetRequestContext(ctx)
 
 		mce := NewMysqlCmdExecutor()

@@ -35,11 +35,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1243,6 +1243,8 @@ handle Load DataSource statement
 func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *process.Process, load *tree.Import) error {
 	var err error
 	var txn TxnOperator
+	var dbHandler engine.Database
+	var tableHandler engine.Relation
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 
@@ -1295,7 +1297,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *pr
 	if err != nil {
 		return err
 	}
-	dbHandler, err := ses.GetStorage().Database(requestCtx, loadDb, txn)
+	dbHandler, err = ses.GetStorage().Database(requestCtx, loadDb, txn)
 	if err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(loadDb)
@@ -1311,10 +1313,24 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *pr
 	/*
 		check table
 	*/
-	tableHandler, err := dbHandler.Relation(requestCtx, loadTable)
+	tableHandler, err = dbHandler.Relation(requestCtx, loadTable)
 	if err != nil {
-		//echo client. no such table
-		return moerr.NewNoSuchTable(loadDb, loadTable)
+		txn, err = ses.txnHandler.GetTxn()
+		if err != nil {
+			return err
+		}
+		dbHandler, err = ses.GetStorage().Database(requestCtx, engine.TEMPORARY_DBNAME, txn)
+		if err != nil {
+			return moerr.NewNoSuchTable(loadDb, loadTable)
+		}
+		loadTable = engine.GetTempTableName(loadDb, loadTable)
+		tableHandler, err = dbHandler.Relation(requestCtx, loadTable)
+		if err != nil {
+			//echo client. no such table
+			return moerr.NewNoSuchTable(loadDb, loadTable)
+		}
+		loadDb = engine.TEMPORARY_DBNAME
+		load.Table.ObjectName = tree.Identifier(loadTable)
 	}
 
 	/*
@@ -2166,7 +2182,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		return nil, err
 	}
 	// check if it is necessary to initialize the temporary engine
-	if cwft.compile.NeedInitTempEngine() {
+	if cwft.compile.NeedInitTempEngine(cwft.ses.IfNeedInitTempEngine()) {
 		// 0. init memory-non-dist engine
 		ck := clock.DefaultClock()
 		if ck == nil {
@@ -2174,14 +2190,18 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 				return time.Now().Unix()
 			}, math.MaxInt)
 		}
+		// Arbitrary value is OK since it's single sharded. Let's use 0xbeef
+		// suggested by @reusee
 		shard := logservicepb.DNShardInfo{
-			ShardID:   2,
-			ReplicaID: 2,
+			ShardID:   0xbeef,
+			ReplicaID: 0xbeef,
 		}
 		shards := []logservicepb.DNShardInfo{
 			shard,
 		}
-		dnAddr := "1"
+		// Any value is OK here. use "DN-address".
+		// suggested by @reusee
+		dnAddr := "DN-address"
 		dnStore := logservicepb.DNStore{
 			UUID:           uuid.NewString(),
 			ServiceAddress: dnAddr,
@@ -2194,7 +2214,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 			memoryengine.RandomIDGenerator,
 		)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		mc := memorystorage.NewStorageTxnClient(
 			ck,
@@ -2218,21 +2238,39 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		)
 		txnOp, err := mc.New()
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 
 		// 1. bind the temporary engine to the session
-		cwft.ses.SetTempEngine(me.Bind(txnOp))
+		cwft.ses.SetTempEngine(me)
 		e := cwft.ses.GetStorage().(*engine.EntireEngine)
 
 		// 2. init temp-db to store temporary relations
-		err = e.TempEngine.Create(requestCtx, "temp-db", txnOp)
+		err = e.TempEngine.Create(requestCtx, engine.TEMPORARY_DBNAME, txnOp)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 
 		// 3. assign for compile, only for the first time needed
 		cwft.compile.SetTempEngine(e.TempEngine)
+		// 4. add auto_IncrementTable fortemp-db
+		txnop := cwft.proc.TxnOperator.(*client.EntireTxnOperator)
+
+		txnop.SetTemp(txnOp)
+		colexec.CreateAutoIncrTable(e, requestCtx, cwft.proc, engine.TEMPORARY_DBNAME)
+		txnOp.Commit(requestCtx)
+
+		txnOp2, err := mc.New()
+		if err != nil {
+			return nil, err
+		}
+		txnop.SetTemp(txnOp2)
+
+		txn := cwft.ses.txnCompileCtx.txnHandler
+		txn.SetTempEngine(e.TempEngine)
+		txn.SetTempClient(mc)
+		cwft.ses.InitTempEngine = true
+
 	}
 	RecordStatementTxnID(requestCtx, cwft.ses)
 	return cwft.compile, err
@@ -2468,7 +2506,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	proc := process.New(
 		requestCtx,
 		ses.GetMemPool(),
-		pu.TxnClient,
+		ses.GetTxnHandler().GetTxnClient(),
 		ses.GetTxnHandler().GetTxnOperator(),
 		pu.FileService,
 		pu.GetClusterDetails,

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
@@ -556,10 +557,13 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		truncateTable.Database = ctx.DefaultDatabase()
 	}
 	truncateTable.Table = string(stmt.Name.ObjectName)
-	_, tableDef := ctx.Resolve(truncateTable.Database, truncateTable.Table)
+	objDef, tableDef := ctx.Resolve(truncateTable.Database, truncateTable.Table)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(truncateTable.Database, truncateTable.Table)
 	} else {
+		indexInfos := BuildIndexInfos(ctx, objDef.DbName, tableDef.Defs)
+		// truncate need to delete the index info
+		truncateTable.IndexInfos = indexInfos
 		isView := false
 		for _, def := range tableDef.Defs {
 			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
@@ -679,6 +683,9 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 }
 
 func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan, error) {
+	if string(stmt.Name) == engine.TEMPORARY_DBNAME {
+		return nil, moerr.NewInternalError("this database name is used by mo temporary engine")
+	}
 	createDB := &plan.CreateDatabase{
 		IfNotExists: stmt.IfNotExists,
 		Database:    string(stmt.Name),

@@ -40,31 +40,63 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 
 	var tableID string
+	var err error
+	var dbSource engine.Database
+	var rel engine.Relation
+	var isTemp bool
+
 	if arg.DeleteCtxs[0].CanTruncate {
-		dbSource, err := c.e.Database(c.ctx, arg.DeleteCtxs[0].DbName, c.proc.TxnOperator)
+		dbSource, err = c.e.Database(c.ctx, arg.DeleteCtxs[0].DbName, c.proc.TxnOperator)
 		if err != nil {
 			return 0, err
 		}
 
-		var rel engine.Relation
 		if rel, err = dbSource.Relation(c.ctx, arg.DeleteCtxs[0].TableName); err != nil {
-			return 0, err
+			var e error
+			dbSource, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
+			if e != nil {
+				return 0, err
+			}
+
+			rel, e = dbSource.Relation(c.ctx, engine.GetTempTableName(arg.DeleteCtxs[0].DbName, arg.DeleteCtxs[0].TableName))
+			if e != nil {
+				return 0, err
+			}
+			isTemp = true
 		}
 		tableID = rel.GetTableID(c.ctx)
 
 		for _, info := range arg.DeleteCtxs[0].IndexInfos {
 			err = dbSource.Truncate(c.ctx, info.TableName)
 			if err != nil {
-				return 0, err
+				origin := dbSource
+				var e error // avoid contamination of error messages
+				dbSource, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
+				if e != nil {
+					return 0, err
+				}
+
+				e = dbSource.Truncate(c.ctx, engine.GetTempTableName(arg.DeleteCtxs[0].DbName, info.TableName))
+				if e != nil {
+					return 0, err
+				}
+				dbSource = origin
 			}
 		}
 
-		err = dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].TableName)
-		if err != nil {
-			return 0, err
+		if isTemp {
+			err = dbSource.Truncate(c.ctx, engine.GetTempTableName(arg.DeleteCtxs[0].DbName, arg.DeleteCtxs[0].TableName))
+			if err != nil {
+				return 0, err
+			}
+			err = colexec.MoveAutoIncrCol(c.e, c.ctx, engine.GetTempTableName(arg.DeleteCtxs[0].DbName, arg.DeleteCtxs[0].TableName), dbSource, c.proc, tableID, engine.TEMPORARY_DBNAME)
+		} else {
+			err = dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].TableName)
+			if err != nil {
+				return 0, err
+			}
+			err = colexec.MoveAutoIncrCol(c.e, c.ctx, arg.DeleteCtxs[0].TableName, dbSource, c.proc, tableID, arg.DeleteCtxs[0].DbName)
 		}
-
-		err = colexec.MoveAutoIncrCol(c.e, c.ctx, arg.DeleteCtxs[0].TableName, dbSource, c.proc, tableID, arg.DeleteCtxs[0].DbName)
 		if err != nil {
 			return 0, err
 		}
@@ -100,7 +132,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	var err error
 	var dbSource engine.Database
 	var relation engine.Relation
-	var IsTemporary bool
+	var isTemp bool
 	p := s.Plan.GetIns()
 
 	dbSource, err = c.e.Database(c.ctx, p.DbName, c.proc.TxnOperator)
@@ -110,15 +142,15 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	relation, err = dbSource.Relation(c.ctx, p.TblName)
 	if err != nil {
 		var e error // avoid contamination of error messages
-		dbSource, e = c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+		dbSource, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
 		if e != nil {
 			return 0, e
 		}
-		relation, e = dbSource.Relation(c.ctx, p.TblName)
+		relation, e = dbSource.Relation(c.ctx, engine.GetTempTableName(p.DbName, p.TblName))
 		if e != nil {
 			return 0, err
 		}
-		IsTemporary = true
+		isTemp = true
 	}
 
 	bat := makeInsertBatch(p)
@@ -150,11 +182,15 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	}
 	batch.Reorder(bat, p.OrderAttrs)
 
-	if IsTemporary {
-		e := c.e.(*engine.EntireEngine).TempEngine
-		if err = colexec.UpdateInsertValueBatch(e, c.ctx, c.proc, p, bat, "temp-db", p.DbName+"-"+p.TblName); err != nil {
+	if isTemp {
+		// e := c.e.(*engine.EntireEngine).TempEngine
+		p.TblName = engine.GetTempTableName(p.DbName, p.TblName)
+		o := p.DbName
+		p.DbName = engine.TEMPORARY_DBNAME
+		if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, engine.TEMPORARY_DBNAME, p.TblName); err != nil {
 			return 0, err
 		}
+		p.DbName = o
 	} else {
 		if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
 			return 0, err
@@ -176,8 +212,16 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 			}
 		}
 	}
+
 	for _, indexInfo := range p.IndexInfos {
-		indexRelation, err := dbSource.Relation(c.ctx, indexInfo.TableName)
+		var indexRelation engine.Relation
+		var err error
+		if isTemp {
+
+			indexRelation, err = dbSource.Relation(c.ctx, engine.GetTempTableName(p.DbName, indexInfo.TableName))
+		} else {
+			indexRelation, err = dbSource.Relation(c.ctx, indexInfo.TableName)
+		}
 		if err != nil {
 			return 0, err
 		}

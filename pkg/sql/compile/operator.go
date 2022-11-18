@@ -256,28 +256,59 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 	count := len(n.DeleteTablesCtx)
 	ds := make([]*deletion.DeleteCtx, count)
 	for i := 0; i < count; i++ {
-		dbSource, err := eg.Database(proc.Ctx, n.DeleteTablesCtx[i].DbName, proc.TxnOperator)
+		var dbSource engine.Database
+		var relation engine.Relation
+		var err error
+		var isTemp bool
+		dbSource, err = eg.Database(proc.Ctx, n.DeleteTablesCtx[i].DbName, proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
-		relation, err := dbSource.Relation(proc.Ctx, n.DeleteTablesCtx[i].TblName)
+		relation, err = dbSource.Relation(proc.Ctx, n.DeleteTablesCtx[i].TblName)
 		if err != nil {
-			return nil, err
+			var e error
+			dbSource, e = eg.Database(proc.Ctx, engine.TEMPORARY_DBNAME, proc.TxnOperator)
+			if e != nil {
+				return nil, err
+			}
+
+			relation, e = dbSource.Relation(proc.Ctx, engine.GetTempTableName(n.DeleteTablesCtx[i].DbName, n.DeleteTablesCtx[i].TblName))
+			if e != nil {
+				return nil, err
+			}
+			isTemp = true
 		}
 
 		indexTables := make([]engine.Relation, 0)
 		for _, info := range n.DeleteTablesCtx[i].IndexInfos {
-			indexTable, err := dbSource.Relation(proc.Ctx, info.TableName)
+			var indexTable engine.Relation
+			var err error
+			if isTemp {
+
+				indexTable, err = dbSource.Relation(proc.Ctx, engine.GetTempTableName(n.DeleteTablesCtx[i].DbName, info.TableName))
+			} else {
+				indexTable, err = dbSource.Relation(proc.Ctx, info.TableName)
+			}
 			if err != nil {
 				return nil, err
 			}
 			indexTables = append(indexTables, indexTable)
 		}
 
+		var dbName string
+		var tblName string
+		if isTemp {
+			dbName = engine.TEMPORARY_DBNAME
+			tblName = engine.GetTempTableName(n.DeleteTablesCtx[i].DbName, n.DeleteTablesCtx[i].TblName)
+		} else {
+			dbName = n.DeleteTablesCtx[i].DbName
+			tblName = n.DeleteTablesCtx[i].TblName
+		}
+
 		ds[i] = &deletion.DeleteCtx{
 			TableSource:  relation,
-			TableName:    n.DeleteTablesCtx[i].TblName,
-			DbName:       n.DeleteTablesCtx[i].DbName,
+			TableName:    tblName,
+			DbName:       dbName,
 			UseDeleteKey: n.DeleteTablesCtx[i].UseDeleteKey,
 			CanTruncate:  n.DeleteTablesCtx[i].CanTruncate,
 			ColIndex:     n.DeleteTablesCtx[i].ColIndex,
@@ -293,30 +324,62 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 }
 
 func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
-	db, err := eg.Database(proc.Ctx, n.ObjRef.SchemaName, proc.TxnOperator)
+	var db engine.Database
+	var relation engine.Relation
+	var err error
+	var isTemp bool
+	db, err = eg.Database(proc.Ctx, n.ObjRef.SchemaName, proc.TxnOperator)
 	if err != nil {
 		return nil, err
 	}
-	relation, err := db.Relation(proc.Ctx, n.TableDef.Name)
+	relation, err = db.Relation(proc.Ctx, n.TableDef.Name)
 	if err != nil {
-		return nil, err
+		var e error
+		db, e = eg.Database(proc.Ctx, engine.TEMPORARY_DBNAME, proc.TxnOperator)
+		if e != nil {
+			return nil, err
+		}
+
+		relation, e = db.Relation(proc.Ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
+		if e != nil {
+			return nil, err
+		}
+		isTemp = true
 	}
 	indexTables := make([]engine.Relation, 0)
 	for _, info := range n.TableDef.IndexInfos {
-		indexTable, err := db.Relation(proc.Ctx, info.TableName)
+		var indexTable engine.Relation
+		var err error
+		if isTemp {
+
+			indexTable, err = db.Relation(proc.Ctx, engine.GetTempTableName(n.ObjRef.SchemaName, info.TableName))
+		} else {
+			indexTable, err = db.Relation(proc.Ctx, info.TableName)
+		}
 		if err != nil {
 			return nil, err
 		}
 		indexTables = append(indexTables, indexTable)
 	}
+
+	var dbName string
+	var tblName string
+	if isTemp {
+		dbName = engine.TEMPORARY_DBNAME
+		tblName = engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name)
+	} else {
+		dbName = n.ObjRef.SchemaName
+		tblName = n.TableDef.Name
+	}
+
 	return &insert.Argument{
 		TargetTable:   relation,
 		TargetColDefs: n.TableDef.Cols,
 		Engine:        eg,
 		DB:            db,
 		TableID:       relation.GetTableID(proc.Ctx),
-		DBName:        n.ObjRef.SchemaName,
-		TableName:     n.TableDef.Name,
+		DBName:        dbName,
+		TableName:     tblName,
 		CPkeyColDef:   n.TableDef.CompositePkey,
 		IndexTables:   indexTables,
 		IndexInfos:    n.TableDef.IndexInfos,
@@ -330,19 +393,37 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 	dbName := make([]string, len(n.UpdateCtxs))
 	tblName := make([]string, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {
-		dbSource, err := eg.Database(proc.Ctx, updateCtx.DbName, proc.TxnOperator)
+		var dbSource engine.Database
+		var relation engine.Relation
+		var err error
+		var isTemp bool
+		dbSource, err = eg.Database(proc.Ctx, updateCtx.DbName, proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
-		db[i] = dbSource
-		relation, err := dbSource.Relation(proc.Ctx, updateCtx.TblName)
+		relation, err = dbSource.Relation(proc.Ctx, updateCtx.TblName)
 		if err != nil {
-			return nil, err
+			var e error
+			dbSource, e = eg.Database(proc.Ctx, engine.TEMPORARY_DBNAME, proc.TxnOperator)
+			if e != nil {
+				return nil, err
+			}
+			relation, e = dbSource.Relation(proc.Ctx, engine.GetTempTableName(updateCtx.DbName, updateCtx.TblName))
+			if e != nil {
+				return nil, err
+			}
+			isTemp = true
 		}
 
+		if isTemp {
+			dbName[i] = engine.TEMPORARY_DBNAME
+			tblName[i] = engine.GetTempTableName(updateCtx.DbName, updateCtx.TblName)
+		} else {
+			dbName[i] = updateCtx.DbName
+			tblName[i] = updateCtx.TblName
+		}
 		tableID[i] = relation.GetTableID(proc.Ctx)
-		dbName[i] = updateCtx.DbName
-		tblName[i] = updateCtx.TblName
+
 		colNames := make([]string, 0, len(updateCtx.UpdateCols))
 		for _, col := range updateCtx.UpdateCols {
 			colNames = append(colNames, col.Name)
@@ -356,7 +437,13 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 		}
 		indexTables := make([]engine.Relation, 0)
 		for _, info := range n.TableDefVec[k].IndexInfos {
-			indexTable, err := dbSource.Relation(proc.Ctx, info.TableName)
+			var indexTable engine.Relation
+			var err error
+			if isTemp {
+				indexTable, err = dbSource.Relation(proc.Ctx, engine.GetTempTableName(updateCtx.DbName, info.TableName))
+			} else {
+				indexTable, err = dbSource.Relation(proc.Ctx, info.TableName)
+			}
 			if err != nil {
 				return nil, err
 			}

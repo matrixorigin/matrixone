@@ -733,6 +733,7 @@ message DropIndex {
 message TruncateTable {
 	string database = 1;
 	string table = 2;
+	repeated IndexInfo index_infos = 3;
 }
 
 message ShowVariables {
