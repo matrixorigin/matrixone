@@ -440,9 +440,7 @@ func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRe
 	}
 
 	// copy node.Data
-	for i := range srcScope.NodeInfo.Data {
-		newScope.NodeInfo.Data[i] = srcScope.NodeInfo.Data[i]
-	}
+	copy(newScope.NodeInfo.Data, srcScope.NodeInfo.Data)
 
 	if srcScope.DataSource != nil {
 		newScope.DataSource = &Source{
