@@ -14,18 +14,12 @@
 
 package log
 
-import "math"
+import (
+	"context"
+	"math"
 
-// ServiceType used to describe which type of service the log belongs to
-type ServiceType string
-
-var (
-	// CN cn service type
-	CN = ServiceType("cn-service")
-	// DN dn service type
-	DN = ServiceType("dn-service")
-	// LOG log service type
-	LOG = ServiceType("log-service")
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // Module used to describe which component module the log belongs to
@@ -77,5 +71,22 @@ var (
 	ExampleSample = SampleType(math.MaxInt)
 )
 
+// MOLogger mo logger based zap.logger. To standardize and standardize the logging
+// output of MO, the native zap.logger should not be used for logging in MO, but
+// rather MOLogger. MOLogger is compatible with the zap.logger log printing method
+// signature
+type MOLogger struct {
+	logger *zap.Logger
+	ctx    context.Context
+}
+
+// LogOptions log options
+type LogOptions struct {
+	ctx        context.Context
+	level      zapcore.Level
+	fields     []zap.Field
+	sampleType SampleType
+}
+
 // logFilter used to filter the print log, returns false to abort this print
-type logFilter func(ctx LogContext) bool
+type logFilter func(opts LogOptions) bool

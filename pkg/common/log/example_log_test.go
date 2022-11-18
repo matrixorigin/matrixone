@@ -19,78 +19,80 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"go.uber.org/zap"
 )
 
 func ExampleGetServiceLogger() {
-	cnServiceLogger := log.GetServiceLogger(logutil.GetGlobalLogger(), log.CN, "cn0")
-	log.Info(cnServiceLogger).Log("this is a info log")
+	logger := getServiceLogger(metadata.ServiceType_CN, "cn0")
+	logger.Info("this is a info log")
 	// Output logs:
-	// 2022/11/17 15:25:49.375367 +0800 INFO cn-service log/logger.go:51 this is a info log {"uuid": "cn0"}
+	// 2022/11/17 15:25:49.375367 +0800 INFO cn log/logger.go:51 this is a info log {"uuid": "cn0"}
 }
 
 func ExampleGetModuleLogger() {
-	cnServiceLogger := log.GetServiceLogger(logutil.GetGlobalLogger(), log.CN, "cn0")
+	cnServiceLogger := getServiceLogger(metadata.ServiceType_CN, "cn0")
 	txnClientLogger := log.GetModuleLogger(cnServiceLogger, log.TxnClient)
-	log.Info(txnClientLogger).Log("this is a info log")
+	txnClientLogger.Info("this is a info log")
 	// Output logs:
 	// 2022/11/17 15:27:24.562799 +0800 INFO cn-service.txn-client log/logger.go:51 this is a info log {"uuid": "cn0"}
 }
 
-func ExampleInfo() {
-	log.Info(logutil.GetGlobalLogger()).Log("this is a info log")
+func ExampleMOLogger_Info() {
+	getServiceLogger(metadata.ServiceType_CN, "cn0").Info("this is a info log")
 	// Output logs:
-	// 2022/11/17 15:27:52.036861 +0800 INFO log/logger.go:51 this is a info log
+	// 2022/11/17 15:27:52.036861 +0800 INFO cn-service log/logger.go:51 this is a info log {"uuid": "cn0"}
 }
 
-func ExampleDebug() {
-	log.Debug(logutil.GetGlobalLogger()).Log("this is a debug log")
+func ExampleMOLogger_Debug() {
+	getServiceLogger(metadata.ServiceType_CN, "cn0").Debug("this is a debug log")
 	// Output logs:
-	// 2022/11/17 15:27:52.036861 +0800 DEBUG log/logger.go:51 this is a debug log
+	// 2022/11/17 15:27:52.036861 +0800 DEBUG cn-service log/logger.go:51 this is a debug log {"uuid": "cn0"}
 }
 
-func ExampleError() {
-	log.Error(logutil.GetGlobalLogger()).Log("this is a error log")
+func ExampleMOLogger_Error() {
+	getServiceLogger(metadata.ServiceType_CN, "cn0").Error("this is a error log")
 	// Output logs:
-	// 2022/11/17 15:27:52.036861 +0800 ERROR log/logger.go:51 this is a error log
+	// 2022/11/17 15:27:52.036861 +0800 ERROR cn-service log/logger.go:51 this is a error log {"uuid": "cn0"}
 }
 
-func ExampleWarn() {
-	log.Warn(logutil.GetGlobalLogger()).Log("this is a warn log")
+func ExampleMOLogger_Warn() {
+	getServiceLogger(metadata.ServiceType_CN, "cn0").Warn("this is a warn log")
 	// Output logs:
-	// 2022/11/17 15:27:52.036861 +0800 WARN log/logger.go:51 this is a warn log
+	// 2022/11/17 15:27:52.036861 +0800 WARN cn-service log/logger.go:51 this is a warn log {"uuid": "cn0"}
 }
 
-func ExamplePanic() {
-	log.Panic(logutil.GetGlobalLogger()).Log("this is a panic log")
+func ExampleMOLogger_Panic() {
+	getServiceLogger(metadata.ServiceType_CN, "cn0").Panic("this is a panic log")
 	// Output logs:
-	// 2022/11/17 15:27:52.036861 +0800 PANIC log/logger.go:51 this is a panic log
+	// 2022/11/17 15:27:52.036861 +0800 PANIC cn-service log/logger.go:51 this is a panic log {"uuid": "cn0"}
 	// panic stacks...
 }
 
-func ExampleFatal() {
-	log.Fatal(logutil.GetGlobalLogger()).Log("this is a fatal log")
+func ExampleMOLogger_Fatal() {
+	getServiceLogger(metadata.ServiceType_CN, "cn0").Fatal("this is a fatal log")
 	// Output logs:
-	// 2022/11/17 15:27:52.036861 +0800 FATAL log/logger.go:51 this is a fatal log
+	// 2022/11/17 15:27:52.036861 +0800 FATAL cn-service log/logger.go:51 this is a fatal log {"uuid": "cn0"}
 	// fatal stacks...
 }
 
-func ExampleLogContext_Log() {
-	log.Info(logutil.GetGlobalLogger()).Log("this is a example log",
+func ExampleMOLogger_Log() {
+	getServiceLogger(metadata.ServiceType_CN, "cn0").Log("this is a example log",
+		log.DefaultLogOptions(),
 		zap.String("field-1", "field-1"),
 		zap.String("field-2", "field-2"))
 	// Output logs:
-	// 2022/11/17 15:27:52.036861 +0800 INFO log/logger.go:51 this is a example log {"field-1": "field-1", "field-2": "field-2"}
+	// 2022/11/17 15:27:52.036861 +0800 INFO cn-service log/logger.go:51 this is a example log {"uuid": "cn0", "field-1": "field-1", "field-2": "field-2"}
 }
 
-func ExampleLogContext_LogAction() {
+func ExampleMOLogger_LogAction() {
 	someAction()
 	// Output logs:
-	// 2022/11/17 15:28:15.599321 +0800 INFO log/logger.go:51 do action
-	// 2022/11/17 15:28:16.600754 +0800 INFO log/logger.go:51 do action {"cost": "1.001430792s"}
+	// 2022/11/17 15:28:15.599321 +0800 INFO cn-service log/logger.go:51 do action {"uuid": "cn0"}
+	// 2022/11/17 15:28:16.600754 +0800 INFO cn-service log/logger.go:51 do action {"uuid": "cn0", "cost": "1.001430792s"}
 }
 
-func ExampleLogContext_WithProcess() {
+func ExampleLogOptions_WithProcess() {
 	processStep1InCN("txn uuid")
 	processStep2InDN("txn uuid")
 	processStep3InLOG("txn uuid")
@@ -101,31 +103,39 @@ func ExampleLogContext_WithProcess() {
 	// 2022/11/17 15:36:04.724812 +0800 INFO log-service log/logger.go:51 step 3 {"uuid": "log0", "process": "txn", "process-id": "txn uuid"}
 }
 
-func ExampleLogContext_WithSampleLog() {
-	n := 10000
+func ExampleLogOptions_WithSample() {
+	logger := getServiceLogger(metadata.ServiceType_CN, "cn0")
+
+	n := 2
 	for i := 0; i < n; i++ {
-		log.Info(logutil.GetGlobalLogger()).WithSampleLog(log.ExampleSample, uint64(n)).Log("example sample log")
+		logger.Log("example sample log",
+			log.DefaultLogOptions().WithSample(log.ExampleSample))
 	}
 	// Output logs:
-	// 2022/11/17 15:43:14.645242 +0800 INFO log/logger.go:51 example sample log
+	// 2022/11/17 15:43:14.645242 +0800 INFO cn-service log/logger.go:51 example sample log {"uuid": "cn0"}
 }
 
 func someAction() {
-	defer log.Info(logutil.GetGlobalLogger()).LogAction("do action")()
+	logger := getServiceLogger(metadata.ServiceType_CN, "cn0")
+	defer logger.InfoAction("do action")()
 	time.Sleep(time.Second)
 }
 
 func processStep1InCN(id string) {
-	logger := log.GetServiceLogger(logutil.GetGlobalLogger(), log.CN, "cn0")
-	log.Info(logger).WithProcess(log.Txn, id).Log("step 1")
+	logger := getServiceLogger(metadata.ServiceType_CN, "cn0")
+	logger.Log("step 1", log.DefaultLogOptions().WithProcess(log.Txn, id))
 }
 
 func processStep2InDN(id string) {
-	logger := log.GetServiceLogger(logutil.GetGlobalLogger(), log.DN, "dn0")
-	log.Info(logger).WithProcess(log.Txn, id).Log("step 2")
+	logger := getServiceLogger(metadata.ServiceType_DN, "dn0")
+	logger.Log("step 2", log.DefaultLogOptions().WithProcess(log.Txn, id))
 }
 
 func processStep3InLOG(id string) {
-	logger := log.GetServiceLogger(logutil.GetGlobalLogger(), log.LOG, "log0")
-	log.Info(logger).WithProcess(log.Txn, id).Log("step 3")
+	logger := getServiceLogger(metadata.ServiceType_LOG, "log0")
+	logger.Log("step 3", log.DefaultLogOptions().WithProcess(log.Txn, id))
+}
+
+func getServiceLogger(serviceType metadata.ServiceType, uuid string) log.MOLogger {
+	return log.GetServiceLogger(logutil.GetGlobalLogger(), serviceType, uuid)
 }
