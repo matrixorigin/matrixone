@@ -65,8 +65,9 @@ func (h *MOErrorHolder) CsvFields(row *export.Row) []string {
 	}
 	if ct := errutil.GetContextTracer(h.Error); ct != nil && ct.Context() != nil {
 		span := SpanFromContext(ct.Context())
-		row.SetColumnVal(stmtIDCol, span.SpanContext().TraceID.String())
+		row.SetColumnVal(traceIDCol, span.SpanContext().TraceID.String())
 		row.SetColumnVal(spanIDCol, span.SpanContext().SpanID.String())
+		row.SetColumnVal(spanKindCol, span.SpanContext().Kind.String())
 	}
 	return row.ToStrings()
 }
@@ -76,7 +77,12 @@ func (h *MOErrorHolder) Format(s fmt.State, verb rune) { errbase.FormatError(h.E
 // ReportError send to BatchProcessor
 func ReportError(ctx context.Context, err error, depth int) {
 	msg := fmt.Sprintf("error: %v", err)
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(depth+1)).Info(msg, ContextField(ctx))
+	sc := SpanFromContext(ctx).SpanContext()
+	if sc.IsEmpty() {
+		logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg)
+	} else {
+		logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg, ContextField(ctx))
+	}
 	if !GetTracerProvider().IsEnable() {
 		return
 	}

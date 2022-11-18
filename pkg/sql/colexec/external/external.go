@@ -151,9 +151,14 @@ func InitS3Param(param *tree.ExternParam) error {
 
 func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
 	if param.ScanType == tree.S3 {
+		var err error
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
-		err := w.Write([]string{"s3", param.S3Param.Endpoint, param.S3Param.Region, param.S3Param.Bucket, param.S3Param.APIKey, param.S3Param.APISecret, ""})
+		if param.S3Param.APIKey == "" && param.S3Param.APISecret == "" {
+			err = w.Write([]string{"s3-no-key", param.S3Param.Endpoint, param.S3Param.Region, param.S3Param.Bucket, ""})
+		} else {
+			err = w.Write([]string{"s3", param.S3Param.Endpoint, param.S3Param.Region, param.S3Param.Bucket, param.S3Param.APIKey, param.S3Param.APISecret, ""})
+		}
 		if err != nil {
 			return nil, "", err
 		}
@@ -805,7 +810,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				d, err := types.ParseTime(field, vec.Typ.Precision)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
-					return moerr.NewInternalError("the input value '%v' is not Datetime type for column %d", field, colIdx)
+					return moerr.NewInternalError("the input value '%v' is not Time type for column %d", field, colIdx)
 				}
 				cols[rowIdx] = d
 			}

@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 
@@ -172,13 +173,16 @@ type Session struct {
 	mu sync.Mutex
 
 	InitTempEngine bool
+	flag           bool
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
 func (ses *Session) Dispose() {
-	mp := ses.GetMemPool()
-	mpool.DeleteMPool(mp)
-	ses.SetMemPool(mp)
+	if ses.flag {
+		mp := ses.GetMemPool()
+		mpool.DeleteMPool(mp)
+		ses.SetMemPool(mp)
+	}
 }
 
 type errInfo struct {
@@ -200,24 +204,8 @@ func (e *errInfo) length() int {
 	return len(e.codes)
 }
 
-func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
-	var err error
-	if mp == nil {
-		// If no mp, we create one for session.  Use GuestMmuLimitation as cap.
-		// fixed pool size can be another param, or should be computed from cap,
-		// but here, too lazy, just use Mid.
-		//
-		// XXX MPOOL
-		// We don't have a way to close a session, so the only sane way of creating
-		// a mpool is to use NoFixed
-		mp, err = mpool.NewMPool("session", PU.SV.GuestMmuLimitation, mpool.NoFixed)
-		if err != nil {
-			panic(err)
-		}
-	}
-
+func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables, flag bool) *Session {
 	txnHandler := InitTxnHandler(PU.StorageEngine, client.NewEntireClient(PU.TxnClient, nil))
-
 	ses := &Session{
 		protocol: proto,
 		Mp:       mp,
@@ -238,7 +226,6 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 		serverStatus: 0,
 		optionBits:   0,
 
-		prepareStmts:   make(map[string]*PrepareStmt),
 		outputCallback: getDataFromPipeline,
 		timeZone:       time.Local,
 		errInfo: &errInfo{
@@ -248,10 +235,31 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 		},
 		cache: &privilegeCache{},
 	}
+	if flag {
+		ses.sysVars = gSysVars.CopySysVarsToSession()
+		ses.userDefinedVars = make(map[string]interface{})
+		ses.prepareStmts = make(map[string]*PrepareStmt)
+	}
+	ses.flag = flag
 	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.GetTxnCompileCtx().SetSession(ses)
 	ses.GetTxnHandler().SetSession(ses)
+
+	var err error
+	if ses.Mp == nil {
+		// If no mp, we create one for session.  Use GuestMmuLimitation as cap.
+		// fixed pool size can be another param, or should be computed from cap,
+		// but here, too lazy, just use Mid.
+		//
+		// XXX MPOOL
+		// We don't have a way to close a session, so the only sane way of creating
+		// a mpool is to use NoFixed
+		ses.Mp, err = mpool.NewMPool("pipeline-"+ses.GetUUIDString(), PU.SV.GuestMmuLimitation, mpool.NoFixed)
+		if err != nil {
+			panic(err)
+		}
+	}
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Dispose()
@@ -267,8 +275,11 @@ type BackgroundSession struct {
 
 // NewBackgroundSession generates an independent background session executing the sql
 func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *BackgroundSession {
-	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars)
+	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars, false)
 	ses.SetOutputCallback(fakeDataSetFetcher)
+	if stmt := trace.StatementFromContext(ctx); stmt != nil {
+		logutil.Infof("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
+	}
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(ctx)
 	ses.SetRequestContext(cancelBackgroundCtx)
 	backSes := &BackgroundSession{
@@ -282,6 +293,19 @@ func (bgs *BackgroundSession) Close() {
 	if bgs.cancel != nil {
 		bgs.cancel()
 	}
+
+	if bgs.Session != nil {
+		bgs.Session.ep = nil
+		bgs.Session.errInfo.codes = nil
+		bgs.Session.errInfo.msgs = nil
+		bgs.Session.errInfo = nil
+		bgs.Session.cache.invalidate()
+		bgs.Session.cache = nil
+		bgs.Session.txnCompileCtx = nil
+		bgs.Session.txnHandler = nil
+		bgs.Session.gSysVars = nil
+	}
+	bgs = nil
 }
 
 func (ses *Session) makeProfile(profileTyp profileType) {
@@ -538,7 +562,7 @@ func (ses *Session) GetTenantInfo() *TenantInfo {
 
 // GetTenantName return tenant name according to GetTenantInfo and stmt.
 //
-// With stmt = nil, should be only called in TxnBegin, TxnCommit, TxnRollback
+// With stmt = nil, should be only called in TxnHandler.NewTxn, TxnHandler.CommitTxn, TxnHandler.RollbackTxn
 func (ses *Session) GetTenantName(stmt tree.Statement) string {
 	tenant := sysAccountName
 	if ses.GetTenantInfo() != nil && (stmt == nil || !IsPrepareStatement(stmt)) {
@@ -792,6 +816,11 @@ func (ses *Session) GetConnectionID() uint32 {
 	return ses.GetMysqlProtocol().ConnectionID()
 }
 
+func (ses *Session) GetPeer() (string, string) {
+	rh, rp, _, _ := ses.GetMysqlProtocol().Peer()
+	return rh, rp
+}
+
 func (ses *Session) SetOptionBits(bit uint32) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -832,10 +861,27 @@ func (ses *Session) ServerStatusIsSet(bit uint16) bool {
 InMultiStmtTransactionMode checks the session is in multi-statement transaction mode.
 OPTION_NOT_AUTOCOMMIT: After the autocommit is off, the multi-statement transaction is
 started implicitly by the first statement of the transaction.
-OPTION_BEGAN: Whenever the autocommit is on or off, the multi-statement transaction is
+OPTION_BEGIN: Whenever the autocommit is on or off, the multi-statement transaction is
 started explicitly by the BEGIN statement.
 
 But it does not denote the transaction is active or not.
+
+Cases    | set Autocommit = 1/0 | BEGIN statement |
+---------------------------------------------------
+Case1      1                       Yes
+Case2      1                       No
+Case3      0                       Yes
+Case4      0                       No
+---------------------------------------------------
+
+If it is Case1,Case3,Cass4, Then
+
+	InMultiStmtTransactionMode returns true.
+	Also, the bit SERVER_STATUS_IN_TRANS will be set.
+
+If it is Case2, Then
+
+	InMultiStmtTransactionMode returns false
 */
 func (ses *Session) InMultiStmtTransactionMode() bool {
 	return ses.OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN)
@@ -888,6 +934,23 @@ func (ses *Session) TxnStart() error {
 
 /*
 TxnCommitSingleStatement commits the single statement transaction.
+
+Cases    | set Autocommit = 1/0 | BEGIN statement |
+---------------------------------------------------
+Case1      1                       Yes
+Case2      1                       No
+Case3      0                       Yes
+Case4      0                       No
+---------------------------------------------------
+
+If it is Case1,Case3,Cass4, Then
+
+	InMultiStmtTransactionMode returns true.
+	Also, the bit SERVER_STATUS_IN_TRANS will be set.
+
+If it is Case2, Then
+
+	InMultiStmtTransactionMode returns false
 */
 func (ses *Session) TxnCommitSingleStatement(stmt tree.Statement) error {
 	var err error
@@ -900,45 +963,49 @@ func (ses *Session) TxnCommitSingleStatement(stmt tree.Statement) error {
 				the transaction need to be committed at the end of the statement.
 	*/
 	if !ses.InMultiStmtTransactionMode() ||
-		ses.InActiveTransaction() && IsStatementToBeCommittedInActiveTransaction(stmt) {
+		ses.InActiveTransaction() && NeedToBeCommittedInActiveTransaction(stmt) {
 		err = ses.GetTxnHandler().CommitTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
-		// metric count
-		tenant := ses.GetTenantName(stmt)
-		incTransactionCounter(tenant)
-		if err != nil {
-			incTransactionErrorsCounter(tenant, metric.SQLTypeAutoCommit)
-		}
 	}
 	return err
 }
 
 /*
 TxnRollbackSingleStatement rollbacks the single statement transaction.
+
+Cases    | set Autocommit = 1/0 | BEGIN statement |
+---------------------------------------------------
+Case1      1                       Yes
+Case2      1                       No
+Case3      0                       Yes
+Case4      0                       No
+---------------------------------------------------
+
+If it is Case1,Case3,Cass4, Then
+
+	InMultiStmtTransactionMode returns true.
+	Also, the bit SERVER_STATUS_IN_TRANS will be set.
+
+If it is Case2, Then
+
+	InMultiStmtTransactionMode returns false
 */
 func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 	var err error
 	/*
-		Rollback Rules:
-		1, if it is in single-statement mode:
-			it rollbacks.
-		2, if it is in multi-statement mode:
-			if the statement is the one can be executed in the active transaction,
-				the transaction need to be rollback at the end of the statement.
+			Rollback Rules:
+			1, if it is in single-statement mode (Case2):
+				it rollbacks.
+			2, if it is in multi-statement mode (Case1,Case3,Case4):
+		        the transaction need to be rollback at the end of the statement.
+				(every error will abort the transaction.)
 	*/
 	if !ses.InMultiStmtTransactionMode() ||
-		ses.InActiveTransaction() && IsStatementToBeCommittedInActiveTransaction(stmt) {
+		ses.InActiveTransaction() {
 		err = ses.GetTxnHandler().RollbackTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
-		// metric count
-		tenant := ses.GetTenantName(stmt)
-		incTransactionCounter(tenant)
-		incTransactionErrorsCounter(tenant, metric.SQLTypeOther) // exec rollback cnt
-		if err != nil {
-			incTransactionErrorsCounter(tenant, metric.SQLTypeAutoRollback)
-		}
 	}
 	return err
 }
@@ -949,25 +1016,17 @@ It commits the current transaction implicitly.
 */
 func (ses *Session) TxnBegin() error {
 	var err error
-	tenant := ses.GetTenantName(nil)
 	if ses.InMultiStmtTransactionMode() {
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		err = ses.GetTxnHandler().CommitTxn()
-		// metric count: last txn
-		incTransactionCounter(tenant)
 	}
 	ses.ClearOptionBits(OPTION_BEGIN)
 	if err != nil {
-		// metric count: last txn commit failed.
-		incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
 		return err
 	}
 	ses.SetOptionBits(OPTION_BEGIN)
 	ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
 	err = ses.GetTxnHandler().NewTxn()
-	if err != nil {
-		incTransactionErrorsCounter(tenant, metric.SQLTypeBegin)
-	}
 	return err
 }
 
@@ -978,12 +1037,6 @@ func (ses *Session) TxnCommit() error {
 	err = ses.GetTxnHandler().CommitTxn()
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 	ses.ClearOptionBits(OPTION_BEGIN)
-	// metric count
-	tenant := ses.GetTenantName(nil)
-	incTransactionCounter(tenant)
-	if err != nil {
-		incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
-	}
 	return err
 }
 
@@ -993,13 +1046,6 @@ func (ses *Session) TxnRollback() error {
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY)
 	err = ses.GetTxnHandler().RollbackTxn()
 	ses.ClearOptionBits(OPTION_BEGIN)
-	// metric count
-	tenant := ses.GetTenantName(nil)
-	incTransactionCounter(tenant)
-	incTransactionErrorsCounter(tenant, metric.SQLTypeOther)
-	if err != nil {
-		incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
-	}
 	return err
 }
 
@@ -1270,6 +1316,12 @@ func (th *TxnHandler) NewTxn() error {
 		}
 	}
 	th.SetInvalid()
+	defer func() {
+		if err != nil {
+			tenant := th.ses.GetTenantName(nil)
+			incTransactionErrorsCounter(tenant, metric.SQLTypeBegin)
+		}
+	}()
 	err = th.TxnClientNew()
 	if err != nil {
 		return err
@@ -1279,12 +1331,8 @@ func (th *TxnHandler) NewTxn() error {
 		panic("context should not be nil")
 	}
 	storage := th.GetStorage()
-	ctx, cancel := context.WithTimeout(
-		ctx,
-		storage.Hints().CommitOrRollbackTimeout,
-	)
-	defer cancel()
-	return storage.New(ctx, th.GetTxnOperator())
+	err = storage.New(ctx, th.GetTxnOperator())
+	return err
 }
 
 // IsValidTxn checks the transaction is true or not.
@@ -1331,6 +1379,14 @@ func (th *TxnHandler) CommitTxn() error {
 	)
 	defer cancel()
 	var err, err2 error
+	defer func() {
+		// metric count
+		tenant := ses.GetTenantName(nil)
+		incTransactionCounter(tenant)
+		if err != nil {
+			incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
+		}
+	}()
 	txnOp := th.GetTxnOperator()
 	if txnOp == nil {
 		logErrorf(sessionProfile, "CommitTxn: txn operator is null")
@@ -1375,6 +1431,15 @@ func (th *TxnHandler) RollbackTxn() error {
 	)
 	defer cancel()
 	var err, err2 error
+	defer func() {
+		// metric count
+		tenant := ses.GetTenantName(nil)
+		incTransactionCounter(tenant)
+		incTransactionErrorsCounter(tenant, metric.SQLTypeOther) // exec rollback cnt
+		if err != nil {
+			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
+		}
+	}()
 	txnOp := th.GetTxnOperator()
 	if txnOp == nil {
 		logErrorf(sessionProfile, "RollbackTxn: txn operator is null")
@@ -1608,12 +1673,13 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 			col := &plan2.ColDef{
 				Name: attr.Attr.Name,
 				Typ: &plan2.Type{
-					Id:        int32(attr.Attr.Type.Oid),
-					Width:     attr.Attr.Type.Width,
-					Precision: attr.Attr.Type.Precision,
-					Scale:     attr.Attr.Type.Scale,
-					AutoIncr:  attr.Attr.AutoIncrement,
-					Table:     tableName,
+					Id:          int32(attr.Attr.Type.Oid),
+					Width:       attr.Attr.Type.Width,
+					Precision:   attr.Attr.Type.Precision,
+					Scale:       attr.Attr.Type.Scale,
+					AutoIncr:    attr.Attr.AutoIncrement,
+					Table:       tableName,
+					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
 				},
 				Primary:  attr.Attr.Primary,
 				Default:  attr.Attr.Default,
@@ -1925,8 +1991,9 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	if ctx == nil {
 		ctx = bh.ses.GetRequestContext()
 	}
+	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 	//logutil.Debugf("-->bh:%s", sql)
-	err := bh.mce.doComQuery(ctx, sql)
+	err := bh.mce.GetDoQueryFunc()(ctx, sql)
 	if err != nil {
 		return err
 	}

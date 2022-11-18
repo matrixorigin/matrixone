@@ -90,7 +90,15 @@ func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
 		result += strconv.FormatInt(int64(exprImpl.Corr.Depth), 10)
 		result += "]"
 	case *plan.Expr_V:
-		panic("unimplement Expr_V")
+		if exprImpl.V.System {
+			if exprImpl.V.Global {
+				result += "@@global." + exprImpl.V.Name
+			} else {
+				result += "@@session." + exprImpl.V.Name
+			}
+		} else {
+			result += "@" + exprImpl.V.Name
+		}
 	case *plan.Expr_P:
 		panic("unimplement Expr_P")
 	case *plan.Expr_List:

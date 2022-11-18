@@ -22,6 +22,7 @@ import (
 )
 
 func TestTxnCleintNewWithSnapshot(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()

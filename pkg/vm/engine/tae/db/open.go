@@ -22,7 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -42,6 +44,11 @@ const (
 
 func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	dbLocker, err := createDBLock(dirname)
+
+	logutil.Info("open-tae", common.OperationField("Start"),
+		common.OperandField("open"))
+	totalTime := time.Now()
+
 	if err != nil {
 		return nil, err
 	}
@@ -49,6 +56,10 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		if dbLocker != nil {
 			dbLocker.Close()
 		}
+		logutil.Info("open-tae", common.OperationField("End"),
+			common.OperandField("open"),
+			common.AnyField("cost", time.Since(totalTime)),
+			common.AnyField("err", err))
 	}()
 
 	opts = opts.FillDefaults(dirname)
@@ -87,7 +98,13 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.Catalog = db.Opts.Catalog
 
 	// Init and start txn manager
-	txnStoreFactory := txnimpl.TxnStoreFactory(db.Opts.Catalog, db.Wal, txnBufMgr, dataFactory)
+	db.TransferTable = model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
+	txnStoreFactory := txnimpl.TxnStoreFactory(
+		db.Opts.Catalog,
+		db.Wal,
+		db.TransferTable,
+		txnBufMgr,
+		dataFactory)
 	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
 	db.LogtailMgr = logtail.NewLogtailMgr(db.Opts.LogtailCfg.PageSize, db.Opts.Clock)
@@ -106,16 +123,21 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		checkpoint.WithMinGlobalInterval(opts.CheckpointCfg.GlobalInterval))
 
 	now := time.Now()
-	ts, err := db.BGCheckpointRunner.Replay(dataFactory)
+	checkpointed, err := db.BGCheckpointRunner.Replay(dataFactory)
 	if err != nil {
 		panic(err)
 	}
-	logutil.Infof("replay checkpoint takes %s", time.Since(now))
+	logutil.Info("open-tae", common.OperationField("replay"),
+		common.OperandField("checkpoints"),
+		common.AnyField("cost", time.Since(now)),
+		common.AnyField("checkpointed", checkpointed.ToString()))
 
 	now = time.Now()
-	db.Replay(dataFactory, ts)
+	db.Replay(dataFactory, checkpointed)
 	db.Catalog.ReplayTableRows()
-	logutil.Infof("replay wal takes %s", time.Since(now))
+	logutil.Info("open-tae", common.OperationField("replay"),
+		common.OperandField("wal"),
+		common.AnyField("cost", time.Since(now)))
 
 	db.DBLocker, dbLocker = dbLocker, nil
 
@@ -127,6 +149,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		opts.CheckpointCfg.FlushInterval)
 	scanner.RegisterOp(calibrationOp)
 	scanner.RegisterOp(gcCollector)
+	db.Wal.Start()
 	db.BGCheckpointRunner.Start()
 
 	db.BGScanner = w.NewHeartBeater(

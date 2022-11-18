@@ -82,8 +82,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 		for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
 			reg := proc.Reg.MergeReceivers[i]
-			bat := <-reg.Ch
-			if bat == nil {
+			bat, ok := <-reg.Ch
+			if !ok || bat == nil {
 				proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:i], proc.Reg.MergeReceivers[i+1:]...)
 				i--
 				continue

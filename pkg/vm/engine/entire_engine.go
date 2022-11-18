@@ -75,5 +75,5 @@ func (e *EntireEngine) Hints() Hints {
 
 func (e *EntireEngine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
 	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]Reader, error) {
-		return e.Engine.NewBlockReader(ctx, num, ts, expr, ranges, tblDef)
-	}
+	return e.Engine.NewBlockReader(ctx, num, ts, expr, ranges, tblDef)
+}

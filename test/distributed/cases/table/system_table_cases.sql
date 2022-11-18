@@ -195,10 +195,10 @@ SELECT COUNT('') FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
 
 -- schemata
-SELECT COUNT(*) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
-SELECT COUNT(0) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
-SELECT COUNT('') FROM (SELECT * FROM schemata LIMIT 10) AS temp;
-SELECT COUNT(NULL) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
+SELECT COUNT(*) FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
+SELECT COUNT(0) FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
+SELECT COUNT('') FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
+SELECT COUNT(NULL) FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
 
 -- character_sets
 SELECT COUNT(*) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;

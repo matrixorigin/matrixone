@@ -15,7 +15,6 @@
 package dispatch
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -26,7 +25,6 @@ type container struct {
 type Argument struct {
 	ctr  *container
 	All  bool // dispatch batch to each consumer
-	vecs []*vector.Vector
 	Regs []*process.WaitRegister
 }
 
@@ -48,5 +46,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		case <-arg.Regs[i].Ctx.Done():
 		case arg.Regs[i].Ch <- nil:
 		}
+		close(arg.Regs[i].Ch)
 	}
 }

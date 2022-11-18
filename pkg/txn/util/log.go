@@ -24,6 +24,42 @@ import (
 	"go.uber.org/zap"
 )
 
+// LogTxnRead log txn read
+func LogTxnRead(
+	logger *zap.Logger,
+	txnMeta txn.TxnMeta) {
+	if ce := logger.Check(zap.DebugLevel, "txn read"); ce != nil {
+		ce.Write(zap.String("txn", txnMeta.DebugString()))
+	}
+}
+
+// LogTxnWrite log txn write
+func LogTxnWrite(
+	logger *zap.Logger,
+	txnMeta txn.TxnMeta) {
+	if ce := logger.Check(zap.DebugLevel, "txn write"); ce != nil {
+		ce.Write(zap.String("txn", txnMeta.DebugString()))
+	}
+}
+
+// LogTxnCommit log txn commit
+func LogTxnCommit(
+	logger *zap.Logger,
+	txnMeta txn.TxnMeta) {
+	if ce := logger.Check(zap.DebugLevel, "txn commit"); ce != nil {
+		ce.Write(zap.String("txn", txnMeta.DebugString()))
+	}
+}
+
+// LogTxnRollback log txn rollback
+func LogTxnRollback(
+	logger *zap.Logger,
+	txnMeta txn.TxnMeta) {
+	if ce := logger.Check(zap.DebugLevel, "txn rollback"); ce != nil {
+		ce.Write(zap.String("txn", txnMeta.DebugString()))
+	}
+}
+
 // LogTxnCreated log txn created
 func LogTxnCreated(
 	logger *zap.Logger,
@@ -77,7 +113,7 @@ func LogTxnSendRequests(
 	logger *zap.Logger,
 	requests []txn.TxnRequest) {
 	if ce := logger.Check(zap.DebugLevel, "txn send requests"); ce != nil {
-		ce.Write(zap.String("requests", txn.RequestsDebugString(requests)))
+		ce.Write(zap.String("requests", txn.RequestsDebugString(requests, true)))
 	}
 }
 
@@ -86,8 +122,13 @@ func LogTxnSendRequestsFailed(
 	logger *zap.Logger,
 	requests []txn.TxnRequest,
 	err error) {
+	// The payload cannot be recorded here because reading the payload field would
+	// cause a DATA RACE, as it is possible that morpc was still processing the send
+	// at the time of the error and would have manipulated the payload field. And logging
+	// the error, the payload field does not need to be logged to the log either, you can
+	// find the previous log to view the paylaod based on the request-id.
 	logger.Error("txn send requests failed",
-		zap.String("requests", txn.RequestsDebugString(requests)),
+		zap.String("requests", txn.RequestsDebugString(requests, false)),
 		zap.Error(err))
 }
 

@@ -87,6 +87,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	pro.SetSkipCheckUser(rm.GetSkipCheckUser())
 	exe := NewMysqlCmdExecutor()
 	exe.SetRoutineManager(rm)
+	exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
 
 	routine := NewRoutine(rm.getCtx(), pro, exe, pu)
 	routine.SetRoutineMgr(rm)
@@ -94,7 +95,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(routine.GetClientProtocol(), nil, pu, gSysVariables)
+	ses := NewSession(routine.GetClientProtocol(), nil, pu, gSysVariables, true)
 	ses.SetRequestContext(routine.GetCancelRoutineCtx())
 	ses.SetFromRealUser(true)
 	routine.SetSession(ses)

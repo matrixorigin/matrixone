@@ -92,11 +92,12 @@ func TestTaskServiceCanCreate(t *testing.T) {
 		WithLogShardNum(1))
 	require.NoError(t, err)
 
-	// start the cluster
-	require.NoError(t, c.Start())
+	// close the cluster
 	defer func(c Cluster) {
 		require.NoError(t, c.Close())
 	}(c)
+	// start the cluster
+	require.NoError(t, c.Start())
 
 	t.Log("cluster log svcs length:", len(c.(*testCluster).log.svcs))
 
@@ -121,11 +122,12 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
-	// start the cluster
-	require.NoError(t, c.Start())
+	// close the cluster
 	defer func(c Cluster) {
 		require.NoError(t, c.Close())
 	}(c)
+	// start the cluster
+	require.NoError(t, c.Start())
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
@@ -179,18 +181,18 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 		t.Logf("task %d is running", task.ID)
 		select {
 		case <-ctx.Done():
-			close(halt)
 		case <-halt:
 		}
 		return nil
 	}
 
-	// start the cluster
-	require.NoError(t, c.Start())
 	defer func(c Cluster, halt chan bool) {
 		halt <- true
 		require.NoError(t, c.Close())
+		close(halt)
 	}(c, halt)
+	// start the cluster
+	require.NoError(t, c.Start())
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
@@ -249,12 +251,12 @@ func TestTaskRunner(t *testing.T) {
 	c, err := NewCluster(t, opt.WithLogLevel(zap.DebugLevel))
 	require.NoError(t, err)
 
-	// start the cluster
-	require.NoError(t, c.Start())
 	// close the cluster
 	defer func(c Cluster) {
 		require.NoError(t, c.Close())
 	}(c)
+	// start the cluster
+	require.NoError(t, c.Start())
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
@@ -304,12 +306,12 @@ func TestCronTask(t *testing.T) {
 		return nil
 	}
 
+	// close the cluster
+	defer func(c Cluster) {
+		require.NoError(t, c.Close())
+	}(c)
 	// start the cluster
 	require.NoError(t, c.Start())
-	defer func(c Cluster, ch chan int) {
-		//close(ch)
-		require.NoError(t, c.Close())
-	}(c, ch)
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
@@ -323,14 +325,13 @@ func TestCronTask(t *testing.T) {
 	taskService, ok := indexed.GetTaskService()
 	require.True(t, ok)
 
-	err = taskService.CreateCronTask(context.TODO(),
+	require.NoError(t, taskService.CreateCronTask(context.TODO(),
 		task.TaskMetadata{
 			ID:       "a",
 			Executor: uint32(task.TaskCode_TestOnly),
 		},
 		"*/1 * * * * *", // every 1 second
-	)
-	require.NoError(t, err)
+	))
 
 	waitChannelFull(t, ctx, ch, 3)
 }

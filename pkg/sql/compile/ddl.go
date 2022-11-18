@@ -24,10 +24,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
+	var span trace.Span
+	c.ctx, span = trace.Start(c.ctx, "CreateDatabase")
+	defer span.End()
 	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
 	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err == nil {
 		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
@@ -222,12 +226,12 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	// Truncate Index Tables if needed
-	for _, indexInfo := range tqry.IndexInfos {
+	for _, name := range tqry.IndexTableNames {
 		var err error
 		if isTemp {
-			err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, indexInfo.TableName))
+			err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
 		} else {
-			err = dbSource.Truncate(c.ctx, indexInfo.TableName)
+			err = dbSource.Truncate(c.ctx, name)
 		}
 		if err != nil {
 			return err

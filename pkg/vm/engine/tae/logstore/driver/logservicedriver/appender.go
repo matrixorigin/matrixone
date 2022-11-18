@@ -53,12 +53,12 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	copy(record.Payload(), a.entry.payload)
 	record.ResizePayload(size)
 	ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
-	lsn, err := a.client.c.Append(ctx, a.client.record)
+	lsn, err := a.client.c.Append(ctx, record)
 	cancel()
 	if err != nil {
 		err = RetryWithTimeout(retryTimout, func() (shouldReturn bool) {
 			ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
-			lsn, err = a.client.c.Append(ctx, a.client.record)
+			lsn, err = a.client.c.Append(ctx, record)
 			cancel()
 			return err == nil
 		})

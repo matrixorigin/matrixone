@@ -12,7 +12,9 @@ SELECT COUNT(NULL) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 count(null)
 0
 (SELECT * FROM statement_info LIMIT 1) UNION ALL (SELECT * FROM statement_info LIMIT 1);
-[unknown result because it is related to issue#5895]
+statement_id    transaction_id    session_id    account    user    host    database    statement    statement_tag    statement_fingerprint    node_uuid    node_type    request_at    response_at    duration    status    err_code    error    exec_plan    rows_read    bytes_scan
+f435783f-602c-11ed-bb7f-000c29847904    00000000-0000-0000-0000-000000000000    f4350b5b-602c-11ed-bb7f-000c29847904    sys    0a1264f1-fb77-4f3b-8b6e-1611dd0f8438    0.0.0.0        use mo_task            7c4dccb4-4d3c-41f8-b482-5251dc7a41bf    ALL    2022-11-09 20:49:31.032463000    2022-11-09 20:49:31.033148000    685200    Failed    20402    invalid database mo_task    {"code": 200, "message": "sql query no record execution plan", "steps": null, "success": false, "uuid": "f435783f-602c-11ed-bb7f-000c29847904"}    0    0
+f435783f-602c-11ed-bb7f-000c29847904    00000000-0000-0000-0000-000000000000    f4350b5b-602c-11ed-bb7f-000c29847904    sys    0a1264f1-fb77-4f3b-8b6e-1611dd0f8438    0.0.0.0        use mo_task            7c4dccb4-4d3c-41f8-b482-5251dc7a41bf    ALL    2022-11-09 20:49:31.032463000    2022-11-09 20:49:31.033148000    685200    Failed    20402    invalid database mo_task    {"code": 200, "message": "sql query no record execution plan", "steps": null, "success": false, "uuid": "f435783f-602c-11ed-bb7f-000c29847904"}    0    0
 SELECT COUNT(*) FROM (SELECT * FROM rawlog LIMIT 10) AS temp;
 count(*)
 10
@@ -38,13 +40,17 @@ SELECT COUNT(NULL) FROM (SELECT * FROM log_info LIMIT 10) AS temp;
 count(null)
 0
 SELECT COUNT(*) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
-[unknown result because it is related to issue#5901]
+count(*)
+10
 SELECT COUNT(0) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
-[unknown result because it is related to issue#5901]
+count(0)
+10
 SELECT COUNT('') FROM (SELECT * FROM error_info LIMIT 10) AS temp;
-[unknown result because it is related to issue#5901]
+count()
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
-[unknown result because it is related to issue#5901]
+count(null)
+0
 SELECT COUNT(*) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 count(*)
 10
@@ -351,16 +357,16 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
 count(null)
 0
-SELECT COUNT(*) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
+SELECT COUNT(*) FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
 count(*)
-0
-SELECT COUNT(0) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
+2
+SELECT COUNT(0) FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
 count(0)
-0
-SELECT COUNT('') FROM (SELECT * FROM schemata LIMIT 10) AS temp;
+2
+SELECT COUNT('') FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
 count()
-0
-SELECT COUNT(NULL) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
+2
+SELECT COUNT(NULL) FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
 count(null)
 0
 SELECT COUNT(*) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;

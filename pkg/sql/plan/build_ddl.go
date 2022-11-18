@@ -557,13 +557,10 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		truncateTable.Database = ctx.DefaultDatabase()
 	}
 	truncateTable.Table = string(stmt.Name.ObjectName)
-	objDef, tableDef := ctx.Resolve(truncateTable.Database, truncateTable.Table)
+	_, tableDef := ctx.Resolve(truncateTable.Database, truncateTable.Table)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(truncateTable.Database, truncateTable.Table)
 	} else {
-		indexInfos := BuildIndexInfos(ctx, objDef.DbName, tableDef.Defs)
-		// truncate need to delete the index info
-		truncateTable.IndexInfos = indexInfos
 		isView := false
 		for _, def := range tableDef.Defs {
 			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
@@ -573,6 +570,11 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		}
 		if isView {
 			return nil, moerr.NewNoSuchTable(truncateTable.Database, truncateTable.Table)
+		}
+		indexInfos := BuildIndexInfos(ctx, truncateTable.Database, tableDef.Defs)
+		truncateTable.IndexTableNames = make([]string, len(indexInfos))
+		for i := range indexInfos {
+			truncateTable.IndexTableNames[i] = indexInfos[i].TableName
 		}
 	}
 

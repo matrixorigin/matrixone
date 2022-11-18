@@ -183,7 +183,7 @@ func (m *ScheduleCommand) LogString() string {
 		return fmt.Sprintf("%s/CreateTask %s", serviceType, target)
 	}
 	if m.ConfigChange == nil {
-		return fmt.Sprintf("%s/unknown command %v", serviceType, m)
+		return fmt.Sprintf("%s/unknown command %s", serviceType, m.String())
 	}
 
 	configChangeType := "Unknown"

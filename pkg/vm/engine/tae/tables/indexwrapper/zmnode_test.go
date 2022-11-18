@@ -39,6 +39,7 @@ const (
 )
 
 func TestBlockZoneMapIndex(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	var err error
 	// var res bool
 	dir := testutils.InitTestEnv(ModuleName, t)

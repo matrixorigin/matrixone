@@ -60,10 +60,10 @@ show variables like 'wait_timeout';
 
 drop table if exists t;
 create table t(
-	a int,
-	b int,
-	c int,
-	primary key(a)
+                  a int,
+                  b int,
+                  c int,
+                  primary key(a)
 );
 show indexes from t;
 
@@ -74,19 +74,17 @@ show tables;
 desc key_column_usage;
 select table_name, column_name from key_column_usage limit 2;
 desc columns;
-select TABLE_CATALOG from `columns` LIMIT 2;
+select table_name, column_name from columns where table_schema = 'mo_catalog' order by table_name, column_name limit 5;
 desc profiling;
 select seq, state from profiling;
 
--- @bvt:issue#6036
-desc PROCESSLIST;
-select * from PROCESSLIST limit 2;
--- @bvt:issue
+desc `PROCESSLIST`;
+select * from `PROCESSLIST` limit 2;
 
 desc user_privileges;
 select grantee, table_catalog from user_privileges limit 2;
 desc schemata;
-select catalog_name, schema_name from schemata;
+select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' order by catalog_name, schema_name;
 desc character_sets;
 select character_set_name, description, maxlen from character_sets limit 5;
 desc triggers;
@@ -105,3 +103,14 @@ desc columns_priv;
 select table_name, column_name from columns_priv limit 5;
 desc tables_priv;
 select host, table_name from tables_priv limit 5;
+
+-- sql_select_limit
+show variables like 'sql_select_limit';
+set sql_select_limit = 100000;
+show variables like 'sql_select_limit';
+set sql_select_limit = 1;
+show variables like 'sql_select_limit';
+-- @bvt:issue#6743
+SET SQL_SELECT_LIMIT = Default;
+show variables like 'sql_select_limit';
+-- @bvt:issue

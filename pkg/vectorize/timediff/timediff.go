@@ -15,23 +15,16 @@
 package timediff
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type DiffT interface {
 	types.Time | types.Datetime
 }
 
-func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, rs []types.Time, v1N, v2N *nulls.Nulls, resultVector *vector.Vector, proc *process.Process, vectorLen int) error {
+func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, rs []types.Time) error {
 	if len(v1) == 1 && len(v2) == 1 {
-		for i := 0; i < vectorLen; i++ {
-			if nulls.Contains(v1N, uint64(0)) || nulls.Contains(v2N, uint64(0)) {
-				nulls.Add(resultVector.Nsp, uint64(0))
-				continue
-			}
+		for i := 0; i < len(rs); i++ {
 			res, err := timeDiff(v1[0], v2[0])
 			if err != nil {
 				return err
@@ -39,11 +32,7 @@ func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, rs []types.Time, v1N, v2N *nulls.Nu
 			rs[0] = res
 		}
 	} else if len(v1) == 1 {
-		for i := 0; i < vectorLen; i++ {
-			if nulls.Contains(v1N, uint64(0)) || nulls.Contains(v2N, uint64(i)) {
-				nulls.Add(resultVector.Nsp, uint64(0))
-				continue
-			}
+		for i := 0; i < len(rs); i++ {
 			res, err := timeDiff(v1[0], v2[i])
 			if err != nil {
 				return err
@@ -51,11 +40,7 @@ func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, rs []types.Time, v1N, v2N *nulls.Nu
 			rs[i] = res
 		}
 	} else if len(v2) == 1 {
-		for i := 0; i < vectorLen; i++ {
-			if nulls.Contains(v1N, uint64(i)) || nulls.Contains(v2N, uint64(0)) {
-				nulls.Add(resultVector.Nsp, uint64(0))
-				continue
-			}
+		for i := 0; i < len(rs); i++ {
 			res, err := timeDiff(v1[i], v2[0])
 			if err != nil {
 				return err
@@ -63,11 +48,7 @@ func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, rs []types.Time, v1N, v2N *nulls.Nu
 			rs[i] = res
 		}
 	} else {
-		for i := 0; i < vectorLen; i++ {
-			if nulls.Contains(v1N, uint64(i)) || nulls.Contains(v2N, uint64(i)) {
-				nulls.Add(resultVector.Nsp, uint64(0))
-				continue
-			}
+		for i := 0; i < len(rs); i++ {
 			res, err := timeDiff(v1[i], v2[i])
 			if err != nil {
 				return err
@@ -79,14 +60,21 @@ func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, rs []types.Time, v1N, v2N *nulls.Nu
 }
 
 func timeDiff[T DiffT](v1, v2 T) (types.Time, error) {
-	time := types.Time(int(v1) - int(v2))
+	tmpTime := int64(v1 - v2)
+	// different sign need to check over flow
+	if (int64(v1)>>63)^(int64(v2)>>63) != 0 {
+		if (tmpTime>>63)^(int64(v1)>>63) != 0 {
+			// overflow
+			isNeg := int64(v1) < 0
+			return types.FromTimeClock(isNeg, types.MaxHourInTime, 59, 59, 0), nil
+		}
+	}
+
+	// same sign don't need to check overflow
+	time := types.Time(tmpTime)
 	hour, _, _, _, isNeg := time.ClockFormat()
 	if !types.ValidTime(uint64(hour), 0, 0) {
-		if isNeg {
-			return types.ParseTime("-838:59:59", 0)
-		} else {
-			return types.ParseTime("838:59:59", 0)
-		}
+		return types.FromTimeClock(isNeg, types.MaxHourInTime, 59, 59, 0), nil
 	}
 	return time, nil
 }

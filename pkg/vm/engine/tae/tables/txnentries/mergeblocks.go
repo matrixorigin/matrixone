@@ -16,6 +16,7 @@ package txnentries
 
 import (
 	"sync"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -44,7 +45,15 @@ type mergeBlocksEntry struct {
 	skippedBlks []int
 }
 
-func NewMergeBlocksEntry(txn txnif.AsyncTxn, relation handle.Relation, droppedSegs, createdSegs []*catalog.SegmentEntry, droppedBlks, createdBlks []*catalog.BlockEntry, mapping, fromAddr, toAddr []uint32, scheduler tasks.TaskScheduler, deletes []*roaring.Bitmap, skipBlks []int) *mergeBlocksEntry {
+func NewMergeBlocksEntry(
+	txn txnif.AsyncTxn,
+	relation handle.Relation,
+	droppedSegs, createdSegs []*catalog.SegmentEntry,
+	droppedBlks, createdBlks []*catalog.BlockEntry,
+	mapping, fromAddr, toAddr []uint32,
+	deletes []*roaring.Bitmap,
+	skipBlks []int,
+	scheduler tasks.TaskScheduler) *mergeBlocksEntry {
 	return &mergeBlocksEntry{
 		txn:         txn,
 		relation:    relation,
@@ -94,7 +103,17 @@ func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err er
 	for _, blk := range entry.createdBlks {
 		createdBlks = append(createdBlks, blk.AsCommonID())
 	}
-	cmd = newMergeBlocksCmd(entry.relation.ID(), droppedSegs, createdSegs, droppedBlks, createdBlks, entry.mapping, entry.fromAddr, entry.toAddr, entry.txn, csn)
+	cmd = newMergeBlocksCmd(
+		entry.relation.ID(),
+		droppedSegs,
+		createdSegs,
+		droppedBlks,
+		createdBlks,
+		entry.mapping,
+		entry.fromAddr,
+		entry.toAddr,
+		entry.txn,
+		csn)
 	return
 }
 
@@ -137,6 +156,70 @@ func (entry *mergeBlocksEntry) isSkipped(fromPos int) bool {
 	return false
 }
 
+func (entry *mergeBlocksEntry) transferBlockDeletes(
+	dropped *catalog.BlockEntry,
+	blks []handle.Block,
+	fromPos int,
+	skippedCnt int) (err error) {
+	id := dropped.AsCommonID()
+	page := model.NewTransferHashPage(id, time.Now())
+	var (
+		length uint32
+		view   *model.BlockView
+	)
+	if fromPos-skippedCnt+1 == len(entry.fromAddr) {
+		length = uint32(len(entry.mapping)) - entry.fromAddr[fromPos-skippedCnt]
+	} else {
+		length = entry.fromAddr[fromPos-skippedCnt+1] - entry.fromAddr[fromPos-skippedCnt]
+	}
+	for i := uint32(0); i < length; i++ {
+		if entry.deletes[fromPos] != nil && entry.deletes[fromPos].Contains(i) {
+			continue
+		}
+		newOffset := i
+		if entry.deletes[fromPos] != nil {
+			newOffset = i - uint32(entry.deletes[fromPos].Rank(i))
+		}
+		toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, newOffset)
+		toId := entry.createdBlks[toPos].AsCommonID()
+		prefix := model.EncodeBlockKeyPrefix(toId.SegmentID, toId.BlockID)
+		rowid := model.EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
+		page.Train(toRow, rowid)
+	}
+	_ = entry.scheduler.AddTransferPage(page)
+
+	dataBlock := dropped.GetBlockData()
+	if view, err = dataBlock.CollectChangesInRange(
+		entry.txn.GetStartTS(),
+		entry.txn.GetCommitTS()); err != nil || view == nil {
+		return
+	}
+
+	deletes := view.DeleteMask
+	for colIdx, column := range view.Columns {
+		view.DeleteMask = compute.ShuffleByDeletes(
+			deletes, entry.deletes[fromPos])
+		for row, v := range column.UpdateVals {
+			toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, row)
+			if err = blks[toPos].Update(toRow, uint16(colIdx), v); err != nil {
+				return
+			}
+		}
+	}
+	view.DeleteMask = compute.ShuffleByDeletes(view.DeleteMask, entry.deletes[fromPos])
+	if view.DeleteMask != nil {
+		it := view.DeleteMask.Iterator()
+		for it.HasNext() {
+			row := it.Next()
+			toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, row)
+			if err = blks[toPos].RangeDelete(toRow, toRow, handle.DT_MergeCompact); err != nil {
+				return
+			}
+		}
+	}
+	return
+}
+
 func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 	blks := make([]handle.Block, len(entry.createdBlks))
 	for i, meta := range entry.createdBlks {
@@ -151,42 +234,28 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 		}
 		blks[i] = blk
 	}
-	var view *model.BlockView
+
 	skippedCnt := 0
+	ids := make([]*common.ID, 0)
+
 	for fromPos, dropped := range entry.droppedBlks {
 		if entry.isSkipped(fromPos) {
 			skippedCnt++
 			continue
 		}
-		dataBlock := dropped.GetBlockData()
-		view, err = dataBlock.CollectChangesInRange(entry.txn.GetStartTS(), entry.txn.GetCommitTS())
-		if err != nil {
+
+		if err = entry.transferBlockDeletes(
+			dropped,
+			blks,
+			fromPos,
+			skippedCnt); err != nil {
 			break
 		}
-		if view == nil {
-			continue
-		}
-		deletes := view.DeleteMask
-		for colIdx, column := range view.Columns {
-			view.DeleteMask = compute.ShuffleByDeletes(
-				deletes, entry.deletes[fromPos])
-			for row, v := range column.UpdateVals {
-				toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, row)
-				if err = blks[toPos].Update(toRow, uint16(colIdx), v); err != nil {
-					return
-				}
-			}
-		}
-		view.DeleteMask = compute.ShuffleByDeletes(view.DeleteMask, entry.deletes[fromPos])
-		if view.DeleteMask != nil {
-			it := view.DeleteMask.Iterator()
-			for it.HasNext() {
-				row := it.Next()
-				toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, row)
-				if err = blks[toPos].RangeDelete(toRow, toRow, handle.DT_MergeCompact); err != nil {
-					return
-				}
-			}
+		ids = append(ids, dropped.AsCommonID())
+	}
+	if err != nil {
+		for _, id := range ids {
+			_ = entry.scheduler.DeleteTransferPage(id)
 		}
 	}
 	return
