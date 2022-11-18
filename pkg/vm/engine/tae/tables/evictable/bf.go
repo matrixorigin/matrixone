@@ -35,7 +35,14 @@ type BfNode struct {
 	colMetaFactory EvictableNodeFactory
 }
 
-func NewBfNode(mgr base.INodeManager, bfKey, metaKey string, fs *objectio.ObjectFS, idx uint16, metaloc string, typ types.Type) (node *BfNode, err error) {
+func NewBfNode(
+	idx uint16,
+	typ types.Type,
+	metaloc string,
+	bfKey, metaKey string,
+	mgr base.INodeManager,
+	fs *objectio.ObjectFS,
+) (node *BfNode, err error) {
 	node = &BfNode{
 		bfKey:   bfKey,
 		metaKey: metaKey,

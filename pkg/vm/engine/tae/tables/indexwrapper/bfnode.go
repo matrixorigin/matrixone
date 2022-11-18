@@ -32,14 +32,31 @@ type BfReader struct {
 	bfFacotry evictable.EvictableNodeFactory
 }
 
-func newBfReader(mgr base.INodeManager, typ types.Type, id common.ID, fs *objectio.ObjectFS, col uint16, metaloc string) *BfReader {
+func newBfReader(
+	mgr base.INodeManager,
+	typ types.Type,
+	id common.ID,
+	fs *objectio.ObjectFS,
+	col uint16,
+	metaloc string,
+) *BfReader {
 	metaKey := evictable.EncodeColMetaKey(id.Idx, metaloc)
 	bfKey := evictable.EncodeColBfKey(id.Idx, metaloc)
 
 	return &BfReader{
-		mgr:       mgr,
-		bfKey:     bfKey,
-		bfFacotry: func() (base.INode, error) { return evictable.NewBfNode(mgr, bfKey, metaKey, fs, col, metaloc, typ) },
+		mgr:   mgr,
+		bfKey: bfKey,
+		bfFacotry: func() (base.INode, error) {
+			return evictable.NewBfNode(
+				col,
+				typ,
+				metaloc,
+				bfKey,
+				metaKey,
+				mgr,
+				fs,
+			)
+		},
 	}
 }
 
