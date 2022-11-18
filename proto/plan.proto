@@ -24,8 +24,8 @@ option (gogoproto.sizer_all) = false;
 option (gogoproto.protosizer_all) = true;
 
 message Type {
-	int32 id           = 1;
-	bool nullable		= 2;
+	int32 id            = 1;
+	bool notNullable	= 2;
 	bool auto_incr      = 3;
 	int32 width			= 4;
 	int32 precision		= 5;

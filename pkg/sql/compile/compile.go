@@ -713,7 +713,7 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns []*plan.Node) []*Scope {
 	ss = append(ss, children...)
-	rs := c.newScopeList(1)
+	rs := c.newScopeList(1, int(n.Cost.Card))
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
 	copy(gn.GroupBy, n.ProjectList)
@@ -737,7 +737,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns 
 }
 
 func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	rs := c.newJoinScopeListWithBucket(c.newScopeList(2), ss, children)
+	rs := c.newJoinScopeListWithBucket(c.newScopeList(2, int(n.Cost.Card)), ss, children)
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
@@ -1027,7 +1027,7 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 }
 
 func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
-	rs := c.newScopeList(validScopeCount(ss))
+	rs := c.newScopeList(validScopeCount(ss), int(n.Cost.Card))
 	j := 0
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
@@ -1089,11 +1089,11 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	return rs
 }
 
-func (c *Compile) newScopeList(childrenCount int) []*Scope {
+func (c *Compile) newScopeList(childrenCount int, rows int) []*Scope {
 	var ss []*Scope
 
 	for _, n := range c.cnList {
-		ss = append(ss, c.newScopeListWithNode(n.Mcpu, childrenCount)...)
+		ss = append(ss, c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, rows), childrenCount)...)
 	}
 	return ss
 }
@@ -1208,6 +1208,16 @@ func (c *Compile) NumCPU() int {
 	return runtime.NumCPU()
 }
 
+func (c *Compile) generateCPUNumber(num, rows int) int {
+	for n := rows / num; num > 0 && n < Single_Core_Rows; num = num - 1 {
+		continue
+	}
+	if num == 0 {
+		num++
+	}
+	return num
+}
+
 func (c *Compile) initAnalyze(qry *plan.Query) {
 	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
 	for i := range anals {
@@ -1252,13 +1262,23 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		return nil, err
 	}
 	if len(ranges) == 0 {
-		return c.cnList, nil
+		nodes = make(engine.Nodes, len(c.cnList))
+		for i, node := range c.cnList {
+			nodes[i] = engine.Node{
+				Id:   node.Id,
+				Addr: node.Addr,
+				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Cost.Card)),
+			}
+		}
+		return nodes, nil
 	}
 	if len(ranges[0]) == 0 {
 		if c.info.Typ == plan2.ExecTypeTP {
 			nodes = append(nodes, engine.Node{Mcpu: 1})
 		} else {
-			nodes = append(nodes, engine.Node{Mcpu: c.NumCPU()})
+			nodes = append(nodes, engine.Node{
+				Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Cost.Card)),
+			})
 		}
 		ranges = ranges[1:]
 	}
@@ -1272,14 +1292,14 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			nodes = append(nodes, engine.Node{
 				Id:   c.cnList[j].Id,
 				Addr: c.cnList[j].Addr,
-				Mcpu: c.cnList[j].Mcpu,
+				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Cost.Card)),
 				Data: ranges[i:],
 			})
 		} else {
 			nodes = append(nodes, engine.Node{
 				Id:   c.cnList[j].Id,
 				Addr: c.cnList[j].Addr,
-				Mcpu: c.cnList[j].Mcpu,
+				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Cost.Card)),
 				Data: ranges[i : i+step],
 			})
 		}

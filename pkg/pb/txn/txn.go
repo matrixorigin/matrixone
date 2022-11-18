@@ -63,9 +63,9 @@ func (m TxnRequest) DebugStringWithPayload(withPayload bool) string {
 	buffer.WriteString("/")
 	buffer.WriteString(fmt.Sprintf("F-%d", m.Flag))
 
-	if m.CNRequest != nil {
+	if withPayload && m.CNRequest != nil {
 		buffer.WriteString("/<")
-		buffer.WriteString(m.CNRequest.DebugString(withPayload))
+		buffer.WriteString(m.CNRequest.DebugString())
 		buffer.WriteString(">")
 	}
 	buffer.WriteString("/=><")
@@ -110,12 +110,8 @@ func (m TxnResponse) DebugString() string {
 }
 
 // DebugString returns debug string
-func (m CNOpRequest) DebugString(withPayload bool) string {
-	if withPayload {
-		return fmt.Sprintf("O:%d-D:%d", m.OpCode, len(m.Payload))
-	} else {
-		return fmt.Sprintf("O:%d", m.OpCode)
-	}
+func (m CNOpRequest) DebugString() string {
+	return fmt.Sprintf("O:%d-D:%d", m.OpCode, len(m.Payload))
 }
 
 // DebugString returns debug string
