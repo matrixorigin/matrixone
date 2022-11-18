@@ -106,26 +106,17 @@ func (impl *nullableVecImpl[T]) Delete(i int) {
 func (impl *nullableVecImpl[T]) DeleteBatch(deletes *roaring.Bitmap) {
 	impl.tryCOW()
 	if !impl.HasNull() {
-		arr := deletes.ToArray()
-		for i := len(arr) - 1; i >= 0; i-- {
-			impl.vecBase.Delete(int(arr[i]))
-		}
+		impl.vecBase.DeleteBatch(deletes)
 		return
 	}
 	nulls := impl.derived.nulls
 	max := nulls.Maximum()
 	min := deletes.Minimum()
 	if max < uint64(min) {
-		arr := deletes.ToArray()
-		for i := len(arr) - 1; i >= 0; i-- {
-			impl.vecBase.Delete(int(arr[i]))
-		}
+		impl.vecBase.DeleteBatch(deletes)
 		return
 	} else if max == uint64(min) {
-		arr := deletes.ToArray()
-		for i := len(arr) - 1; i >= 0; i-- {
-			impl.vecBase.Delete(int(arr[i]))
-		}
+		impl.vecBase.DeleteBatch(deletes)
 		nulls.Remove(uint64(min))
 		return
 	}

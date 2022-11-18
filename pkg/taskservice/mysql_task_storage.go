@@ -433,7 +433,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 		var codeOption sql.NullInt32
 		var msgOption sql.NullString
 		var options string
-		err := rows.Scan(
+		if err := rows.Scan(
 			&t.ID,
 			&t.Metadata.ID,
 			&t.Metadata.Executor,
@@ -448,8 +448,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 			&msgOption,
 			&t.CreateAt,
 			&t.CompletedAt,
-		)
-		if err != nil {
+		); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(options), &t.Metadata.Options); err != nil {
@@ -776,6 +775,9 @@ func (m *mysqlTaskStorage) getDB() (*sql.DB, func() error, error) {
 }
 
 func (m *mysqlTaskStorage) useDB(db *sql.DB) error {
+	if err := db.Ping(); err != nil {
+		return errNotReady
+	}
 	for _, err := db.Exec("use " + m.dbname); err != nil; _, err = db.Exec("use " + m.dbname) {
 		me, ok := err.(*mysql.MySQLError)
 		if !ok || me.Number != moerr.ER_BAD_DB_ERROR {

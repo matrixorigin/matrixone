@@ -80,21 +80,23 @@ func (r *Reader) LoadBlkColumnsByMeta(
 	nullables []bool,
 	block objectio.BlockObject) (*containers.Batch, error) {
 	bat := containers.NewBatch()
+	if block.GetExtent().End() == 0 {
+		return bat, nil
+	}
+	idxs := make([]uint16, len(colNames))
+	for i := range colNames {
+		idxs[i] = uint16(i)
+	}
+	ioResult, err := r.reader.Read(r.readCxt, block.GetExtent(), idxs, nil)
+	if err != nil {
+		return nil, err
+	}
 
 	for i := range colNames {
-		if block.GetExtent().End() == 0 {
-			continue
-		}
-		col, err := block.GetColumn(uint16(i))
-		if err != nil {
-			return bat, err
-		}
-		data, err := col.GetData(r.readCxt, nil)
-		if err != nil {
-			return bat, err
-		}
 		pkgVec := vector.New(colTypes[i])
-		if err = pkgVec.Read(data.Entries[0].Object.([]byte)); err != nil && !errors.Is(err, io.EOF) {
+		data := make([]byte, len(ioResult.Entries[i].Object.([]byte)))
+		copy(data, ioResult.Entries[i].Object.([]byte))
+		if err = pkgVec.Read(data); err != nil && !errors.Is(err, io.EOF) {
 			return bat, err
 		}
 		var vec containers.Vector
@@ -105,6 +107,7 @@ func (r *Reader) LoadBlkColumnsByMeta(
 		}
 		bat.AddVector(colNames[i], vec)
 		bat.Vecs[i] = vec
+
 	}
 	return bat, nil
 }
@@ -117,31 +120,30 @@ func (r *Reader) LoadBlkColumnsByMetaAndIdx(
 	idx int) (*containers.Batch, error) {
 	bat := containers.NewBatch()
 
-	for i := range colNames {
-		if block.GetExtent().End() == 0 {
-			continue
-		}
-		col, err := block.GetColumn(uint16(idx))
-		if err != nil {
-			return bat, err
-		}
-		data, err := col.GetData(r.readCxt, nil)
-		if err != nil {
-			return bat, err
-		}
-		pkgVec := vector.New(colTypes[i])
-		if err = pkgVec.Read(data.Entries[0].Object.([]byte)); err != nil && !errors.Is(err, io.EOF) {
-			return bat, err
-		}
-		var vec containers.Vector
-		if pkgVec.Length() == 0 {
-			vec = containers.MakeVector(colTypes[i], nullables[i])
-		} else {
-			vec = containers.NewVectorWithSharedMemory(pkgVec, nullables[i])
-		}
-		bat.AddVector(colNames[i], vec)
-		bat.Vecs[i] = vec
+	if block.GetExtent().End() == 0 {
+		return nil, nil
 	}
+	col, err := block.GetColumn(uint16(idx))
+	if err != nil {
+		return bat, err
+	}
+	data, err := col.GetData(r.readCxt, nil)
+	if err != nil {
+		return bat, err
+	}
+	pkgVec := vector.New(colTypes[0])
+	v := make([]byte, len(data.Entries[0].Object.([]byte)))
+	copy(v, data.Entries[0].Object.([]byte))
+	if err = pkgVec.Read(v); err != nil && !errors.Is(err, io.EOF) {
+		return bat, err
+	}
+	var vec containers.Vector
+	if pkgVec.Length() == 0 {
+		vec = containers.MakeVector(colTypes[0], nullables[0])
+	} else {
+		vec = containers.NewVectorWithSharedMemory(pkgVec, nullables[0])
+	}
+	bat.AddVector(colNames[0], vec)
 	return bat, nil
 }
 

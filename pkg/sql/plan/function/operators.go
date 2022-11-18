@@ -40,7 +40,7 @@ func initOperators() {
 var operators = map[int]Functions{
 	ISTRUE: {
 		Id:     ISTRUE,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_PRODUCE_NO_NULL,
 		Layout: IS_NULL_EXPRESSION,
 		Overloads: []Function{
 			{
@@ -55,7 +55,7 @@ var operators = map[int]Functions{
 	},
 	ISNOTTRUE: {
 		Id:     ISNOTTRUE,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_PRODUCE_NO_NULL,
 		Layout: IS_NULL_EXPRESSION,
 		Overloads: []Function{
 			{
@@ -70,7 +70,7 @@ var operators = map[int]Functions{
 	},
 	ISFALSE: {
 		Id:     ISFALSE,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_PRODUCE_NO_NULL,
 		Layout: IS_NULL_EXPRESSION,
 		Overloads: []Function{
 			{
@@ -85,7 +85,7 @@ var operators = map[int]Functions{
 	},
 	ISNOTFALSE: {
 		Id:     ISNOTFALSE,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_PRODUCE_NO_NULL,
 		Layout: IS_NULL_EXPRESSION,
 		Overloads: []Function{
 			{
@@ -101,7 +101,7 @@ var operators = map[int]Functions{
 	// is null operator
 	ISNULL: {
 		Id:     ISNULL,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_PRODUCE_NO_NULL,
 		Layout: IS_NULL_EXPRESSION,
 		Overloads: []Function{
 			{
@@ -277,7 +277,7 @@ var operators = map[int]Functions{
 
 	ISNOTNULL: {
 		Id:     ISNOTNULL,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_PRODUCE_NO_NULL,
 		Layout: IS_NULL_EXPRESSION,
 		Overloads: []Function{
 			{

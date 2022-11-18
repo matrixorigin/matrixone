@@ -17,6 +17,7 @@ package checkpoint
 import (
 	"context"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 type metaFile struct {
@@ -85,7 +87,9 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			return types.TS{}, err2
 		}
 		pkgVec := vector.New(colTypes[i])
-		if err = pkgVec.Read(data.Entries[0].Object.([]byte)); err != nil {
+		v := make([]byte, len(data.Entries[0].Object.([]byte)))
+		copy(v, data.Entries[0].Object.([]byte))
+		if err = pkgVec.Read(v); err != nil {
 			return
 		}
 		var vec containers.Vector
@@ -97,7 +101,19 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		bat.AddVector(colNames[i], vec)
 	}
 	readDuration += time.Since(t0)
-	for i := 0; i < bat.Length(); i++ {
+	datas := make([]*logtail.CheckpointData, bat.Length())
+	defer func() {
+		for _, data := range datas {
+			if data != nil {
+				data.Close()
+			}
+		}
+	}()
+	entries := make([]*CheckpointEntry, bat.Length())
+	var errMu sync.RWMutex
+	var wg sync.WaitGroup
+	readfn := func(i int) {
+		defer wg.Done()
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
 		metaloc := string(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
@@ -107,17 +123,37 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			location: metaloc,
 			state:    ST_Finished,
 		}
+		var err2 error
+		if datas[i], err2 = checkpointEntry.Read(r.fs); err2 != nil {
+			errMu.Lock()
+			err = err2
+			errMu.Unlock()
+		}
+		entries[i] = checkpointEntry
+	}
+	wg.Add(bat.Length())
+	t0 = time.Now()
+	for i := 0; i < bat.Length(); i++ {
+		go readfn(i)
+	}
+	wg.Wait()
+	readDuration += time.Since(t0)
+	if err != nil {
+		return
+	}
+	t0 = time.Now()
+	for i := 0; i < bat.Length(); i++ {
+		checkpointEntry := entries[i]
 		r.tryAddNewCheckpointEntry(checkpointEntry)
-		var applyEntry, readEntry time.Duration
-		if readEntry, applyEntry, err = checkpointEntry.Replay(r.catalog, r.fs, dataFactory); err != nil {
+		err = datas[i].ApplyReplayTo(r.catalog, dataFactory)
+		if err != nil {
 			return
 		}
-		readDuration += readEntry
-		applyDuration += applyEntry
 		if maxTs.Less(checkpointEntry.end) {
 			maxTs = checkpointEntry.end
 		}
 	}
+	applyDuration = time.Since(t0)
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("checkpoint"),
 		common.AnyField("apply cost", applyDuration),

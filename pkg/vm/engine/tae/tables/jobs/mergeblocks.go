@@ -323,7 +323,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		err = blockHandles[i].UpdateMetaLoc(metaLoc)
 	}
 	for _, blk := range task.createdBlks {
-		if err = blk.GetBlockData().ReplayIndex(); err != nil {
+		if err = blk.GetBlockData().Init(); err != nil {
 			return err
 		}
 	}
