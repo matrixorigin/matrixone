@@ -39,7 +39,7 @@ func WithLogger(logger *zap.Logger) Option {
 	}
 }
 
-// WithTaskStorageFactory setup the special task strorage factory
+// WithTaskStorageFactory set up the special task storage factory
 func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 	return func(s *Service) {
 		s.task.storageFactory = factory
