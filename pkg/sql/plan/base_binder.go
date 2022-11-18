@@ -364,9 +364,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	if astExpr.Exists {
 		returnExpr.Typ = &plan.Type{
-			Id:       int32(types.T_bool),
-			Nullable: false,
-			Size:     1,
+			Id:          int32(types.T_bool),
+			NotNullable: true,
+			Size:        1,
 		}
 		returnExpr.Expr.(*plan.Expr_Sub).Sub.Typ = plan.SubqueryRef_EXISTS
 	} else if rowSize == 1 {
@@ -864,8 +864,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 		if args[0].Typ.Id == int32(types.T_uint64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
-				Id:       int32(types.T_decimal128),
-				Nullable: false,
+				Id:          int32(types.T_decimal128),
+				NotNullable: true,
 			})
 			if err != nil {
 				return nil, err
@@ -877,8 +877,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
-				Id:       int32(types.T_float64),
-				Nullable: false,
+				Id:          int32(types.T_float64),
+				NotNullable: true,
 			})
 			if err != nil {
 				return nil, err
@@ -1023,6 +1023,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	}
 
 	// return new expr
+	Typ := makePlan2Type(&returnType)
+	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
@@ -1030,7 +1032,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				Args: args,
 			},
 		},
-		Typ: makePlan2Type(&returnType),
+		Typ: Typ,
 	}, nil
 }
 
@@ -1130,11 +1132,11 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				},
 			},
 			Typ: &plan.Type{
-				Id:        int32(types.T_decimal128),
-				Width:     34,
-				Scale:     scale,
-				Precision: 34,
-				Nullable:  false,
+				Id:          int32(types.T_decimal128),
+				Width:       34,
+				Scale:       scale,
+				Precision:   34,
+				NotNullable: true,
 			},
 		}, nil
 	case tree.P_float64:
@@ -1181,6 +1183,7 @@ func appendCastBeforeExpr(expr *Expr, toType *Type, isBin ...bool) (*Expr, error
 	if expr.Typ.Id == int32(types.T_any) {
 		return expr, nil
 	}
+	toType.NotNullable = expr.Typ.NotNullable
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),
