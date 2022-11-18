@@ -123,7 +123,7 @@ char_1    char_2    date_1    date_2
 cat    yellow 芝士    2020-10-09    0001-01-01 00:00:00
 123木头人    zt@126.com    1000-01-01    9999-12-31 00:00:00
 abc$%*()#$    ttttt    9999-12-31    2019-10-23 23:00:09
-set time_zone='+00:00';
+set time_zone='SYSTEM';
 create external table ex_table_3_1(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_3_1.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_3_1;
 char_1    char_2    date_1    date_2    date_3
