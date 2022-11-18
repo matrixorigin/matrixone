@@ -139,21 +139,6 @@ func (l *store) hakeeperCheck() {
 	case pb.HAKeeperBootstrapFailed:
 		l.handleBootstrapFailure()
 	case pb.HAKeeperRunning:
-		if state.TaskState == pb.TaskInitNotStart {
-			user, ok := getTaskTableUserFromEnv()
-			if !ok {
-				user = pb.TaskTableUser{
-					Username: uuid.NewString(),
-					Password: uuid.NewString(),
-				}
-			}
-
-			// TODO: rename TaskTableUser to moadmin
-			if err := l.setTaskTableUser(user); err != nil {
-				l.logger.Error("failed to set task table user", zap.Error(err))
-				return
-			}
-		}
 		l.healthCheck(term, state)
 		l.taskSchedule(state)
 	default:
@@ -206,8 +191,25 @@ func (l *store) taskSchedule(state *pb.CheckerState) {
 	l.assertHAKeeperState(pb.HAKeeperRunning)
 	defer l.assertHAKeeperState(pb.HAKeeperRunning)
 
-	l.taskScheduler.StartScheduleCronTask()
-	l.taskScheduler.Schedule(state.GetCNState(), state.Tick)
+	switch state.TaskState {
+	case pb.TaskInitNotStart:
+		l.registerTaskUser()
+	case pb.TaskInitStarted:
+		l.taskScheduler.StartScheduleCronTask()
+		l.taskScheduler.Schedule(state.CNState, state.Tick)
+	}
+}
+
+func (l *store) registerTaskUser() {
+	user, ok := getTaskTableUserFromEnv()
+	if !ok {
+		user = randomUser()
+	}
+
+	// TODO: rename TaskTableUser to moadmin
+	if err := l.setTaskTableUser(user); err != nil {
+		l.logger.Error("failed to set task table user", zap.Error(err))
+	}
 }
 
 func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
@@ -329,4 +331,11 @@ func getTaskTableUserFromEnv() (pb.TaskTableUser, bool) {
 		return pb.TaskTableUser{}, false
 	}
 	return pb.TaskTableUser{Username: username, Password: password}, true
+}
+
+func randomUser() pb.TaskTableUser {
+	return pb.TaskTableUser{
+		Username: uuid.NewString(),
+		Password: uuid.NewString(),
+	}
 }
