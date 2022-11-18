@@ -75,12 +75,12 @@ func NewColDataNode(
 		def:        def,
 		colMetaFactory: func() (base.INode, error) {
 			return NewColumnMetaNode(
-				mgr,
-				metaKey,
-				fs,
 				id.Idx,
+				def.Type,
 				metaloc,
-				def.Type), nil
+				metaKey,
+				mgr,
+				fs), nil
 		},
 	}
 	// For disk, size is zero, do not cache, read directly when GetData

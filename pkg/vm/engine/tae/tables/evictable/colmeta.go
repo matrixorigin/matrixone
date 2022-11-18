@@ -38,12 +38,12 @@ type ColumnMetaNode struct {
 }
 
 func NewColumnMetaNode(
-	mgr base.INodeManager,
-	metaKey string,
-	fs *objectio.ObjectFS,
 	idx uint16,
+	typ types.Type,
 	metaloc string,
-	typ types.Type) *ColumnMetaNode {
+	metaKey string,
+	mgr base.INodeManager,
+	fs *objectio.ObjectFS) *ColumnMetaNode {
 	node := &ColumnMetaNode{
 		idx:     idx,
 		metaloc: metaloc,
