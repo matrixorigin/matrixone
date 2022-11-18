@@ -31,6 +31,7 @@ import (
 )
 
 func makeColExprForTest(idx int32, typ types.T) *plan.Expr {
+	schema := []string{"a", "b", "c", "d"}
 	containerType := typ.ToType()
 	exprType := plan2.MakePlan2Type(&containerType)
 
@@ -40,7 +41,7 @@ func makeColExprForTest(idx int32, typ types.T) *plan.Expr {
 			Col: &plan.ColRef{
 				RelPos: 0,
 				ColPos: idx,
-				Name:   "",
+				Name:   schema[idx],
 			},
 		},
 	}
@@ -296,7 +297,7 @@ func TestGetNonIntPkValueByExpr(t *testing.T) {
 
 	t.Run("test getPkValueByExpr", func(t *testing.T) {
 		for i, testCase := range testCases {
-			result, data := getPkValueByExpr(testCase.expr, 0, testCase.typ)
+			result, data := getPkValueByExpr(testCase.expr, "a", testCase.typ)
 			if result != testCase.result {
 				t.Fatalf("test getPkValueByExpr at cases[%d], get result is different with expected", i)
 			}
@@ -400,7 +401,7 @@ func TestComputeRangeByNonIntPk(t *testing.T) {
 
 	t.Run("test computeRangeByNonIntPk", func(t *testing.T) {
 		for i, testCase := range testCases {
-			result, data := computeRangeByNonIntPk(testCase.expr, 0)
+			result, data := computeRangeByNonIntPk(testCase.expr, "a")
 			if result != testCase.result {
 				t.Fatalf("test computeRangeByNonIntPk at cases[%d], get result is different with expected", i)
 			}
@@ -565,7 +566,7 @@ func TestComputeRangeByIntPk(t *testing.T) {
 
 	t.Run("test computeRangeByIntPk", func(t *testing.T) {
 		for i, testCase := range testCases {
-			result, data := computeRangeByIntPk(testCase.expr, 0, "")
+			result, data := computeRangeByIntPk(testCase.expr, "a", "")
 			if result != testCase.result {
 				t.Fatalf("test computeRangeByIntPk at cases[%d], get result is different with expected", i)
 			}

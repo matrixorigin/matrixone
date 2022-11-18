@@ -201,11 +201,21 @@ func (db *database) openSysTable(key tableKey, id uint64, name string,
 	defs []engine.TableDef) engine.Relation {
 	parts := db.txn.db.getPartitions(db.databaseId, id)
 	tbl := &table{
-		db:        db,
-		tableId:   id,
-		tableName: name,
-		defs:      defs,
-		parts:     parts,
+		db:         db,
+		tableId:    id,
+		tableName:  name,
+		defs:       defs,
+		parts:      parts,
+		primaryIdx: -1,
+	}
+	// find primary idx
+	for i, def := range defs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			if attr.Attr.Primary {
+				tbl.primaryIdx = i
+				break
+			}
+		}
 	}
 	db.txn.tableMap.Store(key, tbl)
 	return tbl
