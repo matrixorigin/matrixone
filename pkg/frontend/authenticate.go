@@ -674,7 +674,7 @@ var (
 		`create table mo_user(
 				user_id int signed auto_increment,
 				user_host varchar(100),
-				user_name varchar(100),
+				user_name varchar(300),
 				authentication_string varchar(100),
 				status   varchar(8),
 				created_time  timestamp,
