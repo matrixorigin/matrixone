@@ -16,6 +16,7 @@ package evictable
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
@@ -36,7 +37,13 @@ type ColumnMetaNode struct {
 	fs      *objectio.ObjectFS
 }
 
-func NewColumnMetaNode(mgr base.INodeManager, metaKey string, fs *objectio.ObjectFS, idx uint16, metaloc string, typ types.Type) *ColumnMetaNode {
+func NewColumnMetaNode(
+	mgr base.INodeManager,
+	metaKey string,
+	fs *objectio.ObjectFS,
+	idx uint16,
+	metaloc string,
+	typ types.Type) *ColumnMetaNode {
 	node := &ColumnMetaNode{
 		idx:     idx,
 		metaloc: metaloc,

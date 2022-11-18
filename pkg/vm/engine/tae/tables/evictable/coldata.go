@@ -59,13 +59,13 @@ const (
 var StorageBackend BackendKind = Disk
 
 func NewColDataNode(
-	mgr base.INodeManager,
-	colDataKey, metaKey string,
-	fs *objectio.ObjectFS,
-	col uint16,
-	metaloc string,
+	id *common.ID,
 	def *catalog.ColDef,
-	id *common.ID) (node *ColDataNode, err error) {
+	colDataKey string,
+	metaKey string,
+	metaloc string,
+	mgr base.INodeManager,
+	fs *objectio.ObjectFS) (node *ColDataNode, err error) {
 	node = &ColDataNode{
 		colDataKey: colDataKey,
 		metaKey:    metaKey,
@@ -74,7 +74,13 @@ func NewColDataNode(
 		mgr:        mgr,
 		def:        def,
 		colMetaFactory: func() (base.INode, error) {
-			return NewColumnMetaNode(mgr, metaKey, fs, col, metaloc, def.Type), nil
+			return NewColumnMetaNode(
+				mgr,
+				metaKey,
+				fs,
+				id.Idx,
+				metaloc,
+				def.Type), nil
 		},
 	}
 	// For disk, size is zero, do not cache, read directly when GetData
@@ -183,14 +189,13 @@ func FetchColumnData(
 	colDataKey := EncodeColDataKey(id.Idx, metaloc)
 	factory := func() (base.INode, error) {
 		return NewColDataNode(
-			mgr,
+			id,
+			def,
 			colDataKey,
 			EncodeColMetaKey(id.Idx, metaloc),
-			fs,
-			id.Idx,
 			metaloc,
-			def,
-			id)
+			mgr,
+			fs)
 	}
 	h, err := PinEvictableNode(mgr, colDataKey, factory)
 	if err != nil {
