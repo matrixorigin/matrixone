@@ -1301,6 +1301,9 @@ func UnionOne(v, w *Vector, sel int64, m *mpool.MPool) (err error) {
 		}
 		if v.GetType().IsVarlen() {
 			bs := w.GetBytes(sel)
+			if v.GetType().Width != 0 && len(bs) > int(v.GetType().Width) {
+				return moerr.NewOutOfRange("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
+			}
 			tgt := MustTCols[types.Varlena](v)
 			nele := len(tgt)
 			tgt[nele-1], v.area, err = types.BuildVarlena(bs, v.area, m)
