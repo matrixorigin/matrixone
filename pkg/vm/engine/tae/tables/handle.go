@@ -22,11 +22,11 @@ import (
 
 type tableHandle struct {
 	table    *dataTable
-	block    *dataBlock
+	block    *ablock
 	appender data.BlockAppender
 }
 
-func newHandle(table *dataTable, block *dataBlock) *tableHandle {
+func newHandle(table *dataTable, block *ablock) *tableHandle {
 	h := &tableHandle{
 		table: table,
 		block: block,
@@ -41,10 +41,9 @@ func (h *tableHandle) SetAppender(id *common.ID) (appender data.BlockAppender) {
 	tableMeta := h.table.meta
 	segMeta, _ := tableMeta.GetSegmentByID(id.SegmentID)
 	blkMeta, _ := segMeta.GetBlockEntryByID(id.BlockID)
-	h.block = blkMeta.GetBlockData().(*dataBlock)
+	h.block = blkMeta.GetBlockData().(*ablock)
 	h.appender, _ = h.block.MakeAppender()
 	h.block.Ref()
-
 	return h.appender
 }
 
@@ -78,7 +77,7 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 			err = data.ErrAppendableSegmentNotFound
 			return
 		}
-		h.block = blkEntry.GetBlockData().(*dataBlock)
+		h.block = blkEntry.GetBlockData().(*ablock)
 		h.appender, err = h.block.MakeAppender()
 		if err != nil {
 			panic(err)
