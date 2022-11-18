@@ -290,8 +290,8 @@ func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
 				},
 			},
 			Typ: &plan.Type{
-				Id:       d.Typ.Id,
-				Nullable: true,
+				Id:          d.Typ.Id,
+				NotNullable: false,
 			},
 		}, nil
 	}
