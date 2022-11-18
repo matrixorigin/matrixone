@@ -619,7 +619,7 @@ func (h *Handle) HandleWrite(
 
 }
 
-func vec2Str[T types.FixedSizeT](vec []T, typ types.Type, originalLen int) string {
+func vec2Str[T any](vec []T, typ types.Type, originalLen int) string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(fmt.Sprintf("[%d]: ", originalLen))
 	first := true
@@ -676,6 +676,9 @@ func moVec2String(v *vector.Vector, printN int) string {
 	case types.T_Rowid:
 		return vec2Str(vector.MustTCols[types.Rowid](v)[:printN], v.Typ, v.Length())
 	}
+	if v.Typ.IsVarlen() {
+		return vec2Str(vector.MustBytesCols(v), types.T_varchar.ToType(), v.Length())
+	}
 	return fmt.Sprintf("unkown type vec... %v", v.Typ)
 }
 
@@ -689,13 +692,7 @@ func debugMoBatch(moBat *batch.Batch) string {
 	}
 	buf := new(bytes.Buffer)
 	for i, vec := range moBat.Vecs {
-		if vec.Typ.IsVarlen() {
-			vs := vector.MustStrCols(vec)
-			fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], vs[:printN])
-		} else {
-
-			fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], moVec2String(vec, printN))
-		}
+		fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], moVec2String(vec, printN))
 	}
 	return buf.String()
 }
