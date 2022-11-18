@@ -42,6 +42,7 @@
 /pkg/common/moerror @fengttt
 /pkg/common/morpc @zhangxu19830126
 /pkg/common/stopper @zhangxu19830126
+/pkg/common/log @zhangxu19830126
 
 # other directories under pkg
 /pkg/cnservice @nnsgmsone @reusee @daviszhen
