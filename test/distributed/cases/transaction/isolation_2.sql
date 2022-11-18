@@ -162,7 +162,7 @@ select * from dis_table_02;
 insert into dis_table_02(b,c) values ('','1999-06-04');
 
 ------------------------------
-create temporary table dis_temp_01(a int,b varchar,primary key(a));
+create temporary table dis_temp_01(a int,b varchar(100),primary key(a));
 begin ;
 insert into dis_temp_01 values (233,'uuuu');
 -- @session:id=1{
