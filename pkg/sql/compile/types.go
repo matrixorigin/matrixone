@@ -35,6 +35,11 @@ type (
 	TxnOperator = client.TxnOperator
 )
 
+// number of rows per core scheduled to be processed
+const (
+	Single_Core_Rows = 1000000
+)
+
 // type of scope
 const (
 	Merge = iota
