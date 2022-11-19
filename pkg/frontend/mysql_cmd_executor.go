@@ -472,6 +472,8 @@ func handleShowColumns(ses *Session) error {
 					row[4] = "UUID"
 				case "current_timestamp()":
 					row[4] = "CURRENT_TIMESTAMP"
+				case "now()":
+					row[4] = "CURRENT_TIMESTAMP"
 				case "":
 					row[4] = "NULL"
 				default:
@@ -516,6 +518,8 @@ func handleShowColumns(ses *Session) error {
 				case "uuid()":
 					row[5] = "UUID"
 				case "current_timestamp()":
+					row[5] = "CURRENT_TIMESTAMP"
+				case "now()":
 					row[5] = "CURRENT_TIMESTAMP"
 				case "":
 					row[5] = "NULL"
@@ -1521,6 +1525,12 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 			return err
 		}
 
+		if systemVar, ok := gSysVarsDefs[name]; ok {
+			if isDefault, ok := value.(bool); ok && isDefault {
+				value = systemVar.Default
+			}
+		}
+
 		//TODO : fix SET NAMES after parser is ready
 		if name == "names" {
 			//replaced into three system variable:
@@ -1950,7 +1960,7 @@ func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.Crea
 	tenant := ses.GetTenantInfo()
 
 	//step1 : create the user
-	return InitUser(ctx, tenant, cu)
+	return InitUser(ctx, ses, tenant, cu)
 }
 
 // handleDropUser drops the user for the tenant
@@ -1964,7 +1974,7 @@ func (mce *MysqlCmdExecutor) handleCreateRole(ctx context.Context, cr *tree.Crea
 	tenant := ses.GetTenantInfo()
 
 	//step1 : create the role
-	return InitRole(ctx, tenant, cr)
+	return InitRole(ctx, ses, tenant, cr)
 }
 
 // handleDropRole drops the role
@@ -2911,6 +2921,8 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 
 // authenticateUserCanExecuteStatement checks the user can execute the statement
 func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
+	requestCtx, span := trace.Debug(requestCtx, "authenticateUserCanExecuteStatement")
+	defer span.End()
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}

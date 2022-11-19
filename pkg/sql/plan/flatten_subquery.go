@@ -32,9 +32,9 @@ var (
 			},
 		},
 		Typ: &plan.Type{
-			Id:       int32(types.T_bool),
-			Nullable: false,
-			Size:     1,
+			Id:          int32(types.T_bool),
+			NotNullable: true,
+			Size:        1,
 		},
 	}
 )

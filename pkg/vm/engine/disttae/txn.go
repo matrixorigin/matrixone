@@ -829,9 +829,8 @@ func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
 	if expr == nil || pk == nil || tableDef == nil {
 		return fullList()
 	}
-	pkIndex := tableDef.Name2ColIndex[pk.Name]
 	if pk.Type.IsIntOrUint() {
-		canComputeRange, intPkRange := computeRangeByIntPk(expr, pkIndex, "")
+		canComputeRange, intPkRange := computeRangeByIntPk(expr, pk.Name, "")
 		if !canComputeRange {
 			return fullList()
 		}
@@ -847,7 +846,7 @@ func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
 		}
 		return getListByItems(dnStores, intPkRange.items)
 	}
-	canComputeRange, hashVal := computeRangeByNonIntPk(expr, pkIndex)
+	canComputeRange, hashVal := computeRangeByNonIntPk(expr, pk.Name)
 	if !canComputeRange {
 		return fullList()
 	}

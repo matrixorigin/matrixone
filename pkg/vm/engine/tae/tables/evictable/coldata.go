@@ -134,7 +134,9 @@ func (n *ColDataNode) fetchData() (containers.Vector, error) {
 		return nil, err
 	}
 
-	srcBuf := fsVector.Entries[0].Object.([]byte)
+	//srcBuf := fsVector.Entries[0].Object.([]byte)
+	srcBuf := make([]byte, len(fsVector.Entries[0].Object.([]byte)))
+	copy(srcBuf, fsVector.Entries[0].Object.([]byte))
 	v := vector.New(n.colDef.Type)
 	v.Read(srcBuf)
 	return containers.NewVectorWithSharedMemory(v, n.colDef.NullAbility), nil

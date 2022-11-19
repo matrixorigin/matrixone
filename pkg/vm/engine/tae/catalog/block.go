@@ -187,13 +187,6 @@ func (entry *BlockEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (entry *BlockEntry) DestroyData() (err error) {
-	if entry.blkData == nil {
-		return
-	}
-	return entry.blkData.Destroy()
-}
-
 func (entry *BlockEntry) MakeKey() []byte {
 	return model.EncodeBlockKeyPrefix(entry.segment.ID, entry.ID)
 }

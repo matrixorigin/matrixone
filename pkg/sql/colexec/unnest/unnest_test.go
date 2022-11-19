@@ -53,56 +53,56 @@ var (
 		{
 			Name: "col",
 			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    4,
+				Id:          int32(types.T_varchar),
+				NotNullable: false,
+				Width:       4,
 			},
 		},
 		{
 			Name: "seq",
 			Typ: &plan.Type{
-				Id:       int32(types.T_int32),
-				Nullable: true,
+				Id:          int32(types.T_int32),
+				NotNullable: false,
 			},
 		},
 		{
 			Name: "key",
 			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    256,
+				Id:          int32(types.T_varchar),
+				NotNullable: false,
+				Width:       256,
 			},
 		},
 		{
 			Name: "path",
 			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    256,
+				Id:          int32(types.T_varchar),
+				NotNullable: false,
+				Width:       256,
 			},
 		},
 		{
 			Name: "index",
 			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    4,
+				Id:          int32(types.T_varchar),
+				NotNullable: false,
+				Width:       4,
 			},
 		},
 		{
 			Name: "value",
 			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    1024,
+				Id:          int32(types.T_varchar),
+				NotNullable: false,
+				Width:       1024,
 			},
 		},
 		{
 			Name: "this",
 			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    1024,
+				Id:          int32(types.T_varchar),
+				NotNullable: false,
+				Width:       1024,
 			},
 		},
 	}

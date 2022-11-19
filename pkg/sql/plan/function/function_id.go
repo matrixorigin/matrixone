@@ -457,5 +457,5 @@ func GetFunctionIsWinfunByName(name string) bool {
 		return false
 	}
 	fs := functionRegister[fid].Overloads
-	return len(fs) > 0 && fs[0].GetFlag() == plan.Function_WIN
+	return len(fs) > 0 && fs[0].TestFlag(plan.Function_WIN)
 }
