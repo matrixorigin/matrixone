@@ -60,9 +60,10 @@ func (m *MemCache) Read(
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		obj, ok := m.lru.Get(key)
+		obj, size, ok := m.lru.Get(key)
 		if ok {
 			vector.Entries[i].Object = obj
+			vector.Entries[i].ObjectSize = size
 			vector.Entries[i].ignore = true
 			numHit++
 		}
