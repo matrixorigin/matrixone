@@ -34,15 +34,13 @@ func LoadPersistedColumnData(
 	def *catalog.ColDef,
 	location string,
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
-	id.Idx = uint16(def.Idx)
 	return evictable.FetchColumnData(
+		id,
+		def,
+		location,
 		buffer,
 		mgr,
-		id,
-		fs,
-		id.Idx,
-		location,
-		def)
+		fs)
 }
 
 func ReadPersistedBlockRow(location string) int {

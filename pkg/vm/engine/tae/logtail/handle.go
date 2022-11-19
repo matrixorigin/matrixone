@@ -21,10 +21,10 @@ an application on logtail mgr: build reponse to SyncLogTailRequest
 */
 
 import (
+	"context"
 	"fmt"
 	"hash/fnv"
 	"strings"
-	"sync"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
@@ -554,42 +555,60 @@ func LoadCheckpointEntries(
 
 	locations := strings.Split(metLoc, ";")
 	datas := make([]*CheckpointData, len(locations))
+	jobs := make([]*tasks.Job, len(locations))
 	defer func() {
-		for _, data := range datas {
+		for idx, data := range datas {
+			if jobs[idx] != nil {
+				jobs[idx].WaitDone()
+			}
 			if data != nil {
 				data.Close()
 			}
 		}
 	}()
-	var errMu sync.Mutex
-	var wg sync.WaitGroup
-	readfn := func(i int) {
-		defer wg.Done()
+
+	// TODO: using a global job scheduler
+	jobScheduler := tasks.NewParallelJobScheduler(200)
+	defer jobScheduler.Stop()
+
+	makeJob := func(i int) (job *tasks.Job) {
 		location := locations[i]
-		reader, err2 := blockio.NewCheckpointReader(fs, location)
-		if err2 != nil {
-			errMu.Lock()
-			err = err2
-			errMu.Unlock()
+		exec := func(ctx context.Context) (result *tasks.JobResult) {
+			result = &tasks.JobResult{}
+			reader, err := blockio.NewCheckpointReader(fs, location)
+			if err != nil {
+				result.Err = err
+				return
+			}
+			data := NewCheckpointData()
+			if err = data.ReadFrom(reader, jobScheduler, common.DefaultAllocator); err != nil {
+				result.Err = err
+				return
+			}
+			datas[i] = data
 			return
 		}
-		data := NewCheckpointData()
-		if err2 = data.ReadFrom(reader, common.DefaultAllocator); err2 != nil {
-			errMu.Lock()
-			err = err2
-			errMu.Unlock()
-			return
-		}
-		datas[i] = data
-	}
-	wg.Add(len(locations))
-	for i := range locations {
-		go readfn(i)
-	}
-	wg.Wait()
-	if err != nil {
+		job = tasks.NewJob(
+			fmt.Sprintf("load-%s", location),
+			context.Background(),
+			exec)
 		return
 	}
+
+	for i := range locations {
+		jobs[i] = makeJob(i)
+		if err = jobScheduler.Schedule(jobs[i]); err != nil {
+			return
+		}
+	}
+
+	for _, job := range jobs {
+		result := job.WaitDone()
+		if err = result.Err; err != nil {
+			return
+		}
+	}
+
 	entries = make([]*api.Entry, 0)
 	for i := range locations {
 		data := datas[i]
