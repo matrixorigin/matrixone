@@ -27,6 +27,7 @@ import (
 	"io"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 
@@ -43,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/simdcsv"
@@ -147,6 +149,73 @@ func InitS3Param(param *tree.ExternParam) error {
 		}
 	}
 	return nil
+}
+
+func judgeContainAccount(expr *plan.Expr) (bool, []string) {
+	expr_F, ok := expr.Expr.(*plan.Expr_F)
+	if !ok {
+		return false, nil
+	}
+	if len(expr_F.F.Args) != 2 {
+		return false, nil
+	}
+	if expr_F.F.Func.ObjName == "or" {
+		var ret []string
+		for i := 0; i < len(expr_F.F.Args); i++ {
+			flag, tmp := judgeContainAccount(expr_F.F.Args[i])
+			if flag {
+				ret = append(ret, tmp...)
+			}
+		}
+		return len(ret) != 0, ret
+	}
+	expr_Col, ok := expr_F.F.Args[0].Expr.(*plan.Expr_Col)
+	if !ok || !strings.Contains(expr_Col.Col.Name, "account") {
+		return false, nil
+	}
+	_, ok = expr_F.F.Args[1].Expr.(*plan.Expr_C)
+	if !ok {
+		return false, nil
+	}
+
+	str := expr_F.F.Args[1].Expr.(*plan.Expr_C).C.GetSval()
+	if str == "" {
+		return false, nil
+	}
+	return true, []string{str}
+}
+
+func FliterByAccount(node *plan.Node, proc *process.Process, fileList []string) ([]string, error) {
+	filterList := make([][]string, 0)
+	for i := 0; i < len(node.FilterList); i++ {
+		if ok, str := judgeContainAccount(node.FilterList[i]); ok {
+			filterList = append(filterList, str)
+		}
+	}
+	if len(filterList) == 0 {
+		return fileList, nil
+	}
+	ret := make([]string, 0)
+	for i := 0; i < len(fileList); i++ {
+		flag := false
+		for j := 0; j < len(filterList); j++ {
+			flag = false
+			for k := 0; k < len(fileList[j]); k++ {
+				if ok, _ := regexp.MatchString(filterList[j][k], fileList[i]); ok {
+					flag = true
+					break
+				}
+			}
+			if !flag {
+				flag = false
+				break
+			}
+		}
+		if flag {
+			ret = append(ret, fileList[i])
+		}
+	}
+	return ret, nil
 }
 
 func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
