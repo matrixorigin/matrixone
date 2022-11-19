@@ -19,6 +19,7 @@ import (
 	"errors"
 	"io"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
@@ -88,7 +89,7 @@ func (r *Reader) BlkColumnByMetaLoadJob(
 			Res: bat,
 		}
 	}
-	return tasks.NewJob("", r.readCxt, exec)
+	return tasks.NewJob(uuid.NewString(), r.readCxt, exec)
 }
 
 func (r *Reader) BlkColumnsByMetaAndIdxLoadJob(
@@ -110,7 +111,7 @@ func (r *Reader) BlkColumnsByMetaAndIdxLoadJob(
 			Res: bat,
 		}
 	}
-	return tasks.NewJob("", r.readCxt, exec)
+	return tasks.NewJob(uuid.NewString(), r.readCxt, exec)
 }
 
 func (r *Reader) LoadBlkColumnsByMeta(

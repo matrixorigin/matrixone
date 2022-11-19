@@ -111,7 +111,6 @@ func init() {
 		BlkMetaSchema,
 	}
 	for idx, schema := range checkpointDataSchemas {
-		logutil.Infof("idx %d, schema %s", idx, schema.Name)
 		checkpointDataRefer[idx] = &checkpointDataItem{
 			schema,
 			append(BaseTypes, schema.Types()...),
