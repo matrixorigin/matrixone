@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/simdcsv"
@@ -147,6 +148,56 @@ func InitS3Param(param *tree.ExternParam) error {
 		}
 	}
 	return nil
+}
+
+func judgeContainAccount(expr *plan.Expr) (bool, string) {
+	expr_F, ok := expr.Expr.(*plan.Expr_F)
+	if !ok {
+		return false, ""
+	}
+	if len(expr_F.F.Args) != 2 {
+		return false, ""
+	}
+	expr_Col, ok := expr_F.F.Args[0].Expr.(*plan.Expr_Col)
+	if !ok || !strings.Contains(expr_Col.Col.Name, "account") {
+		return false, ""
+	}
+	_, ok = expr_F.F.Args[1].Expr.(*plan.Expr_C)
+	if !ok {
+		return false, ""
+	}
+
+	str := expr_F.F.Args[1].Expr.(*plan.Expr_C).C.GetSval()
+	if str == "" {
+		return false, ""
+	}
+	return true, str
+}
+
+func FliterByAccount(node *plan.Node, proc *process.Process, fileList []string) ([]string, error) {
+	filterList := make([]string, 0)
+	for i := 0; i < len(node.FilterList); i++ {
+		if ok, str := judgeContainAccount(node.FilterList[i]); ok {
+			filterList = append(filterList, str)
+		}
+	}
+	if len(filterList) == 0 {
+		return fileList, nil
+	}
+	ret := make([]string, 0)
+	for i := 0; i < len(fileList); i++ {
+		flag := true
+		for j := 0; j < len(filterList); j++ {
+			if !strings.ContainsAny(fileList[i], filterList[j]) {
+				flag = false
+				break
+			}
+		}
+		if flag {
+			ret = append(ret, fileList[i])
+		}
+	}
+	return ret, nil
 }
 
 func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {

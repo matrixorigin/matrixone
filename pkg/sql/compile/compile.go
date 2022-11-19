@@ -548,6 +548,10 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
+	fileList, err = external.FliterByAccount(n, c.proc, fileList)
+	if err != nil {
+		return nil, err
+	}
 	if param.LoadFile && len(fileList) == 0 {
 		return nil, moerr.NewInvalidInput("the file does not exist in load flow")
 	}
