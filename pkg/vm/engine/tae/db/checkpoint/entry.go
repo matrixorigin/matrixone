@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type CheckpointEntry struct {
@@ -141,14 +142,21 @@ func (e *CheckpointEntry) Replay(
 	applyDuration = time.Since(t0)
 	return
 }
-func (e *CheckpointEntry) Read(fs *objectio.ObjectFS) (data *logtail.CheckpointData, err error) {
+func (e *CheckpointEntry) Read(
+	scheduler tasks.JobScheduler,
+	fs *objectio.ObjectFS,
+) (data *logtail.CheckpointData, err error) {
 	reader, err := blockio.NewCheckpointReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}
 
 	data = logtail.NewCheckpointData()
-	if err = data.ReadFrom(reader, nil, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(
+		reader,
+		scheduler,
+		common.DefaultAllocator,
+	); err != nil {
 		return
 	}
 	return
