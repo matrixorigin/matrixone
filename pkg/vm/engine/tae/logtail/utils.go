@@ -405,6 +405,8 @@ func (data *CheckpointData) WriteTo(
 	return
 }
 
+// TODO:
+// There need a global io pool
 func (data *CheckpointData) ReadFrom(
 	reader *blockio.Reader,
 	m *mpool.MPool) (err error) {
@@ -413,7 +415,9 @@ func (data *CheckpointData) ReadFrom(
 		return
 	}
 
-	pool, err := ants.NewPool(200)
+	parallelism := 100
+
+	pool, err := ants.NewPool(parallelism)
 	if err != nil {
 		return
 	}
