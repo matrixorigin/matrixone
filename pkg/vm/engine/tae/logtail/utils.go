@@ -53,11 +53,6 @@ const (
 	SEGDeleteIDX
 	SEGDeleteTxnIDX
 
-	BLKInsertIDX
-	BLKInsertTxnIDX
-	BLKDeleteIDX
-	BLKDeleteTxnIDX
-
 	BLKMetaInsertIDX
 	BLKMetaInsertTxnIDX
 	BLKMetaDeleteIDX
@@ -70,8 +65,13 @@ const (
 
 	BLKCNMetaInsertIDX
 
-	MaxIDX
+	BLKInsertIDX
+	BLKInsertTxnIDX
+	BLKDeleteIDX
+	BLKDeleteTxnIDX
 )
+
+const MaxIDX = BLKCNMetaInsertIDX + 1
 
 type checkpointDataItem struct {
 	schema    *catalog.Schema
@@ -80,37 +80,39 @@ type checkpointDataItem struct {
 	nullables []bool
 }
 
-var checkpointDataSchemas = [MaxIDX]*catalog.Schema{
-	MetaSchema,
-	catalog.SystemDBSchema,
-	TxnNodeSchema,
-	DelSchema,
-	DBDNSchema,
-	catalog.SystemTableSchema,
-	TblDNSchema,
-	DelSchema,
-	TblDNSchema,
-	catalog.SystemColumnSchema,
-	DelSchema,
-	SegSchema,
-	SegDNSchema,
-	DelSchema,
-	SegDNSchema,
-	BlkMetaSchema,
-	BlkDNSchema,
-	DelSchema,
-	BlkDNSchema,
-	BlkMetaSchema,
-	BlkDNSchema,
-	DelSchema,
-	BlkDNSchema,
-	BlkMetaSchema,
-}
+var checkpointDataSchemas [MaxIDX]*catalog.Schema
 
 var checkpointDataRefer [MaxIDX]*checkpointDataItem
 
 func init() {
+	checkpointDataSchemas = [MaxIDX]*catalog.Schema{
+		MetaSchema,
+		catalog.SystemDBSchema,
+		TxnNodeSchema,
+		DelSchema,
+		DBDNSchema,
+		catalog.SystemTableSchema,
+		TblDNSchema,
+		DelSchema,
+		TblDNSchema,
+		catalog.SystemColumnSchema,
+		DelSchema,
+		SegSchema,
+		SegDNSchema,
+		DelSchema,
+		SegDNSchema,
+		BlkMetaSchema,
+		BlkDNSchema,
+		DelSchema,
+		BlkDNSchema,
+		BlkMetaSchema,
+		BlkDNSchema,
+		DelSchema,
+		BlkDNSchema,
+		BlkMetaSchema,
+	}
 	for idx, schema := range checkpointDataSchemas {
+		logutil.Infof("idx %d, schema %s", idx, schema.Name)
 		checkpointDataRefer[idx] = &checkpointDataItem{
 			schema,
 			append(BaseTypes, schema.Types()...),
