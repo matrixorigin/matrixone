@@ -132,7 +132,7 @@ func (e *CheckpointEntry) Replay(
 	data := logtail.NewCheckpointData()
 	defer data.Close()
 	t0 := time.Now()
-	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(reader, nil, common.DefaultAllocator); err != nil {
 		return
 	}
 	readDuration = time.Since(t0)
@@ -148,7 +148,7 @@ func (e *CheckpointEntry) Read(fs *objectio.ObjectFS) (data *logtail.CheckpointD
 	}
 
 	data = logtail.NewCheckpointData()
-	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(reader, nil, common.DefaultAllocator); err != nil {
 		return
 	}
 	return
@@ -160,7 +160,7 @@ func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, 
 	}
 	data := logtail.NewCheckpointData()
 	defer data.Close()
-	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(reader, nil, common.DefaultAllocator); err != nil {
 		return
 	}
 	ins, del, cnIns, err = data.GetTableData(tid)

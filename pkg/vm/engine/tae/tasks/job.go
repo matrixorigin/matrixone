@@ -7,13 +7,53 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/panjf2000/ants/v2"
 )
+
+type JobScheduler interface {
+	Schedule(job *Job) error
+	Stop()
+}
 
 type JobExecutor = func(context.Context) *JobResult
 
 type JobResult struct {
 	Err error
 	Res any
+}
+
+var SerialJobScheduler = new(simpleJobSceduler)
+
+type simpleJobSceduler struct{}
+
+func (s *simpleJobSceduler) Stop() {}
+func (s *simpleJobSceduler) Schedule(job *Job) (err error) {
+	job.Run()
+	return
+}
+
+type parallelJobScheduler struct {
+	pool *ants.Pool
+}
+
+func NewParallelJobScheduler(parallism int) *parallelJobScheduler {
+	pool, err := ants.NewPool(parallism)
+	if err != nil {
+		panic(err)
+	}
+	return &parallelJobScheduler{
+		pool: pool,
+	}
+}
+
+func (s *parallelJobScheduler) Stop() {
+	s.pool.Release()
+	s.pool = nil
+}
+
+func (s *parallelJobScheduler) Schedule(job *Job) (err error) {
+	err = s.pool.Submit(job.Run)
+	return
 }
 
 type Job struct {

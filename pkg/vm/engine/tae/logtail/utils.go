@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
-	"github.com/panjf2000/ants/v2"
 )
 
 const (
@@ -409,19 +408,18 @@ func (data *CheckpointData) WriteTo(
 // There need a global io pool
 func (data *CheckpointData) ReadFrom(
 	reader *blockio.Reader,
+	scheduler tasks.JobScheduler,
 	m *mpool.MPool) (err error) {
 	metas, err := reader.ReadMetas(m)
 	if err != nil {
 		return
 	}
 
-	parallelism := 100
-
-	pool, err := ants.NewPool(parallelism)
-	if err != nil {
-		return
+	if scheduler == nil {
+		scheduler = tasks.NewParallelJobScheduler(100)
+		defer scheduler.Stop()
 	}
-	defer pool.Release()
+
 	jobs := make([]*tasks.Job, MaxIDX)
 
 	for idx, item := range checkpointDataRefer {
@@ -431,7 +429,7 @@ func (data *CheckpointData) ReadFrom(
 			item.nullables,
 			metas[idx],
 		)
-		if err = pool.Submit(job.Run); err != nil {
+		if err = scheduler.Schedule(job); err != nil {
 			break
 		}
 		jobs[idx] = job

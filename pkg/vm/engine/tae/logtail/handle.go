@@ -574,7 +574,7 @@ func LoadCheckpointEntries(
 			return
 		}
 		data := NewCheckpointData()
-		if err2 = data.ReadFrom(reader, common.DefaultAllocator); err2 != nil {
+		if err2 = data.ReadFrom(reader, nil, common.DefaultAllocator); err2 != nil {
 			errMu.Lock()
 			err = err2
 			errMu.Unlock()
