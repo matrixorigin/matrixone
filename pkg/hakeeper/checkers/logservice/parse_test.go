@@ -69,19 +69,20 @@ func TestFixedLogShardInfo(t *testing.T) {
 			},
 		},
 		{
-			desc: "shard 1 has 2 replicas, which expected to be 3",
+			desc: "shard 1 has 3 replicas, which expected to be 1, and leader is the last to be removed",
 			record: metadata.LogShardRecord{
 				ShardID:          1,
-				NumberOfReplicas: 3,
+				NumberOfReplicas: 1,
 			},
 			info: pb.LogShardInfo{
 				ShardID:  1,
-				Replicas: map[uint64]string{1: "a", 2: "b"},
+				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+				LeaderID: 2,
 			},
 			expected: &fixingShard{
 				shardID:  1,
-				replicas: map[uint64]string{1: "a", 2: "b"},
-				toAdd:    1,
+				replicas: map[uint64]string{2: "b"},
+				toAdd:    0,
 			},
 		},
 	}
