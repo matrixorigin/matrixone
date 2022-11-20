@@ -472,6 +472,8 @@ func handleShowColumns(ses *Session) error {
 					row[4] = "UUID"
 				case "current_timestamp()":
 					row[4] = "CURRENT_TIMESTAMP"
+				case "now()":
+					row[4] = "CURRENT_TIMESTAMP"
 				case "":
 					row[4] = "NULL"
 				default:
@@ -516,6 +518,8 @@ func handleShowColumns(ses *Session) error {
 				case "uuid()":
 					row[5] = "UUID"
 				case "current_timestamp()":
+					row[5] = "CURRENT_TIMESTAMP"
+				case "now()":
 					row[5] = "CURRENT_TIMESTAMP"
 				case "":
 					row[5] = "NULL"
@@ -1519,6 +1523,12 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 		value, err = GetSimpleExprValue(assign.Value)
 		if err != nil {
 			return err
+		}
+
+		if systemVar, ok := gSysVarsDefs[name]; ok {
+			if isDefault, ok := value.(bool); ok && isDefault {
+				value = systemVar.Default
+			}
 		}
 
 		//TODO : fix SET NAMES after parser is ready
