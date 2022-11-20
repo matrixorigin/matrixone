@@ -37,7 +37,7 @@ NULL
 SELECT REGEXP_SUBSTR('Cat Cut Cot', "", 2, 1);
 regexp_substr(Cat Cut Cot, , 2, 1)
 NULL
-create table t1(a int, b varchar(20));
+create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
 insert into t1 values(2 , "Powerage");
 insert into t1 values( 3 , "Singing Down the Lane" );
@@ -57,7 +57,7 @@ a    regexp_substr(b, .i)
 7     i
 8    Pi
 drop table t1;
-create table t1(a int, b varchar(20));
+create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
 insert into t1 values(2 , "Powerage");
 insert into t1 values( 3 , "Singing Down the Lane" );
@@ -77,7 +77,7 @@ a    regexp_substr(b, .i, 3)
 7     i
 8    Mi
 drop table t1;
-create table t1(a int, b varchar(20));
+create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
 insert into t1 values(2 , "Powerage");
 insert into t1 values( 3 , "Singing Down the Lane" );
