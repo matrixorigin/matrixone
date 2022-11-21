@@ -3216,6 +3216,8 @@ func (c *dummyCpkGetter) CollectCheckpointsInRange(start, end types.TS) (string,
 	return "", types.TS{}
 }
 
+func (c *dummyCpkGetter) FlushTable(dbID, tableID uint64, ts types.TS) error { return nil }
+
 func TestLogtailBasic(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)

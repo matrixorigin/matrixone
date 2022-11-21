@@ -40,8 +40,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
+const Size90M = 80 * 1024 * 1024
+
 type CheckpointClient interface {
 	CollectCheckpointsInRange(start, end types.TS) (location string, checkpointed types.TS)
+	FlushTable(dbID, tableID uint64, ts types.TS) error
 }
 
 func HandleSyncLogTailReq(
@@ -99,6 +102,17 @@ func HandleSyncLogTailReq(
 	operator := mgr.GetTableOperator(start, end, c, did, tid, scope, visitor)
 	if err := operator.Run(); err != nil {
 		return api.SyncLogTailResp{}, err
+	}
+	resp, err = visitor.BuildResp()
+	if scope == ScopeUserTables && resp.ProtoSize() > Size90M {
+		if err = ckpClient.FlushTable(did, tid, end); err != nil {
+			logutil.Errorf("[logtail] flush err: %v", err)
+			return api.SyncLogTailResp{}, err
+		}
+		// try again after flushing
+		newResp, err := HandleSyncLogTailReq(ckpClient, mgr, c, req)
+		logutil.Infof("[logtail] flush result: %d -> %d err: %v", resp.ProtoSize(), newResp.ProtoSize(), err)
+		return newResp, err
 	}
 	return visitor.BuildResp()
 }
