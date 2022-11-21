@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
@@ -202,6 +203,7 @@ func newS3FS(
 	}
 	if memCacheCapacity > 0 {
 		fs.memCache = NewMemCache(memCacheCapacity)
+		logutil.Info("fileservice: cache initialized", zap.Any("fs-name", name), zap.Any("capacity", memCacheCapacity))
 	}
 
 	return fs, nil

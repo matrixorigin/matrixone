@@ -268,6 +268,7 @@ type blockReader struct {
 	colTypes       []types.Type
 	colNulls       []bool
 	pkidxInColIdxs int
+	pkName         string
 }
 
 type blockMergeReader struct {

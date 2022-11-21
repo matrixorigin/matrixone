@@ -159,8 +159,13 @@ PRIVILEGES    VARCHAR    YES        NULL
 table_catalog    VARCHAR    YES        NULL        
 generation_expression    VARCHAR    YES        NULL        
 character_set_name    VARCHAR    YES        NULL        
-select table_name, column_name from columns where table_schema = 'mo_catalog' limit 5;
+select table_name, column_name from columns where table_schema = 'mo_catalog' order by table_name, column_name limit 5;
 table_name    column_name
+mo_account    account_id
+mo_account    account_name
+mo_account    comments
+mo_account    created_time
+mo_account    status
 desc profiling;
 Field    Type    Null    Key    Default    Extra    Comment
 block_ops_in    INT    YES        null        
@@ -211,7 +216,7 @@ default_character_set_name    VARCHAR    YES        NULL
 sql_path    VARCHAR    YES        NULL        
 default_encryption    VARCHAR    YES        NULL        
 schema_name    VARCHAR    YES        NULL        
-select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task';
+select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' order by catalog_name, schema_name;
 catalog_name    schema_name
 def    mo_task
 mo_catalog    mo_catalog
@@ -396,3 +401,68 @@ __mo_cpkey_004host002db004user010table_name    VARCHAR    NO    PRI    NULL
 column_priv    VARCHAR    NO        ''        
 select host, table_name from tables_priv limit 5;
 host    table_name
+show variables like 'sql_select_limit';
+Variable_name    Value
+sql_select_limit    18446744073709551615
+set sql_select_limit = 100000;
+show variables like 'sql_select_limit';
+Variable_name    Value
+sql_select_limit    100000
+set sql_select_limit = 1;
+show variables like 'sql_select_limit';
+Variable_name    Value
+sql_select_limit    1
+SET SQL_SELECT_LIMIT = Default;
+show variables like 'sql_select_limit';
+Variable_name    Value
+sql_select_limit    18446744073709551615
+show variables like 'max_allowed_packet';
+Variable_name    Value
+max_allowed_packet    16777216
+set max_allowed_packet = 10000;
+show variables like 'max_allowed_packet';
+Variable_name    Value
+max_allowed_packet    10000
+set max_allowed_packet = default;
+show variables like 'max_allowed_packet';
+Variable_name    Value
+max_allowed_packet    16777216
+show variables like 'wait_timeout';
+Variable_name    Value
+wait_timeout    10
+set wait_timeout = 10000;
+show variables like 'wait_timeout';
+Variable_name    Value
+wait_timeout    10000
+set wait_timeout = default;
+show variables like 'wait_timeout';
+Variable_name    Value
+wait_timeout    28800
+show variables like 'character_set_results';
+Variable_name    Value
+character_set_results    utf8
+set character_set_server = default;
+show variables like 'character_set_results';
+Variable_name    Value
+character_set_results    utf8
+show variables like 'character_set_server';
+Variable_name    Value
+character_set_server    utf8mb4
+set character_set_server = default;
+show variables like 'character_set_server';
+Variable_name    Value
+character_set_server    utf8mb4
+show variables like 'transaction_isolation';
+Variable_name    Value
+transaction_isolation    SNAPSHOT-ISOLATION
+set transaction_isolation = default;
+show variables like 'transaction_isolation';
+Variable_name    Value
+transaction_isolation    SNAPSHOT-ISOLATION
+show variables like 'tx_isolation';
+Variable_name    Value
+tx_isolation    REPEATABLE-READ
+set tx_isolation = default;
+show variables like 'tx_isolation';
+Variable_name    Value
+tx_isolation    REPEATABLE-READ

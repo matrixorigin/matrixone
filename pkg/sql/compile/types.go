@@ -35,6 +35,11 @@ type (
 	TxnOperator = client.TxnOperator
 )
 
+// number of rows per core scheduled to be processed
+const (
+	Single_Core_Rows = 1000000
+)
+
 // type of scope
 const (
 	Merge = iota
@@ -111,6 +116,7 @@ type Scope struct {
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
 type scopeContext struct {
 	id       int32
+	plan     *plan.Plan
 	scope    *Scope
 	root     *scopeContext
 	parent   *scopeContext

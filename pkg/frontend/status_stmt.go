@@ -352,7 +352,7 @@ type CreateUserExecutor struct {
 
 func (cue *CreateUserExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	tenant := ses.GetTenantInfo()
-	return InitUser(ctx, tenant, cue.cu)
+	return InitUser(ctx, ses, tenant, cue.cu)
 }
 
 type DropUserExecutor struct {
@@ -378,7 +378,7 @@ func (cre *CreateRoleExecutor) ExecuteImpl(ctx context.Context, ses *Session) er
 	tenant := ses.GetTenantInfo()
 
 	//step1 : create the role
-	return InitRole(ctx, tenant, cre.cr)
+	return InitRole(ctx, ses, tenant, cre.cr)
 }
 
 type DropRoleExecutor struct {

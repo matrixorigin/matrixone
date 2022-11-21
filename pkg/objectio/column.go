@@ -49,7 +49,6 @@ func NewColumnBlock(idx uint16, object *Object) ColumnObject {
 
 func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservice.IOVector, error) {
 	var err error
-	var object []byte
 	data := &fileservice.IOVector{
 		FilePath: cb.object.name,
 		Entries:  make([]fileservice.IOEntry, 1),
@@ -58,10 +57,9 @@ func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservic
 		Offset: int64(cb.meta.location.Offset()),
 		Size:   int64(cb.meta.location.Length()),
 	}
-	data.Entries[0].ToObject = newDecompressToObject(object, int64(cb.meta.location.OriginSize()), m)
+	data.Entries[0].ToObject = newDecompressToObject(int64(cb.meta.location.OriginSize()))
 	err = cb.object.fs.Read(ctx, data)
 	if err != nil {
-		cb.freeData(object, m)
 		return nil, err
 	}
 	return data, nil
@@ -79,12 +77,10 @@ func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, m *
 			Offset: int64(cb.meta.bloomFilter.Offset()),
 			Size:   int64(cb.meta.bloomFilter.Length()),
 		}
-		var object []byte
 		var err error
-		data.Entries[0].ToObject = newDecompressToObject(object, int64(cb.meta.bloomFilter.OriginSize()), m)
+		data.Entries[0].ToObject = newDecompressToObject(int64(cb.meta.bloomFilter.OriginSize()))
 		err = cb.object.fs.Read(ctx, data)
 		if err != nil {
-			cb.freeData(object, m)
 			return nil, err
 		}
 		return NewBloomFilter(cb.meta.idx, 0, data.Entries[0].Object.([]byte)), nil
@@ -188,10 +184,4 @@ func (cb *ColumnBlock) UnMarshalMate(cache *bytes.Buffer) error {
 		return err
 	}
 	return err
-}
-
-func (cb *ColumnBlock) freeData(buf []byte, m *mpool.MPool) {
-	if m != nil {
-		m.Free(buf)
-	}
 }
