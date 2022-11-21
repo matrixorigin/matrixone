@@ -229,19 +229,13 @@ func (blk *ablock) resolveInMemoryColumnDatas(
 		return
 	}
 
-	for i, colIdx := range colIdxes {
+	data, err := mnode.GetDataWindow(0, maxRow)
+	if err != nil {
+		return
+	}
+	for _, colIdx := range colIdxes {
 		view := model.NewColumnView(ts, colIdx)
-		var data containers.Vector
-		data, err = mnode.GetColumnDataWindow(
-			0,
-			maxRow,
-			colIdx,
-			buffers[i])
-		if err != nil {
-			// blk.RUnlock()
-			return
-		}
-		view.SetData(data)
+		view.SetData(data.Vecs[colIdx])
 		views = append(views, view)
 	}
 	if skipDeletes {

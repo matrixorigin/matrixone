@@ -284,13 +284,13 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	colIdxs []int,
 	buffers []*bytes.Buffer,
 	skipDeletes bool) (views []*model.ColumnView, err error) {
-	for i, colIdx := range colIdxs {
+	data, err := blk.LoadPersistedData()
+	if err != nil {
+		return nil, err
+	}
+	for _, colIdx := range colIdxs {
 		view := model.NewColumnView(ts, colIdx)
-		vec, err := blk.LoadPersistedColumnData(colIdx, buffers[i])
-		if err != nil {
-			return nil, err
-		}
-		view.SetData(vec)
+		view.SetData(data.Vecs[colIdx])
 		views = append(views, view)
 	}
 
