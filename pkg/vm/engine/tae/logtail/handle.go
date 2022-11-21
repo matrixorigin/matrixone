@@ -102,7 +102,8 @@ func HandleSyncLogTailReq(
 	resp, err = visitor.BuildResp()
 
 	if canRetry && scope == ScopeUserTables { // check simple conditions first
-		if _, forceFlush := fault.TriggerFault("logtail_max_size"); forceFlush || resp.ProtoSize() > Size90M {
+		_, name, forceFlush := fault.TriggerFault("logtail_max_size")
+		if (forceFlush && name == tableEntry.GetSchema().Name) || resp.ProtoSize() > Size90M {
 			if err = ckpClient.FlushTable(did, tid, end); err != nil {
 				logutil.Errorf("[logtail] flush err: %v", err)
 				return api.SyncLogTailResp{}, err
