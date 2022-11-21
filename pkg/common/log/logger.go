@@ -28,60 +28,60 @@ import (
 
 // GetServiceLogger returns service logger, it will using the service as the logger name, and
 // append FieldNameServiceUUID field to the logger
-func GetServiceLogger(logger *zap.Logger, service metadata.ServiceType, uuid string) MOLogger {
+func GetServiceLogger(logger *zap.Logger, service metadata.ServiceType, uuid string) *MOLogger {
 	return wrap(logger.Named(fmt.Sprintf("%s-service", strings.ToLower(service.String()))).With(zap.String(FieldNameServiceUUID, uuid)))
 }
 
 // GetModuleLogger returns the module logger, it will add ".module" to logger name.
 // e.g. if the logger's name is cn-service, module is txn, the new logger's name is
 // "cn-service.txn".
-func GetModuleLogger(logger MOLogger, module Module) MOLogger {
+func GetModuleLogger(logger *MOLogger, module Module) *MOLogger {
 	return wrap(logger.logger.Named(string(module)))
 }
 
 // Info shortcuts to print info log
-func (l MOLogger) Info(msg string, fields ...zap.Field) bool {
+func (l *MOLogger) Info(msg string, fields ...zap.Field) bool {
 	return l.Log(msg, DefaultLogOptions().WithLevel(zap.InfoLevel), fields...)
 }
 
 // InfoAction shortcuts to print info action log
-func (l MOLogger) InfoAction(msg string, fields ...zap.Field) func() {
+func (l *MOLogger) InfoAction(msg string, fields ...zap.Field) func() {
 	return l.LogAction(msg, DefaultLogOptions().WithLevel(zap.InfoLevel), fields...)
 }
 
 // Debug shortcuts to  print debug log
-func (l MOLogger) Debug(msg string, fields ...zap.Field) bool {
+func (l *MOLogger) Debug(msg string, fields ...zap.Field) bool {
 	return l.Log(msg, DefaultLogOptions().WithLevel(zap.DebugLevel), fields...)
 }
 
 // InfoDebugAction shortcuts to print debug action log
-func (l MOLogger) InfoDebugAction(msg string, fields ...zap.Field) func() {
+func (l *MOLogger) InfoDebugAction(msg string, fields ...zap.Field) func() {
 	return l.LogAction(msg, DefaultLogOptions().WithLevel(zap.DebugLevel), fields...)
 }
 
 // Error shortcuts to  print error log
-func (l MOLogger) Error(msg string, fields ...zap.Field) bool {
+func (l *MOLogger) Error(msg string, fields ...zap.Field) bool {
 	return l.Log(msg, DefaultLogOptions().WithLevel(zap.ErrorLevel), fields...)
 }
 
 // Warn shortcuts to  print warn log
-func (l MOLogger) Warn(msg string, fields ...zap.Field) bool {
+func (l *MOLogger) Warn(msg string, fields ...zap.Field) bool {
 	return l.Log(msg, DefaultLogOptions().WithLevel(zap.WarnLevel), fields...)
 }
 
 // Panic shortcuts to  print panic log
-func (l MOLogger) Panic(msg string, fields ...zap.Field) bool {
+func (l *MOLogger) Panic(msg string, fields ...zap.Field) bool {
 	return l.Log(msg, DefaultLogOptions().WithLevel(zap.PanicLevel), fields...)
 }
 
 // Fatal shortcuts to print fatal log
-func (l MOLogger) Fatal(msg string, fields ...zap.Field) bool {
+func (l *MOLogger) Fatal(msg string, fields ...zap.Field) bool {
 	return l.Log(msg, DefaultLogOptions().WithLevel(zap.FatalLevel), fields...)
 }
 
 // Log is the entry point for mo log printing. Return true to indicate that the log
 // is being recorded by the current LogContext.
-func (l MOLogger) Log(msg string, opts LogOptions, fields ...zap.Field) bool {
+func (l *MOLogger) Log(msg string, opts LogOptions, fields ...zap.Field) bool {
 	if l.logger == nil {
 		panic("missing logger")
 	}
@@ -117,7 +117,7 @@ func (l MOLogger) Log(msg string, opts LogOptions, fields ...zap.Field) bool {
 //
 // This method should often be used to log the elapsed time of a function and, as the
 // logs appear in pairs, can also be used to check whether a function has been executed.
-func (l MOLogger) LogAction(action string, opts LogOptions, fields ...zap.Field) func() {
+func (l *MOLogger) LogAction(action string, opts LogOptions, fields ...zap.Field) func() {
 	startAt := time.Now()
 	if !l.Log(action, opts, fields...) {
 		return nothing
@@ -128,11 +128,11 @@ func (l MOLogger) LogAction(action string, opts LogOptions, fields ...zap.Field)
 	}
 }
 
-func wrap(logger *zap.Logger) MOLogger {
+func wrap(logger *zap.Logger) *MOLogger {
 	return wrapWithContext(logger, nil)
 }
 
-func wrapWithContext(logger *zap.Logger, ctx context.Context) MOLogger {
+func wrapWithContext(logger *zap.Logger, ctx context.Context) *MOLogger {
 	if logger == nil {
 		panic("zap logger is nil")
 	}
@@ -141,7 +141,7 @@ func wrapWithContext(logger *zap.Logger, ctx context.Context) MOLogger {
 		panic("TODO and Background are not supported")
 	}
 
-	return MOLogger{
+	return &MOLogger{
 		logger: logger,
 		ctx:    ctx,
 	}
