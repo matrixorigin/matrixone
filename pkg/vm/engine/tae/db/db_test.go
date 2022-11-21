@@ -3845,10 +3845,11 @@ func TestBlockRead(t *testing.T) {
 	bid, sid := blkEntry.ID, blkEntry.GetSegment().ID
 
 	info := &pkgcatalog.BlockInfo{
-		BlockID:   bid,
-		SegmentID: sid,
-		MetaLoc:   metaloc,
-		DeltaLoc:  deltaloc,
+		BlockID:    bid,
+		SegmentID:  sid,
+		EntryState: true,
+		MetaLoc:    metaloc,
+		DeltaLoc:   deltaloc,
 	}
 
 	columns := make([]string, 0)
@@ -3868,7 +3869,7 @@ func TestBlockRead(t *testing.T) {
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
-		context.Background(), info,
+		context.Background(), info, len(schema.ColDefs),
 		columns, colIdxs, colTyps, colNulls,
 		beforeDel, fs, pool,
 	)
@@ -3879,7 +3880,7 @@ func TestBlockRead(t *testing.T) {
 	assert.Equal(t, 20, b1.Vecs[0].Length())
 
 	b2, err := blockio.BlockReadInner(
-		context.Background(), info,
+		context.Background(), info, len(schema.ColDefs),
 		columns, colIdxs, colTyps, colNulls,
 		afterFirstDel, fs, pool,
 	)
@@ -3889,7 +3890,7 @@ func TestBlockRead(t *testing.T) {
 	assert.Equal(t, len(columns), len(b2.Vecs))
 	assert.Equal(t, 19, b2.Vecs[0].Length())
 	b3, err := blockio.BlockReadInner(
-		context.Background(), info,
+		context.Background(), info, len(schema.ColDefs),
 		columns, colIdxs, colTyps, colNulls,
 		afterSecondDel, fs, pool,
 	)
@@ -3901,7 +3902,7 @@ func TestBlockRead(t *testing.T) {
 
 	// read rowid column only
 	b4, err := blockio.BlockReadInner(
-		context.Background(), info,
+		context.Background(), info, len(schema.ColDefs),
 		[]string{catalog.AttrRowID},
 		[]uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},
