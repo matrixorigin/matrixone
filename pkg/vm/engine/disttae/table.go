@@ -30,6 +30,22 @@ import (
 
 var _ engine.Relation = new(table)
 
+func (tbl *table) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error) {
+	if expr == nil {
+		r, err := tbl.Rows(ctx)
+		return float64(r), err
+	}
+	var card float64
+	for _, blockmetas := range tbl.meta.blocks {
+		for _, blk := range blockmetas {
+			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
+				card += float64(blockRows(blk)) / 3
+			}
+		}
+	}
+	return 0, nil
+}
+
 func (tbl *table) Rows(ctx context.Context) (int64, error) {
 	var rows int64
 

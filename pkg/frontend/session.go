@@ -1825,7 +1825,7 @@ func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) (cost *
 	if err != nil {
 		return
 	}
-	rows, err := table.Rows(tcc.GetSession().GetRequestContext())
+	rows, err := table.FilteredRows(tcc.GetSession().GetRequestContext(), e)
 	if err != nil {
 		return
 	}
