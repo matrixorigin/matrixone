@@ -47,7 +47,8 @@ type externalTestCase struct {
 }
 
 var (
-	cases []externalTestCase
+	cases         []externalTestCase
+	defaultOption = []string{"filepath", "abc", "format", "jsonline", "jsondata", "array"}
 )
 
 func newTestCase(all bool, format, jsondata string) externalTestCase {
@@ -100,7 +101,8 @@ func Test_Prepare(t *testing.T) {
 				FileService: tcs.proc.FileService,
 				Format:      tcs.format,
 				JsonData:    tcs.jsondata,
-				Ctx:         context.Background(),
+				Option:      defaultOption,
+        Ctx:         context.Background(),
 			}
 			json_byte, err := json.Marshal(extern)
 			if err != nil {
@@ -126,6 +128,7 @@ func Test_Prepare(t *testing.T) {
 						IgnoredLines: 0,
 					},
 					Format: tcs.format,
+					Option: defaultOption,
 					Ctx:    context.Background(),
 				}
 				extern.JsonData = tcs.jsondata
@@ -137,10 +140,11 @@ func Test_Prepare(t *testing.T) {
 				convey.So(param.FileList, convey.ShouldResemble, []string(nil))
 				convey.So(param.Fileparam.FileCnt, convey.ShouldEqual, 0)
 
-				extern.JsonData = "test"
+				extern.Option = []string{"filepath", "abc", "format", "jsonline", "jsondata", "test"}
 				json_byte, err = json.Marshal(extern)
 				convey.So(err, convey.ShouldBeNil)
 				param.CreateSql = string(json_byte)
+
 				err = Prepare(tcs.proc, tcs.arg)
 				convey.So(err, convey.ShouldNotBeNil)
 			}
