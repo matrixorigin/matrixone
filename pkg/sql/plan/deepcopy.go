@@ -24,6 +24,17 @@ func DeepCopyExprList(list []*Expr) []*Expr {
 	return newList
 }
 
+func DeepCopyOrderBy(orderBy *plan.OrderBySpec) *plan.OrderBySpec {
+	if orderBy == nil {
+		return nil
+	}
+	return &plan.OrderBySpec{
+		Expr:      DeepCopyExpr(orderBy.Expr),
+		Collation: orderBy.Collation,
+		Flag:      orderBy.Flag,
+	}
+}
+
 func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode := &Node{
 		NodeType:        node.NodeType,
@@ -75,11 +86,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	}
 
 	for idx, orderBy := range node.OrderBy {
-		newNode.OrderBy[idx] = &plan.OrderBySpec{
-			Expr:      DeepCopyExpr(orderBy.Expr),
-			Collation: orderBy.Collation,
-			Flag:      orderBy.Flag,
-		}
+		newNode.OrderBy[idx] = DeepCopyOrderBy(orderBy)
 	}
 
 	for idx, deleteTablesCtx := range node.DeleteTablesCtx {
@@ -150,11 +157,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 			newNode.WinSpec.PartitionBy[idx] = DeepCopyExpr(pb)
 		}
 		for idx, orderBy := range node.WinSpec.OrderBy {
-			newNode.WinSpec.OrderBy[idx] = &plan.OrderBySpec{
-				Expr:      DeepCopyExpr(orderBy.Expr),
-				Collation: orderBy.Collation,
-				Flag:      orderBy.Flag,
-			}
+			newNode.WinSpec.OrderBy[idx] = DeepCopyOrderBy(orderBy)
 		}
 	}
 
@@ -236,6 +239,9 @@ func DeepCopyOnUpdate(old *plan.OnUpdate) *plan.OnUpdate {
 }
 
 func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
+	if table == nil {
+		return nil
+	}
 	newTable := &plan.TableDef{
 		Name:          table.Name,
 		Cols:          make([]*plan.ColDef, len(table.Cols)),

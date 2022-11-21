@@ -17,9 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/generate_series"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -47,7 +49,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
@@ -58,9 +59,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
@@ -79,171 +78,273 @@ func init() {
 	constBat.Zs = []int64{1}
 }
 
-func dupInstruction(in vm.Instruction) vm.Instruction {
-	rin := vm.Instruction{
-		Op:  in.Op,
-		Idx: in.Idx,
-	}
-	switch arg := in.Arg.(type) {
-	case *top.Argument:
-		rin.Arg = &top.Argument{
-			Fs:    arg.Fs,
-			Limit: arg.Limit,
+func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]*process.WaitRegister) vm.Instruction {
+	res := vm.Instruction{Op: sourceIns.Op, Idx: sourceIns.Idx}
+	switch sourceIns.Op {
+	case vm.Anti:
+		t := sourceIns.Arg.(*anti.Argument)
+		res.Arg = &anti.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Cond:       t.Cond,
+			Typs:       t.Typs,
+			Conditions: t.Conditions,
+			Result:     t.Result,
 		}
-	case *limit.Argument:
-		rin.Arg = &limit.Argument{
-			Limit: arg.Limit,
+	case vm.Group:
+		t := sourceIns.Arg.(*group.Argument)
+		res.Arg = &group.Argument{
+			NeedEval: t.NeedEval,
+			Ibucket:  t.Ibucket,
+			Nbucket:  t.Nbucket,
+			Exprs:    t.Exprs,
+			Types:    t.Types,
+			Aggs:     t.Aggs,
 		}
-	case *join.Argument:
-		rin.Arg = &join.Argument{
-			Typs:       arg.Typs,
-			Cond:       arg.Cond,
-			Result:     arg.Result,
-			Conditions: arg.Conditions,
+	case vm.Join:
+		t := sourceIns.Arg.(*join.Argument)
+		res.Arg = &join.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Cond:       t.Cond,
+			Typs:       t.Typs,
+			Conditions: t.Conditions,
 		}
-	case *semi.Argument:
-		rin.Arg = &semi.Argument{
-			Typs:       arg.Typs,
-			Cond:       arg.Cond,
-			Result:     arg.Result,
-			Conditions: arg.Conditions,
+	case vm.Left:
+		t := sourceIns.Arg.(*left.Argument)
+		res.Arg = &left.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Cond:       t.Cond,
+			Result:     t.Result,
+			Typs:       t.Typs,
+			Conditions: t.Conditions,
 		}
-	case *left.Argument:
-		rin.Arg = &left.Argument{
-			Typs:       arg.Typs,
-			Cond:       arg.Cond,
-			Result:     arg.Result,
-			Conditions: arg.Conditions,
+	case vm.Limit:
+		t := sourceIns.Arg.(*limit.Argument)
+		res.Arg = &limit.Argument{
+			Limit: t.Limit,
 		}
-	case *group.Argument:
-		rin.Arg = &group.Argument{
-			Aggs:    arg.Aggs,
-			Exprs:   arg.Exprs,
-			Types:   arg.Types,
-			Ibucket: arg.Ibucket,
-			Nbucket: arg.Nbucket,
+	case vm.LoopAnti:
+		t := sourceIns.Arg.(*loopanti.Argument)
+		res.Arg = &loopanti.Argument{
+			Result: t.Result,
+			Cond:   t.Cond,
+			Typs:   t.Typs,
 		}
-	case *single.Argument:
-		rin.Arg = &single.Argument{
-			Typs:       arg.Typs,
-			Cond:       arg.Cond,
-			Result:     arg.Result,
-			Conditions: arg.Conditions,
+	case vm.LoopJoin:
+		t := sourceIns.Arg.(*loopanti.Argument)
+		res.Arg = &loopanti.Argument{
+			Result: t.Result,
+			Cond:   t.Cond,
+			Typs:   t.Typs,
 		}
-	case *product.Argument:
-		rin.Arg = &product.Argument{
-			Typs:   arg.Typs,
-			Result: arg.Result,
+	case vm.LoopLeft:
+		t := sourceIns.Arg.(*loopleft.Argument)
+		res.Arg = &loopleft.Argument{
+			Cond:   t.Cond,
+			Typs:   t.Typs,
+			Result: t.Result,
 		}
-	case *anti.Argument:
-		rin.Arg = &anti.Argument{
-			Typs:       arg.Typs,
-			Cond:       arg.Cond,
-			Result:     arg.Result,
-			Conditions: arg.Conditions,
+	case vm.LoopSemi:
+		t := sourceIns.Arg.(*loopsemi.Argument)
+		res.Arg = &loopsemi.Argument{
+			Result: t.Result,
+			Cond:   t.Cond,
+			Typs:   t.Typs,
 		}
-	case *mark.Argument:
-		{
-			rin.Arg = &mark.Argument{
-				Typs:       arg.Typs,
-				Cond:       arg.Cond,
-				Result:     arg.Result,
-				Conditions: arg.Conditions,
-				OnList:     arg.OnList,
-			}
+	case vm.LoopSingle:
+		t := sourceIns.Arg.(*loopsingle.Argument)
+		res.Arg = &loopsingle.Argument{
+			Result: t.Result,
+			Cond:   t.Cond,
+			Typs:   t.Typs,
 		}
-	case *offset.Argument:
-		rin.Arg = &offset.Argument{
-			Offset: arg.Offset,
+	case vm.Offset:
+		t := sourceIns.Arg.(*offset.Argument)
+		res.Arg = &offset.Argument{
+			Offset: t.Offset,
 		}
-	case *order.Argument:
-		rin.Arg = &order.Argument{
-			Fs: arg.Fs,
+	case vm.Order:
+		t := sourceIns.Arg.(*order.Argument)
+		res.Arg = &order.Argument{
+			Fs: t.Fs,
 		}
-	case *projection.Argument:
-		rin.Arg = &projection.Argument{
-			Es: arg.Es,
+	case vm.Product:
+		t := sourceIns.Arg.(*product.Argument)
+		res.Arg = &product.Argument{
+			Result: t.Result,
+			Typs:   t.Typs,
 		}
-	case *restrict.Argument:
-		rin.Arg = &restrict.Argument{
-			E: arg.E,
+	case vm.Projection:
+		t := sourceIns.Arg.(*projection.Argument)
+		res.Arg = &projection.Argument{
+			Es: t.Es,
 		}
-	case *output.Argument:
-		rin.Arg = &output.Argument{
-			Data: arg.Data,
-			Func: arg.Func,
+	case vm.Restrict:
+		t := sourceIns.Arg.(*restrict.Argument)
+		res.Arg = &restrict.Argument{
+			E: t.E,
 		}
-	case *loopjoin.Argument:
-		rin.Arg = &loopjoin.Argument{
-			Typs:   arg.Typs,
-			Cond:   arg.Cond,
-			Result: arg.Result,
+	case vm.Semi:
+		t := sourceIns.Arg.(*semi.Argument)
+		res.Arg = &semi.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Cond:       t.Cond,
+			Typs:       t.Typs,
+			Conditions: t.Conditions,
 		}
-	case *loopsemi.Argument:
-		rin.Arg = &loopsemi.Argument{
-			Typs:   arg.Typs,
-			Cond:   arg.Cond,
-			Result: arg.Result,
+	case vm.Single:
+		t := sourceIns.Arg.(*single.Argument)
+		res.Arg = &single.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Cond:       t.Cond,
+			Typs:       t.Typs,
+			Conditions: t.Conditions,
 		}
-	case *loopleft.Argument:
-		rin.Arg = &loopleft.Argument{
-			Typs:   arg.Typs,
-			Cond:   arg.Cond,
-			Result: arg.Result,
+	case vm.Top:
+		t := sourceIns.Arg.(*top.Argument)
+		res.Arg = &top.Argument{
+			Limit: t.Limit,
+			Fs:    t.Fs,
 		}
-	case *loopanti.Argument:
-		rin.Arg = &loopanti.Argument{
-			Typs:   arg.Typs,
-			Cond:   arg.Cond,
-			Result: arg.Result,
+	case vm.Intersect:
+		t := sourceIns.Arg.(*intersect.Argument)
+		res.Arg = &intersect.Argument{
+			IBucket: t.IBucket,
+			NBucket: t.NBucket,
 		}
-	case *loopsingle.Argument:
-		rin.Arg = &loopsingle.Argument{
-			Typs:   arg.Typs,
-			Cond:   arg.Cond,
-			Result: arg.Result,
+	case vm.Minus: // 2
+		t := sourceIns.Arg.(*minus.Argument)
+		res.Arg = &minus.Argument{
+			IBucket: t.IBucket,
+			NBucket: t.NBucket,
 		}
-	case *dispatch.Argument:
-	case *connector.Argument:
-	case *minus.Argument:
-		rin.Arg = &minus.Argument{
-			IBucket: arg.IBucket,
-			NBucket: arg.NBucket,
+	case vm.IntersectAll:
+		t := sourceIns.Arg.(*intersectall.Argument)
+		res.Arg = &intersectall.Argument{
+			IBucket: t.IBucket,
+			NBucket: t.NBucket,
 		}
-	case *intersect.Argument:
-		rin.Arg = &intersect.Argument{
-			IBucket: arg.IBucket,
-			NBucket: arg.NBucket,
+	case vm.Merge:
+		res.Arg = &merge.Argument{}
+	case vm.MergeGroup:
+		t := sourceIns.Arg.(*mergegroup.Argument)
+		res.Arg = &mergegroup.Argument{
+			NeedEval: t.NeedEval,
 		}
-	case *intersectall.Argument:
-		rin.Arg = &intersectall.Argument{
-			IBucket: arg.IBucket,
-			NBucket: arg.NBucket,
+	case vm.MergeLimit:
+		t := sourceIns.Arg.(*mergelimit.Argument)
+		res.Arg = &mergelimit.Argument{
+			Limit: t.Limit,
 		}
-	case *external.Argument:
-		rin.Arg = &external.Argument{
-			Es: arg.Es,
+	case vm.MergeOffset:
+		t := sourceIns.Arg.(*mergeoffset.Argument)
+		res.Arg = &mergeoffset.Argument{
+			Offset: t.Offset,
 		}
-	case *unnest.Argument:
-		rin.Arg = &unnest.Argument{
+	case vm.MergeTop:
+		t := sourceIns.Arg.(*mergetop.Argument)
+		res.Arg = &mergetop.Argument{
+			Limit: t.Limit,
+			Fs:    t.Fs,
+		}
+	case vm.MergeOrder:
+		t := sourceIns.Arg.(*mergeorder.Argument)
+		res.Arg = &mergeorder.Argument{
+			Fs: t.Fs,
+		}
+	case vm.Mark:
+		t := sourceIns.Arg.(*mark.Argument)
+		res.Arg = &mark.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Conditions: t.Conditions,
+			Typs:       t.Typs,
+			Cond:       t.Cond,
+			OnList:     t.OnList,
+		}
+	case vm.Unnest:
+		t := sourceIns.Arg.(*unnest.Argument)
+		res.Arg = &unnest.Argument{
 			Es: &unnest.Param{
-				Attrs:    arg.Es.Attrs,
-				Cols:     arg.Es.Cols,
-				ExprList: arg.Es.ExprList,
-				ColName:  arg.Es.ColName,
+				Attrs:    t.Es.Attrs,
+				Cols:     t.Es.Cols,
+				ExprList: t.Es.ExprList,
+				ColName:  t.Es.ColName,
 			},
 		}
-	case *generate_series.Argument:
-		rin.Arg = &generate_series.Argument{
+	case vm.GenerateSeries:
+		t := sourceIns.Arg.(*generate_series.Argument)
+		res.Arg = &generate_series.Argument{
 			Es: &generate_series.Param{
-				Attrs:    arg.Es.Attrs,
-				ExprList: arg.Es.ExprList,
+				Attrs:    t.Es.Attrs,
+				ExprList: t.Es.ExprList,
 			},
+		}
+	case vm.HashBuild:
+		t := sourceIns.Arg.(*hashbuild.Argument)
+		res.Arg = &hashbuild.Argument{
+			NeedHashMap: t.NeedHashMap,
+			NeedExpr:    t.NeedExpr,
+			Ibucket:     t.Ibucket,
+			Nbucket:     t.Nbucket,
+			Typs:        t.Typs,
+			Conditions:  t.Conditions,
+		}
+	case vm.External:
+		t := sourceIns.Arg.(*external.Argument)
+		res.Arg = &external.Argument{
+			Es: &external.ExternalParam{
+				Attrs:         t.Es.Attrs,
+				Cols:          t.Es.Cols,
+				Name2ColIndex: t.Es.Name2ColIndex,
+				CreateSql:     t.Es.CreateSql,
+				FileList:      t.Es.FileList,
+				Fileparam: &external.ExternalFileparam{
+					End:       t.Es.Fileparam.End,
+					FileCnt:   t.Es.Fileparam.FileCnt,
+					FileFin:   t.Es.Fileparam.FileFin,
+					FileIndex: t.Es.Fileparam.FileIndex,
+				},
+			},
+		}
+	case vm.Connector:
+		ok := false
+		if regMap != nil {
+			arg := &connector.Argument{}
+			sourceReg := sourceIns.Arg.(*connector.Argument).Reg
+			if arg.Reg, ok = regMap[sourceReg]; !ok {
+				panic("nonexistent wait register")
+			}
+			res.Arg = arg
+		}
+	case vm.Dispatch:
+		ok := false
+		if regMap != nil {
+			sourceArg := sourceIns.Arg.(*dispatch.Argument)
+			arg := &dispatch.Argument{
+				All:  sourceArg.All,
+				Regs: make([]*process.WaitRegister, len(sourceArg.Regs)),
+			}
+			for j := range arg.Regs {
+				sourceReg := sourceArg.Regs[j]
+				if arg.Regs[j], ok = regMap[sourceReg]; !ok {
+					panic("nonexistent wait register")
+				}
+			}
+			res.Arg = arg
 		}
 	default:
-		panic(moerr.NewInternalError(fmt.Sprintf("unsupport instruction %T\n", in.Arg)))
+		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
-	return rin
+	return res
 }
 
 func constructRestrict(n *plan.Node) *restrict.Argument {
