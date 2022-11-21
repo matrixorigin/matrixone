@@ -129,7 +129,6 @@ func Test_Prepare(t *testing.T) {
 					},
 					Format: tcs.format,
 					Option: defaultOption,
-					Ctx:    context.Background(),
 				}
 				extern.JsonData = tcs.jsondata
 				json_byte, err = json.Marshal(extern)
