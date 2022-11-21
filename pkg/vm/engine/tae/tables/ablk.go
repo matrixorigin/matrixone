@@ -120,7 +120,7 @@ func (blk *ablock) Pin() *common.PinnedItem[*ablock] {
 func (blk *ablock) GetColumnDataByNames(
 	txn txnif.AsyncTxn,
 	attrs []string,
-	buffers []*bytes.Buffer) (views []*model.ColumnView, err error) {
+	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
 	colIdxes := make([]int, len(attrs))
 	for i, attr := range attrs {
 		colIdxes[i] = blk.meta.GetSchema().GetColIdx(attr)
@@ -139,7 +139,7 @@ func (blk *ablock) GetColumnDataByName(
 func (blk *ablock) GetColumnDataByIds(
 	txn txnif.AsyncTxn,
 	colIdxes []int,
-	buffers []*bytes.Buffer) (views []*model.ColumnView, err error) {
+	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
 	return blk.resolveColumnDatas(
 		txn.GetStartTS(),
 		colIdxes,
@@ -162,7 +162,7 @@ func (blk *ablock) resolveColumnDatas(
 	ts types.TS,
 	colIdxes []int,
 	buffers []*bytes.Buffer,
-	skipDeletes bool) (views []*model.ColumnView, err error) {
+	skipDeletes bool) (view *model.BlockView, err error) {
 	mnode, pnode := blk.PinNode()
 
 	if mnode != nil {
@@ -220,7 +220,7 @@ func (blk *ablock) resolveInMemoryColumnDatas(
 	ts types.TS,
 	colIdxes []int,
 	buffers []*bytes.Buffer,
-	skipDeletes bool) (views []*model.ColumnView, err error) {
+	skipDeletes bool) (view *model.BlockView, err error) {
 	blk.RLock()
 	defer blk.RUnlock()
 	maxRow, visible, deSels, err := blk.mvcc.GetVisibleRowLocked(ts)
@@ -234,36 +234,25 @@ func (blk *ablock) resolveInMemoryColumnDatas(
 		return
 	}
 	for _, colIdx := range colIdxes {
-		view := model.NewColumnView(ts, colIdx)
-		view.SetData(data.Vecs[colIdx])
-		views = append(views, view)
+		view.SetData(colIdx, data.Vecs[colIdx])
 	}
 	if skipDeletes {
 		// blk.RUnlock()
 		return
 	}
 
-	err = blk.FillInMemoryDeletesLocked(views[0], blk.RWMutex)
+	err = blk.FillInMemoryDeletesLocked(view.BaseView, blk.RWMutex)
 	// blk.RUnlock()
 	if err != nil {
 		return
 	}
 	if deSels != nil && !deSels.IsEmpty() {
-		if views[0].DeleteMask != nil {
-			views[0].DeleteMask.Or(deSels)
+		if view.DeleteMask != nil {
+			view.DeleteMask.Or(deSels)
 		} else {
-			views[0].DeleteMask = deSels
+			view.DeleteMask = deSels
 		}
 	}
-	if views[0].DeleteMask != nil {
-		for i, view := range views {
-			if i == 0 {
-				continue
-			}
-			view.DeleteMask = views[0].DeleteMask.Clone()
-		}
-	}
-
 	return
 }
 
@@ -299,7 +288,7 @@ func (blk *ablock) resolveInMemoryColumnData(
 		return
 	}
 
-	err = blk.FillInMemoryDeletesLocked(view, blk.RWMutex)
+	err = blk.FillInMemoryDeletesLocked(view.BaseView, blk.RWMutex)
 	// blk.RUnlock()
 	if err != nil {
 		return
@@ -429,7 +418,7 @@ func (blk *ablock) getPersistedRowByFilter(
 
 	// Load persisted deletes
 	view := model.NewColumnView(ts, 0)
-	if err = blk.FillPersistedDeletes(view); err != nil {
+	if err = blk.FillPersistedDeletes(view.BaseView); err != nil {
 		return
 	}
 

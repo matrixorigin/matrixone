@@ -200,14 +200,14 @@ func (blk *txnBlock) Rows() int {
 	return blk.entry.GetBlockData().Rows()
 }
 
-func (blk *txnBlock) GetColumnDataByIds(colIdxes []int, buffers []*bytes.Buffer) ([]*model.ColumnView, error) {
+func (blk *txnBlock) GetColumnDataByIds(colIdxes []int, buffers []*bytes.Buffer) (*model.BlockView, error) {
 	if blk.isUncommitted {
 		return blk.table.localSegment.GetColumnDataByIds(blk.entry, colIdxes, buffers)
 	}
 	return blk.entry.GetBlockData().GetColumnDataByIds(blk.Txn, colIdxes, buffers)
 }
 
-func (blk *txnBlock) GetColumnDataByNames(attrs []string, buffers []*bytes.Buffer) ([]*model.ColumnView, error) {
+func (blk *txnBlock) GetColumnDataByNames(attrs []string, buffers []*bytes.Buffer) (*model.BlockView, error) {
 	if blk.isUncommitted {
 		attrIds := make([]int, len(attrs))
 		for i, attr := range attrs {

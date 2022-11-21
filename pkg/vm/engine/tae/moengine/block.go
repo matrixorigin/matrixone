@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -31,20 +32,23 @@ func newBlock(h handle.Block) *txnBlock {
 }
 
 func (blk *txnBlock) Read(attrs []string, compressed []*bytes.Buffer, deCompressed []*bytes.Buffer) (*batch.Batch, error) {
-	var views []*model.ColumnView
+	var view *model.BlockView
 	var err error
 	bat := batch.New(true, attrs)
 	bat.Vecs = make([]*vector.Vector, len(attrs))
-	views, err = blk.handle.GetColumnDataByNames(attrs, deCompressed)
+	view, err = blk.handle.GetColumnDataByNames(attrs, deCompressed)
 	if err != nil {
 		return nil, err
 	}
-	for i, view := range views {
-		view.ApplyDeletes()
-		if view.GetData().Allocated() > 0 {
-			bat.Vecs[i] = containers.CopyToMoVec(view.GetData())
+	view.ApplyDeletes()
+	nameIdx := blk.handle.GetMeta().(*catalog.BlockEntry).GetSchema().NameIndex
+	for i, attr := range attrs {
+		colIdx := nameIdx[attr]
+		vec := view.GetColumnData(colIdx)
+		if vec.Allocated() > 0 {
+			bat.Vecs[i] = containers.CopyToMoVec(vec)
 		} else {
-			bat.Vecs[i] = containers.UnmarshalToMoVec(view.GetData())
+			bat.Vecs[i] = containers.UnmarshalToMoVec(vec)
 		}
 		view.Close()
 	}

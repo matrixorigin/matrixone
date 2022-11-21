@@ -367,13 +367,18 @@ func (seg *localSegment) BatchDedup(key containers.Vector) error {
 func (seg *localSegment) GetColumnDataByIds(
 	blk *catalog.BlockEntry,
 	colIdxes []int,
-	buffer []*bytes.Buffer) (views []*model.ColumnView, err error) {
-	for i, colIdx := range colIdxes {
-		view, err := seg.GetColumnDataById(blk, colIdx, buffer[i])
-		if err != nil {
-			return nil, err
-		}
-		views = append(views, view)
+	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+	view = model.NewBlockView(seg.table.store.txn.GetStartTS())
+	npos := int(blk.ID)
+	n := seg.nodes[npos]
+	h, err := seg.table.store.nodesMgr.TryPin(n, time.Second)
+	if err != nil {
+		return
+	}
+	err = n.FillBlockView(view, buffers, colIdxes)
+	h.Close()
+	if err != nil {
+		return
 	}
 	return
 }

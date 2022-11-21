@@ -81,7 +81,7 @@ func (blk *block) Pin() *common.PinnedItem[*block] {
 func (blk *block) GetColumnDataByNames(
 	txn txnif.AsyncTxn,
 	attrs []string,
-	buffers []*bytes.Buffer) (views []*model.ColumnView, err error) {
+	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
 	colIdxes := make([]int, len(attrs))
 	schema := blk.meta.GetSchema()
 	for i, attr := range attrs {
@@ -101,7 +101,7 @@ func (blk *block) GetColumnDataByName(
 func (blk *block) GetColumnDataByIds(
 	txn txnif.AsyncTxn,
 	colIdxes []int,
-	buffers []*bytes.Buffer) (views []*model.ColumnView, err error) {
+	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
 	_, pnode := blk.PinNode()
 	return blk.ResolvePersistedColumnDatas(
 		pnode.Item(),
