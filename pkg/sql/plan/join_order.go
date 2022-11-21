@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -251,7 +252,12 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		eligible := adjMat[firstConnected*nLeaf : (firstConnected+1)*nLeaf]
 
 		var leftCard, rightCard float64
-		leftCard = subTrees[firstConnected].Cost.Card
+		leftChild := subTrees[firstConnected]
+		if leftChild.ObjRef != nil {
+			leftCard = builder.compCtx.Cost(leftChild.ObjRef, colexec.RewriteFilterExprList(leftChild.FilterList)).Card
+		} else {
+			leftCard = leftChild.Cost.Card
+		}
 
 		for {
 			nextSibling := nLeaf
@@ -268,7 +274,12 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 
 			visited[nextSibling] = true
 
-			rightCard = subTrees[nextSibling].Cost.Card
+			rightChild := subTrees[nextSibling]
+			if rightChild.ObjRef != nil {
+				rightCard = builder.compCtx.Cost(rightChild.ObjRef, colexec.RewriteFilterExprList(rightChild.FilterList)).Card
+			} else {
+				rightCard = rightChild.Cost.Card
+			}
 
 			children := []int32{nodeID, subTrees[nextSibling].NodeId}
 			if leftCard < rightCard {
