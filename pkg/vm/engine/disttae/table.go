@@ -43,7 +43,7 @@ func (tbl *table) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, e
 			}
 		}
 	}
-	return 0, nil
+	return card, nil
 }
 
 func (tbl *table) Rows(ctx context.Context) (int64, error) {
