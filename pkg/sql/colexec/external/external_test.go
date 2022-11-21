@@ -102,7 +102,7 @@ func Test_Prepare(t *testing.T) {
 				Format:      tcs.format,
 				JsonData:    tcs.jsondata,
 				Option:      defaultOption,
-        Ctx:         context.Background(),
+				Ctx:         context.Background(),
 			}
 			json_byte, err := json.Marshal(extern)
 			if err != nil {
