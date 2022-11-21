@@ -279,9 +279,6 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	ctx, span := trace.Start(ctx, "S3FS.Write")
 	defer span.End()
-	if ctx == nil {
-		ctx = context.Background()
-	}
 
 	// check existence
 	path, err := ParsePathAtService(vector.FilePath, s.name)
@@ -361,9 +358,6 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
 	ctx, span := trace.Start(ctx, "S3FS.Read")
 	defer span.End()
-	if ctx == nil {
-		ctx = context.Background()
-	}
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVector()
@@ -608,9 +602,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 	ctx, span := trace.Start(ctx, "S3FS.Delete")
 	defer span.End()
-	if ctx == nil {
-		ctx = context.Background()
-	}
 
 	if len(filePaths) == 0 {
 		return nil
