@@ -63,28 +63,6 @@ func (node *appendableNode) getMemoryDataLocked(minRow, maxRow uint32) (bat *con
 	return
 }
 
-func (node *appendableNode) getPersistedData(minRow, maxRow uint32) (bat *containers.Batch, err error) {
-	schema := node.block.meta.GetSchema()
-	opts := new(containers.Options)
-	opts.Capacity = int(schema.BlockMaxRows)
-	data := containers.NewBatch()
-	var vec containers.Vector
-	for i, col := range schema.ColDefs {
-		vec, err = node.block.LoadColumnData(i, nil)
-		if err != nil {
-			return nil, err
-		}
-		data.AddVector(col.Name, vec)
-	}
-	if maxRow-minRow == uint32(data.Length()) {
-		bat = data
-	} else {
-		bat = data.CloneWindow(int(minRow), int(maxRow-minRow), common.DefaultAllocator)
-		data.Close()
-	}
-	return
-}
-
 func (node *appendableNode) getPersistedColumnData(
 	minRow,
 	maxRow uint32,
@@ -128,8 +106,7 @@ func (node *appendableNode) GetData(minRow, maxRow uint32) (bat *containers.Batc
 		return
 	}
 	node.block.RUnlock()
-	bat, err = node.getPersistedData(minRow, maxRow)
-	return
+	return nil, moerr.GetOkExpectedEOB()
 }
 
 func (node *appendableNode) GetColumnData(
