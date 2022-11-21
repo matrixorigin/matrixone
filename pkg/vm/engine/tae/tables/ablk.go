@@ -233,7 +233,7 @@ func (blk *ablock) resolveInMemoryColumnDatas(
 	if err != nil {
 		return
 	}
-	view=model.NewBlockView(ts)
+	view = model.NewBlockView(ts)
 	for _, colIdx := range colIdxes {
 		view.SetData(colIdx, data.Vecs[colIdx])
 	}
