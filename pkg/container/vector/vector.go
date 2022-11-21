@@ -1341,6 +1341,9 @@ func UnionMulti(v, w *Vector, sel int64, cnt int, m *mpool.MPool) (err error) {
 	} else if v.GetType().IsVarlen() {
 		tgt := MustTCols[types.Varlena](v)
 		bs := w.GetBytes(sel)
+		if v.GetType().Width != 0 && len(bs) > int(v.GetType().Width) {
+			return moerr.NewOutOfRange("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
+		}
 		for i := 0; i < cnt; i++ {
 			tgt[curIdx], v.area, err = types.BuildVarlena(bs, v.area, m)
 			curIdx += 1
@@ -1416,6 +1419,9 @@ func Union(v, w *Vector, sels []int64, hasNull bool, m *mpool.MPool) (err error)
 		next := len(tgt) - len(sels)
 		for idx, sel := range sels {
 			bs := w.GetBytes(sel)
+			if v.GetType().Width != 0 && len(bs) > int(v.GetType().Width) {
+				return moerr.NewOutOfRange("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
+			}
 			tgt[next+idx], v.area, err = types.BuildVarlena(bs, v.area, m)
 			if err != nil {
 				return err
