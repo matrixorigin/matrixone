@@ -50,7 +50,7 @@ func (blk *txnBlock) Read(attrs []string, compressed []*bytes.Buffer, deCompress
 		} else {
 			bat.Vecs[i] = containers.UnmarshalToMoVec(vec)
 		}
-		view.Close()
 	}
+	view.Close()
 	return bat, nil
 }
