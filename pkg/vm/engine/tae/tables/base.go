@@ -278,6 +278,53 @@ func (blk *baseBlock) FillPersistedDeletes(
 	return nil
 }
 
+func (blk *baseBlock) ResolvePersistedColumnDatas(
+	pnode *persistedNode,
+	ts types.TS,
+	colIdxs []int,
+	buffers []*bytes.Buffer,
+	skipDeletes bool) (views []*model.ColumnView, err error) {
+	for i, colIdx := range colIdxs {
+		view := model.NewColumnView(ts, colIdx)
+		vec, err := blk.LoadPersistedColumnData(colIdx, buffers[i])
+		if err != nil {
+			return nil, err
+		}
+		view.SetData(vec)
+		views = append(views, view)
+	}
+
+	if skipDeletes {
+		return
+	}
+
+	defer func() {
+		if err != nil {
+			for _, view := range views {
+				view.Close()
+			}
+		}
+	}()
+
+	if err = blk.FillPersistedDeletes(views[0]); err != nil {
+		return
+	}
+
+	blk.RLock()
+	defer blk.RUnlock()
+	err = blk.FillInMemoryDeletesLocked(views[0], blk.RWMutex)
+
+	if views[0].DeleteMask != nil {
+		for i, view := range views {
+			if i == 0 {
+				continue
+			}
+			view.DeleteMask = views[0].DeleteMask.Clone()
+		}
+	}
+	return
+}
+
 func (blk *baseBlock) ResolvePersistedColumnData(
 	pnode *persistedNode,
 	ts types.TS,

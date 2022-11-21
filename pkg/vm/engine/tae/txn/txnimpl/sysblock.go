@@ -367,6 +367,19 @@ func (blk *txnSysBlock) GetColumnDataByName(attr string, buffer *bytes.Buffer) (
 	return blk.GetColumnDataById(colIdx, buffer)
 }
 
+func (blk *txnSysBlock) GetColumnDataByNames(attrs []string, buffers []*bytes.Buffer) (views []*model.ColumnView, err error) {
+	views = make([]*model.ColumnView, len(attrs))
+	for i, attr := range attrs {
+		colIdx := blk.entry.GetSchema().GetColIdx(attr)
+		view, err := blk.GetColumnDataById(colIdx, buffers[i])
+		if err != nil {
+			return views, err
+		}
+		views[i] = view
+	}
+	return
+}
+
 func (blk *txnSysBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	if !blk.isSysTable() {
 		return blk.txnBlock.LogTxnEntry(entry, readed)

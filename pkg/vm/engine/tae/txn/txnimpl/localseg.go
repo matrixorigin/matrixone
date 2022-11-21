@@ -364,6 +364,20 @@ func (seg *localSegment) BatchDedup(key containers.Vector) error {
 	return seg.index.BatchDedup(seg.table.GetSchema().GetSingleSortKey().Name, key)
 }
 
+func (seg *localSegment) GetColumnDataByIds(
+	blk *catalog.BlockEntry,
+	colIdxes []int,
+	buffer []*bytes.Buffer) (views []*model.ColumnView, err error) {
+	for i, colIdx := range colIdxes {
+		view, err := seg.GetColumnDataById(blk, colIdx, buffer[i])
+		if err != nil {
+			return nil, err
+		}
+		views = append(views, view)
+	}
+	return
+}
+
 func (seg *localSegment) GetColumnDataById(
 	blk *catalog.BlockEntry,
 	colIdx int,

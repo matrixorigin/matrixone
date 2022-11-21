@@ -31,18 +31,15 @@ func newBlock(h handle.Block) *txnBlock {
 }
 
 func (blk *txnBlock) Read(attrs []string, compressed []*bytes.Buffer, deCompressed []*bytes.Buffer) (*batch.Batch, error) {
-	var view *model.ColumnView
+	var views []*model.ColumnView
 	var err error
 	bat := batch.New(true, attrs)
 	bat.Vecs = make([]*vector.Vector, len(attrs))
-	for i, attr := range attrs {
-		view, err = blk.handle.GetColumnDataByName(attr, deCompressed[i])
-		if err != nil {
-			if view != nil {
-				view.Close()
-			}
-			return nil, err
-		}
+	views, err = blk.handle.GetColumnDataByNames(attrs, deCompressed)
+	if err != nil {
+		return nil, err
+	}
+	for i, view := range views {
 		view.ApplyDeletes()
 		if view.GetData().Allocated() > 0 {
 			bat.Vecs[i] = containers.CopyToMoVec(view.GetData())
