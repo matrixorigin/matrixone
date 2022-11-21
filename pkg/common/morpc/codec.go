@@ -69,6 +69,7 @@ func WithCodecMaxBodySize(size int) CodecOption {
 			size = defaultMaxMessageSize
 		}
 		c.codec = length.NewWithSize(c.bc, 0, 0, 0, size)
+		c.bc.maxBodySize = size
 	}
 }
 
@@ -91,6 +92,7 @@ type messageCodec struct {
 func NewMessageCodec(messageFactory func() Message, options ...CodecOption) Codec {
 	bc := &baseCodec{
 		messageFactory: messageFactory,
+		maxBodySize:    defaultMaxMessageSize,
 	}
 	c := &messageCodec{codec: length.NewWithSize(bc, 0, 0, 0, defaultMaxMessageSize), bc: bc}
 	c.AddHeaderCodec(&deadlineContextCodec{})
@@ -117,6 +119,7 @@ func (c *messageCodec) AddHeaderCodec(hc HeaderCodec) {
 type baseCodec struct {
 	enableChecksum bool
 	payloadBufSize int
+	maxBodySize    int
 	messageFactory func() Message
 	headerCodecs   []HeaderCodec
 }
@@ -201,7 +204,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 	totalSize += n
 
 	// 3.1 message body
-	bodySize, body, err := writeBody(out, msg.Message)
+	bodySize, body, err := c.writeBody(out, msg.Message, totalSize)
 	if err != nil {
 		return err
 	}
@@ -308,8 +311,16 @@ func writeUint64At(offset int, out *buf.ByteBuf, value uint64) {
 	buf.Uint64ToBytesTo(value, out.RawSlice(idx, idx+8))
 }
 
-func writeBody(out *buf.ByteBuf, msg Message) (int, []byte, error) {
+func (c *baseCodec) writeBody(out *buf.ByteBuf, msg Message, writtenSize int) (int, []byte, error) {
+	maxCanWrite := c.maxBodySize - writtenSize
 	size := msg.Size()
+	if size > maxCanWrite {
+		return 0, nil,
+			moerr.NewInternalError("message body %d is too large, max is %d",
+				size+writtenSize,
+				c.maxBodySize)
+	}
+
 	index, _ := setWriterIndexAfterGow(out, size)
 	data := out.RawSlice(index, index+size)
 	if _, err := msg.MarshalTo(data); err != nil {
