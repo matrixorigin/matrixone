@@ -337,15 +337,20 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	return rs, nil
 }
 
+func constructValueScanBatch() *batch.Batch {
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
+	bat.Vecs[0].Col = make([]int64, 1)
+	bat.InitZsOne(1)
+	return bat
+}
+
 func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, error) {
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
 		ds := &Scope{Magic: Normal}
 		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
-		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
-		bat.Vecs[0].Col = make([]int64, 1)
-		bat.InitZsOne(1)
+		bat := constructValueScanBatch()
 		ds.DataSource = &Source{Bat: bat}
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
 	case plan.Node_EXTERNAL_SCAN:

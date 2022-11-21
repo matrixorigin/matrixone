@@ -116,6 +116,7 @@ type Scope struct {
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
 type scopeContext struct {
 	id       int32
+	plan     *plan.Plan
 	scope    *Scope
 	root     *scopeContext
 	parent   *scopeContext
