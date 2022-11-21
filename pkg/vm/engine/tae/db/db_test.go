@@ -3345,7 +3345,7 @@ func TestLogtailBasic(t *testing.T) {
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_DATABASE_ID},
-	})
+	}, true)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(resp.Commands)) // insert and delete
 
@@ -3366,7 +3366,7 @@ func TestLogtailBasic(t *testing.T) {
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
-	})
+	}, true)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(resp.Commands)) // insert
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
@@ -3382,7 +3382,7 @@ func TestLogtailBasic(t *testing.T) {
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
-	})
+	}, true)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(resp.Commands)) // insert
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
@@ -3395,7 +3395,7 @@ func TestLogtailBasic(t *testing.T) {
 		CnHave: tots(firstWriteTs.Next()), // skip the first write deliberately,
 		CnWant: tots(lastWriteTs),
 		Table:  &api.TableID{DbId: dbID, TbId: tableID},
-	})
+	}, true)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(resp.Commands)) // insert data and delete data
 
