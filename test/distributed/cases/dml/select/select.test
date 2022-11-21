@@ -212,3 +212,4 @@ select count(*) from t1;
 select count(*) from t1 where b=2;
 select count(*) from t1 where a=2;
 drop table if exists t1;
+;
