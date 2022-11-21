@@ -19,18 +19,18 @@ t2
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT    NO        NULL
-str    CHAR    YES        NULL
-name    VARCHAR    YES        NULL
+name    VARCHAR(10)    YES        NULL
+str    CHAR(10)    YES        NULL
 show full columns from t1;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
 id    INT    NULL    NO        NULL        select,insert,update,references
-str    CHAR    NULL    YES        NULL        select,insert,update,references
-name    VARCHAR    NULL    YES        NULL        select,insert,update,references
+name    VARCHAR(10)    NULL    YES        NULL        select,insert,update,references
+str    CHAR(10)    NULL    YES        NULL        select,insert,update,references
 show full columns from t1 like '%';
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
 id    INT    NULL    NO        NULL        select,insert,update,references
-str    CHAR    NULL    YES        NULL        select,insert,update,references
-name    VARCHAR    NULL    YES        NULL        select,insert,update,references
+name    VARCHAR(10)    NULL    YES        NULL        select,insert,update,references
+str    CHAR(10)    NULL    YES        NULL        select,insert,update,references
 show full columns from t1 where `Field`='id';
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
 id    INT    NULL    NO        NULL        select,insert,update,references
