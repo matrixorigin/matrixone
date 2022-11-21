@@ -1474,6 +1474,9 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPo
 		for idx, flg := range flags {
 			if flg > 0 {
 				bs := w.GetBytes(offset + int64(idx))
+				if v.GetType().Width != 0 && len(bs) > int(v.GetType().Width) {
+					return moerr.NewOutOfRange("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
+				}
 				tgt[curIdx], v.area, err = types.BuildVarlena(bs, v.area, m)
 				curIdx += 1
 			}
