@@ -260,6 +260,10 @@ func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condit
 		return 0, nil
 	}
 
+	if len(tasks) == 0 {
+		return 0, nil
+	}
+
 	db, release, err := m.getDB()
 	if err != nil {
 		return 0, err
@@ -480,6 +484,10 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 		return 0, nil
 	}
 
+	if len(cronTask) == 0 {
+		return 0, nil
+	}
+
 	db, release, err := m.getDB()
 	if err != nil {
 		return 0, err
@@ -612,7 +620,15 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 		return 0, nil
 	}
 
-	conn, err := m.db.Conn(ctx)
+	db, release, err := m.getDB()
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = release()
+	}()
+
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return 0, err
 	}

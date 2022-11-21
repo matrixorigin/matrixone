@@ -416,3 +416,53 @@ SET SQL_SELECT_LIMIT = Default;
 show variables like 'sql_select_limit';
 Variable_name    Value
 sql_select_limit    18446744073709551615
+show variables like 'max_allowed_packet';
+Variable_name    Value
+max_allowed_packet    16777216
+set max_allowed_packet = 10000;
+show variables like 'max_allowed_packet';
+Variable_name    Value
+max_allowed_packet    10000
+set max_allowed_packet = default;
+show variables like 'max_allowed_packet';
+Variable_name    Value
+max_allowed_packet    16777216
+show variables like 'wait_timeout';
+Variable_name    Value
+wait_timeout    10
+set wait_timeout = 10000;
+show variables like 'wait_timeout';
+Variable_name    Value
+wait_timeout    10000
+set wait_timeout = default;
+show variables like 'wait_timeout';
+Variable_name    Value
+wait_timeout    28800
+show variables like 'character_set_results';
+Variable_name    Value
+character_set_results    utf8
+set character_set_server = default;
+show variables like 'character_set_results';
+Variable_name    Value
+character_set_results    utf8
+show variables like 'character_set_server';
+Variable_name    Value
+character_set_server    utf8mb4
+set character_set_server = default;
+show variables like 'character_set_server';
+Variable_name    Value
+character_set_server    utf8mb4
+show variables like 'transaction_isolation';
+Variable_name    Value
+transaction_isolation    SNAPSHOT-ISOLATION
+set transaction_isolation = default;
+show variables like 'transaction_isolation';
+Variable_name    Value
+transaction_isolation    SNAPSHOT-ISOLATION
+show variables like 'tx_isolation';
+Variable_name    Value
+tx_isolation    REPEATABLE-READ
+set tx_isolation = default;
+show variables like 'tx_isolation';
+Variable_name    Value
+tx_isolation    REPEATABLE-READ

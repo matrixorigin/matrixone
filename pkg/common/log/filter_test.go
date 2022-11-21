@@ -21,9 +21,9 @@ import (
 )
 
 func TestSampleFilter(t *testing.T) {
-	st := SampleType(1)
-	samples[st] = &sampleValue{}
-	ctx := Info(nil).WithSampleLog(st, 2)
-	assert.False(t, sampleFilter(ctx))
-	assert.True(t, sampleFilter(ctx))
+	opts := DefaultLogOptions().WithSample(ExampleSample)
+	assert.True(t, sampleFilter(opts))
+	assert.False(t, sampleFilter(opts))
+	assert.True(t, sampleFilter(opts))
+	assert.False(t, sampleFilter(opts))
 }
