@@ -170,6 +170,9 @@ func (opt *Options) validate() {
 	if opt.heartbeat.cn == 0 {
 		opt.heartbeat.cn = defaultCNHeartbeatInterval
 	}
+	if opt.logger == nil {
+		opt.logger = logutil.GetGlobalLogger()
+	}
 }
 
 // BuildHAKeeperConfig returns hakeeper.Config

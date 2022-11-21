@@ -106,15 +106,15 @@ func (l *LRU) evict() {
 	}
 }
 
-func (l *LRU) Get(key any) (value any, ok bool) {
+func (l *LRU) Get(key any) (value any, size int64, ok bool) {
 	l.Lock()
 	defer l.Unlock()
 	if elem, ok := l.kv[key]; ok {
 		l.evicts.MoveToFront(elem)
 		item := elem.Value.(*lruItem)
-		return item.Value, true
+		return item.Value, item.Size, true
 	}
-	return nil, false
+	return nil, 0, false
 }
 
 func (l *LRU) Flush() {

@@ -42,3 +42,6 @@ select length(cast(uuid() as varchar));
 select length(cast(uuid() as char));
 select length(cast(uuid() as text));
 
+CREATE TABLE ratings (   `book_id` bigint,   `user_id` bigint,   `score` tinyint,   `rated_at` datetime DEFAULT NOW(),   PRIMARY KEY (`book_id`,`user_id`) );
+desc ratings;
+drop table ratings;

@@ -74,9 +74,7 @@ show tables;
 desc key_column_usage;
 select table_name, column_name from key_column_usage limit 2;
 desc columns;
--- @bvt:issue#6714
-select table_name, column_name from columns where table_schema = 'mo_catalog' limit 5;
--- @bvt:issue
+select table_name, column_name from columns where table_schema = 'mo_catalog' order by table_name, column_name limit 5;
 desc profiling;
 select seq, state from profiling;
 
@@ -86,9 +84,7 @@ select * from `PROCESSLIST` limit 2;
 desc user_privileges;
 select grantee, table_catalog from user_privileges limit 2;
 desc schemata;
--- @bvt:issue#6715
-select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task';
--- @bvt:issue
+select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' order by catalog_name, schema_name;
 desc character_sets;
 select character_set_name, description, maxlen from character_sets limit 5;
 desc triggers;
@@ -114,7 +110,36 @@ set sql_select_limit = 100000;
 show variables like 'sql_select_limit';
 set sql_select_limit = 1;
 show variables like 'sql_select_limit';
--- @bvt:issue#6743
 SET SQL_SELECT_LIMIT = Default;
 show variables like 'sql_select_limit';
--- @bvt:issue
+
+--int type
+show variables like 'max_allowed_packet';
+set max_allowed_packet = 10000;
+show variables like 'max_allowed_packet';
+set max_allowed_packet = default;
+show variables like 'max_allowed_packet';
+
+show variables like 'wait_timeout';
+set wait_timeout = 10000;
+show variables like 'wait_timeout';
+set wait_timeout = default;
+show variables like 'wait_timeout';
+
+--string type
+show variables like 'character_set_results';
+set character_set_server = default;
+show variables like 'character_set_results';
+
+show variables like 'character_set_server';
+set character_set_server = default;
+show variables like 'character_set_server';
+
+--enum type
+show variables like 'transaction_isolation';
+set transaction_isolation = default;
+show variables like 'transaction_isolation';
+
+show variables like 'tx_isolation';
+set tx_isolation = default;
+show variables like 'tx_isolation';
