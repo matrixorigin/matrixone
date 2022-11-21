@@ -499,6 +499,10 @@ message Node {
     AnalyzeInfo analyze_info = 24;
 
 	repeated Expr tbl_func_expr_list = 25;
+
+    // The pipeline will determine the parallelism by traversing the plan 
+    // when it is received. Then the build is built based on this information.
+    int32   parallelism = 26;
 }
 
 message DeleteTableCtx {

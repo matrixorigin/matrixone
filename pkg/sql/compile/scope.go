@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -344,7 +345,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			}
 		default:
 			for i := range ss {
-				ss[i].Instructions = append(ss[i].Instructions, dupInstruction(in))
+				ss[i].Instructions = append(ss[i].Instructions, dupInstruction(&in, nil))
 			}
 		}
 	}
@@ -398,22 +399,99 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 	}
 }
 
-func dupScope(s *Scope) *Scope {
-	data, err := encodeScope(s)
-	if err != nil {
-		return nil
-	}
-	rs, err := decodeScope(data, s.Proc, s.IsRemote)
-	if err != nil {
-		return nil
-	}
-	return rs
-}
-
 func dupScopeList(ss []*Scope) []*Scope {
 	rs := make([]*Scope, len(ss))
 	for i := range rs {
 		rs[i] = dupScope(ss[i])
 	}
 	return rs
+}
+
+func dupScope(s *Scope) *Scope {
+	regMap := make(map[*process.WaitRegister]*process.WaitRegister)
+
+	newScope, err := copyScope(s, regMap)
+	if err != nil {
+		return nil
+	}
+	err = fillInstructionsByCopyScope(newScope, s, regMap)
+	if err != nil {
+		return nil
+	}
+	return newScope
+}
+
+func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRegister) (*Scope, error) {
+	var err error
+	newScope := &Scope{
+		Magic:        srcScope.Magic,
+		IsJoin:       srcScope.IsJoin,
+		IsEnd:        srcScope.IsEnd,
+		IsRemote:     srcScope.IsRemote,
+		Plan:         srcScope.Plan,
+		PreScopes:    make([]*Scope, len(srcScope.PreScopes)),
+		Instructions: make([]vm.Instruction, len(srcScope.Instructions)),
+		NodeInfo: engine.Node{
+			Mcpu: srcScope.NodeInfo.Mcpu,
+			Id:   srcScope.NodeInfo.Id,
+			Addr: srcScope.NodeInfo.Addr,
+			Data: make([][]byte, len(srcScope.NodeInfo.Data)),
+		},
+	}
+
+	// copy node.Data
+	copy(newScope.NodeInfo.Data, srcScope.NodeInfo.Data)
+
+	if srcScope.DataSource != nil {
+		newScope.DataSource = &Source{
+			PushdownId:   srcScope.DataSource.PushdownId,
+			PushdownAddr: srcScope.DataSource.PushdownAddr,
+			SchemaName:   srcScope.DataSource.SchemaName,
+			RelationName: srcScope.DataSource.RelationName,
+			Attributes:   srcScope.DataSource.Attributes,
+			Timestamp: timestamp.Timestamp{
+				PhysicalTime: srcScope.DataSource.Timestamp.PhysicalTime,
+				LogicalTime:  srcScope.DataSource.Timestamp.LogicalTime,
+				NodeID:       srcScope.DataSource.Timestamp.NodeID,
+			},
+			// read only.
+			Expr:     srcScope.DataSource.Expr,
+			TableDef: srcScope.DataSource.TableDef,
+		}
+
+		// IF const run.
+		if srcScope.DataSource.Bat != nil {
+			newScope.DataSource.Bat = constructValueScanBatch()
+		}
+	}
+
+	newScope.Proc = process.NewFromProc(srcScope.Proc, srcScope.Proc.Ctx, len(srcScope.PreScopes))
+	for i := range srcScope.Proc.Reg.MergeReceivers {
+		regMap[srcScope.Proc.Reg.MergeReceivers[i]] = newScope.Proc.Reg.MergeReceivers[i]
+	}
+
+	//copy preScopes.
+	for i := range srcScope.PreScopes {
+		newScope.PreScopes[i], err = copyScope(srcScope.PreScopes[i], regMap)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return newScope, nil
+}
+
+func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
+	regMap map[*process.WaitRegister]*process.WaitRegister) error {
+	var err error
+
+	for i := range srcScope.PreScopes {
+		if err = fillInstructionsByCopyScope(targetScope.PreScopes[i], srcScope.PreScopes[i], regMap); err != nil {
+			return err
+		}
+	}
+
+	for i := range srcScope.Instructions {
+		targetScope.Instructions[i] = dupInstruction(&srcScope.Instructions[i], regMap)
+	}
+	return nil
 }

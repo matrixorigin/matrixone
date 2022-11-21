@@ -397,7 +397,11 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.IsEnd = s.IsEnd
 	p.IsJoin = s.IsJoin
 	// Plan
-	p.Qry = s.Plan
+	if ctxId == 1 {
+		// encode and decode cost is too large for it.
+		// only encode the first one.
+		p.Qry = s.Plan
+	}
 	p.Node = &pipeline.NodeInfo{
 		Id:      s.NodeInfo.Id,
 		Addr:    s.NodeInfo.Addr,
@@ -478,12 +482,15 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContext,
 	analNodes []*process.AnalyzeInfo, isRemote bool) (*Scope, error) {
 	var err error
+	if p.Qry != nil {
+		ctx.plan = p.Qry
+	}
 
 	s := &Scope{
 		Magic:    int(p.GetPipelineType()),
 		IsEnd:    p.IsEnd,
 		IsJoin:   p.IsJoin,
-		Plan:     p.Qry,
+		Plan:     ctx.plan,
 		IsRemote: isRemote,
 	}
 	dsc := p.GetDataSource()
