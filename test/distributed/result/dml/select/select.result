@@ -406,3 +406,5 @@ select count(*) from t1 where a=2;
 count(*)
 0
 drop table if exists t1;
+;
+SQL parser error: Query was empty
