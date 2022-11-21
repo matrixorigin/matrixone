@@ -25,13 +25,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
-
-	"math"
-	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -73,6 +72,10 @@ func Prepare(proc *process.Process, arg any) error {
 	}
 	if param.extern.ScanType == tree.S3 {
 		if err := InitS3Param(param.extern); err != nil {
+			return err
+		}
+	} else {
+		if err := InitInfileParam(param.extern); err != nil {
 			return err
 		}
 	}
@@ -124,27 +127,83 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	return false, nil
 }
 
+func InitInfileParam(param *tree.ExternParam) error {
+	for i := 0; i < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
+		case "filepath":
+			param.Filepath = param.Option[i+1]
+		case "compression":
+			param.CompressType = param.Option[i+1]
+		case "format":
+			format := strings.ToLower(param.Option[i+1])
+			if format != tree.CSV && format != tree.JSONLINE {
+				return moerr.NewBadConfig("the format '%s' is not supported", format)
+			}
+			param.Format = format
+		case "jsondata":
+			jsondata := strings.ToLower(param.Option[i+1])
+			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
+				return moerr.NewBadConfig("the jsondata '%s' is not supported", jsondata)
+			}
+			param.JsonData = jsondata
+			param.Format = tree.JSONLINE
+		default:
+			return moerr.NewBadConfig("the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+		}
+	}
+	if len(param.Filepath) == 0 {
+		return moerr.NewBadConfig("the filepath must be specified")
+	}
+	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
+		return moerr.NewBadConfig("the jsondata must be specified")
+	}
+	if len(param.Format) == 0 {
+		param.Format = tree.CSV
+	}
+	return nil
+}
+
 func InitS3Param(param *tree.ExternParam) error {
 	param.S3Param = &tree.S3Parameter{}
-	for i := 0; i < len(param.S3option); i += 2 {
-		switch strings.ToLower(param.S3option[i]) {
+	for i := 0; i < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
 		case "endpoint":
-			param.S3Param.Endpoint = param.S3option[i+1]
+			param.S3Param.Endpoint = param.Option[i+1]
 		case "region":
-			param.S3Param.Region = param.S3option[i+1]
+			param.S3Param.Region = param.Option[i+1]
 		case "access_key_id":
-			param.S3Param.APIKey = param.S3option[i+1]
+			param.S3Param.APIKey = param.Option[i+1]
 		case "secret_access_key":
-			param.S3Param.APISecret = param.S3option[i+1]
+			param.S3Param.APISecret = param.Option[i+1]
 		case "bucket":
-			param.S3Param.Bucket = param.S3option[i+1]
+			param.S3Param.Bucket = param.Option[i+1]
 		case "filepath":
-			param.Filepath = param.S3option[i+1]
+			param.Filepath = param.Option[i+1]
 		case "compression":
-			param.CompressType = param.S3option[i+1]
+			param.CompressType = param.Option[i+1]
+		case "format":
+			format := strings.ToLower(param.Option[i+1])
+			if format != tree.CSV && format != tree.JSONLINE {
+				return moerr.NewBadConfig("the format '%s' is not supported", format)
+			}
+			param.Format = format
+		case "jsondata":
+			jsondata := strings.ToLower(param.Option[i+1])
+			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
+				return moerr.NewBadConfig("the jsondata '%s' is not supported", jsondata)
+			}
+			param.JsonData = jsondata
+			param.Format = tree.JSONLINE
+
 		default:
-			return moerr.NewBadConfig("the keyword '%s' is not support", strings.ToLower(param.S3option[i]))
+			return moerr.NewBadConfig("the keyword '%s' is not support", strings.ToLower(param.Option[i]))
 		}
+	}
+	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
+		return moerr.NewBadConfig("the jsondata must be specified")
+	}
+	if len(param.Format) == 0 {
+		param.Format = tree.CSV
 	}
 	return nil
 }

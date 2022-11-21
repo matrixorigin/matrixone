@@ -140,7 +140,7 @@ type ExternParam struct {
 	Tail         *TailParameter
 	FileService  fileservice.FileService
 	NullMap      map[string]([]string)
-	S3option     []string
+	Option       []string
 	S3Param      *S3Parameter
 	Ctx          context.Context
 	LoadFile     bool
@@ -192,39 +192,41 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteString(" local")
 	}
 
-	if (node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS) && node.Param.Format == CSV {
+	if len(node.Param.Option) == 0 {
 		ctx.WriteString(" infile ")
 		ctx.WriteString(node.Param.Filepath)
-	} else if node.Param.ScanType == S3 {
-		ctx.WriteString(" url s3option ")
+	} else {
+		if node.Param.ScanType == S3 {
+			ctx.WriteString(" url s3option ")
+		} else {
+			ctx.WriteString(" infile ")
+
+		}
 		ctx.WriteString("{")
-		for i := 0; i < len(node.Param.S3option); i += 2 {
-			switch strings.ToLower(node.Param.S3option[i]) {
+		for i := 0; i < len(node.Param.Option); i += 2 {
+			switch strings.ToLower(node.Param.Option[i]) {
 			case "endpoint":
-				ctx.WriteString("'endpoint'='" + node.Param.S3option[i+1] + "'")
+				ctx.WriteString("'endpoint'='" + node.Param.Option[i+1] + "'")
 			case "region":
-				ctx.WriteString("'region'='" + node.Param.S3option[i+1] + "'")
+				ctx.WriteString("'region'='" + node.Param.Option[i+1] + "'")
 			case "access_key_id":
-				ctx.WriteString("'access_key_id'='" + node.Param.S3option[i+1] + "'")
+				ctx.WriteString("'access_key_id'='" + node.Param.Option[i+1] + "'")
 			case "secret_access_key":
-				ctx.WriteString("'secret_access_key'='" + node.Param.S3option[i+1] + "'")
+				ctx.WriteString("'secret_access_key'='" + node.Param.Option[i+1] + "'")
 			case "bucket":
-				ctx.WriteString("'bucket'='" + node.Param.S3option[i+1] + "'")
+				ctx.WriteString("'bucket'='" + node.Param.Option[i+1] + "'")
 			case "filepath":
-				ctx.WriteString("'filepath'='" + node.Param.S3option[i+1] + "'")
+				ctx.WriteString("'filepath'='" + node.Param.Option[i+1] + "'")
 			case "compression":
-				ctx.WriteString("'compression'='" + node.Param.S3option[i+1] + "'")
+				ctx.WriteString("'compression'='" + node.Param.Option[i+1] + "'")
+			case "format":
+				ctx.WriteString("'format'='" + node.Param.Option[i+1] + "'")
+			case "jsondata":
+				ctx.WriteString("'jsondata'='" + node.Param.Option[i+1] + "'")
 			}
-			if i != len(node.Param.S3option)-2 {
+			if i != len(node.Param.Option)-2 {
 				ctx.WriteString(", ")
 			}
-		}
-		ctx.WriteString("}")
-	} else {
-		ctx.WriteString(" infile ")
-		ctx.WriteString("{'filepath':'" + node.Param.Filepath + "', 'compression':'" + strings.ToLower(node.Param.CompressType) + "', 'format':'" + strings.ToLower(node.Param.Format) + "'")
-		if node.Param.Format == JSONLINE {
-			ctx.WriteString(", 'jsondata':'" + node.Param.JsonData + "'")
 		}
 		ctx.WriteString("}")
 	}
