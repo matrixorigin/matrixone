@@ -199,6 +199,7 @@ func (node *DeleteNode) ApplyRollback(index *wal.Index) (err error) {
 	node.chain.mvcc.Lock()
 	defer node.chain.mvcc.Unlock()
 	_, err = node.TxnMVCCNode.ApplyRollback(index)
+	node.chain.mask.AndNot(node.mask)
 	return
 }
 

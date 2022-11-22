@@ -34,6 +34,7 @@ type DeleteChain struct {
 	*txnbase.MVCCChain
 	mvcc  *MVCCHandle
 	links map[uint32]*common.GenericSortedDList[txnif.MVCCNode]
+	mask  *roaring.Bitmap
 	cnt   atomic.Uint32
 }
 
@@ -45,6 +46,7 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 		RWMutex:   rwlocker,
 		MVCCChain: txnbase.NewMVCCChain(compareDeleteNode, NewEmptyDeleteNode),
 		links:     make(map[uint32]*common.GenericSortedDList[txnif.MVCCNode]),
+		mask:      roaring.New(),
 		mvcc:      mvcc,
 	}
 	return chain
@@ -117,6 +119,7 @@ func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn, deleteType handle.De
 }
 func (chain *DeleteChain) InsertInDeleteView(row uint32, deleteNode *DeleteNode) {
 	var link *common.GenericSortedDList[txnif.MVCCNode]
+	chain.mask.Add(row)
 	if link = chain.links[row]; link == nil {
 		link = common.NewGenericSortedDList(compareDeleteNode)
 		link.Insert(deleteNode)
@@ -125,6 +128,7 @@ func (chain *DeleteChain) InsertInDeleteView(row uint32, deleteNode *DeleteNode)
 	}
 	link.Insert(deleteNode)
 }
+
 func (chain *DeleteChain) DeleteInDeleteView(deleteNode *DeleteNode) {
 	it := deleteNode.mask.Iterator()
 	for it.HasNext() {
@@ -139,6 +143,7 @@ func (chain *DeleteChain) DeleteInDeleteView(deleteNode *DeleteNode) {
 		}, false)
 		if link.Depth() == 0 {
 			delete(chain.links, row)
+			chain.mask.Flip(uint64(row), uint64(row+1))
 		}
 	}
 }
@@ -270,6 +275,36 @@ func (chain *DeleteChain) CollectDeletesLocked(
 		}
 		return true
 	})
+	return merged, err
+}
+
+func (chain *DeleteChain) CollectDeletesLockedByRemove(
+	ts types.TS,
+	collectIndex bool,
+	rwlocker *sync.RWMutex) (txnif.DeleteNode, error) {
+	merged := NewMergedNode(ts)
+	merged.mask = chain.mask.Clone()
+	var err error
+	chain.LoopChain(func(vn txnif.MVCCNode) bool {
+		n := vn.(*DeleteNode)
+		// Merged node is a loop breaker
+		if n.IsMerged() {
+			return n.GetCommitTSLocked().Greater(ts)
+		}
+		needWait, txnToWait := n.NeedWaitCommitting(ts)
+		if needWait {
+			rwlocker.RUnlock()
+			txnToWait.GetTxnState(true)
+			rwlocker.RLock()
+		}
+		if !n.IsAborted() && !n.IsVisible(ts) {
+			merged.mask.AndNot(n.mask)
+		}
+		return true
+	})
+	if merged.mask.IsEmpty() {
+		merged = nil
+	}
 	return merged, err
 }
 
