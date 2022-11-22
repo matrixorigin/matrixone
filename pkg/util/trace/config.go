@@ -26,7 +26,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/util"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -65,10 +64,11 @@ type tracerProviderConfig struct {
 	// debugMode used in Tracer.Debug
 	debugMode bool // DebugMode
 
-	batchProcessMode string // WithBatchProcessMode
+	batchProcessMode string         // WithBatchProcessMode
+	batchProcessor   BatchProcessor // WithBatchProcessor
 
 	// writerFactory gen writer for CSV output
-	writerFactory export.FSWriterFactory // WithFSWriterFactory, default from export.GetFSWriterFactory result
+	writerFactory FSWriterFactory // WithFSWriterFactory, default from export.GetFSWriterFactory4Trace
 
 	sqlExecutor func() ie.InternalExecutor // WithSQLExecutor
 	// needInit control table schema create
@@ -142,7 +142,7 @@ func EnableTracer(enable bool) tracerProviderOption {
 	}
 }
 
-func WithFSWriterFactory(f export.FSWriterFactory) tracerProviderOption {
+func WithFSWriterFactory(f FSWriterFactory) tracerProviderOption {
 	return tracerProviderOption(func(cfg *tracerProviderConfig) {
 		cfg.writerFactory = f
 	})
@@ -169,6 +169,11 @@ func DebugMode(debug bool) tracerProviderOption {
 func WithBatchProcessMode(mode string) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.batchProcessMode = mode
+	}
+}
+func WithBatchProcessor(p BatchProcessor) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.batchProcessor = p
 	}
 }
 

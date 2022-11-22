@@ -26,7 +26,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 )
 
 var _ SpanProcessor = &batchSpanProcessor{}
@@ -34,14 +33,14 @@ var _ SpanProcessor = &batchSpanProcessor{}
 // batchSpanProcessor is a SpanProcessor that batches asynchronously-received
 // spans and sends them to a trace.Exporter when complete.
 type batchSpanProcessor struct {
-	e export.BatchProcessor
+	e BatchProcessor
 
 	stopWait sync.WaitGroup
 	stopOnce sync.Once
 	stopCh   chan struct{}
 }
 
-func NewBatchSpanProcessor(exporter export.BatchProcessor) SpanProcessor {
+func NewBatchSpanProcessor(exporter BatchProcessor) SpanProcessor {
 	bsp := &batchSpanProcessor{
 		e:      exporter,
 		stopCh: make(chan struct{}),

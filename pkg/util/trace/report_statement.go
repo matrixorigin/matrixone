@@ -19,22 +19,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
-
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var nilTxnID [16]byte
 
-var _ IBuffer2SqlItem = (*StatementInfo)(nil)
-var _ CsvFields = (*StatementInfo)(nil)
-
+// StatementInfo implement export.IBuffer2SqlItem and export.CsvFields
 type StatementInfo struct {
 	StatementID          [16]byte  `json:"statement_id"`
 	TransactionID        [16]byte  `json:"transaction_id"`
@@ -92,9 +89,9 @@ func (s *StatementInfo) Free() {
 	}
 }
 
-func (s *StatementInfo) GetRow() *export.Row { return SingleStatementTable.GetRow() }
+func (s *StatementInfo) GetRow() *table.Row { return SingleStatementTable.GetRow() }
 
-func (s *StatementInfo) CsvFields(row *export.Row) []string {
+func (s *StatementInfo) CsvFields(row *table.Row) []string {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.exported = true
@@ -111,8 +108,8 @@ func (s *StatementInfo) CsvFields(row *export.Row) []string {
 	row.SetColumnVal(stmtFgCol, s.StatementFingerprint)
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
-	row.SetColumnVal(reqAtCol, time2DatetimeString(s.RequestAt))
-	row.SetColumnVal(respAtCol, time2DatetimeString(s.ResponseAt))
+	row.SetColumnVal(reqAtCol, Time2DatetimeString(s.RequestAt))
+	row.SetColumnVal(respAtCol, Time2DatetimeString(s.ResponseAt))
 	row.SetColumnVal(durationCol, fmt.Sprintf("%d", s.Duration))
 	row.SetColumnVal(statusCol, s.Status.String())
 	if s.Error != nil {
@@ -246,5 +243,5 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	if !GetTracerProvider().IsEnable() {
 		return nil
 	}
-	return export.GetGlobalBatchProcessor().Collect(ctx, s)
+	return GetGlobalBatchProcessor().Collect(ctx, s)
 }
