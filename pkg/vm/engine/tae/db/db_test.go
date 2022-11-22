@@ -3216,6 +3216,8 @@ func (c *dummyCpkGetter) CollectCheckpointsInRange(start, end types.TS) (string,
 	return "", types.TS{}
 }
 
+func (c *dummyCpkGetter) FlushTable(dbID, tableID uint64, ts types.TS) error { return nil }
+
 func TestLogtailBasic(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3343,7 +3345,7 @@ func TestLogtailBasic(t *testing.T) {
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_DATABASE_ID},
-	})
+	}, true)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(resp.Commands)) // insert and delete
 
@@ -3364,7 +3366,7 @@ func TestLogtailBasic(t *testing.T) {
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
-	})
+	}, true)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(resp.Commands)) // insert
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
@@ -3380,7 +3382,7 @@ func TestLogtailBasic(t *testing.T) {
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
-	})
+	}, true)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(resp.Commands)) // insert
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
@@ -3393,7 +3395,7 @@ func TestLogtailBasic(t *testing.T) {
 		CnHave: tots(firstWriteTs.Next()), // skip the first write deliberately,
 		CnWant: tots(lastWriteTs),
 		Table:  &api.TableID{DbId: dbID, TbId: tableID},
-	})
+	}, true)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(resp.Commands)) // insert data and delete data
 
@@ -3843,10 +3845,11 @@ func TestBlockRead(t *testing.T) {
 	bid, sid := blkEntry.ID, blkEntry.GetSegment().ID
 
 	info := &pkgcatalog.BlockInfo{
-		BlockID:   bid,
-		SegmentID: sid,
-		MetaLoc:   metaloc,
-		DeltaLoc:  deltaloc,
+		BlockID:    bid,
+		SegmentID:  sid,
+		EntryState: true,
+		MetaLoc:    metaloc,
+		DeltaLoc:   deltaloc,
 	}
 
 	columns := make([]string, 0)
@@ -3866,7 +3869,7 @@ func TestBlockRead(t *testing.T) {
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
-		context.Background(), info,
+		context.Background(), info, len(schema.ColDefs),
 		columns, colIdxs, colTyps, colNulls,
 		beforeDel, fs, pool,
 	)
@@ -3877,7 +3880,7 @@ func TestBlockRead(t *testing.T) {
 	assert.Equal(t, 20, b1.Vecs[0].Length())
 
 	b2, err := blockio.BlockReadInner(
-		context.Background(), info,
+		context.Background(), info, len(schema.ColDefs),
 		columns, colIdxs, colTyps, colNulls,
 		afterFirstDel, fs, pool,
 	)
@@ -3887,7 +3890,7 @@ func TestBlockRead(t *testing.T) {
 	assert.Equal(t, len(columns), len(b2.Vecs))
 	assert.Equal(t, 19, b2.Vecs[0].Length())
 	b3, err := blockio.BlockReadInner(
-		context.Background(), info,
+		context.Background(), info, len(schema.ColDefs),
 		columns, colIdxs, colTyps, colNulls,
 		afterSecondDel, fs, pool,
 	)
@@ -3899,7 +3902,7 @@ func TestBlockRead(t *testing.T) {
 
 	// read rowid column only
 	b4, err := blockio.BlockReadInner(
-		context.Background(), info,
+		context.Background(), info, len(schema.ColDefs),
 		[]string{catalog.AttrRowID},
 		[]uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},

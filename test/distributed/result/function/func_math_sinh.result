@@ -32,9 +32,9 @@ SELECT SINH(-2);
 sinh(-2)
 -3.6269
 SELECT SINH(13413);
-Infinity
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'sinh(13413)'
 SELECT SINH(-3114);
--Infinity
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'sinh(-3114)'
 SELECT SINH(1);
 sinh(1)
 1.1752
@@ -108,3 +108,4 @@ a
 1
 drop table t1;
 SELECT SINH(0.745e5);
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'sinh(74500)'

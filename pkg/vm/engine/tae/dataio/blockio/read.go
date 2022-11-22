@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -47,7 +49,7 @@ func BlockRead(
 
 	// read
 	columnBatch, err := BlockReadInner(
-		ctx, info,
+		ctx, info, len(tableDef.Cols), /*including rowid*/
 		columns, colIdxs, colTypes, colNulls,
 		types.TimestampToTS(ts), fs, pool,
 	)
@@ -75,6 +77,7 @@ func BlockRead(
 func BlockReadInner(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
+	schemaColCnt int,
 	colNames []string,
 	colIdxs []uint16,
 	colTyps []types.Type,
@@ -83,8 +86,7 @@ func BlockReadInner(
 	fs fileservice.FileService,
 	pool *mpool.MPool) (*containers.Batch, error) {
 	columnBatch, err := readColumnBatchByMetaloc(
-		ctx, info.BlockID, info.SegmentID,
-		info.MetaLoc,
+		ctx, info, ts, schemaColCnt,
 		colNames, colIdxs, colTyps, colNulls,
 		fs, pool,
 	)
@@ -96,31 +98,37 @@ func BlockReadInner(
 		if err != nil {
 			return nil, err
 		}
-		applyDeletes(columnBatch, deleteBatch, ts)
+		recordDeletes(columnBatch, deleteBatch, ts)
 		deleteBatch.Close()
+	}
+	// remove rows from columns
+	if columnBatch.Deletes != nil {
+		for _, col := range columnBatch.Vecs {
+			col.Compact(columnBatch.Deletes)
+		}
 	}
 	return columnBatch, nil
 }
 
 func readColumnBatchByMetaloc(
 	ctx context.Context,
-	blkid uint64,
-	segid uint64,
-	metaloc string,
+	info *pkgcatalog.BlockInfo,
+	ts types.TS,
+	schemaColCnt int,
 	colNames []string,
 	colIdxs []uint16,
 	colTyps []types.Type,
 	colNulls []bool,
 	fs fileservice.FileService,
 	pool *mpool.MPool) (bat *containers.Batch, err error) {
-	name, extent, rows := DecodeMetaLoc(metaloc)
+	name, extent, rows := DecodeMetaLoc(info.MetaLoc)
 	idxsWithouRowid := make([]uint16, 0, len(colIdxs))
 	var rowidData containers.Vector
 	// sift rowid column
 	for i, typ := range colTyps {
 		if typ.Oid == types.T_Rowid {
 			// generate rowid data
-			prefix := model.EncodeBlockKeyPrefix(segid, blkid)
+			prefix := model.EncodeBlockKeyPrefix(info.SegmentID, info.BlockID)
 			rowidData, err = model.PreparePhyAddrDataWithPool(
 				types.T_Rowid.ToType(),
 				prefix,
@@ -142,13 +150,23 @@ func readColumnBatchByMetaloc(
 	}
 
 	bat = containers.NewBatch()
+	defer func() {
+		if err != nil {
+			bat.Close()
+		}
+	}()
 
-	// only read rowid column, return early
-	if len(idxsWithouRowid) == 0 {
+	// only read rowid column on non appendable block, return early
+	if len(idxsWithouRowid) == 0 && !info.EntryState {
 		for _, name := range colNames {
 			bat.AddVector(name, rowidData)
 		}
 		return bat, nil
+	}
+
+	if info.EntryState { // appendable block should be filtered by committs
+		idxsWithouRowid = append(idxsWithouRowid, uint16(schemaColCnt))   // committs
+		idxsWithouRowid = append(idxsWithouRowid, uint16(schemaColCnt+1)) // aborted
 	}
 
 	// raed s3
@@ -172,7 +190,6 @@ func readColumnBatchByMetaloc(
 			copy(data, entry[0].Object.([]byte))
 			err := vec.Read(data)
 			if err != nil {
-				bat.Close()
 				return nil, err
 			}
 			bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(vec, colNulls[i]))
@@ -180,7 +197,35 @@ func readColumnBatchByMetaloc(
 		}
 	}
 
-	return bat, nil
+	// generate filter map
+	if info.EntryState {
+		t0 := time.Now()
+		v1 := vector.New(types.T_TS.ToType())
+		err := v1.Read(entry[0].Object.([]byte))
+		if err != nil {
+			return nil, err
+		}
+		commits := containers.NewVectorWithSharedMemory(v1, false)
+		defer commits.Close()
+		v2 := vector.New(types.T_bool.ToType())
+		err = v2.Read(entry[1].Object.([]byte))
+		if err != nil {
+			return nil, err
+		}
+		abort := containers.NewVectorWithSharedMemory(v2, false)
+		defer abort.Close()
+		for i := 0; i < commits.Length(); i++ {
+			if abort.Get(i).(bool) || commits.Get(i).(types.TS).Greater(ts) {
+				if bat.Deletes == nil {
+					bat.Deletes = roaring.NewBitmap()
+				}
+				bat.Deletes.Add(uint32(i))
+			}
+		}
+		logutil.Infof("blockread scan filter cost %v\n", time.Since(t0))
+	}
+
+	return
 }
 
 func readDeleteBatchByDeltaloc(ctx context.Context, deltaloc string, fs fileservice.FileService) (*containers.Batch, error) {
@@ -210,7 +255,7 @@ func readDeleteBatchByDeltaloc(ctx context.Context, deltaloc string, fs fileserv
 	return bat, nil
 }
 
-func applyDeletes(columnBatch *containers.Batch, deleteBatch *containers.Batch, ts types.TS) {
+func recordDeletes(columnBatch *containers.Batch, deleteBatch *containers.Batch, ts types.TS) {
 	if deleteBatch == nil {
 		return
 	}
@@ -231,12 +276,5 @@ func applyDeletes(columnBatch *containers.Batch, deleteBatch *containers.Batch, 
 			columnBatch.Deletes = roaring.NewBitmap()
 		}
 		columnBatch.Deletes.Add(row)
-	}
-
-	// remove rows from columns
-	if columnBatch.Deletes != nil {
-		for _, col := range columnBatch.Vecs {
-			col.Compact(columnBatch.Deletes)
-		}
 	}
 }
