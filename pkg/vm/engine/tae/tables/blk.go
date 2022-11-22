@@ -78,12 +78,37 @@ func (blk *block) Pin() *common.PinnedItem[*block] {
 	}
 }
 
+func (blk *block) GetColumnDataByNames(
+	txn txnif.AsyncTxn,
+	attrs []string,
+	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+	colIdxes := make([]int, len(attrs))
+	schema := blk.meta.GetSchema()
+	for i, attr := range attrs {
+		colIdxes[i] = schema.GetColIdx(attr)
+	}
+	return blk.GetColumnDataByIds(txn, colIdxes, buffers)
+}
+
 func (blk *block) GetColumnDataByName(
 	txn txnif.AsyncTxn,
 	attr string,
 	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
 	colIdx := blk.meta.GetSchema().GetColIdx(attr)
 	return blk.GetColumnDataById(txn, colIdx, buffer)
+}
+
+func (blk *block) GetColumnDataByIds(
+	txn txnif.AsyncTxn,
+	colIdxes []int,
+	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+	_, pnode := blk.PinNode()
+	return blk.ResolvePersistedColumnDatas(
+		pnode.Item(),
+		txn.GetStartTS(),
+		colIdxes,
+		buffers,
+		false)
 }
 
 func (blk *block) GetColumnDataById(
