@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -311,7 +312,7 @@ type mfsetCSV struct {
 }
 
 func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {
-	opts := export.CommonCsvOptions
+	opts := table.CommonCsvOptions
 	for idx, field := range fields {
 		if idx > 0 {
 			buf.WriteRune(opts.FieldTerminator)
@@ -386,7 +387,7 @@ func (s *mfsetCSV) GetBatchSingleTable(buf *bytes.Buffer) trace.CSVRequests {
 
 	ts := time.Now()
 	buffer := make(map[string]*bytes.Buffer, 2)
-	writeValues := func(row *export.Row) {
+	writeValues := func(row *table.Row) {
 		buf, exist := buffer[row.GetAccount()]
 		if !exist {
 			buf = bytes.NewBuffer(nil)

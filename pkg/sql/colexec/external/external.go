@@ -95,6 +95,7 @@ func Prepare(proc *process.Process, arg any) error {
 	}
 	param.extern.Filepath = ""
 	param.Fileparam.FileCnt = len(param.FileList)
+	param.Ctx = proc.Ctx
 	return nil
 }
 
@@ -854,7 +855,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				d, err := types.ParseDate(field)
+				d, err := types.ParseDateCast(field)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError("the input value '%v' is not Date type for column %d", field, colIdx)

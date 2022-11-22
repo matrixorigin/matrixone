@@ -442,7 +442,7 @@ func checkIntersect[T compT](cols1, cols2 []T, gtFun compFn[T], ltFun compFn[T])
 	// check v2 if some item >= min && <= max
 	for i := 0; i < len(cols2); i++ {
 		// cols2[i] >= min && cols2[i] <= max
-		if gtFun(cols1[i], min) && ltFun(cols1[i], max) {
+		if gtFun(cols2[i], min) && ltFun(cols2[i], max) {
 			return true, nil
 		}
 	}
