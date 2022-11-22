@@ -72,8 +72,8 @@ jobs:
           rm -rf ./mo-tester/lib
           mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
+          cat ${{ github.workspace }}/upload/mo-service.log | grep 'DATA RACE'
       - uses: actions/upload-artifact@v2
-        if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:
           name: multi-cn-e2e_linux_x86_reports
