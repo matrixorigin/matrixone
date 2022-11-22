@@ -603,7 +603,7 @@ func compareNumber[T constraints.Integer | constraints.Float | types.Date | type
 		}), nil
 	case "<=":
 		return runCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 T) bool {
-			return t1 >= t2
+			return t1 <= t2
 		}), nil
 	default:
 		return false, moerr.NewInternalError("unsupport compare function")

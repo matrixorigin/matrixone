@@ -304,12 +304,13 @@ func (s *refreshableTaskStorage) refreshTask(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case lastAddress := <-s.refreshC:
-			s.mu.Lock()
-			if s.mu.store != nil {
-				_ = s.mu.store.Close()
-			}
-			s.mu.Unlock()
 			s.refresh(lastAddress)
+			// see pkg/logservice/service_commands.go#132
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 		}
 	}
 }
@@ -318,6 +319,13 @@ func (s *refreshableTaskStorage) refresh(lastAddress string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.mu.store != nil {
+		_ = s.mu.store.Close()
+	}
+
+	if s.mu.closed {
+		return
+	}
 	if lastAddress != "" && lastAddress != s.mu.lastAddress {
 		return
 	}
