@@ -12,18 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package log
+package runtime
 
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSampleFilter(t *testing.T) {
-	opts := DefaultLogOptions().WithSample(ExampleSample)
-	assert.True(t, sampleFilter(opts))
-	assert.False(t, sampleFilter(opts))
-	assert.True(t, sampleFilter(opts))
-	assert.False(t, sampleFilter(opts))
+func TestRuntime(t *testing.T) {
+	rt := NewRuntime(metadata.ServiceType_CN, "cn0", nil)
+	assert.Equal(t, metadata.ServiceType_CN, rt.ServiceType())
+	assert.Equal(t, "cn0", rt.ServiceUUID())
+	assert.NotNil(t, rt.Logger())
+
+	k := "k"
+	v := "v"
+	rt.SetGlobalVariables(k, v)
+	vv, ok := rt.GetGlobalVariables(k)
+	assert.Equal(t, v, vv)
+	assert.True(t, ok)
 }

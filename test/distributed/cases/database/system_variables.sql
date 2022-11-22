@@ -110,7 +110,36 @@ set sql_select_limit = 100000;
 show variables like 'sql_select_limit';
 set sql_select_limit = 1;
 show variables like 'sql_select_limit';
--- @bvt:issue#6743
 SET SQL_SELECT_LIMIT = Default;
 show variables like 'sql_select_limit';
--- @bvt:issue
+
+--int type
+show variables like 'max_allowed_packet';
+set max_allowed_packet = 10000;
+show variables like 'max_allowed_packet';
+set max_allowed_packet = default;
+show variables like 'max_allowed_packet';
+
+show variables like 'wait_timeout';
+set wait_timeout = 10000;
+show variables like 'wait_timeout';
+set wait_timeout = default;
+show variables like 'wait_timeout';
+
+--string type
+show variables like 'character_set_results';
+set character_set_server = default;
+show variables like 'character_set_results';
+
+show variables like 'character_set_server';
+set character_set_server = default;
+show variables like 'character_set_server';
+
+--enum type
+show variables like 'transaction_isolation';
+set transaction_isolation = default;
+show variables like 'transaction_isolation';
+
+show variables like 'tx_isolation';
+set tx_isolation = default;
+show variables like 'tx_isolation';

@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type metaFile struct {
@@ -109,6 +110,9 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			}
 		}
 	}()
+
+	jobScheduler := tasks.NewParallelJobScheduler(200)
+	defer jobScheduler.Stop()
 	entries := make([]*CheckpointEntry, bat.Length())
 	var errMu sync.RWMutex
 	var wg sync.WaitGroup
@@ -124,7 +128,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			state:    ST_Finished,
 		}
 		var err2 error
-		if datas[i], err2 = checkpointEntry.Read(r.fs); err2 != nil {
+		if datas[i], err2 = checkpointEntry.Read(jobScheduler, r.fs); err2 != nil {
 			errMu.Lock()
 			err = err2
 			errMu.Unlock()

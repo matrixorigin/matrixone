@@ -117,12 +117,34 @@ func (blk *ablock) Pin() *common.PinnedItem[*ablock] {
 	}
 }
 
+func (blk *ablock) GetColumnDataByNames(
+	txn txnif.AsyncTxn,
+	attrs []string,
+	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+	colIdxes := make([]int, len(attrs))
+	for i, attr := range attrs {
+		colIdxes[i] = blk.meta.GetSchema().GetColIdx(attr)
+	}
+	return blk.GetColumnDataByIds(txn, colIdxes, buffers)
+}
+
 func (blk *ablock) GetColumnDataByName(
 	txn txnif.AsyncTxn,
 	attr string,
 	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
 	colIdx := blk.meta.GetSchema().GetColIdx(attr)
 	return blk.GetColumnDataById(txn, colIdx, buffer)
+}
+
+func (blk *ablock) GetColumnDataByIds(
+	txn txnif.AsyncTxn,
+	colIdxes []int,
+	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+	return blk.resolveColumnDatas(
+		txn.GetStartTS(),
+		colIdxes,
+		buffers,
+		false)
 }
 
 func (blk *ablock) GetColumnDataById(
@@ -134,6 +156,34 @@ func (blk *ablock) GetColumnDataById(
 		colIdx,
 		buffer,
 		false)
+}
+
+func (blk *ablock) resolveColumnDatas(
+	ts types.TS,
+	colIdxes []int,
+	buffers []*bytes.Buffer,
+	skipDeletes bool) (view *model.BlockView, err error) {
+	mnode, pnode := blk.PinNode()
+
+	if mnode != nil {
+		defer mnode.Close()
+		return blk.resolveInMemoryColumnDatas(
+			mnode.Item(),
+			ts,
+			colIdxes,
+			buffers,
+			skipDeletes)
+	} else if pnode != nil {
+		defer pnode.Close()
+		return blk.ResolvePersistedColumnDatas(
+			pnode.Item(),
+			ts,
+			colIdxes,
+			buffers,
+			skipDeletes,
+		)
+	}
+	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
 }
 
 func (blk *ablock) resolveColumnData(
@@ -162,6 +212,49 @@ func (blk *ablock) resolveColumnData(
 		)
 	}
 	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
+}
+
+// Note: With PinNode Context
+func (blk *ablock) resolveInMemoryColumnDatas(
+	mnode *memoryNode,
+	ts types.TS,
+	colIdxes []int,
+	buffers []*bytes.Buffer,
+	skipDeletes bool) (view *model.BlockView, err error) {
+	blk.RLock()
+	defer blk.RUnlock()
+	maxRow, visible, deSels, err := blk.mvcc.GetVisibleRowLocked(ts)
+	if !visible || err != nil {
+		// blk.RUnlock()
+		return
+	}
+
+	data, err := mnode.GetDataWindow(0, maxRow)
+	if err != nil {
+		return
+	}
+	view = model.NewBlockView(ts)
+	for _, colIdx := range colIdxes {
+		view.SetData(colIdx, data.Vecs[colIdx])
+	}
+	if skipDeletes {
+		// blk.RUnlock()
+		return
+	}
+
+	err = blk.FillInMemoryDeletesLocked(view.BaseView, blk.RWMutex)
+	// blk.RUnlock()
+	if err != nil {
+		return
+	}
+	if deSels != nil && !deSels.IsEmpty() {
+		if view.DeleteMask != nil {
+			view.DeleteMask.Or(deSels)
+		} else {
+			view.DeleteMask = deSels
+		}
+	}
+	return
 }
 
 // Note: With PinNode Context
@@ -196,7 +289,7 @@ func (blk *ablock) resolveInMemoryColumnData(
 		return
 	}
 
-	err = blk.FillInMemoryDeletesLocked(view, blk.RWMutex)
+	err = blk.FillInMemoryDeletesLocked(view.BaseView, blk.RWMutex)
 	// blk.RUnlock()
 	if err != nil {
 		return
@@ -326,7 +419,7 @@ func (blk *ablock) getPersistedRowByFilter(
 
 	// Load persisted deletes
 	view := model.NewColumnView(ts, 0)
-	if err = blk.FillPersistedDeletes(view); err != nil {
+	if err = blk.FillPersistedDeletes(view.BaseView); err != nil {
 		return
 	}
 
