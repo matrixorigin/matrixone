@@ -95,7 +95,6 @@ func NewCNClient(cfg *ClientConfig) error {
 
 	codec := morpc.NewMessageCodec(client.acquireMessage)
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
-		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendGoettyOptions(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
 			goetty.WithSessionReleaseMsgFunc(func(v any) {
