@@ -162,7 +162,7 @@ func (blk *baseBlock) FillInMemoryDeletesLocked(
 	view *model.BaseView,
 	rwlocker *sync.RWMutex) (err error) {
 	chain := blk.mvcc.GetDeleteChain()
-	n, err := chain.CollectDeletesLocked(view.Ts, false, rwlocker)
+	n, err := chain.CollectDeletesLockedByRemove(view.Ts, false, rwlocker)
 	if err != nil {
 		return
 	}

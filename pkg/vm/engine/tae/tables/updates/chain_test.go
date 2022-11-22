@@ -96,11 +96,25 @@ func TestDeleteChain1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(11), collected.GetCardinalityLocked())
 
+	collected, err = chain.CollectDeletesLockedByRemove(txn1.GetStartTS(), false, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(10), collected.GetCardinalityLocked())
+	collected, err = chain.CollectDeletesLockedByRemove(txn2.GetStartTS(), false, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(11), collected.GetCardinalityLocked())
+
 	var startTs1 types.TS
 	collected, err = chain.CollectDeletesLocked(startTs1, false, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, collected)
 	collected, err = chain.CollectDeletesLocked(types.NextGlobalTsForTest(), false, nil)
+	assert.NoError(t, err)
+	assert.Nil(t, collected)
+
+	collected, err = chain.CollectDeletesLockedByRemove(startTs1, false, nil)
+	assert.NoError(t, err)
+	assert.Nil(t, collected)
+	collected, err = chain.CollectDeletesLockedByRemove(types.NextGlobalTsForTest(), false, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, collected)
 
@@ -120,6 +134,16 @@ func TestDeleteChain1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(11), collected.GetCardinalityLocked())
 
+	collected, err = chain.CollectDeletesLockedByRemove(startTs2, false, nil)
+	assert.NoError(t, err)
+	assert.Nil(t, collected)
+	collected, err = chain.CollectDeletesLockedByRemove(types.NextGlobalTsForTest(), false, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(10), collected.GetCardinalityLocked())
+	collected, err = chain.CollectDeletesLockedByRemove(txn2.GetStartTS(), false, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(11), collected.GetCardinalityLocked())
+
 	txn3 := mockTxn()
 	err = chain.PrepareRangeDelete(5, 5, txn3.GetStartTS())
 	assert.NotNil(t, err)
@@ -132,6 +156,10 @@ func TestDeleteChain1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(13), collected.GetCardinalityLocked())
 	t.Log(chain.StringLocked())
+
+	collected, err = chain.CollectDeletesLockedByRemove(txn3.GetStartTS(), false, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(13), collected.GetCardinalityLocked())
 
 	merged = chain.AddMergeNode().(*DeleteNode)
 	assert.NotNil(t, merged)
@@ -206,6 +234,22 @@ func TestDeleteChain2(t *testing.T) {
 	mask = m.(*DeleteNode).mask
 	assert.Equal(t, uint64(4), mask.GetCardinality())
 	m, err = chain.CollectDeletesLocked(txn1.GetCommitTS().Prev(), false, nil)
+	assert.NoError(t, err)
+	assert.Nil(t, m)
+
+	m, err = chain.CollectDeletesLockedByRemove(types.NextGlobalTsForTest(), false, nil)
+	assert.NoError(t, err)
+	mask = m.(*DeleteNode).mask
+	assert.Equal(t, uint64(8), mask.GetCardinality())
+	m, err = chain.CollectDeletesLockedByRemove(txn3.GetCommitTS(), false, nil)
+	assert.NoError(t, err)
+	mask = m.(*DeleteNode).mask
+	assert.Equal(t, uint64(8), mask.GetCardinality())
+	m, err = chain.CollectDeletesLockedByRemove(txn1.GetCommitTS(), false, nil)
+	assert.NoError(t, err)
+	mask = m.(*DeleteNode).mask
+	assert.Equal(t, uint64(4), mask.GetCardinality())
+	m, err = chain.CollectDeletesLockedByRemove(txn1.GetCommitTS().Prev(), false, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, m)
 
