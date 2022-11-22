@@ -56,3 +56,5 @@ drop table if exists json_table_1;
 create table json_table_1 (j1 json);
 insert into json_table_1 values('{"key10": "value1", "key2": "value2"}'),('{"key1": "@#$_%^&*()!@", "123456": "中文mo"}'),('{"芝士面包": "12abc", "123456": "中文mo"}'),('{"": "", "123456": "中文mo"}'),('{"a 1": "b 1", "123456": "中文mo"}'),('{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}'),('{"d1": [true,false]}'),('{}');
 select json_extract('{"a":"a1","b":"b1"}','$.*') from json_table_1;
+create view v1 as select json_extract('{"a":1}','$.a');
+desc v1;
