@@ -505,7 +505,6 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool, maxMessag
 
 	// construct morpc.BackendOption
 	backendOpts := []morpc.BackendOption{
-		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendConnectTimeout(time.Second),
 		morpc.WithBackendHasPayloadResponse(),
 		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("hakeeper-client-backend")),

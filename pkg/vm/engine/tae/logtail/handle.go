@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -41,15 +42,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
+const Size90M = 80 * 1024 * 1024
+
 type CheckpointClient interface {
 	CollectCheckpointsInRange(start, end types.TS) (location string, checkpointed types.TS)
+	FlushTable(dbID, tableID uint64, ts types.TS) error
 }
 
 func HandleSyncLogTailReq(
 	ckpClient CheckpointClient,
 	mgr *LogtailMgr,
 	c *catalog.Catalog,
-	req api.SyncLogTailReq) (resp api.SyncLogTailResp, err error) {
+	req api.SyncLogTailReq,
+	canRetry bool) (resp api.SyncLogTailResp, err error) {
 	logutil.Debugf("[Logtail] begin handle %+v", req)
 	defer func() {
 		logutil.Debugf("[Logtail] end handle %d entries[%q], err %v", len(resp.Commands), resp.CkpLocation, err)
@@ -84,13 +89,6 @@ func HandleSyncLogTailReq(
 	var visitor RespBuilder
 
 	if scope == ScopeUserTables {
-		var tableEntry *catalog.TableEntry
-		// table logtail needs information about this table, so give it the table entry.
-		if db, err := c.GetDatabaseByID(did); err != nil {
-			return api.SyncLogTailResp{}, err
-		} else if tableEntry, err = db.GetTableEntryByID(tid); err != nil {
-			return api.SyncLogTailResp{}, err
-		}
 		visitor = NewTableLogtailRespBuilder(ckpLoc, start, end, tableEntry)
 	} else {
 		visitor = NewCatalogLogtailRespBuilder(scope, ckpLoc, start, end)
@@ -100,6 +98,20 @@ func HandleSyncLogTailReq(
 	operator := mgr.GetTableOperator(start, end, c, did, tid, scope, visitor)
 	if err := operator.Run(); err != nil {
 		return api.SyncLogTailResp{}, err
+	}
+	resp, err = visitor.BuildResp()
+
+	if canRetry && scope == ScopeUserTables { // check simple conditions first
+		if _, forceFlush := fault.TriggerFault("logtail_max_size"); forceFlush || resp.ProtoSize() > Size90M {
+			if err = ckpClient.FlushTable(did, tid, end); err != nil {
+				logutil.Errorf("[logtail] flush err: %v", err)
+				return api.SyncLogTailResp{}, err
+			}
+			// try again after flushing
+			newResp, err := HandleSyncLogTailReq(ckpClient, mgr, c, req, false)
+			logutil.Infof("[logtail] flush result: %d -> %d err: %v", resp.ProtoSize(), newResp.ProtoSize(), err)
+			return newResp, err
+		}
 	}
 	return visitor.BuildResp()
 }

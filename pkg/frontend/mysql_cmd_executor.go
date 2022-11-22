@@ -446,7 +446,7 @@ func handleShowColumns(ses *Session) error {
 			if err := types.Decode(data, typ); err != nil {
 				return err
 			}
-			row[1] = typ.String()
+			row[1] = typ.DescString()
 			if d[2].(int8) == 0 {
 				row[2] = "NO"
 			} else {
@@ -492,7 +492,7 @@ func handleShowColumns(ses *Session) error {
 			if err := types.Decode(data, typ); err != nil {
 				return err
 			}
-			row[1] = typ.String()
+			row[1] = typ.DescString()
 			row[2] = "NULL"
 			if d[3].(int8) == 0 {
 				row[3] = "NO"
