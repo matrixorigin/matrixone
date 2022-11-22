@@ -115,7 +115,7 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 		return err
 	}
 
-	setupGlobalComponents(cfg, stopper)
+	setupProcessLevelRuntime(cfg, stopper)
 
 	fs, err := cfg.createFileService(defines.LocalFileServiceName)
 	if err != nil {

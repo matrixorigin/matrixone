@@ -266,7 +266,7 @@ func TestNewSenderWithOptions(t *testing.T) {
 	}()
 
 	assert.Equal(t, 100, s.(*sender).options.payloadCopyBufferSize)
-	assert.True(t, len(s.(*sender).options.backendCreateOptions) >= 3)
+	assert.True(t, len(s.(*sender).options.backendCreateOptions) >= 2)
 	assert.True(t, len(s.(*sender).options.clientOptions) >= 1)
 }
 

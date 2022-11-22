@@ -136,6 +136,6 @@ func processStep3InLOG(id string) {
 	logger.Log("step 3", log.DefaultLogOptions().WithProcess(log.Txn, id))
 }
 
-func getServiceLogger(serviceType metadata.ServiceType, uuid string) log.MOLogger {
+func getServiceLogger(serviceType metadata.ServiceType, uuid string) *log.MOLogger {
 	return log.GetServiceLogger(logutil.GetGlobalLogger(), serviceType, uuid)
 }
