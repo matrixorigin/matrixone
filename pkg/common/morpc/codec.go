@@ -164,6 +164,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 		return moerr.NewInternalError("not support %T %+v", data, data)
 	}
 
+	startWriteOffset := out.GetWriteOffset()
 	totalSize := 0
 	// The total message size cannot be determined at the beginning and needs to wait until all the
 	// dynamic content is determined before the total size can be determined. After the total size is
@@ -196,6 +197,14 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 		totalSize += payloadSizeFieldBytes + len(payloadData)
 	}
 
+	// skip all written data by this message
+	discardWritten := func() {
+		out.SetWriteIndexByOffset(startWriteOffset)
+		if hasPayload {
+			payloadMsg.SetPayloadField(payloadData)
+		}
+	}
+
 	// 2.4 Custom header size
 	n, err := c.encodeCustomHeaders(&msg, out)
 	if err != nil {
@@ -206,6 +215,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 	// 3.1 message body
 	bodySize, body, err := c.writeBody(out, msg.Message, totalSize)
 	if err != nil {
+		discardWritten()
 		return err
 	}
 
@@ -217,6 +227,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 	// fill checksum
 	if checksumAt != -1 {
 		if err := writeChecksum(checksumAt, out, body, payloadData); err != nil {
+			discardWritten()
 			return err
 		}
 	}
