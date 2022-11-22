@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -109,6 +110,23 @@ func TestGetWithTimeout(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, resp)
 	assert.Equal(t, ctx.Err(), err)
+}
+
+func TestGetWithError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	f := newFuture(func(f *Future) { f.reset() })
+	f.init(1, ctx)
+	defer f.Close()
+
+	errResp := moerr.NewBackendClosed()
+	f.error(1, errResp, nil)
+
+	resp, err := f.Get()
+	assert.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Equal(t, errResp, err)
 }
 
 func TestGetWithInvalidResponse(t *testing.T) {

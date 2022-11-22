@@ -21,16 +21,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
+type BaseView struct {
+	Ts         types.TS
+	DeleteMask *roaring.Bitmap
+}
+
 type BlockView struct {
-	Ts               types.TS
+	*BaseView
 	Columns          map[int]*ColumnView
-	DeleteMask       *roaring.Bitmap
 	DeleteLogIndexes []*wal.Index
 }
 
 func NewBlockView(ts types.TS) *BlockView {
 	return &BlockView{
-		Ts:      ts,
+		BaseView: &BaseView{
+			Ts: ts,
+		},
 		Columns: make(map[int]*ColumnView),
 	}
 }
@@ -85,6 +91,16 @@ func (view *BlockView) Eval(clear bool) (err error) {
 		}
 	}
 	return
+}
+
+func (view *BlockView) ApplyDeletes() {
+	if view.DeleteMask == nil {
+		return
+	}
+	for _, col := range view.Columns {
+		col.data.Compact(view.DeleteMask)
+	}
+	view.DeleteMask = nil
 }
 
 func (view *BlockView) Close() {
