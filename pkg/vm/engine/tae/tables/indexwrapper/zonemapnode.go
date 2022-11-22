@@ -61,6 +61,16 @@ func (r *ZmReader) Contains(key any) bool {
 	return node.Zonemap.Contains(key)
 }
 
+func (r *ZmReader) FastContainsAny(keys containers.Vector) (ok bool) {
+	h, err := evictable.PinEvictableNode(r.mgr, r.metaKey, r.colMetaFactory)
+	if err != nil {
+		return
+	}
+	defer h.Close()
+	node := h.GetNode().(*evictable.ColumnMetaNode)
+	return node.Zonemap.FastContainsAny(keys)
+}
+
 func (r *ZmReader) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok bool) {
 	h, err := evictable.PinEvictableNode(r.mgr, r.metaKey, r.colMetaFactory)
 	if err != nil {

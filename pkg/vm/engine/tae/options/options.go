@@ -35,6 +35,15 @@ func WithCheckpointMinCount(count int64) func(*Options) {
 	}
 }
 
+func WithFlushInterval(interval time.Duration) func(*Options) {
+	return func(opts *Options) {
+		if opts.CheckpointCfg == nil {
+			opts.CheckpointCfg = new(CheckpointCfg)
+		}
+		opts.CheckpointCfg.FlushInterval = interval
+	}
+}
+
 func WithCheckpointScanInterval(interval time.Duration) func(*Options) {
 	return func(opts *Options) {
 		if opts.CheckpointCfg == nil {
