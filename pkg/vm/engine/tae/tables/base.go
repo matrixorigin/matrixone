@@ -353,6 +353,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 	rowmask *roaring.Bitmap,
 	dedupClosure func(
 		containers.Vector,
+		types.TS,
 		*roaring.Bitmap,
 		*catalog.ColDef,
 	) func(any, int) error) (err error) {
@@ -381,7 +382,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 		}
 	}
 	defer view.Close()
-	dedupFn := dedupClosure(view.GetData(), view.DeleteMask, def)
+	dedupFn := dedupClosure(view.GetData(), ts, view.DeleteMask, def)
 	err = keys.Foreach(dedupFn, sels)
 	return
 }
