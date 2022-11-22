@@ -195,3 +195,6 @@ insert into t1 values("ab");
 select * from t1;
 drop table if exists t1;
 create table t1(a varchar(65536));
+create table t1(a varchar(0));
+insert into t1 values("");
+insert into t1 values("ab");

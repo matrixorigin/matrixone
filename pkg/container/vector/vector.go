@@ -1304,6 +1304,11 @@ func UnionOne(v, w *Vector, sel int64, m *mpool.MPool) (err error) {
 			if v.GetType().Width != 0 && len(bs) > int(v.GetType().Width) {
 				return moerr.NewOutOfRange("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
 			}
+			if v.GetType().Width == 0 && (v.GetType().Oid == types.T_varchar || v.GetType().Oid == types.T_char) {
+				if len(bs) > 0 {
+					return moerr.NewOutOfRange("varchar/char ", "%v oversize of %v ", string(bs), 0)
+				}
+			}
 			tgt := MustTCols[types.Varlena](v)
 			nele := len(tgt)
 			tgt[nele-1], v.area, err = types.BuildVarlena(bs, v.area, m)
@@ -1343,6 +1348,11 @@ func UnionMulti(v, w *Vector, sel int64, cnt int, m *mpool.MPool) (err error) {
 		bs := w.GetBytes(sel)
 		if v.GetType().Width != 0 && len(bs) > int(v.GetType().Width) {
 			return moerr.NewOutOfRange("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
+		}
+		if v.GetType().Width == 0 && (v.GetType().Oid == types.T_varchar || v.GetType().Oid == types.T_char) {
+			if len(bs) > 0 {
+				return moerr.NewOutOfRange("varchar/char ", "%v oversize of %v ", string(bs), 0)
+			}
 		}
 		for i := 0; i < cnt; i++ {
 			tgt[curIdx], v.area, err = types.BuildVarlena(bs, v.area, m)
@@ -1422,6 +1432,12 @@ func Union(v, w *Vector, sels []int64, hasNull bool, m *mpool.MPool) (err error)
 			if v.GetType().Width != 0 && len(bs) > int(v.GetType().Width) {
 				return moerr.NewOutOfRange("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
 			}
+
+			if v.GetType().Width == 0 && (v.GetType().Oid == types.T_varchar || v.GetType().Oid == types.T_char) {
+				if len(bs) > 0 {
+					return moerr.NewOutOfRange("varchar/char ", "%v oversize of %v ", string(bs), 0)
+				}
+			}
 			tgt[next+idx], v.area, err = types.BuildVarlena(bs, v.area, m)
 			if err != nil {
 				return err
@@ -1476,6 +1492,12 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPo
 				bs := w.GetBytes(offset + int64(idx))
 				if v.GetType().Width != 0 && len(bs) > int(v.GetType().Width) {
 					return moerr.NewOutOfRange("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
+				}
+
+				if v.GetType().Width == 0 && (v.GetType().Oid == types.T_varchar || v.GetType().Oid == types.T_char) {
+					if len(bs) > 0 {
+						return moerr.NewOutOfRange("varchar/char ", "%v oversize of %v ", string(bs), 0)
+					}
 				}
 				tgt[curIdx], v.area, err = types.BuildVarlena(bs, v.area, m)
 				curIdx += 1

@@ -68,7 +68,7 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			// for char type,if we didn't specify the length,
 			// the default width should be 1, and for varchar,it's
 			// the defaultMaxLength
-			if width == -1 || width == 0 {
+			if width == -1 {
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
 				if n.InternalType.FamilyString == "char" {
 					width = 1
@@ -90,7 +90,7 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			// for char type,if we didn't specify the length,
 			// the default width should be 1, and for varchar,it's
 			// the defaultMaxLength
-			if width == -1 || width == 0 {
+			if width == -1 {
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
 				if n.InternalType.FamilyString == "char" {
 					width = 1

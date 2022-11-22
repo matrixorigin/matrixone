@@ -473,3 +473,7 @@ ab
 drop table if exists t1;
 create table t1(a char(256));
 Data truncation: data out of range: data type char,  typeLen is over the MaxCharLen: 255
+create table t1(a char(0));
+insert into t1 values("");
+insert into t1 values("ab");
+Data truncation: data out of range: data type varchar/char , ab oversize of 0 
