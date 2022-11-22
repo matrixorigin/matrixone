@@ -40,7 +40,7 @@ func (index *immutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int) (er
 }
 func (index *immutableIndex) GetActiveRow(key any) ([]uint32, error) { panic("not support") }
 func (index *immutableIndex) String() string                         { return "immutable" }
-func (index *immutableIndex) Dedup(key any) (err error) {
+func (index *immutableIndex) Dedup(key any, _ func(row uint32) error) (err error) {
 	exist := index.zmReader.Contains(key)
 	// 1. if not in [min, max], key is definitely not found
 	if !exist {
@@ -68,7 +68,7 @@ func (index *immutableIndex) BatchDedup(
 	skipfn func(row uint32) (err error),
 ) (keyselects *roaring.Bitmap, err error) {
 	if keys.Length() == 1 {
-		err = index.Dedup(keys.Get(0))
+		err = index.Dedup(keys.Get(0), skipfn)
 		return
 	}
 	exist := index.zmReader.FastContainsAny(keys)
