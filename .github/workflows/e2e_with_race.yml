@@ -76,6 +76,9 @@ jobs:
           rm -rf ./mo-tester/lib
           mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
+          
+      - name: check data race
+        run: |
           cat ${{ github.workspace }}/upload/mo-service.log | grep -C2 'DATA RACE' || true
           if [ "$(cat ${{ github.workspace }}/upload/mo-service.log |grep 'DATA RACE' | grep -v "grep" | wc -l)" -gt 0 ]; then exit 1; fi
           
