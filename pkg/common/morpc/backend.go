@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -226,7 +227,8 @@ func (rb *remoteBackend) adjust() {
 		}
 	}
 
-	rb.logger = logutil.Adjust(rb.logger).With(zap.String("remote", rb.remote))
+	rb.logger = logutil.Adjust(rb.logger).With(zap.String("remote", rb.remote),
+		zap.String("backend-id", uuid.NewString()))
 	rb.options.goettyOptions = append(rb.options.goettyOptions,
 		goetty.WithSessionCodec(rb.codec),
 		goetty.WithSessionLogger(rb.logger))
