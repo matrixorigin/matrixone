@@ -104,7 +104,7 @@ func (idx *mutableIndex) BatchDedup(keys containers.Vector,
 		err = idx.Dedup(keys.Get(0), skipfn)
 		return
 	}
-	keyselects, exist := idx.zonemap.ContainsAny(keys)
+	exist := idx.zonemap.FastContainsAny(keys)
 	// 1. all keys are definitely not existed
 	if !exist {
 		return
@@ -121,7 +121,7 @@ func (idx *mutableIndex) BatchDedup(keys containers.Vector,
 		}
 		return nil
 	}
-	if err = keys.ForeachWindow(0, keys.Length(), op, keyselects); err != nil {
+	if err = keys.ForeachWindow(0, keys.Length(), op, nil); err != nil {
 		if moerr.IsMoErrCode(err, moerr.OkExpectedDup) || moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 			return
 		} else {
