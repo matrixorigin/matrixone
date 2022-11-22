@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 const (
@@ -394,6 +395,8 @@ func (c *client) connectReadOnly(ctx context.Context) error {
 func (c *client) request(ctx context.Context,
 	mt pb.MethodType, payload []byte, lsn Lsn,
 	maxSize uint64) (pb.Response, []pb.LogRecord, error) {
+	ctx, span := trace.Debug(ctx, "client.request")
+	defer span.End()
 	req := pb.Request{
 		Method: mt,
 		LogRequest: pb.LogRequest{
@@ -433,6 +436,8 @@ func (c *client) request(ctx context.Context,
 }
 
 func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
+	ctx, span := trace.Debug(ctx, "client.tsoRequest")
+	defer span.End()
 	req := pb.Request{
 		Method: pb.TSO_UPDATE,
 		TsoRequest: &pb.TsoRequest{
