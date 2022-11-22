@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/generate_series"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -52,8 +51,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
@@ -102,8 +101,7 @@ func TestInstructionSerializationCover(t *testing.T) {
 		{instruction: vm.Instruction{Op: vm.Intersect, Arg: &intersect.Argument{}}},
 		{instruction: vm.Instruction{Op: vm.IntersectAll, Arg: &intersectall.Argument{}}},
 		{instruction: vm.Instruction{Op: vm.HashBuild, Arg: &hashbuild.Argument{}}},
-		{instruction: vm.Instruction{Op: vm.Unnest, Arg: &unnest.Argument{Es: &unnest.Param{}}}},
-		{instruction: vm.Instruction{Op: vm.GenerateSeries, Arg: &generate_series.Argument{Es: &generate_series.Param{}}}},
+		{instruction: vm.Instruction{Op: vm.TableFunction, Arg: &table_function.Argument{}}},
 	}
 	{
 		typeReached := make([]int, vm.LastInstructionOp)

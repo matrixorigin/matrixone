@@ -17,28 +17,23 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/generate_series"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -270,24 +265,16 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Cond:       t.Cond,
 			OnList:     t.OnList,
 		}
-	case vm.Unnest:
-		t := sourceIns.Arg.(*unnest.Argument)
-		res.Arg = &unnest.Argument{
-			Es: &unnest.Param{
-				Attrs:    t.Es.Attrs,
-				Cols:     t.Es.Cols,
-				ExprList: t.Es.ExprList,
-				ColName:  t.Es.ColName,
-			},
+	case vm.TableFunction:
+		t := sourceIns.Arg.(*colexec.TableFunctionArgument)
+		res.Arg = &colexec.TableFunctionArgument{
+			Name:   t.Name,
+			Args:   t.Args,
+			Rets:   t.Rets,
+			Attrs:  t.Attrs,
+			Params: t.Params,
 		}
-	case vm.GenerateSeries:
-		t := sourceIns.Arg.(*generate_series.Argument)
-		res.Arg = &generate_series.Argument{
-			Es: &generate_series.Param{
-				Attrs:    t.Es.Attrs,
-				ExprList: t.Es.ExprList,
-			},
-		}
+
 	case vm.HashBuild:
 		t := sourceIns.Arg.(*hashbuild.Argument)
 		res.Arg = &hashbuild.Argument{
@@ -513,31 +500,17 @@ func constructExternal(n *plan.Node, ctx context.Context, fileList []string) *ex
 		},
 	}
 }
-func constructUnnest(n *plan.Node, ctx context.Context) *unnest.Argument {
+func constructTableFunction(n *plan.Node, ctx context.Context, name string) *colexec.TableFunctionArgument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
-	return &unnest.Argument{
-		Es: &unnest.Param{
-			Attrs:    attrs,
-			Cols:     n.TableDef.Cols,
-			ExprList: n.TblFuncExprList,
-			ColName:  string(n.TableDef.TblFunc.Param),
-		},
-	}
-}
-
-func constructGenerateSeries(n *plan.Node, ctx context.Context) *generate_series.Argument {
-	attrs := make([]string, len(n.TableDef.Cols))
-	for j, col := range n.TableDef.Cols {
-		attrs[j] = col.Name
-	}
-	return &generate_series.Argument{
-		Es: &generate_series.Param{
-			Attrs:    attrs,
-			ExprList: n.TblFuncExprList,
-		},
+	return &colexec.TableFunctionArgument{
+		Attrs:  attrs,
+		Rets:   n.TableDef.Cols,
+		Args:   n.TblFuncExprList,
+		Name:   name,
+		Params: n.TableDef.TblFunc.Param,
 	}
 }
 

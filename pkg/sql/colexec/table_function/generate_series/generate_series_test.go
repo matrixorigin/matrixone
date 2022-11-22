@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -423,7 +424,7 @@ func TestString(t *testing.T) {
 }
 
 func TestPrepare(t *testing.T) {
-	err := Prepare(nil, new(bytes.Buffer))
+	err := Prepare(nil, nil)
 	require.Nil(t, err)
 }
 func TestGenStep(t *testing.T) {
@@ -446,18 +447,15 @@ func TestGenStep(t *testing.T) {
 func TestCall(t *testing.T) {
 	proc := testutil.NewProc()
 	beforeCall := proc.Mp().CurrNB()
-	arg := &Argument{
-		Es: &Param{
-			Attrs: []string{"result"},
-		},
+	arg := &colexec.TableFunctionArgument{
+		Attrs: []string{"result"},
 	}
-	param := arg.Es
 	proc.SetInputBatch(nil)
 	end, err := Call(0, proc, arg)
 	require.Nil(t, err)
 	require.Equal(t, true, end)
 
-	param.ExprList = makeInt64List(1, 3, 1)
+	arg.Args = makeInt64List(1, 3, 1)
 
 	bat := makeBatch()
 	proc.SetInputBatch(bat)
@@ -467,7 +465,7 @@ func TestCall(t *testing.T) {
 	require.Equal(t, 3, proc.InputBatch().GetVector(0).Length())
 	proc.InputBatch().Clean(proc.Mp())
 
-	param.ExprList = makeDatetimeList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second", 0)
+	arg.Args = makeDatetimeList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second", 0)
 	proc.SetInputBatch(bat)
 	end, err = Call(0, proc, arg)
 	require.Nil(t, err)
@@ -475,7 +473,7 @@ func TestCall(t *testing.T) {
 	require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
 	proc.InputBatch().Clean(proc.Mp())
 
-	param.ExprList = makeVarcharList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second")
+	arg.Args = makeVarcharList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second")
 	proc.SetInputBatch(bat)
 	end, err = Call(0, proc, arg)
 	require.Nil(t, err)
@@ -483,7 +481,7 @@ func TestCall(t *testing.T) {
 	require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
 	proc.InputBatch().Clean(proc.Mp())
 
-	param.ExprList = makeVarcharList("1", "10", "3")
+	arg.Args = makeVarcharList("1", "10", "3")
 	proc.SetInputBatch(bat)
 	end, err = Call(0, proc, arg)
 	require.Nil(t, err)
@@ -491,7 +489,7 @@ func TestCall(t *testing.T) {
 	require.Equal(t, 4, proc.InputBatch().GetVector(0).Length())
 	proc.InputBatch().Clean(proc.Mp())
 
-	param.ExprList = param.ExprList[:2]
+	arg.Args = arg.Args[:2]
 	proc.SetInputBatch(bat)
 	_, err = Call(0, proc, arg)
 	require.NotNil(t, err)

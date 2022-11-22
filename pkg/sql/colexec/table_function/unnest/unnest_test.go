@@ -16,6 +16,7 @@ package unnest
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -29,7 +30,7 @@ import (
 )
 
 type unnestTestCase struct {
-	arg      *Argument
+	arg      *colexec.TableFunctionArgument
 	proc     *process.Process
 	jsons    []string
 	paths    []string
@@ -132,11 +133,9 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 
 	ret := unnestTestCase{
 		proc: proc,
-		arg: &Argument{
-			Es: &Param{
-				Attrs: attrs,
-				Cols:  colDefs,
-			},
+		arg: &colexec.TableFunctionArgument{
+			Attrs: attrs,
+			Rets:  colDefs,
 		},
 		jsons:    jsons,
 		paths:    paths,
@@ -166,8 +165,10 @@ func TestCall(t *testing.T) {
 			beforeMem := ut.proc.Mp().CurrNB()
 			inputBat, err = makeTestBatch(ut.jsons, types.T_varchar, encodeStr, ut.proc)
 			require.Nil(t, err)
-			ut.arg.Es.ExprList = makeConstInputExprs(ut.jsons, ut.paths, ut.jsonType, ut.outers)
+			ut.arg.Args = makeConstInputExprs(ut.jsons, ut.paths, ut.jsonType, ut.outers)
 			ut.proc.SetInputBatch(inputBat)
+			err := Prepare(ut.proc, ut.arg)
+			require.Nil(t, err)
 			end, err := Call(0, ut.proc, ut.arg)
 			require.Nil(t, err)
 			require.False(t, end)
@@ -179,8 +180,10 @@ func TestCall(t *testing.T) {
 			beforeMem := ut.proc.Mp().CurrNB()
 			inputBat, err = makeTestBatch(ut.jsons, types.T_json, encodeJson, ut.proc)
 			require.Nil(t, err)
-			ut.arg.Es.ExprList = makeColExprs(ut.jsonType, ut.paths, ut.outers)
+			ut.arg.Args = makeColExprs(ut.jsonType, ut.paths, ut.outers)
 			ut.proc.SetInputBatch(inputBat)
+			err := Prepare(ut.proc, ut.arg)
+			require.Nil(t, err)
 			end, err := Call(0, ut.proc, ut.arg)
 			require.Nil(t, err)
 			require.False(t, end)
@@ -225,37 +228,6 @@ func encodeJson(json string) ([]byte, error) {
 }
 func encodeStr(json string) ([]byte, error) {
 	return []byte(json), nil
-}
-
-func TestHandle(t *testing.T) {
-	for _, ut := range utc {
-
-		err := Prepare(ut.proc, ut.arg)
-		require.Nil(t, err)
-		var inputBat *batch.Batch
-		switch ut.jsonType {
-		case "str":
-			inputBat, err = makeTestBatch(ut.jsons, types.T_varchar, encodeStr, ut.proc)
-			require.Nil(t, err)
-			jsonVec := inputBat.GetVector(0)
-			path, err := types.ParseStringToPath(ut.paths[0])
-			require.Nil(t, err)
-			outer := ut.outers[0]
-			rbat, err := handle(jsonVec, &path, outer, ut.arg.Es, ut.proc, parseStr)
-			require.Nil(t, err)
-			require.NotNil(t, rbat)
-		case "json":
-			inputBat, err = makeTestBatch(ut.jsons, types.T_varchar, encodeJson, ut.proc)
-			require.Nil(t, err)
-			jsonVec := inputBat.GetVector(0)
-			path, err := types.ParseStringToPath(ut.paths[0])
-			require.Nil(t, err)
-			outer := ut.outers[0]
-			rbat, err := handle(jsonVec, &path, outer, ut.arg.Es, ut.proc, parseJson)
-			require.Nil(t, err)
-			require.NotNil(t, rbat)
-		}
-	}
 }
 
 func makeConstInputExprs(jsons, paths []string, jsonType string, outers []bool) []*plan.Expr {

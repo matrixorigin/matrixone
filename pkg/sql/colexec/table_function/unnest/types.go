@@ -14,30 +14,9 @@
 
 package unnest
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-)
-
 type Param struct {
-	Attrs    []string
-	Cols     []*plan.ColDef
-	ExprList []*plan.Expr
-	ColName  string
-	filters  []string
-}
-
-type Argument struct {
-	Es *Param
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-}
-
-type ExternalParam struct {
-	ColName string
-	Path    string
-	Outer   bool
+	Filters []string `json:"filters"`
+	ColName string   `json:"colName"`
 }
 
 var (

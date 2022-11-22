@@ -33,11 +33,11 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("generate_series")
 }
 
-func Prepare(_ *process.Process, arg any) error {
+func Prepare(_ *process.Process, arg *colexec.TableFunctionArgument) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg any) (bool, error) {
+func Call(_ int, proc *process.Process, arg *colexec.TableFunctionArgument) (bool, error) {
 	var (
 		err                                               error
 		startVec, endVec, stepVec, startVecTmp, endVecTmp *vector.Vector
@@ -63,26 +63,25 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			endVecTmp.Free(proc.Mp())
 		}
 	}()
-	param := arg.(*Argument).Es
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
-	startVec, err = colexec.EvalExpr(bat, proc, param.ExprList[0])
+	startVec, err = colexec.EvalExpr(bat, proc, arg.Args[0])
 	if err != nil {
 		return false, err
 	}
-	endVec, err = colexec.EvalExpr(bat, proc, param.ExprList[1])
+	endVec, err = colexec.EvalExpr(bat, proc, arg.Args[1])
 	if err != nil {
 		return false, err
 	}
-	rbat = batch.New(false, param.Attrs)
+	rbat = batch.New(false, arg.Attrs)
 	rbat.Cnt = 1
-	for i := range param.Attrs {
+	for i := range arg.Attrs {
 		rbat.Vecs[i] = vector.New(dupType(plan.MakePlan2Type(&startVec.Typ)))
 	}
-	if len(param.ExprList) == 3 {
-		stepVec, err = colexec.EvalExpr(bat, proc, param.ExprList[2])
+	if len(arg.Args) == 3 {
+		stepVec, err = colexec.EvalExpr(bat, proc, arg.Args[2])
 		if err != nil {
 			return false, err
 		}

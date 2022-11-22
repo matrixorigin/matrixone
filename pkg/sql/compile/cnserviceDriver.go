@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/generate_series"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -67,7 +66,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -760,17 +758,13 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Cond:      t.Cond,
 			OnList:    t.OnList,
 		}
-	case *unnest.Argument:
+	case *colexec.TableFunctionArgument:
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs: t.Es.Attrs,
-			Cols:  t.Es.Cols,
-			Exprs: t.Es.ExprList,
-			Param: []byte(t.Es.ColName),
-		}
-	case *generate_series.Argument:
-		in.TableFunction = &pipeline.TableFunction{
-			Attrs: t.Es.Attrs,
-			Exprs: t.Es.ExprList,
+			Attrs:  t.Attrs,
+			Rets:   t.Rets,
+			Args:   t.Args,
+			Params: t.Params,
+			Name:   t.Name,
 		}
 	case *hashbuild.Argument:
 		in.HashBuild = &pipeline.HashBuild{
@@ -991,21 +985,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		v.Arg = &mergeorder.Argument{
 			Fs: opr.OrderBy,
 		}
-	case vm.Unnest:
-		v.Arg = &unnest.Argument{
-			Es: &unnest.Param{
-				Attrs:    opr.TableFunction.Attrs,
-				Cols:     opr.TableFunction.Cols,
-				ExprList: opr.TableFunction.Exprs,
-				ColName:  string(opr.TableFunction.Param),
-			},
-		}
-	case vm.GenerateSeries:
-		v.Arg = &generate_series.Argument{
-			Es: &generate_series.Param{
-				Attrs:    opr.TableFunction.Attrs,
-				ExprList: opr.TableFunction.Exprs,
-			},
+	case vm.TableFunction:
+		v.Arg = &colexec.TableFunctionArgument{
+			Attrs:  opr.TableFunction.Attrs,
+			Rets:   opr.TableFunction.Rets,
+			Args:   opr.TableFunction.Args,
+			Name:   opr.TableFunction.Name,
+			Params: opr.TableFunction.Params,
 		}
 	case vm.HashBuild:
 		t := opr.GetHashBuild()
