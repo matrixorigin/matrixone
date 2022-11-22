@@ -100,6 +100,15 @@ func TestMOTracer_Start(t *testing.T) {
 			wantKind:         SpanKindStatement,
 		},
 		{
+			name:             "empty",
+			fields:           fields{Enable: true},
+			args:             args{ctx: context.Background(), name: "backgroundCtx", opts: []SpanOption{}},
+			wantNewRoot:      true,
+			wantTraceId:      nilTraceID,
+			wantParentSpanId: _1SpanID,
+			wantKind:         SpanKindInternal,
+		},
+		{
 			name:             "remote",
 			fields:           fields{Enable: true},
 			args:             args{ctx: remoteCtx, name: "remoteCtx", opts: []SpanOption{}},
@@ -127,6 +136,7 @@ func TestMOTracer_Start(t *testing.T) {
 				require.NotEqual(t1, tt.wantParentSpanId, SpanFromContext(newCtx).ParentSpanContext().SpanID)
 			}
 			require.Equal(t1, tt.wantKind, SpanFromContext(newCtx).ParentSpanContext().Kind)
+			require.Equal(t1, span, SpanFromContext(newCtx))
 		})
 	}
 }
