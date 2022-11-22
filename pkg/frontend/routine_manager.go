@@ -153,6 +153,7 @@ func (rm *RoutineManager) killStatement(id uint64) error {
 	if rt != nil {
 		logutil.Infof("will close the statement %d", id)
 		rt.notifyClose()
+		rt.notifyDone()
 	}
 	return nil
 }
