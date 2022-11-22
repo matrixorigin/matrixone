@@ -55,12 +55,18 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	defer logSlowAppend()()
 	ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
 	lsn, err := a.client.c.Append(ctx, record)
+	if err != nil {
+		logutil.Errorf("append failed: %v", err)
+	}
 	cancel()
 	if err != nil {
 		err = RetryWithTimeout(retryTimout, func() (shouldReturn bool) {
 			ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
 			lsn, err = a.client.c.Append(ctx, record)
 			cancel()
+			if err != nil {
+				logutil.Errorf("append failed: %v", err)
+			}
 			return err == nil
 		})
 	}
