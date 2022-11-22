@@ -51,7 +51,6 @@ type DeleteNode struct {
 	nt         NodeType
 	id         *common.ID
 	dt         handle.DeleteType
-	viewNodes  map[uint32]*common.GenericDLNode[txnif.MVCCNode]
 }
 
 func NewMergedNode(commitTs types.TS) *DeleteNode {
@@ -60,7 +59,6 @@ func NewMergedNode(commitTs types.TS) *DeleteNode {
 		mask:        roaring.New(),
 		nt:          NT_Merge,
 		logIndexes:  make([]*wal.Index, 0),
-		viewNodes:   make(map[uint32]*common.GenericDLNode[txnif.MVCCNode]),
 	}
 	return n
 }
@@ -69,7 +67,6 @@ func NewEmptyDeleteNode() txnif.MVCCNode {
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(nil),
 		mask:        roaring.New(),
 		nt:          NT_Normal,
-		viewNodes:   make(map[uint32]*common.GenericDLNode[txnif.MVCCNode]),
 	}
 	return n
 }
@@ -79,7 +76,6 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 		mask:        roaring.New(),
 		nt:          NT_Normal,
 		dt:          dt,
-		viewNodes:   make(map[uint32]*common.GenericDLNode[txnif.MVCCNode]),
 	}
 	if n.dt == handle.DT_MergeCompact {
 		_, err := n.TxnMVCCNode.PrepareCommit()

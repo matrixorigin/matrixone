@@ -119,8 +119,7 @@ func (chain *DeleteChain) InsertInDeleteView(row uint32, deleteNode *DeleteNode)
 	var link *common.GenericSortedDList[txnif.MVCCNode]
 	if link = chain.links[row]; link == nil {
 		link = common.NewGenericSortedDList(compareDeleteNode)
-		n := link.Insert(deleteNode)
-		deleteNode.viewNodes[row] = n
+		link.Insert(deleteNode)
 		chain.links[row] = link
 		return
 	}
@@ -131,7 +130,13 @@ func (chain *DeleteChain) DeleteInDeleteView(deleteNode *DeleteNode) {
 	for it.HasNext() {
 		row := it.Next()
 		link := chain.links[row]
-		link.Delete(deleteNode.viewNodes[row])
+		link.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
+			if n.GetPayload().(*DeleteNode) == deleteNode {
+				link.Delete((n))
+				return false
+			}
+			return true
+		}, false)
 		if link.Depth() == 0 {
 			delete(chain.links, row)
 		}
