@@ -3942,6 +3942,12 @@ func (mce *MysqlCmdExecutor) setCancelRequestFunc(cancelFunc context.CancelFunc)
 	mce.cancelRequestFunc = cancelFunc
 }
 
+func (mce *MysqlCmdExecutor) getCancelRequestFunc() context.CancelFunc {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
+	return mce.cancelRequestFunc
+}
+
 func (mce *MysqlCmdExecutor) Close() {}
 
 /*
