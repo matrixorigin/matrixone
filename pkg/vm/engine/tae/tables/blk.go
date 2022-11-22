@@ -151,6 +151,7 @@ func (blk *block) BatchDedup(
 
 func (blk *block) dedupClosure(
 	vec containers.Vector,
+	ts types.TS,
 	mask *roaring.Bitmap,
 	def *catalog.ColDef) func(any, int) error {
 	return func(v any, _ int) (err error) {
