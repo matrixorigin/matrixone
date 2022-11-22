@@ -235,11 +235,9 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		}
 	}
 }
-
-func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, err error) {
-	view = model.NewColumnView(blk.Txn.GetStartTS(), colIdx)
+func (blk *txnSysBlock) getColumnTableVec(colIdx int) (colData containers.Vector, err error) {
 	col := catalog.SystemColumnSchema.ColDefs[colIdx]
-	colData := containers.MakeVector(col.Type, col.Nullable())
+	colData = containers.MakeVector(col.Type, col.Nullable())
 	tableFn := func(table *catalog.TableEntry) error {
 		FillColumnRow(table, col.Name, colData)
 		return nil
@@ -251,6 +249,11 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 	if err != nil {
 		return
 	}
+	return
+}
+func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, err error) {
+	view = model.NewColumnView(blk.Txn.GetStartTS(), colIdx)
+	colData, err := blk.getColumnTableVec(colIdx)
 	view.SetData(colData)
 	return
 }
@@ -291,10 +294,9 @@ func FillTableRow(table *catalog.TableEntry, attr string, colData containers.Vec
 	}
 }
 
-func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err error) {
-	view = model.NewColumnView(blk.Txn.GetStartTS(), colIdx)
+func (blk *txnSysBlock) getRelTableVec(colIdx int) (colData containers.Vector, err error) {
 	colDef := catalog.SystemTableSchema.ColDefs[colIdx]
-	colData := containers.MakeVector(colDef.Type, colDef.Nullable())
+	colData = containers.MakeVector(colDef.Type, colDef.Nullable())
 	tableFn := func(table *catalog.TableEntry) error {
 		FillTableRow(table, colDef.Name, colData)
 		return nil
@@ -305,6 +307,12 @@ func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err
 	if err = blk.processDB(dbFn, false); err != nil {
 		return
 	}
+	return
+}
+
+func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err error) {
+	view = model.NewColumnView(blk.Txn.GetStartTS(), colIdx)
+	colData, err := blk.getRelTableVec(colIdx)
 	view.SetData(colData)
 	return
 }
@@ -331,11 +339,9 @@ func FillDBRow(db *catalog.DBEntry, attr string, colData containers.Vector) {
 		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}
 }
-
-func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err error) {
-	view = model.NewColumnView(blk.Txn.GetStartTS(), colIdx)
+func (blk *txnSysBlock) getDBTableVec(colIdx int) (colData containers.Vector, err error) {
 	colDef := catalog.SystemDBSchema.ColDefs[colIdx]
-	colData := containers.MakeVector(colDef.Type, colDef.Nullable())
+	colData = containers.MakeVector(colDef.Type, colDef.Nullable())
 	fn := func(db *catalog.DBEntry) error {
 		FillDBRow(db, colDef.Name, colData)
 		return nil
@@ -343,6 +349,11 @@ func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err 
 	if err = blk.processDB(fn, false); err != nil {
 		return
 	}
+	return
+}
+func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err error) {
+	view = model.NewColumnView(blk.Txn.GetStartTS(), colIdx)
+	colData, err := blk.getDBTableVec(colIdx)
 	view.SetData(colData)
 	return
 }
@@ -365,6 +376,45 @@ func (blk *txnSysBlock) GetColumnDataById(colIdx int, buffer *bytes.Buffer) (vie
 func (blk *txnSysBlock) GetColumnDataByName(attr string, buffer *bytes.Buffer) (view *model.ColumnView, err error) {
 	colIdx := blk.entry.GetSchema().GetColIdx(attr)
 	return blk.GetColumnDataById(colIdx, buffer)
+}
+
+func (blk *txnSysBlock) GetColumnDataByNames(attrs []string, buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+	if !blk.isSysTable() {
+		return blk.txnBlock.GetColumnDataByNames(attrs, buffers)
+	}
+	view = model.NewBlockView(blk.Txn.GetStartTS())
+	switch blk.table.GetID() {
+	case pkgcatalog.MO_DATABASE_ID:
+		for _, attr := range attrs {
+			colIdx := blk.entry.GetSchema().GetColIdx(attr)
+			vec, err := blk.getDBTableVec(colIdx)
+			view.SetData(colIdx, vec)
+			if err != nil {
+				return view, err
+			}
+		}
+	case pkgcatalog.MO_TABLES_ID:
+		for _, attr := range attrs {
+			colIdx := blk.entry.GetSchema().GetColIdx(attr)
+			vec, err := blk.getRelTableVec(colIdx)
+			view.SetData(colIdx, vec)
+			if err != nil {
+				return view, err
+			}
+		}
+	case pkgcatalog.MO_COLUMNS_ID:
+		for _, attr := range attrs {
+			colIdx := blk.entry.GetSchema().GetColIdx(attr)
+			vec, err := blk.getColumnTableVec(colIdx)
+			view.SetData(colIdx, vec)
+			if err != nil {
+				return view, err
+			}
+		}
+	default:
+		panic("not supported")
+	}
+	return
 }
 
 func (blk *txnSysBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
