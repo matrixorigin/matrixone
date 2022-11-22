@@ -31,6 +31,9 @@ import (
 var _ engine.Relation = new(table)
 
 func (tbl *table) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error) {
+	if tbl.db.databaseId == catalog.MO_CATALOG_ID {
+		return 100, nil
+	}
 	if expr == nil {
 		r, err := tbl.Rows(ctx)
 		return float64(r), err
