@@ -54,6 +54,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	record.ResizePayload(size)
 	defer logSlowAppend()()
 	ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
+	logutil.Infof("xxxxxxxxxxxxxx append start %p",&a.client.record)
 	lsn, err := a.client.c.Append(ctx, record)
 	cancel()
 	if err != nil {
@@ -64,6 +65,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 			return err == nil
 		})
 	}
+	logutil.Infof("xxxxxxxxxxxxxxxxxxxx append end %p",&a.client.record)
 	if err != nil {
 		logutil.Infof("size is %d", size)
 		panic(err)
