@@ -19,8 +19,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
 
+// Time represents a time
 type Time = timestamp.Timestamp
 
+// Now gets the current time from a clock
 func Now(clock clock.Clock) Time {
 	now, _ := clock.Now()
 	return now
