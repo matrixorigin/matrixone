@@ -96,7 +96,7 @@ func MakeBatch(columnSi int, rowCount int, mp *mpool.MPool) (*batch.Batch, *plan
 		randInsertValues(bat.Vecs[i], bat.Vecs[i].Typ.Oid, rowCount, valueCount, i*rowCount, mp)
 	}
 
-	bat.Vecs[idx] = vector.New(types.Type{Oid: types.T_varchar})
+	bat.Vecs[idx] = vector.New(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 
 	colDef := &plan.ColDef{
 		Name: cPkeyName,

@@ -33,7 +33,7 @@ func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	}
 	inputBytes0 := vector.MustStrCols(vectors[0])
 	inputBytes1 := vector.MustStrCols(vectors[1])
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	if vectors[0].IsScalar() && vectors[1].IsScalar() {
 		results := make([]string, 1)
 		format := inputBytes1[0]

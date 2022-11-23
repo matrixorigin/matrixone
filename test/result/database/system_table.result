@@ -3,7 +3,7 @@ character_set_name    default_collate_name    description    maxlen
 SELECT * FROM `information_schema`.`columns` where TABLE_NAME = 'mo_tables' order by ORDINAL_POSITION LIMIT 2;
 table_catalog    table_schema    table_name    column_name    ordinal_position    column_default    is_nullable    data_type    character_maximum_length    character_octet_length    numeric_precision    numeric_scale    datetime_precision    character_set_name    collation_name    column_type    column_key    extra    PRIVILEGES    column_comment    generation_expression    srs_id
 def    mo_catalog    mo_tables    rel_id    1    null    NO    BIGINT UNSIGNED    0    0    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(0)    PRI        select,insert,update,references            0
-def    mo_catalog    mo_tables    relname    2    null    YES    VARCHAR    100    100    0    0    0    utf8    utf8_bin    VARCHAR(100)            select,insert,update,references            0
+def    mo_catalog    mo_tables    relname    2    null    YES    VARCHAR    5000    5000    0    0    0    utf8    utf8_bin    VARCHAR(5000)            select,insert,update,references            0
 SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
 constraint_catalog    constraint_schema    constraint_name    table_catalog    table_schema    table_name    column_name    ordinal_position    position_in_unique_constraint    referenced_table_schema    referenced_table_name    referenced_column_name
 SELECT * FROM `information_schema`.`PROCESSLIST` LIMIT 0,1000;
@@ -90,7 +90,7 @@ password_reuse_history    SMALLINT UNSIGNED    YES        null
 password_reuse_time    SMALLINT UNSIGNED    YES        null
 password_require_current    VARCHAR(10)    YES        null
 user_attributes    JSON    YES        null
-__mo_cpkey_004host004user    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host004user    VARCHAR(65535)    NO    PRI    NULL
 show columns from `db`;
 Field    Type    Null    Key    Default    Extra    Comment
 host    CHAR(255)    NO        ''
@@ -115,7 +115,7 @@ alter_routine_priv    VARCHAR(10)    NO        'N'
 execute_priv    VARCHAR(10)    NO        'N'
 event_priv    VARCHAR(10)    NO        'N'
 trigger_priv    VARCHAR(10)    NO        'N'
-__mo_cpkey_004host002db004user    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host002db004user    VARCHAR(65535)    NO    PRI    NULL
 show columns from `procs_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
 host    CHAR(255)    NO        ''
@@ -126,7 +126,7 @@ routine_type    VARCHAR(10)    NO        NULL
 grantor    VARCHAR(288)    NO        ''
 proc_priv    VARCHAR(10)    NO        ''
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
-__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR(65535)    NO    PRI    NULL
 show columns from `columns_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
 host    CHAR(255)    NO        ''
@@ -136,7 +136,7 @@ table_name    CHAR(64)    NO        ''
 column_name    CHAR(64)    NO        ''
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
 column_priv    VARCHAR(10)    NO        ''
-__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR(65535)    NO    PRI    NULL
 show columns from `tables_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
 host    CHAR(255)    NO        ''
@@ -147,7 +147,7 @@ grantor    VARCHAR(288)    NO        ''
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
 table_priv    VARCHAR(10)    NO        ''
 column_priv    VARCHAR(10)    NO        ''
-__mo_cpkey_004host002db004user010table_name    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host002db004user010table_name    VARCHAR(65535)    NO    PRI    NULL
 use information_schema;
 show tables;
 tables_in_information_schema
