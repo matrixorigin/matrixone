@@ -105,6 +105,7 @@ create external table ex_table_3(char_1 char(20),char_2 varchar(10),date_1 date,
 select char_1,char_2,date_1,date_2 from ex_table_3;
 --增加text类型
 
+set time_zone='SYSTEM';
 --覆盖非法值，超出范围值
 create external table ex_table_3_1(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_3_1.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_3_1;

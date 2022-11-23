@@ -191,12 +191,15 @@ func (l *store) taskSchedule(state *pb.CheckerState) {
 	l.assertHAKeeperState(pb.HAKeeperRunning)
 	defer l.assertHAKeeperState(pb.HAKeeperRunning)
 
-	switch state.TaskState {
-	case pb.TaskInitNotStart:
+	switch state.TaskSchedulerState {
+	case pb.TaskSchedulerCreated:
 		l.registerTaskUser()
-	case pb.TaskInitStarted:
+	case pb.TaskSchedulerRunning:
 		l.taskScheduler.StartScheduleCronTask()
 		l.taskScheduler.Schedule(state.CNState, state.Tick)
+	case pb.TaskSchedulerStopped:
+	default:
+		panic("unknown TaskScheduler state")
 	}
 }
 
@@ -304,10 +307,10 @@ func (l *store) setTaskTableUser(user pb.TaskTableUser) error {
 		l.logger.Error("failed to propose task user info", zap.Error(err))
 		return err
 	}
-	if result.Value == uint64(pb.TaskInitFailed) {
+	if result.Value == uint64(pb.TaskSchedulerStopped) {
 		panic("failed to set task user")
 	}
-	if result.Value != uint64(pb.TaskInitNotStart) {
+	if result.Value != uint64(pb.TaskSchedulerCreated) {
 		l.logger.Error("task user info already set")
 	}
 	return nil

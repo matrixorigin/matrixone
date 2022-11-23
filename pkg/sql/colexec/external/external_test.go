@@ -47,7 +47,8 @@ type externalTestCase struct {
 }
 
 var (
-	cases []externalTestCase
+	cases         []externalTestCase
+	defaultOption = []string{"filepath", "abc", "format", "jsonline", "jsondata", "array"}
 )
 
 func newTestCase(all bool, format, jsondata string) externalTestCase {
@@ -100,6 +101,8 @@ func Test_Prepare(t *testing.T) {
 				FileService: tcs.proc.FileService,
 				Format:      tcs.format,
 				JsonData:    tcs.jsondata,
+				Option:      defaultOption,
+				Ctx:         context.Background(),
 			}
 			json_byte, err := json.Marshal(extern)
 			if err != nil {
@@ -125,6 +128,7 @@ func Test_Prepare(t *testing.T) {
 						IgnoredLines: 0,
 					},
 					Format: tcs.format,
+					Option: defaultOption,
 				}
 				extern.JsonData = tcs.jsondata
 				json_byte, err = json.Marshal(extern)
@@ -135,10 +139,11 @@ func Test_Prepare(t *testing.T) {
 				convey.So(param.FileList, convey.ShouldResemble, []string(nil))
 				convey.So(param.Fileparam.FileCnt, convey.ShouldEqual, 0)
 
-				extern.JsonData = "test"
+				extern.Option = []string{"filepath", "abc", "format", "jsonline", "jsondata", "test"}
 				json_byte, err = json.Marshal(extern)
 				convey.So(err, convey.ShouldBeNil)
 				param.CreateSql = string(json_byte)
+
 				err = Prepare(tcs.proc, tcs.arg)
 				convey.So(err, convey.ShouldNotBeNil)
 			}
@@ -158,6 +163,7 @@ func Test_Call(t *testing.T) {
 				FileService: tcs.proc.FileService,
 				Format:      tcs.format,
 				JsonData:    tcs.jsondata,
+				Ctx:         context.Background(),
 			}
 			param.extern = extern
 			param.Fileparam.End = false
@@ -183,6 +189,7 @@ func Test_getCompressType(t *testing.T) {
 	convey.Convey("getCompressType succ", t, func() {
 		param := &tree.ExternParam{
 			CompressType: tree.GZIP,
+			Ctx:          context.Background(),
 		}
 		compress := getCompressType(param)
 		convey.So(compress, convey.ShouldEqual, param.CompressType)
@@ -214,6 +221,7 @@ func Test_getUnCompressReader(t *testing.T) {
 	convey.Convey("getUnCompressReader succ", t, func() {
 		param := &tree.ExternParam{
 			CompressType: tree.NOCOMPRESS,
+			Ctx:          context.Background(),
 		}
 		read, err := getUnCompressReader(param, nil)
 		convey.So(read, convey.ShouldBeNil)
@@ -429,6 +437,7 @@ func Test_GetBatchData(t *testing.T) {
 					Fields: &tree.Fields{},
 				},
 				Format: tree.CSV,
+				Ctx:    context.Background(),
 			},
 		}
 		param.Name2ColIndex = make(map[string]int32)
@@ -559,6 +568,7 @@ func TestReadDirSymlink(t *testing.T) {
 	fooPathInB := filepath.Join(root, "a", "b", "d", "foo")
 	files, err := ReadDir(&tree.ExternParam{
 		Filepath: fooPathInB,
+		Ctx:      context.Background(),
 	})
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(files))

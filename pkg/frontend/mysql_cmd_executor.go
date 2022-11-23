@@ -446,7 +446,7 @@ func handleShowColumns(ses *Session) error {
 			if err := types.Decode(data, typ); err != nil {
 				return err
 			}
-			row[1] = typ.String()
+			row[1] = typ.DescString()
 			if d[2].(int8) == 0 {
 				row[2] = "NO"
 			} else {
@@ -472,6 +472,8 @@ func handleShowColumns(ses *Session) error {
 					row[4] = "UUID"
 				case "current_timestamp()":
 					row[4] = "CURRENT_TIMESTAMP"
+				case "now()":
+					row[4] = "CURRENT_TIMESTAMP"
 				case "":
 					row[4] = "NULL"
 				default:
@@ -490,7 +492,7 @@ func handleShowColumns(ses *Session) error {
 			if err := types.Decode(data, typ); err != nil {
 				return err
 			}
-			row[1] = typ.String()
+			row[1] = typ.DescString()
 			row[2] = "NULL"
 			if d[3].(int8) == 0 {
 				row[3] = "NO"
@@ -516,6 +518,8 @@ func handleShowColumns(ses *Session) error {
 				case "uuid()":
 					row[5] = "UUID"
 				case "current_timestamp()":
+					row[5] = "CURRENT_TIMESTAMP"
+				case "now()":
 					row[5] = "CURRENT_TIMESTAMP"
 				case "":
 					row[5] = "NULL"
@@ -1681,7 +1685,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		if err != nil {
 			return err
 		}
-		binder := plan2.NewDefaultBinder(nil, nil, &plan2.Type{Id: int32(types.T_varchar)}, []string{"variable_name", "value"})
+		binder := plan2.NewDefaultBinder(nil, nil, &plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
 		planExpr, err := binder.BindExpr(sv.Where.Expr, 0, false)
 		if err != nil {
 			return err
@@ -1743,7 +1747,7 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *p
 
 func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error) {
 	bat := batch.New(true, []string{"Variable_name", "Value"})
-	typ := types.New(types.T_varchar, 0, 0, 0)
+	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
 	cnt := len(rows)
 	bat.Zs = make([]int64, cnt)
 	for i := range bat.Zs {
@@ -3936,6 +3940,12 @@ func (mce *MysqlCmdExecutor) setCancelRequestFunc(cancelFunc context.CancelFunc)
 	mce.mu.Lock()
 	defer mce.mu.Unlock()
 	mce.cancelRequestFunc = cancelFunc
+}
+
+func (mce *MysqlCmdExecutor) getCancelRequestFunc() context.CancelFunc {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
+	return mce.cancelRequestFunc
 }
 
 func (mce *MysqlCmdExecutor) Close() {}

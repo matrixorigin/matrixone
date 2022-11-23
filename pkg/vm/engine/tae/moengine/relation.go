@@ -64,6 +64,10 @@ func (rel *baseRelation) TableColumns(_ context.Context) ([]*engine.Attribute, e
 	return cols, nil
 }
 
+func (rel *baseRelation) FilteredRows(c context.Context, expr *plan.Expr) (float64, error) {
+	return float64(rel.handle.Rows()), nil
+}
+
 func (rel *baseRelation) Rows(context.Context) (int64, error) {
 	return rel.handle.Rows(), nil
 }

@@ -146,7 +146,6 @@ func (s *sender) adjust() {
 		s.options.payloadCopyBufferSize = 16 * 1024
 	}
 	s.options.backendCreateOptions = append(s.options.backendCreateOptions,
-		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendLogger(s.logger))
 
 	s.options.clientOptions = append(s.options.clientOptions, morpc.WithClientLogger(s.logger))
