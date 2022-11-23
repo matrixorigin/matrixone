@@ -39,115 +39,115 @@ columns_priv
 tables_priv
 show columns from `user`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        ''        
-user    CHAR    NO        ''        
-select_priv    VARCHAR    NO        'N'        
-insert_priv    VARCHAR    NO        'N'        
-update_priv    VARCHAR    NO        'N'        
-delete_priv    VARCHAR    NO        'N'        
-create_priv    VARCHAR    NO        'N'        
-drop_priv    VARCHAR    NO        'N'        
-reload_priv    VARCHAR    NO        'N'        
-shutdown_priv    VARCHAR    NO        'N'        
-process_priv    VARCHAR    NO        'N'        
-file_priv    VARCHAR    NO        'N'        
-grant_priv    VARCHAR    NO        'N'        
-references_priv    VARCHAR    NO        'N'        
-index_priv    VARCHAR    NO        'N'        
-alter_priv    VARCHAR    NO        'N'        
-show_db_priv    VARCHAR    NO        'N'        
-super_priv    VARCHAR    NO        'N'        
-create_tmp_table_priv    VARCHAR    NO        'N'        
-lock_tables_priv    VARCHAR    NO        'N'        
-execute_priv    VARCHAR    NO        'N'        
-repl_slave_priv    VARCHAR    NO        'N'        
-repl_client_priv    VARCHAR    NO        'N'        
-create_view_priv    VARCHAR    NO        'N'        
-show_view_priv    VARCHAR    NO        'N'        
-create_routine_priv    VARCHAR    NO        'N'        
-alter_routine_priv    VARCHAR    NO        'N'        
-create_user_priv    VARCHAR    NO        'N'        
-event_priv    VARCHAR    NO        'N'        
-trigger_priv    VARCHAR    NO        'N'        
-create_tablespace_priv    VARCHAR    NO        'N'        
-ssl_type    VARCHAR    NO        ''        
-ssl_cipher    BLOB    NO        NULL        
-x509_issuer    BLOB    NO        NULL        
-x509_subject    BLOB    NO        NULL        
-max_questions    INT UNSIGNED    NO        '0'        
-max_updates    INT UNSIGNED    NO        '0'        
-max_connections    INT UNSIGNED    NO        '0'        
-max_user_connections    INT UNSIGNED    NO        '0'        
-plugin    CHAR    NO        'caching_sha2_password'        
-authentication_string    TEXT    YES        NULL        
-password_expired    VARCHAR    NO        'N'        
-password_last_changed    TIMESTAMP    YES        null        
-password_lifetime    SMALLINT UNSIGNED    YES        null        
-account_locked    VARCHAR    NO        'N'        
-create_role_priv    VARCHAR    NO        'N'        
-drop_role_priv    VARCHAR    NO        'N'        
-password_reuse_history    SMALLINT UNSIGNED    YES        null        
-password_reuse_time    SMALLINT UNSIGNED    YES        null        
-password_require_current    VARCHAR    YES        null        
-user_attributes    JSON    YES        null        
-__mo_cpkey_004host004user    VARCHAR    NO    PRI    NULL        
+host    CHAR(255)    NO        ''
+user    CHAR(32)    NO        ''
+select_priv    VARCHAR(10)    NO        'N'
+insert_priv    VARCHAR(10)    NO        'N'
+update_priv    VARCHAR(10)    NO        'N'
+delete_priv    VARCHAR(10)    NO        'N'
+create_priv    VARCHAR(10)    NO        'N'
+drop_priv    VARCHAR(10)    NO        'N'
+reload_priv    VARCHAR(10)    NO        'N'
+shutdown_priv    VARCHAR(10)    NO        'N'
+process_priv    VARCHAR(10)    NO        'N'
+file_priv    VARCHAR(10)    NO        'N'
+grant_priv    VARCHAR(10)    NO        'N'
+references_priv    VARCHAR(10)    NO        'N'
+index_priv    VARCHAR(10)    NO        'N'
+alter_priv    VARCHAR(10)    NO        'N'
+show_db_priv    VARCHAR(10)    NO        'N'
+super_priv    VARCHAR(10)    NO        'N'
+create_tmp_table_priv    VARCHAR(10)    NO        'N'
+lock_tables_priv    VARCHAR(10)    NO        'N'
+execute_priv    VARCHAR(10)    NO        'N'
+repl_slave_priv    VARCHAR(10)    NO        'N'
+repl_client_priv    VARCHAR(10)    NO        'N'
+create_view_priv    VARCHAR(10)    NO        'N'
+show_view_priv    VARCHAR(10)    NO        'N'
+create_routine_priv    VARCHAR(10)    NO        'N'
+alter_routine_priv    VARCHAR(10)    NO        'N'
+create_user_priv    VARCHAR(10)    NO        'N'
+event_priv    VARCHAR(10)    NO        'N'
+trigger_priv    VARCHAR(10)    NO        'N'
+create_tablespace_priv    VARCHAR(10)    NO        'N'
+ssl_type    VARCHAR(10)    NO        ''
+ssl_cipher    BLOB    NO        NULL
+x509_issuer    BLOB    NO        NULL
+x509_subject    BLOB    NO        NULL
+max_questions    INT UNSIGNED    NO        '0'
+max_updates    INT UNSIGNED    NO        '0'
+max_connections    INT UNSIGNED    NO        '0'
+max_user_connections    INT UNSIGNED    NO        '0'
+plugin    CHAR(64)    NO        'caching_sha2_password'
+authentication_string    TEXT    YES        NULL
+password_expired    VARCHAR(10)    NO        'N'
+password_last_changed    TIMESTAMP    YES        null
+password_lifetime    SMALLINT UNSIGNED    YES        null
+account_locked    VARCHAR(10)    NO        'N'
+create_role_priv    VARCHAR(10)    NO        'N'
+drop_role_priv    VARCHAR(10)    NO        'N'
+password_reuse_history    SMALLINT UNSIGNED    YES        null
+password_reuse_time    SMALLINT UNSIGNED    YES        null
+password_require_current    VARCHAR(10)    YES        null
+user_attributes    JSON    YES        null
+__mo_cpkey_004host004user    VARCHAR(0)    NO    PRI    NULL
 show columns from `db`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        ''        
-db    CHAR    NO        ''        
-user    CHAR    NO        ''        
-select_priv    VARCHAR    NO        'N'        
-insert_priv    VARCHAR    NO        'N'        
-update_priv    VARCHAR    NO        'N'        
-delete_priv    VARCHAR    NO        'N'        
-create_priv    VARCHAR    NO        'N'        
-drop_priv    VARCHAR    NO        'N'        
-grant_priv    VARCHAR    NO        'N'        
-references_priv    VARCHAR    NO        'N'        
-index_priv    VARCHAR    NO        'N'        
-alter_priv    VARCHAR    NO        'N'        
-create_tmp_table_priv    VARCHAR    NO        'N'        
-lock_tables_priv    VARCHAR    NO        'N'        
-create_view_priv    VARCHAR    NO        'N'        
-show_view_priv    VARCHAR    NO        'N'        
-create_routine_priv    VARCHAR    NO        'N'        
-alter_routine_priv    VARCHAR    NO        'N'        
-execute_priv    VARCHAR    NO        'N'        
-event_priv    VARCHAR    NO        'N'        
-trigger_priv    VARCHAR    NO        'N'        
-__mo_cpkey_004host002db004user    VARCHAR    NO    PRI    NULL        
+host    CHAR(255)    NO        ''
+db    CHAR(64)    NO        ''
+user    CHAR(32)    NO        ''
+select_priv    VARCHAR(10)    NO        'N'
+insert_priv    VARCHAR(10)    NO        'N'
+update_priv    VARCHAR(10)    NO        'N'
+delete_priv    VARCHAR(10)    NO        'N'
+create_priv    VARCHAR(10)    NO        'N'
+drop_priv    VARCHAR(10)    NO        'N'
+grant_priv    VARCHAR(10)    NO        'N'
+references_priv    VARCHAR(10)    NO        'N'
+index_priv    VARCHAR(10)    NO        'N'
+alter_priv    VARCHAR(10)    NO        'N'
+create_tmp_table_priv    VARCHAR(10)    NO        'N'
+lock_tables_priv    VARCHAR(10)    NO        'N'
+create_view_priv    VARCHAR(10)    NO        'N'
+show_view_priv    VARCHAR(10)    NO        'N'
+create_routine_priv    VARCHAR(10)    NO        'N'
+alter_routine_priv    VARCHAR(10)    NO        'N'
+execute_priv    VARCHAR(10)    NO        'N'
+event_priv    VARCHAR(10)    NO        'N'
+trigger_priv    VARCHAR(10)    NO        'N'
+__mo_cpkey_004host002db004user    VARCHAR(0)    NO    PRI    NULL
 show columns from `procs_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        ''        
-db    CHAR    NO        ''        
-user    CHAR    NO        ''        
-routine_name    CHAR    NO        ''        
-routine_type    VARCHAR    NO        NULL        
-grantor    VARCHAR    NO        ''        
-proc_priv    VARCHAR    NO        ''        
-timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP        
-__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR    NO    PRI    NULL        
+host    CHAR(255)    NO        ''
+db    CHAR(64)    NO        ''
+user    CHAR(32)    NO        ''
+routine_name    CHAR(64)    NO        ''
+routine_type    VARCHAR(10)    NO        NULL
+grantor    VARCHAR(288)    NO        ''
+proc_priv    VARCHAR(10)    NO        ''
+timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
+__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR(0)    NO    PRI    NULL
 show columns from `columns_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        ''        
-db    CHAR    NO        ''        
-user    CHAR    NO        ''        
-table_name    CHAR    NO        ''        
-column_name    CHAR    NO        ''        
-timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP        
-column_priv    VARCHAR    NO        ''        
-__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR    NO    PRI    NULL        
+host    CHAR(255)    NO        ''
+db    CHAR(64)    NO        ''
+user    CHAR(32)    NO        ''
+table_name    CHAR(64)    NO        ''
+column_name    CHAR(64)    NO        ''
+timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
+column_priv    VARCHAR(10)    NO        ''
+__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR(0)    NO    PRI    NULL
 show columns from `tables_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        ''        
-db    CHAR    NO        ''        
-user    CHAR    NO        ''        
-table_name    CHAR    NO        ''        
-grantor    VARCHAR    NO        ''        
-timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP        
-table_priv    VARCHAR    NO        ''        
-column_priv    VARCHAR    NO        ''        
-__mo_cpkey_004host002db004user010table_name    VARCHAR    NO    PRI    NULL        
+host    CHAR(255)    NO        ''
+db    CHAR(64)    NO        ''
+user    CHAR(32)    NO        ''
+table_name    CHAR(64)    NO        ''
+grantor    VARCHAR(288)    NO        ''
+timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
+table_priv    VARCHAR(10)    NO        ''
+column_priv    VARCHAR(10)    NO        ''
+__mo_cpkey_004host002db004user010table_name    VARCHAR(0)    NO    PRI    NULL
 use information_schema;
 show tables;
 tables_in_information_schema
@@ -172,13 +172,13 @@ show columns from `PROFILING`;
 no such table information_schema.PROFILING
 show columns from `PROCESSLIST`;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT UNSIGNED    NO        '0'        
-user    VARCHAR    NO        ''        
-host    VARCHAR    NO        ''        
-db    VARCHAR    YES        null        
-command    VARCHAR    NO        ''        
-time    INT    NO        '0'        
-state    VARCHAR    YES        null        
+id    BIGINT UNSIGNED    NO        '0'
+user    VARCHAR(32)    NO        ''
+host    VARCHAR(261)    NO        ''
+db    VARCHAR(64)    YES        null
+command    VARCHAR(16)    NO        ''
+time    INT    NO        '0'
+state    VARCHAR(64)    YES        null
 info    TEXT    YES        NULL        
 show columns from `USER_PRIVILEGES`;
 no such table information_schema.USER_PRIVILEGES

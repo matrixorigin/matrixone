@@ -123,9 +123,11 @@ char_1    char_2    date_1    date_2
 cat    yellow 芝士    2020-10-09    0001-01-01 00:00:00
 123木头人    zt@126.com    1000-01-01    9999-12-31 00:00:00
 abc$%*()#$    ttttt    9999-12-31    2019-10-23 23:00:09
+set time_zone='SYSTEM';
 create external table ex_table_3_1(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_3_1.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_3_1;
-internal error: the input value '2020-10-09 00:00:00.000000' is not Date type for column 2
+char_1    char_2    date_1    date_2    date_3
+cat    yellow 芝士    2020-10-09    0001-01-01 00:00:00    1970-01-01 00:00:01
 create external table ex_table_3_2(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_3_2.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_3_2;
 internal error: the input value '0001' is not Date type for column 2
@@ -137,7 +139,8 @@ select * from ex_table_3_4;
 internal error: the input value '0000-0-20 03:14:07.999999' is not Timestamp type for column 4
 create external table ex_table_3_5(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_3_5.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_3_5;
-internal error: the input value '2020/10/09' is not Date type for column 2
+char_1    char_2    date_1    date_2    date_3
+78    yellow 芝士    2020-10-09    0001-01-01 00:00:00    2011-01-20 03:14:08
 create external table ex_table_31(clo1 tinyint default 8,clo2 smallint null,clo3 int not null,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255),primary key(clo1))infile{"filepath"='$resources/external_table_file/ex_table_3_6.csv'};
 select clo1,clo2,clo3,clo4,clo5,clo6,clo7,clo8,col9,col10,col11,col12,col13,col15,col16,col17,col18,col19,col20 from ex_table_31;
 clo1    clo2    clo3    clo4    clo5    clo6    clo7    clo8    col9    col10    col11    col12    col13    col15    col16    col17    col18    col19    col20

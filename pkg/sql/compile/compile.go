@@ -548,6 +548,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	}
 
 	param.FileService = c.proc.FileService
+	param.Ctx = c.ctx
 	fileList, err := external.ReadDir(param)
 	if err != nil {
 		return nil, err

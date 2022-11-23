@@ -446,7 +446,7 @@ func handleShowColumns(ses *Session) error {
 			if err := types.Decode(data, typ); err != nil {
 				return err
 			}
-			row[1] = typ.String()
+			row[1] = typ.DescString()
 			if d[2].(int8) == 0 {
 				row[2] = "NO"
 			} else {
@@ -492,7 +492,7 @@ func handleShowColumns(ses *Session) error {
 			if err := types.Decode(data, typ); err != nil {
 				return err
 			}
-			row[1] = typ.String()
+			row[1] = typ.DescString()
 			row[2] = "NULL"
 			if d[3].(int8) == 0 {
 				row[3] = "NO"
@@ -3940,6 +3940,12 @@ func (mce *MysqlCmdExecutor) setCancelRequestFunc(cancelFunc context.CancelFunc)
 	mce.mu.Lock()
 	defer mce.mu.Unlock()
 	mce.cancelRequestFunc = cancelFunc
+}
+
+func (mce *MysqlCmdExecutor) getCancelRequestFunc() context.CancelFunc {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
+	return mce.cancelRequestFunc
 }
 
 func (mce *MysqlCmdExecutor) Close() {}
