@@ -98,7 +98,7 @@ func (view *BlockView) ApplyDeletes() {
 		return
 	}
 	for _, col := range view.Columns {
-		col.data.Compact(view.DeleteMask)
+		col.data.DeleteBatch(view.DeleteMask)
 	}
 	view.DeleteMask = nil
 }

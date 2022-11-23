@@ -404,7 +404,7 @@ func TestVector8(t *testing.T) {
 	assert.True(t, types.IsNull(vec.Get(1)))
 	assert.True(t, types.IsNull(vec.Get(2)))
 	assert.True(t, types.IsNull(vec.Get(4)))
-	vec.Compact(roaring.BitmapOf(0, 2))
+	vec.DeleteBatch(roaring.BitmapOf(0, 2))
 	assert.Equal(t, 3, vec.Length())
 	assert.True(t, types.IsNull(vec.Get(0)))
 	assert.True(t, types.IsNull(vec.Get(2)))
@@ -462,7 +462,7 @@ func TestCompact(t *testing.T) {
 	t.Log(vec.String())
 	deletes := roaring.BitmapOf(0)
 	//{null}
-	vec.Compact(deletes)
+	vec.DeleteBatch(deletes)
 	//{}
 	assert.Equal(t, 0, vec.Length())
 
@@ -471,7 +471,7 @@ func TestCompact(t *testing.T) {
 	vec.Append(types.Null{})
 	deletes = roaring.BitmapOf(0, 1)
 	//{n,n,n}
-	vec.Compact(deletes)
+	vec.DeleteBatch(deletes)
 	//{n}
 	assert.Equal(t, 1, vec.Length())
 	assert.True(t, types.IsNull(vec.Get(0)))
@@ -482,7 +482,7 @@ func TestCompact(t *testing.T) {
 	vec.Append(types.Null{})
 	//{null,var,null,var,null}
 	deletes = roaring.BitmapOf(1, 3)
-	vec.Compact(deletes)
+	vec.DeleteBatch(deletes)
 	//{null,null,null}
 	assert.Equal(t, 3, vec.Length())
 	assert.True(t, types.IsNull(vec.Get(0)))

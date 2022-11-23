@@ -74,7 +74,6 @@ type Vector interface {
 	AppendNoNulls(s any)
 	Extend(o Vector)
 	ExtendWithOffset(src Vector, srcOff, srcLen int)
-	Compact(deletes *roaring.Bitmap)
 	CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector
 
 	Equals(o Vector) bool

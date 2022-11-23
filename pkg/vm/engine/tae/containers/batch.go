@@ -89,7 +89,7 @@ func (bat *Batch) Compact() {
 		return
 	}
 	for _, vec := range bat.Vecs {
-		vec.Compact(bat.Deletes)
+		vec.DeleteBatch(bat.Deletes)
 	}
 	bat.Deletes = nil
 }

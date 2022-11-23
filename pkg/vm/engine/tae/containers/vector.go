@@ -211,16 +211,6 @@ func (vec *vector[T]) Window(offset, length int) Vector {
 	}
 }
 
-func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
-	if deletes == nil || deletes.IsEmpty() {
-		return
-	}
-	if vec.roStorage != nil {
-		vec.cow()
-	}
-	vec.impl.DeleteBatch(deletes)
-}
-
 func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
 	var nr int
 	var tmpn int64

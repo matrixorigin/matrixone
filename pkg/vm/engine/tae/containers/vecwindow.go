@@ -35,7 +35,6 @@ func (win *windowBase) Update(i int, v any)                  { panic("cannot mod
 func (win *windowBase) Delete(i int)                         { panic("cannot modify window") }
 func (win *windowBase) DeleteBatch(deletes *roaring.Bitmap)  { panic("cannot modify window") }
 func (win *windowBase) Append(v any)                         { panic("cannot modify window") }
-func (win *windowBase) Compact(*roaring.Bitmap)              { panic("cannot modify window") }
 func (win *windowBase) AppendMany(vs ...any)                 { panic("cannot modify window") }
 func (win *windowBase) AppendNoNulls(s any)                  { panic("cannot modify window") }
 func (win *windowBase) Extend(o Vector)                      { panic("cannot modify window") }

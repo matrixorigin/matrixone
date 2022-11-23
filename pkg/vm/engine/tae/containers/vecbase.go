@@ -75,9 +75,6 @@ func (base *vecBase[T]) Append(v any) {
 	base.tryCOW()
 	base.derived.stlvec.Append(v.(T))
 }
-func (base *vecBase[T]) Compact(_ *roaring.Bitmap) {
-	panic("not supported")
-}
 func (base *vecBase[T]) AppendMany(vs ...any) {
 	base.tryCOW()
 	for _, v := range vs {
