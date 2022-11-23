@@ -70,7 +70,7 @@ func TriggerFaultPoint(vecs []*vector.Vector, proc *process.Process) (*vector.Ve
 	}
 
 	name := vecs[0].GetString(0)
-	iv, ok := fault.TriggerFault(name)
+	iv, _, ok := fault.TriggerFault(name)
 	if !ok {
 		return proc.AllocScalarNullVector(types.T_int64.ToType()), nil
 	}

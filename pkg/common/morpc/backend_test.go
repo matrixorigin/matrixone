@@ -55,7 +55,45 @@ func TestSend(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, req, resp)
 		},
-		WithBackendConnectWhenCreate())
+	)
+}
+
+func TestSendWithSomeErrorInBatch(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*100000)
+			defer cancel()
+
+			n := 100
+			largePayload := make([]byte, defaultMaxMessageSize)
+			futures := make([]*Future, 0, n)
+			requests := make([]Message, 0, n)
+			for i := 0; i < n; i++ {
+				req := newTestMessage(uint64(i))
+				if i%2 == 0 {
+					req.SetPayloadField(largePayload)
+				}
+				f, err := b.Send(ctx, req)
+				assert.NoError(t, err)
+				defer f.Close()
+				futures = append(futures, f)
+				requests = append(requests, req)
+			}
+
+			for i, f := range futures {
+				resp, err := f.Get()
+				if i%2 == 0 {
+					assert.Error(t, err)
+				} else {
+					assert.NoError(t, err)
+					assert.Equal(t, requests[i], resp)
+				}
+			}
+		},
+	)
 }
 
 func TestSendWithPayloadCannotTimeout(t *testing.T) {
@@ -78,7 +116,7 @@ func TestSendWithPayloadCannotTimeout(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, req, resp)
 		},
-		WithBackendConnectWhenCreate())
+	)
 }
 
 func TestSendWithPayloadCannotBlockIfFutureRemoved(t *testing.T) {
@@ -108,7 +146,6 @@ func TestSendWithPayloadCannotBlockIfFutureRemoved(t *testing.T) {
 			wg.Done()
 			time.Sleep(time.Second)
 		},
-		WithBackendConnectWhenCreate(),
 		WithBackendHasPayloadResponse())
 }
 
@@ -139,7 +176,6 @@ func TestSendWithPayloadCannotBlockIfFutureClosed(t *testing.T) {
 			wg.Done()
 			time.Sleep(time.Second)
 		},
-		WithBackendConnectWhenCreate(),
 		WithBackendHasPayloadResponse())
 }
 
@@ -190,7 +226,7 @@ func TestCloseWhileContinueSending(t *testing.T) {
 			close(stopC)
 			wg.Wait()
 		},
-		WithBackendConnectWhenCreate())
+	)
 }
 
 func TestSendWithAlreadyContextDone(t *testing.T) {
@@ -210,34 +246,8 @@ func TestSendWithAlreadyContextDone(t *testing.T) {
 			assert.Error(t, err)
 			assert.Nil(t, resp)
 		},
-		WithBackendConnectWhenCreate(),
 		WithBackendFilter(func(Message, string) bool {
 			cancel()
-			return true
-		}))
-}
-
-func TestSendWithResetConnAndRetry(t *testing.T) {
-	retry := 0
-	testBackendSend(t,
-		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
-			return conn.Write(msg, goetty.WriteOptions{Flush: true})
-		},
-		func(b *remoteBackend) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-			defer cancel()
-			req := &testMessage{id: 1}
-			f, err := b.Send(ctx, req)
-			assert.NoError(t, err)
-			defer f.Close()
-
-			resp, err := f.Get()
-			assert.NoError(t, err)
-			assert.Equal(t, req, resp)
-			assert.True(t, retry > 0)
-		},
-		WithBackendFilter(func(Message, string) bool {
-			retry++
 			return true
 		}))
 }
@@ -260,44 +270,10 @@ func TestSendWithTimeout(t *testing.T) {
 			assert.Nil(t, resp)
 			assert.Equal(t, err, ctx.Err())
 		},
-		WithBackendConnectWhenCreate())
+	)
 }
 
-func TestSendWithReconnect(t *testing.T) {
-	var rb *remoteBackend
-	idx := 0
-	testBackendSend(t,
-		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
-			return conn.Write(msg, goetty.WriteOptions{Flush: true})
-		},
-		func(b *remoteBackend) {
-			rb = b
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-			defer cancel()
-
-			for i := 0; i < 10; i++ {
-				req := newTestMessage(1)
-				f, err := b.Send(ctx, req)
-				assert.NoError(t, err)
-				defer f.Close()
-
-				resp, err := f.Get()
-				assert.NoError(t, err)
-				assert.Equal(t, req, resp)
-			}
-		},
-		WithBackendConnectWhenCreate(),
-		WithBackendFilter(func(Message, string) bool {
-			idx++
-			if idx%2 == 0 {
-				rb.closeConn(false)
-				idx = 0
-			}
-			return true
-		}))
-}
-
-func TestSendWithCannotConnectWillTimeout(t *testing.T) {
+func TestSendWithCannotConnect(t *testing.T) {
 	var rb *remoteBackend
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
@@ -315,7 +291,6 @@ func TestSendWithCannotConnectWillTimeout(t *testing.T) {
 			resp, err := f.Get()
 			assert.Error(t, err)
 			assert.Nil(t, resp)
-			assert.Equal(t, err, ctx.Err())
 		},
 		WithBackendFilter(func(Message, string) bool {
 			assert.NoError(t, rb.conn.Disconnect())
@@ -323,7 +298,7 @@ func TestSendWithCannotConnectWillTimeout(t *testing.T) {
 			return true
 		}),
 		WithBackendConnectTimeout(time.Millisecond*200),
-		WithBackendConnectWhenCreate())
+	)
 }
 
 func TestStream(t *testing.T) {
@@ -358,7 +333,7 @@ func TestStream(t *testing.T) {
 				assert.Equal(t, &testMessage{id: st.ID()}, v)
 			}
 		},
-		WithBackendConnectWhenCreate())
+	)
 }
 
 func TestStreamSendWillPanicIfDeadlineNotSet(t *testing.T) {
@@ -385,7 +360,7 @@ func TestStreamSendWillPanicIfDeadlineNotSet(t *testing.T) {
 			req := &testMessage{id: st.ID()}
 			assert.NoError(t, st.Send(context.TODO(), req))
 		},
-		WithBackendConnectWhenCreate())
+	)
 }
 
 func TestStreamClosedByConnReset(t *testing.T) {
@@ -410,7 +385,7 @@ func TestStreamClosedByConnReset(t *testing.T) {
 			assert.True(t, ok)
 			assert.Nil(t, v)
 		},
-		WithBackendConnectWhenCreate())
+	)
 }
 
 func TestBusy(t *testing.T) {
@@ -437,7 +412,6 @@ func TestBusy(t *testing.T) {
 			assert.True(t, b.Busy())
 			c <- struct{}{}
 		},
-		WithBackendConnectWhenCreate(),
 		WithBackendFilter(func(Message, string) bool {
 			if n == 0 {
 				<-c
@@ -492,7 +466,7 @@ func TestLastActiveWithNew(t *testing.T) {
 		func(b *remoteBackend) {
 			assert.NotEqual(t, time.Time{}, b.LastActiveTime())
 		},
-		WithBackendConnectWhenCreate())
+	)
 }
 
 func TestLastActiveWithSend(t *testing.T) {
@@ -526,7 +500,7 @@ func TestLastActiveWithSend(t *testing.T) {
 			assert.True(t, t3.After(t2))
 
 		},
-		WithBackendConnectWhenCreate())
+	)
 }
 
 func TestLastActiveWithStream(t *testing.T) {
@@ -555,13 +529,13 @@ func TestLastActiveWithStream(t *testing.T) {
 				assert.True(t, t2.After(t1))
 			}
 		},
-		WithBackendConnectWhenCreate())
+	)
 }
 
 func TestBackendConnectTimeout(t *testing.T) {
 	rb, err := NewRemoteBackend(testAddr, newTestCodec(),
 		WithBackendConnectTimeout(time.Millisecond*200),
-		WithBackendConnectWhenCreate())
+	)
 	assert.Error(t, err)
 	assert.Nil(t, rb)
 }
@@ -595,7 +569,6 @@ func TestInactiveAfterCannotConnect(t *testing.T) {
 				time.Sleep(time.Millisecond * 100)
 			}
 		},
-		WithBackendConnectWhenCreate(),
 		WithBackendConnectTimeout(time.Millisecond*100))
 }
 
@@ -625,7 +598,7 @@ func TestTCPProxyExample(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, req, resp)
 		},
-		WithBackendConnectWhenCreate())
+	)
 }
 
 func TestLockedStream(t *testing.T) {
@@ -642,7 +615,7 @@ func TestLockedStream(t *testing.T) {
 			assert.NoError(t, st.Close())
 			assert.False(t, b.Locked())
 		},
-		WithBackendConnectWhenCreate())
+	)
 }
 
 func testBackendSend(t *testing.T,
@@ -803,7 +776,7 @@ func (tm *testMessage) GetID() uint64 {
 }
 
 func (tm *testMessage) DebugString() string {
-	return fmt.Sprintf("%d", tm.id)
+	return fmt.Sprintf("%d:%d", tm.id, len(tm.payload))
 }
 
 func (tm *testMessage) Size() int {
@@ -829,7 +802,8 @@ func (tm *testMessage) SetPayloadField(data []byte) {
 }
 
 func newTestCodec(options ...CodecOption) Codec {
-	options = append(options, WithCodecPayloadCopyBufferSize(1024))
+	options = append(options,
+		WithCodecPayloadCopyBufferSize(1024))
 	return NewMessageCodec(func() Message { return messagePool.Get().(*testMessage) }, options...)
 }
 

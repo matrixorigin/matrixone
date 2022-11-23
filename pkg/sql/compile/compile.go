@@ -541,9 +541,14 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		if err := external.InitS3Param(param); err != nil {
 			return nil, err
 		}
+	} else {
+		if err := external.InitInfileParam(param); err != nil {
+			return nil, err
+		}
 	}
 
 	param.FileService = c.proc.FileService
+	param.Ctx = c.ctx
 	fileList, err := external.ReadDir(param)
 	if err != nil {
 		return nil, err

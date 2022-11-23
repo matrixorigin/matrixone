@@ -31,7 +31,6 @@ func TestWithOption(t *testing.T) {
 
 	// set morpc.BackendOption
 	backendOpts := []morpc.BackendOption{
-		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendConnectTimeout(time.Second),
 	}
 	ctx1 := SetBackendOptions(ctx, backendOpts...)
@@ -41,9 +40,7 @@ func TestWithOption(t *testing.T) {
 	require.Equal(t, backendOpts, backendOptsRet)
 
 	// set morpc.BackendOption again
-	newBackendOpts := []morpc.BackendOption{
-		morpc.WithBackendConnectWhenCreate(),
-	}
+	newBackendOpts := []morpc.BackendOption{}
 	ctx2 := SetBackendOptions(ctx1, newBackendOpts...)
 	newBackendOptsRet := GetBackendOptions(ctx2)
 	require.NotNil(t, backendOptsRet)

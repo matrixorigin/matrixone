@@ -428,7 +428,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		mce.tableInfos = make(map[string][]ColumnInfo)
 		mce.tableInfos["A"] = []ColumnInfo{&engineColumnInfo{
 			name: "a",
-			typ:  types.Type{Oid: types.T_varchar},
+			typ:  types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen},
 		}}
 
 		err = mce.handleCmdFieldList(ctx, cflStmt)

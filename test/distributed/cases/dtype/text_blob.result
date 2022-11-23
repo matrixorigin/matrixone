@@ -229,7 +229,7 @@ cast(苏轼 as blob)    cast(alex as blob)    cast(123 as blob)
 select cast('@#$%^' as blob),cast('hhh@123'as blob);
 cast(@#$%^ as blob)    cast(hhh@123 as blob)
 @#$%^    hhh@123
-create table blob_03(t1 text,t2 time,t3 json,t4 blob,t5 int,t6 varchar,t7 double,t8 decimal(6,3));
+create table blob_03(t1 text,t2 time,t3 json,t4 blob,t5 int,t6 varchar(100),t7 double,t8 decimal(6,3));
 insert into blob_03 values ('枫叶','0150','{"a":"1","b":"2"}','checkin',30,'zzzow',89.02,23.90);
 select cast(t1 as blob),cast(t2 as blob),cast(t5 as blob),cast(t6 as blob),cast(t7 as blob),cast(t8 as blob) from blob_03;
 cast(t1 as blob)    cast(t2 as blob)    cast(t5 as blob)    cast(t6 as blob)    cast(t7 as blob)    cast(t8 as blob)

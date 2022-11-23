@@ -415,3 +415,22 @@ select * from t1;
 a	b
 ab	apple
 abc	apple
+drop table if exists t1;
+create table t1(a varchar(1));
+insert into t1 values("ab");
+Data truncation: data out of range: data type varchar/char , ab oversize of 1
+select * from t1;
+a
+drop table if exists t1;
+create table t1(a varchar(10));
+insert into t1 values("ab");
+select * from t1;
+a
+ab
+drop table if exists t1;
+create table t1(a varchar(65536));
+Data truncation: data out of range: data type varchar,  typeLen is over the MaxVarcharLen: 65535
+create table t1(a varchar(0));
+insert into t1 values("");
+insert into t1 values("ab");
+Data truncation: data out of range: data type varchar/char , ab oversize of 0 

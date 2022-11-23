@@ -420,7 +420,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 	} else {
 		query = fmt.Sprintf(selectAsyncTask, m.dbname)
 	}
-	query += buildOrderByCause(c)
+	query += buildOrderByClause(c)
 	query += buildLimitClause(c)
 
 	rows, err := conn.QueryContext(ctx, query)
@@ -475,6 +475,9 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 		}
 
 		tasks = append(tasks, t)
+	}
+	if err := rows.Err(); err != nil {
+		return tasks, err
 	}
 	return tasks, nil
 }
@@ -610,6 +613,9 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, 
 		}
 
 		tasks = append(tasks, t)
+	}
+	if err := rows.Err(); err != nil {
+		return tasks, err
 	}
 
 	return tasks, nil
@@ -834,7 +840,7 @@ func buildLimitClause(c conditions) string {
 	return ""
 }
 
-func buildOrderByCause(c conditions) string {
+func buildOrderByClause(c conditions) string {
 	if c.orderByDesc {
 		return " order by task_id desc"
 	}

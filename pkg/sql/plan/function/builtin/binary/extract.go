@@ -104,7 +104,7 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 
 func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	leftValues, rightValues := vector.MustStrCols(left), vector.MustTCols[types.Datetime](right)
 	switch {
 	case left.IsScalar() && right.IsScalar():

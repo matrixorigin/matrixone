@@ -25,6 +25,8 @@ const (
 	VarlenaSize       = 24
 	MaxStringSize     = 10485760
 	VarlenaBigHdr     = 0xffffffff
+	MaxVarcharLen     = 65535
+	MaxCharLen        = 255
 )
 
 func (v *Varlena) unsafePtr() unsafe.Pointer {

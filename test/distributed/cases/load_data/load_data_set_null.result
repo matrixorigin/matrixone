@@ -1,7 +1,7 @@
 drop table if exists t1;
 create table t1(
 col1 int,
-col2 varchar,
+col2 varchar(100),
 col3 float,
 col4 date,
 col5 text
@@ -61,7 +61,7 @@ drop table t1;
 drop table if exists t2;
 create table t2(
 col1 int primary key auto_increment,
-col2 varchar
+col2 varchar(100)
 );
 load data infile "$resources/load_data/set_null_3.csv" into table t2 set col1=nullif(col1,'null');
 select * from t2;
