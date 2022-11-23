@@ -521,5 +521,6 @@ func init() {
 		"low_cardinality":          LOW_CARDINALITY,
 		"preceding":                PRECEDING,
 		"following":                FOLLOWING,
+		"groups":                   GROUPS,
 	}
 }

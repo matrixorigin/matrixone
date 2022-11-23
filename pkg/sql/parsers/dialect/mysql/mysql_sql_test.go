@@ -1723,7 +1723,7 @@ var (
 			input: `select sum(a) over (partition by col1, col2 order by col3 desc rows between 1 preceding and 20 following) from t1`,
 		},
 		{
-			input: `select count(a) over (partition by col1, col2 order by col3 desc rows unbounded preceding) from t1`,
+			input: `select count(a) over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1`,
 		},
 	}
 )

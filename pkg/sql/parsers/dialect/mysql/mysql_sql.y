@@ -118,6 +118,7 @@ import (
     windowSpec *tree.WindowSpec
     windowFrame *tree.WindowFrame
     windowFrameBound tree.WindowFrameBound
+    windowFrameUnit tree.WindowFrameUnits
     partition *tree.Partition
     partitions []*tree.Partition
     values tree.Values
@@ -301,7 +302,7 @@ import (
 %token <str> MODUMP
 
 // Window function
-%token <str> OVER PRECEDING FOLLOWING
+%token <str> OVER PRECEDING FOLLOWING GROUPS
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
@@ -507,6 +508,7 @@ import (
 %type <windowSpec> window_spec_opt
 %type <windowFrame> window_frame window_frame_opt
 %type <windowFrameBound> window_frame_bound
+%type <windowFrameUnit> window_frame_unit
 %type <str> fields_or_columns
 %type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt
 %type <boolVal> linear_opt
@@ -5848,18 +5850,32 @@ window_frame_bound:
         }
     }
 
+window_frame_unit:
+    ROWS
+    {
+        $$ = tree.WIN_FRAME_UNIT_ROWS
+    }
+|   RANGE
+    {
+        $$ = tree.WIN_FRAME_UNIT_RANGE
+    }
+|   GROUPS
+    {
+        $$ = tree.WIN_FRAME_UNIT_GROUPS
+    }
+
 window_frame:
-    ROWS window_frame_bound
+    window_frame_unit window_frame_bound
     {
         $$ = &tree.WindowFrame{
-            Unit: tree.WIN_FRAME_UNIT_ROWS,
+            Unit: $1,
             StartBound: $2,
         }
     }
-|   ROWS BETWEEN window_frame_bound AND window_frame_bound
+|   window_frame_unit BETWEEN window_frame_bound AND window_frame_bound
     {
         $$ = &tree.WindowFrame{
-            Unit: tree.WIN_FRAME_UNIT_ROWS,
+            Unit: $1,
             StartBound: $3,
             EndBound: $5,
         }
@@ -7723,6 +7739,7 @@ reserved_keyword:
 |   OVER
 |   PRECEDING
 |   FOLLOWING
+|   GROUPS
 
 non_reserved_keyword:
     ACCOUNT
