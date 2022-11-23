@@ -30,6 +30,17 @@ import (
 
 var _ engine.Relation = new(table)
 
+func fixColumnMap(tbl *table, expr *plan.Expr) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			fixColumnMap(tbl, arg)
+		}
+	case *plan.Expr_Col:
+		exprImpl.Col.Name = tbl.tableDef.Cols[exprImpl.Col.ColPos].Name
+	}
+}
+
 func (tbl *table) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error) {
 	if tbl.db.databaseId == catalog.MO_CATALOG_ID {
 		return 100, nil
@@ -39,6 +50,7 @@ func (tbl *table) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, e
 		return float64(r), err
 	}
 	var card float64
+	fixColumnMap(tbl, expr)
 	for _, blockmetas := range tbl.meta.blocks {
 		for _, blk := range blockmetas {
 			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
