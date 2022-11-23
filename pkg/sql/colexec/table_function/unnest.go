@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package unnest
+package table_function
 
 import (
 	"bytes"
@@ -30,12 +30,12 @@ import (
 	"strconv"
 )
 
-func String(arg any, buf *bytes.Buffer) {
+func unnestString(arg any, buf *bytes.Buffer) {
 	buf.WriteString("unnest")
 }
 
-func Prepare(_ *process.Process, arg *colexec.TableFunctionArgument) error {
-	param := Param{}
+func unnestPrepare(_ *process.Process, arg *TableFunctionArgument) error {
+	param := unnestParam{}
 	param.ColName = string(arg.Params)
 	if len(param.ColName) == 0 {
 		param.ColName = "UNNEST_DEFAULT"
@@ -43,8 +43,8 @@ func Prepare(_ *process.Process, arg *colexec.TableFunctionArgument) error {
 	var filters []string
 	for i := range arg.Attrs {
 		denied := false
-		for j := range deniedFilters {
-			if arg.Attrs[i] == deniedFilters[j] {
+		for j := range unnestDeniedFilters {
+			if arg.Attrs[i] == unnestDeniedFilters[j] {
 				denied = true
 				break
 			}
@@ -74,7 +74,7 @@ func Prepare(_ *process.Process, arg *colexec.TableFunctionArgument) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg *colexec.TableFunctionArgument) (bool, error) {
+func unnestCall(_ int, proc *process.Process, arg *TableFunctionArgument) (bool, error) {
 	var (
 		err      error
 		rbat     *batch.Batch
@@ -131,7 +131,7 @@ func Call(_ int, proc *process.Process, arg *colexec.TableFunctionArgument) (boo
 		return false, err
 	}
 	outer = vector.MustTCols[bool](outerVec)[0]
-	param := Param{}
+	param := unnestParam{}
 	if err = json.Unmarshal(arg.Params, &param); err != nil {
 		return false, err
 	}
@@ -148,7 +148,7 @@ func Call(_ int, proc *process.Process, arg *colexec.TableFunctionArgument) (boo
 	return false, nil
 }
 
-func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *Param, arg *colexec.TableFunctionArgument, proc *process.Process, fn func(dt []byte) (bytejson.ByteJson, error)) (*batch.Batch, error) {
+func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unnestParam, arg *TableFunctionArgument, proc *process.Process, fn func(dt []byte) (bytejson.ByteJson, error)) (*batch.Batch, error) {
 	var (
 		err  error
 		rbat *batch.Batch
@@ -167,7 +167,7 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *Para
 		if err != nil {
 			return nil, err
 		}
-		ures, err = json.Unnest(path, outer, recursive, mode, param.Filters)
+		ures, err = json.Unnest(path, outer, unnestRecursive, unnestMode, param.Filters)
 		if err != nil {
 			return nil, err
 		}
@@ -185,7 +185,7 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *Para
 		if err != nil {
 			return nil, err
 		}
-		ures, err = json.Unnest(path, outer, recursive, mode, param.Filters)
+		ures, err = json.Unnest(path, outer, unnestRecursive, unnestMode, param.Filters)
 		if err != nil {
 			return nil, err
 		}
@@ -199,7 +199,7 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *Para
 	return rbat, nil
 }
 
-func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, arg *colexec.TableFunctionArgument, proc *process.Process) (*batch.Batch, error) {
+func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestParam, arg *TableFunctionArgument, proc *process.Process) (*batch.Batch, error) {
 	for i := 0; i < len(ures); i++ {
 		for j := 0; j < len(arg.Attrs); j++ {
 			vec := bat.GetVector(int32(j))
@@ -229,9 +229,6 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, arg
 		}
 	}
 	return bat, nil
-}
-func dupType(typ *plan.Type) types.Type {
-	return types.New(types.T(typ.Id), typ.Width, typ.Scale, typ.Precision)
 }
 
 func parseJson(dt []byte) (bytejson.ByteJson, error) {

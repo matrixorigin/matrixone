@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -758,7 +759,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Cond:      t.Cond,
 			OnList:    t.OnList,
 		}
-	case *colexec.TableFunctionArgument:
+	case *table_function.TableFunctionArgument:
 		in.TableFunction = &pipeline.TableFunction{
 			Attrs:  t.Attrs,
 			Rets:   t.Rets,
@@ -986,7 +987,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Fs: opr.OrderBy,
 		}
 	case vm.TableFunction:
-		v.Arg = &colexec.TableFunctionArgument{
+		v.Arg = &table_function.TableFunctionArgument{
 			Attrs:  opr.TableFunction.Attrs,
 			Rets:   opr.TableFunction.Rets,
 			Args:   opr.TableFunction.Args,

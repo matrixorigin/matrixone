@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package generate_series
+package table_function
 
 import (
 	"bytes"
@@ -29,15 +29,15 @@ import (
 	"strings"
 )
 
-func String(arg any, buf *bytes.Buffer) {
+func generateSeriesString(arg any, buf *bytes.Buffer) {
 	buf.WriteString("generate_series")
 }
 
-func Prepare(_ *process.Process, arg *colexec.TableFunctionArgument) error {
+func generateSeriesPrepare(_ *process.Process, arg *TableFunctionArgument) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg *colexec.TableFunctionArgument) (bool, error) {
+func generateSeriesCall(_ int, proc *process.Process, arg *TableFunctionArgument) (bool, error) {
 	var (
 		err                                               error
 		startVec, endVec, stepVec, startVecTmp, endVecTmp *vector.Vector

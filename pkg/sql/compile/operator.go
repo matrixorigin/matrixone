@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -266,8 +267,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			OnList:     t.OnList,
 		}
 	case vm.TableFunction:
-		t := sourceIns.Arg.(*colexec.TableFunctionArgument)
-		res.Arg = &colexec.TableFunctionArgument{
+		t := sourceIns.Arg.(*table_function.TableFunctionArgument)
+		res.Arg = &table_function.TableFunctionArgument{
 			Name:   t.Name,
 			Args:   t.Args,
 			Rets:   t.Rets,
@@ -500,12 +501,12 @@ func constructExternal(n *plan.Node, ctx context.Context, fileList []string) *ex
 		},
 	}
 }
-func constructTableFunction(n *plan.Node, ctx context.Context, name string) *colexec.TableFunctionArgument {
+func constructTableFunction(n *plan.Node, ctx context.Context, name string) *table_function.TableFunctionArgument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
-	return &colexec.TableFunctionArgument{
+	return &table_function.TableFunctionArgument{
 		Attrs:  attrs,
 		Rets:   n.TableDef.Cols,
 		Args:   n.TblFuncExprList,

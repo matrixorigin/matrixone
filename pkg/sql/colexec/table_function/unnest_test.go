@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package unnest
+package table_function
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,7 +29,7 @@ import (
 )
 
 type unnestTestCase struct {
-	arg      *colexec.TableFunctionArgument
+	arg      *TableFunctionArgument
 	proc     *process.Process
 	jsons    []string
 	paths    []string
@@ -133,7 +132,7 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 
 	ret := unnestTestCase{
 		proc: proc,
-		arg: &colexec.TableFunctionArgument{
+		arg: &TableFunctionArgument{
 			Attrs: attrs,
 			Rets:  colDefs,
 		},
@@ -147,29 +146,29 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 	return ret
 }
 
-func TestString(t *testing.T) {
+func TestUnnestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, ut := range utc {
-		String(ut.arg, buf)
+		unnestString(ut.arg, buf)
 	}
 }
 
-func TestCall(t *testing.T) {
+func TestUnnestCall(t *testing.T) {
 	for _, ut := range utc {
 
-		err := Prepare(ut.proc, ut.arg)
+		err := unnestPrepare(ut.proc, ut.arg)
 		require.NotNil(t, err)
 		var inputBat *batch.Batch
 		switch ut.jsonType {
 		case "str":
 			beforeMem := ut.proc.Mp().CurrNB()
-			inputBat, err = makeTestBatch(ut.jsons, types.T_varchar, encodeStr, ut.proc)
+			inputBat, err = makeUnnestBatch(ut.jsons, types.T_varchar, encodeStr, ut.proc)
 			require.Nil(t, err)
 			ut.arg.Args = makeConstInputExprs(ut.jsons, ut.paths, ut.jsonType, ut.outers)
 			ut.proc.SetInputBatch(inputBat)
-			err := Prepare(ut.proc, ut.arg)
+			err := unnestPrepare(ut.proc, ut.arg)
 			require.Nil(t, err)
-			end, err := Call(0, ut.proc, ut.arg)
+			end, err := unnestCall(0, ut.proc, ut.arg)
 			require.Nil(t, err)
 			require.False(t, end)
 			ut.proc.InputBatch().Clean(ut.proc.Mp())
@@ -178,13 +177,13 @@ func TestCall(t *testing.T) {
 			require.Equal(t, beforeMem, afterMem)
 		case "json":
 			beforeMem := ut.proc.Mp().CurrNB()
-			inputBat, err = makeTestBatch(ut.jsons, types.T_json, encodeJson, ut.proc)
+			inputBat, err = makeUnnestBatch(ut.jsons, types.T_json, encodeJson, ut.proc)
 			require.Nil(t, err)
 			ut.arg.Args = makeColExprs(ut.jsonType, ut.paths, ut.outers)
 			ut.proc.SetInputBatch(inputBat)
-			err := Prepare(ut.proc, ut.arg)
+			err := unnestPrepare(ut.proc, ut.arg)
 			require.Nil(t, err)
-			end, err := Call(0, ut.proc, ut.arg)
+			end, err := unnestCall(0, ut.proc, ut.arg)
 			require.Nil(t, err)
 			require.False(t, end)
 			ut.proc.InputBatch().Clean(ut.proc.Mp())
@@ -195,7 +194,7 @@ func TestCall(t *testing.T) {
 	}
 }
 
-func makeTestBatch(jsons []string, typ types.T, fn func(str string) ([]byte, error), proc *process.Process) (*batch.Batch, error) {
+func makeUnnestBatch(jsons []string, typ types.T, fn func(str string) ([]byte, error), proc *process.Process) (*batch.Batch, error) {
 	bat := batch.New(true, []string{"a"})
 	for i := range bat.Vecs {
 		bat.Vecs[i] = vector.New(types.Type{
