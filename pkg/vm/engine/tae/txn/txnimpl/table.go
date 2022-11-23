@@ -761,6 +761,9 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 	return
 }
 
+// Dedup 1. checks whether these primary keys are duplicated in all the blocks
+// which are visible and not dropped at txn's snapshot timestamp.
+// 2. It is called when appending data into this table.
 func (tbl *txnTable) Dedup(keys containers.Vector) (err error) {
 	h := newRelation(tbl)
 	it := newRelationBlockIt(h)
@@ -788,15 +791,22 @@ func (tbl *txnTable) Dedup(keys containers.Vector) (err error) {
 	return
 }
 
+// DoPrecommitDedup 1. it do deduplication by traversing all the segments/blocks, and
+// skipping over some blocks/segments which being active or drop-committed or aborted;
+//  2. it is called when txn dequeues from preparing queue.
+//  3. we should make this function run quickly as soon as possible.
+//     TODO::it would be used to do deduplication with the logtail.
 func (tbl *txnTable) DoPrecommitDedup(pks containers.Vector) (err error) {
 	segIt := tbl.entry.MakeSegmentIt(false)
 	for segIt.Valid() {
 		seg := segIt.Get().GetPayload()
+		//FIXME::Where is this tbl.maxSegId assigned, it always be zero?
 		if seg.GetID() < tbl.maxSegId {
 			return
 		}
 		{
 			seg.RLock()
+			//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
 			needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
 			if needwait {
 				seg.RUnlock()
@@ -860,6 +870,7 @@ func (tbl *txnTable) DoPrecommitDedup(pks containers.Vector) (err error) {
 
 func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 	index := NewSimpleTableIndex()
+	//Check whether primary key is duplicated in key.
 	if err = index.BatchInsert(
 		tbl.schema.GetSingleSortKey().Name,
 		key,
@@ -871,11 +882,12 @@ func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 	}
 
 	if tbl.localSegment != nil {
+		//Check whether primary key is duplicated in localSegment.
 		if err = tbl.localSegment.BatchDedup(key); err != nil {
 			return
 		}
 	}
-
+	//Check whether primary key is duplicated in all the blocks.
 	err = tbl.Dedup(key)
 	return
 }

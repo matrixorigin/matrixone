@@ -35,6 +35,8 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// CompactSegmentTaskFactory merge non-appendable blocks of an appendable-segment
+// into a new non-appendable segment.
 var CompactSegmentTaskFactory = func(mergedBlks []*catalog.BlockEntry, scheduler tasks.TaskScheduler) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		mergedSegs := make([]*catalog.SegmentEntry, 1)

@@ -51,7 +51,11 @@ type Relation interface {
 	GetPrimaryKeys(context.Context) ([]*engine.Attribute, error)
 	GetHideKeys(context.Context) ([]*engine.Attribute, error)
 
+	//Write just append data into txn's workspace, instead of applying data into state machine.
 	Write(context.Context, *batch.Batch) error
+
+	//append block into txn's workspace, and load primary keys from S3 asynchronously for deduplication.
+	//AppendBlockOnFS(ctx context.Context, uuid string, file string, metaloc string)
 
 	Delete(context.Context, *batch.Batch, string) error
 

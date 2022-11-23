@@ -51,11 +51,19 @@ func isLocalSegmentByID(id uint64) bool {
 	return id >= LocalSegmentStartID
 }
 
+type blockInfo struct {
+	uuid    string
+	pks     containers.Vector
+	metaloc string
+}
+
 type localSegment struct {
-	entry       *catalog.SegmentEntry
-	appendable  base.INodeHandle
-	index       TableIndex
-	nodes       []InsertNode
+	entry      *catalog.SegmentEntry
+	appendable base.INodeHandle
+	index      TableIndex
+	nodes      []InsertNode
+	//non-appendable blocks appended from File Service.
+	blocks      []blockInfo
 	table       *txnTable
 	rows        uint32
 	appends     []*appendCtx

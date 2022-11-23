@@ -136,10 +136,10 @@ message PrecommitWriteCmd {
 //          // one S3 object file can hold many blocks.
 //          file_name = "s3 file name"
 //
-//          // bat holds meta info for many blocks.
-//          // "block_id" is the transient block uuid,
-//          //  base data sorted by primary key resides in "meta_loc", and deleted rows resides in "delta_loc".
-//          bat.attrs = {"block_id", "meta_loc", "delta_loc"}
+//          //  bat holds meta info for many blocks.
+//          //  "block_id" : the transient block uuid.
+//          //  "meta_loc" : the location of base data sorted by primary key.
+//          bat.attrs = {"block_id", "meta_loc"}
 //      }
 
 //  DML:

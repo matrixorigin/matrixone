@@ -130,7 +130,7 @@ func (h *Handle) HandleCommit(
 			default:
 				panic(moerr.NewNYI("Pls implement me"))
 			}
-			//Need to rollback the txn.
+			//Need to roll back the txn.
 			if err != nil {
 				txn, _ = h.eng.GetTxnByID(meta.GetID())
 				txn.Rollback()
@@ -335,7 +335,7 @@ func (h *Handle) CacheTxnRequest(
 	return nil
 }
 
-// HandlePreCommitWrite only cache the req.
+// HandlePreCommitWrite only cache the request that would change txnEngine's state machine.
 func (h *Handle) HandlePreCommitWrite(
 	ctx context.Context,
 	meta txn.TxnMeta,
@@ -602,7 +602,7 @@ func (h *Handle) HandleWrite(
 		//Add blocks had been bulk-loaded into S3
 		if req.FileName != "" {
 			//TODO::Add blocks from S3.
-			//tb.AddBlock()
+			//tb.AppendBlockOnFS(ctx, uuid, file, metaloc);
 			panic(moerr.NewNYI("Precommit a block is not implemented yet"))
 		}
 		//Appends a batch of data into table.

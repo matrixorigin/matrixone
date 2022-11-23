@@ -40,6 +40,7 @@ type SegmentEntry struct {
 	*MetaBaseEntry
 	table   *TableEntry
 	entries map[uint64]*common.GenericDLNode[*BlockEntry]
+	//link.head and tail is nil when new a segmentEntry object.
 	link    *common.GenericSortedDList[*BlockEntry]
 	state   EntryState
 	segData data.Segment
