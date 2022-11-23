@@ -636,8 +636,6 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 }
 
 func TestGossipInSimulatedCluster(t *testing.T) {
-	t.Skip("need fix goroutine leak in memberlist lib, skip it now")
-
 	defer leaktest.AfterTest(t)()
 	debug.SetMemoryLimit(1 << 30)
 	// start all services
