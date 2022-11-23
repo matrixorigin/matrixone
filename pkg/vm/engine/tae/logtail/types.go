@@ -177,8 +177,8 @@ var (
 		types.New(types.T_uint64, 0, 0, 0),
 		types.New(types.T_uint64, 0, 0, 0),
 		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_varchar, 0, 0, 0),
-		types.New(types.T_varchar, 0, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0),
 	}
 	MetaSchemaAttr = []string{
 		SnapshotMetaAttr_Tid,

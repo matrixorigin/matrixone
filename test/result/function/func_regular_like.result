@@ -20,7 +20,7 @@ SELECT REGEXP_LIKE(NULL, NULL);
 regexp_like(null, null)
 NULL
 drop table if exists t1;
-create table t1(a int, b varchar(20));
+create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
 insert into t1 values(2 , "Powerage");
 insert into t1 values( 3 , "Singing Down the Lane" );
@@ -48,7 +48,7 @@ a    b
 1    PowerSlave
 2    Powerage
 drop table t1;
-create table t1(a int, b varchar(20));
+create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
 insert into t1 values(2 , "Powerage");
 insert into t1 values( 3 , "Singing Down the Lane" );
@@ -70,7 +70,7 @@ a    regexp_like(b, ^P)
 8    true
 9    false
 drop table t1;
-create table t1(a int, b varchar(20));
+create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
 insert into t1 values(2 , "Powerage");
 insert into t1 values( 3 , "Singing Down the Lane" );

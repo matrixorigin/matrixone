@@ -17,10 +17,11 @@ package sysview
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"time"
 )
 
 const (
@@ -346,11 +347,11 @@ var (
 			"PARAMETER_STYLE varchar(3)," +
 			"IS_DETERMINISTIC varchar(3)," +
 			"SQL_DATA_ACCESS varchar(10)," +
-			"SQL_PATH varchar(100)," +
+			"SQL_PATH varchar(1000)," +
 			"SECURITY_TYPE varchar(10)," +
 			"CREATED timestamp," +
 			"LAST_ALTERED timestamp," +
-			"SQL_MODE varchar(100)," +
+			"SQL_MODE varchar(1000)," +
 			"ROUTINE_COMMENT text," +
 			"DEFINER varchar(288)," +
 			"CHARACTER_SET_CLIENT varchar(64)," +
