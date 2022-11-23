@@ -95,6 +95,7 @@ func Prepare(proc *process.Process, arg any) error {
 	}
 	param.extern.Filepath = ""
 	param.Fileparam.FileCnt = len(param.FileList)
+	param.Ctx = proc.Ctx
 	return nil
 }
 

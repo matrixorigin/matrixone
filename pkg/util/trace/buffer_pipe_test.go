@@ -18,17 +18,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"io"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
@@ -53,7 +52,7 @@ func init() {
 		WithMOVersion("v0.test.0"),
 		WithNode("node_uuid", NodeTypeStandalone),
 		WithBatchProcessMode(FileService),
-		WithFSWriterFactory(func(ctx context.Context, _ string, _ batchpipe.HasName, _ ...export.FSWriterOption) io.StringWriter {
+		WithFSWriterFactory(func(ctx context.Context, _ string, _ batchpipe.HasName, _ WriteFactoryConfig) io.StringWriter {
 			return os.Stdout
 		}),
 		WithSQLExecutor(func() internalExecutor.InternalExecutor {
@@ -206,9 +205,9 @@ func Test_withSizeThreshold(t *testing.T) {
 	buf := &buffer2Sql{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			bufferWithSizeThreshold(tt.args.size).apply(buf)
+			BufferWithSizeThreshold(tt.args.size).apply(buf)
 			if got := buf.sizeThreshold; got != tt.want {
-				t.Errorf("bufferWithSizeThreshold() = %v, want %v", got, tt.want)
+				t.Errorf("BufferWithSizeThreshold() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -219,7 +218,7 @@ var gCtrlSqlCh = make(chan struct{}, 1)
 func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 	gCtrlSqlCh <- struct{}{}
 	type fields struct {
-		defaultOpts []bufferOption
+		defaultOpts []BufferOption
 		ch          chan string
 	}
 	type args struct {
@@ -235,7 +234,7 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 		{
 			name: "nil",
 			fields: fields{
-				defaultOpts: []bufferOption{bufferWithSizeThreshold(GB)},
+				defaultOpts: []BufferOption{BufferWithSizeThreshold(GB)},
 				ch:          make(chan string, 10),
 			},
 			args: args{
