@@ -29,7 +29,7 @@ import (
 )
 
 type unnestTestCase struct {
-	arg      *TableFunctionArgument
+	arg      *Argument
 	proc     *process.Process
 	jsons    []string
 	paths    []string
@@ -132,7 +132,7 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 
 	ret := unnestTestCase{
 		proc: proc,
-		arg: &TableFunctionArgument{
+		arg: &Argument{
 			Attrs: attrs,
 			Rets:  colDefs,
 		},

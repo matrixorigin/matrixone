@@ -34,7 +34,7 @@ func unnestString(arg any, buf *bytes.Buffer) {
 	buf.WriteString("unnest")
 }
 
-func unnestPrepare(_ *process.Process, arg *TableFunctionArgument) error {
+func unnestPrepare(_ *process.Process, arg *Argument) error {
 	param := unnestParam{}
 	param.ColName = string(arg.Params)
 	if len(param.ColName) == 0 {
@@ -74,7 +74,7 @@ func unnestPrepare(_ *process.Process, arg *TableFunctionArgument) error {
 	return nil
 }
 
-func unnestCall(_ int, proc *process.Process, arg *TableFunctionArgument) (bool, error) {
+func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	var (
 		err      error
 		rbat     *batch.Batch
@@ -148,7 +148,7 @@ func unnestCall(_ int, proc *process.Process, arg *TableFunctionArgument) (bool,
 	return false, nil
 }
 
-func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unnestParam, arg *TableFunctionArgument, proc *process.Process, fn func(dt []byte) (bytejson.ByteJson, error)) (*batch.Batch, error) {
+func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unnestParam, arg *Argument, proc *process.Process, fn func(dt []byte) (bytejson.ByteJson, error)) (*batch.Batch, error) {
 	var (
 		err  error
 		rbat *batch.Batch
@@ -199,7 +199,7 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unne
 	return rbat, nil
 }
 
-func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestParam, arg *TableFunctionArgument, proc *process.Process) (*batch.Batch, error) {
+func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestParam, arg *Argument, proc *process.Process) (*batch.Batch, error) {
 	for i := 0; i < len(ures); i++ {
 		for j := 0; j < len(arg.Attrs); j++ {
 			vec := bat.GetVector(int32(j))

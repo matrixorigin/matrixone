@@ -759,7 +759,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Cond:      t.Cond,
 			OnList:    t.OnList,
 		}
-	case *table_function.TableFunctionArgument:
+	case *table_function.Argument:
 		in.TableFunction = &pipeline.TableFunction{
 			Attrs:  t.Attrs,
 			Rets:   t.Rets,
@@ -987,7 +987,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Fs: opr.OrderBy,
 		}
 	case vm.TableFunction:
-		v.Arg = &table_function.TableFunctionArgument{
+		v.Arg = &table_function.Argument{
 			Attrs:  opr.TableFunction.Attrs,
 			Rets:   opr.TableFunction.Rets,
 			Args:   opr.TableFunction.Args,

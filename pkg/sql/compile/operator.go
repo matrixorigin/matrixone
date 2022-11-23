@@ -267,8 +267,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			OnList:     t.OnList,
 		}
 	case vm.TableFunction:
-		t := sourceIns.Arg.(*table_function.TableFunctionArgument)
-		res.Arg = &table_function.TableFunctionArgument{
+		t := sourceIns.Arg.(*table_function.Argument)
+		res.Arg = &table_function.Argument{
 			Name:   t.Name,
 			Args:   t.Args,
 			Rets:   t.Rets,
@@ -501,12 +501,12 @@ func constructExternal(n *plan.Node, ctx context.Context, fileList []string) *ex
 		},
 	}
 }
-func constructTableFunction(n *plan.Node, ctx context.Context, name string) *table_function.TableFunctionArgument {
+func constructTableFunction(n *plan.Node, ctx context.Context, name string) *table_function.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
-	return &table_function.TableFunctionArgument{
+	return &table_function.Argument{
 		Attrs:  attrs,
 		Rets:   n.TableDef.Cols,
 		Args:   n.TblFuncExprList,

@@ -33,11 +33,11 @@ func generateSeriesString(arg any, buf *bytes.Buffer) {
 	buf.WriteString("generate_series")
 }
 
-func generateSeriesPrepare(_ *process.Process, arg *TableFunctionArgument) error {
+func generateSeriesPrepare(_ *process.Process, arg *Argument) error {
 	return nil
 }
 
-func generateSeriesCall(_ int, proc *process.Process, arg *TableFunctionArgument) (bool, error) {
+func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	var (
 		err                                               error
 		startVec, endVec, stepVec, startVecTmp, endVecTmp *vector.Vector
@@ -157,11 +157,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *TableFunctionArgument
 	return false, nil
 }
 
-func dupType(typ *plan.Type) types.Type {
-	return types.New(types.T(typ.Id), typ.Width, typ.Scale, typ.Precision)
-}
-
-func judgeArgs[T Number](start, end, step T) ([]T, error) {
+func judgeArgs[T generateSeriesNumber](start, end, step T) ([]T, error) {
 	if step == 0 {
 		return nil, moerr.NewInvalidInput("step size cannot equal zero")
 	}

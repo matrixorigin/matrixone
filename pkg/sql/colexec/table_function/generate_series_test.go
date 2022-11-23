@@ -446,7 +446,7 @@ func TestGenStep(t *testing.T) {
 func TestGenerateSeriesCall(t *testing.T) {
 	proc := testutil.NewProc()
 	beforeCall := proc.Mp().CurrNB()
-	arg := &TableFunctionArgument{
+	arg := &Argument{
 		Attrs: []string{"result"},
 	}
 	proc.SetInputBatch(nil)
