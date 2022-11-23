@@ -89,8 +89,6 @@ desc character_sets;
 select character_set_name, description, maxlen from character_sets limit 5;
 desc triggers;
 select trigger_name, action_order from triggers limit 3;
-desc tables;
-select table_name, table_type from tables limit 3;
 
 use mysql;
 desc user;
