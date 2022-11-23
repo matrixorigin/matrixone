@@ -183,8 +183,8 @@ SELECT CAST(CAST('2006-08-10 10:11:12' AS DATETIME) + INTERVAL 14 MICROSECOND AS
 -- @label:bvt
 drop table if exists t1;
 drop table if exists t2;
-create table t1(i int,a datetime,b datetime,c datetime,d char(20),e varchar(50));
-create table t2(i int,a datetime,b datetime,c datetime,d char(20),e varchar(50));
+create table t1(i int,a datetime,b datetime,c datetime,d char(200),e varchar(50));
+create table t2(i int,a datetime,b datetime,c datetime,d char(200),e varchar(50));
 insert into t1 select 1,"1997-12-30" + INTERVAL 1 SECOND ,"1997-12-31 23:59:59" + INTERVAL 1 MINUTE,"1997-12-31 23:59:59.000002" + INTERVAL 1 HOUR,"1997-12-31 23:59:59" + INTERVAL 1 DAY,"1997-12-31 23:59:59.000002" + INTERVAL 1 MONTH;
 insert into t1 select 2,"1997-12-30" + INTERVAL 1 YEAR,"1997-12-31 23:59:59" + INTERVAL "1:1" MINUTE_SECOND,"1997-12-31 23:59:59.000002" + INTERVAL "1:1" DAY_HOUR,"1997-12-31 23:59:59" + INTERVAL "1 1" YEAR_MONTH,"1997-12-31 23:59:59.000002" + INTERVAL "1:1:1" HOUR_SECOND;
 insert into t1 select 3,"1997-12-30" + INTERVAL "1:1:1" HOUR_SECOND,"1997-12-31 23:59:59" + INTERVAL "1 1:1" DAY_MINUTE,"1997-12-31 23:59:59.000002" + INTERVAL "1 1:1:1" DAY_SECOND,"1997-12-31 23:59:59","1997-12-31 23:59:59.000002";
