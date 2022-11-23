@@ -30,27 +30,17 @@ import (
 
 var _ engine.Relation = new(table)
 
-func fixColumnName(tbl *table, expr *plan.Expr) {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			fixColumnName(tbl, arg)
-		}
-	case *plan.Expr_Col:
-		exprImpl.Col.Name = tbl.tableDef.Cols[exprImpl.Col.ColPos].Name
-	}
-}
-
 func (tbl *table) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error) {
-	if tbl.db.databaseId == catalog.MO_CATALOG_ID {
-		return 100, nil
+	switch tbl.tableId {
+	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
+		return float64(100), nil
 	}
+
 	if expr == nil {
 		r, err := tbl.Rows(ctx)
 		return float64(r), err
 	}
 	var card float64
-	fixColumnName(tbl, expr)
 	for _, blockmetas := range tbl.meta.blocks {
 		for _, blk := range blockmetas {
 			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {

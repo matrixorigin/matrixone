@@ -1813,6 +1813,17 @@ func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *p
 	return hideDef
 }
 
+func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			fixColumnName(cols, arg)
+		}
+	case *plan.Expr_Col:
+		exprImpl.Col.Name = cols[exprImpl.Col.ColPos].Name
+	}
+}
+
 func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) (cost *plan2.Cost) {
 	cost = new(plan2.Cost)
 	dbName := obj.GetSchemaName()
@@ -1824,6 +1835,10 @@ func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) (cost *
 	table, err := tcc.getRelation(dbName, tableName)
 	if err != nil {
 		return
+	}
+	if e != nil {
+		cols, _ := table.TableColumns(tcc.GetSession().GetRequestContext())
+		fixColumnName(cols, e)
 	}
 	rows, err := table.FilteredRows(tcc.GetSession().GetRequestContext(), e)
 	if err != nil {
