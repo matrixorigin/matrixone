@@ -63,7 +63,7 @@ func (base *vecBase[T]) tryCOW() {
 // Modification
 func (base *vecBase[T]) Update(i int, v any) { base.derived.stlvec.Update(i, v.(T)) }
 func (base *vecBase[T]) Delete(i int)        { base.derived.stlvec.Delete(i) }
-func (base *vecBase[T]) DeleteBatch(deletes *roaring.Bitmap) {
+func (base *vecBase[T]) Compact(deletes *roaring.Bitmap) {
 	if deletes == nil || deletes.IsEmpty() {
 		return
 	}

@@ -104,7 +104,7 @@ func BlockReadInner(
 	// remove rows from columns
 	if columnBatch.Deletes != nil {
 		for _, col := range columnBatch.Vecs {
-			col.DeleteBatch(columnBatch.Deletes)
+			col.Compact(columnBatch.Deletes)
 		}
 	}
 	return columnBatch, nil

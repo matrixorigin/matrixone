@@ -68,7 +68,7 @@ type Vector interface {
 	GetView() VectorView
 	Update(i int, v any)
 	Delete(i int)
-	DeleteBatch(*roaring.Bitmap)
+	Compact(*roaring.Bitmap)
 	Append(v any)
 	AppendMany(vs ...any)
 	AppendNoNulls(s any)

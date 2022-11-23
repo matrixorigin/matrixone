@@ -167,14 +167,14 @@ func (vec *vector[T]) Slice() any {
 	return vec.stlvec.Slice()
 }
 
-func (vec *vector[T]) Get(i int) (v any)                   { return vec.impl.Get(i) }
-func (vec *vector[T]) Update(i int, v any)                 { vec.impl.Update(i, v) }
-func (vec *vector[T]) Delete(i int)                        { vec.impl.Delete(i) }
-func (vec *vector[T]) DeleteBatch(deletes *roaring.Bitmap) { vec.impl.DeleteBatch(deletes) }
-func (vec *vector[T]) Append(v any)                        { vec.impl.Append(v) }
-func (vec *vector[T]) AppendMany(vs ...any)                { vec.impl.AppendMany(vs...) }
-func (vec *vector[T]) AppendNoNulls(s any)                 { vec.impl.AppendNoNulls(s) }
-func (vec *vector[T]) Extend(o Vector)                     { vec.impl.Extend(o) }
+func (vec *vector[T]) Get(i int) (v any)               { return vec.impl.Get(i) }
+func (vec *vector[T]) Update(i int, v any)             { vec.impl.Update(i, v) }
+func (vec *vector[T]) Delete(i int)                    { vec.impl.Delete(i) }
+func (vec *vector[T]) Compact(deletes *roaring.Bitmap) { vec.impl.Compact(deletes) }
+func (vec *vector[T]) Append(v any)                    { vec.impl.Append(v) }
+func (vec *vector[T]) AppendMany(vs ...any)            { vec.impl.AppendMany(vs...) }
+func (vec *vector[T]) AppendNoNulls(s any)             { vec.impl.AppendNoNulls(s) }
+func (vec *vector[T]) Extend(o Vector)                 { vec.impl.Extend(o) }
 func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	vec.impl.ExtendWithOffset(src, srcOff, srcLen)
 }

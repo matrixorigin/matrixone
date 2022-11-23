@@ -103,20 +103,20 @@ func (impl *nullableVecImpl[T]) Delete(i int) {
 	impl.derived.stlvec.Delete(i)
 }
 
-func (impl *nullableVecImpl[T]) DeleteBatch(deletes *roaring.Bitmap) {
+func (impl *nullableVecImpl[T]) Compact(deletes *roaring.Bitmap) {
 	impl.tryCOW()
 	if !impl.HasNull() {
-		impl.vecBase.DeleteBatch(deletes)
+		impl.vecBase.Compact(deletes)
 		return
 	}
 	nulls := impl.derived.nulls
 	max := nulls.Maximum()
 	min := deletes.Minimum()
 	if max < uint64(min) {
-		impl.vecBase.DeleteBatch(deletes)
+		impl.vecBase.Compact(deletes)
 		return
 	} else if max == uint64(min) {
-		impl.vecBase.DeleteBatch(deletes)
+		impl.vecBase.Compact(deletes)
 		nulls.Remove(uint64(min))
 		return
 	}
@@ -141,7 +141,7 @@ func (impl *nullableVecImpl[T]) DeleteBatch(deletes *roaring.Bitmap) {
 		deleted++
 	}
 	impl.derived.nulls = newNulls
-	impl.vecBase.DeleteBatch(deletes)
+	impl.vecBase.Compact(deletes)
 }
 
 func (impl *nullableVecImpl[T]) Append(v any) {
