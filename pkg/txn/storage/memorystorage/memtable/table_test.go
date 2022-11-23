@@ -262,3 +262,22 @@ func TestUniqueIndex(t *testing.T) {
 	err = tx2.Commit(ts(2))
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 }
+
+func TestFilterVersions(t *testing.T) {
+	table := NewTable[Int, int, TestRow]()
+
+	for i := 0; i < 10; i++ {
+		row := TestRow{key: 42, value: i}
+		tx1 := NewTransaction("foo", ts(int64(i)), SnapshotIsolation)
+		err := table.Upsert(tx1, row)
+		assert.Nil(t, err)
+		err = tx1.Commit(ts(int64(i)))
+		assert.Nil(t, err)
+	}
+
+	err := table.FilterVersions(func(key Int, versions []Version[int]) (filtered []Version[int], err error) {
+		return nil, nil
+	})
+	assert.Nil(t, err)
+
+}

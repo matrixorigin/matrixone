@@ -433,7 +433,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 		var codeOption sql.NullInt32
 		var msgOption sql.NullString
 		var options string
-		err := rows.Scan(
+		if err := rows.Scan(
 			&t.ID,
 			&t.Metadata.ID,
 			&t.Metadata.Executor,
@@ -448,8 +448,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 			&msgOption,
 			&t.CreateAt,
 			&t.CompletedAt,
-		)
-		if err != nil {
+		); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(options), &t.Metadata.Options); err != nil {
@@ -472,6 +471,9 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 		}
 
 		tasks = append(tasks, t)
+	}
+	if err := rows.Err(); err != nil {
+		return tasks, err
 	}
 	return tasks, nil
 }
@@ -603,6 +605,9 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, 
 		}
 
 		tasks = append(tasks, t)
+	}
+	if err := rows.Err(); err != nil {
+		return tasks, err
 	}
 
 	return tasks, nil
