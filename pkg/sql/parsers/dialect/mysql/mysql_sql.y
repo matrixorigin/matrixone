@@ -118,9 +118,6 @@ import (
     windowSpec *tree.WindowSpec
     windowFrame *tree.WindowFrame
     windowFrameBound tree.WindowFrameBound
-    windowFrameBoundCurrentRow *tree.WindowFrameBoundCurrentRow
-    windowFrameBoundPreceding *tree.WindowFrameBoundPreceding
-    windowFrameBoundFollowing *tree.WindowFrameBoundFollowing
     partition *tree.Partition
     partitions []*tree.Partition
     values tree.Values
