@@ -299,31 +299,28 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 }
 
 func (p *Partition) GC(ts timestamp.Timestamp) error {
+	// remove versions only visible before ts
+	// assuming no transaction is reading or writing
 	t := memtable.Time{
 		Timestamp: ts,
 	}
-	tx := memtable.NewTransaction(
-		uuid.NewString(),
-		t,
-		memtable.SnapshotIsolation,
-	)
-	min := memtable.Tuple{
-		index_Time,
-		memtable.Min,
-	}
-	max := memtable.Tuple{
-		index_Time,
-		ts,
-	}
-	iter := p.data.NewIndexIter(tx, min, max)
-	for ok := iter.First(); ok; ok = iter.Next() {
-		entry := iter.Item()
-		err := p.data.Delete(tx, entry.Key)
-		if err != nil {
-			return err
+	err := p.data.FilterVersions(func(k RowID, versions []memtable.Version[DataValue]) (filtered []memtable.Version[DataValue], err error) {
+		for _, version := range versions {
+			if version.LockTime.IsZero() {
+				// not deleted
+				filtered = append(filtered, version)
+				continue
+			}
+			if version.LockTime.Equal(t) ||
+				version.LockTime.After(t) {
+				// still visible after ts
+				filtered = append(filtered, version)
+				continue
+			}
 		}
-	}
-	if err := tx.Commit(t); err != nil {
+		return
+	})
+	if err != nil {
 		return err
 	}
 	return nil
