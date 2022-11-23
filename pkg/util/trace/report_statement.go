@@ -130,6 +130,8 @@ func (s *StatementInfo) CsvFields(row *table.Row) []string {
 
 // ExecPlan2Json return ExecPlan Serialized json-str
 // and set RowsRead, BytesScan from ExecPlan
+//
+// please used in s.mux.Lock()
 func (s *StatementInfo) ExecPlan2Json() string {
 	var jsonByte []byte
 	if s.SerializeExecPlan == nil {
@@ -170,6 +172,8 @@ func getDefaultSerializeExecPlan() SerializeExecPlanFunc {
 
 // SetExecPlan record execPlan should be TxnComputationWrapper.plan obj, which support 2json.
 func (s *StatementInfo) SetExecPlan(execPlan any, SerializeFunc SerializeExecPlanFunc) {
+	s.mux.Lock()
+	defer s.mux.Unlock()
 	s.ExecPlan = execPlan
 	s.SerializeExecPlan = SerializeFunc
 }

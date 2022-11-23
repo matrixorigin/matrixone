@@ -69,13 +69,13 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 
 	// init Tracer
 	gTracer = GetTracerProvider().Tracer("MatrixOne")
+	_, span := gTracer.Start(ctx, "TraceInit")
+	defer span.End()
 
 	// init DefaultContext / DefaultSpanContext
 	var spanId SpanID
 	spanId.SetByUUID(config.getNodeResource().NodeUuid)
-	_, span := gTracer.Start(ctx, "TraceInit", WithTraceID(nilTraceID), WithSpanID(spanId))
-	defer span.End()
-	sc := span.SpanContext()
+	sc := SpanContextWithIDs(nilTraceID, spanId)
 	SetDefaultSpanContext(&sc)
 	SetDefaultContext(ContextWithSpanContext(ctx, sc))
 
