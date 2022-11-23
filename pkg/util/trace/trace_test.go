@@ -27,7 +27,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -58,6 +57,7 @@ func Test_initExport(t *testing.T) {
 				enableTracer: true,
 				config: &tracerProviderConfig{
 					enable: true, batchProcessMode: InternalExecutor, sqlExecutor: newDummyExecutorFactory(ch),
+					batchProcessor: noopBatchProcessor{},
 				},
 				needRecover: true,
 			},
@@ -69,13 +69,13 @@ func Test_initExport(t *testing.T) {
 				enableTracer: true,
 				config: &tracerProviderConfig{
 					enable: true, batchProcessMode: FileService, sqlExecutor: newDummyExecutorFactory(ch),
+					batchProcessor: noopBatchProcessor{},
 				}},
 			empty: false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			export.ResetGlobalBatchProcessor()
 			if tt.args.needRecover {
 				defer func() {
 					if err := recover(); err != nil {
@@ -86,11 +86,7 @@ func Test_initExport(t *testing.T) {
 				}()
 			}
 			initExporter(context.TODO(), tt.args.config)
-			if tt.empty {
-				require.Equal(t, "*export.noopBatchProcessor", fmt.Sprintf("%v", reflect.ValueOf(export.GetGlobalBatchProcessor()).Type()))
-			} else {
-				require.Equal(t, "*export.MOCollector", fmt.Sprintf("%v", reflect.ValueOf(export.GetGlobalBatchProcessor()).Type()))
-			}
+			require.Equal(t, "trace.noopBatchProcessor", fmt.Sprintf("%v", reflect.ValueOf(GetGlobalBatchProcessor()).Type()))
 			require.Equal(t, Shutdown(context.Background()), nil)
 		})
 	}

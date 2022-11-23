@@ -555,6 +555,7 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 }
 
 func LoadCheckpointEntries(
+	ctx context.Context,
 	metLoc string,
 	tableID uint64,
 	tableName string,
@@ -587,7 +588,7 @@ func LoadCheckpointEntries(
 		location := locations[i]
 		exec := func(ctx context.Context) (result *tasks.JobResult) {
 			result = &tasks.JobResult{}
-			reader, err := blockio.NewCheckpointReader(fs, location)
+			reader, err := blockio.NewCheckpointReader(ctx, fs, location)
 			if err != nil {
 				result.Err = err
 				return

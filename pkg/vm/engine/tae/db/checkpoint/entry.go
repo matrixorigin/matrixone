@@ -15,6 +15,7 @@
 package checkpoint
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -122,10 +123,11 @@ func (e *CheckpointEntry) String() string {
 }
 
 func (e *CheckpointEntry) Replay(
+	ctx context.Context,
 	c *catalog.Catalog,
 	fs *objectio.ObjectFS,
 	dataFactory catalog.DataFactory) (readDuration, applyDuration time.Duration, err error) {
-	reader, err := blockio.NewCheckpointReader(fs.Service, e.location)
+	reader, err := blockio.NewCheckpointReader(ctx, fs.Service, e.location)
 	if err != nil {
 		return
 	}
@@ -143,10 +145,11 @@ func (e *CheckpointEntry) Replay(
 	return
 }
 func (e *CheckpointEntry) Read(
+	ctx context.Context,
 	scheduler tasks.JobScheduler,
 	fs *objectio.ObjectFS,
 ) (data *logtail.CheckpointData, err error) {
-	reader, err := blockio.NewCheckpointReader(fs.Service, e.location)
+	reader, err := blockio.NewCheckpointReader(ctx, fs.Service, e.location)
 	if err != nil {
 		return
 	}
@@ -162,7 +165,7 @@ func (e *CheckpointEntry) Read(
 	return
 }
 func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns *api.Batch, err error) {
-	reader, err := blockio.NewCheckpointReader(fs.Service, e.location)
+	reader, err := blockio.NewCheckpointReader(context.Background(), fs.Service, e.location)
 	if err != nil {
 		return
 	}

@@ -48,7 +48,7 @@ type Index interface {
 	// If key is existed, return ErrDuplicate
 	// If any other unknown error happens, return error
 	// If key is not found, return nil
-	Dedup(key any) error
+	Dedup(key any, skipfn func(row uint32) error) error
 
 	BatchDedup(keys containers.Vector, skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error)
 
