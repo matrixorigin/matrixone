@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -109,7 +108,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 	}
-	fmt.Println("Dbname ", dbName, " tblName ", tblName)
 	return colexec.CreateAutoIncrCol(c.e, c.ctx, dbSource, c.proc, tableCols, dbName, tblName)
 }
 

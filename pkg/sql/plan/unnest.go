@@ -28,6 +28,7 @@ var (
 			Typ: &plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
+				Width:       types.MaxVarcharLen,
 			},
 		},
 		{
@@ -43,6 +44,7 @@ var (
 			Typ: &plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
+				Width:       types.MaxVarcharLen,
 			},
 		},
 		{
@@ -50,6 +52,7 @@ var (
 			Typ: &plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
+				Width:       types.MaxVarcharLen,
 			},
 		},
 		{
@@ -65,6 +68,7 @@ var (
 			Typ: &plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
+				Width:       types.MaxVarcharLen,
 			},
 		},
 		{
@@ -72,6 +76,7 @@ var (
 			Typ: &plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
+				Width:       types.MaxVarcharLen,
 			},
 		},
 	}

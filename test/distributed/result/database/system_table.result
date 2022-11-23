@@ -47,7 +47,7 @@ x509_issuer    BLOB    NO        NULL
 event_priv    VARCHAR(10)    NO        'N'
 lock_tables_priv    VARCHAR(10)    NO        'N'
 select_priv    VARCHAR(10)    NO        'N'
-__mo_cpkey_004host004user    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host004user    VARCHAR(65535)    NO    PRI    NULL
 max_questions    INT UNSIGNED    NO        '0'
 execute_priv    VARCHAR(10)    NO        'N'
 update_priv    VARCHAR(10)    NO        'N'
@@ -95,7 +95,7 @@ show columns from `db`;
 Field    Type    Null    Key    Default    Extra    Comment
 trigger_priv    VARCHAR(10)    NO        'N'
 update_priv    VARCHAR(10)    NO        'N'
-__mo_cpkey_004host002db004user    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host002db004user    VARCHAR(65535)    NO    PRI    NULL
 db    CHAR(64)    NO        ''
 drop_priv    VARCHAR(10)    NO        'N'
 host    CHAR(255)    NO        ''
@@ -126,14 +126,14 @@ timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
 user    CHAR(32)    NO        ''
 routine_type    VARCHAR(10)    NO        NULL
 routine_name    CHAR(64)    NO        ''
-__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR(65535)    NO    PRI    NULL
 show columns from `columns_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
 db    CHAR(64)    NO        ''
 host    CHAR(255)    NO        ''
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
 user    CHAR(32)    NO        ''
-__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR(65535)    NO    PRI    NULL
 column_name    CHAR(64)    NO        ''
 column_priv    VARCHAR(10)    NO        ''
 table_name    CHAR(64)    NO        ''
@@ -147,7 +147,7 @@ user    CHAR(32)    NO        ''
 column_priv    VARCHAR(10)    NO        ''
 table_priv    VARCHAR(10)    NO        ''
 table_name    CHAR(64)    NO        ''
-__mo_cpkey_004host002db004user010table_name    VARCHAR(0)    NO    PRI    NULL        
+__mo_cpkey_004host002db004user010table_name    VARCHAR(65535)    NO    PRI    NULL        
 use information_schema;
 show tables;
 tables_in_information_schema
