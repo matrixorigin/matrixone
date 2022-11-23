@@ -59,7 +59,6 @@ const (
 
 	HashBuild
 
-
 	TableFunction
 
 	// LastInstructionOp is not a true operator and must set at last.
