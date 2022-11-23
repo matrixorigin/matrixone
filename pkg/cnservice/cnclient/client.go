@@ -65,6 +65,12 @@ func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
 }
 
 func (c *CNClient) Close() error {
+	lock.Lock()
+	defer lock.Unlock()
+	if client == nil || !c.ready {
+		return nil
+	}
+
 	c.ready = false
 	return c.client.Close()
 }
@@ -87,7 +93,18 @@ type ClientConfig struct {
 	WriteBufferSize int
 }
 
+var (
+	lock sync.Mutex
+)
+
+// TODO: Here it needs to be refactored together with Runtime
 func NewCNClient(cfg *ClientConfig) error {
+	lock.Lock()
+	defer lock.Unlock()
+	if client != nil {
+		return nil
+	}
+
 	var err error
 	cfg.Fill()
 	client = &CNClient{config: cfg}
