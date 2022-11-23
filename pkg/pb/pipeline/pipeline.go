@@ -19,7 +19,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-const MessageEnd = 1
+const (
+	BatchEnd = iota
+	MessageEnd
+	WaitingNext
+)
 
 func (m *Message) Size() int {
 	return m.ProtoSize()
@@ -46,6 +50,10 @@ func (m *Message) IsEndMessage() bool {
 	return m.Sid == MessageEnd
 }
 
+func (m *Message) WaitingNextToMerge() bool {
+	return m.Sid == WaitingNext
+}
+
 func EncodedMessageError(err error) []byte {
 	var errData []byte
 	if err == nil {
@@ -65,7 +73,7 @@ func EncodedMessageError(err error) []byte {
 	return errData
 }
 
-func DecodeMessageError(m *Message) error {
+func GetMessageErrorInfo(m *Message) error {
 	errData := m.GetErr()
 	if len(errData) > 0 {
 		err := &moerr.Error{}
