@@ -254,31 +254,6 @@ collation_connection    VARCHAR    YES        NULL
 database_collation    VARCHAR    YES        NULL        
 select trigger_name, action_order from triggers limit 3;
 trigger_name    action_order
-desc tables;
-Field    Type    Null    Key    Default    Extra    Comment
-table_catalog    VARCHAR    YES        NULL        
-table_schema    VARCHAR    YES        NULL        
-table_name    VARCHAR    YES        NULL        
-table_type    VARCHAR    YES        NULL        
-engine    VARCHAR    YES        NULL        
-version    INT    YES        NULL        
-row_format    VARCHAR    YES        NULL        
-table_rows    BIGINT UNSIGNED    YES        NULL        
-avg_row_length    BIGINT UNSIGNED    YES        NULL        
-data_length    BIGINT UNSIGNED    YES        NULL        
-max_data_length    BIGINT UNSIGNED    YES        NULL        
-index_length    BIGINT UNSIGNED    YES        NULL        
-data_free    BIGINT UNSIGNED    YES        NULL        
-AUTO_INCREMENT    BIGINT UNSIGNED    YES        NULL        
-create_time    TIMESTAMP    YES        NULL        
-update_time    DATETIME    YES        NULL        
-check_time    DATETIME    YES        NULL        
-table_collation    VARCHAR    YES        NULL        
-checksum    BIGINT    YES        NULL        
-create_options    VARCHAR    YES        NULL        
-table_comment    TEXT    YES        NULL        
-select table_name, table_type from tables limit 3;
-table_name    table_type
 use mysql;
 desc user;
 Field    Type    Null    Key    Default    Extra    Comment

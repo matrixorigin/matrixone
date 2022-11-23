@@ -254,31 +254,6 @@ event_object_schema    VARCHAR    YES        NULL
 action_reference_old_table    VARCHAR    YES        NULL        
 select trigger_name, action_order from triggers limit 3;
 trigger_name    action_order
-desc tables;
-Field    Type    Null    Key    Default    Extra    Comment
-create_time    TIMESTAMP    YES        NULL        
-table_catalog    VARCHAR    YES        NULL        
-checksum    BIGINT    YES        NULL        
-data_free    BIGINT UNSIGNED    YES        NULL        
-engine    VARCHAR    YES        NULL        
-version    INT    YES        NULL        
-create_options    VARCHAR    YES        NULL        
-update_time    DATETIME    YES        NULL        
-table_schema    VARCHAR    YES        NULL        
-AUTO_INCREMENT    BIGINT UNSIGNED    YES        NULL        
-check_time    DATETIME    YES        NULL        
-max_data_length    BIGINT UNSIGNED    YES        NULL        
-row_format    VARCHAR    YES        NULL        
-data_length    BIGINT UNSIGNED    YES        NULL        
-avg_row_length    BIGINT UNSIGNED    YES        NULL        
-table_comment    TEXT    YES        NULL        
-index_length    BIGINT UNSIGNED    YES        NULL        
-table_name    VARCHAR    YES        NULL        
-table_rows    BIGINT UNSIGNED    YES        NULL        
-table_type    VARCHAR    YES        NULL        
-table_collation    VARCHAR    YES        NULL        
-select table_name, table_type from tables limit 3;
-table_name    table_type
 use mysql;
 desc user;
 Field    Type    Null    Key    Default    Extra    Comment
