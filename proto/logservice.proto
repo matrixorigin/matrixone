@@ -255,8 +255,8 @@ enum HAKeeperUpdateType {
   ScheduleCommandUpdate   = 5;
   SetStateUpdate          = 6;
   InitialClusterUpdate    = 7;
-  SetInitTaskStateUpdate  = 8;
-  TaskTableUserUpdate     = 9;
+  SetTaskSchedulerStateUpdate  = 8;
+  SetTaskTableUserUpdate       = 9;
 }
 
 // HAKeeperState state transition diagram
@@ -284,22 +284,20 @@ enum HAKeeperState {
   HAKeeperRunning                    = 4;
 }
 
-// TaskInitState state transition diagram
-//        TaskInitNotStart
-//               │
-//               │ setTaskTableUser()
-//               ▼
-//        TaskInitStarted
-//               │
-//          ┌────┴────┐
-//          ▼         ▼
-// TaskInitFailed     TaskInitCompleted
-//
-enum TaskInitState {
-  TaskInitNotStart  = 0;
-  TaskInitStarted   = 1;
-  TaskInitFailed    = 2;
-  TaskInitCompleted = 3;
+// TaskSchedulerState state transition diagram
+//         TaskSchedulerCreated
+//                  │
+//                  │  setTaskTableUser()
+//                  ▼
+//         TaskSchedulerStarted
+//                 │ ▲
+//                 │ │
+//                 ▼ │
+//          TaskSchedulerStopped
+enum TaskSchedulerState {
+  TaskSchedulerCreated  = 0;
+  TaskSchedulerRunning  = 1;
+  TaskSchedulerStopped  = 2;
 }
 
 message TaskTableUser {
@@ -460,8 +458,8 @@ message CheckerState {
   LogState LogState       = 4 [(gogoproto.nullable) = false];
   CNState CNState         = 5 [(gogoproto.nullable) = false];
   HAKeeperState State     = 6;
-  TaskInitState TaskState = 7;
-  TaskTableUser TaskTableUser = 8 [(gogoproto.nullable) = false];
+  TaskSchedulerState TaskSchedulerState = 7;
+  TaskTableUser TaskTableUser           = 8 [(gogoproto.nullable) = false];
 }
 
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.
@@ -470,7 +468,7 @@ message HAKeeperRSMState {
   uint64 NextID                              = 2;
   uint64 Term                                = 3;
   HAKeeperState State                        = 4;
-  TaskInitState TaskInitState                = 5;
+  TaskSchedulerState TaskSchedulerState      = 5;
   map<string, CommandBatch> ScheduleCommands = 6 [(gogoproto.nullable) = false];
   map<string, uint64> LogShards = 7;
   CNState CNState               = 8  [(gogoproto.nullable) = false];

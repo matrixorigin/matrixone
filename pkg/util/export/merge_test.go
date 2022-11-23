@@ -17,9 +17,9 @@ package export
 import (
 	"context"
 	"errors"
-	"github.com/lni/goutils/leaktest"
 	"path"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,14 +29,43 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lni/goutils/leaktest"
 )
 
 func init() {
 	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
-	RegisterTableDefine(dummyTable)
+	table.RegisterTableDefine(dummyTable)
+}
+
+var mux sync.Mutex
+
+var dummyStrColumn = table.Column{Name: "str", Type: "varchar(32)", Default: "", Comment: "str column"}
+var dummyInt64Column = table.Column{Name: "int64", Type: "BIGINT", Default: "0", Comment: "int64 column"}
+var dummyFloat64Column = table.Column{Name: "float64", Type: "DOUBLE", Default: "0.0", Comment: "float64 column"}
+
+var dummyTable = &table.Table{
+	Account:          "test",
+	Database:         "db_dummy",
+	Table:            "tbl_dummy",
+	Columns:          []table.Column{dummyStrColumn, dummyInt64Column, dummyFloat64Column},
+	PrimaryKeyColumn: []table.Column{dummyStrColumn, dummyInt64Column},
+	Engine:           table.ExternalTableEngine,
+	Comment:          "dummy table",
+	PathBuilder:      table.NewAccountDatePathBuilder(),
+	TableOptions:     nil,
+}
+
+func dummyFillTable(str string, i int64, f float64) *table.Row {
+	row := dummyTable.GetRow()
+	row.SetVal(dummyStrColumn.Name, str)
+	row.SetInt64(dummyInt64Column.Name, i)
+	row.SetFloat64(dummyFloat64Column.Name, f)
+	return row
 }
 
 func TestInitCronExpr(t *testing.T) {
@@ -97,13 +126,13 @@ func TestInitCronExpr(t *testing.T) {
 	}
 }
 
-func initLogsFile(ctx context.Context, fs fileservice.FileService, table *Table, ts time.Time) error {
+func initLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Table, ts time.Time) error {
 	mux.Lock()
 	defer mux.Unlock()
 
 	var newFilePath = func(ts time.Time) string {
-		filename := table.PathBuilder.NewLogFilename(table.GetName(), "uuid", "node", ts)
-		p := table.PathBuilder.Build(table.Account, MergeLogTypeLogs, ts, table.Database, table.GetName())
+		filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts)
+		p := tbl.PathBuilder.Build(tbl.Account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.GetName())
 		filepath := path.Join(p, filename)
 		return filepath
 	}
@@ -137,13 +166,13 @@ func initLogsFile(ctx context.Context, fs fileservice.FileService, table *Table,
 	return nil
 }
 
-func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, table *Table, ts time.Time) error {
+func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Table, ts time.Time) error {
 	mux.Lock()
 	defer mux.Unlock()
 
 	var newFilePath = func(ts time.Time) string {
-		filename := table.PathBuilder.NewLogFilename(table.GetName(), "uuid", "node", ts)
-		p := table.PathBuilder.Build(table.Account, MergeLogTypeLogs, ts, table.Database, table.GetName())
+		filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts)
+		p := tbl.PathBuilder.Build(tbl.Account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.GetName())
 		filepath := path.Join(p, filename)
 		return filepath
 	}

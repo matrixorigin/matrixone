@@ -4474,3 +4474,46 @@ func TestUpdate(t *testing.T) {
 		assert.NoError(t, txn.Commit())
 	}
 }
+
+func TestInsertPerf(t *testing.T) {
+	t.Skip(any("for debug"))
+	opts := new(options.Options)
+	options.WithCheckpointScanInterval(time.Second * 10)(opts)
+	options.WithFlushInterval(time.Second * 10)(opts)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(10, 2)
+	schema.BlockMaxRows = 1000
+	schema.SegmentMaxBlocks = 5
+	tae.bindSchema(schema)
+
+	cnt := 1000
+	iBat := 1
+	poolSize := 20
+
+	bat := catalog.MockBatch(schema, cnt*iBat*poolSize*2)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat.Window(0, 1), true)
+	var wg sync.WaitGroup
+	run := func(start int) func() {
+		return func() {
+			defer wg.Done()
+			for i := start; i < start+cnt*iBat; i += iBat {
+				txn, rel := tae.getRelation()
+				_ = rel.Append(bat.Window(i, iBat))
+				_ = txn.Commit()
+			}
+		}
+	}
+
+	p, _ := ants.NewPool(poolSize)
+	defer p.Release()
+	now := time.Now()
+	for i := 1; i <= poolSize; i++ {
+		wg.Add(1)
+		_ = p.Submit(run(i * cnt * iBat))
+	}
+	wg.Wait()
+	t.Log(time.Since(now))
+}

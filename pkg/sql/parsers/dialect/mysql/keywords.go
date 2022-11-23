@@ -290,6 +290,7 @@ func init() {
 		"order":                    ORDER,
 		"out":                      UNUSED,
 		"outer":                    OUTER,
+		"over":                     OVER,
 		"outfile":                  OUTFILE,
 		"ownership":                OWNERSHIP,
 		"header":                   HEADER,
@@ -516,5 +517,8 @@ func init() {
 		"reference":                REFERENCE,
 		"modump":                   MODUMP,
 		"low_cardinality":          LOW_CARDINALITY,
+		"preceding":                PRECEDING,
+		"following":                FOLLOWING,
+		"groups":                   GROUPS,
 	}
 }

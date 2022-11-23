@@ -128,7 +128,7 @@ func (n *MVCCHandle) AddAppendNodeLocked(
 	if txn != nil {
 		ts = txn.GetStartTS()
 	}
-	if n.appends.IsEmpty() || n.appends.SearchNode(NewCommittedAppendNode(ts, 0, 0, nil)) == nil {
+	if n.appends.IsEmpty() || !n.appends.GetUpdateNodeLocked().(*AppendNode).Start.Equal(ts) {
 		an = NewAppendNode(txn, startRow, maxRow, n)
 		n.appends.InsertNode(an)
 		created = true

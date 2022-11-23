@@ -648,8 +648,7 @@ type FuncExpr struct {
 	//specify the type of aggregation.
 	AggType AggType
 
-	//aggregations which specify an order.
-	OrderBy OrderBy
+	WindowSpec *WindowSpec
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
@@ -662,6 +661,48 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	}
 	node.Exprs.Format(ctx)
 	ctx.WriteByte(')')
+
+	if node.WindowSpec != nil {
+		ctx.WriteString(" over (")
+
+		if len(node.WindowSpec.PartitionBy) > 0 {
+			ctx.WriteString("partition by ")
+			node.WindowSpec.PartitionBy.Format(ctx)
+		}
+
+		if len(node.WindowSpec.OrderBy) > 0 {
+			if len(node.WindowSpec.PartitionBy) > 0 {
+				ctx.WriteByte(' ')
+			}
+			node.WindowSpec.OrderBy.Format(ctx)
+		}
+
+		if node.WindowSpec.WindowFrame != nil {
+			frame := node.WindowSpec.WindowFrame
+
+			switch frame.Unit {
+			case WIN_FRAME_UNIT_ROWS:
+				ctx.WriteString(" rows ")
+
+			case WIN_FRAME_UNIT_RANGE:
+				ctx.WriteString(" range ")
+
+			case WIN_FRAME_UNIT_GROUPS:
+				ctx.WriteString(" groups ")
+			}
+
+			if frame.EndBound == nil {
+				frame.StartBound.Format(ctx)
+			} else {
+				ctx.WriteString("between ")
+				frame.StartBound.Format(ctx)
+				ctx.WriteString(" and ")
+				frame.EndBound.Format(ctx)
+			}
+		}
+
+		ctx.WriteByte(')')
+	}
 }
 
 func NewFuncExpr(ft FuncType, name *UnresolvedName, e Exprs, order OrderBy) *FuncExpr {
@@ -670,7 +711,66 @@ func NewFuncExpr(ft FuncType, name *UnresolvedName, e Exprs, order OrderBy) *Fun
 		Type:    ft,
 		Exprs:   e,
 		AggType: AGG_TYPE_GENERAL,
-		OrderBy: order,
+	}
+}
+
+type WindowSpec struct {
+	PartitionBy Exprs
+	OrderBy     OrderBy
+	WindowFrame *WindowFrame
+}
+
+type WindowFrame struct {
+	Unit       WindowFrameUnits
+	StartBound WindowFrameBound
+	EndBound   WindowFrameBound
+}
+
+type WindowFrameUnits int
+
+const (
+	WIN_FRAME_UNIT_ROWS WindowFrameUnits = iota
+	WIN_FRAME_UNIT_RANGE
+	WIN_FRAME_UNIT_GROUPS //MySQL don't support
+)
+
+type WindowFrameBound interface {
+	Format(ctx *FmtCtx)
+}
+
+type WindowFrameBoundCurrentRow struct {
+	WindowFrameBound
+}
+
+func (currentRow *WindowFrameBoundCurrentRow) Format(ctx *FmtCtx) {
+	ctx.WriteString("current row")
+}
+
+type WindowFrameBoundPreceding struct {
+	WindowFrameBound
+	Expr Expr
+}
+
+func (preceding *WindowFrameBoundPreceding) Format(ctx *FmtCtx) {
+	if preceding.Expr == nil {
+		ctx.WriteString("unbounded preceding")
+	} else {
+		preceding.Expr.Format(ctx)
+		ctx.WriteString(" preceding")
+	}
+}
+
+type WindowFrameBoundFollowing struct {
+	WindowFrameBound
+	Expr Expr
+}
+
+func (following *WindowFrameBoundFollowing) Format(ctx *FmtCtx) {
+	if following.Expr == nil {
+		ctx.WriteString("unbounded following")
+	} else {
+		following.Expr.Format(ctx)
+		ctx.WriteString(" following")
 	}
 }
 
