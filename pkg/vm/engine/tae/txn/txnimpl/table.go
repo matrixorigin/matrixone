@@ -797,12 +797,12 @@ func (tbl *txnTable) DoPrecommitDedup(pks containers.Vector) (err error) {
 		}
 		{
 			seg.RLock()
-			// needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
-			// if needwait {
-			// 	seg.RUnlock()
-			// 	txnToWait.GetTxnState(true)
-			// 	seg.RLock()
-			// }
+			needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
+			if needwait {
+				seg.RUnlock()
+				txnToWait.GetTxnState(true)
+				seg.RLock()
+			}
 			shouldSkip := seg.HasDropCommittedLocked() || seg.IsCreatingOrAborted()
 			seg.RUnlock()
 			if shouldSkip {
