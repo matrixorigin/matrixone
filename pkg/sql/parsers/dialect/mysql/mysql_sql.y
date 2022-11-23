@@ -115,6 +115,10 @@ import (
 
     partitionOption *tree.PartitionOption
     partitionBy *tree.PartitionBy
+    windowSpec *tree.WindowSpec
+    windowFrame *tree.WindowFrame
+    windowFrameBound tree.WindowFrameBound
+    windowFrameUnit tree.WindowFrameUnits
     partition *tree.Partition
     partitions []*tree.Partition
     values tree.Values
@@ -297,6 +301,9 @@ import (
 // MODump
 %token <str> MODUMP
 
+// Window function
+%token <str> OVER PRECEDING FOLLOWING GROUPS
+
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
 
@@ -453,7 +460,7 @@ import (
 %type <expr> simple_expr else_opt
 %type <expr> expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
-%type <exprs> expression_list row_value
+%type <exprs> expression_list row_value window_partition_by window_partition_by_opt
 %type <expr> datetime_precision_opt datetime_precision
 %type <tuple> tuple_expression
 %type <comparisonOp> comparison_operator and_or_some
@@ -498,6 +505,10 @@ import (
 %type <unresolveNames> column_name_list
 %type <partitionOption> partition_by_opt
 %type <partitionBy> partition_method sub_partition_method sub_partition_opt
+%type <windowSpec> window_spec_opt
+%type <windowFrame> window_frame window_frame_opt
+%type <windowFrameBound> window_frame_bound
+%type <windowFrameUnit> window_frame_unit
 %type <str> fields_or_columns
 %type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt
 %type <boolVal> linear_opt
@@ -5813,138 +5824,248 @@ integer_opt:
 |    INTEGER
 |    INT
 
+window_frame_bound:
+  CURRENT ROW
+    {
+        $$ = &tree.WindowFrameBoundCurrentRow{}
+    }
+| UNBOUNDED PRECEDING
+    {
+        $$ = &tree.WindowFrameBoundPreceding{}
+    }
+| expression PRECEDING
+    {
+        $$ = &tree.WindowFrameBoundPreceding{
+            Expr: $1,
+        }
+    }
+| UNBOUNDED FOLLOWING
+    {
+        $$ = &tree.WindowFrameBoundFollowing{}
+    }
+| expression FOLLOWING
+    {
+        $$ = &tree.WindowFrameBoundFollowing{
+            Expr: $1,
+        }
+    }
+
+window_frame_unit:
+    ROWS
+    {
+        $$ = tree.WIN_FRAME_UNIT_ROWS
+    }
+|   RANGE
+    {
+        $$ = tree.WIN_FRAME_UNIT_RANGE
+    }
+|   GROUPS
+    {
+        $$ = tree.WIN_FRAME_UNIT_GROUPS
+    }
+
+window_frame:
+    window_frame_unit window_frame_bound
+    {
+        $$ = &tree.WindowFrame{
+            Unit: $1,
+            StartBound: $2,
+        }
+    }
+|   window_frame_unit BETWEEN window_frame_bound AND window_frame_bound
+    {
+        $$ = &tree.WindowFrame{
+            Unit: $1,
+            StartBound: $3,
+            EndBound: $5,
+        }
+    }
+
+window_frame_opt:
+    {
+        $$ = nil
+    }
+|   window_frame
+    {
+        $$ = $1
+    }
+
+
+window_partition_by:
+   PARTITION BY expression_list
+    {
+        $$ = $3
+    }
+
+window_partition_by_opt:
+    {
+        $$ = nil
+    }
+|   window_partition_by
+    {
+        $$ = $1
+    }
+
+window_spec_opt:
+    {
+        $$ = nil
+    }
+|   OVER '(' window_partition_by_opt order_by_opt window_frame_opt ')'
+    {
+        $$ = &tree.WindowSpec{
+            PartitionBy: $3,
+            OrderBy: $4,
+            WindowFrame: $5,
+        }
+    }
+
 function_call_aggregate:
-    AVG '(' func_type_opt expression  ')'
+    AVG '(' func_type_opt expression  ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   APPROX_COUNT_DISTINCT '(' expression_list ')'
+|   APPROX_COUNT_DISTINCT '(' expression_list ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: $3,
+            WindowSpec: $5,
         }
     }
-|   APPROX_PERCENTILE '(' expression_list ')'
+|   APPROX_PERCENTILE '(' expression_list ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: $3,
+            WindowSpec: $5,
         }
     }
-|   BIT_AND '(' func_type_opt expression ')'
+|   BIT_AND '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   BIT_OR '(' func_type_opt expression ')'
+|   BIT_OR '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   BIT_XOR '(' func_type_opt expression ')'
+|   BIT_XOR '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   COUNT '(' func_type_opt expression_list ')'
+|   COUNT '(' func_type_opt expression_list ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: $4,
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   COUNT '(' '*' ')'
+|   COUNT '(' '*' ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         es := tree.NewNumValWithType(constant.MakeString("*"), "*", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{es},
+            WindowSpec: $5,
         }
     }
-|   MAX '(' func_type_opt expression ')'
+|   MAX '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   MIN '(' func_type_opt expression ')'
+|   MIN '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   SUM '(' func_type_opt expression ')'
+|   SUM '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   std_dev_pop '(' func_type_opt expression ')'
+|   std_dev_pop '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   STDDEV_SAMP '(' func_type_opt expression ')'
+|   STDDEV_SAMP '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   VAR_POP '(' func_type_opt expression ')'
+|   VAR_POP '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   VAR_SAMP '(' func_type_opt expression ')'
+|   VAR_SAMP '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
 
@@ -7615,6 +7736,10 @@ reserved_keyword:
 |   SECONDARY
 |   DECLARE
 |   MODUMP
+|   OVER
+|   PRECEDING
+|   FOLLOWING
+|   GROUPS
 
 non_reserved_keyword:
     ACCOUNT
