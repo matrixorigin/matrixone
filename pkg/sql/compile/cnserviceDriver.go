@@ -249,9 +249,7 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextOperat
 // 2. Message with end flag and the result of analysis
 // 3. Batch Message with batch data
 func (s *Scope) remoteRun(c *Compile) error {
-	// encode the scope
-	// the last instruction of remote-run scope must be `connect`, it doesn't need serialization work.
-	// just ignore this instruction when doing serialization work and recover at the end in order to receive the returned batch.
+	// encode the scope. shouldn't encode the `connector` operator which used to receive the back batch.
 	n := len(s.Instructions) - 1
 	con := s.Instructions[n]
 	s.Instructions = s.Instructions[:n]
@@ -276,8 +274,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 		_ = streamSender.Close()
 	}(streamSender)
 
-	// send encoded message
-	// mo-rpc send message requires that context should have its own timeout.
+	// send encoded message and receive the back message.
 	// TODO: get dead time from config file may suitable.
 	if _, ok := c.ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -296,14 +293,11 @@ func (s *Scope) remoteRun(c *Compile) error {
 	if errSend != nil {
 		return errSend
 	}
-
-	// range to receive.
-	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
 	messagesReceive, errReceive := streamSender.Receive()
 	if errReceive != nil {
 		return errReceive
 	}
-	return receiveMessageFromCnServer(c, messagesReceive, arg)
+	return receiveMessageFromCnServer(c, messagesReceive, s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument))
 }
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
