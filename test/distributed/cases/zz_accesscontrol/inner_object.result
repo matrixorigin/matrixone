@@ -20,8 +20,8 @@ system
 system_metrics
 information_schema
 mysql
-update mo_catalog.mo_tables set relanme='mo_aaaa';
-
+update mo_catalog.mo_tables set relname='mo_aaaa';
+internal error: do not have privilege to execute the statement
 insert into mo_catalog.mo_role values (1763,'apple',0,1,'2022-09-22 06:53:34','');
 internal error: do not have privilege to execute the statement
 delete from mo_catalog.mo_user;
@@ -35,9 +35,9 @@ internal error: do not have privilege to execute the statement
 delete from mo_catalog.mo_role_privs;
 internal error: do not have privilege to execute the statement
 delete from mo_catalog.mo_database;
-
+internal error: do not have privilege to execute the statement
 delete from mo_catalog.mo_columns;
-
+internal error: do not have privilege to execute the statement
 drop database information_schema;
 internal error: do not have privilege to execute the statement
 drop database mo_catalog;
