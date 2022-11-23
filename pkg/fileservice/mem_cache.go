@@ -17,6 +17,8 @@ package fileservice
 import (
 	"context"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 type MemCache struct {
@@ -38,6 +40,8 @@ func (m *MemCache) Read(
 ) (
 	err error,
 ) {
+	ctx, span := trace.Start(ctx, "MemCache.Read")
+	defer span.End()
 
 	numHit := 0
 	defer func() {

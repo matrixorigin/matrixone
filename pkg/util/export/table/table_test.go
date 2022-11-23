@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package export
+package table
 
 import (
 	"errors"
@@ -70,14 +70,6 @@ var dummyTable = &Table{
 	Comment:          "dummy table",
 	PathBuilder:      NewAccountDatePathBuilder(),
 	TableOptions:     nil,
-}
-
-func dummyFillTable(str string, i int64, f float64) *Row {
-	row := dummyTable.GetRow()
-	row.SetVal(dummyStrColumn.Name, str)
-	row.SetInt64(dummyInt64Column.Name, i)
-	row.SetFloat64(dummyFloat64Column.Name, f)
-	return row
 }
 
 var dummyTableCreateExistsSql = "CREATE EXTERNAL TABLE IF NOT EXISTS `db_dummy`.`tbl_dummy`(" +

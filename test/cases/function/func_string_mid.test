@@ -1,0 +1,183 @@
+#SELECT, EXTREME VALUE
+
+SELECT MID('Quadratically',5);
+SELECT MID('foobarbar' FROM 4);
+SELECT MID('Quadratically',5,6);
+SELECT MID('Sakila', -3);
+SELECT MID('Sakila', -5, 3);
+SELECT MID('Sakila' FROM -4 FOR 2);
+SELECT MID('monty',5,1);
+SELECT MID('a',1,2);
+select MID('abcdefg',3,2);
+select MID('abcdefg',3,2);
+select MID('abcdefg',-3,2);
+select MID('abcdefg',-1,5);
+select MID('abcdefg',0,0);
+
+select MID('abcdefg',-1,-1);
+select MID('abcdefg',1,-1);
+select mid('hello', 2, -1);
+
+select mid('hello', -1, 1);
+select mid('hello', -2, 1);
+select mid('hello', -4294967295, 1);
+select mid('hello', 4294967295, 1);
+select mid('hello', -4294967296, 1);
+select mid('hello', 4294967296, 1);
+select mid('hello', -4294967297, 1);
+select mid('hello', 4294967297, 1);
+
+select mid('hello', -18446744073709551615, 1);
+select mid('hello', 18446744073709551615, 1);
+select mid('hello', -18446744073709551616, 1);
+select mid('hello', 18446744073709551616, 1);
+select mid('hello', -18446744073709551617, 1);
+select mid('hello', 18446744073709551617, 1);
+select mid('hello', 1, -1);
+select mid('hello', 1, -4294967295);
+select mid('hello', 1, 4294967295);
+select mid('hello', 1, -4294967296);
+select mid('hello', 1, 4294967296);
+select mid('hello', 1, -4294967297);
+
+select mid('hello', 1, 4294967297);
+
+select mid('hello', 1, -18446744073709551615);
+select mid('hello', 1, 18446744073709551615);
+select mid('hello', 1, -18446744073709551616);
+select mid('hello', 1, 18446744073709551616);
+select mid('hello', 1, -18446744073709551617);
+select mid('hello', 1, 18446744073709551617);
+select mid('hello', -1, -1);
+
+select mid('hello', -4294967295, -4294967295);
+select mid('hello', 4294967295, 4294967295);
+select mid('hello', -4294967296, -4294967296);
+select mid('hello', 4294967296, 4294967296);
+select mid('hello', -4294967297, -4294967297);
+select mid('hello', 4294967297, 4294967297);
+
+select mid('hello', -18446744073709551615, -18446744073709551615);
+select mid('hello', 18446744073709551615, 18446744073709551615);
+select mid('hello', -18446744073709551616, -18446744073709551616);
+select mid('hello', 18446744073709551616, 18446744073709551616);
+select mid('hello', -18446744073709551617, -18446744073709551617);
+select mid('hello', 18446744073709551617, 18446744073709551617);
+
+SELECT MID('Sakila' FROM -4 FOR 2);
+SELECT MID('foobarbar' FROM 4);
+
+#别名
+SELECT MID('w3resource',4,3);
+
+#嵌套
+select mid('abc', cast(2 as unsigned int));
+
+#数据类型
+create table t1(f1 varchar(255));
+insert into t1 values ("123"),("456");
+select mid(f1,1,1) from t1 group by 1;
+drop table t1;
+
+
+
+#EXTREME VALUE, IN操作符
+SELECT '1' IN ('1', MID(-9223372036854775809, 1));
+
+#嵌套
+SELECT MID('1', year(FROM_UNIXTIME(-1)));
+select reverse(mid(1,1,1));
+
+
+#DISTINCT
+CREATE TABLE t1(c1 CHAR(30));
+INSERT INTO t1 VALUES('111'),('222');
+SELECT DISTINCT mid(c1, 1, 2147483647) FROM t1;
+SELECT DISTINCT mid(c1, 1, 2147483648) FROM t1;
+SELECT DISTINCT mid(c1, -1, 2147483648) FROM t1;
+
+SELECT DISTINCT mid(c1, -2147483647, 2147483648) FROM t1;
+
+SELECT DISTINCT mid(c1, 9223372036854775807, 23) FROM t1;
+DROP TABLE t1;
+
+#嵌套, LONGTEXT,GROUP_CONCAT暂不支持
+#CREATE TABLE t1 (f1 LONGTEXT , f2  INTEGER);
+#INSERT INTO t1 VALUES (REPEAT('a', 500000), 0), (REPEAT('b', 500000), 1), (REPEAT('c', 500000), 2);
+#SELECT MID(GROUP_CONCAT(DISTINCT f1 ORDER BY f1 DESC), 1, 5) FROM t1;
+#SELECT MID(GROUP_CONCAT(DISTINCT UPPER(f1) ORDER BY f1), 1, 5) FROM t1;
+#DROP TABLE t1;
+
+#SELECT, 子查询
+create table t1 (b varchar(5));
+insert t1 values ('ab'), ('abc'), ('abcd'), ('abcde');
+select *,mid(b,1),mid(b,-1),mid(b,-2),mid(b,-3),mid(b,-4),mid(b,-5) from t1;
+select * from (select *,mid(b,1),mid(b,-1),mid(b,-2),mid(b,-3),mid(b,-4),mid(b,-5) from t1) t;
+drop table t1;
+
+#SELECT, GROUP BY
+CREATE TABLE t1 (a varchar(2000), b varchar(10));
+INSERT INTO t1 select space(1300),'one';
+INSERT INTO t1 select space(1300),'two';
+
+-- @separator:table
+SELECT MID(a,1,10), LENGTH(a) FROM t1 GROUP BY a;
+drop table t1;
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES (0),(0);
+SELECT 1 FROM t1 GROUP BY MID('',1,'');
+drop table t1;
+
+#INSERT
+create table t1 (email varchar(50));
+insert into t1 values ('sasha@mysql.com'),('monty@mysql.com'),('foo@hotmail.com'),('foo@aol.com'),('bar@aol.com');
+create table t2(id int not null, t2 varchar(50));
+insert into t2 select 1, mid(email, 2,1) from t1;
+select id from t2;
+select t2 from t2;
+drop table t1;
+drop table t2;
+
+
+#字符集
+
+create table t1 (a varchar(50));
+insert into t1 values("你好"), ("再见"), ("今天");
+select * from t1;
+select mid(a, 1, 1) from t1;
+drop table t1;
+
+#NULL
+select mid(null, 1, 1);
+
+#WHERE 
+create table t1 (b varchar(5));
+insert t1 values ('ab'), ('abc'), ('abcd'), ('abcde');
+select * from t1 where mid(b,1,1) = 'a';
+drop table t1;
+
+#HAVING & 逻辑运算
+drop table if exists t1;
+create table t1(b varchar(5));
+insert into t1 values('ab'), ('abc'), ('abcd'), ('abcde');
+select b from t1 group by b having mid(b,1,1)+'a'='aa';
+drop table t1;
+
+#ON CONDITION
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a varchar(5));
+create table t2(a varchar(20));
+insert into t1 values('ab'), ('abc'), ('abcd'), ('abcde');
+insert into t2 values("2013-04-30"),("1994-10-04"),("2018-06-04"),("2012-10-12"), ("abc"),("abcd");
+SELECT t1.a, t2.a FROM t1 JOIN t2 ON (mid(t1.a, 1,1) = mid(t2.a, 1,1 ));
+drop table t1;
+drop table t2;
+
+#BLOB
+drop table if exists t1;
+create table t1(a blob);
+insert into t1 values('ab'), ('abc'), ('abcd'), ('abcde');
+SELECT MID(a,1,4), LENGTH(a) FROM t1 GROUP BY a;
+SELECT MID(a,-1) FROM t1;
+drop table t1;

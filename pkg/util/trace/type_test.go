@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,40 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package export
+// Portions of this file are additionally subject to the following
+// copyright.
+//
+// Copyright (C) 2022 Matrix Origin.
+//
+// Modified the behavior and the interface of the step.
+
+package trace
 
 import (
 	"reflect"
 	"testing"
-	"time"
 )
 
-func TestString2Bytes(t *testing.T) {
-	type args struct {
-		s string
-	}
+func TestGetGlobalBatchProcessor(t *testing.T) {
 	tests := []struct {
-		name    string
-		args    args
-		wantRet []byte
+		name string
+		want BatchProcessor
 	}{
 		{
 			name: "normal",
-			args: args{
-				s: "12345a",
-			},
-			wantRet: []byte{'1', '2', '3', '4', '5', 'a'},
+			want: noopBatchProcessor{},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if gotRet := String2Bytes(tt.args.s); !reflect.DeepEqual(gotRet, tt.wantRet) {
-				t.Errorf("String2Bytes() = %v, want %v", gotRet, tt.wantRet)
+			if got := GetGlobalBatchProcessor(); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("GetGlobalBatchProcessor() = %v, want %v", got, tt.want)
 			}
 		})
 	}
-}
-
-func init() {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
 }

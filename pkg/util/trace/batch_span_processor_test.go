@@ -28,17 +28,8 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/stretchr/testify/assert"
 )
-
-var _ export.BatchProcessor = &noopBatchProcessor{}
-
-type noopBatchProcessor struct{}
-
-func (n noopBatchProcessor) Collect(context.Context, batchpipe.HasName) error { return nil }
-func (n noopBatchProcessor) Start() bool                                      { return true }
-func (n noopBatchProcessor) Stop(bool) error                                  { return nil }
 
 var _ batchpipe.HasName = &namedNoopSpan{}
 
@@ -48,7 +39,7 @@ func (n namedNoopSpan) GetName() string { return "NamedNopSpan" }
 
 func TestNewBatchSpanProcessor(t *testing.T) {
 	type args struct {
-		exporter export.BatchProcessor
+		exporter BatchProcessor
 	}
 	tests := []struct {
 		name string
@@ -75,7 +66,7 @@ func TestNewBatchSpanProcessor(t *testing.T) {
 
 func Test_batchSpanProcessor_OnEnd(t *testing.T) {
 	type fields struct {
-		e export.BatchProcessor
+		e BatchProcessor
 	}
 	type args struct {
 		c context.Context
@@ -103,7 +94,7 @@ func Test_batchSpanProcessor_OnEnd(t *testing.T) {
 
 func Test_batchSpanProcessor_Shutdown(t *testing.T) {
 	type fields struct {
-		e      export.BatchProcessor
+		e      BatchProcessor
 		stopCh chan struct{}
 	}
 	type args struct {

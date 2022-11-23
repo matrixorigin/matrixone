@@ -128,10 +128,11 @@ func (s *taskService) CreateCronTask(ctx context.Context, value task.TaskMetadat
 func (s *taskService) Allocate(ctx context.Context, value task.Task, taskRunner string) error {
 	exists, err := s.store.Query(ctx, WithTaskIDCond(EQ, value.ID))
 	if err != nil {
-		return nil
+		return err
 	}
 	if len(exists) != 1 {
-		panic(fmt.Sprintf("query task by primary key, return %d records", len(exists)))
+		s.logger.Debug(fmt.Sprintf("queried tasks: %v", exists))
+		s.logger.Fatal(fmt.Sprintf("query task by primary key, return %d records", len(exists)))
 	}
 
 	old := exists[0]

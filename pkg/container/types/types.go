@@ -286,6 +286,20 @@ func (t Type) String() string {
 	return t.Oid.String()
 }
 
+func (t Type) DescString() string {
+	switch t.Oid {
+	case T_char:
+		return fmt.Sprintf("CHAR(%d)", t.Width)
+	case T_varchar:
+		return fmt.Sprintf("VARCHAR(%d)", t.Width)
+	case T_decimal64:
+		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
+	case T_decimal128:
+		return fmt.Sprintf("DECIAML(%d,%d)", t.Width, t.Scale)
+	}
+	return t.Oid.String()
+}
+
 func (t Type) Eq(b Type) bool {
 	switch t.Oid {
 	// XXX need to find out why these types have different size/width
