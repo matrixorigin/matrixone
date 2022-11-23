@@ -379,18 +379,6 @@ func WithNewRoot(newRoot bool) spanOptionFunc {
 	})
 }
 
-func WithTraceID(id TraceID) spanOptionFunc {
-	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.TraceID = id
-	})
-}
-
-func WithSpanID(id SpanID) spanOptionFunc {
-	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.SpanID = id
-	})
-}
-
 type Resource struct {
 	m map[string]any
 }
