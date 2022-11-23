@@ -33,7 +33,8 @@ func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *B
 			Cols: []*plan.ColDef{{
 				Name: "result",
 				Typ: &plan.Type{
-					Id: int32(types.T_varchar),
+					Id:    int32(types.T_varchar),
+					Width: types.MaxVarcharLen,
 				},
 			},
 			},
