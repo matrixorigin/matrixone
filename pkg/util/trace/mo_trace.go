@@ -101,11 +101,8 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (
 	if span.NewRoot || psc.IsEmpty() {
 		span.TraceID, span.SpanID = t.provider.idGenerator.NewIDs()
 		span.parent = noopSpan{}
-	} else if span.SpanID.IsZero() {
-		span.TraceID, span.SpanID, span.Kind = psc.TraceID, t.provider.idGenerator.NewSpanID(), psc.Kind
-		span.parent = parent
 	} else {
-		span.Kind = psc.Kind
+		span.TraceID, span.SpanID, span.Kind = psc.TraceID, t.provider.idGenerator.NewSpanID(), psc.Kind
 		span.parent = parent
 	}
 

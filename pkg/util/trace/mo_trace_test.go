@@ -131,7 +131,7 @@ func TestMOTracer_Start(t *testing.T) {
 				require.Equal(t1, tt.wantParentSpanId, span.ParentSpanContext().SpanID)
 				require.Equal(t1, tt.wantParentSpanId, SpanFromContext(newCtx).ParentSpanContext().SpanID)
 			} else {
-				require.NotEqual(t1, tt.wantTraceId, span.SpanContext().TraceID)
+				require.NotEqualf(t1, tt.wantTraceId, span.SpanContext().TraceID, "want %s, but got %s", tt.wantTraceId.String(), span.SpanContext().TraceID.String())
 				require.NotEqual(t1, tt.wantParentSpanId, span.ParentSpanContext().SpanID)
 				require.NotEqual(t1, tt.wantParentSpanId, SpanFromContext(newCtx).ParentSpanContext().SpanID)
 			}
