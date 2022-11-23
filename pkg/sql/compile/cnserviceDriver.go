@@ -184,8 +184,14 @@ func (s *Scope) remoteRun(c *Compile) error {
 		return errEncodeProc
 	}
 
+	cli, err := cnclient.NewClient()
+	if err != nil {
+		return err
+	}
+	defer cli.Close()
+
 	// get the stream-sender
-	streamSender, errStream := cnclient.GetStreamSender(s.NodeInfo.Addr)
+	streamSender, errStream := cli.NewStream(s.NodeInfo.Addr)
 	if errStream != nil {
 		return errStream
 	}
@@ -202,7 +208,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 		_ = cancel
 	}
 
-	message := cnclient.AcquireMessage()
+	message := cli.AcquireMessage().(*pipeline.Message)
 	{
 		message.Id = streamSender.ID()
 		message.Data = sData

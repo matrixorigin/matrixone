@@ -448,9 +448,9 @@ var globalPools sync.Map
 
 func InitCap(cap int64) {
 	if cap < GB {
-		globalCap = GB
+		atomic.StoreInt64(&globalCap, GB)
 	} else {
-		globalCap = cap
+		atomic.StoreInt64(&globalCap, cap)
 	}
 }
 
@@ -458,10 +458,11 @@ func GlobalStats() *MPoolStats {
 	return &globalStats
 }
 func GlobalCap() int64 {
-	if globalCap == 0 {
+	cap := atomic.LoadInt64(&globalCap)
+	if cap == 0 {
 		return PB
 	}
-	return globalCap
+	return cap
 }
 
 func sizeToIdx(size int) int {

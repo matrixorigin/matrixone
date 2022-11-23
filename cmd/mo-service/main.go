@@ -30,7 +30,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -162,17 +161,9 @@ func startCNService(
 		if err := s.Start(); err != nil {
 			panic(err)
 		}
-		// TODO: global client need to refactor
-		err = cnclient.NewCNClient(&cnclient.ClientConfig{})
-		if err != nil {
-			panic(err)
-		}
 
 		<-ctx.Done()
 		if err := s.Close(); err != nil {
-			panic(err)
-		}
-		if err := cnclient.CloseCNClient(); err != nil {
 			panic(err)
 		}
 	})
