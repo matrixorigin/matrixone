@@ -38,7 +38,7 @@ var (
 	constU64Type        = types.Type{Oid: types.T_uint64}
 	constFType          = types.Type{Oid: types.T_float32}
 	constDType          = types.Type{Oid: types.T_float64}
-	constSType          = types.Type{Oid: types.T_varchar}
+	constSType          = types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}
 	constDateType       = types.Type{Oid: types.T_date}
 	constTimeType       = types.Type{Oid: types.T_time}
 	constDatetimeType   = types.Type{Oid: types.T_datetime}

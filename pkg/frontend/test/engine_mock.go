@@ -40,6 +40,21 @@ func (m *MockStatistics) EXPECT() *MockStatisticsMockRecorder {
 	return m.recorder
 }
 
+// FilteredRows mocks base method.
+func (m *MockStatistics) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FilteredRows", ctx, expr)
+	ret0, _ := ret[0].(float64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FilteredRows indicates an expected call of FilteredRows.
+func (mr *MockStatisticsMockRecorder) FilteredRows(ctx, expr interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FilteredRows", reflect.TypeOf((*MockStatistics)(nil).FilteredRows), ctx, expr)
+}
+
 // Rows mocks base method.
 func (m *MockStatistics) Rows(ctx context.Context) (int64, error) {
 	m.ctrl.T.Helper()
@@ -168,6 +183,21 @@ func (m *MockRelation) Delete(arg0 context.Context, arg1 *batch.Batch, arg2 stri
 func (mr *MockRelationMockRecorder) Delete(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockRelation)(nil).Delete), arg0, arg1, arg2)
+}
+
+// FilteredRows mocks base method.
+func (m *MockRelation) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FilteredRows", ctx, expr)
+	ret0, _ := ret[0].(float64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FilteredRows indicates an expected call of FilteredRows.
+func (mr *MockRelationMockRecorder) FilteredRows(ctx, expr interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FilteredRows", reflect.TypeOf((*MockRelation)(nil).FilteredRows), ctx, expr)
 }
 
 // GetHideKeys mocks base method.

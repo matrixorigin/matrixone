@@ -674,7 +674,7 @@ var (
 		`create table mo_user(
 				user_id int signed auto_increment,
 				user_host varchar(100),
-				user_name varchar(100),
+				user_name varchar(300),
 				authentication_string varchar(100),
 				status   varchar(8),
 				created_time  timestamp,
@@ -686,14 +686,14 @@ var (
     		);`,
 		`create table mo_account(
 				account_id int signed auto_increment,
-				account_name varchar(100),
-				status varchar(100),
+				account_name varchar(300),
+				status varchar(300),
 				created_time timestamp,
 				comments varchar(256)
 			);`,
 		`create table mo_role(
 				role_id int signed auto_increment,
-				role_name varchar(100),
+				role_name varchar(300),
 				creator int signed,
 				owner int signed,
 				created_time timestamp,
