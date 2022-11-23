@@ -1705,6 +1705,26 @@ var (
 			input:  `select mo_show_visible_bin('a',0) as m`,
 			output: `select mo_show_visible_bin(a, 0) as m`,
 		},
+		//https://dev.mysql.com/doc/refman/8.0/en/window-functions-usage.html
+		{
+			input: `select avg(a) over () from t1`,
+		},
+		{
+			input: `select avg(a) over (partition by col1, col2) from t1`,
+		},
+		{
+			input: `select avg(a) over (partition by col1, col2 order by col3 desc) from t1`,
+		},
+		//https://dev.mysql.com/doc/refman/8.0/en/window-functions-frames.html
+		{
+			input: `select count(a) over (partition by col1, col2 order by col3 desc rows 1 preceding) from t1`,
+		},
+		{
+			input: `select sum(a) over (partition by col1, col2 order by col3 desc rows between 1 preceding and 20 following) from t1`,
+		},
+		{
+			input: `select count(a) over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1`,
+		},
 	}
 )
 

@@ -40,7 +40,7 @@ func (index *immutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int) (er
 }
 func (index *immutableIndex) GetActiveRow(key any) ([]uint32, error) { panic("not support") }
 func (index *immutableIndex) String() string                         { return "immutable" }
-func (index *immutableIndex) Dedup(key any) (err error) {
+func (index *immutableIndex) Dedup(key any, _ func(row uint32) error) (err error) {
 	exist := index.zmReader.Contains(key)
 	// 1. if not in [min, max], key is definitely not found
 	if !exist {
@@ -63,14 +63,21 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 	return
 }
 
-func (index *immutableIndex) BatchDedup(keys containers.Vector, skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error) {
-	keyselects, exist := index.zmReader.ContainsAny(keys)
+func (index *immutableIndex) BatchDedup(
+	keys containers.Vector,
+	skipfn func(row uint32) (err error),
+) (keyselects *roaring.Bitmap, err error) {
+	if keys.Length() == 1 {
+		err = index.Dedup(keys.Get(0), skipfn)
+		return
+	}
+	exist := index.zmReader.FastContainsAny(keys)
 	// 1. all keys are not in [min, max]. definitely not
 	if !exist {
 		return
 	}
 	if index.bfReader != nil {
-		exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys, keyselects)
+		exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys, nil)
 		// 2. check bloomfilter has some unknown error. return err
 		if err != nil {
 			err = TranslateError(err)
