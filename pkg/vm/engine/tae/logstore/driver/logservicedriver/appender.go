@@ -49,7 +49,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	// 	panic(moerr.NewInternalError("record size %d, larger than max size 20K", size))
 	// }
 	a.client.TryResize(size)
-	logutil.Infof("xxxxxxxxxxxxxx append start %p", &a.client.record)
+	logutil.Debugf("Log Service Driver: append start %p", &a.client.record)
 	record := a.client.record
 	copy(record.Payload(), a.entry.payload)
 	record.ResizePayload(size)
@@ -71,7 +71,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 			return err == nil
 		})
 	}
-	logutil.Infof("xxxxxxxxxxxxxxxxxxxx append end %p", &a.client.record)
+	logutil.Debugf("Log Service Driver: append end %p", &a.client.record)
 	if err != nil {
 		logutil.Infof("size is %d", size)
 		panic(err)
