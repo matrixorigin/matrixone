@@ -168,6 +168,7 @@ func init() {
 		"fulltext":                 FULLTEXT,
 		"function":                 FUNCTION,
 		"fields":                   FIELDS,
+		"field":                    FIELD,
 		"file":                     FILE,
 		"fixed":                    FIXED,
 		"generated":                UNUSED,
