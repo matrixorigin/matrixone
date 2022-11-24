@@ -16,9 +16,9 @@ package main
 
 import (
 	"sync"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -32,8 +32,6 @@ const (
 )
 
 var (
-	defaultMaxClockOffset = time.Millisecond * 500
-
 	supportTxnClockBackends = map[string]struct{}{
 		localClockBackend: {},
 		hlcClockBackend:   {},
@@ -47,6 +45,8 @@ var (
 func setupProcessLevelRuntime(cfg *Config, stopper *stopper.Stopper) error {
 	var e error
 	setupRuntimeOnce.Do(func() {
+		mpool.InitCap(int64(cfg.Limit.Memory))
+
 		clock, err := getClock(cfg, stopper)
 		if err != nil {
 			e = err

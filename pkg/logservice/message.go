@@ -47,7 +47,7 @@ func (r *RPCRequest) GetID() uint64 {
 }
 
 func (r *RPCRequest) DebugString() string {
-	return ""
+	return r.Request.Method.String()
 }
 
 func (r *RPCRequest) GetPayloadField() []byte {
