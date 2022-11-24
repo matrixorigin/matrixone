@@ -16,6 +16,6 @@ jobs:
         uses: actions/add-to-project@v0.1.0
         with:
           project-url: https://github.com/orgs/matrixorigin/projects/13/views/1
-          github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
+          github-token: ${{ secrets.TOKEN_ACTION }}
           labeled: kind/bug,kind/docs,kind/enhancement,kind/feature,kind/questions,kind/performance,kind/refactoring,kind/subtask
           label-operator: OR

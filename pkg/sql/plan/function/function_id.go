@@ -364,6 +364,7 @@ var functionIdRegister = map[string]int32{
 	"rpad":              RPAD,
 	"substr":            SUBSTRING,
 	"substring":         SUBSTRING,
+	"mid":               SUBSTRING,
 	"utc_timestamp":     UTC_TIMESTAMP,
 	"unix_timestamp":    UNIX_TIMESTAMP,
 	"from_unixtime":     FROM_UNIXTIME,
@@ -459,5 +460,5 @@ func GetFunctionIsWinfunByName(name string) bool {
 		return false
 	}
 	fs := functionRegister[fid].Overloads
-	return len(fs) > 0 && fs[0].GetFlag() == plan.Function_WIN
+	return len(fs) > 0 && fs[0].TestFlag(plan.Function_WIN)
 }

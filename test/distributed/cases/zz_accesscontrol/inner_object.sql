@@ -19,8 +19,7 @@ show databases;
 -- @session
 
 --内置表不能增删改
--- @bvt:issue#5707
-update mo_catalog.mo_tables set relanme='mo_aaaa';
+update mo_catalog.mo_tables set relname='mo_aaaa';
 insert into mo_catalog.mo_role values (1763,'apple',0,1,'2022-09-22 06:53:34','');
 delete from mo_catalog.mo_user;
 drop table mo_catalog.mo_account;
@@ -29,7 +28,6 @@ delete from mo_catalog.mo_role_grant;
 delete from mo_catalog.mo_role_privs;
 delete from mo_catalog.mo_database;
 delete from mo_catalog.mo_columns;
--- @bvt:issue
 
 --内置数据库不能删除
 drop database information_schema;

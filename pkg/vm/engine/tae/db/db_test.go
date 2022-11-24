@@ -2792,12 +2792,12 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	_, err = meta.GetBlockData().GetByFilter(txn, filter)
 	assert.NoError(t, err)
 
-	err = meta.GetBlockData().BatchDedup(txn, bat.Vecs[1], nil)
+	err = meta.GetBlockData().BatchDedup(txn, bat.Vecs[1], nil, false)
 	assert.Error(t, err)
 }
 
 func TestDelete3(t *testing.T) {
-	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
+	// t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	defer testutils.AfterTest(t)()
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -3216,6 +3216,8 @@ func (c *dummyCpkGetter) CollectCheckpointsInRange(start, end types.TS) (string,
 	return "", types.TS{}
 }
 
+func (c *dummyCpkGetter) FlushTable(dbID, tableID uint64, ts types.TS) error { return nil }
+
 func TestLogtailBasic(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3343,7 +3345,7 @@ func TestLogtailBasic(t *testing.T) {
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_DATABASE_ID},
-	})
+	}, true)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(resp.Commands)) // insert and delete
 
@@ -3364,7 +3366,7 @@ func TestLogtailBasic(t *testing.T) {
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
-	})
+	}, true)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(resp.Commands)) // insert
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
@@ -3380,7 +3382,7 @@ func TestLogtailBasic(t *testing.T) {
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
-	})
+	}, true)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(resp.Commands)) // insert
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
@@ -3393,7 +3395,7 @@ func TestLogtailBasic(t *testing.T) {
 		CnHave: tots(firstWriteTs.Next()), // skip the first write deliberately,
 		CnWant: tots(lastWriteTs),
 		Table:  &api.TableID{DbId: dbID, TbId: tableID},
-	})
+	}, true)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(resp.Commands)) // insert data and delete data
 
@@ -3843,10 +3845,11 @@ func TestBlockRead(t *testing.T) {
 	bid, sid := blkEntry.ID, blkEntry.GetSegment().ID
 
 	info := &pkgcatalog.BlockInfo{
-		BlockID:   bid,
-		SegmentID: sid,
-		MetaLoc:   metaloc,
-		DeltaLoc:  deltaloc,
+		BlockID:    bid,
+		SegmentID:  sid,
+		EntryState: true,
+		MetaLoc:    metaloc,
+		DeltaLoc:   deltaloc,
 	}
 
 	columns := make([]string, 0)
@@ -3866,7 +3869,7 @@ func TestBlockRead(t *testing.T) {
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
-		context.Background(), info,
+		context.Background(), info, len(schema.ColDefs),
 		columns, colIdxs, colTyps, colNulls,
 		beforeDel, fs, pool,
 	)
@@ -3877,7 +3880,7 @@ func TestBlockRead(t *testing.T) {
 	assert.Equal(t, 20, b1.Vecs[0].Length())
 
 	b2, err := blockio.BlockReadInner(
-		context.Background(), info,
+		context.Background(), info, len(schema.ColDefs),
 		columns, colIdxs, colTyps, colNulls,
 		afterFirstDel, fs, pool,
 	)
@@ -3887,7 +3890,7 @@ func TestBlockRead(t *testing.T) {
 	assert.Equal(t, len(columns), len(b2.Vecs))
 	assert.Equal(t, 19, b2.Vecs[0].Length())
 	b3, err := blockio.BlockReadInner(
-		context.Background(), info,
+		context.Background(), info, len(schema.ColDefs),
 		columns, colIdxs, colTyps, colNulls,
 		afterSecondDel, fs, pool,
 	)
@@ -3899,7 +3902,7 @@ func TestBlockRead(t *testing.T) {
 
 	// read rowid column only
 	b4, err := blockio.BlockReadInner(
-		context.Background(), info,
+		context.Background(), info, len(schema.ColDefs),
 		[]string{catalog.AttrRowID},
 		[]uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},
@@ -4178,7 +4181,7 @@ func TestDelete4(t *testing.T) {
 			defer view.Close()
 			view.ApplyDeletes()
 			if view.Length() != 0 {
-				t.Logf("block-%d, data=%s", blk.ID(), logtail.VectorToString(view.GetData()))
+				t.Logf("block-%d, data=%s", blk.ID(), logtail.ToStringTemplate(view.GetData(), -1))
 			}
 			it.Next()
 		}
@@ -4470,4 +4473,47 @@ func TestUpdate(t *testing.T) {
 		checkAllColRowsByScan(t, rel, 1, true)
 		assert.NoError(t, txn.Commit())
 	}
+}
+
+func TestInsertPerf(t *testing.T) {
+	t.Skip(any("for debug"))
+	opts := new(options.Options)
+	options.WithCheckpointScanInterval(time.Second * 10)(opts)
+	options.WithFlushInterval(time.Second * 10)(opts)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(10, 2)
+	schema.BlockMaxRows = 1000
+	schema.SegmentMaxBlocks = 5
+	tae.bindSchema(schema)
+
+	cnt := 1000
+	iBat := 1
+	poolSize := 20
+
+	bat := catalog.MockBatch(schema, cnt*iBat*poolSize*2)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat.Window(0, 1), true)
+	var wg sync.WaitGroup
+	run := func(start int) func() {
+		return func() {
+			defer wg.Done()
+			for i := start; i < start+cnt*iBat; i += iBat {
+				txn, rel := tae.getRelation()
+				_ = rel.Append(bat.Window(i, iBat))
+				_ = txn.Commit()
+			}
+		}
+	}
+
+	p, _ := ants.NewPool(poolSize)
+	defer p.Release()
+	now := time.Now()
+	for i := 1; i <= poolSize; i++ {
+		wg.Add(1)
+		_ = p.Submit(run(i * cnt * iBat))
+	}
+	wg.Wait()
+	t.Log(time.Since(now))
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 var (
@@ -139,8 +140,8 @@ func (db *txnDatabase) CreateRelation(_ context.Context, name string, defs []eng
 	if err != nil {
 		return err
 	}
-	schema.BlockMaxRows = 40000
-	schema.SegmentMaxBlocks = 20
+	schema.BlockMaxRows = options.DefaultBlockMaxRows
+	schema.SegmentMaxBlocks = options.DefaultBlocksPerSegment
 	_, err = db.handle.CreateRelation(schema)
 	return err
 }
@@ -152,8 +153,8 @@ func (db *txnDatabase) CreateRelationWithID(_ context.Context, name string,
 	if err != nil {
 		return err
 	}
-	schema.BlockMaxRows = 40000
-	schema.SegmentMaxBlocks = 20
+	schema.BlockMaxRows = options.DefaultBlockMaxRows
+	schema.SegmentMaxBlocks = options.DefaultBlocksPerSegment
 	_, err = db.handle.CreateRelationWithID(schema, id)
 	return err
 }

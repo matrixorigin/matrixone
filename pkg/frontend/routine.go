@@ -218,6 +218,16 @@ func (routine *Routine) notifyClose() {
 	}
 }
 
+func (routine *Routine) notifyDone() {
+	executor := routine.GetCmdExecutor()
+	if executor != nil {
+		cancal := executor.(*MysqlCmdExecutor).getCancelRequestFunc()
+		if cancal != nil {
+			cancal()
+		}
+	}
+}
+
 func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecutor, pu *config.ParameterUnit) *Routine {
 	cancelRoutineCtx, cancelRoutineFunc := context.WithCancel(ctx)
 	ri := &Routine{

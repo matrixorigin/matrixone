@@ -37,6 +37,7 @@ import (
 )
 
 func init() {
+	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
 	logutil.SetupMOLogger(&logutil.LogConfig{
 		Level:      zapcore.DebugLevel.String(),
 		Format:     "console",
@@ -238,7 +239,12 @@ func Test_newBufferHolder(t *testing.T) {
 	signalAcceptableCh <- struct{}{}
 }
 
+var MOCollectorMux sync.Mutex
+
 func TestNewMOCollector(t *testing.T) {
+	MOCollectorMux.Lock()
+	defer MOCollectorMux.Unlock()
+	ctx := context.Background()
 	ch := make(chan string, 3)
 	errutil.SetErrorReporter(func(ctx context.Context, err error, i int) {
 		t.Logf("TestNewMOCollector::ErrorReport: %+v", err)
@@ -247,21 +253,21 @@ func TestNewMOCollector(t *testing.T) {
 	var acceptSignal = func() { <-signalC }
 	signalFunc = func() { signalC <- struct{}{} }
 
-	Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
 	collector := NewMOCollector()
+	collector.Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
 	collector.Start()
 
-	collector.Collect(DefaultContext(), newDummy(1))
+	collector.Collect(ctx, newDummy(1))
 	acceptSignal()
-	collector.Collect(DefaultContext(), newDummy(2))
+	collector.Collect(ctx, newDummy(2))
 	acceptSignal()
-	collector.Collect(DefaultContext(), newDummy(3))
+	collector.Collect(ctx, newDummy(3))
 	acceptSignal()
 	got := <-ch
 	require.Equal(t, `(1),(2),(3)`, got)
-	collector.Collect(DefaultContext(), newDummy(4))
+	collector.Collect(ctx, newDummy(4))
 	acceptSignal()
-	collector.Collect(DefaultContext(), newDummy(5))
+	collector.Collect(ctx, newDummy(5))
 	acceptSignal()
 	collector.Stop(true)
 	logutil.GetGlobalLogger().Sync()
@@ -274,6 +280,8 @@ func TestNewMOCollector(t *testing.T) {
 }
 
 func TestMOCollector_HangBug(t *testing.T) {
+	MOCollectorMux.Lock()
+	defer MOCollectorMux.Unlock()
 	defer leaktest.AfterTest(t)()
 	ch := make(chan string, 3)
 	errutil.SetErrorReporter(func(ctx context.Context, err error, i int) {
@@ -291,39 +299,40 @@ func TestMOCollector_HangBug(t *testing.T) {
 	var ctrlC = make(chan *bufferHolder, 1)
 	var ctrlTimeoutCnt = 0
 	_stubAwakeBuffer := gostub.Stub(&awakeBuffer, func(c *MOCollector) func(holder *bufferHolder) {
-		var ctrlTimer = time.NewTimer(timeo)
 		return func(holder *bufferHolder) {
+			var ctrlTimer = time.NewTimer(timeo)
 			//c.awakeGenerate <- holder
 			select {
 			case ctrlC <- holder:
 			case <-ctrlTimer.C:
 				ctrlTimeoutCnt += 1
-				ctrlTimer = time.NewTimer(timeo)
 			}
 		}
 	})
 	defer _stubAwakeBuffer.Reset()
 
 	// init Collector, with disabled-trigger
-	Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
-	collector := NewMOCollector()
+	collector := NewMOCollector(WithCollectorCnt(2), WithGeneratorCnt(1), WithExporterCnt(1))
+	collector.Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
 	collector.Start()
 	defer collector.Stop(true)
 
+	ctx := context.Background()
+
 	t.Logf("fill up the buffer")
-	collector.Collect(DefaultContext(), newDummy(1))
+	collector.Collect(ctx, newDummy(1))
 	acceptSignal()
-	collector.Collect(DefaultContext(), newDummy(2))
+	collector.Collect(ctx, newDummy(2))
 	acceptSignal()
 	t.Logf("trigger ShouldFlush calling")
-	collector.Collect(DefaultContext(), newDummy(3))
+	collector.Collect(ctx, newDummy(3))
 	acceptSignal()
 	// fill up the collect channel(awakeCollect) ==> fill up the Batch channel(awakeGenerate)
-	collector.Collect(DefaultContext(), newDummy(4))
+	collector.Collect(ctx, newDummy(4))
 	acceptSignal()
-	collector.Collect(DefaultContext(), newDummy(5))
+	collector.Collect(ctx, newDummy(5))
 	acceptSignal()
-	collector.Collect(DefaultContext(), newDummy(6))
+	collector.Collect(ctx, newDummy(6))
 	t.Logf("length collect channel: %d", len(collector.awakeCollect))
 	t.Logf("length generate channel: %d", len(ctrlC))
 	require.Equal(t, 1, len(collector.awakeCollect))

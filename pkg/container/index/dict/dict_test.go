@@ -148,11 +148,11 @@ func TestInsertLargeDataFixedLen(t *testing.T) {
 }
 
 func TestInsertBatchVarLen(t *testing.T) {
-	dict, err := newTestDict(types.Type{Oid: types.T_varchar})
+	dict, err := newTestDict(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 	require.NoError(t, err)
 	defer dict.Free()
 
-	v0 := vector.New(types.Type{Oid: types.T_varchar})
+	v0 := vector.New(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 	require.NoError(t, vector.AppendBytes(v0, [][]byte{
 		[]byte("hello"),
 		[]byte("My"),
@@ -169,7 +169,7 @@ func TestInsertBatchVarLen(t *testing.T) {
 	require.Equal(t, uint16(4), ips[3])
 	require.Equal(t, uint16(5), ips[4])
 
-	v1 := vector.New(types.Type{Oid: types.T_varchar})
+	v1 := vector.New(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 	require.NoError(t, vector.AppendBytes(v1, [][]byte{
 		[]byte("Tom"),
 		[]byte("is"),
@@ -186,11 +186,11 @@ func TestInsertBatchVarLen(t *testing.T) {
 }
 
 func TestFindBatchVarLen(t *testing.T) {
-	dict, err := newTestDict(types.Type{Oid: types.T_varchar})
+	dict, err := newTestDict(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 	require.NoError(t, err)
 	defer dict.Free()
 
-	v0 := vector.New(types.Type{Oid: types.T_varchar})
+	v0 := vector.New(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 	require.NoError(t, vector.AppendBytes(v0, [][]byte{
 		[]byte("hello"),
 		[]byte("My"),
@@ -207,7 +207,7 @@ func TestFindBatchVarLen(t *testing.T) {
 	require.Equal(t, uint16(4), ips[3])
 	require.Equal(t, uint16(5), ips[4])
 
-	v1 := vector.New(types.Type{Oid: types.T_varchar})
+	v1 := vector.New(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 	require.NoError(t, vector.AppendBytes(v1, [][]byte{
 		[]byte("Jack"),
 		[]byte("is"),
@@ -225,11 +225,11 @@ func TestFindBatchVarLen(t *testing.T) {
 }
 
 func TestFindDataVarLen(t *testing.T) {
-	dict, err := newTestDict(types.Type{Oid: types.T_varchar})
+	dict, err := newTestDict(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 	require.NoError(t, err)
 	defer dict.Free()
 
-	v0 := vector.New(types.Type{Oid: types.T_varchar})
+	v0 := vector.New(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 	require.NoError(t, vector.AppendBytes(v0, [][]byte{
 		[]byte("thisisalonglonglonglongstring"),
 		[]byte("My"),

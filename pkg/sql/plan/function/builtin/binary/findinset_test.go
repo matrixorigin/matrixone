@@ -132,7 +132,7 @@ func makeFindInSetTestVectors(left []string, right []string, isScalarL bool, isS
 			vec[0] = testutil.MakeVarcharVector(left, nil)
 		}
 	} else {
-		vec[0] = testutil.MakeScalarNull(types.T_varchar, 0)
+		vec[0] = testutil.MakeScalarNull(types.T_varchar, types.MaxVarcharLen)
 	}
 
 	if right != nil {
@@ -142,7 +142,7 @@ func makeFindInSetTestVectors(left []string, right []string, isScalarL bool, isS
 			vec[1] = testutil.MakeVarcharVector(right, nil)
 		}
 	} else {
-		vec[1] = testutil.MakeScalarNull(types.T_varchar, 0)
+		vec[1] = testutil.MakeScalarNull(types.T_varchar, types.MaxVarcharLen)
 	}
 
 	return vec
