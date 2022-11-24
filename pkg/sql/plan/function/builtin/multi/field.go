@@ -45,7 +45,7 @@ func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 
 		//if first vector is null, the return value is 0
 		if firstVector.IsScalarNull() {
-			return resultVector, nil
+			return vector.NewConstFixed(returnType, vecLen*returnType.Oid.FixedLength(), uint64(0), proc.Mp()), err
 		}
 
 		//detect index
@@ -160,7 +160,7 @@ func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.
 
 		//if first vector is null, the return value is 0
 		if firstVector.IsScalarNull() {
-			return resultVector, nil
+			return vector.NewConstFixed(returnType, vecLen*returnType.Oid.FixedLength(), uint64(0), proc.Mp()), err
 		}
 
 		//detect index
