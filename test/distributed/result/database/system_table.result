@@ -13,8 +13,6 @@ query_id    seq    state    duration    cpu_user    cpu_system    context_volunt
 SELECT * FROM `information_schema`.`schemata` where schema_name = 'information_schema';
 catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
 def    information_schema    utf8mb4    utf8mb4_0900_ai_ci        NO
-SELECT * FROM `information_schema`.`tables` LIMIT 0,1000;
-table_catalog    table_schema    table_name    table_type    engine    version    row_format    table_rows    avg_row_length    data_length    max_data_length    index_length    data_free    AUTO_INCREMENT    create_time    update_time    check_time    table_collation    checksum    create_options    table_comment
 SELECT * FROM `information_schema`.`triggers` LIMIT 0,1000;
 trigger_catalog    trigger_schema    trigger_name    event_manipulation    event_object_catalog    event_object_schema    event_object_table    action_order    action_condition    action_statement    action_orientation    action_timing    action_reference_old_table    action_reference_new_table    action_reference_old_row    action_reference_new_row    created    sql_mode    definer    character_set_client    collation_connection    database_collation
 SELECT * FROM `information_schema`.`user_privileges` LIMIT 0,1000;
