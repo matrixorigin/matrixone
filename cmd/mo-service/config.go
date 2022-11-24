@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
@@ -43,6 +44,9 @@ const (
 )
 
 var (
+	defaultMaxClockOffset = time.Millisecond * 500
+	defaultMemoryLimit    = 1 << 40
+
 	supportServiceTypes = map[string]metadata.ServiceType{
 		cnServiceType:  metadata.ServiceType_CN,
 		dnServiceType:  metadata.ServiceType_DN,
@@ -92,6 +96,12 @@ type Config struct {
 		// EnableCheckMaxClockOffset enable local clock offset checker
 		EnableCheckMaxClockOffset bool `toml:"enable-check-clock-offset"`
 	}
+
+	// Limit limit configuration
+	Limit struct {
+		// Memory memory usage limit, see mpool for details
+		Memory tomlutil.ByteSize `toml:"memory"`
+	}
 }
 
 func parseConfigFromFile(file string, cfg any) error {
@@ -138,6 +148,9 @@ func (c *Config) validate() error {
 				c.FileServices[idx].DataDir = filepath.Join(c.DataDir, strings.ToLower(c.FileServices[idx].Name))
 			}
 		}
+	}
+	if c.Limit.Memory == 0 {
+		c.Limit.Memory = tomlutil.ByteSize(defaultMemoryLimit)
 	}
 	return nil
 }
