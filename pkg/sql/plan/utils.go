@@ -930,15 +930,13 @@ func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Exp
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
 func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
-	key := [2]types.T{columnT, constT}
-	// lowIntCol > highIntConst
-	if _, ok := intCastTableForRewrite[key]; ok {
+	switch constT {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
 		if !valOk {
 			return false
 		}
 		constVal := val.I64Val
-
 		switch columnT {
 		case types.T_int8:
 			return constVal <= int64(math.MaxInt8) && constVal >= int64(math.MinInt8)
@@ -946,44 +944,47 @@ func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
 			return constVal <= int64(math.MaxInt16) && constVal >= int64(math.MinInt16)
 		case types.T_int32:
 			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
+		case types.T_int64:
+			return true
+		case types.T_uint8:
+			return constVal <= math.MaxUint8 && constVal >= 0
+		case types.T_uint16:
+			return constVal <= math.MaxUint16 && constVal >= 0
+		case types.T_uint32:
+			return constVal <= math.MaxUint32 && constVal >= 0
+		case types.T_uint64:
+			return constVal >= 0
+		default:
+			return false
 		}
-	}
-
-	// lowUIntCol > highUIntConst
-	if _, ok := uintCastTableForRewrite[key]; ok {
-		val, valOk := constExpr.C.Value.(*plan.Const_U64Val)
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		val_u, valOk := constExpr.C.Value.(*plan.Const_U64Val)
 		if !valOk {
 			return false
 		}
-		constVal := val.U64Val
-
+		constVal := val_u.U64Val
 		switch columnT {
+		case types.T_int8:
+			return constVal <= math.MaxInt8
+		case types.T_int16:
+			return constVal <= math.MaxInt16
+		case types.T_int32:
+			return constVal <= math.MaxInt32
+		case types.T_int64:
+			return constVal <= math.MaxInt64
 		case types.T_uint8:
-			return constVal <= uint64(math.MaxUint8)
+			return constVal <= math.MaxUint8
 		case types.T_uint16:
-			return constVal <= uint64(math.MaxUint16)
+			return constVal <= math.MaxUint16
 		case types.T_uint32:
-			return constVal <= uint64(math.MaxUint32)
-		}
-	}
-
-	// lowUIntCol > highIntConst
-	if _, ok := uint2intCastTableForRewrite[key]; ok {
-		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
-		if !valOk {
+			return constVal <= math.MaxUint32
+		case types.T_uint64:
+			return true
+		default:
 			return false
 		}
-		constVal := val.I64Val
-
-		switch columnT {
-		case types.T_uint8:
-			return constVal <= int64(math.MaxUint8)
-		case types.T_uint16:
-			return constVal <= int64(math.MaxUint16)
-		case types.T_uint32:
-			return constVal <= int64(math.MaxUint32)
-		}
+	default:
+		return false
 	}
 
-	return false
 }
