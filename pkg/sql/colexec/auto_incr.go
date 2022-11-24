@@ -616,11 +616,6 @@ func NewTxn(eg engine.Engine, proc *process.Process, ctx context.Context) (txn c
 	if ctx == nil {
 		return nil, moerr.NewInternalError("context should not be nil")
 	}
-	ctx, cancel := context.WithTimeout(
-		ctx,
-		eg.Hints().CommitOrRollbackTimeout,
-	)
-	defer cancel()
 	if err = eg.New(ctx, txn); err != nil {
 		return nil, err
 	}
