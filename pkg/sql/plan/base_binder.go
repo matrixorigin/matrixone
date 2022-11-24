@@ -709,9 +709,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// rewrite curdate() + $1 to curdate($1)
 		if len(astArgs) == 2 {
 			if fn, ok := astArgs[0].(*tree.FuncExpr); ok {
-				if fn.Func.FunctionReference.(*tree.UnresolvedName).Parts[0] == "curdate" {
+				if fn.Func.FunctionReference.(*tree.UnresolvedName).Parts[0] == "curdate" || fn.Func.FunctionReference.(*tree.UnresolvedName).Parts[0] == "current_date" {
 					astArgs = astArgs[1:]
-					name = "curdate"
+					name = fn.Func.FunctionReference.(*tree.UnresolvedName).Parts[0]
 				}
 			}
 		}

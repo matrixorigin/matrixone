@@ -2491,8 +2491,8 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
-	CUR_DATE: {
-		Id:     CUR_DATE,
+	CURRENT_DATE: {
+		Id:     CURRENT_DATE,
 		Flag:   plan.Function_STRICT,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{

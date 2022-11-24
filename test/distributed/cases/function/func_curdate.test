@@ -1,3 +1,6 @@
 select cast(now() as date)=curdate() q;
 select datediff(curdate(),date('1970-01-01')) = curdate()+0 q;
 select datediff(curdate(),date('1969-12-31')) = curdate()+1 q;
+select cast(now() as date)=current_date() q;
+select datediff(current_date(),date('1970-01-01')) = current_date()+0 q;
+select datediff(current_date(),date('1969-12-31')) = current_date()+1 q;
