@@ -1346,6 +1346,7 @@ func (th *TxnHandler) CommitTxn() error {
 	if txnOp == nil {
 		logErrorf(sessionProfile, "CommitTxn: txn operator is null")
 	}
+
 	txnId := txnOp.Txn().DebugString()
 	logDebugf(sessionProfile, "CommitTxn txnId:%s", txnId)
 	defer func() {
