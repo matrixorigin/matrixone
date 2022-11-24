@@ -53,18 +53,21 @@ func (db *TxnDatabase) Relations() (rels []handle.Relation)                     
 func (db *TxnDatabase) MakeRelationIt() (it handle.RelationIt)                          { return }
 func (db *TxnDatabase) GetMeta() any                                                    { return nil }
 
-func (rel *TxnRelation) SimplePPString(_ common.PPLevel) string                      { return "" }
-func (rel *TxnRelation) String() string                                              { return "" }
-func (rel *TxnRelation) Close() error                                                { return nil }
-func (rel *TxnRelation) ID() uint64                                                  { return 0 }
-func (rel *TxnRelation) Rows() int64                                                 { return 0 }
-func (rel *TxnRelation) Size(attr string) int64                                      { return 0 }
-func (rel *TxnRelation) GetCardinality(attr string) int64                            { return 0 }
-func (rel *TxnRelation) Schema() any                                                 { return nil }
-func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt                             { return nil }
-func (rel *TxnRelation) MakeBlockIt() handle.BlockIt                                 { return nil }
-func (rel *TxnRelation) BatchDedup(col containers.Vector) error                      { return nil }
-func (rel *TxnRelation) Append(data *containers.Batch) error                         { return nil }
+func (rel *TxnRelation) SimplePPString(_ common.PPLevel) string { return "" }
+func (rel *TxnRelation) String() string                         { return "" }
+func (rel *TxnRelation) Close() error                           { return nil }
+func (rel *TxnRelation) ID() uint64                             { return 0 }
+func (rel *TxnRelation) Rows() int64                            { return 0 }
+func (rel *TxnRelation) Size(attr string) int64                 { return 0 }
+func (rel *TxnRelation) GetCardinality(attr string) int64       { return 0 }
+func (rel *TxnRelation) Schema() any                            { return nil }
+func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt        { return nil }
+func (rel *TxnRelation) MakeBlockIt() handle.BlockIt            { return nil }
+func (rel *TxnRelation) BatchDedup(col containers.Vector) error { return nil }
+func (rel *TxnRelation) Append(data *containers.Batch) error    { return nil }
+func (rel *TxnRelation) AppendBlocksOnFS([]containers.Vector, []string, string, []string, int32) error {
+	return nil
+}
 func (rel *TxnRelation) GetMeta() any                                                { return nil }
 func (rel *TxnRelation) GetSegment(id uint64) (seg handle.Segment, err error)        { return }
 func (rel *TxnRelation) SoftDeleteSegment(id uint64) (err error)                     { return }

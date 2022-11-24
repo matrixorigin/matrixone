@@ -181,6 +181,23 @@ func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
 	return db.Append(id, data)
 }
 
+func (store *txnStore) AppendBlocksOnFS(
+	dbId, id uint64,
+	pkVecs []containers.Vector,
+	uuids []string,
+	file string,
+	metaLoc []string,
+	flag int32,
+) error {
+	store.IncreateWriteCnt()
+	db, err := store.getOrSetDB(dbId)
+	if err != nil {
+		return err
+	}
+	return db.AppendBlocksOnFS(id, pkVecs, uuids, file, metaLoc, flag)
+	return nil
+}
+
 func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {

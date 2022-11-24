@@ -54,6 +54,16 @@ func (rel *txnRelation) Write(_ context.Context, bat *batch.Batch) error {
 	return rel.handle.Append(taeBatch)
 }
 
+func (rel *txnRelation) AppendBlocksOnFS(
+	ctx context.Context,
+	pkVecs []containers.Vector,
+	uuids []string,
+	file string,
+	metaLocs []string,
+	flag int32) error {
+	return rel.handle.AppendBlocksOnFS(pkVecs, uuids, file, metaLocs, flag)
+}
+
 func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {
 	return moerr.NewNYI("Update not supported")
 }

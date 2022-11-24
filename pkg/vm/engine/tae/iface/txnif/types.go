@@ -221,6 +221,8 @@ type TxnStore interface {
 	LogBlockID(dbId, tid, bid uint64)
 
 	Append(dbId, id uint64, data *containers.Batch) error
+	AppendBlocksOnFS(dbId, id uint64, pkVecs []containers.Vector, uuids []string,
+		file string, metaLocs []string, flag int32) error
 
 	RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) error
 	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)

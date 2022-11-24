@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"os"
 	"sync"
 	"syscall"
@@ -51,6 +54,7 @@ type Handle struct {
 		//map txn id to txnContext.
 		txnCtxs map[string]*txnContext
 	}
+	jobScheduler tasks.JobScheduler
 }
 
 type txnContext struct {
@@ -75,7 +79,8 @@ func NewTAEHandle(path string, opt *options.Options) *Handle {
 	}
 
 	h := &Handle{
-		eng: moengine.NewEngine(tae),
+		eng:          moengine.NewEngine(tae),
+		jobScheduler: tasks.NewParallelJobScheduler(10),
 	}
 	h.mu.txnCtxs = make(map[string]*txnContext)
 	return h
@@ -269,16 +274,21 @@ func (h *Handle) HandleStartRecovery(
 	ctx context.Context,
 	ch chan txn.TxnMeta) {
 	//panic(moerr.NewNYI("HandleStartRecovery is not implemented yet"))
-	//TODO:: 1.  Get the 2PC transactions which be in prepared or committing state from txn engine's recovery.
+	//TODO:: 1.  Get the 2PC transactions which be in prepared or
+	//           committing state from txn engine's recovery.
 	//       2.  Feed these transaction into ch.
 	close(ch)
 }
 
 func (h *Handle) HandleClose(ctx context.Context) (err error) {
+	//FIXME::should wait txn request's job done?
+	h.jobScheduler.Stop()
 	return h.eng.Close()
 }
 
 func (h *Handle) HandleDestroy(ctx context.Context) (err error) {
+	//FIXME::should wait txn request's job done?
+	h.jobScheduler.Stop()
 	return h.eng.Destroy()
 }
 
@@ -288,7 +298,12 @@ func (h *Handle) HandleGetLogTail(
 	req apipb.SyncLogTailReq,
 	resp *apipb.SyncLogTailResp) (err error) {
 	tae := h.eng.GetTAE(context.Background())
-	res, err := logtail.HandleSyncLogTailReq(tae.BGCheckpointRunner, tae.LogtailMgr, tae.Catalog, req, true)
+	res, err := logtail.HandleSyncLogTailReq(
+		tae.BGCheckpointRunner,
+		tae.LogtailMgr,
+		tae.Catalog,
+		req,
+		true)
 	if err != nil {
 		return err
 	}
@@ -316,11 +331,84 @@ func (h *Handle) HandleFlushTable(
 	return err
 }
 
+func (h *Handle) loadPksFromFS(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.WriteReq,
+) (err error) {
+	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+		types.TimestampToTS(meta.GetSnapshotTS()))
+	if err != nil {
+		return err
+	}
+	dbase, err := h.eng.GetDatabaseByID(ctx, req.DatabaseId, txn)
+	if err != nil {
+		return
+	}
+
+	tb, err := dbase.GetRelationByID(ctx, req.TableID)
+	if err != nil {
+		return
+	}
+	schema := tb.GetSchema(ctx)
+	if !schema.HasPK() {
+		return
+	}
+	//start job for loading primary keys of blocks
+	req.Jobs = make([]*tasks.Job, len(req.Uuids))
+	req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
+	for i := range req.Uuids {
+		req.Jobs[i] = tasks.NewJob(
+			fmt.Sprintf("load-primaykey-%s", req.MetaLocs[i]),
+			ctx,
+			func(ctx context.Context) (jobR *tasks.JobResult) {
+				jobR = &tasks.JobResult{}
+				reader, err := blockio.NewReader(ctx, h.eng.GetTAE(ctx).Fs, req.MetaLocs[i])
+				if err != nil {
+					jobR.Err = err
+					return
+				}
+				meta, err := reader.ReadMeta(nil)
+				if err != nil {
+					jobR.Err = err
+					return
+				}
+				bat, err := reader.LoadBlkColumnsByMetaAndIdx(
+					[]types.Type{schema.GetSingleSortKey().Type},
+					[]string{schema.GetSingleSortKey().Name},
+					[]bool{false},
+					meta,
+					schema.GetSingleSortKeyIdx(),
+				)
+				if err != nil {
+					jobR.Err = err
+					return
+				}
+				jobR.Res = bat.Vecs[0]
+				return
+			},
+		)
+		if err = h.jobScheduler.Schedule(req.Jobs[i]); err != nil {
+			return
+		}
+	}
+	return
+}
+
 func (h *Handle) CacheTxnRequest(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req any,
 	rsp any) (err error) {
+	if r, ok := req.(db.WriteReq); ok {
+		if r.FileName != "" {
+			//start task for loading primary keys of block on S3
+			err = h.loadPksFromFS(ctx, meta, &r)
+			if err != nil {
+				return
+			}
+		}
+	}
 	h.mu.Lock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	if !ok {
@@ -335,7 +423,6 @@ func (h *Handle) CacheTxnRequest(
 	return nil
 }
 
-// HandlePreCommitWrite only cache the request that would change txnEngine's state machine.
 func (h *Handle) HandlePreCommitWrite(
 	ctx context.Context,
 	meta txn.TxnMeta,
@@ -429,7 +516,16 @@ func (h *Handle) HandlePreCommitWrite(
 				FileName:     pe.GetFileName(),
 				Batch:        moBat,
 			}
-
+			//for loading block on S3/FS
+			if req.FileName != "" {
+				rows := catalog.GenRows(req.Batch)
+				req.Uuids = make([]string, len(rows))
+				req.MetaLocs = make([]string, len(rows))
+				for i, row := range rows {
+					req.Uuids[i] = string(row[catalog.BLOCKMETAONFS_ID_IDX].([]byte))
+					req.MetaLocs[i] = string(row[catalog.BLOCKMETAONFS_METALOC_IDX].([]byte))
+				}
+			}
 			if err = h.CacheTxnRequest(ctx, meta, req,
 				new(db.WriteResp)); err != nil {
 				return err
@@ -571,7 +667,6 @@ func (h *Handle) HandleWrite(
 	meta txn.TxnMeta,
 	req db.WriteReq,
 	resp *db.WriteResp) (err error) {
-
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
@@ -599,19 +694,27 @@ func (h *Handle) HandleWrite(
 	}
 
 	if req.Type == db.EntryInsert {
-		//Add blocks had been bulk-loaded into S3
+		//Add blocks which had been bulk-loaded into S3 into table.
 		if req.FileName != "" {
-			//TODO::Add blocks from S3.
-			//tb.AppendBlockOnFS(ctx, uuid, file, metaloc);
-			panic(moerr.NewNYI("Precommit a block is not implemented yet"))
+			//wait loading primary key done.
+			var pkVecs []containers.Vector
+			for i, job := range req.Jobs {
+				req.JobRes[i] = job.WaitDone()
+				if req.JobRes[i].Err != nil {
+					return req.JobRes[i].Err
+				}
+				pkVecs = append(pkVecs, req.JobRes[i].Res.(containers.Vector))
+			}
+			err = tb.AppendBlocksOnFS(ctx, pkVecs, req.Uuids, req.FileName, req.MetaLocs, 0)
+			return
 		}
 		//Appends a batch of data into table.
-		//TODO::add a parameter for Write method to represent pre-commit append?
+		//TODO::Add a parameter for Write method to represent pre-commit write append?
 		err = tb.Write(ctx, req.Batch)
 		return
 	}
 
-	//TODO:: handle delete rows of block had been bulk-loaded into S3.
+	//TODO::Handle delete rows of block had been bulk-loaded into S3.
 
 	//Vecs[0]--> rowid
 	//Vecs[1]--> PrimaryKey

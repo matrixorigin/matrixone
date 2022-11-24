@@ -95,6 +95,10 @@ const (
 	BlockMeta_CommitTs   = "committs"
 	BlockMeta_SegmentID  = "segment_id"
 
+	//for loading block from S3/FS
+	BlockMetaOnFS_ID      = "block_id"
+	BlockMetaOnFS_MetaLoc = "meta_loc"
+
 	SystemCatalogName  = "def"
 	SystemPersistRel   = "p"
 	SystemTransientRel = "t"
@@ -173,6 +177,10 @@ const (
 	BLOCKMETA_DELTALOC_IDX   = 4
 	BLOCKMETA_COMMITTS_IDX   = 5
 	BLOCKMETA_SEGID_IDX      = 6
+
+	//for loading block on S3/FS.
+	BLOCKMETAONFS_ID_IDX      = 0
+	BLOCKMETAONFS_METALOC_IDX = 1
 )
 
 type BlockInfo struct {
@@ -287,6 +295,13 @@ var (
 		BlockMeta_CommitTs,
 		BlockMeta_SegmentID,
 	}
+
+	//for loading block on S3/FS
+	MoBlockMetaOnFSSchema = []string{
+		BlockMetaOnFS_ID,
+		BlockMetaOnFS_MetaLoc,
+	}
+
 	MoDatabaseTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),     // dat_id
 		types.New(types.T_varchar, 5000, 0, 0), // datname
@@ -345,6 +360,13 @@ var (
 		types.New(types.T_TS, 0, 0, 0),                        // committs
 		types.New(types.T_uint64, 0, 0, 0),                    // segment_id
 	}
+
+	//for loading block on S3/FS
+	MoBlockMetaOnFSTypes = []types.Type{
+		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0), // uuid
+		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0), // meta_loc
+	}
+
 	// used by memengine or tae
 	MoDatabaseTableDefs = []engine.TableDef{}
 	// used by memengine or tae
@@ -353,4 +375,6 @@ var (
 	MoColumnsTableDefs = []engine.TableDef{}
 	// used by memengine or tae or cn
 	MoTableMetaDefs = []engine.TableDef{}
+	// for loading block on S3/FS.
+	MoBlockMetaOnFSDefs = []engine.TableDef{}
 )

@@ -567,6 +567,31 @@ func (tbl *txnTable) Append(data *containers.Batch) (err error) {
 	return tbl.localSegment.Append(data)
 }
 
+func (tbl *txnTable) AppendBlocksOnFS(
+	pkVecs []containers.Vector,
+	uuids []string,
+	file string,
+	metaLocs []string,
+	flag int32) (err error) {
+	//TODO::If txn at CN had checked duplication against its snapshot and workspace,
+	// we should skip here.
+	if tbl.schema.HasPK() {
+		pkDef := tbl.schema.GetSingleSortKey()
+		pkVec := containers.MakeVector(pkDef.Type, false)
+		for _, v := range pkVecs {
+			//FIXME::Is it shallow copy or deep copy?
+			pkVec.Extend(v)
+		}
+		if err = tbl.DoBatchDedup(pkVec); err != nil {
+			return
+		}
+	}
+	if tbl.localSegment == nil {
+		tbl.localSegment = newLocalSegment(tbl)
+	}
+	return tbl.localSegment.AppendBlocksOnFS(pkVecs, uuids, file, metaLocs, flag)
+}
+
 func (tbl *txnTable) RangeDeleteLocalRows(start, end uint32) (err error) {
 	if tbl.localSegment != nil {
 		err = tbl.localSegment.RangeDelete(start, end)

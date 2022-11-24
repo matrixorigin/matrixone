@@ -47,6 +47,7 @@ type Relation interface {
 
 	BatchDedup(col containers.Vector) error
 	Append(data *containers.Batch) error
+	AppendBlocksOnFS(pkVecs []containers.Vector, uuids []string, file string, metaLcos []string, flag int32) error
 
 	GetMeta() any
 	CreateSegment(bool) (Segment, error)

@@ -51,19 +51,23 @@ func isLocalSegmentByID(id uint64) bool {
 	return id >= LocalSegmentStartID
 }
 
-type blockInfo struct {
-	uuid    string
+type blockMeta struct {
+	uuid string
+	//sorted primary key if exists.
 	pks     containers.Vector
 	metaloc string
+	//object name on S3/FS
+	file string
 }
 
 type localSegment struct {
 	entry      *catalog.SegmentEntry
 	appendable base.INodeHandle
-	index      TableIndex
-	nodes      []InsertNode
-	//non-appendable blocks appended from File Service.
-	blocks      []blockInfo
+	//index for primary key
+	index TableIndex
+	nodes []InsertNode
+	//meta for non-appendable blocks on S3/FS
+	blocks      map[string]*blockMeta
 	table       *txnTable
 	rows        uint32
 	appends     []*appendCtx
@@ -75,6 +79,7 @@ func newLocalSegment(table *txnTable) *localSegment {
 	return &localSegment{
 		entry:   entry,
 		nodes:   make([]InsertNode, 0),
+		blocks:  make(map[string]*blockMeta),
 		index:   NewSimpleTableIndex(),
 		appends: make([]*appendCtx, 0),
 		table:   table,
@@ -137,9 +142,14 @@ func (seg *localSegment) PrepareApply() (err error) {
 			break
 		}
 	}
+	for _, blk := range seg.blocks {
+
+	}
 	return
 }
 
+// It is very important that appending a AppendNode into
+// block's MVCCHandle before applying data into block.
 func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 	tableData := seg.table.entry.GetTableData()
 	if seg.tableHandle == nil {
@@ -248,6 +258,38 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 		}
 	}
 	return err
+}
+
+func (seg *localSegment) AppendBlocksOnFS(
+	pkVecs []containers.Vector,
+	uuids []string,
+	file string,
+	metaLocs []string,
+	flag int32) (err error) {
+	for i, id := range uuids {
+		seg.blocks[id] = &blockMeta{
+			uuid: id,
+			//pks:  nil,
+			metaloc: metaLocs[i],
+			file:    file,
+		}
+		if pkVecs != nil {
+			seg.blocks[id].pks = pkVecs[i]
+			//insert primary keys into seg.index
+			if err = seg.index.BatchInsert(
+				seg.table.schema.GetSingleSortKey().Name,
+				pkVecs[i],
+				0,
+				pkVecs[i].Length(),
+				seg.rows,
+				false,
+			); err != nil {
+				return
+			}
+			seg.rows += uint32(pkVecs[i].Length())
+		}
+	}
+	return nil
 }
 
 func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err error) {

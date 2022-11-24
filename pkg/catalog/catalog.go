@@ -45,6 +45,10 @@ func init() {
 	for i, name := range MoTableMetaSchema {
 		MoTableMetaDefs[i] = newAttributeDef(name, MoTableMetaTypes[i], i == 0)
 	}
+	MoBlockMetaOnFSDefs = make([]engine.TableDef, len(MoBlockMetaOnFSSchema))
+	for i, name := range MoBlockMetaOnFSSchema {
+		MoBlockMetaOnFSDefs[i] = newAttributeDef(name, MoBlockMetaOnFSTypes[i], false)
+	}
 }
 
 func newAttributeDef(name string, typ types.Type, isPrimary bool) engine.TableDef {

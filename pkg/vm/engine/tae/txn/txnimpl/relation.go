@@ -162,6 +162,23 @@ func (h *txnRelation) Append(data *containers.Batch) error {
 	return h.Txn.GetStore().Append(h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
 }
 
+func (h *txnRelation) AppendBlocksOnFS(
+	pkVecs []containers.Vector,
+	uuids []string,
+	file string,
+	metaLocs []string,
+	flag int32) error {
+	return h.Txn.GetStore().AppendBlocksOnFS(
+		h.table.entry.GetDB().ID,
+		h.table.entry.GetID(),
+		pkVecs,
+		uuids,
+		file,
+		metaLocs,
+		flag,
+	)
+}
+
 func (h *txnRelation) GetSegment(id uint64) (seg handle.Segment, err error) {
 	fp := h.table.entry.AsCommonID()
 	fp.SegmentID = id
