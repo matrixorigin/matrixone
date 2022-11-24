@@ -244,7 +244,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
-var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string, err error) context.Context {
+var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string) context.Context {
 	if !trace.GetTracerProvider().IsEnable() {
 		return ctx
 	}
@@ -283,7 +283,6 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	}
 	sc := trace.SpanContextWithID(trace.TraceID(stmID), trace.SpanKindStatement)
 	ctx = trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
-	trace.EndStatement(ctx, err)
 	incStatementCounter(tenant.GetTenant(), nil)
 	incStatementErrorsCounter(tenant.GetTenant(), nil)
 	return ctx
@@ -3053,8 +3052,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(err.Error())
 		}
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, retErr)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql)
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
+		trace.EndStatement(requestCtx, retErr)
 		return retErr
 	}
 
@@ -3728,8 +3728,10 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql)
 		retErr = moerr.NewParseError(err.Error())
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
+		trace.EndStatement(requestCtx, retErr)
 		return retErr
 	}
 
