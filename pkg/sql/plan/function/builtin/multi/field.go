@@ -58,7 +58,7 @@ func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 				if !input.IsScalarNull() {
 					cols := vector.MustStrCols(input)
 					if firstValues[0] == cols[0] {
-						return resultVector, nil
+						return vector.NewConstFixed(returnType, vecLen*returnType.Oid.FixedLength(), uint64(i), proc.Mp()), err
 					}
 				}
 			} else {
@@ -173,7 +173,7 @@ func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.
 				if !input.IsScalarNull() {
 					cols := vector.MustTCols[T](input)
 					if firstValues[0] == cols[0] {
-						return resultVector, nil
+						return vector.NewConstFixed(returnType, vecLen*returnType.Oid.FixedLength(), uint64(i), proc.Mp()), err
 					}
 				}
 			} else {
