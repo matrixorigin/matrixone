@@ -1,7 +1,7 @@
 drop table if exists t1;
 create table t1(
 a int auto_increment,
-b varchar
+b varchar(100)
 );
 set @a=1;
 set @b='a';

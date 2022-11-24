@@ -95,7 +95,7 @@ var (
 	CheckpointSchemaTypes = []types.Type{
 		types.New(types.T_TS, 0, 0, 0),
 		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_varchar, 0, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0),
 	}
 )
 

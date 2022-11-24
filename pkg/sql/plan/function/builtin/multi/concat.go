@@ -22,7 +22,7 @@ import (
 )
 
 func Concat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	isAllConst := true
 
 	for i := range vectors {
