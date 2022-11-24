@@ -27,7 +27,6 @@ import (
 	"io"
 	"math"
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -230,8 +229,8 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 
 func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 	filePath := strings.TrimSpace(param.Filepath)
-	filePath = filepath.Clean(filePath)
-	sep := string(filepath.Separator)
+	filePath = path.Clean(filePath)
+	sep := "/"
 	pathDir := strings.Split(filePath, sep)
 	l := list.New()
 	if pathDir[0] == "" {
@@ -259,7 +258,7 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 				if entry.IsDir && i+1 == len(pathDir) {
 					continue
 				}
-				matched, err := filepath.Match(pathDir[i], entry.Name)
+				matched, err := path.Match(pathDir[i], entry.Name)
 				if err != nil {
 					return nil, err
 				}
