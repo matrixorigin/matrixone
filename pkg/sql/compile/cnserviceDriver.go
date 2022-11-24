@@ -160,15 +160,96 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	return anas.Marshal()
 }
 
+const maxMessageSizeToMoRpc = 64 * mpool.MB
+
+// sendBackBatchToCnClient send back the result batch to cn client.
+func sendBackBatchToCnClient(ctx context.Context, b *batch.Batch, messageId uint64, mHelper *messageHandleHelper, cs morpc.ClientSession) error {
+	encodeData, errEncode := types.Encode(b)
+	if errEncode != nil {
+		return errEncode
+	}
+
+	if len(encodeData) <= maxMessageSizeToMoRpc {
+		m := mHelper.acquirer().(*pipeline.Message)
+		m.Id = messageId
+		m.Data = encodeData
+		return cs.Write(ctx, m)
+	}
+	// if data is too large, it should be split into small blocks.
+	start := 0
+	for start < len(encodeData) {
+		end := start + maxMessageSizeToMoRpc
+		sid := pipeline.WaitingNext
+		if end > len(encodeData) {
+			end = len(encodeData)
+			sid = pipeline.BatchEnd
+		}
+		m := mHelper.acquirer().(*pipeline.Message)
+		m.Id = messageId
+		m.Data = encodeData[start:end]
+		m.Sid = uint64(sid)
+		if err := cs.Write(ctx, m); err != nil {
+			return err
+		}
+		start = end
+	}
+	return nil
+}
+
+// receiveMessageFromCnServer deal the back message from cn-server.
+func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextOperator *connector.Argument) error {
+	var val morpc.Message
+	var dataBuffer []byte
+	for {
+		select {
+		case <-c.ctx.Done():
+			return moerr.NewRPCTimeout()
+		case val = <-mChan:
+		}
+		m := val.(*pipeline.Message)
+
+		// if message contains the back error info.
+		if err := pipeline.GetMessageErrorInfo(m); err != nil {
+			return err
+		}
+		if m.IsEndMessage() {
+			anaData := m.GetAnalyse()
+			if len(anaData) > 0 {
+				// get analysis info if it has
+				ana := new(pipeline.AnalysisList)
+				err := ana.Unmarshal(anaData)
+				if err != nil {
+					return err
+				}
+				mergeAnalyseInfo(c.anal, ana)
+			}
+			return nil
+		} else {
+			if len(dataBuffer) == 0 {
+				dataBuffer = m.Data
+			} else {
+				dataBuffer = append(dataBuffer, m.Data...)
+			}
+			if m.WaitingNextToMerge() {
+				continue
+			}
+			bat, err := decodeBatch(c.proc, dataBuffer)
+			if err != nil {
+				return err
+			}
+			sendToConnectOperator(nextOperator, bat)
+			dataBuffer = nil
+		}
+	}
+}
+
 // remoteRun sends a scope to remote node for execution, and wait to receive the back message.
 // the back message is always *pipeline.Message but contains three cases.
 // 1. Message with error information
 // 2. Message with end flag and the result of analysis
 // 3. Batch Message with batch data
 func (s *Scope) remoteRun(c *Compile) error {
-	// encode the scope
-	// the last instruction of remote-run scope must be `connect`, it doesn't need serialization work.
-	// just ignore this instruction when doing serialization work and recover at the end in order to receive the returned batch.
+	// encode the scope. shouldn't encode the `connector` operator which used to receive the back batch.
 	n := len(s.Instructions) - 1
 	con := s.Instructions[n]
 	s.Instructions = s.Instructions[:n]
@@ -193,8 +274,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 		_ = streamSender.Close()
 	}(streamSender)
 
-	// send encoded message
-	// mo-rpc send message requires that context should have its own timeout.
+	// send encoded message and receive the back message.
 	// TODO: get dead time from config file may suitable.
 	if _, ok := c.ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -213,52 +293,11 @@ func (s *Scope) remoteRun(c *Compile) error {
 	if errSend != nil {
 		return errSend
 	}
-
-	// range to receive.
-	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
 	messagesReceive, errReceive := streamSender.Receive()
 	if errReceive != nil {
 		return errReceive
 	}
-	var val morpc.Message
-	for {
-		select {
-		case <-c.ctx.Done():
-			return moerr.NewRPCTimeout()
-		case val = <-messagesReceive:
-		}
-
-		m, ok := val.(*pipeline.Message)
-		if !ok {
-			return moerr.NewInternalError("unexpected mo-rpc address %s", s.NodeInfo.Addr)
-		}
-		if err := pipeline.DecodeMessageError(m); err != nil {
-			return err
-		}
-
-		if m.IsEndMessage() {
-			anaData := m.GetAnalyse()
-			if len(anaData) > 0 {
-				// decode analyse
-				ana := new(pipeline.AnalysisList)
-				err := ana.Unmarshal(anaData)
-				if err != nil {
-					return err
-				}
-				mergeAnalyseInfo(c.anal, ana)
-			}
-			sendToConnectOperator(arg, nil)
-			break
-		}
-		// decoded message
-		bat, errBatch := decodeBatch(c.proc, m)
-		if errBatch != nil {
-			return errBatch
-		}
-		sendToConnectOperator(arg, bat)
-	}
-
-	return nil
+	return receiveMessageFromCnServer(c, messagesReceive, s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument))
 }
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
@@ -1070,14 +1109,7 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 	}
 
 	c.fill = func(_ any, b *batch.Batch) error {
-		encodeData, errEncode := types.Encode(b)
-		if errEncode != nil {
-			return errEncode
-		}
-		m := mHelper.acquirer().(*pipeline.Message)
-		m.Id = message.GetID()
-		m.Data = encodeData
-		return cs.Write(ctx, m)
+		return sendBackBatchToCnClient(ctx, b, message.GetID(), mHelper, cs)
 	}
 	return c
 }
@@ -1225,10 +1257,10 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 	}
 }
 
-func decodeBatch(proc *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
+func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
 	bat := new(batch.Batch)
 	mp := proc.Mp()
-	err := types.Decode(msg.GetData(), bat)
+	err := types.Decode(data, bat)
 	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
 		bat.Vecs[i], err = vector.Dup(bat.Vecs[i], mp)
