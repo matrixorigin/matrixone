@@ -244,7 +244,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
-var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string, err error) context.Context {
+var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string) context.Context {
 	if !trace.GetTracerProvider().IsEnable() {
 		return ctx
 	}
@@ -283,7 +283,6 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	}
 	sc := trace.SpanContextWithID(trace.TraceID(stmID), trace.SpanKindStatement)
 	ctx = trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
-	trace.EndStatement(ctx, err)
 	incStatementCounter(tenant.GetTenant(), nil)
 	incStatementErrorsCounter(tenant.GetTenant(), nil)
 	return ctx
@@ -3053,7 +3052,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(err.Error())
 		}
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, retErr)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql)
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
 		return retErr
 	}
@@ -3584,7 +3583,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if !fromLoadData {
 			txnErr = ses.TxnCommitSingleStatement(stmt)
 			if txnErr != nil {
-				trace.EndStatement(requestCtx, txnErr)
 				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
@@ -3603,7 +3601,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				resp.lastInsertId = 1
 			}
 			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(resp); err2 != nil {
-				trace.EndStatement(requestCtx, err2)
 				retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
 				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 				return retErr
@@ -3612,7 +3609,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.PrepareStmt, *tree.PrepareString:
 			if ses.GetCmd() == COM_STMT_PREPARE {
 				if err2 = mce.GetSession().GetMysqlProtocol().SendPrepareResponse(prepareStmt); err2 != nil {
-					trace.EndStatement(requestCtx, err2)
 					retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
 					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
@@ -3620,7 +3616,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			} else {
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(resp); err2 != nil {
-					trace.EndStatement(requestCtx, err2)
 					retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
 					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
@@ -3638,14 +3633,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if ses.GetCmd() != COM_STMT_CLOSE {
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(resp); err2 != nil {
-					trace.EndStatement(requestCtx, err2)
 					retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
 					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				}
 			}
 		}
-		trace.EndStatement(requestCtx, nil)
 		logStatementStatus(requestCtx, ses, stmt, success, nil)
 		goto handleNext
 	handleFailed:
@@ -3664,7 +3657,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
 			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
-		trace.EndStatement(requestCtx, err)
 		logError(ses.GetConciseProfile(), err.Error())
 		if !fromLoadData {
 			txnErr = ses.TxnRollbackSingleStatement(stmt)
@@ -3730,6 +3722,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql)
 		retErr = moerr.NewParseError(err.Error())
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
 		return retErr
