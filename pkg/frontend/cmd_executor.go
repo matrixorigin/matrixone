@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -194,11 +193,9 @@ func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Sessi
 		if txnErr != nil {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
 			logStatementStatus(ctx, ses, stmt, fail, txnErr)
-			trace.EndStatement(ctx, txnErr)
 			return txnErr
 		}
 		logStatementStatus(ctx, ses, stmt, success, nil)
-		trace.EndStatement(ctx, nil)
 	} else {
 		incStatementErrorsCounter(tenant, stmt)
 		/*
@@ -214,7 +211,6 @@ func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Sessi
 		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
 			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
-		defer trace.EndStatement(ctx, bse.err)
 		logutil.Error(bse.err.Error())
 		txnErr = ses.TxnRollbackSingleStatement(stmt)
 		if txnErr != nil {
@@ -304,7 +300,6 @@ func (bse *baseStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Session
 		if err = ses.GetMysqlProtocol().SendResponse(resp); err != nil {
 			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err)
 			logStatementStatus(ctx, ses, bse.GetAst(), fail, retErr)
-			trace.EndStatement(ctx, err)
 			return retErr
 		}
 	}

@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -122,7 +121,6 @@ func (ie *ImportExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session)
 	incStatementCounter(tenant, stmt)
 	if ie.GetStatus() == stmtExecSuccess {
 		logStatementStatus(ctx, ses, stmt, success, nil)
-		trace.EndStatement(ctx, nil)
 	} else {
 		incStatementErrorsCounter(tenant, stmt)
 		/*
@@ -140,7 +138,6 @@ func (ie *ImportExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session)
 		}
 		logutil.Error(ie.err.Error())
 		logStatementStatus(ctx, ses, stmt, fail, ie.err)
-		trace.EndStatement(ctx, ie.err)
 	}
 	return nil
 }
@@ -157,7 +154,6 @@ func (pse *PrepareStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Sess
 		if err2 = ses.GetMysqlProtocol().SendPrepareResponse(pse.prepareStmt); err2 != nil {
 			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
 			logStatementStatus(ctx, ses, pse.GetAst(), fail, retErr)
-			trace.EndStatement(ctx, err2)
 			return retErr
 		}
 	} else {
@@ -165,7 +161,6 @@ func (pse *PrepareStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Sess
 		if err2 = ses.GetMysqlProtocol().SendResponse(resp); err2 != nil {
 			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
 			logStatementStatus(ctx, ses, pse.GetAst(), fail, retErr)
-			trace.EndStatement(ctx, err2)
 			return retErr
 		}
 	}
@@ -193,7 +188,6 @@ func (pse *PrepareStringExecutor) ResponseAfterExec(ctx context.Context, ses *Se
 		if err2 = ses.GetMysqlProtocol().SendPrepareResponse(pse.prepareStmt); err2 != nil {
 			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
 			logStatementStatus(ctx, ses, pse.GetAst(), fail, retErr)
-			trace.EndStatement(ctx, err2)
 			return retErr
 		}
 	} else {
@@ -201,7 +195,6 @@ func (pse *PrepareStringExecutor) ResponseAfterExec(ctx context.Context, ses *Se
 		if err2 = ses.GetMysqlProtocol().SendResponse(resp); err2 != nil {
 			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
 			logStatementStatus(ctx, ses, pse.GetAst(), fail, retErr)
-			trace.EndStatement(ctx, err2)
 			return retErr
 		}
 	}
@@ -231,7 +224,6 @@ func (de *DeallocateExecutor) ResponseAfterExec(ctx context.Context, ses *Sessio
 		if err2 = ses.GetMysqlProtocol().SendResponse(resp); err2 != nil {
 			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
 			logStatementStatus(ctx, ses, de.GetAst(), fail, retErr)
-			trace.EndStatement(ctx, err2)
 			return retErr
 		}
 	}
@@ -468,7 +460,6 @@ func (ie *InsertExecutor) ResponseAfterExec(ctx context.Context, ses *Session) e
 		if err = ses.GetMysqlProtocol().SendResponse(resp); err != nil {
 			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err)
 			logStatementStatus(ctx, ses, ie.GetAst(), fail, retErr)
-			trace.EndStatement(ctx, err)
 			return retErr
 		}
 	}
@@ -486,7 +477,6 @@ func (le *LoadExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) e
 	incStatementCounter(tenant, stmt)
 	if le.GetStatus() == stmtExecSuccess {
 		logStatementStatus(ctx, ses, stmt, success, nil)
-		trace.EndStatement(ctx, nil)
 	} else {
 		incStatementErrorsCounter(tenant, stmt)
 		/*
@@ -504,7 +494,6 @@ func (le *LoadExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) e
 		}
 		logutil.Error(le.err.Error())
 		logStatementStatus(ctx, ses, stmt, fail, le.err)
-		trace.EndStatement(ctx, le.err)
 	}
 	return nil
 }

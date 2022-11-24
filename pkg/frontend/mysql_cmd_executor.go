@@ -3054,7 +3054,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql)
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
-		trace.EndStatement(requestCtx, retErr)
 		return retErr
 	}
 
@@ -3073,10 +3072,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var err2 error
 	var columns []interface{}
 	var mrs *MysqlResultSet
-
-	defer func() {
-		trace.EndStatement(requestCtx, retErr)
-	}()
 
 	singleStatement := len(cws) == 1
 	for i, cw := range cws {
@@ -3673,7 +3668,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		logStatementStatus(requestCtx, ses, stmt, fail, err)
 		return err
 	handleNext:
-		trace.EndStatement(requestCtx, nil)
 	} // end of for
 
 	return nil
@@ -3731,7 +3725,6 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql)
 		retErr = moerr.NewParseError(err.Error())
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
-		trace.EndStatement(requestCtx, retErr)
 		return retErr
 	}
 
