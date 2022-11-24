@@ -943,9 +943,10 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		dbTestId = dbHandle.GetDatabaseID(ctx)
 		err = txn.Commit()
 		assert.Nil(t, err)
-		wg.Done()
+		//wg.Done()
 		//To check whether reader had waited.
 		assert.True(t, time.Since(startTime) > 1*time.Second)
+		wg.Done()
 
 	}()
 	//sleep 1 second
@@ -1040,9 +1041,10 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		assert.Equal(t, "expr2", rAttr.Default.OriginString)
 		err = txn.Commit()
 		assert.NoError(t, err)
-		wg.Done()
+		//wg.Done()
 		//To check whether reader had waited.
 		assert.True(t, time.Since(startTime) > 1*time.Second)
+		wg.Done()
 	}()
 	time.Sleep(1 * time.Second)
 	err = handle.handleCmds(ctx, txnMeta, []txnCommand{

@@ -101,6 +101,14 @@ func (store *NoopTxnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID) 
 	return
 }
 
+func (store *NoopTxnStore) CreateNonAppendableBlockWithMeta(
+	_ uint64,
+	_ *common.ID,
+	_ string,
+	_ string) (blk handle.Block, err error) {
+	return
+}
+
 func (store *NoopTxnStore) UpdateMetaLoc(dbId uint64, id *common.ID, un string) (err error)  { return }
 func (store *NoopTxnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, un string) (err error) { return }
 func (store *NoopTxnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error)           { return }

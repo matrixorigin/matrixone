@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"testing"
 	"time"
@@ -152,7 +153,8 @@ func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
 	}
 
 	mh.Handle = &Handle{
-		eng: moengine.NewEngine(tae),
+		eng:          moengine.NewEngine(tae),
+		jobScheduler: tasks.NewParallelJobScheduler(5),
 	}
 	mh.Handle.mu.txnCtxs = make(map[string]*txnContext)
 	return mh
@@ -203,10 +205,8 @@ type Entry struct {
 	databaseId   uint64
 	tableName    string
 	databaseName string
-	// blockName for s3 file
+	//object name for s3 file
 	fileName string
-	// blockId for s3 file
-	blockId uint64
 	// update or delete tuples
 	bat *batch.Batch
 }
@@ -710,7 +710,6 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		TableName:    e.tableName,
 		DatabaseName: e.databaseName,
 		FileName:     e.fileName,
-		BlockId:      e.blockId,
 	}, nil
 }
 

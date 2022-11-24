@@ -488,6 +488,18 @@ func (store *txnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID) (blk
 	return db.CreateNonAppendableBlock(id)
 }
 
+func (store *txnStore) CreateNonAppendableBlockWithMeta(
+	dbId uint64,
+	id *common.ID,
+	metaLoc string,
+	deltaLoc string) (blk handle.Block, err error) {
+	var db *txnDB
+	if db, err = store.getOrSetDB(dbId); err != nil {
+		return
+	}
+	return db.CreateNonAppendableBlockWithMeta(id, metaLoc, deltaLoc)
+}
+
 func (store *txnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {

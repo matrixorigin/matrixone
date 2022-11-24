@@ -360,6 +360,17 @@ func (db *txnDB) CreateNonAppendableBlock(id *common.ID) (blk handle.Block, err 
 	return table.CreateNonAppendableBlock(id.SegmentID)
 }
 
+func (db *txnDB) CreateNonAppendableBlockWithMeta(
+	id *common.ID,
+	metaLoc string,
+	deltaLoc string) (blk handle.Block, err error) {
+	var table *txnTable
+	if table, err = db.getOrSetTable(id.TableID); err != nil {
+		return
+	}
+	return table.CreateNonAppendableBlockWithMeta(id.SegmentID, metaLoc, deltaLoc)
+}
+
 func (db *txnDB) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {

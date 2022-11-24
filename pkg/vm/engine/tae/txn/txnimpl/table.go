@@ -460,11 +460,22 @@ func (tbl *txnTable) CreateNonAppendableBlock(sid uint64) (blk handle.Block, err
 	return tbl.createBlock(sid, catalog.ES_NotAppendable, false)
 }
 
+func (tbl *txnTable) CreateNonAppendableBlockWithMeta(
+	sid uint64,
+	metaLoc string,
+	deltaLoc string) (blk handle.Block, err error) {
+	return tbl.createBlockWithMeta(sid, catalog.ES_NotAppendable,
+		false, metaLoc, deltaLoc)
+}
+
 func (tbl *txnTable) CreateBlock(sid uint64, is1PC bool) (blk handle.Block, err error) {
 	return tbl.createBlock(sid, catalog.ES_Appendable, is1PC)
 }
 
-func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState, is1PC bool) (blk handle.Block, err error) {
+func (tbl *txnTable) createBlock(
+	sid uint64,
+	state catalog.EntryState,
+	is1PC bool) (blk handle.Block, err error) {
 	var seg *catalog.SegmentEntry
 	if seg, err = tbl.entry.GetSegmentByID(sid); err != nil {
 		return
@@ -478,6 +489,38 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState, is1PC boo
 		factory = tbl.store.dataFactory.MakeBlockFactory()
 	}
 	meta, err := seg.CreateBlock(tbl.store.txn, state, factory)
+	if err != nil {
+		return
+	}
+	if is1PC {
+		meta.Set1PC()
+	}
+	tbl.store.IncreateWriteCnt()
+	id := meta.AsCommonID()
+	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
+	tbl.txnEntries.Append(meta)
+	return buildBlock(tbl, meta), err
+}
+
+func (tbl *txnTable) createBlockWithMeta(
+	sid uint64,
+	state catalog.EntryState,
+	is1PC bool,
+	metaLoc string,
+	deltaLoc string) (blk handle.Block, err error) {
+	var seg *catalog.SegmentEntry
+	if seg, err = tbl.entry.GetSegmentByID(sid); err != nil {
+		return
+	}
+	if !seg.IsAppendable() && state == catalog.ES_Appendable {
+		err = moerr.NewInternalError("not appendable")
+		return
+	}
+	var factory catalog.BlockDataFactory
+	if tbl.store.dataFactory != nil {
+		factory = tbl.store.dataFactory.MakeBlockFactory()
+	}
+	meta, err := seg.CreateBlockWithMeta(tbl.store.txn, state, factory, metaLoc, deltaLoc)
 	if err != nil {
 		return
 	}

@@ -139,11 +139,28 @@ func (seg *localSegment) PrepareApply() (err error) {
 	}()
 	for _, node := range seg.nodes {
 		if err = seg.prepareApplyNode(node); err != nil {
-			break
+			return
 		}
 	}
-	for _, blk := range seg.blocks {
+	if len(seg.blocks) != 0 {
+		if err = seg.ApplyBlocksOnFS(seg.blocks); err != nil {
+			return
+		}
+	}
+	return
+}
 
+func (seg *localSegment) ApplyBlocksOnFS(blks map[string]*blockMeta) (err error) {
+	//create a appendable segment.
+	segH, err := seg.table.CreateSegment(true)
+	if err != nil {
+		return err
+	}
+	for _, v := range blks {
+		_, err := segH.CreateNonAppendableBlockWithMeta(v.metaloc, "")
+		if err != nil {
+			return err
+		}
 	}
 	return
 }

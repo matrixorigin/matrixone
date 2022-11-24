@@ -241,6 +241,19 @@ func (entry *SegmentEntry) CreateBlock(txn txnif.AsyncTxn, state EntryState, dat
 	return
 }
 
+func (entry *SegmentEntry) CreateBlockWithMeta(
+	txn txnif.AsyncTxn,
+	state EntryState,
+	dataFactory BlockDataFactory,
+	metaLoc string,
+	deltaLoc string) (created *BlockEntry, err error) {
+	entry.Lock()
+	defer entry.Unlock()
+	created = NewBlockEntryWithMeta(entry, txn, state, dataFactory, metaLoc, deltaLoc)
+	entry.AddEntryLocked(created)
+	return
+}
+
 func (entry *SegmentEntry) DropBlockEntry(id uint64, txn txnif.AsyncTxn) (deleted *BlockEntry, err error) {
 	blk, err := entry.GetBlockEntryByID(id)
 	if err != nil {

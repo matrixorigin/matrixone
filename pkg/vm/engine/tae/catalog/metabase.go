@@ -129,6 +129,18 @@ func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	be.Insert(node)
 }
 
+func (be *MetaBaseEntry) CreateWithTxnAndMeta(txn txnif.AsyncTxn, metaLoc string, deltaLoc string) {
+	node := &MetadataMVCCNode{
+		EntryMVCCNode: &EntryMVCCNode{
+			CreatedAt: txnif.UncommitTS,
+		},
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
+		MetaLoc:     metaLoc,
+		DeltaLoc:    deltaLoc,
+	}
+	be.Insert(node)
+}
+
 func (be *MetaBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *MetadataMVCCNode) {
 	entry := be.GetLatestNodeLocked()
 	if entry.IsSameTxn(txn.GetStartTS()) {
