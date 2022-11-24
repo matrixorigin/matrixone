@@ -19,6 +19,9 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -40,7 +43,8 @@ type Routine struct {
 	cancelRoutineCtx  context.Context
 	cancelRoutineFunc context.CancelFunc
 
-	routineMgr *RoutineManager
+	rs         goetty.IOSession
+	parameters *config.FrontendParameters
 
 	ses *Session
 	// TODO: the initialization and closure of application in goetty should be clear in 0.7
@@ -77,16 +81,10 @@ func (routine *Routine) getConnID() uint32 {
 	return routine.GetClientProtocol().ConnectionID()
 }
 
-func (routine *Routine) SetRoutineMgr(rtMgr *RoutineManager) {
+func (routine *Routine) getParameters() *config.FrontendParameters {
 	routine.mu.Lock()
 	defer routine.mu.Unlock()
-	routine.routineMgr = rtMgr
-}
-
-func (routine *Routine) GetRoutineMgr() *RoutineManager {
-	routine.mu.Lock()
-	defer routine.mu.Unlock()
-	return routine.routineMgr
+	return routine.parameters
 }
 
 func (routine *Routine) SetSession(ses *Session) {
@@ -107,6 +105,12 @@ func (routine *Routine) GetRequestChannel() chan *Request {
 	return routine.requestChan
 }
 
+func (routine *Routine) getIOSession() goetty.IOSession {
+	routine.mu.Lock()
+	defer routine.mu.Unlock()
+	return routine.rs
+}
+
 /*
 After the handshake with the client is done, the routine goes into processing loop.
 */
@@ -117,6 +121,13 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 	var counted bool
 	var requestChan = routine.GetRequestChannel()
 	var ses *Session
+	rs := routine.getIOSession()
+	defer func(rs goetty.IOSession) {
+		if err := rs.Close(); err != nil {
+			logErrorf(routine.GetSession().GetConciseProfile(), "failed to close io session", zap.Error(err))
+		}
+	}(rs)
+
 	//session for the connection
 	for {
 		quit := false
@@ -140,12 +151,11 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 
 		reqBegin := time.Now()
 
-		mgr := routine.GetRoutineMgr()
-		pu := mgr.getParameterUnit()
+		parameters := routine.getParameters()
 		mpi := routine.GetClientProtocol().(*MysqlProtocolImpl)
 		mpi.SetSequenceID(req.seq)
 
-		cancelRequestCtx, cancelRequestFunc := context.WithTimeout(routineCtx, pu.SV.SessionTimeout.Duration)
+		cancelRequestCtx, cancelRequestFunc := context.WithTimeout(routineCtx, parameters.SessionTimeout.Duration)
 		executor := routine.GetCmdExecutor()
 		executor.(*MysqlCmdExecutor).setCancelRequestFunc(cancelRequestFunc)
 		ses = routine.GetSession()
@@ -167,7 +177,7 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 			}
 		}
 
-		if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
+		if !parameters.DisableRecordTimeElapsedOfSqlRequest {
 			logDebugf(ses.GetConciseProfile(), "the time of handling the request %s", time.Since(reqBegin).String())
 		}
 
@@ -228,7 +238,7 @@ func (routine *Routine) notifyDone() {
 	}
 }
 
-func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecutor, pu *config.ParameterUnit) *Routine {
+func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecutor, parameters *config.FrontendParameters, rs goetty.IOSession) *Routine {
 	cancelRoutineCtx, cancelRoutineFunc := context.WithCancel(ctx)
 	ri := &Routine{
 		protocol:          protocol,
@@ -236,7 +246,10 @@ func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecuto
 		requestChan:       make(chan *Request, 1),
 		cancelRoutineCtx:  cancelRoutineCtx,
 		cancelRoutineFunc: cancelRoutineFunc,
+		parameters:        parameters,
+		rs:                rs,
 	}
+	rs.Ref()
 
 	//async process request
 	go ri.Loop(cancelRoutineCtx)
