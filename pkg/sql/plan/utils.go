@@ -590,6 +590,36 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 	return nil
 }
 
+func DeduceSelectivity(expr *plan.Expr) float64 {
+	if expr == nil {
+		return 1
+	}
+	var sel float64
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		funcName := exprImpl.F.Func.ObjName
+		switch funcName {
+		case "=":
+			return 0.01
+		case "and":
+			sel = math.Min(DeduceSelectivity(exprImpl.F.Args[0]), DeduceSelectivity(exprImpl.F.Args[1]))
+			return sel
+		case "or":
+			sel1 := DeduceSelectivity(exprImpl.F.Args[0])
+			sel2 := DeduceSelectivity(exprImpl.F.Args[1])
+			sel = math.Max(sel1, sel2)
+			if sel < 0.1 {
+				return sel * 1.05
+			} else {
+				return 1 - (1-sel1)*(1-sel2)
+			}
+		default:
+			return 0.33
+		}
+	}
+	return 1
+}
+
 func RewriteAndConstantFold(exprList []*plan.Expr) *plan.Expr {
 	e := colexec.RewriteFilterExprList(exprList)
 	if e != nil {
