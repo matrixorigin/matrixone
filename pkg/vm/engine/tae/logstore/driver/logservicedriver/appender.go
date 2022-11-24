@@ -49,13 +49,13 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	// 	panic(moerr.NewInternalError("record size %d, larger than max size 20K", size))
 	// }
 	a.client.TryResize(size)
-	logutil.Debugf("Log Service Driver: append start prepare %p", &a.client.record)
+	logutil.Debugf("Log Service Driver: append start prepare %p", a.client.record.Data)
 	record := a.client.record
 	copy(record.Payload(), a.entry.payload)
 	record.ResizePayload(size)
 	defer logSlowAppend()()
 	ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
-	logutil.Debugf("Log Service Driver: append start %p", &a.client.record)
+	logutil.Debugf("Log Service Driver: append start %p", a.client.record.Data)
 	lsn, err := a.client.c.Append(ctx, record)
 	if err != nil {
 		logutil.Errorf("append failed: %v", err)
@@ -72,7 +72,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 			return err == nil
 		})
 	}
-	logutil.Debugf("Log Service Driver: append end %p", &a.client.record)
+	logutil.Debugf("Log Service Driver: append end %p", a.client.record.Data)
 	if err != nil {
 		logutil.Infof("size is %d", size)
 		panic(err)
