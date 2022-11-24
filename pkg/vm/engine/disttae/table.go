@@ -44,7 +44,7 @@ func (tbl *table) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, e
 	for _, blockmetas := range tbl.meta.blocks {
 		for _, blk := range blockmetas {
 			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
-				card += float64(blockRows(blk)) / 3
+				card += float64(blockRows(blk))
 			}
 		}
 	}
