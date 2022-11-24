@@ -47,15 +47,15 @@ func newBlock(
 	blk.baseBlock = newBaseBlock(blk, meta, bufMgr, fs, scheduler)
 	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
 	node := newPersistedNode(blk.baseBlock)
-	pinned := node.Pin()
-	blk.storage.pnode = pinned
+	node.Ref()
+	blk.storage.pnode = node
 	return blk
 }
 
 func (blk *block) Init() (err error) {
 	_, pnode := blk.PinNode()
-	defer pnode.Close()
-	pnode.Item().init()
+	defer pnode.Unref()
+	pnode.init()
 	return
 }
 
@@ -103,8 +103,9 @@ func (blk *block) GetColumnDataByIds(
 	colIdxes []int,
 	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
 	_, pnode := blk.PinNode()
+	defer pnode.Unref()
 	return blk.ResolvePersistedColumnDatas(
-		pnode.Item(),
+		pnode,
 		txn.GetStartTS(),
 		colIdxes,
 		buffers,
@@ -116,9 +117,9 @@ func (blk *block) GetColumnDataById(
 	colIdx int,
 	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
 	_, pnode := blk.PinNode()
-	defer pnode.Close()
+	defer pnode.Unref()
 	return blk.ResolvePersistedColumnData(
-		pnode.Item(),
+		pnode,
 		txn.GetStartTS(),
 		colIdx,
 		buffer,
@@ -140,9 +141,9 @@ func (blk *block) BatchDedup(
 		ts = txn.GetPrepareTS()
 	}
 	_, pnode := blk.PinNode()
-	defer pnode.Close()
+	defer pnode.Unref()
 	return blk.PersistedBatchDedup(
-		pnode.Item(),
+		pnode,
 		ts,
 		keys,
 		rowmask,
@@ -168,9 +169,9 @@ func (blk *block) GetValue(
 	row, col int) (v any, err error) {
 	ts := txn.GetStartTS()
 	_, pnode := blk.PinNode()
-	defer pnode.Close()
+	defer pnode.Unref()
 	return blk.getPersistedValue(
-		pnode.Item(),
+		pnode,
 		ts,
 		row,
 		col,
@@ -222,8 +223,8 @@ func (blk *block) GetByFilter(
 	ts := txn.GetStartTS()
 
 	_, pnode := blk.PinNode()
-	defer pnode.Close()
-	return blk.getPersistedRowByFilter(pnode.Item(), ts, filter)
+	defer pnode.Unref()
+	return blk.getPersistedRowByFilter(pnode, ts, filter)
 }
 
 func (blk *block) getPersistedRowByFilter(

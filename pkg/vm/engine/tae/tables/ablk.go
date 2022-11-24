@@ -55,12 +55,12 @@ func newABlock(
 	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
 	if blk.meta.HasDropCommitted() {
 		node := newPersistedNode(blk.baseBlock)
-		pinned := node.Pin()
-		blk.storage.pnode = pinned
+		node.Ref()
+		blk.storage.pnode = node
 	} else {
 		node := newMemoryNode(blk.baseBlock)
-		pinned := node.Pin()
-		blk.storage.mnode = pinned
+		node.Ref()
+		blk.storage.mnode = node
 	}
 	return blk
 }
@@ -95,8 +95,8 @@ func (blk *ablock) IsAppendable() bool {
 	if mnode == nil {
 		return false
 	}
-	defer mnode.Close()
-	return mnode.Item().Rows() < blk.meta.GetSchema().BlockMaxRows
+	defer mnode.Unref()
+	return mnode.Rows() < blk.meta.GetSchema().BlockMaxRows
 }
 
 func (blk *ablock) PrepareCompact() bool {
@@ -166,17 +166,17 @@ func (blk *ablock) resolveColumnDatas(
 	mnode, pnode := blk.PinNode()
 
 	if mnode != nil {
-		defer mnode.Close()
+		defer mnode.Unref()
 		return blk.resolveInMemoryColumnDatas(
-			mnode.Item(),
+			mnode,
 			ts,
 			colIdxes,
 			buffers,
 			skipDeletes)
 	} else if pnode != nil {
-		defer pnode.Close()
+		defer pnode.Unref()
 		return blk.ResolvePersistedColumnDatas(
-			pnode.Item(),
+			pnode,
 			ts,
 			colIdxes,
 			buffers,
@@ -194,17 +194,17 @@ func (blk *ablock) resolveColumnData(
 	mnode, pnode := blk.PinNode()
 
 	if mnode != nil {
-		defer mnode.Close()
+		defer mnode.Unref()
 		return blk.resolveInMemoryColumnData(
-			mnode.Item(),
+			mnode,
 			ts,
 			colIdx,
 			buffer,
 			skipDeletes)
 	} else if pnode != nil {
-		defer pnode.Close()
+		defer pnode.Unref()
 		return blk.ResolvePersistedColumnData(
-			pnode.Item(),
+			pnode,
 			ts,
 			colIdx,
 			buffer,
@@ -311,12 +311,12 @@ func (blk *ablock) GetValue(
 	ts := txn.GetStartTS()
 	mnode, pnode := blk.PinNode()
 	if mnode != nil {
-		defer mnode.Close()
-		return blk.getInMemoryValue(mnode.Item(), ts, row, col)
+		defer mnode.Unref()
+		return blk.getInMemoryValue(mnode, ts, row, col)
 	} else if pnode != nil {
-		defer pnode.Close()
+		defer pnode.Unref()
 		return blk.getPersistedValue(
-			pnode.Item(),
+			pnode,
 			ts,
 			row,
 			col,
@@ -363,11 +363,11 @@ func (blk *ablock) GetByFilter(
 
 	mnode, pnode := blk.PinNode()
 	if mnode != nil {
-		defer mnode.Close()
-		return blk.getInMemoryRowByFilter(mnode.Item(), ts, filter)
+		defer mnode.Unref()
+		return blk.getInMemoryRowByFilter(mnode, ts, filter)
 	} else if pnode != nil {
-		defer pnode.Close()
-		return blk.getPersistedRowByFilter(pnode.Item(), ts, filter)
+		defer pnode.Unref()
+		return blk.getPersistedRowByFilter(pnode, ts, filter)
 	}
 
 	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
@@ -607,12 +607,12 @@ func (blk *ablock) BatchDedup(
 	}
 	mnode, pnode := blk.PinNode()
 	if mnode != nil {
-		defer mnode.Close()
-		return blk.inMemoryBatchDedup(mnode.Item(), dedupTS, txn.GetStartTS(), keys, rowmask)
+		defer mnode.Unref()
+		return blk.inMemoryBatchDedup(mnode, dedupTS, txn.GetStartTS(), keys, rowmask)
 	} else if pnode != nil {
-		defer pnode.Close()
+		defer pnode.Unref()
 		return blk.PersistedBatchDedup(
-			pnode.Item(),
+			pnode,
 			dedupTS,
 			keys,
 			rowmask,
@@ -670,16 +670,16 @@ func (blk *ablock) CollectAppendInRange(
 	withAborted bool) (*containers.Batch, error) {
 	mnode, pnode := blk.PinNode()
 	if mnode != nil {
-		defer mnode.Close()
+		defer mnode.Unref()
 		return blk.inMemoryCollectAppendInRange(
-			mnode.Item(),
+			mnode,
 			start,
 			end,
 			withAborted)
 	} else if pnode != nil {
-		defer pnode.Close()
+		defer pnode.Unref()
 		return blk.persistedCollectAppendInRange(
-			pnode.Item(),
+			pnode,
 			start,
 			end,
 			withAborted)
