@@ -215,6 +215,7 @@ const (
 	EXTRACT   // EXTRACT
 	OCT
 	SUBSTRING // SUBSTRING
+	SUBSTRING_INDEX //SUBSTRING_INDEX
 	WEEK      //WEEK
 	WEEKDAY
 	YEAR   // YEAR
@@ -450,6 +451,7 @@ var functionIdRegister = map[string]int32{
 	"mo_disable_memory_usage_detail": MO_DISABLE_MEMORY_USAGE_DETAIL,
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
+	"substring_index":                SUBSTRING_INDEX,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
