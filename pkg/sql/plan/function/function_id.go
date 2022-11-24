@@ -222,6 +222,7 @@ const (
 	MINUTE // MINUTE
 	SECOND // SECOND
 
+	CUR_DATE
 	DATE_ADD              // DATE_ADD
 	DATE_SUB              // DATE_SUB
 	APPROX_COUNT_DISTINCT // APPROX_COUNT_DISTINCT, special aggregate
@@ -402,6 +403,7 @@ var functionIdRegister = map[string]int32{
 	"extract":                        EXTRACT,
 	"if":                             IFF,
 	"iff":                            IFF,
+	"curdate":                        CUR_DATE,
 	"date_add":                       DATE_ADD,
 	"date_sub":                       DATE_SUB,
 	"atan":                           ATAN,

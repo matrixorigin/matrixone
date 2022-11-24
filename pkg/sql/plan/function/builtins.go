@@ -2491,4 +2491,25 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	CUR_DATE: {
+		Id:     CUR_DATE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Args:      []types.T{},
+				ReturnTyp: types.T_date,
+				Fn:        unary.CurDate,
+			},
+			{
+				Index:     1,
+				Volatile:  true,
+				Args:      []types.T{types.T_int64},
+				ReturnTyp: types.T_int64,
+				Fn:        unary.CurDate,
+			},
+		},
+	},
 }

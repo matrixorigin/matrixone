@@ -705,6 +705,17 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 		}
+	case "+":
+		// rewrite curdate() + $1 to curdate($1)
+		if len(astArgs) == 2 {
+			if fn, ok := astArgs[0].(*tree.FuncExpr); ok {
+				if fn.Func.FunctionReference.(*tree.UnresolvedName).Parts[0] == "curdate" {
+					astArgs[0] = fn
+					astArgs = astArgs[1:]
+					name = "curdate"
+				}
+			}
+		}
 	}
 	// bind ast function's args
 	args := make([]*Expr, len(astArgs))

@@ -1,0 +1,9 @@
+select cast(now() as date)=curdate() q;
+q
+true
+select datediff(curdate(),date('1970-01-01')) = curdate()+0 q;
+q
+true
+select datediff(curdate(),date('1969-12-31')) = curdate()+1 q;
+q
+true
