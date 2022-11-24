@@ -94,11 +94,6 @@ func NewTxn(n *Argument, proc *process.Process, ctx context.Context) (txn client
 	if ctx == nil {
 		return nil, moerr.NewInternalError("context should not be nil")
 	}
-	ctx, cancel := context.WithTimeout(
-		ctx,
-		n.Engine.Hints().CommitOrRollbackTimeout,
-	)
-	defer cancel()
 	if err = n.Engine.New(ctx, txn); err != nil {
 		return nil, err
 	}
