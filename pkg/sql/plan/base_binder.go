@@ -710,7 +710,6 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if len(astArgs) == 2 {
 			if fn, ok := astArgs[0].(*tree.FuncExpr); ok {
 				if fn.Func.FunctionReference.(*tree.UnresolvedName).Parts[0] == "curdate" {
-					astArgs[0] = fn
 					astArgs = astArgs[1:]
 					name = "curdate"
 				}
