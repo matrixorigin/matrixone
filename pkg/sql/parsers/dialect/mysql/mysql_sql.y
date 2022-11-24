@@ -6195,6 +6195,7 @@ trim_direction:
 substr_option:
     SUBSTRING
 |    SUBSTR
+|    MID
 
 time_unit:
     time_stamp_unit
