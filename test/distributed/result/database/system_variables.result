@@ -137,28 +137,28 @@ select table_name, column_name from key_column_usage limit 2;
 table_name    column_name
 desc columns;
 Field    Type    Null    Key    Default    Extra    Comment
+table_catalog    VARCHAR(3)    YES        NULL
+table_schema    VARCHAR(256)    YES        NULL
 table_name    VARCHAR(256)    YES        NULL
-column_key    VARCHAR(3)    YES        NULL
+column_name    VARCHAR(256)    YES        NULL
 ordinal_position    INT    YES        NULL
-column_default    VARCHAR(0)    YES        NULL
-data_type    VARCHAR(0)    YES        NULL
-extra    VARCHAR(14)    YES        NULL
-srs_id    BIGINT    YES        NULL
-column_comment    VARCHAR(1024)    YES        NULL
+column_default    VARCHAR(65535)    YES        NULL
+is_nullable    VARCHAR(2)    YES        NULL
+data_type    VARCHAR(65535)    YES        NULL
+character_maximum_length    INT    YES        NULL
+character_octet_length    INT    YES        NULL
+numeric_precision    BIGINT    YES        NULL
 numeric_scale    BIGINT    YES        NULL
 datetime_precision    BIGINT    YES        NULL
-collation_name    VARCHAR(8)    YES        NULL
-is_nullable    VARCHAR(2)    YES        NULL
-numeric_precision    BIGINT    YES        NULL
-column_name    VARCHAR(256)    YES        NULL
-column_type    VARCHAR(0)    YES        NULL
-character_maximum_length    INT    YES        NULL
-table_schema    VARCHAR(256)    YES        NULL
-character_octet_length    INT    YES        NULL
-PRIVILEGES    VARCHAR(31)    YES        NULL
-table_catalog    VARCHAR(3)    YES        NULL
-generation_expression    VARCHAR(0)    YES        NULL
 character_set_name    VARCHAR(4)    YES        NULL
+collation_name    VARCHAR(8)    YES        NULL
+column_type    VARCHAR(65535)    YES        NULL
+column_key    VARCHAR(3)    YES        NULL
+extra    VARCHAR(14)    YES        NULL
+PRIVILEGES    VARCHAR(31)    YES        NULL
+column_comment    VARCHAR(2048)    YES        NULL
+generation_expression    VARCHAR(0)    YES        NULL
+srs_id    BIGINT    YES        NULL
 select table_name, column_name from columns where table_schema = 'mo_catalog' order by table_name, column_name limit 5;
 table_name    column_name
 mo_account    account_id
@@ -210,12 +210,12 @@ select grantee, table_catalog from user_privileges limit 2;
 grantee    table_catalog
 desc schemata;
 Field    Type    Null    Key    Default    Extra    Comment
-catalog_name    VARCHAR(100)    YES        NULL
-default_collation_name    VARCHAR(18)    YES        NULL
+catalog_name    VARCHAR(5000)    YES        NULL
+schema_name    VARCHAR(5000)    YES        NULL
 default_character_set_name    VARCHAR(7)    YES        NULL
+default_collation_name    VARCHAR(18)    YES        NULL
 sql_path    VARCHAR(0)    YES        NULL
-default_encryption    VARCHAR(2)    YES        NULL    
-schema_name    VARCHAR(100)    YES        NULL
+default_encryption    VARCHAR(2)    YES        NULL
 select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' order by catalog_name, schema_name;
 catalog_name    schema_name
 def    mo_task
@@ -230,28 +230,28 @@ select character_set_name, description, maxlen from character_sets limit 5;
 character_set_name    description    maxlen
 desc triggers;
 Field    Type    Null    Key    Default    Extra    Comment
-action_reference_new_row    VARCHAR(3)    YES        NULL
 trigger_catalog    VARCHAR(64)    YES        NULL
-character_set_client    VARCHAR(64)    YES        NULL
-action_reference_new_table    VARCHAR(1)    YES        NULL
-action_orientation    VARCHAR(3)    YES        NULL
-created    TIMESTAMP    YES        NULL
-definer    VARCHAR(288)    YES        NULL
-sql_mode    VARCHAR(10)    YES        NULL
 trigger_schema    VARCHAR(64)    YES        NULL
-action_order    INT UNSIGNED    YES        NULL
 trigger_name    VARCHAR(64)    YES        NULL
-collation_connection    VARCHAR(64)    YES        NULL
 event_manipulation    VARCHAR(10)    YES        NULL
-event_object_table    VARCHAR(64)    YES        NULL
-action_reference_old_row    VARCHAR(3)    YES        NULL
-action_statement    TEXT    YES        NULL
-database_collation    VARCHAR(64)    YES        NULL
-action_condition    VARCHAR(1)    YES        NULL
-action_timing    VARCHAR(10)    YES        NULL
 event_object_catalog    VARCHAR(64)    YES        NULL
 event_object_schema    VARCHAR(64)    YES        NULL
-action_reference_old_table    VARCHAR(1)    YES        NULL        
+event_object_table    VARCHAR(64)    YES        NULL
+action_order    INT UNSIGNED    YES        NULL
+action_condition    VARCHAR(65535)    YES        NULL
+action_statement    TEXT    YES        NULL
+action_orientation    VARCHAR(3)    YES        NULL
+action_timing    VARCHAR(10)    YES        NULL
+action_reference_old_table    VARCHAR(65535)    YES        NULL
+action_reference_new_table    VARCHAR(65535)    YES        NULL
+action_reference_old_row    VARCHAR(3)    YES        NULL
+action_reference_new_row    VARCHAR(3)    YES        NULL
+created    TIMESTAMP    YES        NULL
+sql_mode    VARCHAR(10)    YES        NULL
+definer    VARCHAR(288)    YES        NULL
+character_set_client    VARCHAR(64)    YES        NULL
+collation_connection    VARCHAR(64)    YES        NULL
+database_collation    VARCHAR(64)    YES        NULL        
 select trigger_name, action_order from triggers limit 3;
 trigger_name    action_order
 desc tables;
@@ -295,7 +295,7 @@ host    CHAR(255)    NO        ''
 plugin    CHAR(64)    NO        'caching_sha2_password'
 ssl_type    VARCHAR(10)    NO        ''
 user    CHAR(32)    NO        ''
-__mo_cpkey_004host004user    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host004user    VARCHAR(65535)    NO    PRI    NULL
 ssl_cipher    BLOB    NO        NULL
 password_expired    VARCHAR(10)    NO        'N'
 max_updates    INT UNSIGNED    NO        '0'
@@ -355,7 +355,7 @@ create_view_priv    VARCHAR(10)    NO        'N'
 lock_tables_priv    VARCHAR(10)    NO        'N'
 insert_priv    VARCHAR(10)    NO        'N'
 select_priv    VARCHAR(10)    NO        'N'
-__mo_cpkey_004host002db004user    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host002db004user    VARCHAR(65535)    NO    PRI    NULL
 trigger_priv    VARCHAR(10)    NO        'N'
 create_priv    VARCHAR(10)    NO        'N'
 show_view_priv    VARCHAR(10)    NO        'N'
@@ -373,7 +373,7 @@ timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
 user    CHAR(32)    NO        ''
 routine_type    VARCHAR(10)    NO        NULL
 routine_name    CHAR(64)    NO        ''
-__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR(65535)    NO    PRI    NULL
 select routine_name, routine_type from procs_priv limit 5;
 routine_name    routine_type
 desc columns_priv;
@@ -382,7 +382,7 @@ db    CHAR(64)    NO        ''
 host    CHAR(255)    NO        ''
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
 user    CHAR(32)    NO        ''
-__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR(65535)    NO    PRI    NULL
 table_name    CHAR(64)    NO        ''
 column_name    CHAR(64)    NO        ''
 column_priv    VARCHAR(10)    NO        ''
@@ -397,7 +397,7 @@ timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
 user    CHAR(32)    NO        ''        
 table_priv    VARCHAR(10)    NO        ''
 table_name    CHAR(64)    NO        ''
-__mo_cpkey_004host002db004user010table_name    VARCHAR(0)    NO    PRI    NULL    
+__mo_cpkey_004host002db004user010table_name    VARCHAR(65535)    NO    PRI    NULL    
 column_priv    VARCHAR(10)    NO        ''        
 select host, table_name from tables_priv limit 5;
 host    table_name

@@ -142,9 +142,9 @@ table_schema    VARCHAR(256)    YES        NULL
 table_name    VARCHAR(256)    YES        NULL
 column_name    VARCHAR(256)    YES        NULL
 ordinal_position    INT    YES        NULL
-column_default    VARCHAR(0)    YES        NULL
+column_default    VARCHAR(65535)    YES        NULL
 is_nullable    VARCHAR(2)    YES        NULL
-data_type    VARCHAR(0)    YES        NULL
+data_type    VARCHAR(65535)    YES        NULL
 character_maximum_length    INT    YES        NULL
 character_octet_length    INT    YES        NULL
 numeric_precision    BIGINT    YES        NULL
@@ -152,11 +152,11 @@ numeric_scale    BIGINT    YES        NULL
 datetime_precision    BIGINT    YES        NULL
 character_set_name    VARCHAR(4)    YES        NULL
 collation_name    VARCHAR(8)    YES        NULL
-column_type    VARCHAR(0)    YES        NULL
+column_type    VARCHAR(65535)    YES        NULL
 column_key    VARCHAR(3)    YES        NULL
 extra    VARCHAR(14)    YES        NULL
 PRIVILEGES    VARCHAR(31)    YES        NULL
-column_comment    VARCHAR(1024)    YES        NULL
+column_comment    VARCHAR(2048)    YES        NULL
 generation_expression    VARCHAR(0)    YES        NULL
 srs_id    BIGINT    YES        NULL
 select table_name, column_name from columns where table_schema = 'mo_catalog' order by table_name, column_name limit 5;
@@ -210,8 +210,8 @@ select grantee, table_catalog from user_privileges limit 2;
 grantee    table_catalog
 desc schemata;
 Field    Type    Null    Key    Default    Extra    Comment
-catalog_name    VARCHAR(100)    YES        NULL
-schema_name    VARCHAR(100)    YES        NULL
+catalog_name    VARCHAR(5000)    YES        NULL
+schema_name    VARCHAR(5000)    YES        NULL
 default_character_set_name    VARCHAR(7)    YES        NULL
 default_collation_name    VARCHAR(18)    YES        NULL
 sql_path    VARCHAR(0)    YES        NULL
@@ -238,12 +238,12 @@ event_object_catalog    VARCHAR(64)    YES        NULL
 event_object_schema    VARCHAR(64)    YES        NULL
 event_object_table    VARCHAR(64)    YES        NULL
 action_order    INT UNSIGNED    YES        NULL
-action_condition    VARCHAR(1)    YES        NULL
+action_condition    VARCHAR(65535)    YES        NULL
 action_statement    TEXT    YES        NULL
 action_orientation    VARCHAR(3)    YES        NULL
 action_timing    VARCHAR(10)    YES        NULL
-action_reference_old_table    VARCHAR(1)    YES        NULL
-action_reference_new_table    VARCHAR(1)    YES        NULL
+action_reference_old_table    VARCHAR(65535)    YES        NULL
+action_reference_new_table    VARCHAR(65535)    YES        NULL
 action_reference_old_row    VARCHAR(3)    YES        NULL
 action_reference_new_row    VARCHAR(3)    YES        NULL
 created    TIMESTAMP    YES        NULL
@@ -333,7 +333,7 @@ password_reuse_history    SMALLINT UNSIGNED    YES        null
 password_reuse_time    SMALLINT UNSIGNED    YES        null
 password_require_current    VARCHAR(10)    YES        null
 user_attributes    JSON    YES        null
-__mo_cpkey_004host004user    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host004user    VARCHAR(65535)    NO    PRI    NULL
 select host, user from user limit 2;
 host    user
 desc db;
@@ -360,7 +360,7 @@ alter_routine_priv    VARCHAR(10)    NO        'N'
 execute_priv    VARCHAR(10)    NO        'N'
 event_priv    VARCHAR(10)    NO        'N'
 trigger_priv    VARCHAR(10)    NO        'N'
-__mo_cpkey_004host002db004user    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host002db004user    VARCHAR(65535)    NO    PRI    NULL
 select db, user from db limit 5;
 db    user
 desc procs_priv;
@@ -373,7 +373,7 @@ routine_type    VARCHAR(10)    NO        NULL
 grantor    VARCHAR(288)    NO        ''
 proc_priv    VARCHAR(10)    NO        ''
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
-__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR(65535)    NO    PRI    NULL
 select routine_name, routine_type from procs_priv limit 5;
 routine_name    routine_type
 desc columns_priv;
@@ -385,7 +385,7 @@ table_name    CHAR(64)    NO        ''
 column_name    CHAR(64)    NO        ''
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
 column_priv    VARCHAR(10)    NO        ''
-__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR(0)    NO    PRI    NULL        
+__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR(65535)    NO    PRI    NULL        
 select table_name, column_name from columns_priv limit 5;
 table_name    column_name
 desc tables_priv;
@@ -398,7 +398,7 @@ grantor    VARCHAR(288)    NO        ''
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
 table_priv    VARCHAR(10)    NO        ''
 column_priv    VARCHAR(10)    NO        ''
-__mo_cpkey_004host002db004user010table_name    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host002db004user010table_name    VARCHAR(65535)    NO    PRI    NULL
 select host, table_name from tables_priv limit 5;
 host    table_name
 show variables like 'sql_select_limit';

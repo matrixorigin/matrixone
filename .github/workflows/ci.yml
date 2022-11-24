@@ -40,16 +40,8 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
           make ut UT_PARALLEL=6
-
-      - uses: actions/upload-artifact@v2
-        if: ${{ failure() }}
-        continue-on-error: true
-        with:
-          name: ut-linux-x86_reports
-          path: |
-            ${{ github.workspace }}
-          retention-days: 7
-          
+         
+         
   ut-mac-x86:
     runs-on: macos-12
     name: UT Test on Darwin/x86
@@ -69,14 +61,6 @@ jobs:
           cd $GITHUB_WORKSPACE && make clean && make config
           make ut UT_PARALLEL=6
 
-      - uses: actions/upload-artifact@v2
-        if: ${{ failure() }}
-        continue-on-error: true
-        with:
-          name: ut_darwin_x86_reports
-          path: |
-            ${{ github.workspace }}
-          retention-days: 7
           
   ut-linux-arm:
     runs-on: arm64-runner
@@ -97,14 +81,6 @@ jobs:
           cd $GITHUB_WORKSPACE && make clean && make config
           make ut UT_PARALLEL=6
 
-      - uses: actions/upload-artifact@v2
-        if: ${{ failure() }}
-        continue-on-error: true
-        with:
-          name: ut_linux_arm_reports
-          path: |
-            ${{ github.workspace }}
-          retention-days: 7
 
   bvt-linux-x86:
     runs-on: x86-runner
@@ -162,6 +138,7 @@ jobs:
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
         
       - name: generate upload files
+        if: ${{ always() }}
         continue-on-error: true
         run: |
           mkdir -p ${{ github.workspace }}/upload
@@ -171,6 +148,7 @@ jobs:
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
 
       - uses: actions/upload-artifact@v2
+        if: ${{ failure() }}
         continue-on-error: true
         with:
           name: bvt-linux-x86_reports
@@ -234,6 +212,7 @@ jobs:
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
 
       - name: generate upload files
+        if: ${{ always() }}
         continue-on-error: true
         run: |
           mkdir -p ${{ github.workspace }}/upload
@@ -306,6 +285,7 @@ jobs:
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
         
       - name: generate upload files
+        if: ${{ always() }}
         continue-on-error: true
         run: |
           mkdir -p ${{ github.workspace }}/upload

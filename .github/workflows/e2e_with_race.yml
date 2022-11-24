@@ -20,8 +20,8 @@ jobs:
         with:
           fetch-depth: '3'
           path: ./head
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.event.pull_request.base.repo.full_name }}
+          ref: main
 
       - name: Set up Go
         uses: ./head/.github/actions/setup_env

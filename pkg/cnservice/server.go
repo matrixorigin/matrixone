@@ -22,7 +22,6 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -215,7 +214,6 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 	cancelMoServerCtx, cancelMoServerFunc := context.WithCancel(ctx)
 	s.cancelMoServerFunc = cancelMoServerFunc
 
-	mpool.InitCap(pu.SV.HostMmuLimitation)
 	pu.FileService = s.fileService
 
 	logutil.Info("Initialize the engine ...")

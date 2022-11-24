@@ -101,7 +101,7 @@ func parseInitialClusterRequestCmd(cmd []byte) pb.InitialClusterRequest {
 }
 
 func parseTaskTableUserCmd(cmd []byte) pb.TaskTableUser {
-	if parseCmdTag(cmd) != pb.TaskTableUserUpdate {
+	if parseCmdTag(cmd) != pb.SetTaskTableUserUpdate {
 		panic("not a task table user update")
 	}
 	payload := cmd[headerSize:]
@@ -144,8 +144,8 @@ func parseSetStateCmd(cmd []byte) pb.HAKeeperState {
 	return pb.HAKeeperState(binaryEnc.Uint32(cmd[headerSize:]))
 }
 
-func parseSetInitTaskStateCmd(cmd []byte) pb.TaskInitState {
-	return pb.TaskInitState(binaryEnc.Uint32(cmd[headerSize:]))
+func parseSetInitTaskStateCmd(cmd []byte) pb.TaskSchedulerState {
+	return pb.TaskSchedulerState(binaryEnc.Uint32(cmd[headerSize:]))
 }
 
 func GetSetStateCmd(state pb.HAKeeperState) []byte {
@@ -155,16 +155,16 @@ func GetSetStateCmd(state pb.HAKeeperState) []byte {
 	return cmd
 }
 
-func GetSetInitTaskStateCmd(state pb.TaskInitState) []byte {
+func GetSetTaskSchedulerStateCmd(state pb.TaskSchedulerState) []byte {
 	cmd := make([]byte, headerSize+4)
-	binaryEnc.PutUint32(cmd, uint32(pb.SetInitTaskStateUpdate))
+	binaryEnc.PutUint32(cmd, uint32(pb.SetTaskSchedulerStateUpdate))
 	binaryEnc.PutUint32(cmd[headerSize:], uint32(state))
 	return cmd
 }
 
 func GetTaskTableUserCmd(user pb.TaskTableUser) []byte {
 	cmd := make([]byte, headerSize+user.Size())
-	binaryEnc.PutUint32(cmd, uint32(pb.TaskTableUserUpdate))
+	binaryEnc.PutUint32(cmd, uint32(pb.SetTaskTableUserUpdate))
 	if _, err := user.MarshalTo(cmd[headerSize:]); err != nil {
 		panic(err)
 	}
@@ -344,28 +344,30 @@ func (s *stateMachine) handleSetStateCmd(cmd []byte) sm.Result {
 	}
 }
 
-func (s *stateMachine) handleSetInitTaskStateCmd(cmd []byte) sm.Result {
+func (s *stateMachine) handleSetTaskSchedulerStateUpdateCmd(cmd []byte) sm.Result {
 	re := func() sm.Result {
 		data := make([]byte, 4)
-		binaryEnc.PutUint32(data, uint32(s.state.TaskInitState))
+		binaryEnc.PutUint32(data, uint32(s.state.TaskSchedulerState))
 		return sm.Result{Data: data}
 	}
 	defer func() {
-		plog.Infof("Init Task Table is in %s state", s.state.TaskInitState)
+		plog.Infof("Task scheduler is in %s state", s.state.TaskSchedulerState)
 	}()
 	state := parseSetInitTaskStateCmd(cmd)
-	switch s.state.TaskInitState {
-	case pb.TaskInitNotStart:
+	switch s.state.TaskSchedulerState {
+	case pb.TaskSchedulerCreated:
 		return re()
-	case pb.TaskInitStarted:
-		if state == pb.TaskInitFailed || state == pb.TaskInitCompleted {
-			s.state.TaskInitState = state
+	case pb.TaskSchedulerRunning:
+		if state == pb.TaskSchedulerStopped {
+			s.state.TaskSchedulerState = state
 			return sm.Result{}
 		}
 		return re()
-	case pb.TaskInitFailed:
-		return re()
-	case pb.TaskInitCompleted:
+	case pb.TaskSchedulerStopped:
+		if state == pb.TaskSchedulerRunning {
+			s.state.TaskSchedulerState = state
+			return sm.Result{}
+		}
 		return re()
 	default:
 		panic("unknown task table init state")
@@ -373,8 +375,8 @@ func (s *stateMachine) handleSetInitTaskStateCmd(cmd []byte) sm.Result {
 }
 
 func (s *stateMachine) handleTaskTableUserCmd(cmd []byte) sm.Result {
-	result := sm.Result{Value: uint64(s.state.TaskInitState)}
-	if s.state.TaskInitState != pb.TaskInitNotStart {
+	result := sm.Result{Value: uint64(s.state.TaskSchedulerState)}
+	if s.state.TaskSchedulerState != pb.TaskSchedulerCreated {
 		return result
 	}
 	req := parseTaskTableUserCmd(cmd)
@@ -383,9 +385,9 @@ func (s *stateMachine) handleTaskTableUserCmd(cmd []byte) sm.Result {
 	}
 
 	s.state.TaskTableUser = req
-	plog.Infof("task table user set, InitTaskState in TaskTableInitStarted state")
+	plog.Infof("task table user set, TaskSchedulerState in TaskSchedulerRunning state")
 
-	s.state.TaskInitState = pb.TaskInitStarted
+	s.state.TaskSchedulerState = pb.TaskSchedulerRunning
 	return result
 }
 
@@ -468,29 +470,29 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleUpdateCommandsCmd(cmd), nil
 	case pb.SetStateUpdate:
 		return s.handleSetStateCmd(cmd), nil
-	case pb.SetInitTaskStateUpdate:
+	case pb.SetTaskSchedulerStateUpdate:
 		s.assertState()
-		return s.handleSetInitTaskStateCmd(cmd), nil
+		return s.handleSetTaskSchedulerStateUpdateCmd(cmd), nil
 	case pb.InitialClusterUpdate:
 		return s.handleInitialClusterRequestCmd(cmd), nil
-	case pb.TaskTableUserUpdate:
+	case pb.SetTaskTableUserUpdate:
 		s.assertState()
 		return s.handleTaskTableUserCmd(cmd), nil
 	default:
-		panic(moerr.NewInvalidInput("unknownn haKeeper cmd '%v'", cmd))
+		panic(moerr.NewInvalidInput("unknown haKeeper cmd '%v'", cmd))
 	}
 }
 
 func (s *stateMachine) handleStateQuery() interface{} {
 	internal := &pb.CheckerState{
-		Tick:          s.state.Tick,
-		ClusterInfo:   s.state.ClusterInfo,
-		DNState:       s.state.DNState,
-		LogState:      s.state.LogState,
-		CNState:       s.state.CNState,
-		State:         s.state.State,
-		TaskState:     s.state.TaskInitState,
-		TaskTableUser: s.state.TaskTableUser,
+		Tick:               s.state.Tick,
+		ClusterInfo:        s.state.ClusterInfo,
+		DNState:            s.state.DNState,
+		LogState:           s.state.LogState,
+		CNState:            s.state.CNState,
+		State:              s.state.State,
+		TaskSchedulerState: s.state.TaskSchedulerState,
+		TaskTableUser:      s.state.TaskTableUser,
 	}
 	copied := deepcopy.Copy(internal)
 	result, ok := copied.(*pb.CheckerState)
