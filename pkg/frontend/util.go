@@ -485,10 +485,10 @@ func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string,
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	if status == success {
 		trace.EndStatement(ctx, nil)
-		logInfo(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()))
+		logInfo(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
 	} else {
 		trace.EndStatement(ctx, err)
-		logError(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err))
+		logError(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
 	}
 }
 
