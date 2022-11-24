@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"testing"
 	"time"
 
@@ -39,6 +40,7 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 
 		ctx := context.TODO()
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -83,6 +85,7 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 
 		ctx := context.TODO()
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		cnt := 0
 		txnOperator.EXPECT().Commit(gomock.Any()).DoAndReturn(
 			func(context.Context) error {
@@ -127,6 +130,7 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 
 		ctx := context.TODO()
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		cnt := 0
 		txnOperator.EXPECT().Rollback(gomock.Any()).DoAndReturn(
 			func(ctc context.Context) error {
@@ -176,10 +180,11 @@ func TestSession_TxnBegin(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		txn := mock_frontend.NewMockTxnOperator(ctrl)
-		txn.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		txnClient.EXPECT().New().Return(txn, nil).AnyTimes()
+		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
 		hints := engine.Hints{CommitOrRollbackTimeout: time.Second * 10}
 		eng.EXPECT().Hints().Return(hints).AnyTimes()

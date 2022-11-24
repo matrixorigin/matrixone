@@ -253,32 +253,7 @@ character_set_client    VARCHAR(64)    YES        NULL
 collation_connection    VARCHAR(64)    YES        NULL
 database_collation    VARCHAR(64)    YES        NULL        
 select trigger_name, action_order from triggers limit 3;
-trigger_name    action_order
-desc tables;
-Field    Type    Null    Key    Default    Extra    Comment
-create_time    TIMESTAMP    YES        NULL
-table_catalog    VARCHAR(64)    YES        NULL
-checksum    BIGINT    YES        NULL
-data_free    BIGINT UNSIGNED    YES        NULL
-engine    VARCHAR(64)    YES        NULL
-version    INT    YES        NULL
-create_options    VARCHAR(256)    YES        NULL
-update_time    DATETIME    YES        NULL
-table_schema    VARCHAR(64)    YES        NULL
-AUTO_INCREMENT    BIGINT UNSIGNED    YES        NULL
-check_time    DATETIME    YES        NULL
-max_data_length    BIGINT UNSIGNED    YES        NULL
-row_format    VARCHAR(10)    YES        NULL
-data_length    BIGINT UNSIGNED    YES        NULL
-avg_row_length    BIGINT UNSIGNED    YES        NULL
-table_comment    TEXT    YES        NULL
-index_length    BIGINT UNSIGNED    YES        NULL
-table_name    VARCHAR(64)    YES        NULL
-table_rows    BIGINT UNSIGNED    YES        NULL
-table_type    VARCHAR(10)    YES        NULL
-table_collation    VARCHAR(64)    YES        NULL        
-select table_name, table_type from tables limit 3;
-table_name    table_type
+trigger_name    action_order      
 use mysql;
 desc user;
 Field    Type    Null    Key    Default    Extra    Comment
