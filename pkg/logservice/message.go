@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -47,7 +48,7 @@ func (r *RPCRequest) GetID() uint64 {
 }
 
 func (r *RPCRequest) DebugString() string {
-	return r.Request.Method.String()
+	return fmt.Sprintf("%s:%p", r.Request.Method.String(), r.payload)
 }
 
 func (r *RPCRequest) GetPayloadField() []byte {
@@ -84,7 +85,7 @@ func (r *RPCResponse) GetID() uint64 {
 }
 
 func (r *RPCResponse) DebugString() string {
-	return ""
+	return r.Response.Method.String()
 }
 
 func (r *RPCResponse) GetPayloadField() []byte {
