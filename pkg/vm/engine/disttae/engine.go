@@ -63,7 +63,7 @@ func New(
 		getClusterDetails: getClusterDetails,
 		txns:              make(map[string]*Transaction),
 	}
-	go e.gc()
+	go e.gc(ctx)
 	return e
 }
 
@@ -420,28 +420,33 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	delete(e.txns, string(txn.meta.ID))
 }
 
-func (e *Engine) minActiveTimestamp() timestamp.Timestamp {
-	e.RLock()
-	defer e.RUnlock()
-	return (*e.txnHeap)[0].meta.SnapshotTS
-}
-
-func (e *Engine) gc() {
+func (e *Engine) gc(ctx context.Context) {
 	var ps []Partitions
+	var ts timestamp.Timestamp
 
 	for {
-		<-time.After(GcCycle)
-		ts := e.minActiveTimestamp()
-		e.Lock()
-		for k := range e.db.tables {
-			ps = append(ps, e.db.tables[k])
-		}
-		e.Unlock()
-		for i := range ps {
-			for j := range ps[i] {
-				ps[i][j].Lock()
-				ps[i][j].GC(ts)
-				ps[i][j].Unlock()
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(GcCycle):
+			e.RLock()
+			if len(*e.txnHeap) == 0 {
+				e.RUnlock()
+				continue
+			}
+			ts = (*e.txnHeap)[0].meta.SnapshotTS
+			e.RUnlock()
+			e.Lock()
+			for k := range e.db.tables {
+				ps = append(ps, e.db.tables[k])
+			}
+			e.Unlock()
+			for i := range ps {
+				for j := range ps[i] {
+					ps[i][j].Lock()
+					ps[i][j].GC(ts)
+					ps[i][j].Unlock()
+				}
 			}
 		}
 	}
