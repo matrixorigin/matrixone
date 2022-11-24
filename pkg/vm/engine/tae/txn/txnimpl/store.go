@@ -195,7 +195,6 @@ func (store *txnStore) AppendBlocksOnFS(
 		return err
 	}
 	return db.AppendBlocksOnFS(id, pkVecs, uuids, file, metaLoc, flag)
-	return nil
 }
 
 func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
