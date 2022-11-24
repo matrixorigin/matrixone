@@ -875,12 +875,12 @@ func (tbl *txnTable) DoPrecommitDedup(pks containers.Vector) (err error) {
 		{
 			seg.RLock()
 			//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
-			needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
-			if needwait {
-				seg.RUnlock()
-				txnToWait.GetTxnState(true)
-				seg.RLock()
-			}
+			//needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
+			//if needwait {
+			//	seg.RUnlock()
+			//	txnToWait.GetTxnState(true)
+			//	seg.RLock()
+			//}
 			shouldSkip := seg.HasDropCommittedLocked() || seg.IsCreatingOrAborted()
 			seg.RUnlock()
 			if shouldSkip {
