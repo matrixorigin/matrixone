@@ -344,7 +344,10 @@ func (n *insertNode) Append(data *containers.Batch, offset uint32) (an uint32, e
 	schema := n.table.entry.GetSchema()
 	if n.data == nil {
 		opts := new(containers.Options)
-		opts.Capacity = int(txnbase.MaxNodeRows)
+		opts.Capacity = data.Length() - int(offset)
+		if opts.Capacity > int(txnbase.MaxNodeRows) {
+			opts.Capacity = int(txnbase.MaxNodeRows)
+		}
 		n.data = containers.BuildBatch(
 			schema.AllNames(),
 			schema.AllTypes(),
