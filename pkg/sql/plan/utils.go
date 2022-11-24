@@ -590,6 +590,17 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 	return nil
 }
 
+func RewriteAndConstantFold(exprList []*plan.Expr) *plan.Expr {
+	e := colexec.RewriteFilterExprList(exprList)
+	if e != nil {
+		bat := batch.NewWithSize(0)
+		bat.Zs = []int64{1}
+		filter, _ := ConstantFold(bat, DeepCopyExpr(e))
+		return filter
+	}
+	return nil
+}
+
 func ConstantFold(bat *batch.Batch, e *plan.Expr) (*plan.Expr, error) {
 	var err error
 
