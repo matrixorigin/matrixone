@@ -347,8 +347,14 @@ func (t T) ToType() Type {
 		typ.Size = TxnTsSize
 	case T_Rowid:
 		typ.Size = RowidSize
-	case T_char, T_varchar, T_json, T_blob, T_text:
+	case T_json, T_blob, T_text:
 		typ.Size = VarlenaSize
+	case T_char:
+		typ.Size = VarlenaSize
+		typ.Width = MaxCharLen
+	case T_varchar:
+		typ.Size = VarlenaSize
+		typ.Width = MaxVarcharLen
 	case T_any:
 		// XXX I don't know about this one ...
 		typ.Size = 0

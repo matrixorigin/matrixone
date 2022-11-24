@@ -258,7 +258,9 @@ insert into t8(col10) values ('this is a varchar type');
 select cast(col10 as char) from t8;
 internal error: Can't cast column from TEXT type to CHAR type because of one or more values in that column. Src length 19 is larger than Dest length 1
 select cast(col10 as varchar) from t8;
-internal error: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 19 is larger than Dest length 1
+cast(col10 as varchar)
+this is a char type
+this is a varchar type
 select cast(col10 as char(1)) from t8;
 internal error: Can't cast column from TEXT type to CHAR type because of one or more values in that column. Src length 19 is larger than Dest length 1
 select cast(col10 as varchar(1)) from t8;

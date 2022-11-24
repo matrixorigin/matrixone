@@ -175,13 +175,13 @@ drop view if exists view_t4;
 create view view_t4 as select coalesce(f1,f3) as f4 from t4;
 desc view_t4;
 Field    Type    Null    Key    Default    Comment
-f4    VARCHAR(0)    YES        NULL
+f4    VARCHAR(65535)    YES        NULL
 drop view view_t4;
 drop view if exists view_t5;
 create view view_t5 as select coalesce(f2,f3) as f4 from t4;
 desc view_t5;
 Field    Type    Null    Key    Default    Comment
-f4    VARCHAR(0)    YES        NULL
+f4    VARCHAR(65535)    YES        NULL
 drop view view_t5;
 drop table t4;
 drop table if exists t5;

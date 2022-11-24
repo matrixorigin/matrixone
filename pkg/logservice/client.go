@@ -407,6 +407,7 @@ func (c *client) request(ctx context.Context,
 		},
 	}
 	r := c.pool.Get().(*RPCRequest)
+	defer r.Release()
 	r.Request = req
 	r.payload = payload
 	future, err := c.client.Send(ctx, c.addr, r)

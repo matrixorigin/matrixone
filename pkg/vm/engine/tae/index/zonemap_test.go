@@ -189,7 +189,7 @@ func TestZoneMapString(t *testing.T) {
 
 func TestZMEmptyString(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	typ := types.Type{Oid: types.T_varchar}
+	typ := types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}
 	zm := NewZoneMap(typ)
 	require.Equal(t, typ.Oid, zm.GetType().Oid)
 	// check not inited
@@ -233,7 +233,7 @@ func TestZMTruncatedString(t *testing.T) {
 		return ret
 	}
 
-	typ := types.Type{Oid: types.T_varchar}
+	typ := types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}
 	zm := NewZoneMap(typ)
 
 	minv := mockBytes(0x00, 33)

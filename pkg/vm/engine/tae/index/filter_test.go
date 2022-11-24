@@ -105,7 +105,7 @@ func TestNewBinaryFuseFilter(t *testing.T) {
 func TestStaticFilterString(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	typ := types.Type{Oid: types.T_varchar}
+	typ := types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}
 	data := containers.MockVector2(typ, 40000, 0)
 	defer data.Close()
 	sf, err := NewBinaryFuseFilter(data)

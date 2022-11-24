@@ -44,6 +44,7 @@ const (
 	NOTIFY
 	NOTIFYALL
 	PANIC
+	ECHO
 )
 
 // faultEntry describes how we shall fail
@@ -110,14 +111,14 @@ func (fm *faultMap) run() {
 	}
 }
 
-func (e *faultEntry) do() int64 {
+func (e *faultEntry) do() (int64, string) {
 	switch e.action {
 	case RETURN: // no op
 	case SLEEP:
 		time.Sleep(time.Duration(e.iarg) * time.Second)
 	case GETCOUNT:
 		if ee := lookup(e.sarg); ee != nil {
-			return int64(ee.cnt)
+			return int64(ee.cnt), ""
 		}
 	case WAIT:
 		e.mutex.Lock()
@@ -130,7 +131,7 @@ func (e *faultEntry) do() int64 {
 			ee.mutex.Lock()
 			nw := ee.nWaiters
 			ee.mutex.Unlock()
-			return int64(nw)
+			return int64(nw), ""
 		}
 	case NOTIFY:
 		if ee := lookup(e.sarg); ee != nil {
@@ -142,8 +143,10 @@ func (e *faultEntry) do() int64 {
 		}
 	case PANIC:
 		panic(e.sarg)
+	case ECHO:
+		return e.iarg, e.sarg
 	}
-	return 0
+	return 0, ""
 }
 
 func startFaultMap() {
@@ -186,9 +189,9 @@ func IsEnabled() bool {
 }
 
 // Trigger a fault point.
-func TriggerFault(name string) (int64, bool) {
+func TriggerFault(name string) (iret int64, sret string, exist bool) {
 	if !IsEnabled() {
-		return 0, false
+		return
 	}
 	var msg faultEntry
 	msg.cmd = TRIGGER
@@ -197,9 +200,11 @@ func TriggerFault(name string) (int64, bool) {
 	out := <-gfm.chOut
 
 	if out == nil {
-		return 0, false
+		return
 	}
-	return out.do(), true
+	exist = true
+	iret, sret = out.do()
+	return
 }
 
 func AddFaultPoint(name string, freq string, action string, iarg int64, sarg string) error {
@@ -271,6 +276,8 @@ func AddFaultPoint(name string, freq string, action string, iarg int64, sarg str
 		msg.action = NOTIFYALL
 	case "PANIC":
 		msg.action = PANIC
+	case "ECHO":
+		msg.action = ECHO
 	default:
 		return moerr.NewInvalidArg("fault action", action)
 	}
