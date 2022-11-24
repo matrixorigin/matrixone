@@ -19,6 +19,8 @@ import (
 	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -55,6 +57,9 @@ type ExternalFileparam struct {
 
 type Argument struct {
 	Es *ExternalParam
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
 type ParseLineHandler struct {

@@ -38,7 +38,7 @@ var (
 	constU64Type        = types.Type{Oid: types.T_uint64}
 	constFType          = types.Type{Oid: types.T_float32}
 	constDType          = types.Type{Oid: types.T_float64}
-	constSType          = types.Type{Oid: types.T_varchar}
+	constSType          = types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}
 	constDateType       = types.Type{Oid: types.T_date}
 	constTimeType       = types.Type{Oid: types.T_time}
 	constDatetimeType   = types.Type{Oid: types.T_datetime}
@@ -99,6 +99,9 @@ func getConstVec(proc *process.Process, expr *plan.Expr, length int) (*vector.Ve
 		case *plan.Const_Sval:
 			sval := t.C.GetSval()
 			vec = vector.NewConstString(constSType, length, sval, proc.Mp())
+		case *plan.Const_Defaultval:
+			defaultVal := t.C.GetDefaultval()
+			vec = vector.NewConstFixed(constBType, length, defaultVal, proc.Mp())
 		default:
 			return nil, moerr.NewNYI(fmt.Sprintf("const expression %v", t.C.GetValue()))
 		}

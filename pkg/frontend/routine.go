@@ -116,6 +116,7 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 	var resp *Response
 	var counted bool
 	var requestChan = routine.GetRequestChannel()
+	var ses *Session
 	//session for the connection
 	for {
 		quit := false
@@ -147,7 +148,7 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		cancelRequestCtx, cancelRequestFunc := context.WithTimeout(routineCtx, pu.SV.SessionTimeout.Duration)
 		executor := routine.GetCmdExecutor()
 		executor.(*MysqlCmdExecutor).setCancelRequestFunc(cancelRequestFunc)
-		ses := routine.GetSession()
+		ses = routine.GetSession()
 		ses.MakeProfile()
 		tenant := ses.GetTenantInfo()
 		tenantCtx := context.WithValue(cancelRequestCtx, defines.TenantIDKey{}, tenant.GetTenantID())
@@ -171,6 +172,16 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		}
 
 		cancelRequestFunc()
+	}
+
+	ses = routine.GetSession()
+	//ensure cleaning the transaction
+	if ses != nil {
+		logErrorf(ses.GetConciseProfile(), "rollback the txn.")
+		err = ses.TxnRollback()
+		if err != nil {
+			logErrorf(ses.GetConciseProfile(), "rollback txn failed.error:%v", err)
+		}
 	}
 }
 
@@ -204,6 +215,16 @@ func (routine *Routine) notifyClose() {
 	executor := routine.GetCmdExecutor()
 	if executor != nil {
 		executor.Close()
+	}
+}
+
+func (routine *Routine) notifyDone() {
+	executor := routine.GetCmdExecutor()
+	if executor != nil {
+		cancal := executor.(*MysqlCmdExecutor).getCancelRequestFunc()
+		if cancal != nil {
+			cancal()
+		}
 	}
 }
 

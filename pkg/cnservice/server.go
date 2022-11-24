@@ -22,7 +22,6 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -32,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -90,7 +88,9 @@ func NewService(
 		&cfg.Frontend,
 		nil,
 		nil,
-		nil,
+		engine.Nodes{engine.Node{
+			Addr: cfg.ServiceAddress,
+		}},
 		memoryengine.GetClusterDetailsFromHAKeeper(ctx, hakeeper),
 	)
 	cfg.Frontend.SetDefaultValues()
@@ -100,8 +100,6 @@ func NewService(
 		return nil, err
 	}
 	srv.pu = pu
-
-	compile.InitAddress(cfg.ServiceAddress)
 
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
 		morpc.NewMessageCodec(srv.acquireMessage),
@@ -216,7 +214,6 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 	cancelMoServerCtx, cancelMoServerFunc := context.WithCancel(ctx)
 	s.cancelMoServerFunc = cancelMoServerFunc
 
-	mpool.InitCap(pu.SV.HostMmuLimitation)
 	pu.FileService = s.fileService
 
 	logutil.Info("Initialize the engine ...")

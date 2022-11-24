@@ -18,6 +18,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/RoaringBitmap/roaring"
@@ -26,6 +27,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+)
+
+var (
+	ErrTxnWWConflict = moerr.NewTxnWWConflict()
 )
 
 type Txn2PC interface {
@@ -195,6 +200,7 @@ type DeleteNode interface {
 	TxnEntry
 	StringLocked() string
 	GetChain() DeleteChain
+	DeletedRows() []uint32
 	RangeDeleteLocked(start, end uint32)
 	GetCardinalityLocked() uint32
 	IsDeletedLocked(row uint32) bool

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -39,6 +40,7 @@ func compareTestNode(n, on *testNode) int {
 }
 
 func TestDLNode(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	link := common.NewGenericSortedDList(compareTestNode)
 	now := time.Now()
 	var node *common.GenericDLNode[*testNode]

@@ -683,6 +683,10 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 0, len(tasks))
 		store.taskSchedule(state)
+		// update state
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		store.taskSchedule(state)
 		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(tasks))
@@ -776,6 +780,10 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 		tasks, err := taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
 		assert.NoError(t, err)
 		assert.Equal(t, 0, len(tasks))
+		store.taskSchedule(state)
+		// update state
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
 		store.taskSchedule(state)
 		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
 		assert.NoError(t, err)

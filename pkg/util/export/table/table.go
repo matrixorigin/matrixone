@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package export
+package table
 
 import (
 	"fmt"
@@ -41,6 +41,7 @@ type Column struct {
 	Type    string
 	Default string
 	Comment string
+	Alias   string // only use in view
 }
 
 // ToCreateSql return column scheme in create sql
@@ -212,6 +213,9 @@ func (tbl *View) ToCreateSql(ifNotExists bool) string {
 			sb.WriteString(", ")
 		}
 		sb.WriteString(fmt.Sprintf("`%s`", col.Name))
+		if len(col.Alias) > 0 {
+			sb.WriteString(fmt.Sprintf(" as `%s`", col.Alias))
+		}
 	}
 	sb.WriteString(fmt.Sprintf(" from `%s`.`%s` where ", tbl.OriginTable.Database, tbl.OriginTable.Table))
 	sb.WriteString(tbl.Condition.String())
@@ -309,6 +313,33 @@ func (r *Row) ToRawStrings() []string {
 	return r.Columns
 }
 
+func (r *Row) ParseRow(cols []string) error {
+	r.Columns = cols
+	return nil
+}
+
+func (r *Row) PrimaryKey() string {
+	if len(r.Table.PrimaryKeyColumn) == 0 {
+		return ""
+	}
+	if len(r.Table.PrimaryKeyColumn) == 1 {
+		return r.Columns[r.Name2ColumnIdx[r.Table.PrimaryKeyColumn[0].Name]]
+	}
+	sb := strings.Builder{}
+	for _, col := range r.Table.PrimaryKeyColumn {
+		sb.WriteString(r.Columns[r.Name2ColumnIdx[col.Name]])
+		sb.WriteRune('-')
+	}
+	return sb.String()
+}
+
+func (r *Row) Size() (size int64) {
+	for _, col := range r.Columns {
+		size += int64(len(col))
+	}
+	return
+}
+
 var _ TableOptions = (*NoopTableOptions)(nil)
 
 type NoopTableOptions struct{}
@@ -387,6 +418,13 @@ func GetAllTable() []*Table {
 		tables = append(tables, tbl)
 	}
 	return tables
+}
+
+func GetTable(b string) (*Table, bool) {
+	mux.Lock()
+	defer mux.Unlock()
+	tbl, exist := gTable[b]
+	return tbl, exist
 }
 
 func SetPathBuilder(pathBuilder string) error {

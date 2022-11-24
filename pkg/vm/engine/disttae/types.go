@@ -268,6 +268,7 @@ type blockReader struct {
 	colTypes       []types.Type
 	colNulls       []bool
 	pkidxInColIdxs int
+	pkName         string
 }
 
 type blockMergeReader struct {
@@ -334,4 +335,10 @@ func (w *workspaceRow) Indexes() []memtable.Tuple {
 
 func (w *workspaceRow) UniqueIndexes() []memtable.Tuple {
 	return nil
+}
+
+type pkRange struct {
+	isRange bool
+	items   []int64
+	ranges  []int64
 }

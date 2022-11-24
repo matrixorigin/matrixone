@@ -74,6 +74,7 @@ func TestEncodeAndDecodeTrace(t *testing.T) {
 	assert.Equal(t, 1+span.Size(), n)
 	assert.NoError(t, err)
 
+	span.Kind = trace.SpanKindRemote
 	assert.Equal(t, span, trace.SpanFromContext(msg.Ctx).SpanContext())
 }
 

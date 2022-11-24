@@ -1,7 +1,7 @@
 drop table if exists t1;
 create table t1(
 col1 int,
-col2 varchar,
+col2 varchar(100),
 col3 float,
 col4 date,
 col5 text
@@ -11,9 +11,7 @@ load data infile "$resources/load_data/set_null_1.csv" into table t1 set a=nulli
 
 load data infile "$resources/load_data/set_null_1.csv" into table t1 set col2=nullif(col3,'1');
 
--- bvt:issue#6325
 load data infile "$resources/load_data/not_exists.csv" into table t1;
--- bvt:issue
 
 load data infile "$resources/load_data/set_null_1.csv" into table t1 set col1=nullif(col1,'1');
 select * from t1;
@@ -38,7 +36,7 @@ drop table t1;
 drop table if exists t2;
 create table t2(
 col1 int primary key auto_increment,
-col2 varchar
+col2 varchar(100)
 );
 
 load data infile "$resources/load_data/set_null_3.csv" into table t2 set col1=nullif(col1,'null');

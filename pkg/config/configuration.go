@@ -53,9 +53,6 @@ var (
 	//listening unix domain socket
 	defaultUnixAddr = "/var/lib/mysql/mysql.sock"
 
-	//host mmu limitation. 1 << 40 = 1099511627776
-	defaultHostMmuLimitation = 1099511627776
-
 	//guest mmu limitation.  1 << 40 = 1099511627776
 	defaultGuestMmuLimitation = 1099511627776
 
@@ -76,6 +73,8 @@ var (
 
 	//the root directory of the storage
 	defaultStorePath = "./store"
+
+	defaultServerVersionPrefix = "8.0.30-MatrixOne-v"
 
 	//the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
 	defaultLengthOfQueryPrinted = 200000
@@ -128,7 +127,7 @@ var (
 	defaultPathBuilder = "AccountDate"
 
 	// defaultSessionTimeout default: 10 minutes
-	defaultSessionTimeout = 10 * time.Minute
+	defaultSessionTimeout = 24 * time.Hour
 )
 
 // FrontendParameters of the frontend
@@ -157,9 +156,6 @@ type FrontendParameters struct {
 	//listening unix domain socket
 	UAddr string `toml:"UAddr"`
 
-	//host mmu limitation. default: 1 << 40 = 1099511627776
-	HostMmuLimitation int64 `toml:"hostMmuLimitation"`
-
 	//guest mmu limitation. default: 1 << 40 = 1099511627776
 	GuestMmuLimitation int64 `toml:"guestMmuLimitation"`
 
@@ -186,6 +182,9 @@ type FrontendParameters struct {
 
 	//the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID
 	StorePath string `toml:"storePath"`
+
+	//the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID
+	ServerVersionPrefix string `toml:"serverVersionPrefix"`
 
 	//the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
 	LengthOfQueryPrinted int64 `toml:"lengthOfQueryPrinted"`
@@ -253,6 +252,8 @@ type FrontendParameters struct {
 	//default is 1
 	DNReplicaID uint64 `toml:"dnreplicalid"`
 
+	EnableDoComQueryInProgress bool `toml:"comQueryInProgress"`
+
 	//timeout of the session. the default is 10minutes
 	SessionTimeout toml.Duration `toml:"sessionTimeout"`
 
@@ -289,10 +290,6 @@ func (fp *FrontendParameters) SetDefaultValues() {
 		fp.UAddr = defaultUnixAddr
 	}
 
-	if fp.HostMmuLimitation == 0 {
-		fp.HostMmuLimitation = int64(defaultHostMmuLimitation)
-	}
-
 	if fp.GuestMmuLimitation == 0 {
 		fp.GuestMmuLimitation = int64(toml.ByteSize(defaultGuestMmuLimitation))
 	}
@@ -319,6 +316,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.StorePath == "" {
 		fp.StorePath = defaultStorePath
+	}
+
+	if fp.ServerVersionPrefix == "" {
+		fp.ServerVersionPrefix = defaultServerVersionPrefix
 	}
 
 	if fp.LengthOfQueryPrinted == 0 {

@@ -209,7 +209,7 @@ var builtins = map[int]Functions{
 	},
 	DATE: {
 		Id:     DATE,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -269,24 +269,36 @@ var builtins = map[int]Functions{
 			},
 			{
 				Index:     3,
+				Args:      []types.T{types.T_int64},
+				ReturnTyp: types.T_time,
+				Fn:        unary.Int64ToTime,
+			},
+			{
+				Index:     4,
+				Args:      []types.T{types.T_decimal128},
+				ReturnTyp: types.T_time,
+				Fn:        unary.Decimal128ToTime,
+			},
+			{
+				Index:     5,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_time,
 				Fn:        unary.DateStringToTime,
 			},
 			{
-				Index:     4,
+				Index:     6,
 				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_time,
 				Fn:        unary.DateStringToTime,
 			},
 			{
-				Index:     5,
+				Index:     7,
 				Args:      []types.T{types.T_text},
 				ReturnTyp: types.T_time,
 				Fn:        unary.DateStringToTime,
 			},
 			{
-				Index:     6,
+				Index:     8,
 				Args:      []types.T{types.T_blob},
 				ReturnTyp: types.T_time,
 				Fn:        unary.DateStringToTime,
@@ -434,18 +446,24 @@ var builtins = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Args:      []types.T{types.T_char},
+				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.Length,
 			},
 			{
 				Index:     1,
-				Args:      []types.T{types.T_blob},
+				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.Length,
 			},
 			{
 				Index:     2,
+				Args:      []types.T{types.T_blob},
+				ReturnTyp: types.T_int64,
+				Fn:        unary.Length,
+			},
+			{
+				Index:     3,
 				Args:      []types.T{types.T_text},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.Length,
@@ -618,6 +636,12 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Reverse,
 			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.Reverse,
+			},
 		},
 	},
 	RTRIM: {
@@ -724,7 +748,7 @@ var builtins = map[int]Functions{
 	},
 	YEAR: {
 		Id:     YEAR,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -822,7 +846,7 @@ var builtins = map[int]Functions{
 	// variadic functions
 	CEIL: {
 		Id:     CEIL,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -871,7 +895,7 @@ var builtins = map[int]Functions{
 	},
 	FLOOR: {
 		Id:     FLOOR,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -943,7 +967,7 @@ var builtins = map[int]Functions{
 	},
 	PI: {
 		Id:     PI,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -956,7 +980,7 @@ var builtins = map[int]Functions{
 	},
 	ROUND: {
 		Id:     ROUND,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{

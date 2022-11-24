@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -73,14 +74,6 @@ func WithBackendBatchSendSize(size int) BackendOption {
 	}
 }
 
-// WithBackendConnectWhenCreate connection the goetty connection while create the
-// backend.
-func WithBackendConnectWhenCreate() BackendOption {
-	return func(rb *remoteBackend) {
-		rb.options.connect = true
-	}
-}
-
 // WithBackendConnectTimeout set the timeout for connect to remote. Default 10s.
 func WithBackendConnectTimeout(timeout time.Duration) BackendOption {
 	return func(rb *remoteBackend) {
@@ -122,7 +115,6 @@ type remoteBackend struct {
 	closeOnce  sync.Once
 
 	options struct {
-		connect            bool
 		hasPayloadResponse bool
 		goettyOptions      []goetty.Option
 		connectTimeout     time.Duration
@@ -137,6 +129,7 @@ type remoteBackend struct {
 		sync.RWMutex
 		state          int32
 		readLoopActive bool
+		locked         bool
 	}
 
 	mu struct {
@@ -195,11 +188,9 @@ func NewRemoteBackend(
 	}
 	rb.conn = goetty.NewIOSession(rb.options.goettyOptions...)
 
-	if rb.options.connect {
-		if err := rb.resetConn(); err != nil {
-			rb.logger.Error("connect to remote failed", zap.Error(err))
-			return nil, err
-		}
+	if err := rb.resetConn(); err != nil {
+		rb.logger.Error("connect to remote failed", zap.Error(err))
+		return nil, err
 	}
 	rb.activeReadLoop(false)
 
@@ -236,7 +227,8 @@ func (rb *remoteBackend) adjust() {
 		}
 	}
 
-	rb.logger = logutil.Adjust(rb.logger).With(zap.String("remote", rb.remote))
+	rb.logger = logutil.Adjust(rb.logger).With(zap.String("remote", rb.remote),
+		zap.String("backend-id", uuid.NewString()))
 	rb.options.goettyOptions = append(rb.options.goettyOptions,
 		goetty.WithSessionCodec(rb.codec),
 		goetty.WithSessionLogger(rb.logger))
@@ -256,7 +248,7 @@ func (rb *remoteBackend) Send(ctx context.Context, request Message) (*Future, er
 	return f, nil
 }
 
-func (rb *remoteBackend) NewStream() (Stream, error) {
+func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	rb.active()
 	rb.stateMu.RLock()
 	defer rb.stateMu.RUnlock()
@@ -269,7 +261,7 @@ func (rb *remoteBackend) NewStream() (Stream, error) {
 	defer rb.mu.Unlock()
 
 	st := rb.acquireStream()
-	st.init(rb.nextID())
+	st.init(rb.nextID(), unlockAfterClose)
 	rb.mu.activeStreams[st.ID()] = st
 	return st, nil
 }
@@ -320,6 +312,30 @@ func (rb *remoteBackend) LastActiveTime() time.Time {
 	return rb.atomic.lastActiveTime.Load().(time.Time)
 }
 
+func (rb *remoteBackend) Lock() {
+	rb.stateMu.Lock()
+	defer rb.stateMu.Unlock()
+	if rb.stateMu.locked {
+		panic("backend is already locked")
+	}
+	rb.stateMu.locked = true
+}
+
+func (rb *remoteBackend) Unlock() {
+	rb.stateMu.Lock()
+	defer rb.stateMu.Unlock()
+	if !rb.stateMu.locked {
+		panic("backend is not locked")
+	}
+	rb.stateMu.locked = false
+}
+
+func (rb *remoteBackend) Locked() bool {
+	rb.stateMu.RLock()
+	defer rb.stateMu.RUnlock()
+	return rb.stateMu.locked
+}
+
 func (rb *remoteBackend) active() {
 	now := time.Now()
 	rb.atomic.lastActiveTime.Store(now)
@@ -336,15 +352,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 		rb.logger.Info("write loop stopped")
 	}()
 
-	resetConnTimes := uint64(0)
-	retry := false
-	retryAt := uint64(0)
 	futures := make([]backendSendMessage, 0, rb.options.batchSendSize)
-
-	resetRetry := func() {
-		retry = false
-		retryAt = 0
-	}
 
 	handleResetConn := func() {
 		if err := rb.resetConn(); err != nil {
@@ -352,7 +360,6 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 				zap.Error(err))
 			rb.inactive()
 		}
-		resetConnTimes++
 	}
 
 	fetch := func() {
@@ -399,31 +406,9 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			if !retry {
-				fetch()
-			} else {
-				select {
-				case _, ok := <-rb.resetConnC:
-					if !ok {
-						return
-					}
-					handleResetConn()
-				default:
-				}
-			}
+			fetch()
 
 			if len(futures) > 0 {
-				if retry && !rb.conn.Connected() {
-					if retryAt < resetConnTimes {
-						for _, f := range futures {
-							f.completed()
-						}
-						resetRetry()
-					}
-					continue
-				}
-
-				resetRetry()
 				written := 0
 				writeTimeout := time.Duration(0)
 				for _, f := range futures {
@@ -442,16 +427,17 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 						if _, ok := f.message.Message.(PayloadMessage); ok && conn != nil {
 							conn.SetWriteDeadline(time.Now().Add(v))
 						}
-						rb.logger.Debug("write request",
-							zap.Uint64("request-id", f.message.Message.GetID()),
-							zap.String("request", f.message.Message.DebugString()))
+						id := f.message.Message.GetID()
+						if ce := rb.logger.Check(zap.DebugLevel, "write request"); ce != nil {
+							ce.Write(zap.Uint64("request-id", id),
+								zap.String("request", f.message.Message.DebugString()))
+						}
 						if err := rb.conn.Write(f.message, goetty.WriteOptions{}); err != nil {
 							rb.logger.Error("write request failed",
-								zap.Uint64("request-id", f.message.Message.GetID()),
+								zap.Uint64("request-id", id),
 								zap.Error(err))
-							retry = true
-							written = 0
-							break
+							rb.requestDone(id, nil, err, nil)
+							continue
 						}
 						written++
 					}
@@ -461,23 +447,20 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 					if err := rb.conn.Flush(writeTimeout); err != nil {
 						for _, f := range futures {
 							if rb.options.filter(f.message.Message, rb.remote) {
+								id := f.message.Message.GetID()
 								rb.logger.Error("write request failed",
 									zap.Uint64("request-id", f.message.Message.GetID()),
 									zap.Error(err))
+								rb.requestDone(id, nil, err, nil)
 							}
 						}
-						retry = true
 					}
 				}
 
-				if !retry {
-					for _, f := range futures {
-						if f.completed != nil {
-							f.completed()
-						}
+				for _, f := range futures {
+					if f.completed != nil {
+						f.completed()
 					}
-				} else {
-					retryAt = resetConnTimes
 				}
 			}
 		}
@@ -515,7 +498,8 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 			if rb.options.hasPayloadResponse {
 				wg.Add(1)
 			}
-			rb.requestDone(msg.(RPCMessage).Message, cb)
+			resp := msg.(RPCMessage).Message
+			rb.requestDone(resp.GetID(), resp, nil, cb)
 			if rb.options.hasPayloadResponse {
 				wg.Wait()
 			}
@@ -558,6 +542,9 @@ func (rb *remoteBackend) removeActiveStream(s *stream) {
 
 	delete(rb.mu.activeStreams, s.id)
 	delete(rb.mu.futures, s.id)
+	if s.unlockAfterClose {
+		rb.Unlock()
+	}
 	rb.pool.streams.Put(s)
 }
 
@@ -566,20 +553,31 @@ func (rb *remoteBackend) stopWriteLoop() {
 	close(rb.writeC)
 }
 
-func (rb *remoteBackend) requestDone(response Message, cb func()) {
-	id := response.GetID()
+func (rb *remoteBackend) requestDone(id uint64, response Message, err error, cb func()) {
+	if ce := rb.logger.Check(zap.DebugLevel, "read response"); ce != nil {
+		debugStr := ""
+		if response != nil {
+			debugStr = response.DebugString()
+		}
+		ce.Write(zap.Uint64("request-id", id),
+			zap.String("response", debugStr),
+			zap.Error(err))
+	}
 
-	rb.logger.Debug("read response",
-		zap.Uint64("request-id", id),
-		zap.String("response", response.DebugString()))
 	rb.mu.Lock()
 	if f, ok := rb.mu.futures[id]; ok {
 		delete(rb.mu.futures, id)
 		rb.mu.Unlock()
-		f.done(response, cb)
+		if err == nil {
+			f.done(response, cb)
+		} else {
+			f.error(id, err, cb)
+		}
 	} else if st, ok := rb.mu.activeStreams[id]; ok {
 		rb.mu.Unlock()
-		st.done(response)
+		if response != nil {
+			st.done(response)
+		}
 	} else {
 		// future has been removed, e.g. it has timed out.
 		rb.mu.Unlock()
@@ -726,12 +724,13 @@ func (bf *goettyBasedBackendFactory) Create(remote string) (Backend, error) {
 }
 
 type stream struct {
-	c              chan Message
-	sendFunc       func(m backendSendMessage) error
-	activeFunc     func()
-	unregisterFunc func(*stream)
-	ctx            context.Context
-	cancel         context.CancelFunc
+	c                chan Message
+	sendFunc         func(m backendSendMessage) error
+	activeFunc       func()
+	unregisterFunc   func(*stream)
+	unlockAfterClose bool
+	ctx              context.Context
+	cancel           context.CancelFunc
 
 	// reset fields
 	id uint64
@@ -758,8 +757,9 @@ func newStream(c chan Message,
 	return s
 }
 
-func (s *stream) init(id uint64) {
+func (s *stream) init(id uint64, unlockAfterClose bool) {
 	s.id = id
+	s.unlockAfterClose = unlockAfterClose
 	s.mu.closed = false
 	for {
 		select {

@@ -19,7 +19,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-const MessageEnd = 1
+const (
+	BatchEnd = iota
+	MessageEnd
+	WaitingNext
+)
 
 func (m *Message) Size() int {
 	return m.ProtoSize()
@@ -34,14 +38,20 @@ func (m *Message) SetID(id uint64) {
 }
 
 func (m *Message) DebugString() string {
-	me := moerr.Error{}
-	_ = me.UnmarshalBinary(m.Err)
-	errStr := me.Error()
-	return fmt.Sprintf("sid: %v, cmd: %v, data: %s, err: %s", m.Sid, m.Cmd, m.Data, errStr)
+	errInfo := "none"
+	if len(m.Err) > 0 {
+		me := moerr.Error{}
+		errInfo = me.UnmarshalBinary(m.Err).Error()
+	}
+	return fmt.Sprintf("MessageSize: %d, sid: %d, ErrInfo: %s, batchSize: %d", m.Size(), m.Sid, errInfo, len(m.Data))
 }
 
 func (m *Message) IsEndMessage() bool {
 	return m.Sid == MessageEnd
+}
+
+func (m *Message) WaitingNextToMerge() bool {
+	return m.Sid == WaitingNext
 }
 
 func EncodedMessageError(err error) []byte {
@@ -63,7 +73,7 @@ func EncodedMessageError(err error) []byte {
 	return errData
 }
 
-func DecodeMessageError(m *Message) error {
+func GetMessageErrorInfo(m *Message) error {
 	errData := m.GetErr()
 	if len(errData) > 0 {
 		err := &moerr.Error{}

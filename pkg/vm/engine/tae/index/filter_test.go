@@ -26,6 +26,7 @@ import (
 )
 
 func TestStaticFilterNumeric(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.T_int32}
 	data := containers.MockVector2(typ, 40000, 0)
@@ -92,9 +93,19 @@ func TestStaticFilterNumeric(t *testing.T) {
 	require.True(t, exist)
 }
 
-func TestStaticFilterString(t *testing.T) {
+func TestNewBinaryFuseFilter(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	typ := types.Type{Oid: types.T_varchar}
+	typ := types.Type{Oid: types.T_uint32}
+	data := containers.MockVector3(typ, 2000)
+	defer data.Close()
+	_, err := NewBinaryFuseFilter(data)
+	require.NoError(t, err)
+}
+
+func TestStaticFilterString(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	typ := types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}
 	data := containers.MockVector2(typ, 40000, 0)
 	defer data.Close()
 	sf, err := NewBinaryFuseFilter(data)

@@ -30,6 +30,27 @@ import (
 
 var _ engine.Relation = new(table)
 
+func (tbl *table) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error) {
+	switch tbl.tableId {
+	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
+		return float64(100), nil
+	}
+
+	if expr == nil {
+		r, err := tbl.Rows(ctx)
+		return float64(r), err
+	}
+	var card float64
+	for _, blockmetas := range tbl.meta.blocks {
+		for _, blk := range blockmetas {
+			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
+				card += float64(blockRows(blk)) / 3
+			}
+		}
+	}
+	return card, nil
+}
+
 func (tbl *table) Rows(ctx context.Context) (int64, error) {
 	var rows int64
 
@@ -345,7 +366,7 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 		}
 		return rds, nil
 	}
-	step := len(ranges) / num
+	step := (len(ranges)) / num
 	if step < 1 {
 		step = 1
 	}
@@ -385,8 +406,8 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 		}
 	*/
 	if tbl.primaryIdx >= 0 && expr != nil {
-		ok, v := getPkValueByExpr(expr, int32(tbl.primaryIdx),
-			types.T(tbl.tableDef.Cols[tbl.primaryIdx].Typ.Id))
+		pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
+		ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
 		if ok {
 			index = memtable.Tuple{
 				index_PrimaryKey,

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
 
@@ -145,7 +146,6 @@ func (s *sender) adjust() {
 		s.options.payloadCopyBufferSize = 16 * 1024
 	}
 	s.options.backendCreateOptions = append(s.options.backendCreateOptions,
-		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendLogger(s.logger))
 
 	s.options.clientOptions = append(s.options.clientOptions, morpc.WithClientLogger(s.logger))
@@ -208,6 +208,8 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 }
 
 func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnResponse, error) {
+	ctx, span := trace.Debug(ctx, "sender.doSend")
+	defer span.End()
 	dn := request.GetTargetDN()
 	if s.options.localDispatch != nil {
 		if handle := s.options.localDispatch(dn); handle != nil {
@@ -238,7 +240,7 @@ func (s *sender) createStream(ctx context.Context, dn metadata.DNShard, size int
 			return ls, nil
 		}
 	}
-	return s.client.NewStream(dn.Address)
+	return s.client.NewStream(dn.Address, false)
 }
 
 func (s *sender) acquireLocalStream() *localStream {

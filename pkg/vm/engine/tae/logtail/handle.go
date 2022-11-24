@@ -21,6 +21,7 @@ an application on logtail mgr: build reponse to SyncLogTailRequest
 */
 
 import (
+	"context"
 	"fmt"
 	"hash/fnv"
 	"strings"
@@ -32,25 +33,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
+const Size90M = 80 * 1024 * 1024
+
 type CheckpointClient interface {
 	CollectCheckpointsInRange(start, end types.TS) (location string, checkpointed types.TS)
+	FlushTable(dbID, tableID uint64, ts types.TS) error
 }
 
 func HandleSyncLogTailReq(
 	ckpClient CheckpointClient,
 	mgr *LogtailMgr,
 	c *catalog.Catalog,
-	req api.SyncLogTailReq) (resp api.SyncLogTailResp, err error) {
-	logutil.Debugf("[Logtail] begin handle %v\n", req)
+	req api.SyncLogTailReq,
+	canRetry bool) (resp api.SyncLogTailResp, err error) {
+	logutil.Debugf("[Logtail] begin handle %+v", req)
 	defer func() {
-		logutil.Debugf("[Logtail] end handle err %v\n", err)
+		logutil.Debugf("[Logtail] end handle %d entries[%q], err %v", len(resp.Commands), resp.CkpLocation, err)
 	}()
 	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
 	end := types.BuildTS(req.CnWant.PhysicalTime, req.CnWant.LogicalTime)
@@ -70,7 +77,6 @@ func HandleSyncLogTailReq(
 	ckpLoc, checkpointed := ckpClient.CollectCheckpointsInRange(start, end)
 
 	if checkpointed.GreaterEq(end) {
-		logutil.Debugf("[Logtail] only send ckp %q\n", ckpLoc)
 		return api.SyncLogTailResp{
 			CkpLocation: ckpLoc,
 		}, err
@@ -83,13 +89,6 @@ func HandleSyncLogTailReq(
 	var visitor RespBuilder
 
 	if scope == ScopeUserTables {
-		var tableEntry *catalog.TableEntry
-		// table logtail needs information about this table, so give it the table entry.
-		if db, err := c.GetDatabaseByID(did); err != nil {
-			return api.SyncLogTailResp{}, err
-		} else if tableEntry, err = db.GetTableEntryByID(tid); err != nil {
-			return api.SyncLogTailResp{}, err
-		}
 		visitor = NewTableLogtailRespBuilder(ckpLoc, start, end, tableEntry)
 	} else {
 		visitor = NewCatalogLogtailRespBuilder(scope, ckpLoc, start, end)
@@ -99,6 +98,21 @@ func HandleSyncLogTailReq(
 	operator := mgr.GetTableOperator(start, end, c, did, tid, scope, visitor)
 	if err := operator.Run(); err != nil {
 		return api.SyncLogTailResp{}, err
+	}
+	resp, err = visitor.BuildResp()
+
+	if canRetry && scope == ScopeUserTables { // check simple conditions first
+		_, name, forceFlush := fault.TriggerFault("logtail_max_size")
+		if (forceFlush && name == tableEntry.GetSchema().Name) || resp.ProtoSize() > Size90M {
+			if err = ckpClient.FlushTable(did, tid, end); err != nil {
+				logutil.Errorf("[logtail] flush err: %v", err)
+				return api.SyncLogTailResp{}, err
+			}
+			// try again after flushing
+			newResp, err := HandleSyncLogTailReq(ckpClient, mgr, c, req, false)
+			logutil.Infof("[logtail] flush result: %d -> %d err: %v", resp.ProtoSize(), newResp.ProtoSize(), err)
+			return newResp, err
+		}
 	}
 	return visitor.BuildResp()
 }
@@ -240,6 +254,7 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 
 	if b.insBatch.Length() > 0 {
 		bat, err := containersBatchToProtoBatch(b.insBatch)
+		logutil.Debugf("[logtail] catalog insert to %d-%s, %s", tblID, tableName, DebugBatchToString("catalog", b.insBatch, true))
 		if err != nil {
 			return api.SyncLogTailResp{}, err
 		}
@@ -255,6 +270,7 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	}
 	if b.delBatch.Length() > 0 {
 		bat, err := containersBatchToProtoBatch(b.delBatch)
+		logutil.Debugf("[logtail] catalog delete from %d-%s, %s", tblID, tableName, DebugBatchToString("catalog", b.delBatch, false))
 		if err != nil {
 			return api.SyncLogTailResp{}, err
 		}
@@ -389,13 +405,11 @@ func (b *TableLogtailRespBuilder) Close() {
 }
 
 func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData bool) {
-	var latestCommittedNode *catalog.MetadataMVCCNode
 	newEnd := b.end
 	e.RLock()
 	// try to find new end
 	if newest := e.GetLatestCommittedNode(); newest != nil {
-		latestCommittedNode = newest.CloneAll().(*catalog.MetadataMVCCNode)
-		latestPrepareTs := latestCommittedNode.GetPrepare()
+		latestPrepareTs := newest.CloneAll().(*catalog.MetadataMVCCNode).GetPrepare()
 		if latestPrepareTs.Greater(b.end) {
 			newEnd = latestPrepareTs
 		}
@@ -410,14 +424,15 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 		}
 	}
 
-	if latestCommittedNode != nil {
+	if n := len(mvccNodes); n > 0 {
+		newest := mvccNodes[n-1].(*catalog.MetadataMVCCNode)
 		if e.IsAppendable() {
-			if latestCommittedNode.MetaLoc != "" {
+			if newest.MetaLoc != "" {
 				// appendable block has been flushed, no need to collect data
 				return true
 			}
 		} else {
-			if latestCommittedNode.DeltaLoc != "" && latestCommittedNode.GetEnd().GreaterEq(b.end) {
+			if newest.DeltaLoc != "" && newest.GetEnd().GreaterEq(b.end) {
 				// non-appendable block has newer delta data on s3, no need to collect data
 				return true
 			}
@@ -501,6 +516,12 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			tableName = fmt.Sprintf("_%d_meta", b.tid)
 			logutil.Infof("[Logtail] send block meta for %q", b.tname)
 		}
+		if metaChange {
+			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname, DebugBatchToString("meta", batch, true))
+		} else {
+			logutil.Debugf("[logtail] table data [%v] %d-%s: %s", typ, b.tid, b.tname, DebugBatchToString("data", batch, false))
+		}
+
 		entry := &api.Entry{
 			EntryType:    typ,
 			TableId:      b.tid,
@@ -535,6 +556,7 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 }
 
 func LoadCheckpointEntries(
+	ctx context.Context,
 	metLoc string,
 	tableID uint64,
 	tableName string,
@@ -546,17 +568,64 @@ func LoadCheckpointEntries(
 	}
 
 	locations := strings.Split(metLoc, ";")
+	datas := make([]*CheckpointData, len(locations))
+	jobs := make([]*tasks.Job, len(locations))
+	defer func() {
+		for idx, data := range datas {
+			if jobs[idx] != nil {
+				jobs[idx].WaitDone()
+			}
+			if data != nil {
+				data.Close()
+			}
+		}
+	}()
+
+	// TODO: using a global job scheduler
+	jobScheduler := tasks.NewParallelJobScheduler(200)
+	defer jobScheduler.Stop()
+
+	makeJob := func(i int) (job *tasks.Job) {
+		location := locations[i]
+		exec := func(ctx context.Context) (result *tasks.JobResult) {
+			result = &tasks.JobResult{}
+			reader, err := blockio.NewCheckpointReader(ctx, fs, location)
+			if err != nil {
+				result.Err = err
+				return
+			}
+			data := NewCheckpointData()
+			if err = data.ReadFrom(reader, jobScheduler, common.DefaultAllocator); err != nil {
+				result.Err = err
+				return
+			}
+			datas[i] = data
+			return
+		}
+		job = tasks.NewJob(
+			fmt.Sprintf("load-%s", location),
+			context.Background(),
+			exec)
+		return
+	}
+
+	for i := range locations {
+		jobs[i] = makeJob(i)
+		if err = jobScheduler.Schedule(jobs[i]); err != nil {
+			return
+		}
+	}
+
+	for _, job := range jobs {
+		result := job.WaitDone()
+		if err = result.Err; err != nil {
+			return
+		}
+	}
+
 	entries = make([]*api.Entry, 0)
-	for _, location := range locations {
-		reader, err := blockio.NewCheckpointReader(fs, location)
-		if err != nil {
-			return nil, err
-		}
-		data := NewCheckpointData()
-		defer data.Close()
-		if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
-			return nil, err
-		}
+	for i := range locations {
+		data := datas[i]
 		ins, del, cnIns, err := data.GetTableData(tableID)
 		if err != nil {
 			return nil, err

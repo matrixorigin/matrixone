@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
@@ -100,6 +101,11 @@ func waitSignalToStop(stopper *stopper.Stopper) {
 	sig := <-sigchan
 	logutil.GetGlobalLogger().Info("Starting shutdown...", zap.String("signal", sig.String()))
 	stopper.Stop()
+	if cnProxy != nil {
+		if err := cnProxy.Stop(); err != nil {
+			logutil.GetGlobalLogger().Error("shutdown cn proxy failed", zap.Error(err))
+		}
+	}
 }
 
 func startService(cfg *Config, stopper *stopper.Stopper) error {
@@ -110,7 +116,7 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 		return err
 	}
 
-	setupGlobalComponents(cfg, stopper)
+	setupProcessLevelRuntime(cfg, stopper)
 
 	fs, err := cfg.createFileService(defines.LocalFileServiceName)
 	if err != nil {
@@ -262,7 +268,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 
 	if !SV.DisableTrace || !SV.DisableMetric {
 		writerFactory = export.GetFSWriterFactory(fs, UUID, nodeRole)
-		_ = export.SetPathBuilder(SV.PathBuilder)
+		_ = table.SetPathBuilder(SV.PathBuilder)
 	}
 	if !SV.DisableTrace {
 		initWG.Add(1)
@@ -272,10 +278,12 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 				trace.WithNode(UUID, nodeRole),
 				trace.EnableTracer(!SV.DisableTrace),
 				trace.WithBatchProcessMode(SV.BatchProcessor),
-				trace.WithFSWriterFactory(writerFactory),
+				trace.WithBatchProcessor(export.NewMOCollector()),
+				trace.WithFSWriterFactory(export.GetFSWriterFactory4Trace(fs, UUID, nodeRole)),
 				trace.WithExportInterval(SV.TraceExportInterval),
 				trace.WithLongQueryTime(SV.LongQueryTime),
 				trace.WithSQLExecutor(nil),
+				trace.DebugMode(SV.EnableTraceDebug),
 			); err != nil {
 				panic(err)
 			}

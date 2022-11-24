@@ -20,12 +20,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
 
+func WithTransferTableTTL(ttl time.Duration) func(*Options) {
+	return func(opts *Options) {
+		opts.TransferTableTTL = ttl
+	}
+}
+
 func WithCheckpointMinCount(count int64) func(*Options) {
 	return func(opts *Options) {
 		if opts.CheckpointCfg == nil {
 			opts.CheckpointCfg = new(CheckpointCfg)
 		}
 		opts.CheckpointCfg.MinCount = count
+	}
+}
+
+func WithFlushInterval(interval time.Duration) func(*Options) {
+	return func(opts *Options) {
+		if opts.CheckpointCfg == nil {
+			opts.CheckpointCfg = new(CheckpointCfg)
+		}
+		opts.CheckpointCfg.FlushInterval = interval
 	}
 }
 
@@ -59,6 +74,10 @@ func WithCheckpointGlobalInterval(interval time.Duration) func(*Options) {
 func (o *Options) FillDefaults(dirname string) *Options {
 	if o == nil {
 		o = &Options{}
+	}
+
+	if o.TransferTableTTL == time.Duration(0) {
+		o.TransferTableTTL = time.Second * 120
 	}
 
 	if o.CacheCfg == nil {

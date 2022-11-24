@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 type basicHAKeeperClient interface {
@@ -498,9 +499,10 @@ func (c *hakeeperClient) checkIsHAKeeper(ctx context.Context) (bool, error) {
 
 func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Response, error) {
 	if c == nil {
-		return pb.Response{},
-			moerr.NewInternalError("hakeeper client is nil")
+		return pb.Response{}, moerr.NewNoHAKeeper()
 	}
+	ctx, span := trace.Debug(ctx, "hakeeperClient.request")
+	defer span.End()
 	r := c.pool.Get().(*RPCRequest)
 	r.Request = req
 	future, err := c.client.Send(ctx, c.addr, r)

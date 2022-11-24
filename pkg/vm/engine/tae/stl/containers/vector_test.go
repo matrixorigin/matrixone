@@ -16,12 +16,15 @@ package containers
 
 import (
 	"bytes"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -34,6 +37,7 @@ func withAllocator(opts *Options) *Options {
 }
 
 func TestVector1(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[int64](opts)
 	now := time.Now()
@@ -73,6 +77,7 @@ func TestVector1(t *testing.T) {
 }
 
 func TestVector2(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	vec := NewVector[[]byte]()
 	defer vec.Close()
 	vec.Append([]byte("hello"))
@@ -88,6 +93,7 @@ func TestVector2(t *testing.T) {
 }
 
 func TestVector3(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[[]byte](opts)
 	vec.Append([]byte("h1"))
@@ -110,6 +116,7 @@ func TestVector3(t *testing.T) {
 }
 
 func TestVector4(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[[]byte](opts)
 	vec.Append([]byte("h1"))
@@ -131,6 +138,7 @@ func TestVector4(t *testing.T) {
 }
 
 func TestVector5(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[[]byte](opts)
 	vec.Append([]byte("h1"))
@@ -181,6 +189,7 @@ func TestVector5(t *testing.T) {
 }
 
 func TestVector6(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	w := bytes.Buffer{}
 	for i := 0; i < 10; i++ {
 		v := int64(i)
@@ -214,6 +223,7 @@ func TestVector6(t *testing.T) {
 }
 
 func TestVector7(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[int16](opts)
 	vec.Append(int16(1))
@@ -260,6 +270,7 @@ func TestVector7(t *testing.T) {
 }
 
 func TestVector8(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[int32](opts)
 	vec.AppendMany(int32(1), int32(3), int32(9))
@@ -283,6 +294,7 @@ func TestVector8(t *testing.T) {
 }
 
 func TestVector9(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	allocator := mpool.MustNewZero()
 	opts := new(Options)
 	opts.Allocator = allocator
@@ -311,6 +323,7 @@ func TestVector9(t *testing.T) {
 }
 
 func TestVector10(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[[]byte](opts)
 	h1 := "h1"
@@ -353,6 +366,7 @@ func TestVector10(t *testing.T) {
 }
 
 func TestVector11(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[[]byte](opts)
 	h1 := "h1"
@@ -381,6 +395,7 @@ func TestVector11(t *testing.T) {
 }
 
 func TestVector12(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[[]byte](opts)
 	h1 := "h1"
@@ -411,6 +426,7 @@ func TestVector12(t *testing.T) {
 }
 
 func TestStrVector1(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewStrVector[[]byte](opts)
 	h1 := "h1"
@@ -473,6 +489,7 @@ func TestStrVector1(t *testing.T) {
 }
 
 func TestStrVector2(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewStrVector[[]byte](opts)
 	h1 := "h1"
@@ -508,6 +525,7 @@ func TestStrVector2(t *testing.T) {
 }
 
 func TestStrVector3(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewStrVector[[]byte](opts)
 	h1 := "h1"
@@ -524,7 +542,7 @@ func TestStrVector3(t *testing.T) {
 	vec.Append([]byte(h6))
 
 	assert.Equal(t, 6, vec.Length())
-	vec.RangeDelete(1, 2)
+	vec.BatchDeleteInts(1, 2)
 	assert.Equal(t, 4, vec.Length())
 	assert.Equal(t, h1, string(vec.Get(0)))
 	assert.Equal(t, h4, string(vec.Get(1)))
@@ -584,6 +602,7 @@ func getBytes(i int) []byte {
 }
 
 func TestStrVector4(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewStrVector[[]byte](opts)
 	for i := 0; i < 10000; i++ {
@@ -601,4 +620,34 @@ func TestStrVector4(t *testing.T) {
 	t.Log(time.Since(now))
 	vec.Close()
 	assert.Zero(t, opts.Allocator.CurrNB())
+}
+
+func TestStrVector5(t *testing.T) {
+	strs := [][]byte{}
+	for i := 1; i < 10; i++ {
+		str := strings.Repeat(fmt.Sprintf("%d", i), i*4)
+		strs = append(strs, []byte(str))
+	}
+	opts := withAllocator(nil)
+	vec := NewStrVector[[]byte](opts)
+	defer vec.Close()
+	size := 40000
+	for cnt := 0; cnt < size; cnt++ {
+		p := cnt % len(strs)
+		vec.Append(strs[p])
+	}
+	deleteCnt := 200
+	step := size / deleteCnt
+	deletes := []int{}
+	for i := 0; i < size; i += step {
+		deletes = append(deletes, i)
+	}
+	now := time.Now()
+	// for i := len(deletes) - 1; i >= 0; i-- {
+	// 	vec.Delete(deletes[i])
+	// }
+	vec.BatchDeleteInts(deletes...)
+	t.Log(time.Since(now))
+	// t.Log(vec.String())
+
 }

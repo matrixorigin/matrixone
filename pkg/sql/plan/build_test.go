@@ -701,6 +701,21 @@ func TestSubQuery(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestMysqlCompatibilityMode(t *testing.T) {
+	mock := NewMockOptimizer()
+
+	sqls := []string{
+		"SELECT n_nationkey FROM NATION group by n_name",
+		"SELECT n_nationkey, min(n_name) FROM NATION",
+		"SELECT n_nationkey + 100 FROM NATION group by n_name",
+	}
+	// withou mysql compatibility
+	runTestShouldError(mock, t, sqls)
+	// with mysql compatibility
+	mock.ctxt.mysqlCompatible = true
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
 func TestTcl(t *testing.T) {
 	mock := NewMockOptimizer()
 	// should pass

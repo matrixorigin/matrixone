@@ -19,6 +19,7 @@ import (
 	"container/heap"
 	"context"
 	"math"
+	"runtime"
 	"sync"
 	"time"
 
@@ -67,7 +68,7 @@ var _ engine.Engine = new(Engine)
 func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator) error {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return moerr.NewTxnClosed()
+		return moerr.NewTxnClosed(op.Txn().ID)
 	}
 	sql := getSql(ctx)
 	accountId, userId, roleId := getAccessInfo(ctx)
@@ -94,7 +95,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	op client.TxnOperator) (engine.Database, error) {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return nil, moerr.NewTxnClosed()
+		return nil, moerr.NewTxnClosed(op.Txn().ID)
 	}
 	key := genDatabaseKey(ctx, name)
 	if db, ok := txn.databaseMap.Load(key); ok {
@@ -129,7 +130,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return nil, moerr.NewTxnClosed()
+		return nil, moerr.NewTxnClosed(op.Txn().ID)
 	}
 	return txn.getDatabaseList(ctx)
 }
@@ -139,7 +140,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return moerr.NewTxnClosed()
+		return moerr.NewTxnClosed(op.Txn().ID)
 	}
 	key := genDatabaseKey(ctx, name)
 	if v, ok := txn.databaseMap.Load(key); ok {
@@ -253,18 +254,21 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	table.tableName = catalog.MO_DATABASE
 	if err := e.db.Update(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
 		catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
+		e.delTransaction(txn)
 		return err
 	}
 	table.tableId = catalog.MO_TABLES_ID
 	table.tableName = catalog.MO_TABLES
 	if err := e.db.Update(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
 		catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
+		e.delTransaction(txn)
 		return err
 	}
 	table.tableId = catalog.MO_COLUMNS_ID
 	table.tableName = catalog.MO_COLUMNS
 	if err := e.db.Update(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
 		catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
+		e.delTransaction(txn)
 		return err
 	}
 	return nil
@@ -273,7 +277,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return moerr.NewTxnClosed()
+		return moerr.NewTxnClosed(op.Txn().ID)
 	}
 	defer e.delTransaction(txn)
 	if txn.readOnly {
@@ -317,7 +321,7 @@ func (e *Engine) Nodes() (engine.Nodes, error) {
 	var nodes engine.Nodes
 	for _, store := range clusterDetails.CNStores {
 		nodes = append(nodes, engine.Node{
-			Mcpu: 10, // TODO
+			Mcpu: runtime.NumCPU(),
 			Id:   store.UUID,
 			Addr: store.ServiceAddress,
 		})

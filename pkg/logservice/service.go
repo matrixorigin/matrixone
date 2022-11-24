@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 const (
@@ -198,6 +199,8 @@ func (s *Service) ID() string {
 
 func (s *Service) handleRPCRequest(ctx context.Context, req morpc.Message,
 	seq uint64, cs morpc.ClientSession) error {
+	ctx, span := trace.Debug(ctx, "Service.handleRPCRequest")
+	defer span.End()
 	rr, ok := req.(*RPCRequest)
 	if !ok {
 		panic("unexpected message type")
@@ -217,6 +220,8 @@ func (s *Service) handleRPCRequest(ctx context.Context, req morpc.Message,
 
 func (s *Service) handle(ctx context.Context, req pb.Request,
 	payload []byte) (pb.Response, pb.LogRecordResponse) {
+	ctx, span := trace.Debug(ctx, "Service.handle."+req.Method.String())
+	defer span.End()
 	switch req.Method {
 	case pb.TSO_UPDATE:
 		return s.handleTsoUpdate(ctx, req), pb.LogRecordResponse{}

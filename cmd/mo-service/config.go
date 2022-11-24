@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
@@ -42,10 +44,13 @@ const (
 )
 
 var (
-	supportServiceTypes = map[string]any{
-		cnServiceType:  cnServiceType,
-		dnServiceType:  dnServiceType,
-		logServiceType: logServiceType,
+	defaultMaxClockOffset = time.Millisecond * 500
+	defaultMemoryLimit    = 1 << 40
+
+	supportServiceTypes = map[string]metadata.ServiceType{
+		cnServiceType:  metadata.ServiceType_CN,
+		dnServiceType:  metadata.ServiceType_DN,
+		logServiceType: metadata.ServiceType_LOG,
 	}
 )
 
@@ -91,6 +96,12 @@ type Config struct {
 		// EnableCheckMaxClockOffset enable local clock offset checker
 		EnableCheckMaxClockOffset bool `toml:"enable-check-clock-offset"`
 	}
+
+	// Limit limit configuration
+	Limit struct {
+		// Memory memory usage limit, see mpool for details
+		Memory tomlutil.ByteSize `toml:"memory"`
+	}
 }
 
 func parseConfigFromFile(file string, cfg any) error {
@@ -115,8 +126,8 @@ func (c *Config) validate() error {
 	if c.DataDir == "" {
 		c.DataDir = "./mo-data"
 	}
-	if _, ok := supportServiceTypes[strings.ToUpper(c.ServiceType)]; !ok {
-		return moerr.NewInternalError("service type %s not support", c.ServiceType)
+	if _, err := c.getServiceType(); err != nil {
+		return err
 	}
 	if c.Clock.MaxClockOffset.Duration == 0 {
 		c.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
@@ -137,6 +148,9 @@ func (c *Config) validate() error {
 				c.FileServices[idx].DataDir = filepath.Join(c.DataDir, strings.ToLower(c.FileServices[idx].Name))
 			}
 		}
+	}
+	if c.Limit.Memory == 0 {
+		c.Limit.Memory = tomlutil.ByteSize(defaultMemoryLimit)
 	}
 	return nil
 }
@@ -277,4 +291,31 @@ func (c *Config) hashNodeID() uint16 {
 	}
 	v := h.Sum32()
 	return uint16(v % math.MaxUint16)
+}
+
+func (c *Config) getServiceType() (metadata.ServiceType, error) {
+	if v, ok := supportServiceTypes[strings.ToUpper(c.ServiceType)]; ok {
+		return v, nil
+	}
+	return metadata.ServiceType(0), moerr.NewInternalError("service type %s not support", c.ServiceType)
+}
+
+func (c *Config) mustGetServiceType() metadata.ServiceType {
+	v, err := c.getServiceType()
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func (c *Config) mustGetServiceUUID() string {
+	switch c.mustGetServiceType() {
+	case metadata.ServiceType_CN:
+		return c.CN.UUID
+	case metadata.ServiceType_DN:
+		return c.DN.UUID
+	case metadata.ServiceType_LOG:
+		return c.LogService.UUID
+	}
+	panic("impossible")
 }

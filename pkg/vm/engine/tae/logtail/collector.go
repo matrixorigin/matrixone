@@ -392,7 +392,7 @@ func (d *dirtyCollector) tryCompactTree(
 					// TODO: may be put it to post replay process
 					// FIXME
 					if blk.HasPersistedData() {
-						blk.GetBlockData().FreeData()
+						blk.GetBlockData().TryUpgrade()
 					}
 					dirtySeg.Shrink(id)
 					continue

@@ -86,4 +86,35 @@ func TestLocalETLFS(t *testing.T) {
 
 	})
 
+	t.Run("deref symlink", func(t *testing.T) {
+		dir := t.TempDir()
+
+		aPath := filepath.Join(dir, "a")
+		err := os.Mkdir(aPath, 0755)
+		assert.Nil(t, err)
+
+		bPath := filepath.Join(dir, "b")
+		err = os.Symlink(aPath, bPath)
+		assert.Nil(t, err)
+
+		filePathInA := filepath.Join(aPath, "foo")
+		err = os.WriteFile(
+			filePathInA,
+			[]byte("foo"),
+			0644,
+		)
+		assert.Nil(t, err)
+
+		fs, err := NewLocalETLFS("foo", dir)
+		assert.Nil(t, err)
+
+		ctx := context.Background()
+		entries, err := fs.List(ctx, "")
+		assert.Nil(t, err)
+		assert.Equal(t, 2, len(entries))
+		assert.True(t, entries[0].IsDir)
+		assert.True(t, entries[1].IsDir)
+
+	})
+
 }

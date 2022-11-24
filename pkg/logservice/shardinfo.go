@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -53,6 +54,8 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 			logutil.Error("failed to close client", zap.Error(err))
 		}
 	}()
+	ctx, span := trace.Debug(ctx, "GetShardInfo")
+	defer span.End()
 	req := pb.Request{
 		Method: pb.GET_SHARD_INFO,
 		LogRequest: pb.LogRequest{

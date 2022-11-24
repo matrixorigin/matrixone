@@ -35,7 +35,10 @@ type (
 	TxnOperator = client.TxnOperator
 )
 
-var Address string
+// number of rows per core scheduled to be processed
+const (
+	Single_Core_Rows = 1000000
+)
 
 // type of scope
 const (
@@ -113,6 +116,7 @@ type Scope struct {
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
 type scopeContext struct {
 	id       int32
+	plan     *plan.Plan
 	scope    *Scope
 	root     *scopeContext
 	parent   *scopeContext
@@ -147,6 +151,8 @@ type Compile struct {
 	fill func(any, *batch.Batch) error
 	//affectRows stores the number of rows affected while insert / update / delete
 	affectRows uint64
+	// cn address
+	addr string
 	// db current database name.
 	db string
 	// uid the user who initiated the sql.

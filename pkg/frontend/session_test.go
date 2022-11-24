@@ -185,7 +185,7 @@ func TestSession_TxnBegin(t *testing.T) {
 		eng.EXPECT().Hints().Return(hints).AnyTimes()
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil, nil), gSysVars)
+		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil, nil), gSysVars, false)
 		session.SetRequestContext(context.Background())
 		return session
 	}
@@ -235,7 +235,7 @@ func TestVariables(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New().AnyTimes()
-		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, txnClient, nil, nil), gSysVars)
+		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, txnClient, nil, nil), gSysVars, true)
 		session.SetRequestContext(context.Background())
 		return session
 	}
@@ -510,7 +510,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		session := NewSession(proto, nil, pu, gSysVars)
+		session := NewSession(proto, nil, pu, gSysVars, false)
 		session.SetRequestContext(context.Background())
 		return session
 	}
@@ -541,7 +541,9 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetHideKeys(gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().FilteredRows(gomock.Any(), gomock.Any()).Return(float64(1000000), nil).AnyTimes()
 		table.EXPECT().Rows(gomock.Any()).Return(int64(1000000), nil).AnyTimes()
+		table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
 		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 

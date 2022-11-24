@@ -161,7 +161,7 @@ func (blk *txnBlock) Fingerprint() *common.ID { return blk.entry.AsCommonID() }
 func (blk *txnBlock) BatchDedup(pks containers.Vector, invisibility *roaring.Bitmap) (err error) {
 	blkData := blk.entry.GetBlockData()
 	blk.Txn.GetStore().LogBlockID(blk.getDBID(), blk.entry.GetSegment().GetTable().GetID(), blk.entry.GetID())
-	return blkData.BatchDedup(blk.Txn, pks, invisibility)
+	return blkData.BatchDedup(blk.Txn, pks, invisibility, false)
 }
 
 func (blk *txnBlock) getDBID() uint64 {
@@ -198,6 +198,24 @@ func (blk *txnBlock) Rows() int {
 		return blk.table.localSegment.GetBlockRows(blk.entry)
 	}
 	return blk.entry.GetBlockData().Rows()
+}
+
+func (blk *txnBlock) GetColumnDataByIds(colIdxes []int, buffers []*bytes.Buffer) (*model.BlockView, error) {
+	if blk.isUncommitted {
+		return blk.table.localSegment.GetColumnDataByIds(blk.entry, colIdxes, buffers)
+	}
+	return blk.entry.GetBlockData().GetColumnDataByIds(blk.Txn, colIdxes, buffers)
+}
+
+func (blk *txnBlock) GetColumnDataByNames(attrs []string, buffers []*bytes.Buffer) (*model.BlockView, error) {
+	if blk.isUncommitted {
+		attrIds := make([]int, len(attrs))
+		for i, attr := range attrs {
+			attrIds[i] = blk.table.entry.GetSchema().GetColIdx(attr)
+		}
+		return blk.table.localSegment.GetColumnDataByIds(blk.entry, attrIds, buffers)
+	}
+	return blk.entry.GetBlockData().GetColumnDataByNames(blk.Txn, attrs, buffers)
 }
 
 func (blk *txnBlock) GetColumnDataById(colIdx int, buffer *bytes.Buffer) (*model.ColumnView, error) {
@@ -319,4 +337,12 @@ func (it *relBlockIt) Next() {
 	}
 	seg := it.segmentIt.GetSegment()
 	it.blockIt = seg.MakeBlockIt()
+	for !it.blockIt.Valid() {
+		it.segmentIt.Next()
+		if !it.segmentIt.Valid() {
+			return
+		}
+		seg := it.segmentIt.GetSegment()
+		it.blockIt = seg.MakeBlockIt()
+	}
 }

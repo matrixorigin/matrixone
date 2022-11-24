@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compute
+package common
 
 import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -37,6 +38,7 @@ func (g *testGenerator) Next() uint32 {
 }
 
 func TestDeleteRows(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	cnt := 10000000
 	rows := make([]int, 0)
 	deleteCnt := 1

@@ -275,6 +275,11 @@ func (bs *baseStore) Replay(h driver.ApplyHandle) error {
 		return err
 	}
 	bs.onReplay(r)
+	logutil.Info("open-tae", common.OperationField("replay"),
+		common.OperandField("wal"),
+		common.AnyField("backend", "batchstore"),
+		common.AnyField("apply cost", r.applyDuration),
+		common.AnyField("read cost", r.readDuration))
 	return nil
 }
 
