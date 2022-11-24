@@ -139,7 +139,11 @@ func Sinh(arg, result *vector.Vector) error {
 	nulls.Set(result.Nsp, arg.Nsp)
 	for i, v := range argCol {
 		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
-			resCol[i] = math.Sinh(v)
+			r := math.Sinh(v)
+			if math.IsInf(r, 0) {
+				return moerr.NewOutOfRange("float64", "DOUBLE value is out of range in 'sinh(%v)'", v)
+			}
+			resCol[i] = r
 		}
 	}
 	return nil

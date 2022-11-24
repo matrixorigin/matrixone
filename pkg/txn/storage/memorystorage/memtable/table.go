@@ -565,10 +565,14 @@ func (t *Table[K, V, R]) CommitTx(tx *Transaction) error {
 
 }
 
-func (t *Table[K, V, R]) FilterVersions(filterFunc func(K, []Version[V]) ([]Version[V], error), keys ...K) error {
+func (t *Table[K, V, R]) FilterVersions(filterFunc func(K, []Version[V]) ([]Version[V], error)) error {
 	return t.update(func(state *tableState[K, V]) error {
-		for _, key := range keys {
-			physicalRow := getRowByKey(state.rows, key)
+		rowsIter := state.rows.Copy().Iter()
+		defer rowsIter.Release()
+		for ok := rowsIter.First(); ok; ok = rowsIter.Next() {
+			physicalRow := rowsIter.Item()
+			key := physicalRow.Key
+
 			newVersions, err := filterFunc(key, physicalRow.Versions)
 			if err != nil {
 				return err
@@ -630,8 +634,8 @@ func (t *Table[K, V, R]) FilterVersions(filterFunc func(K, []Version[V]) ([]Vers
 				})
 				state.reverseUniqueIndexes.Delete(entry)
 			}
-
 		}
+
 		return nil
 	})
 }

@@ -970,6 +970,14 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 						return nil
 					}
 					if compute.CompareGeneric(v1, v2, pks.GetType()) == 0 {
+						commitTSVec := blk.LoadCommitTS()
+						if commitTSVec != nil {
+							defer commitTSVec.Close()
+							commitTS := commitTSVec.Get(row).(types.TS)
+							if commitTS.Greater(ts) {
+								return txnif.ErrTxnWWConflict
+							}
+						}
 						entry := common.TypeStringValue(pks.GetType(), v1)
 						return moerr.NewDuplicateEntry(entry, pkDef.Name)
 					}

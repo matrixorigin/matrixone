@@ -3037,7 +3037,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		retErr = moerr.NewParseError(err.Error())
+		retErr = err
+		if _, ok := err.(*moerr.Error); !ok {
+			retErr = moerr.NewParseError(err.Error())
+		}
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, retErr)
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
 		return retErr
@@ -3925,6 +3928,12 @@ func (mce *MysqlCmdExecutor) setCancelRequestFunc(cancelFunc context.CancelFunc)
 	mce.mu.Lock()
 	defer mce.mu.Unlock()
 	mce.cancelRequestFunc = cancelFunc
+}
+
+func (mce *MysqlCmdExecutor) getCancelRequestFunc() context.CancelFunc {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
+	return mce.cancelRequestFunc
 }
 
 func (mce *MysqlCmdExecutor) Close() {}
