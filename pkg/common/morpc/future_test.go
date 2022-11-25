@@ -89,9 +89,11 @@ func TestGet(t *testing.T) {
 
 	req := newTestMessage(1)
 	f := newFuture(func(f *Future) { f.reset() })
+	f.ref()
 	f.init(1, ctx)
 	defer f.Close()
 
+	f.writeCompleted()
 	f.done(req, nil)
 	resp, err := f.Get()
 	assert.Nil(t, err)
@@ -103,9 +105,11 @@ func TestGetWithTimeout(t *testing.T) {
 	defer cancel()
 
 	f := newFuture(func(f *Future) { f.reset() })
+	f.ref()
 	f.init(1, ctx)
 	defer f.Close()
 
+	f.writeCompleted()
 	resp, err := f.Get()
 	assert.NotNil(t, err)
 	assert.Nil(t, resp)
@@ -117,12 +121,14 @@ func TestGetWithError(t *testing.T) {
 	defer cancel()
 
 	f := newFuture(func(f *Future) { f.reset() })
+	f.ref()
 	f.init(1, ctx)
 	defer f.Close()
 
 	errResp := moerr.NewBackendClosed()
 	f.error(1, errResp, nil)
 
+	f.writeCompleted()
 	resp, err := f.Get()
 	assert.Error(t, err)
 	assert.Nil(t, resp)
