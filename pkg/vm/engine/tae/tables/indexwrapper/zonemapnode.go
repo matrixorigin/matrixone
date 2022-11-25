@@ -15,6 +15,8 @@
 package indexwrapper
 
 import (
+	"sync/atomic"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,7 +31,7 @@ import (
 type ZmReader struct {
 	metaKey        string
 	mgr            base.INodeManager
-	zm             *index.ZoneMap
+	zm             atomic.Value
 	colMetaFactory evictable.EvictableNodeFactory
 }
 
@@ -51,8 +53,8 @@ func newZmReader(mgr base.INodeManager, typ types.Type, id common.ID, fs *object
 }
 
 func (r *ZmReader) Contains(key any) bool {
-	if r.zm != nil {
-		return r.zm.Contains(key)
+	if zm, ok := r.zm.Load().(*index.ZoneMap); ok {
+		return zm.Contains(key)
 	}
 	// TODOa: new zmreader if metaloc changed, replayIndex is not right?
 	h, err := evictable.PinEvictableNode(r.mgr, r.metaKey, r.colMetaFactory)
@@ -62,13 +64,13 @@ func (r *ZmReader) Contains(key any) bool {
 	}
 	defer h.Close()
 	node := h.GetNode().(*evictable.ColumnMetaNode)
-	r.zm = node.Zonemap
+	r.zm.Store(node.Zonemap)
 	return node.Zonemap.Contains(key)
 }
 
 func (r *ZmReader) FastContainsAny(keys containers.Vector) (ok bool) {
-	if r.zm != nil {
-		return r.zm.FastContainsAny(keys)
+	if zm, ok := r.zm.Load().(*index.ZoneMap); ok {
+		return zm.FastContainsAny(keys)
 	}
 	h, err := evictable.PinEvictableNode(r.mgr, r.metaKey, r.colMetaFactory)
 	if err != nil {
@@ -76,13 +78,13 @@ func (r *ZmReader) FastContainsAny(keys containers.Vector) (ok bool) {
 	}
 	defer h.Close()
 	node := h.GetNode().(*evictable.ColumnMetaNode)
-	r.zm = node.Zonemap
+	r.zm.Store(node.Zonemap)
 	return node.Zonemap.FastContainsAny(keys)
 }
 
 func (r *ZmReader) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok bool) {
-	if r.zm != nil {
-		return r.zm.ContainsAny(keys)
+	if zm, ok := r.zm.Load().(*index.ZoneMap); ok {
+		return zm.ContainsAny(keys)
 	}
 	h, err := evictable.PinEvictableNode(r.mgr, r.metaKey, r.colMetaFactory)
 	if err != nil {
@@ -90,7 +92,7 @@ func (r *ZmReader) ContainsAny(keys containers.Vector) (visibility *roaring.Bitm
 	}
 	defer h.Close()
 	node := h.GetNode().(*evictable.ColumnMetaNode)
-	r.zm = node.Zonemap
+	r.zm.Store(node.Zonemap)
 	return node.Zonemap.ContainsAny(keys)
 }
 
