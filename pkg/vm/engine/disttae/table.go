@@ -394,6 +394,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 			}
 		}
 	}
+	tbl.db.txn.Lock()
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	for i := range tbl.db.txn.writes {
 		for _, entry := range tbl.db.txn.writes[i] {
@@ -403,6 +404,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 			}
 		}
 	}
+	tbl.db.txn.Unlock()
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	for _, i := range tbl.dnList {
