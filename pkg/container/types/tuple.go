@@ -31,6 +31,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -172,7 +173,10 @@ func adjustFloatBytes(b []byte, encode bool) {
 }
 
 type packer struct {
-	buf []byte
+	buf      []byte
+	size     int
+	capacity int
+	mp       *mpool.MPool
 }
 
 func NewPacker() *packer {
@@ -181,22 +185,65 @@ func NewPacker() *packer {
 	}
 }
 
-func NewPackerArray(size int) []*packer {
+func NewPackerArray(size int, mp *mpool.MPool) []*packer {
 	packerArr := make([]*packer, size)
 	for num := range packerArr {
+		//packerArr[num] = &packer{
+		//	buf: make([]byte, 0, 64),
+		//}
+		bytes, err := mp.Alloc(64)
+		if err != nil {
+			panic(err)
+		}
 		packerArr[num] = &packer{
-			buf: make([]byte, 0, 64),
+			buf:      bytes,
+			size:     0,
+			capacity: 64,
+			mp:       mp,
 		}
 	}
 	return packerArr
 }
 
-func (p *packer) putByte(b byte) {
-	p.buf = append(p.buf, b)
+func (p *packer) FreeMem() {
+	if p.buf != nil {
+		p.mp.Free(p.buf)
+		p.size = 0
+		p.capacity = 0
+		p.buf = nil
+	}
 }
 
-func (p *packer) putBytes(b []byte) {
-	p.buf = append(p.buf, b...)
+func (p *packer) putByte(b byte) {
+	fmt.Printf("-----------------------putByte--------------------------------\n")
+	if p.size < p.capacity {
+		p.buf[p.size] = b
+		p.size++
+	} else {
+		p.buf, _ = p.mp.Grow(p.buf, 64)
+		p.capacity += 64
+		p.buf[p.size] = b
+		p.size++
+	}
+	//p.buf = append(p.buf, b)
+}
+
+func (p *packer) putBytes(bs []byte) {
+	fmt.Printf("-----------------------putBytes--------------------------------\n")
+	if p.size+len(bs) < p.capacity {
+		for _, b := range bs {
+			p.buf[p.size] = b
+			p.size++
+		}
+	} else {
+		p.buf, _ = p.mp.Grow(p.buf, 64)
+		p.capacity += 64
+		for _, b := range bs {
+			p.buf[p.size] = b
+			p.size++
+		}
+	}
+	//p.buf = append(p.buf, b...)
 }
 
 func (p *packer) putBytesNil(b []byte, i int) {
@@ -362,7 +409,8 @@ func (p *packer) EncodeStringType(e []byte) {
 }
 
 func (p *packer) GetBuf() []byte {
-	return p.buf
+	return p.buf[:p.size]
+	//return p.buf
 }
 
 func findTerminator(b []byte) int {
