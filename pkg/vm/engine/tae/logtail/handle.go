@@ -102,7 +102,8 @@ func HandleSyncLogTailReq(
 	resp, err = visitor.BuildResp()
 
 	if canRetry && scope == ScopeUserTables { // check simple conditions first
-		if _, forceFlush := fault.TriggerFault("logtail_max_size"); forceFlush || resp.ProtoSize() > Size90M {
+		_, name, forceFlush := fault.TriggerFault("logtail_max_size")
+		if (forceFlush && name == tableEntry.GetSchema().Name) || resp.ProtoSize() > Size90M {
 			if err = ckpClient.FlushTable(did, tid, end); err != nil {
 				logutil.Errorf("[logtail] flush err: %v", err)
 				return api.SyncLogTailResp{}, err
@@ -555,6 +556,7 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 }
 
 func LoadCheckpointEntries(
+	ctx context.Context,
 	metLoc string,
 	tableID uint64,
 	tableName string,
@@ -587,7 +589,7 @@ func LoadCheckpointEntries(
 		location := locations[i]
 		exec := func(ctx context.Context) (result *tasks.JobResult) {
 			result = &tasks.JobResult{}
-			reader, err := blockio.NewCheckpointReader(fs, location)
+			reader, err := blockio.NewCheckpointReader(ctx, fs, location)
 			if err != nil {
 				result.Err = err
 				return

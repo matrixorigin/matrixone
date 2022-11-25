@@ -90,6 +90,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				ap.ctr.i = 0
 			}
 		case reg.Ch <- bat:
+			proc.SetInputBatch(nil)
 			ap.ctr.i++
 			return false, nil
 		}

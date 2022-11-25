@@ -83,7 +83,7 @@ func init() {
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_int64},
-			{Oid: types.T_varchar},
+			{Oid: types.T_varchar, Width: types.MaxVarcharLen},
 			{Oid: types.T_decimal128},
 		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
 	}

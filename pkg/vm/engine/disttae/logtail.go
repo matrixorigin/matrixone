@@ -73,6 +73,7 @@ func consumeLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	var entries []*api.Entry
 
 	if entries, err = logtail.LoadCheckpointEntries(
+		ctx,
 		logTail.CkpLocation,
 		tbl.tableId,
 		tbl.tableName,

@@ -446,18 +446,24 @@ var builtins = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Args:      []types.T{types.T_char},
+				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.Length,
 			},
 			{
 				Index:     1,
-				Args:      []types.T{types.T_blob},
+				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.Length,
 			},
 			{
 				Index:     2,
+				Args:      []types.T{types.T_blob},
+				ReturnTyp: types.T_int64,
+				Fn:        unary.Length,
+			},
+			{
+				Index:     3,
 				Args:      []types.T{types.T_text},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.Length,
@@ -627,6 +633,12 @@ var builtins = map[int]Functions{
 			{
 				Index:     0,
 				Args:      []types.T{types.T_char},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.Reverse,
+			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Reverse,
 			},

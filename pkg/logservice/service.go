@@ -220,6 +220,8 @@ func (s *Service) handleRPCRequest(ctx context.Context, req morpc.Message,
 
 func (s *Service) handle(ctx context.Context, req pb.Request,
 	payload []byte) (pb.Response, pb.LogRecordResponse) {
+	ctx, span := trace.Debug(ctx, "Service.handle."+req.Method.String())
+	defer span.End()
 	switch req.Method {
 	case pb.TSO_UPDATE:
 		return s.handleTsoUpdate(ctx, req), pb.LogRecordResponse{}

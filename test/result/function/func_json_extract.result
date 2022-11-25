@@ -111,7 +111,7 @@ drop table t1;
 create table t1 (a json);
 insert into t1(a) values ('{"a":1}'),('[1,2]'),('{"xa":1}');
 drop table if exists t2;
-create table t2 (a varchar);
+create table t2 (a varchar(100));
 insert into t2 values ('$[0]'),('$.a');
 select json_extract(t1.a,t2.a) qqq,t1.a,t2.a from t2, t1;
 qqq	a	a

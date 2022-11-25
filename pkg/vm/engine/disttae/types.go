@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -32,6 +33,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+const (
+	GcCycle = 10 * time.Second
 )
 
 const (
@@ -52,25 +57,6 @@ const (
 )
 
 type DNStore = logservice.DNStore
-
-// tae's block metadata, which is currently just an empty one,
-// does not serve any purpose When tae submits a concrete structure,
-// it will replace this structure with tae's code
-// type BlockMeta struct {
-
-// }
-
-// Cache is a multi-version cache for maintaining some table data.
-// The cache is concurrently secure,  with multiple transactions accessing
-// the cache at the same time.
-// For different dn,  the cache is handled independently, the format
-// for our example is k-v, k being the dn number and v the timestamp,
-// suppose there are 2 dn, for table A exist dn0 - 100, dn1 - 200.
-type Cache interface {
-	// update table's cache to the specified timestamp
-	Update(ctx context.Context, dnList []DNStore, databaseId uint64,
-		tableId uint64, ts timestamp.Timestamp) error
-}
 
 type IDGenerator interface {
 	AllocateID(ctx context.Context) (uint64, error)

@@ -24,7 +24,7 @@ import (
 
 // todo(broccoli): revise this, maybe rewrite this? at least clean up the logic
 func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	if vectors[0].IsScalar() {
 		if vectors[0].ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
@@ -77,7 +77,7 @@ func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 func concatWs(inputCleaned []*vector.Vector, separator *vector.Vector, vectorIsConst []bool, proc *process.Process) (*vector.Vector, error) {
 	separators := vector.MustStrCols(separator)
 	length := len(separators)
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	resultNsp := new(nulls.Nulls)
 	resultValues := make([]string, length)
 	for i := 0; i < length; i++ {
@@ -111,7 +111,7 @@ func concatWs(inputCleaned []*vector.Vector, separator *vector.Vector, vectorIsC
 func concatWsAllConst(inputCleaned []*vector.Vector, separator *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	separators := vector.MustStrCols(separator)
 	length := len(separators)
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	resultNsp := new(nulls.Nulls)
 	resultValues := make([]string, length)
 	for i := 0; i < length; i++ {
@@ -133,7 +133,7 @@ func concatWsAllConst(inputCleaned []*vector.Vector, separator *vector.Vector, p
 
 // the inputs are guaranteed to be scalar non-NULL
 func concatWsWithConstSeparatorAllConst(inputCleaned []*vector.Vector, separator string, mp *mpool.MPool) (*vector.Vector, error) {
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	res := ""
 	for i := range inputCleaned {
 		res = res + inputCleaned[i].GetString(0)
@@ -161,7 +161,7 @@ func concatWsWithConstSeparator(inputCleaned []*vector.Vector, separator string,
 		}
 	}
 
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	resultNsp := new(nulls.Nulls)
 	resultValues := make([]string, length)
 

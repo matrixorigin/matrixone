@@ -87,7 +87,7 @@ func TestARTIndexNumeric(t *testing.T) {
 func TestArtIndexString(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	typ := types.Type{Oid: types.T_varchar}
+	typ := types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}
 	idx := NewSimpleARTMap(typ)
 
 	var err error

@@ -93,11 +93,11 @@ func (node *persistedNode) BatchDedup(
 }
 
 func (node *persistedNode) Dedup(key any) (err error) {
-	return node.pkIndex.Dedup(key)
+	return node.pkIndex.Dedup(key, nil)
 }
 
 func (node *persistedNode) ContainsKey(key any) (ok bool, err error) {
-	if err = node.pkIndex.Dedup(key); err == nil {
+	if err = node.pkIndex.Dedup(key, nil); err == nil {
 		return
 	}
 	if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
