@@ -111,6 +111,7 @@ type Partition struct {
 
 // Transaction represents a transaction
 type Transaction struct {
+	sync.Mutex
 	db *DB
 	// readOnly default value is true, once a write happen, then set to false
 	readOnly bool
