@@ -16,7 +16,7 @@ jobs:
 
     steps:
       - name: checkout head
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           fetch-depth: '3'
           path: ./head
@@ -41,7 +41,7 @@ jobs:
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-multi-CN-tae-DN
           
       - name: Clone test-tool repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tester
           path: ./mo-tester
@@ -82,7 +82,7 @@ jobs:
           cat ${{ github.workspace }}/upload/mo-service.log | grep -C2 'DATA RACE' || true
           if [ "$(cat ${{ github.workspace }}/upload/mo-service.log |grep 'DATA RACE' | grep -v "grep" | wc -l)" -gt 0 ]; then exit 1; fi
           
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         if: ${{ always() }}
         continue-on-error: true
         with:
