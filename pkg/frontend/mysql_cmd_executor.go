@@ -546,7 +546,7 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 		return err
 	}
 	mrs := ses.GetMysqlResultSet()
-	for _, row := range ses.Data {
+	for _, row := range ses.data {
 		tableName := string(row[0].([]byte))
 		r, err := db.Relation(ses.requestCtx, tableName)
 		if err != nil {
@@ -1138,7 +1138,7 @@ func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tre
 				buf.Reset()
 			}
 			if rbat != nil {
-				rbat.Clean(ses.Mp)
+				rbat.Clean(ses.mp)
 			}
 			removeFile(dump.OutFile, curFileIdx)
 		}
@@ -1171,7 +1171,7 @@ func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tre
 			return err
 		}
 		for {
-			bat, err := rds[0].Read(param.attrs, nil, ses.Mp)
+			bat, err := rds[0].Read(param.attrs, nil, ses.mp)
 			if err != nil {
 				return err
 			}
@@ -1182,7 +1182,7 @@ func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tre
 			buf.WriteString("INSERT INTO ")
 			buf.WriteString(param.name)
 			buf.WriteString(" VALUES ")
-			rbat, err = convertValueBat2Str(bat, ses.Mp, ses.GetTimeZone())
+			rbat, err = convertValueBat2Str(bat, ses.mp, ses.GetTimeZone())
 			if err != nil {
 				return err
 			}
