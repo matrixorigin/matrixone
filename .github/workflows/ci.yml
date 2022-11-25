@@ -19,7 +19,7 @@ jobs:
     name: UT Test on Ubuntu/x64
       
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           fetch-depth: '3'
           repository: ${{ github.event.pull_request.head.repo.full_name }}
@@ -47,7 +47,7 @@ jobs:
     name: UT Test on Darwin/x86
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           fetch-depth: '3'
           repository: ${{ github.event.pull_request.head.repo.full_name }}
@@ -67,7 +67,7 @@ jobs:
     name: UT Test on Linux/Arm
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           fetch-depth: '3'
           repository: ${{ github.event.pull_request.head.repo.full_name }}
@@ -89,7 +89,7 @@ jobs:
 
     steps:
       - name: checkout head
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           fetch-depth: '3'
           path: ./head
@@ -110,7 +110,7 @@ jobs:
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-logservice
 
       - name: Clone test-tool repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tester
           path: ./mo-tester
@@ -147,7 +147,7 @@ jobs:
           mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         if: ${{ failure() }}
         continue-on-error: true
         with:
@@ -163,7 +163,7 @@ jobs:
 
     steps:
       - name: checkout head
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           fetch-depth: '3'
           path: ./head
@@ -184,7 +184,7 @@ jobs:
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-logservice
 
       - name: Clone test-tool repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tester
           path: ./mo-tester
@@ -221,7 +221,7 @@ jobs:
           mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/ 
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         if: ${{ failure() }}
         continue-on-error: true
         with:
@@ -238,7 +238,7 @@ jobs:
 
     steps:
       - name: checkout head
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           fetch-depth: '3'
           path: ./head
@@ -259,7 +259,7 @@ jobs:
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-logservice
 
       - name: Clone test-tool repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tester
           path: ./mo-tester
@@ -294,7 +294,7 @@ jobs:
           mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/ 
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         if: ${{ failure() }}
         continue-on-error: true
         with:
@@ -314,7 +314,7 @@ jobs:
     name: SCA Test on Ubuntu/x64
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           fetch-depth: '3'
           repository: ${{ github.event.pull_request.head.repo.full_name }}
