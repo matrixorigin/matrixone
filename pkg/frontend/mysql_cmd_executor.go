@@ -4121,7 +4121,7 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 	case types.T_blob:
 		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
 	case types.T_text:
-		col.SetColumnType(defines.MYSQL_TYPE_TEXT) // default utf-8
+		col.SetColumnType(defines.MYSQL_TYPE_BLOB) // default utf-8
 	case types.T_uuid:
 		col.SetColumnType(defines.MYSQL_TYPE_UUID)
 	default:
