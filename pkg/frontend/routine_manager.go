@@ -89,8 +89,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	exe.SetRoutineManager(rm)
 	exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
 
-	routine := NewRoutine(rm.getCtx(), pro, exe, pu)
-	routine.SetRoutineMgr(rm)
+	routine := NewRoutine(rm.getCtx(), pro, exe, pu.SV, rs)
 
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know

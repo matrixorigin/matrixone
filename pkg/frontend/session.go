@@ -98,19 +98,19 @@ type Session struct {
 	protocol Protocol
 
 	//cmd from the client
-	Cmd CommandType
+	cmd CommandType
 
 	//for test
-	Mrs *MysqlResultSet
+	mrs *MysqlResultSet
 
 	// mpool
-	Mp *mpool.MPool
+	mp *mpool.MPool
 
-	Pu *config.ParameterUnit
+	pu *config.ParameterUnit
 
-	IsInternal bool
+	isInternal bool
 
-	Data         [][]interface{}
+	data         [][]interface{}
 	ep           *tree.ExportParam
 	showStmtType ShowStatementType
 
@@ -191,12 +191,12 @@ func (e *errInfo) length() int {
 	return len(e.codes)
 }
 
-func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables, flag bool) *Session {
-	txnHandler := InitTxnHandler(PU.StorageEngine, PU.TxnClient)
+func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysVars *GlobalSystemVariables, flag bool) *Session {
+	txnHandler := InitTxnHandler(pu.StorageEngine, pu.TxnClient)
 	ses := &Session{
 		protocol: proto,
-		Mp:       mp,
-		Pu:       PU,
+		mp:       mp,
+		pu:       pu,
 		ep: &tree.ExportParam{
 			Outfile: false,
 			Fields:  &tree.Fields{},
@@ -205,7 +205,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 		txnHandler: txnHandler,
 		//TODO:fix database name after the catalog is ready
 		txnCompileCtx: InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
-		storage:       PU.StorageEngine,
+		storage:       pu.StorageEngine,
 		gSysVars:      gSysVars,
 
 		serverStatus: 0,
@@ -232,7 +232,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 	ses.GetTxnHandler().SetSession(ses)
 
 	var err error
-	if ses.Mp == nil {
+	if ses.mp == nil {
 		// If no mp, we create one for session.  Use GuestMmuLimitation as cap.
 		// fixed pool size can be another param, or should be computed from cap,
 		// but here, too lazy, just use Mid.
@@ -240,7 +240,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 		// XXX MPOOL
 		// We don't have a way to close a session, so the only sane way of creating
 		// a mpool is to use NoFixed
-		ses.Mp, err = mpool.NewMPool("pipeline-"+ses.GetUUIDString(), PU.SV.GuestMmuLimitation, mpool.NoFixed)
+		ses.mp, err = mpool.NewMPool("pipeline-"+ses.GetUUIDString(), pu.SV.GuestMmuLimitation, mpool.NoFixed)
 		if err != nil {
 			panic(err)
 		}
@@ -377,43 +377,43 @@ func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
 func (ses *Session) GetIsInternal() bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.IsInternal
+	return ses.isInternal
 }
 
 func (ses *Session) SetMemPool(mp *mpool.MPool) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.Mp = mp
+	ses.mp = mp
 }
 
 func (ses *Session) GetMemPool() *mpool.MPool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.Mp
+	return ses.mp
 }
 
 func (ses *Session) GetParameterUnit() *config.ParameterUnit {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.Pu
+	return ses.pu
 }
 
 func (ses *Session) GetData() [][]interface{} {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.Data
+	return ses.data
 }
 
 func (ses *Session) SetData(data [][]interface{}) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.Data = data
+	ses.data = data
 }
 
 func (ses *Session) AppendData(row []interface{}) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.Data = append(ses.Data, row)
+	ses.data = append(ses.data, row)
 }
 
 func (ses *Session) SetExportParam(ep *tree.ExportParam) {
@@ -492,25 +492,25 @@ func (ses *Session) GetTimeZone() *time.Location {
 func (ses *Session) SetCmd(cmd CommandType) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.Cmd = cmd
+	ses.cmd = cmd
 }
 
 func (ses *Session) GetCmd() CommandType {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.Cmd
+	return ses.cmd
 }
 
 func (ses *Session) SetMysqlResultSet(mrs *MysqlResultSet) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.Mrs = mrs
+	ses.mrs = mrs
 }
 
 func (ses *Session) GetMysqlResultSet() *MysqlResultSet {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.Mrs
+	return ses.mrs
 }
 
 func (ses *Session) AppendMysqlResultSetOfBackgroundTask(mrs *MysqlResultSet) {
