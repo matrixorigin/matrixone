@@ -15,6 +15,7 @@
 package binary
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -667,7 +668,7 @@ func TestDateFormatWithScalar(t *testing.T) {
 }
 
 func TestDatetimeFromat(t *testing.T) {
-
+	ctx := context.TODO()
 	kases := []struct {
 		datestr string
 		format  []string
@@ -687,7 +688,7 @@ func TestDatetimeFromat(t *testing.T) {
 		}
 
 		for i := 0; i < len(k.format); i++ {
-			res, err := datetimeFormat(datetime, k.format[i])
+			res, err := datetimeFormat(ctx, datetime, k.format[i])
 			if err != nil {
 				t.Fatalf("dateformat exec error: %+v", err)
 			}
@@ -738,7 +739,7 @@ func TestDatetimeFromat(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse datetime string err %+v", err)
 			}
-			result, err := datetimeFormat(datetime, c.format)
+			result, err := datetimeFormat(ctx, datetime, c.format)
 			if err != nil {
 				t.Fatalf("dateformat exec error: %+v", err)
 			}

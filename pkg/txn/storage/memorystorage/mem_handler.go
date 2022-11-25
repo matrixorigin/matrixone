@@ -114,7 +114,7 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 
 	table, err := m.relations.Get(tx, req.TableID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return moerr.NewInternalError(
+		return moerr.NewInternalErrorNoCtx(
 			"invalid table id %v, db %v, name %v",
 			req.TableID,
 			req.DatabaseName,
@@ -173,7 +173,7 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 			return err
 		}
 		if len(entries) > 0 {
-			return moerr.NewConstraintViolation(`duplicate column "%s"`, def.Attr.Name)
+			return moerr.NewConstraintViolationNoCtx(`duplicate column "%s"`, def.Attr.Name)
 		}
 		// insert
 		id, err := m.idGenerator.NewID(ctx)
@@ -206,7 +206,7 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 				return err
 			}
 			if len(entries) > 0 {
-				return moerr.NewDuplicate()
+				return moerr.NewDuplicateNoCtx()
 			}
 			// insert
 			id, err := m.idGenerator.NewID(ctx)
@@ -273,7 +273,7 @@ func (m *MemHandler) HandleCloseTableIter(ctx context.Context, meta txn.TxnMeta,
 	defer m.iterators.Unlock()
 	iter, ok := m.iterators.Map[req.IterID]
 	if !ok {
-		return moerr.NewInternalError("no such iter: %v", req.IterID)
+		return moerr.NewInternalErrorNoCtx("no such iter: %v", req.IterID)
 	}
 	delete(m.iterators.Map, req.IterID)
 	if err := iter.TableIter.Close(); err != nil {
@@ -294,7 +294,7 @@ func (m *MemHandler) HandleCreateDatabase(ctx context.Context, meta txn.TxnMeta,
 		return err
 	}
 	if len(entries) > 0 {
-		return moerr.NewDBAlreadyExists(req.Name)
+		return moerr.NewDBAlreadyExistsNoCtx(req.Name)
 	}
 
 	if req.ID.IsEmpty() {
@@ -323,7 +323,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 	if !req.DatabaseID.IsEmpty() {
 		_, err := m.databases.Get(tx, req.DatabaseID)
 		if errors.Is(err, sql.ErrNoRows) {
-			return moerr.NewNoDB()
+			return moerr.NewNoDBNoCtx()
 		}
 		if err != nil {
 			return err
@@ -340,7 +340,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 		return err
 	}
 	if len(entries) > 0 {
-		return moerr.NewTableAlreadyExists(req.Name)
+		return moerr.NewTableAlreadyExistsNoCtx(req.Name)
 	}
 
 	// row
@@ -397,7 +397,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 	}
 
 	if len(relAttrs) == 0 && len(row.ViewDef) == 0 {
-		return moerr.NewConstraintViolation("no schema")
+		return moerr.NewConstraintViolationNoCtx("no schema")
 	}
 
 	// add row id
@@ -415,7 +415,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 	nameSet := make(map[string]bool)
 	for i, attr := range relAttrs {
 		if _, ok := nameSet[attr.Name]; ok {
-			return moerr.NewConstraintViolation(`duplicate column "%s"`, attr.Name)
+			return moerr.NewConstraintViolationNoCtx(`duplicate column "%s"`, attr.Name)
 		}
 		nameSet[attr.Name] = true
 		if len(primaryColumnNames) > 0 {
@@ -481,7 +481,7 @@ func (m *MemHandler) HandleDelTableDef(ctx context.Context, meta txn.TxnMeta, re
 
 	table, err := m.relations.Get(tx, req.TableID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return moerr.NewInternalError(
+		return moerr.NewInternalErrorNoCtx(
 			"invalid table id %v, db %v, name %v",
 			req.TableID,
 			req.DatabaseName,
@@ -628,7 +628,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 		return err
 	}
 	if len(entries) == 0 {
-		return moerr.NewInternalError("no such column: %s", req.ColumnName)
+		return moerr.NewInternalErrorNoCtx("no such column: %s", req.ColumnName)
 	}
 	if len(entries) != 1 {
 		panic("impossible")
@@ -681,7 +681,7 @@ func (m *MemHandler) HandleDeleteDatabase(ctx context.Context, meta txn.TxnMeta,
 		return err
 	}
 	if len(entries) == 0 {
-		return moerr.NewNoDB()
+		return moerr.NewNoDBNoCtx()
 	}
 
 	for _, entry := range entries {
@@ -801,7 +801,7 @@ func (m *MemHandler) HandleTruncateRelation(ctx context.Context, meta txn.TxnMet
 	tx := m.getTx(meta)
 	_, err := m.relations.Get(tx, req.OldTableID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return moerr.NewNoSuchTable(req.DatabaseName, req.Name)
+		return moerr.NewNoSuchTableNoCtx(req.DatabaseName, req.Name)
 	}
 	return m.deleteRelationData(tx, req.OldTableID)
 }
@@ -1089,7 +1089,7 @@ func (m *MemHandler) HandleOpenDatabase(ctx context.Context, meta txn.TxnMeta, r
 	}
 
 	if len(entries) == 0 {
-		return moerr.NewNoDB()
+		return moerr.NewNoDBNoCtx()
 	}
 
 	entry := entries[0]
@@ -1114,7 +1114,7 @@ func (m *MemHandler) HandleOpenRelation(ctx context.Context, meta txn.TxnMeta, r
 		return err
 	}
 	if len(entries) == 0 {
-		return moerr.NewNoSuchTable(req.DatabaseName, req.Name)
+		return moerr.NewNoSuchTableNoCtx(req.DatabaseName, req.Name)
 	}
 	entry := entries[0]
 	rel, err := m.relations.Get(tx, entry.Key)
@@ -1139,7 +1139,7 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req memor
 	iter, ok := m.iterators.Map[req.IterID]
 	if !ok {
 		m.iterators.Unlock()
-		return moerr.NewInternalError("no such iter: %v", req.IterID)
+		return moerr.NewInternalErrorNoCtx("no such iter: %v", req.IterID)
 	}
 	m.iterators.Unlock()
 
@@ -1285,7 +1285,7 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 	}
 
 	if len(nameToAttrs) == 0 {
-		return moerr.NewInternalError(
+		return moerr.NewInternalErrorNoCtx(
 			"invalid table id %v, db %v, name %v",
 			tableID,
 			dbName,

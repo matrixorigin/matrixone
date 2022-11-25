@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -76,6 +77,8 @@ type CompilerContext interface {
 	// get username of current session
 	GetUserName() string
 	GetAccountId() uint32
+	// GetContext get raw context.Context
+	GetContext() context.Context
 }
 
 type Optimizer interface {

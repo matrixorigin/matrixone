@@ -321,7 +321,7 @@ func newHAKeeperClient(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	return nil, moerr.NewNoHAKeeper()
+	return nil, moerr.NewNoHAKeeper(ctx)
 }
 
 func connectByReverseProxy(ctx context.Context,
@@ -391,7 +391,7 @@ func connectToHAKeeper(ctx context.Context,
 	}
 	if e == nil {
 		// didn't encounter any error
-		return nil, moerr.NewNoHAKeeper()
+		return nil, moerr.NewNoHAKeeper(ctx)
 	}
 	return nil, e
 }
@@ -499,7 +499,7 @@ func (c *hakeeperClient) checkIsHAKeeper(ctx context.Context) (bool, error) {
 
 func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Response, error) {
 	if c == nil {
-		return pb.Response{}, moerr.NewNoHAKeeper()
+		return pb.Response{}, moerr.NewNoHAKeeper(ctx)
 	}
 	ctx, span := trace.Debug(ctx, "hakeeperClient.request")
 	defer span.End()
@@ -520,7 +520,7 @@ func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Respon
 	}
 	resp := response.Response
 	defer response.Release()
-	err = toError(response.Response)
+	err = toError(ctx, response.Response)
 	if err != nil {
 		return pb.Response{}, err
 	}

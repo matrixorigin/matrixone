@@ -39,7 +39,7 @@ func waitChTimeout[T any](
 	for {
 		select {
 		case <-timeout:
-			return moerr.NewInternalError("timeout")
+			return moerr.NewInternalError(context.TODO(), "timeout")
 		case item, ok := <-ch:
 			goOn, err := onRecvCheck(item, !ok)
 			if err != nil {
@@ -86,7 +86,7 @@ func (b *intBuf) IsEmpty() bool { return b.sum == 0 }
 
 func (b *intBuf) ShouldFlush() bool { return b.sum > 100 }
 
-func (b *intBuf) GetBatch(_ *bytes.Buffer) string {
+func (b *intBuf) GetBatch(_ context.Context, _ *bytes.Buffer) string {
 	return fmt.Sprintf("Batch int %d", b.sum)
 }
 
@@ -115,7 +115,7 @@ func (b *posBuf) IsEmpty() bool {
 func (b *posBuf) ShouldFlush() bool { return len(b.posList) > 3 }
 
 // bytes.Buffer to mitigate mem allocaction and the return bytes should own its data
-func (b *posBuf) GetBatch(buf *bytes.Buffer) string {
+func (b *posBuf) GetBatch(ctx context.Context, buf *bytes.Buffer) string {
 	buf.Reset()
 	for _, pos := range b.posList {
 		buf.WriteString(fmt.Sprintf("Ln %d, Col %d, Doc %d\n", pos.line, pos.linepos, pos.docpos))
@@ -179,10 +179,11 @@ func newTestCollector(opts ...BaseBatchPipeOpt) *testCollector {
 }
 
 func TestBaseCollector(t *testing.T) {
+	ctx := context.TODO()
 	collector := newTestCollector(PipeWithBatchWorkerNum(1))
 	require.True(t, collector.Start(context.TODO()))
 	require.False(t, collector.Start(context.TODO()))
-	err := collector.SendItem(
+	err := collector.SendItem(ctx,
 		&TestItem{name: T_INT, intval: 32},
 		&TestItem{name: T_POS, posval: &Pos{line: 1, linepos: 12, docpos: 12}},
 		&TestItem{name: T_INT, intval: 33},
@@ -191,11 +192,11 @@ func TestBaseCollector(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	require.Contains(t, collector.Received(), fmt.Sprintf("Ln %d, Col %d, Doc %d\n", 1, 12, 12))
 
-	_ = collector.SendItem(&TestItem{name: T_INT, intval: 40})
+	_ = collector.SendItem(ctx, &TestItem{name: T_INT, intval: 40})
 	time.Sleep(20 * time.Millisecond)
 	require.Contains(t, collector.Received(), "Batch int 105")
 
-	_ = collector.SendItem(&TestItem{name: T_INT, intval: 40})
+	_ = collector.SendItem(ctx, &TestItem{name: T_INT, intval: 40})
 	handle, succ := collector.Stop(false)
 	require.True(t, succ)
 	require.NoError(t, waitChTimeout(handle, func(element struct{}, closed bool) (goOn bool, err error) {
@@ -206,11 +207,10 @@ func TestBaseCollector(t *testing.T) {
 }
 
 func TestBaseCollectorReminderBackOff(t *testing.T) {
+	ctx := context.TODO()
 	collector := newTestCollector(PipeWithBatchWorkerNum(1))
 	require.True(t, collector.Start(context.TODO()))
-	err := collector.SendItem(
-		&TestItem{name: T_POS, posval: &Pos{line: 1, linepos: 12, docpos: 12}},
-	)
+	err := collector.SendItem(ctx, &TestItem{name: T_POS, posval: &Pos{line: 1, linepos: 12, docpos: 12}})
 	require.NoError(t, err)
 
 	var prev time.Time
@@ -233,9 +233,7 @@ func TestBaseCollectorReminderBackOff(t *testing.T) {
 
 	require.Contains(t, collector.Received(), fmt.Sprintf("Ln %d, Col %d, Doc %d\n", 1, 12, 12))
 
-	_ = collector.SendItem(
-		&TestItem{name: T_POS, posval: &Pos{line: 1, linepos: 12, docpos: 12}},
-	)
+	_ = collector.SendItem(ctx, &TestItem{name: T_POS, posval: &Pos{line: 1, linepos: 12, docpos: 12}})
 
 	// new write will reset timer to 30ms
 	time.Sleep(50 * time.Millisecond)
@@ -254,12 +252,13 @@ func TestBaseCollectorGracefulStop(t *testing.T) {
 	var notifyFun = func() {
 		notify.Done()
 	}
+	ctx := context.TODO()
 	collector := newTestCollector(PipeWithBatchWorkerNum(2), PipeWithBufferWorkerNum(1))
 	collector.notify4Batch = notifyFun
 	collector.Start(context.TODO())
 
 	notify.Add(1)
-	err := collector.SendItem(
+	err := collector.SendItem(ctx,
 		&TestItem{name: T_INT, intval: 32},
 		&TestItem{name: T_INT, intval: 40},
 		&TestItem{name: T_INT, intval: 33},
@@ -270,14 +269,14 @@ func TestBaseCollectorGracefulStop(t *testing.T) {
 	require.Contains(t, collector.Received(), "Batch int 105")
 
 	notify.Add(1)
-	_ = collector.SendItem(&TestItem{name: T_INT, intval: 40})
+	_ = collector.SendItem(ctx, &TestItem{name: T_INT, intval: 40})
 	handle, succ := collector.Stop(true)
 	require.True(t, succ)
 	handle2, succ2 := collector.Stop(true)
 	require.False(t, succ2)
 	require.Nil(t, handle2)
 	notify.Add(1)
-	require.Error(t, collector.SendItem(&TestItem{name: T_INT, intval: 40}))
+	require.Error(t, collector.SendItem(ctx, &TestItem{name: T_INT, intval: 40}))
 	require.NoError(t, waitChTimeout(handle, func(element struct{}, closed bool) (goOn bool, err error) {
 		assert.True(t, closed)
 		return
@@ -294,7 +293,7 @@ func TestBaseReminder(t *testing.T) {
 	require.Panics(t, func() { registry.Register("1", 1*ms) })
 	checkOneRecevied := func(_ string, closed bool) (goOn bool, err error) {
 		if closed {
-			err = moerr.NewInternalError("unexpected close")
+			err = moerr.NewInternalError(context.TODO(), "unexpected close")
 		}
 		return
 	}

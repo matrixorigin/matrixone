@@ -59,11 +59,11 @@ func Decimal64VecDiv(xs, ys, rs *vector.Vector) error {
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
 	if rc != 0 {
 		if rc == RC_DIVISION_BY_ZERO {
-			return moerr.NewDivByZero()
+			return moerr.NewDivByZeroNoCtx()
 		} else if rc == RC_OUT_OF_RANGE {
-			return moerr.NewOutOfRange("decimal64", "decimal div")
+			return moerr.NewOutOfRangeNoCtx("decimal64", "decimal div")
 		} else {
-			return moerr.NewInternalError("decimal64 div internal error")
+			return moerr.NewInternalErrorNoCtx("decimal64 div internal error")
 		}
 	}
 	return nil
@@ -85,11 +85,11 @@ func Decimal128VecDiv(xs, ys, rs *vector.Vector) error {
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
 	if rc != 0 {
 		if rc == RC_DIVISION_BY_ZERO {
-			return moerr.NewDivByZero()
+			return moerr.NewDivByZeroNoCtx()
 		} else if rc == RC_OUT_OF_RANGE {
-			return moerr.NewOutOfRange("decimal128", "decimal div")
+			return moerr.NewOutOfRangeNoCtx("decimal128", "decimal div")
 		} else {
-			return moerr.NewInternalError("decimal128 div internal error")
+			return moerr.NewInternalErrorNoCtx("decimal128 div internal error")
 		}
 	}
 	return nil

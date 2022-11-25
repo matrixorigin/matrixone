@@ -49,7 +49,7 @@ func NumericDivFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 	rc := C.Float_VecDiv(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
 	if rc != 0 {
-		return moerr.NewDivByZero()
+		return moerr.NewDivByZeroNoCtx()
 	}
 	return nil
 }
@@ -67,7 +67,7 @@ func NumericIntegerDivFloat[T constraints.Float](xs, ys, rs *vector.Vector) erro
 	rc := C.Float_VecIntegerDiv(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
 	if rc != 0 {
-		return moerr.NewDivByZero()
+		return moerr.NewDivByZeroNoCtx()
 	}
 	return nil
 }

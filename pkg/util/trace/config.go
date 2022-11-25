@@ -382,6 +382,12 @@ func WithNewRoot(newRoot bool) spanOptionFunc {
 	})
 }
 
+func WithKind(kind SpanKind) spanOptionFunc {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.Kind = kind
+	})
+}
+
 type Resource struct {
 	m map[string]any
 }
@@ -426,6 +432,9 @@ const (
 	// SpanKindRemote is a SpanKind for a Span that represents the operation
 	// cross rpc
 	SpanKindRemote SpanKind = 2
+	// SpanKindSession is a SpanKind for a Span that represents the operation
+	// start from session
+	SpanKindSession SpanKind = 3
 )
 
 func (k SpanKind) String() string {
@@ -436,6 +445,8 @@ func (k SpanKind) String() string {
 		return "statement"
 	case SpanKindRemote:
 		return "remote"
+	case SpanKindSession:
+		return "session"
 	default:
 		return "unknown"
 	}

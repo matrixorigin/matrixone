@@ -26,10 +26,10 @@ import (
 )
 
 var (
-	ErrVFileGroupNotExist = moerr.NewInternalError("vfile: group not existed")
-	ErrVFileLsnNotExist   = moerr.NewInternalError("vfile: lsn not existed")
-	ErrVFileOffsetTimeOut = moerr.NewInternalError("get vfile offset timeout")
-	ErrReadMetaFailed     = moerr.NewInternalError("read meta failed")
+	ErrVFileGroupNotExist = moerr.NewInternalErrorNoCtx("vfile: group not existed")
+	ErrVFileLsnNotExist   = moerr.NewInternalErrorNoCtx("vfile: lsn not existed")
+	ErrVFileOffsetTimeOut = moerr.NewInternalErrorNoCtx("get vfile offset timeout")
+	ErrReadMetaFailed     = moerr.NewInternalErrorNoCtx("read meta failed")
 )
 
 type vInfo struct {

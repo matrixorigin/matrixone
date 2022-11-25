@@ -76,12 +76,12 @@ func (i *ioEntriesReader) Read(buf []byte) (n int, err error) {
 				return
 			}
 			if int64(bytesRead) != numBytes {
-				err = moerr.NewSizeNotMatch("")
+				err = moerr.NewSizeNotMatchNoCtx("")
 				return
 			}
 		} else {
 			if int64(len(entry.Data)) != entry.Size {
-				err = moerr.NewSizeNotMatch("")
+				err = moerr.NewSizeNotMatchNoCtx("")
 				return
 			}
 			copy(buf, entry.Data[:numBytes])

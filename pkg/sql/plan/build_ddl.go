@@ -151,7 +151,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		// todo confirm: option data store like this?
 		case *tree.TableOptionComment:
 			if getNumOfCharacters(opt.Comment) > maxLengthOfTableComment {
-				return nil, moerr.NewInvalidInput("comment for field '%s' is too long", createTable.TableDef.Name)
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for field '%s' is too long", createTable.TableDef.Name)
 			}
 
 			properties := []*plan.Property{
@@ -179,7 +179,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		// 	*tree.TableOptionUnion, *tree.TableOptionEncryption:
 		// 	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
 		default:
-			return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 		}
 	}
 
@@ -189,7 +189,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			switch strings.ToLower(stmt.Param.Option[i]) {
 			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata":
 			default:
-				return nil, moerr.NewBadConfig("the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
+				return nil, moerr.NewBadConfig(ctx.GetContext(), "the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
 			}
 		}
 		json_byte, err := json.Marshal(stmt.Param)
@@ -297,7 +297,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			}
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) {
 				if colType.GetWidth() > types.MaxStringSize {
-					return moerr.NewInvalidInput("string width (%d) is too long", colType.GetWidth())
+					return moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
 				}
 			}
 
@@ -307,13 +307,13 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			for _, attr := range def.Attributes {
 				if _, ok := attr.(*tree.AttributePrimaryKey); ok {
 					if colType.GetId() == int32(types.T_blob) {
-						return moerr.NewNotSupported("blob type in primary key")
+						return moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
 					}
 					if colType.GetId() == int32(types.T_text) {
-						return moerr.NewNotSupported("text type in primary key")
+						return moerr.NewNotSupported(ctx.GetContext(), "text type in primary key")
 					}
 					if colType.GetId() == int32(types.T_json) {
-						return moerr.NewNotSupported(fmt.Sprintf("JSON column '%s' cannot be in primary key", def.Name.Parts[0]))
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", def.Name.Parts[0]))
 					}
 					pks = append(pks, def.Name.Parts[0])
 				}
@@ -321,20 +321,20 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 				if attrComment, ok := attr.(*tree.AttributeComment); ok {
 					comment = attrComment.CMT.String()
 					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
-						return moerr.NewInvalidInput("comment for column '%s' is too long", def.Name.Parts[0])
+						return moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", def.Name.Parts[0])
 					}
 				}
 
 				if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
 					auto_incr = true
 					if !operator.IsInteger(types.T(colType.GetId())) {
-						return moerr.NewNotSupported("the auto_incr column is only support integer type now")
+						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				}
 			}
 			if len(pks) > 0 {
 				if len(primaryKeys) > 0 {
-					return moerr.NewInvalidInput("more than one primary key defined")
+					return moerr.NewInvalidInput(ctx.GetContext(), "more than one primary key defined")
 				}
 				primaryKeys = pks
 			}
@@ -344,7 +344,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 				return err
 			}
 			if auto_incr && defaultValue.Expr != nil {
-				return moerr.NewInvalidInput("invalid default value for '%s'", def.Name.Parts[0])
+				return moerr.NewInvalidInput(ctx.GetContext(), "invalid default value for '%s'", def.Name.Parts[0])
 			}
 
 			onUpdateExpr, err := buildOnUpdate(def, colType)
@@ -365,13 +365,13 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
 		case *tree.PrimaryKeyIndex:
 			if len(primaryKeys) > 0 {
-				return moerr.NewInvalidInput("more than one primary key defined")
+				return moerr.NewInvalidInput(ctx.GetContext(), "more than one primary key defined")
 			}
 			pksMap := map[string]bool{}
 			for _, key := range def.KeyParts {
 				name := key.ColName.Parts[0] // name of primary key column
 				if _, ok := pksMap[name]; ok {
-					return moerr.NewInvalidInput("duplicate column name '%s' in primary key", name)
+					return moerr.NewInvalidInput(ctx.GetContext(), "duplicate column name '%s' in primary key", name)
 				}
 				primaryKeys = append(primaryKeys, name)
 				pksMap[name] = true
@@ -383,7 +383,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			for _, key := range def.KeyParts {
 				name := key.ColName.Parts[0] // name of index column
 				if _, ok := nameMap[name]; ok {
-					return moerr.NewInvalidInput("duplicate column name '%s' in primary key", name)
+					return moerr.NewInvalidInput(ctx.GetContext(), "duplicate column name '%s' in primary key", name)
 				}
 				nameMap[name] = true
 				indexs = append(indexs, name)
@@ -392,9 +392,9 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			indexInfos = append(indexInfos, def)
 		case *tree.CheckIndex, *tree.ForeignKey, *tree.FullTextIndex:
 			// unsupport in plan. will support in next version.
-			return moerr.NewNYI("table def: '%v'", def)
+			return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
 		default:
-			return moerr.NewNYI("table def: '%v'", def)
+			return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
 		}
 	}
 
@@ -402,7 +402,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 	if len(primaryKeys) > 0 {
 		for _, primaryKey := range primaryKeys {
 			if _, ok := colMap[primaryKey]; !ok {
-				return moerr.NewInvalidInput("column '%s' doesn't exist in table", primaryKey)
+				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", primaryKey)
 			}
 		}
 		if len(primaryKeys) == 1 {
@@ -444,19 +444,19 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 	// for example, the text type don't support index
 	for _, str := range indexs {
 		if colMap[str].Typ.Id == int32(types.T_blob) {
-			return moerr.NewNotSupported("blob type in index")
+			return moerr.NewNotSupported(ctx.GetContext(), "blob type in index")
 		}
 		if colMap[str].Typ.Id == int32(types.T_text) {
-			return moerr.NewNotSupported("text type in index")
+			return moerr.NewNotSupported(ctx.GetContext(), "text type in index")
 		}
 		if colMap[str].Typ.Id == int32(types.T_json) {
-			return moerr.NewNotSupported(fmt.Sprintf("JSON column '%s' cannot be in index", str))
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
 		}
 	}
 
 	// build index table
 	if len(indexInfos) != 0 {
-		err := buildUniqueIndexTable(createTable, indexInfos, colMap, pkeyName)
+		err := buildUniqueIndexTable(createTable, indexInfos, colMap, pkeyName, ctx)
 		if err != nil {
 			return err
 		}
@@ -464,14 +464,14 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 	return nil
 }
 
-func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef, pkeyName string) error {
+func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
 	indexNumber := 0
 	def := &plan.IndexDef{
 		Fields: make([]*plan.Field, 0),
 	}
 
 	for _, indexInfo := range indexInfos {
-		indexTableName, err := util.BuildIndexTableName(true, indexNumber, indexInfo.Name)
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), true, indexNumber, indexInfo.Name)
 		if err != nil {
 			return err
 		}
@@ -484,7 +484,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		for _, keyPart := range indexInfo.KeyParts {
 			name := keyPart.ColName.Parts[0]
 			if _, ok := colMap[name]; !ok {
-				return moerr.NewInvalidInput("column '%s' is not exist", name)
+				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", name)
 			}
 			field.ColNames = append(field.ColNames, name)
 		}
@@ -560,7 +560,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 	truncateTable.Table = string(stmt.Name.ObjectName)
 	_, tableDef := ctx.Resolve(truncateTable.Database, truncateTable.Table)
 	if tableDef == nil {
-		return nil, moerr.NewNoSuchTable(truncateTable.Database, truncateTable.Table)
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 	} else {
 		isView := false
 		for _, def := range tableDef.Defs {
@@ -570,7 +570,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			}
 		}
 		if isView {
-			return nil, moerr.NewNoSuchTable(truncateTable.Database, truncateTable.Table)
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 		}
 		indexInfos := BuildIndexInfos(ctx, truncateTable.Database, tableDef.Defs)
 		truncateTable.IndexTableNames = make([]string, len(indexInfos))
@@ -596,7 +596,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		IfExists: stmt.IfExists,
 	}
 	if len(stmt.Names) != 1 {
-		return nil, moerr.NewNotSupported("drop multiple (%d) tables in one statement", len(stmt.Names))
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "drop multiple (%d) tables in one statement", len(stmt.Names))
 	}
 	dropTable.Database = string(stmt.Names[0].SchemaName)
 	if dropTable.Database == "" {
@@ -607,7 +607,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	_, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
 	if tableDef == nil {
 		if !dropTable.IfExists {
-			return nil, moerr.NewNoSuchTable(dropTable.Database, dropTable.Table)
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 	} else {
 		isView := false
@@ -619,7 +619,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		}
 		if isView && !dropTable.IfExists {
 			// drop table v0, v0 is view
-			return nil, moerr.NewNoSuchTable(dropTable.Database, dropTable.Table)
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		} else if isView {
 			// drop table if exists v0, v0 is view
 			dropTable.Table = ""
@@ -647,7 +647,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 		IfExists: stmt.IfExists,
 	}
 	if len(stmt.Names) != 1 {
-		return nil, moerr.NewNotSupported("drop multiple (%d) view", len(stmt.Names))
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "drop multiple (%d) view", len(stmt.Names))
 	}
 	dropTable.Database = string(stmt.Names[0].SchemaName)
 	if dropTable.Database == "" {
@@ -658,7 +658,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 	_, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
 	if tableDef == nil {
 		if !dropTable.IfExists {
-			return nil, moerr.NewBadView(dropTable.Database, dropTable.Table)
+			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 	} else {
 		isView := false
@@ -669,7 +669,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 			}
 		}
 		if !isView {
-			return nil, moerr.NewBadView(dropTable.Database, dropTable.Table)
+			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 	}
 
@@ -722,7 +722,7 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 }
 
 func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error) {
-	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
+	return nil, moerr.NewNotSupported(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	// todo unsupport now
 	// createIndex := &plan.CreateIndex{}
 	// return &Plan{
@@ -738,7 +738,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 }
 
 func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
-	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
+	return nil, moerr.NewNotSupported(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	// todo unsupport now
 	// dropIndex := &plan.DropIndex{
 	// 	IfExists: stmt.IfExists,

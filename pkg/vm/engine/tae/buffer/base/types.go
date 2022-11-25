@@ -25,9 +25,9 @@ import (
 )
 
 var (
-	ErrNoSpace       = moerr.NewInternalError("buffer: no space left")
-	ErrNotFound      = moerr.NewInternalError("buffer: node not found")
-	ErrDuplicataNode = moerr.NewInternalError("buffer: duplicate node")
+	ErrNoSpace       = moerr.NewInternalErrorNoCtx("buffer: no space left")
+	ErrNotFound      = moerr.NewInternalErrorNoCtx("buffer: node not found")
+	ErrDuplicataNode = moerr.NewInternalErrorNoCtx("buffer: duplicate node")
 )
 
 type MemoryFreeFunc func(IMemoryNode)

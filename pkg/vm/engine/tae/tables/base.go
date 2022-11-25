@@ -126,7 +126,7 @@ func (blk *baseBlock) GetColumnData(
 		defer pnode.Unref()
 		return pnode.GetColumnDataWindow(from, to, colIdx, buffer)
 	}
-	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
+	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("bad block %s", blk.meta.String())))
 }
 
 func (blk *baseBlock) Rows() int {
@@ -140,7 +140,7 @@ func (blk *baseBlock) Rows() int {
 		defer pnode.Unref()
 		return int(pnode.Rows())
 	}
-	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
+	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("bad block %s", blk.meta.String())))
 }
 
 func (blk *baseBlock) TryUpgrade() (err error) {
@@ -409,7 +409,7 @@ func (blk *baseBlock) getPersistedValue(
 		}
 	}
 	if view.DeleteMask != nil && view.DeleteMask.ContainsInt(row) {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	view2, err := blk.ResolvePersistedColumnData(pnode, ts, col, nil, true)

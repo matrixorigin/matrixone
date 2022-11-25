@@ -15,6 +15,7 @@
 package parsers
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -33,10 +34,11 @@ var (
 )
 
 func TestMysql(t *testing.T) {
+	ctx := context.TODO()
 	if debugSQL.output == "" {
 		debugSQL.output = debugSQL.input
 	}
-	ast, err := mysql.ParseOne(debugSQL.input)
+	ast, err := mysql.ParseOne(ctx, debugSQL.input)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", debugSQL.input, err)
 		return
@@ -48,10 +50,11 @@ func TestMysql(t *testing.T) {
 }
 
 func TestPostgresql(t *testing.T) {
+	ctx := context.TODO()
 	if debugSQL.output == "" {
 		debugSQL.output = debugSQL.input
 	}
-	ast, err := postgresql.ParseOne(debugSQL.input)
+	ast, err := postgresql.ParseOne(ctx, debugSQL.input)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", debugSQL.input, err)
 		return

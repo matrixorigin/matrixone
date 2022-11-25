@@ -21,5 +21,5 @@ import (
 
 func buildValues(stmt *tree.ValuesStatement, ctx CompilerContext) (p *Plan, err error) {
 	// no support values statement now
-	return nil, moerr.NewNotSupported("Not support values statement")
+	return nil, moerr.NewNotSupported(ctx.GetContext(), "Not support values statement")
 }

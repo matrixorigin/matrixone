@@ -158,7 +158,7 @@ func (blk *block) dedupClosure(
 	return func(v any, _ int) (err error) {
 		if _, existed := compute.GetOffsetByVal(vec, v, mask); existed {
 			entry := common.TypeStringValue(vec.GetType(), v)
-			return moerr.NewDuplicateEntry(entry, def.Name)
+			return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 		}
 		return nil
 	}
@@ -236,7 +236,7 @@ func (blk *block) getPersistedRowByFilter(
 		return
 	}
 	if !ok {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	var sortKey containers.Vector
@@ -248,7 +248,7 @@ func (blk *block) getPersistedRowByFilter(
 	defer sortKey.Close()
 	off, existed := compute.GetOffsetByVal(sortKey, filter.Val, nil)
 	if !existed {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	offset = uint32(off)
@@ -260,7 +260,7 @@ func (blk *block) getPersistedRowByFilter(
 		return
 	}
 	if deleted {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 	}
 	return
 }

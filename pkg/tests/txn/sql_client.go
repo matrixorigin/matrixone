@@ -103,7 +103,7 @@ func (kop *sqlTxn) Commit() error {
 	kop.mu.Lock()
 	defer kop.mu.Unlock()
 	if kop.mu.closed {
-		return moerr.NewTxnClosed(nil)
+		return moerr.NewTxnClosedNoCtx(nil)
 	}
 
 	kop.mu.closed = true

@@ -16,6 +16,7 @@ package batch
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync/atomic"
 
@@ -266,12 +267,12 @@ func (bat *Batch) String() string {
 	return buf.String()
 }
 
-func (bat *Batch) Append(mh *mpool.MPool, b *Batch) (*Batch, error) {
+func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
 	if bat == nil {
 		return b, nil
 	}
 	if len(bat.Vecs) != len(b.Vecs) {
-		return nil, moerr.NewInternalError("unexpected error happens in batch append")
+		return nil, moerr.NewInternalError(ctx, "unexpected error happens in batch append")
 	}
 	if len(bat.Vecs) == 0 {
 		return bat, nil
