@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"io"
 	"path"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 
@@ -170,10 +169,12 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 
 func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 	filePath := strings.TrimSpace(param.Filepath)
-	pathDir := strings.Split(filePath, "/")
+	filePath = path.Clean(filePath)
+	sep := string("/")
+	pathDir := strings.Split(filePath, sep)
 	l := list.New()
 	if pathDir[0] == "" {
-		l.PushBack("/")
+		l.PushBack(sep)
 	} else {
 		l.PushBack(pathDir[0])
 	}
@@ -197,7 +198,10 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 				if entry.IsDir && i+1 == len(pathDir) {
 					continue
 				}
-				matched, _ := filepath.Match(pathDir[i], entry.Name)
+				matched, err := path.Match(pathDir[i], entry.Name)
+				if err != nil {
+					return nil, err
+				}
 				if !matched {
 					continue
 				}
