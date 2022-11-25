@@ -112,7 +112,7 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 	colDefs := _getDefaultColDefs()
 	colName := findColName(tbl.Func)
 	node := &plan.Node{
-		NodeType: plan.Node_TABLE_FUNCTION,
+		NodeType: plan.Node_FUNCTION_SCAN,
 		Cost:     &plan.Cost{},
 		TableDef: &plan.TableDef{
 			TableType: "func_table", //test if ok

@@ -249,23 +249,23 @@ enum PartitionType {
 message PartitionInfo {
 	PartitionType type = 1;
 	Expr Expr = 2;
-	Expr partitionExpression = 3;
+	Expr partition_expression = 3;
 	repeated Expr Columns = 4;
-	repeated string partitionColumns = 5;
+	repeated string partition_columns = 5;
 	uint64 partitionNum = 6;
 	repeated PartitionItem partitions = 7;
 	int64 algorithm = 8;
-	bool isSubPartition = 9;
+	bool is_sub_partition = 9;
 	string partition_msg = 10;
 }
 
 message PartitionItem {
-	string partitionName = 1;
-	uint32 ordinalPosition = 2;
+	string partition_name = 1;
+	uint32 ordinal_position = 2;
 	string description = 3;
 	string comment = 4;
-	repeated Expr lessThan = 5;
-	repeated Expr inValues = 6;
+	repeated Expr less_than = 5;
+	repeated Expr in_values = 6;
 }
 
 message ViewDef {
@@ -439,9 +439,6 @@ message Node {
 		INTERSECT_ALL = 55;
 		MINUS = 56;
 		MINUS_ALL = 57;
-
-		//
-		TABLE_FUNCTION = 58;
 	}
 
 	enum JoinFlag {
@@ -492,7 +489,7 @@ message Node {
 	ObjectRef obj_ref = 19;
 	RowsetData rowset_data = 20;
 	string extra_options = 21;
-	repeated DeleteTableCtx deleteTablesCtx = 22;
+	repeated DeleteTableCtx delete_tables_ctx = 22;
 
 	repeated int32 binding_tags = 23;
 
@@ -506,11 +503,11 @@ message Node {
 }
 
 message DeleteTableCtx {
-	string dbName = 1;
-	string tblName = 2;
-	string useDeleteKey = 3;
-	bool canTruncate = 4;
-	int32 colIndex = 5;
+	string db_name = 1;
+	string tbl_name = 2;
+	string use_delete_key = 3;
+	bool can_truncate = 4;
+	int32 col_index = 5;
 	repeated IndexInfo index_infos = 6;
 	repeated string index_attrs = 7;
 }

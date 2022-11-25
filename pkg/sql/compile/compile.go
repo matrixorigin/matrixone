@@ -490,7 +490,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			return nil, err
 		}
 		return ss, nil
-	case plan.Node_TABLE_FUNCTION:
+	case plan.Node_FUNCTION_SCAN:
 		var (
 			pre []*Scope
 			err error

@@ -57,7 +57,7 @@ func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
 	pro := NewMysqlClientProtocol(nextConnectionID(), rs, 1024, tRM.pu.SV)
 	pro.SetSkipCheckUser(true)
 	exe := NewMysqlCmdExecutor()
-	routine := NewRoutine(context.TODO(), pro, exe, tRM.pu)
+	routine := NewRoutine(context.TODO(), pro, exe, tRM.pu.SV, rs)
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
@@ -2102,7 +2102,7 @@ func Test_resultset(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
-		ses.Cmd = COM_STMT_EXECUTE
+		ses.cmd = COM_STMT_EXECUTE
 		proto.ses = ses
 
 		res := make9ColumnsResultSet()
