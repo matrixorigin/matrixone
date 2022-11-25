@@ -29,13 +29,6 @@ type nodeHandle struct {
 	mgr base.INodeManager
 }
 
-func newNodeHandle(n base.INode, mgr base.INodeManager) *nodeHandle {
-	return &nodeHandle{
-		n:   n,
-		mgr: mgr,
-	}
-}
-
 func (h *nodeHandle) Key() any {
 	return h.n.Key()
 }
@@ -59,6 +52,7 @@ type Node struct {
 	iter              atomic.Uint64
 	closed            bool
 	impl              base.INode
+	handle            *nodeHandle
 	HardEvictableFunc func() bool
 	DestroyFunc       func()
 	LoadFunc          func()
@@ -67,12 +61,22 @@ type Node struct {
 }
 
 func NewNode(impl base.INode, mgr base.INodeManager, key any, size uint64) *Node {
-	return &Node{
+	node := &Node{
 		mgr:  mgr,
 		key:  key,
 		size: size,
 		impl: impl,
 	}
+
+	handleInner := impl
+	if impl == nil {
+		handleInner = node
+	}
+	node.handle = &nodeHandle{
+		n:   handleInner,
+		mgr: mgr,
+	}
+	return node
 }
 
 func (n *Node) Size() uint64 {
@@ -84,10 +88,7 @@ func (n *Node) Key() any {
 }
 
 func (n *Node) MakeHandle() base.INodeHandle {
-	if n.impl != nil {
-		return newNodeHandle(n.impl, n.mgr)
-	}
-	return newNodeHandle(n, n.mgr)
+	return n.handle
 }
 
 func (n *Node) TryClose() (closed bool) {
