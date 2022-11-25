@@ -251,7 +251,12 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		eligible := adjMat[firstConnected*nLeaf : (firstConnected+1)*nLeaf]
 
 		var leftCard, rightCard float64
-		leftCard = subTrees[firstConnected].Cost.Card
+		leftChild := subTrees[firstConnected]
+		if leftChild.ObjRef != nil {
+			leftCard = builder.compCtx.Cost(leftChild.ObjRef, RewriteAndConstantFold(leftChild.FilterList)).Card
+		} else {
+			leftCard = leftChild.Cost.Card
+		}
 
 		for {
 			nextSibling := nLeaf
@@ -268,7 +273,12 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 
 			visited[nextSibling] = true
 
-			rightCard = subTrees[nextSibling].Cost.Card
+			rightChild := subTrees[nextSibling]
+			if rightChild.ObjRef != nil {
+				rightCard = builder.compCtx.Cost(rightChild.ObjRef, RewriteAndConstantFold(rightChild.FilterList)).Card
+			} else {
+				rightCard = rightChild.Cost.Card
+			}
 
 			children := []int32{nodeID, subTrees[nextSibling].NodeId}
 			if leftCard < rightCard {
@@ -453,9 +463,28 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 	})
 
 	for _, child := range dimensions {
+		leftID := vertex.node.NodeId
+		rightID := child.node.NodeId
+		leftChild := builder.qry.Nodes[leftID]
+		rightChild := builder.qry.Nodes[rightID]
+		var leftCard, rightCard float64
+		if leftChild.ObjRef != nil {
+			leftCard = builder.compCtx.Cost(leftChild.ObjRef, RewriteAndConstantFold(leftChild.FilterList)).Card
+		} else {
+			leftCard = leftChild.Cost.Card
+		}
+		if rightChild.ObjRef != nil {
+			rightCard = builder.compCtx.Cost(rightChild.ObjRef, RewriteAndConstantFold(rightChild.FilterList)).Card
+		} else {
+			rightCard = rightChild.Cost.Card
+		}
+		if leftCard < rightCard {
+			leftID, rightID = rightID, leftID
+		}
+
 		nodeId := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{vertex.node.NodeId, child.node.NodeId},
+			Children: []int32{leftID, rightID},
 			JoinType: plan.Node_INNER,
 		}, nil)
 

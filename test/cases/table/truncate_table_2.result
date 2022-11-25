@@ -159,7 +159,7 @@ internal error: do not have privilege to execute the statement
 truncate table triggers;
 internal error: do not have privilege to execute the statement
 truncate table tables;
-internal error: do not have privilege to execute the statement
+no such table information_schema.tables
 truncate table engines;
 internal error: do not have privilege to execute the statement
 use truncate_table_2;

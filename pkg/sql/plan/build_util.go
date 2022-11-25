@@ -65,9 +65,21 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: int32(types.T_float64), Width: n.InternalType.DisplayWith, Size: 8, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_STRING:
 			width := n.InternalType.DisplayWith
+			// for char type,if we didn't specify the length,
+			// the default width should be 1, and for varchar,it's
+			// the defaultMaxLength
 			if width == -1 {
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
-				width = 1
+				if n.InternalType.FamilyString == "char" {
+					width = 1
+				} else {
+					width = types.MaxVarcharLen
+				}
+			}
+			if n.InternalType.FamilyString == "char" && width > types.MaxCharLen {
+				return nil, moerr.NewOutOfRange("char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
+			} else if n.InternalType.FamilyString == "varchar" && width > types.MaxVarcharLen {
+				return nil, moerr.NewOutOfRange("varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			}
 			if n.InternalType.FamilyString == "char" { // type char
 				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil
@@ -75,9 +87,21 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: int32(types.T_varchar), Size: 24, Width: width}, nil
 		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
 			width := n.InternalType.DisplayWith
+			// for char type,if we didn't specify the length,
+			// the default width should be 1, and for varchar,it's
+			// the defaultMaxLength
 			if width == -1 {
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
-				width = 1
+				if n.InternalType.FamilyString == "char" {
+					width = 1
+				} else {
+					width = types.MaxVarcharLen
+				}
+			}
+			if n.InternalType.FamilyString == "char" && width > types.MaxCharLen {
+				return nil, moerr.NewOutOfRange("char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
+			} else if n.InternalType.FamilyString == "varchar" && width > types.MaxVarcharLen {
+				return nil, moerr.NewOutOfRange("varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			}
 			if n.InternalType.FamilyString == "char" { // type char
 				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil

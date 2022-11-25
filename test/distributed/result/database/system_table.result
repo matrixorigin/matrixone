@@ -3,7 +3,7 @@ character_set_name    default_collate_name    description    maxlen
 SELECT * FROM `information_schema`.`columns` where TABLE_NAME = 'mo_tables' order by ORDINAL_POSITION LIMIT 2;
 table_catalog    table_schema    table_name    column_name    ordinal_position    column_default    is_nullable    data_type    character_maximum_length    character_octet_length    numeric_precision    numeric_scale    datetime_precision    character_set_name    collation_name    column_type    column_key    extra    PRIVILEGES    column_comment    generation_expression    srs_id
 def    mo_catalog    mo_tables    rel_id    0    null    NO    BIGINT UNSIGNED    90    90    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(0)    PRI        select,insert,update,references            0
-def    mo_catalog    mo_tables    relname    1    null    NO    VARCHAR    93    93    0    0    0    utf8    utf8_bin    VARCHAR(100)            select,insert,update,references            0
+def    mo_catalog    mo_tables    relname    1    null    NO    VARCHAR    94    94    0    0    0    utf8    utf8_bin    VARCHAR(5000)            select,insert,update,references            0
 SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
 constraint_catalog    constraint_schema    constraint_name    table_catalog    table_schema    table_name    column_name    ordinal_position    position_in_unique_constraint    referenced_table_schema    referenced_table_name    referenced_column_name
 SELECT * FROM `information_schema`.`PROCESSLIST` LIMIT 0,1000;
@@ -13,8 +13,6 @@ query_id    seq    state    duration    cpu_user    cpu_system    context_volunt
 SELECT * FROM `information_schema`.`schemata` where schema_name = 'information_schema';
 catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
 def    information_schema    utf8mb4    utf8mb4_0900_ai_ci        NO
-SELECT * FROM `information_schema`.`tables` LIMIT 0,1000;
-table_catalog    table_schema    table_name    table_type    engine    version    row_format    table_rows    avg_row_length    data_length    max_data_length    index_length    data_free    AUTO_INCREMENT    create_time    update_time    check_time    table_collation    checksum    create_options    table_comment
 SELECT * FROM `information_schema`.`triggers` LIMIT 0,1000;
 trigger_catalog    trigger_schema    trigger_name    event_manipulation    event_object_catalog    event_object_schema    event_object_table    action_order    action_condition    action_statement    action_orientation    action_timing    action_reference_old_table    action_reference_new_table    action_reference_old_row    action_reference_new_row    created    sql_mode    definer    character_set_client    collation_connection    database_collation
 SELECT * FROM `information_schema`.`user_privileges` LIMIT 0,1000;
@@ -47,7 +45,7 @@ x509_issuer    BLOB    NO        NULL
 event_priv    VARCHAR(10)    NO        'N'
 lock_tables_priv    VARCHAR(10)    NO        'N'
 select_priv    VARCHAR(10)    NO        'N'
-__mo_cpkey_004host004user    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host004user    VARCHAR(65535)    NO    PRI    NULL
 max_questions    INT UNSIGNED    NO        '0'
 execute_priv    VARCHAR(10)    NO        'N'
 update_priv    VARCHAR(10)    NO        'N'
@@ -95,7 +93,7 @@ show columns from `db`;
 Field    Type    Null    Key    Default    Extra    Comment
 trigger_priv    VARCHAR(10)    NO        'N'
 update_priv    VARCHAR(10)    NO        'N'
-__mo_cpkey_004host002db004user    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host002db004user    VARCHAR(65535)    NO    PRI    NULL
 db    CHAR(64)    NO        ''
 drop_priv    VARCHAR(10)    NO        'N'
 host    CHAR(255)    NO        ''
@@ -126,14 +124,14 @@ timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
 user    CHAR(32)    NO        ''
 routine_type    VARCHAR(10)    NO        NULL
 routine_name    CHAR(64)    NO        ''
-__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR(65535)    NO    PRI    NULL
 show columns from `columns_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
 db    CHAR(64)    NO        ''
 host    CHAR(255)    NO        ''
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
 user    CHAR(32)    NO        ''
-__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR(65535)    NO    PRI    NULL
 column_name    CHAR(64)    NO        ''
 column_priv    VARCHAR(10)    NO        ''
 table_name    CHAR(64)    NO        ''
@@ -147,7 +145,7 @@ user    CHAR(32)    NO        ''
 column_priv    VARCHAR(10)    NO        ''
 table_priv    VARCHAR(10)    NO        ''
 table_name    CHAR(64)    NO        ''
-__mo_cpkey_004host002db004user010table_name    VARCHAR(0)    NO    PRI    NULL        
+__mo_cpkey_004host002db004user010table_name    VARCHAR(65535)    NO    PRI    NULL        
 use information_schema;
 show tables;
 tables_in_information_schema

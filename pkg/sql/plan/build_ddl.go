@@ -420,8 +420,9 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 				Name: pkeyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
-					Id:   int32(types.T_varchar),
-					Size: types.VarlenaSize,
+					Id:    int32(types.T_varchar),
+					Size:  types.VarlenaSize,
+					Width: types.MaxVarcharLen,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,
@@ -517,8 +518,9 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
-					Id:   int32(types.T_varchar),
-					Size: types.VarlenaSize,
+					Id:    int32(types.T_varchar),
+					Size:  types.VarlenaSize,
+					Width: types.MaxVarcharLen,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,
