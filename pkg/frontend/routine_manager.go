@@ -128,9 +128,9 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	}
 	rm.mu.Unlock()
 
-	ses := rt.GetSession()
-	logDebugf(ses.GetConciseProfile(), "will close io session.")
 	if rt != nil {
+		ses := rt.GetSession()
+		logDebugf(ses.GetConciseProfile(), "will close io session.")
 		rt.Quit()
 	}
 }
