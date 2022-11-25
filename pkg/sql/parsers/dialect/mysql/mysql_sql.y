@@ -3699,7 +3699,7 @@ table_subquery:
     }
 
 table_function:
-    ID '(' expression_list_opt ')'
+    ident '(' expression_list_opt ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.TableFunction{
