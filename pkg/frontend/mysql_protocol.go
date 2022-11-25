@@ -1759,11 +1759,11 @@ func (mp *MysqlProtocolImpl) SendColumnDefinitionPacket(column Column, cmd int) 
 	}
 
 	var data []byte
-	
+
 	if column.ColumnType() == defines.MYSQL_TYPE_TEXT {
 		column.SetColumnType(defines.MYSQL_TYPE_BLOB)
 	}
-	
+
 	if mp.capability&CLIENT_PROTOCOL_41 != 0 {
 		data = mp.makeColumnDefinition41Payload(mysqlColumn, cmd)
 	}
