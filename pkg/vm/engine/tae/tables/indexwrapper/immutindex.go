@@ -119,7 +119,7 @@ func (index *immutableIndex) ReadFrom(
 	index.zmReader = newZmReader(
 		bufMgr,
 		colDef.Type,
-		*id,
+		colDef.IsPrimary(),
 		fs,
 		id.Idx,
 		location)
