@@ -324,6 +324,9 @@ func (c *SpanContext) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	if !c.SpanID.IsZero() {
 		enc.AddString("span_id", c.SpanID.String())
 	}
+	if c.Kind != SpanKindInternal {
+		enc.AddString("kind", c.Kind.String())
+	}
 	return nil
 }
 

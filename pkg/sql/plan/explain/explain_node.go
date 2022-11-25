@@ -48,8 +48,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		pname = "Values Scan"
 	case plan.Node_TABLE_SCAN:
 		pname = TableScan
-	case plan.Node_FUNCTION_SCAN:
-		pname = "Function Scan"
 	case plan.Node_EXTERNAL_SCAN:
 		pname = ExternalScan
 	case plan.Node_MATERIAL_SCAN:
@@ -108,7 +106,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		pname = "Minus"
 	case plan.Node_MINUS_ALL:
 		pname = "Minus All"
-	case plan.Node_TABLE_FUNCTION:
+	case plan.Node_FUNCTION_SCAN:
 		pname = ndesc.Node.TableDef.TblFunc.Name
 	default:
 		panic("error node type")

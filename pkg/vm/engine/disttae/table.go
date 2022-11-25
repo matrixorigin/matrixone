@@ -416,6 +416,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 		}
 	}
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
+	tbl.db.txn.Lock()
 	for i := range tbl.db.txn.writes {
 		for _, entry := range tbl.db.txn.writes[i] {
 			if entry.databaseId == tbl.db.databaseId &&
@@ -424,6 +425,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 			}
 		}
 	}
+	tbl.db.txn.Unlock()
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	for _, i := range tbl.dnList {
