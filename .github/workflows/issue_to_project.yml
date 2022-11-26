@@ -13,7 +13,7 @@ jobs:
 
     steps:
       - name: Add Issue To GitHub Project
-        uses: actions/add-to-project@v0.1.0
+        uses: actions/add-to-project@v0.4.0
         with:
           project-url: https://github.com/orgs/matrixorigin/projects/13/views/1
           github-token: ${{ secrets.TOKEN_ACTION }}
