@@ -71,63 +71,6 @@ const (
 	TimeStampType = 2
 )
 
-// ParseDate will parse a string to be a Date
-// Support Format:
-// `yyyy-mm-dd`
-// `yyyy-mm-d`
-// `yyyy-m-dd`
-// `yyyy-m-d`
-// `yyyymmdd`
-// func ParseDateCast(s string) (Date, error) {
-// 	var y int32
-// 	var m, d uint8
-
-// 	if len(s) < 8 {
-// 		return -1, moerr.NewInvalidArg("parsedate", s)
-// 	}
-
-// 	y = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
-// 	if s[4] == '-' {
-// 		if len(s) < 8 || len(s) > 10 {
-// 			return -1, moerr.NewInvalidArg("parsedate", s)
-// 		}
-// 		if len(s) == 8 {
-// 			if s[6] != '-' {
-// 				return -1, moerr.NewInvalidArg("parsedate", s)
-// 			}
-// 			m = s[5] - '0'
-// 			d = s[7] - '0'
-// 		} else if len(s) == 9 {
-// 			if s[6] == '-' {
-// 				m = s[5] - '0'
-// 				d = (s[7]-'0')*10 + (s[8] - '0')
-// 			} else if s[7] == '-' {
-// 				m = (s[5]-'0')*10 + (s[6] - '0')
-// 				d = s[8] - '0'
-// 			} else {
-// 				return -1, moerr.NewInvalidArg("parsedate", s)
-// 			}
-// 		} else {
-// 			if s[7] != '-' {
-// 				return -1, moerr.NewInvalidArg("parsedate", s)
-// 			}
-// 			m = (s[5]-'0')*10 + (s[6] - '0')
-// 			d = (s[8]-'0')*10 + (s[9] - '0')
-// 		}
-// 	} else {
-// 		if len(s) != 8 {
-// 			return -1, moerr.NewInvalidArg("parsedate", s)
-// 		}
-// 		m = (s[4]-'0')*10 + (s[5] - '0')
-// 		d = (s[6]-'0')*10 + (s[7] - '0')
-// 	}
-
-// 	if ValidDate(y, m, d) {
-// 		return FromCalendar(y, m, d), nil
-// 	}
-// 	return -1, moerr.NewInvalidArg("parsedate", s)
-// }
-
 const (
 	Start = iota
 	YearState
