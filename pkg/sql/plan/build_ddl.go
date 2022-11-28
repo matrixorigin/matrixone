@@ -234,7 +234,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 	bindContext := NewBindContext(builder, nil)
 
-	if stmt.ClusterByOption != nil {
+	if stmt.ClusterByOption != nil && util.FindPrimaryKey(createTable.TableDef) {
 		return nil, moerr.NewBadConfig("cluster by with primary key is not support")
 	}
 

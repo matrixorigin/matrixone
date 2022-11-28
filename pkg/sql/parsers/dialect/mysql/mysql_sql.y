@@ -4577,8 +4577,8 @@ cluster_by_opt:
     }
 |   CLUSTER BY column_name
     {
-        $$ = $tree.ClusterByOption{
-            colName : $3,
+        $$ = &tree.ClusterByOption{
+            ColName : $3,
         }
     }
 
