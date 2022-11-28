@@ -22,6 +22,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -32,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
@@ -296,7 +296,9 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 
 func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 	s.initTxnSenderOnce.Do(func() {
-		sender, err = rpc.NewSenderWithConfig(s.cfg.RPC, clock.DefaultClock(), s.logger)
+		sender, err = rpc.NewSenderWithConfig(
+			s.cfg.RPC,
+			runtime.ProcessLevelRuntime())
 		if err != nil {
 			return
 		}
@@ -313,7 +315,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if err != nil {
 			return
 		}
-		c = client.NewTxnClient(sender, client.WithLogger(s.logger))
+		c = client.NewTxnClient(runtime.ProcessLevelRuntime(), sender)
 		s._txnClient = c
 	})
 	c = s._txnClient

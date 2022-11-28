@@ -94,7 +94,7 @@ create account `test:account` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 create account default ADMIN_NAME 'root' IDENTIFIED BY '123456';
 create account account ADMIN_NAME 'root' IDENTIFIED BY '123456';
 select count(*) from mo_catalog.mo_account where account_name in ('test:account','default','account');
--- @bvt:issue
+
 -- 7.account初始accountamdin权限验证：查询系统表;创建db，user，table;sys租户下root看不到account下的系统表数据
 create account account_1 admin_name='admin' identified by '123456';
 -- @session:id=2&user=account_1:admin:accountadmin&password=123456

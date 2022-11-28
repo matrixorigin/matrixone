@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"go.uber.org/zap"
 )
@@ -39,6 +40,7 @@ var (
 )
 
 var (
+	logOnce          sync.Once
 	setupRuntimeOnce sync.Once
 )
 
@@ -46,27 +48,40 @@ func setupProcessLevelRuntime(cfg *Config, stopper *stopper.Stopper) error {
 	var e error
 	setupRuntimeOnce.Do(func() {
 		mpool.InitCap(int64(cfg.Limit.Memory))
-
-		clock, err := getClock(cfg, stopper)
+		r, err := newRuntime(cfg, stopper)
 		if err != nil {
 			e = err
 			return
 		}
-
-		logger, err := getLogger(cfg)
-		if err != nil {
-			e = err
-			return
-		}
-
-		logutil.GetGlobalLogger()
-		r := runtime.NewRuntime(cfg.mustGetServiceType(),
-			cfg.mustGetServiceUUID(),
-			logger,
-			runtime.WithClock(clock))
 		runtime.SetupProcessLevelRuntime(r)
 	})
 	return e
+}
+
+func getRuntime(st metadata.ServiceType, cfg *Config, stopper *stopper.Stopper) (runtime.Runtime, error) {
+	switch st {
+	case metadata.ServiceType_DN:
+		return newRuntime(cfg, stopper)
+	default:
+		return runtime.ProcessLevelRuntime(), nil
+	}
+}
+
+func newRuntime(cfg *Config, stopper *stopper.Stopper) (runtime.Runtime, error) {
+	clock, err := getClock(cfg, stopper)
+	if err != nil {
+		return nil, err
+	}
+
+	logger, err := getLogger(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return runtime.NewRuntime(cfg.mustGetServiceType(),
+		cfg.mustGetServiceUUID(),
+		logger,
+		runtime.WithClock(clock)), nil
 }
 
 func getClock(cfg *Config, stopper *stopper.Stopper) (clock.Clock, error) {
@@ -78,19 +93,21 @@ func getClock(cfg *Config, stopper *stopper.Stopper) (clock.Clock, error) {
 		return nil, moerr.NewInternalError("not implment for %s", cfg.Clock.Backend)
 	}
 	c.SetNodeID(cfg.hashNodeID())
-
-	// TODO: after unifying the use of Runtime, remove the GlobalClock
-	clock.SetupDefaultClock(c)
 	return c, nil
 }
 
 func getLogger(cfg *Config) (*zap.Logger, error) {
-	// TODO: after unifying the use of Runtime, remove the GlobalLogger
-	logutil.SetupMOLogger(&cfg.Log)
+	initLogger(cfg)
 	logger := logutil.GetGlobalLogger()
 	return logger, nil
 }
 
 func newLocalClock(cfg *Config, stopper *stopper.Stopper) clock.Clock {
 	return clock.NewUnixNanoHLCClockWithStopper(stopper, cfg.Clock.MaxClockOffset.Duration)
+}
+
+func initLogger(cfg *Config) {
+	logOnce.Do(func() {
+		logutil.SetupMOLogger(&cfg.Log)
+	})
 }
