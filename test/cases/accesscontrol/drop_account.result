@@ -21,6 +21,7 @@ account_name
 create account drop_account_04 ADMIN_NAME 'root' IDENTIFIED BY '1234567890';
 drop account `drop_account_04`;
 drop account sys;
+internal error: can not delete the account sys
 drop accout abc;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " accout abc;";
 drop account if not exists abc;
