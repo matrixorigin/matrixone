@@ -526,6 +526,13 @@ func judgeInteger(field string) bool {
 	return true
 }
 
+func addNullPos(vec *vector.Vector, rowIdx int) {
+	if vec.Nsp == nil || vec.Nsp.Np == nil {
+		vec.Nsp = nulls.NewWithSize(vec.Length())
+	}
+	nulls.Add(vec.Nsp, uint64(rowIdx))
+}
+
 func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
 	for colIdx := range param.Attrs {
 		field := Line[param.Name2ColIndex[param.Attrs[colIdx]]]
@@ -543,7 +550,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_bool:
 			cols := vector.MustTCols[bool](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				if field == "true" || field == "1" {
 					cols[rowIdx] = true
@@ -556,7 +563,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_int8:
 			cols := vector.MustTCols[int8](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				if judgeInteger(field) {
 					d, err := strconv.ParseInt(field, 10, 8)
@@ -577,7 +584,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_int16:
 			cols := vector.MustTCols[int16](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				if judgeInteger(field) {
 					d, err := strconv.ParseInt(field, 10, 16)
@@ -598,7 +605,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_int32:
 			cols := vector.MustTCols[int32](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				if judgeInteger(field) {
 					d, err := strconv.ParseInt(field, 10, 32)
@@ -619,7 +626,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_int64:
 			cols := vector.MustTCols[int64](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				if judgeInteger(field) {
 					d, err := strconv.ParseInt(field, 10, 64)
@@ -640,7 +647,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_uint8:
 			cols := vector.MustTCols[uint8](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				if judgeInteger(field) {
 					d, err := strconv.ParseUint(field, 10, 8)
@@ -661,7 +668,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_uint16:
 			cols := vector.MustTCols[uint16](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				if judgeInteger(field) {
 					d, err := strconv.ParseUint(field, 10, 16)
@@ -682,7 +689,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_uint32:
 			cols := vector.MustTCols[uint32](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				if judgeInteger(field) {
 					d, err := strconv.ParseUint(field, 10, 32)
@@ -703,7 +710,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_uint64:
 			cols := vector.MustTCols[uint64](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				if judgeInteger(field) {
 					d, err := strconv.ParseUint(field, 10, 64)
@@ -724,7 +731,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_float32:
 			cols := vector.MustTCols[float32](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				// origin float32 data type
 				if vec.Typ.Precision < 0 {
@@ -746,7 +753,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_float64:
 			cols := vector.MustTCols[float64](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				// origin float64 data type
 				if vec.Typ.Precision < 0 {
@@ -767,7 +774,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 			}
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				// XXX Memory accounting?
 				err := vector.SetStringAt(vec, rowIdx, field, mp)
@@ -777,7 +784,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 			}
 		case types.T_json:
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				byteJson, err := types.ParseStringToByteJson(field)
 				if err != nil {
@@ -797,7 +804,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_date:
 			cols := vector.MustTCols[types.Date](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				d, err := types.ParseDateCast(field)
 				if err != nil {
@@ -809,7 +816,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_time:
 			cols := vector.MustTCols[types.Time](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				d, err := types.ParseTime(field, vec.Typ.Precision)
 				if err != nil {
@@ -821,7 +828,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_datetime:
 			cols := vector.MustTCols[types.Datetime](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				d, err := types.ParseDatetime(field, vec.Typ.Precision)
 				if err != nil {
@@ -833,7 +840,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_decimal64:
 			cols := vector.MustTCols[types.Decimal64](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				d, err := types.Decimal64_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Scale)
 				if err != nil {
@@ -848,7 +855,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_decimal128:
 			cols := vector.MustTCols[types.Decimal128](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Scale)
 				if err != nil {
@@ -863,7 +870,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_timestamp:
 			cols := vector.MustTCols[types.Timestamp](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				t := time.Local
 				d, err := types.ParseTimestamp(t, field, vec.Typ.Precision)
@@ -876,7 +883,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		case types.T_uuid:
 			cols := vector.MustTCols[types.Uuid](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				addNullPos(vec, rowIdx)
 			} else {
 				d, err := types.ParseUuid(field)
 				if err != nil {
