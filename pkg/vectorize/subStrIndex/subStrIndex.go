@@ -62,3 +62,33 @@ func subStrIndex(str, delim string, count int64) (string, error) {
 	return strings.Join(subPartions, delim), nil
 }
 
+func SubStrIndex(strs, delims []string, counts []int64, rowCount int, constVectors []bool, results []string) {
+	for i := 0; i < rowCount; i++ {
+		//get str
+		var str string
+		if constVectors[0] {
+			str = strs[0]
+		} else {
+			str = strs[i]
+		}
+
+		//get delim
+		var delim string
+		if constVectors[1] {
+			delim = delims[0]
+		} else {
+			delim = delims[i]
+		}
+
+		//get count
+
+		var count int64
+		if constVectors[2] {
+			count = counts[0]
+		} else {
+			count = counts[i]
+		}
+
+		results[i], _ = subStrIndex(str, delim, count)
+	}
+}

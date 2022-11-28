@@ -15,10 +15,74 @@
 package multi
 
 import (
+	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	substrindex "github.com/matrixorigin/matrixone/pkg/vectorize/subStrIndex"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func SubStrIndex(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return nil, nil
+	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() || vecs[2].IsScalarNull() {
+		return proc.AllocScalarNullVector(vecs[0].Typ), nil
+	}
+	//get the first arg str
+	sourceCols := vector.MustStrCols(vecs[0])
+	//get the second arg delim
+	delimCols := vector.MustStrCols(vecs[1])
+	//get the third arg count
+	countCols, err := getCount(vecs[2].Col)
+	if err != nil {
+		return nil, err
+	}
+
+	rowCount := vector.Length(vecs[ParameterSourceString])
+
+	var resultVec *vector.Vector = nil
+	resultValues := make([]string, rowCount)
+	resultNsp := nulls.NewWithSize(rowCount)
+
+	// set null row
+	nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
+	nulls.Or(vecs[2].Nsp, resultNsp, resultNsp)
+
+	constVectors := []bool{vecs[ParameterSourceString].IsScalar(), vecs[ParameterLengths].IsScalar(), vecs[ParameterPadString].IsScalar()}
+	//get result values
+	substrindex.SubStrIndex(sourceCols, delimCols, countCols, rowCount, constVectors, resultValues)
+	resultVec = vector.NewWithStrings(types.T_varchar.ToType(), resultValues, resultNsp, proc.Mp())
+
+	return resultVec, nil
+}
+
+func getCount(col interface{}) ([]int64, error) {
+	switch vs := col.(type) {
+	case []int64:
+		return vs, nil
+	case []float64:
+		res := make([]int64, 0, len(vs))
+		for _, v := range vs {
+			if v > float64(math.MaxInt64) {
+				res = append(res, math.MaxInt64)
+			} else if v < float64(math.MinInt64) {
+				res = append(res, math.MinInt64)
+			} else {
+				res = append(res, int64(v))
+			}
+		}
+		return res, nil
+	case []uint64:
+		res := make([]int64, 0, len(vs))
+		for _, v := range vs {
+			if v > uint64(math.MaxInt64) {
+				res = append(res, math.MaxInt64)
+			} else {
+				res = append(res, int64(v))
+			}
+		}
+		return res, nil
+	}
+	return nil, moerr.NewInvalidInput("unexpected parameter types were received")
 }
