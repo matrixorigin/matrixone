@@ -305,7 +305,8 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			var comment string
 			var auto_incr bool
 			for _, attr := range def.Attributes {
-				if _, ok := attr.(*tree.AttributePrimaryKey); ok {
+				switch colAttr := attr.(type) {
+				case *tree.AttributePrimaryKey:
 					if colType.GetId() == int32(types.T_blob) {
 						return moerr.NewNotSupported("blob type in primary key")
 					}
@@ -316,20 +317,23 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 						return moerr.NewNotSupported(fmt.Sprintf("JSON column '%s' cannot be in primary key", def.Name.Parts[0]))
 					}
 					pks = append(pks, def.Name.Parts[0])
-				}
-
-				if attrComment, ok := attr.(*tree.AttributeComment); ok {
-					comment = attrComment.CMT.String()
+				case *tree.AttributeComment:
+					comment = colAttr.CMT.String()
 					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
 						return moerr.NewInvalidInput("comment for column '%s' is too long", def.Name.Parts[0])
 					}
-				}
-
-				if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
+				case *tree.AttributeAutoIncrement:
 					auto_incr = true
 					if !operator.IsInteger(types.T(colType.GetId())) {
 						return moerr.NewNotSupported("the auto_incr column is only support integer type now")
 					}
+				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					kp := &tree.KeyPart{ColName: def.Name}
+					indexInfo := &tree.UniqueIndex{
+						KeyParts: []*tree.KeyPart{kp},
+						Name:     def.Name.Parts[0],
+					}
+					indexInfos = append(indexInfos, indexInfo)
 				}
 			}
 			if len(pks) > 0 {

@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "show variables like 'sql_mode'",
-		output: "show variables like sql_mode",
+		input:  "create table t1 (a int unique)",
+		output: "create table t1 (a int unique)",
 	}
 )
 
@@ -52,6 +52,9 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "create table t1 (a int unique)",
+		output: "create table t1 (a int unique)",
+	}, {
 		input:  "show variables like 'sql_mode'",
 		output: "show variables like sql_mode",
 	}, {

@@ -217,3 +217,8 @@ create table t1 (a int(11) unsigned);
 insert into t1 values (1), (2);
 select * from t1 where a != 2;
 drop table if exists t1;
+drop database if exists db_index;
+create database db_index;
+drop table if exists db_index.t2;
+create table db_index.t2 (a int unique);
+select count(*) = 3 from mo_catalog.mo_tables where reldatabase = 'db_index';
