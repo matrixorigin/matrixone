@@ -1,5 +1,5 @@
 {
-  "source" : ["./mo-server"],
+  "source" : ["./mo-service"],
   "bundle_id" : "com.matrixorigin.matrixone",
   "apple_id": {
     "username" : "shuqi.qin@matrixorigin.cn",
