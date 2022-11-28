@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/ctl"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/unary"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 )
 
 func initBuiltIns() {
@@ -2488,6 +2489,110 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_text, types.T_uint8},
 				ReturnTyp: types.T_varchar,
 				Fn:        binary.ShowVisibleBin,
+			},
+		},
+	},
+	FIELD: {
+		Id:     FIELD,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			l := len(inputs)
+			if l < 2 {
+				return wrongFunctionParameters, nil
+			}
+
+			//If all arguments are strings, all arguments are compared as strings &&
+			//If all arguments are numbers, all arguments are compared as numbers.
+			returnType := [...]types.T{types.T_varchar, types.T_char, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_float32, types.T_float64}
+			for i := range returnType {
+				if operator.CoalesceTypeCheckFn(inputs, nil, returnType[i]) {
+					if i < 2 {
+						return 0, nil
+					} else {
+						return int32(i - 1), nil
+					}
+				}
+			}
+
+			//Otherwise, the arguments are compared as double.
+			targetTypes := make([]types.T, l)
+
+			for j := 0; j < l; j++ {
+				targetTypes[j] = types.T_float64
+			}
+			if code, _ := tryToMatch(inputs, targetTypes); code == matchedByConvert {
+				return 10, targetTypes
+			}
+
+			return wrongFunctionParameters, nil
+		},
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldString,
+			},
+			{
+				Index:     1,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[int8],
+			},
+			{
+				Index:     2,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[int16],
+			},
+			{
+				Index:     3,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[int32],
+			},
+			{
+				Index:     4,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[int64],
+			},
+			{
+				Index:     5,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[uint8],
+			},
+			{
+				Index:     6,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[uint16],
+			},
+			{
+				Index:     7,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[uint32],
+			},
+			{
+				Index:     8,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[uint64],
+			},
+			{
+				Index:     9,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[float32],
+			},
+			{
+				Index:     10,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[float64],
 			},
 		},
 	},

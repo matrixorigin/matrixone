@@ -148,9 +148,10 @@ message Product {
 
 message TableFunction {
   repeated string attrs = 1;
-  repeated plan.ColDef cols = 2;
-  repeated plan.Expr exprs = 3;
-  bytes param = 4;
+  repeated plan.ColDef rets = 2;
+  repeated plan.Expr args = 3;
+  bytes params = 4;
+  string name = 5;
 }
 
 message HashBuild {
