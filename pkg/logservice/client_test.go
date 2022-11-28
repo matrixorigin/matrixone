@@ -28,6 +28,7 @@ import (
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -52,6 +53,8 @@ func runClientTest(
 	readOnly bool,
 	cCfgFn func(bool) ClientConfig,
 	fn func(*testing.T, *Service, ClientConfig, Client)) {
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+
 	defer leaktest.AfterTest(t)()
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)

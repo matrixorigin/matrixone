@@ -17,6 +17,7 @@ package dnservice
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -35,7 +36,7 @@ func TestCreateLogServiceClient(t *testing.T) {
 }
 
 func TestCreateTxnStorage(t *testing.T) {
-	s := &store{cfg: &Config{}, stopper: stopper.NewStopper("")}
+	s := &store{rt: runtime.DefaultRuntime(), cfg: &Config{}, stopper: stopper.NewStopper("")}
 	s.options.logServiceClientFactory = func(d metadata.DNShard) (logservice.Client, error) {
 		return mem.NewMemLog(), nil
 	}

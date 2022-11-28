@@ -21,14 +21,12 @@ import (
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
 )
 
 func TestRead(t *testing.T) {
@@ -156,7 +154,7 @@ func TestMissingSenderWillPanic(t *testing.T) {
 		}
 		assert.Fail(t, "must panic")
 	}()
-	newTxnOperator(nil, txn.TxnMeta{}, WithTxnLogger(logutil.GetPanicLogger()))
+	newTxnOperator(runtime.DefaultRuntime(), nil, txn.TxnMeta{})
 }
 
 func TestMissingTxnIDWillPanic(t *testing.T) {
@@ -166,7 +164,7 @@ func TestMissingTxnIDWillPanic(t *testing.T) {
 		}
 		assert.Fail(t, "must panic")
 	}()
-	newTxnOperator(newTestTxnSender(), txn.TxnMeta{}, WithTxnLogger(logutil.GetPanicLogger()))
+	newTxnOperator(runtime.DefaultRuntime(), newTestTxnSender(), txn.TxnMeta{})
 }
 
 func TestEmptyTxnSnapshotTSWillPanic(t *testing.T) {
@@ -176,7 +174,7 @@ func TestEmptyTxnSnapshotTSWillPanic(t *testing.T) {
 		}
 		assert.Fail(t, "must panic")
 	}()
-	newTxnOperator(newTestTxnSender(), txn.TxnMeta{ID: []byte{1}}, WithTxnLogger(logutil.GetPanicLogger()))
+	newTxnOperator(runtime.DefaultRuntime(), newTestTxnSender(), txn.TxnMeta{ID: []byte{1}})
 }
 
 func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
@@ -186,9 +184,10 @@ func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
 		}
 		assert.Fail(t, "must panic")
 	}()
-	newTxnOperator(newTestTxnSender(),
+	newTxnOperator(
+		runtime.DefaultRuntime(),
+		newTestTxnSender(),
 		txn.TxnMeta{ID: []byte{1}, SnapshotTS: timestamp.Timestamp{PhysicalTime: 1}},
-		WithTxnLogger(logutil.GetPanicLogger()),
 		WithTxnReadyOnly(),
 		WithTxnCacheWrite())
 }
@@ -326,7 +325,7 @@ func TestSnapshotTxnOperator(t *testing.T) {
 		v, err := tc.Snapshot()
 		assert.NoError(t, err)
 
-		tc2, err := newTxnOperatorWithSnapshot(tc.sender, v, tc.logger)
+		tc2, err := newTxnOperatorWithSnapshot(tc.rt, tc.sender, v)
 		assert.NoError(t, err)
 
 		assert.Equal(t, tc.mu.txn, tc2.mu.txn)
@@ -365,9 +364,9 @@ func TestDebugTxnOperator(t *testing.T) {
 
 func runOperatorTests(t *testing.T, tc func(context.Context, *txnOperator, *testTxnSender), options ...TxnOption) {
 	ts := newTestTxnSender()
-	c := NewTxnClient(ts,
-		WithLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel)),
-		WithClock(clock.NewHLCClock(func() int64 { return time.Now().UTC().UnixNano() }, time.Millisecond*400)))
+	c := NewTxnClient(
+		runtime.DefaultRuntime(),
+		ts)
 	txn, err := c.New(options...)
 	assert.Nil(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)

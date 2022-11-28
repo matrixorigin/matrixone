@@ -17,6 +17,7 @@ package runtime
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -99,4 +100,15 @@ func (r *runtime) SetGlobalVariables(name string, value any) {
 
 func (r *runtime) GetGlobalVariables(name string) (any, bool) {
 	return r.global.variables.Load(name)
+}
+
+// DefaultRuntime used to test
+func DefaultRuntime() Runtime {
+	return NewRuntime(
+		metadata.ServiceType_CN,
+		"",
+		logutil.GetPanicLoggerWithLevel(zap.DebugLevel),
+		WithClock(clock.NewHLCClock(func() int64 {
+			return time.Now().UTC().UnixNano()
+		}, 0)))
 }

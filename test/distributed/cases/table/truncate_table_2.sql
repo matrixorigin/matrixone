@@ -81,11 +81,9 @@ truncate table mo_role_privs;
 use system ;
 truncate table statement_info;
 truncate table rawlog;
--- @bvt:issue#5892
 truncate table log_info;
 truncate table error_info;
 truncate table span_info;
--- @bvt:issue
 use information_schema;
 truncate table key_column_usage ;
 truncate table columns;

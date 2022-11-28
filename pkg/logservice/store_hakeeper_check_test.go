@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -143,7 +144,7 @@ func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskse
 	cfg.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 
-	taskService := taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
+	taskService := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
 	defer taskService.StopScheduleCronTask()
 
 	store, err := getTestStore(cfg, false, taskService)

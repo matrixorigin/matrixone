@@ -23,9 +23,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -236,11 +238,21 @@ func newTestStore(
 		UUID:          uuid,
 		ListenAddress: testDNStoreAddr,
 	}
-	options = append(options, WithClock(clock.NewHLCClock(func() int64 { return time.Now().UTC().UnixNano() },
-		time.Duration(math.MaxInt64))))
 	fs, err := fsFactory(defines.LocalFileServiceName)
 	assert.Nil(t, err)
-	s, err := NewService(c, fs, options...)
+
+	rt := runtime.NewRuntime(
+		metadata.ServiceType_DN,
+		"",
+		logutil.Adjust(nil),
+		runtime.WithClock(
+			clock.NewHLCClock(
+				func() int64 { return time.Now().UTC().UnixNano() },
+				time.Duration(math.MaxInt64))))
+	s, err := NewService(
+		c,
+		rt,
+		fs, options...)
 	assert.NoError(t, err)
 	return s.(*store)
 }
