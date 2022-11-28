@@ -94,6 +94,7 @@ const (
 	CEIL           // CEIL
 	CHR            // CHR
 	COALESCE       // COALESCE
+	FIELD          // FIELD
 	CONCAT_WS
 	CONTAINS          // CONTAINS
 	CORR              // CORR
@@ -452,6 +453,7 @@ var functionIdRegister = map[string]int32{
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
 	"substring_index":                SUBSTRING_INDEX,
+	"field":                          FIELD,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
