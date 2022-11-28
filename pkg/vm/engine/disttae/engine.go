@@ -436,11 +436,11 @@ func (e *Engine) gc(ctx context.Context) {
 			}
 			ts = (*e.txnHeap)[0].meta.SnapshotTS
 			e.RUnlock()
-			e.Lock()
+			e.db.Lock()
 			for k := range e.db.tables {
 				ps = append(ps, e.db.tables[k])
 			}
-			e.Unlock()
+			e.db.Unlock()
 			for i := range ps {
 				for j := range ps[i] {
 					ps[i][j].Lock()
