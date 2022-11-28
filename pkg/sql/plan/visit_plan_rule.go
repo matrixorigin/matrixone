@@ -78,7 +78,7 @@ func (rule *GetParamRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_P:
 		pos := int(exprImpl.P.Pos)
 		rule.params[pos] = 0
-		if e.Typ.Id == int32(types.T_any) && !e.Typ.Nullable {
+		if e.Typ.Id == int32(types.T_any) && e.Typ.NotNullable {
 			// is not null, use string
 			rule.mapTypes[pos] = int32(types.T_varchar)
 		} else {

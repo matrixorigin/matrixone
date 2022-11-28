@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,26 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package generate_series
+package runtime
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/stretchr/testify/assert"
 )
 
-type Number interface {
-	int32 | int64 | types.Datetime
-}
+func TestRuntime(t *testing.T) {
+	rt := NewRuntime(metadata.ServiceType_CN, "cn0", nil)
+	assert.Equal(t, metadata.ServiceType_CN, rt.ServiceType())
+	assert.Equal(t, "cn0", rt.ServiceUUID())
+	assert.NotNil(t, rt.Logger())
 
-type Param struct {
-	Attrs    []string
-	ExprList []*plan.Expr
-}
-
-type Argument struct {
-	Es *Param
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	k := "k"
+	v := "v"
+	rt.SetGlobalVariables(k, v)
+	vv, ok := rt.GetGlobalVariables(k)
+	assert.Equal(t, v, vv)
+	assert.True(t, ok)
 }

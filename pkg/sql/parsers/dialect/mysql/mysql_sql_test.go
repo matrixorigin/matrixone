@@ -594,14 +594,11 @@ var (
 		input:  "create external table t (a int) infile 'data.txt'",
 		output: "create external table t (a int) infile 'data.txt'",
 	}, {
-		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='none'}",
-		output: "create external table t (a int) infile 'data.txt'",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='none'}",
 	}, {
-		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='auto'}",
-		output: "create external table t (a int) infile 'data.txt'",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='auto'}",
 	}, {
-		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
-		output: "create external table t (a int) infile {'filepath':'data.txt', 'compression':'lz4'}",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
 	}, {
 		input:  "create external table t (a int) infile 'data.txt' FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY ''",
 		output: "create external table t (a int) infile 'data.txt' fields terminated by \t optionally enclosed by \u0000 lines",
@@ -661,23 +658,18 @@ var (
 		input:  "load data infile 'data.txt' into table db.a",
 		output: "load data infile data.txt into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
-		output: "load data infile data.txt into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
-		output: "load data infile data.txt into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
 	}, {
 		input:  "create external table t (a int) infile 'data.txt'",
 		output: "create external table t (a int) infile 'data.txt'",
 	}, {
-		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='none'}",
-		output: "create external table t (a int) infile 'data.txt'",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='none'}",
 	}, {
-		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='auto'}",
-		output: "create external table t (a int) infile 'data.txt'",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='auto'}",
 	}, {
-		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
-		output: "create external table t (a int) infile {'filepath':'data.txt', 'compression':'lz4'}",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
 	}, {
 		input:  "create external table t (a int) infile 'data.txt' FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY ''",
 		output: "create external table t (a int) infile 'data.txt' fields terminated by \t optionally enclosed by \u0000 lines",
@@ -691,61 +683,47 @@ var (
 		input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
 		output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by \t optionally enclosed by \u0000 lines",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
-		output: "load data infile data.txt into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
-		output: "load data infile data.txt into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'gzip', 'format':'csv'} into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'bzip2', 'format':'csv'} into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'flate', 'format':'csv'} into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'lzw', 'format':'csv'} into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'zlib', 'format':'csv'} into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'lz4', 'format':'csv'} into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
 	}, {
 		input:  "LOAD DATA URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
 		output: "load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
-	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'gzip', 'format':'csv'} into table db.a",
-	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'bzip2', 'format':'csv'} into table db.a",
-	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'flate', 'format':'csv'} into table db.a",
-	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'lzw', 'format':'csv'} into table db.a",
-	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'zlib', 'format':'csv'} into table db.a",
-	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'lz4', 'format':'csv'} into table db.a",
-	}, {
-		input:  "load data infile {'filepath'='data.txt', 'format'='jsonline','jsondata'='array'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'auto', 'format':'jsonline', 'jsondata':'array'} into table db.a",
 	},
 		{
-			input:  "load data infile {'filepath'='data.txt', 'format'='jsonline','jsondata'='object'} into table db.a",
-			output: "load data infile {'filepath':'data.txt', 'compression':'auto', 'format':'jsonline', 'jsondata':'object'} into table db.a",
+			input: `load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} into table t1`,
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'format'='jsonline', 'jsondata'='array'} into table db.a",
 		},
 		{
-			input:  "load data infile {'filepath'='data.txt', 'compression'='BZIP2','format'='jsonline','jsondata'='object'} into table db.a",
-			output: "load data infile {'filepath':'data.txt', 'compression':'bzip2', 'format':'jsonline', 'jsondata':'object'} into table db.a",
+			input: "load data infile {'filepath'='data.txt', 'format'='jsonline', 'jsondata'='object'} into table db.a",
+		},
+		{
+			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2', 'format'='jsonline', 'jsondata'='object'} into table db.a",
 		},
 		{
 			input:  "import data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
@@ -1726,6 +1704,26 @@ var (
 		{
 			input:  `select mo_show_visible_bin('a',0) as m`,
 			output: `select mo_show_visible_bin(a, 0) as m`,
+		},
+		//https://dev.mysql.com/doc/refman/8.0/en/window-functions-usage.html
+		{
+			input: `select avg(a) over () from t1`,
+		},
+		{
+			input: `select avg(a) over (partition by col1, col2) from t1`,
+		},
+		{
+			input: `select avg(a) over (partition by col1, col2 order by col3 desc) from t1`,
+		},
+		//https://dev.mysql.com/doc/refman/8.0/en/window-functions-frames.html
+		{
+			input: `select count(a) over (partition by col1, col2 order by col3 desc rows 1 preceding) from t1`,
+		},
+		{
+			input: `select sum(a) over (partition by col1, col2 order by col3 desc rows between 1 preceding and 20 following) from t1`,
+		},
+		{
+			input: `select count(a) over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1`,
 		},
 	}
 )

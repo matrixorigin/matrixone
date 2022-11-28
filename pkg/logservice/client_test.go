@@ -165,7 +165,7 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 	done := false
 	for i := 0; i < 1000; i++ {
 		si, ok, err := GetShardInfo(testServiceAddress, 1)
-		if err != nil {
+		if err != nil || !ok {
 			time.Sleep(10 * time.Millisecond)
 			continue
 		}
@@ -329,11 +329,8 @@ func TestClientSendWithMsgSize(t *testing.T) {
 		rand.Read(rec.Payload())
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
+		// client only writes message whose size less than 190
 		_, err := c.Append(ctx, rec)
-		require.NoError(t, err)
-
-		// client only accepts message whose size less than 190
-		_, _, err = c.Read(ctx, 4, math.MaxUint64)
 		require.Error(t, err)
 	}
 	runClientTest(t, false, cFn, fn)

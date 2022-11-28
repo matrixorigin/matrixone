@@ -29,7 +29,7 @@ func TestGetShardInfo(t *testing.T) {
 		done := false
 		for i := 0; i < 1000; i++ {
 			si, ok, err := GetShardInfo(testServiceAddress, 1)
-			if err != nil {
+			if err != nil || !ok {
 				time.Sleep(10 * time.Millisecond)
 				continue
 			}

@@ -348,7 +348,7 @@ func checkDNF(expr *plan.Expr) []string {
 	case *plan.Expr_F:
 		if exprImpl.F.Func.ObjName == "or" {
 			left := checkDNF(exprImpl.F.Args[0])
-			right := checkDNF(exprImpl.F.Args[0])
+			right := checkDNF(exprImpl.F.Args[1])
 			return intersectSlice(left, right)
 		}
 		for _, arg := range exprImpl.F.Args {
@@ -586,6 +586,47 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 		} else {
 			*unionTypes = append(*unionTypes, plan.Node_MINUS)
 		}
+	}
+	return nil
+}
+
+func DeduceSelectivity(expr *plan.Expr) float64 {
+	if expr == nil {
+		return 1
+	}
+	var sel float64
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		funcName := exprImpl.F.Func.ObjName
+		switch funcName {
+		case "=":
+			return 0.01
+		case "and":
+			sel = math.Min(DeduceSelectivity(exprImpl.F.Args[0]), DeduceSelectivity(exprImpl.F.Args[1]))
+			return sel
+		case "or":
+			sel1 := DeduceSelectivity(exprImpl.F.Args[0])
+			sel2 := DeduceSelectivity(exprImpl.F.Args[1])
+			sel = math.Max(sel1, sel2)
+			if sel < 0.1 {
+				return sel * 1.05
+			} else {
+				return 1 - (1-sel1)*(1-sel2)
+			}
+		default:
+			return 0.33
+		}
+	}
+	return 1
+}
+
+func RewriteAndConstantFold(exprList []*plan.Expr) *plan.Expr {
+	e := colexec.RewriteFilterExprList(exprList)
+	if e != nil {
+		bat := batch.NewWithSize(0)
+		bat.Zs = []int64{1}
+		filter, _ := ConstantFold(bat, DeepCopyExpr(e))
+		return filter
 	}
 	return nil
 }
@@ -889,15 +930,13 @@ func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Exp
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
 func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
-	key := [2]types.T{columnT, constT}
-	// lowIntCol > highIntConst
-	if _, ok := intCastTableForRewrite[key]; ok {
+	switch constT {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
 		if !valOk {
 			return false
 		}
 		constVal := val.I64Val
-
 		switch columnT {
 		case types.T_int8:
 			return constVal <= int64(math.MaxInt8) && constVal >= int64(math.MinInt8)
@@ -905,44 +944,47 @@ func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
 			return constVal <= int64(math.MaxInt16) && constVal >= int64(math.MinInt16)
 		case types.T_int32:
 			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
+		case types.T_int64:
+			return true
+		case types.T_uint8:
+			return constVal <= math.MaxUint8 && constVal >= 0
+		case types.T_uint16:
+			return constVal <= math.MaxUint16 && constVal >= 0
+		case types.T_uint32:
+			return constVal <= math.MaxUint32 && constVal >= 0
+		case types.T_uint64:
+			return constVal >= 0
+		default:
+			return false
 		}
-	}
-
-	// lowUIntCol > highUIntConst
-	if _, ok := uintCastTableForRewrite[key]; ok {
-		val, valOk := constExpr.C.Value.(*plan.Const_U64Val)
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		val_u, valOk := constExpr.C.Value.(*plan.Const_U64Val)
 		if !valOk {
 			return false
 		}
-		constVal := val.U64Val
-
+		constVal := val_u.U64Val
 		switch columnT {
+		case types.T_int8:
+			return constVal <= math.MaxInt8
+		case types.T_int16:
+			return constVal <= math.MaxInt16
+		case types.T_int32:
+			return constVal <= math.MaxInt32
+		case types.T_int64:
+			return constVal <= math.MaxInt64
 		case types.T_uint8:
-			return constVal <= uint64(math.MaxUint8)
+			return constVal <= math.MaxUint8
 		case types.T_uint16:
-			return constVal <= uint64(math.MaxUint16)
+			return constVal <= math.MaxUint16
 		case types.T_uint32:
-			return constVal <= uint64(math.MaxUint32)
-		}
-	}
-
-	// lowUIntCol > highIntConst
-	if _, ok := uint2intCastTableForRewrite[key]; ok {
-		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
-		if !valOk {
+			return constVal <= math.MaxUint32
+		case types.T_uint64:
+			return true
+		default:
 			return false
 		}
-		constVal := val.I64Val
-
-		switch columnT {
-		case types.T_uint8:
-			return constVal <= int64(math.MaxUint8)
-		case types.T_uint16:
-			return constVal <= int64(math.MaxUint16)
-		case types.T_uint32:
-			return constVal <= int64(math.MaxUint32)
-		}
+	default:
+		return false
 	}
 
-	return false
 }

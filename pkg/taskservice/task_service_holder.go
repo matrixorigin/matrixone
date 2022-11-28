@@ -304,12 +304,13 @@ func (s *refreshableTaskStorage) refreshTask(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case lastAddress := <-s.refreshC:
-			s.mu.Lock()
-			if s.mu.store != nil {
-				_ = s.mu.store.Close()
-			}
-			s.mu.Unlock()
 			s.refresh(lastAddress)
+			// see pkg/logservice/service_commands.go#132
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 		}
 	}
 }
@@ -318,21 +319,28 @@ func (s *refreshableTaskStorage) refresh(lastAddress string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.mu.store != nil {
+		_ = s.mu.store.Close()
+	}
+
+	if s.mu.closed {
+		return
+	}
 	if lastAddress != "" && lastAddress != s.mu.lastAddress {
 		return
 	}
 	connectAddress, err := s.addressFactory()
 	if err != nil {
-		s.logger.Error("refresh task storage failed",
+		s.logger.Error("failed to refresh task storage",
 			zap.Error(err))
 		return
 	}
 
 	s.mu.lastAddress = connectAddress
-	s.logger.Debug("try to refresh task storage", zap.String("address", connectAddress))
+	s.logger.Debug("trying to refresh task storage", zap.String("address", connectAddress))
 	store, err := s.storeFactory.Create(connectAddress)
 	if err != nil {
-		s.logger.Error("refresh task storage failed",
+		s.logger.Error("failed to refresh task storage",
 			zap.String("address", connectAddress),
 			zap.Error(err))
 		return

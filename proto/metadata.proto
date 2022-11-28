@@ -20,6 +20,18 @@ option go_package = "github.com/matrixorigin/matrixone/pkg/pb/metadata";
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 
+option (gogoproto.goproto_enum_prefix_all) = true;
+
+// ServiceType service type
+enum ServiceType {
+  // CN cn service
+  CN  = 0;
+  // DN dn service
+  DN  = 1;
+  // LOG log service
+  LOG = 2;
+}
+
 // DNShardRecord is DN shard metadata describing what is a DN shard. It
 // is internally used by HAKeeper to maintain how many DNs available in
 // the system. 

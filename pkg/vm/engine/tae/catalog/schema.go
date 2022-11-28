@@ -784,6 +784,9 @@ func (s *Schema) IsPartOfPK(idx int) bool {
 }
 
 func (s *Schema) Attrs() []string {
+	if len(s.ColDefs) == 0 {
+		return make([]string, 0)
+	}
 	attrs := make([]string, 0, len(s.ColDefs)-1)
 	for _, def := range s.ColDefs {
 		if def.IsPhyAddr() {
@@ -795,6 +798,9 @@ func (s *Schema) Attrs() []string {
 }
 
 func (s *Schema) Types() []types.Type {
+	if len(s.ColDefs) == 0 {
+		return make([]types.Type, 0)
+	}
 	ts := make([]types.Type, 0, len(s.ColDefs)-1)
 	for _, def := range s.ColDefs {
 		if def.IsPhyAddr() {
@@ -806,6 +812,9 @@ func (s *Schema) Types() []types.Type {
 }
 
 func (s *Schema) Nullables() []bool {
+	if len(s.ColDefs) == 0 {
+		return make([]bool, 0)
+	}
 	nulls := make([]bool, 0, len(s.ColDefs)-1)
 	for _, def := range s.ColDefs {
 		if def.IsPhyAddr() {
@@ -817,6 +826,9 @@ func (s *Schema) Nullables() []bool {
 }
 
 func (s *Schema) AllNullables() []bool {
+	if len(s.ColDefs) == 0 {
+		return make([]bool, 0)
+	}
 	nulls := make([]bool, 0, len(s.ColDefs))
 	for _, def := range s.ColDefs {
 		nulls = append(nulls, def.Nullable())
@@ -825,6 +837,9 @@ func (s *Schema) AllNullables() []bool {
 }
 
 func (s *Schema) AllTypes() []types.Type {
+	if len(s.ColDefs) == 0 {
+		return make([]types.Type, 0)
+	}
 	ts := make([]types.Type, 0, len(s.ColDefs))
 	for _, def := range s.ColDefs {
 		ts = append(ts, def.Type)
@@ -833,6 +848,9 @@ func (s *Schema) AllTypes() []types.Type {
 }
 
 func (s *Schema) AllNames() []string {
+	if len(s.ColDefs) == 0 {
+		return make([]string, 0)
+	}
 	names := make([]string, 0, len(s.ColDefs))
 	for _, def := range s.ColDefs {
 		names = append(names, def.Name)

@@ -337,15 +337,20 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	return rs, nil
 }
 
+func constructValueScanBatch() *batch.Batch {
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
+	bat.Vecs[0].Col = make([]int64, 1)
+	bat.InitZsOne(1)
+	return bat
+}
+
 func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, error) {
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
 		ds := &Scope{Magic: Normal}
 		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
-		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
-		bat.Vecs[0].Col = make([]int64, 1)
-		bat.InitZsOne(1)
+		bat := constructValueScanBatch()
 		ds.DataSource = &Source{Bat: bat}
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
 	case plan.Node_EXTERNAL_SCAN:
@@ -485,7 +490,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			return nil, err
 		}
 		return ss, nil
-	case plan.Node_TABLE_FUNCTION:
+	case plan.Node_FUNCTION_SCAN:
 		var (
 			pre []*Scope
 			err error
@@ -536,9 +541,14 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		if err := external.InitS3Param(param); err != nil {
 			return nil, err
 		}
+	} else {
+		if err := external.InitInfileParam(param); err != nil {
+			return nil, err
+		}
 	}
 
 	param.FileService = c.proc.FileService
+	param.Ctx = c.ctx
 	fileList, err := external.ReadDir(param)
 	if err != nil {
 		return nil, err
@@ -569,33 +579,11 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 }
 
 func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, error) {
-	switch n.TableDef.TblFunc.Name {
-	case "unnest":
-		return c.compileUnnest(n, ss)
-	case "generate_series":
-		return c.compileGenerateSeries(n, ss)
-	default:
-		return nil, moerr.NewNotSupported(fmt.Sprintf("table function '%s' not supported", n.TableDef.TblFunc.Name))
-	}
-}
-
-func (c *Compile) compileUnnest(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
-			Op:  vm.Unnest,
+			Op:  vm.TableFunction,
 			Idx: c.anal.curr,
-			Arg: constructUnnest(n, c.ctx),
-		})
-	}
-	return ss, nil
-}
-
-func (c *Compile) compileGenerateSeries(n *plan.Node, ss []*Scope) ([]*Scope, error) {
-	for i := range ss {
-		ss[i].appendInstruction(vm.Instruction{
-			Op:  vm.GenerateSeries,
-			Idx: c.anal.curr,
-			Arg: constructGenerateSeries(n, c.ctx),
+			Arg: constructTableFunction(n, c.ctx, n.TableDef.TblFunc.Name),
 		})
 	}
 	return ss, nil
@@ -713,7 +701,7 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns []*plan.Node) []*Scope {
 	ss = append(ss, children...)
-	rs := c.newScopeList(1)
+	rs := c.newScopeList(1, int(n.Cost.Card))
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
 	copy(gn.GroupBy, n.ProjectList)
@@ -737,7 +725,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns 
 }
 
 func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	rs := c.newJoinScopeListWithBucket(c.newScopeList(2), ss, children)
+	rs := c.newJoinScopeListWithBucket(c.newScopeList(2, int(n.Cost.Card)), ss, children)
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
@@ -886,6 +874,7 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 		if err != nil {
 			panic(err)
 		}
+		defer vec.Free(c.proc.Mp())
 		return c.compileTop(n, vec.Col.([]int64)[0], ss)
 	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileOrder(n, ss)
@@ -894,10 +883,12 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 		if err != nil {
 			panic(err)
 		}
+		defer vec1.Free(c.proc.Mp())
 		vec2, err := colexec.EvalExpr(constBat, c.proc, n.Offset)
 		if err != nil {
 			panic(err)
 		}
+		defer vec2.Free(c.proc.Mp())
 		limit, offset := vec1.Col.([]int64)[0], vec2.Col.([]int64)[0]
 		topN := limit + offset
 		if topN <= 8192*2 {
@@ -1024,7 +1015,7 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 }
 
 func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
-	rs := c.newScopeList(validScopeCount(ss))
+	rs := c.newScopeList(validScopeCount(ss), int(n.Cost.Card))
 	j := 0
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
@@ -1086,11 +1077,11 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	return rs
 }
 
-func (c *Compile) newScopeList(childrenCount int) []*Scope {
+func (c *Compile) newScopeList(childrenCount int, rows int) []*Scope {
 	var ss []*Scope
 
 	for _, n := range c.cnList {
-		ss = append(ss, c.newScopeListWithNode(n.Mcpu, childrenCount)...)
+		ss = append(ss, c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, rows), childrenCount)...)
 	}
 	return ss
 }
@@ -1205,6 +1196,16 @@ func (c *Compile) NumCPU() int {
 	return runtime.NumCPU()
 }
 
+func (c *Compile) generateCPUNumber(num, rows int) int {
+	for n := rows / num; num > 0 && n < Single_Core_Rows; num = num - 1 {
+		continue
+	}
+	if num == 0 {
+		num++
+	}
+	return num
+}
+
 func (c *Compile) initAnalyze(qry *plan.Query) {
 	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
 	for i := range anals {
@@ -1249,13 +1250,23 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		return nil, err
 	}
 	if len(ranges) == 0 {
-		return c.cnList, nil
+		nodes = make(engine.Nodes, len(c.cnList))
+		for i, node := range c.cnList {
+			nodes[i] = engine.Node{
+				Id:   node.Id,
+				Addr: node.Addr,
+				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Cost.Card)),
+			}
+		}
+		return nodes, nil
 	}
 	if len(ranges[0]) == 0 {
 		if c.info.Typ == plan2.ExecTypeTP {
 			nodes = append(nodes, engine.Node{Mcpu: 1})
 		} else {
-			nodes = append(nodes, engine.Node{Mcpu: c.NumCPU()})
+			nodes = append(nodes, engine.Node{
+				Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Cost.Card)),
+			})
 		}
 		ranges = ranges[1:]
 	}
@@ -1269,14 +1280,14 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			nodes = append(nodes, engine.Node{
 				Id:   c.cnList[j].Id,
 				Addr: c.cnList[j].Addr,
-				Mcpu: c.cnList[j].Mcpu,
+				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Cost.Card)),
 				Data: ranges[i:],
 			})
 		} else {
 			nodes = append(nodes, engine.Node{
 				Id:   c.cnList[j].Id,
 				Addr: c.cnList[j].Addr,
-				Mcpu: c.cnList[j].Mcpu,
+				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Cost.Card)),
 				Data: ranges[i : i+step],
 			})
 		}

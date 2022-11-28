@@ -30,6 +30,27 @@ import (
 
 var _ engine.Relation = new(table)
 
+func (tbl *table) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error) {
+	switch tbl.tableId {
+	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
+		return float64(100), nil
+	}
+
+	if expr == nil {
+		r, err := tbl.Rows(ctx)
+		return float64(r), err
+	}
+	var card float64
+	for _, blockmetas := range tbl.meta.blocks {
+		for _, blk := range blockmetas {
+			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
+				card += float64(blockRows(blk))
+			}
+		}
+	}
+	return card, nil
+}
+
 func (tbl *table) Rows(ctx context.Context) (int64, error) {
 	var rows int64
 
@@ -385,8 +406,8 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 		}
 	*/
 	if tbl.primaryIdx >= 0 && expr != nil {
-		ok, v := getPkValueByExpr(expr, int32(tbl.primaryIdx),
-			types.T(tbl.tableDef.Cols[tbl.primaryIdx].Typ.Id))
+		pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
+		ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
 		if ok {
 			index = memtable.Tuple{
 				index_PrimaryKey,
@@ -395,6 +416,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 		}
 	}
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
+	tbl.db.txn.Lock()
 	for i := range tbl.db.txn.writes {
 		for _, entry := range tbl.db.txn.writes[i] {
 			if entry.databaseId == tbl.db.databaseId &&
@@ -403,6 +425,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 			}
 		}
 	}
+	tbl.db.txn.Unlock()
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	for _, i := range tbl.dnList {

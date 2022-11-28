@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/matrixorigin/simdcsv"
 )
@@ -51,11 +52,11 @@ import (
 //     2. call `Merge::doMergeFiles` with all files in `rootPath`,  do merge job
 //   - `Merge::doMergeFiles` handle one job flow: read each file, merge in cache, write into file.
 type Merge struct {
-	Table       *Table                  // WithTable
+	Table       *table.Table            // WithTable
 	FS          fileservice.FileService // WithFileService
 	FSName      string                  // WithFileServiceName, cooperate with FS
 	datetime    time.Time               // see Main
-	pathBuilder PathBuilder             // const as NewAccountDatePathBuilder()
+	pathBuilder table.PathBuilder       // const as NewAccountDatePathBuilder()
 
 	// MaxFileSize 控制合并后最大文件大小, default: 128 MB
 	MaxFileSize int64 // WithMaxFileSize
@@ -81,7 +82,7 @@ func (opt MergeOption) Apply(m *Merge) {
 	opt(m)
 }
 
-func WithTable(tbl *Table) MergeOption {
+func WithTable(tbl *table.Table) MergeOption {
 	return MergeOption(func(m *Merge) {
 		m.Table = tbl
 	})
@@ -128,7 +129,7 @@ func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 	m := &Merge{
 		FSName:        defines.ETLFileServiceName,
 		datetime:      time.Now(),
-		pathBuilder:   NewAccountDatePathBuilder(),
+		pathBuilder:   table.NewAccountDatePathBuilder(),
 		MaxFileSize:   128 * mpool.MB,
 		MaxMergeJobs:  16,
 		MinFilesMerge: 1,
@@ -203,7 +204,7 @@ func (m *Merge) Main(ts time.Time) error {
 			logutil.Warnf("path is not dir: %s", account.Name)
 			continue
 		}
-		rootPath := m.pathBuilder.Build(account.Name, MergeLogTypeLogs, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
+		rootPath := m.pathBuilder.Build(account.Name, table.MergeLogTypeLogs, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
 		// get all file entry
 
 		fileEntrys, err := m.FS.List(m.ctx, rootPath)
@@ -280,13 +281,13 @@ func (m *Merge) doMergeFiles(account string, paths []string, bufferSize int64) e
 	buf := make([]byte, 0, bufferSize)
 
 	// Step 2. new filename, file writer
-	prefix := m.pathBuilder.Build(account, MergeLogTypeMerged, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
+	prefix := m.pathBuilder.Build(account, table.MergeLogTypeMerged, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
 	mergeFilename := m.pathBuilder.NewMergeFilename(timestampStart, timestampEnd)
 	mergeFilepath := path.Join(prefix, mergeFilename)
 	newFileWriter, _ := NewCSVWriter(m.ctx, m.FS, mergeFilepath, buf)
 
 	// Step 3. do simple merge
-	cacheFileData := m.Table.NewRowCache()
+	cacheFileData := NewRowCache(m.Table)
 	row := m.Table.GetRow()
 	for _, path := range paths {
 		reader, err := NewCSVReader(m.ctx, m.FS, path)
@@ -416,7 +417,7 @@ func NewCSVReader(ctx context.Context, fs fileservice.FileService, path string) 
 
 	// parse csv content
 	simdCsvReader := simdcsv.NewReaderWithOptions(reader,
-		CommonCsvOptions.FieldTerminator,
+		table.CommonCsvOptions.FieldTerminator,
 		'#',
 		true,
 		true)
@@ -471,7 +472,7 @@ func NewCSVWriter(ctx context.Context, fs fileservice.FileService, path string, 
 }
 
 type Cache interface {
-	Put(*Row)
+	Put(*table.Row)
 	Size() int64
 	Flush(CSVWriter) error
 	Reset()
@@ -504,7 +505,7 @@ func (c *SliceCache) IsEmpty() bool {
 	return len(c.m) == 0
 }
 
-func (c *SliceCache) Put(r *Row) {
+func (c *SliceCache) Put(r *table.Row) {
 	c.m = append(c.m, r.ToRawStrings())
 	c.size += r.Size()
 }
@@ -538,44 +539,17 @@ func (c *MapCache) IsEmpty() bool {
 	return len(c.m) == 0
 }
 
-func (c *MapCache) Put(r *Row) {
+func (c *MapCache) Put(r *table.Row) {
 	c.m[r.PrimaryKey()] = r.ToRawStrings()
 	c.size += r.Size()
 }
 
-func (tbl *Table) NewRowCache() Cache {
+func NewRowCache(tbl *table.Table) Cache {
 	if len(tbl.PrimaryKeyColumn) == 0 {
 		return &SliceCache{}
 	} else {
 		return &MapCache{m: make(map[string][]string)}
 	}
-}
-
-func (r *Row) ParseRow(cols []string) error {
-	r.Columns = cols
-	return nil
-}
-
-func (r *Row) PrimaryKey() string {
-	if len(r.Table.PrimaryKeyColumn) == 0 {
-		return ""
-	}
-	if len(r.Table.PrimaryKeyColumn) == 1 {
-		return r.Columns[r.Name2ColumnIdx[r.Table.PrimaryKeyColumn[0].Name]]
-	}
-	sb := strings.Builder{}
-	for _, col := range r.Table.PrimaryKeyColumn {
-		sb.WriteString(r.Columns[r.Name2ColumnIdx[col.Name]])
-		sb.WriteRune('-')
-	}
-	return sb.String()
-}
-
-func (r *Row) Size() (size int64) {
-	for _, col := range r.Columns {
-		size += int64(len(col))
-	}
-	return
 }
 
 func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, task task.Task) error {
@@ -588,7 +562,7 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 
 		elems := strings.Split(string(args), ParamSeparator)
 		id := elems[0]
-		table, exist := gTable[id]
+		table, exist := table.GetTable(id)
 		if !exist {
 			return moerr.NewNotSupported("merge task not support table: %s", id)
 		}
@@ -651,7 +625,7 @@ func MergeTaskMetadata(id task.TaskCode, args ...string) task.TaskMetadata {
 func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService taskservice.TaskService) error {
 	var err error
 	// should init once in/with schema-init.
-	tables := GetAllTable()
+	tables := table.GetAllTable()
 	logutil.Infof("init merge task with CronExpr: %s", MergeTaskCronExpr)
 	for _, tbl := range tables {
 		logutil.Debugf("init table merge task: %s", tbl.GetIdentify())

@@ -22,18 +22,19 @@ import (
 )
 
 type ColumnView struct {
+	*BaseView
 	ColIdx     int
-	Ts         types.TS
 	data       containers.Vector
 	UpdateMask *roaring.Bitmap
 	UpdateVals map[uint32]any
-	DeleteMask *roaring.Bitmap
 	LogIndexes []*wal.Index
 }
 
 func NewColumnView(ts types.TS, colIdx int) *ColumnView {
 	return &ColumnView{
-		Ts:     ts,
+		BaseView: &BaseView{
+			Ts: ts,
+		},
 		ColIdx: colIdx,
 	}
 }
@@ -90,6 +91,13 @@ func (view *ColumnView) String() string {
 
 func (view *ColumnView) GetValue(row int) any {
 	return view.data.Get(row)
+}
+
+func (view *ColumnView) IsDeleted(row int) bool {
+	if view.DeleteMask == nil {
+		return false
+	}
+	return view.DeleteMask.ContainsInt(row)
 }
 
 func (view *ColumnView) Close() {

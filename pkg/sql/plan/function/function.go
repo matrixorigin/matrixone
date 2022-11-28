@@ -139,8 +139,8 @@ type Function struct {
 	layout FuncExplainLayout
 }
 
-func (f *Function) GetFlag() plan.Function_FuncFlag {
-	return f.flag
+func (f *Function) TestFlag(funcFlag plan.Function_FuncFlag) bool {
+	return f.flag&funcFlag != 0
 }
 
 func (f *Function) GetLayout() FuncExplainLayout {
@@ -161,7 +161,7 @@ func (f Function) VecFn(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 }
 
 func (f Function) IsAggregate() bool {
-	return f.GetFlag() == plan.Function_AGG
+	return f.TestFlag(plan.Function_AGG)
 }
 
 func (f Function) isFunction() bool {
@@ -206,6 +206,28 @@ func GetFunctionByID(overloadID int64) (Function, error) {
 	return fs[overloadIndex], nil
 }
 
+// deduce notNullable for function
+// for example, create table t1(c1 int not null, c2 int, c3 int not null ,c4 int);
+// sql select c1+1, abs(c2), cast(c3 as varchar(10)) from t1 where c1=c3;
+// we can deduce that c1+1, cast c3 and c1=c3 is notNullable, abs(c2) is nullable
+// this message helps optimization sometimes
+func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
+	function, _ := GetFunctionByID(overloadID)
+	if function.TestFlag(plan.Function_PRODUCE_NULL) {
+		return false
+	}
+	if function.TestFlag(plan.Function_PRODUCE_NO_NULL) {
+		return true
+	}
+
+	for _, arg := range args {
+		if !arg.Typ.NotNullable {
+			return false
+		}
+	}
+	return true
+}
+
 func GetFunctionIsAggregateByName(name string) bool {
 	fid, err := fromNameToFunctionId(name)
 	if err != nil {
@@ -233,7 +255,7 @@ func GetFunctionIsMonotonicById(overloadID int64) (bool, error) {
 	if function.Volatile {
 		return false, nil
 	}
-	isMonotonic := (function.GetFlag() & plan.Function_MONOTONIC) != 0
+	isMonotonic := function.TestFlag(plan.Function_MONOTONIC)
 	return isMonotonic, nil
 }
 

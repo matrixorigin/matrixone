@@ -15,6 +15,7 @@
 package checkpoint
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type CheckpointEntry struct {
@@ -121,10 +123,11 @@ func (e *CheckpointEntry) String() string {
 }
 
 func (e *CheckpointEntry) Replay(
+	ctx context.Context,
 	c *catalog.Catalog,
 	fs *objectio.ObjectFS,
 	dataFactory catalog.DataFactory) (readDuration, applyDuration time.Duration, err error) {
-	reader, err := blockio.NewCheckpointReader(fs.Service, e.location)
+	reader, err := blockio.NewCheckpointReader(ctx, fs.Service, e.location)
 	if err != nil {
 		return
 	}
@@ -132,7 +135,7 @@ func (e *CheckpointEntry) Replay(
 	data := logtail.NewCheckpointData()
 	defer data.Close()
 	t0 := time.Now()
-	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(reader, nil, common.DefaultAllocator); err != nil {
 		return
 	}
 	readDuration = time.Since(t0)
@@ -141,15 +144,34 @@ func (e *CheckpointEntry) Replay(
 	applyDuration = time.Since(t0)
 	return
 }
+func (e *CheckpointEntry) Read(
+	ctx context.Context,
+	scheduler tasks.JobScheduler,
+	fs *objectio.ObjectFS,
+) (data *logtail.CheckpointData, err error) {
+	reader, err := blockio.NewCheckpointReader(ctx, fs.Service, e.location)
+	if err != nil {
+		return
+	}
 
+	data = logtail.NewCheckpointData()
+	if err = data.ReadFrom(
+		reader,
+		scheduler,
+		common.DefaultAllocator,
+	); err != nil {
+		return
+	}
+	return
+}
 func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns *api.Batch, err error) {
-	reader, err := blockio.NewCheckpointReader(fs.Service, e.location)
+	reader, err := blockio.NewCheckpointReader(context.Background(), fs.Service, e.location)
 	if err != nil {
 		return
 	}
 	data := logtail.NewCheckpointData()
 	defer data.Close()
-	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(reader, nil, common.DefaultAllocator); err != nil {
 		return
 	}
 	ins, del, cnIns, err = data.GetTableData(tid)

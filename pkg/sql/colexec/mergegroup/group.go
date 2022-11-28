@@ -48,7 +48,6 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 				return false, err
 			}
 			ctr.state = Eval
-
 		case Eval:
 			if ctr.bat != nil {
 				if ap.NeedEval {
@@ -70,7 +69,6 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 				ctr.bat.ExpandNulls()
 			}
 			ctr.state = End
-
 		case End:
 			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil

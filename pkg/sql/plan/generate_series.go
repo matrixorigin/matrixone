@@ -22,7 +22,7 @@ import (
 
 func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) int32 {
 	node := &plan.Node{
-		NodeType: plan.Node_TABLE_FUNCTION,
+		NodeType: plan.Node_FUNCTION_SCAN,
 		Cost:     &plan.Cost{},
 		TableDef: &plan.TableDef{
 			TableType: "func_table", //test if ok
@@ -33,7 +33,8 @@ func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *B
 			Cols: []*plan.ColDef{{
 				Name: "result",
 				Typ: &plan.Type{
-					Id: int32(types.T_varchar),
+					Id:    int32(types.T_varchar),
+					Width: types.MaxVarcharLen,
 				},
 			},
 			},

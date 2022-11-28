@@ -108,7 +108,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 	}
-
 	return colexec.CreateAutoIncrCol(c.e, c.ctx, dbSource, c.proc, tableCols, dbName, tblName)
 }
 
@@ -130,6 +129,15 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
+
+	// Truncate Index Tables if needed
+	for _, name := range tqry.IndexTableNames {
+		err := dbSource.Truncate(c.ctx, name)
+		if err != nil {
+			return err
+		}
+	}
+
 	err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, dbName)
 	if err != nil {
 		return err
