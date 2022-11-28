@@ -234,7 +234,7 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 			}
 			vec[0] = vector.NewConstFixed(types.T_decimal128.ToType(), 1, data, testutil.TestUtilMp)
 		case types.T_date:
-			data, err := types.ParseDate(str)
+			data, err := types.ParseDateCast(str)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}

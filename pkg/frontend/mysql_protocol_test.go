@@ -759,8 +759,8 @@ func makeMysqlDateResultSet() *MysqlResultSet {
 
 	rs.AddColumn(mysqlCol)
 
-	d1, _ := types.ParseDate("1997-01-01")
-	d2, _ := types.ParseDate("2008-02-02")
+	d1, _ := types.ParseDateCast("1997-01-01")
+	d2, _ := types.ParseDateCast("2008-02-02")
 	var cases = []types.Date{
 		d1,
 		d2,
@@ -881,8 +881,8 @@ func make9ColumnsResultSet() *MysqlResultSet {
 		"Double",
 	}
 
-	d1, _ := types.ParseDate("1997-01-01")
-	d2, _ := types.ParseDate("2008-02-02")
+	d1, _ := types.ParseDateCast("1997-01-01")
+	d2, _ := types.ParseDateCast("2008-02-02")
 
 	dt1, _ := types.ParseDatetime("2018-04-28 10:21:15", 0)
 	dt2, _ := types.ParseDatetime("2018-04-28 10:21:15.123", 0)
