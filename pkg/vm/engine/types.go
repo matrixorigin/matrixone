@@ -55,6 +55,8 @@ type Attribute struct {
 	OnUpdate *plan.OnUpdate
 	// Primary is primary key or not
 	Primary bool
+	// Clusterby means sort by this column
+	ClusterBy bool
 	// Comment of attribute
 	Comment string
 	// AutoIncrement is auto incr or not

@@ -157,6 +157,7 @@ type ColDef struct {
 	Comment       string
 	Default       Default
 	OnUpdate      OnUpdate
+	ClusterBy     bool
 }
 
 func (def *ColDef) GetName() string     { return def.Name }
@@ -168,6 +169,7 @@ func (def *ColDef) IsPhyAddr() bool       { return def.PhyAddr }
 func (def *ColDef) IsPrimary() bool       { return def.Primary }
 func (def *ColDef) IsAutoIncrement() bool { return def.AutoIncrement }
 func (def *ColDef) IsSortKey() bool       { return def.SortKey }
+func (def *ColDef) IsClusterBy() bool     { return def.ClusterBy }
 
 type SortKey struct {
 	Defs      []*ColDef
@@ -612,6 +614,8 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
 		def.NullAbility = i82bool(nullable)
 		isHidden := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsHidden)).Get(offset).(int8)
 		def.Hidden = i82bool(isHidden)
+		isClusterBy := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsClusterBy)).Get(offset).(int8)
+		def.ClusterBy = i82bool(isClusterBy)
 		isAutoIncrement := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsAutoIncrement)).Get(offset).(int8)
 		def.AutoIncrement = i82bool(isAutoIncrement)
 		def.Comment = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).Get(offset).([]byte))

@@ -86,6 +86,7 @@ const (
 	SystemColAttr_IsHidden        = "att_is_hidden"
 	SystemColAttr_HasUpdate       = "attr_has_update"
 	SystemColAttr_Update          = "attr_update"
+	SystemColAttr_IsClusterBy     = "attr_isClusterBy"
 
 	BlockMeta_ID         = "block_id"
 	BlockMeta_EntryState = "entry_state"
@@ -165,6 +166,7 @@ const (
 	MO_COLUMNS_ATT_IS_HIDDEN_IDX         = 18
 	MO_COLUMNS_ATT_HAS_UPDATE_IDX        = 19
 	MO_COLUMNS_ATT_UPDATE_IDX            = 20
+	MO_COLUMNS_ATT_IS_CLUSTERBY          = 21
 
 	BLOCKMETA_ID_IDX         = 0
 	BLOCKMETA_ENTRYSTATE_IDX = 1
@@ -277,6 +279,7 @@ var (
 		SystemColAttr_IsHidden,
 		SystemColAttr_HasUpdate,
 		SystemColAttr_Update,
+		SystemColAttr_IsClusterBy,
 	}
 	MoTableMetaSchema = []string{
 		BlockMeta_ID,
@@ -335,6 +338,7 @@ var (
 		types.New(types.T_int8, 0, 0, 0),       // att_is_hidden
 		types.New(types.T_int8, 0, 0, 0),       // att_has_update
 		types.New(types.T_varchar, 2048, 0, 0), // att_update
+		types.New(types.T_int8, 0, 0, 0),       // att_is_clusterby
 	}
 	MoTableMetaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),                    // block_id
