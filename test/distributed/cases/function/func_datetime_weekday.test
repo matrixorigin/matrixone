@@ -35,7 +35,7 @@ SELECT weekday(1340124) as weekday;
 SELECT weekday(0.45133) as weekday;
 SELECT weekday(10) as weekday;
 SELECT weekday(1=1) as weekday;
-SELECT weekday('2015-09.30') as weekday;
+SELECT weekday('2015-09-30') as weekday;
 
 SELECT weekday('2015-0') as weekday;
 

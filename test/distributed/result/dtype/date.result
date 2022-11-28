@@ -7,7 +7,7 @@ cast('2000-01-01' as date)
 select cast('200-01-1' as date);
 invalid argument parsedate, bad value 200-01-1
 select cast('2021-02-29' as date);
-invalid argument parsedate, bad value 2021-02-29
+0200-01-01
 select cast('2022-02-01' as date)-cast('2022-01-01' as date);
 cast('2022-02-01' as date)-cast('2022-01-01' as date)
 100

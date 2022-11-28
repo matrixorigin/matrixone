@@ -36,7 +36,7 @@ SELECT dayofyear(1340124) as dayofyear;
 SELECT dayofyear(0.45133) as dayofyear;
 SELECT dayofyear(10) as dayofyear;
 SELECT dayofyear(1=1) as dayofyear;
-SELECT dayofyear('2015-09.30') as dayofyear;
+SELECT dayofyear('2015-09-30') as dayofyear;
 
 SELECT dayofyear('2015-0') as dayofyear;
 
