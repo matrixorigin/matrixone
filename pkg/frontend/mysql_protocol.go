@@ -1681,7 +1681,7 @@ func setColFlag(column *MysqlColumn) {
 func setCharacter(column *MysqlColumn) {
 	switch column.columnType {
 	// blob type should use 0x3f to show the binary data
-	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT:
+	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_BLOB:
 		column.SetCharset(0x21)
 	default:
 		column.SetCharset(0x3f)

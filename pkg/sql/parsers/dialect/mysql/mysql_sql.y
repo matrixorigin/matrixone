@@ -296,7 +296,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT FROM_JSONLINE
+%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT
 
 // MODump
 %token <str> MODUMP
@@ -339,13 +339,7 @@ import (
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
 //JSON function
-%token <str> JSON_EXTRACT ARROW
-
-// JSON table function
-%token <str> UNNEST
-
-// table function
-%token <str> GENERATE_SERIES
+%token <str> ARROW
 
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE
@@ -436,7 +430,6 @@ import (
 %type <funcExpr> function_call_keyword
 %type <funcExpr> function_call_nonkeyword
 %type <funcExpr> function_call_aggregate
-//%type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params
@@ -3706,27 +3699,16 @@ table_subquery:
     }
 
 table_function:
-    UNNEST '(' expression_list ')'
+    ident '(' expression_list_opt ')'
     {
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
+        name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: $3,
-                Type: tree.FUNC_TYPE_TABLE,
+       	    Func: &tree.FuncExpr{
+        	Func: tree.FuncName2ResolvableFunctionReference(name),
+        	Exprs: $3,
+        	Type: tree.FUNC_TYPE_TABLE,
             },
-	}
-    }
-|   GENERATE_SERIES '(' expression_list ')'
-    {
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-	$$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-		Func: tree.FuncName2ResolvableFunctionReference(name),
-		Exprs: $3,
-		Type: tree.FUNC_TYPE_TABLE,
-	    },
-	}
+        }
     }
 
 aliased_table_name:
@@ -5627,10 +5609,6 @@ simple_expr:
     {
         $$ = $1
     }
-//|     function_call_json
-//    {
-//        $$ = $1
-//    }
 
 else_opt:
     {
@@ -7932,8 +7910,6 @@ func_not_keyword:
 |   SUBDATE
 |   SYSTEM_USER
 |   TRANSLATE
-|   UNNEST
-|   GENERATE_SERIES
 
 not_keyword:
     ADDDATE

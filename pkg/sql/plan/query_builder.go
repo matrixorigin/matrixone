@@ -82,7 +82,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 	}
 
 	switch node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_TABLE_FUNCTION:
+	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_FUNCTION_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, colRefCnt)
 		}
@@ -178,7 +178,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			}
 		}
 
-		if node.NodeType == plan.Node_TABLE_FUNCTION {
+		if node.NodeType == plan.Node_FUNCTION_SCAN {
 			childId := node.Children[0]
 			childNode := builder.qry.Nodes[childId]
 			if childNode.NodeType != plan.Node_PROJECT {
@@ -1846,7 +1846,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var types []*plan.Type
 	var binding *Binding
 
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_TABLE_FUNCTION {
+	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN {
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return moerr.NewSyntaxError("table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
 		}
@@ -1855,7 +1855,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		if alias.Alias != "" {
 			table = string(alias.Alias)
 		} else {
-			if node.NodeType == plan.Node_TABLE_FUNCTION {
+			if node.NodeType == plan.Node_FUNCTION_SCAN {
 				return moerr.NewSyntaxError("Every table function must have an alias")
 			}
 
@@ -2315,7 +2315,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
 		node.FilterList = append(node.FilterList, filters...)
-	case plan.Node_TABLE_FUNCTION:
+	case plan.Node_FUNCTION_SCAN:
 		node.FilterList = append(node.FilterList, filters...)
 		childId := node.Children[0]
 		childId, err := builder.pushdownFilters(childId, nil)
