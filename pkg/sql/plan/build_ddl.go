@@ -236,12 +236,22 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 	if stmt.ClusterByOption != nil {
 		if util.FindPrimaryKey(createTable.TableDef) {
-			return nil, moerr.NewBadConfig("cluster by with primary key is not support")
+			return nil, moerr.NewNotSupported("cluster by with primary key is not support")
+		}
+		colName := stmt.ClusterByOption.ColName.Parts[0]
+		var found bool
+		for _, col := range createTable.TableDef.Cols {
+			if col.Name == colName {
+				found = true
+			}
+		}
+		if !found {
+			return nil, moerr.NewInvalidInput("column '%s' doesn't exist in table", colName)
 		}
 		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
 			Def: &plan.TableDef_DefType_Cb{
 				Cb: &plan.ClusterByDef{
-					Name: stmt.ClusterByOption.ColName.Parts[0],
+					Name: colName,
 				},
 			},
 		})
