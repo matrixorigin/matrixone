@@ -31,7 +31,11 @@ jobs:
           sleep 10
 
       - name: Clone test-tool repository
-        uses: actions/checkout@v2
+        # Node.js 12 actions are deprecated.
+        # For more information see:
+        #     - https://github.blog/changelog/2022-09-22-github-actions-all-actions-will-begin-running-on-node16-instead-of-node12/.
+        # Please update the following actions to use Node.js 16: actions/checkout@v3
+        uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tester
           path: ./mo-tester
@@ -68,7 +72,7 @@ jobs:
           docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN down --remove-orphans
           docker volume rm launch-tae-compose_minio_storage
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:

@@ -574,4 +574,12 @@ func TestReadDirSymlink(t *testing.T) {
 	assert.Equal(t, 1, len(files))
 	assert.Equal(t, fooPathInB, files[0])
 
+	path1 := root + "/a//b/./../b/c/foo"
+	files1, err := ReadDir(&tree.ExternParam{
+		Filepath: path1,
+	})
+	assert.Nil(t, err)
+	pathWant1 := root + "/a/b/c/foo"
+	assert.Equal(t, 1, len(files1))
+	assert.Equal(t, pathWant1, files1[0])
 }

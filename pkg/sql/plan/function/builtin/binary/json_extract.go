@@ -34,7 +34,7 @@ func JsonExtractByString(vectors []*vector.Vector, proc *process.Process) (*vect
 		}
 	}()
 	jsonBytes, pathBytes := vectors[0], vectors[1]
-	resultType := types.T_varchar
+	resultType := types.T_json
 	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
 	if jsonBytes.IsScalar() && pathBytes.IsScalar() {
 		resultValues := make([]*bytejson.ByteJson, 0, 1)
@@ -44,7 +44,8 @@ func JsonExtractByString(vectors []*vector.Vector, proc *process.Process) (*vect
 		}
 		ret = vector.New(types.Type{Oid: resultType})
 		for _, v := range resultValues {
-			err = ret.Append([]byte(v.String()), v.IsNull(), proc.Mp())
+			dt, _ := v.Marshal()
+			err = ret.Append(dt, v.IsNull(), proc.Mp())
 			if err != nil {
 				return nil, err
 			}
@@ -64,7 +65,8 @@ func JsonExtractByString(vectors []*vector.Vector, proc *process.Process) (*vect
 	}
 	ret = vector.New(types.Type{Oid: resultType})
 	for _, v := range resultValues {
-		err = ret.Append([]byte(v.String()), v.IsNull(), proc.Mp())
+		dt, _ := v.Marshal()
+		err = ret.Append(dt, v.IsNull(), proc.Mp())
 		if err != nil {
 			return nil, err
 		}
@@ -84,7 +86,7 @@ func JsonExtractByJson(vectors []*vector.Vector, proc *process.Process) (*vector
 		}
 	}()
 	jsonBytes, pathBytes := vectors[0], vectors[1]
-	resultType := types.T_varchar
+	resultType := types.T_json
 	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
 	if jsonBytes.IsScalar() && pathBytes.IsScalar() {
 		resultValues := make([]*bytejson.ByteJson, 0, 1)
@@ -94,7 +96,8 @@ func JsonExtractByJson(vectors []*vector.Vector, proc *process.Process) (*vector
 		}
 		ret = vector.New(types.Type{Oid: resultType})
 		for _, v := range resultValues {
-			err = ret.Append([]byte(v.String()), v.IsNull(), proc.Mp())
+			dt, _ := v.Marshal()
+			err = ret.Append(dt, v.IsNull(), proc.Mp())
 			if err != nil {
 				return nil, err
 			}
@@ -114,7 +117,8 @@ func JsonExtractByJson(vectors []*vector.Vector, proc *process.Process) (*vector
 	}
 	ret = vector.New(types.Type{Oid: resultType})
 	for _, v := range resultValues {
-		err = ret.Append([]byte(v.String()), v.IsNull(), proc.Mp())
+		dt, _ := v.Marshal()
+		err = ret.Append(dt, v.IsNull(), proc.Mp())
 		if err != nil {
 			return nil, err
 		}
