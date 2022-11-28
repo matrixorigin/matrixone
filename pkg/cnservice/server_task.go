@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -59,10 +60,12 @@ func (s *service) initTaskServiceHolder() {
 	s.task.Lock()
 	defer s.task.Unlock()
 	if s.task.storageFactory == nil {
-		s.task.holder = taskservice.NewTaskServiceHolder(s.logger,
+		s.task.holder = taskservice.NewTaskServiceHolder(
+			runtime.ProcessLevelRuntime(),
 			func() (string, error) { return s.cfg.SQLAddress, nil })
 	} else {
-		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(s.logger,
+		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(
+			runtime.ProcessLevelRuntime(),
 			func() (string, error) { return s.cfg.SQLAddress, nil },
 			func(_, _, _ string) taskservice.TaskStorageFactory {
 				return s.task.storageFactory

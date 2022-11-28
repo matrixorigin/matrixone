@@ -39,6 +39,34 @@ func GetModuleLogger(logger *MOLogger, module Module) *MOLogger {
 	return wrap(logger.logger.Named(string(module)))
 }
 
+// With creates a child logger and adds structured context to it. Fields added
+// to the child don't affect the parent, and vice versa.
+func (l *MOLogger) With(fields ...zap.Field) *MOLogger {
+	return &MOLogger{
+		logger: l.logger.With(fields...),
+		ctx:    l.ctx,
+	}
+}
+
+// Named adds a new path segment to the logger's name. Segments are joined by
+// periods. By default, Loggers are unnamed.
+func (l *MOLogger) Named(name string) *MOLogger {
+	return &MOLogger{
+		logger: l.logger.Named(name),
+		ctx:    l.ctx,
+	}
+}
+
+// Enabled returns true if the level is enabled
+func (l *MOLogger) Enabled(level zapcore.Level) bool {
+	return l.logger.Core().Enabled(level)
+}
+
+// RawLogger returns the raw zap logger
+func (l *MOLogger) RawLogger() *zap.Logger {
+	return l.logger
+}
+
 // Info shortcuts to print info log
 func (l *MOLogger) Info(msg string, fields ...zap.Field) bool {
 	return l.Log(msg, DefaultLogOptions().WithLevel(zap.InfoLevel), fields...)

@@ -50,7 +50,7 @@ func TestSendWithSingleRequest(t *testing.T) {
 		})
 	})
 
-	sd, err := NewSender(newTestClock(), nil)
+	sd, err := NewSender(newTestRuntime(newTestClock(), nil))
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, sd.Close())
@@ -91,7 +91,7 @@ func TestSendWithMultiDN(t *testing.T) {
 		})
 	}
 
-	sd, err := NewSender(newTestClock(), nil)
+	sd, err := NewSender(newTestRuntime(newTestClock(), nil))
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, sd.Close())
@@ -151,8 +151,7 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 	}
 
 	sd, err := NewSender(
-		newTestClock(),
-		nil,
+		newTestRuntime(newTestClock(), nil),
 		WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
 			if d.Address != testDN1Addr {
 				return nil
@@ -217,8 +216,7 @@ func TestLocalStreamDestroy(t *testing.T) {
 
 func BenchmarkLocalSend(b *testing.B) {
 	sd, err := NewSender(
-		newTestClock(),
-		nil,
+		newTestRuntime(newTestClock(), nil),
 		WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
 			return func(_ context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
 				resp.RequestID = req.RequestID
@@ -256,8 +254,8 @@ func BenchmarkLocalSend(b *testing.B) {
 func TestNewSenderWithOptions(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	s, err := NewSender(newTestClock(),
-		nil,
+	s, err := NewSender(
+		newTestRuntime(newTestClock(), nil),
 		WithSenderPayloadBufferSize(100),
 		WithSenderBackendOptions(morpc.WithBackendBusyBufferSize(1)))
 	assert.NoError(t, err)
@@ -287,7 +285,7 @@ func TestCanSendWithLargeRequest(t *testing.T) {
 		})
 	})
 
-	sd, err := NewSender(newTestClock(), nil, WithSenderMaxMessageSize(size+1024))
+	sd, err := NewSender(newTestRuntime(newTestClock(), nil), WithSenderMaxMessageSize(size+1024))
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, sd.Close())
