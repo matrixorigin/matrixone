@@ -15,12 +15,13 @@
 package plan
 
 import (
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -420,7 +421,7 @@ func makeTimeExpr(s string, p int32) *plan.Expr {
 }
 
 func makeDateExpr(s string) *plan.Expr {
-	dt, _ := types.ParseDate(s)
+	dt, _ := types.ParseDateCast(s)
 	return &plan.Expr{
 		Typ: &plan.Type{
 			Id: int32(types.T_date),

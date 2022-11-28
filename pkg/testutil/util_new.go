@@ -567,7 +567,7 @@ func NewDateVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []stri
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
-			d, err := types.ParseDate(vs[i])
+			d, err := types.ParseDateCast(vs[i])
 			if err != nil {
 				return nil
 			}

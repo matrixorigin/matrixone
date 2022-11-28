@@ -27,14 +27,13 @@ SELECT dayofyear(10) as dayofyear;
 invalid argument function dayofyear, bad value [BIGINT]
 SELECT dayofyear(1=1) as dayofyear;
 invalid argument function dayofyear, bad value [BOOL]
-SELECT dayofyear('2015-09.30') as dayofyear;
+SELECT dayofyear('2015-09-30') as dayofyear;
 dayofyear
 273
 SELECT dayofyear('2015-0') as dayofyear;
 invalid argument parsedate, bad value 2015-0
 SELECT dayofyear('2015-09.30 12') as dayofyear;
-dayofyear
-273
+invalid argument parsedate, bad value 2015-09.30 12
 SELECT dayofyear('2015-09-26 08:09:22') AS dayofyear;
 dayofyear
 269
