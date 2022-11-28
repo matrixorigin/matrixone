@@ -231,6 +231,7 @@ type column struct {
 	isAutoIncrement int8
 	hasUpdate       int8
 	updateExpr      []byte
+	clusterBy       int8
 }
 
 func genColumns(accountId uint32, tableName, databaseName string,
@@ -511,6 +512,12 @@ func genCreateColumnTuple(
 		idx = catalog.MO_COLUMNS_ATT_UPDATE_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_update
 		if err := bat.Vecs[idx].Append(col.updateExpr, false, m); err != nil {
+			return nil, err
+		}
+
+		idx = catalog.MO_COLUMNS_ATT_IS_CLUSTERBY
+		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_is_clusterby
+		if err := bat.Vecs[idx].Append(col.clusterBy, false, m); err != nil {
 			return nil, err
 		}
 
