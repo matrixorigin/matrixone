@@ -225,6 +225,10 @@ message PrimaryKeyDef {
 	repeated string names = 1;
 }
 
+message ClusterByDef {
+	string name = 1;
+}
+
 message Property {
 	string key 		= 1;
 	string value 	= 2;
@@ -298,6 +302,7 @@ message TableDef {
 			PropertiesDef properties	= 3;
 			ViewDef view				= 4;
 			PartitionInfo partition				= 5;
+			ClusterByDef cb				=6;
 		}
 	}
 	string name				= 1;

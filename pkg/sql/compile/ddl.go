@@ -179,6 +179,10 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 	exeDefs := make([]engine.TableDef, len(planDefs))
 	for i, def := range planDefs {
 		switch defVal := def.GetDef().(type) {
+		case *plan.TableDef_DefType_Cb:
+			exeDefs[i] = &engine.ClusterByDef{
+				Name: defVal.Cb.Name,
+			}
 		case *plan.TableDef_DefType_Pk:
 			exeDefs[i] = &engine.PrimaryIndexDef{
 				Names: defVal.Pk.GetNames(),

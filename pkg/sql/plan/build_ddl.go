@@ -234,8 +234,17 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 	bindContext := NewBindContext(builder, nil)
 
-	if stmt.ClusterByOption != nil && util.FindPrimaryKey(createTable.TableDef) {
-		return nil, moerr.NewBadConfig("cluster by with primary key is not support")
+	if stmt.ClusterByOption != nil {
+		if util.FindPrimaryKey(createTable.TableDef) {
+			return nil, moerr.NewBadConfig("cluster by with primary key is not support")
+		}
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Cb{
+				Cb: &plan.ClusterByDef{
+					Name: stmt.ClusterByOption.ColName.Parts[0],
+				},
+			},
+		})
 	}
 
 	// set partition(unsupport now)

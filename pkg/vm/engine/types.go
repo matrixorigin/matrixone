@@ -74,6 +74,10 @@ type Property struct {
 	Value string
 }
 
+type ClusterByDef struct {
+	Name string
+}
+
 type Statistics interface {
 	FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error)
 	Rows(ctx context.Context) (int64, error)
@@ -139,6 +143,7 @@ func (*AttributeDef) tableDef()    {}
 func (*IndexTableDef) tableDef()   {}
 func (*PropertiesDef) tableDef()   {}
 func (*PrimaryIndexDef) tableDef() {}
+func (*ClusterByDef) tableDef()    {}
 func (*ComputeIndexDef) tableDef() {}
 
 type Relation interface {
