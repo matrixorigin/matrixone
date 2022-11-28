@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,7 +37,10 @@ func createMem(t *testing.T) TaskStorage {
 }
 
 func createRefresh(t *testing.T) TaskStorage {
-	return newRefreshableTaskStorage(nil, func() (string, error) { return "", nil }, NewFixedTaskStorageFactory(NewMemTaskStorage()))
+	return newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func() (string, error) { return "", nil },
+		NewFixedTaskStorageFactory(NewMemTaskStorage()))
 }
 
 // TODO: move to cluster testing.

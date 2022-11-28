@@ -38,6 +38,8 @@ func newDB(dnList []DNStore) *DB {
 
 // init is used to insert some data that will not be synchronized by logtail.
 func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
+	db.Lock()
+	defer db.Unlock()
 	{
 		parts := make(Partitions, len(db.dnMap))
 		for i := range parts {

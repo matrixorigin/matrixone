@@ -15,19 +15,10 @@
 package client
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"go.uber.org/zap"
 )
-
-// WithLogger setup zap logger for TxnCoordinator
-func WithLogger(logger *zap.Logger) TxnClientCreateOption {
-	return func(tc *txnClient) {
-		tc.logger = logger
-	}
-}
 
 // WithTxnIDGenerator setup txn id generator
 func WithTxnIDGenerator(generator TxnIDGenerator) TxnClientCreateOption {
@@ -36,25 +27,20 @@ func WithTxnIDGenerator(generator TxnIDGenerator) TxnClientCreateOption {
 	}
 }
 
-// WithClock setup clock
-func WithClock(clock clock.Clock) TxnClientCreateOption {
-	return func(tc *txnClient) {
-		tc.clock = clock
-	}
-}
-
 var _ TxnClient = (*txnClient)(nil)
 
 type txnClient struct {
-	logger    *zap.Logger
+	rt        runtime.Runtime
 	sender    rpc.TxnSender
-	clock     clock.Clock
 	generator TxnIDGenerator
 }
 
 // NewTxnClient create a txn client with TxnSender and Options
-func NewTxnClient(sender rpc.TxnSender, options ...TxnClientCreateOption) TxnClient {
-	c := &txnClient{sender: sender}
+func NewTxnClient(
+	rt runtime.Runtime,
+	sender rpc.TxnSender,
+	options ...TxnClientCreateOption) TxnClient {
+	c := &txnClient{rt: rt, sender: sender}
 	for _, opt := range options {
 		opt(c)
 	}
@@ -63,16 +49,10 @@ func NewTxnClient(sender rpc.TxnSender, options ...TxnClientCreateOption) TxnCli
 }
 
 func (client *txnClient) adjust() {
-	client.logger = logutil.Adjust(client.logger).Named("txn")
-
 	if client.generator == nil {
 		client.generator = newUUIDTxnIDGenerator()
 	}
-
-	if client.clock == nil {
-		client.clock = clock.DefaultClock()
-	}
-	if client.clock == nil {
+	if client.rt.Clock() == nil {
 		panic("txn clock not set")
 	}
 }
@@ -81,17 +61,17 @@ func (client *txnClient) New(options ...TxnOption) (TxnOperator, error) {
 	txnMeta := txn.TxnMeta{}
 	txnMeta.ID = client.generator.Generate()
 
-	now, _ := client.clock.Now()
+	now, _ := client.rt.Clock().Now()
 	// TODO: Consider how to handle clock offsets. If use Clock-SI, can use the current
 	// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
 	// conflicts due to clock uncertainty.
 	txnMeta.SnapshotTS = now
-	options = append(options, WithTxnLogger(client.logger), WithTxnCNCoordinator())
-	return newTxnOperator(client.sender, txnMeta, options...), nil
+	options = append(options, WithTxnCNCoordinator())
+	return newTxnOperator(client.rt, client.sender, txnMeta, options...), nil
 }
 
 func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
-	return newTxnOperatorWithSnapshot(client.sender, snapshot, client.logger)
+	return newTxnOperatorWithSnapshot(client.rt, client.sender, snapshot)
 }
 
 func (client *txnClient) Close() error {

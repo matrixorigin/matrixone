@@ -16,14 +16,12 @@ package cnservice
 
 import (
 	"context"
-	"math"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
@@ -65,13 +63,7 @@ func (s *service) initMemoryEngineNonDist(
 	ctx context.Context,
 	pu *config.ParameterUnit,
 ) error {
-	ck := clock.DefaultClock()
-	if ck == nil {
-		ck = clock.NewHLCClock(func() int64 {
-			return time.Now().Unix()
-		}, math.MaxInt)
-	}
-
+	ck := runtime.ProcessLevelRuntime().Clock()
 	mp, err := mpool.NewMPool("cnservice_mem_engine_nondist", 0, mpool.Mid)
 	if err != nil {
 		return err
