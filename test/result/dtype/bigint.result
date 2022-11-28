@@ -214,10 +214,12 @@ insert into t values(8894754949779693579,2);
 insert into t values(17790886498483827171,3);
 select count(*) from t
 where id>=8894754949779693574 and id =17790886498483827171 order by 1 asc;
-Data truncation: data out of range: data type int64, 
+count(*)
+1
 select count(*) from t
 where id between 8894754949779693574 and 17790886498483827171;
-Data truncation: data out of range: data type int64, 
+count(*)
+3
 drop table t;
 SELECT (184467440737095 BETWEEN 0 AND 18446744073709551500);
 Data truncation: data out of range: data type int64, 

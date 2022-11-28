@@ -94,6 +94,7 @@ const (
 	CEIL           // CEIL
 	CHR            // CHR
 	COALESCE       // COALESCE
+	FIELD          // FIELD
 	CONCAT_WS
 	CONTAINS          // CONTAINS
 	CORR              // CORR
@@ -363,6 +364,7 @@ var functionIdRegister = map[string]int32{
 	"rpad":              RPAD,
 	"substr":            SUBSTRING,
 	"substring":         SUBSTRING,
+	"mid":               SUBSTRING,
 	"utc_timestamp":     UTC_TIMESTAMP,
 	"unix_timestamp":    UNIX_TIMESTAMP,
 	"from_unixtime":     FROM_UNIXTIME,
@@ -449,6 +451,7 @@ var functionIdRegister = map[string]int32{
 	"mo_disable_memory_usage_detail": MO_DISABLE_MEMORY_USAGE_DETAIL,
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
+	"field":                          FIELD,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

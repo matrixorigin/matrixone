@@ -27,7 +27,7 @@ func NewPredicatePushdown() *PredicatePushdown {
 }
 
 func (r *PredicatePushdown) Match(n *plan.Node) bool {
-	return n.NodeType != plan.Node_TABLE_SCAN && n.NodeType != plan.Node_EXTERNAL_SCAN && n.NodeType != plan.Node_TABLE_FUNCTION && len(n.FilterList) > 0
+	return n.NodeType != plan.Node_TABLE_SCAN && n.NodeType != plan.Node_EXTERNAL_SCAN && n.NodeType != plan.Node_FUNCTION_SCAN && len(n.FilterList) > 0
 }
 
 func (r *PredicatePushdown) Apply(n *plan.Node, qry *plan.Query) {
@@ -45,11 +45,11 @@ func (r *PredicatePushdown) pushdown(e *plan.Expr, n *plan.Node, qry *plan.Query
 		n.FilterList = append(n.FilterList, e)
 		return false
 	}
-	if n.NodeType == plan.Node_TABLE_SCAN || n.NodeType == plan.Node_AGG || n.NodeType == plan.Node_TABLE_FUNCTION {
+	if n.NodeType == plan.Node_TABLE_SCAN || n.NodeType == plan.Node_AGG || n.NodeType == plan.Node_FUNCTION_SCAN {
 		n.FilterList = append(n.FilterList, e)
 		return false
 	}
-	if len(n.Children) > 0 && (qry.Nodes[n.Children[0]].NodeType == plan.Node_JOIN || qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG || qry.Nodes[n.Children[0]].NodeType == plan.Node_TABLE_FUNCTION) {
+	if len(n.Children) > 0 && (qry.Nodes[n.Children[0]].NodeType == plan.Node_JOIN || qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG || qry.Nodes[n.Children[0]].NodeType == plan.Node_FUNCTION_SCAN) {
 		n.FilterList = append(n.FilterList, e)
 		return false
 	}

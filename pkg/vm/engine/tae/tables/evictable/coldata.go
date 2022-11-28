@@ -17,6 +17,7 @@ package evictable
 import (
 	"bytes"
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,7 +37,7 @@ type ColDataNode struct {
 	Data containers.Vector
 
 	colDataKey string
-	colDef     *catalog.ColDef
+	def        *catalog.ColDef
 
 	// used for rowid
 	rows     uint32
@@ -57,21 +58,34 @@ const (
 
 var StorageBackend BackendKind = Disk
 
-func NewColDataNode(mgr base.INodeManager, colDataKey, metaKey string, fs *objectio.ObjectFS, col uint16, metaloc string, colDef *catalog.ColDef, id *common.ID) (node *ColDataNode, err error) {
+func NewColDataNode(
+	id *common.ID,
+	def *catalog.ColDef,
+	colDataKey string,
+	metaKey string,
+	metaloc string,
+	mgr base.INodeManager,
+	fs *objectio.ObjectFS) (node *ColDataNode, err error) {
 	node = &ColDataNode{
 		colDataKey: colDataKey,
 		metaKey:    metaKey,
 		sid:        id.SegmentID,
 		bid:        id.BlockID,
 		mgr:        mgr,
-		colDef:     colDef,
+		def:        def,
 		colMetaFactory: func() (base.INode, error) {
-			return NewColumnMetaNode(mgr, metaKey, fs, col, metaloc, colDef.Type), nil
+			return NewColumnMetaNode(
+				id.Idx,
+				def.Type,
+				metaloc,
+				metaKey,
+				mgr,
+				fs), nil
 		},
 	}
 	// For disk, size is zero, do not cache, read directly when GetData
 	var size uint32 = 0
-	if node.colDef.IsPhyAddr() {
+	if node.def.IsPhyAddr() {
 		_, _, node.rows = blockio.DecodeMetaLoc(metaloc)
 		size = types.RowidSize * node.rows
 	} else if StorageBackend == S3 {
@@ -93,7 +107,7 @@ func NewColDataNode(mgr base.INodeManager, colDataKey, metaKey string, fs *objec
 }
 
 func (n *ColDataNode) onLoad() {
-	if n.colDef.IsPhyAddr() {
+	if n.def.IsPhyAddr() {
 		n.constructRowId()
 		return
 	}
@@ -137,14 +151,14 @@ func (n *ColDataNode) fetchData() (containers.Vector, error) {
 	//srcBuf := fsVector.Entries[0].Object.([]byte)
 	srcBuf := make([]byte, len(fsVector.Entries[0].Object.([]byte)))
 	copy(srcBuf, fsVector.Entries[0].Object.([]byte))
-	v := vector.New(n.colDef.Type)
+	v := vector.New(n.def.Type)
 	v.Read(srcBuf)
-	return containers.NewVectorWithSharedMemory(v, n.colDef.NullAbility), nil
+	return containers.NewVectorWithSharedMemory(v, n.def.NullAbility), nil
 }
 
 func (n *ColDataNode) GetData(buf *bytes.Buffer) (containers.Vector, error) {
 	// after load, for s3 and phy addr, its data is n.Data
-	if n.colDef.IsPhyAddr() {
+	if n.def.IsPhyAddr() {
 		return copyVector(n.Data, buf), nil
 	}
 	switch StorageBackend {
@@ -164,10 +178,24 @@ func (n *ColDataNode) onUnload() {
 	}
 }
 
-func FetchColumnData(buf *bytes.Buffer, mgr base.INodeManager, id *common.ID, fs *objectio.ObjectFS, col uint16, metaloc string, colDef *catalog.ColDef) (res containers.Vector, err error) {
+func FetchColumnData(
+	id *common.ID,
+	def *catalog.ColDef,
+	metaloc string,
+	buf *bytes.Buffer,
+	mgr base.INodeManager,
+	fs *objectio.ObjectFS) (res containers.Vector, err error) {
+	id.Idx = uint16(def.Idx)
 	colDataKey := EncodeColDataKey(id.Idx, metaloc)
 	factory := func() (base.INode, error) {
-		return NewColDataNode(mgr, colDataKey, EncodeColMetaKey(id.Idx, metaloc), fs, col, metaloc, colDef, id)
+		return NewColDataNode(
+			id,
+			def,
+			colDataKey,
+			EncodeColMetaKey(id.Idx, metaloc),
+			metaloc,
+			mgr,
+			fs)
 	}
 	h, err := PinEvictableNode(mgr, colDataKey, factory)
 	if err != nil {

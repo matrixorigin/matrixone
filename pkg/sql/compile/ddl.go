@@ -108,7 +108,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 	}
-
 	return colexec.CreateAutoIncrCol(c.e, c.ctx, dbSource, c.proc, tableCols, dbName, tblName)
 }
 

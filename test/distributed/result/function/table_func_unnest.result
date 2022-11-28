@@ -208,7 +208,7 @@ select `key`,path,value from unnest(substring('{"a":1}...',1,7), '$') u;
 key	path	value
 a	$.a	1
 drop table if exists t2;
-create table t2 (a varchar);
+create table t2 (a varchar(100));
 insert into t2 values ('{"a":1}.');
 with tmpt as (select substring(a,1,7) as a from t2) select * from tmpt, unnest(tmpt.a, '$') u;
 a	col	seq	key	path	index	value	this

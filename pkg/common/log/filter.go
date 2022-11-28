@@ -24,22 +24,28 @@ var (
 
 	// all SampleType register here.
 	samples = map[SampleType]*sampleValue{
-		ExampleSample: {},
+		ExampleSample: {frequency: 3},
 	}
 )
 
-func sampleFilter(ctx LogContext) bool {
-	if ctx.sampleType == noneSample {
+func sampleFilter(opts LogOptions) bool {
+	if opts.sampleType == noneSample {
 		return true
 	}
-	if v, ok := samples[ctx.sampleType]; ok {
-		return v.incr()%ctx.samplefrequency == 0
+	if v, ok := samples[opts.sampleType]; ok {
+		return v.allow()
 	}
 	return false
 }
 
 type sampleValue struct {
-	v uint64
+	v         uint64
+	frequency uint64
+}
+
+func (s *sampleValue) allow() bool {
+	n := s.incr()
+	return n == 1 || n%s.frequency == 0
 }
 
 func (s *sampleValue) incr() uint64 {

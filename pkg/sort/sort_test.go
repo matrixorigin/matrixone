@@ -86,8 +86,8 @@ func init() {
 		newTestCase(true, mp, types.New(types.T_decimal128, 0, 0, 0)),
 		newTestCase(false, mp, types.New(types.T_decimal128, 0, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_varchar, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_varchar, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)),
 	}
 }
 

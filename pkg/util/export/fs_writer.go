@@ -16,6 +16,8 @@ package export
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"io"
 	"path"
 	"sync"
@@ -33,7 +35,7 @@ type FSWriter struct {
 	ctx context.Context         // New args
 	fs  fileservice.FileService // New args
 	// pathBuilder help to generate filepath
-	pathBuilder PathBuilder // WithPathBuilder
+	pathBuilder table.PathBuilder // WithPathBuilder
 	// account and following val are for pathBuilder
 	ts       time.Time // WithTimestamp
 	account  string    // see WithAccount, default: ""
@@ -61,7 +63,7 @@ func NewFSWriter(ctx context.Context, fs fileservice.FileService, opts ...FSWrit
 	w := &FSWriter{
 		ctx:         ctx,
 		fs:          fs,
-		pathBuilder: NewDBTablePathBuilder(),
+		pathBuilder: table.NewDBTablePathBuilder(),
 		account:     "sys",
 		ts:          time.Now(),
 		name:        "info",
@@ -76,7 +78,7 @@ func NewFSWriter(ctx context.Context, fs fileservice.FileService, opts ...FSWrit
 	}
 	if len(w.filepath) == 0 {
 		filename := w.pathBuilder.NewLogFilename(w.name, w.nodeUUID, w.nodeType, w.ts)
-		p := w.pathBuilder.Build(w.account, MergeLogTypeLogs, w.ts, w.database, w.name)
+		p := w.pathBuilder.Build(w.account, table.MergeLogTypeLogs, w.ts, w.database, w.name)
 		w.filepath = path.Join(p, filename)
 	}
 	return w
@@ -110,7 +112,7 @@ func WithTimestamp(ts time.Time) FSWriterOption {
 		w.ts = ts
 	})
 }
-func WithPathBuilder(builder PathBuilder) FSWriterOption {
+func WithPathBuilder(builder table.PathBuilder) FSWriterOption {
 	return FSWriterOption(func(w *FSWriter) {
 		w.pathBuilder = builder
 	})
@@ -159,11 +161,24 @@ func (w *FSWriter) WriteString(s string) (n int, err error) {
 type FSWriterFactory func(ctx context.Context, db string, name batchpipe.HasName, options ...FSWriterOption) io.StringWriter
 
 func GetFSWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string) FSWriterFactory {
-	return func(_ context.Context, db string, name batchpipe.HasName, options ...FSWriterOption) io.StringWriter {
+	return func(ctx context.Context, db string, name batchpipe.HasName, options ...FSWriterOption) io.StringWriter {
 		options = append(options, WithDatabase(db), WithNode(nodeUUID, nodeType))
 		if name != nil {
 			options = append(options, WithName(name))
 		}
-		return NewFSWriter(DefaultContext(), fs, options...)
+		return NewFSWriter(ctx, fs, options...)
+	}
+}
+
+func GetFSWriterFactory4Trace(fs fileservice.FileService, nodeUUID, nodeType string) trace.FSWriterFactory {
+	return func(ctx context.Context, db string, name batchpipe.HasName, config trace.WriteFactoryConfig) io.StringWriter {
+		var options []FSWriterOption
+		options = append(options,
+			WithAccount(config.Account), WithTimestamp(config.Ts), WithPathBuilder(config.PathBuilder),
+			WithDatabase(db), WithNode(nodeUUID, nodeType))
+		if name != nil {
+			options = append(options, WithName(name))
+		}
+		return NewFSWriter(ctx, fs, options...)
 	}
 }

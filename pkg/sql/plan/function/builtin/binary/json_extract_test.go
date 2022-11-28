@@ -143,8 +143,7 @@ func TestJsonExtractByString(t *testing.T) {
 			switch value := kase.want.(type) {
 			case []string:
 				for i := range value {
-					bjson, err := types.ParseSliceToByteJson(got[i])
-					require.Nil(t, err)
+					bjson := types.DecodeJson(got[i])
 					require.JSONEq(t, value[i], bjson.String())
 				}
 			default:
@@ -152,8 +151,7 @@ func TestJsonExtractByString(t *testing.T) {
 					require.Equal(t, []byte{}, got[0])
 					break
 				}
-				bjson, err := types.ParseSliceToByteJson(got[0])
-				require.Nil(t, err)
+				bjson := types.DecodeJson(got[0])
 				require.JSONEq(t, kase.want.(string), bjson.String())
 			}
 		})
@@ -170,8 +168,7 @@ func TestJsonExtractByJson(t *testing.T) {
 			switch value := kase.want.(type) {
 			case []string:
 				for i := range value {
-					bjson, err := types.ParseSliceToByteJson(bytes[i])
-					require.Nil(t, err)
+					bjson := types.DecodeJson(bytes[i])
 					require.JSONEq(t, value[i], bjson.String())
 				}
 			default:
@@ -179,8 +176,7 @@ func TestJsonExtractByJson(t *testing.T) {
 					require.Equal(t, []byte{}, bytes[0])
 					break
 				}
-				bjson, err := types.ParseSliceToByteJson(bytes[0])
-				require.Nil(t, err)
+				bjson := types.DecodeJson(bytes[0])
 				require.JSONEq(t, kase.want.(string), bjson.String())
 			}
 		})

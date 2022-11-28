@@ -240,6 +240,7 @@ func (txn *Transaction) WriteBatch(
 		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
 		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 	}
+	txn.Lock()
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
 		typ:          typ,
 		bat:          bat,
@@ -249,6 +250,7 @@ func (txn *Transaction) WriteBatch(
 		databaseName: databaseName,
 		dnStore:      dnStore,
 	})
+	txn.Unlock()
 
 	if err := txn.checkPrimaryKey(typ, primaryIdx, bat, tableName, tableId); err != nil {
 		return err

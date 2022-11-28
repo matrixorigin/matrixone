@@ -73,6 +73,8 @@ type Block interface {
 	PrepareCompact() bool
 
 	Rows() int
+	GetColumnDataByNames(txn txnif.AsyncTxn, attrs []string, buffers []*bytes.Buffer) (*model.BlockView, error)
+	GetColumnDataByIds(txn txnif.AsyncTxn, colIdxes []int, buffers []*bytes.Buffer) (*model.BlockView, error)
 	GetColumnDataByName(txn txnif.AsyncTxn, attr string, buffer *bytes.Buffer) (*model.ColumnView, error)
 	GetColumnDataById(txn txnif.AsyncTxn, colIdx int, buffer *bytes.Buffer) (*model.ColumnView, error)
 	GetMeta() any

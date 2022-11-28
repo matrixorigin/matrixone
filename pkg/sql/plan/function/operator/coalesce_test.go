@@ -193,7 +193,7 @@ func TestCoalesceString(t *testing.T) {
 				require.True(t, b)
 			}
 
-			got, ergot := coalesceString(tc.vs, tc.proc, types.Type{Oid: types.T_varchar})
+			got, ergot := coalesceString(tc.vs, tc.proc, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 			if tc.err {
 				require.Errorf(t, ergot, fmt.Sprintf("case '%d' expected error, but no error happens", i))
 			} else {

@@ -52,6 +52,7 @@ type InsertNode interface {
 	RangeDelete(start, end uint32) error
 	IsRowDeleted(row uint32) bool
 	PrintDeletes() string
+	FillBlockView(view *model.BlockView, buffers []*bytes.Buffer, colIdxes []int) (err error)
 	FillColumnView(*model.ColumnView, *bytes.Buffer) error
 	Window(start, end uint32) (*containers.Batch, error)
 	GetSpace() uint32
@@ -343,7 +344,10 @@ func (n *insertNode) Append(data *containers.Batch, offset uint32) (an uint32, e
 	schema := n.table.entry.GetSchema()
 	if n.data == nil {
 		opts := new(containers.Options)
-		opts.Capacity = int(txnbase.MaxNodeRows)
+		opts.Capacity = data.Length() - int(offset)
+		if opts.Capacity > int(txnbase.MaxNodeRows) {
+			opts.Capacity = int(txnbase.MaxNodeRows)
+		}
 		n.data = containers.BuildBatch(
 			schema.AllNames(),
 			schema.AllTypes(),
@@ -377,7 +381,20 @@ func (n *insertNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	vec.Extend(col)
 	return
 }
+func (n *insertNode) FillBlockView(view *model.BlockView, buffers []*bytes.Buffer, colIdxes []int) (err error) {
+	for i, colIdx := range colIdxes {
+		orig := n.data.Vecs[colIdx]
+		if buffers[i] != nil {
+			buffers[i].Reset()
+			view.SetData(colIdx, containers.CloneWithBuffer(orig, buffers[i]))
+		} else {
+			view.SetData(colIdx, orig.CloneWindow(0, orig.Length()))
+		}
 
+	}
+	view.DeleteMask = n.data.Deletes
+	return
+}
 func (n *insertNode) FillColumnView(view *model.ColumnView, buffer *bytes.Buffer) (err error) {
 	orig := n.data.Vecs[view.ColIdx]
 	if buffer != nil {
