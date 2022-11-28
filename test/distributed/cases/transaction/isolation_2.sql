@@ -42,10 +42,8 @@ insert into dis_table_02(b,c) values ('aaaa','2020-09-08');
 insert into dis_table_02(b,c) values ('aaaa','2020-09-08');
 create table dis_table_03(b varchar(25) primary key,c datetime);
 begin ;
--- @bvt:issue#5950
 insert into dis_table_03 select b,c from dis_table_02;
 select * from dis_table_03;
--- @bvt:issue
 -- @session:id=1{
 insert into dis_table_03 select 'bbb','2012-09-30';
 update dis_table_03 set b='aaa';
