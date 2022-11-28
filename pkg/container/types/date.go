@@ -245,7 +245,8 @@ func ParseDateCast(s string) (Date, error) {
 				temp_s := string(s[i:])
 				if IsAllNumber(&temp_s) {
 					state = End
-					break
+					// break out loop
+					i = len(s)
 				} else {
 					return -1, moerr.NewInvalidArg("parsedate", s)
 				}
