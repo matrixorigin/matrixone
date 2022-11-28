@@ -64,7 +64,8 @@ jobs:
           cp ./optools/sign/gon.json ./gon.json
           gon -log-json ./gon.json
           unzip -d ./mo-macos11 mo-macos11.zip
-          cp -r ./etc/launch-tae-CN-tae-DN ./mo-macos11/
+          mkdir -p ./mo-macos11/etc
+          cp -r ./etc/launch-tae-CN-tae-DN ./mo-macos11/etc/
           cd ./mo-macos11
           spctl -a -vvv -t install mo-service
           codesign --test-requirement="=notarized" -vv mo-service
