@@ -28,7 +28,7 @@ func (s *store) heartbeatTask(ctx context.Context) {
 		panic("invalid heartbeat interval")
 	}
 	defer func() {
-		s.logger.Info("dn heartbeat task stopped")
+		s.rt.Logger().Info("dn heartbeat task stopped")
 	}()
 
 	ticker := time.NewTicker(s.cfg.HAKeeper.HeatbeatInterval.Duration)
@@ -62,7 +62,7 @@ func (s *store) heartbeat(ctx context.Context) {
 	}
 	cb, err := s.hakeeperClient.SendDNHeartbeat(ctx2, hb)
 	if err != nil {
-		s.logger.Error("failed to send dn heartbeat", zap.Error(err))
+		s.rt.Logger().Error("failed to send dn heartbeat", zap.Error(err))
 		return
 	}
 	s.handleCommands(cb.Commands)
@@ -71,9 +71,9 @@ func (s *store) heartbeat(ctx context.Context) {
 func (s *store) handleCommands(cmds []logservicepb.ScheduleCommand) {
 	for _, cmd := range cmds {
 		if cmd.ServiceType != logservicepb.DNService {
-			s.logger.Fatal("received invalid command", zap.String("command", cmd.LogString()))
+			s.rt.Logger().Fatal("received invalid command", zap.String("command", cmd.LogString()))
 		}
-		s.logger.Debug("applying schedule command:", zap.String("command", cmd.LogString()))
+		s.rt.Logger().Debug("applying schedule command:", zap.String("command", cmd.LogString()))
 		if cmd.ConfigChange != nil {
 			switch cmd.ConfigChange.ChangeType {
 			case logservicepb.AddReplica, logservicepb.StartReplica:
@@ -102,19 +102,19 @@ func (s *store) handleAddReplica(cmd logservicepb.ScheduleCommand) {
 		ReplicaID: replicaID,
 		Address:   address,
 	}); err != nil {
-		s.logger.Error("failed to add replica", zap.Error(err))
+		s.rt.Logger().Error("failed to add replica", zap.Error(err))
 	}
 }
 
 func (s *store) handleRemoveReplica(cmd logservicepb.ScheduleCommand) {
 	shardID := cmd.ConfigChange.Replica.ShardID
 	if err := s.removeReplica(shardID); err != nil {
-		s.logger.Error("failed to remove replica", zap.Error(err))
+		s.rt.Logger().Error("failed to remove replica", zap.Error(err))
 	}
 }
 
 func (s *store) handleShutdownStore(_ logservicepb.ScheduleCommand) {
 	if err := s.Close(); err != nil {
-		s.logger.Error("failed to shutdown store", zap.Error(err))
+		s.rt.Logger().Error("failed to shutdown store", zap.Error(err))
 	}
 }

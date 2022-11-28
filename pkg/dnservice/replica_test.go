@@ -19,13 +19,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNewReplica(t *testing.T) {
-	r := newReplica(newTestDNShard(1, 2, 3), nil)
+	r := newReplica(newTestDNShard(1, 2, 3), runtime.DefaultRuntime())
 	select {
 	case <-r.startedC:
 		assert.Fail(t, "cannot started")
@@ -34,12 +35,12 @@ func TestNewReplica(t *testing.T) {
 }
 
 func TestCloseNotStartedReplica(t *testing.T) {
-	r := newReplica(newTestDNShard(1, 2, 3), nil)
+	r := newReplica(newTestDNShard(1, 2, 3), runtime.DefaultRuntime())
 	assert.NoError(t, r.close(false))
 }
 
 func TestWaitStarted(t *testing.T) {
-	r := newReplica(newTestDNShard(1, 2, 3), nil)
+	r := newReplica(newTestDNShard(1, 2, 3), runtime.DefaultRuntime())
 	c := make(chan struct{})
 	go func() {
 		r.waitStarted()
@@ -70,7 +71,7 @@ func TestHandleLocalCNRequestsWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 
-	r := newReplica(newTestDNShard(1, 2, 3), nil)
+	r := newReplica(newTestDNShard(1, 2, 3), runtime.DefaultRuntime())
 	ts := service.NewTestTxnService(t, 1, service.NewTestSender(), service.NewTestClock(1))
 	defer func() {
 		assert.NoError(t, ts.Close(false))
