@@ -81,7 +81,6 @@ func SubStrIndex(strs, delims []string, counts []int64, rowCount int, constVecto
 		}
 
 		//get count
-
 		var count int64
 		if constVectors[2] {
 			count = counts[0]

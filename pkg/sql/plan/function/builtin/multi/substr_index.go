@@ -39,7 +39,8 @@ func SubStrIndex(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		return nil, err
 	}
 
-	rowCount := vector.Length(vecs[ParameterSourceString])
+	//calcute rows
+	rowCount := vector.Length(vecs[0])
 
 	var resultVec *vector.Vector = nil
 	resultValues := make([]string, rowCount)
@@ -49,7 +50,7 @@ func SubStrIndex(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
 	nulls.Or(vecs[2].Nsp, resultNsp, resultNsp)
 
-	constVectors := []bool{vecs[ParameterSourceString].IsScalar(), vecs[ParameterLengths].IsScalar(), vecs[ParameterPadString].IsScalar()}
+	constVectors := []bool{vecs[0].IsScalar(), vecs[1].IsScalar(), vecs[2].IsScalar()}
 	//get result values
 	substrindex.SubStrIndex(sourceCols, delimCols, countCols, rowCount, constVectors, resultValues)
 	resultVec = vector.NewWithStrings(types.T_varchar.ToType(), resultValues, resultNsp, proc.Mp())
