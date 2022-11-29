@@ -490,3 +490,15 @@ func TestCompact(t *testing.T) {
 	assert.True(t, types.IsNull(vec.Get(2)))
 	vec.Close()
 }
+
+func BenchmarkVectorExtend(t *testing.B) {
+	vec1 := MockVector(types.T_int32.ToType(), 0, true, false, nil)
+	vec2 := MockVector(types.T_int32.ToType(), 1, true, false, nil)
+	defer vec1.Close()
+	defer vec2.Close()
+
+	t.ResetTimer()
+	for i := 0; i < t.N; i++ {
+		vec1.Extend(vec2)
+	}
+}
