@@ -117,7 +117,7 @@ var (
 			if nulls.Contains(ns, uint64(i)) {
 				continue
 			}
-			d, err := types.ParseDate(s)
+			d, err := types.ParseDateCast(s)
 			if err != nil {
 				panic(err)
 			}
@@ -260,7 +260,7 @@ var (
 	}
 
 	MakeScalarDate = func(value string, length int) *vector.Vector {
-		d, err := types.ParseDate(value)
+		d, err := types.ParseDateCast(value)
 		if err != nil {
 			panic(err)
 		}

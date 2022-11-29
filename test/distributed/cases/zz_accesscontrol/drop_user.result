@@ -18,9 +18,9 @@ user_name    authentication_string
 drop user "";
 internal error: the name "" is invalid
 drop user root;
-[unknown result because it is related to issue#5705]
+internal error: can not delete the user root
 drop user dump;
-[unknown result because it is related to issue#5705]
+internal error: can not delete the user dump
 drop if not exists d;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 7 near " if not exists d;";
 drop user if not exists d;

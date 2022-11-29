@@ -305,7 +305,7 @@ func TestParser(t *testing.T) {
 		case types.T_date:
 			xs := make([]types.Date, len(kase.xs))
 			for i, x := range kase.xs {
-				tmp, err := types.ParseDate(x)
+				tmp, err := types.ParseDateCast(x)
 				require.Nil(t, err)
 				xs[i] = tmp
 			}

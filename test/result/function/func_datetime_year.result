@@ -16,19 +16,18 @@ invalid argument parsedate, bad value 2015-09
 SELECT YEAR(2015) as year;
 invalid argument parsedate, bad value 2015
 SELECT YEAR(1340124) as year;
-invalid argument parsedate, bad value 1340124
+year
+134
 SELECT YEAR(0.45133) as year;
 invalid argument parsedate, bad value 0.45133
 SELECT YEAR(1=1) as year;
 invalid argument parsedate, bad value 1
 SELECT YEAR('2015-09.30') as year;
-year
-2015
+invalid argument parsedate, bad value 2015-09.30
 SELECT YEAR('2015-0') as year;
 invalid argument parsedate, bad value 2015-0
 SELECT YEAR('2015-09.30 12') as year;
-year
-2015
+invalid argument parsedate, bad value 2015-09.30 12
 SELECT YEAR('2015-09-26 08:09:22') AS Year ;
 Year
 2015

@@ -73,9 +73,7 @@ load data infile '$resources/external_table_file/pt_table_data.csv' into table  
 start transaction ;
 update  atomic_table_3 set col2=20;
 select  col1,col2 from atomic_table_3;
--- @bvt:issue#6010
 show create table atomic_table_3;
--- @bvt:issue
 rollback ;
 select  col1,col2 from atomic_table_3;
 
@@ -85,9 +83,7 @@ create external table atomic_ex_table(num_col1 tinyint,num_col2 smallint,num_col
 select num_col1  from  atomic_ex_table;
 rollback ;
 select num_col1  from  atomic_ex_table;
--- @bvt:issue#6010
 show create table atomic_ex_table;
--- @bvt:issue
 desc atomic_ex_table;
 
 create TEMPORARY TABLE atomic_temp(a int);
@@ -103,9 +99,7 @@ insert into atomic_temp values (5);
 select * from atomic_temp;
 rollback ;
 select * from atomic_temp;
--- @bvt:issue#6010
 show create table atomic_temp;
--- @bvt:issue
 
 start transaction ;
 create TEMPORARY TABLE atomic_temp(a int);
