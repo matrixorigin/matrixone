@@ -25,7 +25,7 @@ select @val;
 SET @val = CAST("2022-10-10" AS timestamp);
 select @val;
 @val
-2022-10-10 00:00:00.000000 UTC
+2022-10-10 00:00:00
 SET @val = CAST('0' AS text);
 select @val;
 @val
