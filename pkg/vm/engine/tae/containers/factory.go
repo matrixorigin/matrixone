@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func MakeVector(typ types.Type, nullable bool, opts ...*Options) (vec Vector) {
+func MakeVector(typ types.Type, nullable bool, opts ...Options) (vec Vector) {
 	switch typ.Oid {
 	case types.T_any:
 		vec = NewVector[any](typ, nullable, opts...)
@@ -74,7 +74,7 @@ func BuildBatch(
 	attrs []string,
 	colTypes []types.Type,
 	nullables []bool,
-	opts *Options) *Batch {
+	opts Options) *Batch {
 	bat := &Batch{
 		Attrs:   make([]string, 0, len(attrs)),
 		nameidx: make(map[string]int, len(attrs)),
