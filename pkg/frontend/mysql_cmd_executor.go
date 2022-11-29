@@ -1519,7 +1519,7 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 		name := assign.Name
 		var value interface{}
 
-		value, err = GetSimpleExprValue(assign.Value)
+		value, err = GetSimpleExprValue(assign.Value, ses)
 		if err != nil {
 			return err
 		}
