@@ -19,6 +19,7 @@ import (
 	"math/rand"
 	"strconv"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -215,9 +217,65 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 			return NewJsonVector(n, typ, m, random, vs)
 		}
 		return NewJsonVector(n, typ, m, random, nil)
+	case types.T_TS:
+		if vs, ok := Values.([]types.TS); ok {
+			return NewTsVector(n, typ, m, random, vs)
+		}
+		return NewTsVector(n, typ, m, random, nil)
+	case types.T_Rowid:
+		if vs, ok := Values.([]types.Rowid); ok {
+			return NewRowidVector(n, typ, m, random, vs)
+		}
+		return NewRowidVector(n, typ, m, random, nil)
 	default:
 		panic(moerr.NewInternalError("unsupport vector's type '%v", typ))
 	}
+}
+
+func NewTsVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.TS) *vector.Vector {
+	vec := vector.New(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vec.Append(vs[i], false, m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		var t timestamp.Timestamp
+
+		t.PhysicalTime = int64(i)
+		if err := vec.Append(types.TimestampToTS(t), false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func NewRowidVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.Rowid) *vector.Vector {
+	vec := vector.New(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vec.Append(vs[i], false, m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		var rowId [2]int64
+
+		rowId[1] = int64(i)
+		if err := vec.Append(*(*types.Rowid)(unsafe.Pointer(&rowId[0])), false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
 }
 
 func NewJsonVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []string) *vector.Vector {
