@@ -208,6 +208,7 @@ message ColDef {
 	bool is_cPkey 		= 8;
 	OnUpdate on_update  = 9;
 	bool low_cardinality = 10;
+	bool clusterBy		=11;
 }
 
 message Default {
