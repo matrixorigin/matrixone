@@ -220,3 +220,6 @@ func UnixToTimestamp(ts int64) Timestamp {
 func UnixMicroToTimestamp(ts int64) Timestamp {
 	return Timestamp(ts + unixEpoch)
 }
+func UnixNanoToTimestamp(ts int64) Timestamp {
+	return Timestamp(ts/nanoSecsPerMicroSec + unixEpoch)
+}

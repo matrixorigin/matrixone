@@ -25,16 +25,17 @@ import (
 )
 
 const (
-	secsPerMinute   = 60
-	secsPerHour     = 60 * secsPerMinute
-	secsPerDay      = 24 * secsPerHour
-	secsPerWeek     = 7 * secsPerDay
-	NanoSecsPerSec  = 1000000000 // 10^9
-	microSecsPerSec = 1000000    // 10^6
-	MillisecsPerSec = 1000       // 10^3
-	microSecsPerDay = secsPerDay * microSecsPerSec
-	MaxDatetimeYear = 9999
-	MinDatetimeYear = 1
+	secsPerMinute       = 60
+	secsPerHour         = 60 * secsPerMinute
+	secsPerDay          = 24 * secsPerHour
+	secsPerWeek         = 7 * secsPerDay
+	NanoSecsPerSec      = 1000000000 // 10^9
+	microSecsPerSec     = 1000000    // 10^6
+	MillisecsPerSec     = 1000       // 10^3
+	nanoSecsPerMicroSec = 1000
+	microSecsPerDay     = secsPerDay * microSecsPerSec
+	MaxDatetimeYear     = 9999
+	MinDatetimeYear     = 1
 
 	minHourInDay, maxHourInDay           = 0, 23
 	minMinuteInHour, maxMinuteInHour     = 0, 59
