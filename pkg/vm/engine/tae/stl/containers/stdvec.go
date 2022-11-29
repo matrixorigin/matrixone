@@ -26,10 +26,11 @@ import (
 )
 
 func NewStdVector[T any](opts ...Options) *StdVector[T] {
-	vec := &StdVector[T]{
-		buf:   make([]byte, 0),
-		slice: make([]T, 0),
-	}
+	// vec := &StdVector[T]{
+	// 	buf:   make([]byte, 0),
+	// 	slice: make([]T, 0),
+	// }
+	vec := new(StdVector[T])
 	var capacity int
 	var buf []byte
 	if len(opts) > 0 {
