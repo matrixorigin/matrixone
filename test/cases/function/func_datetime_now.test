@@ -75,3 +75,5 @@
 #select last_insert_id();
 #select a, b, c, year(d) from t1;
 #drop table t1;
+
+select now()=now();

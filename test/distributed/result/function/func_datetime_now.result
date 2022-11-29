@@ -1,0 +1,3 @@
+select now()=now();
+now() = now()
+true
