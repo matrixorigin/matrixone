@@ -41,18 +41,20 @@ type CatalogCache struct {
 }
 
 // database cache:
-//  	. get by database key
-//      . del by rowid
-//      . gc by timestamp
+//
+//		. get by database key
+//	    . del by rowid
+//	    . gc by timestamp
 type databaseCache struct {
 	data       *btree.BTreeG[*DatabaseItem]
 	rowidIndex *btree.BTreeG[*DatabaseItem]
 }
 
 // table cache:
-//  	. get by table key
-//      . del by rowid
-//      . gc by timestamp
+//
+//		. get by table key
+//	    . del by rowid
+//	    . gc by timestamp
 type tableCache struct {
 	data       *btree.BTreeG[*TableItem]
 	rowidIndex *btree.BTreeG[*TableItem]
