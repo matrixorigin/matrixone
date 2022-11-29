@@ -63,31 +63,61 @@ func subStrIndex(str, delim string, count int64) (string, error) {
 }
 
 func SubStrIndex(strs, delims []string, counts []int64, rowCount int, constVectors []bool, results []string) {
-	for i := 0; i < rowCount; i++ {
-		//get str
-		var str string
-		if constVectors[0] {
-			str = strs[0]
-		} else {
-			str = strs[i]
-		}
-
-		//get delim
-		var delim string
+	if constVectors[0] {
+		str := strs[0]
 		if constVectors[1] {
-			delim = delims[0]
+			delim := delims[0]
+			if constVectors[2] {
+				//scalar - scalar - scalar
+				results[0], _ = subStrIndex(str, delim, counts[0])
+			} else {
+				//scalar - scalar - vector
+				for i := 0; i < rowCount; i++ {
+					results[i], _ = subStrIndex(str, delim, counts[i])
+				}
+			}
 		} else {
-			delim = delims[i]
+			if constVectors[2] {
+				count := counts[0]
+				//scalar - vector - scalar
+				for i := 0; i < rowCount; i++ {
+					results[i], _ = subStrIndex(str, delims[i], count)
+				}
+			} else {
+				//scalar - vector - vector
+				for i := 0; i < rowCount; i++ {
+					results[i], _ = subStrIndex(str, delims[i], counts[i])
+				}
+			}
 		}
-
-		//get count
-		var count int64
-		if constVectors[2] {
-			count = counts[0]
+	} else {
+		if constVectors[1] {
+			delim := delims[0]
+			if constVectors[2] {
+				count := counts[0]
+				//vector - scalar - scalar
+				for i := 0; i < rowCount; i++ {
+					results[i], _ = subStrIndex(strs[i], delim, count)
+				}
+			} else {
+				//vaetor - scalar - vector
+				for i := 0; i < rowCount; i++ {
+					results[i], _ = subStrIndex(strs[i], delim, counts[i])
+				}
+			}
 		} else {
-			count = counts[i]
+			if constVectors[2] {
+				count := counts[0]
+				//vector - vector - scalar
+				for i := 0; i < rowCount; i++ {
+					results[i], _ = subStrIndex(strs[i], delims[i], count)
+				}
+			} else {
+				//vector - vector - vector
+				for i := 0; i < rowCount; i++ {
+					results[i], _ = subStrIndex(strs[i], delims[i], counts[i])
+				}
+			}
 		}
-
-		results[i], _ = subStrIndex(str, delim, count)
 	}
 }

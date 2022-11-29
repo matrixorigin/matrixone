@@ -17,7 +17,6 @@ package multi
 import (
 	"math"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -34,10 +33,7 @@ func SubStrIndex(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	//get the second arg delim
 	delimCols := vector.MustStrCols(vecs[1])
 	//get the third arg count
-	countCols, err := getCount(vecs[2].Col)
-	if err != nil {
-		return nil, err
-	}
+	countCols := getCount(vecs[2])
 
 	//calcute rows
 	rowCount := vector.Length(vecs[0])
@@ -58,11 +54,10 @@ func SubStrIndex(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	return resultVec, nil
 }
 
-func getCount(col interface{}) ([]int64, error) {
-	switch vs := col.(type) {
-	case []int64:
-		return vs, nil
-	case []float64:
+func getCount(vec *vector.Vector) []int64 {
+	switch vec.GetType().Oid {
+	case types.T_float64:
+		vs := vector.MustTCols[float64](vec)
 		res := make([]int64, 0, len(vs))
 		for _, v := range vs {
 			if v > float64(math.MaxInt64) {
@@ -73,8 +68,9 @@ func getCount(col interface{}) ([]int64, error) {
 				res = append(res, int64(v))
 			}
 		}
-		return res, nil
-	case []uint64:
+		return res
+	case types.T_uint64:
+		vs := vector.MustTCols[uint64](vec)
 		res := make([]int64, 0, len(vs))
 		for _, v := range vs {
 			if v > uint64(math.MaxInt64) {
@@ -83,7 +79,8 @@ func getCount(col interface{}) ([]int64, error) {
 				res = append(res, int64(v))
 			}
 		}
-		return res, nil
+		return res
+	default:
+		return castTVecAsInt64(vec)
 	}
-	return nil, moerr.NewInvalidInput("unexpected parameter types were received")
 }
