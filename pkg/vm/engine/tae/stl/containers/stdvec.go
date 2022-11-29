@@ -110,6 +110,11 @@ func (vec *StdVector[T]) Slice() []T   { return vec.slice }
 func (vec *StdVector[T]) SliceWindow(offset, length int) []T {
 	return vec.slice[offset : offset+length]
 }
+
+func (vec *StdVector[T]) SlicePtr() (ptr unsafe.Pointer) {
+	return unsafe.Pointer(&vec.buf[0])
+}
+
 func (vec *StdVector[T]) DataWindow(offset, length int) []byte {
 	start := offset * stl.Sizeof[T]()
 	end := start + length*stl.Sizeof[T]()
