@@ -661,6 +661,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i, rootId := range builder.qry.Steps {
 		rootId, _ = builder.pushdownFilters(rootId, nil)
+		builder.calcScanCost(rootId)
 		rootId = builder.determineJoinOrder(rootId)
 		rootId = builder.pushdownSemiAntiJoins(rootId)
 		builder.qry.Steps[i] = rootId
@@ -1501,10 +1502,11 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 	case plan.Node_JOIN:
 		leftCost := builder.qry.Nodes[node.Children[0]].Cost
 		rightCost := builder.qry.Nodes[node.Children[1]].Cost
+		ndv := rightCost.Card
 
 		switch node.JoinType {
 		case plan.Node_INNER:
-			card := leftCost.Card * rightCost.Card
+			card := leftCost.Card * rightCost.Card / ndv
 			if len(node.OnList) > 0 {
 				card *= 0.1
 			}
@@ -1513,7 +1515,7 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 			}
 
 		case plan.Node_LEFT:
-			card := leftCost.Card * rightCost.Card
+			card := leftCost.Card * rightCost.Card / ndv
 			if len(node.OnList) > 0 {
 				card *= 0.1
 				card += leftCost.Card
@@ -1523,7 +1525,7 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 			}
 
 		case plan.Node_RIGHT:
-			card := leftCost.Card * rightCost.Card
+			card := leftCost.Card * rightCost.Card / ndv
 			if len(node.OnList) > 0 {
 				card *= 0.1
 				card += rightCost.Card
@@ -1533,7 +1535,7 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 			}
 
 		case plan.Node_OUTER:
-			card := leftCost.Card * rightCost.Card
+			card := leftCost.Card * rightCost.Card / ndv
 			if len(node.OnList) > 0 {
 				card *= 0.1
 				card += leftCost.Card + rightCost.Card
