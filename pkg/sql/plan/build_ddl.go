@@ -243,6 +243,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		for _, col := range createTable.TableDef.Cols {
 			if col.Name == colName {
 				found = true
+				col.ClusterBy = true
 			}
 		}
 		if !found {
