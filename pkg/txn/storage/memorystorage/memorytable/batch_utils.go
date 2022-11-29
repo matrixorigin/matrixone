@@ -18,8 +18,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
+// BatchIter iterates over a batch.Batch
 type BatchIter func() (tuple []Nullable)
 
+// NewBatchIter create an iter over b
 func NewBatchIter(b *batch.Batch) BatchIter {
 	i := 0
 	iter := func() (tuple []Nullable) {

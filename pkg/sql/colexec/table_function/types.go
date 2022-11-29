@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,39 +12,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package unnest
+package table_function
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type Param struct {
-	Attrs    []string
-	Cols     []*plan.ColDef
-	ExprList []*plan.Expr
-	ColName  string
-	filters  []string
-}
-
 type Argument struct {
-	Es *Param
+	Rets   []*plan.ColDef
+	Args   []*plan.Expr
+	Attrs  []string
+	Params []byte
+	Name   string
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+
 }
 
-type ExternalParam struct {
-	ColName string
-	Path    string
-	Outer   bool
+type unnestParam struct {
+	Filters []string `json:"filters"`
+	ColName string   `json:"colName"`
 }
 
 var (
-	deniedFilters = []string{"col", "seq"}
+	unnestDeniedFilters = []string{"col", "seq"}
 )
 
 const (
-	mode      = "both"
-	recursive = false
+	unnestMode      = "both"
+	unnestRecursive = false
 )
+
+type generateSeriesNumber interface {
+	int32 | int64 | types.Datetime
+}

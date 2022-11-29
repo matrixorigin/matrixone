@@ -52,11 +52,11 @@ select count(*) from mo_catalog.mo_role_privs where role_name in ('moadmin','pub
 count(*)
 34
 drop role if exists moadmin,public;
-
+internal error: can not delete the role moadmin
 select role_name from mo_role where role_name in('moadmin','public');
 SQL parser error: table "mo_role" does not exist
 drop user if exists admin,root;
-
+internal error: can not delete the user root
 create account inner_account ADMIN_NAME 'admin' IDENTIFIED BY '111';
 revoke accountadmin from admin;
 internal error: the role accountadmin can not be revoked
@@ -64,7 +64,7 @@ select count(*) from mo_catalog.mo_role_privs where role_name in ('accountadmin'
 count(*)
 30
 drop role if exists accountadmin;
-
+internal error: can not delete the role accountadmin
 select role_name from mo_catalog.mo_role where role_name in('accountadmin');
 role_name
 accountadmin

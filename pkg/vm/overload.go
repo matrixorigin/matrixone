@@ -16,18 +16,15 @@ package vm
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/generate_series"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
@@ -107,8 +104,7 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 
 	HashBuild: hashbuild.String,
 
-	Unnest:         unnest.String,
-	GenerateSeries: generate_series.String,
+	TableFunction: table_function.String,
 }
 
 var prepareFunc = [...]func(*process.Process, any) error{
@@ -154,9 +150,7 @@ var prepareFunc = [...]func(*process.Process, any) error{
 
 	HashBuild: hashbuild.Prepare,
 
-	Unnest: unnest.Prepare,
-
-	GenerateSeries: generate_series.Prepare,
+	TableFunction: table_function.Prepare,
 }
 
 var execFunc = [...]func(int, *process.Process, any) (bool, error){
@@ -201,6 +195,5 @@ var execFunc = [...]func(int, *process.Process, any) (bool, error){
 
 	HashBuild: hashbuild.Call,
 
-	Unnest:         unnest.Call,
-	GenerateSeries: generate_series.Call,
+	TableFunction: table_function.Call,
 }

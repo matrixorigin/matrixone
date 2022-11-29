@@ -224,7 +224,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 
 	// fast path: write in only one DNShard.
 	if len(newTxn.DNShards) == 1 {
-		newTxn.CommitTS, _ = s.clock.Now()
+		newTxn.CommitTS, _ = s.rt.Clock().Now()
 		txnCtx.updateTxnLocked(newTxn)
 
 		util.LogTxnStart1PCCommit(s.logger, newTxn)
@@ -426,8 +426,9 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 
 		if result := s.parallelSendWithRetry(ctx, txnMeta, requests, rollbackIngoreErrorCodes); result != nil {
 			result.Release()
-			if ce := s.logger.Check(zap.DebugLevel, "other dnshards committed"); ce != nil {
-				ce.Write(util.TxnIDFieldWithID(txnMeta.ID))
+			if s.logger.Enabled(zap.DebugLevel) {
+				s.logger.Debug("other dnshards committed",
+					util.TxnIDFieldWithID(txnMeta.ID))
 			}
 
 			if err := s.storage.Commit(ctx, txnMeta); err != nil {
@@ -436,8 +437,9 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 					zap.Error(err))
 			}
 
-			if ce := s.logger.Check(zap.DebugLevel, "coordinator dnshard committed, txn committed"); ce != nil {
-				ce.Write(util.TxnIDFieldWithID(txnMeta.ID))
+			if s.logger.Enabled(zap.DebugLevel) {
+				s.logger.Debug("coordinator dnshard committed, txn committed",
+					util.TxnIDFieldWithID(txnMeta.ID))
 			}
 
 			txnCtx.changeStatusLocked(txn.TxnStatus_Committed)
@@ -454,7 +456,7 @@ func (s *service) checkCNRequest(request *txn.TxnRequest) {
 
 func (s *service) waitClockTo(ts timestamp.Timestamp) {
 	for {
-		now, _ := s.clock.Now()
+		now, _ := s.rt.Clock().Now()
 		if now.GreaterEq(ts) {
 			return
 		}

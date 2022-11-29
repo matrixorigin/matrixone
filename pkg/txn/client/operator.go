@@ -20,7 +20,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -75,13 +75,6 @@ func WithTxnDisable1PCOpt() TxnOption {
 	}
 }
 
-// WithTxnLogger setup txn logger
-func WithTxnLogger(logger *zap.Logger) TxnOption {
-	return func(tc *txnOperator) {
-		tc.logger = logger
-	}
-}
-
 // WithTxnCNCoordinator set cn txn coodinator
 func WithTxnCNCoordinator() TxnOption {
 	return func(tc *txnOperator) {
@@ -106,7 +99,7 @@ func WithTxnCacheWrite() TxnOption {
 }
 
 type txnOperator struct {
-	logger *zap.Logger
+	rt     runtime.Runtime
 	sender rpc.TxnSender
 	txnID  []byte
 
@@ -125,26 +118,32 @@ type txnOperator struct {
 	}
 }
 
-func newTxnOperator(sender rpc.TxnSender, txnMeta txn.TxnMeta, options ...TxnOption) *txnOperator {
-	tc := &txnOperator{sender: sender}
+func newTxnOperator(
+	rt runtime.Runtime,
+	sender rpc.TxnSender,
+	txnMeta txn.TxnMeta,
+	options ...TxnOption) *txnOperator {
+	tc := &txnOperator{rt: rt, sender: sender}
 	tc.mu.txn = txnMeta
 	tc.txnID = txnMeta.ID
 	for _, opt := range options {
 		opt(tc)
 	}
 	tc.adjust()
-	util.LogTxnCreated(tc.logger, txnMeta)
+	util.LogTxnCreated(tc.rt.Logger(), txnMeta)
 	return tc
 }
 
-func newTxnOperatorWithSnapshot(sender rpc.TxnSender, snapshot []byte, logger *zap.Logger) (*txnOperator, error) {
+func newTxnOperatorWithSnapshot(
+	rt runtime.Runtime,
+	sender rpc.TxnSender,
+	snapshot []byte) (*txnOperator, error) {
 	v := &txn.CNTxnSnapshot{}
 	if err := v.Unmarshal(snapshot); err != nil {
 		return nil, err
 	}
 
-	tc := &txnOperator{sender: sender}
-	tc.logger = logger
+	tc := &txnOperator{rt: rt, sender: sender}
 	tc.mu.txn = v.Txn
 	tc.txnID = v.Txn.ID
 	tc.option.disable1PCOpt = v.Disable1PCOpt
@@ -152,23 +151,22 @@ func newTxnOperatorWithSnapshot(sender rpc.TxnSender, snapshot []byte, logger *z
 	tc.option.readyOnly = v.ReadyOnly
 
 	tc.adjust()
-	util.LogTxnCreated(tc.logger, tc.mu.txn)
+	util.LogTxnCreated(tc.rt.Logger(), tc.mu.txn)
 	return tc, nil
 }
 
 func (tc *txnOperator) adjust() {
-	tc.logger = logutil.Adjust(tc.logger)
 	if tc.sender == nil {
-		tc.logger.Fatal("missing txn sender")
+		tc.rt.Logger().Fatal("missing txn sender")
 	}
 	if len(tc.mu.txn.ID) == 0 {
-		tc.logger.Fatal("missing txn id")
+		tc.rt.Logger().Fatal("missing txn id")
 	}
 	if tc.mu.txn.SnapshotTS.IsEmpty() {
-		tc.logger.Fatal("missing txn snapshot timestamp")
+		tc.rt.Logger().Fatal("missing txn snapshot timestamp")
 	}
 	if tc.option.readyOnly && tc.option.enableCacheWrite {
-		tc.logger.Fatal("readyOnly and delayWrites cannot both be set")
+		tc.rt.Logger().Fatal("readyOnly and delayWrites cannot both be set")
 	}
 }
 
@@ -195,7 +193,7 @@ func (tc *txnOperator) Snapshot() ([]byte, error) {
 
 func (tc *txnOperator) ApplySnapshot(data []byte) error {
 	if !tc.option.coordinator {
-		tc.logger.Fatal("apply snapshot on non-coordinator txn operator")
+		tc.rt.Logger().Fatal("apply snapshot on non-coordinator txn operator")
 	}
 
 	tc.mu.Lock()
@@ -211,7 +209,7 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 	}
 
 	if !bytes.Equal(snapshot.Txn.ID, tc.mu.txn.ID) {
-		tc.logger.Fatal("apply snapshot with invalid txn id")
+		tc.rt.Logger().Fatal("apply snapshot with invalid txn id")
 	}
 
 	for _, dn := range snapshot.Txn.DNShards {
@@ -227,12 +225,12 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 			tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, dn)
 		}
 	}
-	util.LogTxnUpdated(tc.logger, tc.mu.txn)
+	util.LogTxnUpdated(tc.rt.Logger(), tc.mu.txn)
 	return nil
 }
 
 func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
-	util.LogTxnRead(tc.logger, tc.getTxnMeta(false))
+	util.LogTxnRead(tc.rt.Logger(), tc.getTxnMeta(false))
 
 	for idx := range requests {
 		requests[idx].Method = txn.TxnMethod_Read
@@ -247,7 +245,7 @@ func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) (*rp
 }
 
 func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
-	util.LogTxnWrite(tc.logger, tc.getTxnMeta(false))
+	util.LogTxnWrite(tc.rt.Logger(), tc.getTxnMeta(false))
 
 	return tc.doWrite(ctx, requests, false)
 }
@@ -257,7 +255,7 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
-	util.LogTxnCommit(tc.logger, tc.getTxnMeta(false))
+	util.LogTxnCommit(tc.rt.Logger(), tc.getTxnMeta(false))
 
 	if tc.option.readyOnly {
 		return nil
@@ -274,7 +272,7 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
-	util.LogTxnRollback(tc.logger, tc.getTxnMeta(false))
+	util.LogTxnRollback(tc.rt.Logger(), tc.getTxnMeta(false))
 
 	tc.mu.Lock()
 	defer func() {
@@ -321,7 +319,7 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	}
 
 	if tc.option.readyOnly {
-		tc.logger.Fatal("can not write on ready only transaction")
+		tc.rt.Logger().Fatal("can not write on ready only transaction")
 	}
 
 	if commit {
@@ -380,12 +378,12 @@ func (tc *txnOperator) addPartitionLocked(dn metadata.DNShard) {
 		}
 	}
 	tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, dn)
-	util.LogTxnUpdated(tc.logger, tc.mu.txn)
+	util.LogTxnUpdated(tc.rt.Logger(), tc.mu.txn)
 }
 
 func (tc *txnOperator) validate(ctx context.Context, locked bool) error {
 	if _, ok := ctx.Deadline(); !ok {
-		tc.logger.Fatal("context deadline set")
+		tc.rt.Logger().Fatal("context deadline set")
 	}
 
 	return tc.checkStatus(locked)
@@ -479,13 +477,13 @@ func (tc *txnOperator) doSend(ctx context.Context, requests []txn.TxnRequest, lo
 		requests[idx].Txn = txnMeta
 	}
 
-	util.LogTxnSendRequests(tc.logger, requests)
+	util.LogTxnSendRequests(tc.rt.Logger(), requests)
 	result, err := tc.sender.Send(ctx, requests)
 	if err != nil {
-		util.LogTxnSendRequestsFailed(tc.logger, requests, err)
+		util.LogTxnSendRequestsFailed(tc.rt.Logger(), requests, err)
 		return nil, err
 	}
-	util.LogTxnReceivedResponses(tc.logger, result.Responses)
+	util.LogTxnReceivedResponses(tc.rt.Logger(), result.Responses)
 	return result, nil
 }
 
@@ -531,7 +529,7 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 		}
 		return nil
 	default:
-		tc.logger.Fatal("invalid response",
+		tc.rt.Logger().Fatal("invalid response",
 			zap.String("response", resp.DebugString()))
 	}
 	return nil
@@ -554,7 +552,7 @@ func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) 
 		txn.TxnStatus_Committed, txn.TxnStatus_Committing:
 		return moerr.NewTxnClosed(tc.txnID)
 	default:
-		tc.logger.Fatal("invalid response status for read or write",
+		tc.rt.Logger().Fatal("invalid response status for read or write",
 			util.TxnField(*txnMeta))
 	}
 	return nil

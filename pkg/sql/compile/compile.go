@@ -579,33 +579,11 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 }
 
 func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, error) {
-	switch n.TableDef.TblFunc.Name {
-	case "unnest":
-		return c.compileUnnest(n, ss)
-	case "generate_series":
-		return c.compileGenerateSeries(n, ss)
-	default:
-		return nil, moerr.NewNotSupported(fmt.Sprintf("table function '%s' not supported", n.TableDef.TblFunc.Name))
-	}
-}
-
-func (c *Compile) compileUnnest(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
-			Op:  vm.Unnest,
+			Op:  vm.TableFunction,
 			Idx: c.anal.curr,
-			Arg: constructUnnest(n, c.ctx),
-		})
-	}
-	return ss, nil
-}
-
-func (c *Compile) compileGenerateSeries(n *plan.Node, ss []*Scope) ([]*Scope, error) {
-	for i := range ss {
-		ss[i].appendInstruction(vm.Instruction{
-			Op:  vm.GenerateSeries,
-			Idx: c.anal.curr,
-			Arg: constructGenerateSeries(n, c.ctx),
+			Arg: constructTableFunction(n, c.ctx, n.TableDef.TblFunc.Name),
 		})
 	}
 	return ss, nil
