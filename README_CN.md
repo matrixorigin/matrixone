@@ -278,7 +278,7 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commi
 - **挂载配置文件**
 
 ```
-docker run -d -p 6001:6001 -v ${local_data_path}/etc:/etc:rw  --entrypoint "/mo-service" matrixorigin/matrixone:0.6.0 -launch /etc/launch-tae-CN-tae-DN/launch.toml
+docker run -d -p 6001:6001 -v ${local_data_path}/etc:/etc:rw  --entrypoint "/mo-service" matrixorigin/matrixone:0.6.0 -launch /etc/quickstart/launch.toml
 ```
 
 ### 🌟 连接 MatrixOne 服务
