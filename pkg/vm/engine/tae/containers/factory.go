@@ -75,7 +75,11 @@ func BuildBatch(
 	colTypes []types.Type,
 	nullables []bool,
 	opts *Options) *Batch {
-	bat := NewBatch()
+	bat := &Batch{
+		Attrs:   make([]string, 0, len(attrs)),
+		nameidx: make(map[string]int, len(attrs)),
+		Vecs:    make([]Vector, 0, len(attrs)),
+	}
 	for i, attr := range attrs {
 		vec := MakeVector(colTypes[i], nullables[i], opts)
 		bat.AddVector(attr, vec)
