@@ -15,7 +15,6 @@
 package operator
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -47,7 +46,7 @@ func shortenValueString(valueStr string) string {
 	return valueStr
 }
 
-func formatCastError(ctx context.Context, vec *vector.Vector, typ types.Type, extraInfo string) error {
+func formatCastError(vec *vector.Vector, typ types.Type, extraInfo string) error {
 	var errStr string
 	if vec.IsScalar() {
 		if vec.ConstVectorIsNull() {
@@ -60,14 +59,14 @@ func formatCastError(ctx context.Context, vec *vector.Vector, typ types.Type, ex
 	} else {
 		errStr = fmt.Sprintf("Can't cast column from %v type to %v type because of one or more values in that column.", vec.Typ, typ)
 	}
-	return moerr.NewInternalError(ctx, errStr+extraInfo)
+	return moerr.NewInternalErrorNoCtx(errStr + extraInfo)
 }
 
 func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv := vs[0]
 	rv := vs[1]
 	if rv.IsScalarNull() {
-		return nil, formatCastError(proc.Ctx, lv, rv.Typ, "the target type of cast function cannot be null")
+		return nil, formatCastError(lv, rv.Typ, "the target type of cast function cannot be null")
 	}
 	if lv.IsScalarNull() {
 		return proc.AllocScalarNullVector(rv.Typ), nil
@@ -737,7 +736,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		return CastUuidToString(lv, rv, proc)
 	}
 
-	return nil, formatCastError(proc.Ctx, lv, rv.Typ, "")
+	return nil, formatCastError(lv, rv.Typ, "")
 }
 
 func CastTimestampAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -1173,7 +1172,7 @@ func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector
 		}
 		if rv.Typ.Oid != types.T_text && int(rv.Typ.Width) != 0 && len(source[0]) > int(rv.Typ.Width) {
 			errInfo := fmt.Sprintf(" Src length %v is larger than Dest length %v", len(source[0]), rv.Typ.Width)
-			return nil, formatCastError(proc.Ctx, lv, rv.Typ, errInfo)
+			return nil, formatCastError(lv, rv.Typ, errInfo)
 		}
 		return vector.NewConstString(rv.Typ, lv.Length(), source[0], proc.Mp()), nil
 	}
@@ -1185,7 +1184,7 @@ func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector
 			}
 			if len(str) > destLen {
 				errInfo := fmt.Sprintf(" Src length %v is larger than Dest length %v", len(str), destLen)
-				return nil, formatCastError(proc.Ctx, lv, rv.Typ, errInfo)
+				return nil, formatCastError(lv, rv.Typ, errInfo)
 			}
 		}
 	}
@@ -2337,7 +2336,7 @@ func CastDecimal128ToUint64(lv, rv *vector.Vector, proc *process.Process) (*vect
 // this cast function is too slow, and therefore only temporary, rewrite needed
 func CastDecimal128ToDecimal64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if lv.Typ.Scale > 18 {
-		return nil, formatCastError(proc.Ctx, lv, rv.Typ, "")
+		return nil, formatCastError(lv, rv.Typ, "")
 	}
 	lvs := lv.Col.([]types.Decimal128)
 	if lv.IsScalar() {

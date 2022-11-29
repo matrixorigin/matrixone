@@ -37,7 +37,7 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 
 	resultType := types.T_date.ToType()
 	if !formatVector.IsScalar() {
-		return nil, moerr.NewInvalidArg(proc.Ctx, "to_date format", "not constant")
+		return nil, moerr.NewInvalidArgNoCtx("to_date format", "not constant")
 	}
 	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
@@ -82,7 +82,7 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 
 	resultType := types.T_datetime.ToType()
 	if !formatVector.IsScalar() {
-		return nil, moerr.NewInvalidArg(proc.Ctx, "to_date format", "not constant")
+		return nil, moerr.NewInvalidArgNoCtx("to_date format", "not constant")
 	}
 	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
@@ -127,7 +127,7 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 
 	resultType := types.T_time.ToType()
 	if !formatVector.IsScalar() {
-		return nil, moerr.NewInvalidArg(proc.Ctx, "to_date format", "not constant")
+		return nil, moerr.NewInvalidArgNoCtx("to_date format", "not constant")
 	}
 	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil

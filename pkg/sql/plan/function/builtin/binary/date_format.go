@@ -16,7 +16,6 @@ package binary
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"math"
 	"strconv"
@@ -81,7 +80,7 @@ func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 
 	resultType := types.T_varchar.ToType()
 	if !formatVector.IsScalar() {
-		return nil, moerr.NewInvalidArg(proc.Ctx, "date format format", "not constant")
+		return nil, moerr.NewInvalidArgNoCtx("date format format", "not constant")
 	}
 
 	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
@@ -94,14 +93,14 @@ func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	if dateVector.IsScalar() {
 		// XXX Null handling maybe broken.
 		datetimes := dateVector.Col.([]types.Datetime)
-		resCol, err := CalcDateFromat(proc.Ctx, datetimes, formatMask, dateVector.Nsp)
+		resCol, err := CalcDateFromat(datetimes, formatMask, dateVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
 		return vector.NewConstString(resultType, 1, resCol[0], proc.Mp()), nil
 	} else {
 		datetimes := dateVector.Col.([]types.Datetime)
-		resCol, err := CalcDateFromat(proc.Ctx, datetimes, formatMask, dateVector.Nsp)
+		resCol, err := CalcDateFromat(datetimes, formatMask, dateVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
@@ -113,13 +112,13 @@ func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 }
 
 // CalcDateFromat: DateFromat is used to formating the datetime values according to the format string.
-func CalcDateFromat(ctx context.Context, datetimes []types.Datetime, format string, ns *nulls.Nulls) ([]string, error) {
+func CalcDateFromat(datetimes []types.Datetime, format string, ns *nulls.Nulls) ([]string, error) {
 	res := make([]string, len(datetimes))
 	for idx, datetime := range datetimes {
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		formatStr, err := datetimeFormat(ctx, datetime, format)
+		formatStr, err := datetimeFormat(datetime, format)
 		if err != nil {
 			return nil, err
 		}
@@ -129,12 +128,12 @@ func CalcDateFromat(ctx context.Context, datetimes []types.Datetime, format stri
 }
 
 // datetimeFormat: format the datetime value according to the format string.
-func datetimeFormat(ctx context.Context, datetime types.Datetime, format string) (string, error) {
+func datetimeFormat(datetime types.Datetime, format string) (string, error) {
 	var buf bytes.Buffer
 	inPatternMatch := false
 	for _, b := range format {
 		if inPatternMatch {
-			if err := makeDateFormat(ctx, datetime, b, &buf); err != nil {
+			if err := makeDateFormat(datetime, b, &buf); err != nil {
 				return "", err
 			}
 			inPatternMatch = false
@@ -152,18 +151,18 @@ func datetimeFormat(ctx context.Context, datetime types.Datetime, format string)
 }
 
 // makeDateFormat: Get the format string corresponding to the date according to a single format character
-func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Buffer) error {
+func makeDateFormat(t types.Datetime, b rune, buf *bytes.Buffer) error {
 	switch b {
 	case 'b':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return moerr.NewInvalidInput(ctx, "invalud date format for month '%d'", m)
+			return moerr.NewInvalidInputNoCtx("invalud date format for month '%d'", m)
 		}
 		buf.WriteString(MonthNames[m-1][:3])
 	case 'M':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return moerr.NewInvalidInput(ctx, "invalud date format for month '%d'", m)
+			return moerr.NewInvalidInputNoCtx("invalud date format for month '%d'", m)
 		}
 		buf.WriteString(MonthNames[m-1])
 	case 'm':

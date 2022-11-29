@@ -155,7 +155,7 @@ func (f Function) ReturnType() (typ types.T, nullable bool) {
 
 func (f Function) VecFn(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if f.Fn == nil {
-		return nil, moerr.NewInternalError(proc.Ctx, "no function")
+		return nil, moerr.NewInternalErrorNoCtx("no function")
 	}
 	return f.Fn(vs, proc)
 }
