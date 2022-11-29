@@ -42,7 +42,7 @@ jobs:
         uses: cgetc/automatically-set-milestone-to-issue@v0.1.2
         with:
           github-token: ${{ secrets.TOKEN_ACTION }}
-          version-prefix: "v0.6.0"
+          version-prefix: "v0.7.0"
 
   check-bvt-issue:
     if: github.event.action == 'closed'
