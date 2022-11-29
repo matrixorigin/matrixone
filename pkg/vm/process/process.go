@@ -69,7 +69,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.SessionInfo = p.SessionInfo
 	proc.FileService = p.FileService
 	proc.GetClusterDetails = p.GetClusterDetails
-	proc.UnixTime = time.Now().UnixNano()
+	proc.UnixTime = p.UnixTime
 
 	// reg and cancel
 	proc.Ctx = newctx
