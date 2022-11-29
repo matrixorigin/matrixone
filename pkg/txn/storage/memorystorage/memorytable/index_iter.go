@@ -20,6 +20,7 @@ import (
 	"github.com/tidwall/btree"
 )
 
+// IndexIter represents iterator over index entries
 type IndexIter[
 	K Ordered[K],
 	V any,
@@ -30,6 +31,7 @@ type IndexIter[
 	max  Tuple
 }
 
+// NewIndexIter creates new index iter
 func (t *Table[K, V, R]) NewIndexIter(tx *Transaction, min Tuple, max Tuple) (*IndexIter[K, V], error) {
 	if max.Less(min) {
 		panic(fmt.Sprintf("%v is less than %v", max, min))
@@ -50,6 +52,7 @@ func (t *Table[K, V, R]) NewIndexIter(tx *Transaction, min Tuple, max Tuple) (*I
 
 var _ Iter[*IndexEntry[Int, int]] = new(IndexIter[Int, int])
 
+// First sets the cursor to the first index entry
 func (i *IndexIter[K, V]) First() bool {
 	if !i.iter.First() {
 		return false
@@ -69,6 +72,7 @@ func (i *IndexIter[K, V]) First() bool {
 	return true
 }
 
+// Next reports whether next entry is valid
 func (i *IndexIter[K, V]) Next() bool {
 	if !i.iter.Next() {
 		return false
@@ -83,11 +87,13 @@ func (i *IndexIter[K, V]) Next() bool {
 	return true
 }
 
+// Close closes the iter
 func (i *IndexIter[K, V]) Close() error {
 	i.iter.Release()
 	return nil
 }
 
+// Read reads the current entry
 func (i *IndexIter[K, V]) Read() (*IndexEntry[K, V], error) {
 	return i.iter.Item(), nil
 }
