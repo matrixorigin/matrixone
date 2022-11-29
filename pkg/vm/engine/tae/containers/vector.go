@@ -161,9 +161,6 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 	return cloned
 }
 func (vec *vector[T]) Slice() any {
-	if vec.typ.IsVarlen() {
-		return vec.stlvec.Bytes()
-	}
 	return vec.stlvec.Slice()
 }
 
