@@ -106,9 +106,8 @@ func (base *vecBase[T]) extendData(src Vector, srcOff, srcLen int) {
 		}
 		return
 	}
-	slice := unsafe.Slice((*T)(src.SlicePtr()), src.Length())
+	slice := unsafe.Slice((*T)(src.SlicePtr()), srcOff+srcLen)
 	base.derived.stlvec.AppendMany(slice[srcOff : srcOff+srcLen]...)
-	// base.derived.stlvec.AppendMany(src.Slice().([]T)[srcOff : srcOff+srcLen]...)
 }
 
 func (base *vecBase[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
