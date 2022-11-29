@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -329,7 +330,7 @@ func TestMergeTaskExecutorFactory(t *testing.T) {
 
 func TestCreateCronTask(t *testing.T) {
 	store := taskservice.NewMemTaskStorage()
-	s := taskservice.NewTaskService(store, nil)
+	s := taskservice.NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()

@@ -22,11 +22,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+// Nullable represents a nullable value
 type Nullable struct {
 	IsNull bool
 	Value  any
 }
 
+// Equal reports whether tow Nullable values are equal
 func (n Nullable) Equal(n2 Nullable) bool {
 	if n.IsNull || n2.IsNull {
 		return false
@@ -42,6 +44,7 @@ func (n Nullable) Equal(n2 Nullable) bool {
 	return n.Value == n2.Value
 }
 
+// AppendVector append the value to a vector
 func (n Nullable) AppendVector(
 	vec *vector.Vector, mp *mpool.MPool) {
 	value := n.Value

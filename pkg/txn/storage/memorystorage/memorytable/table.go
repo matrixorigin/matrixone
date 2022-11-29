@@ -24,6 +24,7 @@ import (
 	"github.com/tidwall/btree"
 )
 
+// Table represents a table
 type Table[
 	K Ordered[K],
 	V any,
@@ -37,6 +38,7 @@ type Table[
 
 var nextTableID = int64(1)
 
+// Row represents a logical row in a table
 type Row[K any, V any] interface {
 	Key() K
 	Value() V
@@ -44,6 +46,7 @@ type Row[K any, V any] interface {
 	UniqueIndexes() []Tuple
 }
 
+// NewTable creates new table
 func NewTable[
 	K Ordered[K],
 	V any,
@@ -110,173 +113,79 @@ func (t *Table[K, V, R]) getTransactionTable(
 	return
 }
 
+// Insert inserts a row to the table
 func (t *Table[K, V, R]) Insert(
 	tx *Transaction,
 	row R,
 ) (
 	err error,
 ) {
-	txTable, err := t.getTransactionTable(tx)
+	bat, err := t.NewBatch(tx)
 	if err != nil {
 		return err
 	}
-	initState := txTable.state.Load().(*tableState[K, V])
-
-	key := row.Key()
-	pair := &KVPair[K, V]{
-		Key: key,
+	if err := bat.Insert(row); err != nil {
+		return err
 	}
-
-	_, ok := initState.rows.Get(pair)
-	if ok {
-		return moerr.NewDuplicate()
-	}
-
-	state := initState.cloneWithLogs()
-	defer func() {
-		if err == nil {
-			if !txTable.state.CompareAndSwap(initState, state) {
-				panic("concurrent mutation")
-			}
-		}
-	}()
-
-	pair.ID = atomic.AddInt64(&nextKVPairID, 1)
-	pair.Value = row.Value()
-	pair.Indexes = row.Indexes()
-	state.setPair(pair, nil)
-
+	bat.Commit()
 	return nil
 }
 
+// Update updates a row in the table
 func (t *Table[K, V, R]) Update(
 	tx *Transaction,
 	row R,
 ) (
 	err error,
 ) {
-	txTable, err := t.getTransactionTable(tx)
+	bat, err := t.NewBatch(tx)
 	if err != nil {
 		return err
 	}
-	initState := txTable.state.Load().(*tableState[K, V])
-	key := row.Key()
-	pair := &KVPair[K, V]{
-		Key: key,
+	if err := bat.Update(row); err != nil {
+		return err
 	}
-
-	oldPair, ok := initState.rows.Get(pair)
-	if !ok {
-		return sql.ErrNoRows
-	}
-
-	state := initState.cloneWithLogs()
-	defer func() {
-		if err == nil {
-			if !txTable.state.CompareAndSwap(initState, state) {
-				panic("concurrent mutation")
-			}
-		}
-	}()
-
-	pair.ID = atomic.AddInt64(&nextKVPairID, 1)
-	pair.Value = row.Value()
-	pair.Indexes = row.Indexes()
-	state.setPair(pair, oldPair)
-
+	bat.Commit()
 	return nil
 }
 
+// Delete deletes a row from the table
 func (t *Table[K, V, R]) Delete(
 	tx *Transaction,
 	key K,
 ) (
 	err error,
 ) {
-	txTable, err := t.getTransactionTable(tx)
+	bat, err := t.NewBatch(tx)
 	if err != nil {
 		return err
 	}
-	initState := txTable.state.Load().(*tableState[K, V])
-
-	pivot := &KVPair[K, V]{
-		Key: key,
+	if err := bat.Delete(key); err != nil {
+		return err
 	}
-
-	oldPair, ok := initState.rows.Get(pivot)
-	if !ok {
-		return sql.ErrNoRows
-	}
-
-	state := initState.cloneWithLogs()
-	defer func() {
-		if err == nil {
-			if !txTable.state.CompareAndSwap(initState, state) {
-				panic("concurrent mutation")
-			}
-		}
-	}()
-
-	state.unsetPair(pivot, oldPair)
-
+	bat.Commit()
 	return nil
 }
 
+// Upsert update a row in the table or insert the row to the table if not exists
 func (t *Table[K, V, R]) Upsert(
 	tx *Transaction,
 	row R,
 ) (
 	err error,
 ) {
-	txTable, err := t.getTransactionTable(tx)
+	bat, err := t.NewBatch(tx)
 	if err != nil {
 		return err
 	}
-	initState := txTable.state.Load().(*tableState[K, V])
-
-	key := row.Key()
-	pair := &KVPair[K, V]{
-		Key: key,
+	if err := bat.Upsert(row); err != nil {
+		return err
 	}
-
-	oldPair, ok := initState.rows.Get(pair)
-	if !ok {
-		// insert
-
-		state := initState.cloneWithLogs()
-		defer func() {
-			if err == nil {
-				if !txTable.state.CompareAndSwap(initState, state) {
-					panic("concurrent mutation")
-				}
-			}
-		}()
-
-		pair.ID = atomic.AddInt64(&nextKVPairID, 1)
-		pair.Value = row.Value()
-		pair.Indexes = row.Indexes()
-		state.setPair(pair, oldPair)
-
-		return nil
-	}
-
-	state := initState.cloneWithLogs()
-	defer func() {
-		if err == nil {
-			if !txTable.state.CompareAndSwap(initState, state) {
-				panic("concurrent mutation")
-			}
-		}
-	}()
-
-	pair.ID = atomic.AddInt64(&nextKVPairID, 1)
-	pair.Value = row.Value()
-	pair.Indexes = row.Indexes()
-	state.setPair(pair, oldPair)
-
+	bat.Commit()
 	return nil
 }
 
+// Get gets the value of a key
 func (t *Table[K, V, R]) Get(
 	tx *Transaction,
 	key K,

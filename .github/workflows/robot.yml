@@ -98,7 +98,7 @@ jobs:
     if: github.event_name != 'issues'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           fetch-depth: '3'
           path: ./matrixone
@@ -138,7 +138,7 @@ jobs:
 
       - name: Clone test-tool repository
         if: ${{ env.Job-Status }} == 2
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tester
           path: ./mo-tester
@@ -253,7 +253,7 @@ jobs:
           mentioned_list: '["@all"]'
           content: "<font color=\"warning\">Nightly Code Quality - ${{ env.Today }} </font>\nNumber of files failed static checks:<font color=\"warning\">${{ env.FAILED_FILES_NUM }}</font>\nUT Coverage Summary:<font color=\"warning\">${{ env.UT_CODE_COVERAGE }}</font>\nBVT Coverage Summary:<font color=\"warning\">${{ env.BVT_CODE_COVERAGE }}</font>\nGeneral Coverage Summary:<font color=\"warning\">${{ env.GENERAL_CODE_COVERAGE }}</font>\nFor details, please visit [Action Run](${{ env.Url }})\n"
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         if: ${{ failure() }}
         continue-on-error: true
         with:

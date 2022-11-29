@@ -21,19 +21,17 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
-	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
@@ -42,20 +40,6 @@ import (
 var (
 	retryCreateStorageInterval = time.Second * 5
 )
-
-// WithLogger set logger
-func WithLogger(logger *zap.Logger) Option {
-	return func(s *store) {
-		s.logger = logger
-	}
-}
-
-// WithClock set clock
-func WithClock(clock clock.Clock) Option {
-	return func(s *store) {
-		s.clock = clock
-	}
-}
 
 // WithConfigAdjust set adjust config func
 func WithConfigAdjust(adjustConfigFunc func(c *Config)) Option {
@@ -94,8 +78,7 @@ func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 
 type store struct {
 	cfg                 *Config
-	logger              *zap.Logger
-	clock               clock.Clock
+	rt                  runtime.Runtime
 	sender              rpc.TxnSender
 	server              rpc.TxnServer
 	hakeeperClient      logservice.DNHAKeeperClient
@@ -126,6 +109,7 @@ type store struct {
 
 // NewService create DN Service
 func NewService(cfg *Config,
+	rt runtime.Runtime,
 	fileService fileservice.FileService,
 	opts ...Option) (Service, error) {
 	if err := cfg.Validate(); err != nil {
@@ -143,15 +127,16 @@ func NewService(cfg *Config,
 
 	s := &store{
 		cfg:                 cfg,
+		rt:                  rt,
 		fileService:         fileService,
 		metadataFileService: metadataFS,
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
-	s.logger = logutil.Adjust(s.logger)
 	s.replicas = &sync.Map{}
-	s.stopper = stopper.NewStopper("dn-store", stopper.WithLogger(s.logger))
+	s.stopper = stopper.NewStopper("dn-store",
+		stopper.WithLogger(s.rt.Logger().RawLogger()))
 	s.mu.metadata = metadata.DNStore{UUID: cfg.UUID}
 	if s.options.adjustConfigFunc != nil {
 		s.options.adjustConfigFunc(s.cfg)
@@ -183,7 +168,7 @@ func (s *store) Start() error {
 	if err := s.server.Start(); err != nil {
 		return err
 	}
-	s.logger.Info("dn heartbeat task started")
+	s.rt.Logger().Info("dn heartbeat task started")
 	return s.stopper.RunTask(s.heartbeatTask)
 }
 
@@ -249,10 +234,10 @@ func (s *store) getDNShardInfo() []logservicepb.DNShardInfo {
 }
 
 func (s *store) createReplica(shard metadata.DNShard) error {
-	r := newReplica(shard, s.logger.With(util.TxnDNShardField(shard)))
+	r := newReplica(shard, s.rt)
 	v, ok := s.replicas.LoadOrStore(shard.ShardID, r)
 	if ok {
-		s.logger.Debug("DNShard already created",
+		s.rt.Logger().Debug("DNShard already created",
 			zap.String("new", shard.DebugString()),
 			zap.String("exist", v.(*replica).shard.DebugString()))
 		return nil
@@ -272,11 +257,11 @@ func (s *store) createReplica(shard metadata.DNShard) error {
 					continue
 				}
 
-				err = r.start(service.NewTxnService(r.logger,
+				err = r.start(service.NewTxnService(
+					r.rt,
 					shard,
 					storage,
 					s.sender,
-					s.clock,
 					s.cfg.Txn.ZombieTimeout.Duration))
 				if err != nil {
 					r.logger.Fatal("start DNShard failed",
@@ -313,9 +298,9 @@ func (s *store) getReplica(id uint64) *replica {
 }
 
 func (s *store) initTxnSender() error {
-	sender, err := rpc.NewSenderWithConfig(s.cfg.RPC,
-		s.clock,
-		s.logger,
+	sender, err := rpc.NewSenderWithConfig(
+		s.cfg.RPC,
+		s.rt,
 		rpc.WithSenderBackendOptions(morpc.WithBackendFilter(func(m morpc.Message, backendAddr string) bool {
 			return s.options.backendFilter == nil || s.options.backendFilter(m.(*txn.TxnRequest), backendAddr)
 		})),
@@ -328,9 +313,9 @@ func (s *store) initTxnSender() error {
 }
 
 func (s *store) initTxnServer() error {
-	server, err := rpc.NewTxnServer(s.cfg.ListenAddress,
-		s.clock,
-		s.logger,
+	server, err := rpc.NewTxnServer(
+		s.cfg.ListenAddress,
+		s.rt,
 		rpc.WithServerMaxMessageSize(int(s.cfg.RPC.MaxMessageSize)))
 	if err != nil {
 		return err
@@ -341,11 +326,7 @@ func (s *store) initTxnServer() error {
 }
 
 func (s *store) initClocker() error {
-	if s.clock == nil {
-		s.clock = clock.DefaultClock()
-	}
-
-	if s.clock == nil {
+	if s.rt.Clock() == nil {
 		return moerr.NewBadConfig("missing txn clock")
 	}
 	return nil

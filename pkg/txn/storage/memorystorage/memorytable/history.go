@@ -26,6 +26,7 @@ type history[
 	State  *tableState[K, V]
 }
 
+// EraseHistory erases history before specified time
 func (t *Table[K, V, R]) EraseHistory(before Time) {
 	t.Lock()
 	defer t.Unlock()
