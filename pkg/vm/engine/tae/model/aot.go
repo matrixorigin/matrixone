@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/tidwall/btree"
 )
@@ -44,12 +43,12 @@ type AOT[B BlockT[R], R RowsT[R]] struct {
 	blockSize int
 	appender  B
 	blocks    *btree.BTreeG[B]
-	factory   func() B
+	factory   func(R) B
 }
 
 func NewAOT[B BlockT[R], R RowsT[R]](
 	blockSize int,
-	factory func() B,
+	factory func(R) B,
 	lessFn func(_, _ B) bool) *AOT[B, R] {
 	return &AOT[B, R]{
 		blockSize: blockSize,
@@ -70,6 +69,12 @@ func (aot *AOT[B, R]) Scan(fn func(_ B) bool) {
 	cpy := aot.blocks.Copy()
 	aot.Unlock()
 	cpy.Scan(fn)
+}
+
+func (aot *AOT[B, R]) BlocksSnapshot() *btree.BTreeG[B] {
+	aot.Lock()
+	defer aot.Unlock()
+	return aot.blocks.Copy()
 }
 
 func (aot *AOT[B, R]) Close() {
@@ -182,7 +187,7 @@ func (aot *AOT[B, R]) Append(rows R) (err error) {
 	for !done {
 		toAppend, done = aot.prepareAppend(rows.Length() - appended)
 		if toAppend == 0 {
-			newB := aot.factory()
+			newB := aot.factory(rows)
 			if err = aot.appendBlock(newB); err != nil {
 				return
 			}
@@ -197,7 +202,7 @@ func (aot *AOT[B, R]) Append(rows R) (err error) {
 				return
 			}
 		}
-		logutil.Infof("Appended=%d, ToAppend=%d, done=%v, AllRows=%d", appended, toAppend, done, rows.Length())
+		// logutil.Infof("Appended=%d, ToAppend=%d, done=%v, AllRows=%d", appended, toAppend, done, rows.Length())
 		appended += toAppend
 	}
 	return

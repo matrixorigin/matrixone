@@ -33,7 +33,7 @@ type testRows struct {
 func (r *testRows) Length() int               { return 1 }
 func (r *testRows) Window(_, _ int) *testRows { return nil }
 
-func createBlockFn[R any]() *model.TimedSliceBlock[R] {
+func createBlockFn[R any](_ R) *model.TimedSliceBlock[R] {
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	return model.NewTimedSliceBlock[R](ts)
 }
@@ -57,7 +57,7 @@ func TestAOT1(t *testing.T) {
 
 func TestAOT2(t *testing.T) {
 	schema := catalog.MockSchemaAll(14, 3)
-	factory := func() *model.BatchBlock {
+	factory := func(_ *containers.Batch) *model.BatchBlock {
 		id := common.NextGlobalSeqNum()
 		return model.NewBatchBlock(
 			id,

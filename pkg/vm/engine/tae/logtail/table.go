@@ -6,9 +6,39 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
+
+type RowT = *txnRow
+type BlockT = *txnBlock
+
+// type TableReader struct {
+// 	from, to types.TS
+// 	it       btree.GenericIter[*txnBlock]
+// }
+
+// func (r *TableReader) GetDirty() (tree *common.Tree, count int) {
+// 	tree = common.NewTree()
+// 	op := func(txn txnif.AsyncTxn) (moveOn bool) {
+// 		if memo := txn.GetMemo(); memo.HasAnyTableDataChanges() {
+// 			tree.Merge(memo.GetDirty())
+// 		}
+// 		count++
+// 		return true
+// 	}
+// 	r.readTxnInBetween(r.from, r.to, op)
+// }
+
+// func (r *TableReader) foreach(
+// 	tableView *TxnTable,
+// 	from, to types.TS,
+// 	op func(row RowT) (goNext bool),
+// ) {
+// 	pivot := &txnBlock{bornTS: from}
+
+// }
 
 type txnRow struct {
 	txnif.AsyncTxn
@@ -47,6 +77,32 @@ func (blk *txnBlock) Close() {
 	blk.rows = make([]*txnRow, 0)
 }
 
+func (blk *txnBlock) ForeachRowInBetween(
+	from, to types.TS,
+	op func(row RowT) (goNext bool),
+) (outOfRange bool) {
+	blk.RLock()
+	rows := blk.rows[:len(blk.rows)]
+	blk.RUnlock()
+	for _, row := range rows {
+		ts := row.GetPrepareTS()
+		if ts.IsEmpty() || ts.Greater(to) {
+			outOfRange = true
+			return
+		}
+		if ts.Less(from) {
+			logutil.Infof("ts %s, from %s", ts.ToString(), from.ToString())
+			continue
+		}
+
+		if !op(row) {
+			outOfRange = true
+			return false
+		}
+	}
+	return
+}
+
 func (blk *txnBlock) String() string {
 	length := blk.Length()
 	var buf bytes.Buffer
@@ -56,30 +112,30 @@ func (blk *txnBlock) String() string {
 }
 
 type TxnTable struct {
-	*model.AOT[*txnBlock, *txnRow]
+	*model.AOT[BlockT, RowT]
 }
 
-func blockCompareFn(a, b *txnBlock) bool {
+func blockCompareFn(a, b BlockT) bool {
 	return a.bornTS.Less(b.bornTS)
 }
 
-func timeBasedTruncateFactory(ts types.TS) func(b *txnBlock) bool {
-	return func(b *txnBlock) bool {
+func timeBasedTruncateFactory(ts types.TS) func(b BlockT) bool {
+	return func(b BlockT) bool {
 		return b.bornTS.GreaterEq(ts)
 	}
 }
 
 func NewTxnTable(blockSize int, clock *types.TsAlloctor) *TxnTable {
-	factory := func() *txnBlock {
+	factory := func(row RowT) BlockT {
 		return &txnBlock{
-			bornTS: clock.Alloc(),
-			rows:   make([]*txnRow, 0),
+			bornTS: row.GetStartTS(),
+			rows:   make([]*txnRow, 0, blockSize),
 		}
 	}
 	return &TxnTable{
 		AOT: model.NewAOT[
-			*txnBlock,
-			*txnRow](
+			BlockT,
+			RowT](
 			blockSize,
 			factory,
 			blockCompareFn,
@@ -98,4 +154,28 @@ func (table *TxnTable) AddTxn(txn txnif.AsyncTxn) (err error) {
 func (table *TxnTable) TruncateByTimeStamp(ts types.TS) (cnt int) {
 	filter := timeBasedTruncateFactory(ts)
 	return table.Truncate(filter)
+}
+
+func (table *TxnTable) ForeachRowInBetween(
+	from, to types.TS,
+	op func(row RowT) (goNext bool),
+) {
+	snapshot := table.BlocksSnapshot()
+	pivot := &txnBlock{bornTS: from}
+	snapshot.Descend(pivot, func(blk BlockT) bool {
+		pivot.bornTS = blk.bornTS
+		return false
+	})
+	snapshot.Ascend(pivot, func(blk BlockT) bool {
+		if blk.bornTS.Greater(to) {
+			return false
+		}
+		outOfRange := blk.ForeachRowInBetween(
+			from,
+			to,
+			op,
+		)
+
+		return !outOfRange
+	})
 }
