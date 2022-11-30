@@ -101,7 +101,7 @@ func getConstVec(proc *process.Process, expr *plan.Expr, length int) (*vector.Ve
 			vec = vector.NewConstString(constSType, length, sval, proc.Mp())
 		case *plan.Const_Defaultval:
 			defaultVal := t.C.GetDefaultval()
-			vec = vector.NewConstFixed(constBType, length, defaultVal, proc.Mp())	
+			vec = vector.NewConstFixed(constBType, length, defaultVal, proc.Mp())
 		default:
 			return nil, moerr.NewNYI(fmt.Sprintf("const expression %v", t.C.GetValue()))
 		}
