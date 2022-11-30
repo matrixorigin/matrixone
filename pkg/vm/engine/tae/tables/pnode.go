@@ -137,6 +137,8 @@ func (node *persistedNode) GetDataWindow(
 	return
 }
 
+func (node *persistedNode) IsPersisted() bool { return true }
+
 func (node *persistedNode) PrepareAppend(rows uint32) (n uint32, err error) {
 	panic(moerr.NewInternalError("not supported"))
 }

@@ -86,6 +86,8 @@ func (node *memoryNode) close() {
 	node.block = nil
 }
 
+func (node *memoryNode) IsPersisted() bool { return false }
+
 func (node *memoryNode) BatchDedup(
 	keys containers.Vector,
 	skipFn func(row uint32) error) (sels *roaring.Bitmap, err error) {

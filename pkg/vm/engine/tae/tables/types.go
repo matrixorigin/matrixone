@@ -18,11 +18,16 @@ import (
 	"bytes"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type NodeT interface {
+	common.IRef
+
+	IsPersisted() bool
+
 	PrepareAppend(rows uint32) (n uint32, err error)
 	ApplyAppend(
 		bat *containers.Batch,
@@ -46,4 +51,22 @@ type NodeT interface {
 	ContainsKey(key any) (ok bool, err error)
 
 	Rows() uint32
+}
+
+type Node struct {
+	NodeT
+}
+
+func NewNode(node NodeT) *Node {
+	return &Node{
+		NodeT: node,
+	}
+}
+
+func (n *Node) MustMNode() *memoryNode {
+	return n.NodeT.(*memoryNode)
+}
+
+func (n *Node) MustPNode() *persistedNode {
+	return n.NodeT.(*persistedNode)
 }
