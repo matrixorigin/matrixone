@@ -247,6 +247,7 @@ const (
 	TIMESTAMP    // TIMESTAMP
 	DATE_FORMAT  // DATE_FORMAT
 	JSON_EXTRACT // JSON_EXTRACT
+	FORMAT       // FORMAT
 
 	UUID
 	SERIAL
@@ -452,6 +453,7 @@ var functionIdRegister = map[string]int32{
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
 	"field":                          FIELD,
+	"format":                         FORMAT,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
