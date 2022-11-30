@@ -120,11 +120,11 @@ func (aot *AOT[B, R]) Max() (b B) {
 }
 
 // Truncate prunes the blocks by ts
-// blocks:         (Page1[bornTs=1], Page2[bornTs=10], Page3[bornTs=20])
+// blocks:           (Page1[bornTs=1], Page2[bornTs=10], Page3[bornTs=20])
 // Truncate(ts=5):   (Page1,Page2,Page3), ()
 // Truncate(ts=12):  (Page2,Page3),       (Page1)
-// Truncate(ts=30):  (),                  (Page1,Page2,Page3)
-func (aot *AOT[B, R]) Truncate(filter func(_ B) bool) (cnt int) {
+// Truncate(ts=30):  (Page3),             (Page1,Page2)
+func (aot *AOT[B, R]) Truncate(stopFn func(_ B) bool) (cnt int) {
 	aot.Lock()
 	cpy := aot.blocks.Copy()
 	aot.Unlock()
@@ -132,19 +132,20 @@ func (aot *AOT[B, R]) Truncate(filter func(_ B) bool) (cnt int) {
 	valid := false
 	candidates := make([]B, 0)
 	cpy.Scan(func(block B) bool {
-		if filter(block) {
+		if stopFn(block) {
 			valid = true
 			return false
 		}
 		candidates = append(candidates, block)
-		logutil.Infof("candidate %s", block.String())
+		// logutil.Infof("candidate %s", block.String())
 		return true
 	})
 
-	logutil.Infof("valid=%v, candidates len=%d", valid, len(candidates))
-	if !valid || len(candidates) == 0 {
+	// logutil.Infof("valid=%v, candidates len=%d", valid, len(candidates))
+	if !valid || len(candidates) <= 1 {
 		return
 	}
+	candidates = candidates[:len(candidates)-1]
 
 	aot.Lock()
 	defer aot.Unlock()

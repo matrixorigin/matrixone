@@ -27,7 +27,6 @@ func TestTxnTable1(t *testing.T) {
 	}
 	table.Scan(fn1)
 	assert.Equal(t, 3, len(timestamps))
-	// t.Log(timestamps)
 
 	ckp := timestamps[0].Prev()
 	cnt := table.TruncateByTimeStamp(ckp)
@@ -36,13 +35,13 @@ func TestTxnTable1(t *testing.T) {
 	ckp = timestamps[0].Next()
 	cnt = table.TruncateByTimeStamp(ckp)
 	assert.Equal(t, 0, cnt)
-	return
 
 	ckp = timestamps[1].Prev()
 	cnt = table.TruncateByTimeStamp(ckp)
 	assert.Equal(t, 0, cnt)
 
+	t.Log(table.String())
 	ckp = timestamps[1].Next()
 	cnt = table.TruncateByTimeStamp(ckp)
-	assert.Equal(t, 0, cnt)
+	assert.Equal(t, 1, cnt)
 }
