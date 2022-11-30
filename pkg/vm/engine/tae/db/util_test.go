@@ -64,7 +64,7 @@ func TestAOT2(t *testing.T) {
 			schema.Attrs(),
 			schema.Types(),
 			schema.Nullables(),
-			new(containers.Options))
+			containers.Options{})
 	}
 	aot := model.NewAOT[
 		*model.BatchBlock,
