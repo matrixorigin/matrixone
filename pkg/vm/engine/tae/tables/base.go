@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -54,13 +55,10 @@ type baseBlock struct {
 	scheduler tasks.TaskScheduler
 	meta      *catalog.BlockEntry
 	mvcc      *updates.MVCCHandle
-	storage   struct {
-		mu    sync.RWMutex
-		mnode *memoryNode
-		pnode *persistedNode
-	}
-	ttl  time.Time
-	impl data.Block
+	ttl       time.Time
+	impl      data.Block
+
+	node atomic.Pointer[Node]
 }
 
 func newBaseBlock(
@@ -86,29 +84,10 @@ func (blk *baseBlock) Close() {
 	// TODO
 }
 
-func (blk *baseBlock) PinMemoryNode() *memoryNode {
-	blk.storage.mu.RLock()
-	defer blk.storage.mu.RUnlock()
-	if blk.storage.mnode != nil {
-		blk.storage.mnode.Ref()
-		return blk.storage.mnode
-	}
-	return nil
-}
-
-func (blk *baseBlock) PinNode() (
-	mnode *memoryNode,
-	pnode *persistedNode) {
-	blk.storage.mu.RLock()
-	defer blk.storage.mu.RUnlock()
-	if blk.storage.mnode != nil {
-		blk.storage.mnode.Ref()
-		mnode = blk.storage.mnode
-	} else if blk.storage.pnode != nil {
-		blk.storage.pnode.Ref()
-		pnode = blk.storage.pnode
-	}
-	return
+func (blk *baseBlock) PinNode() *Node {
+	n := blk.node.Load()
+	n.Ref()
+	return n
 }
 
 func (blk *baseBlock) GetColumnData(
@@ -116,43 +95,40 @@ func (blk *baseBlock) GetColumnData(
 	to uint32,
 	colIdx int,
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
-	mnode, pnode := blk.PinNode()
-	if mnode != nil {
-		defer mnode.Unref()
+	node := blk.PinNode()
+	defer node.Unref()
+	if !node.IsPersisted() {
 		blk.RLock()
 		defer blk.RUnlock()
-		return mnode.GetColumnDataWindow(from, to, colIdx, buffer)
-	} else if pnode != nil {
-		defer pnode.Unref()
-		return pnode.GetColumnDataWindow(from, to, colIdx, buffer)
+		return node.GetColumnDataWindow(from, to, colIdx, buffer)
+	} else {
+		return node.GetColumnDataWindow(from, to, colIdx, buffer)
 	}
-	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
 }
 
 func (blk *baseBlock) Rows() int {
-	mnode, pnode := blk.PinNode()
-	if mnode != nil {
-		defer mnode.Unref()
+	node := blk.PinNode()
+	defer node.Unref()
+	if !node.IsPersisted() {
 		blk.RLock()
 		defer blk.RUnlock()
-		return int(mnode.Rows())
-	} else if pnode != nil {
-		defer pnode.Unref()
-		return int(pnode.Rows())
+		return int(node.Rows())
+	} else {
+		return int(node.Rows())
 	}
-	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
 }
 
 func (blk *baseBlock) TryUpgrade() (err error) {
-	blk.storage.mu.Lock()
-	defer blk.storage.mu.Unlock()
-	if blk.storage.mnode != nil {
-		blk.storage.mnode.Unref()
-		blk.storage.mnode = nil
+	node := blk.node.Load()
+	if node.IsPersisted() {
+		return
 	}
-	if blk.storage.pnode == nil {
-		blk.storage.pnode = newPersistedNode(blk)
-		blk.storage.pnode.Ref()
+	pnode := newPersistedNode(blk)
+	nnode := NewNode(pnode)
+	nnode.Ref()
+
+	if !blk.node.CompareAndSwap(node, nnode) {
+		nnode.Unref()
 	}
 	return
 }
