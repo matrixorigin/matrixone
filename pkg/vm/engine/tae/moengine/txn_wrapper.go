@@ -53,6 +53,10 @@ func (w *wrappedEngine) NewWithSnapshot(snapshot []byte) (client.TxnOperator, er
 	return TxnToTxnOperator(txn), nil
 }
 
+func (w *wrappedEngine) Close() error {
+	return w.engine.Close()
+}
+
 type wrappedTx struct {
 	tx Txn
 }

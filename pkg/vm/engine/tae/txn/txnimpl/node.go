@@ -52,6 +52,7 @@ type InsertNode interface {
 	RangeDelete(start, end uint32) error
 	IsRowDeleted(row uint32) bool
 	PrintDeletes() string
+	FillBlockView(view *model.BlockView, buffers []*bytes.Buffer, colIdxes []int) (err error)
 	FillColumnView(*model.ColumnView, *bytes.Buffer) error
 	Window(start, end uint32) (*containers.Batch, error)
 	GetSpace() uint32
@@ -342,8 +343,11 @@ func (n *insertNode) PrepareAppend(data *containers.Batch, offset uint32) uint32
 func (n *insertNode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
 	schema := n.table.entry.GetSchema()
 	if n.data == nil {
-		opts := new(containers.Options)
-		opts.Capacity = int(txnbase.MaxNodeRows)
+		opts := containers.Options{}
+		opts.Capacity = data.Length() - int(offset)
+		if opts.Capacity > int(txnbase.MaxNodeRows) {
+			opts.Capacity = int(txnbase.MaxNodeRows)
+		}
 		n.data = containers.BuildBatch(
 			schema.AllNames(),
 			schema.AllTypes(),
@@ -377,7 +381,20 @@ func (n *insertNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	vec.Extend(col)
 	return
 }
+func (n *insertNode) FillBlockView(view *model.BlockView, buffers []*bytes.Buffer, colIdxes []int) (err error) {
+	for i, colIdx := range colIdxes {
+		orig := n.data.Vecs[colIdx]
+		if buffers[i] != nil {
+			buffers[i].Reset()
+			view.SetData(colIdx, containers.CloneWithBuffer(orig, buffers[i]))
+		} else {
+			view.SetData(colIdx, orig.CloneWindow(0, orig.Length()))
+		}
 
+	}
+	view.DeleteMask = n.data.Deletes
+	return
+}
 func (n *insertNode) FillColumnView(view *model.ColumnView, buffer *bytes.Buffer) (err error) {
 	orig := n.data.Vecs[view.ColIdx]
 	if buffer != nil {
@@ -452,7 +469,11 @@ func (n *insertNode) PrintDeletes() string {
 }
 
 func (n *insertNode) Window(start, end uint32) (bat *containers.Batch, err error) {
-	bat = n.data.CloneWindow(int(start), int(end-start))
-	bat.Compact()
+	if n.data.HasDelete() {
+		bat = n.data.CloneWindow(int(start), int(end-start))
+		bat.Compact()
+	} else {
+		bat = n.data.Window(int(start), int(end-start))
+	}
 	return
 }

@@ -17,8 +17,8 @@ package service
 import (
 	"context"
 	"testing"
-	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -31,6 +31,7 @@ const (
 )
 
 func TestClusterStart(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -39,17 +40,16 @@ func TestClusterStart(t *testing.T) {
 	// initialize cluster
 	c, err := NewCluster(t, DefaultOptions())
 	require.NoError(t, err)
-
-	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
-
 	// close the cluster
-	err = c.Close()
-	require.NoError(t, err)
+	defer func(c Cluster) {
+		require.NoError(t, c.Close())
+	}(c)
+	// start the cluster
+	require.NoError(t, c.Start())
 }
 
 func TestAllocateID(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -59,16 +59,14 @@ func TestAllocateID(t *testing.T) {
 	c, err := NewCluster(t, DefaultOptions())
 	require.NoError(t, err)
 
+	// close the cluster
+	defer func(c Cluster) {
+		require.NoError(t, c.Close())
+	}(c)
 	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
-	defer func() {
-		// close the cluster
-		err = c.Close()
-		require.NoError(t, err)
-	}()
+	require.NoError(t, c.Start())
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 	c.WaitHAKeeperState(ctx, logpb.HAKeeperRunning)
 
@@ -95,6 +93,7 @@ func TestAllocateID(t *testing.T) {
 }
 
 func TestClusterAwareness(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -115,15 +114,12 @@ func TestClusterAwareness(t *testing.T) {
 	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
+	// close the cluster
+	defer func(c Cluster) {
+		require.NoError(t, c.Close())
+	}(c)
 	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
-
-	// close the cluster after all
-	defer func() {
-		err := c.Close()
-		require.NoError(t, err)
-	}()
+	require.NoError(t, c.Start())
 
 	// -------------------------------------------
 	// the following would test `ClusterAwareness`
@@ -164,6 +160,7 @@ func TestClusterAwareness(t *testing.T) {
 }
 
 func TestClusterOperation(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -184,15 +181,12 @@ func TestClusterOperation(t *testing.T) {
 	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
+	// close the cluster
+	defer func(c Cluster) {
+		require.NoError(t, c.Close())
+	}(c)
 	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
-
-	// close the cluster after all
-	defer func() {
-		err := c.Close()
-		require.NoError(t, err)
-	}()
+	require.NoError(t, c.Start())
 
 	// -------------------------------------------
 	// the following would test `ClusterOperation`
@@ -328,6 +322,7 @@ func TestClusterOperation(t *testing.T) {
 }
 
 func TestClusterState(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -348,15 +343,12 @@ func TestClusterState(t *testing.T) {
 	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
+	// close the cluster
+	defer func(c Cluster) {
+		require.NoError(t, c.Close())
+	}(c)
 	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
-
-	// close the cluster after all
-	defer func() {
-		err := c.Close()
-		require.NoError(t, err)
-	}()
+	require.NoError(t, c.Start())
 
 	// ----------------------------------------
 	// the following would test `ClusterState`.
@@ -462,6 +454,7 @@ func TestClusterState(t *testing.T) {
 }
 
 func TestClusterWaitState(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -482,15 +475,12 @@ func TestClusterWaitState(t *testing.T) {
 	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
+	// close the cluster
+	defer func(c Cluster) {
+		require.NoError(t, c.Close())
+	}(c)
 	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
-
-	// close the cluster after all
-	defer func() {
-		err := c.Close()
-		require.NoError(t, err)
-	}()
+	require.NoError(t, c.Start())
 
 	// we must wait for hakeeper's running state, or hakeeper wouldn't receive hearbeat.
 	ctx1, cancel1 := context.WithTimeout(context.Background(), defaultTestTimeout)
@@ -545,6 +535,7 @@ func TestClusterWaitState(t *testing.T) {
 }
 
 func TestNetworkPartition(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -565,15 +556,12 @@ func TestNetworkPartition(t *testing.T) {
 	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
+	// close the cluster
+	defer func(c Cluster) {
+		require.NoError(t, c.Close())
+	}(c)
 	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
-
-	// close the cluster after all
-	defer func() {
-		err := c.Close()
-		require.NoError(t, err)
-	}()
+	require.NoError(t, c.Start())
 
 	// we must wait for hakeeper's running state, or hakeeper wouldn't receive hearbeat.
 	ctx1, cancel1 := context.WithTimeout(context.Background(), defaultTestTimeout)

@@ -90,7 +90,7 @@ var (
 	}
 
 	IfVarchar = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifForString(vs, proc, types.Type{Oid: types.T_varchar})
+		return ifForString(vs, proc, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 	}
 
 	IfChar = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {

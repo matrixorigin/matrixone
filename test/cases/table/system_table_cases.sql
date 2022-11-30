@@ -21,10 +21,6 @@ SELECT COUNT(0) FROM (SELECT * FROM rawlog LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM rawlog LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM rawlog LIMIT 10) AS temp;
 
--- @bvt:issue#5892
-SELECT * FROM rawlog LIMIT 1;
-SELECT * FROM log_info LIMIT 1;
--- @bvt:issue
 
 -- log_info
 SELECT COUNT(*) FROM (SELECT * FROM log_info LIMIT 10) AS temp;
@@ -199,10 +195,10 @@ SELECT COUNT('') FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
 
 -- schemata
-SELECT COUNT(*) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
-SELECT COUNT(0) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
-SELECT COUNT('') FROM (SELECT * FROM schemata LIMIT 10) AS temp;
-SELECT COUNT(NULL) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
+SELECT COUNT(*) FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
+SELECT COUNT(0) FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
+SELECT COUNT('') FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
+SELECT COUNT(NULL) FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
 
 -- character_sets
 SELECT COUNT(*) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;

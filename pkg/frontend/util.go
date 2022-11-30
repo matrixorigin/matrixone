@@ -24,6 +24,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
+	"path/filepath"
+	"strings"
+
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,8 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	dumpUtils "github.com/matrixorigin/matrixone/pkg/vectorize/dump"
-	"path/filepath"
-	"strings"
 
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -368,7 +371,7 @@ func WildcardMatch(pattern, target string) bool {
 }
 
 // only support single value and unary minus
-func GetSimpleExprValue(e tree.Expr) (interface{}, error) {
+func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
@@ -386,11 +389,11 @@ func GetSimpleExprValue(e tree.Expr) (interface{}, error) {
 		if err != nil {
 			return nil, err
 		}
-		return getValueFromVector(vec)
+		return getValueFromVector(vec, ses)
 	}
 }
 
-func getValueFromVector(vec *vector.Vector) (interface{}, error) {
+func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
 	if nulls.Any(vec.Nsp) {
 		return nil, nil
 	}
@@ -432,6 +435,18 @@ func getValueFromVector(vec *vector.Vector) (interface{}, error) {
 	case types.T_uuid:
 		val := vector.GetValueAt[types.Uuid](vec, 0)
 		return val.ToString(), nil
+	case types.T_date:
+		val := vector.GetValueAt[types.Date](vec, 0)
+		return val.String(), nil
+	case types.T_time:
+		val := vector.GetValueAt[types.Time](vec, 0)
+		return val.String(), nil
+	case types.T_datetime:
+		val := vector.GetValueAt[types.Datetime](vec, 0)
+		return val.String(), nil
+	case types.T_timestamp:
+		val := vector.GetValueAt[types.Timestamp](vec, 0)
+		return val.String2(ses.GetTimeZone(), vec.Typ.Precision), nil
 	default:
 		return nil, moerr.NewInvalidArg("variable type", vec.Typ.Oid.String())
 	}
@@ -471,10 +486,42 @@ func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, 
 func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string, status statementStatus, err error) {
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	if status == success {
-		logutil.Info("query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()))
+		trace.EndStatement(ctx, nil)
+		logInfo(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
 	} else {
-		logutil.Error("query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err))
+		trace.EndStatement(ctx, err)
+		logError(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
 	}
+}
+
+func logInfo(info string, msg string, fields ...zap.Field) {
+	fields = append(fields, zap.String("session_info", info))
+	logutil.Info(msg, fields...)
+}
+
+//func logDebug(info string, msg string, fields ...zap.Field) {
+//	fields = append(fields, zap.String("session_info", info))
+//	logutil.Debug(msg, fields...)
+//}
+
+func logError(info string, msg string, fields ...zap.Field) {
+	fields = append(fields, zap.String("session_info", info))
+	logutil.Error(msg, fields...)
+}
+
+func logInfof(info string, msg string, fields ...interface{}) {
+	fields = append(fields, info)
+	logutil.Infof(msg+" %s", fields...)
+}
+
+func logDebugf(info string, msg string, fields ...interface{}) {
+	fields = append(fields, info)
+	logutil.Debugf(msg+" %s", fields...)
+}
+
+func logErrorf(info string, msg string, fields ...interface{}) {
+	fields = append(fields, info)
+	logutil.Errorf(msg+" %s", fields...)
 }
 
 func fileExists(path string) (bool, error) {
@@ -523,7 +570,7 @@ func convertValueBat2Str(bat *batch.Batch, mp *mpool.MPool, loc *time.Location) 
 	rbat := batch.NewWithSize(bat.VectorCount())
 	rbat.InitZsOne(bat.Length())
 	for i := 0; i < rbat.VectorCount(); i++ {
-		rbat.Vecs[i] = vector.New(types.Type{Oid: types.T_varchar}) //TODO: check size
+		rbat.Vecs[i] = vector.New(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}) //TODO: check size
 		rs := make([]string, bat.Length())
 		switch bat.Vecs[i].Typ.Oid {
 		case types.T_bool:

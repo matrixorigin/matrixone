@@ -3,7 +3,7 @@ service-type = "LOG"
 data-dir = "./mo-data"
 
 [log]
-level = "debug"
+level = "info"
 format = "console"
 max-size = 512
 
@@ -13,7 +13,8 @@ backend = "DISK"
 
 [[fileservice]]
 name = "S3"
-backend = "MEM"
+backend = "DISK"
+data-dir = "mo-data/s3"
 
 [[fileservice]]
 name = "ETL"
@@ -21,6 +22,7 @@ backend = "DISK-ETL"
 
 [observability]
 statusPort = 7001
+enableTraceDebug = false
 
 [hakeeper-client]
 service-addresses = [

@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -45,7 +47,8 @@ type externalTestCase struct {
 }
 
 var (
-	cases []externalTestCase
+	cases         []externalTestCase
+	defaultOption = []string{"filepath", "abc", "format", "jsonline", "jsondata", "array"}
 )
 
 func newTestCase(all bool, format, jsondata string) externalTestCase {
@@ -98,6 +101,8 @@ func Test_Prepare(t *testing.T) {
 				FileService: tcs.proc.FileService,
 				Format:      tcs.format,
 				JsonData:    tcs.jsondata,
+				Option:      defaultOption,
+				Ctx:         context.Background(),
 			}
 			json_byte, err := json.Marshal(extern)
 			if err != nil {
@@ -123,6 +128,7 @@ func Test_Prepare(t *testing.T) {
 						IgnoredLines: 0,
 					},
 					Format: tcs.format,
+					Option: defaultOption,
 				}
 				extern.JsonData = tcs.jsondata
 				json_byte, err = json.Marshal(extern)
@@ -130,13 +136,14 @@ func Test_Prepare(t *testing.T) {
 				param.CreateSql = string(json_byte)
 				err = Prepare(tcs.proc, tcs.arg)
 				convey.So(err, convey.ShouldBeNil)
-				convey.So(param.FileList, convey.ShouldResemble, []string{"/"})
-				convey.So(param.Fileparam.FileCnt, convey.ShouldEqual, 1)
+				convey.So(param.FileList, convey.ShouldResemble, []string(nil))
+				convey.So(param.Fileparam.FileCnt, convey.ShouldEqual, 0)
 
-				extern.JsonData = "test"
+				extern.Option = []string{"filepath", "abc", "format", "jsonline", "jsondata", "test"}
 				json_byte, err = json.Marshal(extern)
 				convey.So(err, convey.ShouldBeNil)
 				param.CreateSql = string(json_byte)
+
 				err = Prepare(tcs.proc, tcs.arg)
 				convey.So(err, convey.ShouldNotBeNil)
 			}
@@ -156,6 +163,7 @@ func Test_Call(t *testing.T) {
 				FileService: tcs.proc.FileService,
 				Format:      tcs.format,
 				JsonData:    tcs.jsondata,
+				Ctx:         context.Background(),
 			}
 			param.extern = extern
 			param.Fileparam.End = false
@@ -181,6 +189,7 @@ func Test_getCompressType(t *testing.T) {
 	convey.Convey("getCompressType succ", t, func() {
 		param := &tree.ExternParam{
 			CompressType: tree.GZIP,
+			Ctx:          context.Background(),
 		}
 		compress := getCompressType(param)
 		convey.So(compress, convey.ShouldEqual, param.CompressType)
@@ -212,6 +221,7 @@ func Test_getUnCompressReader(t *testing.T) {
 	convey.Convey("getUnCompressReader succ", t, func() {
 		param := &tree.ExternParam{
 			CompressType: tree.NOCOMPRESS,
+			Ctx:          context.Background(),
 		}
 		read, err := getUnCompressReader(param, nil)
 		convey.So(read, convey.ShouldBeNil)
@@ -369,12 +379,14 @@ func Test_GetBatchData(t *testing.T) {
 			},
 			{
 				Typ: &plan.Type{
-					Id: int32(types.T_float32),
+					Id:        int32(types.T_float32),
+					Precision: -1,
 				},
 			},
 			{
 				Typ: &plan.Type{
-					Id: int32(types.T_float64),
+					Id:        int32(types.T_float64),
+					Precision: -1,
 				},
 			},
 			{
@@ -425,6 +437,7 @@ func Test_GetBatchData(t *testing.T) {
 					Fields: &tree.Fields{},
 				},
 				Format: tree.CSV,
+				Ctx:    context.Background(),
 			},
 		}
 		param.Name2ColIndex = make(map[string]int32)
@@ -531,4 +544,42 @@ func Test_GetBatchData(t *testing.T) {
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
+}
+
+func TestReadDirSymlink(t *testing.T) {
+	root := t.TempDir()
+
+	// create a/b/c
+	err := os.MkdirAll(filepath.Join(root, "a", "b", "c"), 0755)
+	assert.Nil(t, err)
+
+	// write a/b/c/foo
+	err = os.WriteFile(filepath.Join(root, "a", "b", "c", "foo"), []byte("abc"), 0644)
+	assert.Nil(t, err)
+
+	// symlink a/b/d to a/b/c
+	err = os.Symlink(
+		filepath.Join(root, "a", "b", "c"),
+		filepath.Join(root, "a", "b", "d"),
+	)
+	assert.Nil(t, err)
+
+	// read a/b/d/foo
+	fooPathInB := filepath.Join(root, "a", "b", "d", "foo")
+	files, err := ReadDir(&tree.ExternParam{
+		Filepath: fooPathInB,
+		Ctx:      context.Background(),
+	})
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(files))
+	assert.Equal(t, fooPathInB, files[0])
+
+	path1 := root + "/a//b/./../b/c/foo"
+	files1, err := ReadDir(&tree.ExternParam{
+		Filepath: path1,
+	})
+	assert.Nil(t, err)
+	pathWant1 := root + "/a/b/c/foo"
+	assert.Equal(t, 1, len(files1))
+	assert.Equal(t, pathWant1, files1[0])
 }

@@ -28,10 +28,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/matrixorigin/simdcsv"
 )
@@ -50,11 +52,11 @@ import (
 //     2. call `Merge::doMergeFiles` with all files in `rootPath`,  do merge job
 //   - `Merge::doMergeFiles` handle one job flow: read each file, merge in cache, write into file.
 type Merge struct {
-	Table       *Table                  // WithTable
+	Table       *table.Table            // WithTable
 	FS          fileservice.FileService // WithFileService
 	FSName      string                  // WithFileServiceName, cooperate with FS
 	datetime    time.Time               // see Main
-	pathBuilder PathBuilder             // const as NewAccountDatePathBuilder()
+	pathBuilder table.PathBuilder       // const as NewAccountDatePathBuilder()
 
 	// MaxFileSize 控制合并后最大文件大小, default: 128 MB
 	MaxFileSize int64 // WithMaxFileSize
@@ -64,9 +66,7 @@ type Merge struct {
 	//
 	// Deprecated: useless in Merge all in one file
 	MinFilesMerge int // WithMinFilesMerge
-	// FileCacheSize 控制Merge 过程中, 允许缓存的文件大小，default: 16 MB
-	//
-	// Deprecated: useless while NOT support multiParts upload
+	// FileCacheSize 控制Merge 过程中, 允许缓存的文件大小，default: 32 MB
 	FileCacheSize int64
 
 	// flow ctrl
@@ -82,7 +82,7 @@ func (opt MergeOption) Apply(m *Merge) {
 	opt(m)
 }
 
-func WithTable(tbl *Table) MergeOption {
+func WithTable(tbl *table.Table) MergeOption {
 	return MergeOption(func(m *Merge) {
 		m.Table = tbl
 	})
@@ -127,13 +127,13 @@ func NewMergeService(ctx context.Context, opts ...MergeOption) (*Merge, bool) {
 
 func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 	m := &Merge{
-		FSName:        etlFileServiceName,
+		FSName:        defines.ETLFileServiceName,
 		datetime:      time.Now(),
-		pathBuilder:   NewAccountDatePathBuilder(),
+		pathBuilder:   table.NewAccountDatePathBuilder(),
 		MaxFileSize:   128 * mpool.MB,
 		MaxMergeJobs:  16,
 		MinFilesMerge: 1,
-		FileCacheSize: mpool.PB, // disable it by set very large
+		FileCacheSize: 32 * mpool.MB,
 	}
 	m.ctx, m.cancelFunc = context.WithCancel(ctx)
 	for _, opt := range opts {
@@ -198,12 +198,13 @@ func (m *Merge) Main(ts time.Time) error {
 		logutil.Info("merge find empty data")
 		return nil
 	}
+	logutil.Debugf("merge task with max file: %v MB", m.MaxFileSize/mpool.MB)
 	for _, account := range accounts {
 		if !account.IsDir {
 			logutil.Warnf("path is not dir: %s", account.Name)
 			continue
 		}
-		rootPath := m.pathBuilder.Build(account.Name, MergeLogTypeLogs, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
+		rootPath := m.pathBuilder.Build(account.Name, table.MergeLogTypeLogs, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
 		// get all file entry
 
 		fileEntrys, err := m.FS.List(m.ctx, rootPath)
@@ -212,14 +213,24 @@ func (m *Merge) Main(ts time.Time) error {
 			return err
 		}
 		files = files[:0]
+		totalSize = 0
 		for _, f := range fileEntrys {
 			filepath := path.Join(rootPath, f.Name)
 			totalSize += f.Size
 			files = append(files, filepath)
+			if totalSize > m.MaxFileSize {
+				if err = m.doMergeFiles(account.Name, files, totalSize); err != nil {
+					logutil.Errorf("merge task meet error: %v", err)
+				}
+				files = files[:0]
+				totalSize = 0
+			}
 		}
 
-		if err := m.doMergeFiles(account.Name, files); err != nil {
-			logutil.Errorf("err: %v\n", err)
+		if len(files) > 0 {
+			if err = m.doMergeFiles(account.Name, files, 0); err != nil {
+				logutil.Errorf("merge task meet error: %v", err)
+			}
 		}
 	}
 
@@ -231,7 +242,7 @@ func (m *Merge) Main(ts time.Time) error {
 // Step 2. make new filename, file writer
 // Step 3. read file data(valid format), and write down new file
 // Step 4. delete old files.
-func (m *Merge) doMergeFiles(account string, paths []string) error {
+func (m *Merge) doMergeFiles(account string, paths []string, bufferSize int64) error {
 
 	// Control task concurrency
 	m.runningJobs <- struct{}{}
@@ -245,93 +256,145 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 
 	// Step 1. group by node_uuid, find target timestamp
 	timestamps := make([]string, 0, len(paths))
-	for _, path := range paths {
-		p, err := m.pathBuilder.ParsePath(path)
+	for _, path_ := range paths {
+		p, err := m.pathBuilder.ParsePath(path_)
 		if err != nil {
 			return err
 		}
 		ts := p.Timestamp()
 		if len(ts) == 0 {
-			// fixme: logutil.Warn
+			logutil.Warnf("merge file meet unknown file: %s", path_)
 			continue
 		}
 		timestamps = append(timestamps, ts[0])
 	}
 	if len(timestamps) == 0 {
-		return moerr.NewNotSupported("CSVMerge: NO timestamp for merge")
+		return moerr.NewNotSupported("csv merge: NO timestamp for merge")
 	}
 	timestampStart := timestamps[0]
 	timestampEnd := timestamps[len(timestamps)-1]
 
+	// new buffer
+	if bufferSize <= 0 {
+		bufferSize = m.MaxFileSize
+	}
+	buf := make([]byte, 0, bufferSize)
+
 	// Step 2. new filename, file writer
-	prefix := m.pathBuilder.Build(account, MergeLogTypeMerged, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
+	prefix := m.pathBuilder.Build(account, table.MergeLogTypeMerged, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
 	mergeFilename := m.pathBuilder.NewMergeFilename(timestampStart, timestampEnd)
 	mergeFilepath := path.Join(prefix, mergeFilename)
-	newFileWriter, _ := NewCSVWriter(m.ctx, m.FS, mergeFilepath)
+	newFileWriter, _ := NewCSVWriter(m.ctx, m.FS, mergeFilepath, buf)
 
 	// Step 3. do simple merge
-	cacheFileData := m.Table.NewRowCache()
+	cacheFileData := NewRowCache(m.Table)
+	row := m.Table.GetRow()
 	for _, path := range paths {
 		reader, err := NewCSVReader(m.ctx, m.FS, path)
 		if err != nil {
-			// fixme: handle this path ? just return
-			// errorFileHandler(m.ctx, m.FS, path) without continue
-			continue
+			logutil.Errorf("merge file meet read failed: %v", err)
+			return err
 		}
-		for line := reader.ReadLine(); line != nil; line = reader.ReadLine() {
-
-			row := m.Table.ParseRow(line)
-			// fixme: if !obj.Valid() { continue }
-			cacheFileData.Put(row) // if table_name == "statement_info", try to save last record.
+		var line []string
+		for line, err = reader.ReadLine(); line != nil && err == nil; line, err = reader.ReadLine() {
+			if err = row.ParseRow(line); err != nil {
+				continue
+			}
+			cacheFileData.Put(row)
 		}
-		// fixme: reader.Close()
+		if err != nil {
+			return err
+		}
+		// check cache size
 		if cacheFileData.Size() > m.FileCacheSize {
-			if err := cacheFileData.Flush(newFileWriter); err != nil {
-				// fixme: handle error situation
-				logutil.Errorf("merge file meet flush error: %v", err)
+			if err = cacheFileData.Flush(newFileWriter); err != nil {
+				logutil.Errorf("merge file meet flush failed: %v", err)
+				return err
 			}
 			cacheFileData.Reset()
 		}
+		reader.Close()
 	}
 	if !cacheFileData.IsEmpty() {
 		if err := cacheFileData.Flush(newFileWriter); err != nil {
-			// fixme: handle error situation
-			logutil.Errorf("merge file meet flush error: %v", err)
+			logutil.Errorf("merge file meet flush failed: %v", err)
+			return err
 		}
 		cacheFileData.Reset()
 	}
-	newFileWriter.FlushAndClose()
+	if err := newFileWriter.FlushAndClose(); err != nil {
+		logutil.Errorf("merge file meet write failed: %v", err)
+		return err
+	}
 
 	// step 4. delete old files
-	err := m.FS.Delete(m.ctx, paths...)
+	if err := m.FS.Delete(m.ctx, paths...); err != nil {
+		logutil.Errorf("merge file meet delete failed: %v", err)
+		return err
+	}
 
-	return err
+	return nil
 }
 
 type CSVReader interface {
-	ReadLine() []string
+	ReadLine() ([]string, error)
+	Close()
 }
 
 type ContentReader struct {
+	ctx     context.Context
 	idx     int
 	length  int
 	content [][]string
+
+	reader *simdcsv.Reader
+	raw    io.ReadCloser
 }
 
-func NewContentReader(content [][]string) *ContentReader {
+// BatchReadRows ~= 20MB rawlog file has about 3700+ rows
+const BatchReadRows = 4000
+
+func NewContentReader(ctx context.Context, reader *simdcsv.Reader, raw io.ReadCloser) *ContentReader {
 	return &ContentReader{
-		length:  len(content),
-		content: content,
+		ctx:     ctx,
+		length:  0,
+		content: make([][]string, BatchReadRows),
+		reader:  reader,
+		raw:     raw,
 	}
 }
 
-func (s *ContentReader) ReadLine() []string {
+func (s *ContentReader) ReadLine() ([]string, error) {
+	if s.idx == s.length && s.reader != nil {
+		var cnt int
+		var err error
+		s.content, cnt, err = s.reader.Read(BatchReadRows, s.ctx, s.content)
+		if err != nil {
+			return nil, err
+		}
+		if cnt < BatchReadRows {
+			//s.reader.Close() // just empty op and never end.
+			s.reader = nil
+			s.raw.Close()
+			s.raw = nil
+		}
+		s.idx = 0
+		s.length = cnt
+	}
 	if s.idx < s.length {
 		idx := s.idx
 		s.idx++
-		return s.content[idx]
+		return s.content[idx], nil
 	}
-	return nil
+	return nil, nil
+}
+
+func (s *ContentReader) Close() {
+	capLen := cap(s.content)
+	s.content = s.content[:capLen]
+	for idx := range s.content {
+		s.content[idx] = nil
+	}
 }
 
 func NewCSVReader(ctx context.Context, fs fileservice.FileService, path string) (CSVReader, error) {
@@ -351,22 +414,16 @@ func NewCSVReader(ctx context.Context, fs fileservice.FileService, path string) 
 	if err := fs.Read(ctx, &vec); err != nil {
 		return nil, err
 	}
-	defer reader.Close()
 
 	// parse csv content
 	simdCsvReader := simdcsv.NewReaderWithOptions(reader,
-		CommonCsvOptions.FieldTerminator,
+		table.CommonCsvOptions.FieldTerminator,
 		'#',
 		true,
 		true)
-	defer simdCsvReader.Close()
-	content, err := simdCsvReader.ReadAll(ctx)
-	if err != nil {
-		return nil, err
-	}
 
 	// return content Reader
-	return NewContentReader(content), nil
+	return NewContentReader(ctx, simdCsvReader, reader), nil
 }
 
 type CSVWriter interface {
@@ -384,8 +441,8 @@ type ContentWriter struct {
 	parser *csv.Writer
 }
 
-func NewContentWriter(writer io.StringWriter) *ContentWriter {
-	buf := bytes.NewBuffer(nil)
+func NewContentWriter(writer io.StringWriter, buffer []byte) *ContentWriter {
+	buf := bytes.NewBuffer(buffer)
 	return &ContentWriter{
 		writer: writer,
 		buf:    buf,
@@ -406,16 +463,16 @@ func (w *ContentWriter) FlushAndClose() error {
 	return err
 }
 
-func NewCSVWriter(ctx context.Context, fs fileservice.FileService, path string) (CSVWriter, error) {
+func NewCSVWriter(ctx context.Context, fs fileservice.FileService, path string, buf []byte) (CSVWriter, error) {
 
 	factory := GetFSWriterFactory(fs, "", "")
 	fsWriter := factory(ctx, "", nil, WithFilePath(path))
 
-	return NewContentWriter(fsWriter), nil
+	return NewContentWriter(fsWriter, buf), nil
 }
 
 type Cache interface {
-	Put(*Row)
+	Put(*table.Row)
 	Size() int64
 	Flush(CSVWriter) error
 	Reset()
@@ -423,13 +480,13 @@ type Cache interface {
 }
 
 type SliceCache struct {
-	m    []*Row
+	m    [][]string
 	size int64
 }
 
 func (c *SliceCache) Flush(writer CSVWriter) error {
 	for _, record := range c.m {
-		if err := writer.WriteStrings(record.ToStrings()); err != nil {
+		if err := writer.WriteStrings(record); err != nil {
 			return err
 		}
 	}
@@ -437,7 +494,10 @@ func (c *SliceCache) Flush(writer CSVWriter) error {
 }
 
 func (c *SliceCache) Reset() {
-	c.m = c.m[:]
+	for idx := range c.m {
+		c.m[idx] = nil
+	}
+	c.m = c.m[:0]
 	c.size = 0
 }
 
@@ -445,8 +505,8 @@ func (c *SliceCache) IsEmpty() bool {
 	return len(c.m) == 0
 }
 
-func (c *SliceCache) Put(r *Row) {
-	c.m = append(c.m, r)
+func (c *SliceCache) Put(r *table.Row) {
+	c.m = append(c.m, r.ToRawStrings())
 	c.size += r.Size()
 }
 
@@ -455,13 +515,13 @@ func (c *SliceCache) Size() int64 { return c.size }
 func (c *MapCache) Size() int64 { return c.size }
 
 type MapCache struct {
-	m    map[string]*Row
+	m    map[string][]string
 	size int64
 }
 
 func (c *MapCache) Flush(writer CSVWriter) error {
 	for _, record := range c.m {
-		if err := writer.WriteStrings(record.ToStrings()); err != nil {
+		if err := writer.WriteStrings(record); err != nil {
 			return err
 		}
 	}
@@ -479,45 +539,17 @@ func (c *MapCache) IsEmpty() bool {
 	return len(c.m) == 0
 }
 
-func (c *MapCache) Put(r *Row) {
-	c.m[r.PrimaryKey()] = r
+func (c *MapCache) Put(r *table.Row) {
+	c.m[r.PrimaryKey()] = r.ToRawStrings()
 	c.size += r.Size()
 }
 
-func (tbl *Table) NewRowCache() Cache {
+func NewRowCache(tbl *table.Table) Cache {
 	if len(tbl.PrimaryKeyColumn) == 0 {
 		return &SliceCache{}
 	} else {
-		return &MapCache{m: make(map[string]*Row)}
+		return &MapCache{m: make(map[string][]string)}
 	}
-}
-
-func (tbl *Table) ParseRow(cols []string) *Row {
-	r := tbl.GetRow()
-	copy(r.Columns[:], cols[:])
-	return r
-}
-
-func (r *Row) PrimaryKey() string {
-	if len(r.Table.PrimaryKeyColumn) == 0 {
-		return ""
-	}
-	if len(r.Table.PrimaryKeyColumn) == 1 {
-		return r.Columns[r.Name2ColumnIdx[r.Table.PrimaryKeyColumn[0].Name]]
-	}
-	sb := strings.Builder{}
-	for _, col := range r.Table.PrimaryKeyColumn {
-		sb.WriteString(r.Columns[r.Name2ColumnIdx[col.Name]])
-		sb.WriteRune('-')
-	}
-	return sb.String()
-}
-
-func (r *Row) Size() (size int64) {
-	for _, col := range r.Columns {
-		size += int64(len(col))
-	}
-	return
 }
 
 func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, task task.Task) error {
@@ -530,7 +562,7 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 
 		elems := strings.Split(string(args), ParamSeparator)
 		id := elems[0]
-		table, exist := gTable[id]
+		table, exist := table.GetTable(id)
 		if !exist {
 			return moerr.NewNotSupported("merge task not support table: %s", id)
 		}
@@ -554,8 +586,10 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 		}
 
 		// handle metric
-		opts = append(opts, WithTable(table))
-		merge := NewMerge(ctx, opts...)
+		newOptions := []MergeOption{WithMaxFileSize(maxFileSize.Load())}
+		newOptions = append(newOptions, opts...)
+		newOptions = append(newOptions, WithTable(table))
+		merge := NewMerge(ctx, newOptions...)
 		if err := merge.Main(ts); err != nil {
 			logutil.Errorf("merge metric failed: %v", err)
 			return err
@@ -591,7 +625,7 @@ func MergeTaskMetadata(id task.TaskCode, args ...string) task.TaskMetadata {
 func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService taskservice.TaskService) error {
 	var err error
 	// should init once in/with schema-init.
-	tables := GetAllTable()
+	tables := table.GetAllTable()
 	logutil.Infof("init merge task with CronExpr: %s", MergeTaskCronExpr)
 	for _, tbl := range tables {
 		logutil.Debugf("init table merge task: %s", tbl.GetIdentify())
@@ -640,5 +674,19 @@ func InitCronExpr(duration time.Duration) error {
 			MergeTaskCronExpr = fmt.Sprintf("0 0 %s * * *", strings.Join(hours, ","))
 		}
 	}
+	return nil
+}
+
+var maxFileSize atomic.Int64
+
+func InitMerge(mergeCycle time.Duration, filesize int) error {
+	var err error
+	if mergeCycle > 0 {
+		err = InitCronExpr(mergeCycle)
+		if err != nil {
+			return err
+		}
+	}
+	maxFileSize.Store(int64(filesize * mpool.MB))
 	return nil
 }

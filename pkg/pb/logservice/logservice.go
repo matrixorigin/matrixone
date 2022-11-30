@@ -160,7 +160,7 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 }
 
 // LogString returns "ServiceType/ConfigChangeType UUID RepUuid:RepShardID:RepID InitialMembers".
-// Donot add CN's StartTaskRunner info to log string, because there has user and password.
+// Do not add CN's StartTaskRunner info to log string, because there has user and password.
 func (m *ScheduleCommand) LogString() string {
 	c := func(s string) string {
 		if len(s) > 6 {
@@ -182,14 +182,20 @@ func (m *ScheduleCommand) LogString() string {
 	if m.CreateTaskService != nil {
 		return fmt.Sprintf("%s/CreateTask %s", serviceType, target)
 	}
+	if m.ConfigChange == nil {
+		return fmt.Sprintf("%s/unknown command %s", serviceType, m.String())
+	}
 
-	configChangeType := map[ConfigChangeType]string{
-		AddReplica:    "Add",
-		RemoveReplica: "Remove",
-		StartReplica:  "Start",
-		StopReplica:   "Stop",
-		KillZombie:    "Kill",
-	}[m.ConfigChange.ChangeType]
+	configChangeType := "Unknown"
+	if m.ConfigChange != nil {
+		configChangeType = map[ConfigChangeType]string{
+			AddReplica:    "Add",
+			RemoveReplica: "Remove",
+			StartReplica:  "Start",
+			StopReplica:   "Stop",
+			KillZombie:    "Kill",
+		}[m.ConfigChange.ChangeType]
+	}
 
 	replica := c(m.ConfigChange.Replica.UUID)
 	s := fmt.Sprintf("%s/%s %s %s:%d:%d:%d",

@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -52,7 +53,9 @@ type DB struct {
 	MTBufMgr  base.INodeManager
 	TxnBufMgr base.INodeManager
 
-	TxnMgr     *txnbase.TxnManager
+	TxnMgr        *txnbase.TxnManager
+	TransferTable *model.HashPageTable
+
 	LogtailMgr *logtail.LogtailMgr
 	Wal        wal.Driver
 
@@ -148,5 +151,6 @@ func (db *DB) Close() error {
 	db.TxnMgr.Stop()
 	db.Wal.Close()
 	db.Opts.Catalog.Close()
+	db.TransferTable.Close()
 	return db.DBLocker.Close()
 }

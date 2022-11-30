@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -164,12 +165,11 @@ func (win *vectorWindow[T]) PPString(num int) string {
 	return s
 }
 func (win *vectorWindow[T]) Slice() any {
-	if win.ref.typ.IsVarlen() {
-		base := win.ref.Slice().(*Bytes)
-		return base.Window(win.offset, win.length)
-	} else {
-		return win.ref.Slice().([]T)[win.offset : win.offset+win.length]
-	}
+	return win.ref.fastSlice()[win.offset : win.offset+win.length]
+}
+func (win *vectorWindow[T]) SlicePtr() unsafe.Pointer {
+	slice := win.ref.fastSlice()[win.offset : win.offset+win.length]
+	return unsafe.Pointer(&slice[0])
 }
 func (win *vectorWindow[T]) Bytes() *Bytes {
 	bs := win.ref.Bytes()

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -80,10 +81,21 @@ func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.
 	return UpdateInsertBatch(e, ctx, proc, ColDefs, bat, rel.GetTableID(ctx), dbName, tblName)
 }
 
+// get autoincr columns values.  This function updates the auto incr table.
+// multiple txn may cause a conflicts, but we retry off band transactions.
 func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID string) ([]uint64, []uint64, error) {
+	var err error
+	loopCnt := 0
+loop:
+	// if fail 100 times, too bad, really unlucky one get aborted anyway.
+	loopCnt += 1
+	if loopCnt >= 100 {
+		return nil, nil, err
+	}
+
 	txn, err := NewTxn(param.eg, param.proc, param.ctx)
 	if err != nil {
-		return nil, nil, err
+		goto loop
 	}
 
 	offset, step := make([]uint64, 0), make([]uint64, 0)
@@ -94,20 +106,19 @@ func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID s
 		var d, s uint64
 		param.rel, err = GetNewRelation(param.eg, param.dbName, AUTO_INCR_TABLE, txn, param.ctx)
 		if err != nil {
-			return nil, nil, err
+			goto loop
 		}
 		if d, s, err = getOneColRangeFromAutoIncrTable(param, bat, tableID+"_"+col.Name, i); err != nil {
-			if err2 := RolllbackTxn(param.eg, txn, param.ctx); err2 != nil {
-				return nil, nil, err2
-			}
-			return nil, nil, err
+			RolllbackTxn(param.eg, txn, param.ctx)
+			goto loop
 		}
 		offset = append(offset, d)
 		step = append(step, s)
 	}
 	if err = CommitTxn(param.eg, txn, param.ctx); err != nil {
-		return nil, nil, err
+		goto loop
 	}
+
 	return offset, step, nil
 }
 
@@ -605,11 +616,6 @@ func NewTxn(eg engine.Engine, proc *process.Process, ctx context.Context) (txn c
 	if ctx == nil {
 		return nil, moerr.NewInternalError("context should not be nil")
 	}
-	ctx, cancel := context.WithTimeout(
-		ctx,
-		eg.Hints().CommitOrRollbackTimeout,
-	)
-	defer cancel()
 	if err = eg.New(ctx, txn); err != nil {
 		return nil, err
 	}
@@ -629,6 +635,9 @@ func CommitTxn(eg engine.Engine, txn client.TxnOperator, ctx context.Context) er
 	)
 	defer cancel()
 	if err := eg.Commit(ctx, txn); err != nil {
+		if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
+			logutil.Errorf("CommitTxn: txn operator rollback failed. error:%v", err2)
+		}
 		return err
 	}
 	err := txn.Commit(ctx)

@@ -109,7 +109,7 @@ func (l *store) truncationWorker(ctx context.Context) {
 // processTruncateLog process log truncation for all shards excpet
 // hakeeper shard.
 func (l *store) processTruncateLog(ctx context.Context) error {
-	for _, shard := range l.mu.metadata.Shards {
+	for _, shard := range l.getShards() {
 		if shard.ShardID == hakeeper.DefaultHAKeeperShardID {
 			continue
 		}

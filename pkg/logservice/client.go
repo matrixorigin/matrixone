@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 const (
@@ -311,7 +313,7 @@ func connectToLogService(ctx context.Context,
 		addresses[i], addresses[j] = addresses[j], addresses[i]
 	})
 	for _, addr := range addresses {
-		cc, err := getRPCClient(ctx, addr, c.respPool)
+		cc, err := getRPCClient(ctx, addr, c.respPool, c.cfg.MaxMessageSize, cfg.Tag)
 		if err != nil {
 			e = err
 			continue
@@ -393,6 +395,8 @@ func (c *client) connectReadOnly(ctx context.Context) error {
 func (c *client) request(ctx context.Context,
 	mt pb.MethodType, payload []byte, lsn Lsn,
 	maxSize uint64) (pb.Response, []pb.LogRecord, error) {
+	ctx, span := trace.Debug(ctx, "client.request")
+	defer span.End()
 	req := pb.Request{
 		Method: mt,
 		LogRequest: pb.LogRequest{
@@ -403,6 +407,7 @@ func (c *client) request(ctx context.Context,
 		},
 	}
 	r := c.pool.Get().(*RPCRequest)
+	defer r.Release()
 	r.Request = req
 	r.payload = payload
 	future, err := c.client.Send(ctx, c.addr, r)
@@ -432,6 +437,8 @@ func (c *client) request(ctx context.Context,
 }
 
 func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
+	ctx, span := trace.Debug(ctx, "client.tsoRequest")
+	defer span.End()
 	req := pb.Request{
 		Method: pb.TSO_UPDATE,
 		TsoRequest: &pb.TsoRequest{
@@ -497,14 +504,13 @@ func (c *client) doGetTruncatedLsn(ctx context.Context) (Lsn, error) {
 	return resp.LogResponse.Lsn, nil
 }
 
-func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RPCClient, error) {
+func getRPCClient(ctx context.Context, target string, pool *sync.Pool, maxMessageSize int, tag ...string) (morpc.RPCClient, error) {
 	mf := func() morpc.Message {
 		return pool.Get().(*RPCResponse)
 	}
 
 	// construct morpc.BackendOption
 	backendOpts := []morpc.BackendOption{
-		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendConnectTimeout(time.Second),
 		morpc.WithBackendHasPayloadResponse(),
 		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("hakeeper-client-backend")),
@@ -515,7 +521,8 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RP
 	clientOpts := []morpc.ClientOption{
 		morpc.WithClientInitBackends([]string{target}, []int{1}),
 		morpc.WithClientMaxBackendPerHost(1),
-		morpc.WithClientLogger(logutil.GetGlobalLogger().Named("hakeeper-client")),
+		morpc.WithClientTag(fmt.Sprintf("hakeeper-client(%s)", tag)),
+		morpc.WithClientLogger(logutil.GetGlobalLogger()),
 	}
 	clientOpts = append(clientOpts, GetClientOptions(ctx)...)
 
@@ -524,7 +531,8 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RP
 	// to be attempted
 	codec := morpc.NewMessageCodec(mf,
 		morpc.WithCodecPayloadCopyBufferSize(defaultWriteSocketSize),
-		morpc.WithCodecEnableChecksum())
+		morpc.WithCodecEnableChecksum(),
+		morpc.WithCodecMaxBodySize(maxMessageSize))
 	bf := morpc.NewGoettyBasedBackendFactory(codec, backendOpts...)
 	return morpc.NewClient(bf, clientOpts...)
 }

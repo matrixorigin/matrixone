@@ -19,22 +19,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
-
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var nilTxnID [16]byte
 
-var _ IBuffer2SqlItem = (*StatementInfo)(nil)
-var _ CsvFields = (*StatementInfo)(nil)
-
+// StatementInfo implement export.IBuffer2SqlItem and export.CsvFields
 type StatementInfo struct {
 	StatementID          [16]byte  `json:"statement_id"`
 	TransactionID        [16]byte  `json:"transaction_id"`
@@ -81,16 +78,20 @@ func (s *StatementInfo) Size() int64 {
 }
 
 func (s *StatementInfo) Free() {
-	s.Statement = ""
-	s.StatementFingerprint = ""
-	s.StatementTag = ""
-	s.ExecPlan = nil
-	s.Error = nil
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	if s.end { // cooperate with s.mux
+		s.Statement = ""
+		s.StatementFingerprint = ""
+		s.StatementTag = ""
+		s.ExecPlan = nil
+		s.Error = nil
+	}
 }
 
-func (s *StatementInfo) GetRow() *export.Row { return SingleStatementTable.GetRow() }
+func (s *StatementInfo) GetRow() *table.Row { return SingleStatementTable.GetRow() }
 
-func (s *StatementInfo) CsvFields(row *export.Row) []string {
+func (s *StatementInfo) CsvFields(row *table.Row) []string {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.exported = true
@@ -107,8 +108,8 @@ func (s *StatementInfo) CsvFields(row *export.Row) []string {
 	row.SetColumnVal(stmtFgCol, s.StatementFingerprint)
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
-	row.SetColumnVal(reqAtCol, time2DatetimeString(s.RequestAt))
-	row.SetColumnVal(respAtCol, time2DatetimeString(s.ResponseAt))
+	row.SetColumnVal(reqAtCol, Time2DatetimeString(s.RequestAt))
+	row.SetColumnVal(respAtCol, Time2DatetimeString(s.ResponseAt))
 	row.SetColumnVal(durationCol, fmt.Sprintf("%d", s.Duration))
 	row.SetColumnVal(statusCol, s.Status.String())
 	if s.Error != nil {
@@ -129,6 +130,8 @@ func (s *StatementInfo) CsvFields(row *export.Row) []string {
 
 // ExecPlan2Json return ExecPlan Serialized json-str
 // and set RowsRead, BytesScan from ExecPlan
+//
+// please used in s.mux.Lock()
 func (s *StatementInfo) ExecPlan2Json() string {
 	var jsonByte []byte
 	if s.SerializeExecPlan == nil {
@@ -169,6 +172,8 @@ func getDefaultSerializeExecPlan() SerializeExecPlanFunc {
 
 // SetExecPlan record execPlan should be TxnComputationWrapper.plan obj, which support 2json.
 func (s *StatementInfo) SetExecPlan(execPlan any, SerializeFunc SerializeExecPlanFunc) {
+	s.mux.Lock()
+	defer s.mux.Unlock()
 	s.ExecPlan = execPlan
 	s.SerializeExecPlan = SerializeFunc
 }
@@ -194,10 +199,10 @@ var EndStatement = func(ctx context.Context, err error) {
 	if s == nil {
 		panic(moerr.NewInternalError("no statement info in context"))
 	}
+	s.mux.Lock()
+	defer s.mux.Unlock()
 	if !s.end {
 		// do report
-		s.mux.Lock()
-		defer s.mux.Unlock()
 		s.end = true
 		s.ResponseAt = time.Now()
 		s.Duration = s.ResponseAt.Sub(s.RequestAt)
@@ -242,5 +247,5 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	if !GetTracerProvider().IsEnable() {
 		return nil
 	}
-	return export.GetGlobalBatchProcessor().Collect(ctx, s)
+	return GetGlobalBatchProcessor().Collect(ctx, s)
 }

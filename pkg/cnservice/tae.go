@@ -51,10 +51,12 @@ func initTAE(
 		lc := func() (logservice.Client, error) {
 			ctx, cancel := context.WithTimeout(ctx, time.Minute)
 			lc, err := logservice.NewClient(ctx, logservice.ClientConfig{
+				Tag:              targetDir,
 				ReadOnly:         false,
 				LogShardID:       pu.SV.LogShardID,
 				DNReplicaID:      pu.SV.DNReplicaID,
 				ServiceAddresses: cfg.HAKeeper.ClientConfig.ServiceAddresses,
+				MaxMessageSize:   int(cfg.RPC.MaxMessageSize),
 			})
 			cancel()
 			return lc, err

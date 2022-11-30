@@ -23,14 +23,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"
 )
 
-func withAllocator(opt *Options) *Options {
-	if opt == nil {
-		opt = new(Options)
-	}
+func withAllocator(opt Options) Options {
 	opt.Allocator = mpool.MustNewZero()
 	return opt
 }
@@ -52,7 +50,8 @@ func withAllocator(opt *Options) *Options {
 // }
 
 func TestVector1(t *testing.T) {
-	opt := withAllocator(nil)
+	defer testutils.AfterTest(t)()
+	opt := withAllocator(Options{})
 	vec := MakeVector(types.T_int32.ToType(), false, opt)
 	vec.Append(int32(12))
 	vec.Append(int32(32))
@@ -78,7 +77,8 @@ func TestVector1(t *testing.T) {
 }
 
 func TestVector2(t *testing.T) {
-	opt := withAllocator(nil)
+	defer testutils.AfterTest(t)()
+	opt := withAllocator(Options{})
 	vec := MakeVector(types.T_int64.ToType(), true, opt)
 	t.Log(vec.String())
 	assert.True(t, vec.Nullable())
@@ -134,7 +134,8 @@ func TestVector2(t *testing.T) {
 }
 
 func TestVector3(t *testing.T) {
-	opts := withAllocator(nil)
+	defer testutils.AfterTest(t)()
+	opts := withAllocator(Options{})
 	vec1 := MakeVector(types.T_int32.ToType(), false, opts)
 	for i := 0; i < 100; i++ {
 		vec1.Append(int32(i))
@@ -160,6 +161,7 @@ func TestVector3(t *testing.T) {
 }
 
 func TestVector4(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	for _, vecType := range vecTypes {
 		vec := MockVector(vecType, 1000, false, true, nil)
@@ -205,6 +207,7 @@ func TestVector4(t *testing.T) {
 }
 
 func TestVector5(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	sels := roaring.BitmapOf(2, 6)
 	for _, vecType := range vecTypes {
@@ -245,6 +248,7 @@ func TestVector5(t *testing.T) {
 }
 
 func TestVector6(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	sels := roaring.BitmapOf(2, 6)
 	f := func(vecType types.Type, nullable bool) {
@@ -331,6 +335,7 @@ func TestVector6(t *testing.T) {
 }
 
 func TestVector7(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	testF := func(typ types.Type, nullable bool) {
 		vec := MockVector(typ, 10, false, nullable, nil)
@@ -375,6 +380,7 @@ func TestVector7(t *testing.T) {
 }
 
 func TestVector8(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	vec := MakeVector(types.T_int32.ToType(), true)
 	defer vec.Close()
 	vec.Append(int32(0))
@@ -403,7 +409,8 @@ func TestVector8(t *testing.T) {
 }
 
 func TestVector9(t *testing.T) {
-	opts := withAllocator(nil)
+	defer testutils.AfterTest(t)()
+	opts := withAllocator(Options{})
 	vec := MakeVector(types.T_varchar.ToType(), true, opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("h22"))
@@ -421,7 +428,8 @@ func TestVector9(t *testing.T) {
 }
 
 func TestCloneWithBuffer(t *testing.T) {
-	opts := withAllocator(nil)
+	defer testutils.AfterTest(t)()
+	opts := withAllocator(Options{})
 	vec := MakeVector(types.T_varchar.ToType(), true, opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("h22"))
@@ -443,10 +451,12 @@ func TestCloneWithBuffer(t *testing.T) {
 }
 
 func TestCompact(t *testing.T) {
-	opts := withAllocator(nil)
+	defer testutils.AfterTest(t)()
+	opts := withAllocator(Options{})
 	vec := MakeVector(types.T_varchar.ToType(), true, opts)
 
 	vec.Append(types.Null{})
+	t.Log(vec.String())
 	deletes := roaring.BitmapOf(0)
 	//{null}
 	vec.Compact(deletes)
@@ -476,4 +486,16 @@ func TestCompact(t *testing.T) {
 	assert.True(t, types.IsNull(vec.Get(1)))
 	assert.True(t, types.IsNull(vec.Get(2)))
 	vec.Close()
+}
+
+func BenchmarkVectorExtend(t *testing.B) {
+	vec1 := MockVector(types.T_int32.ToType(), 0, true, false, nil)
+	vec2 := MockVector(types.T_int32.ToType(), 1, true, false, nil)
+	defer vec1.Close()
+	defer vec2.Close()
+
+	t.ResetTimer()
+	for i := 0; i < t.N; i++ {
+		vec1.Extend(vec2)
+	}
 }

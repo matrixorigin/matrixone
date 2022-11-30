@@ -8,12 +8,13 @@ require (
 	github.com/RoaringBitmap/roaring v0.9.4
 	github.com/aws/aws-sdk-go-v2 v1.16.5
 	github.com/aws/aws-sdk-go-v2/config v1.15.11
+	github.com/aws/aws-sdk-go-v2/credentials v1.12.6
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.26.11
 	github.com/aws/smithy-go v1.11.3
 	github.com/axiomhq/hyperloglog v0.0.0-20220105174342-98591331716a
 	github.com/cespare/xxhash/v2 v2.1.2
 	github.com/docker/go-units v0.4.0
-	github.com/fagongzi/goetty/v2 v2.0.3-0.20221103025002-a4c7a0d38815
+	github.com/fagongzi/goetty/v2 v2.0.3-0.20221121133015-81355a910e4a
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/gogo/protobuf v1.3.2
@@ -24,7 +25,7 @@ require (
 	github.com/google/uuid v1.3.0
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
-	github.com/matrixorigin/simdcsv v0.0.0-20221007051957-5df242a514a8
+	github.com/matrixorigin/simdcsv v0.0.0-20221106123050-31511b2d3fa8
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
 	github.com/panjf2000/ants/v2 v2.4.6
 	github.com/pierrec/lz4 v2.6.1+incompatible
@@ -32,8 +33,9 @@ require (
 	github.com/plar/go-adaptive-radix-tree v1.0.4
 	github.com/prashantv/gostub v1.1.0
 	github.com/robfig/cron/v3 v3.0.1
+	github.com/samber/lo v1.33.0
 	github.com/smartystreets/goconvey v1.7.2
-	github.com/stretchr/testify v1.7.5
+	github.com/stretchr/testify v1.8.0
 	github.com/tidwall/btree v1.4.3
 	github.com/tidwall/pretty v1.2.1
 	github.com/yireyun/go-queue v0.0.0-20220725040158-a4dd64810e1e
@@ -46,7 +48,6 @@ require (
 	github.com/VictoriaMetrics/metrics v1.18.1 // indirect
 	github.com/armon/go-metrics v0.0.0-20180917152333-f0300d1749da // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.4.2 // indirect
-	github.com/aws/aws-sdk-go-v2/credentials v1.12.6 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.12.6 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.1.12 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.4.6 // indirect
@@ -71,7 +72,6 @@ require (
 	github.com/hashicorp/golang-lru v0.5.4 // indirect
 	github.com/hashicorp/memberlist v0.3.1 // indirect
 	github.com/miekg/dns v1.1.26 // indirect
-	github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e // indirect
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect
@@ -125,9 +125,9 @@ require (
 
 // required until memberlist issue 272 is resolved
 // see https://github.com/hashicorp/memberlist/pull/273 for progress
-replace github.com/hashicorp/memberlist => github.com/matrixorigin/memberlist v0.4.1-0.20221101065119-bb7bce164406
+replace github.com/hashicorp/memberlist => github.com/matrixorigin/memberlist v0.4.1-0.20221125074841-7595e1626d36
 
-replace github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20221031100441-62f1755ca7ab
+replace github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20221116064434-34611fc96385
 
 replace github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376 => github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376
 

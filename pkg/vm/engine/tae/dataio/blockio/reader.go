@@ -19,12 +19,15 @@ import (
 	"errors"
 	"io"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type Reader struct {
@@ -55,22 +58,61 @@ func NewReader(cxt context.Context, fs *objectio.ObjectFS, key string) (*Reader,
 	}, nil
 }
 
-func NewCheckpointReader(fs *objectio.ObjectFS, key string) (*Reader, error) {
+func NewCheckpointReader(cxt context.Context, fs fileservice.FileService, key string) (*Reader, error) {
 	name, locs, err := DecodeMetaLocToMetas(key)
 	if err != nil {
 		return nil, err
 	}
-	reader, err := objectio.NewObjectReader(name, fs.Service)
+	reader, err := objectio.NewObjectReader(name, fs)
 	if err != nil {
 		return nil, err
 	}
 	return &Reader{
-		fs:     fs,
-		reader: reader,
-		key:    key,
-		name:   name,
-		locs:   locs,
+		fs:      objectio.NewObjectFS(fs, ""),
+		reader:  reader,
+		key:     key,
+		name:    name,
+		locs:    locs,
+		readCxt: cxt,
 	}, nil
+}
+
+func (r *Reader) BlkColumnByMetaLoadJob(
+	colTypes []types.Type,
+	colNames []string,
+	nullables []bool,
+	block objectio.BlockObject,
+) *tasks.Job {
+	exec := func(_ context.Context) (result *tasks.JobResult) {
+		bat, err := r.LoadBlkColumnsByMeta(colTypes, colNames, nullables, block)
+		return &tasks.JobResult{
+			Err: err,
+			Res: bat,
+		}
+	}
+	return tasks.NewJob(uuid.NewString(), r.readCxt, exec)
+}
+
+func (r *Reader) BlkColumnsByMetaAndIdxLoadJob(
+	colTypes []types.Type,
+	colNames []string,
+	nullables []bool,
+	block objectio.BlockObject,
+	idx int,
+) *tasks.Job {
+	exec := func(_ context.Context) (result *tasks.JobResult) {
+		bat, err := r.LoadBlkColumnsByMetaAndIdx(
+			colTypes,
+			colNames,
+			nullables,
+			block,
+			idx)
+		return &tasks.JobResult{
+			Err: err,
+			Res: bat,
+		}
+	}
+	return tasks.NewJob(uuid.NewString(), r.readCxt, exec)
 }
 
 func (r *Reader) LoadBlkColumnsByMeta(
@@ -79,21 +121,23 @@ func (r *Reader) LoadBlkColumnsByMeta(
 	nullables []bool,
 	block objectio.BlockObject) (*containers.Batch, error) {
 	bat := containers.NewBatch()
+	if block.GetExtent().End() == 0 {
+		return bat, nil
+	}
+	idxs := make([]uint16, len(colNames))
+	for i := range colNames {
+		idxs[i] = uint16(i)
+	}
+	ioResult, err := r.reader.Read(r.readCxt, block.GetExtent(), idxs, nil)
+	if err != nil {
+		return nil, err
+	}
 
 	for i := range colNames {
-		if block.GetExtent().End() == 0 {
-			continue
-		}
-		col, err := block.GetColumn(uint16(i))
-		if err != nil {
-			return bat, err
-		}
-		data, err := col.GetData(r.readCxt, nil)
-		if err != nil {
-			return bat, err
-		}
 		pkgVec := vector.New(colTypes[i])
-		if err = pkgVec.Read(data.Entries[0].Data); err != nil && !errors.Is(err, io.EOF) {
+		data := make([]byte, len(ioResult.Entries[i].Object.([]byte)))
+		copy(data, ioResult.Entries[i].Object.([]byte))
+		if err = pkgVec.Read(data); err != nil && !errors.Is(err, io.EOF) {
 			return bat, err
 		}
 		var vec containers.Vector
@@ -104,7 +148,43 @@ func (r *Reader) LoadBlkColumnsByMeta(
 		}
 		bat.AddVector(colNames[i], vec)
 		bat.Vecs[i] = vec
+
 	}
+	return bat, nil
+}
+
+func (r *Reader) LoadBlkColumnsByMetaAndIdx(
+	colTypes []types.Type,
+	colNames []string,
+	nullables []bool,
+	block objectio.BlockObject,
+	idx int) (*containers.Batch, error) {
+	bat := containers.NewBatch()
+
+	if block.GetExtent().End() == 0 {
+		return nil, nil
+	}
+	col, err := block.GetColumn(uint16(idx))
+	if err != nil {
+		return bat, err
+	}
+	data, err := col.GetData(r.readCxt, nil)
+	if err != nil {
+		return bat, err
+	}
+	pkgVec := vector.New(colTypes[0])
+	v := make([]byte, len(data.Entries[0].Object.([]byte)))
+	copy(v, data.Entries[0].Object.([]byte))
+	if err = pkgVec.Read(v); err != nil && !errors.Is(err, io.EOF) {
+		return bat, err
+	}
+	var vec containers.Vector
+	if pkgVec.Length() == 0 {
+		vec = containers.MakeVector(colTypes[0], nullables[0])
+	} else {
+		vec = containers.NewVectorWithSharedMemory(pkgVec, nullables[0])
+	}
+	bat.AddVector(colNames[0], vec)
 	return bat, nil
 }
 

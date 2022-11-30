@@ -85,7 +85,7 @@ select * from t1 where a>='17.6660';
 drop table t1;
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a double(20),
-b VARCHAR(20));
+b VARCHAR(100));
 INSERT INTO t1 (id,a) VALUES
 (1,0),
 (2,CAST(0x7FFFFFFFFFFFFFFF AS UNSIGNED)),
@@ -106,14 +106,14 @@ SELECT id, 1.1 = id FROM t_double;
 SELECT * from t_double WHERE id = 1.1;
 SELECT * from t_double WHERE id = 1.1e0;
 -- @bvt:issue
--- @bvt:issue#3677
+
 SELECT * from t_double WHERE id = '1.1';
 SELECT * from t_double WHERE id = '1.1e0';
 SELECT * from t_double WHERE id IN (1.1, 2.2);
 SELECT * from t_double WHERE id IN (1.1e0, 2.2e0);
 SELECT * from t_double WHERE id IN ('1.1', '2.2');
 SELECT * from t_double WHERE id IN ('1.1e0', '2.2e0');
--- @bvt:issue
+
 SELECT * from t_double WHERE id BETWEEN 1.1 AND 1.9;
 SELECT * from t_double WHERE id BETWEEN 1.1e0 AND 1.9e0;
 SELECT * from t_double WHERE id BETWEEN '1.1' AND '1.9';

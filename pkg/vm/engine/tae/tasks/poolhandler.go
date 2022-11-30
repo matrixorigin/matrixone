@@ -64,10 +64,13 @@ func (h *poolHandler) doHandle(op iops.IOp) {
 	err := h.pool.Submit(closure(op, h.wg))
 	if err != nil {
 		logutil.Warnf("%v", err)
+		op.SetError(err)
+		h.wg.Done()
 	}
 }
 
 func (h *poolHandler) Close() error {
+	h.pool.Release()
 	h.BaseTaskHandler.Close()
 	h.wg.Wait()
 	return nil

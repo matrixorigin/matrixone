@@ -21,7 +21,11 @@
 
 package trace
 
-import "context"
+import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"time"
+)
 
 type TracerProvider interface {
 	Tracer(instrumentationName string, opts ...TracerOption) Tracer
@@ -30,6 +34,8 @@ type TracerProvider interface {
 type Tracer interface {
 	// Start creates a span and a context.Context containing the newly-created span.
 	Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span)
+	// Debug creates a span only with DebugMode
+	Debug(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span)
 }
 
 type Span interface {
@@ -55,4 +61,33 @@ type SpanProcessor interface {
 type IDGenerator interface {
 	NewIDs() (TraceID, SpanID)
 	NewSpanID() SpanID
+}
+
+type PipeImpl batchpipe.PipeImpl[batchpipe.HasName, any]
+
+type BatchProcessor interface {
+	Collect(context.Context, batchpipe.HasName) error
+	Start() bool
+	Stop(graceful bool) error
+	Register(name batchpipe.HasName, impl PipeImpl)
+}
+
+var _ BatchProcessor = &noopBatchProcessor{}
+
+type noopBatchProcessor struct {
+}
+
+func (n noopBatchProcessor) Collect(context.Context, batchpipe.HasName) error { return nil }
+func (n noopBatchProcessor) Start() bool                                      { return true }
+func (n noopBatchProcessor) Stop(bool) error                                  { return nil }
+func (n noopBatchProcessor) Register(batchpipe.HasName, PipeImpl)             {}
+
+func GetGlobalBatchProcessor() BatchProcessor {
+	return GetTracerProvider().batchProcessor
+}
+
+const timestampFormatter = "2006-01-02 15:04:05.000000"
+
+func Time2DatetimeString(t time.Time) string {
+	return t.Format(timestampFormatter)
 }

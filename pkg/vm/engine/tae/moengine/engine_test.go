@@ -47,6 +47,7 @@ func initDB(t *testing.T, opts *options.Options) *db.DB {
 }
 
 func TestEngine(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	ctx := context.TODO()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
@@ -154,6 +155,7 @@ func TestEngine(t *testing.T) {
 }
 
 func TestEngineAllType(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	ctx := context.TODO()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
@@ -280,6 +282,7 @@ func TestEngineAllType(t *testing.T) {
 }
 
 func TestTxnRelation_GetHideKey(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	ctx := context.TODO()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
@@ -368,6 +371,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 }
 
 func TestCopy1(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	t1 := types.T_varchar.ToType()
 	v1 := containers.MockVector(t1, 10, false, true, nil)
@@ -458,6 +462,7 @@ func checkSysTable(t *testing.T, name string, dbase engine.Database, txn Txn, re
 }
 
 func TestSysRelation(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	ctx := context.TODO()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)

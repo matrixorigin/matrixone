@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -47,6 +48,7 @@ func (base *vecBase[T]) IsNull(i int) bool                              { return
 func (base *vecBase[T]) HasNull() bool                                  { return false }
 func (base *vecBase[T]) NullMask() *roaring64.Bitmap                    { return base.derived.nulls }
 func (base *vecBase[T]) Slice() any                                     { panic("not supported") }
+func (base *vecBase[T]) SlicePtr() unsafe.Pointer                       { panic("not supported") }
 func (base *vecBase[T]) Data() []byte                                   { return base.derived.stlvec.Data() }
 func (base *vecBase[T]) DataWindow(offset, length int) []byte {
 	return base.derived.stlvec.DataWindow(offset, length)
@@ -64,10 +66,12 @@ func (base *vecBase[T]) tryCOW() {
 func (base *vecBase[T]) Update(i int, v any) { base.derived.stlvec.Update(i, v.(T)) }
 func (base *vecBase[T]) Delete(i int)        { base.derived.stlvec.Delete(i) }
 func (base *vecBase[T]) DeleteBatch(deletes *roaring.Bitmap) {
-	arr := deletes.ToArray()
-	for i := len(arr) - 1; i >= 0; i-- {
-		base.derived.stlvec.Delete(int(arr[i]))
+	if deletes == nil || deletes.IsEmpty() {
+		return
 	}
+	base.derived.stlvec.BatchDelete(
+		deletes.Iterator(),
+		int(deletes.GetCardinality()))
 }
 func (base *vecBase[T]) Append(v any) {
 	base.tryCOW()
@@ -92,6 +96,9 @@ func (base *vecBase[T]) Extend(o Vector) {
 }
 
 func (base *vecBase[T]) extendData(src Vector, srcOff, srcLen int) {
+	if srcLen < 1 {
+		return
+	}
 	if base.derived.typ.IsVarlen() {
 		bs := src.Bytes()
 		for i := srcOff; i < srcOff+srcLen; i++ {
@@ -99,7 +106,8 @@ func (base *vecBase[T]) extendData(src Vector, srcOff, srcLen int) {
 		}
 		return
 	}
-	base.derived.stlvec.AppendMany(src.Slice().([]T)[srcOff : srcOff+srcLen]...)
+	slice := unsafe.Slice((*T)(src.SlicePtr()), srcOff+srcLen)
+	base.derived.stlvec.AppendMany(slice[srcOff : srcOff+srcLen]...)
 }
 
 func (base *vecBase[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {

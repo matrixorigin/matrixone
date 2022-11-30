@@ -19,10 +19,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestPrepareHiddenData(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	typ := types.T_Rowid.ToType()
 	id := common.ID{
 		TableID:   1,

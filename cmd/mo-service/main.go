@@ -33,21 +33,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
 
 var (
-	configFile = flag.String("cfg", "./mo.toml", "toml configuration used to start mo-service")
-	launchFile = flag.String("launch", "", "toml configuration used to launch mo cluster")
+	configFile = flag.String("cfg", "", "toml configuration used to start mo-service")
+	launchFile = flag.String("launch", "./etc/launch-tae-multi-CN-tae-DN/launch.toml", "toml configuration used to launch mo cluster")
 	version    = flag.Bool("version", false, "print version information")
 )
 
@@ -99,6 +102,11 @@ func waitSignalToStop(stopper *stopper.Stopper) {
 	sig := <-sigchan
 	logutil.GetGlobalLogger().Info("Starting shutdown...", zap.String("signal", sig.String()))
 	stopper.Stop()
+	if cnProxy != nil {
+		if err := cnProxy.Stop(); err != nil {
+			logutil.GetGlobalLogger().Error("shutdown cn proxy failed", zap.Error(err))
+		}
+	}
 }
 
 func startService(cfg *Config, stopper *stopper.Stopper) error {
@@ -108,24 +116,28 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 	if err := cfg.resolveGossipSeedAddresses(); err != nil {
 		return err
 	}
+	setupProcessLevelRuntime(cfg, stopper)
 
-	setupGlobalComponents(cfg, stopper)
-
-	fs, err := cfg.createFileService(localFileServiceName)
+	fs, err := cfg.createFileService(defines.LocalFileServiceName)
 	if err != nil {
 		return err
 	}
 
-	if err = initTraceMetric(context.Background(), cfg, stopper, fs); err != nil {
+	st, err := cfg.getServiceType()
+	if err != nil {
 		return err
 	}
 
-	switch strings.ToUpper(cfg.ServiceType) {
-	case cnServiceType:
+	if err = initTraceMetric(context.Background(), st, cfg, stopper, fs); err != nil {
+		return err
+	}
+
+	switch st {
+	case metadata.ServiceType_CN:
 		return startCNService(cfg, stopper, fs)
-	case dnServiceType:
+	case metadata.ServiceType_DN:
 		return startDNService(cfg, stopper, fs)
-	case logServiceType:
+	case metadata.ServiceType_LOG:
 		return startLogService(cfg, stopper, fs)
 	default:
 		panic("unknown service type")
@@ -179,12 +191,16 @@ func startDNService(
 	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
+	r, err := getRuntime(metadata.ServiceType_DN, cfg, stopper)
+	if err != nil {
+		return err
+	}
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
 		c := cfg.getDNServiceConfig()
 		s, err := dnservice.NewService(
 			&c,
-			fileService,
-			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service").With(zap.String("uuid", cfg.DN.UUID))))
+			r,
+			fileService)
 		if err != nil {
 			panic(err)
 		}
@@ -205,7 +221,8 @@ func startLogService(
 	fileService fileservice.FileService,
 ) error {
 	lscfg := cfg.getLogServiceConfig()
-	s, err := logservice.NewService(lscfg, fileService)
+	s, err := logservice.NewService(lscfg, fileService,
+		logservice.WithLogger(logutil.GetGlobalLogger().Named("log-service").With(zap.String("uuid", lscfg.UUID))))
 	if err != nil {
 		panic(err)
 	}
@@ -227,20 +244,19 @@ func startLogService(
 	})
 }
 
-func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper, fs fileservice.FileService) error {
+func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, stopper *stopper.Stopper, fs fileservice.FileService) error {
 	var writerFactory export.FSWriterFactory
 	var err error
 	var UUID string
 	var initWG sync.WaitGroup
 	SV := cfg.getObservabilityConfig()
 
-	ServiceType := strings.ToUpper(cfg.ServiceType)
-	nodeRole := ServiceType
+	nodeRole := st.String()
 	if *launchFile != "" {
 		nodeRole = "ALL"
 	}
-	switch ServiceType {
-	case cnServiceType:
+	switch st {
+	case metadata.ServiceType_CN:
 		// validate node_uuid
 		var uuidErr error
 		var nodeUUID uuid.UUID
@@ -251,16 +267,16 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 			return moerr.ConvertPanicError(err)
 		}
 		UUID = nodeUUID.String()
-	case dnServiceType:
+	case metadata.ServiceType_DN:
 		UUID = cfg.DN.UUID
-	case logServiceType:
+	case metadata.ServiceType_LOG:
 		UUID = cfg.LogService.UUID
 	}
 	UUID = strings.ReplaceAll(UUID, " ", "_") // remove space in UUID for filename
 
 	if !SV.DisableTrace || !SV.DisableMetric {
 		writerFactory = export.GetFSWriterFactory(fs, UUID, nodeRole)
-		_ = export.SetPathBuilder(SV.PathBuilder)
+		_ = table.SetPathBuilder(SV.PathBuilder)
 	}
 	if !SV.DisableTrace {
 		initWG.Add(1)
@@ -270,10 +286,12 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 				trace.WithNode(UUID, nodeRole),
 				trace.EnableTracer(!SV.DisableTrace),
 				trace.WithBatchProcessMode(SV.BatchProcessor),
-				trace.WithFSWriterFactory(writerFactory),
+				trace.WithBatchProcessor(export.NewMOCollector()),
+				trace.WithFSWriterFactory(export.GetFSWriterFactory4Trace(fs, UUID, nodeRole)),
 				trace.WithExportInterval(SV.TraceExportInterval),
 				trace.WithLongQueryTime(SV.LongQueryTime),
 				trace.WithSQLExecutor(nil),
+				trace.DebugMode(SV.EnableTraceDebug),
 			); err != nil {
 				panic(err)
 			}
@@ -292,11 +310,8 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 			metric.WithExportInterval(SV.MetricExportInterval),
 			metric.WithMultiTable(SV.MetricMultiTable))
 	}
-	if SV.MergeCycle.Duration > 0 {
-		err = export.InitCronExpr(SV.MergeCycle.Duration)
-		if err != nil {
-			return err
-		}
+	if err = export.InitMerge(SV.MergeCycle.Duration, SV.MergeMaxFileSize); err != nil {
+		return err
 	}
 	return nil
 }

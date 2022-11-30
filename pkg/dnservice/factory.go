@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -29,12 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
-)
-
-const (
-	s3FileServiceName    = "S3"
-	localFileServiceName = "LOCAL"
-	etlFileServiceName   = "ETL"
 )
 
 var (
@@ -49,7 +44,7 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 	factory := s.createLogServiceClientFactroy(shard)
 	closeLogClientFn := func(logClient logservice.Client) {
 		if err := logClient.Close(); err != nil {
-			s.logger.Error("close log client failed",
+			s.rt.Logger().Error("close log client failed",
 				zap.Error(err))
 		}
 	}
@@ -106,6 +101,7 @@ func (s *store) newLogServiceClient(shard metadata.DNShard) (logservice.Client, 
 		LogShardID:       shard.LogShardID,
 		DNReplicaID:      shard.ReplicaID,
 		ServiceAddresses: s.cfg.HAKeeper.ClientConfig.ServiceAddresses,
+		MaxMessageSize:   int(s.cfg.RPC.MaxMessageSize),
 	})
 }
 
@@ -122,13 +118,13 @@ func (s *store) newMemTxnStorage(
 	return memorystorage.NewMemoryStorage(
 		mp,
 		memorystorage.SnapshotIsolation,
-		s.clock,
+		s.rt.Clock(),
 		memoryengine.NewHakeeperIDGenerator(hakeeper),
 	)
 }
 
 func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
-	return mem.NewKVTxnStorage(0, logClient, s.clock), nil
+	return mem.NewKVTxnStorage(0, logClient, s.rt.Clock()), nil
 }
 
 func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientFactory) (storage.TxnStorage, error) {
@@ -139,16 +135,19 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		IncrementalInterval: s.cfg.Ckp.IncrementalInterval.Duration,
 		GlobalInterval:      s.cfg.Ckp.GlobalInterval.Duration,
 	}
-	fs, err := fileservice.Get[fileservice.FileService](s.fileService, s.cfg.Txn.Storage.FileService)
+
+	// use s3 as main fs
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.S3FileServiceName)
 	if err != nil {
 		return nil, err
 	}
+
 	return taestorage.NewTAEStorage(
 		s.cfg.Txn.Storage.dataDir,
 		shard,
 		factory,
 		fs,
-		s.clock,
+		s.rt.Clock(),
 		ckpcfg,
 		options.LogstoreType(s.cfg.Txn.Storage.LogBackend))
 }

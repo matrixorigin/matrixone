@@ -7,7 +7,7 @@ SELECT REGEXP_LIKE(NULL, '.*');
 SELECT REGEXP_LIKE('Cat', NULL);
 SELECT REGEXP_LIKE(NULL, NULL);
 drop table if exists t1;
-create table t1(a int, b varchar(20));
+create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
 insert into t1 values(2 , "Powerage");
 insert into t1 values( 3 , "Singing Down the Lane" );
@@ -33,7 +33,7 @@ FROM t1
 WHERE REGEXP_LIKE(b, '^Power');
 drop table t1;
 
-create table t1(a int, b varchar(20));
+create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
 insert into t1 values(2 , "Powerage");
 insert into t1 values( 3 , "Singing Down the Lane" );
@@ -46,7 +46,7 @@ insert into t1 values( 9 , "Killers");
 SELECT a, REGEXP_LIKE(b, '^P') from t1;
 drop table t1;
 
-create table t1(a int, b varchar(20));
+create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
 insert into t1 values(2 , "Powerage");
 insert into t1 values( 3 , "Singing Down the Lane" );

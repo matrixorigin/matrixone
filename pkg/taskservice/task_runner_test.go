@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/assert"
@@ -194,7 +195,7 @@ func runTaskRunnerTest(t *testing.T,
 	testFunc func(r *taskRunner, s TaskService, store TaskStorage),
 	opts ...RunnerOption) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()

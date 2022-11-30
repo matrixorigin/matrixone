@@ -14,10 +14,12 @@
 package disttae
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -44,18 +46,18 @@ const (
 	MAX_RANGE_SIZE int64  = 200
 )
 
-func checkExprIsMonotonical(expr *plan.Expr) bool {
+func checkExprIsMonotonic(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			isMonotonical := checkExprIsMonotonical(arg)
-			if !isMonotonical {
+			isMonotonic := checkExprIsMonotonic(arg)
+			if !isMonotonic {
 				return false
 			}
 		}
 
-		isMonotonical, _ := function.GetFunctionIsMonotonicalById(exprImpl.F.Func.GetObj())
-		if !isMonotonical {
+		isMonotonic, _ := function.GetFunctionIsMonotonicById(exprImpl.F.Func.GetObj())
+		if !isMonotonic {
 			return false
 		}
 
@@ -65,24 +67,26 @@ func checkExprIsMonotonical(expr *plan.Expr) bool {
 	}
 }
 
-func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[int]int) {
+func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
 			getColumnMapByExpr(arg, tableDef, columnMap)
 		}
+
 	case *plan.Expr_Col:
 		idx := exprImpl.Col.ColPos
 		colName := exprImpl.Col.Name
 		dotIdx := strings.Index(colName, ".")
 		colName = colName[dotIdx+1:]
-		columnMap[int(idx)] = int(tableDef.Name2ColIndex[colName])
+		colIdx := tableDef.Name2ColIndex[colName]
+		(*columnMap)[int(idx)] = int(colIdx)
 	}
 }
 
 func getColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) map[int]int {
 	columnMap := make(map[int]int)
-	getColumnMapByExpr(expr, tableDef, columnMap)
+	getColumnMapByExpr(expr, tableDef, &columnMap)
 	return columnMap
 }
 
@@ -180,10 +184,13 @@ func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableD
 			return nil, nil, err
 		}
 
-		datas[i] = [2]any{
-			zm.GetMin(),
-			zm.GetMax(),
+		min := zm.GetMin()
+		max := zm.GetMax()
+		if min == nil || max == nil {
+			// that's fine, not a bug. if nil just read the block
+			return nil, nil, moerr.NewInternalError("zonemap is nil")
 		}
+		datas[i] = [2]any{min, max}
 	}
 
 	return datas, dataTypes, nil
@@ -281,58 +288,53 @@ func getConstantExprHashValue(constExpr *plan.Expr) (bool, uint64) {
 	return true, uint64(list[0])
 }
 
-func getNonIntPkExprValue(expr *plan.Expr, pkIdx int32) (bool, *plan.Expr) {
+func compPkCol(colName string, pkName string) bool {
+	dotIdx := strings.Index(colName, ".")
+	colName = colName[dotIdx+1:]
+	return colName == pkName
+}
+
+func getPkExpr(expr *plan.Expr, pkName string) (bool, *plan.Expr) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funName := exprImpl.F.Func.ObjName
 		switch funName {
 		case "and":
-			canCompute, pkBytes := getNonIntPkExprValue(exprImpl.F.Args[0], pkIdx)
+			canCompute, pkBytes := getPkExpr(exprImpl.F.Args[0], pkName)
 			if canCompute {
 				return canCompute, pkBytes
 			}
-			return getNonIntPkExprValue(exprImpl.F.Args[1], pkIdx)
+			return getPkExpr(exprImpl.F.Args[1], pkName)
 
 		case "=":
-			var pkVal *plan.Expr
-			leftIsConstant := false
-			switch subExpr := exprImpl.F.Args[0].Expr.(type) {
+			switch leftExpr := exprImpl.F.Args[0].Expr.(type) {
 			case *plan.Expr_C:
-				pkVal = exprImpl.F.Args[0]
-				leftIsConstant = true
-			case *plan.Expr_Col:
-				if subExpr.Col.ColPos != pkIdx {
-					return false, nil
+				if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
+					if compPkCol(rightExpr.Col.Name, pkName) {
+						return true, exprImpl.F.Args[0]
+					}
 				}
-			default:
-				return false, nil
+
+			case *plan.Expr_Col:
+				if compPkCol(leftExpr.Col.Name, pkName) {
+					if _, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_C); ok {
+						return true, exprImpl.F.Args[1]
+					}
+				}
 			}
 
-			switch subExpr := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_C:
-				if leftIsConstant {
-					return false, nil
-				}
-				return true, exprImpl.F.Args[1]
-			case *plan.Expr_Col:
-				if !leftIsConstant {
-					return false, nil
-				}
-				if subExpr.Col.ColPos != pkIdx {
-					return false, nil
-				}
-				return true, pkVal
-			default:
-				return false, nil
-			}
+			return false, nil
+
+		default:
+			return false, nil
 		}
 	}
 
 	return false, nil
 }
 
-func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32, oid types.T) (bool, any) {
-	canCompute, valExpr := getNonIntPkExprValue(expr, pkIdx)
+func getPkValueByExpr(expr *plan.Expr, pkName string, oid types.T) (bool, any) {
+	canCompute, valExpr := getPkExpr(expr, pkName)
 	if !canCompute {
 		return canCompute, nil
 	}
@@ -383,8 +385,8 @@ func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32, oid types.T) (bool, an
 // only support function :["and", "="]
 // support eg: pk="a",  pk="a" and noPk > 200
 // unsupport eg: pk>"a", pk=otherFun("a"),  pk="a" or noPk > 200,
-func computeRangeByNonIntPk(expr *plan.Expr, pkIdx int32) (bool, uint64) {
-	canCompute, valExpr := getNonIntPkExprValue(expr, pkIdx)
+func computeRangeByNonIntPk(expr *plan.Expr, pkName string) (bool, uint64) {
+	canCompute, valExpr := getPkExpr(expr, pkName)
 	if !canCompute {
 		return canCompute, 0
 	}
@@ -399,7 +401,7 @@ func computeRangeByNonIntPk(expr *plan.Expr, pkIdx int32) (bool, uint64) {
 // only under the following conditions：
 // 1、function named ["and", "or", ">", "<", ">=", "<=", "="]
 // 2、if function name is not "and", "or".  then one arg is column, the other is constant
-func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, [][2]int64) {
+func computeRangeByIntPk(expr *plan.Expr, pkName string, parentFun string) (bool, *pkRange) {
 	type argType int
 	var typeConstant argType = 0
 	var typeColumn argType = 1
@@ -437,20 +439,20 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 		funName := exprImpl.F.Func.ObjName
 		switch funName {
 		case "and", "or":
-			canCompute, leftRange := computeRangeByIntPk(exprImpl.F.Args[0], pkIdx, funName)
+			canCompute, leftRange := computeRangeByIntPk(exprImpl.F.Args[0], pkName, funName)
 			if !canCompute {
 				return canCompute, nil
 			}
 
-			canCompute, rightRange := computeRangeByIntPk(exprImpl.F.Args[1], pkIdx, funName)
+			canCompute, rightRange := computeRangeByIntPk(exprImpl.F.Args[1], pkName, funName)
 			if !canCompute {
 				return canCompute, nil
 			}
 
 			if funName == "and" {
-				return true, _computeAnd(leftRange, rightRange)
+				return _computeAnd(leftRange, rightRange)
 			} else {
-				return true, _computeOr(leftRange, rightRange)
+				return _computeOr(leftRange, rightRange)
 			}
 
 		case ">", "<", ">=", "<=", "=":
@@ -463,10 +465,12 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 				leftArg = typeConstant
 
 			case *plan.Expr_Col:
-				if subExpr.Col.ColPos != pkIdx {
+				if !compPkCol(subExpr.Col.Name, pkName) {
 					// if  pk > 10 and noPk < 10.  we just use pk > 10
 					if parentFun == "and" {
-						return true, [][2]int64{}
+						return true, &pkRange{
+							isRange: false,
+						}
 					}
 					// if pk > 10 or noPk < 10,   we use all list
 					return false, nil
@@ -486,23 +490,40 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 					}
 					switch funName {
 					case ">":
-						return true, [][2]int64{{rightConstat + 1, math.MaxInt64}}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  []int64{rightConstat + 1, math.MaxInt64},
+						}
 					case ">=":
-						return true, [][2]int64{{rightConstat, math.MaxInt64}}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  []int64{rightConstat, math.MaxInt64},
+						}
 					case "<":
-						return true, [][2]int64{{math.MinInt64, rightConstat - 1}}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  []int64{math.MinInt64, rightConstat - 1},
+						}
 					case "<=":
-						return true, [][2]int64{{math.MinInt64, rightConstat}}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  []int64{math.MinInt64, rightConstat},
+						}
 					case "=":
-						return true, [][2]int64{{rightConstat, rightConstat}}
+						return true, &pkRange{
+							isRange: false,
+							items:   []int64{rightConstat},
+						}
 					}
 					return false, nil
 				}
 			case *plan.Expr_Col:
-				if subExpr.Col.ColPos != pkIdx {
+				if !compPkCol(subExpr.Col.Name, pkName) {
 					// if  pk > 10 and noPk < 10.  we just use pk > 10
 					if parentFun == "and" {
-						return true, [][2]int64{}
+						return true, &pkRange{
+							isRange: false,
+						}
 					}
 					// if pk > 10 or noPk < 10,   we use all list
 					return false, nil
@@ -511,15 +532,30 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 				if leftArg == typeConstant {
 					switch funName {
 					case ">":
-						return true, [][2]int64{{math.MinInt64, leftConstant - 1}}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  []int64{math.MinInt64, leftConstant - 1},
+						}
 					case ">=":
-						return true, [][2]int64{{math.MinInt64, leftConstant}}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  []int64{math.MinInt64, leftConstant},
+						}
 					case "<":
-						return true, [][2]int64{{leftConstant + 1, math.MaxInt64}}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  []int64{leftConstant + 1, math.MaxInt64},
+						}
 					case "<=":
-						return true, [][2]int64{{leftConstant, math.MaxInt64}}
+						return true, &pkRange{
+							isRange: true,
+							ranges:  []int64{leftConstant, math.MaxInt64},
+						}
 					case "=":
-						return true, [][2]int64{{leftConstant, leftConstant}}
+						return true, &pkRange{
+							isRange: false,
+							items:   []int64{leftConstant},
+						}
 					}
 					return false, nil
 				}
@@ -530,14 +566,83 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 	return false, nil
 }
 
-func _computeAnd(leftRange [][2]int64, rightRange [][2]int64) [][2]int64 {
-	if len(leftRange) == 0 {
-		return rightRange
-	} else if len(rightRange) == 0 {
-		return leftRange
+func _computeOr(left *pkRange, right *pkRange) (bool, *pkRange) {
+	result := &pkRange{
+		isRange: false,
+		items:   []int64{},
 	}
 
-	compute := func(left [2]int64, right [2]int64) (bool, [2]int64) {
+	compute := func(left []int64, right []int64) [][]int64 {
+		min := left[0]
+		max := left[1]
+		if min > right[1] {
+			// eg: a > 10 or a < 2
+			return [][]int64{left, right}
+		} else if max < right[0] {
+			// eg: a < 2 or a > 10
+			return [][]int64{left, right}
+		} else {
+			// eg: a > 2 or a < 10
+			// a > 2 or a > 10
+			// a > 2 or a = -2
+			if right[0] < min {
+				min = right[0]
+			}
+			if right[1] > max {
+				max = right[1]
+			}
+			return [][]int64{{min, max}}
+		}
+	}
+
+	if !left.isRange {
+		if !right.isRange {
+			result.items = append(left.items, right.items...)
+			return len(result.items) < int(MAX_RANGE_SIZE), result
+		} else {
+			r := right.ranges
+			if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
+				return false, nil
+			}
+			result.items = append(result.items, left.items...)
+			for i := right.ranges[0]; i <= right.ranges[1]; i++ {
+				result.items = append(result.items, i)
+			}
+			return len(result.items) < int(MAX_RANGE_SIZE), result
+		}
+	} else {
+		if !right.isRange {
+			r := left.ranges
+			if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
+				return false, nil
+			}
+			result.items = append(result.items, right.items...)
+			for i := left.ranges[0]; i <= left.ranges[1]; i++ {
+				result.items = append(result.items, i)
+			}
+			return len(result.items) < int(MAX_RANGE_SIZE), result
+		} else {
+			newRange := compute(left.ranges, right.ranges)
+			for _, r := range newRange {
+				if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
+					return false, nil
+				}
+				for i := r[0]; i <= r[1]; i++ {
+					result.items = append(result.items, i)
+				}
+			}
+			return len(result.items) < int(MAX_RANGE_SIZE), result
+		}
+	}
+}
+
+func _computeAnd(left *pkRange, right *pkRange) (bool, *pkRange) {
+	result := &pkRange{
+		isRange: false,
+		items:   []int64{},
+	}
+
+	compute := func(left []int64, right []int64) (bool, []int64) {
 		min := left[0]
 		max := left[1]
 
@@ -557,65 +662,50 @@ func _computeAnd(leftRange [][2]int64, rightRange [][2]int64) [][2]int64 {
 			if right[1] < max {
 				max = right[1]
 			}
-			return true, [2]int64{min, max}
-		}
-
-	}
-
-	// eg: (a >3 or a=1) and (a < 10 or a =11)
-	var newRange [][2]int64
-	for _, left := range leftRange {
-		for _, right := range rightRange {
-			ok, tmp := compute(left, right)
-			if ok {
-				newRange = append(newRange, tmp)
-			}
+			return true, []int64{min, max}
 		}
 	}
 
-	return newRange
-}
-
-func _computeOr(leftRange [][2]int64, rightRange [][2]int64) [][2]int64 {
-	if len(leftRange) == 0 {
-		return rightRange
-	} else if len(rightRange) == 0 {
-		return leftRange
-	}
-
-	compute := func(left [2]int64, right [2]int64) [][2]int64 {
-		min := left[0]
-		max := left[1]
-		if min > right[1] {
-			// eg: a > 10 or a < 2
-			return [][2]int64{left, right}
-		} else if max < right[0] {
-			// eg: a < 2 or a > 10
-			return [][2]int64{left, right}
+	if !left.isRange {
+		if !right.isRange {
+			result.items = append(left.items, right.items...)
+			return len(result.items) < int(MAX_RANGE_SIZE), result
 		} else {
-			// eg: a > 2 or a < 10
-			// a > 2 or a > 10
-			// a > 2 or a = -2
-			if right[0] < min {
-				min = right[0]
+			r := right.ranges
+			if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
+				return false, nil
 			}
-			if right[1] > max {
-				max = right[1]
+			result.items = append(result.items, left.items...)
+			for i := right.ranges[0]; i <= right.ranges[1]; i++ {
+				result.items = append(result.items, i)
 			}
-			return [][2]int64{{min, max}}
+			return len(result.items) < int(MAX_RANGE_SIZE), result
+		}
+	} else {
+		if !right.isRange {
+			r := left.ranges
+			if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
+				return false, nil
+			}
+			result.items = append(result.items, right.items...)
+			for i := left.ranges[0]; i <= left.ranges[1]; i++ {
+				result.items = append(result.items, i)
+			}
+			return len(result.items) < int(MAX_RANGE_SIZE), result
+		} else {
+			ok, r := compute(left.ranges, right.ranges)
+			if !ok {
+				return false, nil
+			}
+			if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
+				return false, nil
+			}
+			for i := r[0]; i <= r[1]; i++ {
+				result.items = append(result.items, i)
+			}
+			return len(result.items) < int(MAX_RANGE_SIZE), result
 		}
 	}
-
-	// eg: (a>10 or a=1) or (a<5 or a=6)
-	var newRange [][2]int64
-	for _, left := range leftRange {
-		for _, right := range rightRange {
-			tmp := compute(left, right)
-			newRange = append(newRange, tmp...)
-		}
-	}
-
-	return newRange
 }
 
 func getHashValue(buf []byte) uint64 {
@@ -628,7 +718,7 @@ func getHashValue(buf []byte) uint64 {
 	return states[0]
 }
 
-func getListByRange[T DNStore](list []T, pkRange [][2]int64) []int {
+func getListByItems[T DNStore](list []T, items []int64) []int {
 	fullList := func() []int {
 		dnList := make([]int, len(list))
 		for i := range list {
@@ -636,25 +726,25 @@ func getListByRange[T DNStore](list []T, pkRange [][2]int64) []int {
 		}
 		return dnList
 	}
+
 	listLen := uint64(len(list))
-	if listLen == 1 || len(pkRange) == 0 {
+	if listLen == 1 {
 		return []int{0}
 	}
 
+	if len(items) == 0 || int64(len(items)) > MAX_RANGE_SIZE {
+		return fullList()
+	}
+
 	listMap := make(map[uint64]struct{})
-	for _, r := range pkRange {
-		if r[1]-r[0] > MAX_RANGE_SIZE {
+	for _, item := range items {
+		keys := make([]byte, 8)
+		binary.LittleEndian.PutUint64(keys, uint64(item))
+		val := getHashValue(keys)
+		modVal := val % listLen
+		listMap[modVal] = struct{}{}
+		if len(listMap) == int(listLen) {
 			return fullList()
-		}
-		for i := r[0]; i <= r[1]; i++ {
-			keys := make([]byte, 8)
-			binary.LittleEndian.PutUint64(keys, uint64(i))
-			val := getHashValue(keys)
-			modVal := val % listLen
-			listMap[modVal] = struct{}{}
-			if len(listMap) == int(listLen) {
-				return fullList()
-			}
 		}
 	}
 	dnList := make([]int, len(listMap))
@@ -666,6 +756,44 @@ func getListByRange[T DNStore](list []T, pkRange [][2]int64) []int {
 	return dnList
 }
 
+// func getListByRange[T DNStore](list []T, pkRange [][2]int64) []int {
+// 	fullList := func() []int {
+// 		dnList := make([]int, len(list))
+// 		for i := range list {
+// 			dnList[i] = i
+// 		}
+// 		return dnList
+// 	}
+// 	listLen := uint64(len(list))
+// 	if listLen == 1 || len(pkRange) == 0 {
+// 		return []int{0}
+// 	}
+
+// 	listMap := make(map[uint64]struct{})
+// 	for _, r := range pkRange {
+// 		if r[1]-r[0] > MAX_RANGE_SIZE {
+// 			return fullList()
+// 		}
+// 		for i := r[0]; i <= r[1]; i++ {
+// 			keys := make([]byte, 8)
+// 			binary.LittleEndian.PutUint64(keys, uint64(i))
+// 			val := getHashValue(keys)
+// 			modVal := val % listLen
+// 			listMap[modVal] = struct{}{}
+// 			if len(listMap) == int(listLen) {
+// 				return fullList()
+// 			}
+// 		}
+// 	}
+// 	dnList := make([]int, len(listMap))
+// 	i := 0
+// 	for idx := range listMap {
+// 		dnList[i] = int(idx)
+// 		i++
+// 	}
+// 	return dnList
+// }
+
 func checkIfDataInBlock(data any, meta BlockMeta, colIdx int, typ types.Type) (bool, error) {
 	zm := index.NewZoneMap(typ)
 	err := zm.Unmarshal(meta.Zonemap[colIdx][:])
@@ -673,4 +801,124 @@ func checkIfDataInBlock(data any, meta BlockMeta, colIdx int, typ types.Type) (b
 		return false, err
 	}
 	return zm.Contains(data), nil
+}
+
+func findRowByPkValue(vec *vector.Vector, v any) int {
+	switch vec.Typ.Oid {
+	case types.T_int8:
+		rows := vector.MustTCols[int8](vec)
+		val := v.(int8)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_int16:
+		rows := vector.MustTCols[int16](vec)
+		val := v.(int16)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_int32:
+		rows := vector.MustTCols[int32](vec)
+		val := v.(int32)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_int64:
+		rows := vector.MustTCols[int64](vec)
+		val := v.(int64)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_uint8:
+		rows := vector.MustTCols[uint8](vec)
+		val := v.(uint8)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_uint16:
+		rows := vector.MustTCols[uint16](vec)
+		val := v.(uint16)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_uint32:
+		rows := vector.MustTCols[uint32](vec)
+		val := v.(uint32)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_uint64:
+		rows := vector.MustTCols[uint64](vec)
+		val := v.(uint64)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_float32:
+		rows := vector.MustTCols[float32](vec)
+		val := v.(float32)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_float64:
+		rows := vector.MustTCols[float64](vec)
+		val := v.(float64)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_date:
+		rows := vector.MustTCols[types.Date](vec)
+		val := v.(types.Date)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_time:
+		rows := vector.MustTCols[types.Time](vec)
+		val := v.(types.Time)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_datetime:
+		rows := vector.MustTCols[types.Datetime](vec)
+		val := v.(types.Datetime)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_timestamp:
+		rows := vector.MustTCols[types.Timestamp](vec)
+		val := v.(types.Timestamp)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_uuid:
+		rows := vector.MustTCols[types.Uuid](vec)
+		val := v.(types.Uuid)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx].Ge(val)
+		})
+	case types.T_decimal64:
+		rows := vector.MustTCols[types.Decimal64](vec)
+		val := v.(types.Decimal64)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx].Ge(val)
+		})
+	case types.T_decimal128:
+		rows := vector.MustTCols[types.Decimal128](vec)
+		val := v.(types.Decimal128)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx].Ge(val)
+		})
+	case types.T_char, types.T_text, types.T_varchar, types.T_json, types.T_blob:
+		// rows := vector.MustStrCols(vec)
+		// val := string(v.([]byte))
+		// return sort.SearchStrings(rows, val)
+		val := v.([]byte)
+		area := vec.GetArea()
+		varlenas := vector.MustTCols[types.Varlena](vec)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			colVal := varlenas[idx].GetByteSlice(area)
+			return bytes.Compare(colVal, val) >= 0
+		})
+	}
+
+	return -1
 }

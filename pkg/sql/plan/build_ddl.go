@@ -17,6 +17,7 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -184,6 +185,13 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 	// After handleTableOptions, so begin the partitions processing depend on TableDef
 	if stmt.Param != nil {
+		for i := 0; i < len(stmt.Param.Option); i += 2 {
+			switch strings.ToLower(stmt.Param.Option[i]) {
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata":
+			default:
+				return nil, moerr.NewBadConfig("the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
+			}
+		}
 		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
 			return nil, err
@@ -412,8 +420,9 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 				Name: pkeyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
-					Id:   int32(types.T_varchar),
-					Size: types.VarlenaSize,
+					Id:    int32(types.T_varchar),
+					Size:  types.VarlenaSize,
+					Width: types.MaxVarcharLen,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,
@@ -509,8 +518,9 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
-					Id:   int32(types.T_varchar),
-					Size: types.VarlenaSize,
+					Id:    int32(types.T_varchar),
+					Size:  types.VarlenaSize,
+					Width: types.MaxVarcharLen,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,
@@ -561,6 +571,11 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		}
 		if isView {
 			return nil, moerr.NewNoSuchTable(truncateTable.Database, truncateTable.Table)
+		}
+		indexInfos := BuildIndexInfos(ctx, truncateTable.Database, tableDef.Defs)
+		truncateTable.IndexTableNames = make([]string, len(indexInfos))
+		for i := range indexInfos {
+			truncateTable.IndexTableNames[i] = indexInfos[i].TableName
 		}
 	}
 

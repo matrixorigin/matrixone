@@ -65,9 +65,21 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: int32(types.T_float64), Width: n.InternalType.DisplayWith, Size: 8, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_STRING:
 			width := n.InternalType.DisplayWith
+			// for char type,if we didn't specify the length,
+			// the default width should be 1, and for varchar,it's
+			// the defaultMaxLength
 			if width == -1 {
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
-				width = 1
+				if n.InternalType.FamilyString == "char" {
+					width = 1
+				} else {
+					width = types.MaxVarcharLen
+				}
+			}
+			if n.InternalType.FamilyString == "char" && width > types.MaxCharLen {
+				return nil, moerr.NewOutOfRange("char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
+			} else if n.InternalType.FamilyString == "varchar" && width > types.MaxVarcharLen {
+				return nil, moerr.NewOutOfRange("varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			}
 			if n.InternalType.FamilyString == "char" { // type char
 				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil
@@ -75,9 +87,21 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: int32(types.T_varchar), Size: 24, Width: width}, nil
 		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
 			width := n.InternalType.DisplayWith
+			// for char type,if we didn't specify the length,
+			// the default width should be 1, and for varchar,it's
+			// the defaultMaxLength
 			if width == -1 {
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
-				width = 1
+				if n.InternalType.FamilyString == "char" {
+					width = 1
+				} else {
+					width = types.MaxVarcharLen
+				}
+			}
+			if n.InternalType.FamilyString == "char" && width > types.MaxCharLen {
+				return nil, moerr.NewOutOfRange("char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
+			} else if n.InternalType.FamilyString == "varchar" && width > types.MaxVarcharLen {
+				return nil, moerr.NewOutOfRange("varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			}
 			if n.InternalType.FamilyString == "char" { // type char
 				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil
@@ -179,10 +203,12 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 		return nil, err
 	}
 
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
+	fmtCtx.PrintExpr(expr, expr, false)
 	return &plan.Default{
 		NullAbility:  nullAbility,
 		Expr:         newExpr,
-		OriginString: tree.String(expr, dialect.MYSQL),
+		OriginString: fmtCtx.String(),
 	}, nil
 }
 
@@ -288,8 +314,8 @@ func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
 				},
 			},
 			Typ: &plan.Type{
-				Id:       d.Typ.Id,
-				Nullable: true,
+				Id:          d.Typ.Id,
+				NotNullable: false,
 			},
 		}, nil
 	}
@@ -297,7 +323,7 @@ func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
 }
 
 func judgeUnixTimestampReturnType(timestr string) types.T {
-	retDecimal := -1
+	retDecimal := 0
 	if dotIdx := strings.LastIndex(timestr, "."); dotIdx >= 0 {
 		retDecimal = len(timestr) - dotIdx - 1
 	}
@@ -309,6 +335,6 @@ func judgeUnixTimestampReturnType(timestr string) types.T {
 	if retDecimal == 0 {
 		return types.T_int64
 	} else {
-		return types.T_float64
+		return types.T_decimal128
 	}
 }

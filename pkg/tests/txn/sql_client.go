@@ -103,7 +103,7 @@ func (kop *sqlTxn) Commit() error {
 	kop.mu.Lock()
 	defer kop.mu.Unlock()
 	if kop.mu.closed {
-		return moerr.NewTxnClosed()
+		return moerr.NewTxnClosed(nil)
 	}
 
 	kop.mu.closed = true
@@ -121,6 +121,7 @@ func (kop *sqlTxn) Rollback() error {
 		return nil
 	}
 
+	kop.mu.closed = true
 	err := kop.txn.Rollback()
 	if err != nil {
 		return multierr.Append(err, kop.db.Close())

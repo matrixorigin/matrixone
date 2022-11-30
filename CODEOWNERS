@@ -42,6 +42,7 @@
 /pkg/common/moerror @fengttt
 /pkg/common/morpc @zhangxu19830126
 /pkg/common/stopper @zhangxu19830126
+/pkg/common/log @zhangxu19830126
 
 # other directories under pkg
 /pkg/cnservice @nnsgmsone @reusee @daviszhen
@@ -75,7 +76,9 @@
 /pkg/util/metric @aptend
 /pkg/util/toml @zhangxu19830126
 /pkg/util/trace @xzxiong
+/pkg/util/export @xzxiong
 /pkg/catalog @nnsgmsone
+/pkg/objectio @LeftHandCold
 
 # /proto contains pb definitions, owners will be responsible
 # for compatibility issues required for rolling upgrade.

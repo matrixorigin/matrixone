@@ -17,14 +17,18 @@ package taskservice
 import (
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestTaskHolderCanCreateTaskService(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	store := NewMemTaskStorage()
-	h := NewTaskServiceHolderWithTaskStorageFactorySelector(nil,
+	h := NewTaskServiceHolderWithTaskStorageFactorySelector(
+		runtime.DefaultRuntime(),
 		func() (string, error) { return "", nil },
 		func(s1, s2, s3 string) TaskStorageFactory {
 			return NewFixedTaskStorageFactory(store)
@@ -33,6 +37,9 @@ func TestTaskHolderCanCreateTaskService(t *testing.T) {
 		User:         logservicepb.TaskTableUser{Username: "u", Password: "p"},
 		TaskDatabase: "d",
 	}))
+	defer func() {
+		require.NoError(t, h.Close())
+	}()
 	s, ok := h.Get()
 	assert.True(t, ok)
 	assert.NotNil(t, s)
@@ -41,7 +48,8 @@ func TestTaskHolderCanCreateTaskService(t *testing.T) {
 
 func TestTaskHolderCreateWithEmptyCommandReturnError(t *testing.T) {
 	store := NewMemTaskStorage()
-	h := NewTaskServiceHolderWithTaskStorageFactorySelector(nil,
+	h := NewTaskServiceHolderWithTaskStorageFactorySelector(
+		runtime.DefaultRuntime(),
 		func() (string, error) { return "", nil },
 		func(s1, s2, s3 string) TaskStorageFactory {
 			return NewFixedTaskStorageFactory(store)
@@ -51,7 +59,8 @@ func TestTaskHolderCreateWithEmptyCommandReturnError(t *testing.T) {
 
 func TestTaskHolderNotCreatedCanClose(t *testing.T) {
 	store := NewMemTaskStorage()
-	h := NewTaskServiceHolderWithTaskStorageFactorySelector(nil,
+	h := NewTaskServiceHolderWithTaskStorageFactorySelector(
+		runtime.DefaultRuntime(),
 		func() (string, error) { return "", nil },
 		func(s1, s2, s3 string) TaskStorageFactory {
 			return NewFixedTaskStorageFactory(store)
@@ -61,7 +70,8 @@ func TestTaskHolderNotCreatedCanClose(t *testing.T) {
 
 func TestTaskHolderCanClose(t *testing.T) {
 	store := NewMemTaskStorage()
-	h := NewTaskServiceHolderWithTaskStorageFactorySelector(nil,
+	h := NewTaskServiceHolderWithTaskStorageFactorySelector(
+		runtime.DefaultRuntime(),
 		func() (string, error) { return "", nil },
 		func(s1, s2, s3 string) TaskStorageFactory {
 			return NewFixedTaskStorageFactory(store)
@@ -74,12 +84,20 @@ func TestTaskHolderCanClose(t *testing.T) {
 }
 
 func TestRefreshTaskStorageCanRefresh(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
 	stores := map[string]TaskStorage{
 		"s1": NewMemTaskStorage(),
 		"s2": NewMemTaskStorage(),
 	}
 	address := "s1"
-	s := newRefreshableTaskStorage(nil, func() (string, error) { return address, nil }, &testStorageFactory{stores: stores}).(*refreshableTaskStorage)
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func() (string, error) { return address, nil },
+		&testStorageFactory{stores: stores}).(*refreshableTaskStorage)
+	defer func() {
+		require.NoError(t, s.Close())
+	}()
 
 	s.mu.RLock()
 	assert.Equal(t, stores["s1"], s.mu.store)
@@ -106,7 +124,10 @@ func TestRefreshTaskStorageCanClose(t *testing.T) {
 		"s2": NewMemTaskStorage(),
 	}
 	address := "s1"
-	s := newRefreshableTaskStorage(nil, func() (string, error) { return address, nil }, &testStorageFactory{stores: stores}).(*refreshableTaskStorage)
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func() (string, error) { return address, nil },
+		&testStorageFactory{stores: stores}).(*refreshableTaskStorage)
 	address = "s2"
 	require.True(t, s.maybeRefresh("s1"))
 	require.NoError(t, s.Close())

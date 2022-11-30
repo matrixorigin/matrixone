@@ -1,5 +1,9 @@
 FROM golang:1.19-buster as builder
 
+# goproxy
+ARG GOPROXY="https://proxy.golang.org,direct"
+RUN go env -w GOPROXY=${GOPROXY}
+
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone
 
 WORKDIR /go/src/github.com/matrixorigin/matrixone
@@ -18,7 +22,7 @@ RUN make build
 FROM ubuntu:latest
 
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-service
-COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc/cn-standalone-test.toml  /cn-standalone-test.toml
+COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
 # Install some utilities used for debugging or by startup script
 RUN apt-get update && apt-get install -y \
     dnsutils \
@@ -29,4 +33,4 @@ WORKDIR /
 
 EXPOSE 6001
 
-ENTRYPOINT [ "/mo-service", "-cfg", "/cn-standalone-test.toml"]
+ENTRYPOINT [ "/mo-service", "-launch", "/etc/quickstart/launch.toml"]

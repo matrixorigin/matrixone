@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -39,15 +40,15 @@ func TestGetTenantInfo(t *testing.T) {
 			wantErr bool
 		}
 		args := []input{
-			{"u1", "{tenantInfo sys:u1: -- 0:0:0}", false},
-			{"tenant1:u1", "{tenantInfo tenant1:u1: -- 0:0:0}", false},
-			{"tenant1:u1:r1", "{tenantInfo tenant1:u1:r1 -- 0:0:0}", false},
-			{":u1:r1", "{tenantInfo tenant1:u1:r1 -- 0:0:0}", true},
-			{"tenant1:u1:", "{tenantInfo tenant1:u1:moadmin -- 0:0:0}", true},
-			{"tenant1::r1", "{tenantInfo tenant1::r1 -- 0:0:0}", true},
-			{"tenant1:    :r1", "{tenantInfo tenant1::r1 -- 0:0:0}", true},
-			{"     : :r1", "{tenantInfo tenant1::r1 -- 0:0:0}", true},
-			{"   tenant1   :   u1   :   r1    ", "{tenantInfo tenant1:u1:r1 -- 0:0:0}", false},
+			{"u1", "{account sys:u1: -- 0:0:0}", false},
+			{"tenant1:u1", "{account tenant1:u1: -- 0:0:0}", false},
+			{"tenant1:u1:r1", "{account tenant1:u1:r1 -- 0:0:0}", false},
+			{":u1:r1", "{account tenant1:u1:r1 -- 0:0:0}", true},
+			{"tenant1:u1:", "{account tenant1:u1:moadmin -- 0:0:0}", true},
+			{"tenant1::r1", "{account tenant1::r1 -- 0:0:0}", true},
+			{"tenant1:    :r1", "{account tenant1::r1 -- 0:0:0}", true},
+			{"     : :r1", "{account tenant1::r1 -- 0:0:0}", true},
+			{"   tenant1   :   u1   :   r1    ", "{account tenant1:u1:r1 -- 0:0:0}", false},
 		}
 
 		for _, arg := range args {
@@ -368,7 +369,9 @@ func Test_checkUserExistsOrNot(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 
-		err = InitUser(ctx, tenant, &tree.CreateUser{IfNotExists: true, Users: []*tree.User{{Username: "test"}}})
+		ses := &Session{}
+
+		err = InitUser(ctx, ses, tenant, &tree.CreateUser{IfNotExists: true, Users: []*tree.User{{Username: "test"}}})
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -431,7 +434,8 @@ func Test_initUser(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 
-		err := InitUser(ctx, tenant, cu)
+		ses := &Session{}
+		err := InitUser(ctx, ses, tenant, cu)
 		convey.So(err, convey.ShouldBeError)
 	})
 }
@@ -473,8 +477,9 @@ func Test_initRole(t *testing.T) {
 				{UserName: "r2"},
 			},
 		}
+		ses := &Session{}
 
-		err := InitRole(ctx, tenant, cr)
+		err := InitRole(ctx, ses, tenant, cr)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -5781,9 +5786,12 @@ func Test_doDropAccount(t *testing.T) {
 		sql = getSqlForDeleteAccountFromMoAccount(stmt.Name)
 		bh.sql2result[sql] = nil
 
-		for _, sql = range getSqlForDropTablesOfAccount() {
+		for _, sql = range getSqlForDropAccount() {
 			bh.sql2result[sql] = nil
 		}
+
+		sql = "show databases;"
+		bh.sql2result[sql] = newMrsForSqlForShowDatabases([][]interface{}{})
 
 		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
@@ -5817,7 +5825,7 @@ func Test_doDropAccount(t *testing.T) {
 		sql = getSqlForDeleteAccountFromMoAccount(stmt.Name)
 		bh.sql2result[sql] = nil
 
-		for _, sql = range getSqlForDropTablesOfAccount() {
+		for _, sql = range getSqlForDropAccount() {
 			bh.sql2result[sql] = nil
 		}
 
@@ -5852,7 +5860,7 @@ func Test_doDropAccount(t *testing.T) {
 		sql = getSqlForDeleteAccountFromMoAccount(stmt.Name)
 		bh.sql2result[sql] = nil
 
-		for _, sql = range getSqlForDropTablesOfAccount() {
+		for _, sql = range getSqlForDropAccount() {
 			bh.sql2result[sql] = nil
 		}
 
@@ -6037,7 +6045,7 @@ func newSes(priv *privilege) *Session {
 
 	proto := NewMysqlClientProtocol(0, nil, 1024, pu.SV)
 
-	ses := NewSession(proto, nil, pu, gSysVariables)
+	ses := NewSession(proto, nil, pu, gSysVariables, false)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,
@@ -6093,6 +6101,21 @@ func (bt *backgroundExecTest) ClearExecResultSet() {
 }
 
 var _ BackgroundExec = &backgroundExecTest{}
+
+func newMrsForSqlForShowDatabases(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("Database")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
 
 func newMrsForSqlForCheckUserHasRole(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
@@ -6599,5 +6622,49 @@ func Test_cache(t *testing.T) {
 			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
 			convey.So(ret, convey.ShouldBeFalse)
 		}
+	})
+}
+
+func Test_DropDatabaseOfAccount(t *testing.T) {
+	convey.Convey("drop account", t, func() {
+		var db string
+		databases := map[string]int8{
+			"abc":        0,
+			"mo_catalog": 0,
+			"system":     0,
+			"ABC":        0,
+		}
+		var sqlsForDropDatabases []string
+		prefix := "drop database if exists "
+		for db = range databases {
+			if db == "mo_catalog" {
+				continue
+			}
+			bb := &bytes.Buffer{}
+			bb.WriteString(prefix)
+			//handle the database annotated by '`'
+			if db != strings.ToLower(db) {
+				bb.WriteString("`")
+				bb.WriteString(db)
+				bb.WriteString("`")
+			} else {
+				bb.WriteString(db)
+			}
+			bb.WriteString(";")
+			sqlsForDropDatabases = append(sqlsForDropDatabases, bb.String())
+		}
+
+		has := func(s string) bool {
+			for _, sql := range sqlsForDropDatabases {
+				if strings.Contains(sql, s) {
+					return true
+				}
+			}
+			return false
+		}
+
+		convey.So(has("ABC"), convey.ShouldBeTrue)
+		convey.So(has("system"), convey.ShouldBeTrue)
+		convey.So(has("mo_catalog"), convey.ShouldBeFalse)
 	})
 }

@@ -65,12 +65,16 @@ type Block interface {
 	CheckpointUnit
 	BlockReplayer
 
+	DeletesInfo() string
+
 	GetRowsOnReplay() uint64
 	GetID() *common.ID
 	IsAppendable() bool
 	PrepareCompact() bool
 
 	Rows() int
+	GetColumnDataByNames(txn txnif.AsyncTxn, attrs []string, buffers []*bytes.Buffer) (*model.BlockView, error)
+	GetColumnDataByIds(txn txnif.AsyncTxn, colIdxes []int, buffers []*bytes.Buffer) (*model.BlockView, error)
 	GetColumnDataByName(txn txnif.AsyncTxn, attr string, buffer *bytes.Buffer) (*model.ColumnView, error)
 	GetColumnDataById(txn txnif.AsyncTxn, colIdx int, buffer *bytes.Buffer) (*model.ColumnView, error)
 	GetMeta() any
@@ -86,19 +90,17 @@ type Block interface {
 	// check wether any delete intents with prepared ts within [from, to]
 	HasDeleteIntentsPreparedIn(from, to types.TS) bool
 
-	BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap) error
+	BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap, precommit bool) error
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
 	GetValue(txn txnif.AsyncTxn, row, col int) (any, error)
 	PPString(level common.PPLevel, depth int, prefix string) string
 
-	Destroy() error
-	ReplayIndex() error
-	ReplayImmutIndex() error
-	FreeData()
+	Init() error
+	TryUpgrade() error
 	CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.Batch, error)
 	CollectDeleteInRange(start, end types.TS, withAborted bool) (*containers.Batch, error)
-	GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
-	GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
+	// GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
+	// GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 	GetFs() *objectio.ObjectFS
 
 	Close()

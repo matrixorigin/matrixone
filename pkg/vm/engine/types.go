@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -74,6 +75,7 @@ type Property struct {
 }
 
 type Statistics interface {
+	FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error)
 	Rows(ctx context.Context) (int64, error)
 	Size(ctx context.Context, columnName string) (int64, error)
 }
@@ -208,6 +210,9 @@ type Engine interface {
 	// return value should not be cached
 	// since implementations may update hints after engine had initialized
 	Hints() Hints
+
+	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
+		expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]Reader, error)
 }
 
 type Hints struct {

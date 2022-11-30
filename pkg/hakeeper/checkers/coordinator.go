@@ -56,10 +56,17 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState) []pb.
 	cluster := state.ClusterInfo
 	currentTick := state.Tick
 	user := state.TaskTableUser
+	c.logger.Debug("hakeeper checker state",
+		zap.Any("cluster information", cluster),
+		zap.Any("log state", logState),
+		zap.Any("dn state", dnState),
+		zap.Any("cn state", cnState),
+		zap.Uint64("current tick", currentTick),
+	)
 
 	defer func() {
 		if !c.teardown {
-			c.logger.Info("MO is working.")
+			c.logger.Debug("MO is working.")
 		}
 	}()
 

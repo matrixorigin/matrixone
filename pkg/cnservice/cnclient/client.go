@@ -18,10 +18,12 @@ import (
 	"context"
 	"sync"
 
+	"time"
+
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"time"
 )
 
 // client each node will hold only one client.
@@ -59,10 +61,16 @@ func (c *CNClient) Send(ctx context.Context, backend string, request morpc.Messa
 }
 
 func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
-	return c.client.NewStream(backend)
+	return c.client.NewStream(backend, true)
 }
 
 func (c *CNClient) Close() error {
+	lock.Lock()
+	defer lock.Unlock()
+	if client == nil || !c.ready {
+		return nil
+	}
+
 	c.ready = false
 	return c.client.Close()
 }
@@ -85,7 +93,18 @@ type ClientConfig struct {
 	WriteBufferSize int
 }
 
+var (
+	lock sync.Mutex
+)
+
+// TODO: Here it needs to be refactored together with Runtime
 func NewCNClient(cfg *ClientConfig) error {
+	lock.Lock()
+	defer lock.Unlock()
+	if client != nil {
+		return nil
+	}
+
 	var err error
 	cfg.Fill()
 	client = &CNClient{config: cfg}
@@ -93,7 +112,6 @@ func NewCNClient(cfg *ClientConfig) error {
 
 	codec := morpc.NewMessageCodec(client.acquireMessage)
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
-		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendGoettyOptions(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
 			goetty.WithSessionReleaseMsgFunc(func(v any) {
@@ -102,10 +120,12 @@ func NewCNClient(cfg *ClientConfig) error {
 			}),
 		),
 		morpc.WithBackendConnectTimeout(cfg.TimeOutForEachConnect),
+		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("cn-backend")),
 	)
 
 	client.client, err = morpc.NewClient(factory,
 		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
+		morpc.WithClientTag("cn-client"),
 	)
 	client.ready = true
 	return err

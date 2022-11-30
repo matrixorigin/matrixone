@@ -94,6 +94,7 @@ const (
 	CEIL           // CEIL
 	CHR            // CHR
 	COALESCE       // COALESCE
+	FIELD          // FIELD
 	CONCAT_WS
 	CONTAINS          // CONTAINS
 	CORR              // CORR
@@ -265,6 +266,8 @@ const (
 	// see builtin.ctl.ctl.go to get detail.
 	MO_CTL
 
+	MO_SHOW_VISIBLE_BIN // parse type/onUpdate/default []byte to visible string
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -361,6 +364,7 @@ var functionIdRegister = map[string]int32{
 	"rpad":              RPAD,
 	"substr":            SUBSTRING,
 	"substring":         SUBSTRING,
+	"mid":               SUBSTRING,
 	"utc_timestamp":     UTC_TIMESTAMP,
 	"unix_timestamp":    UNIX_TIMESTAMP,
 	"from_unixtime":     FROM_UNIXTIME,
@@ -446,6 +450,8 @@ var functionIdRegister = map[string]int32{
 	"mo_enable_memory_usage_detail":  MO_ENABLE_MEMORY_USAGE_DETAIL,
 	"mo_disable_memory_usage_detail": MO_DISABLE_MEMORY_USAGE_DETAIL,
 	"mo_ctl":                         MO_CTL,
+	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
+	"field":                          FIELD,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
@@ -454,5 +460,5 @@ func GetFunctionIsWinfunByName(name string) bool {
 		return false
 	}
 	fs := functionRegister[fid].Overloads
-	return len(fs) > 0 && fs[0].GetFlag() == plan.Function_WIN
+	return len(fs) > 0 && fs[0].TestFlag(plan.Function_WIN)
 }

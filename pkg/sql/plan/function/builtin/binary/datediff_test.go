@@ -107,8 +107,8 @@ func TestDateDiff(t *testing.T) {
 func makeDateDiffVectors(firstStr, secondStr string, mp *mpool.MPool) []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
 
-	firstDate, _ := types.ParseDate(firstStr)
-	secondDate, _ := types.ParseDate(secondStr)
+	firstDate, _ := types.ParseDateCast(firstStr)
+	secondDate, _ := types.ParseDateCast(secondStr)
 
 	vec[0] = vector.NewConstFixed(types.T_date.ToType(), 1, firstDate, mp)
 	vec[1] = vector.NewConstFixed(types.T_date.ToType(), 1, secondDate, mp)

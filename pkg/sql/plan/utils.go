@@ -292,6 +292,125 @@ func applyDistributivity(expr *plan.Expr) *plan.Expr {
 	return expr
 }
 
+func unionSlice(left, right []string) []string {
+	if len(left) < 1 {
+		return right
+	}
+	if len(right) < 1 {
+		return left
+	}
+	m := make(map[string]bool, len(left)+len(right))
+	for _, s := range left {
+		m[s] = true
+	}
+	for _, s := range right {
+		m[s] = true
+	}
+	ret := make([]string, 0)
+	for s := range m {
+		ret = append(ret, s)
+	}
+	return ret
+}
+
+func intersectSlice(left, right []string) []string {
+	if len(left) < 1 || len(right) < 1 {
+		return left
+	}
+	m := make(map[string]bool, len(left)+len(right))
+	for _, s := range left {
+		m[s] = true
+	}
+	ret := make([]string, 0)
+	for _, s := range right {
+		if _, ok := m[s]; ok {
+			ret = append(ret, s)
+		}
+	}
+	return ret
+}
+
+/*
+DNF means disjunctive normal form, for example (a and b) or (c and d) or (e and f)
+if we have a DNF filter, for example (c1=1 and c2=1) or (c1=2 and c2=2)
+we can have extra filter: (c1=1 or c1=2) and (c2=1 or c2=2), which can be pushed down to optimize join
+
+checkDNF scan the expr and return all groups of cond
+for example (c1=1 and c2=1) or (c1=2 and c3=2), c1 is a group because it appears in all disjunctives
+and c2,c3 is not a group
+
+walkThroughDNF accept a keyword string, walk through the expr,
+and extract all the conds which contains the keyword
+*/
+func checkDNF(expr *plan.Expr) []string {
+	var ret []string
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F.Func.ObjName == "or" {
+			left := checkDNF(exprImpl.F.Args[0])
+			right := checkDNF(exprImpl.F.Args[1])
+			return intersectSlice(left, right)
+		}
+		for _, arg := range exprImpl.F.Args {
+			ret = unionSlice(ret, checkDNF(arg))
+		}
+		return ret
+
+	case *plan.Expr_Corr:
+		ret = append(ret, exprImpl.Corr.String())
+	case *plan.Expr_Col:
+		ret = append(ret, exprImpl.Col.String())
+	}
+	return ret
+}
+
+func walkThroughDNF(expr *plan.Expr, keywords string) *plan.Expr {
+	var retExpr *plan.Expr
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F.Func.ObjName == "or" {
+			left := walkThroughDNF(exprImpl.F.Args[0], keywords)
+			right := walkThroughDNF(exprImpl.F.Args[1], keywords)
+			if left != nil && right != nil {
+				retExpr, _ = bindFuncExprImplByPlanExpr("or", []*plan.Expr{left, right})
+				return retExpr
+			}
+		} else if exprImpl.F.Func.ObjName == "and" {
+			left := walkThroughDNF(exprImpl.F.Args[0], keywords)
+			right := walkThroughDNF(exprImpl.F.Args[1], keywords)
+			if left == nil {
+				return right
+			} else if right == nil {
+				return left
+			} else {
+				retExpr, _ = bindFuncExprImplByPlanExpr("and", []*plan.Expr{left, right})
+				return retExpr
+			}
+		} else {
+			for _, arg := range exprImpl.F.Args {
+				if walkThroughDNF(arg, keywords) == nil {
+					return nil
+				}
+			}
+			return expr
+		}
+
+	case *plan.Expr_Corr:
+		if exprImpl.Corr.String() == keywords {
+			return expr
+		} else {
+			return nil
+		}
+	case *plan.Expr_Col:
+		if exprImpl.Col.String() == keywords {
+			return expr
+		} else {
+			return nil
+		}
+	}
+	return expr
+}
+
 func splitPlanConjunction(expr *plan.Expr) []*plan.Expr {
 	var exprs []*plan.Expr
 	switch exprImpl := expr.Expr.(type) {
@@ -467,6 +586,47 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 		} else {
 			*unionTypes = append(*unionTypes, plan.Node_MINUS)
 		}
+	}
+	return nil
+}
+
+func DeduceSelectivity(expr *plan.Expr) float64 {
+	if expr == nil {
+		return 1
+	}
+	var sel float64
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		funcName := exprImpl.F.Func.ObjName
+		switch funcName {
+		case "=":
+			return 0.01
+		case "and":
+			sel = math.Min(DeduceSelectivity(exprImpl.F.Args[0]), DeduceSelectivity(exprImpl.F.Args[1]))
+			return sel
+		case "or":
+			sel1 := DeduceSelectivity(exprImpl.F.Args[0])
+			sel2 := DeduceSelectivity(exprImpl.F.Args[1])
+			sel = math.Max(sel1, sel2)
+			if sel < 0.1 {
+				return sel * 1.05
+			} else {
+				return 1 - (1-sel1)*(1-sel2)
+			}
+		default:
+			return 0.33
+		}
+	}
+	return 1
+}
+
+func RewriteAndConstantFold(exprList []*plan.Expr) *plan.Expr {
+	e := colexec.RewriteFilterExprList(exprList)
+	if e != nil {
+		bat := batch.NewWithSize(0)
+		bat.Zs = []int64{1}
+		filter, _ := ConstantFold(bat, DeepCopyExpr(e))
+		return filter
 	}
 	return nil
 }
@@ -766,23 +926,17 @@ func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Exp
 	return bindFuncExprImplByPlanExpr("or", []*plan.Expr{expr, tailExpr})
 }
 
-func needQuoteType(id types.T) bool {
-	return id == types.T_char || id == types.T_varchar || id == types.T_blob || id == types.T_text || id == types.T_json || id == types.T_timestamp || id == types.T_datetime || id == types.T_date || id == types.T_decimal64 || id == types.T_decimal128 || id == types.T_uuid
-}
-
 // checkNoNeedCast
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
 func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
-	key := [2]types.T{columnT, constT}
-	// lowIntCol > highIntConst
-	if _, ok := intCastTableForRewrite[key]; ok {
+	switch constT {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
 		if !valOk {
 			return false
 		}
 		constVal := val.I64Val
-
 		switch columnT {
 		case types.T_int8:
 			return constVal <= int64(math.MaxInt8) && constVal >= int64(math.MinInt8)
@@ -790,44 +944,47 @@ func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
 			return constVal <= int64(math.MaxInt16) && constVal >= int64(math.MinInt16)
 		case types.T_int32:
 			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
+		case types.T_int64:
+			return true
+		case types.T_uint8:
+			return constVal <= math.MaxUint8 && constVal >= 0
+		case types.T_uint16:
+			return constVal <= math.MaxUint16 && constVal >= 0
+		case types.T_uint32:
+			return constVal <= math.MaxUint32 && constVal >= 0
+		case types.T_uint64:
+			return constVal >= 0
+		default:
+			return false
 		}
-	}
-
-	// lowUIntCol > highUIntConst
-	if _, ok := uintCastTableForRewrite[key]; ok {
-		val, valOk := constExpr.C.Value.(*plan.Const_U64Val)
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		val_u, valOk := constExpr.C.Value.(*plan.Const_U64Val)
 		if !valOk {
 			return false
 		}
-		constVal := val.U64Val
-
+		constVal := val_u.U64Val
 		switch columnT {
+		case types.T_int8:
+			return constVal <= math.MaxInt8
+		case types.T_int16:
+			return constVal <= math.MaxInt16
+		case types.T_int32:
+			return constVal <= math.MaxInt32
+		case types.T_int64:
+			return constVal <= math.MaxInt64
 		case types.T_uint8:
-			return constVal <= uint64(math.MaxUint8)
+			return constVal <= math.MaxUint8
 		case types.T_uint16:
-			return constVal <= uint64(math.MaxUint16)
+			return constVal <= math.MaxUint16
 		case types.T_uint32:
-			return constVal <= uint64(math.MaxUint32)
-		}
-	}
-
-	// lowUIntCol > highIntConst
-	if _, ok := uint2intCastTableForRewrite[key]; ok {
-		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
-		if !valOk {
+			return constVal <= math.MaxUint32
+		case types.T_uint64:
+			return true
+		default:
 			return false
 		}
-		constVal := val.I64Val
-
-		switch columnT {
-		case types.T_uint8:
-			return constVal <= int64(math.MaxUint8)
-		case types.T_uint16:
-			return constVal <= int64(math.MaxUint16)
-		case types.T_uint32:
-			return constVal <= int64(math.MaxUint32)
-		}
+	default:
+		return false
 	}
 
-	return false
 }

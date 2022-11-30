@@ -16,8 +16,10 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -41,6 +43,8 @@ type ComputationRunner interface {
 type ComputationWrapper interface {
 	ComputationRunner
 	GetAst() tree.Statement
+
+	GetProcess() *process.Process
 
 	SetDatabaseName(db string) error
 
@@ -172,3 +176,12 @@ type dumpTable struct {
 	attrs  []string
 	isView bool
 }
+
+// profile makes the debug info
+type profile interface {
+	makeProfile(profileTyp profileType)
+
+	getProfile(profileTyp profileType) string
+}
+
+var _ profile = &Session{}

@@ -21,11 +21,13 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
 )
 
 func TestHandleMessageWithSender(t *testing.T) {
@@ -34,7 +36,7 @@ func TestHandleMessageWithSender(t *testing.T) {
 			return nil
 		})
 
-		cli, err := NewSender(newTestClock(), s.logger)
+		cli, err := NewSender(newTestRuntime(newTestClock(), s.rt.Logger().RawLogger()))
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, cli.Close())
@@ -47,6 +49,35 @@ func TestHandleMessageWithSender(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(v.Responses))
 	})
+}
+
+func TestHandleLargeMessageWithSender(t *testing.T) {
+	size := 1024 * 1024 * 15
+	runTestTxnServer(t, testDN1Addr, func(s *server) {
+		s.RegisterMethodHandler(txn.TxnMethod_Read, func(ctx context.Context, tr1 *txn.TxnRequest, tr2 *txn.TxnResponse) error {
+			tr2.CNOpResponse = &txn.CNOpResponse{Payload: make([]byte, size)}
+			return nil
+		})
+
+		cli, err := NewSender(newTestRuntime(newTestClock(), s.rt.Logger().RawLogger()),
+			WithSenderMaxMessageSize(size+1024))
+		assert.NoError(t, err)
+		defer func() {
+			assert.NoError(t, cli.Close())
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		defer cancel()
+
+		v, err := cli.Send(ctx, []txn.TxnRequest{{
+			CNRequest: &txn.CNOpRequest{
+				Target:  metadata.DNShard{Address: testDN1Addr},
+				Payload: make([]byte, size),
+			},
+		}})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(v.Responses))
+	}, WithServerMaxMessageSize(size+1024))
 }
 
 func TestHandleMessage(t *testing.T) {
@@ -74,16 +105,15 @@ func TestHandleMessageWithFilter(t *testing.T) {
 			n++
 			return nil
 		})
-		s.SetFilter(func(tr *txn.TxnRequest) bool {
-			return false
-		})
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 		defer cancel()
 		assert.NoError(t, s.onMessage(ctx, &txn.TxnRequest{RequestID: 1},
 			0, nil))
 		assert.Equal(t, 0, n)
-	})
+	}, WithServerMessageFilter(func(tr *txn.TxnRequest) bool {
+		return false
+	}))
 }
 
 func TestHandleInvalidMessageWillPanic(t *testing.T) {
@@ -129,11 +159,11 @@ func TestTimeoutRequestCannotHandled(t *testing.T) {
 	})
 }
 
-func runTestTxnServer(t *testing.T, addr string, testFunc func(s *server)) {
+func runTestTxnServer(t *testing.T, addr string, testFunc func(s *server), opts ...ServerOption) {
 	assert.NoError(t, os.RemoveAll(addr[7:]))
 	s, err := NewTxnServer(addr,
-		clock.NewHLCClock(func() int64 { return 0 }, 0),
-		logutil.GetPanicLogger())
+		newTestRuntime(clock.NewHLCClock(func() int64 { return 0 }, 0), logutil.GetPanicLogger()),
+		opts...)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, s.Close())
@@ -160,4 +190,8 @@ func (cs *testClientSession) Write(ctx context.Context, response morpc.Message) 
 
 func newTestClock() clock.Clock {
 	return clock.NewHLCClock(func() int64 { return 0 }, 0)
+}
+
+func newTestRuntime(clock clock.Clock, logger *zap.Logger) runtime.Runtime {
+	return runtime.NewRuntime(metadata.ServiceType_CN, "", logutil.Adjust(logger), runtime.WithClock(clock))
 }

@@ -260,7 +260,10 @@ func (l *store) requestLeaderTransfer(shardID uint64, targetReplicaID uint64) er
 
 func (l *store) addReplica(shardID uint64, replicaID uint64,
 	target dragonboat.Target, cci uint64) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	// Set timeout to a little bigger value to prevent Timeout Error and
+	// returns a dragonboat.ErrRejected at last, in which case, it will take
+	// longer time to finish this operation.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 	count := 0
 	for {
@@ -315,7 +318,8 @@ func (l *store) propose(ctx context.Context,
 		count++
 		result, err := l.nh.SyncPropose(ctx, session, cmd)
 		if err != nil {
-			if errors.Is(err, dragonboat.ErrShardNotReady) {
+			if errors.Is(err, dragonboat.ErrShardNotReady) ||
+				errors.Is(err, dragonboat.ErrSystemBusy) {
 				l.retryWait()
 				continue
 			}

@@ -42,8 +42,10 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
-	bat := proc.Reg.InputBatch
+
+	bat := proc.InputBatch()
 	if bat == nil {
+		proc.SetInputBatch(nil)
 		return true, nil
 	}
 	if bat.Length() == 0 {
@@ -73,6 +75,6 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	bat.Zs = nil
 	bat.Clean(proc.Mp())
 	anal.Output(rbat)
-	proc.Reg.InputBatch = rbat
+	proc.SetInputBatch(rbat)
 	return false, nil
 }

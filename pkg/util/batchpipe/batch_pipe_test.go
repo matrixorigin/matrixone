@@ -298,17 +298,16 @@ func TestBaseReminder(t *testing.T) {
 		}
 		return
 	}
-	// only one event
-	require.NoError(t, waitChTimeout(registry.C, checkOneRecevied, 100*ms))
-	require.Error(t, waitChTimeout(registry.C, checkOneRecevied, 100*ms))
+	// only one event 1 will be triggered
+	require.NoError(t, waitChTimeout(registry.C, checkOneRecevied, 500*ms))
+	require.Error(t, waitChTimeout(registry.C, checkOneRecevied, 500*ms))
 
 	// nothing happens after these two lines
-	registry.Reset("2", 2*ms)
-	registry.Reset("1", 0*ms)
-	require.Error(t, waitChTimeout(registry.C, checkOneRecevied, 50*ms))
+	registry.Reset("2", 2*ms)                                            // 2 is not in the registry
+	registry.Reset("1", 0*ms)                                            // 0 is ignored
+	require.Error(t, waitChTimeout(registry.C, checkOneRecevied, 50*ms)) // timeout
 	registry.Reset("1", 5*ms)
-	fmt.Println(time.Now())
-	require.NoError(t, waitChTimeout(registry.C, checkOneRecevied, 30*ms))
+	require.NoError(t, waitChTimeout(registry.C, checkOneRecevied, 500*ms))
 	registry.CleanAll()
 }
 

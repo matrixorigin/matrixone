@@ -340,22 +340,7 @@ func (v *Vector) extend(rows int, m *mpool.MPool) error {
 	newRows := int(tgtSz / v.GetType().TypeSize())
 	// Setup v.Col
 	v.setupColFromData(0, newRows)
-	// extend the null map
-	v.extendNullBitmap(newRows)
 	return nil
-}
-
-func (v *Vector) extendNullBitmap(target int) {
-	if v.IsScalar() {
-		if v.IsScalarNull() {
-			v.Nsp = nulls.NewWithSize(1)
-			nulls.Add(v.Nsp, 0)
-		} else {
-			v.Nsp = &nulls.Nulls{}
-		}
-	} else {
-		nulls.TryExpand(v.Nsp, target)
-	}
 }
 
 // CompareAndCheckIntersect  we use this method for eval expr by zonemap
@@ -457,7 +442,7 @@ func checkIntersect[T compT](cols1, cols2 []T, gtFun compFn[T], ltFun compFn[T])
 	// check v2 if some item >= min && <= max
 	for i := 0; i < len(cols2); i++ {
 		// cols2[i] >= min && cols2[i] <= max
-		if gtFun(cols1[i], min) && ltFun(cols1[i], max) {
+		if gtFun(cols2[i], min) && ltFun(cols2[i], max) {
 			return true, nil
 		}
 	}
@@ -618,7 +603,7 @@ func compareNumber[T constraints.Integer | constraints.Float | types.Date | type
 		}), nil
 	case "<=":
 		return runCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 T) bool {
-			return t1 >= t2
+			return t1 <= t2
 		}), nil
 	default:
 		return false, moerr.NewInternalError("unsupport compare function")

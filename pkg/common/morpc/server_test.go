@@ -137,7 +137,7 @@ func TestStreamServer(t *testing.T) {
 			return nil
 		})
 
-		st, err := c.NewStream(testAddr)
+		st, err := c.NewStream(testAddr, false)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, st.Close())
@@ -206,8 +206,7 @@ func testRPCServer(t assert.TestingT, testFunc func(*server), options ...ServerO
 }
 
 func newTestClient(t assert.TestingT, options ...ClientOption) RPCClient {
-	bf := NewGoettyBasedBackendFactory(newTestCodec(),
-		WithBackendConnectWhenCreate())
+	bf := NewGoettyBasedBackendFactory(newTestCodec())
 	c, err := NewClient(bf, options...)
 	assert.NoError(t, err)
 	return c

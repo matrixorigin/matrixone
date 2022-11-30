@@ -17,9 +17,10 @@ package plan
 import (
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"go/constant"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -363,9 +364,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	if astExpr.Exists {
 		returnExpr.Typ = &plan.Type{
-			Id:       int32(types.T_bool),
-			Nullable: false,
-			Size:     1,
+			Id:          int32(types.T_bool),
+			NotNullable: true,
+			Size:        1,
 		}
 		returnExpr.Expr.(*plan.Expr_Sub).Sub.Typ = plan.SubqueryRef_EXISTS
 	} else if rowSize == 1 {
@@ -863,8 +864,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 		if args[0].Typ.Id == int32(types.T_uint64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
-				Id:       int32(types.T_decimal128),
-				Nullable: false,
+				Id:          int32(types.T_decimal128),
+				NotNullable: true,
 			})
 			if err != nil {
 				return nil, err
@@ -876,8 +877,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
-				Id:       int32(types.T_float64),
-				Nullable: false,
+				Id:          int32(types.T_float64),
+				NotNullable: true,
 			})
 			if err != nil {
 				return nil, err
@@ -899,12 +900,6 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
 		}
 
-		if isNullExpr(args[0]) || isNullExpr(args[1]) {
-			break
-		}
-		if int(args[0].Typ.Id) != int(args[1].Typ.Id) {
-			return nil, moerr.NewInvalidInput(name + " function have invalid input args type")
-		}
 	case "str_to_date", "to_date":
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
@@ -932,10 +927,10 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 					if tp == types.T_int64 {
 						args = append(args, makePlan2Int64ConstExprWithType(0))
 					} else {
-						args = append(args, makePlan2Float64ConstExprWithType(0))
+						args = append(args, makePlan2Decimal128ConstNullExpr())
 					}
 				} else {
-					args = append(args, makePlan2Float64ConstExprWithType(0))
+					args = append(args, makePlan2Decimal128ConstNullExpr())
 				}
 			}
 		} else if len(args) > 1 {
@@ -996,6 +991,15 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				}
 			}
 		}
+
+	case "timediff":
+		if len(argsType) == len(argsCastType) {
+			for i := range argsType {
+				if int(argsType[i].Oid) == int(types.T_time) && int(argsCastType[i].Oid) == int(types.T_datetime) {
+					return nil, moerr.NewInvalidInput(name + " function have invalid input args type")
+				}
+			}
+		}
 	}
 
 	if len(argsCastType) != 0 {
@@ -1019,6 +1023,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	}
 
 	// return new expr
+	Typ := makePlan2Type(&returnType)
+	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
@@ -1026,7 +1032,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				Args: args,
 			},
 		},
-		Typ: makePlan2Type(&returnType),
+		Typ: Typ,
 	}, nil
 }
 
@@ -1126,11 +1132,11 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				},
 			},
 			Typ: &plan.Type{
-				Id:        int32(types.T_decimal128),
-				Width:     34,
-				Scale:     scale,
-				Precision: 34,
-				Nullable:  false,
+				Id:          int32(types.T_decimal128),
+				Width:       34,
+				Scale:       scale,
+				Precision:   34,
+				NotNullable: true,
 			},
 		}, nil
 	case tree.P_float64:
@@ -1156,10 +1162,15 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 		}
 		bytes, _ := hex.DecodeString(s)
 		return returnHexNumExpr(string(bytes), true)
+	case tree.P_ScoreBinary:
+		return returnHexNumExpr(astExpr.String(), true)
 	case tree.P_bit:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_char:
 		expr := makePlan2StringConstExprWithType(astExpr.String())
+		return expr, nil
+	case tree.P_nulltext:
+		expr := MakePlan2NullTextConstExprWithType(astExpr.String())
 		return expr, nil
 	default:
 		return nil, moerr.NewInvalidInput("unsupport value '%s'", astExpr.String())
@@ -1172,6 +1183,7 @@ func appendCastBeforeExpr(expr *Expr, toType *Type, isBin ...bool) (*Expr, error
 	if expr.Typ.Id == int32(types.T_any) {
 		return expr, nil
 	}
+	toType.NotNullable = expr.Typ.NotNullable
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),

@@ -41,8 +41,7 @@ CONCAT_WS(14,'.3')
 -- (CAST(0x7FFFFFFFFFFFFFFF AS char))
 -- ������� 
 SELECT (CAST(0x61616161 AS char));
-(CAST(0x0x61616161 AS char))
-aaaa
+internal error: Can't cast 'aaaa' from VARCHAR type to CHAR type. Src length 4 is larger than Dest length 1
 drop table if exists t1;
 create table t1 (a char(10));
 insert into t1 values('abcdef');
@@ -459,3 +458,22 @@ select * from t1;
 a	b
 ab	apple
 abc	apple
+drop table if exists t1;
+create table t1(a char(1));
+insert into t1 values("ab");
+truncated type CHAR value ab for column a, 1
+select * from t1;
+a
+drop table if exists t1;
+create table t1(a char(10));
+insert into t1 values("ab");
+select * from t1;
+a
+ab
+drop table if exists t1;
+create table t1(a char(256));
+Data truncation: data out of range: data type char,  typeLen is over the MaxCharLen: 255
+create table t1(a char(0));
+insert into t1 values("");
+insert into t1 values("ab");
+Data truncation: data out of range: data type varchar/char , ab oversize of 0 

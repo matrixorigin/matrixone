@@ -16,8 +16,11 @@ package disttae
 
 import (
 	"context"
+	"math"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -26,10 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -212,8 +217,16 @@ func (txn *Transaction) IncStatementId() {
 
 // Write used to write data to the transaction buffer
 // insert/delete/update all use this api
-func (txn *Transaction) WriteBatch(typ int, databaseId, tableId uint64,
-	databaseName, tableName string, bat *batch.Batch, dnStore DNStore) error {
+func (txn *Transaction) WriteBatch(
+	typ int,
+	databaseId uint64,
+	tableId uint64,
+	databaseName string,
+	tableName string,
+	bat *batch.Batch,
+	dnStore DNStore,
+	primaryIdx int, // pass -1 to indicate no primary key or disable primary key checking
+) error {
 	txn.readOnly = false
 	if typ == INSERT {
 		len := bat.Length()
@@ -227,6 +240,7 @@ func (txn *Transaction) WriteBatch(typ int, databaseId, tableId uint64,
 		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
 		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 	}
+	txn.Lock()
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
 		typ:          typ,
 		bat:          bat,
@@ -236,7 +250,102 @@ func (txn *Transaction) WriteBatch(typ int, databaseId, tableId uint64,
 		databaseName: databaseName,
 		dnStore:      dnStore,
 	})
+	txn.Unlock()
+
+	if err := txn.checkPrimaryKey(typ, primaryIdx, bat, tableName, tableId); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (txn *Transaction) checkPrimaryKey(
+	typ int,
+	primaryIdx int,
+	bat *batch.Batch,
+	tableName string,
+	tableId uint64,
+) error {
+
+	// no primary key
+	if primaryIdx < 0 {
+		return nil
+	}
+
+	//TODO ignore these buggy auto incr tables for now
+	if strings.Contains(tableName, "%!%mo_increment") {
+		return nil
+	}
+
+	t := memtable.Time{
+		Timestamp: txn.nextLocalTS(),
+	}
+	tx := memtable.NewTransaction(uuid.NewString(), t, memtable.SnapshotIsolation)
+	iter := memtable.NewBatchIter(bat)
+	for {
+		tuple := iter()
+		if len(tuple) == 0 {
+			break
+		}
+
+		rowID := RowID(tuple[0].Value.(types.Rowid))
+
+		switch typ {
+
+		case INSERT:
+			var indexes []memtable.Tuple
+
+			idx := primaryIdx + 1 // skip the first row id column
+			primaryKey := memtable.ToOrdered(tuple[idx].Value)
+			index := memtable.Tuple{
+				index_TableID_PrimaryKey,
+				memtable.ToOrdered(tableId),
+				primaryKey,
+			}
+
+			// check primary key
+			entries, err := txn.workspace.Index(tx, index)
+			if err != nil {
+				return err
+			}
+			if len(entries) > 0 {
+				return moerr.NewDuplicateEntry(
+					common.TypeStringValue(bat.Vecs[idx].Typ, tuple[idx].Value),
+					bat.Attrs[idx],
+				)
+			}
+
+			// add primary key
+			indexes = append(indexes, index)
+
+			row := &workspaceRow{
+				rowID:   rowID,
+				tableID: tableId,
+				indexes: indexes,
+			}
+			err = txn.workspace.Insert(tx, row)
+			if err != nil {
+				return err
+			}
+
+		case DELETE:
+			err := txn.workspace.Delete(tx, rowID)
+			if err != nil {
+				return err
+			}
+
+		}
+	}
+	if err := tx.Commit(t); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (txn *Transaction) nextLocalTS() timestamp.Timestamp {
+	txn.localTS = txn.localTS.Next()
+	return txn.localTS
 }
 
 func (txn *Transaction) RegisterFile(fileName string) {
@@ -487,11 +596,29 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 
 func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	databaseId, tableId uint64) *batch.Batch {
+
+	// tx for workspace operations
+	t := memtable.Time{
+		Timestamp: txn.nextLocalTS(),
+	}
+	tx := memtable.NewTransaction(uuid.NewString(), t, memtable.SnapshotIsolation)
+	defer func() {
+		if err := tx.Commit(t); err != nil {
+			panic(err)
+		}
+	}()
+
 	mp := make(map[types.Rowid]uint8)
 	rowids := vector.MustTCols[types.Rowid](bat.GetVector(0))
 	for _, rowid := range rowids {
 		mp[rowid] = 0
+		// update workspace
+		err := txn.workspace.Delete(tx, RowID(rowid))
+		if err != nil {
+			panic(err)
+		}
 	}
+
 	sels := txn.proc.Mp().GetSels()
 	for i := range txn.writes {
 		for j, e := range txn.writes[i] {
@@ -563,10 +690,6 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	if expr == nil {
 		return true
 	}
-	// return true anyway
-	if expr != nil {
-		return true
-	}
 
 	// key = expr's ColPos,  value = tableDef's ColPos
 	columnMap := getColumnsByExpr(expr, tableDef)
@@ -578,7 +701,11 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 		if err != nil {
 			return true
 		}
+		bat.Clean(proc.Mp())
 		return ifNeed
+	}
+	if !checkExprIsMonotonic(expr) {
+		return true
 	}
 
 	maxCol := 0
@@ -614,8 +741,10 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 
 	ifNeed, err := evalFilterExpr(expr, bat, proc)
 	if err != nil {
+		bat.Clean(proc.Mp())
 		return true
 	}
+	bat.Clean(proc.Mp())
 
 	return ifNeed
 
@@ -702,15 +831,24 @@ func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
 	if expr == nil || pk == nil || tableDef == nil {
 		return fullList()
 	}
-	pkIndex := tableDef.Name2ColIndex[pk.Name]
 	if pk.Type.IsIntOrUint() {
-		canComputeRange, pkRange := computeRangeByIntPk(expr, pkIndex, "")
+		canComputeRange, intPkRange := computeRangeByIntPk(expr, pk.Name, "")
 		if !canComputeRange {
 			return fullList()
 		}
-		return getListByRange(dnStores, pkRange)
+		if intPkRange.isRange {
+			r := intPkRange.ranges
+			if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
+				return fullList()
+			}
+			intPkRange.isRange = false
+			for i := intPkRange.ranges[0]; i <= intPkRange.ranges[1]; i++ {
+				intPkRange.items = append(intPkRange.items, i)
+			}
+		}
+		return getListByItems(dnStores, intPkRange.items)
 	}
-	canComputeRange, hashVal := computeRangeByNonIntPk(expr, pkIndex)
+	canComputeRange, hashVal := computeRangeByNonIntPk(expr, pk.Name)
 	if !canComputeRange {
 		return fullList()
 	}

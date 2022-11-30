@@ -22,33 +22,29 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
-const (
-	cnServiceType  = "CN"
-	dnServiceType  = "DN"
-	logServiceType = "LOG"
-
-	s3FileServiceName    = "S3"
-	localFileServiceName = "LOCAL"
-	etlFileServiceName   = "ETL"
-)
-
 var (
-	supportServiceTypes = map[string]any{
-		cnServiceType:  cnServiceType,
-		dnServiceType:  dnServiceType,
-		logServiceType: logServiceType,
+	defaultMaxClockOffset = time.Millisecond * 500
+	defaultMemoryLimit    = 1 << 40
+
+	supportServiceTypes = map[string]metadata.ServiceType{
+		metadata.ServiceType_CN.String():  metadata.ServiceType_CN,
+		metadata.ServiceType_DN.String():  metadata.ServiceType_DN,
+		metadata.ServiceType_LOG.String(): metadata.ServiceType_LOG,
 	}
 )
 
@@ -94,6 +90,12 @@ type Config struct {
 		// EnableCheckMaxClockOffset enable local clock offset checker
 		EnableCheckMaxClockOffset bool `toml:"enable-check-clock-offset"`
 	}
+
+	// Limit limit configuration
+	Limit struct {
+		// Memory memory usage limit, see mpool for details
+		Memory tomlutil.ByteSize `toml:"memory"`
+	}
 }
 
 func parseConfigFromFile(file string, cfg any) error {
@@ -118,8 +120,8 @@ func (c *Config) validate() error {
 	if c.DataDir == "" {
 		c.DataDir = "./mo-data"
 	}
-	if _, ok := supportServiceTypes[strings.ToUpper(c.ServiceType)]; !ok {
-		return moerr.NewInternalError("service type %s not support", c.ServiceType)
+	if _, err := c.getServiceType(); err != nil {
+		return err
 	}
 	if c.Clock.MaxClockOffset.Duration == 0 {
 		c.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
@@ -135,11 +137,14 @@ func (c *Config) validate() error {
 	}
 	for idx := range c.FileServices {
 		switch c.FileServices[idx].Name {
-		case localFileServiceName, etlFileServiceName:
+		case defines.LocalFileServiceName, defines.ETLFileServiceName:
 			if c.FileServices[idx].DataDir == "" {
 				c.FileServices[idx].DataDir = filepath.Join(c.DataDir, strings.ToLower(c.FileServices[idx].Name))
 			}
 		}
+	}
+	if c.Limit.Memory == 0 {
+		c.Limit.Memory = tomlutil.ByteSize(defaultMemoryLimit)
 	}
 	return nil
 }
@@ -171,20 +176,20 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 	}
 
 	// ensure local exists
-	_, err = fileservice.Get[fileservice.FileService](fs, localFileServiceName)
+	_, err = fileservice.Get[fileservice.FileService](fs, defines.LocalFileServiceName)
 	if err != nil {
 		return nil, err
 	}
 
 	// ensure s3 exists
-	_, err = fileservice.Get[fileservice.FileService](fs, s3FileServiceName)
+	_, err = fileservice.Get[fileservice.FileService](fs, defines.S3FileServiceName)
 	if err != nil {
 		return nil, err
 	}
 
 	// ensure etl exists, for trace & metric
 	if !c.Observability.DisableMetric || !c.Observability.DisableTrace {
-		_, err = fileservice.Get[fileservice.FileService](fs, etlFileServiceName)
+		_, err = fileservice.Get[fileservice.FileService](fs, defines.ETLFileServiceName)
 		if err != nil {
 			return nil, moerr.ConvertPanicError(err)
 		}
@@ -261,13 +266,18 @@ func (c *Config) resolveGossipSeedAddresses() error {
 }
 
 func (c *Config) hashNodeID() uint16 {
+	st, err := c.getServiceType()
+	if err != nil {
+		panic(err)
+	}
+
 	uuid := ""
-	switch c.ServiceType {
-	case cnServiceType:
+	switch st {
+	case metadata.ServiceType_CN:
 		uuid = c.CN.UUID
-	case dnServiceType:
+	case metadata.ServiceType_DN:
 		uuid = c.DN.UUID
-	case logServiceType:
+	case metadata.ServiceType_LOG:
 		uuid = c.LogService.UUID
 	}
 	if uuid == "" {
@@ -280,4 +290,31 @@ func (c *Config) hashNodeID() uint16 {
 	}
 	v := h.Sum32()
 	return uint16(v % math.MaxUint16)
+}
+
+func (c *Config) getServiceType() (metadata.ServiceType, error) {
+	if v, ok := supportServiceTypes[strings.ToUpper(c.ServiceType)]; ok {
+		return v, nil
+	}
+	return metadata.ServiceType(0), moerr.NewInternalError("service type %s not support", c.ServiceType)
+}
+
+func (c *Config) mustGetServiceType() metadata.ServiceType {
+	v, err := c.getServiceType()
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func (c *Config) mustGetServiceUUID() string {
+	switch c.mustGetServiceType() {
+	case metadata.ServiceType_CN:
+		return c.CN.UUID
+	case metadata.ServiceType_DN:
+		return c.DN.UUID
+	case metadata.ServiceType_LOG:
+		return c.LogService.UUID
+	}
+	panic("impossible")
 }

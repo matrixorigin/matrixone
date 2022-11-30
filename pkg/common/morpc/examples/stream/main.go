@@ -39,13 +39,13 @@ func main() {
 		panic(err)
 	}
 
-	bf := morpc.NewGoettyBasedBackendFactory(newCodec(), morpc.WithBackendConnectWhenCreate())
+	bf := morpc.NewGoettyBasedBackendFactory(newCodec())
 	cli, err := morpc.NewClient(bf, morpc.WithClientMaxBackendPerHost(1))
 	if err != nil {
 		panic(err)
 	}
 
-	st, err := cli.NewStream(addr)
+	st, err := cli.NewStream(addr, false)
 	if err != nil {
 		panic(err)
 	}

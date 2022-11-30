@@ -1,3 +1,4 @@
+set time_zone='SYSTEM';
 drop table if exists trun_table_01;
 drop table if exists trun_table_02;
 drop table if exists trun_table_03;
@@ -135,16 +136,16 @@ internal error: do not have privilege to execute the statement
 truncate table rawlog;
 internal error: do not have privilege to execute the statement
 truncate table log_info;
-internal error: do not have privilege to execute the statement
+no such table system.log_info
 truncate table error_info;
-internal error: do not have privilege to execute the statement
+no such table system.error_info
 truncate table span_info;
-internal error: do not have privilege to execute the statement
+no such table system.span_info
 use information_schema;
 truncate table key_column_usage ;
 internal error: do not have privilege to execute the statement
 truncate table columns;
-internal error: do not have privilege to execute the statement
+no such table information_schema.columns
 truncate table profiling;
 internal error: do not have privilege to execute the statement
 truncate table `PROCESSLIST`;
@@ -152,13 +153,13 @@ internal error: do not have privilege to execute the statement
 truncate table user_privileges;
 internal error: do not have privilege to execute the statement
 truncate table schemata;
-internal error: do not have privilege to execute the statement
+no such table information_schema.schemata
 truncate table character_sets;
 internal error: do not have privilege to execute the statement
 truncate table triggers;
 internal error: do not have privilege to execute the statement
 truncate table tables;
-internal error: do not have privilege to execute the statement
+no such table information_schema.tables
 truncate table engines;
 internal error: do not have privilege to execute the statement
 use truncate_table_2;

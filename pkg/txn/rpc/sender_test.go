@@ -23,10 +23,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -48,7 +50,7 @@ func TestSendWithSingleRequest(t *testing.T) {
 		})
 	})
 
-	sd, err := NewSender(newTestClock(), nil)
+	sd, err := NewSender(newTestRuntime(newTestClock(), nil))
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, sd.Close())
@@ -89,7 +91,7 @@ func TestSendWithMultiDN(t *testing.T) {
 		})
 	}
 
-	sd, err := NewSender(newTestClock(), nil)
+	sd, err := NewSender(newTestRuntime(newTestClock(), nil))
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, sd.Close())
@@ -149,8 +151,7 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 	}
 
 	sd, err := NewSender(
-		newTestClock(),
-		nil,
+		newTestRuntime(newTestClock(), nil),
 		WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
 			if d.Address != testDN1Addr {
 				return nil
@@ -215,8 +216,7 @@ func TestLocalStreamDestroy(t *testing.T) {
 
 func BenchmarkLocalSend(b *testing.B) {
 	sd, err := NewSender(
-		newTestClock(),
-		nil,
+		newTestRuntime(newTestClock(), nil),
 		WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
 			return func(_ context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
 				resp.RequestID = req.RequestID
@@ -252,21 +252,71 @@ func BenchmarkLocalSend(b *testing.B) {
 }
 
 func TestNewSenderWithOptions(t *testing.T) {
-	s, err := NewSender(newTestClock(),
-		nil,
+	defer leaktest.AfterTest(t)()
+
+	s, err := NewSender(
+		newTestRuntime(newTestClock(), nil),
 		WithSenderPayloadBufferSize(100),
 		WithSenderBackendOptions(morpc.WithBackendBusyBufferSize(1)))
 	assert.NoError(t, err)
+	defer func() {
+		require.NoError(t, s.Close())
+	}()
+
 	assert.Equal(t, 100, s.(*sender).options.payloadCopyBufferSize)
-	assert.True(t, len(s.(*sender).options.backendCreateOptions) >= 3)
+	assert.True(t, len(s.(*sender).options.backendCreateOptions) >= 2)
 	assert.True(t, len(s.(*sender).options.clientOptions) >= 1)
 }
 
-func newTestTxnServer(t assert.TestingT, addr string) morpc.RPCServer {
+func TestCanSendWithLargeRequest(t *testing.T) {
+	size := 1024 * 1024 * 20
+	s := newTestTxnServer(t, testDN1Addr, morpc.WithCodecMaxBodySize(size+1024))
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	s.RegisterRequestHandler(func(ctx context.Context, request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+		return cs.Write(ctx, &txn.TxnResponse{
+			RequestID: request.GetID(),
+			Method:    txn.TxnMethod_Write,
+			CNOpResponse: &txn.CNOpResponse{
+				Payload: make([]byte, size),
+			},
+		})
+	})
+
+	sd, err := NewSender(newTestRuntime(newTestClock(), nil), WithSenderMaxMessageSize(size+1024))
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, sd.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	req := txn.TxnRequest{
+		Method: txn.TxnMethod_Write,
+		CNRequest: &txn.CNOpRequest{
+			Target: metadata.DNShard{
+				Address: testDN1Addr,
+			},
+			Payload: make([]byte, size),
+		},
+	}
+	result, err := sd.Send(ctx, []txn.TxnRequest{req})
+	assert.NoError(t, err)
+	defer result.Release()
+	assert.Equal(t, 1, len(result.Responses))
+	assert.Equal(t, txn.TxnMethod_Write, result.Responses[0].Method)
+}
+
+func newTestTxnServer(t assert.TestingT, addr string, opts ...morpc.CodecOption) morpc.RPCServer {
 	assert.NoError(t, os.RemoveAll(addr[7:]))
-	codec := morpc.NewMessageCodec(func() morpc.Message { return &txn.TxnRequest{} },
+	opts = append(opts,
 		morpc.WithCodecIntegrationHLC(newTestClock()),
 		morpc.WithCodecEnableChecksum())
+	codec := morpc.NewMessageCodec(func() morpc.Message { return &txn.TxnRequest{} },
+		opts...)
 	s, err := morpc.NewRPCServer("test-txn-server", addr, codec)
 	assert.NoError(t, err)
 	assert.NoError(t, s.Start())

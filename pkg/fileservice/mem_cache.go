@@ -17,6 +17,8 @@ package fileservice
 import (
 	"context"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 type MemCache struct {
@@ -38,6 +40,8 @@ func (m *MemCache) Read(
 ) (
 	err error,
 ) {
+	ctx, span := trace.Start(ctx, "MemCache.Read")
+	defer span.End()
 
 	numHit := 0
 	defer func() {
@@ -60,9 +64,10 @@ func (m *MemCache) Read(
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		obj, ok := m.lru.Get(key)
+		obj, size, ok := m.lru.Get(key)
 		if ok {
 			vector.Entries[i].Object = obj
+			vector.Entries[i].ObjectSize = size
 			vector.Entries[i].ignore = true
 			numHit++
 		}
@@ -77,10 +82,8 @@ func (m *MemCache) Read(
 	}
 
 	for i, entry := range vector.Entries {
-		vector.Entries[i].ignore = false
-
-		// set cache
-		if entry.Object != nil {
+		if !entry.ignore && entry.Object != nil {
+			// new object, set cache
 			key := CacheKey{
 				Path:   vector.FilePath,
 				Offset: entry.Offset,
@@ -88,6 +91,8 @@ func (m *MemCache) Read(
 			}
 			m.lru.Set(key, entry.Object, entry.ObjectSize)
 		}
+
+		vector.Entries[i].ignore = false
 	}
 
 	return

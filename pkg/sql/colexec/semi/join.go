@@ -48,19 +48,15 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				ctr.state = End
-				ctr.mp.Free()
-				return true, err
+				ap.Free(proc, true)
+				return false, err
 			}
 			ctr.state = Probe
+
 		case Probe:
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
-				ctr.mp.Free()
-				if ctr.bat != nil {
-					ctr.bat.Clean(proc.Mp())
-				}
 				continue
 			}
 			if bat.Length() == 0 {
@@ -71,13 +67,13 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				continue
 			}
 			if err := ctr.probe(bat, ap, proc, anal); err != nil {
-				ctr.state = End
-				ctr.mp.Free()
-				proc.SetInputBatch(nil)
-				return true, err
+				ap.Free(proc, true)
+				return false, err
 			}
 			return false, nil
+
 		default:
+			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -86,8 +82,10 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
 	bat := <-proc.Reg.MergeReceivers[1].Ch
-	ctr.bat = bat
-	ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+	if bat != nil {
+		ctr.bat = bat
+		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+	}
 	return nil
 }
 
@@ -99,13 +97,15 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
 	}
+	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
+		rbat.Clean(proc.Mp())
 		return err
 	}
-	defer ctr.freeJoinCondition(proc)
 	count := bat.Length()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
+	eligible := make([]int64, 0, hashmap.UnitLimit)
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -123,6 +123,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for _, sel := range sels {
 					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
 					if err != nil {
+						rbat.Clean(proc.Mp())
 						return err
 					}
 					bs := vec.Col.([]bool)
@@ -137,14 +138,16 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					continue
 				}
 			}
-			for j, pos := range ap.Result {
-				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp()); err != nil {
-					rbat.Clean(proc.Mp())
-					return err
-				}
-			}
+			eligible = append(eligible, int64(i+k))
 			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 		}
+		for j, pos := range ap.Result {
+			if err := vector.Union(rbat.Vecs[j], bat.Vecs[pos], eligible, true, proc.Mp()); err != nil {
+				rbat.Clean(proc.Mp())
+				return err
+			}
+		}
+		eligible = eligible[:0]
 	}
 	rbat.ExpandNulls()
 	anal.Output(rbat)
@@ -156,11 +159,7 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
-			for j := 0; j < i; j++ {
-				if ctr.evecs[j].needFree {
-					vector.Clean(ctr.evecs[j].vec, proc.Mp())
-				}
-			}
+			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
 		ctr.vecs[i] = vec
@@ -174,12 +173,4 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 		}
 	}
 	return nil
-}
-
-func (ctr *container) freeJoinCondition(proc *process.Process) {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].needFree {
-			ctr.evecs[i].vec.Free(proc.Mp())
-		}
-	}
 }

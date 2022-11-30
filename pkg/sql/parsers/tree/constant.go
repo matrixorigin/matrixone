@@ -37,6 +37,8 @@ const (
 	P_char
 	P_decimal
 	P_bit
+	P_ScoreBinary
+	P_nulltext
 )
 
 // the AST for the constant numeric value.

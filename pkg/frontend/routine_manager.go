@@ -87,30 +87,30 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	pro.SetSkipCheckUser(rm.GetSkipCheckUser())
 	exe := NewMysqlCmdExecutor()
 	exe.SetRoutineManager(rm)
+	exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
 
-	routine := NewRoutine(rm.getCtx(), pro, exe, pu)
-	routine.SetRoutineMgr(rm)
+	routine := NewRoutine(rm.getCtx(), pro, exe, pu.SV, rs)
 
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(routine.GetClientProtocol(), nil, pu, gSysVariables)
+	ses := NewSession(routine.GetClientProtocol(), nil, pu, gSysVariables, true)
 	ses.SetRequestContext(routine.GetCancelRoutineCtx())
 	ses.SetFromRealUser(true)
 	routine.SetSession(ses)
 	pro.SetSession(ses)
 
-	logutil.Debugf("have done some preparation for the connection %s", rs.RemoteAddress())
+	logDebugf(pro.GetConciseProfile(), "have done some preparation for the connection %s", rs.RemoteAddress())
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
 	if err != nil {
-		logutil.Error("failed to handshake with server, quiting routine...")
+		logError(pro.GetConciseProfile(), "failed to handshake with server, quiting routine...")
 		routine.Quit()
 		return
 	}
 
-	logutil.Debugf("have sent handshake packet to connection %s", rs.RemoteAddress())
+	logDebugf(pro.GetConciseProfile(), "have sent handshake packet to connection %s", rs.RemoteAddress())
 	rm.setRoutine(rs, routine)
 }
 
@@ -128,8 +128,11 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	}
 	rm.mu.Unlock()
 
-	logutil.Debugf("will close iosession. %s", getConnectionInfo(rs))
 	if rt != nil {
+		ses := rt.GetSession()
+		if ses != nil {
+			logDebugf(ses.GetConciseProfile(), "will close io session.")
+		}
 		rt.Quit()
 	}
 }
@@ -151,6 +154,7 @@ func (rm *RoutineManager) killStatement(id uint64) error {
 	if rt != nil {
 		logutil.Infof("will close the statement %d", id)
 		rt.notifyClose()
+		rt.notifyDone()
 	}
 	return nil
 }
@@ -175,14 +179,14 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}
 
 	protocol := routine.GetClientProtocol().(*MysqlProtocolImpl)
-
+	protoProfile := protocol.GetConciseProfile()
 	packet, ok := msg.(*Packet)
 
 	protocol.SetSequenceID(uint8(packet.SequenceID + 1))
 	var seq = protocol.GetSequenceId()
 	if !ok {
 		err = moerr.NewInternalError("message is not Packet")
-		logutil.Errorf("%s error:%v", connectionInfo, err)
+		logErrorf(protoProfile, "error:%v", err)
 		return err
 	}
 
@@ -191,14 +195,14 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	for uint32(length) == MaxPayloadSize {
 		msg, err = protocol.GetTcpConnection().Read(goetty.ReadOptions{})
 		if err != nil {
-			logutil.Errorf("%s. read message failed. error:%s", connectionInfo, err)
+			logErrorf(protoProfile, "read message failed. error:%s", err)
 			return err
 		}
 
 		packet, ok = msg.(*Packet)
 		if !ok {
 			err = moerr.NewInternalError("message is not Packet")
-			logutil.Errorf("%s. error:%v", connectionInfo, err)
+			logErrorf(protoProfile, "error:%v", err)
 			return err
 		}
 
@@ -210,7 +214,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 	// finish handshake process
 	if !protocol.IsEstablished() {
-		logutil.Debugf("HANDLE HANDSHAKE")
+		logDebugf(protoProfile, "HANDLE HANDSHAKE")
 
 		/*
 			di := MakeDebugInfo(payload,80,8)
@@ -218,28 +222,28 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		*/
 		ses := protocol.GetSession()
 		if protocol.GetCapability()&CLIENT_SSL != 0 && !protocol.IsTlsEstablished() {
-			logutil.Debugf("setup ssl")
+			logDebugf(protoProfile, "setup ssl")
 			isTlsHeader, err = protocol.handleHandshake(payload)
 			if err != nil {
-				logutil.Errorf("%s. error:%v", connectionInfo, err)
+				logErrorf(protoProfile, "error:%v", err)
 				return err
 			}
 			if isTlsHeader {
-				logutil.Debugf("upgrade to TLS")
+				logDebugf(protoProfile, "upgrade to TLS")
 				// do upgradeTls
 				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
-				logutil.Debugf("get TLS conn ok")
+				logDebugf(protoProfile, "get TLS conn ok")
 				newCtx, cancelFun := context.WithTimeout(ses.GetRequestContext(), 20*time.Second)
 				if err = tlsConn.HandshakeContext(newCtx); err != nil {
-					logutil.Errorf("%s. before cancel() error:%v", connectionInfo, err)
+					logErrorf(protoProfile, "before cancel() error:%v", err)
 					cancelFun()
-					logutil.Errorf("%s. after cancel() error:%v", connectionInfo, err)
+					logErrorf(protoProfile, "after cancel() error:%v", err)
 					return err
 				}
 				cancelFun()
-				logutil.Debugf("TLS handshake ok")
+				logDebugf(protoProfile, "TLS handshake ok")
 				rs.UseConn(tlsConn)
-				logutil.Debugf("TLS handshake finished")
+				logDebugf(protoProfile, "TLS handshake finished")
 
 				// tls upgradeOk
 				protocol.SetTlsEstablished()
@@ -249,10 +253,10 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				protocol.SetEstablished()
 			}
 		} else {
-			logutil.Debugf("handleHandshake")
+			logDebugf(protoProfile, "handleHandshake")
 			_, err = protocol.handleHandshake(payload)
 			if err != nil {
-				logutil.Errorf("%s. error:%v", connectionInfo, err)
+				logErrorf(protoProfile, "error:%v", err)
 				return err
 			}
 			protocol.SetEstablished()
@@ -271,7 +275,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	chLen := len(ch)
 	capLen := cap(ch)
 	if chLen+1 > capLen {
-		logutil.Debugf("the request channel will block. length %d capacity %d", chLen, capLen)
+		logDebugf(protoProfile, "the request channel will block. length %d capacity %d", chLen, capLen)
 	}
 	ch <- req
 

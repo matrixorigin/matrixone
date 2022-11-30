@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/stretchr/testify/require"
@@ -155,7 +156,7 @@ func TestFSWriter_Write(t *testing.T) {
 	require.Equal(t, nil, err)
 	t.Logf("path: %s", path)
 
-	localFs, err := fileservice.NewLocalFS(etlFileServiceName, basedir, mpool.MB) // db root database.
+	localFs, err := fileservice.NewLocalFS(defines.ETLFileServiceName, basedir, mpool.MB) // db root database.
 	require.Equal(t, nil, err)
 	tests := []struct {
 		name    string

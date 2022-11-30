@@ -41,9 +41,6 @@ type TxnServer interface {
 	Close() error
 	// RegisterMethodHandler register txn request handler func
 	RegisterMethodHandler(txn.TxnMethod, TxnRequestHandleFunc)
-	// SetFilter set filter func. Requests can be modified or filtered out by the filter
-	// before they are processed by the handler.
-	SetFilter(func(*txn.TxnRequest) bool)
 }
 
 // TxnRequestHandleFunc txn request handle func
@@ -51,6 +48,9 @@ type TxnRequestHandleFunc func(context.Context, *txn.TxnRequest, *txn.TxnRespons
 
 // SenderOption option for create Sender
 type SenderOption func(*sender)
+
+// ServerOption option for create TxnServer
+type ServerOption func(*server)
 
 // LocalDispatch used to returns request handler on local, avoid rpc
 type LocalDispatch func(metadata.DNShard) TxnRequestHandleFunc

@@ -26,6 +26,7 @@ import (
 )
 
 func TestZoneMapNumeric(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.T_int32}
 	zm := NewZoneMap(typ)
@@ -129,6 +130,7 @@ func TestZoneMapNumeric(t *testing.T) {
 }
 
 func TestZoneMapString(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.T_char}
 	zm := NewZoneMap(typ)
@@ -186,7 +188,8 @@ func TestZoneMapString(t *testing.T) {
 }
 
 func TestZMEmptyString(t *testing.T) {
-	typ := types.Type{Oid: types.T_varchar}
+	defer testutils.AfterTest(t)()
+	typ := types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}
 	zm := NewZoneMap(typ)
 	require.Equal(t, typ.Oid, zm.GetType().Oid)
 	// check not inited
@@ -221,6 +224,7 @@ func TestZMEmptyString(t *testing.T) {
 }
 
 func TestZMTruncatedString(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	mockBytes := func(init byte, size int) []byte {
 		ret := make([]byte, size)
 		for i := 0; i < size; i++ {
@@ -229,7 +233,7 @@ func TestZMTruncatedString(t *testing.T) {
 		return ret
 	}
 
-	typ := types.Type{Oid: types.T_varchar}
+	typ := types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}
 	zm := NewZoneMap(typ)
 
 	minv := mockBytes(0x00, 33)

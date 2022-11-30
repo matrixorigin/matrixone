@@ -89,7 +89,8 @@ func (n *MVCCHandle) GetDeleteCnt() uint32 {
 	return n.deletes.GetDeleteCnt()
 }
 
-func (n *MVCCHandle) GetID() *common.ID { return n.meta.AsCommonID() }
+func (n *MVCCHandle) GetID() *common.ID             { return n.meta.AsCommonID() }
+func (n *MVCCHandle) GetEntry() *catalog.BlockEntry { return n.meta }
 
 func (n *MVCCHandle) StringLocked() string {
 	s := ""
@@ -127,7 +128,7 @@ func (n *MVCCHandle) AddAppendNodeLocked(
 	if txn != nil {
 		ts = txn.GetStartTS()
 	}
-	if n.appends.IsEmpty() || n.appends.SearchNode(NewCommittedAppendNode(ts, 0, 0, nil)) == nil {
+	if n.appends.IsEmpty() || !n.appends.GetUpdateNodeLocked().(*AppendNode).Start.Equal(ts) {
 		an = NewAppendNode(txn, startRow, maxRow, n)
 		n.appends.InsertNode(an)
 		created = true
@@ -152,6 +153,33 @@ func (n *MVCCHandle) IsVisibleLocked(row uint32, ts types.TS) (bool, error) {
 
 func (n *MVCCHandle) IsDeletedLocked(row uint32, ts types.TS, rwlocker *sync.RWMutex) (bool, error) {
 	return n.deletes.IsDeleted(row, ts, rwlocker)
+}
+
+//	  1         2        3       4      5       6
+//	[----] [---------] [----][------][-----] [-----]
+//
+// -----------+------------------+---------------------->
+//
+//	start               end
+func (n *MVCCHandle) CollectUncommittedANodesPreparedBefore(
+	ts types.TS,
+	fn func(*AppendNode)) (anyWaitable bool) {
+	if n.appends.IsEmpty() {
+		return
+	}
+	n.appends.ForEach(func(un txnif.MVCCNode) bool {
+		an := un.(*AppendNode)
+		needWait, txn := an.NeedWaitCommitting(ts)
+		if txn == nil {
+			return false
+		}
+		if needWait {
+			fn(an)
+			anyWaitable = true
+		}
+		return true
+	}, false)
+	return
 }
 
 func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs types.TS) (indexes []*wal.Index, err error) {
@@ -237,9 +265,11 @@ func (n *MVCCHandle) GetTotalRow() uint32 {
 	return an.maxRow - n.deletes.cnt.Load()
 }
 
-func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, commitTSVec, abortVec containers.Vector, abortedBitmap *roaring.Bitmap) {
-	n.RLock()
-	defer n.RUnlock()
+func (n *MVCCHandle) CollectAppendLocked(
+	start, end types.TS) (
+	minRow, maxRow uint32,
+	commitTSVec, abortVec containers.Vector,
+	abortedBitmap *roaring.Bitmap) {
 	startOffset, node := n.appends.GetNodeToReadByPrepareTS(start)
 	if node != nil && node.GetPrepare().Less(start) {
 		startOffset++

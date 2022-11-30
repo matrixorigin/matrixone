@@ -26,56 +26,57 @@ var (
 		{
 			Name: "col",
 			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    4,
+				Id:          int32(types.T_varchar),
+				NotNullable: false,
+				Width:       types.MaxVarcharLen,
 			},
 		},
 		{
 			Name: "seq",
 			Typ: &plan.Type{
-				Id:       int32(types.T_int32),
-				Nullable: true,
+				Id:          int32(types.T_int32),
+				NotNullable: false,
+				Width:       4,
 			},
 		},
 		{
 			Name: "key",
 			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    256,
+				Id:          int32(types.T_varchar),
+				NotNullable: false,
+				Width:       types.MaxVarcharLen,
 			},
 		},
 		{
 			Name: "path",
 			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    256,
+				Id:          int32(types.T_varchar),
+				NotNullable: false,
+				Width:       types.MaxVarcharLen,
 			},
 		},
 		{
 			Name: "index",
 			Typ: &plan.Type{
-				Id:       int32(types.T_int32),
-				Nullable: true,
-				Width:    4,
+				Id:          int32(types.T_int32),
+				NotNullable: false,
+				Width:       4,
 			},
 		},
 		{
 			Name: "value",
 			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    1024,
+				Id:          int32(types.T_varchar),
+				NotNullable: false,
+				Width:       types.MaxVarcharLen,
 			},
 		},
 		{
 			Name: "this",
 			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    1024,
+				Id:          int32(types.T_varchar),
+				NotNullable: false,
+				Width:       types.MaxVarcharLen,
 			},
 		},
 	}
@@ -83,12 +84,12 @@ var (
 
 func _dupType(typ *plan.Type) *plan.Type {
 	return &plan.Type{
-		Id:        typ.Id,
-		Nullable:  typ.Nullable,
-		Size:      typ.Size,
-		Width:     typ.Width,
-		Scale:     typ.Scale,
-		Precision: typ.Precision,
+		Id:          typ.Id,
+		NotNullable: typ.NotNullable,
+		Size:        typ.Size,
+		Width:       typ.Width,
+		Scale:       typ.Scale,
+		Precision:   typ.Precision,
 	}
 }
 
@@ -111,7 +112,7 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 	colDefs := _getDefaultColDefs()
 	colName := findColName(tbl.Func)
 	node := &plan.Node{
-		NodeType: plan.Node_TABLE_FUNCTION,
+		NodeType: plan.Node_FUNCTION_SCAN,
 		Cost:     &plan.Cost{},
 		TableDef: &plan.TableDef{
 			TableType: "func_table", //test if ok

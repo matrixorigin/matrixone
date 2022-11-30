@@ -64,6 +64,8 @@ type Limitation struct {
 	PartitionRows int64
 	// ReaderSize, memory threshold for storage's reader
 	ReaderSize int64
+	// MaxMessageSize max size for read messages from dn
+	MaxMsgSize uint64
 }
 
 // SessionInfo session information

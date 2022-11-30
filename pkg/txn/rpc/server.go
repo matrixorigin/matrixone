@@ -20,14 +20,29 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
 
+// WithServerMaxMessageSize set max rpc message size
+func WithServerMaxMessageSize(maxMessageSize int) ServerOption {
+	return func(s *server) {
+		s.options.maxMessageSize = maxMessageSize
+	}
+}
+
+// set filter func. Requests can be modified or filtered out by the filter
+// before they are processed by the handler.
+func WithServerMessageFilter(filter func(*txn.TxnRequest) bool) ServerOption {
+	return func(s *server) {
+		s.options.filter = filter
+	}
+}
+
 type server struct {
-	logger   *zap.Logger
+	rt       runtime.Runtime
 	rpc      morpc.RPCServer
 	handlers map[txn.TxnMethod]TxnRequestHandleFunc
 
@@ -37,14 +52,18 @@ type server struct {
 	}
 
 	options struct {
-		filter func(*txn.TxnRequest) bool
+		filter         func(*txn.TxnRequest) bool
+		maxMessageSize int
 	}
 }
 
 // NewTxnServer create a txn server. One DNStore corresponds to one TxnServer
-func NewTxnServer(address string, clock clock.Clock, logger *zap.Logger) (TxnServer, error) {
+func NewTxnServer(
+	address string,
+	rt runtime.Runtime,
+	opts ...ServerOption) (TxnServer, error) {
 	s := &server{
-		logger:   logutil.Adjust(logger),
+		rt:       rt,
 		handlers: make(map[txn.TxnMethod]TxnRequestHandleFunc),
 	}
 	s.pool.requests = sync.Pool{
@@ -57,13 +76,17 @@ func NewTxnServer(address string, clock clock.Clock, logger *zap.Logger) (TxnSer
 			return &txn.TxnResponse{}
 		},
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
 
 	rpc, err := morpc.NewRPCServer("txn-server", address,
 		morpc.NewMessageCodec(s.acquireRequest,
-			morpc.WithCodecIntegrationHLC(clock),
+			morpc.WithCodecIntegrationHLC(rt.Clock()),
 			morpc.WithCodecEnableChecksum(),
-			morpc.WithCodecPayloadCopyBufferSize(16*1024)),
-		morpc.WithServerLogger(s.logger),
+			morpc.WithCodecPayloadCopyBufferSize(16*1024),
+			morpc.WithCodecMaxBodySize(s.options.maxMessageSize)),
+		morpc.WithServerLogger(s.rt.Logger().RawLogger()),
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 			m := v.(morpc.RPCMessage)
 			s.releaseResponse(m.Message.(*txn.TxnResponse))
@@ -89,15 +112,13 @@ func (s *server) RegisterMethodHandler(m txn.TxnMethod, h TxnRequestHandleFunc) 
 	s.handlers[m] = h
 }
 
-func (s *server) SetFilter(filter func(*txn.TxnRequest) bool) {
-	s.options.filter = filter
-}
-
 // onMessage a client connection has a separate read goroutine. The onMessage invoked in this read goroutine.
 func (s *server) onMessage(ctx context.Context, request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+	ctx, span := trace.Debug(ctx, "server.onMessage")
+	defer span.End()
 	m, ok := request.(*txn.TxnRequest)
 	if !ok {
-		s.logger.Fatal("received invalid message", zap.Any("message", request))
+		s.rt.Logger().Fatal("received invalid message", zap.Any("message", request))
 	}
 	defer s.releaseRequest(m)
 
@@ -107,7 +128,7 @@ func (s *server) onMessage(ctx context.Context, request morpc.Message, sequence 
 
 	handler, ok := s.handlers[m.Method]
 	if !ok {
-		s.logger.Fatal("missing txn request handler",
+		s.rt.Logger().Fatal("missing txn request handler",
 			zap.String("method", m.Method.String()))
 	}
 

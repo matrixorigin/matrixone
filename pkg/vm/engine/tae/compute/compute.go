@@ -83,6 +83,37 @@ func ShuffleByDeletes(deleteMask, deletes *roaring.Bitmap) (destDelets *roaring.
 	return destDelets
 }
 
+func ShuffleOffset(offset uint32, deletes *roaring.Bitmap) uint32 {
+	if deletes == nil || deletes.IsEmpty() {
+		return offset
+	}
+	end := offset
+	deleteCnt := deletes.Rank(end)
+	for offset+uint32(deleteCnt) > end {
+		end = offset + uint32(deleteCnt)
+		deleteCnt = deletes.Rank(end)
+	}
+	return end
+}
+
+func GetOffsetMapBeforeApplyDeletes(deletes *roaring.Bitmap) []uint32 {
+	if deletes == nil || deletes.IsEmpty() {
+		return nil
+	}
+	prev := -1
+	mapping := make([]uint32, 0)
+	it := deletes.Iterator()
+	for it.HasNext() {
+		delete := it.Next()
+		for i := uint32(prev + 1); i < delete; i++ {
+			mapping = append(mapping, i)
+		}
+		prev = int(delete)
+	}
+	mapping = append(mapping, uint32(prev)+1)
+	return mapping
+}
+
 func GetOffsetWithFunc[T any](
 	vals []T,
 	val T,

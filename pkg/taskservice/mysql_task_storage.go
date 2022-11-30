@@ -29,9 +29,9 @@ import (
 )
 
 var (
-	initSqls = []string{
-		`create database if not exists %s`,
-		`create table if not exists %s.sys_async_task (
+	createDatabase = `create database if not exists %s`
+	createTables   = map[string]string{
+		"sys_async_task": `create table if not exists %s.sys_async_task (
 			task_id                     int primary key auto_increment,
 			task_metadata_id            varchar(50) unique not null,
 			task_metadata_executor      int,
@@ -46,7 +46,7 @@ var (
 			error_msg                   varchar(1000) null,
 			create_at                   bigint,
 			end_at                      bigint)`,
-		`create table if not exists %s.sys_cron_task (
+		"sys_cron_task": `create table if not exists %s.sys_cron_task (
 			cron_task_id				int primary key auto_increment,
     		task_metadata_id            varchar(50) unique not null,
 			task_metadata_executor      int,
@@ -57,7 +57,6 @@ var (
 			trigger_times				int,
 			create_at					bigint,
 			update_at					bigint)`,
-		`use %s`,
 	}
 
 	insertAsyncTask = `insert into %s.sys_async_task(
@@ -180,6 +179,10 @@ func (m *mysqlTaskStorage) Close() error {
 }
 
 func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, error) {
+	if taskFrameworkDisabled() {
+		return 0, nil
+	}
+
 	if len(tasks) == 0 {
 		return 0, nil
 	}
@@ -253,6 +256,14 @@ func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, er
 }
 
 func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condition ...Condition) (int, error) {
+	if taskFrameworkDisabled() {
+		return 0, nil
+	}
+
+	if len(tasks) == 0 {
+		return 0, nil
+	}
+
 	db, release, err := m.getDB()
 	if err != nil {
 		return 0, err
@@ -339,6 +350,10 @@ func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condit
 }
 
 func (m *mysqlTaskStorage) Delete(ctx context.Context, condition ...Condition) (int, error) {
+	if taskFrameworkDisabled() {
+		return 0, nil
+	}
+
 	db, release, err := m.getDB()
 	if err != nil {
 		return 0, err
@@ -373,6 +388,10 @@ func (m *mysqlTaskStorage) Delete(ctx context.Context, condition ...Condition) (
 }
 
 func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([]task.Task, error) {
+	if taskFrameworkDisabled() {
+		return nil, nil
+	}
+
 	db, release, err := m.getDB()
 	if err != nil {
 		return nil, err
@@ -401,7 +420,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 	} else {
 		query = fmt.Sprintf(selectAsyncTask, m.dbname)
 	}
-	query += buildOrderByCause(c)
+	query += buildOrderByClause(c)
 	query += buildLimitClause(c)
 
 	rows, err := conn.QueryContext(ctx, query)
@@ -418,7 +437,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 		var codeOption sql.NullInt32
 		var msgOption sql.NullString
 		var options string
-		err := rows.Scan(
+		if err := rows.Scan(
 			&t.ID,
 			&t.Metadata.ID,
 			&t.Metadata.Executor,
@@ -433,8 +452,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 			&msgOption,
 			&t.CreateAt,
 			&t.CompletedAt,
-		)
-		if err != nil {
+		); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(options), &t.Metadata.Options); err != nil {
@@ -458,10 +476,21 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 
 		tasks = append(tasks, t)
 	}
+	if err := rows.Err(); err != nil {
+		return tasks, err
+	}
 	return tasks, nil
 }
 
 func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.CronTask) (int, error) {
+	if taskFrameworkDisabled() {
+		return 0, nil
+	}
+
+	if len(cronTask) == 0 {
+		return 0, nil
+	}
+
 	db, release, err := m.getDB()
 	if err != nil {
 		return 0, err
@@ -528,6 +557,10 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 }
 
 func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, error) {
+	if taskFrameworkDisabled() {
+		return nil, nil
+	}
+
 	db, release, err := m.getDB()
 	if err != nil {
 		return nil, err
@@ -581,12 +614,27 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, 
 
 		tasks = append(tasks, t)
 	}
+	if err := rows.Err(); err != nil {
+		return tasks, err
+	}
 
 	return tasks, nil
 }
 
 func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.CronTask, t task.Task) (int, error) {
-	conn, err := m.db.Conn(ctx)
+	if taskFrameworkDisabled() {
+		return 0, nil
+	}
+
+	db, release, err := m.getDB()
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = release()
+	}()
+
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -749,13 +797,35 @@ func (m *mysqlTaskStorage) getDB() (*sql.DB, func() error, error) {
 }
 
 func (m *mysqlTaskStorage) useDB(db *sql.DB) error {
-	if _, err := db.Exec("use " + m.dbname); err != nil {
+	if err := db.Ping(); err != nil {
+		return errNotReady
+	}
+	for _, err := db.Exec("use " + m.dbname); err != nil; _, err = db.Exec("use " + m.dbname) {
 		me, ok := err.(*mysql.MySQLError)
 		if !ok || me.Number != moerr.ER_BAD_DB_ERROR {
 			return err
 		}
-		for _, s := range initSqls {
-			if _, err = db.Exec(fmt.Sprintf(s, m.dbname)); err != nil {
+		if _, err = db.Exec(fmt.Sprintf(createDatabase, m.dbname)); err != nil {
+			return multierr.Append(err, db.Close())
+		}
+	}
+	rows, err := db.Query("show tables")
+	if err != nil {
+		return err
+	}
+
+	tables := make(map[string]struct{}, len(createTables))
+	for rows.Next() {
+		var table string
+		if err := rows.Scan(&table); err != nil {
+			return err
+		}
+		tables[table] = struct{}{}
+	}
+
+	for table, createSql := range createTables {
+		if _, ok := tables[table]; !ok {
+			if _, err = db.Exec(fmt.Sprintf(createSql, m.dbname)); err != nil {
 				return multierr.Append(err, db.Close())
 			}
 		}
@@ -770,7 +840,7 @@ func buildLimitClause(c conditions) string {
 	return ""
 }
 
-func buildOrderByCause(c conditions) string {
+func buildOrderByClause(c conditions) string {
 	if c.orderByDesc {
 		return " order by task_id desc"
 	}

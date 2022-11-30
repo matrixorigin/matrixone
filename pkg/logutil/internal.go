@@ -33,7 +33,7 @@ func SetupMOLogger(conf *LogConfig) {
 		panic(err)
 	}
 	replaceGlobalLogger(logger)
-	Debugf("MO logger init, level=%s, log file=%s", conf.Level, conf.Filename)
+	Infof("MO logger init, level=%s, log file=%s", conf.Level, conf.Filename)
 }
 
 // initMOLogger initializes a zap Logger.

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 var (
@@ -29,16 +30,16 @@ var (
 	defaultServiceAddress   = "127.0.0.1:22000"
 	defaultZombieTimeout    = time.Hour
 	defaultDiscoveryTimeout = time.Second * 30
-	defaultHeatbeatDuration = time.Second
+	defaultHeatbeatInterval = time.Second
 	defaultConnectTimeout   = time.Second * 30
-	defaultHeatbeatTimeout  = time.Millisecond * 500
+	defaultHeatbeatTimeout  = time.Second * 3
 
 	defaultFlushInterval       = time.Second * 60
 	defaultScanInterval        = time.Second * 5
 	defaultIncrementalInterval = time.Minute
 	defaultGlobalInterval      = time.Minute * 60
 	defaultMinCount            = int64(100)
-	defaultLogBackend          = "batchstore"
+	defaultLogBackend          = string(options.LogstoreLogservice)
 
 	storageDir     = "storage"
 	defaultDataDir = "./mo-data"
@@ -58,9 +59,9 @@ type Config struct {
 
 	// HAKeeper configuration
 	HAKeeper struct {
-		// HeatbeatDuration heartbeat duration to send message to hakeeper. Default is 1s
-		HeatbeatDuration toml.Duration `toml:"hakeeper-heartbeat-duration"`
-		// HeatbeatTimeout heartbeat request timeout. Default is 500ms
+		// HeatbeatInterval heartbeat interval to send message to hakeeper. Default is 1s
+		HeatbeatInterval toml.Duration `toml:"hakeeper-heartbeat-interval"`
+		// HeatbeatTimeout heartbeat request timeout. Default is 3s
 		HeatbeatTimeout toml.Duration `toml:"hakeeper-heartbeat-timeout"`
 		// DiscoveryTimeout discovery HAKeeper service timeout. Default is 30s
 		DiscoveryTimeout toml.Duration `toml:"hakeeper-discovery-timeout"`
@@ -98,8 +99,6 @@ type Config struct {
 			dataDir string `toml:"-"`
 			// Backend txn storage backend implementation. [TAE|Mem], default TAE.
 			Backend StorageType `toml:"backend"`
-			// FileService tae used fileservice, default is LOCAL
-			FileService string `toml:"fileservice"`
 			// LogBackend the backend used to store logs
 			LogBackend string `toml:"log-backend"`
 		}
@@ -124,9 +123,6 @@ func (c *Config) Validate() error {
 	if c.Txn.Storage.Backend == "" {
 		c.Txn.Storage.Backend = StorageTAE
 	}
-	if c.Txn.Storage.FileService == "" {
-		c.Txn.Storage.FileService = localFileServiceName
-	}
 	if c.Txn.Storage.LogBackend == "" {
 		c.Txn.Storage.LogBackend = defaultLogBackend
 	}
@@ -139,8 +135,8 @@ func (c *Config) Validate() error {
 	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
 		c.HAKeeper.DiscoveryTimeout.Duration = defaultDiscoveryTimeout
 	}
-	if c.HAKeeper.HeatbeatDuration.Duration == 0 {
-		c.HAKeeper.HeatbeatDuration.Duration = defaultHeatbeatDuration
+	if c.HAKeeper.HeatbeatInterval.Duration == 0 {
+		c.HAKeeper.HeatbeatInterval.Duration = defaultHeatbeatInterval
 	}
 	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
 		c.HAKeeper.HeatbeatTimeout.Duration = defaultHeatbeatTimeout
