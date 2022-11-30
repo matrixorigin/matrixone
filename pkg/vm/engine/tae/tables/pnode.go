@@ -74,13 +74,6 @@ func (node *persistedNode) init() {
 	}
 }
 
-func (node *persistedNode) Pin() *common.PinnedItem[*persistedNode] {
-	node.Ref()
-	return &common.PinnedItem[*persistedNode]{
-		Val: node,
-	}
-}
-
 func (node *persistedNode) Rows() uint32 {
 	location := node.block.meta.GetMetaLoc()
 	return uint32(ReadPersistedBlockRow(location))

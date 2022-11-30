@@ -71,13 +71,6 @@ func (node *memoryNode) initIndexes(schema *catalog.Schema) {
 	}
 }
 
-func (node *memoryNode) Pin() *common.PinnedItem[*memoryNode] {
-	node.Ref()
-	return &common.PinnedItem[*memoryNode]{
-		Val: node,
-	}
-}
-
 func (node *memoryNode) close() {
 	logutil.Infof("Releasing Memorynode BLK-%d", node.block.meta.ID)
 	node.data.Close()
