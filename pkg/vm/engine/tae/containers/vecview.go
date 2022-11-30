@@ -16,6 +16,7 @@ package containers
 
 import (
 	"io"
+	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -79,6 +80,7 @@ func (vec *vecView) String() string             { return vec.impl.String() }
 func (vec *vecView) PPString(num int) string    { return vec.impl.PPString(num) }
 func (vec *vecView) Close()                     {}
 func (vec *vecView) Slice() any                 { return vec.impl.Slice() }
+func (vec *vecView) SlicePtr() unsafe.Pointer   { return vec.impl.SlicePtr() }
 
 func (vec *vecView) ResetWithData(_ *Bytes, _ *roaring64.Bitmap) { panic("not supported") }
 func (vec *vecView) Window() VectorView                          { panic("not implemented") }
