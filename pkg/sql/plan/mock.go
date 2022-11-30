@@ -16,6 +16,8 @@ package plan
 
 import (
 	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -373,6 +375,10 @@ func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) *Cost {
 
 func (m *MockCompilerContext) GetAccountId() uint32 {
 	return 0
+}
+
+func (m *MockCompilerContext) GetProcess() *process.Process {
+	return testutil.NewProc()
 }
 
 type MockOptimizer struct {

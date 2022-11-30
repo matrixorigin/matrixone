@@ -16,6 +16,7 @@ package memoryengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -47,6 +48,10 @@ var _ plan.CompilerContext = new(CompilerContext)
 
 func (*CompilerContext) Cost(obj *plan.ObjectRef, e *plan.Expr) *plan.Cost {
 	return &plan.Cost{}
+}
+
+func (c *CompilerContext) GetProcess() *process.Process {
+	return nil
 }
 
 func (c *CompilerContext) DatabaseExists(name string) bool {
