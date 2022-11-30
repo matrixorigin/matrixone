@@ -310,8 +310,8 @@ github.com/matrixorigin/dragonboat/v4 v4.0.0-20221116064434-34611fc96385 h1:x4k9
 github.com/matrixorigin/dragonboat/v4 v4.0.0-20221116064434-34611fc96385/go.mod h1:bR6ZGoUwApH4/P4+AezNGT0xehljg+j+Z/Q2Fz+Y4a0=
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4 h1:+SmZP2bG+YcO/ntzjCleCu6hFTJiue7Oj2tftpJKTlU=
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4/go.mod h1:LIHvF0fflR+zyXUQFQOiHPpKANf3UIr7DFIv5CBPOoU=
-github.com/matrixorigin/memberlist v0.4.1-0.20221101065119-bb7bce164406 h1:/OUpnb/8qjNhxQeSJuYuFzzNQMaYrWbC5vVp2iiJqEI=
-github.com/matrixorigin/memberlist v0.4.1-0.20221101065119-bb7bce164406/go.mod h1:yvyXLpo0QaGE59Y7hDTsTzDD25JYBZ4mHgHUZ8lrOI0=
+github.com/matrixorigin/memberlist v0.4.1-0.20221125074841-7595e1626d36 h1:JxDUpqN51LbPF7+bAqIBqGq9atInx8JKihm8J3J9/ME=
+github.com/matrixorigin/memberlist v0.4.1-0.20221125074841-7595e1626d36/go.mod h1:yvyXLpo0QaGE59Y7hDTsTzDD25JYBZ4mHgHUZ8lrOI0=
 github.com/matrixorigin/simdcsv v0.0.0-20221106123050-31511b2d3fa8 h1:N1zB1P5vyHK7XEtMFZVEouEpvIZTMiLR9pjFpoQWUJE=
 github.com/matrixorigin/simdcsv v0.0.0-20221106123050-31511b2d3fa8/go.mod h1:79jCHry8mER+PwqF5EMG3ZE4b0lflH1IE/zF3Zs6lR8=
 github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376 h1:1XpEh8nPx1yFTeTFMj/aMipEiilDhQToQS8gjEU2HxM=
