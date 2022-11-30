@@ -108,6 +108,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		matched := false
 		vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, proc, ap.Cond)
 		if err != nil {
+			rbat.Clean(proc.Mp())
 			return err
 		}
 		bs := vector.MustTCols[bool](vec)
