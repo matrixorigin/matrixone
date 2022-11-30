@@ -120,7 +120,9 @@ func readColumnBatchByMetaloc(
 	colTyps []types.Type,
 	colNulls []bool,
 	fs fileservice.FileService,
-	pool *mpool.MPool) (bat *containers.Batch, err error) {
+	pool *mpool.MPool) (*containers.Batch, error) {
+	var bat *containers.Batch
+	var err error
 	name, extent, rows := DecodeMetaLoc(info.MetaLoc)
 	idxsWithouRowid := make([]uint16, 0, len(colIdxs))
 	var rowidData containers.Vector
@@ -225,7 +227,7 @@ func readColumnBatchByMetaloc(
 		logutil.Infof("blockread scan filter cost %v\n", time.Since(t0))
 	}
 
-	return
+	return bat, nil
 }
 
 func readDeleteBatchByDeltaloc(ctx context.Context, deltaloc string, fs fileservice.FileService) (*containers.Batch, error) {

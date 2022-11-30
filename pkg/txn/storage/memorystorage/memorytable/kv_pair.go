@@ -16,6 +16,7 @@ package memorytable
 
 import "fmt"
 
+// KVPair represents a physical row in Table
 type KVPair[
 	K Ordered[K],
 	V any,
@@ -36,6 +37,7 @@ func compareKVPair[
 	return a.Key.Less(b.Key)
 }
 
+// String returns text form of KVPair
 func (k *KVPair[K, V]) String() string {
 	return fmt.Sprintf("kv pair, id %v, key %v, value %v", k.ID, k.Key, k.Value)
 }

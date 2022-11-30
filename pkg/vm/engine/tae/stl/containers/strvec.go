@@ -17,6 +17,7 @@ package containers
 import (
 	"fmt"
 	"io"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -93,6 +94,7 @@ func (vec *StrVector[T]) Bytes() *stl.Bytes {
 
 	return bs
 }
+func (vec *StrVector[T]) SlicePtr() unsafe.Pointer { panic("not support") }
 func (vec *StrVector[T]) Slice() []T               { panic("not support") }
 func (vec *StrVector[T]) SliceWindow(_, _ int) []T { panic("not support") }
 func (vec *StrVector[T]) WindowAsBytes(offset, length int) *stl.Bytes {

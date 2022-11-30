@@ -160,11 +160,14 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 	cloned.stlvec = vec.stlvec.Clone(offset, length, allocator...)
 	return cloned
 }
-func (vec *vector[T]) Slice() any {
-	if vec.typ.IsVarlen() {
-		return vec.stlvec.Bytes()
-	}
+func (vec *vector[T]) fastSlice() []T {
 	return vec.stlvec.Slice()
+}
+func (vec *vector[T]) Slice() any {
+	return vec.stlvec.Slice()
+}
+func (vec *vector[T]) SlicePtr() unsafe.Pointer {
+	return vec.stlvec.SlicePtr()
 }
 
 func (vec *vector[T]) Get(i int) (v any)                   { return vec.impl.Get(i) }
