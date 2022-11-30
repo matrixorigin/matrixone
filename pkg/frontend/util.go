@@ -371,7 +371,7 @@ func WildcardMatch(pattern, target string) bool {
 }
 
 // only support single value and unary minus
-func GetSimpleExprValue(e tree.Expr) (interface{}, error) {
+func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
@@ -389,11 +389,11 @@ func GetSimpleExprValue(e tree.Expr) (interface{}, error) {
 		if err != nil {
 			return nil, err
 		}
-		return getValueFromVector(vec)
+		return getValueFromVector(vec, ses)
 	}
 }
 
-func getValueFromVector(vec *vector.Vector) (interface{}, error) {
+func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
 	if nulls.Any(vec.Nsp) {
 		return nil, nil
 	}
@@ -446,7 +446,7 @@ func getValueFromVector(vec *vector.Vector) (interface{}, error) {
 		return val.String(), nil
 	case types.T_timestamp:
 		val := vector.GetValueAt[types.Timestamp](vec, 0)
-		return val.String(), nil
+		return val.String2(ses.GetTimeZone(), vec.Typ.Precision), nil
 	default:
 		return nil, moerr.NewInvalidArg("variable type", vec.Typ.Oid.String())
 	}
