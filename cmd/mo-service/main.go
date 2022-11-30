@@ -49,8 +49,8 @@ import (
 )
 
 var (
-	configFile = flag.String("cfg", "./mo.toml", "toml configuration used to start mo-service")
-	launchFile = flag.String("launch", "", "toml configuration used to launch mo cluster")
+	configFile = flag.String("cfg", "", "toml configuration used to start mo-service")
+	launchFile = flag.String("launch", "./etc/launch-tae-multi-CN-tae-DN/launch.toml", "toml configuration used to launch mo cluster")
 	version    = flag.Bool("version", false, "print version information")
 )
 
