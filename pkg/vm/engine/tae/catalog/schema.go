@@ -774,6 +774,7 @@ func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 		NullAbility:   attrDefault.NullAbility,
 		AutoIncrement: attr.AutoIncrement,
 		OnUpdate:      attrOnUpdate,
+		ClusterBy:     attr.ClusterBy,
 	}
 	return s.AppendColDef(def)
 }

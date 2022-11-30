@@ -251,6 +251,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				OnUpdate:      planCols[i].GetOnUpdate(),
 				Primary:       col.GetPrimary(),
 				Comment:       col.GetComment(),
+				ClusterBy:     col.ClusterBy,
 				AutoIncrement: col.Typ.GetAutoIncr(),
 			},
 		}
