@@ -86,7 +86,7 @@ const (
 	SystemColAttr_IsHidden        = "att_is_hidden"
 	SystemColAttr_HasUpdate       = "attr_has_update"
 	SystemColAttr_Update          = "attr_update"
-	SystemColAttr_IsClusterBy     = "attr_isClusterBy"
+	SystemColAttr_IsClusterBy     = "attr_is_clusterby"
 
 	BlockMeta_ID         = "block_id"
 	BlockMeta_EntryState = "entry_state"

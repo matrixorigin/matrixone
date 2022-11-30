@@ -460,6 +460,10 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += 1
+		if err = binary.Read(r, binary.BigEndian, &def.ClusterBy); err != nil {
+			return
+		}
+		n += 1
 		def.Default = Default{}
 		length := uint64(0)
 		if err = binary.Read(r, binary.BigEndian, &length); err != nil {
@@ -558,6 +562,9 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 			return
 		}
 		if err = binary.Write(&w, binary.BigEndian, def.SortKey); err != nil {
+			return
+		}
+		if err = binary.Write(&w, binary.BigEndian, def.ClusterBy); err != nil {
 			return
 		}
 		var data []byte

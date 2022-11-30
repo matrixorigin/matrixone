@@ -151,6 +151,7 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 					OriginString: col.OnUpdate.OriginString,
 				},
 				AutoIncrement: col.IsAutoIncrement(),
+				ClusterBy:     col.ClusterBy,
 			},
 		}
 		defs = append(defs, def)
