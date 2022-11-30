@@ -28,10 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func withAllocator(opt *Options) *Options {
-	if opt == nil {
-		opt = new(Options)
-	}
+func withAllocator(opt Options) Options {
 	opt.Allocator = mpool.MustNewZero()
 	return opt
 }
@@ -54,7 +51,7 @@ func withAllocator(opt *Options) *Options {
 
 func TestVector1(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	opt := withAllocator(nil)
+	opt := withAllocator(Options{})
 	vec := MakeVector(types.T_int32.ToType(), false, opt)
 	vec.Append(int32(12))
 	vec.Append(int32(32))
@@ -81,7 +78,7 @@ func TestVector1(t *testing.T) {
 
 func TestVector2(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	opt := withAllocator(nil)
+	opt := withAllocator(Options{})
 	vec := MakeVector(types.T_int64.ToType(), true, opt)
 	t.Log(vec.String())
 	assert.True(t, vec.Nullable())
@@ -138,7 +135,7 @@ func TestVector2(t *testing.T) {
 
 func TestVector3(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	opts := withAllocator(nil)
+	opts := withAllocator(Options{})
 	vec1 := MakeVector(types.T_int32.ToType(), false, opts)
 	for i := 0; i < 100; i++ {
 		vec1.Append(int32(i))
@@ -413,7 +410,7 @@ func TestVector8(t *testing.T) {
 
 func TestVector9(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	opts := withAllocator(nil)
+	opts := withAllocator(Options{})
 	vec := MakeVector(types.T_varchar.ToType(), true, opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("h22"))
@@ -432,7 +429,7 @@ func TestVector9(t *testing.T) {
 
 func TestCloneWithBuffer(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	opts := withAllocator(nil)
+	opts := withAllocator(Options{})
 	vec := MakeVector(types.T_varchar.ToType(), true, opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("h22"))
@@ -455,7 +452,7 @@ func TestCloneWithBuffer(t *testing.T) {
 
 func TestCompact(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	opts := withAllocator(nil)
+	opts := withAllocator(Options{})
 	vec := MakeVector(types.T_varchar.ToType(), true, opts)
 
 	vec.Append(types.Null{})

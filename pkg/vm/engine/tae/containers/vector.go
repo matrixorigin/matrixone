@@ -43,7 +43,7 @@ type vector[T any] struct {
 	roStorage []byte
 }
 
-func NewVector[T any](typ types.Type, nullable bool, opts ...*Options) *vector[T] {
+func NewVector[T any](typ types.Type, nullable bool, opts ...Options) *vector[T] {
 	vec := &vector[T]{
 		stlvec: containers.NewVector[T](opts...),
 		typ:    typ,
@@ -134,7 +134,7 @@ func (vec *vector[T]) DataWindow(offset, length int) []byte {
 	return vec.impl.DataWindow(offset, length)
 }
 func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
-	opts := new(Options)
+	opts := Options{}
 	if len(allocator) == 0 {
 		opts.Allocator = vec.GetAllocator()
 	} else {

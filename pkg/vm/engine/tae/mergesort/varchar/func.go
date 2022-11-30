@@ -28,7 +28,7 @@ func Sort(col containers.Vector, idx []uint32) (ret containers.Vector) {
 
 	sortUnstable(dataWithIdx)
 
-	opt := &containers.Options{Allocator: col.GetAllocator()}
+	opt := containers.Options{Allocator: col.GetAllocator()}
 	sorted := containers.MakeVector(col.GetType(), col.Nullable(), opt)
 	defer sorted.Close()
 	for i, v := range dataWithIdx {
