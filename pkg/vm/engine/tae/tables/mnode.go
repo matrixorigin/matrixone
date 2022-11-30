@@ -28,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
 
+var _ NodeT = (*memoryNode)(nil)
+
 type memoryNode struct {
 	common.RefHelper
 	block  *baseBlock
@@ -88,6 +90,18 @@ func (node *memoryNode) BatchDedup(
 	keys containers.Vector,
 	skipFn func(row uint32) error) (sels *roaring.Bitmap, err error) {
 	return node.pkIndex.BatchDedup(keys, skipFn)
+}
+
+func (node *memoryNode) ContainsKey(key any) (ok bool, err error) {
+	if err = node.pkIndex.Dedup(key, nil); err != nil {
+		return
+	}
+	if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+		return
+	}
+	ok = true
+	err = nil
+	return
 }
 
 func (node *memoryNode) GetValueByRow(row, col int) (v any) {

@@ -21,8 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
+
+var _ NodeT = (*persistedNode)(nil)
 
 type persistedNode struct {
 	common.RefHelper
@@ -85,10 +88,6 @@ func (node *persistedNode) BatchDedup(
 	return node.pkIndex.BatchDedup(keys, skipFn)
 }
 
-func (node *persistedNode) Dedup(key any) (err error) {
-	return node.pkIndex.Dedup(key, nil)
-}
-
 func (node *persistedNode) ContainsKey(key any) (ok bool, err error) {
 	if err = node.pkIndex.Dedup(key, nil); err == nil {
 		return
@@ -136,4 +135,23 @@ func (node *persistedNode) GetDataWindow(
 		data.Close()
 	}
 	return
+}
+
+func (node *persistedNode) PrepareAppend(rows uint32) (n uint32, err error) {
+	panic(moerr.NewInternalError("not supported"))
+}
+
+func (node *persistedNode) ApplyAppend(
+	_ *containers.Batch,
+	_ txnif.AsyncTxn,
+) (from int, err error) {
+	panic(moerr.NewInternalError("not supported"))
+}
+
+func (node *persistedNode) GetValueByRow(row, col int) (v any) {
+	panic(moerr.NewInternalError("todo"))
+}
+
+func (node *persistedNode) GetRowsByKey(key any) ([]uint32, error) {
+	panic(moerr.NewInternalError("todo"))
 }
