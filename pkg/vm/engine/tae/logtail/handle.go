@@ -51,7 +51,7 @@ type CheckpointClient interface {
 
 func HandleSyncLogTailReq(
 	ckpClient CheckpointClient,
-	mgr *LogtailMgr,
+	mgr *Manager,
 	c *catalog.Catalog,
 	req api.SyncLogTailReq,
 	canRetry bool) (resp api.SyncLogTailResp, err error) {
@@ -84,7 +84,7 @@ func HandleSyncLogTailReq(
 		start = checkpointed.Next()
 	}
 
-	scope := mgr.DecideScope(tid)
+	scope := DecideTableScope(tid)
 
 	var visitor RespBuilder
 

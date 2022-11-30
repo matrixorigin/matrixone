@@ -14,32 +14,6 @@ import (
 type RowT = *txnRow
 type BlockT = *txnBlock
 
-// type TableReader struct {
-// 	from, to types.TS
-// 	it       btree.GenericIter[*txnBlock]
-// }
-
-// func (r *TableReader) GetDirty() (tree *common.Tree, count int) {
-// 	tree = common.NewTree()
-// 	op := func(txn txnif.AsyncTxn) (moveOn bool) {
-// 		if memo := txn.GetMemo(); memo.HasAnyTableDataChanges() {
-// 			tree.Merge(memo.GetDirty())
-// 		}
-// 		count++
-// 		return true
-// 	}
-// 	r.readTxnInBetween(r.from, r.to, op)
-// }
-
-// func (r *TableReader) foreach(
-// 	tableView *TxnTable,
-// 	from, to types.TS,
-// 	op func(row RowT) (goNext bool),
-// ) {
-// 	pivot := &txnBlock{bornTS: from}
-
-// }
-
 type txnRow struct {
 	txnif.AsyncTxn
 }

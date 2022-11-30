@@ -19,7 +19,6 @@ func TestTxnTable1(t *testing.T) {
 		txn := new(txnbase.Txn)
 		txn.TxnCtx = txnbase.NewTxnCtx(idAlloc.Alloc(), tsAlloc.Alloc(), nil)
 		txn.PrepareTS = tsAlloc.Alloc()
-		t.Logf("yyy %s", txn)
 		assert.NoError(t, table.AddTxn(txn))
 	}
 	t.Log(table.BlockCount())
