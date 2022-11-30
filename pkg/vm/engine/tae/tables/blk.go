@@ -54,7 +54,7 @@ func newBlock(
 }
 
 func (blk *block) Init() (err error) {
-	node := blk.PinNode2()
+	node := blk.PinNode()
 	defer node.Unref()
 	node.MustPNode().init()
 	return
@@ -103,7 +103,7 @@ func (blk *block) GetColumnDataByIds(
 	txn txnif.AsyncTxn,
 	colIdxes []int,
 	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
-	node := blk.PinNode2()
+	node := blk.PinNode()
 	defer node.Unref()
 	return blk.ResolvePersistedColumnDatas(
 		node.MustPNode(),
@@ -117,7 +117,7 @@ func (blk *block) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	colIdx int,
 	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
-	node := blk.PinNode2()
+	node := blk.PinNode()
 	defer node.Unref()
 	return blk.ResolvePersistedColumnData(
 		node.MustPNode(),
@@ -141,7 +141,7 @@ func (blk *block) BatchDedup(
 	if precommit {
 		ts = txn.GetPrepareTS()
 	}
-	node := blk.PinNode2()
+	node := blk.PinNode()
 	defer node.Unref()
 	return blk.PersistedBatchDedup(
 		node.MustPNode(),
@@ -169,7 +169,7 @@ func (blk *block) GetValue(
 	txn txnif.AsyncTxn,
 	row, col int) (v any, err error) {
 	ts := txn.GetStartTS()
-	node := blk.PinNode2()
+	node := blk.PinNode()
 	defer node.Unref()
 	return blk.getPersistedValue(
 		node.MustPNode(),
@@ -223,7 +223,7 @@ func (blk *block) GetByFilter(
 	}
 	ts := txn.GetStartTS()
 
-	node := blk.PinNode2()
+	node := blk.PinNode()
 	defer node.Unref()
 	return blk.getPersistedRowByFilter(node.MustPNode(), ts, filter)
 }

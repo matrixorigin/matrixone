@@ -84,7 +84,7 @@ func (blk *baseBlock) Close() {
 	// TODO
 }
 
-func (blk *baseBlock) PinNode2() *Node {
+func (blk *baseBlock) PinNode() *Node {
 	n := blk.node.Load()
 	n.Ref()
 	return n
@@ -95,7 +95,7 @@ func (blk *baseBlock) GetColumnData(
 	to uint32,
 	colIdx int,
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
-	node := blk.PinNode2()
+	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
 		blk.RLock()
@@ -107,7 +107,7 @@ func (blk *baseBlock) GetColumnData(
 }
 
 func (blk *baseBlock) Rows() int {
-	node := blk.PinNode2()
+	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
 		blk.RLock()

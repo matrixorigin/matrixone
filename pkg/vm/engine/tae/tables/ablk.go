@@ -92,7 +92,7 @@ func (blk *ablock) IsAppendable() bool {
 	if blk.IsAppendFrozen() {
 		return false
 	}
-	node := blk.PinNode2()
+	node := blk.PinNode()
 	defer node.Unref()
 	if node.IsPersisted() {
 		return false
@@ -164,7 +164,7 @@ func (blk *ablock) resolveColumnDatas(
 	colIdxes []int,
 	buffers []*bytes.Buffer,
 	skipDeletes bool) (view *model.BlockView, err error) {
-	node := blk.PinNode2()
+	node := blk.PinNode()
 	defer node.Unref()
 
 	if !node.IsPersisted() {
@@ -190,7 +190,7 @@ func (blk *ablock) resolveColumnData(
 	colIdx int,
 	buffer *bytes.Buffer,
 	skipDeletes bool) (view *model.ColumnView, err error) {
-	node := blk.PinNode2()
+	node := blk.PinNode()
 	defer node.Unref()
 
 	if !node.IsPersisted() {
@@ -211,7 +211,7 @@ func (blk *ablock) resolveColumnData(
 	}
 }
 
-// Note: With PinNode2 Context
+// Note: With PinNode Context
 func (blk *ablock) resolveInMemoryColumnDatas(
 	mnode *memoryNode,
 	ts types.TS,
@@ -254,7 +254,7 @@ func (blk *ablock) resolveInMemoryColumnDatas(
 	return
 }
 
-// Note: With PinNode2 Context
+// Note: With PinNode Context
 func (blk *ablock) resolveInMemoryColumnData(
 	mnode *memoryNode,
 	ts types.TS,
@@ -306,7 +306,7 @@ func (blk *ablock) GetValue(
 	txn txnif.AsyncTxn,
 	row, col int) (v any, err error) {
 	ts := txn.GetStartTS()
-	node := blk.PinNode2()
+	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
 		return blk.getInMemoryValue(node.MustMNode(), ts, row, col)
@@ -320,7 +320,7 @@ func (blk *ablock) GetValue(
 	}
 }
 
-// With PinNode2 Context
+// With PinNode Context
 func (blk *ablock) getInMemoryValue(
 	mnode *memoryNode,
 	ts types.TS,
@@ -356,7 +356,7 @@ func (blk *ablock) GetByFilter(
 	}
 	ts := txn.GetStartTS()
 
-	node := blk.PinNode2()
+	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
 		return blk.getInMemoryRowByFilter(node.MustMNode(), ts, filter)
@@ -435,7 +435,7 @@ func (blk *ablock) getPersistedRowByFilter(
 	return
 }
 
-// With PinNode2 Context
+// With PinNode Context
 func (blk *ablock) getInMemoryRowByFilter(
 	mnode *memoryNode,
 	ts types.TS,
@@ -597,7 +597,7 @@ func (blk *ablock) BatchDedup(
 	if precommit {
 		dedupTS = txn.GetPrepareTS()
 	}
-	node := blk.PinNode2()
+	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
 		return blk.inMemoryBatchDedup(node.MustMNode(), dedupTS, txn.GetStartTS(), keys, rowmask)
@@ -658,7 +658,7 @@ func (blk *ablock) inMemoryCollectAppendInRange(
 func (blk *ablock) CollectAppendInRange(
 	start, end types.TS,
 	withAborted bool) (*containers.Batch, error) {
-	node := blk.PinNode2()
+	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
 		return blk.inMemoryCollectAppendInRange(

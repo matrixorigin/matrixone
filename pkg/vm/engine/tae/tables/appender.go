@@ -84,7 +84,7 @@ func (appender *blockAppender) ReplayAppend(
 func (appender *blockAppender) ApplyAppend(
 	bat *containers.Batch,
 	txn txnif.AsyncTxn) (from int, err error) {
-	n := appender.blk.PinNode2()
+	n := appender.blk.PinNode()
 	defer n.Unref()
 
 	node := n.MustMNode()
