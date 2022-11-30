@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
@@ -65,7 +64,6 @@ func (blk *txnBlock) ForeachRowInBetween(
 			return
 		}
 		if ts.Less(from) {
-			logutil.Infof("ts %s, from %s", ts.ToString(), from.ToString())
 			continue
 		}
 
@@ -99,7 +97,7 @@ func timeBasedTruncateFactory(ts types.TS) func(b BlockT) bool {
 	}
 }
 
-func NewTxnTable(blockSize int, clock *types.TsAlloctor) *TxnTable {
+func NewTxnTable(blockSize int) *TxnTable {
 	factory := func(row RowT) BlockT {
 		return &txnBlock{
 			bornTS: row.GetStartTS(),

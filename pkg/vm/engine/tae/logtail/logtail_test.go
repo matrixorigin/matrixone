@@ -14,7 +14,7 @@ func TestTxnTable1(t *testing.T) {
 	blockSize := 10
 	idAlloc := common.NewTxnIDAllocator()
 	tsAlloc := types.GlobalTsAlloctor
-	table := NewTxnTable(blockSize, tsAlloc)
+	table := NewTxnTable(blockSize)
 	for i := 0; i < txnCnt; i++ {
 		txn := new(txnbase.Txn)
 		txn.TxnCtx = txnbase.NewTxnCtx(idAlloc.Alloc(), tsAlloc.Alloc(), nil)

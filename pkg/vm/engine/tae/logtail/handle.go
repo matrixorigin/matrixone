@@ -49,6 +49,21 @@ type CheckpointClient interface {
 	FlushTable(dbID, tableID uint64, ts types.TS) error
 }
 
+func DecideTableScope(tableID uint64) Scope {
+	var scope Scope
+	switch tableID {
+	case pkgcatalog.MO_DATABASE_ID:
+		scope = ScopeDatabases
+	case pkgcatalog.MO_TABLES_ID:
+		scope = ScopeTables
+	case pkgcatalog.MO_COLUMNS_ID:
+		scope = ScopeColumns
+	default:
+		scope = ScopeUserTables
+	}
+	return scope
+}
+
 func HandleSyncLogTailReq(
 	ckpClient CheckpointClient,
 	mgr *Manager,

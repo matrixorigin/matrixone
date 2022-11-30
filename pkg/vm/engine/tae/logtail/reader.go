@@ -64,6 +64,7 @@ func (r *Reader) GetDirtyByTable(
 	return
 }
 
+// TODO: optimize
 func (r *Reader) GetMaxLSN() (maxLsn uint64) {
 	r.table.ForeachRowInBetween(
 		r.from,

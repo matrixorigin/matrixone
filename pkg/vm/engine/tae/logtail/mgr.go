@@ -1,41 +1,23 @@
 package logtail
 
 import (
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
-
-func DecideTableScope(tableID uint64) Scope {
-	var scope Scope
-	switch tableID {
-	case pkgcatalog.MO_DATABASE_ID:
-		scope = ScopeDatabases
-	case pkgcatalog.MO_TABLES_ID:
-		scope = ScopeTables
-	case pkgcatalog.MO_COLUMNS_ID:
-		scope = ScopeColumns
-	default:
-		scope = ScopeUserTables
-	}
-	return scope
-}
 
 type Manager struct {
 	txnbase.NoopCommitListener
 	table *TxnTable
 }
 
-func NewManager(blockSize int, c clock.Clock) *Manager {
-	mgr := &Manager{}
-	mgr.table = NewTxnTable(
-		blockSize,
-		types.NewTsAlloctor(c),
-	)
-	return mgr
+func NewManager(blockSize int) *Manager {
+	return &Manager{
+		table: NewTxnTable(
+			blockSize,
+		),
+	}
 }
 
 func (mgr *Manager) OnEndPrePrepare(txn txnif.AsyncTxn) {
