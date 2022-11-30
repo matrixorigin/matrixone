@@ -163,7 +163,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 
 	if len(cbDef) > 0 {
 		createStr += " CLUSTER BY "
-		createStr += cbDef
+		createStr += fmt.Sprintf("`%s`", cbDef)
 	}
 
 	var comment string
