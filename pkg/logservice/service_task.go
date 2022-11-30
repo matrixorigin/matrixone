@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"go.uber.org/zap"
@@ -52,14 +53,15 @@ func (s *Service) initTaskHolder() {
 	}
 
 	if s.task.storageFactory != nil {
-		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(s.logger,
+		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(
+			runtime.ProcessLevelRuntime(),
 			addressFunc,
 			func(_, _, _ string) taskservice.TaskStorageFactory {
 				return s.task.storageFactory
 			})
 		return
 	}
-	s.task.holder = taskservice.NewTaskServiceHolder(s.logger, addressFunc)
+	s.task.holder = taskservice.NewTaskServiceHolder(runtime.ProcessLevelRuntime(), addressFunc)
 }
 
 func (s *Service) createTaskService(command *logservicepb.CreateTaskService) {

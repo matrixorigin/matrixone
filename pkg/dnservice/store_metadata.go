@@ -45,12 +45,12 @@ func (s *store) initMetadata() error {
 	v := &metadata.DNStore{}
 	protoc.MustUnmarshal(v, data)
 	if v.UUID != s.mu.metadata.UUID {
-		s.logger.Fatal("BUG: disk DNStore and start DNStore not match",
+		s.rt.Logger().Fatal("BUG: disk DNStore and start DNStore not match",
 			zap.String("disk-store", v.UUID))
 	}
 	s.mu.metadata = *v
 
-	s.logger.Info("local DNShard loaded",
+	s.rt.Logger().Info("local DNShard loaded",
 		zap.String("metadata", s.mu.metadata.DebugString()))
 	return nil
 }
@@ -83,7 +83,7 @@ func (s *store) mustUpdateMetadataLocked() {
 	if err := file.WriteFile(s.metadataFileService,
 		getMetadataFile(s.cfg.UUID),
 		protoc.MustMarshal(&s.mu.metadata)); err != nil {
-		s.logger.Fatal("update metadata to local file failed",
+		s.rt.Logger().Fatal("update metadata to local file failed",
 			zap.Error(err))
 	}
 }

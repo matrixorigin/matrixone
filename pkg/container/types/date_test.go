@@ -15,10 +15,12 @@
 package types
 
 import (
+	"fmt"
 	"testing"
+	"time"
 )
 
-func TestParseDate(t *testing.T) {
+func TestParseDateCast(t *testing.T) {
 	type args struct {
 		s string
 	}
@@ -107,17 +109,41 @@ func TestParseDate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseDate(tt.args.s)
+			got, err := ParseDateCast(tt.args.s)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("ParseDate() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("ParseDateCast() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if err != nil && tt.wantErr {
 				return
 			}
 			if got.String() != tt.want {
-				t.Errorf("ParseDate() got = %v, want %v", got, tt.want)
+				t.Errorf("ParseDateCast() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
+
+func TestParseDate2(t *testing.T) {
+	t1 := time.Now()
+	s := "2020-12-21"
+	for i := 0; i < 1000000; i++ {
+		_, err := ParseDateCast(s)
+		if err != nil {
+			panic(err)
+		}
+	}
+	fmt.Println("Time Spent is ", time.Since(t1))
+}
+
+// func TestParseDate3(t *testing.T) {
+// 	t1 := time.Now()
+// 	s := "2020-12-21"
+// 	for i := 0; i < 1000000; i++ {
+// 		_, err := ParseDateCast(s)
+// 		if err != nil {
+// 			panic(err)
+// 		}
+// 	}
+// 	fmt.Println("Time Spent is ", time.Since(t1))
+// }

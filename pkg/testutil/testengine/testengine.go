@@ -38,12 +38,9 @@ func New(
 	compilerContext plan.CompilerContext,
 ) {
 
-	ck := clock.DefaultClock()
-	if ck == nil {
-		ck = clock.NewHLCClock(func() int64 {
-			return time.Now().Unix()
-		}, math.MaxInt)
-	}
+	ck := clock.NewHLCClock(func() int64 {
+		return time.Now().Unix()
+	}, math.MaxInt)
 
 	shard := logservicepb.DNShardInfo{
 		ShardID:   2,

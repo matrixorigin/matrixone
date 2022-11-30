@@ -37,7 +37,7 @@ func ExtractFromString(vectors []*vector.Vector, proc *process.Process) (*vector
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint32, 1)
 		unit := string(leftValues.Data)
-		inputDate, err := types.ParseDate(string(rightValues.Get(0)))
+		inputDate, err := types.ParseDateCast(string(rightValues.Get(0)))
 		if err != nil {
 			return nil, moerr.NewInternalError("invalid input")
 		}

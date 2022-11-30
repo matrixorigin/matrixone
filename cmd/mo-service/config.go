@@ -37,20 +37,14 @@ import (
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
-const (
-	cnServiceType  = "CN"
-	dnServiceType  = "DN"
-	logServiceType = "LOG"
-)
-
 var (
 	defaultMaxClockOffset = time.Millisecond * 500
 	defaultMemoryLimit    = 1 << 40
 
 	supportServiceTypes = map[string]metadata.ServiceType{
-		cnServiceType:  metadata.ServiceType_CN,
-		dnServiceType:  metadata.ServiceType_DN,
-		logServiceType: metadata.ServiceType_LOG,
+		metadata.ServiceType_CN.String():  metadata.ServiceType_CN,
+		metadata.ServiceType_DN.String():  metadata.ServiceType_DN,
+		metadata.ServiceType_LOG.String(): metadata.ServiceType_LOG,
 	}
 )
 
@@ -272,13 +266,18 @@ func (c *Config) resolveGossipSeedAddresses() error {
 }
 
 func (c *Config) hashNodeID() uint16 {
+	st, err := c.getServiceType()
+	if err != nil {
+		panic(err)
+	}
+
 	uuid := ""
-	switch c.ServiceType {
-	case cnServiceType:
+	switch st {
+	case metadata.ServiceType_CN:
 		uuid = c.CN.UUID
-	case dnServiceType:
+	case metadata.ServiceType_DN:
 		uuid = c.DN.UUID
-	case logServiceType:
+	case metadata.ServiceType_LOG:
 		uuid = c.LogService.UUID
 	}
 	if uuid == "" {

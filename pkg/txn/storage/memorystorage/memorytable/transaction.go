@@ -22,6 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
+// Transaction represents a transaction
+// a transaction may contains multiple operations on multiple tables
+// a transaction commits atomically
 type Transaction struct {
 	State     *Atomic[TransactionState]
 	BeginTime Time
@@ -37,6 +40,7 @@ type transactionTable struct {
 	state atomic.Value
 }
 
+// NewTransaction creates a new transaction using beginTime as snapshot time
 func NewTransaction(
 	beginTime Time,
 ) *Transaction {
@@ -47,8 +51,10 @@ func NewTransaction(
 	}
 }
 
+// TransactionState represents state of a transaction
 type TransactionState uint8
 
+// String returns the text form of a state
 func (t TransactionState) String() string {
 	switch t {
 	case Active:
@@ -62,11 +68,15 @@ func (t TransactionState) String() string {
 }
 
 const (
+	// Active is the default state of a newly created transaction
 	Active TransactionState = iota
+	// Committed is the state of a committed transaction
 	Committed
+	// Aborted is the state of a aborted transaction
 	Aborted
 )
 
+// Commit commits the transaction
 func (t *Transaction) Commit(commitTime Time) error {
 	if state := t.State.Load(); state != Active {
 		return moerr.NewTxnNotActive(state.String())
@@ -106,6 +116,7 @@ func (t *Table[K, V, R]) commit(tx *Transaction, state any, commitTime Time) err
 	return nil
 }
 
+// Abort aborts the transaction
 func (t *Transaction) Abort() error {
 	for _, table := range t.tables {
 		table.table.Lock()

@@ -900,7 +900,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 					} else {
 						fs := field
 						//logutil.Infof("==== > field string [%s] ",fs)
-						d, err := types.ParseDate(fs)
+						d, err := types.ParseDateCast(fs)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
@@ -1452,7 +1452,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 					} else {
 						field := line[j]
 						//logutil.Infof("==== > field string [%s] ",fs)
-						d, err := types.ParseDate(field)
+						d, err := types.ParseDateCast(field)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
