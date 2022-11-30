@@ -14,6 +14,7 @@
 
 package memorytable
 
+// IndexEntry represents an index entry
 type IndexEntry[
 	K Ordered[K],
 	V any,
@@ -35,6 +36,7 @@ func compareIndexEntry[
 	return a.Key.Less(b.Key)
 }
 
+// Index finds entry in table
 func (t *Table[K, V, R]) Index(tx *Transaction, index Tuple) (entries []*IndexEntry[K, V], err error) {
 	iter, err := t.NewIndexIter(
 		tx,

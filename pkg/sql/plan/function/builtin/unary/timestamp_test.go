@@ -127,7 +127,7 @@ func TestDateStringAdd(t *testing.T) {
 func makeDateToTimestampVectors(str string, isConst bool) []*vector.Vector {
 	vec := make([]*vector.Vector, 1)
 
-	date, _ := types.ParseDate(str)
+	date, _ := types.ParseDateCast(str)
 
 	vec[0] = vector.NewConstFixed(types.T_date.ToType(), 1, date, testutil.TestUtilMp)
 	return vec
