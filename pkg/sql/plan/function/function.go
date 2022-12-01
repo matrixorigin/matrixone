@@ -175,6 +175,14 @@ func (f Function) isFunction() bool {
 var functionRegister []Functions
 
 // get function id from map functionIdRegister, see functionIds.go
+func fromNameToFunctionIdWithoutError(name string) (int32, bool) {
+	if fid, ok := functionIdRegister[name]; ok {
+		return fid, true
+	}
+	return -1, false
+}
+
+// get function id from map functionIdRegister, see functionIds.go
 func fromNameToFunctionId(name string) (int32, error) {
 	if fid, ok := functionIdRegister[name]; ok {
 		return fid, nil
@@ -229,8 +237,8 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 }
 
 func GetFunctionIsAggregateByName(name string) bool {
-	fid, err := fromNameToFunctionId(name)
-	if err != nil {
+	fid, exists := fromNameToFunctionIdWithoutError(name)
+	if !exists {
 		return false
 	}
 	fs := functionRegister[fid].Overloads
