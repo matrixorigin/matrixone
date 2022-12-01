@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -26,10 +27,12 @@ type Manager struct {
 	table *TxnTable
 }
 
-func NewManager(blockSize int) *Manager {
+func NewManager(blockSize int, clock clock.Clock) *Manager {
+	tsAlloc := types.NewTsAlloctor(clock)
 	return &Manager{
 		table: NewTxnTable(
 			blockSize,
+			tsAlloc,
 		),
 	}
 }

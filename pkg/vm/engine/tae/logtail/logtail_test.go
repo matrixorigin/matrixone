@@ -28,7 +28,7 @@ func TestTxnTable1(t *testing.T) {
 	blockSize := 10
 	idAlloc := common.NewTxnIDAllocator()
 	tsAlloc := types.GlobalTsAlloctor
-	table := NewTxnTable(blockSize)
+	table := NewTxnTable(blockSize, tsAlloc)
 	for i := 0; i < txnCnt; i++ {
 		txn := new(txnbase.Txn)
 		txn.TxnCtx = txnbase.NewTxnCtx(idAlloc.Alloc(), tsAlloc.Alloc(), nil)
@@ -62,7 +62,7 @@ func TestTxnTable1(t *testing.T) {
 	cnt = 0
 	t.Log("==")
 	table.ForeachRowInBetween(
-		timestamps[1].Next(),
+		timestamps[1],
 		types.MaxTs(),
 		op,
 	)
@@ -70,7 +70,7 @@ func TestTxnTable1(t *testing.T) {
 	cnt = 0
 	t.Log("==")
 	table.ForeachRowInBetween(
-		timestamps[2].Next(),
+		timestamps[2],
 		types.MaxTs(),
 		op,
 	)
