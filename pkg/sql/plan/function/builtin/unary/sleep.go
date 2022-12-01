@@ -34,16 +34,17 @@ func Sleep[T number](vs []*vector.Vector, proc *process.Process) (rs *vector.Vec
 	}()
 	resultType := types.T_uint8.ToType()
 	inputs := vs[0]
-	if inputs.IsScalarNull() {
-		err = moerr.NewInvalidArg("sleep", "input is null")
+	if inputs.Nsp.Any() {
+		err = moerr.NewInvalidArg("sleep", "input contains null")
+		return
+	}
+	sleepSlice := vector.MustTCols[T](inputs)
+	if checkNegative(sleepSlice) {
+		err = moerr.NewInvalidArg("sleep", "input contains negative")
 		return
 	}
 	if inputs.IsScalar() {
-		sleepSeconds := vector.MustTCols[T](inputs)[0]
-		if sleepSeconds < 0 {
-			err = moerr.NewInvalidArg("sleep", "input is negative")
-			return
-		}
+		sleepSeconds := sleepSlice[0]
 		sleepNano := time.Nanosecond * time.Duration(sleepSeconds*1e9)
 		rs = proc.AllocScalarVector(resultType)
 		result := vector.MustTCols[uint8](rs)
@@ -55,21 +56,12 @@ func Sleep[T number](vs []*vector.Vector, proc *process.Process) (rs *vector.Vec
 		}
 		return
 	}
-	if inputs.Nsp.Any() {
-		err = moerr.NewInvalidArg("sleep", "input contains null")
-		return
-	}
-	sleepSlice := vector.MustTCols[T](inputs)
 	rs, err = proc.AllocVectorOfRows(resultType, int64(len(sleepSlice)), inputs.Nsp)
 	if err != nil {
 		return
 	}
 	result := vector.MustTCols[uint8](rs)
 	for i, sleepSeconds := range sleepSlice {
-		if sleepSeconds < 0 {
-			err = moerr.NewInvalidArg("sleep", "input is negative")
-			break
-		}
 		sleepNano := time.Nanosecond * time.Duration(sleepSeconds*1e9)
 		select {
 		case <-time.After(sleepNano):
@@ -82,4 +74,13 @@ func Sleep[T number](vs []*vector.Vector, proc *process.Process) (rs *vector.Vec
 		}
 	}
 	return
+}
+
+func checkNegative[T number](rs []T) bool {
+	for _, v := range rs {
+		if v < 0 {
+			return true
+		}
+	}
+	return false
 }
