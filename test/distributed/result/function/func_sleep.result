@@ -8,6 +8,11 @@ sleep(1.5)
 0
 select sleep(null);
 invalid argument sleep, bad value input is null
+select sleep(-1);
+invalid argument sleep, bad value input is negative
+select sleep(-1.5);
+invalid argument sleep, bad value input is negative
+
 create table t1 (a int,b int);
 insert into t1 values (1,1),(1,null);
 select sleep(a) from t1;
