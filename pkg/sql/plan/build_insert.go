@@ -187,19 +187,21 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 			}
 		}
 	}
-	indexInfo := BuildIndexInfos(ctx, dbName, tblRef.Defs)
+
+	uDef, sDef := buildIndexDefs(tblRef.Defs)
 
 	return &Plan{
 		Plan: &plan.Plan_Ins{
 			Ins: &plan.InsertValues{
-				DbName:        dbName,
-				TblName:       tblName,
-				ExplicitCols:  explicitCols,
-				OtherCols:     otherCols,
-				OrderAttrs:    orderAttrs,
-				Columns:       columns,
-				CompositePkey: tblRef.CompositePkey,
-				IndexInfos:    indexInfo,
+				DbName:            dbName,
+				TblName:           tblName,
+				ExplicitCols:      explicitCols,
+				OtherCols:         otherCols,
+				OrderAttrs:        orderAttrs,
+				Columns:           columns,
+				CompositePkey:     tblRef.CompositePkey,
+				UniqueIndexDef:    uDef,
+				SecondaryIndexDef: sDef,
 			},
 		},
 	}, nil
@@ -356,8 +358,6 @@ func getInsertTable(stmt tree.TableExpr, ctx CompilerContext) (*ObjectRef, *Tabl
 		if tableDef == nil {
 			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "insert target table '%s' does not exist", tblName)
 		}
-		indexInfos := BuildIndexInfos(ctx, objRef.DbName, tableDef.Defs)
-		tableDef.IndexInfos = indexInfos
 		return objRef, tableDef, nil
 	case *tree.ParenTableExpr:
 		return getInsertTable(tbl.Expr, ctx)
@@ -372,33 +372,16 @@ func getInsertTable(stmt tree.TableExpr, ctx CompilerContext) (*ObjectRef, *Tabl
 	}
 }
 
-func BuildIndexInfos(ctx CompilerContext, dbName string, defs []*plan.TableDef_DefType) []*plan.IndexInfo {
+func buildIndexDefs(defs []*plan.TableDef_DefType) (*UniqueIndexDef, *SecondaryIndexDef) {
+	var uIdxDef *UniqueIndexDef = nil
+	var sIdxDef *SecondaryIndexDef = nil
 	for _, def := range defs {
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_Idx); ok {
-			infos := make([]*plan.IndexInfo, 0)
-			idx := idxDef.Idx
-
-			for i := range idx.IndexNames {
-				_, tableDef := ctx.Resolve(dbName, idx.TableNames[i])
-				info := &plan.IndexInfo{
-					TableName: idx.TableNames[i],
-					Cols:      make([]*plan.ColDef, 0),
-					ColNames:  make([]string, 0),
-					Field:     &plan.Field{ColNames: idx.Fields[i].ColNames},
-				}
-				if tableDef.CompositePkey != nil {
-					info.Cols = append(info.Cols, tableDef.CompositePkey)
-					info.ColNames = append(info.ColNames, tableDef.CompositePkey.Name)
-				}
-				for _, col := range tableDef.Cols {
-					info.Cols = append(info.Cols, col)
-					info.ColNames = append(info.ColNames, col.Name)
-				}
-				infos = append(infos, info)
-
-			}
-			return infos
+		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+			uIdxDef = idxDef.UIdx
+		}
+		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
+			sIdxDef = idxDef.SIdx
 		}
 	}
-	return nil
+	return uIdxDef, sIdxDef
 }
