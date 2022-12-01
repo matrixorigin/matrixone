@@ -37,7 +37,7 @@ const MO_DEFUALT_HOSTNAME = "localhost"
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	ctx CompilerContext) (*Plan, error) {
 	if !ctx.DatabaseExists(stmt.Name) {
-		return nil, moerr.NewBadDB(stmt.Name)
+		return nil, moerr.NewBadDB(ctx.GetContext(), stmt.Name)
 	}
 
 	// get data from schema
@@ -62,7 +62,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return nil, moerr.NewNoSuchTable(dbName, tblName)
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
 		newStmt := tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
@@ -236,7 +236,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil || tableDef.TableType != catalog.SystemViewRel {
-		return nil, moerr.NewInvalidInput("show view '%s' is not a valid view", tblName)
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "show view '%s' is not a valid view", tblName)
 	}
 	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`"
 	var viewStr string
@@ -266,7 +266,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 
 func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
-		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 	accountId := ctx.GetAccountId()
 	ddlType := plan.DataDefinition_SHOW_DATABASES
@@ -290,11 +290,11 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 
 func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
-		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
 	if stmt.Open {
-		return nil, moerr.NewNYI("statement: '%v'", tree.String(stmt, dialect.MYSQL))
+		return nil, moerr.NewNYI(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
 
 	accountId := ctx.GetAccountId()
@@ -302,11 +302,11 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	if stmt.DBName == "" {
 		dbName = ctx.DefaultDatabase()
 	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(dbName)
+		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
 	}
 
 	if dbName == "" {
-		return nil, moerr.NewNoDB()
+		return nil, moerr.NewNoDB(ctx.GetContext())
 	}
 	ddlType := plan.DataDefinition_SHOW_TABLES
 	var tableType string
@@ -334,7 +334,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 
 func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
-		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
 	accountId := ctx.GetAccountId()
@@ -342,13 +342,13 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
 	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(dbName)
+		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return nil, moerr.NewNoSuchTable(dbName, tblName)
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
@@ -377,7 +377,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 
 func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
-		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
 	dbName := stmt.DbName
@@ -385,10 +385,10 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 		dbName = ctx.DefaultDatabase()
 		stmt.DbName = dbName
 		if dbName == "" {
-			return nil, moerr.NewNoDB()
+			return nil, moerr.NewNoDB(ctx.GetContext())
 		}
 	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(dbName)
+		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
 	}
 
 	ddlType := plan.DataDefinition_SHOW_TABLE_STATUS
@@ -431,16 +431,16 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
 		if dbName == "" {
-			return nil, moerr.NewNoDB()
+			return nil, moerr.NewNoDB(ctx.GetContext())
 		}
 	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(dbName)
+		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
 	}
 
 	tblName := string(stmt.TableName.Name())
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return nil, moerr.NewNoSuchTable(dbName, tblName)
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
 	accountId := ctx.GetAccountId()
@@ -475,7 +475,7 @@ func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) 
 
 func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
-		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
@@ -531,7 +531,7 @@ func buildShowProcessList(stmt *tree.ShowProcessList, ctx CompilerContext) (*Pla
 
 func returnByRewriteSQL(ctx CompilerContext, sql string,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
-	stmt, err := getRewriteSQLStmt(sql)
+	stmt, err := getRewriteSQLStmt(ctx, sql)
 	if err != nil {
 		return nil, err
 	}
@@ -542,7 +542,7 @@ func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
 	where *tree.Where, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	sql := fmt.Sprintf("SELECT * FROM (%s) tbl", baseSQL)
 	// logutil.Info(sql)
-	newStmt, err := getRewriteSQLStmt(sql)
+	newStmt, err := getRewriteSQLStmt(ctx, sql)
 	if err != nil {
 		return nil, err
 	}
@@ -553,7 +553,7 @@ func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
 
 func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonExpr,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
-	newStmt, err := getRewriteSQLStmt(sql)
+	newStmt, err := getRewriteSQLStmt(ctx, sql)
 	if err != nil {
 		return nil, err
 	}
@@ -579,13 +579,13 @@ func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonEx
 	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
 }
 
-func getRewriteSQLStmt(sql string) (tree.Statement, error) {
-	newStmts, err := parsers.Parse(dialect.MYSQL, sql)
+func getRewriteSQLStmt(ctx CompilerContext, sql string) (tree.Statement, error) {
+	newStmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql)
 	if err != nil {
 		return nil, err
 	}
 	if len(newStmts) != 1 {
-		return nil, moerr.NewInvalidInput("rewrite can only contain one statement, %d provided", len(newStmts))
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "rewrite can only contain one statement, %d provided", len(newStmts))
 	}
 	return newStmts[0], nil
 }

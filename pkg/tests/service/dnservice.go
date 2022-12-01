@@ -111,7 +111,7 @@ func (ds *dnService) StartDNReplica(shard metadata.DNShard) error {
 	defer ds.Unlock()
 
 	if ds.status != ServiceStarted {
-		return moerr.NewNoService(ds.uuid)
+		return moerr.NewNoServiceNoCtx(ds.uuid)
 	}
 
 	return ds.svc.StartDNReplica(shard)
@@ -122,7 +122,7 @@ func (ds *dnService) CloseDNReplica(shard metadata.DNShard) error {
 	defer ds.Unlock()
 
 	if ds.status != ServiceStarted {
-		return moerr.NewNoService(ds.uuid)
+		return moerr.NewNoServiceNoCtx(ds.uuid)
 	}
 
 	return ds.svc.CloseDNReplica(shard)

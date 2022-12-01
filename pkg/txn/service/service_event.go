@@ -133,7 +133,7 @@ func (w *waiter) maybeReleaseLocked() {
 func (w *waiter) wait(ctx context.Context) (txn.TxnStatus, error) {
 	select {
 	case <-ctx.Done():
-		return txn.TxnStatus_Aborted, moerr.ConvertGoError(ctx.Err())
+		return txn.TxnStatus_Aborted, moerr.ConvertGoError(ctx, ctx.Err())
 	case status := <-w.c:
 		return status, nil
 	}

@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"context"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -30,7 +31,7 @@ func (r *emptyReader) Close() error {
 	return nil
 }
 
-func (r *emptyReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
+func (r *emptyReader) Read(ctx context.Context, cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
 	return nil, nil
 }
 
@@ -38,7 +39,7 @@ func (r *blockReader) Close() error {
 	return nil
 }
 
-func (r *blockReader) Read(cols []string, _ *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
+func (r *blockReader) Read(ctx context.Context, cols []string, _ *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
 	if len(r.blks) == 0 {
 		return nil, nil
 	}
@@ -75,7 +76,7 @@ func (r *blockReader) Read(cols []string, _ *plan.Expr, m *mpool.MPool) (*batch.
 				}
 			}
 		} else {
-			panic(moerr.NewInternalError("blockReader reads different number of columns"))
+			panic(moerr.NewInternalError(ctx, "blockReader reads different number of columns"))
 		}
 	}
 
@@ -109,7 +110,7 @@ func (r *blockMergeReader) Close() error {
 	return nil
 }
 
-func (r *blockMergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
+func (r *blockMergeReader) Read(ctx context.Context, cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
 	if len(r.blks) == 0 {
 		return nil, nil
 	}
@@ -140,7 +141,7 @@ func (r *blockMergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) 
 				}
 			}
 		} else {
-			panic(moerr.NewInternalError("blockReader reads different number of columns"))
+			panic(moerr.NewInternalError(ctx, "blockReader reads different number of columns"))
 		}
 	}
 
@@ -167,12 +168,12 @@ func (r *mergeReader) Close() error {
 	return nil
 }
 
-func (r *mergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
+func (r *mergeReader) Read(ctx context.Context, cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
 	if len(r.rds) == 0 {
 		return nil, nil
 	}
 	for len(r.rds) > 0 {
-		bat, err := r.rds[0].Read(cols, expr, m)
+		bat, err := r.rds[0].Read(ctx, cols, expr, m)
 		if err != nil {
 			for _, rd := range r.rds {
 				rd.Close()

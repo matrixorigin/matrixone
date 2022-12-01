@@ -21,10 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var (
-	errorParameterIsInvalid = moerr.NewInternalError("the parameter is invalid")
-)
-
 /*
 These functions get information from the session and system status.
 */
@@ -65,7 +61,7 @@ func adapter(vectors []*vector.Vector,
 			return vector.NewConstFixed(resultType, 1, uvals[0], proc.Mp()), nil
 		}
 	}
-	return nil, errorParameterIsInvalid
+	return nil, moerr.NewInternalErrorNoCtx("the parameter is invalid")
 }
 
 func evaluateMemoryCapacityForDatabase(proc *process.Process, params ...interface{}) (int, error) {

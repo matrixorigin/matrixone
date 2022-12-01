@@ -142,29 +142,29 @@ func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 	if fs, err := fileservice.Get[fileservice.FileService](m.FS, m.FSName); err == nil {
 		m.FS = fs
 	}
-	m.valid()
+	m.valid(ctx)
 	m.runningJobs = make(chan struct{}, m.MaxMergeJobs)
 	return m
 }
 
 // valid check missing init elems. Panic with has missing elems.
-func (m *Merge) valid() {
+func (m *Merge) valid(ctx context.Context) {
 	if m.Table == nil {
-		panic(moerr.NewInternalError("merge task missing input 'Table'"))
+		panic(moerr.NewInternalError(ctx, "merge task missing input 'Table'"))
 	}
 	if m.FS == nil {
-		panic(moerr.NewInternalError("merge task missing input 'FileService'"))
+		panic(moerr.NewInternalError(ctx, "merge task missing input 'FileService'"))
 	}
 }
 
 // Start for service Loop
-func (m *Merge) Start(interval time.Duration) {
+func (m *Merge) Start(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case ts := <-ticker.C:
-			m.Main(ts)
+			m.Main(ctx, ts)
 		case <-m.ctx.Done():
 			return
 		}
@@ -182,13 +182,13 @@ func (m *Merge) Stop() {
 
 // Main handle cron job
 // foreach all
-func (m *Merge) Main(ts time.Time) error {
+func (m *Merge) Main(ctx context.Context, ts time.Time) error {
 	var files = make([]string, 0, 1000)
 	var totalSize int64
 
 	m.datetime = ts
 	if m.datetime.IsZero() {
-		return moerr.NewInternalError("Merge Task missing input 'datetime'")
+		return moerr.NewInternalError(ctx, "Merge Task missing input 'datetime'")
 	}
 	accounts, err := m.FS.List(m.ctx, "/")
 	if err != nil {
@@ -219,7 +219,7 @@ func (m *Merge) Main(ts time.Time) error {
 			totalSize += f.Size
 			files = append(files, filepath)
 			if totalSize > m.MaxFileSize {
-				if err = m.doMergeFiles(account.Name, files, totalSize); err != nil {
+				if err = m.doMergeFiles(ctx, account.Name, files, totalSize); err != nil {
 					logutil.Errorf("merge task meet error: %v", err)
 				}
 				files = files[:0]
@@ -228,7 +228,7 @@ func (m *Merge) Main(ts time.Time) error {
 		}
 
 		if len(files) > 0 {
-			if err = m.doMergeFiles(account.Name, files, 0); err != nil {
+			if err = m.doMergeFiles(ctx, account.Name, files, 0); err != nil {
 				logutil.Errorf("merge task meet error: %v", err)
 			}
 		}
@@ -242,7 +242,7 @@ func (m *Merge) Main(ts time.Time) error {
 // Step 2. make new filename, file writer
 // Step 3. read file data(valid format), and write down new file
 // Step 4. delete old files.
-func (m *Merge) doMergeFiles(account string, paths []string, bufferSize int64) error {
+func (m *Merge) doMergeFiles(ctx context.Context, account string, paths []string, bufferSize int64) error {
 
 	// Control task concurrency
 	m.runningJobs <- struct{}{}
@@ -251,13 +251,13 @@ func (m *Merge) doMergeFiles(account string, paths []string, bufferSize int64) e
 	}()
 
 	if len(paths) < m.MinFilesMerge {
-		return moerr.NewInternalError("file cnt(%d) less then threshold(%d)", len(paths), m.MinFilesMerge)
+		return moerr.NewInternalError(ctx, "file cnt(%d) less then threshold(%d)", len(paths), m.MinFilesMerge)
 	}
 
 	// Step 1. group by node_uuid, find target timestamp
 	timestamps := make([]string, 0, len(paths))
 	for _, path_ := range paths {
-		p, err := m.pathBuilder.ParsePath(path_)
+		p, err := m.pathBuilder.ParsePath(ctx, path_)
 		if err != nil {
 			return err
 		}
@@ -269,7 +269,7 @@ func (m *Merge) doMergeFiles(account string, paths []string, bufferSize int64) e
 		timestamps = append(timestamps, ts[0])
 	}
 	if len(timestamps) == 0 {
-		return moerr.NewNotSupported("csv merge: NO timestamp for merge")
+		return moerr.NewNotSupported(ctx, "csv merge: NO timestamp for merge")
 	}
 	timestampStart := timestamps[0]
 	timestampEnd := timestamps[len(timestamps)-1]
@@ -288,7 +288,7 @@ func (m *Merge) doMergeFiles(account string, paths []string, bufferSize int64) e
 
 	// Step 3. do simple merge
 	cacheFileData := NewRowCache(m.Table)
-	row := m.Table.GetRow()
+	row := m.Table.GetRow(ctx)
 	for _, path := range paths {
 		reader, err := NewCSVReader(m.ctx, m.FS, path)
 		if err != nil {
@@ -564,7 +564,7 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 		id := elems[0]
 		table, exist := table.GetTable(id)
 		if !exist {
-			return moerr.NewNotSupported("merge task not support table: %s", id)
+			return moerr.NewNotSupported(ctx, "merge task not support table: %s", id)
 		}
 		if !table.PathBuilder.SupportMergeSplit() {
 			logutil.Info("not support merge task", logutil.TableField(table.GetIdentify()))
@@ -580,7 +580,7 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 				var err error
 				// try to parse date format like '2021-01-01'
 				if ts, err = time.Parse("2006-01-02", date); err != nil {
-					return moerr.NewNotSupported("merge task not support args: %s", args)
+					return moerr.NewNotSupported(ctx, "merge task not support args: %s", args)
 				}
 			}
 		}
@@ -590,7 +590,7 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 		newOptions = append(newOptions, opts...)
 		newOptions = append(newOptions, WithTable(table))
 		merge := NewMerge(ctx, newOptions...)
-		if err := merge.Main(ts); err != nil {
+		if err := merge.Main(ctx, ts); err != nil {
 			logutil.Errorf("merge metric failed: %v", err)
 			return err
 		}
@@ -640,9 +640,9 @@ func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService t
 }
 
 // InitCronExpr support min interval 5 min, max 12 hour
-func InitCronExpr(duration time.Duration) error {
+func InitCronExpr(ctx context.Context, duration time.Duration) error {
 	if duration < 0 || duration > 12*time.Hour {
-		return moerr.NewNotSupported("export cron expr not support cycle: %v", duration)
+		return moerr.NewNotSupported(ctx, "export cron expr not support cycle: %v", duration)
 	}
 	if duration < 5*time.Minute {
 		MergeTaskCronExpr = fmt.Sprintf("@every %.0fs", duration.Seconds())
@@ -679,10 +679,10 @@ func InitCronExpr(duration time.Duration) error {
 
 var maxFileSize atomic.Int64
 
-func InitMerge(mergeCycle time.Duration, filesize int) error {
+func InitMerge(ctx context.Context, mergeCycle time.Duration, filesize int) error {
 	var err error
 	if mergeCycle > 0 {
-		err = InitCronExpr(mergeCycle)
+		err = InitCronExpr(ctx, mergeCycle)
 		if err != nil {
 			return err
 		}

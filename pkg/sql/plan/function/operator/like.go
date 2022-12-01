@@ -23,10 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var (
-	errUnexpected = moerr.NewInternalError("unexpected case for LIKE operator")
-)
-
 func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
 	lvs, rvs := vector.MustStrCols(lv), vector.MustBytesCols(rv)
@@ -93,5 +89,5 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		}
 		return vector.NewWithFixed(rtyp, rs, nsp, proc.Mp()), nil
 	}
-	return nil, errUnexpected
+	return nil, moerr.NewInternalErrorNoCtx("unexpected case for LIKE operator")
 }

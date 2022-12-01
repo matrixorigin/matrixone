@@ -50,7 +50,7 @@ func DateAdd(xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nul
 			if success {
 				rs[i] = date.ToDate()
 			} else {
-				return rs, moerr.NewOutOfRange("date", "")
+				return rs, moerr.NewOutOfRangeNoCtx("date", "")
 			}
 		}
 	} else if len(xs) == 1 {
@@ -63,7 +63,7 @@ func DateAdd(xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nul
 			if success {
 				rs[i] = date.ToDate()
 			} else {
-				return rs, moerr.NewOutOfRange("date", "")
+				return rs, moerr.NewOutOfRangeNoCtx("date", "")
 			}
 		}
 	} else if len(ys) == 1 {
@@ -76,7 +76,7 @@ func DateAdd(xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nul
 			if success {
 				rs[i] = date.ToDate()
 			} else {
-				return rs, moerr.NewOutOfRange("date", "")
+				return rs, moerr.NewOutOfRangeNoCtx("date", "")
 			}
 		}
 	}
@@ -110,7 +110,7 @@ func TimeAdd(xs []types.Time, ys []int64, zs []int64, xns *nulls.Nulls, yns *nul
 			if success {
 				rs[i] = time
 			} else {
-				return rs, moerr.NewOutOfRange("time", "")
+				return rs, moerr.NewOutOfRangeNoCtx("time", "")
 			}
 		}
 	} else if len(xs) == 1 {
@@ -123,7 +123,7 @@ func TimeAdd(xs []types.Time, ys []int64, zs []int64, xns *nulls.Nulls, yns *nul
 			if success {
 				rs[i] = time
 			} else {
-				return rs, moerr.NewOutOfRange("time", "")
+				return rs, moerr.NewOutOfRangeNoCtx("time", "")
 			}
 		}
 	} else if len(ys) == 1 {
@@ -136,7 +136,7 @@ func TimeAdd(xs []types.Time, ys []int64, zs []int64, xns *nulls.Nulls, yns *nul
 			if success {
 				rs[i] = time
 			} else {
-				return rs, moerr.NewOutOfRange("time", "")
+				return rs, moerr.NewOutOfRangeNoCtx("time", "")
 			}
 		}
 	}
@@ -170,7 +170,7 @@ func DatetimeAdd(xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, 
 			if success {
 				rs[i] = date
 			} else {
-				return rs, moerr.NewOutOfRange("datetime", "")
+				return rs, moerr.NewOutOfRangeNoCtx("datetime", "")
 			}
 		}
 	} else if len(xs) == 1 {
@@ -183,7 +183,7 @@ func DatetimeAdd(xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, 
 			if success {
 				rs[i] = date
 			} else {
-				return rs, moerr.NewOutOfRange("datetime", "")
+				return rs, moerr.NewOutOfRangeNoCtx("datetime", "")
 			}
 		}
 	} else if len(ys) == 1 {
@@ -196,7 +196,7 @@ func DatetimeAdd(xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, 
 			if success {
 				rs[i] = date
 			} else {
-				return rs, moerr.NewOutOfRange("datetime", "")
+				return rs, moerr.NewOutOfRangeNoCtx("datetime", "")
 			}
 		}
 	}
@@ -243,7 +243,7 @@ func DateStringAdd(xs []string, ys []int64, zs []int64, xns *nulls.Nulls, yns *n
 			if success {
 				rs[i] = date
 			} else {
-				return rs, moerr.NewOutOfRange("datetime", "")
+				return rs, moerr.NewOutOfRangeNoCtx("datetime", "")
 			}
 		}
 	} else if len(ds) == 1 {
@@ -256,7 +256,7 @@ func DateStringAdd(xs []string, ys []int64, zs []int64, xns *nulls.Nulls, yns *n
 			if success {
 				rs[i] = date
 			} else {
-				return rs, moerr.NewOutOfRange("datetime", "")
+				return rs, moerr.NewOutOfRangeNoCtx("datetime", "")
 			}
 		}
 	} else if len(ys) == 1 {
@@ -269,7 +269,7 @@ func DateStringAdd(xs []string, ys []int64, zs []int64, xns *nulls.Nulls, yns *n
 			if success {
 				rs[i] = date
 			} else {
-				return rs, moerr.NewOutOfRange("datetime", "")
+				return rs, moerr.NewOutOfRangeNoCtx("datetime", "")
 			}
 		}
 	}
@@ -308,11 +308,11 @@ func TimestampAdd(loc *time.Location, xs []types.Timestamp, ys []int64, zs []int
 			if success {
 				ts := date.ToTimestamp(loc)
 				if ts < 0 {
-					return rs, moerr.NewOutOfRange("timestamp", "")
+					return rs, moerr.NewOutOfRangeNoCtx("timestamp", "")
 				}
 				rs[i] = ts
 			} else {
-				return rs, moerr.NewOutOfRange("timestamp", "")
+				return rs, moerr.NewOutOfRangeNoCtx("timestamp", "")
 			}
 		}
 	} else if len(xs) == 1 {
@@ -325,11 +325,11 @@ func TimestampAdd(loc *time.Location, xs []types.Timestamp, ys []int64, zs []int
 			if success {
 				ts := date.ToTimestamp(loc)
 				if ts < 0 {
-					return rs, moerr.NewOutOfRange("timestamp", "")
+					return rs, moerr.NewOutOfRangeNoCtx("timestamp", "")
 				}
 				rs[i] = ts
 			} else {
-				return rs, moerr.NewOutOfRange("timestamp", "")
+				return rs, moerr.NewOutOfRangeNoCtx("timestamp", "")
 			}
 		}
 	} else if len(ys) == 1 {
@@ -342,11 +342,11 @@ func TimestampAdd(loc *time.Location, xs []types.Timestamp, ys []int64, zs []int
 			if success {
 				ts := date.ToTimestamp(loc)
 				if ts < 0 {
-					return rs, moerr.NewOutOfRange("timestamp", "")
+					return rs, moerr.NewOutOfRangeNoCtx("timestamp", "")
 				}
 				rs[i] = ts
 			} else {
-				return rs, moerr.NewOutOfRange("timestamp", "")
+				return rs, moerr.NewOutOfRangeNoCtx("timestamp", "")
 			}
 		}
 	}

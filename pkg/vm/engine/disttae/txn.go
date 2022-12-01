@@ -68,7 +68,7 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 		return nil, nil, err
 	}
 	if len(rows) != 1 {
-		return nil, nil, moerr.NewDuplicate()
+		return nil, nil, moerr.NewDuplicate(ctx)
 	}
 	row := rows[0]
 	/*
@@ -162,7 +162,7 @@ func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64,
 		return 0, err
 	}
 	if len(rows) != 1 {
-		return 0, moerr.NewDuplicate()
+		return 0, moerr.NewDuplicate(ctx)
 	}
 	/*
 		row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.dnStores[:1],
@@ -311,6 +311,7 @@ func (txn *Transaction) checkPrimaryKey(
 			}
 			if len(entries) > 0 {
 				return moerr.NewDuplicateEntry(
+					txn.proc.Ctx,
 					common.TypeStringValue(bat.Vecs[idx].Typ, tuple[idx].Value),
 					bat.Attrs[idx],
 				)
@@ -392,7 +393,7 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 		return nil, moerr.GetOkExpectedEOB()
 	}
 	if len(rows) != 1 {
-		return nil, moerr.NewInvalidInput("table is not unique")
+		return nil, moerr.NewInvalidInput(ctx, "table is not unique")
 	}
 	return rows[0], nil
 }
@@ -554,7 +555,7 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 		}
 		for _, rd := range rds {
 			for {
-				bat, err := rd.Read(columns, expr, txn.proc.Mp())
+				bat, err := rd.Read(ctx, columns, expr, txn.proc.Mp())
 				if err != nil {
 					return nil, err
 				}
@@ -722,7 +723,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	}
 
 	// get min max data from Meta
-	datas, dataTypes, err := getZonemapDataFromMeta(columns, blkInfo, tableDef)
+	datas, dataTypes, err := getZonemapDataFromMeta(ctx, columns, blkInfo, tableDef)
 	if err != nil {
 		return true
 	}

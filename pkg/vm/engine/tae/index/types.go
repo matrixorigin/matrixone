@@ -22,9 +22,9 @@ import (
 )
 
 var (
-	ErrNotFound  = moerr.NewInternalError("tae index: key not found")
-	ErrDuplicate = moerr.NewInternalError("tae index: key duplicate")
-	ErrWrongType = moerr.NewInternalError("tae index: wrong type")
+	ErrNotFound  = moerr.NewInternalErrorNoCtx("tae index: key not found")
+	ErrDuplicate = moerr.NewInternalErrorNoCtx("tae index: key duplicate")
+	ErrWrongType = moerr.NewInternalErrorNoCtx("tae index: wrong type")
 )
 
 type KeysCtx struct {

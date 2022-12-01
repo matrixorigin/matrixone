@@ -203,7 +203,7 @@ func extraWorkingReplicas(shard *dnShard) []*dnReplica {
 // NB: the returned result should be deterministic.
 func consumeLeastSpareStore(working []*util.Store) (string, error) {
 	if len(working) == 0 {
-		return "", moerr.NewNoWorkingStore()
+		return "", moerr.NewNoWorkingStoreNoCtx()
 	}
 
 	// the least shards, the higher priority

@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	ErrDispatchWrongTask = moerr.NewInternalError("tae: wrong task type")
+	ErrDispatchWrongTask = moerr.NewInternalErrorNoCtx("tae: wrong task type")
 )
 
 type Dispatcher interface {
