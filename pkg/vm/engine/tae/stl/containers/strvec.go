@@ -25,11 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
-func NewStrVector[T any](opts ...*Options) *StrVector[T] {
+func NewStrVector[T any](opts ...Options) *StrVector[T] {
 	var capacity int
 	var alloc *mpool.MPool
-	vdataOpt := new(Options)
-	areaOpt := new(Options)
+	vdataOpt := Options{}
+	areaOpt := Options{}
 	if len(opts) > 0 {
 		opt := opts[0]
 		capacity = opt.Capacity
@@ -197,7 +197,7 @@ func (vec *StrVector[T]) AppendMany(vals ...T) {
 }
 
 func (vec *StrVector[T]) Clone(offset, length int, allocator ...*mpool.MPool) stl.Vector[T] {
-	opts := &Options{
+	opts := Options{
 		Capacity: length,
 	}
 	if len(allocator) == 0 {

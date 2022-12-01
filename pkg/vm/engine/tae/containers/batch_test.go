@@ -30,7 +30,7 @@ func TestBatch1(t *testing.T) {
 	vecTypes := types.MockColTypes(4)[2:]
 	attrs := []string{"attr1", "attr2"}
 	nullable := []bool{false, true}
-	opts := new(containers.Options)
+	opts := containers.Options{}
 	opts.Capacity = 0
 	bat := BuildBatch(attrs, vecTypes, nullable, opts)
 	bat.Vecs[0].Append(int32(1))
