@@ -3035,6 +3035,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
 		TimeZone:      ses.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
+		LastInsertID:  ses.GetLastInsertID(),
 	}
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
@@ -3602,7 +3603,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 			resp := mce.setResponse(i, len(cws), rspLen)
 			if _, ok := stmt.(*tree.Insert); ok {
-				resp.lastInsertId = 1
+				resp.lastInsertId = proc.GetLastInsertID()
+				if proc.GetLastInsertID() != 0 {
+					ses.SetLastInsertID(proc.GetLastInsertID())
+				}
 			}
 			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
 				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)

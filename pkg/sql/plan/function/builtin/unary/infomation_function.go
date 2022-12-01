@@ -203,7 +203,7 @@ func LastInsertID(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		},
 		func(proc *process.Process, params ...interface{}) (interface{}, error) {
 			result := params[0].([]uint64)
-			result[0] = 0
+			result[0] = proc.SessionInfo.LastInsertID
 			return result, nil
 		},
 	)
