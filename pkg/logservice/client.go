@@ -57,13 +57,13 @@ type Client interface {
 	// 4 bytes of record type (pb.UserEntryUpdate) + 8 bytes DN replica ID +
 	// payloadLength bytes of actual payload.
 	GetLogRecord(payloadLength int) pb.LogRecord
-	// Append appends the specified LogRecrd into the Log Service. On success, the
+	// Append appends the specified LogRecord into the Log Service. On success, the
 	// assigned Lsn will be returned. For the specified LogRecord, only its Data
 	// field is used with all other fields ignored by Append(). Once returned, the
 	// pb.LogRecord can be reused.
 	Append(ctx context.Context, rec pb.LogRecord) (Lsn, error)
 	// Read reads the Log Service from the specified Lsn position until the
-	// returned LogRecord set reachs the specified maxSize in bytes. The returned
+	// returned LogRecord set reaches the specified maxSize in bytes. The returned
 	// Lsn indicates the next Lsn to use to resume the read, or it means
 	// everything available has been read when it equals to the specified Lsn.
 	// The returned pb.LogRecord records will have their Lsn and Type fields set,

@@ -20,11 +20,23 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestMain(m *testing.M) {
+	logutil.SetupMOLogger(&logutil.LogConfig{
+		Level:  "debug",
+		Format: "console",
+	})
+
+	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
+	m.Run()
+}
 
 func TestNewBootstrapManager(t *testing.T) {
 	cases := []struct {
@@ -56,7 +68,7 @@ func TestNewBootstrapManager(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		bm := NewBootstrapManager(c.cluster, nil)
+		bm := NewBootstrapManager(c.cluster)
 		assert.Equal(t, c.expected.cluster, bm.cluster)
 		c.expected.cluster = pb.ClusterInfo{XXX_sizecache: 1}
 		assert.NotEqual(t, c.expected.cluster, bm.cluster)
@@ -185,7 +197,7 @@ func TestBootstrap(t *testing.T) {
 		fmt.Printf("case %v: %s\n", i, c.desc)
 
 		alloc := util.NewTestIDAllocator(0)
-		bm := NewBootstrapManager(c.cluster, nil)
+		bm := NewBootstrapManager(c.cluster)
 		output, err := bm.Bootstrap(alloc, c.dn, c.log)
 		assert.Equal(t, c.err, err)
 		if err != nil {
@@ -294,7 +306,7 @@ func TestCheckBootstrap(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		bm := NewBootstrapManager(c.cluster, nil)
+		bm := NewBootstrapManager(c.cluster)
 		output := bm.CheckBootstrap(c.log)
 		assert.Equal(t, c.expected, output)
 	}
@@ -378,7 +390,7 @@ func TestIssue3814(t *testing.T) {
 
 	for _, c := range cases {
 		alloc := util.NewTestIDAllocator(0)
-		bm := NewBootstrapManager(c.cluster, nil)
+		bm := NewBootstrapManager(c.cluster)
 		_, err := bm.Bootstrap(alloc, c.dn, c.log)
 		assert.Equal(t, c.expected, err)
 	}
@@ -422,7 +434,7 @@ func TestIssue3845(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		bm := NewBootstrapManager(c.cluster, nil)
+		bm := NewBootstrapManager(c.cluster)
 		output := bm.CheckBootstrap(c.log)
 		assert.Equal(t, c.expected, output)
 	}
