@@ -15,8 +15,8 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"

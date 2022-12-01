@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -480,15 +481,16 @@ func TestGetSimpleExprValue(t *testing.T) {
 			{"set @@x=-null", false, nil},
 			{"set @@x=-x", true, nil},
 		}
-
+		ctrl := gomock.NewController(t)
+		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil, nil), nil, false)
+		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		for _, kase := range kases {
 			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
 			cvey.So(ok, cvey.ShouldBeTrue)
-
-			value, err := GetSimpleExprValue(sv.Assignments[0].Value, nil)
+			value, err := GetSimpleExprValue(sv.Assignments[0].Value, ses)
 			if kase.wantErr {
 				cvey.So(err, cvey.ShouldNotBeNil)
 			} else {

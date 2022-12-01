@@ -20,7 +20,6 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"math"
 	"reflect"
@@ -1817,8 +1816,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		compCtx := InitTxnCompilerContext(nil, "")
-		compCtx.SetProcess(testutil.NewProcess())
+		compCtx := plan.NewEmptyCompilerContext()
 		preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
 		if err != nil {
 			t.Error(err)
@@ -1854,8 +1852,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		compCtx := InitTxnCompilerContext(nil, "")
-		compCtx.SetProcess(testutil.NewProc())
+		compCtx := plan.NewEmptyCompilerContext()
 		preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
 		if err != nil {
 			t.Error(err)
@@ -1893,8 +1890,7 @@ func FuzzParseExecuteData(f *testing.F) {
 	if err != nil {
 		f.Error(err)
 	}
-	compCtx := InitTxnCompilerContext(nil, "")
-	compCtx.SetProcess(testutil.NewProc())
+	compCtx := plan.NewEmptyCompilerContext()
 	preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
 	if err != nil {
 		f.Error(err)
@@ -1962,8 +1958,7 @@ func TestParseExecuteData(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		compCtx := InitTxnCompilerContext(nil, "")
-		compCtx.SetProcess(testutil.NewProc())
+		compCtx := plan.NewEmptyCompilerContext()
 		preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
 		if err != nil {
 			t.Error(err)
