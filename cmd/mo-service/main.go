@@ -299,8 +299,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 			<-ctx.Done()
 			// flush trace/log/error framework
 			if err = trace.Shutdown(trace.DefaultContext()); err != nil {
-				logutil.Error("Shutdown trace", logutil.ErrorField(err), logutil.NoReportFiled())
-				panic(err)
+				logutil.Warn("Shutdown trace", logutil.ErrorField(err), logutil.NoReportFiled())
 			}
 		})
 		initWG.Wait()

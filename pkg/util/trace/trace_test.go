@@ -36,7 +36,10 @@ func Test_initExport(t *testing.T) {
 		enableTracer bool
 		config       *tracerProviderConfig
 		needRecover  bool
+		shutdownCtx  context.Context
 	}
+	cancledCtx, cancle := context.WithCancel(context.Background())
+	cancle()
 	ch := make(chan string, 10)
 	tests := []struct {
 		name  string
@@ -48,6 +51,7 @@ func Test_initExport(t *testing.T) {
 			args: args{
 				enableTracer: false,
 				config:       &tracerProviderConfig{enable: false},
+				shutdownCtx:  nil,
 			},
 			empty: true,
 		},
@@ -60,6 +64,7 @@ func Test_initExport(t *testing.T) {
 					batchProcessor: noopBatchProcessor{},
 				},
 				needRecover: true,
+				shutdownCtx: context.Background(),
 			},
 			empty: false,
 		},
@@ -70,7 +75,21 @@ func Test_initExport(t *testing.T) {
 				config: &tracerProviderConfig{
 					enable: true, batchProcessMode: FileService, sqlExecutor: newDummyExecutorFactory(ch),
 					batchProcessor: noopBatchProcessor{},
-				}},
+				},
+				shutdownCtx: context.Background(),
+			},
+			empty: false,
+		},
+		{
+			name: "enable_FileService_with_canceled_ctx",
+			args: args{
+				enableTracer: true,
+				config: &tracerProviderConfig{
+					enable: true, batchProcessMode: FileService, sqlExecutor: newDummyExecutorFactory(ch),
+					batchProcessor: noopBatchProcessor{},
+				},
+				shutdownCtx: cancledCtx,
+			},
 			empty: false,
 		},
 	}
@@ -87,7 +106,7 @@ func Test_initExport(t *testing.T) {
 			}
 			initExporter(context.TODO(), tt.args.config)
 			require.Equal(t, "trace.noopBatchProcessor", fmt.Sprintf("%v", reflect.ValueOf(GetGlobalBatchProcessor()).Type()))
-			require.Equal(t, Shutdown(context.Background()), nil)
+			require.Equal(t, Shutdown(tt.args.shutdownCtx), nil)
 		})
 	}
 }
