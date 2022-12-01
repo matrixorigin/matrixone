@@ -23,6 +23,7 @@ import (
 	"github.com/tidwall/btree"
 )
 
+// tableState represents a snapshot state of a table
 type tableState[
 	K Ordered[K],
 	V any,
@@ -55,6 +56,7 @@ func (t *tableState[K, V]) cloneWithoutLogs() *tableState[K, V] {
 	return ret
 }
 
+// merge merges two table states
 func (t *tableState[K, V]) merge(
 	from *tableState[K, V],
 ) (
@@ -136,6 +138,7 @@ func init() {
 	_ = new(tableState[Int, int]).dump // to tame static checks
 }
 
+// setPair set a key-value pair
 func (s *tableState[K, V]) setPair(pair *KVPair[K, V], oldPair *KVPair[K, V]) {
 
 	if oldPair != nil {
@@ -173,6 +176,7 @@ func (s *tableState[K, V]) setPair(pair *KVPair[K, V], oldPair *KVPair[K, V]) {
 
 }
 
+// unsetPair unsets a key-value pair
 func (s *tableState[K, V]) unsetPair(pivot *KVPair[K, V], oldPair *KVPair[K, V]) {
 
 	if oldPair != nil {

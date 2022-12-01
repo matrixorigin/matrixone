@@ -181,12 +181,12 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 	return &plan.ColDef{
 		Name: attr.Name,
 		Typ: &plan.Type{
-			Id:        int32(attr.Type.Oid),
-			Nullable:  attr.Default != nil && attr.Default.NullAbility,
-			Width:     attr.Type.Width,
-			Precision: attr.Type.Precision,
-			Size:      attr.Type.Size,
-			Scale:     attr.Type.Scale,
+			Id:          int32(attr.Type.Oid),
+			NotNullable: attr.Default != nil && !(attr.Default.NullAbility),
+			Width:       attr.Type.Width,
+			Precision:   attr.Type.Precision,
+			Size:        attr.Type.Size,
+			Scale:       attr.Type.Scale,
 		},
 		Default: attr.Default,
 		Primary: attr.Primary,

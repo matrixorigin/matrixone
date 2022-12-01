@@ -17,10 +17,11 @@ package sysview
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"time"
 )
 
 const (
@@ -293,29 +294,29 @@ var (
 			"COLLATION_CONNECTION varchar(64)," +
 			"DATABASE_COLLATION varchar(64)" +
 			");",
-		"CREATE TABLE IF NOT EXISTS TABLES(" +
-			"TABLE_CATALOG varchar(64)," +
-			"TABLE_SCHEMA varchar(64)," +
-			"TABLE_NAME varchar(64)," +
-			"TABLE_TYPE varchar(10)," +
-			"ENGINE varchar(64)," +
-			"VERSION int," +
-			"ROW_FORMAT varchar(10)," +
-			"TABLE_ROWS bigint unsigned," +
-			"AVG_ROW_LENGTH bigint unsigned," +
-			"DATA_LENGTH bigint unsigned," +
-			"MAX_DATA_LENGTH bigint unsigned," +
-			"INDEX_LENGTH bigint unsigned," +
-			"DATA_FREE bigint unsigned," +
-			"`AUTO_INCREMENT` bigint unsigned," +
-			"CREATE_TIME timestamp," +
-			"UPDATE_TIME datetime," +
-			"CHECK_TIME datetime," +
-			"TABLE_COLLATION varchar(64)," +
-			"CHECKSUM bigint," +
-			"CREATE_OPTIONS varchar(256)," +
-			"TABLE_COMMENT text" +
-			");",
+		"CREATE VIEW IF NOT EXISTS TABLES AS " +
+			"SELECT '' AS TABLE_CATALOG," +
+			"reldatabase AS TABLE_SCHEMA," +
+			"relname AS TABLE_NAME," +
+			"'' AS TABLE_TYPE," +
+			"'' AS ENGINE," +
+			"0 AS VERSION," +
+			"'' AS ROW_FORMAT," +
+			"0 AS TABLE_ROWS," +
+			"0 AS AVG_ROW_LENGTH," +
+			"0 AS DATA_LENGTH," +
+			"0 AS MAX_DATA_LENGTH," +
+			"0 AS INDEX_LENGTH," +
+			"0 AS DATA_FREE," +
+			"0 AS `AUTO_INCREMENT`," +
+			"created_time AS CREATE_TIME," +
+			"'' AS UPDATE_TIME," +
+			"'' AS CHECK_TIME," +
+			"'' AS TABLE_COLLATION," +
+			"0 AS CHECKSUM," +
+			"'' AS CREATE_OPTIONS," +
+			"rel_comment AS TABLE_COMMENT " +
+			"FROM mo_catalog.mo_tables;",
 		"CREATE TABLE IF NOT EXISTS ENGINES (" +
 			"ENGINE varchar(64)," +
 			"SUPPORT varchar(8)," +
@@ -346,11 +347,11 @@ var (
 			"PARAMETER_STYLE varchar(3)," +
 			"IS_DETERMINISTIC varchar(3)," +
 			"SQL_DATA_ACCESS varchar(10)," +
-			"SQL_PATH varchar(100)," +
+			"SQL_PATH varchar(1000)," +
 			"SECURITY_TYPE varchar(10)," +
 			"CREATED timestamp," +
 			"LAST_ALTERED timestamp," +
-			"SQL_MODE varchar(100)," +
+			"SQL_MODE varchar(1000)," +
 			"ROUTINE_COMMENT text," +
 			"DEFINER varchar(288)," +
 			"CHARACTER_SET_CLIENT varchar(64)," +

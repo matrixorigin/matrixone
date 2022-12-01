@@ -82,7 +82,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 	}
 
 	switch node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_TABLE_FUNCTION:
+	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_FUNCTION_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, colRefCnt)
 		}
@@ -149,21 +149,36 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		if len(node.ProjectList) == 0 {
-			globalRef := [2]int32{tag, 0}
-			remapping.addColRef(globalRef)
+			if len(node.TableDef.Cols) == 0 {
+				globalRef := [2]int32{tag, 0}
+				remapping.addColRef(globalRef)
 
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: node.TableDef.Cols[0].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 0,
-						ColPos: 0,
-						Name:   builder.nameByColRef[globalRef],
+				node.ProjectList = append(node.ProjectList, &plan.Expr{
+					Typ: node.TableDef.Cols[0].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: 0,
+							Name:   builder.nameByColRef[globalRef],
+						},
 					},
-				},
-			})
+				})
+			} else {
+				remapping.addColRef(internalRemapping.localToGlobal[0])
+				node.ProjectList = append(node.ProjectList, &plan.Expr{
+					Typ: node.TableDef.Cols[0].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: 0,
+							Name:   builder.nameByColRef[internalRemapping.localToGlobal[0]],
+						},
+					},
+				})
+			}
 		}
-		if node.NodeType == plan.Node_TABLE_FUNCTION {
+
+		if node.NodeType == plan.Node_FUNCTION_SCAN {
 			childId := node.Children[0]
 			childNode := builder.qry.Nodes[childId]
 			if childNode.NodeType != plan.Node_PROJECT {
@@ -286,9 +301,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: &plan.Type{
-					Id:       int32(types.T_bool),
-					Nullable: true,
-					Size:     1,
+					Id:          int32(types.T_bool),
+					NotNullable: false,
+					Size:        1,
 				},
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
@@ -1133,7 +1148,24 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					As:   selectExpr.As,
 				})
 			}
+		case *tree.NumVal:
+			if expr.ValType == tree.P_null {
+				expr.ValType = tree.P_nulltext
+			}
 
+			if len(selectExpr.As) > 0 {
+				ctx.headings = append(ctx.headings, string(selectExpr.As))
+			} else {
+				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+			}
+			newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
+			if err != nil {
+				return 0, err
+			}
+			selectList = append(selectList, tree.SelectExpr{
+				Expr: newExpr,
+				As:   selectExpr.As,
+			})
 		default:
 			if len(selectExpr.As) > 0 {
 				ctx.headings = append(ctx.headings, string(selectExpr.As))
@@ -1814,7 +1846,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var types []*plan.Type
 	var binding *Binding
 
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_TABLE_FUNCTION {
+	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN {
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return moerr.NewSyntaxError("table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
 		}
@@ -1823,7 +1855,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		if alias.Alias != "" {
 			table = string(alias.Alias)
 		} else {
-			if node.NodeType == plan.Node_TABLE_FUNCTION {
+			if node.NodeType == plan.Node_FUNCTION_SCAN {
 				return moerr.NewSyntaxError("Every table function must have an alias")
 			}
 
@@ -1846,7 +1878,6 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				cols[i] = col.Name
 			}
 			types[i] = col.Typ
-
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
@@ -2284,7 +2315,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
 		node.FilterList = append(node.FilterList, filters...)
-	case plan.Node_TABLE_FUNCTION:
+	case plan.Node_FUNCTION_SCAN:
 		node.FilterList = append(node.FilterList, filters...)
 		childId := node.Children[0]
 		childId, err := builder.pushdownFilters(childId, nil)

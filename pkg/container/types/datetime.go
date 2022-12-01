@@ -82,7 +82,7 @@ func (dt Datetime) String2(precision int32) string {
 func ParseDatetime(s string, precision int32) (Datetime, error) {
 	s = strings.TrimSpace(s)
 	if len(s) < 14 {
-		if d, err := ParseDate(s); err == nil {
+		if d, err := ParseDateCast(s); err == nil {
 			return d.ToDatetime(), nil
 		}
 		return -1, moerr.NewInvalidInput("invalid datatime value %s", s)

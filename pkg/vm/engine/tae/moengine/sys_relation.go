@@ -17,10 +17,11 @@ package moengine
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
 
@@ -38,18 +39,18 @@ func newSysRelation(h handle.Relation) *sysRelation {
 }
 
 func isSysRelation(name string) bool {
-	if name == catalog.MO_DATABASE ||
-		name == catalog.MO_TABLES ||
-		name == catalog.MO_COLUMNS {
+	if name == pkgcatalog.MO_DATABASE ||
+		name == pkgcatalog.MO_TABLES ||
+		name == pkgcatalog.MO_COLUMNS {
 		return true
 	}
 	return false
 }
 
 func isSysRelationId(id uint64) bool {
-	if id == catalog.MO_DATABASE_ID ||
-		id == catalog.MO_TABLES_ID ||
-		id == catalog.MO_COLUMNS_ID {
+	if id == pkgcatalog.MO_DATABASE_ID ||
+		id == pkgcatalog.MO_TABLES_ID ||
+		id == pkgcatalog.MO_COLUMNS_ID {
 		return true
 	}
 	return false
@@ -69,4 +70,10 @@ func (s *sysRelation) Delete(_ context.Context, _ *batch.Batch, _ string) error 
 
 func (s *sysRelation) DeleteByPhyAddrKeys(_ context.Context, _ *vector.Vector) error {
 	return ErrReadOnly
+}
+
+func (s *sysRelation) TableColumns(_ context.Context) ([]*engine.Attribute, error) {
+	colDefs := s.handle.GetMeta().(*catalog.TableEntry).GetSchema().ColDefs
+	cols, _ := ColDefsToAttrs(colDefs)
+	return cols, nil
 }

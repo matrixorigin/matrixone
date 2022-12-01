@@ -21,8 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func parseDate(s string) types.Date {
-	date, _ := types.ParseDate(s)
+func ParseDateCast(s string) types.Date {
+	date, _ := types.ParseDateCast(s)
 	return date
 }
 
@@ -45,14 +45,14 @@ func TestDateToWeekday(t *testing.T) {
 			name: "normal date test",
 			args: args{
 				xs: []types.Date{
-					parseDate("2022-01-01"),
-					parseDate("2022-01-02"),
-					parseDate("2022-01-03"),
-					parseDate("2022-01-04"),
-					parseDate("2022-01-05"),
-					parseDate("2022-01-06"),
-					parseDate("2022-01-07"),
-					parseDate("2022-01-08"),
+					ParseDateCast("2022-01-01"),
+					ParseDateCast("2022-01-02"),
+					ParseDateCast("2022-01-03"),
+					ParseDateCast("2022-01-04"),
+					ParseDateCast("2022-01-05"),
+					ParseDateCast("2022-01-06"),
+					ParseDateCast("2022-01-07"),
+					ParseDateCast("2022-01-08"),
 				},
 				rs: make([]int64, 8),
 			},

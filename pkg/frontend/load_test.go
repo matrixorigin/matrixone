@@ -63,7 +63,7 @@ func Test_readTextFile(t *testing.T) {
 					Name: "a"}},
 			&engine.AttributeDef{
 				Attr: engine.Attribute{
-					Type: types.Type{Oid: types.T_varchar},
+					Type: types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen},
 					Name: "b"}},
 			&engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -181,7 +181,7 @@ func Test_readTextFile(t *testing.T) {
 					Name: "a"}},
 			&engine.AttributeDef{
 				Attr: engine.Attribute{
-					Type: types.Type{Oid: types.T_varchar},
+					Type: types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen},
 					Name: "b"}},
 			&engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -366,7 +366,7 @@ func Test_readTextFile(t *testing.T) {
 					Name: "a"}},
 			&engine.AttributeDef{
 				Attr: engine.Attribute{
-					Type: types.Type{Oid: types.T_varchar},
+					Type: types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen},
 					Name: "b"}},
 			&engine.AttributeDef{
 				Attr: engine.Attribute{

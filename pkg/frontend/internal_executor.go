@@ -34,7 +34,7 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 	}
 
 	if opts.IsInternal != nil {
-		sess.IsInternal = *opts.IsInternal
+		sess.isInternal = *opts.IsInternal
 	}
 }
 
@@ -153,7 +153,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		logutil.Fatalf("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
 	}
-	sess := NewSession(ie.proto, mp, ie.pu, gSysVariables)
+	sess := NewSession(ie.proto, mp, ie.pu, gSysVariables, true)
 	sess.SetRequestContext(ctx)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)

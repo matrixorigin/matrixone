@@ -14,7 +14,7 @@ require (
 	github.com/axiomhq/hyperloglog v0.0.0-20220105174342-98591331716a
 	github.com/cespare/xxhash/v2 v2.1.2
 	github.com/docker/go-units v0.4.0
-	github.com/fagongzi/goetty/v2 v2.0.3-0.20221112031939-24c732da4b95
+	github.com/fagongzi/goetty/v2 v2.0.3-0.20221121133015-81355a910e4a
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/gogo/protobuf v1.3.2
@@ -125,7 +125,7 @@ require (
 
 // required until memberlist issue 272 is resolved
 // see https://github.com/hashicorp/memberlist/pull/273 for progress
-replace github.com/hashicorp/memberlist => github.com/matrixorigin/memberlist v0.4.1-0.20221101065119-bb7bce164406
+replace github.com/hashicorp/memberlist => github.com/matrixorigin/memberlist v0.4.1-0.20221125074841-7595e1626d36
 
 replace github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20221116064434-34611fc96385
 

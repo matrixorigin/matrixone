@@ -27,6 +27,8 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 // LocalFS is a FileService implementation backed by local file system
@@ -103,6 +105,7 @@ func NewLocalFS(
 	}
 	if memCacheCapacity > 0 {
 		fs.memCache = NewMemCache(memCacheCapacity)
+		logutil.Info("fileservice: cache initialized", zap.Any("fs-name", name), zap.Any("capacity", memCacheCapacity))
 	}
 
 	return fs, nil

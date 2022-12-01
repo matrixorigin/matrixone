@@ -99,11 +99,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
+		rbat.Clean(proc.Mp())
 		return err
 	}
 	count := bat.Length()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
+	eligible := make([]int64, 0, hashmap.UnitLimit)
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -121,6 +123,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for _, sel := range sels {
 					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
 					if err != nil {
+						rbat.Clean(proc.Mp())
 						return err
 					}
 					bs := vec.Col.([]bool)
@@ -135,14 +138,16 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					continue
 				}
 			}
-			for j, pos := range ap.Result {
-				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp()); err != nil {
-					rbat.Clean(proc.Mp())
-					return err
-				}
-			}
+			eligible = append(eligible, int64(i+k))
 			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 		}
+		for j, pos := range ap.Result {
+			if err := vector.Union(rbat.Vecs[j], bat.Vecs[pos], eligible, true, proc.Mp()); err != nil {
+				rbat.Clean(proc.Mp())
+				return err
+			}
+		}
+		eligible = eligible[:0]
 	}
 	rbat.ExpandNulls()
 	anal.Output(rbat)

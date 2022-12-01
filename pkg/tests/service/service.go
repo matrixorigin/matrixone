@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
@@ -281,6 +282,10 @@ type testCluster struct {
 
 // NewCluster construct a cluster for integration test.
 func NewCluster(t *testing.T, opt Options) (Cluster, error) {
+	logutil.SetupMOLogger(&logutil.LogConfig{
+		Level:  "debug",
+		Format: "console",
+	})
 	opt.validate()
 
 	c := &testCluster{
@@ -291,11 +296,12 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	}
 	c.logger = logutil.Adjust(opt.logger).With(zap.String("testcase", t.Name())).With(zap.String("test-id", c.testID))
 	c.opt.rootDataDir = filepath.Join(c.opt.rootDataDir, c.testID, t.Name())
-
 	if c.clock == nil {
 		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, 0)
 	}
-	clock.SetupDefaultClock(c.clock)
+
+	// TODO: CN and LOG use process level runtime
+	runtime.SetupProcessLevelRuntime(c.newRuntime(metadata.ServiceType_CN, ""))
 
 	// build addresses for all services
 	c.network.addresses = c.buildServiceAddresses()
@@ -1289,6 +1295,7 @@ func (c *testCluster) buildLogConfigs(
 
 		localAddr := cfg.ServiceAddress
 		opt := buildLogOptions(cfg, c.backendFilterFactory(localAddr))
+		opt = append(opt, logservice.WithLogger(c.logger))
 		opts = append(opts, opt)
 	}
 	return cfgs, opts
@@ -1306,6 +1313,7 @@ func (c *testCluster) buildCNConfigs(
 		cfgs = append(cfgs, cfg)
 
 		opt := buildCNOptions()
+		opt = append(opt, cnservice.WithLogger(c.logger))
 		opts = append(opts, opt)
 	}
 	return cfgs, opts
@@ -1331,10 +1339,11 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 		if err != nil {
 			panic(err)
 		}
-
-		opt = append(opt,
-			dnservice.WithLogger(c.logger))
-		ds, err := newDNService(cfg, fs, opt)
+		ds, err := newDNService(
+			cfg,
+			c.newRuntime(metadata.ServiceType_DN, cfg.UUID),
+			fs,
+			opt)
 		require.NoError(c.t, err)
 
 		c.logger.Info(
@@ -1359,8 +1368,6 @@ func (c *testCluster) initLogServices() []LogService {
 	for i := 0; i < batch; i++ {
 		cfg := c.log.cfgs[i]
 		opt := c.log.opts[i]
-		opt = append(opt,
-			logservice.WithLogger(c.logger))
 		ls, err := newLogService(cfg, testutil.NewFS(), opt)
 		require.NoError(c.t, err)
 
@@ -1392,9 +1399,6 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 		if err != nil {
 			panic(err)
 		}
-
-		opt = append(opt,
-			cnservice.WithLogger(c.logger))
 		ctx, cancel := context.WithCancel(context.Background())
 		cs, err := newCNService(cfg, ctx, fs, opt)
 		if err != nil {
@@ -1608,6 +1612,10 @@ func (c *testCluster) waitSystemInitCompleted(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (c *testCluster) newRuntime(st metadata.ServiceType, uuid string) runtime.Runtime {
+	return runtime.NewRuntime(metadata.ServiceType_CN, "", c.logger, runtime.WithClock(c.clock))
 }
 
 // FilterFunc returns true if traffic was allowed.

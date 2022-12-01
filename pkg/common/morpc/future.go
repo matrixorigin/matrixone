@@ -23,6 +23,8 @@ import (
 func newFuture(releaseFunc func(f *Future)) *Future {
 	f := &Future{
 		c:           make(chan Message, 1),
+		errC:        make(chan error, 1),
+		writtenC:    make(chan struct{}, 1),
 		releaseFunc: releaseFunc,
 	}
 	f.setFinalizer()
@@ -33,6 +35,8 @@ func newFuture(releaseFunc func(f *Future)) *Future {
 type Future struct {
 	id          uint64
 	c           chan Message
+	errC        chan error
+	writtenC    chan struct{}
 	releaseFunc func(*Future)
 	ctx         context.Context
 	mu          struct {
@@ -60,11 +64,17 @@ func (f *Future) init(id uint64, ctx context.Context) {
 // This method cannot be called more than once. After calling `Get`, `Close` must be called to close
 // `Future`.
 func (f *Future) Get() (Message, error) {
+	// we have to wait until the message is written, otherwise it will result in the message still
+	// waiting in the send queue after the Get returns, causing concurrent reading and writing on the
+	// request.
+	f.waitWriteCompleted()
 	select {
 	case <-f.ctx.Done():
 		return nil, f.ctx.Err()
 	case resp := <-f.c:
 		return resp, nil
+	case err := <-f.errC:
+		return nil, err
 	}
 }
 
@@ -78,6 +88,15 @@ func (f *Future) Close() {
 		f.mu.cb()
 	}
 	f.maybeReleaseLocked()
+}
+
+func (f *Future) waitWriteCompleted() {
+	<-f.writtenC
+}
+
+func (f *Future) writeCompleted() {
+	f.writtenC <- struct{}{}
+	f.unRef()
 }
 
 func (f *Future) maybeReleaseLocked() {
@@ -96,6 +115,21 @@ func (f *Future) done(response Message, cb func()) {
 		}
 		f.mu.cb = cb
 		f.c <- response
+	} else if cb != nil {
+		cb()
+	}
+}
+
+func (f *Future) error(id uint64, err error, cb func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if !f.mu.closed && !f.timeout() {
+		if id != f.id {
+			return
+		}
+		f.mu.cb = cb
+		f.errC <- err
 	} else if cb != nil {
 		cb()
 	}
@@ -144,5 +178,7 @@ func (f *Future) setFinalizer() {
 	// need to close chan to avoid resource leaks.
 	runtime.SetFinalizer(f, func(f *Future) {
 		close(f.c)
+		close(f.errC)
+		close(f.writtenC)
 	})
 }

@@ -260,6 +260,10 @@ func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condit
 		return 0, nil
 	}
 
+	if len(tasks) == 0 {
+		return 0, nil
+	}
+
 	db, release, err := m.getDB()
 	if err != nil {
 		return 0, err
@@ -416,7 +420,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 	} else {
 		query = fmt.Sprintf(selectAsyncTask, m.dbname)
 	}
-	query += buildOrderByCause(c)
+	query += buildOrderByClause(c)
 	query += buildLimitClause(c)
 
 	rows, err := conn.QueryContext(ctx, query)
@@ -433,7 +437,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 		var codeOption sql.NullInt32
 		var msgOption sql.NullString
 		var options string
-		err := rows.Scan(
+		if err := rows.Scan(
 			&t.ID,
 			&t.Metadata.ID,
 			&t.Metadata.Executor,
@@ -448,8 +452,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 			&msgOption,
 			&t.CreateAt,
 			&t.CompletedAt,
-		)
-		if err != nil {
+		); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(options), &t.Metadata.Options); err != nil {
@@ -473,11 +476,18 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 
 		tasks = append(tasks, t)
 	}
+	if err := rows.Err(); err != nil {
+		return tasks, err
+	}
 	return tasks, nil
 }
 
 func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.CronTask) (int, error) {
 	if taskFrameworkDisabled() {
+		return 0, nil
+	}
+
+	if len(cronTask) == 0 {
 		return 0, nil
 	}
 
@@ -604,6 +614,9 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, 
 
 		tasks = append(tasks, t)
 	}
+	if err := rows.Err(); err != nil {
+		return tasks, err
+	}
 
 	return tasks, nil
 }
@@ -613,7 +626,15 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 		return 0, nil
 	}
 
-	conn, err := m.db.Conn(ctx)
+	db, release, err := m.getDB()
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = release()
+	}()
+
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -819,7 +840,7 @@ func buildLimitClause(c conditions) string {
 	return ""
 }
 
-func buildOrderByCause(c conditions) string {
+func buildOrderByClause(c conditions) string {
 	if c.orderByDesc {
 		return " order by task_id desc"
 	}

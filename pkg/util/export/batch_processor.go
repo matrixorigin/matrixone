@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 const defaultQueueSize = 1310720 // queue mem cost = 10MB
@@ -156,10 +158,12 @@ func (b *bufferHolder) resetTrigger() {
 	b.trigger.Reset(b.buffer.(batchpipe.Reminder).RemindNextAfter())
 }
 
-var _ BatchProcessor = &MOCollector{}
+var _ trace.BatchProcessor = (*MOCollector)(nil)
 
 // MOCollector handle all bufferPipe
 type MOCollector struct {
+	trace.BatchProcessor
+
 	// mux control all changes on buffers
 	mux sync.RWMutex
 	// buffers maintain working buffer for each type
@@ -171,9 +175,11 @@ type MOCollector struct {
 	// awakeBatch handle export signal
 	awakeBatch chan *bufferHolder
 
-	collectorCnt int // see WithCollectorCnt
-	generatorCnt int // see WithGeneratorCnt
-	exporterCnt  int // see WithExporterCnt
+	collectorCnt int // WithCollectorCnt
+	generatorCnt int // WithGeneratorCnt
+	exporterCnt  int // WithExporterCnt
+	// pipeImplHolder hold implement
+	pipeImplHolder *PipeImplHolder
 
 	// flow control
 	started  uint32
@@ -182,18 +188,50 @@ type MOCollector struct {
 	stopCh   chan struct{}
 }
 
-func NewMOCollector() *MOCollector {
+type MOCollectorOption func(*MOCollector)
+
+func NewMOCollector(opts ...MOCollectorOption) *MOCollector {
 	c := &MOCollector{
-		buffers:       make(map[string]*bufferHolder),
-		awakeCollect:  make(chan batchpipe.HasName, defaultQueueSize),
-		awakeGenerate: make(chan *bufferHolder, 16),
-		awakeBatch:    make(chan *bufferHolder),
-		stopCh:        make(chan struct{}),
-		collectorCnt:  2 * gPipeImplHolder.Size(),
-		generatorCnt:  gPipeImplHolder.Size(),
-		exporterCnt:   gPipeImplHolder.Size(),
+		buffers:        make(map[string]*bufferHolder),
+		awakeCollect:   make(chan batchpipe.HasName, defaultQueueSize),
+		awakeGenerate:  make(chan *bufferHolder, 16),
+		awakeBatch:     make(chan *bufferHolder),
+		stopCh:         make(chan struct{}),
+		collectorCnt:   runtime.NumCPU(),
+		generatorCnt:   runtime.NumCPU(),
+		exporterCnt:    runtime.NumCPU(),
+		pipeImplHolder: newPipeImplHolder(),
+	}
+	for _, opt := range opts {
+		opt(c)
 	}
 	return c
+}
+
+func WithCollectorCnt(cnt int) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) { c.collectorCnt = cnt })
+}
+func WithGeneratorCnt(cnt int) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) { c.generatorCnt = cnt })
+}
+func WithExporterCnt(cnt int) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) { c.exporterCnt = cnt })
+}
+
+func (c *MOCollector) initCnt() {
+	if c.collectorCnt <= 0 {
+		c.collectorCnt = c.pipeImplHolder.Size() * 2
+	}
+	if c.generatorCnt <= 0 {
+		c.generatorCnt = c.pipeImplHolder.Size()
+	}
+	if c.exporterCnt <= 0 {
+		c.exporterCnt = c.pipeImplHolder.Size()
+	}
+}
+
+func (c *MOCollector) Register(name batchpipe.HasName, impl trace.PipeImpl) {
+	_ = c.pipeImplHolder.Put(name.GetName(), impl)
 }
 
 func (c *MOCollector) Collect(ctx context.Context, i batchpipe.HasName) error {
@@ -212,6 +250,8 @@ func (c *MOCollector) Start() bool {
 		return false
 	}
 	defer atomic.StoreUint32(&c.started, 1)
+
+	c.initCnt()
 
 	logutil.Infof("MOCollector Start")
 	for i := 0; i < c.collectorCnt; i++ {
@@ -245,7 +285,7 @@ loop:
 				c.mux.Lock()
 				if _, has := c.buffers[i.GetName()]; !has {
 					logutil.Debugf("doCollect %dth: init buffer done.", idx)
-					if impl, has := gPipeImplHolder.Get(i.GetName()); !has {
+					if impl, has := c.pipeImplHolder.Get(i.GetName()); !has {
 						panic(moerr.NewInternalError("unknown item type: %s", i.GetName()))
 					} else {
 						buf = newBufferHolder(i, impl, awakeBuffer(c))
@@ -351,37 +391,25 @@ func (c *MOCollector) Stop(graceful bool) error {
 	return err
 }
 
-var _ BatchProcessor = &noopBatchProcessor{}
-
-type noopBatchProcessor struct {
-}
-
-func (n noopBatchProcessor) Collect(context.Context, batchpipe.HasName) error { return nil }
-func (n noopBatchProcessor) Start() bool                                      { return true }
-func (n noopBatchProcessor) Stop(bool) error                                  { return nil }
-
-var gPipeImplHolder *pipeImplHolder = newPipeImplHolder()
-
-// pipeImplHolder
-type pipeImplHolder struct {
+type PipeImplHolder struct {
 	mux   sync.RWMutex
-	impls map[string]batchpipe.PipeImpl[batchpipe.HasName, any]
+	impls map[string]trace.PipeImpl
 }
 
-func newPipeImplHolder() *pipeImplHolder {
-	return &pipeImplHolder{
-		impls: make(map[string]batchpipe.PipeImpl[batchpipe.HasName, any]),
+func newPipeImplHolder() *PipeImplHolder {
+	return &PipeImplHolder{
+		impls: make(map[string]trace.PipeImpl),
 	}
 }
 
-func (h *pipeImplHolder) Get(name string) (batchpipe.PipeImpl[batchpipe.HasName, any], bool) {
+func (h *PipeImplHolder) Get(name string) (trace.PipeImpl, bool) {
 	h.mux.RLock()
 	defer h.mux.RUnlock()
 	impl, has := h.impls[name]
 	return impl, has
 }
 
-func (h *pipeImplHolder) Put(name string, impl batchpipe.PipeImpl[batchpipe.HasName, any]) bool {
+func (h *PipeImplHolder) Put(name string, impl trace.PipeImpl) bool {
 	h.mux.Lock()
 	defer h.mux.Unlock()
 	_, has := h.impls[name]
@@ -389,6 +417,8 @@ func (h *pipeImplHolder) Put(name string, impl batchpipe.PipeImpl[batchpipe.HasN
 	return has
 }
 
-func (h *pipeImplHolder) Size() int {
+func (h *PipeImplHolder) Size() int {
+	h.mux.Lock()
+	defer h.mux.Unlock()
 	return len(h.impls)
 }

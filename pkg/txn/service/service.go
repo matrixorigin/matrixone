@@ -22,11 +22,11 @@ import (
 	"time"
 
 	"github.com/fagongzi/util/hack"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
@@ -37,11 +37,11 @@ import (
 var _ TxnService = (*service)(nil)
 
 type service struct {
-	logger  *zap.Logger
+	rt      runtime.Runtime
+	logger  *log.MOLogger
 	shard   metadata.DNShard
 	storage storage.TxnStorage
 	sender  rpc.TxnSender
-	clock   clock.Clock
 	stopper *stopper.Stopper
 
 	// TxnService maintains a sync.Map in memory to record all running transactions. The metadata for each write
@@ -65,19 +65,19 @@ type service struct {
 }
 
 // NewTxnService create TxnService
-func NewTxnService(logger *zap.Logger,
+func NewTxnService(
+	rt runtime.Runtime,
 	shard metadata.DNShard,
 	storage storage.TxnStorage,
 	sender rpc.TxnSender,
-	clock clock.Clock,
 	zombieTimeout time.Duration) TxnService {
-	logger = logutil.Adjust(logger).With(util.TxnDNShardField(shard))
+	logger := rt.Logger().With(util.TxnDNShardField(shard))
 	s := &service{
-		logger:  logger,
+		rt:      rt,
+		logger:  rt.Logger().With(util.TxnDNShardField(shard)),
 		shard:   shard,
 		sender:  sender,
 		storage: storage,
-		clock:   clock,
 		pool: sync.Pool{
 			New: func() any {
 				return &txnContext{
@@ -86,7 +86,8 @@ func NewTxnService(logger *zap.Logger,
 			}},
 		stopper: stopper.NewStopper(fmt.Sprintf("txn-service-%d-%d",
 			shard.ShardID,
-			shard.ReplicaID), stopper.WithLogger(logger)),
+			shard.ReplicaID),
+			stopper.WithLogger(logger.RawLogger())),
 		zombieTimeout: zombieTimeout,
 		recoveryC:     make(chan struct{}),
 		txnC:          make(chan txn.TxnMeta, 16),
@@ -260,7 +261,7 @@ func (s *service) parallelSendWithRetry(
 }
 
 type txnContext struct {
-	logger   *zap.Logger
+	logger   *log.MOLogger
 	nt       *notifier
 	createAt time.Time
 

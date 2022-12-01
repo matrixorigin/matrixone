@@ -17,6 +17,7 @@ package containers
 import (
 	"bytes"
 	"io"
+	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -44,6 +45,7 @@ type VectorView interface {
 	Data() []byte
 	Bytes() *Bytes
 	Slice() any
+	SlicePtr() unsafe.Pointer
 	DataWindow(offset, length int) []byte
 	Get(i int) any
 

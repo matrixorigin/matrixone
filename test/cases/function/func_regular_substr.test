@@ -17,7 +17,7 @@ SELECT REGEXP_SUBSTR('Cat Cut Cot', NULL, 2, 1);
 SELECT REGEXP_SUBSTR(NULL, NULL, 2, 1);
 SELECT REGEXP_SUBSTR('Cat Cut Cot', "", 2, 1);
 
-create table t1(a int, b varchar(20));
+create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
 insert into t1 values(2 , "Powerage");
 insert into t1 values( 3 , "Singing Down the Lane" );
@@ -29,7 +29,7 @@ insert into t1 values(8 , "Piece of Mind");
 SELECT a, REGEXP_SUBSTR(b, '.i') from t1;
 drop table t1;
 
-create table t1(a int, b varchar(20));
+create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
 insert into t1 values(2 , "Powerage");
 insert into t1 values( 3 , "Singing Down the Lane" );
@@ -41,7 +41,7 @@ insert into t1 values(8 , "Piece of Mind");
 SELECT a, REGEXP_SUBSTR(b, '.i', 3) from t1;
 drop table t1;
 
-create table t1(a int, b varchar(20));
+create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
 insert into t1 values(2 , "Powerage");
 insert into t1 values( 3 , "Singing Down the Lane" );

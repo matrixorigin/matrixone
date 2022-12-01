@@ -89,13 +89,12 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	exe.SetRoutineManager(rm)
 	exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
 
-	routine := NewRoutine(rm.getCtx(), pro, exe, pu)
-	routine.SetRoutineMgr(rm)
+	routine := NewRoutine(rm.getCtx(), pro, exe, pu.SV, rs)
 
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(routine.GetClientProtocol(), nil, pu, gSysVariables)
+	ses := NewSession(routine.GetClientProtocol(), nil, pu, gSysVariables, true)
 	ses.SetRequestContext(routine.GetCancelRoutineCtx())
 	ses.SetFromRealUser(true)
 	routine.SetSession(ses)
@@ -129,9 +128,11 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	}
 	rm.mu.Unlock()
 
-	ses := rt.GetSession()
-	logDebugf(ses.GetConciseProfile(), "will close io session.")
 	if rt != nil {
+		ses := rt.GetSession()
+		if ses != nil {
+			logDebugf(ses.GetConciseProfile(), "will close io session.")
+		}
 		rt.Quit()
 	}
 }
@@ -153,6 +154,7 @@ func (rm *RoutineManager) killStatement(id uint64) error {
 	if rt != nil {
 		logutil.Infof("will close the statement %d", id)
 		rt.notifyClose()
+		rt.notifyDone()
 	}
 	return nil
 }

@@ -17,7 +17,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"io"
 	"net/http"
 	"strings"
@@ -25,6 +24,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -126,7 +126,7 @@ func TestDescExtra(t *testing.T) {
 	assert.Equal(t, extra.labels[2].GetName(), "xy")
 }
 
-var dummyOptionsFactory = export.GetOptionFactory(export.NormalTableEngine)
+var dummyOptionsFactory = table.GetOptionFactory(table.NormalTableEngine)
 
 func TestCreateTable(t *testing.T) {
 	buf := new(bytes.Buffer)

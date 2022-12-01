@@ -259,10 +259,10 @@ func NewMockCompilerContext() *MockCompilerContext {
 			for _, col := range table.cols {
 				colDefs = append(colDefs, &ColDef{
 					Typ: &plan.Type{
-						Id:        int32(col.Id),
-						Nullable:  col.Nullable,
-						Width:     col.Width,
-						Precision: col.Precision,
+						Id:          int32(col.Id),
+						NotNullable: !col.Nullable,
+						Width:       col.Width,
+						Precision:   col.Precision,
 					},
 					Name:    col.Name,
 					Pkidx:   1,

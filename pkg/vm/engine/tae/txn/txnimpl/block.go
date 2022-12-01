@@ -200,6 +200,24 @@ func (blk *txnBlock) Rows() int {
 	return blk.entry.GetBlockData().Rows()
 }
 
+func (blk *txnBlock) GetColumnDataByIds(colIdxes []int, buffers []*bytes.Buffer) (*model.BlockView, error) {
+	if blk.isUncommitted {
+		return blk.table.localSegment.GetColumnDataByIds(blk.entry, colIdxes, buffers)
+	}
+	return blk.entry.GetBlockData().GetColumnDataByIds(blk.Txn, colIdxes, buffers)
+}
+
+func (blk *txnBlock) GetColumnDataByNames(attrs []string, buffers []*bytes.Buffer) (*model.BlockView, error) {
+	if blk.isUncommitted {
+		attrIds := make([]int, len(attrs))
+		for i, attr := range attrs {
+			attrIds[i] = blk.table.entry.GetSchema().GetColIdx(attr)
+		}
+		return blk.table.localSegment.GetColumnDataByIds(blk.entry, attrIds, buffers)
+	}
+	return blk.entry.GetBlockData().GetColumnDataByNames(blk.Txn, attrs, buffers)
+}
+
 func (blk *txnBlock) GetColumnDataById(colIdx int, buffer *bytes.Buffer) (*model.ColumnView, error) {
 	if blk.isUncommitted {
 		return blk.table.localSegment.GetColumnDataById(blk.entry, colIdx, buffer)

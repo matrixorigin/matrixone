@@ -17,18 +17,20 @@ package taskservice
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestCreate(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -53,7 +55,7 @@ func TestCreate(t *testing.T) {
 
 func TestCreateBatch(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -87,7 +89,7 @@ func TestCreateBatch(t *testing.T) {
 
 func TestAllocate(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -108,7 +110,7 @@ func TestAllocate(t *testing.T) {
 
 func TestReAllocate(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -136,29 +138,35 @@ func TestReAllocate(t *testing.T) {
 	assert.Equal(t, uint32(2), v.Epoch)
 }
 
-func TestAllocateWithNotExistTask(t *testing.T) {
+func allocateWithNotExistTask(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
-
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
+	_ = s.Allocate(ctx, task.Task{ID: 1}, "r1")
+}
 
-	defer func() {
-		if err := recover(); err != nil {
-			return
-		}
-		assert.FailNow(t, "must panic")
-	}()
-	err := s.Allocate(ctx, task.Task{ID: 1}, "r1")
-	require.NoError(t, err)
+func TestAllocateWithNotExistTask(t *testing.T) {
+	if os.Getenv("RUN_TEST") == "1" {
+		allocateWithNotExistTask(t)
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestAllocateWithNotExistTask")
+	cmd.Env = append(os.Environ(), "RUN_TEST=1")
+	err := cmd.Run()
+	// check Fatal is called
+	if e, ok := err.(*exec.ExitError); ok && !e.Success() {
+		return
+	}
+	t.Fatalf("process ran with err %v, want exit status 1", err)
 }
 
 func TestAllocateWithInvalidEpoch(t *testing.T) {
 	store := NewMemTaskStorage().(*memTaskStorage)
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -184,7 +192,7 @@ func TestAllocateWithInvalidEpoch(t *testing.T) {
 
 func TestCompleted(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -207,7 +215,7 @@ func TestCompleted(t *testing.T) {
 
 func TestCompletedWithInvalidStatus(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -230,7 +238,7 @@ func TestCompletedWithInvalidStatus(t *testing.T) {
 
 func TestCompletedWithInvalidEpoch(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -254,7 +262,7 @@ func TestCompletedWithInvalidEpoch(t *testing.T) {
 
 func TestCompletedWithInvalidTaskRunner(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -274,7 +282,7 @@ func TestCompletedWithInvalidTaskRunner(t *testing.T) {
 
 func TestHeartbeat(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -297,7 +305,7 @@ func TestHeartbeat(t *testing.T) {
 
 func TestHeartbeatWithSmallEpoch(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -320,7 +328,7 @@ func TestHeartbeatWithSmallEpoch(t *testing.T) {
 
 func TestHeartbeatWithBiggerEpochShouldSuccess(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -342,7 +350,7 @@ func TestHeartbeatWithBiggerEpochShouldSuccess(t *testing.T) {
 
 func TestCreateCronTask(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -355,7 +363,7 @@ func TestCreateCronTask(t *testing.T) {
 
 func TestQueryCronTask(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -374,7 +382,7 @@ func TestQueryCronTask(t *testing.T) {
 
 func TestQueryTask(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()

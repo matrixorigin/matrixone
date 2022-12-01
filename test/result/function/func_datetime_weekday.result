@@ -28,14 +28,13 @@ SELECT weekday(10) as weekday;
 invalid argument function weekday, bad value [BIGINT]
 SELECT weekday(1=1) as weekday;
 invalid argument function weekday, bad value [BOOL]
-SELECT weekday('2015-09.30') as weekday;
+SELECT weekday('2015-09-30') as weekday;
 weekday
 2
 SELECT weekday('2015-0') as weekday;
 invalid argument parsedate, bad value 2015-0
 SELECT weekday('2015-09.30 12') as weekday;
-weekday
-2
+invalid argument parsedate, bad value 2015-09.30 12
 SELECT weekday('2015-09-26 08:09:22') AS weekday;
 weekday
 5

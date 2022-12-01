@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package unnest
+package table_function
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,45 +30,51 @@ import (
 	"strconv"
 )
 
-func String(arg any, buf *bytes.Buffer) {
+func unnestString(arg any, buf *bytes.Buffer) {
 	buf.WriteString("unnest")
 }
 
-func Prepare(_ *process.Process, arg any) error {
-	param := arg.(*Argument).Es
+func unnestPrepare(_ *process.Process, arg *Argument) error {
+	param := unnestParam{}
+	param.ColName = string(arg.Params)
 	if len(param.ColName) == 0 {
 		param.ColName = "UNNEST_DEFAULT"
 	}
 	var filters []string
-	for i := range param.Attrs {
+	for i := range arg.Attrs {
 		denied := false
-		for j := range deniedFilters {
-			if param.Attrs[i] == deniedFilters[j] {
+		for j := range unnestDeniedFilters {
+			if arg.Attrs[i] == unnestDeniedFilters[j] {
 				denied = true
 				break
 			}
 		}
 		if !denied {
-			filters = append(filters, param.Attrs[i])
+			filters = append(filters, arg.Attrs[i])
 		}
 	}
-	param.filters = filters
-	if len(param.ExprList) < 1 || len(param.ExprList) > 3 {
+	param.Filters = filters
+	if len(arg.Args) < 1 || len(arg.Args) > 3 {
 		return moerr.NewInvalidInput("unnest: argument number must be 1, 2 or 3")
 	}
-	if len(param.ExprList) == 1 {
+	if len(arg.Args) == 1 {
 		vType := types.T_varchar.ToType()
 		bType := types.T_bool.ToType()
-		param.ExprList = append(param.ExprList, &plan.Expr{Typ: plan2.MakePlan2Type(&vType), Expr: &plan.Expr_C{C: &plan2.Const{Value: &plan.Const_Sval{Sval: "$"}}}})
-		param.ExprList = append(param.ExprList, &plan.Expr{Typ: plan2.MakePlan2Type(&bType), Expr: &plan.Expr_C{C: &plan2.Const{Value: &plan.Const_Bval{Bval: false}}}})
-	} else if len(param.ExprList) == 2 {
+		arg.Args = append(arg.Args, &plan.Expr{Typ: plan2.MakePlan2Type(&vType), Expr: &plan.Expr_C{C: &plan2.Const{Value: &plan.Const_Sval{Sval: "$"}}}})
+		arg.Args = append(arg.Args, &plan.Expr{Typ: plan2.MakePlan2Type(&bType), Expr: &plan.Expr_C{C: &plan2.Const{Value: &plan.Const_Bval{Bval: false}}}})
+	} else if len(arg.Args) == 2 {
 		bType := types.T_bool.ToType()
-		param.ExprList = append(param.ExprList, &plan.Expr{Typ: plan2.MakePlan2Type(&bType), Expr: &plan.Expr_C{C: &plan2.Const{Value: &plan.Const_Bval{Bval: false}}}})
+		arg.Args = append(arg.Args, &plan.Expr{Typ: plan2.MakePlan2Type(&bType), Expr: &plan.Expr_C{C: &plan2.Const{Value: &plan.Const_Bval{Bval: false}}}})
 	}
+	dt, err := json.Marshal(param)
+	if err != nil {
+		return err
+	}
+	arg.Params = dt
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg any) (bool, error) {
+func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	var (
 		err      error
 		rbat     *batch.Batch
@@ -91,26 +98,25 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			outerVec.Free(proc.Mp())
 		}
 	}()
-	param := arg.(*Argument).Es
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
-	jsonVec, err = colexec.EvalExpr(bat, proc, param.ExprList[0])
+	jsonVec, err = colexec.EvalExpr(bat, proc, arg.Args[0])
 	if err != nil {
 		return false, err
 	}
 	if jsonVec.Typ.Oid != types.T_json && jsonVec.Typ.Oid != types.T_varchar {
 		return false, moerr.NewInvalidInput(fmt.Sprintf("unnest: first argument must be json or string, but got %s", jsonVec.Typ.String()))
 	}
-	pathVec, err = colexec.EvalExpr(bat, proc, param.ExprList[1])
+	pathVec, err = colexec.EvalExpr(bat, proc, arg.Args[1])
 	if err != nil {
 		return false, err
 	}
 	if pathVec.Typ.Oid != types.T_varchar {
 		return false, moerr.NewInvalidInput(fmt.Sprintf("unnest: second argument must be string, but got %s", pathVec.Typ.String()))
 	}
-	outerVec, err = colexec.EvalExpr(bat, proc, param.ExprList[2])
+	outerVec, err = colexec.EvalExpr(bat, proc, arg.Args[2])
 	if err != nil {
 		return false, err
 	}
@@ -125,12 +131,15 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		return false, err
 	}
 	outer = vector.MustTCols[bool](outerVec)[0]
-
+	param := unnestParam{}
+	if err = json.Unmarshal(arg.Params, &param); err != nil {
+		return false, err
+	}
 	switch jsonVec.Typ.Oid {
 	case types.T_json:
-		rbat, err = handle(jsonVec, &path, outer, param, proc, parseJson)
+		rbat, err = handle(jsonVec, &path, outer, &param, arg, proc, parseJson)
 	case types.T_varchar:
-		rbat, err = handle(jsonVec, &path, outer, param, proc, parseStr)
+		rbat, err = handle(jsonVec, &path, outer, &param, arg, proc, parseStr)
 	}
 	if err != nil {
 		return false, err
@@ -139,7 +148,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	return false, nil
 }
 
-func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *Param, proc *process.Process, fn func(dt []byte) (bytejson.ByteJson, error)) (*batch.Batch, error) {
+func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unnestParam, arg *Argument, proc *process.Process, fn func(dt []byte) (bytejson.ByteJson, error)) (*batch.Batch, error) {
 	var (
 		err  error
 		rbat *batch.Batch
@@ -147,10 +156,10 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *Para
 		ures []bytejson.UnnestResult
 	)
 
-	rbat = batch.New(false, param.Attrs)
+	rbat = batch.New(false, arg.Attrs)
 	rbat.Cnt = 1
-	for i := range param.Cols {
-		rbat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
+	for i := range arg.Rets {
+		rbat.Vecs[i] = vector.New(dupType(arg.Rets[i].Typ))
 	}
 
 	if jsonVec.IsScalar() {
@@ -158,11 +167,11 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *Para
 		if err != nil {
 			return nil, err
 		}
-		ures, err = json.Unnest(path, outer, recursive, mode, param.filters)
+		ures, err = json.Unnest(path, outer, unnestRecursive, unnestMode, param.Filters)
 		if err != nil {
 			return nil, err
 		}
-		rbat, err = makeBatch(rbat, ures, param, proc)
+		rbat, err = makeBatch(rbat, ures, param, arg, proc)
 		if err != nil {
 			return nil, err
 		}
@@ -176,11 +185,11 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *Para
 		if err != nil {
 			return nil, err
 		}
-		ures, err = json.Unnest(path, outer, recursive, mode, param.filters)
+		ures, err = json.Unnest(path, outer, unnestRecursive, unnestMode, param.Filters)
 		if err != nil {
 			return nil, err
 		}
-		rbat, err = makeBatch(rbat, ures, param, proc)
+		rbat, err = makeBatch(rbat, ures, param, arg, proc)
 		if err != nil {
 			return nil, err
 		}
@@ -190,18 +199,18 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *Para
 	return rbat, nil
 }
 
-func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, proc *process.Process) (*batch.Batch, error) {
+func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestParam, arg *Argument, proc *process.Process) (*batch.Batch, error) {
 	for i := 0; i < len(ures); i++ {
-		for j := 0; j < len(param.Attrs); j++ {
+		for j := 0; j < len(arg.Attrs); j++ {
 			vec := bat.GetVector(int32(j))
 			var err error
-			switch param.Attrs[j] {
+			switch arg.Attrs[j] {
 			case "col":
 				err = vec.Append([]byte(param.ColName), false, proc.Mp())
 			case "seq":
 				err = vec.Append(int32(i), false, proc.Mp())
 			case "index":
-				val, ok := ures[i][param.Attrs[j]]
+				val, ok := ures[i][arg.Attrs[j]]
 				if !ok {
 					err = vec.Append(int32(0), true, proc.Mp())
 				} else {
@@ -209,10 +218,10 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, pro
 					err = vec.Append(int32(intVal), false, proc.Mp())
 				}
 			case "key", "path", "value", "this":
-				val, ok := ures[i][param.Attrs[j]]
+				val, ok := ures[i][arg.Attrs[j]]
 				err = vec.Append([]byte(val), !ok, proc.Mp())
 			default:
-				err = moerr.NewInvalidArg("unnest: invalid column name:%s", param.Attrs[j])
+				err = moerr.NewInvalidArg("unnest: invalid column name:%s", arg.Attrs[j])
 			}
 			if err != nil {
 				return nil, err
@@ -220,9 +229,6 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, pro
 		}
 	}
 	return bat, nil
-}
-func dupType(typ *plan.Type) types.Type {
-	return types.New(types.T(typ.Id), typ.Width, typ.Scale, typ.Precision)
 }
 
 func parseJson(dt []byte) (bytejson.ByteJson, error) {

@@ -18,21 +18,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"time"
 	"unsafe"
 
+	"github.com/cockroachdb/errors/errbase"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
-
-	"github.com/cockroachdb/errors/errbase"
 	"go.uber.org/zap"
 )
 
-var _ IBuffer2SqlItem = (*MOErrorHolder)(nil)
-var _ CsvFields = (*MOErrorHolder)(nil)
-
+// MOErrorHolder implement export.IBuffer2SqlItem and export.CsvFields
 type MOErrorHolder struct {
 	Error     error     `json:"error"`
 	Timestamp time.Time `json:"timestamp"`
@@ -49,12 +46,12 @@ func (h *MOErrorHolder) Free() {
 	h.Error = nil
 }
 
-func (h *MOErrorHolder) GetRow() *export.Row { return errorView.OriginTable.GetRow() }
+func (h *MOErrorHolder) GetRow() *table.Row { return errorView.OriginTable.GetRow() }
 
-func (h *MOErrorHolder) CsvFields(row *export.Row) []string {
+func (h *MOErrorHolder) CsvFields(row *table.Row) []string {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, errorView.Table)
-	row.SetColumnVal(timestampCol, time2DatetimeString(h.Timestamp))
+	row.SetColumnVal(timestampCol, Time2DatetimeString(h.Timestamp))
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
 	row.SetColumnVal(errorCol, h.Error.Error())
@@ -90,5 +87,5 @@ func ReportError(ctx context.Context, err error, depth int) {
 		ctx = DefaultContext()
 	}
 	e := &MOErrorHolder{Error: err, Timestamp: time.Now()}
-	export.GetGlobalBatchProcessor().Collect(ctx, e)
+	GetGlobalBatchProcessor().Collect(ctx, e)
 }

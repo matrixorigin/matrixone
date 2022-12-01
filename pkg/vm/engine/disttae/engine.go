@@ -19,6 +19,7 @@ import (
 	"container/heap"
 	"context"
 	"math"
+	"runtime"
 	"sync"
 	"time"
 
@@ -33,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ engine.Engine = new(Engine)
 
 func New(
 	ctx context.Context,
@@ -50,7 +53,7 @@ func New(
 	if err := db.init(ctx, mp); err != nil {
 		panic(err)
 	}
-	return &Engine{
+	e := &Engine{
 		db:                db,
 		mp:                mp,
 		fs:                fs,
@@ -60,9 +63,9 @@ func New(
 		getClusterDetails: getClusterDetails,
 		txns:              make(map[string]*Transaction),
 	}
+	go e.gc(ctx)
+	return e
 }
-
-var _ engine.Engine = new(Engine)
 
 func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator) error {
 	txn := e.getTransaction(op)
@@ -320,7 +323,7 @@ func (e *Engine) Nodes() (engine.Nodes, error) {
 	var nodes engine.Nodes
 	for _, store := range clusterDetails.CNStores {
 		nodes = append(nodes, engine.Node{
-			Mcpu: 10, // TODO
+			Mcpu: runtime.NumCPU(),
 			Id:   store.UUID,
 			Addr: store.ServiceAddress,
 		})
@@ -417,10 +420,34 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	delete(e.txns, string(txn.meta.ID))
 }
 
-/*
-func (e *Engine) minActiveTimestamp() timestamp.Timestamp {
-	e.RLock()
-	defer e.RUnlock()
-	return (*e.txnHeap)[0].meta.SnapshotTS
+func (e *Engine) gc(ctx context.Context) {
+	var ps []Partitions
+	var ts timestamp.Timestamp
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(GcCycle):
+			e.RLock()
+			if len(*e.txnHeap) == 0 {
+				e.RUnlock()
+				continue
+			}
+			ts = (*e.txnHeap)[0].meta.SnapshotTS
+			e.RUnlock()
+			e.db.Lock()
+			for k := range e.db.tables {
+				ps = append(ps, e.db.tables[k])
+			}
+			e.db.Unlock()
+			for i := range ps {
+				for j := range ps[i] {
+					ps[i][j].Lock()
+					ps[i][j].GC(ts)
+					ps[i][j].Unlock()
+				}
+			}
+		}
+	}
 }
-*/

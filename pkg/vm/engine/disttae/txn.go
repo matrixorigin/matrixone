@@ -240,6 +240,7 @@ func (txn *Transaction) WriteBatch(
 		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
 		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 	}
+	txn.Lock()
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
 		typ:          typ,
 		bat:          bat,
@@ -249,6 +250,7 @@ func (txn *Transaction) WriteBatch(
 		databaseName: databaseName,
 		dnStore:      dnStore,
 	})
+	txn.Unlock()
 
 	if err := txn.checkPrimaryKey(typ, primaryIdx, bat, tableName, tableId); err != nil {
 		return err
@@ -829,9 +831,8 @@ func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
 	if expr == nil || pk == nil || tableDef == nil {
 		return fullList()
 	}
-	pkIndex := tableDef.Name2ColIndex[pk.Name]
 	if pk.Type.IsIntOrUint() {
-		canComputeRange, intPkRange := computeRangeByIntPk(expr, pkIndex, "")
+		canComputeRange, intPkRange := computeRangeByIntPk(expr, pk.Name, "")
 		if !canComputeRange {
 			return fullList()
 		}
@@ -847,7 +848,7 @@ func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
 		}
 		return getListByItems(dnStores, intPkRange.items)
 	}
-	canComputeRange, hashVal := computeRangeByNonIntPk(expr, pkIndex)
+	canComputeRange, hashVal := computeRangeByNonIntPk(expr, pk.Name)
 	if !canComputeRange {
 		return fullList()
 	}

@@ -130,7 +130,7 @@ func TestDateStringSub(t *testing.T) {
 func makeDateSubVectors(str string, isConst bool, num int64, unit types.IntervalType) []*vector.Vector {
 	vec := make([]*vector.Vector, 3)
 
-	date, _ := types.ParseDate(str)
+	date, _ := types.ParseDateCast(str)
 
 	vec[0] = vector.NewConstFixed(types.T_date.ToType(), 1, date, testutil.TestUtilMp)
 	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, num, testutil.TestUtilMp)
