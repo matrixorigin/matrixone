@@ -16,6 +16,7 @@ package model
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 
@@ -233,7 +234,9 @@ func (aot *AOT[B, R]) appendBlock(block B) (err error) {
 	aot.Lock()
 	defer aot.Unlock()
 	if aot.appender.IsAppendable() && aot.appender.Length() < aot.blockSize {
-		panic(moerr.NewInternalError("append a block but the previous block is appendable"))
+		panic(moerr.NewInternalError(
+			context.Background(),
+			"append a block but the previous block is appendable"))
 	}
 	aot.blocks.Set(block)
 	aot.appender = block
