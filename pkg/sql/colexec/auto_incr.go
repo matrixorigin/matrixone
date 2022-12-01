@@ -328,6 +328,7 @@ func updateAutoIncrTable(ctx context.Context, param *AutoIncrParam, curNum uint6
 		bat.Clean(mp)
 		return err
 	}
+	param.proc.SetLastInsertID(curNum)
 	return nil
 }
 
