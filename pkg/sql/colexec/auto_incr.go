@@ -328,6 +328,7 @@ func updateAutoIncrTable(param *AutoIncrParam, curNum uint64, name string, mp *m
 		bat.Clean(mp)
 		return err
 	}
+	param.proc.SetLastInsertID(curNum)
 	return nil
 }
 

@@ -44,6 +44,7 @@ func New(
 		TxnOperator:       txnOperator,
 		FileService:       fileService,
 		GetClusterDetails: getClusterDetails,
+		LastInsertID:      new(uint64),
 	}
 }
 

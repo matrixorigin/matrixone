@@ -161,6 +161,8 @@ type Session struct {
 	mu sync.Mutex
 
 	flag bool
+
+	lastInsertID uint64
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
@@ -463,6 +465,18 @@ func (ses *Session) GetLastStmtId() uint32 {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.lastStmtId
+}
+
+func (ses *Session) SetLastInsertID(num uint64) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.lastInsertID = num
+}
+
+func (ses *Session) GetLastInsertID() uint64 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.lastInsertID
 }
 
 func (ses *Session) SetRequestContext(reqCtx context.Context) {
