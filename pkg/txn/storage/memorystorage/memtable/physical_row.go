@@ -22,10 +22,11 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 )
 
 type PhysicalRow[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 ] struct {
 	Key        K
