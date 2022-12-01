@@ -20,11 +20,23 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestMain(m *testing.M) {
+	logutil.SetupMOLogger(&logutil.LogConfig{
+		Level:  "debug",
+		Format: "console",
+	})
+
+	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
+	m.Run()
+}
 
 func TestGetExpiredTasks(t *testing.T) {
 	cases := []struct {
@@ -94,7 +106,7 @@ func TestGetCNOrderedMap(t *testing.T) {
 
 func TestScheduleCreatedTasks(t *testing.T) {
 	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
-	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{}, nil)
+	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{})
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
 	currentTick := uint64(0)
 
@@ -134,7 +146,7 @@ func TestScheduleCreatedTasks(t *testing.T) {
 
 func TestReallocateExpiredTasks(t *testing.T) {
 	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
-	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{}, nil)
+	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{})
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
 	currentTick := expiredTick - 1
 

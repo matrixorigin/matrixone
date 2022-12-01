@@ -20,10 +20,10 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -54,18 +54,17 @@ func Check(
 	dnState pb.DNState,
 	user pb.TaskTableUser,
 	currTick uint64,
-	logger *zap.Logger,
 ) []*operator.Operator {
 	stores, reportedShards := parseDnState(cfg, dnState, currTick)
-	logger.Debug("reported dn shards in cluster",
+	runtime.ProcessLevelRuntime().Logger().Debug("reported dn shards in cluster",
 		zap.Any("dn shard IDs", reportedShards.shardIDs),
 		zap.Any("dn shards", reportedShards.shards),
 	)
 	for _, node := range stores.ExpiredStores() {
-		logutil.Info("node is expired", zap.String("uuid", node.ID))
+		runtime.ProcessLevelRuntime().Logger().Info("node is expired", zap.String("uuid", node.ID))
 	}
 	if len(stores.WorkingStores()) < 1 {
-		logger.Warn("no working dn stores")
+		runtime.ProcessLevelRuntime().Logger().Warn("no working dn stores")
 		return nil
 	}
 
@@ -75,12 +74,12 @@ func Check(
 
 	// 1. check reported dn state
 	operators = append(operators,
-		checkReportedState(reportedShards, mapper, stores.WorkingStores(), idAlloc, logger)...,
+		checkReportedState(reportedShards, mapper, stores.WorkingStores(), idAlloc)...,
 	)
 
 	// 2. check expected dn state
 	operators = append(operators,
-		checkInitiatingShards(reportedShards, mapper, stores.WorkingStores(), idAlloc, cluster, cfg, currTick, logger)...,
+		checkInitiatingShards(reportedShards, mapper, stores.WorkingStores(), idAlloc, cluster, cfg, currTick)...,
 	)
 
 	if user.Username != "" {
@@ -97,33 +96,31 @@ func Check(
 
 // schedule generator operator as much as possible
 // NB: the returned order should be deterministic.
-func checkShard(
-	shard *dnShard, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator, logger *zap.Logger,
-) []operator.OpStep {
+func checkShard(shard *dnShard, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator) []operator.OpStep {
 	switch len(shard.workingReplicas()) {
 	case 0: // need add replica
 		newReplicaID, ok := idAlloc.Next()
 		if !ok {
-			logger.Warn("fail to allocate replica ID")
+			runtime.ProcessLevelRuntime().Logger().Warn("fail to allocate replica ID")
 			return nil
 		}
 
 		target, err := consumeLeastSpareStore(workingStores)
 		if err != nil {
-			logger.Warn("no working dn stores")
+			runtime.ProcessLevelRuntime().Logger().Warn("no working dn stores")
 			return nil
 		}
 
 		logShardID, err := mapper.getLogShardID(shard.shardID)
 		if err != nil {
-			logger.Warn("shard not registered", zap.Uint64("ShardID", shard.shardID))
+			runtime.ProcessLevelRuntime().Logger().Warn("shard not registered", zap.Uint64("ShardID", shard.shardID))
 			return nil
 		}
 
 		s := newAddStep(
 			target, shard.shardID, newReplicaID, logShardID,
 		)
-		logger.Info(s.String())
+		runtime.ProcessLevelRuntime().Logger().Info(s.String())
 		return []operator.OpStep{s}
 
 	case 1: // ignore expired replicas
@@ -135,7 +132,7 @@ func checkShard(
 
 		logShardID, err := mapper.getLogShardID(shard.shardID)
 		if err != nil {
-			logger.Warn("shard not registered", zap.Uint64("ShardID", shard.shardID))
+			runtime.ProcessLevelRuntime().Logger().Warn("shard not registered", zap.Uint64("ShardID", shard.shardID))
 			return nil
 		}
 
@@ -143,7 +140,7 @@ func checkShard(
 			s := newRemoveStep(
 				r.storeID, r.shardID, r.replicaID, logShardID,
 			)
-			logger.Info(s.String())
+			runtime.ProcessLevelRuntime().Logger().Info(s.String())
 			steps = append(steps, s)
 		}
 		return steps
