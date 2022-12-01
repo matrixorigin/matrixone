@@ -225,7 +225,7 @@ func GetFunctionByID(overloadID int64) (*Function, error) {
 		fs := functionRegister[fid].Overloads
 		return &fs[overloadIndex], nil
 	} else {
-		return nil, moerr.NewInvalidInput("function overload id not found")
+		return nil, moerr.NewInvalidInputNoCtx("function overload id not found")
 	}
 }
 
