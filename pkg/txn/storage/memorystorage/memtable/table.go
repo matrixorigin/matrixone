@@ -24,11 +24,12 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/tidwall/btree"
 )
 
 type Table[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 	R Row[K, V],
 ] struct {
@@ -37,7 +38,7 @@ type Table[
 }
 
 type tableState[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 ] struct {
 	rows                 *btree.BTreeG[*PhysicalRow[K, V]]
@@ -67,7 +68,7 @@ type Row[K any, V any] interface {
 }
 
 type IndexEntry[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 ] struct {
 	Index     Tuple
@@ -76,7 +77,7 @@ type IndexEntry[
 }
 
 type ReverseIndexEntry[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 ] struct {
 	Key       K
@@ -85,7 +86,7 @@ type ReverseIndexEntry[
 }
 
 type WriteEntry[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 ] struct {
 	Transaction *Transaction
@@ -95,7 +96,7 @@ type WriteEntry[
 }
 
 func NewTable[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 	R Row[K, V],
 ]() *Table[K, V, R] {
@@ -113,14 +114,14 @@ func NewTable[
 }
 
 func comparePhysicalRow[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 ](a, b *PhysicalRow[K, V]) bool {
 	return a.Key.Less(b.Key)
 }
 
 func compareIndexEntry[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 ](a, b *IndexEntry[K, V]) bool {
 	if a.Index.Less(b.Index) {
@@ -139,7 +140,7 @@ func compareIndexEntry[
 }
 
 func compareReverseIndexEntry[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 ](a, b *ReverseIndexEntry[K, V]) bool {
 	if a.Key.Less(b.Key) {
@@ -158,7 +159,7 @@ func compareReverseIndexEntry[
 }
 
 func compareWriteEntry[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 ](a, b *WriteEntry[K, V]) bool {
 	if a.Transaction.ID < b.Transaction.ID {
@@ -364,7 +365,7 @@ func (t *Table[K, V, R]) Upsert(
 }
 
 func setIndexes[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 	R Row[K, V],
 ](
@@ -439,7 +440,7 @@ func (t *Table[K, V, R]) Get(
 }
 
 func getRowByKey[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 ](
 	tree *btree.BTreeG[*PhysicalRow[K, V]],
@@ -456,7 +457,7 @@ func getRowByKey[
 }
 
 func getOrSetRowByKey[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 ](
 	tree *btree.BTreeG[*PhysicalRow[K, V]],
@@ -673,7 +674,7 @@ func (t *Table[K, V, R]) update(
 }
 
 func validate[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 ](
 	physicalRow *PhysicalRow[K, V],

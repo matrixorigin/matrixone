@@ -17,6 +17,7 @@ package memtable
 import (
 	"database/sql"
 
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/tidwall/btree"
 )
 
@@ -30,7 +31,7 @@ func (t *Table[K, V, R]) NewDiffIter(fromTime, toTime *Time) *DiffIter[K, V] {
 }
 
 type DiffIter[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 ] struct {
 	fromTime *Time
