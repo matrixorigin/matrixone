@@ -62,11 +62,11 @@ func (s *service) initTaskServiceHolder() {
 	if s.task.storageFactory == nil {
 		s.task.holder = taskservice.NewTaskServiceHolder(
 			runtime.ProcessLevelRuntime(),
-			func() (string, error) { return s.cfg.SQLAddress, nil })
+			func(context.Context) (string, error) { return s.cfg.SQLAddress, nil })
 	} else {
 		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(
 			runtime.ProcessLevelRuntime(),
-			func() (string, error) { return s.cfg.SQLAddress, nil },
+			func(context.Context) (string, error) { return s.cfg.SQLAddress, nil },
 			func(_, _, _ string) taskservice.TaskStorageFactory {
 				return s.task.storageFactory
 			})
@@ -219,7 +219,7 @@ func (s *service) registerExecutorsLocked() {
 
 	ts, ok := s.task.holder.Get()
 	if !ok {
-		panic(moerr.NewInternalError("task Service not ok"))
+		panic(moerr.NewInternalErrorNoCtx("task Service not ok"))
 	}
 	s.task.runner.RegisterExecutor(uint32(task.TaskCode_SystemInit),
 		func(ctx context.Context, t task.Task) error {

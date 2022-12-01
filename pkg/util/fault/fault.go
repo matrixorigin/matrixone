@@ -16,6 +16,7 @@
 package fault
 
 import (
+	"context"
 	"math"
 	"math/rand"
 	"strconv"
@@ -207,9 +208,9 @@ func TriggerFault(name string) (iret int64, sret string, exist bool) {
 	return
 }
 
-func AddFaultPoint(name string, freq string, action string, iarg int64, sarg string) error {
+func AddFaultPoint(ctx context.Context, name string, freq string, action string, iarg int64, sarg string) error {
 	if !IsEnabled() {
-		return moerr.NewInternalError("add fault point not enabled")
+		return moerr.NewInternalError(ctx, "add fault point not enabled")
 	}
 
 	var err error
@@ -222,7 +223,7 @@ func AddFaultPoint(name string, freq string, action string, iarg int64, sarg str
 	// freq is start:end:skip:prob
 	sesp := strings.Split(freq, ":")
 	if len(sesp) != 4 {
-		return moerr.NewInvalidArg("fault point freq", freq)
+		return moerr.NewInvalidArg(ctx, "fault point freq", freq)
 	}
 
 	if sesp[0] == "" {
@@ -230,7 +231,7 @@ func AddFaultPoint(name string, freq string, action string, iarg int64, sarg str
 	} else {
 		msg.start, err = strconv.Atoi(sesp[0])
 		if err != nil {
-			return moerr.NewInvalidArg("fault point freq", freq)
+			return moerr.NewInvalidArg(ctx, "fault point freq", freq)
 		}
 	}
 	if sesp[1] == "" {
@@ -238,7 +239,7 @@ func AddFaultPoint(name string, freq string, action string, iarg int64, sarg str
 	} else {
 		msg.end, err = strconv.Atoi(sesp[1])
 		if err != nil || msg.end < msg.start {
-			return moerr.NewInvalidArg("fault point freq", freq)
+			return moerr.NewInvalidArg(ctx, "fault point freq", freq)
 		}
 	}
 	if sesp[2] == "" {
@@ -246,7 +247,7 @@ func AddFaultPoint(name string, freq string, action string, iarg int64, sarg str
 	} else {
 		msg.skip, err = strconv.Atoi(sesp[2])
 		if err != nil || msg.skip <= 0 {
-			return moerr.NewInvalidArg("fault point freq", freq)
+			return moerr.NewInvalidArg(ctx, "fault point freq", freq)
 		}
 	}
 	if sesp[3] == "" {
@@ -254,7 +255,7 @@ func AddFaultPoint(name string, freq string, action string, iarg int64, sarg str
 	} else {
 		msg.prob, err = strconv.ParseFloat(sesp[3], 64)
 		if err != nil || msg.prob <= 0 || msg.prob >= 1 {
-			return moerr.NewInvalidArg("fault point freq", freq)
+			return moerr.NewInvalidArg(ctx, "fault point freq", freq)
 		}
 	}
 
@@ -279,7 +280,7 @@ func AddFaultPoint(name string, freq string, action string, iarg int64, sarg str
 	case "ECHO":
 		msg.action = ECHO
 	default:
-		return moerr.NewInvalidArg("fault action", action)
+		return moerr.NewInvalidArg(ctx, "fault action", action)
 	}
 
 	msg.iarg = iarg
@@ -292,14 +293,14 @@ func AddFaultPoint(name string, freq string, action string, iarg int64, sarg str
 	gfm.chIn <- &msg
 	out := <-gfm.chOut
 	if out == nil {
-		return moerr.NewInternalError("add fault injection point failed.")
+		return moerr.NewInternalError(ctx, "add fault injection point failed.")
 	}
 	return nil
 }
 
-func RemoveFaultPoint(name string) error {
+func RemoveFaultPoint(ctx context.Context, name string) error {
 	if !IsEnabled() {
-		return moerr.NewInternalError("add fault injection point not enabled.")
+		return moerr.NewInternalError(ctx, "add fault injection point not enabled.")
 	}
 
 	var msg faultEntry
@@ -308,7 +309,7 @@ func RemoveFaultPoint(name string) error {
 	gfm.chIn <- &msg
 	out := <-gfm.chOut
 	if out == nil {
-		return moerr.NewInvalidInput("invalid injection point %s", name)
+		return moerr.NewInvalidInput(ctx, "invalid injection point %s", name)
 	}
 	return nil
 }

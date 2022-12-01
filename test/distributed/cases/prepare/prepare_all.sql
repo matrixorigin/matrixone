@@ -3,7 +3,7 @@
 -- @case
 -- @desc:Test prepared statements with signed and unsigned integer user variables
 -- @label:bvt
-
+set time_zone="+08:00";
 drop table if exists numbers;
 CREATE TABLE numbers
 (pk INTEGER PRIMARY KEY,
@@ -15,9 +15,7 @@ INSERT INTO numbers VALUES
 (0, 0, -9223372036854775808), (1, 18446744073709551615, 9223372036854775807);
 
 
--- @bvt:issue#4491
 SET @ui_min = CAST(0 AS UNSIGNED);
--- @bvt:issue
 
 SET @ui_min = 0;
 SET @ui_max = 18446744073709551615;
@@ -161,11 +159,9 @@ insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '2038-01-19 0
 insert into t2 values ('1000-01-01', '9999-12-31 23:59:59.999999', '2038-01-19 03:14:07.999999');
 insert into t2 values ('9999-12-31', '9999-12-31 23:59:59.999999', '2038-01-19 03:14:07.999999');
 
--- @bvt:issue#3703
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
--- @bvt:issue
 
 insert into t2 values ('2022-10-24', '2022-10-24 10:10:10.000000', '2022-10-24 00:00:01.000000');
 insert into t2 values ('2022-10-25', '2022-10-25 10:10:10.000000', '2022-10-25 00:00:01.000000');
@@ -185,9 +181,7 @@ set @min_timestamp='2038-01-19 03:14:07.999999';
 prepare s1 from 'select * from t2 where time1=?';
 
 execute s1 using @max_date;
--- @bvt:issue#4604
 execute s1 using @min_date;
--- @bvt:issue
 execute s1 using @max_datetime;
 execute s1 using @min_datetime;
 execute s1 using @max_timestamp;
@@ -201,9 +195,7 @@ prepare s2 from 'select * from t2 where time2=?';
 execute s2 using @max_date;
 execute s2 using @min_date;
 execute s2 using @max_datetime;
--- @bvt:issue#4604
 execute s2 using @min_datetime;
--- @bvt:issue
 execute s2 using @max_timestamp;
 execute s2 using @min_timestamp;
 
@@ -278,9 +270,7 @@ prepare s6 from 'select * from t3 where dec1!=?';
 prepare s7 from 'select * from t3 where dec1 between ? and ?';
 prepare s8 from 'select * from t3 where dec1 not between ? and ?';
 
--- @bvt:issue#4604
 execute s1 using @hit_dec1;
--- @bvt:issue
 execute s1 using @dec1_max;
 execute s1 using @dec1_min;
 
@@ -291,19 +281,19 @@ execute s2 using @dec1_min;
 execute s3 using @hit_dec1;
 execute s3 using @dec1_max;
 execute s3 using @dec1_min;
--- @bvt:issue#4604
+
 execute s4 using @hit_dec1;
--- @bvt:issue
+
 execute s4 using @dec1_max;
 execute s4 using @dec1_min;
--- @bvt:issue#4604
+
 execute s5 using @hit_dec1;
--- @bvt:issue
+
 execute s5 using @dec1_max;
 execute s5 using @dec1_min;
--- @bvt:issue#4604
+
 execute s6 using @hit_dec1;
--- @bvt:issue
+
 execute s6 using @dec1_max;
 execute s6 using @dec1_min;
 

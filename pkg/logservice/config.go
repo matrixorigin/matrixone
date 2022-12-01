@@ -220,18 +220,18 @@ func (c *Config) GetInitHAKeeperMembers() (map[uint64]dragonboat.Target, error) 
 			id := strings.TrimSpace(parts[0])
 			target := strings.TrimSpace(parts[1])
 			if _, err := uuid.Parse(target); err != nil {
-				return nil, moerr.NewBadConfig("uuid %s", target)
+				return nil, moerr.NewBadConfigNoCtx("uuid %s", target)
 			}
 			idn, err := strconv.ParseUint(id, 10, 64)
 			if err != nil {
-				return nil, moerr.NewBadConfig("replicateID '%v'", id)
+				return nil, moerr.NewBadConfigNoCtx("replicateID '%v'", id)
 			}
 			if idn >= hakeeper.K8SIDRangeEnd || idn < hakeeper.K8SIDRangeStart {
-				return nil, moerr.NewBadConfig("replicateID '%v'", id)
+				return nil, moerr.NewBadConfigNoCtx("replicateID '%v'", id)
 			}
 			result[idn] = target
 		} else {
-			return nil, moerr.NewBadConfig("replicaID:target %s", pair)
+			return nil, moerr.NewBadConfigNoCtx("replicaID:target %s", pair)
 		}
 	}
 	return result, nil
@@ -240,69 +240,69 @@ func (c *Config) GetInitHAKeeperMembers() (map[uint64]dragonboat.Target, error) 
 // Validate validates the configuration.
 func (c *Config) Validate() error {
 	if len(c.UUID) == 0 {
-		return moerr.NewBadConfig("uuid not set")
+		return moerr.NewBadConfigNoCtx("uuid not set")
 	}
 	if c.DeploymentID == 0 {
-		return moerr.NewBadConfig("deploymentID not set")
+		return moerr.NewBadConfigNoCtx("deploymentID not set")
 	}
 	// when *ListenAddress is not empty and *Address is empty, consider it as an
 	// error
 	if len(c.ServiceAddress) == 0 && len(c.ServiceListenAddress) != 0 {
-		return moerr.NewBadConfig("ServiceAddress not set")
+		return moerr.NewBadConfigNoCtx("ServiceAddress not set")
 	}
 	if len(c.RaftAddress) == 0 && len(c.RaftListenAddress) != 0 {
-		return moerr.NewBadConfig("RaftAddress not set")
+		return moerr.NewBadConfigNoCtx("RaftAddress not set")
 	}
 	if c.LogDBBufferSize == 0 {
-		return moerr.NewBadConfig("LogDBBufferSize not set")
+		return moerr.NewBadConfigNoCtx("LogDBBufferSize not set")
 	}
 	if len(c.GossipAddress) == 0 && len(c.GossipListenAddress) != 0 {
-		return moerr.NewBadConfig("GossipAddress not set")
+		return moerr.NewBadConfigNoCtx("GossipAddress not set")
 	}
 	if len(c.GossipSeedAddresses) == 0 {
-		return moerr.NewBadConfig("GossipSeedAddress not set")
+		return moerr.NewBadConfigNoCtx("GossipSeedAddress not set")
 	}
 	if c.HAKeeperConfig.TickPerSecond == 0 {
-		return moerr.NewBadConfig("TickPerSecond not set")
+		return moerr.NewBadConfigNoCtx("TickPerSecond not set")
 	}
 	if c.HAKeeperConfig.LogStoreTimeout.Duration == 0 {
-		return moerr.NewBadConfig("LogStoreTimeout not set")
+		return moerr.NewBadConfigNoCtx("LogStoreTimeout not set")
 	}
 	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
-		return moerr.NewBadConfig("DNStoreTimeout not set")
+		return moerr.NewBadConfigNoCtx("DNStoreTimeout not set")
 	}
 	if c.GossipProbeInterval.Duration == 0 {
-		return moerr.NewBadConfig("GossipProbeInterval not set")
+		return moerr.NewBadConfigNoCtx("GossipProbeInterval not set")
 	}
 	if c.TruncateInterval.Duration == 0 {
-		return moerr.NewBadConfig("TruncateInterval not set")
+		return moerr.NewBadConfigNoCtx("TruncateInterval not set")
 	}
 	if c.RPC.MaxMessageSize == 0 {
-		return moerr.NewBadConfig("MaxMessageSize not set")
+		return moerr.NewBadConfigNoCtx("MaxMessageSize not set")
 	}
 	// validate BootstrapConfig
 	if c.BootstrapConfig.BootstrapCluster {
 		if c.BootstrapConfig.NumOfLogShards == 0 {
-			return moerr.NewBadConfig("NumOfLogShards not set")
+			return moerr.NewBadConfigNoCtx("NumOfLogShards not set")
 		}
 		if c.BootstrapConfig.NumOfDNShards == 0 {
-			return moerr.NewBadConfig("NumOfDNShards not set")
+			return moerr.NewBadConfigNoCtx("NumOfDNShards not set")
 		}
 		if c.BootstrapConfig.NumOfLogShardReplicas == 0 {
-			return moerr.NewBadConfig("NumOfLogShardReplica not set")
+			return moerr.NewBadConfigNoCtx("NumOfLogShardReplica not set")
 		}
 		if c.BootstrapConfig.NumOfDNShards != c.BootstrapConfig.NumOfLogShards {
-			return moerr.NewBadConfig("NumOfDNShards does not match NumOfLogShards")
+			return moerr.NewBadConfigNoCtx("NumOfDNShards does not match NumOfLogShards")
 		}
 		members, err := c.GetInitHAKeeperMembers()
 		if err != nil {
 			return err
 		}
 		if len(members) == 0 {
-			return moerr.NewBadConfig("InitHAKeeperMembers not set")
+			return moerr.NewBadConfigNoCtx("InitHAKeeperMembers not set")
 		}
 		if uint64(len(members)) != c.BootstrapConfig.NumOfLogShardReplicas {
-			return moerr.NewBadConfig("InitHAKeeperMembers does not match NumOfLogShardReplicas")
+			return moerr.NewBadConfigNoCtx("InitHAKeeperMembers does not match NumOfLogShardReplicas")
 		}
 	}
 
@@ -392,7 +392,7 @@ type HAKeeperClientConfig struct {
 // Validate validates the HAKeeperClientConfig.
 func (c *HAKeeperClientConfig) Validate() error {
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
-		return moerr.NewBadConfig("HAKeeperClientConfig not set")
+		return moerr.NewBadConfigNoCtx("HAKeeperClientConfig not set")
 	}
 	if c.AllocateIDBatch == 0 {
 		c.AllocateIDBatch = 100
@@ -422,13 +422,13 @@ type ClientConfig struct {
 // Validate validates the ClientConfig.
 func (c *ClientConfig) Validate() error {
 	if c.LogShardID == 0 {
-		return moerr.NewBadConfig("LogShardID value cannot be 0")
+		return moerr.NewBadConfigNoCtx("LogShardID value cannot be 0")
 	}
 	if c.DNReplicaID == 0 {
-		return moerr.NewBadConfig("DNReplicaID value cannot be 0")
+		return moerr.NewBadConfigNoCtx("DNReplicaID value cannot be 0")
 	}
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
-		return moerr.NewBadConfig("ServiceAddresses not set")
+		return moerr.NewBadConfigNoCtx("ServiceAddresses not set")
 	}
 	return nil
 }

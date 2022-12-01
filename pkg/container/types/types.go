@@ -521,7 +521,7 @@ func (t T) TypeLen() int {
 	case T_tuple:
 		return 0
 	}
-	panic(moerr.NewInternalError(fmt.Sprintf("unknow type %d", t)))
+	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknow type %d", t)))
 }
 
 // FixedLength dangerous code, use TypeLen() if you don't want -8, -16, -24
@@ -550,7 +550,7 @@ func (t T) FixedLength() int {
 	case T_char, T_varchar, T_blob, T_json, T_text:
 		return -24
 	}
-	panic(moerr.NewInternalError(fmt.Sprintf("unknow type %d", t)))
+	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknow type %d", t)))
 }
 
 // isUnsignedInt: return true if the types.T is UnSigned integer type

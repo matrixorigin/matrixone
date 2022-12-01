@@ -460,7 +460,7 @@ func testFileService(
 				},
 			},
 		})
-		assert.True(t, moerr.IsMoErrCode(moerr.ConvertGoError(err), moerr.ErrUnexpectedEOF))
+		assert.True(t, moerr.IsMoErrCode(moerr.ConvertGoError(context.TODO(), err), moerr.ErrUnexpectedEOF))
 
 		err = fs.Read(ctx, &IOVector{
 			FilePath: "foo",

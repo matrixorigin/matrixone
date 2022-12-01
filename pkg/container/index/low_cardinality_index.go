@@ -30,7 +30,7 @@ const (
 )
 
 var (
-	ErrNotSupported = moerr.NewNotSupported("the type is not supported for low cardinality index")
+	ErrNotSupported = moerr.NewNotSupportedNoCtx("the type is not supported for low cardinality index")
 )
 
 type LowCardinalityIndex struct {

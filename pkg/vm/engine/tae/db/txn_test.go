@@ -51,7 +51,7 @@ var deal *catalog.Schema
 var repertory *catalog.Schema
 var app1Conf *APP1Conf
 
-var errNotEnoughRepertory = moerr.NewInternalError("not enough repertory")
+var errNotEnoughRepertory = moerr.NewInternalErrorNoCtx("not enough repertory")
 
 type APP1Conf struct {
 	Users         int
@@ -270,14 +270,14 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 			found = true
 			offset = uint32(row)
 			count = cntv.(uint64)
-			return moerr.NewInternalError("stop iteration")
+			return moerr.NewInternalErrorNoCtx("stop iteration")
 		}, nil)
 		if found {
 			return
 		}
 		blockIt.Next()
 	}
-	err = moerr.NewNotFound()
+	err = moerr.NewNotFoundNoCtx()
 	return
 }
 

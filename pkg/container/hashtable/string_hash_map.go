@@ -305,7 +305,7 @@ func (it *StringHashMapIterator) Next() (cell *StringHashMapCell, err error) {
 	}
 
 	if it.pos >= it.table.cellCnt {
-		err = moerr.NewInternalError("out of range")
+		err = moerr.NewInternalErrorNoCtx("out of range")
 		return
 	}
 	it.pos++

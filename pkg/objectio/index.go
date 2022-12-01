@@ -42,7 +42,7 @@ type ZoneMap struct {
 
 func NewZoneMap(idx uint16, buf []byte) (IndexData, error) {
 	if len(buf) != ZoneMapMinSize+ZoneMapMaxSize {
-		return nil, moerr.NewInternalError("object io: New ZoneMap failed")
+		return nil, moerr.NewInternalErrorNoCtx("object io: New ZoneMap failed")
 	}
 	zoneMap := &ZoneMap{
 		idx: idx,

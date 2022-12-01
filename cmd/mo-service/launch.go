@@ -58,7 +58,7 @@ func startLogServiceCluster(
 	files []string,
 	stopper *stopper.Stopper) error {
 	if len(files) == 0 {
-		return moerr.NewBadConfig("Log service config not set")
+		return moerr.NewBadConfig(context.Background(), "Log service config not set")
 	}
 
 	var cfg *Config
@@ -78,7 +78,7 @@ func startDNServiceCluster(
 	files []string,
 	stopper *stopper.Stopper) error {
 	if len(files) == 0 {
-		return moerr.NewBadConfig("DN service config not set")
+		return moerr.NewBadConfig(context.Background(), "DN service config not set")
 	}
 
 	for _, file := range files {
@@ -97,7 +97,7 @@ func startCNServiceCluster(
 	files []string,
 	stopper *stopper.Stopper) error {
 	if len(files) == 0 {
-		return moerr.NewBadConfig("CN service config not set")
+		return moerr.NewBadConfig(context.Background(), "CN service config not set")
 	}
 
 	upstreams := []string{}

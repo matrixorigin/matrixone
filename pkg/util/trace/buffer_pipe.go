@@ -48,6 +48,8 @@ type IBuffer2SqlItem interface {
 	Free()
 }
 
+var _ PipeImpl = (*batchCSVHandler)(nil)
+
 type batchCSVHandler struct {
 	defaultOpts []BufferOption
 }
@@ -61,6 +63,7 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	var opts []BufferOption
 	var f genBatchFunc = genCsvData
 	logutil.Debugf("NewItemBuffer name: %s", name)
+	ctx := DefaultContext()
 	switch name {
 	case MOStatementType, SingleStatementTable.GetName():
 	case MOErrorType:
@@ -68,7 +71,7 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	case MOLogType:
 	case MORawLogType:
 	default:
-		panic(moerr.NewInternalError("unknown type %s", name))
+		panic(moerr.NewInternalError(ctx, "unknown type %s", name))
 	}
 	opts = append(opts, BufferWithGenBatchFunc(f), BufferWithType(name))
 	opts = append(opts, t.defaultOpts...)
@@ -100,7 +103,7 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 	handle := func(b any) {
 		req, ok := b.(*CSVRequest) // see genCsvData
 		if !ok {
-			panic(moerr.NewInternalError("batchCSVHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
+			panic(moerr.NewInternalError(ctx, "batchCSVHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
 		}
 		if len(req.content) == 0 {
 			logutil.Warnf("meet empty csv content")
@@ -123,7 +126,7 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 				handle(req)
 			}
 		default:
-			panic(moerr.NewNotSupported("unknown batch type: %v", reflect.ValueOf(b).Type()))
+			panic(moerr.NewNotSupported(ctx, "unknown batch type: %v", reflect.ValueOf(b).Type()))
 		}
 	}
 	return f
@@ -132,17 +135,17 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 type CsvFields interface {
 	bp.HasName
 	GetRow() *table.Row
-	CsvFields(row *table.Row) []string
+	CsvFields(ctx context.Context, row *table.Row) []string
 }
 
-var QuoteFieldFunc = func(buf *bytes.Buffer, value string, enclose rune) string {
+var QuoteFieldFunc = func(ctx context.Context, buf *bytes.Buffer, value string, enclose rune) string {
 	replaceRules := map[rune]string{
 		'"':  `""`,
 		'\'': `\'`,
 	}
 	quotedClose, hasRule := replaceRules[enclose]
 	if !hasRule {
-		panic(moerr.NewInternalError("not support csv enclose: %c", enclose))
+		panic(moerr.NewInternalError(ctx, "not support csv enclose: %c", enclose))
 	}
 	for _, c := range value {
 		if c == enclose {
@@ -162,7 +165,7 @@ type WriteFactoryConfig struct {
 
 type FSWriterFactory func(ctx context.Context, db string, name bp.HasName, config WriteFactoryConfig) io.StringWriter
 
-func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
+func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
 		return NewCSVRequest(nil, "")
@@ -176,13 +179,13 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	ts := time.Now()
 	buffer := make(map[string]*bytes.Buffer, 2)
 	writeValues := func(item CsvFields, row *table.Row) {
-		fields := item.CsvFields(row)
+		fields := item.CsvFields(ctx, row)
 		buf, exist := buffer[row.GetAccount()]
 		if !exist {
 			buf = bytes.NewBuffer(nil)
 			buffer[row.GetAccount()] = buf
 		}
-		writeCsvOneLine(buf, fields)
+		writeCsvOneLine(ctx, buf, fields)
 	}
 
 	row := i.GetRow()
@@ -204,7 +207,7 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	return reqs
 }
 
-func writeCsvOneLine(buf *bytes.Buffer, fields []string) {
+func writeCsvOneLine(ctx context.Context, buf *bytes.Buffer, fields []string) {
 	opts := table.CommonCsvOptions
 	for idx, field := range fields {
 		if idx > 0 {
@@ -212,7 +215,7 @@ func writeCsvOneLine(buf *bytes.Buffer, fields []string) {
 		}
 		if strings.ContainsRune(field, opts.FieldTerminator) || strings.ContainsRune(field, opts.EncloseRune) || strings.ContainsRune(field, opts.Terminator) {
 			buf.WriteRune(opts.EncloseRune)
-			QuoteFieldFunc(buf, field, opts.EncloseRune)
+			QuoteFieldFunc(ctx, buf, field, opts.EncloseRune)
 			buf.WriteRune(opts.EncloseRune)
 		} else {
 			buf.WriteString(field)
@@ -237,10 +240,10 @@ type buffer2Sql struct {
 }
 
 type filterItemFunc func(IBuffer2SqlItem)
-type genBatchFunc func([]IBuffer2SqlItem, *bytes.Buffer) any
+type genBatchFunc func(context.Context, []IBuffer2SqlItem, *bytes.Buffer) any
 
 var noopFilterItemFunc = func(IBuffer2SqlItem) {}
-var noopGenBatchSQL = genBatchFunc(func([]IBuffer2SqlItem, *bytes.Buffer) any { return "" })
+var noopGenBatchSQL = genBatchFunc(func(context.Context, []IBuffer2SqlItem, *bytes.Buffer) any { return "" })
 
 func newBuffer2Sql(opts ...BufferOption) *buffer2Sql {
 	b := &buffer2Sql{
@@ -310,9 +313,9 @@ func (b *buffer2Sql) GetBufferType() string {
 	return b.bufferType
 }
 
-func (b *buffer2Sql) GetBatch(buf *bytes.Buffer) any {
+func (b *buffer2Sql) GetBatch(ctx context.Context, buf *bytes.Buffer) any {
 	// fixme: CollectCycle
-	_, span := Start(DefaultContext(), "GenBatch")
+	ctx, span := Start(ctx, "GenBatch")
 	defer span.End()
 	b.mux.Lock()
 	defer b.mux.Unlock()
@@ -320,7 +323,7 @@ func (b *buffer2Sql) GetBatch(buf *bytes.Buffer) any {
 	if b.isEmpty() {
 		return nil
 	}
-	return b.genBatchFunc(b.buf, buf)
+	return b.genBatchFunc(ctx, b.buf, buf)
 }
 
 type BufferOption interface {

@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	ErrIteratorEnd = moerr.NewInternalError("end of interator")
+	ErrIteratorEnd = moerr.NewInternalErrorNoCtx("end of interator")
 )
 
 // Iterator TODO: this is not thread-safe

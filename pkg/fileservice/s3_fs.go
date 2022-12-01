@@ -154,10 +154,10 @@ func newS3FS(
 ) (*S3FS, error) {
 
 	if endpoint == "" {
-		moerr.NewBadS3Config("empty endpoint")
+		moerr.NewBadS3ConfigNoCtx("empty endpoint")
 	}
 	if bucket == "" {
-		moerr.NewBadS3Config("empty bucket")
+		moerr.NewBadS3ConfigNoCtx("empty bucket")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*17)
@@ -193,7 +193,7 @@ func newS3FS(
 		Bucket: ptrTo(bucket),
 	})
 	if err != nil {
-		return nil, moerr.NewInternalError("bad s3 config: %v", err)
+		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
 	}
 
 	fs := &S3FS{
@@ -307,7 +307,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	}
 	if output != nil {
 		// key existed
-		return moerr.NewFileAlreadyExists(path.File)
+		return moerr.NewFileAlreadyExistsNoCtx(path.File)
 	}
 
 	return s.write(ctx, vector)
@@ -360,7 +360,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
 	defer span.End()
 
 	if len(vector.Entries) == 0 {
-		return moerr.NewEmptyVector()
+		return moerr.NewEmptyVectorNoCtx()
 	}
 
 	if s.memCache == nil {
@@ -482,14 +482,14 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		start := entry.Offset - min
 
 		if entry.Size == 0 {
-			return moerr.NewEmptyRange(path.File)
+			return moerr.NewEmptyRangeNoCtx(path.File)
 		} else if entry.Size > 0 {
 			content, err := getContent(ctx)
 			if err != nil {
 				return err
 			}
 			if start >= int64(len(content)) {
-				return moerr.NewEmptyRange(path.File)
+				return moerr.NewEmptyRangeNoCtx(path.File)
 			}
 		}
 
@@ -504,7 +504,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 					return nil, err
 				}
 				if start >= int64(len(content)) {
-					return nil, moerr.NewEmptyRange(path.File)
+					return nil, moerr.NewEmptyRangeNoCtx(path.File)
 				}
 				return content[start:], nil
 			}
@@ -514,10 +514,10 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			}
 			end := start + entry.Size
 			if end > int64(len(content)) {
-				return nil, moerr.NewUnexpectedEOF(path.File)
+				return nil, moerr.NewUnexpectedEOFNoCtx(path.File)
 			}
 			if start == end {
-				return nil, moerr.NewEmptyRange(path.File)
+				return nil, moerr.NewEmptyRangeNoCtx(path.File)
 			}
 			return content[start:end], nil
 		}
@@ -656,7 +656,7 @@ func (s *S3FS) deleteMultiObj(ctx context.Context, objs []types.ObjectIdentifier
 		}
 	}
 	if message.Len() > 0 {
-		return moerr.NewInternalError("S3 Delete failed: %s", message.String())
+		return moerr.NewInternalErrorNoCtx("S3 Delete failed: %s", message.String())
 	}
 	return nil
 }
@@ -699,7 +699,7 @@ func (s *S3FS) mapError(err error, path string) error {
 	var httpError *http.ResponseError
 	if errors.As(err, &httpError) {
 		if httpError.Response.StatusCode == 404 {
-			return moerr.NewFileNotFound(path)
+			return moerr.NewFileNotFoundNoCtx(path)
 		}
 	}
 	return err

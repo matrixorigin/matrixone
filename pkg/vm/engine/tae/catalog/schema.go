@@ -214,7 +214,8 @@ type Schema struct {
 	Relkind          string
 	Createsql        string
 	View             string
-	IndexInfos       []*ComputeIndexInfo
+	UniqueIndex      string
+	SecondaryIndex   string
 
 	SortKey    *SortKey
 	PhyAddrKey *ColDef
@@ -222,10 +223,9 @@ type Schema struct {
 
 func NewEmptySchema(name string) *Schema {
 	return &Schema{
-		Name:       name,
-		ColDefs:    make([]*ColDef, 0),
-		NameIndex:  make(map[string]int),
-		IndexInfos: make([]*ComputeIndexInfo, 0),
+		Name:      name,
+		ColDefs:   make([]*ColDef, 0),
+		NameIndex: make(map[string]int),
 	}
 }
 
@@ -646,7 +646,7 @@ func (s *Schema) AppendColDef(def *ColDef) (err error) {
 	s.ColDefs = append(s.ColDefs, def)
 	_, existed := s.NameIndex[def.Name]
 	if existed {
-		err = moerr.NewConstraintViolation("duplicate column \"%s\"", def.Name)
+		err = moerr.NewConstraintViolationNoCtx("duplicate column \"%s\"", def.Name)
 		return
 	}
 	s.NameIndex[def.Name] = def.Idx
@@ -861,7 +861,7 @@ func (s *Schema) AllNames() []string {
 // Finalize runs various checks and create shortcuts to phyaddr and sortkey
 func (s *Schema) Finalize(rebuild bool) (err error) {
 	if s == nil {
-		err = moerr.NewConstraintViolation("no schema")
+		err = moerr.NewConstraintViolationNoCtx("no schema")
 		return
 	}
 	if !rebuild {
@@ -878,7 +878,7 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		}
 	}
 	if len(s.ColDefs) == 0 {
-		err = moerr.NewConstraintViolation("no schema")
+		err = moerr.NewConstraintViolationNoCtx("no schema")
 		return
 	}
 
@@ -888,11 +888,11 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 	for idx, def := range s.ColDefs {
 		// Check column idx validility
 		if idx != def.Idx {
-			return moerr.NewInvalidInput(fmt.Sprintf("schema: wrong column index %d specified for \"%s\"", def.Idx, def.Name))
+			return moerr.NewInvalidInputNoCtx(fmt.Sprintf("schema: wrong column index %d specified for \"%s\"", def.Idx, def.Name))
 		}
 		// Check unique name
 		if _, ok := names[def.Name]; ok {
-			return moerr.NewInvalidInput("schema: duplicate column \"%s\"", def.Name)
+			return moerr.NewInvalidInputNoCtx("schema: duplicate column \"%s\"", def.Name)
 		}
 		names[def.Name] = true
 		if def.IsSortKey() {
@@ -900,7 +900,7 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		}
 		if def.IsPhyAddr() {
 			if s.PhyAddrKey != nil {
-				return moerr.NewInvalidInput("schema: duplicated physical address column \"%s\"", def.Name)
+				return moerr.NewInvalidInputNoCtx("schema: duplicated physical address column \"%s\"", def.Name)
 			}
 			s.PhyAddrKey = def
 		}
@@ -914,7 +914,7 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 	if len(sortIdx) == 1 {
 		def := s.ColDefs[sortIdx[0]]
 		if def.SortIdx != 0 {
-			err = moerr.NewConstraintViolation("bad sort idx %d, should be 0", def.SortIdx)
+			err = moerr.NewConstraintViolationNoCtx("bad sort idx %d, should be 0", def.SortIdx)
 			return
 		}
 		s.SortKey = NewSortKey()
@@ -924,17 +924,17 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		for _, idx := range sortIdx {
 			def := s.ColDefs[idx]
 			if ok := s.SortKey.AddDef(def); !ok { // Fixme: I guess it is impossible to be duplicated here because no duplicated idx?
-				return moerr.NewInvalidInput("schema: duplicated sort idx specified")
+				return moerr.NewInvalidInputNoCtx("schema: duplicated sort idx specified")
 			}
 		}
 		isPrimary := s.SortKey.Defs[0].IsPrimary()
 		for i, def := range s.SortKey.Defs {
 			if int(def.SortIdx) != i {
-				err = moerr.NewConstraintViolation("duplicated sort idx specified")
+				err = moerr.NewConstraintViolationNoCtx("duplicated sort idx specified")
 				return
 			}
 			if def.IsPrimary() != isPrimary {
-				err = moerr.NewConstraintViolation("duplicated sort idx specified")
+				err = moerr.NewConstraintViolationNoCtx("duplicated sort idx specified")
 				return
 			}
 		}
@@ -1059,11 +1059,4 @@ func GetAttrIdx(attrs []string, name string) int {
 		}
 	}
 	panic("logic error")
-}
-
-type ComputeIndexInfo struct {
-	Name      string
-	TableName string
-	Unique    bool
-	Field     []string
 }

@@ -268,7 +268,7 @@ func (rf *rotateFile) makeSpace(size int) (rotated *vFile, curr *vFileState, err
 	}
 	curr = rf.getFileState()
 	// if size > curr.bufSize {
-	// 	return nil, nil, moerr.NewInternalError("buff size is %v, but entry size is %v", rf.getFileState().file.bufSize, size) //TODO write without buf
+	// 	return nil, nil, moerr.NewInternalErrorNoCtx("buff size is %v, but entry size is %v", rf.getFileState().file.bufSize, size) //TODO write without buf
 	// }
 	// if size+curr.bufPos > curr.bufSize {
 	// 	curr.file.Sync()
@@ -337,5 +337,5 @@ func (rf *rotateFile) GetEntryByVersion(version int) (VFile, error) {
 	if vf != nil {
 		return vf, nil
 	}
-	return nil, moerr.NewInternalError("version not existed")
+	return nil, moerr.NewInternalErrorNoCtx("version not existed")
 }

@@ -231,7 +231,7 @@ func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, txnNode *txnb
 	if db != nil {
 		dbCreatedAt := db.GetCreatedAt()
 		if !dbCreatedAt.Equal(txnNode.End) {
-			panic(moerr.NewInternalError("logic err expect %s, get %s", txnNode.End.ToString(), dbCreatedAt.ToString()))
+			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), dbCreatedAt.ToString()))
 		}
 		return
 	}
@@ -265,7 +265,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 	dbDeleteAt := db.GetDeleteAt()
 	if !dbDeleteAt.IsEmpty() {
 		if !dbDeleteAt.Equal(txnNode.End) {
-			panic(moerr.NewInternalError("logic err expect %s, get %s", txnNode.End.ToString(), dbDeleteAt.ToString()))
+			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), dbDeleteAt.ToString()))
 		}
 		return
 	}
@@ -360,7 +360,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	if tbl != nil {
 		tblCreatedAt := tbl.GetCreatedAt()
 		if !tblCreatedAt.Equal(txnNode.End) {
-			panic(moerr.NewInternalError("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
+			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
 		return
 	}
@@ -393,7 +393,7 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.T
 	tableDeleteAt := tbl.GetDeleteAt()
 	if !tableDeleteAt.IsEmpty() {
 		if !tableDeleteAt.Equal(txnNode.End) {
-			panic(moerr.NewInternalError("logic err expect %s, get %s", txnNode.End.ToString(), tableDeleteAt.ToString()))
+			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tableDeleteAt.ToString()))
 		}
 		return
 	}
@@ -487,7 +487,7 @@ func (catalog *Catalog) onReplayCreateSegment(dbid, tbid, segid uint64, state En
 	if seg != nil {
 		segCreatedAt := seg.GetCreatedAt()
 		if !segCreatedAt.Equal(txnNode.End) {
-			panic(moerr.NewInternalError("logic err expect %s, get %s", txnNode.End.ToString(), segCreatedAt.ToString()))
+			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), segCreatedAt.ToString()))
 		}
 		return
 	}
@@ -525,7 +525,7 @@ func (catalog *Catalog) onReplayDeleteSegment(dbid, tbid, segid uint64, txnNode 
 	segDeleteAt := seg.GetDeleteAt()
 	if !segDeleteAt.IsEmpty() {
 		if !segDeleteAt.Equal(txnNode.End) {
-			panic(moerr.NewInternalError("logic err expect %s, get %s", txnNode.End.ToString(), segDeleteAt.ToString()))
+			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), segDeleteAt.ToString()))
 		}
 		return
 	}
@@ -662,13 +662,13 @@ func (catalog *Catalog) onReplayCreateBlock(
 		node := blk.MVCCChain.SearchNode(un).(*MetadataMVCCNode)
 		if node != nil {
 			if !node.CreatedAt.Equal(un.CreatedAt) {
-				panic(moerr.NewInternalError("logic err expect %s, get %s", node.CreatedAt.ToString(), un.CreatedAt.ToString()))
+				panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", node.CreatedAt.ToString(), un.CreatedAt.ToString()))
 			}
 			if node.MetaLoc != un.MetaLoc {
-				panic(moerr.NewInternalError("logic err expect %s, get %s", node.MetaLoc, un.MetaLoc))
+				panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", node.MetaLoc, un.MetaLoc))
 			}
 			if node.DeltaLoc != un.DeltaLoc {
-				panic(moerr.NewInternalError("logic err expect %s, get %s", node.DeltaLoc, un.DeltaLoc))
+				panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", node.DeltaLoc, un.DeltaLoc))
 			}
 			return
 		}
@@ -700,7 +700,7 @@ func (catalog *Catalog) onReplayDeleteBlock(dbid, tid, segid, blkid uint64, meta
 	blkDeleteAt := blk.GetDeleteAt()
 	if !blkDeleteAt.IsEmpty() {
 		if !blkDeleteAt.Equal(txnNode.End) {
-			panic(moerr.NewInternalError("logic err expect %s, get %s", txnNode.End.ToString(), blkDeleteAt.ToString()))
+			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), blkDeleteAt.ToString()))
 		}
 		return
 	}
@@ -851,14 +851,14 @@ func (catalog *Catalog) PPString(level common.PPLevel, depth int, prefix string)
 func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 	if database.IsSystemDB() {
 		logutil.Warnf("system db cannot be removed")
-		return moerr.NewTAEError("not permitted")
+		return moerr.NewTAEErrorNoCtx("not permitted")
 	}
 	logutil.Info("[Catalog]", common.OperationField("remove"),
 		common.OperandField(database.String()))
 	catalog.Lock()
 	defer catalog.Unlock()
 	if n, ok := catalog.entries[database.GetID()]; !ok {
-		return moerr.NewBadDB(database.GetName())
+		return moerr.NewBadDBNoCtx(database.GetName())
 	} else {
 		nn := catalog.nameNodes[database.GetFullName()]
 		nn.DeleteNode(database.GetID())
@@ -880,7 +880,7 @@ func (catalog *Catalog) txnGetNodeByName(
 	fullName := genDBFullName(tenantID, name)
 	node := catalog.nameNodes[fullName]
 	if node == nil {
-		return nil, moerr.NewBadDB(name)
+		return nil, moerr.NewBadDBNoCtx(name)
 	}
 	return node.TxnGetNodeLocked(ts)
 }
@@ -921,7 +921,7 @@ func (catalog *Catalog) DropDBEntry(
 	name string,
 	txn txnif.AsyncTxn) (newEntry bool, deleted *DBEntry, err error) {
 	if name == pkgcatalog.MO_CATALOG {
-		err = moerr.NewTAEError("not permitted")
+		err = moerr.NewTAEErrorNoCtx("not permitted")
 		return
 	}
 	dn, err := catalog.txnGetNodeByName(txn.GetTenantID(), name, txn.GetStartTS())
@@ -939,7 +939,7 @@ func (catalog *Catalog) DropDBEntry(
 
 func (catalog *Catalog) DropDBEntryByID(id uint64, txn txnif.AsyncTxn) (newEntry bool, deleted *DBEntry, err error) {
 	if id == pkgcatalog.MO_CATALOG_ID {
-		err = moerr.NewTAEError("not permitted")
+		err = moerr.NewTAEErrorNoCtx("not permitted")
 		return
 	}
 	entry, err := catalog.GetDatabaseByID(id)

@@ -35,7 +35,7 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 	txnID := request.Txn.ID
 	txnCtx := s.getTxnContext(txnID)
 	if txnCtx == nil {
-		response.TxnError = txn.WrapError(moerr.NewTxnNotFound(), 0)
+		response.TxnError = txn.WrapError(moerr.NewTxnNotFoundNoCtx(), 0)
 		return nil
 	}
 
@@ -44,7 +44,7 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 
 	newTxn := txnCtx.getTxnLocked()
 	if !bytes.Equal(newTxn.ID, txnID) {
-		response.TxnError = txn.WrapError(moerr.NewTxnNotFound(), 0)
+		response.TxnError = txn.WrapError(moerr.NewTxnNotFoundNoCtx(), 0)
 		return nil
 	}
 	response.Txn = &newTxn
@@ -55,7 +55,7 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 	case txn.TxnStatus_Prepared:
 		return nil
 	default:
-		response.TxnError = txn.WrapError(moerr.NewTxnNotActive(""), 0)
+		response.TxnError = txn.WrapError(moerr.NewTxnNotActiveNoCtx(""), 0)
 		return nil
 	}
 

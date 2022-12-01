@@ -38,7 +38,7 @@ func NewBatch() *Batch {
 
 func (bat *Batch) AddVector(attr string, vec Vector) {
 	if _, exist := bat.nameidx[attr]; exist {
-		panic(moerr.NewInternalError("duplicate vector %s", attr))
+		panic(moerr.NewInternalErrorNoCtx("duplicate vector %s", attr))
 	}
 	idx := len(bat.Vecs)
 	bat.nameidx[attr] = idx

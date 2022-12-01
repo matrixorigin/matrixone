@@ -80,7 +80,7 @@ const (
 // Commit commits the transaction
 func (t *Transaction) Commit(commitTime Time) error {
 	if state := t.State.Load(); state != Active {
-		return moerr.NewTxnNotActive(state.String())
+		return moerr.NewTxnNotActiveNoCtx(state.String())
 	}
 	committed := make(map[int64]any) // table id -> swapped state
 	for id, table := range t.tables {
@@ -116,7 +116,7 @@ func (t *Table[K, V, R]) commit(tx *Transaction, state any, commitTime Time) (an
 	if !commitTime.IsEmpty() && len(t.history) > 0 {
 		last := t.history[len(t.history)-1]
 		if !commitTime.Greater(last.Before) {
-			return nil, moerr.NewInternalError("commit time too old")
+			return nil, moerr.NewInternalErrorNoCtx("commit time too old")
 		}
 	}
 	t.history = append(t.history, &history[K, V]{

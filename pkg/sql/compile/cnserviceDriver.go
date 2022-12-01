@@ -111,7 +111,7 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	// decode message and run it, get final analysis information and err info.
 	analysis, err := pipelineMessageHandle(ctx, message, cs, helper, cli)
 	if err != nil {
-		errData = pipeline.EncodedMessageError(err)
+		errData = pipeline.EncodedMessageError(ctx, err)
 	}
 	backMessage := messageAcquirer().(*pipeline.Message)
 	backMessage.Id = message.GetID()
@@ -202,7 +202,7 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextOperat
 	for {
 		select {
 		case <-c.ctx.Done():
-			return moerr.NewRPCTimeout()
+			return moerr.NewRPCTimeout(c.ctx)
 		case val = <-mChan:
 		}
 		m := val.(*pipeline.Message)
@@ -830,7 +830,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			FileList:      t.Es.FileList,
 		}
 	default:
-		return -1, nil, moerr.NewInternalError(fmt.Sprintf("unexpected operator: %v", opr.Op))
+		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
 	return ctxId, in, nil
 }
@@ -1060,7 +1060,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			},
 		}
 	default:
-		return v, moerr.NewInternalError(fmt.Sprintf("unexpected operator: %v", opr.Op))
+		return v, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
 	return v, nil
 }

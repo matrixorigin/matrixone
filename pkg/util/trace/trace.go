@@ -42,6 +42,11 @@ func Debug(ctx context.Context, spanName string, opts ...SpanOption) (context.Co
 	return gTracer.Debug(ctx, spanName, opts...)
 }
 
+func Generate(ctx context.Context) context.Context {
+	ctx, _ = gTracer.Start(ctx, "generate", WithNewRoot(true))
+	return ctx
+}
+
 var gTracerProvider atomic.Value
 var gTracer Tracer
 var gTraceContext atomic.Value
@@ -110,18 +115,18 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 	switch {
 	case config.batchProcessMode == InternalExecutor:
 		// register buffer pipe implements
-		panic(moerr.NewNotSupported("not support process mode: %s", config.batchProcessMode))
+		panic(moerr.NewNotSupported(ctx, "not support process mode: %s", config.batchProcessMode))
 	case config.batchProcessMode == FileService:
 		p.Register(&MOSpan{}, NewBufferPipe2CSVWorker(defaultOptions...))
 		p.Register(&MOZapLog{}, NewBufferPipe2CSVWorker(defaultOptions...))
 		p.Register(&StatementInfo{}, NewBufferPipe2CSVWorker(defaultOptions...))
 		p.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker(defaultOptions...))
 	default:
-		return moerr.NewInternalError("unknown batchProcessMode: %s", config.batchProcessMode)
+		return moerr.NewInternalError(ctx, "unknown batchProcessMode: %s", config.batchProcessMode)
 	}
 	logutil.Info("init GlobalBatchProcessor")
 	if !p.Start() {
-		return moerr.NewInternalError("trace exporter already started")
+		return moerr.NewInternalError(ctx, "trace exporter already started")
 	}
 	config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
 	logutil.Info("init trace span processor")
@@ -138,7 +143,7 @@ func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) err
 			return err
 		}
 	default:
-		return moerr.NewInternalError("unknown batchProcessMode: %s", config.batchProcessMode)
+		return moerr.NewInternalError(ctx, "unknown batchProcessMode: %s", config.batchProcessMode)
 	}
 	return nil
 }

@@ -477,7 +477,7 @@ func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode 
 
 	if metaNode.HasDropCommitted() {
 		if metaNode.DeletedAt.IsEmpty() {
-			panic(moerr.NewInternalError("no delete at time in a dropped entry"))
+			panic(moerr.NewInternalErrorNoCtx("no delete at time in a dropped entry"))
 		}
 		delBatch := b.blkMetaDelBatch
 		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.DeletedAt)
