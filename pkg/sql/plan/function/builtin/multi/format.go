@@ -49,7 +49,12 @@ func Format(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 
 	// set null row
 
-	nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
+	if paramNum == 2 {
+		nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
+	} else {
+		nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
+		nulls.Or(vecs[2].Nsp, resultNsp, resultNsp)
+	}
 
 	var constVectors []bool
 	if paramNum == 2 || vecs[2].IsScalarNull() {
