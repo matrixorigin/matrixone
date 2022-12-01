@@ -17,10 +17,8 @@ package util
 import (
 	"context"
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"strconv"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,16 +28,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func BuildIndexTableName(ctx context.Context, unique bool, indexNumber int, indexName string) (string, error) {
+func BuildIndexTableName(ctx context.Context, unique bool, indexName string) (string, error) {
 	var name string
-	name = catalog.PrefixPriColName
+	name = catalog.PrefixIndexTableName
 	if unique {
 		name += "unique_"
 	} else {
 		name += "secondary_"
 	}
-	name += strconv.Itoa(indexNumber)
-	name += "_"
 	name += indexName
 	id, err := uuid.NewUUID()
 	if err != nil {
@@ -50,16 +46,17 @@ func BuildIndexTableName(ctx context.Context, unique bool, indexNumber int, inde
 	return name, nil
 }
 
-func BuildUniqueKeyBatch(vecs []*vector.Vector, Attrs []string, p []*plan.ColDef, proc *process.Process) (*batch.Batch, int) {
+func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, p []*plan.ColDef, proc *process.Process) (*batch.Batch, int) {
 	b := &batch.Batch{
 		// make sure that when batch is cleaned, origin batch is not affected
 		Attrs: make([]string, 1),
 		Vecs:  make([]*vector.Vector, 1),
 	}
-	if p[0].IsCPkey {
+	isCPkey := JudgeIsCompositePrimaryKeyColumn(p[0].Name)
+	if isCPkey {
 		names := SplitCompositePrimaryKeyColumnName(p[0].Name)
 		cPkeyVecMap := make(map[string]*vector.Vector)
-		for num, attrName := range Attrs {
+		for num, attrName := range attrs {
 			for _, name := range names {
 				if attrName == name {
 					cPkeyVecMap[name] = vecs[num]
@@ -75,14 +72,14 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, Attrs []string, p []*plan.ColDef
 		b.Attrs[0] = p[0].Name
 		b.Vecs[0] = vec
 	} else {
-		for i, name := range Attrs {
+		for i, name := range attrs {
 			b.Attrs[0] = p[0].Name
 			if p[0].Name == name {
 				b.Vecs[0] = vecs[i]
 			}
 		}
 	}
-	if p[0].IsCPkey {
+	if isCPkey {
 		b.Cnt = 1
 	} else {
 		v, needClean := compactUniqueKeyBatch(b.Vecs[0], proc)

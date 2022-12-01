@@ -205,9 +205,8 @@ message ColDef {
 	bool primary        = 5;
 	int32 pkidx 		= 6;
 	string comment		= 7;
-	bool is_cPkey 		= 8;
-	OnUpdate on_update  = 9;
-	bool low_cardinality = 10;
+	OnUpdate on_update  = 8;
+	bool low_cardinality = 9;
 }
 
 message Default {
@@ -272,32 +271,34 @@ message ViewDef {
 	string view  = 1;
 }
 
-message IndexDef {
+message UniqueIndexDef {
 	repeated string index_names = 1;
 	repeated string table_names = 2;
-	repeated bool uniques = 3;
-	repeated Field fields = 4;
+	repeated Field fields = 3;
+	repeated bool table_exists = 4;
+}
+
+message SecondaryIndexDef {
+	repeated string index_names = 1;
+	repeated string table_names = 2;
+	repeated Field fields = 3;
+	repeated bool table_exists = 4;
 }
 
 message Field {
-	repeated string col_names = 1;
-}
-
-message IndexInfo {
-	string table_name = 1;
-	repeated string col_names = 2;
-	repeated ColDef cols = 3;
-	Field field = 4;
+	repeated string parts = 1;
+	repeated ColDef cols = 2;
 }
 
 message TableDef {
 	message DefType {
 		oneof def {
 			PrimaryKeyDef pk			= 1;
-			IndexDef idx				= 2;
-			PropertiesDef properties	= 3;
-			ViewDef view				= 4;
-			PartitionInfo partition				= 5;
+			PropertiesDef properties	= 2;
+			ViewDef view				= 3;
+			PartitionInfo partition				= 4;
+			UniqueIndexDef uIdx				= 5;
+			SecondaryIndexDef sIdx				= 6;
 		}
 	}
 	string name				= 1;
@@ -308,7 +309,6 @@ message TableDef {
 	map<string, int32> name2col_index = 6;
 	ColDef composite_pkey = 7;
 	TableFunction tbl_func = 8;
-	repeated IndexInfo index_infos = 9;
 }
 
 message TableFunction{
@@ -508,8 +508,9 @@ message DeleteTableCtx {
 	string use_delete_key = 3;
 	bool can_truncate = 4;
 	int32 col_index = 5;
-	repeated IndexInfo index_infos = 6;
-	repeated string index_attrs = 7;
+	UniqueIndexDef unique_index_def = 6;
+	SecondaryIndexDef secondary_index_def = 7;
+	repeated string index_attrs = 8;
 }
 
 message Query {
@@ -602,7 +603,8 @@ message InsertValues {
 	repeated string order_attrs = 5;
 	repeated column columns = 6;
 	ColDef composite_pkey = 7;
-	repeated IndexInfo index_infos = 8;
+	UniqueIndexDef unique_index_def = 8;
+	SecondaryIndexDef secondary_index_def = 9;
 }
 
 message column{

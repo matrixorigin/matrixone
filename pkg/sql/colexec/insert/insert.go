@@ -35,18 +35,20 @@ import (
 )
 
 type Argument struct {
-	Ts            uint64
-	TargetTable   engine.Relation
-	TargetColDefs []*plan.ColDef
-	Affected      uint64
-	Engine        engine.Engine
-	DB            engine.Database
-	TableID       string
-	CPkeyColDef   *plan.ColDef
-	DBName        string
-	TableName     string
-	IndexTables   []engine.Relation
-	IndexInfos    []*plan.IndexInfo
+	Ts                   uint64
+	TargetTable          engine.Relation
+	TargetColDefs        []*plan.ColDef
+	Affected             uint64
+	Engine               engine.Engine
+	DB                   engine.Database
+	TableID              string
+	CPkeyColDef          *plan.ColDef
+	DBName               string
+	TableName            string
+	UniqueIndexTables    []engine.Relation
+	UniqueIndexDef       *plan.UniqueIndexDef
+	SecondaryIndexTables []engine.Relation
+	SecondaryIndexDef    *plan.SecondaryIndexDef
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -66,15 +68,23 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 	if bat.Length() == 0 {
 		bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
 	}
-	for idx, info := range n.IndexInfos {
-		b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, info.Cols, proc)
-		if rowNum != 0 {
-			err := n.IndexTables[idx].Write(ctx, b)
-			if err != nil {
-				return err
+	// notice the number of the index def not equal to the number of the index table
+	// in some special cases, we don't create index table.
+	if n.UniqueIndexDef != nil {
+		idx := 0
+		for i := range n.UniqueIndexDef.TableNames {
+			if n.UniqueIndexDef.TableExists[i] {
+				b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, n.UniqueIndexDef.Fields[i].Cols, proc)
+				if rowNum != 0 {
+					err := n.UniqueIndexTables[idx].Write(ctx, b)
+					if err != nil {
+						return err
+					}
+				}
+				b.Clean(proc.Mp())
+				idx++
 			}
 		}
-		b.Clean(proc.Mp())
 	}
 	if err := n.TargetTable.Write(ctx, bat); err != nil {
 		return err

@@ -844,15 +844,13 @@ func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *T
 	}
 
 	hasUniqueKey := false
-	var uniqueKey *plan.IndexDef
+	var uniqueKey *plan.UniqueIndexDef
 	for _, def := range defs {
-		if ukdef, ok := def.Def.(*plan.TableDef_DefType_Idx); ok {
-			uniqueKey = ukdef.Idx
-			for _, unique := range uniqueKey.Uniques {
-				if unique {
-					hasUniqueKey = true
-					break
-				}
+		if ukdef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+			uniqueKey = ukdef.UIdx
+			if len(uniqueKey.IndexNames) != 0 {
+				hasUniqueKey = true
+				break
 			}
 		}
 	}
@@ -878,18 +876,16 @@ func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *T
 	}
 
 	if hasUniqueKey {
-		for i, field := range uniqueKey.Fields {
-			if uniqueKey.Uniques[i] {
-				uniqueKeyCols := field.ColNames
-				if partitionInfo.PartitionColumns != nil {
-					if !checkUniqueKeyIncludePartKey(partitionInfo.PartitionColumns, uniqueKeyCols) {
-						return moerr.NewInvalidInputNoCtx("partition key is not part of primary key")
-					}
-				} else {
-					extractCols := extractColFromExpr(partitionBinder, partitionInfo.Expr)
-					if !checkUniqueKeyIncludePartKey(extractCols, uniqueKeyCols) {
-						return moerr.NewInvalidInputNoCtx("partition key is not part of primary key")
-					}
+		for _, field := range uniqueKey.Fields {
+			uniqueKeyCols := field.Parts
+			if partitionInfo.PartitionColumns != nil {
+				if !checkUniqueKeyIncludePartKey(partitionInfo.PartitionColumns, uniqueKeyCols) {
+					return moerr.NewInvalidInputNoCtx("partition key is not part of primary key")
+				}
+			} else {
+				extractCols := extractColFromExpr(partitionBinder, partitionInfo.Expr)
+				if !checkUniqueKeyIncludePartKey(extractCols, uniqueKeyCols) {
+					return moerr.NewInvalidInputNoCtx("partition key is not part of primary key")
 				}
 			}
 		}
@@ -1015,7 +1011,7 @@ func handleEmptyKeyPartition(tableDef *TableDef, partitionInfo *plan.PartitionIn
 	hasPrimaryKey := false
 	hasUniqueKey := false
 	var primaryKey *plan.PrimaryKeyDef
-	var uniqueKey *plan.IndexDef
+	var uniqueKey *plan.UniqueIndexDef
 
 	for _, def := range defs {
 		if pkdef, ok := def.Def.(*plan.TableDef_DefType_Pk); ok {
@@ -1026,13 +1022,11 @@ func handleEmptyKeyPartition(tableDef *TableDef, partitionInfo *plan.PartitionIn
 	}
 
 	for _, def := range defs {
-		if ukdef, ok := def.Def.(*plan.TableDef_DefType_Idx); ok {
-			uniqueKey = ukdef.Idx
-			for _, unique := range uniqueKey.Uniques {
-				if unique {
-					hasUniqueKey = true
-					break
-				}
+		if ukdef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+			uniqueKey = ukdef.UIdx
+			if len(uniqueKey.IndexNames) != 0 {
+				hasUniqueKey = true
+				break
 			}
 		}
 	}
@@ -1046,9 +1040,9 @@ func handleEmptyKeyPartition(tableDef *TableDef, partitionInfo *plan.PartitionIn
 		}
 
 		if hasUniqueKey {
-			for i, field := range uniqueKey.Fields {
+			for _, field := range uniqueKey.Fields {
 				// A UNIQUE INDEX must include all columns in the table's partitioning function
-				if !checkUniqueKeyIncludePartKey(pkcols, field.ColNames) && uniqueKey.Uniques[i] {
+				if !checkUniqueKeyIncludePartKey(pkcols, field.Parts) {
 					return moerr.NewInvalidInputNoCtx("partition key is not part of primary key")
 				}
 			}
@@ -1057,15 +1051,13 @@ func handleEmptyKeyPartition(tableDef *TableDef, partitionInfo *plan.PartitionIn
 		// If there is no primary key but there is a unique key, then the unique key is used for the partitioning key
 		if len(uniqueKey.IndexNames) >= 2 {
 			var firstUniqueKeyCols []string
-			for i, field := range uniqueKey.Fields {
-				if uniqueKey.Uniques[i] {
-					firstUniqueKeyCols = field.ColNames
-					break
-				}
+			for _, field := range uniqueKey.Fields {
+				firstUniqueKeyCols = field.Parts
+				break
 			}
 
 			for _, field := range uniqueKey.Fields {
-				if !checkUniqueKeyIncludePartKey(firstUniqueKeyCols, field.ColNames) {
+				if !checkUniqueKeyIncludePartKey(firstUniqueKeyCols, field.Parts) {
 					return moerr.NewInvalidInputNoCtx("partition key is not part of primary key")
 				}
 			}
