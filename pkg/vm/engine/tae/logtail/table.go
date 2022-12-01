@@ -83,7 +83,7 @@ func (blk *txnBlock) ForeachRowInBetween(
 
 		if !op(row) {
 			outOfRange = true
-			return false
+			return
 		}
 	}
 	return
