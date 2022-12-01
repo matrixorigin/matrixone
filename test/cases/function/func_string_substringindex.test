@@ -1,0 +1,95 @@
+SELECT SUBSTRING_INDEX('www.mysql.com', '.', 0);
+SELECT SUBSTRING_INDEX('www.mysql.com', '.', 1);
+SELECT SUBSTRING_INDEX('www.mysql.com', '.', 2);
+SELECT SUBSTRING_INDEX('www.mysql.com', '.', 3);
+SELECT SUBSTRING_INDEX('www.mysql.com', '.', -3);
+SELECT SUBSTRING_INDEX('www.mysql.com', '.', -2);
+SELECT SUBSTRING_INDEX('www.mysql.com', '.', -1);
+SELECT SUBSTRING_INDEX('www.mysql.com', '', 0);
+
+SELECT SUBSTRING_INDEX('www.mysql.com', '.', '0');
+SELECT SUBSTRING_INDEX('www.mysql.com', '.', '1');
+SELECT SUBSTRING_INDEX('www.mysql.com', '.', '2');
+SELECT SUBSTRING_INDEX('www.mysql.com', '.', '3');
+SELECT SUBSTRING_INDEX('www.mysql.com', '.', '4');
+SELECT SUBSTRING_INDEX('www.mysql.com', '.', '-3');
+SELECT SUBSTRING_INDEX('www.mysql.com', '.', '-2');
+SELECT SUBSTRING_INDEX('www.mysql.com', '.', '-1');
+SELECT SUBSTRING_INDEX('www.mysql.com', '', '0');
+
+
+select substring_index('xyz', 'abc', 9223372036854775808);
+select substring_index("aaa.bbb.ccc.ddd.eee",'.',18446744073709551613);
+select substring_index("aaa.bbb.ccc.ddd.eee",'.',-18446744073709551613);
+    
+
+select substring_index(null, 'abc', 9223372036854775808);
+select substring_index('xyz', null, 9223372036854775808);
+select substring_index('xyz', 'abc', null);
+
+SELECT SUBSTRING_INDEX('192,168,8,203', ',', 1);
+SELECT SUBSTRING_INDEX('192,168,8,203', ',', -1);
+SELECT SUBSTRING_INDEX(SUBSTRING_INDEX('192,168,8,203', ',', 2), ',',-1);
+SELECT SUBSTRING_INDEX(SUBSTRING_INDEX('192,168,8,203', ',', -2), ',',1);
+
+
+create table test(a varchar(100), b varchar(20), c int);
+insert into test values('www.mysql.com', '.', 0);
+insert into test values('www.mysql.com', '.', 1);
+insert into test values('www.mysql.com', '.', 2);
+insert into test values('www.mysql.com', '.', 3);
+insert into test values('www.mysql.com', '.', 9223372036854775808);
+insert into test values('www.mysql.com', '.', -1);
+insert into test values('www.mysql.com', '.', -2);
+insert into test values('www.mysql.com', '.', -3);
+select SUBSTRING_INDEX(a, b, c) from test;
+drop table test;
+
+
+create table test(a varchar(100), b varchar(20), c float);
+insert into test values('www.mysql.com', '.', 0);
+insert into test values('www.mysql.com', '.', 1.0);
+insert into test values('www.mysql.com', '.', 2.0);
+insert into test values('www.mysql.com', '.', 3.0);
+insert into test values('www.mysql.com', '.', 92233720368547758.0);
+insert into test values('www.mysql.com', '.', -1.0);
+insert into test values('www.mysql.com', '.', -2.0);
+insert into test values('www.mysql.com', '.', -3.0);
+select SUBSTRING_INDEX(a, b, c) from test;
+drop table test;
+
+
+create table test(a varchar(100), b varchar(20), c varchar(100));
+insert into test values('www.mysql.com', '.', '0');
+insert into test values('www.mysql.com', '.', '1');
+insert into test values('www.mysql.com', '.', '2');
+insert into test values('www.mysql.com', '.', '3');
+insert into test values('www.mysql.com', '.', '-1');
+insert into test values('www.mysql.com', '.', '-2');
+insert into test values('www.mysql.com', '.', '-3');
+select SUBSTRING_INDEX(a, b, c) from test;
+drop table test;
+
+create table test(a text, b varchar(20), c int);
+insert into test values('www.mysql.com', '.', 0);
+insert into test values('www.mysql.com', '.', 1);
+insert into test values('www.mysql.com', '.', 2);
+insert into test values('www.mysql.com', '.', 3);
+insert into test values('www.mysql.com', '.', 9223372036854775808);
+insert into test values('www.mysql.com', '.', -1);
+insert into test values('www.mysql.com', '.', -2);
+insert into test values('www.mysql.com', '.', -3);
+select SUBSTRING_INDEX(a, b, c) from test;
+drop table test;
+
+create table test(a blob, b varchar(20), c int);
+insert into test values('www.mysql.com', '.', 0);
+insert into test values('www.mysql.com', '.', 1);
+insert into test values('www.mysql.com', '.', 2);
+insert into test values('www.mysql.com', '.', 3);
+insert into test values('www.mysql.com', '.', 9223372036854775808);
+insert into test values('www.mysql.com', '.', -1);
+insert into test values('www.mysql.com', '.', -2);
+insert into test values('www.mysql.com', '.', -3);
+select SUBSTRING_INDEX(a, b, c) from test;
+drop table test;

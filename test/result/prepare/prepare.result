@@ -315,3 +315,11 @@ id    name    email    age
 8    test_save_8    null    8
 9    test_save_9    null    9
 deallocate prepare __mo_stmt_id_1;
+create table algo_offline (algo_id int(11) unsigned not null, algo_name varchar(50) not null);
+prepare stmt1 from select count(*) from algo_offline where (algo_name like ? or algo_id like ?);
+set @a="aa";
+set @b="bb";
+execute stmt1 using @a, @b;
+count(*)
+0
+deallocate prepare stmt1;
