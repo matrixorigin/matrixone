@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
@@ -122,6 +123,8 @@ func (s *Service) heartbeatWorker(ctx context.Context) {
 	}()
 	ticker := time.NewTicker(s.cfg.HeartbeatInterval.Duration)
 	defer ticker.Stop()
+	ctx, span := trace.Start(ctx, "heartbeatWorker")
+	defer span.End()
 
 	for {
 		select {

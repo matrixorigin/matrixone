@@ -385,7 +385,7 @@ func (blk *baseBlock) getPersistedValue(
 		}
 	}
 	if view.DeleteMask != nil && view.DeleteMask.ContainsInt(row) {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	view2, err := blk.ResolvePersistedColumnData(pnode, ts, col, nil, true)

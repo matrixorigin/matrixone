@@ -44,7 +44,7 @@ func goNumericSubUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) err
 			if !nulls.Contains(rs.Nsp, uint64(i)) {
 				rt[i] = xt[0] - y
 				if overflow.OverflowUIntSub(xt[i], y, rt[i]) {
-					return moerr.NewOutOfRange("unsigned int", "unsigned int SUB")
+					return moerr.NewOutOfRangeNoCtx("unsigned int", "unsigned int SUB")
 				}
 			}
 		}
@@ -54,7 +54,7 @@ func goNumericSubUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) err
 			if !nulls.Contains(rs.Nsp, uint64(i)) {
 				rt[i] = x - yt[0]
 				if overflow.OverflowUIntSub(x, yt[0], rt[0]) {
-					return moerr.NewOutOfRange("unsigned int", "unsigned int SUB")
+					return moerr.NewOutOfRangeNoCtx("unsigned int", "unsigned int SUB")
 				}
 			}
 		}
@@ -64,7 +64,7 @@ func goNumericSubUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) err
 			if !nulls.Contains(rs.Nsp, uint64(i)) {
 				rt[i] = x - yt[i]
 				if overflow.OverflowUIntSub(x, yt[i], rt[i]) {
-					return moerr.NewOutOfRange("unsigned int", "unsigned int SUB")
+					return moerr.NewOutOfRangeNoCtx("unsigned int", "unsigned int SUB")
 				}
 			}
 		}
@@ -79,7 +79,7 @@ func goNumericSubSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 			if !nulls.Contains(rs.Nsp, uint64(i)) {
 				rt[i] = xt[0] - y
 				if overflow.OverflowIntSub(xt[0], y, rt[i]) {
-					return moerr.NewOutOfRange("int", "int SUB")
+					return moerr.NewOutOfRangeNoCtx("int", "int SUB")
 				}
 			}
 		}
@@ -89,7 +89,7 @@ func goNumericSubSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 			if !nulls.Contains(rs.Nsp, uint64(i)) {
 				rt[i] = x - yt[0]
 				if overflow.OverflowIntSub(x, yt[0], rt[i]) {
-					return moerr.NewOutOfRange("int", "int SUB")
+					return moerr.NewOutOfRangeNoCtx("int", "int SUB")
 				}
 			}
 		}
@@ -99,7 +99,7 @@ func goNumericSubSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 			if !nulls.Contains(rs.Nsp, uint64(i)) {
 				rt[i] = x - yt[i]
 				if overflow.OverflowIntSub(x, yt[i], rt[i]) {
-					return moerr.NewOutOfRange("int", "int SUB")
+					return moerr.NewOutOfRangeNoCtx("int", "int SUB")
 				}
 			}
 		}
@@ -146,7 +146,7 @@ func NumericSubSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 	rc := C.SignedInt_VecSub(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
 	if rc != 0 {
-		return moerr.NewOutOfRange("int", "int SUB")
+		return moerr.NewOutOfRangeNoCtx("int", "int SUB")
 	}
 	return nil
 }
@@ -163,7 +163,7 @@ func NumericSubUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error
 	rc := C.UnsignedInt_VecSub(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
 	if rc != 0 {
-		return moerr.NewOutOfRange("unsigned int", "unsigned int SUB")
+		return moerr.NewOutOfRangeNoCtx("unsigned int", "unsigned int SUB")
 	}
 	return nil
 }
@@ -181,7 +181,7 @@ func NumericSubFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 	rc := C.Float_VecSub(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
 	if rc != 0 {
-		return moerr.NewOutOfRange("float", "float SUB")
+		return moerr.NewOutOfRangeNoCtx("float", "float SUB")
 	}
 	return nil
 }

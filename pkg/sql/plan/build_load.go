@@ -26,17 +26,17 @@ import (
 )
 
 func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
-	if err := InitNullMap(stmt); err != nil {
+	if err := InitNullMap(stmt, ctx); err != nil {
 		return nil, err
 	}
 	tblName := string(stmt.Table.ObjectName)
 	dbName := string(stmt.Table.SchemaName)
 	objRef, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return nil, moerr.NewInvalidInput("load table '%s' does not exists", tree.String(stmt.Table, dialect.MYSQL))
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "load table '%s' does not exists", tree.String(stmt.Table, dialect.MYSQL))
 	}
 	if tableDef.TableType == catalog.SystemExternalRel {
-		return nil, moerr.NewInvalidInput("cannot load external table")
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot load external table")
 	}
 
 	tableDef.Name2ColIndex = map[string]int32{}
@@ -73,7 +73,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	if err := GetProjectNode(stmt, ctx, node2, tableDef.Name2ColIndex); err != nil {
 		return nil, err
 	}
-	if err := checkNullMap(stmt, tableDef.Cols); err != nil {
+	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
 		return nil, err
 	}
 
@@ -114,10 +114,10 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 	dbName := string(stmt.Table.SchemaName)
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return moerr.NewInternalError("invalid table name: %s", string(stmt.Table.ObjectName))
+		return moerr.NewInternalError(ctx.GetContext(), "invalid table name: %s", string(stmt.Table.ObjectName))
 	}
 	if len(stmt.Param.Tail.ColumnList) > len(tableDef.Cols) {
-		return moerr.NewInternalError("the load data colnum list is larger than table colnum")
+		return moerr.NewInternalError(ctx.GetContext(), "the load data colnum list is larger than table colnum")
 	}
 	colToIndex := make(map[int32]string, 0)
 	if len(stmt.Param.Tail.ColumnList) == 0 {
@@ -129,13 +129,13 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 			switch realCol := col.(type) {
 			case *tree.UnresolvedName:
 				if _, ok := Name2ColIndex[realCol.Parts[0]]; !ok {
-					return moerr.NewInternalError("column '%s' does not exist", realCol.Parts[0])
+					return moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", realCol.Parts[0])
 				}
 				colToIndex[int32(i)] = realCol.Parts[0]
 			case *tree.VarExpr:
 				//NOTE:variable like '@abc' will be passed by.
 			default:
-				return moerr.NewInternalError("unsupported column type %v", realCol)
+				return moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
 			}
 		}
 	}
@@ -176,30 +176,30 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 	return nil
 }
 
-func InitNullMap(stmt *tree.Load) error {
+func InitNullMap(stmt *tree.Load, ctx CompilerContext) error {
 	stmt.Param.NullMap = make(map[string][]string)
 	for i := 0; i < len(stmt.Param.Tail.Assignments); i++ {
 		expr, ok := stmt.Param.Tail.Assignments[i].Expr.(*tree.FuncExpr)
 		if !ok {
-			return moerr.NewInvalidInput("the load set list is not FuncExpr form")
+			return moerr.NewInvalidInput(ctx.GetContext(), "the load set list is not FuncExpr form")
 		}
 		if len(expr.Exprs) != 2 {
-			return moerr.NewInvalidInput("the nullif func need two paramaters")
+			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func need two paramaters")
 		}
 
 		expr2, ok := expr.Exprs[0].(*tree.UnresolvedName)
 		if !ok {
-			return moerr.NewInvalidInput("the nullif func first param is not UnresolvedName form")
+			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param is not UnresolvedName form")
 		}
 
 		expr3, ok := expr.Exprs[1].(*tree.NumVal)
 		if !ok {
-			return moerr.NewInvalidInput("the nullif func second param is not NumVal form")
+			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func second param is not NumVal form")
 		}
 		for j := 0; j < len(stmt.Param.Tail.Assignments[i].Names); j++ {
 			col := stmt.Param.Tail.Assignments[i].Names[j].Parts[0]
 			if col != expr2.Parts[0] {
-				return moerr.NewInvalidInput("the nullif func first param must equal to colName")
+				return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param must equal to colName")
 			}
 			stmt.Param.NullMap[col] = append(stmt.Param.NullMap[col], strings.ToLower(expr3.String()))
 		}
@@ -208,7 +208,7 @@ func InitNullMap(stmt *tree.Load) error {
 	return nil
 }
 
-func checkNullMap(stmt *tree.Load, Cols []*ColDef) error {
+func checkNullMap(stmt *tree.Load, Cols []*ColDef, ctx CompilerContext) error {
 	for k := range stmt.Param.NullMap {
 		find := false
 		for i := 0; i < len(Cols); i++ {
@@ -217,7 +217,7 @@ func checkNullMap(stmt *tree.Load, Cols []*ColDef) error {
 			}
 		}
 		if !find {
-			return moerr.NewInvalidInput("wrong col name '%s' in nullif function", k)
+			return moerr.NewInvalidInput(ctx.GetContext(), "wrong col name '%s' in nullif function", k)
 		}
 	}
 	return nil

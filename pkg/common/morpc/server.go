@@ -366,7 +366,7 @@ func (cs *clientSession) Write(ctx context.Context, message Message) error {
 	defer cs.mu.RUnlock()
 
 	if cs.mu.closed {
-		return moerr.NewClientClosed()
+		return moerr.NewClientClosedNoCtx()
 	}
 
 	cs.c <- RPCMessage{Ctx: ctx, Message: message}

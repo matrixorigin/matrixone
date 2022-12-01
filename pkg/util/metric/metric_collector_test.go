@@ -160,13 +160,14 @@ func newDummyFSWriterFactory(csvCh chan string) export.FSWriterFactory {
 		return &dummyStringWriter{name: name.GetName(), ch: csvCh}
 	})
 }
-func dummyInitView(tbls []string) {
+func dummyInitView(ctx context.Context, tbls []string) {
 	for _, tbl := range tbls {
-		GetMetricViewWithLabels(tbl, []string{metricTypeColumn.Name, metricAccountColumn.Name})
+		GetMetricViewWithLabels(ctx, tbl, []string{metricTypeColumn.Name, metricAccountColumn.Name})
 	}
 }
 
 func TestCsvFSCollector(t *testing.T) {
+	ctx := context.Background()
 	csvCh := make(chan string, 100)
 	factory := newDummyFSWriterFactory(csvCh)
 	collector := newMetricFSCollector(factory, WithFlushInterval(3*time.Second), WithMetricThreshold(4), ExportMultiTable(false))
@@ -176,7 +177,7 @@ func TestCsvFSCollector(t *testing.T) {
 	nodes := []string{"e669d136-24f3-11ed-ba8c-d6aee46d73fa", "e9b89520-24f3-11ed-ba8c-d6aee46d73fa"}
 	roles := []string{"ping", "pong"}
 	ts := time.Now().UnixMicro()
-	dummyInitView(names)
+	dummyInitView(ctx, names)
 	go func() {
 		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
 			{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[0], Role: roles[0], Metric: []*pb.Metric{

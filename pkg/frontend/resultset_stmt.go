@@ -60,7 +60,7 @@ func (rsse *resultSetStmtExecutor) ResponseBeforeExec(ctx context.Context, ses *
 		/*
 			mysql COM_QUERY response: send the column definition per column
 		*/
-		err = proto.SendColumnDefinitionPacket(mysqlc, int(cmd))
+		err = proto.SendColumnDefinitionPacket(ctx, mysqlc, int(cmd))
 		if err != nil {
 			return err
 		}

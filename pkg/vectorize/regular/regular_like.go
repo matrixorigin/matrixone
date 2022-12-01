@@ -24,7 +24,7 @@ import (
 func RegularLike(expr, pat, match_type string) (bool, error) {
 	matchRes, err := regexp.MatchString(pat, expr)
 	if err != nil {
-		return false, moerr.NewInvalidInput("regexp_like have invalid input")
+		return false, moerr.NewInvalidInputNoCtx("regexp_like have invalid input")
 	}
 	if matchRes {
 		return true, nil

@@ -30,7 +30,7 @@ func DateStringToDate(xs []string, rs []types.Date) ([]types.Date, error) {
 	for i, str := range xs {
 		d, e := types.ParseDatetime(str, 6)
 		if e != nil {
-			return rs, moerr.NewOutOfRange("date", "'%s'", str)
+			return rs, moerr.NewOutOfRangeNoCtx("date", "'%s'", str)
 		}
 		rs[i] = d.ToDate()
 	}

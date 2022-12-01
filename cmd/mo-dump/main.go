@@ -16,6 +16,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -78,6 +79,7 @@ func main() {
 			conn.Close()
 		}
 	}()
+	ctx := context.Background()
 	flag.StringVar(&username, "u", _username, "username")
 	flag.StringVar(&password, "p", _password, "password")
 	flag.StringVar(&host, "h", _host, "hostname")
@@ -86,7 +88,7 @@ func main() {
 	flag.Var(&tables, "tbl", "tableNameList, default all")
 	flag.Parse()
 	if len(database) == 0 {
-		err = moerr.NewInvalidInput("database must be specified")
+		err = moerr.NewInvalidInput(ctx, "database must be specified")
 		return
 	}
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", username, password, host, port, database)
@@ -106,7 +108,7 @@ func main() {
 	select {
 	case <-ch:
 	case <-time.After(timeout):
-		err = moerr.NewInternalError("connect to %s timeout", dsn)
+		err = moerr.NewInternalError(ctx, "connect to %s timeout", dsn)
 	}
 	if err != nil {
 		return

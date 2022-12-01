@@ -232,7 +232,7 @@ func (l *store) startHAKeeperReplica(replicaID uint64,
 func (l *store) startReplica(shardID uint64, replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target, join bool) error {
 	if shardID == hakeeper.DefaultHAKeeperShardID {
-		return moerr.NewInvalidInput("shardID %d does not match DefaultHAKeeperShardID %d", shardID, hakeeper.DefaultHAKeeperShardID)
+		return moerr.NewInvalidInputNoCtx("shardID %d does not match DefaultHAKeeperShardID %d", shardID, hakeeper.DefaultHAKeeperShardID)
 	}
 	cfg := getRaftConfig(shardID, replicaID)
 	if err := l.snapshotMgr.Init(shardID, replicaID); err != nil {
@@ -371,7 +371,7 @@ func (l *store) truncateLog(ctx context.Context,
 	}
 	if result.Value > 0 {
 		l.logger.Error(fmt.Sprintf("shardID %d already truncated to index %d", shardID, result.Value))
-		return moerr.NewInvalidTruncateLsn(shardID, result.Value)
+		return moerr.NewInvalidTruncateLsn(ctx, shardID, result.Value)
 	}
 	return nil
 }
@@ -386,10 +386,10 @@ func (l *store) append(ctx context.Context,
 	}
 	if len(result.Data) > 0 {
 		l.logger.Error("not current lease holder", zap.Uint64("data", binaryEnc.Uint64(result.Data)))
-		return 0, moerr.NewNotLeaseHolder(binaryEnc.Uint64(result.Data))
+		return 0, moerr.NewNotLeaseHolder(ctx, binaryEnc.Uint64(result.Data))
 	}
 	if result.Value == 0 {
-		panic(moerr.NewInvalidState("unexpected Lsn value"))
+		panic(moerr.NewInvalidState(ctx, "unexpected Lsn value"))
 	}
 	return result.Value, nil
 }
@@ -414,12 +414,12 @@ func (l *store) tsoUpdate(ctx context.Context, count uint64) (uint64, error) {
 	return result.Value, nil
 }
 
-func handleNotHAKeeperError(err error) error {
+func handleNotHAKeeperError(ctx context.Context, err error) error {
 	if err == nil {
 		return err
 	}
 	if errors.Is(err, dragonboat.ErrShardNotFound) {
-		return moerr.NewNoHAKeeper()
+		return moerr.NewNoHAKeeper(ctx)
 	}
 	return err
 }
@@ -431,7 +431,7 @@ func (l *store) addLogStoreHeartbeat(ctx context.Context,
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if result, err := l.propose(ctx, session, cmd); err != nil {
 		l.logger.Error("propose failed", zap.Error(err))
-		return pb.CommandBatch{}, handleNotHAKeeperError(err)
+		return pb.CommandBatch{}, handleNotHAKeeperError(ctx, err)
 	} else {
 		var cb pb.CommandBatch
 		MustUnmarshal(&cb, result.Data)
@@ -446,7 +446,7 @@ func (l *store) addCNStoreHeartbeat(ctx context.Context,
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if result, err := l.propose(ctx, session, cmd); err != nil {
 		l.logger.Error("propose failed", zap.Error(err))
-		return pb.CommandBatch{}, handleNotHAKeeperError(err)
+		return pb.CommandBatch{}, handleNotHAKeeperError(ctx, err)
 	} else {
 		var cb pb.CommandBatch
 		MustUnmarshal(&cb, result.Data)
@@ -473,7 +473,7 @@ func (l *store) addDNStoreHeartbeat(ctx context.Context,
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if result, err := l.propose(ctx, session, cmd); err != nil {
 		l.logger.Error("propose failed", zap.Error(err))
-		return pb.CommandBatch{}, handleNotHAKeeperError(err)
+		return pb.CommandBatch{}, handleNotHAKeeperError(ctx, err)
 	} else {
 		var cb pb.CommandBatch
 		MustUnmarshal(&cb, result.Data)
@@ -486,7 +486,7 @@ func (l *store) getCommandBatch(ctx context.Context,
 	v, err := l.read(ctx,
 		hakeeper.DefaultHAKeeperShardID, &hakeeper.ScheduleCommandQuery{UUID: uuid})
 	if err != nil {
-		return pb.CommandBatch{}, handleNotHAKeeperError(err)
+		return pb.CommandBatch{}, handleNotHAKeeperError(ctx, err)
 	}
 	return *(v.(*pb.CommandBatch)), nil
 }
@@ -495,7 +495,7 @@ func (l *store) getClusterDetails(ctx context.Context) (pb.ClusterDetails, error
 	v, err := l.read(ctx,
 		hakeeper.DefaultHAKeeperShardID, &hakeeper.ClusterDetailsQuery{Cfg: l.cfg.GetHAKeeperConfig()})
 	if err != nil {
-		return pb.ClusterDetails{}, handleNotHAKeeperError(err)
+		return pb.ClusterDetails{}, handleNotHAKeeperError(ctx, err)
 	}
 	return *(v.(*pb.ClusterDetails)), nil
 }
@@ -505,7 +505,7 @@ func (l *store) addScheduleCommands(ctx context.Context,
 	cmd := hakeeper.GetUpdateCommandsCmd(term, cmds)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if _, err := l.propose(ctx, session, cmd); err != nil {
-		return handleNotHAKeeperError(err)
+		return handleNotHAKeeperError(ctx, err)
 	}
 	return nil
 }
@@ -517,8 +517,8 @@ func (l *store) getLeaseHolderID(ctx context.Context,
 	}
 	// first entry is an update lease cmd
 	e := entries[0]
-	if !isRaftInternalEntry(e) && isSetLeaseHolderUpdate(l.decodeCmd(e)) {
-		return parseLeaseHolderID(l.decodeCmd(e)), nil
+	if !isRaftInternalEntry(e) && isSetLeaseHolderUpdate(l.decodeCmd(ctx, e)) {
+		return parseLeaseHolderID(l.decodeCmd(ctx, e)), nil
 	}
 	v, err := l.read(ctx, shardID, leaseHistoryQuery{lsn: e.Index})
 	if err != nil {
@@ -528,17 +528,17 @@ func (l *store) getLeaseHolderID(ctx context.Context,
 	return v.(uint64), nil
 }
 
-func (l *store) decodeCmd(e raftpb.Entry) []byte {
+func (l *store) decodeCmd(ctx context.Context, e raftpb.Entry) []byte {
 	if e.Type == raftpb.ApplicationEntry {
-		panic(moerr.NewInvalidState("unexpected entry type"))
+		panic(moerr.NewInvalidState(ctx, "unexpected entry type"))
 	}
 	if e.Type == raftpb.EncodedEntry {
 		if e.Cmd[0] != 0 {
-			panic(moerr.NewInvalidState("unexpected cmd header"))
+			panic(moerr.NewInvalidState(ctx, "unexpected cmd header"))
 		}
 		return e.Cmd[1:]
 	}
-	panic(moerr.NewInvalidState("invalid cmd"))
+	panic(moerr.NewInvalidState(ctx, "invalid cmd"))
 }
 
 func isRaftInternalEntry(e raftpb.Entry) bool {
@@ -567,7 +567,7 @@ func (l *store) markEntries(ctx context.Context,
 			})
 			continue
 		}
-		cmd := l.decodeCmd(e)
+		cmd := l.decodeCmd(ctx, e)
 		if isSetLeaseHolderUpdate(cmd) {
 			leaseHolderID = parseLeaseHolderID(cmd)
 			result = append(result, LogRecord{
@@ -639,7 +639,7 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 			l.logger.Error("OutOfRange query found")
 			return nil, 0, dragonboat.ErrInvalidRange
 		}
-		panic(moerr.NewInvalidState("unexpected rs state"))
+		panic(moerr.NewInvalidState(ctx, "unexpected rs state"))
 	case <-ctx.Done():
 		return nil, 0, ctx.Err()
 	}

@@ -34,7 +34,7 @@ func ParseValueToBool(num *tree.NumVal) (bool, error) {
 			return true, nil
 		}
 	}
-	return false, moerr.NewInvalidInput("'%s' is not a valid bool expression", str)
+	return false, moerr.NewInvalidInputNoCtx("'%s' is not a valid bool expression", str)
 }
 
 func AppendBoolToByteArray(b bool, arr []byte) []byte {
@@ -61,7 +61,7 @@ func ParseBool(s string) (bool, error) {
 			return false, nil
 		}
 	}
-	return false, moerr.NewInvalidInput("'%s' is not a valid bool expression", s)
+	return false, moerr.NewInvalidInputNoCtx("'%s' is not a valid bool expression", s)
 
 }
 

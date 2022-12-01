@@ -74,7 +74,7 @@ func (p *PhysicalRow[K, V]) readVersion(now Time, tx *Transaction) (*Version[V],
 			case ReadNoStale:
 				// BornTx must be committed to be visible here
 				if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
-					return &value, moerr.NewTxnReadConflict("%s %s", tx.ID, value.BornTx.ID)
+					return &value, moerr.NewTxnReadConflictNoCtx("%s %s", tx.ID, value.BornTx.ID)
 				}
 			}
 			return &value, nil
@@ -149,10 +149,10 @@ func (p *PhysicalRow[K, V]) Insert(
 		if value.Visible(now, tx.ID, tx.IsolationPolicy.Read) {
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
 				// locked by active or committed tx
-				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflictNoCtx("%s %s", tx.ID, value.LockTx.ID)
 			}
 			if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
-				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflictNoCtx("%s %s", tx.ID, value.BornTx.ID)
 			}
 		}
 	}
@@ -187,10 +187,10 @@ func (p *PhysicalRow[K, V]) Delete(
 		value := p.Versions[i]
 		if value.Visible(now, tx.ID, tx.IsolationPolicy.Read) {
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
-				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflictNoCtx("%s %s", tx.ID, value.LockTx.ID)
 			}
 			if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
-				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflictNoCtx("%s %s", tx.ID, value.BornTx.ID)
 			}
 
 			p = p.clone()
@@ -225,11 +225,11 @@ func (p *PhysicalRow[K, V]) Update(
 		if value.Visible(now, tx.ID, tx.IsolationPolicy.Read) {
 
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
-				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflictNoCtx("%s %s", tx.ID, value.LockTx.ID)
 			}
 
 			if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
-				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflictNoCtx("%s %s", tx.ID, value.BornTx.ID)
 			}
 
 			p = p.clone()

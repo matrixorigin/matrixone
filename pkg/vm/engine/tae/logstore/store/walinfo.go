@@ -29,10 +29,10 @@ import (
 )
 
 var (
-	ErrGroupNotFount = moerr.NewInternalError("group not found")
-	ErrLsnNotFount   = moerr.NewInternalError("lsn not found")
-	ErrTimeOut       = moerr.NewInternalError("retry timeout")
-	ErrLsnTooSmall   = moerr.NewInternalError("lsn is too small")
+	ErrGroupNotFount = moerr.NewInternalErrorNoCtx("group not found")
+	ErrLsnNotFount   = moerr.NewInternalErrorNoCtx("lsn not found")
+	ErrTimeOut       = moerr.NewInternalErrorNoCtx("retry timeout")
+	ErrLsnTooSmall   = moerr.NewInternalErrorNoCtx("lsn is too small")
 )
 
 type StoreInfo struct {
