@@ -106,7 +106,7 @@ func (si *snapshotItem) Valid() (bool, error) {
 		return false, err
 	}
 	if len(names) != 2 {
-		return false, moerr.NewInternalError("file number is not correct: %d", len(names))
+		return false, moerr.NewInternalErrorNoCtx("file number is not correct: %d", len(names))
 	}
 	sort.Strings(names)
 	var index uint64
@@ -115,11 +115,11 @@ func (si *snapshotItem) Valid() (bool, error) {
 		return false, err
 	}
 	if snapshotIndex(index) != si.index {
-		return false, moerr.NewInternalError("index of dir %d and file %d are different",
+		return false, moerr.NewInternalErrorNoCtx("index of dir %d and file %d are different",
 			si.index, index)
 	}
 	if names[1] != "snapshot.metadata" {
-		return false, moerr.NewInternalError("no snapshot.metadata file")
+		return false, moerr.NewInternalErrorNoCtx("no snapshot.metadata file")
 	}
 	return true, nil
 }
@@ -158,12 +158,12 @@ func (ss *snapshotRecord) last() *snapshotItem {
 func (ss *snapshotRecord) add(index snapshotIndex, dir string) error {
 	last := ss.last()
 	if last != nil && index < last.index {
-		return moerr.NewInternalError("snapshot with smaller index %d than current biggest one %d",
+		return moerr.NewInternalErrorNoCtx("snapshot with smaller index %d than current biggest one %d",
 			index, last.index)
 	}
 	si := getSnapshotItem(snapshotItem{fs: ss.fs, index: index, dir: dir})
 	if !si.Exists() {
-		return moerr.NewInternalError("snapshot file does not exist for shard-replica %d-%d, index %d, dir %s",
+		return moerr.NewInternalErrorNoCtx("snapshot file does not exist for shard-replica %d-%d, index %d, dir %s",
 			ss.nodeID.shardID, ss.nodeID.replicaID, index, dir)
 	}
 	v, err := si.Valid()
@@ -259,7 +259,7 @@ func (sm *snapshotManager) prepareDir(path string) error {
 		return nil
 	}
 	if !s.IsDir() {
-		return moerr.NewInternalError("%s is not a dir", path)
+		return moerr.NewInternalErrorNoCtx("%s is not a dir", path)
 	}
 	return nil
 }

@@ -456,6 +456,7 @@ func TestWildcardMatch(t *testing.T) {
 }
 
 func TestGetSimpleExprValue(t *testing.T) {
+	ctx := context.TODO()
 	cvey.Convey("", t, func() {
 		type args struct {
 			sql     string
@@ -481,7 +482,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 		}
 
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(dialect.MYSQL, kase.sql)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -604,7 +605,7 @@ func TestConvertValueBat2Str(t *testing.T) {
 	)
 	before := testutil.TestUtilMp.CurrNB()
 	bat := testutil.NewBatch(typs, true, 5, testutil.TestUtilMp)
-	rbat, err := convertValueBat2Str(bat, testutil.TestUtilMp, time.Local)
+	rbat, err := convertValueBat2Str(context.TODO(), bat, testutil.TestUtilMp, time.Local)
 	require.Nil(t, err)
 	require.NotNil(t, rbat)
 	bat.Clean(testutil.TestUtilMp)
@@ -629,12 +630,13 @@ func TestCreateDumpFile(t *testing.T) {
 		}
 		os.RemoveAll(base)
 	}()
-	f, err := createDumpFile(base)
+	f, err := createDumpFile(context.TODO(), base)
 	require.Nil(t, err)
 	require.NotNil(t, f)
 }
 
 func TestWriteDump2File(t *testing.T) {
+	ctx := context.TODO()
 	base := "test_dump_" + time.Now().Format("20060102150405") + ".sql"
 	var f *os.File
 	defer func() {
@@ -644,7 +646,7 @@ func TestWriteDump2File(t *testing.T) {
 		removeFile(base, 1)
 		removeFile(base, 2)
 	}()
-	f, err := createDumpFile(base)
+	f, err := createDumpFile(ctx, base)
 	require.Nil(t, err)
 	require.NotNil(t, f)
 	dump := &tree.MoDump{
@@ -653,11 +655,11 @@ func TestWriteDump2File(t *testing.T) {
 	}
 	buf := bytes.NewBufferString("test")
 	curFileSize, curFileIdx := int64(0), int64(1)
-	_, _, _, err = writeDump2File(buf, dump, f, curFileIdx, curFileSize)
+	_, _, _, err = writeDump2File(ctx, buf, dump, f, curFileIdx, curFileSize)
 	require.NotNil(t, err)
 	dump.MaxFileSize = 1024
 	bufSize := buf.Len()
-	f, curFileIdx, curFileSize, err = writeDump2File(buf, dump, f, curFileIdx, curFileSize)
+	f, curFileIdx, curFileSize, err = writeDump2File(ctx, buf, dump, f, curFileIdx, curFileSize)
 	require.Nil(t, err)
 	require.NotNil(t, f)
 	require.Equal(t, int64(1), curFileIdx)
@@ -665,7 +667,7 @@ func TestWriteDump2File(t *testing.T) {
 	dump.MaxFileSize = 9
 	buf.WriteString("123456")
 	bufSize = buf.Len()
-	f, curFileIdx, curFileSize, err = writeDump2File(buf, dump, f, curFileIdx, curFileSize)
+	f, curFileIdx, curFileSize, err = writeDump2File(ctx, buf, dump, f, curFileIdx, curFileSize)
 	require.Nil(t, err)
 	require.NotNil(t, f)
 	require.Equal(t, int64(2), curFileIdx)

@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	ErrTransferTransactionState = moerr.NewInternalError("tae: transfer transaction state error")
+	ErrTransferTransactionState = moerr.NewInternalErrorNoCtx("tae: transfer transaction state error")
 )
 
 const (

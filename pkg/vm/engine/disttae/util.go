@@ -168,7 +168,7 @@ func fetchZonemapAndRowsFromBlockInfo(
 	return zonemapList, rows, nil
 }
 
-func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
+func getZonemapDataFromMeta(ctx context.Context, columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
 	dataLength := len(columns)
 	datas := make([][2]any, dataLength)
 	dataTypes := make([]uint8, dataLength)
@@ -207,14 +207,14 @@ func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process) (b
 				return bVal.Bval, nil
 			}
 		}
-		return false, moerr.NewInternalError("cannot eval filter expr")
+		return false, moerr.NewInternalError(proc.Ctx, "cannot eval filter expr")
 	} else {
 		vec, err := colexec.EvalExprByZonemapBat(bat, proc, expr)
 		if err != nil {
 			return false, err
 		}
 		if vec.Typ.Oid != types.T_bool {
-			return false, moerr.NewInternalError("cannot eval filter expr")
+			return false, moerr.NewInternalError(proc.Ctx, "cannot eval filter expr")
 		}
 		cols := vector.MustTCols[bool](vec)
 		for _, isNeed := range cols {

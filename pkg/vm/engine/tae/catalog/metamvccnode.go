@@ -142,7 +142,7 @@ func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	if n2 != int(length) {
-		panic(moerr.NewInternalError("logic err %d!=%d, %v", n2, length, err))
+		panic(moerr.NewInternalErrorNoCtx("logic err %d!=%d, %v", n2, length, err))
 	}
 	n += int64(n2)
 	length = uint32(len([]byte(e.DeltaLoc)))
@@ -155,7 +155,7 @@ func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	if n2 != int(length) {
-		panic(moerr.NewInternalError("logic err %d!=%d, %v", n2, length, err))
+		panic(moerr.NewInternalErrorNoCtx("logic err %d!=%d, %v", n2, length, err))
 	}
 	n += int64(n2)
 	return
@@ -186,7 +186,7 @@ func (e *MetadataMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	if n2 != int(length) {
-		panic(moerr.NewInternalError("logic err %d!=%d, %v", n2, length, err))
+		panic(moerr.NewInternalErrorNoCtx("logic err %d!=%d, %v", n2, length, err))
 	}
 	e.MetaLoc = string(buf)
 	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
@@ -198,7 +198,7 @@ func (e *MetadataMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	if n2 != int(length) {
-		panic(moerr.NewInternalError("logic err %d!=%d, %v", n2, length, err))
+		panic(moerr.NewInternalErrorNoCtx("logic err %d!=%d, %v", n2, length, err))
 	}
 	e.DeltaLoc = string(buf)
 	return

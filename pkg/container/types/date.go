@@ -116,7 +116,7 @@ func ParseDateCast(s string) (Date, error) {
 	var y, m, d, hh, mm, ss string
 	s = strings.TrimSpace(s)
 	if len(s) < 7 && IsAllNumber(&s) {
-		return -1, moerr.NewInvalidArg("parsedate", s)
+		return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 	}
 	// a special we need to process
 	// we need to support 2220919,so we need to add a '0' to extend
@@ -135,12 +135,12 @@ func ParseDateCast(s string) (Date, error) {
 			switch state {
 			case Start:
 				if !IsNumber(&s, i) {
-					return -1, moerr.NewInvalidArg("parsedate", s)
+					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 				state = YearState
 				y = y + string(s[i])
 				if len(y) >= 5 {
-					return -1, moerr.NewInvalidArg("parsedate", s)
+					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 			case YearState:
 				if IsNumber(&s, i) {
@@ -148,21 +148,21 @@ func ParseDateCast(s string) (Date, error) {
 				} else if s[i] == '-' {
 					state = MonthState
 					if y == "" {
-						return -1, moerr.NewInvalidArg("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 				} else {
-					return -1, moerr.NewInvalidArg("parsedate", s)
+					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 			case MonthState:
 				if IsNumber(&s, i) {
 					m = m + string(s[i])
 					if len(m) >= 3 {
-						return -1, moerr.NewInvalidArg("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 				} else if s[i] == '-' {
 					// Can't go into DayState, because the Month is empty
 					if m == "" {
-						return -1, moerr.NewInvalidArg("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					} else {
 						state = DayState
 					}
@@ -171,16 +171,16 @@ func ParseDateCast(s string) (Date, error) {
 				if IsNumber(&s, i) {
 					d = d + string(s[i])
 					if len(d) >= 3 {
-						return -1, moerr.NewInvalidArg("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 				} else {
 					if s[i] == ' ' {
 						if d == "" {
-							return -1, moerr.NewInvalidArg("parsedate", s)
+							return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 						}
 						state = HourState
 					} else {
-						return -1, moerr.NewInvalidArg("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 				}
 				if i == len(s)-1 {
@@ -195,16 +195,16 @@ func ParseDateCast(s string) (Date, error) {
 					if IsNumber(&s, i) {
 						hh += string(s[i])
 						if len(hh) >= 3 {
-							return -1, moerr.NewInvalidArg("parsedate", s)
+							return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 						}
 					} else {
 						if s[i] == ':' {
 							if hh == "" {
-								return -1, moerr.NewInvalidArg("parsedate", s)
+								return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 							}
 							state = MinuteState
 						} else {
-							return -1, moerr.NewInvalidArg("parsedate", s)
+							return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 						}
 					}
 				}
@@ -212,12 +212,12 @@ func ParseDateCast(s string) (Date, error) {
 				if IsNumber(&s, i) {
 					mm = mm + string(s[i])
 					if len(mm) >= 3 {
-						return -1, moerr.NewInvalidArg("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 				} else if s[i] == ':' {
 					// Can't go into SecondState, because the Minute is empty
 					if mm == "" {
-						return -1, moerr.NewInvalidArg("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					} else {
 						state = SecondState
 					}
@@ -226,16 +226,16 @@ func ParseDateCast(s string) (Date, error) {
 				if IsNumber(&s, i) {
 					ss = ss + string(s[i])
 					if len(d) >= 3 {
-						return -1, moerr.NewInvalidArg("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 				} else {
 					if s[i] == '.' {
 						if d == "" {
-							return -1, moerr.NewInvalidArg("parsedate", s)
+							return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 						}
 						state = MsState
 					} else {
-						return -1, moerr.NewInvalidArg("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 				}
 				if i == len(s)-1 {
@@ -248,12 +248,12 @@ func ParseDateCast(s string) (Date, error) {
 					// break out loop
 					i = len(s)
 				} else {
-					return -1, moerr.NewInvalidArg("parsedate", s)
+					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 			}
 		}
 		if state != End {
-			return -1, moerr.NewInvalidArg("parsedate", s)
+			return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 		}
 	}
 	year := ToNumber(y)
@@ -262,7 +262,7 @@ func ParseDateCast(s string) (Date, error) {
 	if ValidDate(int32(year), uint8(month), uint8(day)) {
 		return FromCalendar(int32(year), uint8(month), uint8(day)), nil
 	}
-	return -1, moerr.NewInvalidArg("parsedate", s)
+	return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 }
 
 // date[0001-01-01 to 9999-12-31]

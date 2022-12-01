@@ -70,7 +70,7 @@ func TestReadWithDNShardNotMatch(t *testing.T) {
 	rTxn := NewTestTxn(1, 1)
 	resp := readTestData(t, sender, 1, rTxn, 1)
 	checkResponses(t, resp,
-		txn.WrapError(moerr.NewDNShardNotFound("", 1), 0))
+		txn.WrapError(moerr.NewDNShardNotFound(context.TODO(), "", 1), 0))
 	// newTxnError(moerr.ErrDNShardNotFound, "txn not active"))
 }
 
@@ -440,7 +440,7 @@ func TestWriteWithDNShardNotMatch(t *testing.T) {
 
 	wTxn := NewTestTxn(1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1),
-		txn.WrapError(moerr.NewDNShardNotFound("", 1), 0))
+		txn.WrapError(moerr.NewDNShardNotFound(context.TODO(), "", 1), 0))
 }
 
 func TestWriteWithWWConflict(t *testing.T) {
@@ -462,7 +462,7 @@ func TestWriteWithWWConflict(t *testing.T) {
 
 	wTxn2 := NewTestTxn(2, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn2, 1),
-		txn.WrapError(moerr.NewTAEWrite(), 0))
+		txn.WrapError(moerr.NewTAEWrite(context.TODO()), 0))
 	// newTxnError(moerr.ErrTAEWrite, "write conlict"))
 }
 
@@ -527,7 +527,7 @@ func TestCommitWithDNShardNotMatch(t *testing.T) {
 		checkResponses(t, writeTestData(t, sender, 1, wTxn, i))
 	}
 	checkResponses(t, commitWriteData(t, sender, wTxn),
-		txn.WrapError(moerr.NewDNShardNotFound("", 1), 0))
+		txn.WrapError(moerr.NewDNShardNotFound(context.TODO(), "", 1), 0))
 }
 
 func TestCommitWithMultiDNShards(t *testing.T) {
@@ -602,7 +602,7 @@ func TestCommitWithRollbackIfAnyPrepareFailed(t *testing.T) {
 	defer w2.close()
 
 	checkResponses(t, commitWriteData(t, sender, wTxn),
-		txn.WrapError(moerr.NewTAEPrepare("cannot prepare"), 0))
+		txn.WrapError(moerr.NewTAEPrepare(context.TODO(), "cannot prepare"), 0))
 
 	checkWaiter(t, w1, txn.TxnStatus_Aborted)
 	checkWaiter(t, w2, txn.TxnStatus_Aborted)
@@ -687,7 +687,7 @@ func TestRollbackWithDNShardNotFound(t *testing.T) {
 	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
 
 	checkResponses(t, rollbackWriteData(t, sender, wTxn),
-		txn.WrapError(moerr.NewDNShardNotFound("", 1), 0))
+		txn.WrapError(moerr.NewDNShardNotFound(context.TODO(), "", 1), 0))
 }
 
 func writeTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, wTxn txn.TxnMeta, keys ...byte) []txn.TxnResponse {

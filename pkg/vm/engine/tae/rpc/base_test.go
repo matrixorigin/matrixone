@@ -73,7 +73,7 @@ func (h *mockHandle) HandleCommit(ctx context.Context, meta *txn.TxnMeta) error 
 func (h *mockHandle) HandleCommitting(ctx context.Context, meta *txn.TxnMeta) error {
 	//meta.CommitTS = h.eng.GetTAE(context.TODO()).TxnMgr.TsAlloc.Alloc().ToTimestamp()
 	if meta.PreparedTS.IsEmpty() {
-		return moerr.NewInternalError("PreparedTS is empty")
+		return moerr.NewInternalError(ctx, "PreparedTS is empty")
 	}
 	meta.CommitTS = meta.PreparedTS.Next()
 	return h.Handle.HandleCommitting(ctx, *meta)
@@ -110,7 +110,7 @@ func (h *mockHandle) handleCmds(
 		case CmdPreCommitWrite:
 			cmd, ok := e.cmd.(api.PrecommitWriteCmd)
 			if !ok {
-				return moerr.NewInfo("cmd is not PreCommitWriteCmd")
+				return moerr.NewInfo(ctx, "cmd is not PreCommitWriteCmd")
 			}
 			if err = h.Handle.HandlePreCommitWrite(ctx, *txn,
 				cmd, new(api.SyncLogTailResp)); err != nil {
@@ -133,7 +133,7 @@ func (h *mockHandle) handleCmds(
 				return
 			}
 		default:
-			panic(moerr.NewInfo("Invalid CmdType"))
+			panic(moerr.NewInfo(ctx, "Invalid CmdType"))
 		}
 	}
 	return

@@ -14,7 +14,10 @@
 
 package tree
 
-import "github.com/matrixorigin/matrixone/pkg/common/moerr"
+import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
 
 // IdentifierName is referenced in the expression
 type IdentifierName interface {
@@ -84,10 +87,10 @@ func (node *UnresolvedName) GetNames() (string, string, string) {
 // the path in an UnresolvedName.
 type NameParts = [4]string
 
-func NewUnresolvedName(parts ...string) (*UnresolvedName, error) {
+func NewUnresolvedName(ctx context.Context, parts ...string) (*UnresolvedName, error) {
 	l := len(parts)
 	if l < 1 || l > 4 {
-		return nil, moerr.NewInternalError("the count of name parts among [1,4]")
+		return nil, moerr.NewInternalError(ctx, "the count of name parts among [1,4]")
 	}
 	u := &UnresolvedName{
 		NumParts: len(parts),
@@ -111,10 +114,10 @@ func SetUnresolvedName(parts ...string) *UnresolvedName {
 	return u
 }
 
-func NewUnresolvedNameWithStar(parts ...string) (*UnresolvedName, error) {
+func NewUnresolvedNameWithStar(ctx context.Context, parts ...string) (*UnresolvedName, error) {
 	l := len(parts)
 	if l < 1 || l > 3 {
-		return nil, moerr.NewInternalError("the count of name parts among [1,3]")
+		return nil, moerr.NewInternalError(ctx, "the count of name parts among [1,3]")
 	}
 	u := &UnresolvedName{
 		NumParts: 1 + len(parts),

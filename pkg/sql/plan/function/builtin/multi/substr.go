@@ -37,7 +37,7 @@ func castConstAsInt64(vec *vector.Vector, idx int64) (int64, error) {
 	case types.T_uint64:
 		val := vector.GetValueAt[uint64](vec, idx)
 		if val > uint64(math.MaxInt64) {
-			return 0, moerr.NewInvalidArg("function substring(str, start, lenth)", val)
+			return 0, moerr.NewInvalidArgNoCtx("function substring(str, start, lenth)", val)
 		}
 		return int64(val), nil
 	case types.T_int8:
@@ -53,7 +53,7 @@ func castConstAsInt64(vec *vector.Vector, idx int64) (int64, error) {
 	case types.T_float64:
 		val := vector.GetValueAt[float64](vec, idx)
 		if val > float64(math.MaxInt64) {
-			return 0, moerr.NewInvalidArg("function substring(str, start, lenth)", val)
+			return 0, moerr.NewInvalidArgNoCtx("function substring(str, start, lenth)", val)
 		}
 		return int64(val), nil
 	default:

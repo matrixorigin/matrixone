@@ -26,8 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
-var ErrRecordNotFound = moerr.NewInternalError("driver read cache: lsn not found")
-var ErrAllRecordsRead = moerr.NewInternalError("driver read cache: all records are read")
+var ErrRecordNotFound = moerr.NewInternalErrorNoCtx("driver read cache: lsn not found")
+var ErrAllRecordsRead = moerr.NewInternalErrorNoCtx("driver read cache: all records are read")
 
 type readCache struct {
 	lsns    []uint64

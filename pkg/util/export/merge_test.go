@@ -62,7 +62,7 @@ var dummyTable = &table.Table{
 }
 
 func dummyFillTable(str string, i int64, f float64) *table.Row {
-	row := dummyTable.GetRow()
+	row := dummyTable.GetRow(context.TODO())
 	row.SetVal(dummyStrColumn.Name, str)
 	row.SetInt64(dummyInt64Column.Name, i)
 	row.SetFloat64(dummyFloat64Column.Name, f)
@@ -93,6 +93,7 @@ func TestInitCronExpr(t *testing.T) {
 		{name: "13h", args: args{duration: 13 * time.Hour}, wantErr: true, wantExpr: ""},
 	}
 
+	ctx := context.Background()
 	parser := cron.NewParser(
 		cron.Second |
 			cron.Minute |
@@ -103,7 +104,7 @@ func TestInitCronExpr(t *testing.T) {
 			cron.Descriptor)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := InitCronExpr(tt.args.duration)
+			err := InitCronExpr(ctx, tt.args.duration)
 			if tt.wantErr {
 				var e *moerr.Error
 				require.True(t, errors.As(err, &e))
@@ -223,7 +224,7 @@ func TestNewMerge(t *testing.T) {
 			got := NewMerge(tt.args.ctx, tt.args.opts...)
 			require.NotNil(t, got)
 
-			err = got.Main(ts)
+			err = got.Main(tt.args.ctx, ts)
 			require.Nilf(t, err, "err: %v", err)
 
 			files := make([]string, 0, 1)

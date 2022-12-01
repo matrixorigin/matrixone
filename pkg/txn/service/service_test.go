@@ -118,5 +118,5 @@ func TestGCZombieNonCoordinatorTxn(t *testing.T) {
 	defer cancel()
 	_, err := w1.wait(ctx)
 	assert.Error(t, err)
-	assert.Equal(t, moerr.ConvertGoError(ctx.Err()), err)
+	assert.Equal(t, moerr.ConvertGoError(ctx, ctx.Err()), err)
 }

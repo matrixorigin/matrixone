@@ -215,8 +215,9 @@ const (
 	INTERVAL  // INTERVAL
 	EXTRACT   // EXTRACT
 	OCT
-	SUBSTRING // SUBSTRING
-	WEEK      //WEEK
+	SUBSTRING       // SUBSTRING
+	SUBSTRING_INDEX //SUBSTRING_INDEX
+	WEEK            //WEEK
 	WEEKDAY
 	YEAR   // YEAR
 	HOUR   // HOUR
@@ -451,6 +452,7 @@ var functionIdRegister = map[string]int32{
 	"mo_disable_memory_usage_detail": MO_DISABLE_MEMORY_USAGE_DETAIL,
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
+	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
 }
 

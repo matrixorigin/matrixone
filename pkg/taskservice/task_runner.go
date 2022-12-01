@@ -541,7 +541,7 @@ func (r *taskRunner) getExecutor(code uint32) (TaskExecutor, error) {
 	if executor, ok := r.mu.executors[code]; ok {
 		return executor, nil
 	}
-	return nil, moerr.NewInternalError("executor with code %d not exists", code)
+	return nil, moerr.NewInternalErrorNoCtx("executor with code %d not exists", code)
 }
 
 type runningTask struct {

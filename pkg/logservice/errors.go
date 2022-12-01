@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"context"
 	"fmt"
 	"net"
 
@@ -71,11 +72,11 @@ func toErrorCode(err error) (uint32, string) {
 }
 
 // toError reverse the response to dragonboat error.
-func toError(resp pb.Response) error {
+func toError(ctx context.Context, resp pb.Response) error {
 	if resp.ErrorCode == uint32(moerr.Ok) {
 		return nil
 	} else if resp.ErrorCode == uint32(moerr.ErrDragonboatOtherSystemError) {
-		return moerr.NewDragonboatOtherSystemError(resp.ErrorMessage)
+		return moerr.NewDragonboatOtherSystemError(ctx, resp.ErrorMessage)
 	}
 	// Mapped errors, not that we return a dragonboat error in these cases.
 	for _, rec := range errorToCodeMappings {
@@ -85,15 +86,15 @@ func toError(resp pb.Response) error {
 	}
 	// Three of our own errors.
 	if resp.ErrorCode == uint32(moerr.ErrNoHAKeeper) {
-		return moerr.NewNoHAKeeper()
+		return moerr.NewNoHAKeeper(ctx)
 	} else if resp.ErrorCode == uint32(moerr.ErrInvalidTruncateLsn) {
-		return moerr.NewInvalidTruncateLsn(0, 0)
+		return moerr.NewInvalidTruncateLsn(ctx, 0, 0)
 	} else if resp.ErrorCode == uint32(moerr.ErrNotLeaseHolder) {
 		// hoder id get lost?
-		return moerr.NewNotLeaseHolder(0xDEADBEEF)
+		return moerr.NewNotLeaseHolder(ctx, 0xDEADBEEF)
 	} else {
 		// will logger.Panicf panic?
-		panic(moerr.NewInternalError("unknown error code: %d", resp.ErrorCode))
+		panic(moerr.NewInternalError(ctx, "unknown error code: %d", resp.ErrorCode))
 	}
 	// will never reach here
 }

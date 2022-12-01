@@ -51,7 +51,7 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 				if cnt%2 != 0 {
 					return txnOperator, nil
 				} else {
-					return nil, moerr.NewInternalError("startTxn failed")
+					return nil, moerr.NewInternalError(ctx, "startTxn failed")
 				}
 			}).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -88,12 +88,12 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		cnt := 0
 		txnOperator.EXPECT().Commit(gomock.Any()).DoAndReturn(
-			func(context.Context) error {
+			func(ctx context.Context) error {
 				cnt++
 				if cnt%2 != 0 {
 					return nil
 				} else {
-					return moerr.NewInternalError("commit failed")
+					return moerr.NewInternalError(ctx, "commit failed")
 				}
 			}).AnyTimes()
 
@@ -138,7 +138,7 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 				if cnt%2 != 0 {
 					return nil
 				} else {
-					return moerr.NewInternalError("rollback failed")
+					return moerr.NewInternalError(ctx, "rollback failed")
 				}
 			}).AnyTimes()
 
