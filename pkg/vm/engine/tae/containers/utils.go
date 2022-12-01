@@ -58,7 +58,7 @@ func FillBufferWithBytes(bs *Bytes, buffer *bytes.Buffer) *Bytes {
 }
 
 func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...*mpool.MPool) (cloned Vector) {
-	opts := new(Options)
+	opts := Options{}
 	// XXX what does the following test mean?
 	if len(allocator) > 0 {
 		opts.Allocator = common.DefaultAllocator

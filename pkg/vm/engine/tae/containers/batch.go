@@ -111,7 +111,7 @@ func (bat *Batch) Allocated() int {
 }
 
 func (bat *Batch) Window(offset, length int) *Batch {
-	win := NewEmptyBatch()
+	win := new(Batch)
 	win.Attrs = bat.Attrs
 	win.nameidx = bat.nameidx
 	if bat.Deletes != nil && offset+length != bat.Length() {
@@ -127,10 +127,10 @@ func (bat *Batch) Window(offset, length int) *Batch {
 }
 
 func (bat *Batch) CloneWindow(offset, length int, allocator ...*mpool.MPool) (cloned *Batch) {
-	cloned = NewEmptyBatch()
+	cloned = new(Batch)
 	cloned.Attrs = make([]string, len(bat.Attrs))
 	copy(cloned.Attrs, bat.Attrs)
-	cloned.nameidx = make(map[string]int)
+	cloned.nameidx = make(map[string]int, len(bat.nameidx))
 	for k, v := range bat.nameidx {
 		cloned.nameidx[k] = v
 	}
