@@ -708,7 +708,9 @@ func ReCalcNodeCost(nodeID int32, builder *QueryBuilder, recursive bool) {
 		}
 
 	case plan.Node_TABLE_SCAN:
-		node.Cost = builder.compCtx.Cost(node.ObjRef, RewriteAndConstantFold(node.FilterList))
+		if node.ObjRef != nil {
+			node.Cost = builder.compCtx.Cost(node.ObjRef, RewriteAndConstantFold(node.FilterList))
+		}
 
 	default:
 		if len(node.Children) > 0 {
