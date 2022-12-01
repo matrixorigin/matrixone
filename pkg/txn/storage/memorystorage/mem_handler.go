@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
@@ -73,7 +74,7 @@ type MemHandler struct {
 }
 
 type Iter[
-	K memtable.Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 ] struct {
 	TableIter *memtable.TableIter[K, V]
@@ -567,7 +568,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 	// by row id
 	if req.ColumnName == rowIDColumnName {
 		for i := 0; i < reqVecLen; i++ {
-			value := memtable.VectorAt(req.Vector, i)
+			value := memorytable.VectorAt(req.Vector, i)
 			rowID := value.Value.(types.Rowid)
 			entries, err := m.data.Index(tx, Tuple{
 				index_RowID, memtable.ToOrdered(rowID),
@@ -605,7 +606,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 		if attr.Name == req.ColumnName {
 			// by primary key
 			for i := 0; i < reqVecLen; i++ {
-				value := memtable.VectorAt(req.Vector, i)
+				value := memorytable.VectorAt(req.Vector, i)
 				key := DataKey{
 					tableID:    req.TableID,
 					primaryKey: Tuple{memtable.ToOrdered(value.Value)},
@@ -652,7 +653,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 			break
 		}
 		for i := 0; i < reqVecLen; i++ {
-			value := memtable.VectorAt(req.Vector, i)
+			value := memorytable.VectorAt(req.Vector, i)
 			if attrIndex >= len(dataValue) {
 				// attr not in row
 				continue
@@ -1294,7 +1295,7 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 	}
 
 	// iter
-	batchIter := memtable.NewBatchIter(b)
+	batchIter := memorytable.NewBatchIter(b)
 	for {
 		row := batchIter()
 		if len(row) == 0 {

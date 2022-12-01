@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -281,7 +282,7 @@ func (txn *Transaction) checkPrimaryKey(
 		Timestamp: txn.nextLocalTS(),
 	}
 	tx := memtable.NewTransaction(uuid.NewString(), t, memtable.SnapshotIsolation)
-	iter := memtable.NewBatchIter(bat)
+	iter := memorytable.NewBatchIter(bat)
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
