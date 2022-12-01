@@ -34,7 +34,8 @@ type Transaction struct {
 type transactionTable struct {
 	table interface {
 		sync.Locker
-		commit(tx *Transaction, state any, commitTime Time) error
+		commit(tx *Transaction, state any, commitTime Time) (any, error)
+		rollback(oldState any)
 		abort(*Transaction) error
 	}
 	state atomic.Value
@@ -81,31 +82,41 @@ func (t *Transaction) Commit(commitTime Time) error {
 	if state := t.State.Load(); state != Active {
 		return moerr.NewTxnNotActive(state.String())
 	}
-	for _, table := range t.tables {
+	committed := make(map[int64]any) // table id -> swapped state
+	for id, table := range t.tables {
 		table.table.Lock()
 		defer table.table.Unlock()
-		if err := table.table.commit(t, table.state.Load(), commitTime); err != nil {
+		swapped, err := table.table.commit(t, table.state.Load(), commitTime)
+		if err != nil {
+
+			// rollback previous committed
+			for id, swapped := range committed {
+				table := t.tables[id]
+				table.table.rollback(swapped)
+			}
+
 			return err
 		}
+		committed[id] = swapped
 	}
 	t.State.Store(Committed)
 	return nil
 }
 
 // must call with t being locked
-func (t *Table[K, V, R]) commit(tx *Transaction, state any, commitTime Time) error {
+func (t *Table[K, V, R]) commit(tx *Transaction, state any, commitTime Time) (any, error) {
 
 	currentState := t.state.Load()
 	txState := state.(*tableState[K, V])
 	newState, err := currentState.merge(txState)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	t.state.Store(newState)
 	if !commitTime.IsEmpty() && len(t.history) > 0 {
 		last := t.history[len(t.history)-1]
 		if !commitTime.Greater(last.Before) {
-			return moerr.NewInternalError("commit time too old")
+			return nil, moerr.NewInternalError("commit time too old")
 		}
 	}
 	t.history = append(t.history, &history[K, V]{
@@ -113,7 +124,16 @@ func (t *Table[K, V, R]) commit(tx *Transaction, state any, commitTime Time) err
 		State:  currentState,
 	})
 
-	return nil
+	return currentState, nil
+}
+
+// must call with t being locked
+func (t *Table[K, V, R]) rollback(oldStateValue any) {
+	oldState := oldStateValue.(*tableState[K, V])
+	t.state.Store(oldState)
+	for len(t.history) > 0 && t.history[len(t.history)-1].State != oldState {
+		t.history = t.history[:len(t.history)-1]
+	}
 }
 
 // Abort aborts the transaction

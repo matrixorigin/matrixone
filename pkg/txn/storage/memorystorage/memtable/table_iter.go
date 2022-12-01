@@ -18,11 +18,12 @@ import (
 	"database/sql"
 	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/tidwall/btree"
 )
 
 type TableIter[
-	K Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 ] struct {
 	tx       *Transaction
