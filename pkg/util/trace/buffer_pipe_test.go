@@ -37,7 +37,7 @@ import (
 )
 
 var buf = new(bytes.Buffer)
-var err1 = moerr.NewInternalError("test1")
+var err1 = moerr.NewInternalError(context.Background(), "test1")
 var err2 = errutil.Wrapf(err1, "test2")
 var traceIDSpanIDColumnStr string
 var traceIDSpanIDCsvStr string
@@ -71,7 +71,7 @@ func init() {
 	traceIDSpanIDCsvStr = fmt.Sprintf(`%s,%s`, sc.TraceID.String(), sc.SpanID.String())
 
 	if err := agent.Listen(agent.Options{}); err != nil {
-		_ = moerr.NewInternalError("listen gops agent failed: %s", err)
+		_ = moerr.NewInternalError(DefaultContext(), "listen gops agent failed: %s", err)
 		panic(err)
 	}
 	fmt.Println("Finish tests init.")
@@ -85,7 +85,7 @@ func Test_newBuffer2Sql_base(t *testing.T) {
 	buf.Add(&MOSpan{})
 	assert.Equal(t, false, buf.IsEmpty())
 	assert.Equal(t, false, buf.ShouldFlush())
-	assert.Equal(t, "", buf.GetBatch(byteBuf))
+	assert.Equal(t, "", buf.GetBatch(context.TODO(), byteBuf))
 	buf.Reset()
 	assert.Equal(t, true, buf.IsEmpty())
 }
@@ -417,7 +417,7 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 						ResponseAt:           zeroTime.Add(time.Microsecond + time.Second),
 						Duration:             time.Microsecond + time.Second,
 						Status:               StatementStatusFailed,
-						Error:                moerr.NewInternalError("test error"),
+						Error:                moerr.NewInternalError(DefaultContext(), "test error"),
 						ExecPlan:             nil,
 					},
 				},
@@ -454,7 +454,7 @@ error_info,node_uuid,Standalone,0,0,,0001-01-01 00:00:00.001001,,,,{},20101,test
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := genCsvData(tt.args.in, tt.args.buf)
+			got := genCsvData(DefaultContext(), tt.args.in, tt.args.buf)
 			require.NotEqual(t, nil, got)
 			req, ok := got.(CSVRequests)
 			require.Equal(t, true, ok)
@@ -528,7 +528,7 @@ func Test_genCsvData_diffAccount(t *testing.T) {
 						ResponseAt:           zeroTime.Add(time.Microsecond + time.Second),
 						Duration:             time.Microsecond + time.Second,
 						Status:               StatementStatusFailed,
-						Error:                moerr.NewInternalError("test error"),
+						Error:                moerr.NewInternalError(DefaultContext(), "test error"),
 						ExecPlan:             nil,
 					},
 				},
@@ -541,7 +541,7 @@ func Test_genCsvData_diffAccount(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := genCsvData(tt.args.in, tt.args.buf)
+			got := genCsvData(DefaultContext(), tt.args.in, tt.args.buf)
 			require.NotEqual(t, nil, got)
 			reqs, ok := got.(CSVRequests)
 			require.Equal(t, true, ok)
@@ -619,7 +619,7 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 						ResponseAt:           zeroTime.Add(time.Microsecond + time.Second),
 						Duration:             time.Second,
 						Status:               StatementStatusFailed,
-						Error:                moerr.NewInternalError("test error"),
+						Error:                moerr.NewInternalError(DefaultContext(), "test error"),
 						ExecPlan:             map[string]string{"key": "val"},
 						SerializeExecPlan:    dummySerializeExecPlan,
 					},
@@ -636,7 +636,7 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			GetTracerProvider().longQueryTime = tt.args.queryT
-			got := genCsvData(tt.args.in, tt.args.buf)
+			got := genCsvData(DefaultContext(), tt.args.in, tt.args.buf)
 			require.NotEqual(t, nil, got)
 			req, ok := got.(CSVRequests)
 			require.Equal(t, true, ok)

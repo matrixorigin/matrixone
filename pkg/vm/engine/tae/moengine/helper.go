@@ -252,7 +252,7 @@ func HandleDefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Sc
 		case *engine.AttributeDef:
 			if defVal.Attr.Primary {
 				if have_one {
-					panic(moerr.NewInternalError("%s more one pk", name))
+					panic(moerr.NewInternalErrorNoCtx("%s more one pk", name))
 				} else {
 					have_one = true
 				}

@@ -33,8 +33,8 @@ func (s *Service) initTaskHolder() {
 		return
 	}
 
-	addressFunc := func() (string, error) {
-		ctx, cancel := context.WithTimeout(context.Background(),
+	addressFunc := func(ctx context.Context) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx,
 			time.Second*5)
 		defer cancel()
 		if s.haClient == nil {
@@ -45,7 +45,7 @@ func (s *Service) initTaskHolder() {
 			return "", err
 		}
 		if len(details.CNStores) == 0 {
-			return "", moerr.NewInvalidState("no cn in the cluster")
+			return "", moerr.NewInvalidState(ctx, "no cn in the cluster")
 		}
 
 		n := rand.Intn(len(details.CNStores))

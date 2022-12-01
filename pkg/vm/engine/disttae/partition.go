@@ -234,7 +234,7 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 				return err
 			}
 			if len(entries) > 0 && needCheck {
-				return moerr.NewDuplicate()
+				return moerr.NewDuplicate(ctx)
 			}
 		}
 

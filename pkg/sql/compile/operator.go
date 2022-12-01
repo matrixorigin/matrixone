@@ -525,23 +525,23 @@ func constructTop(n *plan.Node, topN int64) *top.Argument {
 func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &join.Argument{
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
 func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr)
+		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI("semi result '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -550,42 +550,42 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
 func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &left.Argument{
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
 func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *single.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &single.Argument{
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
 func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *product.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	return &product.Argument{Typs: typs, Result: result}
 }
@@ -593,9 +593,9 @@ func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *p
 func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr)
+		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI("anti result '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "anti result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -604,16 +604,16 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
 func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onList []*plan.Expr) *mark.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr)
+		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI("mark result '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "mark result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -622,7 +622,7 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onLis
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 		OnList:     onList,
 	}
 }
@@ -768,7 +768,7 @@ func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argume
 func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *loopjoin.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	return &loopjoin.Argument{
 		Typs:   typs,
@@ -780,9 +780,9 @@ func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *
 func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *loopsemi.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr)
+		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI("loop semi result '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "loop semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -796,7 +796,7 @@ func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *
 func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *loopleft.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	return &loopleft.Argument{
 		Typs:   typs,
@@ -808,7 +808,7 @@ func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *
 func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process) *loopsingle.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	return &loopsingle.Argument{
 		Result: result,
@@ -819,9 +819,9 @@ func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process)
 func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *loopanti.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr)
+		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI("loop anti result '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "loop anti result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -832,7 +832,7 @@ func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *
 	}
 }
 
-func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
+func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Argument {
 	switch in.Op {
 	case vm.Anti:
 		arg := in.Arg.(*anti.Argument)
@@ -914,33 +914,33 @@ func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
 		}
 
 	default:
-		panic(moerr.NewInternalError("unsupport join type '%v'", in.Op))
+		panic(moerr.NewInternalError(proc.Ctx, "unsupport join type '%v'", in.Op))
 	}
 }
 
-func constructJoinResult(expr *plan.Expr) (int32, int32) {
+func constructJoinResult(expr *plan.Expr, proc *process.Process) (int32, int32) {
 	e, ok := expr.Expr.(*plan.Expr_Col)
 	if !ok {
-		panic(moerr.NewNYI("join result '%s'", expr))
+		panic(moerr.NewNYI(proc.Ctx, "join result '%s'", expr))
 	}
 	return e.Col.RelPos, e.Col.ColPos
 }
 
-func constructJoinConditions(exprs []*plan.Expr) [][]*plan.Expr {
+func constructJoinConditions(exprs []*plan.Expr, proc *process.Process) [][]*plan.Expr {
 	conds := make([][]*plan.Expr, 2)
 	conds[0] = make([]*plan.Expr, len(exprs))
 	conds[1] = make([]*plan.Expr, len(exprs))
 	for i, expr := range exprs {
-		conds[0][i], conds[1][i] = constructJoinCondition(expr)
+		conds[0][i], conds[1][i] = constructJoinCondition(expr, proc)
 	}
 	return conds
 }
 
-func constructJoinCondition(expr *plan.Expr) (*plan.Expr, *plan.Expr) {
+func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr) {
 	if e, ok := expr.Expr.(*plan.Expr_C); ok { // constant bool
 		b, ok := e.C.Value.(*plan.Const_Bval)
 		if !ok {
-			panic(moerr.NewNYI("join condition '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
 		}
 		if b.Bval {
 			return expr, expr
@@ -956,7 +956,7 @@ func constructJoinCondition(expr *plan.Expr) (*plan.Expr, *plan.Expr) {
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
 	if !ok || !supportedJoinCondition(e.F.Func.GetObj()) {
-		panic(moerr.NewNYI("join condition '%s'", expr))
+		panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
 	}
 	if exprRelPos(e.F.Args[0]) == 1 {
 		return e.F.Args[1], e.F.Args[0]

@@ -53,7 +53,7 @@ func (d dnShardToLogShard) getLogShardID(dnShardID uint64) (uint64, error) {
 	if logShardID, ok := d[dnShardID]; ok {
 		return logShardID, nil
 	}
-	return 0, moerr.NewInvalidState("shard %d not recorded", dnShardID)
+	return 0, moerr.NewInvalidStateNoCtx("shard %d not recorded", dnShardID)
 }
 
 // parseDnState parses cluster dn state.
@@ -250,7 +250,7 @@ func (rs *reportedShards) getShard(shardID uint64) (*dnShard, error) {
 	if shard, ok := rs.shards[shardID]; ok {
 		return shard, nil
 	}
-	return nil, moerr.NewShardNotReported("", shardID)
+	return nil, moerr.NewShardNotReportedNoCtx("", shardID)
 }
 
 // dnShard records metadata for dn shard.

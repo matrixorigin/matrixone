@@ -76,7 +76,7 @@ func handleFlush() handleFunc {
 				},
 			})
 			if err != nil {
-				return nil, moerr.NewInternalError("payload encode err")
+				return nil, moerr.NewInternalError(proc.Ctx, "payload encode err")
 			}
 			return payload, nil
 		},

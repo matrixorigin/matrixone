@@ -15,6 +15,7 @@
 package metric
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -69,8 +70,8 @@ func (c errorMetric) Desc() *prom.Desc {
 	)
 }
 
-func (c errorMetric) Metric(_ *statCaches) (prom.Metric, error) {
-	return nil, moerr.NewInternalError("Something went wrong")
+func (c errorMetric) Metric(ctx context.Context, _ *statCaches) (prom.Metric, error) {
+	return nil, moerr.NewInternalError(ctx, "Something went wrong")
 }
 
 func TestHardwareError(t *testing.T) {

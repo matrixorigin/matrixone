@@ -34,11 +34,11 @@ func (m RPCMessage) Timeout() bool {
 func (m RPCMessage) GetTimeoutFromContext() (time.Duration, error) {
 	d, ok := m.Ctx.Deadline()
 	if !ok {
-		return 0, moerr.NewInvalidInput("timeout deadline not set")
+		return 0, moerr.NewInvalidInputNoCtx("timeout deadline not set")
 	}
 	now := time.Now()
 	if now.After(d) {
-		return 0, moerr.NewInvalidInput("timeout has invalid deadline")
+		return 0, moerr.NewInvalidInputNoCtx("timeout has invalid deadline")
 	}
 	return d.Sub(now), nil
 }
