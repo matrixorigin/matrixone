@@ -80,7 +80,7 @@ func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 
 	resultType := types.T_varchar.ToType()
 	if !formatVector.IsScalar() {
-		return nil, moerr.NewInvalidArg("date format format", "not constant")
+		return nil, moerr.NewInvalidArgNoCtx("date format format", "not constant")
 	}
 
 	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
@@ -156,13 +156,13 @@ func makeDateFormat(t types.Datetime, b rune, buf *bytes.Buffer) error {
 	case 'b':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return moerr.NewInvalidInput("invalud date format for month '%d'", m)
+			return moerr.NewInvalidInputNoCtx("invalud date format for month '%d'", m)
 		}
 		buf.WriteString(MonthNames[m-1][:3])
 	case 'M':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return moerr.NewInvalidInput("invalud date format for month '%d'", m)
+			return moerr.NewInvalidInputNoCtx("invalud date format for month '%d'", m)
 		}
 		buf.WriteString(MonthNames[m-1])
 	case 'm':

@@ -143,7 +143,7 @@ func (writer *ZMWriter) AddValues(values containers.Vector) (err error) {
 		writer.zonemap = index.NewZoneMap(typ)
 	} else {
 		if writer.zonemap.GetType() != typ {
-			err = moerr.NewInternalError("wrong type")
+			err = moerr.NewInternalErrorNoCtx("wrong type")
 			return
 		}
 	}
@@ -159,7 +159,7 @@ func (writer *ZMWriter) SetMinMax(min, max any, typ types.Type) (err error) {
 		writer.zonemap = index.NewZoneMap(typ)
 	} else {
 		if writer.zonemap.GetType() != typ {
-			err = moerr.NewInternalError("wrong type")
+			err = moerr.NewInternalErrorNoCtx("wrong type")
 			return
 		}
 	}

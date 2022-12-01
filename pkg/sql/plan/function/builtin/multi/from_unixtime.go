@@ -100,7 +100,7 @@ func FromUnixTimeInt64Format(vs []*vector.Vector, proc *process.Process) (*vecto
 	formatVec := vs[1]
 	resultType := types.T_varchar.ToType()
 	if !formatVec.IsScalar() {
-		return nil, moerr.NewInvalidArg("from_unixtime format", "not constant")
+		return nil, moerr.NewInvalidArgNoCtx("from_unixtime format", "not constant")
 	}
 	if inVec.IsScalarNull() || formatVec.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
@@ -145,7 +145,7 @@ func FromUnixTimeFloat64Format(vs []*vector.Vector, proc *process.Process) (*vec
 	formatVec := vs[1]
 	resultType := types.T_varchar.ToType()
 	if !formatVec.IsScalar() {
-		return nil, moerr.NewInvalidArg("from_unixtime format", "not constant")
+		return nil, moerr.NewInvalidArgNoCtx("from_unixtime format", "not constant")
 	}
 	if inVec.IsScalarNull() || formatVec.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
@@ -252,7 +252,7 @@ func FromUnixTimeUint64Format(vs []*vector.Vector, proc *process.Process) (*vect
 	formatVec := vs[1]
 	resultType := types.T_varchar.ToType()
 	if !formatVec.IsScalar() {
-		return nil, moerr.NewInvalidArg("from_unixtime format", "not constant")
+		return nil, moerr.NewInvalidArgNoCtx("from_unixtime format", "not constant")
 	}
 	if inVec.IsScalarNull() || formatVec.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil

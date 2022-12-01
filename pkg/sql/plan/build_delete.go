@@ -64,12 +64,12 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 	tf.baseNameMap = reverseMap(tf.baseNameMap)
 	objRef, tableDef := ctx.Resolve(tf.dbNames[0], tf.tableNames[0])
 	if tableDef == nil {
-		return nil, moerr.NewInvalidInput("delete has no table def")
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "delete has no table def")
 	}
 	if tableDef.TableType == catalog.SystemExternalRel {
-		return nil, moerr.NewInvalidInput("cannot delete from external table")
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from external table")
 	} else if tableDef.TableType == catalog.SystemViewRel {
-		return nil, moerr.NewInvalidInput("cannot delete from view")
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from view")
 	}
 
 	indexInfos := BuildIndexInfos(ctx, objRef.DbName, tableDef.Defs)
@@ -179,12 +179,12 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 		}
 		objRefs[i], tblDefs[i] = ctx.Resolve(dbName, tblName)
 		if tblDefs[i] == nil {
-			return nil, moerr.NewInvalidInput("delete has no table ref")
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "delete has no table ref")
 		}
 		if tblDefs[i].TableType == catalog.SystemExternalRel {
-			return nil, moerr.NewInvalidInput("cannot delete from external table")
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from external table")
 		} else if tblDefs[i].TableType == catalog.SystemViewRel {
-			return nil, moerr.NewInvalidInput("cannot delete from view")
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from view")
 		}
 	}
 	originMap := tf.baseNameMap
@@ -193,7 +193,7 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 		tblName := string(t.ObjectName)
 		if _, ok := tf.baseNameMap[tblName]; !ok {
 			if _, ok := originMap[tblName]; !ok {
-				return nil, moerr.NewInvalidInput("Unknown table '%v' in MULTI DELETE", tblName)
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Unknown table '%v' in MULTI DELETE", tblName)
 			}
 		}
 	}
@@ -270,7 +270,7 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 	// we will allways return hideKey now
 	hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
 	if hideKey == nil {
-		return nil, nil, nil, moerr.NewInvalidState("cannot find hide key")
+		return nil, nil, nil, moerr.NewInvalidState(ctx.GetContext(), "cannot find hide key")
 	}
 	e := tree.SetUnresolvedName(tblName, hideKey.Name)
 	ps = append(ps, tree.SelectExpr{Expr: e})
@@ -292,7 +292,7 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 
 	for indexColName := range indexColNameMap {
 		indexAttrs = append(indexAttrs, indexColName)
-		e, _ := tree.NewUnresolvedName(tf.baseNameMap[tableDef.Name], indexColName)
+		e, _ := tree.NewUnresolvedName(ctx.GetContext(), tf.baseNameMap[tableDef.Name], indexColName)
 		ps = append(ps, tree.SelectExpr{Expr: e})
 	}
 	return ps, useKey, indexAttrs, nil

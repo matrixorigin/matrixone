@@ -97,7 +97,7 @@ func Test_mce(t *testing.T) {
 
 		use_t := mock_frontend.NewMockComputationWrapper(ctrl)
 		use_t.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
-		stmts, err := parsers.Parse(dialect.MYSQL, "use T")
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, "use T")
 		if err != nil {
 			t.Error(err)
 		}
@@ -108,7 +108,7 @@ func Test_mce(t *testing.T) {
 		runner.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
 
 		create_1 := mock_frontend.NewMockComputationWrapper(ctrl)
-		stmts, err = parsers.Parse(dialect.MYSQL, "create table A(a varchar(100),b int,c float)")
+		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "create table A(a varchar(100),b int,c float)")
 		if err != nil {
 			t.Error(err)
 		}
@@ -122,7 +122,7 @@ func Test_mce(t *testing.T) {
 		create_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 
 		select_1 := mock_frontend.NewMockComputationWrapper(ctrl)
-		stmts, err = parsers.Parse(dialect.MYSQL, "select a,b,c from A")
+		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from A")
 		if err != nil {
 			t.Error(err)
 		}
@@ -202,7 +202,7 @@ func Test_mce(t *testing.T) {
 
 		for i := 0; i < len(self_handle_sql); i++ {
 			select_2 := mock_frontend.NewMockComputationWrapper(ctrl)
-			stmts, err = parsers.Parse(dialect.MYSQL, self_handle_sql[i])
+			stmts, err = parsers.Parse(ctx, dialect.MYSQL, self_handle_sql[i])
 			if err != nil {
 				t.Error(err)
 			}
@@ -315,7 +315,7 @@ func Test_mce_selfhandle(t *testing.T) {
 				if cnt == 1 {
 					return nil, nil
 				}
-				return nil, moerr.NewInternalError("fake error")
+				return nil, moerr.NewInternalError(ctx2, "fake error")
 			},
 		).AnyTimes()
 
@@ -389,28 +389,28 @@ func Test_mce_selfhandle(t *testing.T) {
 		mce.PrepareSessionBeforeExecRequest(ses)
 
 		ses.mrs = &MysqlResultSet{}
-		st1, err := parsers.ParseOne(dialect.MYSQL, "select @@max_allowed_packet")
+		st1, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@max_allowed_packet")
 		convey.So(err, convey.ShouldBeNil)
 		sv1 := st1.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
 		err = mce.handleSelectVariables(sv1)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.mrs = &MysqlResultSet{}
-		st2, err := parsers.ParseOne(dialect.MYSQL, "select @@version_comment")
+		st2, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@version_comment")
 		convey.So(err, convey.ShouldBeNil)
 		sv2 := st2.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
 		err = mce.handleSelectVariables(sv2)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.mrs = &MysqlResultSet{}
-		st3, err := parsers.ParseOne(dialect.MYSQL, "select @@global.version_comment")
+		st3, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@global.version_comment")
 		convey.So(err, convey.ShouldBeNil)
 		sv3 := st3.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
 		err = mce.handleSelectVariables(sv3)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.mrs = &MysqlResultSet{}
-		st4, err := parsers.ParseOne(dialect.MYSQL, "select @version_comment")
+		st4, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @version_comment")
 		convey.So(err, convey.ShouldBeNil)
 		sv4 := st4.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
 		err = mce.handleSelectVariables(sv4)
@@ -420,7 +420,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		queryData := []byte("A")
 		queryData = append(queryData, 0)
 		query := string(queryData)
-		cflStmt, err := parseCmdFieldList(makeCmdFieldListSql(query))
+		cflStmt, err := parseCmdFieldList(ctx, makeCmdFieldListSql(query))
 		convey.So(err, convey.ShouldBeNil)
 		err = mce.handleCmdFieldList(ctx, cflStmt)
 		convey.So(err, convey.ShouldBeError)
@@ -441,7 +441,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		set := "set @@tx_isolation=`READ-COMMITTED`"
-		setVar, err := parsers.ParseOne(dialect.MYSQL, set)
+		setVar, err := parsers.ParseOne(ctx, dialect.MYSQL, set)
 		convey.So(err, convey.ShouldBeNil)
 
 		err = mce.handleSetVar(ctx, setVar.(*tree.SetVar))
@@ -619,6 +619,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 }
 
 func Test_typeconvert(t *testing.T) {
+	ctx := context.TODO()
 	convey.Convey("convertEngineTypeToMysqlType", t, func() {
 		input := []types.T{
 			types.T_int8,
@@ -666,7 +667,7 @@ func Test_typeconvert(t *testing.T) {
 
 		for i := 0; i < len(input); i++ {
 			col := &MysqlColumn{}
-			err := convertEngineTypeToMysqlType(input[i], col)
+			err := convertEngineTypeToMysqlType(ctx, input[i], col)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(col.columnType, convey.ShouldEqual, output[i].tp)
 			convey.So(col.IsSigned() && output[i].signed ||
@@ -694,7 +695,7 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 
 func Test_mysqlerror(t *testing.T) {
 	convey.Convey("mysql error", t, func() {
-		err := moerr.NewBadDB("T")
+		err := moerr.NewBadDB(context.TODO(), "T")
 		convey.So(err.MySQLCode(), convey.ShouldEqual, moerr.ER_BAD_DB_ERROR)
 	})
 }
@@ -730,12 +731,12 @@ func Test_handleSelectVariables(t *testing.T) {
 		ses.mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 		mce.PrepareSessionBeforeExecRequest(ses)
-		st2, err := parsers.ParseOne(dialect.MYSQL, "select @@tx_isolation")
+		st2, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@tx_isolation")
 		convey.So(err, convey.ShouldBeNil)
 		sv2 := st2.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
 		convey.So(mce.handleSelectVariables(sv2), convey.ShouldBeNil)
 
-		st3, err := parsers.ParseOne(dialect.MYSQL, "select @@XXX")
+		st3, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@XXX")
 		convey.So(err, convey.ShouldBeNil)
 		sv3 := st3.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
 		convey.So(mce.handleSelectVariables(sv3), convey.ShouldNotBeNil)
@@ -883,7 +884,8 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 }
 
 func Test_HandlePrepareStmt(t *testing.T) {
-	stmt, err := parsers.ParseOne(dialect.MYSQL, "Prepare stmt1 from select 1, 2")
+	ctx := context.TODO()
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "Prepare stmt1 from select 1, 2")
 	if err != nil {
 		t.Errorf("parser sql error %v", err)
 	}
@@ -895,7 +897,8 @@ func Test_HandlePrepareStmt(t *testing.T) {
 }
 
 func Test_HandleDeallocate(t *testing.T) {
-	stmt, err := parsers.ParseOne(dialect.MYSQL, "deallocate Prepare stmt1")
+	ctx := context.TODO()
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "deallocate Prepare stmt1")
 	if err != nil {
 		t.Errorf("parser sql error %v", err)
 	}
@@ -913,7 +916,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		query := string(queryData)
 		cmdFieldListQuery := makeCmdFieldListSql(query)
 		convey.So(isCmdFieldListSql(cmdFieldListQuery), convey.ShouldBeTrue)
-		stmt, err := parseCmdFieldList(cmdFieldListQuery)
+		stmt, err := parseCmdFieldList(ctx, cmdFieldListQuery)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(stmt, convey.ShouldNotBeNil)
 		s := stmt.String()
@@ -1018,14 +1021,15 @@ func Test_statement_type(t *testing.T) {
 }
 
 func Test_convert_type(t *testing.T) {
+	ctx := context.TODO()
 	convey.Convey("type conversion", t, func() {
-		convertEngineTypeToMysqlType(types.T_any, &MysqlColumn{})
-		convertEngineTypeToMysqlType(types.T_bool, &MysqlColumn{})
-		convertEngineTypeToMysqlType(types.T_timestamp, &MysqlColumn{})
-		convertEngineTypeToMysqlType(types.T_decimal64, &MysqlColumn{})
-		convertEngineTypeToMysqlType(types.T_decimal128, &MysqlColumn{})
-		convertEngineTypeToMysqlType(types.T_blob, &MysqlColumn{})
-		convertEngineTypeToMysqlType(types.T_text, &MysqlColumn{})
+		convertEngineTypeToMysqlType(ctx, types.T_any, &MysqlColumn{})
+		convertEngineTypeToMysqlType(ctx, types.T_bool, &MysqlColumn{})
+		convertEngineTypeToMysqlType(ctx, types.T_timestamp, &MysqlColumn{})
+		convertEngineTypeToMysqlType(ctx, types.T_decimal64, &MysqlColumn{})
+		convertEngineTypeToMysqlType(ctx, types.T_decimal128, &MysqlColumn{})
+		convertEngineTypeToMysqlType(ctx, types.T_blob, &MysqlColumn{})
+		convertEngineTypeToMysqlType(ctx, types.T_text, &MysqlColumn{})
 	})
 }
 
@@ -1111,7 +1115,7 @@ func TestDump2File(t *testing.T) {
 		defer ctrl.Finish()
 		reader := mock_frontend.NewMockReader(ctrl)
 		cnt := 0
-		reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(attrs []string, b, c interface{}) (*batch.Batch, error) {
+		reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}) (*batch.Batch, error) {
 			cnt += 1
 			if cnt == 1 {
 				bat := batch.NewWithSize(1)
@@ -1177,7 +1181,7 @@ func TestSerializePlanToJson(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		json, rows, bytes := serializePlanToJson(plan, uuid.New())
+		json, rows, bytes := serializePlanToJson(mock.CurrentContext().GetContext(), plan, uuid.New())
 		require.Equal(t, int64(0), rows)
 		require.Equal(t, int64(0), bytes)
 		t.Logf("SQL plan to json : %s\n", string(json))
@@ -1185,7 +1189,7 @@ func TestSerializePlanToJson(t *testing.T) {
 }
 
 func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
-	stmts, err := mysql.Parse(sql)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

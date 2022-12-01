@@ -15,6 +15,7 @@
 package mysql
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strconv"
@@ -24,24 +25,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func Parse(sql string) ([]tree.Statement, error) {
+func Parse(ctx context.Context, sql string) ([]tree.Statement, error) {
 	lexer := NewLexer(dialect.MYSQL, sql)
 	if yyParse(lexer) != 0 {
 		return nil, lexer.scanner.LastError
 	}
 	if len(lexer.stmts) == 0 {
-		return nil, moerr.NewParseError("Query was empty")
+		return nil, moerr.NewParseError(ctx, "Query was empty")
 	}
 	return lexer.stmts, nil
 }
 
-func ParseOne(sql string) (tree.Statement, error) {
+func ParseOne(ctx context.Context, sql string) (tree.Statement, error) {
 	lexer := NewLexer(dialect.MYSQL, sql)
 	if yyParse(lexer) != 0 {
 		return nil, lexer.scanner.LastError
 	}
 	if len(lexer.stmts) != 1 {
-		return nil, moerr.NewParseError("syntax error, or too many sql to parse")
+		return nil, moerr.NewParseError(ctx, "syntax error, or too many sql to parse")
 	}
 	return lexer.stmts[0], nil
 }

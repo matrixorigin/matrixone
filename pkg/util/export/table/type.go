@@ -15,6 +15,7 @@
 package table
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"strings"
@@ -55,7 +56,7 @@ type PathBuilder interface {
 	// case "{timestamp_writedown}_{node_uuid}_{ndoe_type}.csv":
 	// case "{timestamp_start}_{timestamp_end}_merged.csv"
 	// }
-	ParsePath(path string) (CSVPath, error)
+	ParsePath(ctx context.Context, path string) (CSVPath, error)
 	NewMergeFilename(timestampStart, timestampEnd string) string
 	NewLogFilename(name, nodeUUID, nodeType string, ts time.Time) string
 	// SupportMergeSplit const. if false, not support SCV merge|split task
@@ -103,11 +104,11 @@ func NewMetricLogPath(path string) *MetricLogPath {
 	return &MetricLogPath{path: path}
 }
 
-func (p *MetricLogPath) Parse() error {
+func (p *MetricLogPath) Parse(ctx context.Context) error {
 	// parse path => filename, table
 	elems := strings.Split(p.path, "/")
 	if len(elems) != PathElems {
-		return moerr.NewInternalError("metric/log invalid path: %s", p.path)
+		return moerr.NewInternalError(ctx, "metric/log invalid path: %s", p.path)
 	}
 	p.filename = elems[PathIdxFilename]
 	p.table = elems[PathIdxTable]
@@ -116,7 +117,7 @@ func (p *MetricLogPath) Parse() error {
 	filename := strings.Trim(p.filename, CsvExtension)
 	fnElems := strings.Split(filename, FilenameSeparator)
 	if len(fnElems) != FilenameElems {
-		return moerr.NewInternalError("metric/log invalid filename: %s", p.path)
+		return moerr.NewInternalError(ctx, "metric/log invalid filename: %s", p.path)
 	}
 	if fnElems[FilenameIdxType] == string(MergeLogTypeMerged) {
 		p.fileType = MergeLogTypeMerged
@@ -169,9 +170,9 @@ func (b *AccountDatePathBuilder) BuildETLPath(db, name, account string) string {
 	return path.Join("/", etlDirectory, etlFilename)
 }
 
-func (b *AccountDatePathBuilder) ParsePath(path string) (CSVPath, error) {
+func (b *AccountDatePathBuilder) ParsePath(ctx context.Context, path string) (CSVPath, error) {
 	p := NewMetricLogPath(path)
-	return p, p.Parse()
+	return p, p.Parse(ctx)
 }
 
 func (b *AccountDatePathBuilder) NewMergeFilename(timestampStart, timestampEnd string) string {
@@ -205,7 +206,7 @@ func (m *DBTablePathBuilder) Build(account string, typ MergeLogType, ts time.Tim
 	return db
 }
 
-func (m *DBTablePathBuilder) ParsePath(path string) (CSVPath, error) {
+func (m *DBTablePathBuilder) ParsePath(ctx context.Context, path string) (CSVPath, error) {
 	panic("not implement")
 }
 

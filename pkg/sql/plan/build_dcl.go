@@ -62,12 +62,12 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		}
 
 	case *tree.PrepareString:
-		stmts, err := mysql.Parse(pstmt.Sql)
+		stmts, err := mysql.Parse(ctx.GetContext(), pstmt.Sql)
 		if err != nil {
 			return nil, err
 		}
 		if len(stmts) > 1 {
-			return nil, moerr.NewInvalidInput("cannot prepare multi statements")
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare multi statements")
 		}
 		stmtName = string(pstmt.Name)
 		preparePlan, err = getPreparePlan(ctx, stmts[0])
@@ -82,7 +82,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 
 	switch pp := preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
-		return nil, moerr.NewInvalidInput("cannot prepare TCL and DCL statement")
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
 
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
@@ -94,7 +94,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 			}
 			// TODO : need confirm
 			if len(getParamRule.params) > 0 {
-				return nil, moerr.NewInvalidInput("cannot plan DDL statement")
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot plan DDL statement")
 			}
 		}
 
@@ -202,7 +202,7 @@ func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext) (*Plan, error) {
 			Name:   assignment.Name,
 		}
 		if assignment.Value == nil {
-			return nil, moerr.NewInvalidInput("Set statement has no value")
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Set statement has no value")
 		}
 		item.Value, err = binder.baseBindExpr(assignment.Value, 0, true)
 		if err != nil {

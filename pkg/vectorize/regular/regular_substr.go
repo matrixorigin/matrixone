@@ -25,12 +25,12 @@ import (
 
 func RegularSubstr(expr, pat string, pos, occurrence int64, match_type string) ([]string, error) {
 	if pos < 1 || occurrence < 1 || pos >= int64(len(expr)) {
-		return nil, moerr.NewInvalidInput("regexp_substr have invalid input")
+		return nil, moerr.NewInvalidInputNoCtx("regexp_substr have invalid input")
 	}
 	//regular expression pattern
 	reg, err := regexp.Compile(pat)
 	if err != nil {
-		return nil, moerr.NewInvalidArg("regexp_substr have invalid regexp pattern arg", pat)
+		return nil, moerr.NewInvalidArgNoCtx("regexp_substr have invalid regexp pattern arg", pat)
 	}
 	//match result strings
 	matchRes := reg.FindAllString(expr[pos-1:], -1)
@@ -42,7 +42,7 @@ func RegularSubstr(expr, pat string, pos, occurrence int64, match_type string) (
 
 func RegularSubstrWithReg(expr string, pat *regexp.Regexp, pos, occurrence int64, match_type string) ([]string, error) {
 	if pos < 1 || occurrence < 1 || pos >= int64(len(expr)) {
-		return nil, moerr.NewInvalidInput("regexp_substr have invalid input")
+		return nil, moerr.NewInvalidInputNoCtx("regexp_substr have invalid input")
 	}
 	//match result strings
 	matchRes := pat.FindAllString(expr[pos-1:], -1)
@@ -59,7 +59,7 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 	if len(expr) == 1 && len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
 		if err != nil {
-			return moerr.NewInvalidArg("regexp_substr have invalid regexp pattern arg", pat)
+			return moerr.NewInvalidArgNoCtx("regexp_substr have invalid regexp pattern arg", pat)
 		}
 		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(0)) || pat[0] == "" {
@@ -99,7 +99,7 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 	} else if len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
 		if err != nil {
-			return moerr.NewInvalidArg("regexp_substr have invalid regexp pattern arg", pat)
+			return moerr.NewInvalidArgNoCtx("regexp_substr have invalid regexp pattern arg", pat)
 		}
 		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(0)) || pat[0] == "" {

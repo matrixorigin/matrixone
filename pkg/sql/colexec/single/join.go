@@ -173,7 +173,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						if matched {
 							vec.Free(proc.Mp())
 							rbat.Clean(proc.Mp())
-							return moerr.NewInternalError("scalar subquery returns more than 1 row")
+							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 						}
 						matched = true
 						idx = j
@@ -182,7 +182,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 			} else if len(sels) > 1 {
 				rbat.Clean(proc.Mp())
-				return moerr.NewInternalError("scalar subquery returns more than 1 row")
+				return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 			}
 			if ap.Cond != nil && !matched {
 				for j, rp := range ap.Result {

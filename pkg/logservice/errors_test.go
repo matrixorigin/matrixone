@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"context"
 	"testing"
 
 	"github.com/lni/dragonboat/v4"
@@ -34,6 +35,7 @@ func TestTimeoutError(t *testing.T) {
 }
 
 func TestErrorConversion(t *testing.T) {
+	ctx := context.TODO()
 	mappings := getErrorToCodeMapping()
 	for _, rec := range mappings {
 		if rec.reverse {
@@ -42,19 +44,21 @@ func TestErrorConversion(t *testing.T) {
 				ErrorCode:    uint32(code),
 				ErrorMessage: msg,
 			}
-			err := toError(resp)
+			err := toError(ctx, resp)
 			assert.Equal(t, err, rec.err)
 		}
 	}
 }
 
 func TestUnknownErrorIsHandled(t *testing.T) {
-	err := moerr.NewDragonboatOtherSystemError("test error")
+	ctx := context.TODO()
+	err := moerr.NewDragonboatOtherSystemError(ctx, "test error")
 	code, _ := toErrorCode(err)
 	assert.Equal(t, moerr.ErrDragonboatOtherSystemError, uint16(code))
 }
 
 func TestIsTempError(t *testing.T) {
+	ctx := context.TODO()
 	tests := []struct {
 		err  error
 		temp bool
@@ -76,8 +80,8 @@ func TestIsTempError(t *testing.T) {
 		{dragonboat.ErrInvalidRange, false},
 		{dragonboat.ErrShardNotFound, true},
 
-		{moerr.NewNoHAKeeper(), true},
-		{moerr.NewNoDB(), false},
+		{moerr.NewNoHAKeeper(ctx), true},
+		{moerr.NewNoDB(ctx), false},
 	}
 	for _, tt := range tests {
 		assert.Equal(t, tt.temp, isTempError(tt.err))

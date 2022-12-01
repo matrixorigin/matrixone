@@ -263,7 +263,7 @@ func newClient(ctx context.Context, cfg ClientConfig) (*client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return nil, moerr.NewLogServiceNotReady()
+	return nil, moerr.NewLogServiceNotReady(ctx)
 }
 
 func connectToLogServiceByReverseProxy(ctx context.Context,
@@ -273,7 +273,7 @@ func connectToLogServiceByReverseProxy(ctx context.Context,
 		return nil, err
 	}
 	if !ok {
-		return nil, moerr.NewLogServiceNotReady()
+		return nil, moerr.NewLogServiceNotReady(ctx)
 	}
 	addresses := make([]string, 0)
 	leaderAddress, ok := si.Replicas[si.ReplicaID]
@@ -351,7 +351,7 @@ func (c *client) close() error {
 
 func (c *client) append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
 	if c.readOnly() {
-		return 0, moerr.NewInvalidInput("incompatible client")
+		return 0, moerr.NewInvalidInput(ctx, "incompatible client")
 	}
 	// TODO: check piggybacked hint on whether we are connected to the leader node
 	return c.doAppend(ctx, rec)
@@ -364,7 +364,7 @@ func (c *client) read(ctx context.Context,
 
 func (c *client) truncate(ctx context.Context, lsn Lsn) error {
 	if c.readOnly() {
-		return moerr.NewInvalidInput("incompatible client")
+		return moerr.NewInvalidInput(ctx, "incompatible client")
 	}
 	return c.doTruncate(ctx, lsn)
 }
@@ -383,7 +383,7 @@ func (c *client) readOnly() bool {
 
 func (c *client) connectReadWrite(ctx context.Context) error {
 	if c.readOnly() {
-		panic(moerr.NewInvalidInput("incompatible client"))
+		panic(moerr.NewInvalidInput(ctx, "incompatible client"))
 	}
 	return c.connect(ctx, pb.CONNECT)
 }
@@ -429,7 +429,7 @@ func (c *client) request(ctx context.Context,
 	if len(response.payload) > 0 {
 		MustUnmarshal(&recs, response.payload)
 	}
-	err = toError(response.Response)
+	err = toError(ctx, response.Response)
 	if err != nil {
 		return pb.Response{}, nil, err
 	}
@@ -462,7 +462,7 @@ func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
 	}
 	resp := response.Response
 	defer response.Release()
-	err = toError(response.Response)
+	err = toError(ctx, response.Response)
 	if err != nil {
 		return 0, err
 	}

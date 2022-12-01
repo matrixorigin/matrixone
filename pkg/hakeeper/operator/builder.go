@@ -69,7 +69,7 @@ func NewBuilder(desc string, shardInfo logservice.LogShardInfo) *Builder {
 
 	for replicaID, uuid := range shardInfo.Replicas {
 		if uuid == "" {
-			err = moerr.NewInternalError("cannot build operator for shard with nil peer")
+			err = moerr.NewInternalErrorNoCtx("cannot build operator for shard with nil peer")
 			break
 		}
 		originPeers.Set(uuid, replicaID)
@@ -87,16 +87,16 @@ func (b *Builder) AddPeer(uuid string, peer uint64) *Builder {
 		return b
 	}
 	if uuid == "" {
-		b.err = moerr.NewInternalError("cannot add peer to nil store")
+		b.err = moerr.NewInternalErrorNoCtx("cannot add peer to nil store")
 		return b
 	}
 	if old, ok := b.targetPeers[uuid]; ok {
-		b.err = moerr.NewInternalError("cannot add peer %+v to %s: already have peer %+v on %s", peer, uuid, old, uuid)
+		b.err = moerr.NewInternalErrorNoCtx("cannot add peer %+v to %s: already have peer %+v on %s", peer, uuid, old, uuid)
 		return b
 	}
 	for oldUuid, old := range b.targetPeers {
 		if old == peer {
-			b.err = moerr.NewInternalError("cannot add peer %+v to %s: already have peer %+v on %s", peer, uuid, old, oldUuid)
+			b.err = moerr.NewInternalErrorNoCtx("cannot add peer %+v to %s: already have peer %+v on %s", peer, uuid, old, oldUuid)
 			return b
 		}
 	}
@@ -111,7 +111,7 @@ func (b *Builder) RemovePeer(uuid string) *Builder {
 		return b
 	}
 	if _, ok := b.targetPeers[uuid]; !ok {
-		b.err = moerr.NewInternalError("cannot remove peer from %s: not found", uuid)
+		b.err = moerr.NewInternalErrorNoCtx("cannot remove peer from %s: not found", uuid)
 	} else {
 		delete(b.targetPeers, uuid)
 	}
@@ -192,7 +192,7 @@ func (b *Builder) buildSteps() error {
 	}
 
 	if len(b.steps) == 0 {
-		return moerr.NewInternalError("no operator step is built")
+		return moerr.NewInternalErrorNoCtx("no operator step is built")
 	}
 	return nil
 }

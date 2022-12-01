@@ -84,7 +84,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			if (p.TableDefVec[i].Cols[j].Primary && !p.TableDefVec[i].Cols[j].Typ.AutoIncr) || (p.TableDefVec[i].Cols[j].Default != nil && !p.TableDefVec[i].Cols[j].Default.NullAbility) {
 				if nulls.Any(tmpBat.Vecs[j].Nsp) {
 					tmpBat.Clean(proc.Mp())
-					return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
+					return false, moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
 				}
 			}
 		}
@@ -96,7 +96,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 					if tmpBat.Attrs[i] == name {
 						if nulls.Any(tmpBat.Vecs[i].Nsp) {
 							tmpBat.Clean(proc.Mp())
-							return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", updateCtx.OrderAttrs[i]))
+							return false, moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", updateCtx.OrderAttrs[i]))
 						}
 					}
 				}

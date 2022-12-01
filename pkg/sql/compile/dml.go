@@ -132,7 +132,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		// check for case 1 and case 2
 		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].Typ.AutoIncr) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].Typ.AutoIncr) {
 			if nulls.Any(bat.Vecs[i].Nsp) {
-				return 0, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
+				return 0, moerr.NewConstraintViolation(c.ctx, fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
 			}
 		}
 	}
@@ -149,7 +149,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 				for _, name := range names {
 					if p.OrderAttrs[i] == name {
 						if nulls.Any(bat.Vecs[i].Nsp) {
-							return 0, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", p.OrderAttrs[i]))
+							return 0, moerr.NewConstraintViolation(c.ctx, fmt.Sprintf("Column '%s' cannot be null", p.OrderAttrs[i]))
 						}
 					}
 				}
@@ -186,7 +186,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 		for j, expr := range p.Columns[i].Column {
 			vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 			if err != nil {
-				return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j, err)
+				return y.MakeInsertError(proc.Ctx, v.Typ.Oid, p.ExplicitCols[i], rows, i, j, err)
 			}
 			if vec.Size() == 0 {
 				vec = vec.ConstExpand(proc.Mp())

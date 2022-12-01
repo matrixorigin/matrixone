@@ -80,7 +80,7 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 	}
 	resp := response.Response
 	defer response.Release()
-	err = toError(resp)
+	err = toError(ctx, resp)
 	if err != nil {
 		return ShardInfo{}, false, err
 	}
@@ -105,7 +105,7 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 func (s *Service) getShardInfo(shardID uint64) (pb.ShardInfoQueryResult, bool) {
 	r, ok := s.store.nh.GetNodeHostRegistry()
 	if !ok {
-		panic(moerr.NewInvalidState("gossip registry not enabled"))
+		panic(moerr.NewInvalidStateNoCtx("gossip registry not enabled"))
 	}
 	shard, ok := r.GetShardInfo(shardID)
 	if !ok {

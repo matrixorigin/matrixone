@@ -157,11 +157,11 @@ func (h *mockDBHandle) TruncateByName(name string) (rel handle.Relation, err err
 }
 
 func (h *mockDBHandle) TruncateWithID(name string, newTableId uint64) (rel handle.Relation, err error) {
-	panic(moerr.NewNYI("Pls implement me!!"))
+	panic(moerr.NewNYINoCtx("Pls implement me!!"))
 }
 
 func (h *mockDBHandle) TruncateByID(id uint64, newTableId uint64) (rel handle.Relation, err error) {
-	panic(moerr.NewNYI("Pls implement me!!"))
+	panic(moerr.NewNYINoCtx("Pls implement me!!"))
 }
 
 func (h *mockDBHandle) DropRelationByName(name string) (rel handle.Relation, err error) {
@@ -228,7 +228,7 @@ func (txn *mockTxn) CreateDatabaseWithID(name, createSql string, id uint64) (han
 }
 
 func (txn *mockTxn) CreateDatabaseByDef(def any) (handle.Database, error) {
-	panic(moerr.NewNYI("CreateDatabaseByID is not implemented yet"))
+	panic(moerr.NewNYINoCtx("CreateDatabaseByID is not implemented yet"))
 }
 
 func (txn *mockTxn) GetDatabase(name string) (handle.Database, error) {
