@@ -2657,4 +2657,25 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	SLEEP: {
+		Id:     SLEEP,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_uint64},
+				ReturnTyp: types.T_uint8,
+				Volatile:  true,
+				Fn:        unary.Sleep[uint64],
+			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_float64},
+				ReturnTyp: types.T_uint8,
+				Volatile:  true,
+				Fn:        unary.Sleep[float64],
+			},
+		},
+	},
 }

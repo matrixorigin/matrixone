@@ -269,6 +269,8 @@ const (
 
 	MO_SHOW_VISIBLE_BIN // parse type/onUpdate/default []byte to visible string
 
+	SLEEP // sleep for a while
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -454,6 +456,7 @@ var functionIdRegister = map[string]int32{
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
+	"sleep":                          SLEEP,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
