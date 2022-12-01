@@ -75,8 +75,8 @@ func (r *ConstantFold) constantFold(e *plan.Expr) *plan.Expr {
 		return e
 	}
 	overloadID := ef.F.Func.GetObj()
-	f, err := function.GetFunctionByID(overloadID)
-	if err != nil {
+	f, exists := function.GetFunctionByIDWithoutError(overloadID)
+	if !exists {
 		return e
 	}
 	if f.Volatile { // function cannot be fold
@@ -185,8 +185,8 @@ func isConstant(e *plan.Expr) bool {
 		return true
 	case *plan.Expr_F:
 		overloadID := ef.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadID)
-		if err != nil {
+		f, exists := function.GetFunctionByIDWithoutError(overloadID)
+		if !exists {
 			return false
 		}
 		if f.Volatile { // function cannot be fold
