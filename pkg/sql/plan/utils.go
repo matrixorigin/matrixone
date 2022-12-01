@@ -620,6 +620,113 @@ func DeduceSelectivity(expr *plan.Expr) float64 {
 	return 1
 }
 
+func ReCalcNodeCost(nodeID int32, builder *QueryBuilder, reCalcScan bool) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			ReCalcNodeCost(child, builder, reCalcScan)
+		}
+	}
+
+	// TODO: better estimation
+	switch node.NodeType {
+	case plan.Node_JOIN:
+		leftCost := builder.qry.Nodes[node.Children[0]].Cost
+		rightCost := builder.qry.Nodes[node.Children[1]].Cost
+		ndv := rightCost.Card
+
+		switch node.JoinType {
+		case plan.Node_INNER:
+			card := leftCost.Card * rightCost.Card / ndv
+			if len(node.OnList) > 0 {
+				card *= 0.1
+			}
+			node.Cost = &plan.Cost{
+				Card:  card,
+				Total: leftCost.Total + rightCost.Total,
+			}
+
+		case plan.Node_LEFT:
+			card := leftCost.Card * rightCost.Card / ndv
+			if len(node.OnList) > 0 {
+				card *= 0.1
+				card += leftCost.Card
+			}
+			node.Cost = &plan.Cost{
+				Card:  card,
+				Total: leftCost.Total + rightCost.Total,
+			}
+
+		case plan.Node_RIGHT:
+			card := leftCost.Card * rightCost.Card / ndv
+			if len(node.OnList) > 0 {
+				card *= 0.1
+				card += rightCost.Card
+			}
+			node.Cost = &plan.Cost{
+				Card:  card,
+				Total: leftCost.Total + rightCost.Total,
+			}
+
+		case plan.Node_OUTER:
+			card := leftCost.Card * rightCost.Card / ndv
+			if len(node.OnList) > 0 {
+				card *= 0.1
+				card += leftCost.Card + rightCost.Card
+			}
+			node.Cost = &plan.Cost{
+				Card:  card,
+				Total: leftCost.Total + rightCost.Total,
+			}
+
+		case plan.Node_SEMI, plan.Node_ANTI:
+			node.Cost = &plan.Cost{
+				Card:  leftCost.Card * .7,
+				Total: leftCost.Total + rightCost.Total,
+			}
+
+		case plan.Node_SINGLE, plan.Node_MARK:
+			node.Cost = &plan.Cost{
+				Card:  leftCost.Card,
+				Total: leftCost.Total + rightCost.Total,
+			}
+		}
+
+	case plan.Node_AGG:
+		if len(node.GroupBy) > 0 {
+			childCost := builder.qry.Nodes[node.Children[0]].Cost
+			node.Cost = &plan.Cost{
+				Card:  childCost.Card * 0.1,
+				Total: childCost.Total,
+			}
+		} else {
+			node.Cost = &plan.Cost{
+				Card:  1,
+				Total: 100, //todo fix this
+			}
+		}
+
+	case plan.Node_TABLE_SCAN:
+		if reCalcScan {
+			node.Cost = builder.compCtx.Cost(node.ObjRef, RewriteAndConstantFold(node.FilterList))
+		}
+
+	default:
+		if len(node.Children) > 0 {
+			childCost := builder.qry.Nodes[node.Children[0]].Cost
+			node.Cost = &plan.Cost{
+				Card:  childCost.Card,
+				Total: childCost.Total,
+			}
+		} else if node.Cost == nil {
+			node.Cost = &plan.Cost{
+				Card:  1000,
+				Total: 1000000,
+			}
+		}
+	}
+}
+
 func RewriteAndConstantFold(exprList []*plan.Expr) *plan.Expr {
 	e := colexec.RewriteFilterExprList(exprList)
 	if e != nil {

@@ -451,15 +451,11 @@ func (c *CostDescribeImpl) GetDescription(options *ExplainOptions) (string, erro
 	//(cost=11.75..13.15 rows=140 width=4)
 	var result string
 	if c.Cost == nil {
-		result = " (cost=0.0..0.0 rows=0 ndv=0 rowsize=0)"
+		result = " (total=0 card=0)"
 		//result = " (cost=%.2f..%.2f rows=%.2f ndv=%.2f rowsize=%.f)"
 	} else {
-		result = " (cost=" +
-			strconv.FormatFloat(c.Cost.Start, 'f', 2, 64) +
-			".." + strconv.FormatFloat(c.Cost.Total, 'f', 2, 64) +
+		result = " (total=" + strconv.FormatFloat(c.Cost.Total, 'f', 2, 64) +
 			" card=" + strconv.FormatFloat(c.Cost.Card, 'f', 2, 64) +
-			" ndv=" + strconv.FormatFloat(c.Cost.Ndv, 'f', 2, 64) +
-			" rowsize=" + strconv.FormatFloat(c.Cost.Rowsize, 'f', 0, 64) +
 			")"
 	}
 

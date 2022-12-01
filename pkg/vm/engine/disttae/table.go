@@ -33,7 +33,7 @@ var _ engine.Relation = new(table)
 func (tbl *table) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error) {
 	switch tbl.tableId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
-		return float64(100), nil
+		return float64(1000000), nil
 	}
 
 	if expr == nil {

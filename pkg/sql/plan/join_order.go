@@ -112,19 +112,6 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 	return nodeID
 }
 
-func (builder *QueryBuilder) calcScanCost(nodeID int32) {
-	node := builder.qry.Nodes[nodeID]
-	if node.NodeType != plan.Node_TABLE_SCAN {
-		if len(node.Children) > 0 {
-			for _, child := range node.Children {
-				builder.calcScanCost(child)
-			}
-		}
-	} else {
-		node.Cost.Card = builder.compCtx.Cost(node.ObjRef, RewriteAndConstantFold(node.FilterList)).Card
-	}
-}
-
 func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	node := builder.qry.Nodes[nodeID]
 

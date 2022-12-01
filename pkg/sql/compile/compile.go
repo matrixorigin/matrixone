@@ -701,7 +701,7 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns []*plan.Node) []*Scope {
 	ss = append(ss, children...)
-	rs := c.newScopeList(1, int(n.Cost.Card))
+	rs := c.newScopeList(1, int(n.Cost.Total))
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
 	copy(gn.GroupBy, n.ProjectList)
@@ -725,7 +725,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns 
 }
 
 func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	rs := c.newJoinScopeListWithBucket(c.newScopeList(2, int(n.Cost.Card)), ss, children)
+	rs := c.newJoinScopeListWithBucket(c.newScopeList(2, int(n.Cost.Total)), ss, children)
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
@@ -1015,7 +1015,7 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 }
 
 func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
-	rs := c.newScopeList(validScopeCount(ss), int(n.Cost.Card))
+	rs := c.newScopeList(validScopeCount(ss), int(n.Cost.Total))
 	j := 0
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
@@ -1255,7 +1255,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			nodes[i] = engine.Node{
 				Id:   node.Id,
 				Addr: node.Addr,
-				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Cost.Card)),
+				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Cost.Total)),
 			}
 		}
 		return nodes, nil
@@ -1265,7 +1265,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			nodes = append(nodes, engine.Node{Mcpu: 1})
 		} else {
 			nodes = append(nodes, engine.Node{
-				Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Cost.Card)),
+				Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Cost.Total)),
 			})
 		}
 		ranges = ranges[1:]
@@ -1280,14 +1280,14 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			nodes = append(nodes, engine.Node{
 				Id:   c.cnList[j].Id,
 				Addr: c.cnList[j].Addr,
-				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Cost.Card)),
+				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Cost.Total)),
 				Data: ranges[i:],
 			})
 		} else {
 			nodes = append(nodes, engine.Node{
 				Id:   c.cnList[j].Id,
 				Addr: c.cnList[j].Addr,
-				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Cost.Card)),
+				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Cost.Total)),
 				Data: ranges[i : i+step],
 			})
 		}

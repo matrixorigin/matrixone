@@ -661,9 +661,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i, rootId := range builder.qry.Steps {
 		rootId, _ = builder.pushdownFilters(rootId, nil)
-		builder.calcScanCost(rootId)
+		ReCalcNodeCost(rootId, builder, true)
 		rootId = builder.determineJoinOrder(rootId)
 		rootId = builder.pushdownSemiAntiJoins(rootId)
+		ReCalcNodeCost(rootId, builder, false)
 		builder.qry.Steps[i] = rootId
 
 		colRefCnt := make(map[[2]int32]int)
@@ -1497,88 +1498,7 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 	builder.qry.Nodes = append(builder.qry.Nodes, node)
 	builder.ctxByNode = append(builder.ctxByNode, ctx)
 
-	// TODO: better estimation
-	switch node.NodeType {
-	case plan.Node_JOIN:
-		leftCost := builder.qry.Nodes[node.Children[0]].Cost
-		rightCost := builder.qry.Nodes[node.Children[1]].Cost
-		ndv := rightCost.Card
-
-		switch node.JoinType {
-		case plan.Node_INNER:
-			card := leftCost.Card * rightCost.Card / ndv
-			if len(node.OnList) > 0 {
-				card *= 0.1
-			}
-			node.Cost = &plan.Cost{
-				Card: card,
-			}
-
-		case plan.Node_LEFT:
-			card := leftCost.Card * rightCost.Card / ndv
-			if len(node.OnList) > 0 {
-				card *= 0.1
-				card += leftCost.Card
-			}
-			node.Cost = &plan.Cost{
-				Card: card,
-			}
-
-		case plan.Node_RIGHT:
-			card := leftCost.Card * rightCost.Card / ndv
-			if len(node.OnList) > 0 {
-				card *= 0.1
-				card += rightCost.Card
-			}
-			node.Cost = &plan.Cost{
-				Card: card,
-			}
-
-		case plan.Node_OUTER:
-			card := leftCost.Card * rightCost.Card / ndv
-			if len(node.OnList) > 0 {
-				card *= 0.1
-				card += leftCost.Card + rightCost.Card
-			}
-			node.Cost = &plan.Cost{
-				Card: card,
-			}
-
-		case plan.Node_SEMI, plan.Node_ANTI:
-			node.Cost = &plan.Cost{
-				Card: leftCost.Card * .7,
-			}
-
-		case plan.Node_SINGLE, plan.Node_MARK:
-			node.Cost = &plan.Cost{
-				Card: leftCost.Card,
-			}
-		}
-
-	case plan.Node_AGG:
-		if len(node.GroupBy) > 0 {
-			childCost := builder.qry.Nodes[node.Children[0]].Cost
-			node.Cost = &plan.Cost{
-				Card: childCost.Card * 0.1,
-			}
-		} else {
-			node.Cost = &plan.Cost{
-				Card: 1,
-			}
-		}
-
-	default:
-		if len(node.Children) > 0 {
-			childCost := builder.qry.Nodes[node.Children[0]].Cost
-			node.Cost = &plan.Cost{
-				Card: childCost.Card,
-			}
-		} else if node.Cost == nil {
-			node.Cost = &plan.Cost{
-				Card: 1,
-			}
-		}
-	}
+	ReCalcNodeCost(nodeID, builder, false)
 
 	return nodeID
 }

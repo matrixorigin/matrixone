@@ -1857,7 +1857,8 @@ func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) (cost *
 	if err != nil {
 		return
 	}
-	cost.Card = float64(rows) * plan2.DeduceSelectivity(e)
+	cost.Total = float64(rows)
+	cost.Card = cost.Total * plan2.DeduceSelectivity(e)
 	return
 }
 
