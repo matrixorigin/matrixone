@@ -52,7 +52,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 				colPos = -colPos
 			}
 			if colPos < 1 || int(colPos) > len(b.ctx.projects) {
-				return nil, moerr.NewSyntaxError("ORDER BY position %v is not in select list", colPos)
+				return nil, moerr.NewSyntaxErrorNoCtx("ORDER BY position %v is not in select list", colPos)
 			}
 
 			colPos = colPos - 1
@@ -67,7 +67,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 			}, nil
 
 		default:
-			return nil, moerr.NewSyntaxError("non-integer constant in ORDER BY")
+			return nil, moerr.NewSyntaxErrorNoCtx("non-integer constant in ORDER BY")
 		}
 	}
 
@@ -87,7 +87,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 	exprStr := expr.String()
 	if colPos, ok = b.ctx.projectByExpr[exprStr]; !ok {
 		if b.ctx.isDistinct {
-			return nil, moerr.NewSyntaxError("for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+			return nil, moerr.NewSyntaxErrorNoCtx("for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 		}
 
 		colPos = int32(len(b.ctx.projects))

@@ -332,7 +332,7 @@ func (blk *ablock) getInMemoryValue(
 		return
 	}
 	if deleted {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	view, err := blk.resolveInMemoryColumnData(mnode, ts, col, nil, true)
@@ -374,7 +374,7 @@ func (blk *ablock) getPersistedRowByFilter(
 		return
 	}
 	if !ok {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	sortKey, err := blk.LoadPersistedColumnData(
@@ -398,7 +398,7 @@ func (blk *ablock) getPersistedRowByFilter(
 		return
 	}
 	if len(rows) == 0 {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 
@@ -430,7 +430,7 @@ func (blk *ablock) getPersistedRowByFilter(
 		}
 	}
 	if !exist {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 	}
 	return
 }
@@ -485,7 +485,7 @@ func (blk *ablock) getInMemoryRowByFilter(
 			return
 		}
 	}
-	return 0, moerr.NewNotFound()
+	return 0, moerr.NewNotFoundNoCtx()
 }
 
 func (blk *ablock) checkConflictAndDupClosure(
@@ -552,7 +552,7 @@ func (blk *ablock) inMemoryBatchDedup(
 	def := blk.meta.GetSchema().GetSingleSortKey()
 	v := mnode.GetValueByRow(int(dupRow), def.Idx)
 	entry := common.TypeStringValue(keys.GetType(), v)
-	return moerr.NewDuplicateEntry(entry, def.Name)
+	return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 }
 
 func (blk *ablock) dedupClosure(
@@ -576,7 +576,7 @@ func (blk *ablock) dedupClosure(
 					return txnif.ErrTxnWWConflict
 				}
 				entry := common.TypeStringValue(vec.GetType(), v1)
-				return moerr.NewDuplicateEntry(entry, def.Name)
+				return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 			}
 			return nil
 		}, nil)

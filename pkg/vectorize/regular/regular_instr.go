@@ -23,12 +23,12 @@ import (
 
 func RegularInstr(expr, pat string, pos, occurrence int64, return_option uint8, match_type string) (int64, error) {
 	if pos < 1 || occurrence < 1 || (return_option != 0 && return_option != 1) || pos >= int64(len(expr)) {
-		return 0, moerr.NewInvalidInput("regexp_instr have invalid input")
+		return 0, moerr.NewInvalidInputNoCtx("regexp_instr have invalid input")
 	}
 	//regular expression pattern
 	reg, err := regexp.Compile(pat)
 	if err != nil {
-		return 0, moerr.NewInvalidArg("regexp_instr have invalid regexp pattern arg", pat)
+		return 0, moerr.NewInvalidArgNoCtx("regexp_instr have invalid regexp pattern arg", pat)
 	}
 	//match result indexs
 	matchRes := reg.FindAllStringIndex(expr, -1)
@@ -58,7 +58,7 @@ func RegularInstr(expr, pat string, pos, occurrence int64, return_option uint8, 
 
 func RegularInstrWithReg(expr string, pat *regexp.Regexp, pos, occurrence int64, return_option uint8, match_type string) (int64, error) {
 	if pos < 1 || occurrence < 1 || (return_option != 0 && return_option != 1) || pos >= int64(len(expr)) {
-		return 0, moerr.NewInvalidInput("regexp_instr have invalid input")
+		return 0, moerr.NewInvalidInputNoCtx("regexp_instr have invalid input")
 	}
 	//match result indexs
 	matchRes := pat.FindAllStringIndex(expr, -1)
@@ -92,7 +92,7 @@ func RegularInstrWithArrays(expr, pat []string, pos, occ []int64, return_option 
 	if len(expr) == 1 && len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
 		if err != nil {
-			return moerr.NewInvalidArg("regexp_instr have invalid regexp pattern arg", pat)
+			return moerr.NewInvalidArgNoCtx("regexp_instr have invalid regexp pattern arg", pat)
 		}
 		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(0)) {
@@ -122,7 +122,7 @@ func RegularInstrWithArrays(expr, pat []string, pos, occ []int64, return_option 
 	} else if len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
 		if err != nil {
-			return moerr.NewInvalidArg("regexp_instr have invalid regexp pattern arg", pat)
+			return moerr.NewInvalidArgNoCtx("regexp_instr have invalid regexp pattern arg", pat)
 		}
 		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(0)) {

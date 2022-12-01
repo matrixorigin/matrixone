@@ -220,7 +220,7 @@ func (ctx *TxnCtx) ToPrepared() (err error) {
 
 func (ctx *TxnCtx) ToPreparedLocked() (err error) {
 	if ctx.State != txnif.TxnStatePreparing {
-		err = moerr.NewTAEPrepare("ToPreparedLocked: state is not preparing")
+		err = moerr.NewTAEPrepareNoCtx("ToPreparedLocked: state is not preparing")
 		return
 	}
 	ctx.State = txnif.TxnStatePrepared
@@ -235,7 +235,7 @@ func (ctx *TxnCtx) ToCommittingFinished() (err error) {
 
 func (ctx *TxnCtx) ToCommittingFinishedLocked() (err error) {
 	if ctx.State != txnif.TxnStatePrepared {
-		err = moerr.NewTAECommit("ToCommittingFinishedLocked: state is not prepared")
+		err = moerr.NewTAECommitNoCtx("ToCommittingFinishedLocked: state is not prepared")
 		return
 	}
 	ctx.State = txnif.TxnStateCommittingFinished
@@ -246,14 +246,14 @@ func (ctx *TxnCtx) ToCommittedLocked() error {
 	if ctx.Is2PC() {
 		if ctx.State != txnif.TxnStateCommittingFinished &&
 			ctx.State != txnif.TxnStatePrepared {
-			return moerr.NewTAECommit("ToCommittedLocked: 2PC txn's state " +
+			return moerr.NewTAECommitNoCtx("ToCommittedLocked: 2PC txn's state " +
 				"is not Prepared or CommittingFinished")
 		}
 		ctx.State = txnif.TxnStateCommitted
 		return nil
 	}
 	if ctx.State != txnif.TxnStatePreparing {
-		return moerr.NewTAECommit("ToCommittedLocked: 1PC txn's state is not preparing")
+		return moerr.NewTAECommitNoCtx("ToCommittedLocked: 1PC txn's state is not preparing")
 	}
 	ctx.State = txnif.TxnStateCommitted
 	return nil
@@ -270,7 +270,7 @@ func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
 		panic(fmt.Sprintf("commit ts %d should not be less than start ts %d", ts, ctx.StartTS))
 	}
 	if (ctx.State != txnif.TxnStateActive) && (ctx.State != txnif.TxnStatePreparing) {
-		return moerr.NewTAERollback("ToRollbackingLocked: state is not active or preparing")
+		return moerr.NewTAERollbackNoCtx("ToRollbackingLocked: state is not active or preparing")
 	}
 	ctx.CommitTS = ts
 	ctx.PrepareTS = ts
@@ -282,13 +282,13 @@ func (ctx *TxnCtx) ToRollbackedLocked() error {
 	if ctx.Is2PC() {
 		if ctx.State != txnif.TxnStatePrepared &&
 			ctx.State != txnif.TxnStateRollbacking {
-			return moerr.NewTAERollback("state %s", txnif.TxnStrState(ctx.State))
+			return moerr.NewTAERollbackNoCtx("state %s", txnif.TxnStrState(ctx.State))
 		}
 		ctx.State = txnif.TxnStateRollbacked
 		return nil
 	}
 	if ctx.State != txnif.TxnStateRollbacking {
-		return moerr.NewTAERollback("state %s", txnif.TxnStrState(ctx.State))
+		return moerr.NewTAERollbackNoCtx("state %s", txnif.TxnStrState(ctx.State))
 	}
 	ctx.State = txnif.TxnStateRollbacked
 	return nil

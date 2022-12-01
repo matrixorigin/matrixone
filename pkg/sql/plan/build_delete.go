@@ -64,16 +64,13 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 	tf.baseNameMap = reverseMap(tf.baseNameMap)
 	objRef, tableDef := ctx.Resolve(tf.dbNames[0], tf.tableNames[0])
 	if tableDef == nil {
-		return nil, moerr.NewInvalidInput("delete has no table def")
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "delete has no table def")
 	}
 	if tableDef.TableType == catalog.SystemExternalRel {
-		return nil, moerr.NewInvalidInput("cannot delete from external table")
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from external table")
 	} else if tableDef.TableType == catalog.SystemViewRel {
-		return nil, moerr.NewInvalidInput("cannot delete from view")
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from view")
 	}
-
-	indexInfos := BuildIndexInfos(ctx, objRef.DbName, tableDef.Defs)
-	tableDef.IndexInfos = indexInfos
 
 	// optimize to truncate,
 	if stmt.Where == nil && stmt.Limit == nil {
@@ -106,14 +103,17 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 	usePlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_DELETE
 	qry := usePlan.Plan.(*plan.Plan_Query).Query
 
+	uDef, sDef := buildIndexDefs(tableDef.Defs)
+
 	// build delete node
 	d := &plan.DeleteTableCtx{
-		DbName:       objRef.SchemaName,
-		TblName:      tableDef.Name,
-		UseDeleteKey: useKey.Name,
-		CanTruncate:  false,
-		IndexInfos:   tableDef.IndexInfos,
-		IndexAttrs:   attrs,
+		DbName:            objRef.SchemaName,
+		TblName:           tableDef.Name,
+		UseDeleteKey:      useKey.Name,
+		CanTruncate:       false,
+		UniqueIndexDef:    uDef,
+		SecondaryIndexDef: sDef,
+		IndexAttrs:        attrs,
 	}
 	node := &Node{
 		NodeType:        plan.Node_DELETE,
@@ -131,11 +131,13 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 
 func buildDelete2Truncate(objRef *ObjectRef, tblDef *TableDef) (*Plan, error) {
 	// build delete node
+	uDef, sDef := buildIndexDefs(tblDef.Defs)
 	d := &plan.DeleteTableCtx{
-		DbName:      objRef.SchemaName,
-		TblName:     tblDef.Name,
-		CanTruncate: true,
-		IndexInfos:  tblDef.IndexInfos,
+		DbName:            objRef.SchemaName,
+		TblName:           tblDef.Name,
+		CanTruncate:       true,
+		UniqueIndexDef:    uDef,
+		SecondaryIndexDef: sDef,
 	}
 	node := &Node{
 		NodeType:        plan.Node_DELETE,
@@ -179,12 +181,12 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 		}
 		objRefs[i], tblDefs[i] = ctx.Resolve(dbName, tblName)
 		if tblDefs[i] == nil {
-			return nil, moerr.NewInvalidInput("delete has no table ref")
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "delete has no table ref")
 		}
 		if tblDefs[i].TableType == catalog.SystemExternalRel {
-			return nil, moerr.NewInvalidInput("cannot delete from external table")
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from external table")
 		} else if tblDefs[i].TableType == catalog.SystemViewRel {
-			return nil, moerr.NewInvalidInput("cannot delete from view")
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from view")
 		}
 	}
 	originMap := tf.baseNameMap
@@ -193,7 +195,7 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 		tblName := string(t.ObjectName)
 		if _, ok := tf.baseNameMap[tblName]; !ok {
 			if _, ok := originMap[tblName]; !ok {
-				return nil, moerr.NewInvalidInput("Unknown table '%v' in MULTI DELETE", tblName)
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Unknown table '%v' in MULTI DELETE", tblName)
 			}
 		}
 	}
@@ -270,7 +272,7 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 	// we will allways return hideKey now
 	hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
 	if hideKey == nil {
-		return nil, nil, nil, moerr.NewInvalidState("cannot find hide key")
+		return nil, nil, nil, moerr.NewInvalidState(ctx.GetContext(), "cannot find hide key")
 	}
 	e := tree.SetUnresolvedName(tblName, hideKey.Name)
 	ps = append(ps, tree.SelectExpr{Expr: e})
@@ -278,21 +280,38 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 
 	// make true we can get all the index col data before update, so we can delete index info.
 	indexColNameMap := make(map[string]bool)
-	for _, info := range tableDef.IndexInfos {
-		if info.Cols[0].IsCPkey {
-			colNames := util.SplitCompositePrimaryKeyColumnName(info.Cols[0].Name)
-			for _, colName := range colNames {
-				indexColNameMap[colName] = true
+	uDef, sDef := buildIndexDefs(tableDef.Defs)
+	if uDef != nil {
+		for _, def := range uDef.Fields {
+			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(def.Cols[0].Name)
+			if isCPkey {
+				colNames := util.SplitCompositePrimaryKeyColumnName(def.Cols[0].Name)
+				for _, colName := range colNames {
+					indexColNameMap[colName] = true
+				}
+			} else {
+				indexColNameMap[def.Cols[0].Name] = true
 			}
-		} else {
-			indexColNameMap[info.Cols[0].Name] = true
 		}
 	}
-	indexAttrs := make([]string, 0)
+	if sDef != nil {
+		for _, def := range sDef.Fields {
+			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(def.Cols[0].Name)
+			if isCPkey {
+				colNames := util.SplitCompositePrimaryKeyColumnName(def.Cols[0].Name)
+				for _, colName := range colNames {
+					indexColNameMap[colName] = true
+				}
+			} else {
+				indexColNameMap[def.Cols[0].Name] = true
+			}
+		}
+	}
 
+	indexAttrs := make([]string, 0)
 	for indexColName := range indexColNameMap {
 		indexAttrs = append(indexAttrs, indexColName)
-		e, _ := tree.NewUnresolvedName(tf.baseNameMap[tableDef.Name], indexColName)
+		e, _ := tree.NewUnresolvedName(ctx.GetContext(), tf.baseNameMap[tableDef.Name], indexColName)
 		ps = append(ps, tree.SelectExpr{Expr: e})
 	}
 	return ps, useKey, indexAttrs, nil

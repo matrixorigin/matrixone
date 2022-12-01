@@ -124,7 +124,7 @@ func TestRunTaskWithRetry(t *testing.T) {
 		n := uint32(0)
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			if atomic.AddUint32(&n, 1) == 1 {
-				return moerr.NewInternalError("error")
+				return moerr.NewInternalError(context.TODO(), "error")
 			}
 			close(c)
 			return nil
@@ -147,7 +147,7 @@ func TestRunTaskWithDisableRetry(t *testing.T) {
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			close(c)
 			if atomic.AddUint32(&n, 1) == 1 {
-				return moerr.NewInternalError("error")
+				return moerr.NewInternalError(context.TODO(), "error")
 			}
 			return nil
 		})

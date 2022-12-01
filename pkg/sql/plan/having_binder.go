@@ -62,7 +62,7 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 				},
 			}, nil
 		} else {
-			return nil, moerr.NewInvalidInput("nestted aggregate function")
+			return nil, moerr.NewInvalidInputNoCtx("nestted aggregate function")
 		}
 	}
 
@@ -77,18 +77,18 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		}
 
 		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
-			return nil, moerr.NewNYI("correlated columns in aggregate function")
+			return nil, moerr.NewNYINoCtx("correlated columns in aggregate function")
 		}
 
 		return expr, nil
 	} else {
-		return nil, moerr.NewSyntaxError("column %q must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL))
+		return nil, moerr.NewSyntaxErrorNoCtx("column %q must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL))
 	}
 }
 
 func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if b.insideAgg {
-		return nil, moerr.NewSyntaxError("aggregate function %s calls cannot be nested", funcName)
+		return nil, moerr.NewSyntaxErrorNoCtx("aggregate function %s calls cannot be nested", funcName)
 	}
 
 	b.insideAgg = true
@@ -119,9 +119,9 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 
 func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if b.insideAgg {
-		return nil, moerr.NewSyntaxError("aggregate function calls cannot contain window function calls")
+		return nil, moerr.NewSyntaxErrorNoCtx("aggregate function calls cannot contain window function calls")
 	} else {
-		return nil, moerr.NewSyntaxError("window %s functions not allowed in having clause", funcName)
+		return nil, moerr.NewSyntaxErrorNoCtx("window %s functions not allowed in having clause", funcName)
 	}
 }
 

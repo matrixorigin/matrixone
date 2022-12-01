@@ -18,8 +18,8 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/mohae/deepcopy"
 	"go.uber.org/zap"
@@ -27,23 +27,17 @@ import (
 
 type Manager struct {
 	cluster pb.ClusterInfo
-
-	logger *zap.Logger
 }
 
-func NewBootstrapManager(cluster pb.ClusterInfo, logger *zap.Logger) *Manager {
-	copied := deepcopy.Copy(cluster)
-	nc, ok := copied.(pb.ClusterInfo)
+func NewBootstrapManager(cluster pb.ClusterInfo) *Manager {
+	nc, ok := deepcopy.Copy(cluster).(pb.ClusterInfo)
 	if !ok {
 		panic("deep copy failed")
 	}
 
-	manager := &Manager{
+	return &Manager{
 		cluster: nc,
-		logger:  logutil.GetGlobalLogger().Named("hakeeper"),
 	}
-
-	return manager
 }
 
 func (bm *Manager) Bootstrap(alloc util.IDAllocator,
@@ -56,10 +50,10 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 
 	commands := append(logCommands, dnCommands...)
 	for _, command := range commands {
-		bm.logger.Info("schedule command generated", zap.String("command", command.LogString()))
+		runtime.ProcessLevelRuntime().Logger().Info("schedule command generated", zap.String("command", command.LogString()))
 	}
 	if len(commands) != 0 {
-		bm.logger.Info("bootstrap commands generated")
+		runtime.ProcessLevelRuntime().Logger().Info("bootstrap commands generated")
 	}
 	return commands, nil
 }
@@ -75,14 +69,14 @@ func (bm *Manager) bootstrapLogService(alloc util.IDAllocator,
 		}
 
 		if shardRecord.NumberOfReplicas > uint64(len(logStores)) {
-			return nil, moerr.NewInternalError("not enough log stores")
+			return nil, moerr.NewInternalErrorNoCtx("not enough log stores")
 		}
 
 		initialMembers := make(map[uint64]string)
 		for i := uint64(0); i < shardRecord.NumberOfReplicas; i++ {
 			replicaID, ok := alloc.Next()
 			if !ok {
-				return nil, moerr.NewInternalError("id allocator error")
+				return nil, moerr.NewInternalErrorNoCtx("id allocator error")
 			}
 
 			initialMembers[replicaID] = logStores[i]

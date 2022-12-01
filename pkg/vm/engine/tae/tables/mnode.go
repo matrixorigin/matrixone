@@ -146,7 +146,7 @@ func (node *memoryNode) GetDataWindow(
 func (node *memoryNode) PrepareAppend(rows uint32) (n uint32, err error) {
 	left := node.block.meta.GetSchema().BlockMaxRows - uint32(node.data.Length())
 	if left == 0 {
-		err = moerr.NewInternalError("not appendable")
+		err = moerr.NewInternalErrorNoCtx("not appendable")
 		return
 	}
 	if rows > left {

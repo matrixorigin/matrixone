@@ -57,7 +57,7 @@ func ParsePath(s string) (path Path, err error) {
 		case '!', '-', '_', '.', '*', '\'', '(', ')':
 			continue
 		}
-		err = moerr.NewInvalidPath(path.File)
+		err = moerr.NewInvalidPathNoCtx(path.File)
 		return
 	}
 
@@ -73,7 +73,7 @@ func parseService(str string) (service string, arguments []string, err error) {
 		return
 	}
 	if len(records) != 1 {
-		err = moerr.NewInvalidInput("bad service: %v", str)
+		err = moerr.NewInvalidInputNoCtx("bad service: %v", str)
 		return
 	}
 	service = records[0][0]
@@ -89,7 +89,7 @@ func ParsePathAtService(s string, serviceName string) (path Path, err error) {
 	if serviceName != "" &&
 		path.Service != "" &&
 		!strings.EqualFold(path.Service, serviceName) {
-		err = moerr.NewWrongService(serviceName, path.Service)
+		err = moerr.NewWrongServiceNoCtx(serviceName, path.Service)
 		return
 	}
 	return

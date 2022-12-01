@@ -38,7 +38,8 @@ func TestHandlerWithServiceTypeNotSupported(t *testing.T) {
 	vec3 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
 	require.NoError(t, vec3.Append([]byte(""), false, mpool.MustNewZero()))
 
-	_, err := Handler([]*vector.Vector{vec1, vec2, vec3}, nil)
+	proc := testutil.NewProcess()
+	_, err := Handler([]*vector.Vector{vec1, vec2, vec3}, proc)
 	require.Error(t, err)
 }
 
@@ -52,7 +53,8 @@ func TestHandlerWithCommandNotSupported(t *testing.T) {
 	vec3 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
 	require.NoError(t, vec3.Append([]byte(""), false, mpool.MustNewZero()))
 
-	_, err := Handler([]*vector.Vector{vec1, vec2, vec3}, nil)
+	proc := testutil.NewProcess()
+	_, err := Handler([]*vector.Vector{vec1, vec2, vec3}, proc)
 	require.Error(t, err)
 }
 

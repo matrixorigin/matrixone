@@ -129,11 +129,11 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	case *tree.PrepareStmt, *tree.PrepareString:
 		return buildPrepare(stmt, ctx)
 	case *tree.Do, *tree.Declare:
-		return nil, moerr.NewNotSupported(tree.String(stmt, dialect.MYSQL))
+		return nil, moerr.NewNotSupported(ctx.GetContext(), tree.String(stmt, dialect.MYSQL))
 	case *tree.ValuesStatement:
 		return buildValues(stmt, ctx)
 	default:
-		return nil, moerr.NewInternalError("statement: '%v'", tree.String(stmt, dialect.MYSQL))
+		return nil, moerr.NewInternalError(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
 }
 

@@ -46,14 +46,14 @@ func (info *partialCkpInfo) IsAllCheckpointed() bool {
 
 func (info *partialCkpInfo) MergePartialCkpInfo(o *partialCkpInfo) {
 	if info.size != o.size {
-		panic(moerr.NewInternalError("logic error %d != %d", info.size, o.size))
+		panic(moerr.NewInternalErrorNoCtx("logic error %d != %d", info.size, o.size))
 	}
 	info.ckps.Or(o.ckps)
 }
 
 func (info *partialCkpInfo) MergeCommandInfos(cmds *entry.CommandInfo) {
 	if info.size != cmds.Size {
-		panic(moerr.NewInternalError("logic error %d != %d", info.size, cmds.Size))
+		panic(moerr.NewInternalErrorNoCtx("logic error %d != %d", info.size, cmds.Size))
 	}
 	for _, csn := range cmds.CommandIds {
 		info.ckps.Add(csn)

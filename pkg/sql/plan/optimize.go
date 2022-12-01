@@ -48,7 +48,7 @@ func (opt *BaseOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
 	}
 	qry, ok := pn.Plan.(*plan.Plan_Query)
 	if !ok {
-		panic(moerr.NewInternalError(pn.String()))
+		panic(moerr.NewInternalError(opt.ctx.GetContext(), pn.String()))
 	}
 	opt.qry = qry.Query
 	return opt.optimize()
