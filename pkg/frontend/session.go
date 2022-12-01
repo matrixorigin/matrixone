@@ -1652,7 +1652,6 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				Comment:  attr.Attr.Comment,
 			}
 			if isCPkey {
-				col.IsCPkey = isCPkey
 				CompositePkey = col
 				continue
 			}
@@ -1695,21 +1694,26 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Partition: p,
 				},
 			})
-		} else if indexDef, ok := def.(*engine.ComputeIndexDef); ok {
-			fields := make([]*plan.Field, len(indexDef.Fields))
-			for i := range indexDef.Fields {
-				fields[i] = &plan.Field{
-					ColNames: indexDef.Fields[i],
-				}
+		} else if indexDef, ok := def.(*engine.UniqueIndexDef); ok {
+			u := &plan.UniqueIndexDef{}
+			err = u.UnMarshalUniqueIndexDef(([]byte)(indexDef.UniqueIndex))
+			if err != nil {
+				return nil, nil
 			}
-			defs = append(defs, &plan2.TableDefType{
-				Def: &plan2.TableDef_DefType_Idx{
-					Idx: &plan2.IndexDef{
-						IndexNames: indexDef.IndexNames,
-						TableNames: indexDef.TableNames,
-						Uniques:    indexDef.Uniques,
-						Fields:     fields,
-					},
+			defs = append(defs, &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_UIdx{
+					UIdx: u,
+				},
+			})
+		} else if indexDef, ok := def.(*engine.SecondaryIndexDef); ok {
+			s := &plan.SecondaryIndexDef{}
+			err = s.UnMarshalSecondaryIndexDef(([]byte)(indexDef.SecondaryIndex))
+			if err != nil {
+				return nil, nil
+			}
+			defs = append(defs, &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_SIdx{
+					SIdx: s,
 				},
 			})
 		}
@@ -1793,7 +1797,6 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 
 	priDefs := make([]*plan2.ColDef, 0, len(priKeys))
 	for _, key := range priKeys {
-		isCPkey := util.JudgeIsCompositePrimaryKeyColumn(key.Name)
 		priDefs = append(priDefs, &plan2.ColDef{
 			Name: key.Name,
 			Typ: &plan2.Type{
@@ -1804,7 +1807,6 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 				Size:      key.Type.Size,
 			},
 			Primary: key.Primary,
-			IsCPkey: isCPkey,
 		})
 	}
 	return priDefs

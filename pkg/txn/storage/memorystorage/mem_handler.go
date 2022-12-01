@@ -47,7 +47,6 @@ type MemHandler struct {
 	databases  *memtable.Table[ID, *DatabaseRow, *DatabaseRow]
 	relations  *memtable.Table[ID, *RelationRow, *RelationRow]
 	attributes *memtable.Table[ID, *AttributeRow, *AttributeRow]
-	indexes    *memtable.Table[ID, *IndexRow, *IndexRow]
 
 	// data
 	data *memtable.Table[DataKey, DataValue, DataRow]
@@ -96,7 +95,6 @@ func NewMemHandler(
 		databases:              memtable.NewTable[ID, *DatabaseRow, *DatabaseRow](),
 		relations:              memtable.NewTable[ID, *RelationRow, *RelationRow](),
 		attributes:             memtable.NewTable[ID, *AttributeRow, *AttributeRow](),
-		indexes:                memtable.NewTable[ID, *IndexRow, *IndexRow](),
 		data:                   memtable.NewTable[DataKey, DataValue, DataRow](),
 		mheap:                  mp,
 		defaultIsolationPolicy: defaultIsolationPolicy,
@@ -194,39 +192,16 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 
 	case *engine.IndexTableDef:
 		// tea & mem do not use this def now.
-	case *engine.ComputeIndexDef:
-		// add index
-		// check existence
-		for i := 0; i < len(def.IndexNames); i++ {
-			entries, err := m.indexes.Index(tx, Tuple{
-				index_RelationID_Name,
-				req.TableID,
-				Text(def.IndexNames[i]),
-			})
-			if err != nil {
-				return err
-			}
-			if len(entries) > 0 {
-				return moerr.NewDuplicateNoCtx()
-			}
-			// insert
-			id, err := m.idGenerator.NewID(ctx)
-			if err != nil {
-				return err
-			}
-			idxRow := &IndexRow{
-				ID:         id,
-				RelationID: req.TableID,
-				IndexName:  def.IndexNames[i],
-				Unique:     def.Uniques[i],
-				TableName:  def.TableNames[i],
-				Field:      def.Fields[i],
-			}
-			if err := m.indexes.Insert(tx, idxRow); err != nil {
-				return err
-			}
+	case *engine.UniqueIndexDef:
+		table.UniqueIndexDef = []byte(def.UniqueIndex)
+		if err := m.relations.Update(tx, table); err != nil {
+			return err
 		}
-
+	case *engine.SecondaryIndexDef:
+		table.SecondaryIndexDef = []byte(def.SecondaryIndex)
+		if err := m.relations.Update(tx, table); err != nil {
+			return err
+		}
 	case *engine.PropertiesDef:
 		// update properties
 		for _, prop := range def.Properties {
@@ -361,7 +336,6 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 
 	// handle defs
 	var relAttrs []engine.Attribute
-	var relIndexes *engine.ComputeIndexDef
 	var primaryColumnNames []string
 	for _, def := range req.Defs {
 		switch def := def.(type) {
@@ -381,8 +355,11 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 		case *engine.IndexTableDef:
 			// do nothing
 
-		case *engine.ComputeIndexDef:
-			relIndexes = def
+		case *engine.UniqueIndexDef:
+			row.UniqueIndexDef = []byte(def.UniqueIndex)
+
+		case *engine.SecondaryIndexDef:
+			row.SecondaryIndexDef = []byte(def.SecondaryIndex)
 
 		case *engine.PropertiesDef:
 			for _, prop := range def.Properties {
@@ -445,27 +422,6 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 		}
 	}
 
-	// insert relation indexes
-	if relIndexes != nil {
-		for i := 0; i < len(relIndexes.IndexNames); i++ {
-			id, err := m.idGenerator.NewID(ctx)
-			if err != nil {
-				return err
-			}
-			idxRow := &IndexRow{
-				ID:         id,
-				RelationID: row.ID,
-				IndexName:  relIndexes.IndexNames[i],
-				Unique:     relIndexes.Uniques[i],
-				TableName:  relIndexes.TableNames[i],
-				Field:      relIndexes.Fields[i],
-			}
-			if err := m.indexes.Insert(tx, idxRow); err != nil {
-				return err
-			}
-		}
-	}
-
 	// insert relation
 	if err := m.relations.Insert(tx, row); err != nil {
 		return err
@@ -520,19 +476,18 @@ func (m *MemHandler) HandleDelTableDef(ctx context.Context, meta txn.TxnMeta, re
 		}
 
 	case *engine.IndexTableDef:
-		// delete index
-		entries, err := m.indexes.Index(tx, Tuple{
-			index_RelationID_Name,
-			req.TableID,
-			Text(def.Name),
-		})
-		if err != nil {
+		// do nothing
+
+	case *engine.UniqueIndexDef:
+		table.UniqueIndexDef = nil
+		if err := m.relations.Update(tx, table); err != nil {
 			return err
 		}
-		for _, entry := range entries {
-			if err := m.indexes.Delete(tx, entry.Key); err != nil {
-				return err
-			}
+
+	case *engine.SecondaryIndexDef:
+		table.SecondaryIndexDef = nil
+		if err := m.relations.Update(tx, table); err != nil {
+			return err
 		}
 
 	case *engine.PropertiesDef:
@@ -971,33 +926,15 @@ func (m *MemHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, r
 	}
 
 	// indexes
-	{
-		entries, err := m.indexes.Index(tx, Tuple{
-			index_RelationID, req.TableID,
+	if len(relRow.UniqueIndexDef) != 0 {
+		resp.Defs = append(resp.Defs, &engine.UniqueIndexDef{
+			UniqueIndex: string(relRow.UniqueIndexDef),
 		})
-		if err != nil {
-			return err
-		}
-		indexLen := len(entries)
-		if indexLen > 0 {
-			computeIndexDef := &engine.ComputeIndexDef{
-				IndexNames: make([]string, indexLen),
-				Uniques:    make([]bool, indexLen),
-				TableNames: make([]string, indexLen),
-				Fields:     make([][]string, indexLen),
-			}
-			for i, entry := range entries {
-				index, err := m.indexes.Get(tx, entry.Key)
-				if err != nil {
-					return err
-				}
-				computeIndexDef.IndexNames[i] = index.IndexName
-				computeIndexDef.Uniques[i] = index.Unique
-				computeIndexDef.TableNames[i] = index.TableName
-				computeIndexDef.Fields[i] = index.Field
-			}
-			resp.Defs = append(resp.Defs, computeIndexDef)
-		}
+	}
+	if len(relRow.ViewDef) != 0 {
+		resp.Defs = append(resp.Defs, &engine.SecondaryIndexDef{
+			SecondaryIndex: string(relRow.SecondaryIndexDef),
+		})
 	}
 
 	// properties

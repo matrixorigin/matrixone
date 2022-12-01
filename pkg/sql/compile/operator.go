@@ -354,25 +354,45 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			return nil, err
 		}
 
-		indexTables := make([]engine.Relation, 0)
-		for _, info := range n.DeleteTablesCtx[i].IndexInfos {
-			indexTable, err := dbSource.Relation(proc.Ctx, info.TableName)
-			if err != nil {
-				return nil, err
+		uniqueIndexTables := make([]engine.Relation, 0)
+		secondaryIndexTables := make([]engine.Relation, 0)
+		uDef := n.DeleteTablesCtx[i].UniqueIndexDef
+		sDef := n.DeleteTablesCtx[i].SecondaryIndexDef
+		if uDef != nil {
+			for i := range uDef.TableNames {
+				if uDef.TableExists[i] {
+					indexTable, err := dbSource.Relation(proc.Ctx, uDef.TableNames[i])
+					if err != nil {
+						return nil, err
+					}
+					uniqueIndexTables = append(uniqueIndexTables, indexTable)
+				}
 			}
-			indexTables = append(indexTables, indexTable)
+		}
+		if sDef != nil {
+			for i := range sDef.TableNames {
+				if sDef.TableExists[i] {
+					indexTable, err := dbSource.Relation(proc.Ctx, sDef.TableNames[i])
+					if err != nil {
+						return nil, err
+					}
+					secondaryIndexTables = append(secondaryIndexTables, indexTable)
+				}
+			}
 		}
 
 		ds[i] = &deletion.DeleteCtx{
-			TableSource:  relation,
-			TableName:    n.DeleteTablesCtx[i].TblName,
-			DbName:       n.DeleteTablesCtx[i].DbName,
-			UseDeleteKey: n.DeleteTablesCtx[i].UseDeleteKey,
-			CanTruncate:  n.DeleteTablesCtx[i].CanTruncate,
-			ColIndex:     n.DeleteTablesCtx[i].ColIndex,
-			IndexInfos:   n.DeleteTablesCtx[i].IndexInfos,
-			IndexTables:  indexTables,
-			IndexAttrs:   n.DeleteTablesCtx[i].IndexAttrs,
+			TableSource:          relation,
+			TableName:            n.DeleteTablesCtx[i].TblName,
+			DbName:               n.DeleteTablesCtx[i].DbName,
+			UseDeleteKey:         n.DeleteTablesCtx[i].UseDeleteKey,
+			CanTruncate:          n.DeleteTablesCtx[i].CanTruncate,
+			ColIndex:             n.DeleteTablesCtx[i].ColIndex,
+			UniqueIndexDef:       n.DeleteTablesCtx[i].UniqueIndexDef,
+			SecondaryIndexDef:    n.DeleteTablesCtx[i].SecondaryIndexDef,
+			UniqueIndexTables:    uniqueIndexTables,
+			SecondaryIndexTables: secondaryIndexTables,
+			IndexAttrs:           n.DeleteTablesCtx[i].IndexAttrs,
 		}
 	}
 
@@ -390,25 +410,44 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	if err != nil {
 		return nil, err
 	}
-	indexTables := make([]engine.Relation, 0)
-	for _, info := range n.TableDef.IndexInfos {
-		indexTable, err := db.Relation(proc.Ctx, info.TableName)
-		if err != nil {
-			return nil, err
+	uniqueIndexTables := make([]engine.Relation, 0)
+	secondaryIndexTables := make([]engine.Relation, 0)
+	uDef, sDef := buildIndexDefs(n.TableDef.Defs)
+	if uDef != nil {
+		for i := range uDef.TableNames {
+			if uDef.TableExists[i] {
+				indexTable, err := db.Relation(proc.Ctx, uDef.TableNames[i])
+				if err != nil {
+					return nil, err
+				}
+				uniqueIndexTables = append(uniqueIndexTables, indexTable)
+			}
 		}
-		indexTables = append(indexTables, indexTable)
+	}
+	if sDef != nil {
+		for i := range sDef.TableNames {
+			if sDef.TableExists[i] {
+				indexTable, err := db.Relation(proc.Ctx, sDef.TableNames[i])
+				if err != nil {
+					return nil, err
+				}
+				secondaryIndexTables = append(secondaryIndexTables, indexTable)
+			}
+		}
 	}
 	return &insert.Argument{
-		TargetTable:   relation,
-		TargetColDefs: n.TableDef.Cols,
-		Engine:        eg,
-		DB:            db,
-		TableID:       relation.GetTableID(proc.Ctx),
-		DBName:        n.ObjRef.SchemaName,
-		TableName:     n.TableDef.Name,
-		CPkeyColDef:   n.TableDef.CompositePkey,
-		IndexTables:   indexTables,
-		IndexInfos:    n.TableDef.IndexInfos,
+		TargetTable:          relation,
+		TargetColDefs:        n.TableDef.Cols,
+		Engine:               eg,
+		DB:                   db,
+		TableID:              relation.GetTableID(proc.Ctx),
+		DBName:               n.ObjRef.SchemaName,
+		TableName:            n.TableDef.Name,
+		CPkeyColDef:          n.TableDef.CompositePkey,
+		UniqueIndexTables:    uniqueIndexTables,
+		UniqueIndexDef:       uDef,
+		SecondaryIndexTables: secondaryIndexTables,
+		SecondaryIndexDef:    sDef,
 	}, nil
 }
 
@@ -443,28 +482,47 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 				break
 			}
 		}
-		indexTables := make([]engine.Relation, 0)
-		for _, info := range n.TableDefVec[k].IndexInfos {
-			indexTable, err := dbSource.Relation(proc.Ctx, info.TableName)
-			if err != nil {
-				return nil, err
+		uniqueIndexTables := make([]engine.Relation, 0)
+		secondaryIndexTables := make([]engine.Relation, 0)
+		uDef, sDef := buildIndexDefs(n.TableDefVec[k].Defs)
+		if uDef != nil {
+			for i := range uDef.TableNames {
+				if uDef.TableExists[i] {
+					indexTable, err := dbSource.Relation(proc.Ctx, uDef.TableNames[i])
+					if err != nil {
+						return nil, err
+					}
+					uniqueIndexTables = append(uniqueIndexTables, indexTable)
+				}
 			}
-			indexTables = append(indexTables, indexTable)
+		}
+		if sDef != nil {
+			for i := range sDef.TableNames {
+				if sDef.TableExists[i] {
+					indexTable, err := dbSource.Relation(proc.Ctx, sDef.TableNames[i])
+					if err != nil {
+						return nil, err
+					}
+					secondaryIndexTables = append(secondaryIndexTables, indexTable)
+				}
+			}
 		}
 
 		us[i] = &update.UpdateCtx{
-			PriKey:      updateCtx.PriKey,
-			PriKeyIdx:   updateCtx.PriKeyIdx,
-			HideKey:     updateCtx.HideKey,
-			HideKeyIdx:  updateCtx.HideKeyIdx,
-			UpdateAttrs: colNames,
-			OtherAttrs:  updateCtx.OtherAttrs,
-			OrderAttrs:  updateCtx.OrderAttrs,
-			TableSource: relation,
-			CPkeyColDef: updateCtx.CompositePkey,
-			IndexInfos:  n.TableDefVec[k].IndexInfos,
-			IndexTables: indexTables,
-			IndexAttrs:  updateCtx.IndexAttrs,
+			PriKey:               updateCtx.PriKey,
+			PriKeyIdx:            updateCtx.PriKeyIdx,
+			HideKey:              updateCtx.HideKey,
+			HideKeyIdx:           updateCtx.HideKeyIdx,
+			UpdateAttrs:          colNames,
+			OtherAttrs:           updateCtx.OtherAttrs,
+			OrderAttrs:           updateCtx.OrderAttrs,
+			TableSource:          relation,
+			CPkeyColDef:          updateCtx.CompositePkey,
+			UniqueIndexDef:       uDef,
+			SecondaryIndexDef:    sDef,
+			IndexAttrs:           updateCtx.IndexAttrs,
+			UniqueIndexTables:    uniqueIndexTables,
+			SecondaryIndexTables: secondaryIndexTables,
 		}
 	}
 	return &update.Argument{
@@ -1063,4 +1121,18 @@ func exprRelPos(expr *plan.Expr) int32 {
 		}
 	}
 	return -1
+}
+
+func buildIndexDefs(defs []*plan.TableDef_DefType) (*plan.UniqueIndexDef, *plan.SecondaryIndexDef) {
+	var uIdxDef *plan.UniqueIndexDef = nil
+	var sIdxDef *plan.SecondaryIndexDef = nil
+	for _, def := range defs {
+		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+			uIdxDef = idxDef.UIdx
+		}
+		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
+			sIdxDef = idxDef.SIdx
+		}
+	}
+	return uIdxDef, sIdxDef
 }
