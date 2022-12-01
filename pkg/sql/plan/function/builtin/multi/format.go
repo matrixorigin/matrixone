@@ -52,7 +52,7 @@ func Format(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
 
 	var constVectors []bool
-	if paramNum == 2 {
+	if paramNum == 2 || vecs[2].IsScalarNull() {
 		constVectors = []bool{vecs[0].IsScalar(), vecs[1].IsScalar(), true}
 	} else {
 		constVectors = []bool{vecs[0].IsScalar(), vecs[1].IsScalar(), vecs[2].IsScalar()}
