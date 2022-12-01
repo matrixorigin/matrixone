@@ -41,7 +41,7 @@ import (
 )
 
 var (
-	ErrClosed = moerr.NewInternalError("tae: closed")
+	ErrClosed = moerr.NewInternalErrorNoCtx("tae: closed")
 )
 
 type DB struct {
@@ -91,7 +91,7 @@ func (db *DB) GetTxnByCtx(txnOperator client.TxnOperator) (txn txnif.AsyncTxn, e
 	txnID := txnOperator.Txn().ID
 	txn = db.TxnMgr.GetTxnByCtx(txnID)
 	if txn == nil {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 	}
 	return
 }
@@ -106,7 +106,7 @@ func (db *DB) GetOrCreateTxnWithMeta(
 func (db *DB) GetTxn(id string) (txn txnif.AsyncTxn, err error) {
 	txn = db.TxnMgr.GetTxn(id)
 	if txn == nil {
-		err = moerr.NewTxnNotFound()
+		err = moerr.NewTxnNotFoundNoCtx()
 	}
 	return
 }

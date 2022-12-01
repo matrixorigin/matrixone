@@ -104,7 +104,7 @@ func (db *txnDB) BatchDedup(id uint64, pk containers.Vector) (err error) {
 		return err
 	}
 	if table.IsDeleted() {
-		return moerr.NewNotFound()
+		return moerr.NewNotFoundNoCtx()
 	}
 
 	return table.DoBatchDedup(pk)
@@ -116,7 +116,7 @@ func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
 		return err
 	}
 	if table.IsDeleted() {
-		return moerr.NewNotFound()
+		return moerr.NewNotFoundNoCtx()
 	}
 	return table.Append(bat)
 }
@@ -138,7 +138,7 @@ func (db *txnDB) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteT
 		return err
 	}
 	if table.IsDeleted() {
-		return moerr.NewNotFound()
+		return moerr.NewNotFoundNoCtx()
 	}
 	return table.RangeDelete(id, start, end, dt)
 	// if start == end {
@@ -158,7 +158,7 @@ func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, 
 		return
 	}
 	if table.IsDeleted() {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	return table.GetByFilter(filter)
@@ -170,7 +170,7 @@ func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, err 
 		return
 	}
 	if table.IsDeleted() {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	return table.GetValue(id, row, colIdx)

@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -236,7 +237,7 @@ func setServer(val int32) {
 func echoHandler(session goetty.IOSession, msg interface{}, received uint64) error {
 	value, ok := msg.(string)
 	if !ok {
-		return moerr.NewInternalError("convert to string failed")
+		return moerr.NewInternalError(context.TODO(), "convert to string failed")
 	}
 
 	err := session.Write(value, goetty.WriteOptions{Flush: true})

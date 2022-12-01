@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 // Routine handles requests.
@@ -164,6 +165,7 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		tenantCtx := context.WithValue(cancelRequestCtx, defines.TenantIDKey{}, tenant.GetTenantID())
 		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenant.GetUserID())
 		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
+		tenantCtx = trace.ContextWithSpanContext(tenantCtx, trace.SpanContextWithID(trace.TraceID(ses.uuid), trace.SpanKindSession))
 		ses.SetRequestContext(tenantCtx)
 		executor.PrepareSessionBeforeExecRequest(routine.GetSession())
 
@@ -172,7 +174,7 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		}
 
 		if resp != nil {
-			if err = routine.GetClientProtocol().SendResponse(resp); err != nil {
+			if err = routine.GetClientProtocol().SendResponse(tenantCtx, resp); err != nil {
 				logErrorf(ses.GetConciseProfile(), "routine send response failed %v. error:%v ", resp, err)
 			}
 		}
@@ -239,6 +241,7 @@ func (routine *Routine) notifyDone() {
 }
 
 func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecutor, parameters *config.FrontendParameters, rs goetty.IOSession) *Routine {
+	ctx = trace.Generate(ctx) // fill span{trace_id} in ctx
 	cancelRoutineCtx, cancelRoutineFunc := context.WithCancel(ctx)
 	ri := &Routine{
 		protocol:          protocol,

@@ -15,6 +15,7 @@
 package txn
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"sync"
@@ -103,7 +104,7 @@ func (kop *sqlTxn) Commit() error {
 	kop.mu.Lock()
 	defer kop.mu.Unlock()
 	if kop.mu.closed {
-		return moerr.NewTxnClosed(nil)
+		return moerr.NewTxnClosed(context.Background(), nil)
 	}
 
 	kop.mu.closed = true

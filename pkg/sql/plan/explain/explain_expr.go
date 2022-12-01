@@ -15,6 +15,7 @@
 package explain
 
 import (
+	"context"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -23,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
+func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions) (string, error) {
 	var result string
 
 	switch exprImpl := expr.Expr.(type) {
@@ -73,7 +74,7 @@ func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
 
 	case *plan.Expr_F:
 		funcExpr := expr.Expr.(*plan.Expr_F)
-		funcDesc, err := funcExprExplain(funcExpr, expr.Typ, options)
+		funcDesc, err := funcExprExplain(ctx, funcExpr, expr.Typ, options)
 		if err != nil {
 			return result, err
 		}
@@ -105,7 +106,7 @@ func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
 		exprlist := expr.Expr.(*plan.Expr_List)
 		if exprlist.List.List != nil {
 			exprListDescImpl := NewExprListDescribeImpl(exprlist.List.List)
-			desclist, err := exprListDescImpl.GetDescription(options)
+			desclist, err := exprListDescImpl.GetDescription(ctx, options)
 			if err != nil {
 				return result, err
 			}
@@ -119,7 +120,7 @@ func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
 }
 
 // generator function expression(Expr_F) explain information
-func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOptions) (string, error) {
+func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOptions) (string, error) {
 	// SysFunsAndOperatorsMap
 	var result string
 	funcName := funcExpr.F.GetFunc().GetObjName()
@@ -127,7 +128,7 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 
 	funcProtoType, err := function.GetFunctionByID(funcDef.Obj & function.DistinctMask)
 	if err != nil {
-		return result, moerr.NewInvalidInput("invalid function or opreator '%s'", funcName)
+		return result, moerr.NewInvalidInput(ctx, "invalid function or opreator '%s'", funcName)
 	}
 
 	switch funcProtoType.GetLayout() {
@@ -140,7 +141,7 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 					result += ", "
 				}
 				first = false
-				exprDesc, err := describeExpr(v, options)
+				exprDesc, err := describeExpr(ctx, v, options)
 				if err != nil {
 					return result, err
 				}
@@ -155,13 +156,13 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 		} else {
 			opertator = "-"
 		}
-		describeExpr, err := describeExpr(funcExpr.F.Args[0], options)
+		describeExpr, err := describeExpr(ctx, funcExpr.F.Args[0], options)
 		if err != nil {
 			return result, err
 		}
 		result += "(" + opertator + describeExpr + ")"
 	case function.UNARY_LOGICAL_OPERATOR:
-		describeExpr, err := describeExpr(funcExpr.F.Args[0], options)
+		describeExpr, err := describeExpr(ctx, funcExpr.F.Args[0], options)
 		if err != nil {
 			return result, err
 		}
@@ -171,17 +172,17 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 	case function.BINARY_LOGICAL_OPERATOR:
 		fallthrough
 	case function.COMPARISON_OPERATOR:
-		left, err := describeExpr(funcExpr.F.Args[0], options)
+		left, err := describeExpr(ctx, funcExpr.F.Args[0], options)
 		if err != nil {
 			return result, err
 		}
-		right, err := describeExpr(funcExpr.F.Args[1], options)
+		right, err := describeExpr(ctx, funcExpr.F.Args[1], options)
 		if err != nil {
 			return result, err
 		}
 		result += "(" + left + " " + funcExpr.F.Func.GetObjName() + " " + right + ")"
 	case function.CAST_EXPRESSION:
-		describeExpr, err := describeExpr(funcExpr.F.Args[0], options)
+		describeExpr, err := describeExpr(ctx, funcExpr.F.Args[0], options)
 		if err != nil {
 			return result, err
 		}
@@ -194,11 +195,11 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 		for i := 0; i < condSize; i++ {
 			whenExpr := funcExpr.F.Args[i]
 			thenExpr := funcExpr.F.Args[i+1]
-			whenExprDesc, err := describeExpr(whenExpr, options)
+			whenExprDesc, err := describeExpr(ctx, whenExpr, options)
 			if err != nil {
 				return result, err
 			}
-			thenExprDesc, err := describeExpr(thenExpr, options)
+			thenExprDesc, err := describeExpr(ctx, thenExpr, options)
 			if err != nil {
 				return result, err
 			}
@@ -209,7 +210,7 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 			lastIndex := len(funcExpr.F.Args) - 1
 			elseExpr := funcExpr.F.Args[lastIndex]
 			// get else expression
-			elseExprDesc, err := describeExpr(elseExpr, options)
+			elseExprDesc, err := describeExpr(ctx, elseExpr, options)
 			if err != nil {
 				return result, err
 			}
@@ -220,23 +221,23 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 		if len(funcExpr.F.Args) != 2 {
 			panic("Nested query predicate,such as in,exist,all,any parameter number error!")
 		}
-		descExpr, err := describeExpr(funcExpr.F.Args[0], options)
+		descExpr, err := describeExpr(ctx, funcExpr.F.Args[0], options)
 		if err != nil {
 			return result, err
 		}
-		descExprlist, err := describeExpr(funcExpr.F.Args[1], options)
+		descExprlist, err := describeExpr(ctx, funcExpr.F.Args[1], options)
 		if err != nil {
 			return result, err
 		}
 		result += descExpr + " " + funcExpr.F.Func.GetObjName() + "(" + descExprlist + ")"
 	case function.EXISTS_ANY_PREDICATE:
-		describeExpr, err := describeExpr(funcExpr.F.Args[0], options)
+		describeExpr, err := describeExpr(ctx, funcExpr.F.Args[0], options)
 		if err != nil {
 			return result, err
 		}
 		result += funcExpr.F.Func.GetObjName() + "(" + describeExpr + ")"
 	case function.IS_NULL_EXPRESSION:
-		describeExpr, err := describeExpr(funcExpr.F.Args[0], options)
+		describeExpr, err := describeExpr(ctx, funcExpr.F.Args[0], options)
 		if err != nil {
 			return result, err
 		}
@@ -244,24 +245,24 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 	case function.NOPARAMETER_FUNCTION:
 		result += funcExpr.F.Func.GetObjName()
 	case function.DATE_INTERVAL_EXPRESSION:
-		describeExpr, err := describeExpr(funcExpr.F.Args[0], options)
+		describeExpr, err := describeExpr(ctx, funcExpr.F.Args[0], options)
 		if err != nil {
 			return result, err
 		}
 		result += funcExpr.F.Func.GetObjName() + " " + describeExpr + ""
 	case function.EXTRACT_FUNCTION:
-		first, err := describeExpr(funcExpr.F.Args[0], options)
+		first, err := describeExpr(ctx, funcExpr.F.Args[0], options)
 		if err != nil {
 			return result, err
 		}
-		second, err := describeExpr(funcExpr.F.Args[1], options)
+		second, err := describeExpr(ctx, funcExpr.F.Args[1], options)
 		if err != nil {
 			return result, err
 		}
 
 		result += funcExpr.F.Func.GetObjName() + "(" + first + " from " + second + ")"
 	case function.UNKNOW_KIND_FUNCTION:
-		return result, moerr.NewInvalidInput("explain contains UNKNOW_KIND_FUNCTION")
+		return result, moerr.NewInvalidInput(ctx, "explain contains UNKNOW_KIND_FUNCTION")
 	}
 	return result, nil
 }

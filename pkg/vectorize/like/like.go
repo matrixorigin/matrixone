@@ -181,7 +181,7 @@ func BtConstAndConst(s string, expr []byte) (bool, error) {
 // <source column> like <rule column>
 func BtSliceAndSlice(xs []string, exprs [][]byte, rs []bool) ([]bool, error) {
 	if len(xs) != len(exprs) {
-		return nil, moerr.NewInternalError("unexpected error when LIKE operator")
+		return nil, moerr.NewInternalErrorNoCtx("unexpected error when LIKE operator")
 	}
 
 	for i := range xs {

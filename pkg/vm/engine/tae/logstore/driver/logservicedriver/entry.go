@@ -236,7 +236,7 @@ func (r *recordEntry) ReadFrom(reader io.Reader) (n int64, err error) {
 		return 0, err
 	}
 	if n2 != int(r.meta.payloadSize) {
-		panic(moerr.NewInternalError("logic err: err is %v, expect %d, get %d", err, r.meta.payloadSize, n2))
+		panic(moerr.NewInternalErrorNoCtx("logic err: err is %v, expect %d, get %d", err, r.meta.payloadSize, n2))
 	}
 	r.payload = payload
 	return

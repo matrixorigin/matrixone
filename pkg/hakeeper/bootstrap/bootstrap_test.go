@@ -15,6 +15,7 @@
 package bootstrap
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -370,7 +371,7 @@ func TestIssue3814(t *testing.T) {
 				}},
 			},
 			log:      pb.LogState{},
-			expected: moerr.NewInternalError("not enough log stores"),
+			expected: moerr.NewInternalError(context.TODO(), "not enough log stores"),
 		},
 		{
 			desc: "case not enough dn stores",

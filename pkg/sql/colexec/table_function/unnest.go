@@ -34,7 +34,7 @@ func unnestString(arg any, buf *bytes.Buffer) {
 	buf.WriteString("unnest")
 }
 
-func unnestPrepare(_ *process.Process, arg *Argument) error {
+func unnestPrepare(proc *process.Process, arg *Argument) error {
 	param := unnestParam{}
 	param.ColName = string(arg.Params)
 	if len(param.ColName) == 0 {
@@ -55,7 +55,7 @@ func unnestPrepare(_ *process.Process, arg *Argument) error {
 	}
 	param.Filters = filters
 	if len(arg.Args) < 1 || len(arg.Args) > 3 {
-		return moerr.NewInvalidInput("unnest: argument number must be 1, 2 or 3")
+		return moerr.NewInvalidInput(proc.Ctx, "unnest: argument number must be 1, 2 or 3")
 	}
 	if len(arg.Args) == 1 {
 		vType := types.T_varchar.ToType()
@@ -107,24 +107,24 @@ func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		return false, err
 	}
 	if jsonVec.Typ.Oid != types.T_json && jsonVec.Typ.Oid != types.T_varchar {
-		return false, moerr.NewInvalidInput(fmt.Sprintf("unnest: first argument must be json or string, but got %s", jsonVec.Typ.String()))
+		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: first argument must be json or string, but got %s", jsonVec.Typ.String()))
 	}
 	pathVec, err = colexec.EvalExpr(bat, proc, arg.Args[1])
 	if err != nil {
 		return false, err
 	}
 	if pathVec.Typ.Oid != types.T_varchar {
-		return false, moerr.NewInvalidInput(fmt.Sprintf("unnest: second argument must be string, but got %s", pathVec.Typ.String()))
+		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: second argument must be string, but got %s", pathVec.Typ.String()))
 	}
 	outerVec, err = colexec.EvalExpr(bat, proc, arg.Args[2])
 	if err != nil {
 		return false, err
 	}
 	if outerVec.Typ.Oid != types.T_bool {
-		return false, moerr.NewInvalidInput(fmt.Sprintf("unnest: third argument must be bool, but got %s", outerVec.Typ.String()))
+		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: third argument must be bool, but got %s", outerVec.Typ.String()))
 	}
 	if !pathVec.IsScalar() || !outerVec.IsScalar() {
-		return false, moerr.NewInvalidInput("unnest: second and third arguments must be scalar")
+		return false, moerr.NewInvalidInput(proc.Ctx, "unnest: second and third arguments must be scalar")
 	}
 	path, err = types.ParseStringToPath(pathVec.GetString(0))
 	if err != nil {
@@ -221,7 +221,7 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestPara
 				val, ok := ures[i][arg.Attrs[j]]
 				err = vec.Append([]byte(val), !ok, proc.Mp())
 			default:
-				err = moerr.NewInvalidArg("unnest: invalid column name:%s", arg.Attrs[j])
+				err = moerr.NewInvalidArg(proc.Ctx, "unnest: invalid column name:%s", arg.Attrs[j])
 			}
 			if err != nil {
 				return nil, err

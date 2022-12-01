@@ -195,7 +195,7 @@ func (t *Table[K, V, R]) Insert(
 		for i := len(physicalRow.Versions) - 1; i >= 0; i-- {
 			version := physicalRow.Versions[i]
 			if version.Visible(tx.Time, tx.ID, tx.IsolationPolicy.Read) {
-				return moerr.NewDuplicate()
+				return moerr.NewDuplicateNoCtx()
 			}
 		}
 
@@ -324,7 +324,7 @@ func (t *Table[K, V, R]) Upsert(
 				for i := len(physicalRow.Versions) - 1; i >= 0; i-- {
 					version := physicalRow.Versions[i]
 					if version.Visible(tx.Time, tx.ID, tx.IsolationPolicy.Read) {
-						return moerr.NewDuplicate()
+						return moerr.NewDuplicateNoCtx()
 					}
 				}
 
@@ -402,7 +402,7 @@ func setIndexes[
 			append(index, Min),
 		)
 		for ok := iter.First(); ok; ok = iter.Next() {
-			return moerr.NewDuplicate()
+			return moerr.NewDuplicateNoCtx()
 		}
 		state.uniqueIndexes.Set(&IndexEntry[K, V]{
 			Index:     index,
@@ -548,7 +548,7 @@ func (t *Table[K, V, R]) CommitTx(tx *Transaction) error {
 						if index.Key.Less(entry.Key) ||
 							entry.Key.Less(index.Key) ||
 							index.VersionID != entry.VersionID {
-							return moerr.NewDuplicate()
+							return moerr.NewDuplicateNoCtx()
 						}
 					}
 				}
@@ -690,7 +690,7 @@ func validate[
 			version.LockTx.ID != tx.ID &&
 			version.LockTime.After(tx.BeginTime) {
 			//err = moerr.NewPrimaryKeyDuplicated(physicalRow.Key)
-			return moerr.NewDuplicate()
+			return moerr.NewDuplicateNoCtx()
 		}
 
 		// born in another committed tx after tx begin
@@ -698,7 +698,7 @@ func validate[
 			version.BornTx.ID != tx.ID &&
 			version.BornTime.After(tx.BeginTime) {
 			//err = moerr.NewPrimaryKeyDuplicated(physicalRow.Key)
-			return moerr.NewDuplicate()
+			return moerr.NewDuplicateNoCtx()
 		}
 
 	}

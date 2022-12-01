@@ -122,7 +122,7 @@ func (*HashShard) Batch(
 		hasher := fnv.New32()
 		for _, info := range infos {
 			vec := bat.Vecs[info.Index]
-			bs, err := getBytesFromPrimaryVectorForHash(vec, i, info.Attr.Type)
+			bs, err := getBytesFromPrimaryVectorForHash(ctx, vec, i, info.Attr.Type)
 			if err != nil {
 				return nil, err
 			}
@@ -216,7 +216,7 @@ func (h *HashShard) Vector(
 	// shard vector
 	for i := 0; i < vec.Length(); i++ {
 		hasher := fnv.New32()
-		bs, err := getBytesFromPrimaryVectorForHash(vec, i, shardAttr.Type)
+		bs, err := getBytesFromPrimaryVectorForHash(ctx, vec, i, shardAttr.Type)
 		if err != nil {
 			return nil, err
 		}
@@ -250,13 +250,13 @@ func (h *HashShard) Vector(
 
 var _ ShardPolicy = new(HashShard)
 
-func getBytesFromPrimaryVectorForHash(vec *vector.Vector, i int, typ types.Type) ([]byte, error) {
+func getBytesFromPrimaryVectorForHash(ctx context.Context, vec *vector.Vector, i int, typ types.Type) ([]byte, error) {
 	if vec.IsConst() {
 		panic("primary value vector should not be const")
 	}
 	if vec.GetNulls().Any() {
 		//TODO mimic to pass BVT
-		return nil, moerr.NewDuplicate()
+		return nil, moerr.NewDuplicate(ctx)
 		//panic("primary value vector should not contain nulls")
 	}
 	if vec.Typ.IsFixedLen() {
@@ -267,7 +267,7 @@ func getBytesFromPrimaryVectorForHash(vec *vector.Vector, i int, typ types.Type)
 		end := (i + 1) * size
 		if end > len(data) {
 			//TODO mimic to pass BVT
-			return nil, moerr.NewDuplicate()
+			return nil, moerr.NewDuplicate(ctx)
 			//return nil, moerr.NewInvalidInput("vector size not match")
 		}
 		return data[i*size : (i+1)*size], nil

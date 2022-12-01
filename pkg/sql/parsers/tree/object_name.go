@@ -14,7 +14,10 @@
 
 package tree
 
-import "github.com/matrixorigin/matrixone/pkg/common/moerr"
+import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
 
 // the common interface for qualified object names
 type ObjectName interface {
@@ -74,9 +77,9 @@ func (node *UnresolvedObjectName) ToTableName() TableName {
 	}
 }
 
-func NewUnresolvedObjectName(num int, parts [3]string) (*UnresolvedObjectName, error) {
+func NewUnresolvedObjectName(ctx context.Context, num int, parts [3]string) (*UnresolvedObjectName, error) {
 	if num < 1 || num > 3 {
-		return nil, moerr.NewInternalError("invalid number of parts")
+		return nil, moerr.NewInternalError(ctx, "invalid number of parts")
 	}
 	return &UnresolvedObjectName{
 		NumParts: num,

@@ -50,7 +50,7 @@ func SumReturnType(typs []types.Type) types.Type {
 	case types.T_decimal128:
 		return typs[0]
 	}
-	panic(moerr.NewInternalError("unsupport type '%v' for sum", typs[0]))
+	panic(moerr.NewInternalErrorNoCtx("unsupport type '%v' for sum", typs[0]))
 }
 
 func NewSum[T1 Numeric, T2 ReturnTyp]() *Sum[T1, T2] {

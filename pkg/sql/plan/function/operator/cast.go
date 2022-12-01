@@ -59,7 +59,7 @@ func formatCastError(vec *vector.Vector, typ types.Type, extraInfo string) error
 	} else {
 		errStr = fmt.Sprintf("Can't cast column from %v type to %v type because of one or more values in that column.", vec.Typ, typ)
 	}
-	return moerr.NewInternalError(errStr + extraInfo)
+	return moerr.NewInternalErrorNoCtx(errStr + extraInfo)
 }
 
 func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {

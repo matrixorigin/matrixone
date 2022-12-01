@@ -172,7 +172,7 @@ type Relation interface {
 
 type Reader interface {
 	Close() error
-	Read([]string, *plan.Expr, *mpool.MPool) (*batch.Batch, error)
+	Read(context.Context, []string, *plan.Expr, *mpool.MPool) (*batch.Batch, error)
 }
 
 type Database interface {

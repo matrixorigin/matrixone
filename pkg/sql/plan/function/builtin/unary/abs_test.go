@@ -37,7 +37,7 @@ func Test_AbsUint64(t *testing.T) {
 		}
 		data, ok := vec.Col.([]uint64)
 		if !ok {
-			log.Fatal(moerr.NewInternalError("the AbsUint64 function return value type is not []uint6"))
+			log.Fatal(moerr.NewInternalError(proc.Ctx, "the AbsUint64 function return value type is not []uint6"))
 		}
 		compVec := []uint64{1, 0}
 		compNsp := []int64{2}

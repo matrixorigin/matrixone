@@ -64,7 +64,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		for _, reg := range ap.Regs {
 			select {
 			case <-reg.Ctx.Done():
-				return false, moerr.NewInternalError("pipeline context has done.")
+				return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
 			case reg.Ch <- bat:
 			}
 		}

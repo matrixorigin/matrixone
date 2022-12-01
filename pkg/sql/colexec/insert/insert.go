@@ -85,14 +85,14 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 
 func NewTxn(n *Argument, proc *process.Process, ctx context.Context) (txn client.TxnOperator, err error) {
 	if proc.TxnClient == nil {
-		return nil, moerr.NewInternalError("must set txn client")
+		return nil, moerr.NewInternalError(ctx, "must set txn client")
 	}
 	txn, err = proc.TxnClient.New()
 	if err != nil {
 		return nil, err
 	}
 	if ctx == nil {
-		return nil, moerr.NewInternalError("context should not be nil")
+		return nil, moerr.NewInternalError(ctx, "context should not be nil")
 	}
 	if err = n.Engine.New(ctx, txn); err != nil {
 		return nil, err
@@ -105,7 +105,7 @@ func CommitTxn(n *Argument, txn client.TxnOperator, ctx context.Context) error {
 		return nil
 	}
 	if ctx == nil {
-		return moerr.NewInternalError("context should not be nil")
+		return moerr.NewInternalError(ctx, "context should not be nil")
 	}
 	ctx, cancel := context.WithTimeout(
 		ctx,
@@ -128,7 +128,7 @@ func RolllbackTxn(n *Argument, txn client.TxnOperator, ctx context.Context) erro
 		return nil
 	}
 	if ctx == nil {
-		return moerr.NewInternalError("context should not be nil")
+		return moerr.NewInternalError(ctx, "context should not be nil")
 	}
 	ctx, cancel := context.WithTimeout(
 		ctx,
@@ -195,7 +195,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			// Not-null check, for more information, please refer to the comments in func InsertValues
 			if (n.TargetColDefs[i].Primary && !n.TargetColDefs[i].Typ.AutoIncr) || (n.TargetColDefs[i].Default != nil && !n.TargetColDefs[i].Default.NullAbility && !n.TargetColDefs[i].Typ.AutoIncr) {
 				if nulls.Any(bat.Vecs[i].Nsp) {
-					return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
+					return false, moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 				}
 			}
 		}
@@ -220,7 +220,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 				for i := range bat.Vecs {
 					if n.TargetColDefs[i].Name == name {
 						if nulls.Any(bat.Vecs[i].Nsp) {
-							return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
+							return false, moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 						}
 					}
 				}

@@ -114,7 +114,7 @@ func TestScheduleCreatedTasks(t *testing.T) {
 	scheduler.Schedule(cnState, currentTick)
 
 	// Create Task 1
-	service.Create(context.Background(), task.TaskMetadata{ID: "1"})
+	assert.NoError(t, service.Create(context.Background(), task.TaskMetadata{ID: "1"}))
 	query, err := service.QueryTask(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, task.TaskStatus_Created, query[0].Status)
@@ -128,7 +128,7 @@ func TestScheduleCreatedTasks(t *testing.T) {
 	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
 
 	// Create Task 2
-	service.Create(context.Background(), task.TaskMetadata{ID: "2"})
+	assert.NoError(t, service.Create(context.Background(), task.TaskMetadata{ID: "2"}))
 	query, err = service.QueryTask(context.Background(),
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
 	assert.NoError(t, err)
@@ -154,7 +154,7 @@ func TestReallocateExpiredTasks(t *testing.T) {
 	currentTick := expiredTick - 1
 
 	// Create Task 1
-	service.Create(context.Background(), task.TaskMetadata{ID: "1"})
+	assert.NoError(t, service.Create(context.Background(), task.TaskMetadata{ID: "1"}))
 	query, err := service.QueryTask(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, task.TaskStatus_Created, query[0].Status)
@@ -194,5 +194,17 @@ func TestReallocateExpiredTasks(t *testing.T) {
 	assert.Equal(t, 1, len(query))
 	assert.Equal(t, "b", query[0].TaskRunner)
 	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
+}
 
+func TestSchedulerCreateTasks(t *testing.T) {
+	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
+	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{})
+	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
+	currentTick := uint64(0)
+
+	assert.NoError(t, scheduler.Create(context.Background(),
+		[]task.TaskMetadata{{ID: "1"}}))
+
+	// Schedule empty task
+	scheduler.Schedule(cnState, currentTick)
 }
