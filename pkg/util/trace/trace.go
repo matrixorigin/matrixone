@@ -153,8 +153,10 @@ func Shutdown(ctx context.Context) error {
 	_ = atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(gTracer.(*MOTracer))), unsafe.Pointer(&tracer))
 
 	// fixme: need stop timeout
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 	for _, p := range GetTracerProvider().spanProcessors {
-		if err := p.Shutdown(ctx); err != nil {
+		if err := p.Shutdown(shutdownCtx); err != nil {
 			return err
 		}
 	}
