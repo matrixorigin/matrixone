@@ -146,7 +146,7 @@ func (table *TxnTable) ForeachRowInBetween(
 	from, to types.TS,
 	op func(row RowT) (goNext bool),
 ) {
-	snapshot := table.BlocksSnapshot()
+	snapshot := table.Snapshot()
 	pivot := &txnBlock{bornTS: from}
 	snapshot.Descend(pivot, func(blk BlockT) bool {
 		pivot.bornTS = blk.bornTS

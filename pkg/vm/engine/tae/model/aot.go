@@ -25,43 +25,63 @@ import (
 	"github.com/tidwall/btree"
 )
 
+// RowsT represents a group of rows
 type RowsT[T any] interface {
+	// row count
 	Length() int
+
+	// returns a window of the group of rows
 	Window(offset, length int) T
 }
 
+// BlockT represents a block of rows
 type BlockT[R RowsT[R]] interface {
+	// Append appends a group of rows into the block
 	Append(R) error
+
+	// IsAppendable specifies wether the block is appendable
 	IsAppendable() bool
+
+	// Length specifies the row count of the block
 	Length() int
+
 	String() string
+
+	// Close release the block bound resources
+	// It should be called when the block is not used
 	Close()
 }
 
+// AOTSnapshot represents the snapshot of a AOT
+type AOTSnapshot[B BlockT[R], R RowsT[R]] interface {
+	// Ascend the table within the range [pivot, last]
+	Ascend(pivot B, iter func(blk B) bool)
+
+	// Descend the table within the range [pivot, first]
+	Descend(pivot B, iter func(blk B) bool)
+}
+
+// AOT stands for append-only-table
+// append-only is the most common form of data organization.
+// A basic data structure is abstracted here, which can cover
+// most scenarios, such as logtail data and checkpoint data
 type AOT[B BlockT[R], R RowsT[R]] struct {
 	sync.Mutex
-	blockSize int
-	appender  B
-	blocks    *btree.BTreeG[B]
-	factory   func(R) B
+	blockSize    int
+	appender     B
+	blocks       *btree.BTreeG[B]
+	blockFactory func(R) B
 }
 
 func NewAOT[B BlockT[R], R RowsT[R]](
 	blockSize int,
-	factory func(R) B,
+	blockFactory func(R) B,
 	lessFn func(_, _ B) bool) *AOT[B, R] {
 	return &AOT[B, R]{
-		blockSize: blockSize,
-		factory:   factory,
-		blocks:    btree.NewBTreeGOptions(lessFn, btree.Options{NoLocks: true}),
+		blockSize:    blockSize,
+		blockFactory: blockFactory,
+		blocks:       btree.NewBTreeGOptions(lessFn, btree.Options{NoLocks: true}),
 	}
-}
-
-func (aot *AOT[B, R]) Iter() btree.GenericIter[B] {
-	aot.Lock()
-	cpy := aot.blocks.Copy()
-	aot.Unlock()
-	return cpy.Iter()
 }
 
 func (aot *AOT[B, R]) Scan(fn func(_ B) bool) {
@@ -71,7 +91,7 @@ func (aot *AOT[B, R]) Scan(fn func(_ B) bool) {
 	cpy.Scan(fn)
 }
 
-func (aot *AOT[B, R]) BlocksSnapshot() *btree.BTreeG[B] {
+func (aot *AOT[B, R]) Snapshot() AOTSnapshot[B, R] {
 	aot.Lock()
 	defer aot.Unlock()
 	return aot.blocks.Copy()
@@ -124,7 +144,8 @@ func (aot *AOT[B, R]) Max() (b B) {
 	return
 }
 
-// Truncate prunes the blocks by ts
+// Truncate prunes the blocks
+// For example: truncate the table by timestamp
 // blocks:           (Page1[bornTs=1], Page2[bornTs=10], Page3[bornTs=20])
 // Truncate(ts=5):   (Page1,Page2,Page3), ()
 // Truncate(ts=12):  (Page2,Page3),       (Page1)
@@ -187,7 +208,7 @@ func (aot *AOT[B, R]) Append(rows R) (err error) {
 	for !done {
 		toAppend, done = aot.prepareAppend(rows.Length() - appended)
 		if toAppend == 0 {
-			newB := aot.factory(rows)
+			newB := aot.blockFactory(rows)
 			if err = aot.appendBlock(newB); err != nil {
 				return
 			}
