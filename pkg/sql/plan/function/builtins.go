@@ -2670,7 +2670,7 @@ var builtins = map[int]Functions{
 				Fn:        multi.Format,
 			},
 			{
-				Index:     0,
+				Index:     1,
 				Volatile:  true,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_varchar,

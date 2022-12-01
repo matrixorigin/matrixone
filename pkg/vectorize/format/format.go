@@ -321,7 +321,11 @@ func format(number string, precision string, comma, decimalPoint []byte) (string
 
 	parts := strings.Split(number, ".")
 
-	addComma(comma, &buffer, parts[0])
+	if len(comma) != 0 {
+		addComma(comma, &buffer, parts[0])
+	} else {
+		buffer.WriteString(parts[0])
+	}
 
 	//According to the precision to process the decimal parts
 	position, err := strconv.ParseUint(precision, 10, 64)
@@ -344,7 +348,13 @@ func format(number string, precision string, comma, decimalPoint []byte) (string
 					}
 					newNumber := strconv.FormatFloat(floatVar, 'f', int(position), 64)
 					newParts := strings.Split(newNumber, ".")
-					addComma(comma, &buffer, newParts[0])
+
+					if len(comma) != 0 {
+						addComma(comma, &buffer, newParts[0])
+					} else {
+						buffer.WriteString(newParts[0])
+					}
+
 					buffer.Write(decimalPoint)
 					buffer.WriteString(newParts[1])
 				} else {
@@ -377,7 +387,7 @@ func addComma(comma []byte, buffer *bytes.Buffer, formatString string) {
 		buffer.WriteString(formatString[pos : pos+3])
 		buffer.Write(comma)
 	}
-	if len(comma) != 0 {
-		buffer.Truncate(buffer.Len() - 1)
-	}
+
+	buffer.Truncate(buffer.Len() - 1)
+
 }

@@ -24,14 +24,8 @@ import (
 
 func Format(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var paramNum = len(vecs)
-	if paramNum == 2 {
-		if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() {
-			return proc.AllocScalarNullVector(vecs[0].Typ), nil
-		}
-	} else {
-		if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() || vecs[2].IsScalarNull() {
-			return proc.AllocScalarNullVector(vecs[0].Typ), nil
-		}
+	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() {
+		return proc.AllocScalarNullVector(vecs[0].Typ), nil
 	}
 
 	//get the first arg number
@@ -40,7 +34,7 @@ func Format(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	precisionCols := vector.MustStrCols(vecs[1])
 	//get the third arg locale
 	var localeCols []string
-	if paramNum == 2 {
+	if paramNum == 2 || vecs[2].IsScalarNull() {
 		localeCols = []string{"en_US"}
 	} else {
 		localeCols = vector.MustStrCols(vecs[2])
@@ -54,13 +48,8 @@ func Format(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	resultNsp := nulls.NewWithSize(rowCount)
 
 	// set null row
-	if paramNum == 2 {
-		nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
-	} else {
-		nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
-		nulls.Or(vecs[2].Nsp, resultNsp, resultNsp)
 
-	}
+	nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
 
 	var constVectors []bool
 	if paramNum == 2 {
