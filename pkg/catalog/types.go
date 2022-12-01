@@ -22,7 +22,12 @@ import (
 const (
 	Row_ID           = "__mo_rowid"
 	PrefixPriColName = "__mo_cpkey_"
+	ExternalFilePath = "__mo_filepath"
 )
+
+func ContainExternalHidenCol(col string) bool {
+	return col == ExternalFilePath
+}
 
 const (
 	Meta_Length = 6

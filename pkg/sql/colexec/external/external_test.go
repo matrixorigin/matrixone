@@ -260,7 +260,7 @@ func Test_makeBatch(t *testing.T) {
 		plh := &ParseLineHandler{
 			batchSize: 1,
 		}
-		_ = makeBatch(param, plh, testutil.TestUtilMp)
+		_ = makeBatch(param, plh.batchSize, testutil.TestUtilMp)
 	})
 }
 
