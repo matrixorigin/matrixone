@@ -620,20 +620,21 @@ func DeduceSelectivity(expr *plan.Expr) float64 {
 	return 1
 }
 
-func ReCalcNodeCost(nodeID int32, builder *QueryBuilder, reCalcScan bool) {
+func ReCalcNodeCost(nodeID int32, builder *QueryBuilder, recursive bool) {
 	node := builder.qry.Nodes[nodeID]
-	if len(node.Children) > 0 {
-		for _, child := range node.Children {
-			ReCalcNodeCost(child, builder, reCalcScan)
+	if recursive {
+		if len(node.Children) > 0 {
+			for _, child := range node.Children {
+				ReCalcNodeCost(child, builder, recursive)
+			}
 		}
 	}
-
 	// TODO: better estimation
 	switch node.NodeType {
 	case plan.Node_JOIN:
 		leftCost := builder.qry.Nodes[node.Children[0]].Cost
 		rightCost := builder.qry.Nodes[node.Children[1]].Cost
-		ndv := rightCost.Card
+		ndv := math.Min(leftCost.Card, rightCost.Card)
 
 		switch node.JoinType {
 		case plan.Node_INNER:
@@ -707,9 +708,7 @@ func ReCalcNodeCost(nodeID int32, builder *QueryBuilder, reCalcScan bool) {
 		}
 
 	case plan.Node_TABLE_SCAN:
-		if reCalcScan {
-			node.Cost = builder.compCtx.Cost(node.ObjRef, RewriteAndConstantFold(node.FilterList))
-		}
+		node.Cost = builder.compCtx.Cost(node.ObjRef, RewriteAndConstantFold(node.FilterList))
 
 	default:
 		if len(node.Children) > 0 {

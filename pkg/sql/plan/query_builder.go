@@ -664,7 +664,6 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		ReCalcNodeCost(rootId, builder, true)
 		rootId = builder.determineJoinOrder(rootId)
 		rootId = builder.pushdownSemiAntiJoins(rootId)
-		ReCalcNodeCost(rootId, builder, false)
 		builder.qry.Steps[i] = rootId
 
 		colRefCnt := make(map[[2]int32]int)
@@ -1497,9 +1496,7 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 	node.NodeId = nodeID
 	builder.qry.Nodes = append(builder.qry.Nodes, node)
 	builder.ctxByNode = append(builder.ctxByNode, ctx)
-
 	ReCalcNodeCost(nodeID, builder, false)
-
 	return nodeID
 }
 

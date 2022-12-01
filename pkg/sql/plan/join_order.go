@@ -270,7 +270,8 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 
 			children := []int32{nodeID, subTrees[nextSibling].NodeId}
 			if leftCard < rightCard {
-				children[0], children[1] = children[1], children[0]
+				//todo fix this when pipeline ready
+				//children[0], children[1] = children[1], children[0]
 			}
 
 			nodeID = builder.appendNode(&plan.Node{
@@ -451,7 +452,8 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		leftID := vertex.node.NodeId
 		rightID := child.node.NodeId
 		if vertex.node.Cost.Card < child.node.Cost.Card {
-			leftID, rightID = rightID, leftID
+			//todo fix this when pipeline ready
+			//leftID, rightID = rightID, leftID
 		}
 
 		nodeId := builder.appendNode(&plan.Node{
@@ -462,8 +464,7 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 
 		vertex.card *= child.pkSelRate
 		vertex.pkSelRate *= child.pkSelRate
-		vertex.node = builder.qry.Nodes[nodeId]
-		vertex.node.Cost.Card = vertex.card
+		builder.qry.Nodes[nodeId].Cost.Card = vertex.card
 	}
 }
 
