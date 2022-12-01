@@ -705,6 +705,7 @@ func (h *Handle) HandleWrite(
 				}
 				pkVecs = append(pkVecs, req.JobRes[i].Res.(containers.Vector))
 			}
+			//TODO::AddBlocksWithMetaLoc()
 			err = tb.AppendBlocksOnFS(ctx, pkVecs, req.Uuids, req.FileName, req.MetaLocs, 0)
 			return
 		}

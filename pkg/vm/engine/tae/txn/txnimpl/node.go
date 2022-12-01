@@ -18,11 +18,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"io"
-	"sync/atomic"
-
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -31,8 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+	"io"
+	"sync/atomic"
 )
 
 const (
@@ -46,16 +48,18 @@ const (
 )
 
 type InsertNode interface {
-	base.INode
-	PrepareAppend(data *containers.Batch, offset uint32) (toAppend uint32)
+	//base.INode
+	//PrepareAppend(data *containers.Batch, offset uint32) (toAppend uint32)
+	Close() error
 	Append(data *containers.Batch, offset uint32) (appended uint32, err error)
 	RangeDelete(start, end uint32) error
 	IsRowDeleted(row uint32) bool
+	IsPersisted() bool
 	PrintDeletes() string
 	FillBlockView(view *model.BlockView, buffers []*bytes.Buffer, colIdxes []int) (err error)
 	FillColumnView(*model.ColumnView, *bytes.Buffer) error
 	Window(start, end uint32) (*containers.Batch, error)
-	GetSpace() uint32
+	//GetSpace() uint32
 	Rows() uint32
 	GetValue(col int, row uint32) any
 	MakeCommand(uint32, bool) (txnif.TxnCmd, wal.LogEntry, error)
@@ -166,172 +170,34 @@ func (info *appendInfo) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-type insertNode struct {
+type memoryNode struct {
+	//TODO::memoryNode will be persisted on S3/FS instead,
+	//     so the follow fields will be removed in next PR.
 	*buffer.Node
-	driver  wal.Driver
+	driver wal.Driver
+	lsn    uint64
+	typ    txnbase.NodeState
+	//TODO::the above fields will be removed.
+
+	bnode *baseNode
+	//data resides in.
 	data    *containers.Batch
-	lsn     uint64
-	typ     txnbase.NodeState
 	rows    uint32
-	table   *txnTable
 	appends []*appendInfo
-	prefix  []byte
 }
 
-func NewInsertNode(tbl *txnTable, mgr base.INodeManager, id *common.ID, driver wal.Driver) *insertNode {
-	impl := new(insertNode)
-	impl.Node = buffer.NewNode(impl, mgr, *id, 0)
-	impl.driver = driver
-	impl.typ = txnbase.PersistNode
-	impl.UnloadFunc = impl.OnUnload
-	impl.DestroyFunc = impl.OnDestroy
-	impl.LoadFunc = impl.OnLoad
-	impl.table = tbl
-	impl.appends = make([]*appendInfo, 0)
-	impl.prefix = model.EncodeBlockKeyPrefix(id.SegmentID, id.BlockID)
-	mgr.RegisterNode(impl)
-	return impl
-}
-
-func (n *insertNode) GetTxn() txnif.AsyncTxn {
-	return n.table.store.txn
-}
-func (n *insertNode) GetAppends() []*appendInfo {
-	return n.appends
-}
-func (n *insertNode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo {
-	seq := len(n.appends)
-	info := &appendInfo{
-		dest:    dest,
-		destOff: destOff,
-		destLen: destLen,
-		dbid:    dbid,
-		srcOff:  srcOff,
-		srcLen:  srcLen,
-		seq:     uint32(seq),
-	}
-	n.appends = append(n.appends, info)
-	return info
-}
-
-func (n *insertNode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCmd, entry wal.LogEntry, err error) {
-	if n.data == nil {
-		return
-	}
-	composedCmd := NewAppendCmd(id, n)
-	if n.lsn == 0 && forceFlush {
-		entry = n.execUnload()
-	}
-	if n.lsn == 0 {
-		batCmd := txnbase.NewBatchCmd(n.data)
-		composedCmd.AddCmd(batCmd)
-	} else {
-		ptrCmd := new(txnbase.PointerCmd)
-		ptrCmd.Lsn = n.lsn
-		ptrCmd.Group = wal.GroupUC
-		composedCmd.AddCmd(ptrCmd)
-	}
-	return composedCmd, entry, nil
-}
-
-func (n *insertNode) Type() txnbase.NodeType { return NTInsert }
-
-func (n *insertNode) makeLogEntry() wal.LogEntry {
-	cmd := txnbase.NewBatchCmd(n.data)
-	buf, err := cmd.Marshal()
-	e := entry.GetBase()
-	e.SetType(ETInsertNode)
-	if err != nil {
-		panic(err)
-	}
-	if err = e.SetPayload(buf); err != nil {
-		panic(err)
-	}
-	return e
-}
-
-func (n *insertNode) IsTransient() bool {
-	return atomic.LoadInt32(&n.typ) == txnbase.TransientNode
-}
-
-func (n *insertNode) ToTransient() {
-	atomic.StoreInt32(&n.typ, txnbase.TransientNode)
-}
-
-func (n *insertNode) OnDestroy() {
-	if n.data != nil {
-		n.data.Close()
+func newMemoryNode(node *baseNode) *memoryNode {
+	return &memoryNode{
+		bnode:   node,
+		appends: make([]*appendInfo, 0),
 	}
 }
 
-func (n *insertNode) OnLoad() {
-	if n.IsTransient() {
-		return
-	}
-
-	lsn := atomic.LoadUint64(&n.lsn)
-	if lsn == 0 {
-		return
-	}
-	e, err := n.driver.LoadEntry(wal.GroupUC, lsn)
-	if err != nil {
-		panic(err)
-	}
-	logutil.Debugf("GetPayloadSize=%d", e.GetPayloadSize())
-	buf := e.GetPayload()
-	e.Free()
-	r := bytes.NewBuffer(buf)
-	cmd, _, err := txnbase.BuildCommandFrom(r)
-	if err != nil {
-		panic(err)
-	}
-	n.data = cmd.(*txnbase.BatchCmd).Bat
+func (n *memoryNode) GetSpace() uint32 {
+	return txnbase.MaxNodeRows - n.rows
 }
 
-func (n *insertNode) Close() error {
-	n.ToTransient()
-	return n.Node.Close()
-}
-
-func (n *insertNode) OnUnload() {
-	entry := n.execUnload()
-	if entry != nil {
-		if err := entry.WaitDone(); err != nil {
-			panic(err)
-		}
-		entry.Free()
-	}
-}
-
-func (n *insertNode) execUnload() (en wal.LogEntry) {
-	if n.IsTransient() {
-		return
-	}
-	if atomic.LoadUint64(&n.lsn) != 0 {
-		return
-	}
-	if n.data == nil {
-		return
-	}
-	en = n.makeLogEntry()
-	info := &entry.Info{
-		Group:     wal.GroupUC,
-		Uncommits: n.table.store.txn.GetID(),
-	}
-	en.SetInfo(info)
-	if seq, err := n.driver.AppendEntry(wal.GroupUC, en); err != nil {
-		panic(err)
-	} else {
-		atomic.StoreUint64(&n.lsn, seq)
-		id := n.Key()
-		logutil.Debugf("Unloading lsn=%d id=%v", seq, id)
-	}
-	// e.WaitDone()
-	// e.Free()
-	return
-}
-
-func (n *insertNode) PrepareAppend(data *containers.Batch, offset uint32) uint32 {
+func (n *memoryNode) PrepareAppend(data *containers.Batch, offset uint32) uint32 {
 	left := uint32(data.Length()) - offset
 	nodeLeft := txnbase.MaxNodeRows - n.rows
 	if left <= nodeLeft {
@@ -340,8 +206,8 @@ func (n *insertNode) PrepareAppend(data *containers.Batch, offset uint32) uint32
 	return nodeLeft
 }
 
-func (n *insertNode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
-	schema := n.table.entry.GetSchema()
+func (n *memoryNode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
+	schema := n.bnode.table.entry.GetSchema()
 	if n.data == nil {
 		opts := new(containers.Options)
 		opts.Capacity = data.Length() - int(offset)
@@ -371,105 +237,152 @@ func (n *insertNode) Append(data *containers.Batch, offset uint32) (an uint32, e
 	return
 }
 
-func (n *insertNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
-	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, n.prefix, startRow, length)
+func (n *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
+	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, n.bnode.meta.MakeKey(), startRow, length)
 	if err != nil {
 		return
 	}
 	defer col.Close()
-	vec := n.data.Vecs[n.table.entry.GetSchema().PhyAddrKey.Idx]
+	vec := n.data.Vecs[n.bnode.table.entry.GetSchema().PhyAddrKey.Idx]
 	vec.Extend(col)
 	return
 }
-func (n *insertNode) FillBlockView(view *model.BlockView, buffers []*bytes.Buffer, colIdxes []int) (err error) {
-	for i, colIdx := range colIdxes {
-		orig := n.data.Vecs[colIdx]
-		if buffers[i] != nil {
-			buffers[i].Reset()
-			view.SetData(colIdx, containers.CloneWithBuffer(orig, buffers[i]))
-		} else {
-			view.SetData(colIdx, orig.CloneWindow(0, orig.Length()))
-		}
 
+func (n *memoryNode) OnUnload() {
+	entry := n.execUnload()
+	if entry != nil {
+		if err := entry.WaitDone(); err != nil {
+			panic(err)
+		}
+		entry.Free()
 	}
-	view.DeleteMask = n.data.Deletes
-	return
 }
-func (n *insertNode) FillColumnView(view *model.ColumnView, buffer *bytes.Buffer) (err error) {
-	orig := n.data.Vecs[view.ColIdx]
-	if buffer != nil {
-		buffer.Reset()
-		view.SetData(containers.CloneWithBuffer(orig, buffer))
+
+func (n *memoryNode) execUnload() (en wal.LogEntry) {
+	if n.IsTransient() {
+		return
+	}
+	if atomic.LoadUint64(&n.lsn) != 0 {
+		return
+	}
+	if n.data == nil {
+		return
+	}
+	en = n.makeLogEntry()
+	info := &entry.Info{
+		Group:     wal.GroupUC,
+		Uncommits: n.bnode.table.store.txn.GetID(),
+	}
+	en.SetInfo(info)
+	if seq, err := n.driver.AppendEntry(wal.GroupUC, en); err != nil {
+		panic(err)
 	} else {
-		view.SetData(orig.CloneWindow(0, orig.Length()))
+		atomic.StoreUint64(&n.lsn, seq)
+		id := n.Key()
+		logutil.Debugf("Unloading lsn=%d id=%v", seq, id)
 	}
-	view.DeleteMask = n.data.Deletes
+	// e.WaitDone()
+	// e.Free()
 	return
 }
 
-func (n *insertNode) GetSpace() uint32 {
-	return txnbase.MaxNodeRows - n.rows
-}
-
-func (n *insertNode) Rows() uint32 {
-	return n.rows
-}
-
-func (n *insertNode) RowsWithoutDeletes() uint32 {
-	deletes := uint32(0)
-	if n.data != nil && n.data.Deletes != nil {
-		deletes = uint32(n.data.DeleteCnt())
+func (n *memoryNode) OnDestroy() {
+	if n.data != nil {
+		n.data.Close()
 	}
-	return n.rows - deletes
 }
 
-func (n *insertNode) LengthWithDeletes(appended, toAppend uint32) uint32 {
-	if !n.data.HasDelete() {
-		return toAppend
+func (n *memoryNode) OnLoad() {
+	if n.IsTransient() {
+		return
 	}
-	appendedOffset := n.OffsetWithDeletes(appended)
-	toAppendOffset := n.OffsetWithDeletes(toAppend + appended)
-	// logutil.Infof("appened:%d, toAppend:%d, off1=%d, off2=%d", appended, toAppend, appendedOffset, toAppendOffset)
-	return toAppendOffset - appendedOffset
-}
 
-func (n *insertNode) OffsetWithDeletes(count uint32) uint32 {
-	if !n.data.HasDelete() {
-		return count
+	lsn := atomic.LoadUint64(&n.lsn)
+	if lsn == 0 {
+		return
 	}
-	offset := count
-	for offset < n.rows {
-		deletes := n.data.Deletes.Rank(offset)
-		if offset == count+uint32(deletes) {
-			break
-		}
-		offset = count + uint32(deletes)
+	e, err := n.driver.LoadEntry(wal.GroupUC, lsn)
+	if err != nil {
+		panic(err)
 	}
-	return offset
+	logutil.Debugf("GetPayloadSize=%d", e.GetPayloadSize())
+	buf := e.GetPayload()
+	e.Free()
+	r := bytes.NewBuffer(buf)
+	cmd, _, err := txnbase.BuildCommandFrom(r)
+	if err != nil {
+		panic(err)
+	}
+	n.data = cmd.(*txnbase.BatchCmd).Bat
 }
 
-func (n *insertNode) GetValue(col int, row uint32) any {
-	return n.data.Vecs[col].Get(int(row))
+func (n *memoryNode) IsTransient() bool {
+	return atomic.LoadInt32(&n.typ) == txnbase.TransientNode
 }
 
-func (n *insertNode) RangeDelete(start, end uint32) error {
-	n.data.RangeDelete(int(start), int(end+1))
+func (n *memoryNode) makeLogEntry() wal.LogEntry {
+	cmd := txnbase.NewBatchCmd(n.data)
+	buf, err := cmd.Marshal()
+	e := entry.GetBase()
+	e.SetType(ETInsertNode)
+	if err != nil {
+		panic(err)
+	}
+	if err = e.SetPayload(buf); err != nil {
+		panic(err)
+	}
+	return e
+}
+
+type persistedNode struct {
+	common.RefHelper
+	insertNode InsertNode
+	pk         containers.Vector
+	deletes    *roaring.Bitmap
+	//ZM and BF index for primary key
+	pkIndex indexwrapper.Index
+	//ZM and BF index for all columns
+	indexes map[int]indexwrapper.Index
+}
+
+func newPersistedNode(inode InsertNode) *persistedNode {
 	return nil
 }
 
-func (n *insertNode) IsRowDeleted(row uint32) bool {
-	return n.data.IsDeleted(int(row))
-}
-
-func (n *insertNode) PrintDeletes() string {
-	if !n.data.HasDelete() {
-		return "NoDeletes"
+type baseNode struct {
+	bufMgr base.INodeManager
+	fs     *objectio.ObjectFS
+	//scheduler is used to flush insertNode into S3/FS.
+	scheduler tasks.TaskScheduler
+	//meta for this standalone block.
+	meta    *catalog.BlockEntry
+	table   *txnTable
+	storage struct {
+		mnode *memoryNode
+		pnode *persistedNode
 	}
-	return n.data.Deletes.String()
 }
 
-func (n *insertNode) Window(start, end uint32) (bat *containers.Batch, err error) {
-	bat = n.data.CloneWindow(int(start), int(end-start))
-	bat.Compact()
-	return
+func newBaseNode(
+	tbl *txnTable,
+	fs *objectio.ObjectFS,
+	mgr base.INodeManager,
+	sched tasks.TaskScheduler,
+	meta *catalog.BlockEntry,
+) *baseNode {
+	return &baseNode{
+		bufMgr:    mgr,
+		fs:        fs,
+		scheduler: sched,
+		meta:      meta,
+		table:     tbl,
+	}
+}
+
+func (n *baseNode) IsPersisted() bool {
+	return n.meta.HasPersistedData()
+}
+
+func (n *baseNode) GetTxn() txnif.AsyncTxn {
+	return n.table.store.txn
 }

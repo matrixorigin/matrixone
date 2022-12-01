@@ -99,8 +99,13 @@ func (seg *localSegment) registerInsertNode() {
 	}
 	meta := catalog.NewStandaloneBlock(seg.entry, uint64(len(seg.nodes)), seg.table.store.txn.GetStartTS())
 	seg.entry.AddEntryLocked(meta)
-	n := NewInsertNode(seg.table, seg.table.store.nodesMgr, meta.AsCommonID(), seg.table.store.driver)
-	seg.appendable, err = seg.table.store.nodesMgr.TryPin(n, time.Second)
+	n := NewMemInsertNode(
+		seg.table,
+		seg.table.store.dataFactory.Fs,
+		seg.table.store.nodesMgr,
+		seg.table.store.dataFactory.Scheduler, meta,
+		seg.table.store.driver)
+	seg.appendable, err = seg.table.store.nodesMgr.TryPin(n.storage.mnode, time.Second)
 	if err != nil {
 		panic(err)
 	}
@@ -239,11 +244,11 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 	length := uint32(data.Length())
 	for {
 		h := seg.appendable
-		n := h.GetNode().(*insertNode)
+		n := h.GetNode().(*memoryNode)
 		space := n.GetSpace()
 		if space == 0 {
 			seg.registerInsertNode()
-			n = h.GetNode().(*insertNode)
+			n = h.GetNode().(*memoryNode)
 		}
 		toAppend := n.PrepareAppend(data, offset)
 		size := compute.EstimateSize(data, offset, toAppend)
@@ -309,6 +314,7 @@ func (seg *localSegment) AppendBlocksOnFS(
 	return nil
 }
 
+// TODO::need to rewrite
 func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err error) {
 	for i := from; i <= to; i++ {
 		v := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
@@ -319,6 +325,7 @@ func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err 
 	return
 }
 
+// TODO::
 func (seg *localSegment) RangeDelete(start, end uint32) error {
 	first, firstOffset := seg.GetLocalPhysicalAxis(start)
 	last, lastOffset := seg.GetLocalPhysicalAxis(end)
@@ -364,7 +371,11 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 
 func (seg *localSegment) CollectCmd(cmdMgr *commandManager) (err error) {
 	for i, node := range seg.nodes {
-		h, err := seg.table.store.nodesMgr.TryPin(node, time.Second)
+		if node.IsPersisted() {
+			continue
+		}
+		//TODO::
+		h, err := seg.table.store.nodesMgr.TryPin(node.(*memInsertNode).storage.mnode, time.Second)
 		if err != nil {
 			return err
 		}
@@ -386,6 +397,7 @@ func (seg *localSegment) CollectCmd(cmdMgr *commandManager) (err error) {
 	return
 }
 
+// TODO::
 func (seg *localSegment) DeletesToString() string {
 	var s string
 	for i, n := range seg.nodes {
@@ -431,6 +443,7 @@ func (seg *localSegment) BatchDedup(key containers.Vector) error {
 	return seg.index.BatchDedup(seg.table.GetSchema().GetSingleSortKey().Name, key)
 }
 
+// TODO::need to rewrite
 func (seg *localSegment) GetColumnDataByIds(
 	blk *catalog.BlockEntry,
 	colIdxes []int,
@@ -438,7 +451,7 @@ func (seg *localSegment) GetColumnDataByIds(
 	view = model.NewBlockView(seg.table.store.txn.GetStartTS())
 	npos := int(blk.ID)
 	n := seg.nodes[npos]
-	h, err := seg.table.store.nodesMgr.TryPin(n, time.Second)
+	h, err := seg.table.store.nodesMgr.TryPin(n.(*memInsertNode).storage.mnode, time.Second)
 	if err != nil {
 		return
 	}
@@ -450,6 +463,7 @@ func (seg *localSegment) GetColumnDataByIds(
 	return
 }
 
+// TODO::
 func (seg *localSegment) GetColumnDataById(
 	blk *catalog.BlockEntry,
 	colIdx int,
@@ -457,7 +471,7 @@ func (seg *localSegment) GetColumnDataById(
 	view = model.NewColumnView(seg.table.store.txn.GetStartTS(), colIdx)
 	npos := int(blk.ID)
 	n := seg.nodes[npos]
-	h, err := seg.table.store.nodesMgr.TryPin(n, time.Second)
+	h, err := seg.table.store.nodesMgr.TryPin(n.(*memInsertNode).storage.mnode, time.Second)
 	if err != nil {
 		return
 	}
@@ -476,10 +490,11 @@ func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {
 	return int(n.Rows())
 }
 
+// TODO::
 func (seg *localSegment) GetValue(row uint32, col uint16) (any, error) {
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]
-	h, err := seg.table.store.nodesMgr.TryPin(n, time.Second)
+	h, err := seg.table.store.nodesMgr.TryPin(n.(*memInsertNode).storage.mnode, time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -488,6 +503,7 @@ func (seg *localSegment) GetValue(row uint32, col uint16) (any, error) {
 	return v, nil
 }
 
+// TODO::
 func (seg *localSegment) Close() (err error) {
 	if seg.appendable != nil {
 		if err = seg.appendable.Close(); err != nil {

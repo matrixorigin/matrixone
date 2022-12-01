@@ -45,11 +45,9 @@ type txnStore struct {
 	catalog       *catalog.Catalog
 	cmdMgr        *commandManager
 	logs          []entry.Entry
-	//warChecker records all the db/table/segment/blocks visited/changed by the txn for
-	//           DML-DDL(DML encounters DDL) conflict detection when preparing commit.
-	warChecker  *warChecker
-	dataFactory *tables.DataFactory
-	writeOps    atomic.Uint32
+	warChecker    *warChecker
+	dataFactory   *tables.DataFactory
+	writeOps      atomic.Uint32
 }
 
 var TxnStoreFactory = func(
