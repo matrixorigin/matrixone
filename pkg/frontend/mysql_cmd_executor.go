@@ -1521,6 +1521,12 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 			return err
 		}
 
+		if systemVar, ok := gSysVarsDefs[name]; ok {
+			if isDefault, ok := value.(bool); ok && isDefault {
+				value = systemVar.Default
+			}
+		}
+
 		//TODO : fix SET NAMES after parser is ready
 		if name == "names" {
 			//replaced into three system variable:

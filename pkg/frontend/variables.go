@@ -1159,7 +1159,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemSystemEnumType("SNAPSHOT-ISOLATION"),
+		Type:              InitSystemSystemEnumType("transaction_isolation", "SNAPSHOT-ISOLATION"),
 		Default:           "SNAPSHOT-ISOLATION",
 	},
 	"wait_timeout": {
