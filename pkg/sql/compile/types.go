@@ -37,7 +37,7 @@ type (
 
 // number of rows per core scheduled to be processed
 const (
-	Single_Core_Rows = 1000000
+	Single_Core_Rows = 250000
 )
 
 // type of scope
