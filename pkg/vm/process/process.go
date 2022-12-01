@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -46,6 +47,7 @@ func New(
 		FileService:       fileService,
 		GetClusterDetails: getClusterDetails,
 		UnixTime:          time.Now().UnixNano(),
+		LastInsertID:      new(uint64),
 	}
 }
 
@@ -192,4 +194,8 @@ func (proc *Process) AllocInt64ScalarVector(v int64) *vector.Vector {
 	ivec[0] = v
 	vec.Col = ivec
 	return vec
+}
+
+func (proc *Process) WithSpanContext(sc trace.SpanContext) {
+	proc.Ctx = trace.ContextWithSpanContext(proc.Ctx, sc)
 }

@@ -15,6 +15,8 @@
 package function
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
@@ -2593,6 +2595,65 @@ var builtins = map[int]Functions{
 				Volatile:  true,
 				ReturnTyp: types.T_uint64,
 				Fn:        multi.FieldNumber[float64],
+			},
+		},
+	},
+	SUBSTRING_INDEX: {
+		Id:     SUBSTRING_INDEX,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			l := len(inputs)
+			if l != 3 {
+				return wrongFunctionParameters, nil
+			}
+
+			stringType := [...]types.T{types.T_varchar, types.T_char, types.T_text, types.T_blob}
+			numberType := [...]types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_float32, types.T_float64}
+			//the first and second arg's types
+			stringTypeSet := make(map[types.T]bool)
+			for _, v := range stringType {
+				stringTypeSet[v] = true
+			}
+			//the third arg's types
+			numberTypeSet := make(map[types.T]bool)
+			for _, v := range numberType {
+				numberTypeSet[v] = true
+			}
+			if stringTypeSet[inputs[0]] && stringTypeSet[inputs[1]] && numberTypeSet[inputs[2]] {
+				return 0, nil
+			}
+
+			//otherwise, try to cast
+			minCost, minIndex := math.MaxInt32, -1
+			convertTypes := make([]types.T, l)
+			thirdArgType := [...]types.T{types.T_float64, types.T_uint64, types.T_int64}
+
+			for _, first := range stringType {
+				for _, second := range stringType {
+					for _, third := range thirdArgType {
+						targetTypes := []types.T{first, second, third}
+						if code, c := tryToMatch(inputs, targetTypes); code == matchedByConvert {
+							if c < minCost {
+								minCost = c
+								copy(convertTypes, targetTypes)
+								minIndex = 0
+							}
+						}
+					}
+				}
+			}
+			if minIndex != -1 {
+				return 0, convertTypes
+			}
+
+			return wrongFunctionParameters, nil
+		},
+		Overloads: []Function{
+			{
+				Index:     0,
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.SubStrIndex,
 			},
 		},
 	},

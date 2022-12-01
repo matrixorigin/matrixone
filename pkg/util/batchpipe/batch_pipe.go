@@ -50,7 +50,7 @@ type ItemBuffer[T any, B any] interface {
 	IsEmpty() bool
 	ShouldFlush() bool
 	// GetBatch use bytes.Buffer to mitigate mem allocation and the returned bytes should own its data
-	GetBatch(buf *bytes.Buffer) B
+	GetBatch(ctx context.Context, buf *bytes.Buffer) B
 }
 
 type PipeImpl[T any, B any] interface {
@@ -208,9 +208,9 @@ func NewBaseBatchPipe[T HasName, B any](impl PipeImpl[T, B], opts ...BaseBatchPi
 }
 
 // SendItem returns error when pipe is closed
-func (bc *BaseBatchPipe[T, B]) SendItem(items ...T) error {
+func (bc *BaseBatchPipe[T, B]) SendItem(ctx context.Context, items ...T) error {
 	if atomic.LoadInt32(&bc.isRunning) == 0 {
-		return moerr.NewWarn("Collector has been stopped")
+		return moerr.NewWarn(ctx, "Collector has been stopped")
 	}
 	// avoid data race on itemCh between concurrent sending and closing
 	bc.sendingLock.RLock()
@@ -324,7 +324,7 @@ func (bc *BaseBatchPipe[T, B]) mergeWorker(ctx context.Context) {
 	defer logutil.Infof("mergeWorker quit: %v", &quitMsg)
 
 	doFlush := func(name string, itembuf ItemBuffer[T, B]) {
-		batch := itembuf.GetBatch(batchbuf)
+		batch := itembuf.GetBatch(ctx, batchbuf)
 		bc.batchCh <- batch
 		itembuf.Reset()
 		itembuf.RemindReset()

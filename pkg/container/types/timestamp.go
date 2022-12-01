@@ -111,7 +111,7 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 		} else if msecStr[precision] >= '0' && msecStr[precision] <= '4' {
 			msecCarry = 0
 		} else {
-			return 0, 0, moerr.NewInvalidArg("get ms", msecStr)
+			return 0, 0, moerr.NewInvalidArgNoCtx("get ms", msecStr)
 		}
 		msecStr = msecStr[:precision]
 	} else if len(msecStr) < int(precision) {
@@ -124,7 +124,7 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 	}
 	m, err := strconv.ParseUint(msecStr, 10, 32)
 	if err != nil {
-		return 0, 0, moerr.NewInvalidArg("get ms", msecStr)
+		return 0, 0, moerr.NewInvalidArgNoCtx("get ms", msecStr)
 	}
 	msecs = (uint32(m) + msecCarry) * scaleTable[precision]
 	if msecs == OneSecInMicroSeconds {
@@ -142,7 +142,7 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 func ParseTimestamp(loc *time.Location, s string, precision int32) (Timestamp, error) {
 	dt, err := ParseDatetime(s, precision)
 	if err != nil {
-		return -1, moerr.NewInvalidArg("parse timestamp", s)
+		return -1, moerr.NewInvalidArgNoCtx("parse timestamp", s)
 	}
 
 	result := dt.ToTimestamp(loc)
@@ -150,7 +150,7 @@ func ParseTimestamp(loc *time.Location, s string, precision int32) (Timestamp, e
 	//according to mysql, timestamp function actually return a datetime value
 	/*
 		if result < TimestampMinValue {
-			return -1, moerr.NewInvalidArg("parse timestamp", s)
+			return -1, moerr.NewInvalidArgNoCtx("parse timestamp", s)
 		}
 	*/
 

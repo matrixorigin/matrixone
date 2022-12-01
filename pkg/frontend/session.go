@@ -162,6 +162,8 @@ type Session struct {
 	mu sync.Mutex
 
 	flag bool
+
+	lastInsertID uint64
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
@@ -466,6 +468,18 @@ func (ses *Session) GetLastStmtId() uint32 {
 	return ses.lastStmtId
 }
 
+func (ses *Session) SetLastInsertID(num uint64) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.lastInsertID = num
+}
+
+func (ses *Session) GetLastInsertID() uint64 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.lastInsertID
+}
+
 func (ses *Session) SetRequestContext(reqCtx context.Context) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -574,7 +588,7 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 	defer ses.mu.Unlock()
 	if _, ok := ses.prepareStmts[name]; !ok {
 		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
-			return moerr.NewInvalidState("too many prepared statement, max %d", MaxPrepareNumberInOneSession)
+			return moerr.NewInvalidState(ses.requestCtx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession)
 		}
 	}
 	ses.prepareStmts[name] = prepareStmt
@@ -587,7 +601,7 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 	if prepareStmt, ok := ses.prepareStmts[name]; ok {
 		return prepareStmt, nil
 	}
-	return nil, moerr.NewInvalidState("prepared statement '%s' does not exist", name)
+	return nil, moerr.NewInvalidState(ses.requestCtx, "prepared statement '%s' does not exist", name)
 }
 
 func (ses *Session) RemovePrepareStmt(name string) {
@@ -1024,7 +1038,7 @@ an active transaction whichever it is started by BEGIN or in 'set autocommit = 0
 */
 func (ses *Session) SetAutocommit(on bool) error {
 	if ses.InActiveTransaction() {
-		return errorParameterModificationInTxn
+		return moerr.NewInternalError(ses.requestCtx, parameterModificationInTxnErrorInfo())
 	}
 	if on {
 		ses.ClearOptionBits(OPTION_BEGIN | OPTION_NOT_AUTOCOMMIT)
@@ -1097,7 +1111,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 	if !execResultArrayHasData(rsset) {
-		return nil, moerr.NewInternalError("there is no tenant %s", tenant.GetTenant())
+		return nil, moerr.NewInternalError(ses.GetRequestContext(), "there is no tenant %s", tenant.GetTenant())
 	}
 
 	tenantID, err = rsset[0].GetInt64(0, 0)
@@ -1119,7 +1133,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 	if !execResultArrayHasData(rsset) {
-		return nil, moerr.NewInternalError("there is no user %s", tenant.GetUser())
+		return nil, moerr.NewInternalError(ses.GetRequestContext(), "there is no user %s", tenant.GetUser())
 	}
 
 	userID, err = rsset[0].GetInt64(0, 0)
@@ -1163,7 +1177,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		}
 
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError("there is no role %s", tenant.GetDefaultRole())
+			return nil, moerr.NewInternalError(ses.GetRequestContext(), "there is no role %s", tenant.GetDefaultRole())
 		}
 
 		logDebugf(sessionProfile, "check granted role of user %s.", tenant)
@@ -1174,7 +1188,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 			return nil, err
 		}
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError("the role %s has not been granted to the user %s",
+			return nil, moerr.NewInternalError(ses.GetRequestContext(), "the role %s has not been granted to the user %s",
 				tenant.GetDefaultRole(), tenant.GetUser())
 		}
 
@@ -1192,7 +1206,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 			return nil, err
 		}
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError("get the default role of the user %s failed", tenant.GetUser())
+			return nil, moerr.NewInternalError(ses.GetRequestContext(), "get the default role of the user %s failed", tenant.GetUser())
 		}
 
 		defaultRole, err = rsset[0].GetString(0, 0)
@@ -1256,7 +1270,7 @@ func (th *TxnHandler) TxnClientNew() error {
 		return err
 	}
 	if th.txn == nil {
-		return moerr.NewInternalError("TxnClientNew: txnClient new a null txn")
+		return moerr.NewInternalError(th.ses.GetRequestContext(), "TxnClientNew: txnClient new a null txn")
 	}
 	return err
 }
@@ -1534,6 +1548,10 @@ func (tcc *TxnCompilerContext) GetAccountId() uint32 {
 	return tcc.ses.accountId
 }
 
+func (tcc *TxnCompilerContext) GetContext() context.Context {
+	return tcc.ses.requestCtx
+}
+
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
 	var txn TxnOperator
@@ -1591,7 +1609,7 @@ func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, 
 		dbName = tcc.DefaultDatabase()
 	}
 	if len(dbName) == 0 {
-		return "", moerr.NewNoDB()
+		return "", moerr.NewNoDB(tcc.GetContext())
 	}
 	return dbName, nil
 }
@@ -1903,14 +1921,14 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 }
 
 // getResultSet extracts the result set
-func getResultSet(bh BackgroundExec) ([]ExecResult, error) {
+func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) {
 	results := bh.GetExecResultSet()
 	rsset := make([]ExecResult, len(results))
 	for i, value := range results {
 		if er, ok := value.(ExecResult); ok {
 			rsset[i] = er
 		} else {
-			return nil, moerr.NewInternalError("it is not the type of result set")
+			return nil, moerr.NewInternalError(ctx, "it is not the type of result set")
 		}
 	}
 	return rsset, nil
@@ -1941,7 +1959,7 @@ func executeSQLInBackgroundSession(ctx context.Context, mp *mpool.MPool, pu *con
 	//	}
 	//}
 
-	return getResultSet(bh)
+	return getResultSet(ctx, bh)
 }
 
 type BackgroundHandler struct {

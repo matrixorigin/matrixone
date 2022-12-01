@@ -88,7 +88,7 @@ func FillCompositePKeyBatch(bat *batch.Batch, p *plan.ColDef, proc *process.Proc
 	}
 	for _, v := range vs {
 		if nulls.Any(v.Nsp) {
-			return moerr.NewConstraintViolation("composite pkey don't support null value")
+			return moerr.NewConstraintViolation(proc.Ctx, "composite pkey don't support null value")
 		}
 	}
 	vec, err := multi.Serial(vs, proc)

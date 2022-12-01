@@ -16,6 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"context"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -77,6 +78,8 @@ type CompilerContext interface {
 	// get username of current session
 	GetUserName() string
 	GetAccountId() uint32
+	// GetContext get raw context.Context
+	GetContext() context.Context
 
 	GetProcess() *process.Process
 }

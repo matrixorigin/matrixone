@@ -161,7 +161,7 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) error {
 	msg, ok := data.(RPCMessage)
 	if !ok {
-		return moerr.NewInternalError("not support %T %+v", data, data)
+		return moerr.NewInternalErrorNoCtx("not support %T %+v", data, data)
 	}
 
 	startWriteOffset := out.GetWriteOffset()
@@ -327,7 +327,7 @@ func (c *baseCodec) writeBody(out *buf.ByteBuf, msg Message, writtenSize int) (i
 	size := msg.Size()
 	if size > maxCanWrite {
 		return 0, nil,
-			moerr.NewInternalError("message body %d is too large, max is %d",
+			moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
 				size+writtenSize,
 				c.maxBodySize)
 	}
@@ -418,7 +418,7 @@ func validChecksum(body, payload []byte, expectChecksum uint64) error {
 	}
 	actulChecksum := checksum.Sum64()
 	if actulChecksum != expectChecksum {
-		return moerr.NewInternalError("checksum mismatch, expect %d, got %d",
+		return moerr.NewInternalErrorNoCtx("checksum mismatch, expect %d, got %d",
 			expectChecksum,
 			actulChecksum)
 	}

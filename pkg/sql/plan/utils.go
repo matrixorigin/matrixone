@@ -541,7 +541,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 	case *tree.ParenSelect:
 		*selects = append(*selects, leftStmt.Select)
 	default:
-		return moerr.NewParseError("unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL))
+		return moerr.NewParseErrorNoCtx("unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL))
 	}
 
 	// right is not UNION allways
@@ -565,7 +565,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 
 		*selects = append(*selects, rightStmt.Select)
 	default:
-		return moerr.NewParseError("unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
+		return moerr.NewParseErrorNoCtx("unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
 	}
 
 	switch stmt.Type {
@@ -583,7 +583,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 		}
 	case tree.EXCEPT, tree.UT_MINUS:
 		if stmt.All {
-			return moerr.NewNYI("EXCEPT/MINUS ALL clause")
+			return moerr.NewNYINoCtx("EXCEPT/MINUS ALL clause")
 		} else {
 			*unionTypes = append(*unionTypes, plan.Node_MINUS)
 		}
@@ -797,7 +797,7 @@ func rewriteTableFunction(tblFunc *tree.TableFunction, leftCtx *BindContext) err
 				tableName = binding.table
 				expr.Parts[1] = tableName
 			} else {
-				return moerr.NewInternalError("cannot find column '%s'", colName)
+				return moerr.NewInternalErrorNoCtx("cannot find column '%s'", colName)
 			}
 		}
 		//newTableName = newTableAliasMap[tableName]

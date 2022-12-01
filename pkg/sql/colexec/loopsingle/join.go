@@ -119,13 +119,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		unmatched := true
 		vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, proc, ap.Cond)
 		if err != nil {
+			rbat.Clean(proc.Mp())
 			return err
 		}
 		bs := vector.MustTCols[bool](vec)
 		if len(bs) == 1 {
 			if bs[0] {
 				if len(ctr.bat.Zs) > 1 {
-					return moerr.NewInternalError("scalar subquery returns more than 1 row")
+					return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 				}
 				unmatched = false
 				for k, rp := range ap.Result {
@@ -142,7 +143,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			for j, b := range bs {
 				if b {
 					if !unmatched {
-						return moerr.NewInternalError("scalar subquery returns more than 1 row")
+						return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 					}
 					unmatched = false
 					for k, rp := range ap.Result {

@@ -764,3 +764,32 @@ insert into t1(b) values (1);
 select * from t1;
 a    b
 1    1
+drop table t1;
+create table t1(a int auto_increment primary key);
+insert into t1 values();
+select last_insert_id();
+last_insert_id()
+1
+insert into t1 values(11);
+insert into t1 values();
+select last_insert_id();
+last_insert_id()
+12
+create table t2(a int auto_increment primary key);
+insert into t2 values();
+select last_insert_id();
+last_insert_id()
+1
+insert into t2 values(100);
+insert into t2 values();
+select last_insert_id();
+last_insert_id()
+101
+insert into t1 values();
+select last_insert_id();
+last_insert_id()
+13
+insert into t2 values();
+select last_insert_id();
+last_insert_id()
+102

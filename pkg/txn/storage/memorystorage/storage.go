@@ -67,5 +67,5 @@ func (s *Storage) Destroy(ctx context.Context) error {
 }
 
 func (s *Storage) Debug(context.Context, txn.TxnMeta, uint32, []byte) ([]byte, error) {
-	return nil, moerr.NewNotSupported("MemoryStorage not support debug method")
+	return nil, moerr.NewNotSupportedNoCtx("MemoryStorage not support debug method")
 }

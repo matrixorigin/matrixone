@@ -31,7 +31,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	case "generate_series":
 		return generateSeriesCall(idx, proc, tblArg)
 	default:
-		return true, moerr.NewNotSupported(fmt.Sprintf("table function %s is not supported", tblArg.Name))
+		return true, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}
 }
 
@@ -47,7 +47,7 @@ func Prepare(proc *process.Process, arg any) error {
 	case "generate_series":
 		return generateSeriesPrepare(proc, tblArg)
 	default:
-		return moerr.NewNotSupported(fmt.Sprintf("table function %s is not supported", tblArg.Name))
+		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}
 }
 

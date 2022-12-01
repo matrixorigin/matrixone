@@ -38,13 +38,13 @@ func (b *TableBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRo
 }
 
 func (b *TableBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewSyntaxError("aggregate function %s not allowed", funcName)
+	return nil, moerr.NewSyntaxErrorNoCtx("aggregate function %s not allowed", funcName)
 }
 
 func (b *TableBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewSyntaxError("window function %s not allowed", funcName)
+	return nil, moerr.NewSyntaxErrorNoCtx("window function %s not allowed", funcName)
 }
 
 func (b *TableBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewNYI("subquery in JOIN condition")
+	return nil, moerr.NewNYINoCtx("subquery in JOIN condition")
 }

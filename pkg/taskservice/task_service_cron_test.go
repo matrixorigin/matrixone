@@ -44,7 +44,7 @@ func TestRetryScheduleCronTask(t *testing.T) {
 		store.preUpdateCron = func() error {
 			if n == 0 {
 				n++
-				return moerr.NewInfo("test error")
+				return moerr.NewInfo(context.TODO(), "test error")
 			}
 			return nil
 		}

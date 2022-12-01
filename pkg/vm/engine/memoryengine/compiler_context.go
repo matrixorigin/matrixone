@@ -109,6 +109,10 @@ func (c *CompilerContext) GetAccountId() uint32 {
 	return 0
 }
 
+func (c *CompilerContext) GetContext() context.Context {
+	return c.ctx
+}
+
 func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
 	if schemaName == "" {
 		schemaName = c.defaultDB

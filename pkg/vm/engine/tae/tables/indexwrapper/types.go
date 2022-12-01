@@ -32,10 +32,10 @@ func TranslateError(err error) error {
 		return moerr.GetOkExpectedDup()
 	}
 	if err == index.ErrNotFound {
-		return moerr.NewNotFound()
+		return moerr.NewNotFoundNoCtx()
 	}
 	if err == index.ErrWrongType {
-		return moerr.NewInternalError("wrong type")
+		return moerr.NewInternalErrorNoCtx("wrong type")
 	}
 	return err
 }

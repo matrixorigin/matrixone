@@ -114,7 +114,7 @@ func NewBatchWithVectors(vs []*vector.Vector, zs []int64) *batch.Batch {
 		if zs == nil {
 			zs = MakeBatchZs(l, false)
 		}
-		bat.Zs = zs
+		bat.Zs = append([]int64{}, zs...)
 		bat.Vecs = vs
 	}
 	return bat
@@ -228,7 +228,7 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 		}
 		return NewRowidVector(n, typ, m, random, nil)
 	default:
-		panic(moerr.NewInternalError("unsupport vector's type '%v", typ))
+		panic(moerr.NewInternalErrorNoCtx("unsupport vector's type '%v", typ))
 	}
 }
 

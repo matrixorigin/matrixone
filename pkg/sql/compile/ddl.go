@@ -36,7 +36,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
 			return nil
 		}
-		return moerr.NewDBAlreadyExists(dbName)
+		return moerr.NewDBAlreadyExists(c.ctx, dbName)
 	}
 	err := c.e.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql),
 		dbName, c.proc.TxnOperator)
@@ -52,7 +52,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}
-		return moerr.NewErrDropNonExistsDB(dbName)
+		return moerr.NewErrDropNonExistsDB(c.ctx, dbName)
 	}
 	return c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
 }
@@ -78,7 +78,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if dbName == "" {
-			return moerr.NewNoDB()
+			return moerr.NewNoDB(c.ctx)
 		}
 		return err
 	}
@@ -87,7 +87,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if qry.GetIfNotExists() {
 			return nil
 		}
-		return moerr.NewTableAlreadyExists(tblName)
+		return moerr.NewTableAlreadyExists(c.ctx, tblName)
 	}
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
@@ -102,7 +102,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 		if _, err := dbSource.Relation(c.ctx, def.Name); err == nil {
-			return moerr.NewTableAlreadyExists(def.Name)
+			return moerr.NewTableAlreadyExists(c.ctx, def.Name)
 		}
 		if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
 			return err

@@ -70,7 +70,7 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 func (s *scheduler) Create(ctx context.Context, tasks []task.TaskMetadata) error {
 	ts := s.taskServiceGetter()
 	if ts == nil {
-		return moerr.NewInternalError("failed to get task service")
+		return moerr.NewInternalError(ctx, "failed to get task service")
 	}
 	if err := ts.CreateBatch(ctx, tasks); err != nil {
 		s.logger.Error("failed to create new tasks", zap.Error(err))

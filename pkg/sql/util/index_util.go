@@ -15,6 +15,7 @@
 package util
 
 import (
+	"context"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strconv"
@@ -29,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func BuildIndexTableName(unique bool, indexNumber int, indexName string) (string, error) {
+func BuildIndexTableName(ctx context.Context, unique bool, indexNumber int, indexName string) (string, error) {
 	var name string
 	name = catalog.PrefixPriColName
 	if unique {
@@ -42,7 +43,7 @@ func BuildIndexTableName(unique bool, indexNumber int, indexName string) (string
 	name += indexName
 	id, err := uuid.NewUUID()
 	if err != nil {
-		return "", moerr.NewInternalError("newuuid failed")
+		return "", moerr.NewInternalError(ctx, "newuuid failed")
 	}
 	name += "_"
 	name += id.String()

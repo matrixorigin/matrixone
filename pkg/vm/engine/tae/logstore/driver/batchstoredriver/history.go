@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	ErrHistoryEntryNotFound = moerr.NewInternalError("tae: history not found")
+	ErrHistoryEntryNotFound = moerr.NewInternalErrorNoCtx("tae: history not found")
 )
 
 type HistoryFactory func() History

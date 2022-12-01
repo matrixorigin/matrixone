@@ -78,7 +78,7 @@ func newSysDB(db *txnDB) *txnSysDB {
 
 func (db *txnSysDB) DropRelationByName(name string) (rel handle.Relation, err error) {
 	if isSysTable(name) {
-		err = moerr.NewInternalError("drop relation %s is not permitted", name)
+		err = moerr.NewInternalErrorNoCtx("drop relation %s is not permitted", name)
 		return
 	}
 	return db.txnDatabase.DropRelationByName(name)
@@ -86,7 +86,7 @@ func (db *txnSysDB) DropRelationByName(name string) (rel handle.Relation, err er
 
 func (db *txnSysDB) DropRelationByID(id uint64) (rel handle.Relation, err error) {
 	if isSysTableId(id) {
-		err = moerr.NewInternalError("drop relation %d is not permitted", id)
+		err = moerr.NewInternalErrorNoCtx("drop relation %d is not permitted", id)
 		return
 	}
 	return db.txnDatabase.DropRelationByID(id)
@@ -94,7 +94,7 @@ func (db *txnSysDB) DropRelationByID(id uint64) (rel handle.Relation, err error)
 
 func (db *txnSysDB) TruncateByName(name string) (rel handle.Relation, err error) {
 	if isSysTable(name) {
-		err = moerr.NewInternalError("truncate relation %s is not permitted", name)
+		err = moerr.NewInternalErrorNoCtx("truncate relation %s is not permitted", name)
 		return
 	}
 	return db.txnDatabase.TruncateByName(name)
@@ -102,7 +102,7 @@ func (db *txnSysDB) TruncateByName(name string) (rel handle.Relation, err error)
 
 func (db *txnSysDB) TruncateWithID(name string, newTableId uint64) (rel handle.Relation, err error) {
 	if isSysTable(name) {
-		err = moerr.NewInternalError("truncate relation %s is not permitted", name)
+		err = moerr.NewInternalErrorNoCtx("truncate relation %s is not permitted", name)
 		return
 	}
 	return db.txnDatabase.TruncateWithID(name, newTableId)
@@ -110,7 +110,7 @@ func (db *txnSysDB) TruncateWithID(name string, newTableId uint64) (rel handle.R
 
 func (db *txnSysDB) TruncateByID(id uint64, newTableId uint64) (rel handle.Relation, err error) {
 	if isSysTableId(id) {
-		err = moerr.NewInternalError("truncate relation %d is not permitted", id)
+		err = moerr.NewInternalErrorNoCtx("truncate relation %d is not permitted", id)
 		return
 	}
 	return db.txnDatabase.TruncateByID(id, newTableId)

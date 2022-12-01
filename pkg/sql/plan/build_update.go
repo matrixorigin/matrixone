@@ -55,12 +55,12 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	for i := range tf.dbNames {
 		objRef, tblRef := ctx.Resolve(tf.dbNames[i], tf.tableNames[i])
 		if tblRef == nil {
-			return nil, moerr.NewInternalError("cannot find update table: %s.%s", tf.dbNames[i], tf.tableNames[i])
+			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot find update table: %s.%s", tf.dbNames[i], tf.tableNames[i])
 		}
 		if tblRef.TableType == catalog.SystemExternalRel {
-			return nil, moerr.NewInternalError("the external table is not support update operation")
+			return nil, moerr.NewInternalError(ctx.GetContext(), "the external table is not support update operation")
 		} else if tblRef.TableType == catalog.SystemViewRel {
-			return nil, moerr.NewInternalError("view is not support update operation")
+			return nil, moerr.NewInternalError(ctx.GetContext(), "view is not support update operation")
 		}
 		indexInfos := BuildIndexInfos(ctx, tf.dbNames[i], tblRef.Defs)
 		tblRef.IndexInfos = indexInfos
@@ -69,7 +69,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	}
 
 	// check and build update's columns
-	updateCols, err := buildUpdateColumns(stmt.Exprs, objRefs, tblRefs, tf.baseNameMap)
+	updateCols, err := buildUpdateColumns(stmt.Exprs, objRefs, tblRefs, tf.baseNameMap, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -233,9 +233,9 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 		// use hide key to update if primary key will not be updated
 		hideKey := ctx.GetHideKeyDef(updateCols[0].dbName, updateCols[0].tblName).GetName()
 		if hideKey == "" {
-			return nil, nil, moerr.NewInternalError("internal error: cannot find hide key")
+			return nil, nil, moerr.NewInternalError(ctx.GetContext(), "internal error: cannot find hide key")
 		}
-		e, _ := tree.NewUnresolvedName(updateCols[0].dbName, updateCols[0].aliasTblName, hideKey)
+		e, _ := tree.NewUnresolvedName(ctx.GetContext(), updateCols[0].dbName, updateCols[0].aliasTblName, hideKey)
 		useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 		hideKeyIdx := offset
 
@@ -327,11 +327,11 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: &tree.UpdateVal{}})
 		}
 		for _, o := range otherAttrs {
-			e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, o)
+			e, _ := tree.NewUnresolvedName(ctx.GetContext(), updateCols[0].aliasTblName, o)
 			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 		}
 		for _, attr := range indexAttrs {
-			e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, attr)
+			e, _ := tree.NewUnresolvedName(ctx.GetContext(), updateCols[0].aliasTblName, attr)
 			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 		}
 		if len(priKeys) > 0 && priKeys[0].IsCPkey {
@@ -397,7 +397,7 @@ func extractExprTable(expr tree.TableExpr, tf *tableInfo, ctx CompilerContext) e
 			return nil
 		}
 		if t.As.Cols != nil {
-			return moerr.NewInternalError("syntax error at %s", tree.String(t, dialect.MYSQL))
+			return moerr.NewInternalError(ctx.GetContext(), "syntax error at %s", tree.String(t, dialect.MYSQL))
 		}
 		tblName := string(tn.ObjectName)
 		if _, ok := tf.baseNameMap[tblName]; ok {
@@ -427,7 +427,7 @@ func extractExprTable(expr tree.TableExpr, tf *tableInfo, ctx CompilerContext) e
 	return nil
 }
 
-func buildUpdateColumns(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblRefs []*TableDef, baseNameMap map[string]string) ([]updateCol, error) {
+func buildUpdateColumns(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblRefs []*TableDef, baseNameMap map[string]string, cctx CompilerContext) ([]updateCol, error) {
 	updateCols := make([]updateCol, 0, len(objRefs))
 	colCountMap := make(map[string]int)
 	for _, expr := range exprs {
@@ -440,12 +440,12 @@ func buildUpdateColumns(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblRefs []
 				if objRefs[i].SchemaName == dbName {
 					hasFindDbName = true
 					if tableName != tblRefs[i].Name {
-						return nil, moerr.NewInternalError("cannot find update table of %s in database of %s", tableName, dbName)
+						return nil, moerr.NewInternalError(cctx.GetContext(), "cannot find update table of %s in database of %s", tableName, dbName)
 					}
 				}
 			}
 			if !hasFindDbName {
-				return nil, moerr.NewInternalError("cannot find update database of %s", dbName)
+				return nil, moerr.NewInternalError(cctx.GetContext(), "cannot find update database of %s", dbName)
 			}
 			ctx.dbName = dbName
 		}
@@ -453,7 +453,7 @@ func buildUpdateColumns(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblRefs []
 		if tableName != "" {
 			realTableName, ok := baseNameMap[tableName]
 			if !ok {
-				return nil, moerr.NewInternalError("the target table %s of the UPDATE is not updatable", tableName)
+				return nil, moerr.NewInternalError(cctx.GetContext(), "the target table %s of the UPDATE is not updatable", tableName)
 			}
 			hasFindTableName := false
 			for i := range tblRefs {
@@ -465,7 +465,7 @@ func buildUpdateColumns(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblRefs []
 						if col.Name == columnName {
 							colName := fmt.Sprintf("%s.%s", realTableName, columnName)
 							if cnt, ok := colCountMap[colName]; ok && cnt > 0 {
-								return nil, moerr.NewInternalError("the target column %s.%s of the UPDATE is duplicate", tableName, columnName)
+								return nil, moerr.NewInternalError(cctx.GetContext(), "the target column %s.%s of the UPDATE is duplicate", tableName, columnName)
 							} else {
 								colCountMap[colName]++
 							}
@@ -476,7 +476,7 @@ func buildUpdateColumns(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblRefs []
 						}
 					}
 					if !hasFindColumnName {
-						return nil, moerr.NewInternalError("the target column %s.%s of the UPDATE is ambiguous", tableName, columnName)
+						return nil, moerr.NewInternalError(cctx.GetContext(), "the target column %s.%s of the UPDATE is ambiguous", tableName, columnName)
 					}
 
 					hasFindTableName = true
@@ -486,7 +486,7 @@ func buildUpdateColumns(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblRefs []
 				}
 			}
 			if !hasFindTableName {
-				return nil, moerr.NewInternalError("the target table %s of the UPDATE is not updatable", tableName)
+				return nil, moerr.NewInternalError(cctx.GetContext(), "the target table %s of the UPDATE is not updatable", tableName)
 			}
 			ctx.tblName = realTableName
 			ctx.aliasTblName = tableName
@@ -496,7 +496,7 @@ func buildUpdateColumns(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblRefs []
 					if col.Name == columnName {
 						colName := fmt.Sprintf("%s.%s", tblRefs[i].Name, columnName)
 						if cnt, ok := colCountMap[colName]; ok && cnt > 0 {
-							return nil, moerr.NewInternalError("the target column %s of the UPDATE is ambiguous", columnName)
+							return nil, moerr.NewInternalError(cctx.GetContext(), "the target column %s of the UPDATE is ambiguous", columnName)
 						} else {
 							colCountMap[colName]++
 						}
@@ -511,7 +511,7 @@ func buildUpdateColumns(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblRefs []
 				}
 			}
 			if ctx.tblName == "" {
-				return nil, moerr.NewInternalError("the target column %s is not exists", columnName)
+				return nil, moerr.NewInternalError(cctx.GetContext(), "the target column %s is not exists", columnName)
 			}
 		}
 		updateCols = append(updateCols, ctx)

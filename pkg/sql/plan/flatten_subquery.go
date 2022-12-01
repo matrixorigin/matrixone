@@ -70,13 +70,13 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 	}
 
 	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
-		return 0, nil, moerr.NewNYI("aggregation with non equal predicate in %s subquery  will be supported in future version", subquery.Typ.String())
+		return 0, nil, moerr.NewNYINoCtx("aggregation with non equal predicate in %s subquery  will be supported in future version", subquery.Typ.String())
 	}
 
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
 
 	if len(filterPreds) > 0 && subquery.Typ >= plan.SubqueryRef_SCALAR {
-		return 0, nil, moerr.NewNYI("correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String())
+		return 0, nil, moerr.NewNYINoCtx("correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String())
 	}
 
 	switch subquery.Typ {
@@ -253,7 +253,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		return nodeID, nil, nil
 
 	default:
-		return 0, nil, moerr.NewNotSupported("%s subquery not supported", subquery.Typ.String())
+		return 0, nil, moerr.NewNotSupportedNoCtx("%s subquery not supported", subquery.Typ.String())
 	}
 }
 
@@ -364,7 +364,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 			return unwindTupleComparison(nonEqOp, op, childList, projList, 0)
 
 		default:
-			return nil, moerr.NewNotSupported("row constructor only support comparison operators")
+			return nil, moerr.NewNotSupportedNoCtx("row constructor only support comparison operators")
 		}
 
 	default:

@@ -39,7 +39,7 @@ func generalMathMulti[T mathMultiT](funName string, vecs []*vector.Vector, proc 
 		// 	return proc.AllocScalarNullVector(typ), nil
 		// }
 		if !vecs[1].IsScalar() || vecs[1].Typ.Oid != types.T_int64 {
-			return nil, moerr.NewInvalidArg(fmt.Sprintf("the second argument of the %s", funName), "not const")
+			return nil, moerr.NewInvalidArgNoCtx(fmt.Sprintf("the second argument of the %s", funName), "not const")
 		}
 		digits = vecs[1].Col.([]int64)[0]
 	}
