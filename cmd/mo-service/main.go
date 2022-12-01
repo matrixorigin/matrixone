@@ -49,8 +49,8 @@ import (
 )
 
 var (
-	configFile = flag.String("cfg", "./mo.toml", "toml configuration used to start mo-service")
-	launchFile = flag.String("launch", "", "toml configuration used to launch mo cluster")
+	configFile = flag.String("cfg", "", "toml configuration used to start mo-service")
+	launchFile = flag.String("launch", "./etc/launch-tae-multi-CN-tae-DN/launch.toml", "toml configuration used to launch mo cluster")
 	version    = flag.Bool("version", false, "print version information")
 )
 
@@ -299,8 +299,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 			<-ctx.Done()
 			// flush trace/log/error framework
 			if err = trace.Shutdown(trace.DefaultContext()); err != nil {
-				logutil.Error("Shutdown trace", logutil.ErrorField(err), logutil.NoReportFiled())
-				panic(err)
+				logutil.Warn("Shutdown trace", logutil.ErrorField(err), logutil.NoReportFiled())
 			}
 		})
 		initWG.Wait()

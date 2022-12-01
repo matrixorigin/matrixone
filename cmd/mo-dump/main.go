@@ -300,6 +300,9 @@ func showInsert(db string, tbl string) error {
 func convertValue(v interface{}, typ string) string {
 	typ = strings.ToLower(typ)
 	ret := *(v.(*interface{}))
+	if ret == nil {
+		return "NULL"
+	}
 	switch typ {
 	case "int", "tinyint", "smallint", "bigint":
 		tmp, _ := strconv.ParseInt(string(ret.([]byte)), 10, 64)
@@ -311,6 +314,6 @@ func convertValue(v interface{}, typ string) string {
 		tmp, _ := strconv.ParseFloat(string(ret.([]byte)), 64)
 		return fmt.Sprintf("%v", tmp)
 	default:
-		return fmt.Sprintf("'%v'", string(ret.([]byte)))
+		return "'" + strings.Replace(string(ret.([]byte)), "'", "\\'", -1) + "'"
 	}
 }

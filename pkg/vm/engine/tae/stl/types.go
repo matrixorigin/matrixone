@@ -88,6 +88,7 @@ type Vector[T any] interface {
 	DataWindow(offset, length int) []byte
 	// Slice returns the underlying data storage of type T
 	Slice() []T
+	SlicePtr() unsafe.Pointer
 	SliceWindow(offset, length int) []T
 
 	// Get returns the specified element at i
