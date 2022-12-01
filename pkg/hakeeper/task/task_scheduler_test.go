@@ -110,6 +110,9 @@ func TestScheduleCreatedTasks(t *testing.T) {
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
 	currentTick := uint64(0)
 
+	// Schedule empty task
+	scheduler.Schedule(cnState, currentTick)
+
 	// Create Task 1
 	service.Create(context.Background(), task.TaskMetadata{ID: "1"})
 	query, err := service.QueryTask(context.Background())
