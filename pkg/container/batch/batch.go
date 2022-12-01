@@ -129,7 +129,7 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 		return err
 	}
 	bat.Cnt = 1
-	bat.Zs = rbat.Zs
+	bat.Zs = rbat.Zs // if you drop rbat.Zs is ok, if you need return rbat,  you must deepcopy Zs.
 	bat.Vecs = rbat.Vecs
 	bat.Attrs = rbat.Attrs
 	bat.Aggs = make([]agg.Agg[any], len(rbat.AggInfos))
@@ -226,7 +226,7 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 	for i, col := range cols {
 		rbat.Vecs[i] = bat.Vecs[mp[col]]
 	}
-	rbat.Zs = bat.Zs
+	rbat.Zs = append([]int64{}, bat.Zs...)
 	return rbat
 }
 

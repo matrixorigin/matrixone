@@ -129,6 +129,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
+		rbat.Clean(proc.Mp())
 		return err
 	}
 
@@ -164,12 +165,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for j, sel := range sels {
 					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
 					if err != nil {
+						rbat.Clean(proc.Mp())
 						return err
 					}
 					bs := vec.Col.([]bool)
 					if bs[0] {
 						if matched {
 							vec.Free(proc.Mp())
+							rbat.Clean(proc.Mp())
 							return moerr.NewInternalError("scalar subquery returns more than 1 row")
 						}
 						matched = true
@@ -178,6 +181,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					vec.Free(proc.Mp())
 				}
 			} else if len(sels) > 1 {
+				rbat.Clean(proc.Mp())
 				return moerr.NewInternalError("scalar subquery returns more than 1 row")
 			}
 			if ap.Cond != nil && !matched {

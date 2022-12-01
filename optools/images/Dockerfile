@@ -33,4 +33,4 @@ WORKDIR /
 
 EXPOSE 6001
 
-ENTRYPOINT [ "/mo-service", "-launch", "/etc/launch-tae-logservice/launch.toml"]
+ENTRYPOINT [ "/mo-service", "-launch", "/etc/quickstart/launch.toml"]
