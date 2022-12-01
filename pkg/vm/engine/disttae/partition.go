@@ -184,6 +184,10 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 			},
 			indexes: indexes,
 		})
+		// the reason to ignore, see comments in Insert method
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -285,6 +289,12 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 				value:   dataValue,
 				indexes: indexes,
 			})
+			// if conflict comes up here,  probably the checkpoint from dn
+			// has duplicated history versions. As txn write conflict has been
+			// checked in dn, so it is safe to ignore this error
+			if moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
+				continue
+			}
 			if err != nil {
 				return err
 			}
