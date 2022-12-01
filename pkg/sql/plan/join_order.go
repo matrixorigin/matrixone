@@ -464,7 +464,8 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 
 		vertex.card *= child.pkSelRate
 		vertex.pkSelRate *= child.pkSelRate
-		builder.qry.Nodes[nodeId].Cost.Card = vertex.card
+		vertex.node = builder.qry.Nodes[nodeId]
+		vertex.node.Cost.Card = vertex.card
 	}
 }
 
