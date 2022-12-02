@@ -1343,7 +1343,7 @@ func CastVarcharAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 	vs := vector.MustStrCols(lv)
 
 	if lv.IsScalar() {
-		if lv.IsScalarNull() {
+		if lv.IsScalarNull() || len(vs[0]) == 0 {
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
 		data, err2 := types.ParseDateCast(vs[0])
@@ -1357,9 +1357,14 @@ func CastVarcharAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 	if err != nil {
 		return nil, err
 	}
+	nulls.Set(vec.Nsp, lv.Nsp)
 	rs := vector.MustTCols[types.Date](vec)
 	for i, str := range vs {
 		if nulls.Contains(lv.Nsp, uint64(i)) {
+			continue
+		}
+		if len(str) == 0 {
+			nulls.Add(vec.Nsp, uint64(i))
 			continue
 		}
 		data, err2 := types.ParseDateCast(str)
@@ -1374,7 +1379,7 @@ func CastVarcharAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 func CastVarcharAsTime(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vs := vector.MustStrCols(lv)
 	if lv.IsScalar() {
-		if lv.IsScalarNull() {
+		if lv.IsScalarNull() || len(vs[0]) == 0 {
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
 		data, err2 := types.ParseTime(vs[0], rv.Typ.Precision)
@@ -1388,9 +1393,14 @@ func CastVarcharAsTime(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 	if err != nil {
 		return nil, err
 	}
+	nulls.Set(vec.Nsp, lv.Nsp)
 	rs := vector.MustTCols[types.Time](vec)
 	for i, str := range vs {
 		if nulls.Contains(lv.Nsp, uint64(i)) {
+			continue
+		}
+		if len(str) == 0 {
+			nulls.Add(vec.Nsp, uint64(i))
 			continue
 		}
 		data, err2 := types.ParseTime(str, rv.Typ.Precision)
@@ -1407,7 +1417,7 @@ func CastVarcharAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vecto
 	vs := vector.MustStrCols(lv)
 
 	if lv.IsScalar() {
-		if lv.IsScalarNull() {
+		if lv.IsScalarNull() || len(vs[0]) == 0 {
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
 		data, err2 := types.ParseDatetime(vs[0], rv.Typ.Precision)
@@ -1421,9 +1431,14 @@ func CastVarcharAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vecto
 	if err != nil {
 		return nil, err
 	}
+	nulls.Set(vec.Nsp, lv.Nsp)
 	rs := vector.MustTCols[types.Datetime](vec)
 	for i, str := range vs {
 		if nulls.Contains(lv.Nsp, uint64(i)) {
+			continue
+		}
+		if len(str) == 0 {
+			nulls.Add(vec.Nsp, uint64(i))
 			continue
 		}
 		data, err2 := types.ParseDatetime(str, rv.Typ.Precision)
@@ -1446,7 +1461,7 @@ func CastVarcharAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vect
 	vs := vector.MustStrCols(lv)
 
 	if lv.IsScalar() {
-		if lv.IsScalarNull() {
+		if lv.IsScalarNull() || len(vs[0]) == 0 {
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
 		data, err := types.ParseTimestamp(t, vs[0], rv.Typ.Precision)
@@ -1460,8 +1475,16 @@ func CastVarcharAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vect
 	if err != nil {
 		return nil, err
 	}
+	nulls.Set(vec.Nsp, lv.Nsp)
 	rs := vector.MustTCols[types.Timestamp](vec)
 	for i, str := range vs {
+		if nulls.Contains(lv.Nsp, uint64(i)) {
+			continue
+		}
+		if len(str) == 0 {
+			nulls.Add(vec.Nsp, uint64(i))
+			continue
+		}
 		data, err := types.ParseTimestamp(t, str, rv.Typ.Precision)
 		if err != nil {
 			return nil, err
