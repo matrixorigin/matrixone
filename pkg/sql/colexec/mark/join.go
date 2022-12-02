@@ -204,6 +204,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if zvals[k] == 0 { // 2.1 : probe tuple has null
 				condState, err = ctr.EvalEntire(bat, ctr.bat, i+k, proc, ctr.rewriteCond)
 				if err != nil {
+					rbat.Clean(proc.Mp())
 					return err
 				}
 				ctr.handleResultType(i+k, condState)

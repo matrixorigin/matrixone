@@ -113,7 +113,7 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	case TpCodeString:
 		buf = bj.toString(buf)
 	default:
-		err = moerr.NewInvalidInput("invalid json type '%v'", bj.Type)
+		err = moerr.NewInvalidInputNoCtx("invalid json type '%v'", bj.Type)
 	}
 	return buf, err
 }
@@ -436,7 +436,7 @@ func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool,
 	vals := make([]ByteJson, 0, 1)
 	keys, vals = bj.queryWithSubPath(keys, vals, path, "$")
 	if len(keys) != len(vals) {
-		return nil, moerr.NewInvalidInput("len(key) and len(val) are not equal, len(key)=%d, len(val)=%d", len(keys), len(vals))
+		return nil, moerr.NewInvalidInputNoCtx("len(key) and len(val) are not equal, len(key)=%d, len(val)=%d", len(keys), len(vals))
 	}
 	for i := 0; i < len(keys); i++ {
 		if vals[i].canUnnest() {
@@ -457,7 +457,7 @@ func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool,
 // Unnest returns a slice of UnnestResult, each UnnestResult contains filtered data, if param filters is nil, return all fields.
 func (bj ByteJson) Unnest(path *Path, outer, recursive bool, mode string, filters []string) ([]UnnestResult, error) {
 	if !checkMode(mode) {
-		return nil, moerr.NewInvalidInput("mode must be one of [object, array, both]")
+		return nil, moerr.NewInvalidInputNoCtx("mode must be one of [object, array, both]")
 	}
 	out := make([]UnnestResult, 0, 1)
 	out, err := bj.unnest(out, path, outer, recursive, mode, filters)

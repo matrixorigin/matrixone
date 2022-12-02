@@ -15,6 +15,7 @@
 package table
 
 import (
+	"context"
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
@@ -124,7 +125,7 @@ func TestRow_SetFloat64(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := tt.fields.Table.GetRow()
+			r := tt.fields.Table.GetRow(context.TODO())
 			r.SetFloat64(tt.args.col, tt.args.val)
 		})
 	}
@@ -156,7 +157,7 @@ func TestRow_SetInt64(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := tt.fields.Table.GetRow()
+			r := tt.fields.Table.GetRow(context.TODO())
 			r.SetInt64(tt.args.col, tt.args.val)
 		})
 	}
@@ -188,7 +189,7 @@ func TestRow_SetVal(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := tt.fields.Table.GetRow()
+			r := tt.fields.Table.GetRow(context.TODO())
 			r.SetVal(tt.args.col, tt.args.val)
 		})
 	}
@@ -222,7 +223,7 @@ func TestRow_ToStrings(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := tt.fields.Table.GetRow()
+			r := tt.fields.Table.GetRow(context.TODO())
 			tt.fields.prepare(r)
 			assert.Equalf(t, tt.want, r.ToStrings(), "ToStrings()")
 		})
@@ -277,10 +278,11 @@ func TestTable_ToCreateSql(t *testing.T) {
 			want:   dummyTableCreateExistsSql,
 		},
 	}
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tbl := tt.fields.Table
-			got := tbl.ToCreateSql(tt.args.ifNotExists)
+			got := tbl.ToCreateSql(ctx, tt.args.ifNotExists)
 			t.Logf("create sql: %s", got)
 			assert.Equalf(t, tt.want, got, "ToCreateSql(%v)", tt.args.ifNotExists)
 		})
@@ -307,7 +309,7 @@ func TestViewOption_Apply(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.opt.Apply(tt.args.view)
-			got := tt.args.view.ToCreateSql(true)
+			got := tt.args.view.ToCreateSql(context.TODO(), true)
 			assert.Equalf(t, tt.wantCreate, got, "ToCreateSql(%v)", true)
 		})
 	}
@@ -349,18 +351,19 @@ func TestTable_GetTableOptions(t *testing.T) {
 				TableOptions:      tt.fields.TableOptions,
 				SupportUserAccess: tt.fields.SupportUserAccess,
 			}
-			assert.Equalf(t, tt.want, tbl.GetTableOptions(), "GetTableOptions()")
+			assert.Equalf(t, tt.want, tbl.GetTableOptions(context.TODO()), "GetTableOptions()")
 		})
 	}
 }
 
 func TestSetPathBuilder(t *testing.T) {
 	var err error
-	err = SetPathBuilder((*DBTablePathBuilder)(nil).GetName())
+	ctx := context.Background()
+	err = SetPathBuilder(ctx, (*DBTablePathBuilder)(nil).GetName())
 	require.Nil(t, err)
-	err = SetPathBuilder("AccountDate")
+	err = SetPathBuilder(ctx, "AccountDate")
 	require.Nil(t, err)
-	err = SetPathBuilder("unknown")
+	err = SetPathBuilder(ctx, "unknown")
 	var moErr *moerr.Error
 	if errors.As(err, &moErr) && moerr.IsMoErrCode(moErr, moerr.ErrNotSupported) {
 		t.Logf("got ErrNotSupported normally")

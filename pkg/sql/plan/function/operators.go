@@ -1667,7 +1667,7 @@ var operators = map[int]Functions{
 					types.T_uint32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneral[uint16],
+				Fn:        operator.NeGeneral[uint32],
 			},
 			{
 				Index: 3,

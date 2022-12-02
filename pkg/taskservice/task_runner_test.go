@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/assert"
@@ -123,7 +124,7 @@ func TestRunTaskWithRetry(t *testing.T) {
 		n := uint32(0)
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			if atomic.AddUint32(&n, 1) == 1 {
-				return moerr.NewInternalError("error")
+				return moerr.NewInternalError(context.TODO(), "error")
 			}
 			close(c)
 			return nil
@@ -146,7 +147,7 @@ func TestRunTaskWithDisableRetry(t *testing.T) {
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			close(c)
 			if atomic.AddUint32(&n, 1) == 1 {
-				return moerr.NewInternalError("error")
+				return moerr.NewInternalError(context.TODO(), "error")
 			}
 			return nil
 		})
@@ -194,7 +195,7 @@ func runTaskRunnerTest(t *testing.T,
 	testFunc func(r *taskRunner, s TaskService, store TaskStorage),
 	opts ...RunnerOption) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store, nil)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()

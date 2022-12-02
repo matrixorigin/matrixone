@@ -38,7 +38,7 @@ func Test_CeilUint64(t *testing.T) {
 		}
 		data, ok := vec.Col.([]uint64)
 		if !ok {
-			log.Fatal(moerr.NewInternalError("the AbsUint64 function return value type is not []uint64"))
+			log.Fatal(moerr.NewInternalError(proc.Ctx, "the AbsUint64 function return value type is not []uint64"))
 		}
 		compVec := []uint64{1, 4, 8, 16, 32, math.MaxUint64, 0}
 		compNsp := []int64{6}
@@ -76,7 +76,7 @@ func Test_CeilInt64(t *testing.T) {
 		}
 		data, ok := vec.Col.([]int64)
 		if !ok {
-			log.Fatal(moerr.NewInternalError("the AbsUint64 function return value type is not []int64"))
+			log.Fatal(moerr.NewInternalError(proc.Ctx, "the AbsUint64 function return value type is not []int64"))
 		}
 		compVec := []int64{math.MinInt64 + 1, math.MinInt64 + 2, -100, -1, 0, 1, 4, 8, 16, 32, 64, math.MaxInt64, 0}
 		compNsp := []int64{12}
@@ -114,7 +114,7 @@ func Test_CeilFloat64(t *testing.T) {
 		}
 		data, ok := vec.Col.([]float64)
 		if !ok {
-			log.Fatal(moerr.NewInternalError("the AbsUint64 function return value type is not []int64"))
+			log.Fatal(moerr.NewInternalError(proc.Ctx, "the AbsUint64 function return value type is not []int64"))
 		}
 		compVec := []float64{1, -1, -2, math.MinInt64 + 1, math.MinInt64 + 2, -100, -1, 1,
 			0, 2, 5, 9, 17, 33, 65, math.MaxInt64, math.MaxFloat64, 0}

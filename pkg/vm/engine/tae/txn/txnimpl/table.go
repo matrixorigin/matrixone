@@ -33,7 +33,7 @@ import (
 )
 
 var (
-	ErrDuplicateNode = moerr.NewInternalError("tae: duplicate node")
+	ErrDuplicateNode = moerr.NewInternalErrorNoCtx("tae: duplicate node")
 )
 
 type txnEntries struct {
@@ -147,7 +147,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 	}
 	rowID, ok := pinned.Item().Transfer(row)
 	if !ok {
-		err = moerr.NewTxnWWConflict()
+		err = moerr.NewTxnWWConflictNoCtx()
 		return
 	}
 	changed = true
@@ -202,7 +202,7 @@ func (tbl *txnTable) recurTransferDelete(
 
 	rowID, ok := page.Transfer(row)
 	if !ok {
-		err = moerr.NewTxnWWConflict()
+		err = moerr.NewTxnWWConflictNoCtx()
 		msg := fmt.Sprintf("table-%d blk-%d delete row-%d depth-%d",
 			id.TableID,
 			id.BlockID,
@@ -267,7 +267,7 @@ func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferre
 	// cannot find a transferred record. maybe the transferred record was TTL'ed
 	// here we can convert the error back to r-w conflict
 	if err != nil {
-		err = moerr.NewTxnRWConflict()
+		err = moerr.NewTxnRWConflictNoCtx()
 		return
 	}
 	memo[id.BlockID] = pinned
@@ -360,7 +360,7 @@ func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
 		return
 	}
 	if !ok {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	seg = newSegment(tbl, meta)
@@ -470,7 +470,7 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState, is1PC boo
 		return
 	}
 	if !seg.IsAppendable() && state == catalog.ES_Appendable {
-		err = moerr.NewInternalError("not appendable")
+		err = moerr.NewInternalErrorNoCtx("not appendable")
 		return
 	}
 	var factory catalog.BlockDataFactory
@@ -595,7 +595,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 			return
 		}
 		// if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-		// 	moerr.NewTxnWriteConflict("table-%d blk-%d delete rows from %d to %d",
+		// 	moerr.NewTxnWriteConflictNoCtx("table-%d blk-%d delete rows from %d to %d",
 		// 		id.TableID,
 		// 		id.BlockID,
 		// 		start,
@@ -674,7 +674,7 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 		blockIt.Next()
 	}
 	if err == nil && id == nil {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 	}
 	return
 }

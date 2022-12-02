@@ -187,6 +187,9 @@ var (
 			timestampCol,
 			errCodeCol,
 			errorCol,
+			traceIDCol,
+			spanIDCol,
+			spanKindCol,
 			nodeUUIDCol,
 			nodeTypeCol,
 			stackCol,
@@ -231,7 +234,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(StatsDatabase).Internal(true).Finish())
 	mustExec := func(sql string) error {
 		if err := exec.Exec(ctx, sql, ie.NewOptsBuilder().Finish()); err != nil {
-			return moerr.NewInternalError("[Trace] init table error: %v, sql: %s", err, sql)
+			return moerr.NewInternalError(ctx, "[Trace] init table error: %v, sql: %s", err, sql)
 		}
 		return nil
 	}
@@ -247,12 +250,12 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	instant := time.Now()
 
 	for _, tbl := range tables {
-		if err := mustExec(tbl.ToCreateSql(true)); err != nil {
+		if err := mustExec(tbl.ToCreateSql(ctx, true)); err != nil {
 			return err
 		}
 	}
 	for _, v := range views {
-		if err := mustExec(v.ToCreateSql(true)); err != nil {
+		if err := mustExec(v.ToCreateSql(ctx, true)); err != nil {
 			return err
 		}
 	}
@@ -262,18 +265,18 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 }
 
 // GetSchemaForAccount return account's table, and view's schema
-func GetSchemaForAccount(account string) []string {
+func GetSchemaForAccount(ctx context.Context, account string) []string {
 	var sqls = make([]string, 0, 1)
 	for _, tbl := range tables {
 		if tbl.SupportUserAccess {
 			t := tbl.Clone()
 			t.Account = account
-			sqls = append(sqls, t.ToCreateSql(true))
+			sqls = append(sqls, t.ToCreateSql(ctx, true))
 		}
 	}
 	for _, v := range views {
 		if v.OriginTable.SupportUserAccess {
-			sqls = append(sqls, v.ToCreateSql(true))
+			sqls = append(sqls, v.ToCreateSql(ctx, true))
 		}
 
 	}
@@ -283,7 +286,7 @@ func GetSchemaForAccount(account string) []string {
 func init() {
 	for _, tbl := range tables {
 		if old := table.RegisterTableDefine(tbl); old != nil {
-			panic(moerr.NewInternalError("table already registered: %s", old.GetIdentify()))
+			panic(moerr.NewInternalError(context.Background(), "table already registered: %s", old.GetIdentify()))
 		}
 	}
 }

@@ -15,30 +15,31 @@
 package explain
 
 import (
+	"context"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type ExplainQuery interface {
-	ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions) error
+	ExplainPlan(ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error
 }
 
 type NodeDescribe interface {
-	GetNodeBasicInfo(options *ExplainOptions) (string, error)
-	GetExtraInfo(options *ExplainOptions) ([]string, error)
-	GetProjectListInfo(options *ExplainOptions) (string, error)
-	GetJoinTypeInfo(options *ExplainOptions) (string, error)
-	GetJoinConditionInfo(options *ExplainOptions) (string, error)
-	GetFilterConditionInfo(options *ExplainOptions) (string, error)
-	GetOrderByInfo(options *ExplainOptions) (string, error)
-	GetGroupByInfo(options *ExplainOptions) (string, error)
-	GetTableDef(options *ExplainOptions) (string, error)
-	GetActualAnalyzeInfo(options *ExplainOptions) (string, error)
+	GetNodeBasicInfo(ctx context.Context, options *ExplainOptions) (string, error)
+	GetExtraInfo(ctx context.Context, options *ExplainOptions) ([]string, error)
+	GetProjectListInfo(ctx context.Context, options *ExplainOptions) (string, error)
+	GetJoinTypeInfo(ctx context.Context, options *ExplainOptions) (string, error)
+	GetJoinConditionInfo(ctx context.Context, options *ExplainOptions) (string, error)
+	GetFilterConditionInfo(ctx context.Context, options *ExplainOptions) (string, error)
+	GetOrderByInfo(ctx context.Context, options *ExplainOptions) (string, error)
+	GetGroupByInfo(ctx context.Context, options *ExplainOptions) (string, error)
+	GetTableDef(ctx context.Context, options *ExplainOptions) (string, error)
+	GetActualAnalyzeInfo(ctx context.Context, options *ExplainOptions) (string, error)
 }
 
 type NodeElemDescribe interface {
-	GetDescription(options *ExplainOptions) (string, error)
+	GetDescription(ctx context.Context, options *ExplainOptions) (string, error)
 }
 
 type FormatSettings struct {

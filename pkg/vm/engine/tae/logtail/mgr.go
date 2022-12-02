@@ -15,122 +15,54 @@
 package logtail
 
 import (
-	"sync"
-	"sync/atomic"
-
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/tidwall/btree"
 )
 
-type txnPage struct {
-	minTs types.TS
-	txns  []txnif.AsyncTxn
-}
-
-func cmpTxnPage(a, b *txnPage) bool { return a.minTs.Less(b.minTs) }
-
-type LogtailMgr struct {
+type Manager struct {
 	txnbase.NoopCommitListener
-	pageSize int32             // for test
-	minTs    types.TS          // the lower bound of active page
-	tsAlloc  *types.TsAlloctor // share same clock with txnMgr
-
-	// TODO: move the active page to btree, simplify the iteration of pages
-	activeSize atomic.Int32
-	// activePage is a fixed size array, has fixed memory address during its whole lifetime
-	activePage []txnif.AsyncTxn
-	// Lock is used to protect pages. there are three cases to hold lock
-	// 1. activePage is full and moves to pages
-	// 2. prune txn because of checkpoint TODO
-	// 3. copy btree
-	// Not RwLock because a copied btree can be read without holding read lock
-	sync.Mutex
-	pages *btree.Generic[*txnPage]
+	table *TxnTable
 }
 
-func NewLogtailMgr(pageSize int32, clock clock.Clock) *LogtailMgr {
+func NewManager(blockSize int, clock clock.Clock) *Manager {
 	tsAlloc := types.NewTsAlloctor(clock)
-	minTs := tsAlloc.Alloc()
-
-	return &LogtailMgr{
-		pageSize:   pageSize,
-		minTs:      minTs,
-		tsAlloc:    tsAlloc,
-		activePage: make([]txnif.AsyncTxn, pageSize),
-		pages:      btree.NewGenericOptions(cmpTxnPage, btree.Options{NoLocks: true}),
+	return &Manager{
+		table: NewTxnTable(
+			blockSize,
+			tsAlloc,
+		),
 	}
 }
 
-// LogtailMgr as a commit listener
-func (l *LogtailMgr) OnEndPrePrepare(txn txnif.AsyncTxn) { l.AddTxn(txn) }
+func (mgr *Manager) OnEndPrePrepare(txn txnif.AsyncTxn) {
+	mgr.table.AddTxn(txn)
+}
 
-// Notes:
-// 1. AddTxn happens in a queue, it is safe to assume there is no concurrent AddTxn now.
-// 2. the added txn has no prepareTS because it happens in OnEndPrePrepare, so it is safe to alloc ts to be minTs
-func (l *LogtailMgr) AddTxn(txn txnif.AsyncTxn) {
-	size := l.activeSize.Load()
-	l.activePage[size] = txn
-	newsize := l.activeSize.Add(1)
-
-	if newsize == l.pageSize {
-		// alloc ts without lock
-		prevMinTs := l.minTs
-		l.minTs = l.tsAlloc.Alloc()
-		l.Lock()
-		defer l.Unlock()
-		newPage := &txnPage{
-			minTs: prevMinTs,
-			txns:  l.activePage,
-		}
-		l.pages.Set(newPage)
-
-		l.activePage = make([]txnif.AsyncTxn, l.pageSize)
-		l.activeSize.Store(0)
+func (mgr *Manager) GetReader(from, to types.TS) *Reader {
+	return &Reader{
+		from:  from,
+		to:    to,
+		table: mgr.table,
 	}
 }
 
-// GetReader returns a read only reader of txns at call time.
-// this is cheap operation, the returned reader can be accessed without any locks
-func (l *LogtailMgr) GetReader(start, end types.TS) *LogtailReader {
-	l.Lock()
-	size := l.activeSize.Load()
-	activeView := l.activePage[:size]
-	btreeView := l.pages.Copy()
-	l.Unlock()
-	return &LogtailReader{
-		start:      start,
-		end:        end,
-		btreeView:  btreeView,
-		activeView: activeView,
-	}
-}
-
-func (l *LogtailMgr) DecideScope(tableID uint64) Scope {
-	var scope Scope
-	switch tableID {
-	case pkgcatalog.MO_DATABASE_ID:
-		scope = ScopeDatabases
-	case pkgcatalog.MO_TABLES_ID:
-		scope = ScopeTables
-	case pkgcatalog.MO_COLUMNS_ID:
-		scope = ScopeColumns
-	default:
-		scope = ScopeUserTables
-	}
-	return scope
-}
-
-func (l *LogtailMgr) GetTableOperator(start, end types.TS,
+func (mgr *Manager) GetTableOperator(
+	from, to types.TS,
 	catalog *catalog.Catalog,
 	dbID, tableID uint64,
 	scope Scope,
-	visitor catalog.Processor) *BoundTableOperator {
-
-	reader := l.GetReader(start, end)
-	return NewBoundTableOperator(catalog, reader, scope, dbID, tableID, visitor)
+	visitor catalog.Processor,
+) *BoundTableOperator {
+	reader := mgr.GetReader(from, to)
+	return NewBoundTableOperator(
+		catalog,
+		reader,
+		scope,
+		dbID,
+		tableID,
+		visitor,
+	)
 }

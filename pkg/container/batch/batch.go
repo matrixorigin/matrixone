@@ -16,6 +16,7 @@ package batch
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync/atomic"
 
@@ -129,7 +130,7 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 		return err
 	}
 	bat.Cnt = 1
-	bat.Zs = rbat.Zs
+	bat.Zs = rbat.Zs // if you drop rbat.Zs is ok, if you need return rbat,  you must deepcopy Zs.
 	bat.Vecs = rbat.Vecs
 	bat.Attrs = rbat.Attrs
 	bat.Aggs = make([]agg.Agg[any], len(rbat.AggInfos))
@@ -226,7 +227,7 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 	for i, col := range cols {
 		rbat.Vecs[i] = bat.Vecs[mp[col]]
 	}
-	rbat.Zs = bat.Zs
+	rbat.Zs = append([]int64{}, bat.Zs...)
 	return rbat
 }
 
@@ -266,12 +267,12 @@ func (bat *Batch) String() string {
 	return buf.String()
 }
 
-func (bat *Batch) Append(mh *mpool.MPool, b *Batch) (*Batch, error) {
+func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
 	if bat == nil {
 		return b, nil
 	}
 	if len(bat.Vecs) != len(b.Vecs) {
-		return nil, moerr.NewInternalError("unexpected error happens in batch append")
+		return nil, moerr.NewInternalError(ctx, "unexpected error happens in batch append")
 	}
 	if len(bat.Vecs) == 0 {
 		return bat, nil

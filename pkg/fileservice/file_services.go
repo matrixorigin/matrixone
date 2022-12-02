@@ -34,7 +34,7 @@ func NewFileServices(defaultName string, fss ...FileService) (*FileServices, err
 	for _, fs := range fss {
 		name := strings.ToLower(fs.Name())
 		if _, ok := f.mappings[name]; ok {
-			return nil, moerr.NewDupServiceName(name)
+			return nil, moerr.NewDupServiceNameNoCtx(name)
 		}
 		f.mappings[name] = fs
 	}

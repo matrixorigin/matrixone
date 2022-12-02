@@ -298,7 +298,7 @@ func (it *Int64HashMapIterator) Next() (cell *Int64HashMapCell, err error) {
 	}
 
 	if it.pos >= it.table.cellCnt {
-		err = moerr.NewInternalError("out of range")
+		err = moerr.NewInternalErrorNoCtx("out of range")
 		return
 	}
 

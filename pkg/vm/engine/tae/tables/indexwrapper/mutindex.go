@@ -68,7 +68,7 @@ func (idx *mutableIndex) GetActiveRow(key any) (row []uint32, err error) {
 	exist := idx.zonemap.Contains(key)
 	// 1. key is definitely not existed
 	if !exist {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	// 2. search art tree for key

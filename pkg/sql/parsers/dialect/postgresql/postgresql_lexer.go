@@ -15,6 +15,7 @@
 package postgresql
 
 import (
+	"context"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -22,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func Parse(sql string) ([]tree.Statement, error) {
+func Parse(ctx context.Context, sql string) ([]tree.Statement, error) {
 	lexer := NewLexer(dialect.POSTGRESQL, sql)
 	if yyParse(lexer) != 0 {
 		return nil, lexer.scanner.LastError
@@ -30,13 +31,13 @@ func Parse(sql string) ([]tree.Statement, error) {
 	return lexer.stmts, nil
 }
 
-func ParseOne(sql string) (tree.Statement, error) {
+func ParseOne(ctx context.Context, sql string) (tree.Statement, error) {
 	lexer := NewLexer(dialect.POSTGRESQL, sql)
 	if yyParse(lexer) != 0 {
 		return nil, lexer.scanner.LastError
 	}
 	if len(lexer.stmts) != 1 {
-		return nil, moerr.NewInternalError("syntax Error, or too many sql to parse")
+		return nil, moerr.NewInternalError(ctx, "syntax Error, or too many sql to parse")
 	}
 	return lexer.stmts[0], nil
 }

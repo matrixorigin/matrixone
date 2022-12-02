@@ -17,10 +17,8 @@ select user_name,authentication_string from mo_catalog.mo_user where user_name='
 
 --3.异常测试：空值，内置user，语法错误
 drop user "";
--- @bvt:issue#5705
 drop user root;
 drop user dump;
--- @bvt:issue
 drop if not exists d;
 drop user if not exists d;
 

@@ -35,7 +35,7 @@ insert into time_02 values("");
 select * from time_02;
 t1
 00:02:00
-00:00:00
+null
 insert into time_02 values("200:50:10");
 select '-838:59:59.0000' from time_01 limit 1;
 -838:59:59.0000

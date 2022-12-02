@@ -636,8 +636,6 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 }
 
 func TestGossipInSimulatedCluster(t *testing.T) {
-	t.Skip("need fix goroutine leak in memberlist lib, skip it now")
-
 	defer leaktest.AfterTest(t)()
 	debug.SetMemoryLimit(1 << 30)
 	// start all services
@@ -652,20 +650,20 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 			DeploymentID:   1,
 			RTTMillisecond: 200,
 			DataDir:        fmt.Sprintf("data-%d", i),
-			ServiceAddress: fmt.Sprintf("127.0.0.1:%d", 6000+10*i),
-			RaftAddress:    fmt.Sprintf("127.0.0.1:%d", 6000+10*i+1),
-			GossipAddress:  fmt.Sprintf("127.0.0.1:%d", 6000+10*i+2),
+			ServiceAddress: fmt.Sprintf("127.0.0.1:%d", 26000+10*i),
+			RaftAddress:    fmt.Sprintf("127.0.0.1:%d", 26000+10*i+1),
+			GossipAddress:  fmt.Sprintf("127.0.0.1:%d", 26000+10*i+2),
 			GossipSeedAddresses: []string{
-				"127.0.0.1:6002",
-				"127.0.0.1:6012",
-				"127.0.0.1:6022",
-				"127.0.0.1:6032",
-				"127.0.0.1:6042",
-				"127.0.0.1:6052",
-				"127.0.0.1:6062",
-				"127.0.0.1:6072",
-				"127.0.0.1:6082",
-				"127.0.0.1:6092",
+				"127.0.0.1:26002",
+				"127.0.0.1:26012",
+				"127.0.0.1:26022",
+				"127.0.0.1:26032",
+				"127.0.0.1:26042",
+				"127.0.0.1:26052",
+				"127.0.0.1:26062",
+				"127.0.0.1:26072",
+				"127.0.0.1:26082",
+				"127.0.0.1:26092",
 			},
 			DisableWorkers:  true,
 			LogDBBufferSize: 1024 * 16,
@@ -696,6 +694,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 			}
 		}
 		wg.Wait()
+		time.Sleep(time.Second * 2)
 	}()
 	// start all replicas
 	// shardID: [1, 16]
@@ -749,7 +748,11 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 		if err == nil {
 			break
 		} else if err == dragonboat.ErrTimeout || err == dragonboat.ErrSystemBusy ||
-			err == dragonboat.ErrInvalidDeadline {
+			err == dragonboat.ErrInvalidDeadline || err == dragonboat.ErrTimeoutTooSmall {
+			info, ok := services[0].getShardInfo(1)
+			if ok && info.LeaderID != 0 && len(info.Replicas) == 4 {
+				break
+			}
 			wait()
 			continue
 		} else if err == dragonboat.ErrRejected {

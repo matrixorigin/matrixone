@@ -23,7 +23,7 @@ import (
 // Drive a entry visitor, which acts as an api resp builder
 type BaseOperator struct {
 	catalog *catalog.Catalog
-	reader  *LogtailReader
+	reader  *Reader
 }
 
 type BoundOperator struct {
@@ -32,7 +32,7 @@ type BoundOperator struct {
 }
 
 func NewBoundOperator(catalog *catalog.Catalog,
-	reader *LogtailReader,
+	reader *Reader,
 	visitor catalog.Processor) *BoundOperator {
 	return &BoundOperator{
 		BaseOperator: &BaseOperator{
@@ -94,7 +94,7 @@ type BoundTableOperator struct {
 }
 
 func NewBoundTableOperator(catalog *catalog.Catalog,
-	reader *LogtailReader,
+	reader *Reader,
 	scope Scope,
 	dbID, tableID uint64,
 	visitor catalog.Processor) *BoundTableOperator {

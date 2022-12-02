@@ -125,7 +125,7 @@ func TestGetWithError(t *testing.T) {
 	f.init(1, ctx)
 	defer f.Close()
 
-	errResp := moerr.NewBackendClosed()
+	errResp := moerr.NewBackendClosed(context.TODO())
 	f.error(1, errResp, nil)
 
 	f.writeCompleted()

@@ -94,7 +94,7 @@ func (s *taskService) fetchCronTasks(ctx context.Context) {
 			tasks, err := s.QueryCronTask(c)
 			cancel()
 			if err != nil {
-				s.logger.Error("query cron tasks failed",
+				s.rt.Logger().Error("query cron tasks failed",
 					zap.Error(err))
 				break
 			}
@@ -105,7 +105,7 @@ func (s *taskService) fetchCronTasks(ctx context.Context) {
 			}
 
 			s.crons.Lock()
-			s.logger.Debug("new cron tasks fetched",
+			s.rt.Logger().Debug("new cron tasks fetched",
 				zap.Int("current-count", len(s.crons.jobs)),
 				zap.Int("fetch-count", len(tasks)))
 
@@ -164,7 +164,7 @@ func (s *taskService) retryTriggerCronTask(ctx context.Context) {
 func (s *taskService) scheduleCronTaskLocked(task task.CronTask) {
 	job := newCronJob(task, s)
 	if time.Now().After(time.UnixMilli(task.NextTime)) {
-		s.logger.Debug("cron task triggered",
+		s.rt.Logger().Debug("cron task triggered",
 			zap.String("cause", "now > next"),
 			zap.String("task", task.DebugString()))
 		if err := s.crons.stopper.RunTask(func(ctx context.Context) { job.run() }); err != nil {
@@ -264,7 +264,7 @@ func (j *cronJob) run() {
 	j.Lock()
 	defer j.Unlock()
 
-	j.s.logger.Debug("cron task triggered",
+	j.s.rt.Logger().Debug("cron task triggered",
 		zap.String("cause", "normal"),
 		zap.String("task", j.task.DebugString()))
 	j.doRun()
@@ -291,7 +291,7 @@ func (j *cronJob) doRun() {
 
 	_, err := j.s.store.UpdateCronTask(ctx, new, value)
 	if err != nil {
-		j.s.logger.Error("trigger cron task failed",
+		j.s.rt.Logger().Error("trigger cron task failed",
 			zap.String("cron-task", j.task.Metadata.ID),
 			zap.Error(err))
 		j.s.addToRetrySchedule(j.task)
