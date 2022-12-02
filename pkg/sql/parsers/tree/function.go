@@ -16,6 +16,7 @@ package tree
 
 type FunctionArg interface {
 	NodeFormatter
+	Expr
 }
 
 type FunctionArgImpl struct {
@@ -32,16 +33,24 @@ type FunctionArgDecl struct {
 	DefaultVal Expr
 }
 
+type ReturnType struct {
+	Type ResolvableTypeReference
+}
+
 func (node *FunctionArgDecl) Format(ctx *FmtCtx) {
 	if node.Name != nil {
 		node.Name.Format(ctx)
 		ctx.WriteByte(' ')
 	}
 	node.Type.(*T).InternalType.Format(ctx)
-	// if node.DefaultVal {
-	// 	ctx.WriteString(" default ")
-	// 	ctx.WriteString(node.DefaultVal)
-	// }
+	if node.DefaultVal != nil {
+		ctx.WriteString(" default ")
+		ctx.PrintExpr(node, node.DefaultVal, true)
+	}
+}
+
+func (node *ReturnType) Format(ctx *FmtCtx) {
+	node.Type.(*T).InternalType.Format(ctx)
 }
 
 type FunctionName struct {
@@ -52,7 +61,7 @@ type CreateFunction struct {
 	statementImpl
 	Name       *FunctionName
 	Args       FunctionArgs
-	ReturnType string
+	ReturnType *ReturnType
 	Body       string
 	Language   string
 }
@@ -85,7 +94,7 @@ func (node *CreateFunction) Format(ctx *FmtCtx) {
 	ctx.WriteString(")")
 	ctx.WriteString(" returns ")
 
-	ctx.WriteString(node.ReturnType)
+	node.ReturnType.Format(ctx)
 
 	ctx.WriteString(" language ")
 	ctx.WriteString(node.Language)
@@ -125,3 +134,15 @@ func NewFuncName(name Identifier) *FunctionName {
 		Name: name,
 	}
 }
+
+func NewReturnType(t ResolvableTypeReference) *ReturnType {
+	return &ReturnType{
+		Type: t,
+	}
+}
+
+func (node *CreateFunction) GetStatementType() string { return "CreateFunction" }
+func (node *CreateFunction) GetQueryType() string     { return QueryTypeDDL }
+
+func (node *DropFunction) GetStatementType() string { return "DropFunction" }
+func (node *DropFunction) GetQueryType() string     { return QueryTypeDDL }
