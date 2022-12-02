@@ -55,6 +55,7 @@ import (
     funcArg tree.FunctionArg
     funcArgs tree.FunctionArgs
     funcArgDecl *tree.FunctionArgDecl
+    funcReturn *tree.ReturnType
 
     from *tree.From
     where *tree.Where
@@ -416,7 +417,8 @@ import (
 %type <funcArgs> func_args_list_opt func_args_list
 %type <funcArg> func_arg
 %type <funcArgDecl> func_arg_decl
-%type <str> func_lang func_return extension_lang extension_name
+%type <funcReturn> func_return
+%type <str> func_lang extension_lang extension_name
 
 %type <tableDefs> table_elem_list_opt table_elem_list
 %type <tableDef> table_elem constaint_def constraint_elem
@@ -4104,9 +4106,9 @@ func_lang:
     }
 
 func_return:
-    ident
+    column_type
     {
-        $$ = $1
+        $$ = tree.NewReturnType($1)
     }
 
 create_view_stmt:
@@ -7993,7 +7995,6 @@ reserved_keyword:
 |   NODE
 |   LOCKS
 |   RETURNS
-|   EXTENSION
 
 non_reserved_keyword:
     ACCOUNT
@@ -8174,6 +8175,7 @@ non_reserved_keyword:
 |   HISTORY
 |   LOW_CARDINALITY
 |   S3OPTION
+|   EXTENSION
 
 func_not_keyword:
     DATE_ADD
