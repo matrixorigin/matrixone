@@ -18,17 +18,18 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -45,6 +46,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -84,11 +86,6 @@ func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
 func (th *TxnHandler) SetTempEngine(te engine.Engine) {
 	ee := th.storage.(*engine.EntireEngine)
 	ee.TempEngine = te
-}
-
-func (th *TxnHandler) SetTempClient(tc client.TxnClient) {
-	ec := th.txnClient.(*client.EntireClient)
-	ec.TempClient = tc
 }
 
 type profileType uint8
@@ -176,14 +173,14 @@ type Session struct {
 
 	mu sync.Mutex
 
-	flag bool
-
+	flag         bool
 	lastInsertID uint64
 
 	skipAuth bool
 
 	sqlSourceType string
 	InitTempEngine bool
+	tempTablestorage *memorystorage.Storage
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
@@ -392,10 +389,55 @@ func (ses *Session) GetCompleteProfile() string {
 	return ses.getProfile(profileTypeAll)
 }
 
-func (ses *Session) IfNeedInitTempEngine() bool {
+func (ses *Session) IfInitedTempEngine() bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.InitTempEngine
+}
+
+func (ses *Session) GetTempTableStorage() *memorystorage.Storage {
+	if ses.tempTablestorage == nil {
+		panic("temp table storage is not initialized")
+	}
+	return ses.tempTablestorage
+}
+
+func (ses *Session) SetTempTableStorage() (*logservicepb.DNStore, error) {
+	// Without concurrency, there is no potential for data competition
+	ck := clock.DefaultClock()
+	if ck == nil {
+		ck = clock.NewHLCClock(func() int64 {
+			return time.Now().Unix()
+		}, math.MaxInt)
+	}
+	// Arbitrary value is OK since it's single sharded. Let's use 0xbeef
+	// suggested by @reusee
+	shard := logservicepb.DNShardInfo{
+		ShardID:   0xbeef,
+		ReplicaID: 0xbeef,
+	}
+	shards := []logservicepb.DNShardInfo{
+		shard,
+	}
+	// Any value is OK here. use "TempTable-DN-address".
+	dnAddr := "TempTable-DN-address"
+	dnStore := logservicepb.DNStore{
+		UUID:           uuid.NewString(),
+		ServiceAddress: dnAddr,
+		Shards:         shards,
+	}
+
+	ms, err := memorystorage.NewMemoryStorage(
+		mpool.MustNewZero(),
+		memorystorage.SnapshotIsolation,
+		ck,
+		memoryengine.RandomIDGenerator,
+	)
+	if err != nil {
+		return nil, err
+	}
+	ses.tempTablestorage = ms
+	return &dnStore, nil
 }
 
 func (ses *Session) GetPrivilegeCache() *privilegeCache {
@@ -817,11 +859,13 @@ func (ses *Session) GetStorage() engine.Engine {
 	return ses.storage
 }
 
-func (ses *Session) SetTempEngine(te engine.Engine) {
+func (ses *Session) SetTempEngine(ctx context.Context, te engine.Engine) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ee := ses.storage.(*engine.EntireEngine)
 	ee.TempEngine = te
+	ses.requestCtx = ctx
+	return nil
 }
 
 func (ses *Session) GetDatabaseName() string {

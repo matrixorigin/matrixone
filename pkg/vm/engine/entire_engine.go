@@ -57,7 +57,7 @@ func (e *EntireEngine) Databases(ctx context.Context, op client.TxnOperator) (da
 func (e *EntireEngine) Database(ctx context.Context, databaseName string, op client.TxnOperator) (Database, error) {
 	if databaseName == TEMPORARY_DBNAME {
 		if e.TempEngine != nil {
-			return e.TempEngine.Database(ctx, TEMPORARY_DBNAME, op.(*client.EntireTxnOperator).GetTemp())
+			return e.TempEngine.Database(ctx, TEMPORARY_DBNAME, op)
 		} else {
 			return nil, moerr.NewInternalError("temporary engine not init yet")
 		}

@@ -73,9 +73,10 @@ func (c *Compile) NeedInitTempEngine(InitTempEngine bool) bool {
 	return false
 }
 
-func (c *Compile) SetTempEngine(te engine.Engine) {
+func (c *Compile) SetTempEngine(ctx context.Context, te engine.Engine) {
 	e := c.e.(*engine.EntireEngine)
 	e.TempEngine = te
+	c.ctx = ctx
 }
 
 // Compile is the entrance of the compute-layer, it compiles AST tree to scope list.

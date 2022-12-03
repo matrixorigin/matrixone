@@ -35,9 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -2222,6 +2219,10 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
 	defer RecordStatementTxnID(requestCtx, cwft.ses)
+	if cwft.ses.IfInitedTempEngine() {
+		requestCtx = context.WithValue(requestCtx, "tempStorage", cwft.ses.GetTempTableStorage())
+		cwft.ses.SetRequestContext(requestCtx)
+	}
 	cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 	if err != nil {
 		return nil, err
@@ -2313,47 +2314,18 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		return nil, err
 	}
 	// check if it is necessary to initialize the temporary engine
-	if cwft.compile.NeedInitTempEngine(cwft.ses.IfNeedInitTempEngine()) {
-		// 0. init memory-non-dist engine
-		ck := clock.DefaultClock()
-		if ck == nil {
-			ck = clock.NewHLCClock(func() int64 {
-				return time.Now().Unix()
-			}, math.MaxInt)
-		}
-		// Arbitrary value is OK since it's single sharded. Let's use 0xbeef
-		// suggested by @reusee
-		shard := logservicepb.DNShardInfo{
-			ShardID:   0xbeef,
-			ReplicaID: 0xbeef,
-		}
-		shards := []logservicepb.DNShardInfo{
-			shard,
-		}
-		// Any value is OK here. use "DN-address".
-		// suggested by @reusee
-		dnAddr := "DN-address"
-		dnStore := logservicepb.DNStore{
-			UUID:           uuid.NewString(),
-			ServiceAddress: dnAddr,
-			Shards:         shards,
-		}
-		ms, err := memorystorage.NewMemoryStorage(
-			mpool.MustNewZero(),
-			memorystorage.SnapshotIsolation,
-			ck,
-			memoryengine.RandomIDGenerator,
-		)
+	if cwft.compile.NeedInitTempEngine(cwft.ses.IfInitedTempEngine()) {
+		// 0. init memory-non-dist storage
+		dnStore, err := cwft.ses.SetTempTableStorage()
 		if err != nil {
 			return nil, err
 		}
-		mc := memorystorage.NewStorageTxnClient(
-			ck,
-			map[string]*memorystorage.Storage{
-				dnAddr: ms,
-			},
-		)
-		me := memoryengine.New(
+
+		// temporary storage is passed through Ctx
+		requestCtx = context.WithValue(requestCtx, "tempStorage", cwft.ses.GetTempTableStorage())
+
+		// 1. init memory-non-dist engine
+		tempEngine := memoryengine.New(
 			requestCtx,
 			memoryengine.NewDefaultShardPolicy(
 				mpool.MustNewZero(),
@@ -2361,47 +2333,29 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 			func() (logservicepb.ClusterDetails, error) {
 				return logservicepb.ClusterDetails{
 					DNStores: []logservicepb.DNStore{
-						dnStore,
+						*dnStore,
 					},
 				}, nil
 			},
 			memoryengine.RandomIDGenerator,
 		)
-		txnOp, err := mc.New()
+
+		// 2. bind the temporary engine to the session and txnHandler
+		cwft.ses.SetTempEngine(requestCtx, tempEngine)
+		cwft.compile.SetTempEngine(requestCtx, tempEngine)
+		txnHandler := cwft.ses.txnCompileCtx.txnHandler
+		txnHandler.SetTempEngine(tempEngine)
+
+		// 3. init temp-db to store temporary relations
+		err = tempEngine.Create(requestCtx, engine.TEMPORARY_DBNAME, cwft.ses.txnHandler.txn)
 		if err != nil {
 			return nil, err
 		}
 
-		// 1. bind the temporary engine to the session
-		cwft.ses.SetTempEngine(me)
-		e := cwft.ses.GetStorage().(*engine.EntireEngine)
-
-		// 2. init temp-db to store temporary relations
-		err = e.TempEngine.Create(requestCtx, engine.TEMPORARY_DBNAME, txnOp)
-		if err != nil {
-			return nil, err
-		}
-
-		// 3. assign for compile, only for the first time needed
-		cwft.compile.SetTempEngine(e.TempEngine)
 		// 4. add auto_IncrementTable fortemp-db
-		txnop := cwft.proc.TxnOperator.(*client.EntireTxnOperator)
+		colexec.CreateAutoIncrTable(cwft.ses.GetStorage(), requestCtx, cwft.proc, engine.TEMPORARY_DBNAME)
 
-		txnop.SetTemp(txnOp)
-		colexec.CreateAutoIncrTable(e, requestCtx, cwft.proc, engine.TEMPORARY_DBNAME)
-		txnOp.Commit(requestCtx)
-
-		txnOp2, err := mc.New()
-		if err != nil {
-			return nil, err
-		}
-		txnop.SetTemp(txnOp2)
-
-		txn := cwft.ses.txnCompileCtx.txnHandler
-		txn.SetTempEngine(e.TempEngine)
-		txn.SetTempClient(mc)
 		cwft.ses.InitTempEngine = true
-
 	}
 	RecordStatementTxnID(requestCtx, cwft.ses)
 	return cwft.compile, err
