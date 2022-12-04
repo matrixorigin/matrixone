@@ -70,13 +70,12 @@ type Vector interface {
 	GetView() VectorView
 	Update(i int, v any)
 	Delete(i int)
-	DeleteBatch(*roaring.Bitmap)
+	Compact(*roaring.Bitmap)
 	Append(v any)
 	AppendMany(vs ...any)
 	AppendNoNulls(s any)
 	Extend(o Vector)
 	ExtendWithOffset(src Vector, srcOff, srcLen int)
-	Compact(deletes *roaring.Bitmap)
 	CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector
 
 	Equals(o Vector) bool
