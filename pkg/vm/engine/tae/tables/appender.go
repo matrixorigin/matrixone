@@ -84,11 +84,13 @@ func (appender *blockAppender) ReplayAppend(
 func (appender *blockAppender) ApplyAppend(
 	bat *containers.Batch,
 	txn txnif.AsyncTxn) (from int, err error) {
-	node := appender.blk.PinMemoryNode()
-	defer node.Close()
+	n := appender.blk.PinNode()
+	defer n.Unref()
+
+	node := n.MustMNode()
 	appender.blk.Lock()
 	defer appender.blk.Unlock()
-	from, err = node.Item().ApplyAppend(bat, txn)
+	from, err = node.ApplyAppend(bat, txn)
 
 	schema := appender.blk.meta.GetSchema()
 	keysCtx := new(index.KeysCtx)
@@ -98,7 +100,7 @@ func (appender *blockAppender) ApplyAppend(
 			continue
 		}
 		keysCtx.Keys = bat.Vecs[colDef.Idx]
-		if err = node.Item().indexes[colDef.Idx].BatchUpsert(keysCtx, from); err != nil {
+		if err = node.indexes[colDef.Idx].BatchUpsert(keysCtx, from); err != nil {
 			panic(err)
 		}
 	}

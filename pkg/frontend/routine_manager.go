@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 type RoutineManager struct {
@@ -89,8 +90,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	exe.SetRoutineManager(rm)
 	exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
 
-	routine := NewRoutine(rm.getCtx(), pro, exe, pu)
-	routine.SetRoutineMgr(rm)
+	routine := NewRoutine(rm.getCtx(), pro, exe, pu.SV, rs)
 
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
@@ -129,9 +129,11 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	}
 	rm.mu.Unlock()
 
-	ses := rt.GetSession()
-	logDebugf(ses.GetConciseProfile(), "will close io session.")
 	if rt != nil {
+		ses := rt.GetSession()
+		if ses != nil {
+			logDebugf(ses.GetConciseProfile(), "will close io session.")
+		}
 		rt.Quit()
 	}
 }
@@ -169,10 +171,12 @@ func getConnectionInfo(rs goetty.IOSession) string {
 func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received uint64) error {
 	var err error
 	var isTlsHeader bool
+	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler")
+	defer span.End()
 	connectionInfo := getConnectionInfo(rs)
 	routine := rm.getRoutine(rs)
 	if routine == nil {
-		err = moerr.NewInternalError("routine does not exist")
+		err = moerr.NewInternalError(ctx, "routine does not exist")
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
 	}
@@ -184,7 +188,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	protocol.SetSequenceID(uint8(packet.SequenceID + 1))
 	var seq = protocol.GetSequenceId()
 	if !ok {
-		err = moerr.NewInternalError("message is not Packet")
+		err = moerr.NewInternalError(ctx, "message is not Packet")
 		logErrorf(protoProfile, "error:%v", err)
 		return err
 	}
@@ -200,7 +204,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 		packet, ok = msg.(*Packet)
 		if !ok {
-			err = moerr.NewInternalError("message is not Packet")
+			err = moerr.NewInternalError(ctx, "message is not Packet")
 			logErrorf(protoProfile, "error:%v", err)
 			return err
 		}
@@ -222,7 +226,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		ses := protocol.GetSession()
 		if protocol.GetCapability()&CLIENT_SSL != 0 && !protocol.IsTlsEstablished() {
 			logDebugf(protoProfile, "setup ssl")
-			isTlsHeader, err = protocol.handleHandshake(payload)
+			isTlsHeader, err = protocol.handleHandshake(ctx, payload)
 			if err != nil {
 				logErrorf(protoProfile, "error:%v", err)
 				return err
@@ -232,7 +236,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				// do upgradeTls
 				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
 				logDebugf(protoProfile, "get TLS conn ok")
-				newCtx, cancelFun := context.WithTimeout(ses.GetRequestContext(), 20*time.Second)
+				newCtx, cancelFun := context.WithTimeout(ctx, 20*time.Second)
 				if err = tlsConn.HandshakeContext(newCtx); err != nil {
 					logErrorf(protoProfile, "before cancel() error:%v", err)
 					cancelFun()
@@ -253,7 +257,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			}
 		} else {
 			logDebugf(protoProfile, "handleHandshake")
-			_, err = protocol.handleHandshake(payload)
+			_, err = protocol.handleHandshake(ctx, payload)
 			if err != nil {
 				logErrorf(protoProfile, "error:%v", err)
 				return err
@@ -298,14 +302,14 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineM
 
 func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) error {
 	if len(SV.TlsCertFile) == 0 || len(SV.TlsKeyFile) == 0 {
-		return moerr.NewInternalError("init TLS config error : cert file or key file is empty")
+		return moerr.NewInternalError(rm.ctx, "init TLS config error : cert file or key file is empty")
 	}
 
 	var tlsCert tls.Certificate
 	var err error
 	tlsCert, err = tls.LoadX509KeyPair(SV.TlsCertFile, SV.TlsKeyFile)
 	if err != nil {
-		return moerr.NewInternalError("init TLS config error :load x509 failed")
+		return moerr.NewInternalError(rm.ctx, "init TLS config error :load x509 failed")
 	}
 
 	clientAuthPolicy := tls.NoClientCert
@@ -314,7 +318,7 @@ func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) error {
 		var caCert []byte
 		caCert, err = os.ReadFile(SV.TlsCaFile)
 		if err != nil {
-			return moerr.NewInternalError("init TLS config error :read TlsCaFile failed")
+			return moerr.NewInternalError(rm.ctx, "init TLS config error :read TlsCaFile failed")
 		}
 		certPool = x509.NewCertPool()
 		if certPool.AppendCertsFromPEM(caCert) {

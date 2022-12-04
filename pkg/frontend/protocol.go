@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math"
 	"net"
@@ -147,7 +148,7 @@ type Protocol interface {
 	GetRequest(payload []byte) *Request
 
 	// SendResponse sends a response to the client for the application request
-	SendResponse(*Response) error
+	SendResponse(context.Context, *Response) error
 
 	// ConnectionID the identity of the client
 	ConnectionID() uint32
@@ -166,7 +167,7 @@ type Protocol interface {
 	// Quit
 	Quit()
 
-	SendPrepareResponse(stmt *PrepareStmt) error
+	SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error
 }
 
 type ProtocolImpl struct {
@@ -341,7 +342,7 @@ func (mp *MysqlProtocolImpl) getAbortTransactionErrorInfo() string {
 	return ""
 }
 
-func (mp *MysqlProtocolImpl) SendResponse(resp *Response) error {
+func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) error {
 	mp.GetLock().Lock()
 	defer mp.GetLock().Unlock()
 
@@ -389,9 +390,9 @@ func (mp *MysqlProtocolImpl) SendResponse(resp *Response) error {
 		if mer.Mrs() == nil {
 			return mp.sendOKPacket(mer.AffectedRows(), mer.InsertID(), uint16(resp.status), mer.Warnings(), "")
 		}
-		return mp.sendResultSet(mer.Mrs(), resp.cmd, mer.Warnings(), uint16(resp.status))
+		return mp.sendResultSet(ctx, mer.Mrs(), resp.cmd, mer.Warnings(), uint16(resp.status))
 	default:
-		return moerr.NewInternalError("unsupported response:%d ", resp.category)
+		return moerr.NewInternalError(ctx, "unsupported response:%d ", resp.category)
 	}
 }
 
@@ -415,11 +416,11 @@ func (fp *FakeProtocol) getProfile(profileTyp profileType) string {
 	return ""
 }
 
-func (fp *FakeProtocol) SendPrepareResponse(stmt *PrepareStmt) error {
+func (fp *FakeProtocol) SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
 	return nil
 }
 
-func (fp *FakeProtocol) ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
+func (fp *FakeProtocol) ParseExecuteData(ctx context.Context, stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
 	return nil, nil, nil
 }
 
@@ -431,7 +432,7 @@ func (fp *FakeProtocol) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, cn
 	return nil
 }
 
-func (fp *FakeProtocol) SendColumnDefinitionPacket(column Column, cmd int) error {
+func (fp *FakeProtocol) SendColumnDefinitionPacket(ctx context.Context, column Column, cmd int) error {
 	return nil
 }
 
@@ -467,7 +468,7 @@ func (fp *FakeProtocol) GetRequest(payload []byte) *Request {
 	return nil
 }
 
-func (fp *FakeProtocol) SendResponse(response *Response) error {
+func (fp *FakeProtocol) SendResponse(ctx context.Context, resp *Response) error {
 	return nil
 }
 

@@ -20,9 +20,7 @@ create account drop_account_04 ADMIN_NAME 'root' IDENTIFIED BY '1234567890';
 drop account `drop_account_04`;
 
 --异常：drop sys，语法错误
--- @bvt:issue#5705
 drop account sys;
--- @bvt
 drop accout abc;
 drop account if not exists abc;
 drop account exists abc;

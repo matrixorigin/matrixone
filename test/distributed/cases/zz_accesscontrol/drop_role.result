@@ -15,9 +15,9 @@ role_name
 drop role '';
 internal error: the name "" is invalid
 drop role moadmin;
-[unknown result because it is related to issue#5705]
+internal error: can not delete the role moadmin
 drop role public;
-[unknown result because it is related to issue#5705]
+internal error: can not delete the role public
 drop if not exists d;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 7 near " if not exists d;";
 drop role if not exists d;

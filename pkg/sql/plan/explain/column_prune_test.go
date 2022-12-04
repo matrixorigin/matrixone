@@ -15,6 +15,7 @@
 package explain
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -555,7 +556,7 @@ func TestDerivedTableQueryPrune(t *testing.T) {
 }
 
 func buildOneStmt(opt plan2.Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
-	stmts, err := mysql.Parse(sql)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
@@ -573,7 +574,7 @@ type Entry[K any, V any] struct {
 func getPrunedTableColumns(logicPlan *plan.Plan) ([]Entry[string, []string], error) {
 	query := logicPlan.GetQuery()
 	if query.StmtType != plan.Query_SELECT {
-		return nil, moerr.NewNotSupported("SQL is not a DQL")
+		return nil, moerr.NewNotSupported(context.TODO(), "SQL is not a DQL")
 	}
 
 	res := make([]Entry[string, []string], 0)

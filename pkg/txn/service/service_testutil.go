@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -62,11 +63,15 @@ func NewTestTxnServiceWithLogAndZombie(t *testing.T,
 	clock clock.Clock,
 	log logservice.Client,
 	zombie time.Duration) TxnService {
-	return NewTxnService(logutil.GetPanicLoggerWithLevel(zapcore.DebugLevel).With(zap.String("case", t.Name())),
+	rt := runtime.NewRuntime(
+		metadata.ServiceType_DN,
+		"dn-uuid",
+		logutil.GetPanicLoggerWithLevel(zapcore.DebugLevel).With(zap.String("case", t.Name())),
+		runtime.WithClock(clock))
+	return NewTxnService(rt,
 		NewTestDNShard(shard),
 		NewTestTxnStorage(log, clock),
 		sender,
-		clock,
 		zombie).(*service)
 }
 

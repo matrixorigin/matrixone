@@ -400,18 +400,18 @@ func (mr *MockReaderMockRecorder) Close() *gomock.Call {
 }
 
 // Read mocks base method.
-func (m *MockReader) Read(arg0 []string, arg1 *plan.Expr, arg2 *mpool.MPool) (*batch.Batch, error) {
+func (m *MockReader) Read(ctx context.Context, arg0 []string, arg1 *plan.Expr, arg2 *mpool.MPool) (*batch.Batch, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Read", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "Read", ctx, arg0, arg1, arg2)
 	ret0, _ := ret[0].(*batch.Batch)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Read indicates an expected call of Read.
-func (mr *MockReaderMockRecorder) Read(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockReaderMockRecorder) Read(ctx, arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockReader)(nil).Read), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockReader)(nil).Read), ctx, arg0, arg1, arg2)
 }
 
 // MockDatabase is a mock of Database interface.

@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	ErrTaskHandleEnqueue = moerr.NewInternalError("tae: task handle enqueue")
+	ErrTaskHandleEnqueue = moerr.NewInternalErrorNoCtx("tae: task handle enqueue")
 )
 
 type BaseTaskHandler struct {

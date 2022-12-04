@@ -21,8 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func parseDate(s string) types.Date {
-	d, _ := types.ParseDate(s)
+func ParseDateCast(s string) types.Date {
+	d, _ := types.ParseDateCast(s)
 	return d
 }
 
@@ -45,18 +45,18 @@ func TestDateToMonth(t *testing.T) {
 			name: "normal date test",
 			args: args{
 				xs: []types.Date{
-					parseDate("2022-01-01"),
-					parseDate("2022-02-02"),
-					parseDate("2022-03-03"),
-					parseDate("2022-04-01"),
-					parseDate("2022-05-01"),
-					parseDate("2022-06-01"),
-					parseDate("2022-07-01"),
-					parseDate("2022-08-01"),
-					parseDate("2022-09-01"),
-					parseDate("2022-10-01"),
-					parseDate("2022-11-01"),
-					parseDate("2022-12-01"),
+					ParseDateCast("2022-01-01"),
+					ParseDateCast("2022-02-02"),
+					ParseDateCast("2022-03-03"),
+					ParseDateCast("2022-04-01"),
+					ParseDateCast("2022-05-01"),
+					ParseDateCast("2022-06-01"),
+					ParseDateCast("2022-07-01"),
+					ParseDateCast("2022-08-01"),
+					ParseDateCast("2022-09-01"),
+					ParseDateCast("2022-10-01"),
+					ParseDateCast("2022-11-01"),
+					ParseDateCast("2022-12-01"),
 				},
 				rs: make([]uint8, 12),
 			},

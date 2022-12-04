@@ -17,10 +17,8 @@ select role_name from mo_catalog.mo_role where role_name='drop_role_002';
 
 --3.异常测试：空值，内置role，语法错误
 drop role '';
--- @bvt:issue#5705
 drop role moadmin;
 drop role public;
--- @bvt:issue
 drop if not exists d;
 drop role if not exists d;
 

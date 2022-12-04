@@ -22,11 +22,11 @@ import (
 
 func (txn *Txn) rollback1PC() (err error) {
 	if txn.IsReplay() {
-		panic(moerr.NewTAERollback("1pc txn %s should not be called here", txn.String()))
+		panic(moerr.NewTAERollbackNoCtx("1pc txn %s should not be called here", txn.String()))
 	}
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive {
-		return moerr.NewTAERollback("unexpected txn status : %s", txnif.TxnStrState(state))
+		return moerr.NewTAERollbackNoCtx("unexpected txn status : %s", txnif.TxnStrState(state))
 	}
 
 	txn.Add(1)
@@ -51,7 +51,7 @@ func (txn *Txn) commit1PC(_ bool) (err error) {
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive {
 		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(state))
-		return moerr.NewTAECommit("invalid txn state %s", txnif.TxnStrState(state))
+		return moerr.NewTAECommitNoCtx("invalid txn state %s", txnif.TxnStrState(state))
 	}
 	txn.Add(1)
 	err = txn.Mgr.OnOpTxn(&OpTxn{
@@ -105,7 +105,7 @@ func (txn *Txn) rollback2PC() (err error) {
 
 	default:
 		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(state))
-		return moerr.NewTAERollback("unexpected txn status : %s", txnif.TxnStrState(state))
+		return moerr.NewTAERollbackNoCtx("unexpected txn status : %s", txnif.TxnStrState(state))
 	}
 
 	txn.Mgr.DeleteTxn(txn.GetID())
@@ -154,7 +154,7 @@ func (txn *Txn) commit2PC(inRecovery bool) (err error) {
 
 	default:
 		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(state))
-		return moerr.NewTAECommit("invalid txn state %s", txnif.TxnStrState(state))
+		return moerr.NewTAECommitNoCtx("invalid txn state %s", txnif.TxnStrState(state))
 	}
 	txn.Mgr.DeleteTxn(txn.GetID())
 

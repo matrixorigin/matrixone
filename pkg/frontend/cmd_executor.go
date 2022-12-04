@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -193,11 +192,9 @@ func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Sessi
 		txnErr = ses.TxnCommitSingleStatement(stmt)
 		if txnErr != nil {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
-			trace.EndStatement(ctx, txnErr)
 			logStatementStatus(ctx, ses, stmt, fail, txnErr)
 			return txnErr
 		}
-		trace.EndStatement(ctx, nil)
 		logStatementStatus(ctx, ses, stmt, success, nil)
 	} else {
 		incStatementErrorsCounter(tenant, stmt)
@@ -214,7 +211,6 @@ func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Sessi
 		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
 			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
-		trace.EndStatement(ctx, bse.err)
 		logutil.Error(bse.err.Error())
 		txnErr = ses.TxnRollbackSingleStatement(stmt)
 		if txnErr != nil {
@@ -280,13 +276,13 @@ func (bse *baseStmtExecutor) VerifyTxn(ctx context.Context, ses *Session) error 
 		if !can {
 			//is ddl statement
 			if IsDDL(stmt) {
-				return errorOnlyCreateStatement
+				return moerr.NewInternalError(ctx, onlyCreateStatementErrorInfo())
 			} else if IsAdministrativeStatement(stmt) {
-				return errorAdministrativeStatement
+				return moerr.NewInternalError(ctx, administrativeCommandIsUnsupportedInTxnErrorInfo())
 			} else if IsParameterModificationStatement(stmt) {
-				return errorParameterModificationInTxn
+				return moerr.NewInternalError(ctx, parameterModificationInTxnErrorInfo())
 			} else {
-				return errorUnclassifiedStatement
+				return moerr.NewInternalError(ctx, unclassifiedStatementInUncommittedTxnErrorInfo())
 			}
 		}
 	}
@@ -301,9 +297,8 @@ func (bse *baseStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Session
 	var err, retErr error
 	if bse.GetStatus() == stmtExecSuccess {
 		resp := NewOkResponse(bse.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
-		if err = ses.GetMysqlProtocol().SendResponse(resp); err != nil {
-			trace.EndStatement(ctx, err)
-			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err)
+		if err = ses.GetMysqlProtocol().SendResponse(ctx, resp); err != nil {
+			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
 			logStatementStatus(ctx, ses, bse.GetAst(), fail, retErr)
 			return retErr
 		}

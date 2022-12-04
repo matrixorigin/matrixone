@@ -51,7 +51,7 @@ func (b *DefaultBinder) bindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool
 		}
 	}
 	if idx == -1 {
-		err = moerr.NewInvalidInput("column '%s' does not exist", col)
+		err = moerr.NewInvalidInputNoCtx("column '%s' does not exist", col)
 		return
 	}
 	expr = &plan.Expr{
@@ -67,13 +67,13 @@ func (b *DefaultBinder) bindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool
 }
 
 func (b *DefaultBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewInvalidInput("cannot bind agregate functions '%s'", funcName)
+	return nil, moerr.NewInvalidInputNoCtx("cannot bind agregate functions '%s'", funcName)
 }
 
 func (b *DefaultBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewInvalidInput("cannot bind window functions '%s'", funcName)
+	return nil, moerr.NewInvalidInputNoCtx("cannot bind window functions '%s'", funcName)
 }
 
 func (b *DefaultBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewNYI("subquery in JOIN condition")
+	return nil, moerr.NewNYINoCtx("subquery in JOIN condition")
 }

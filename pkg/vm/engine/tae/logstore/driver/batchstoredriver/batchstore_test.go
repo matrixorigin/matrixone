@@ -55,7 +55,7 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 	tempLsn := uint64(0)
 	err = s.Replay(func(e *entry.Entry) {
 		if e.Lsn < tempLsn {
-			panic(moerr.NewInternalError("logic error %d<%d", e.Lsn, tempLsn))
+			panic(moerr.NewInternalErrorNoCtx("logic error %d<%d", e.Lsn, tempLsn))
 		}
 		tempLsn = e.Lsn
 		_, err = s.Read(e.Lsn)

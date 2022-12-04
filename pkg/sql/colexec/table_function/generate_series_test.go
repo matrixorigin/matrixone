@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package generate_series
+package table_function
 
 import (
 	"bytes"
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -125,7 +126,7 @@ func TestDoGenerateInt32(t *testing.T) {
 		},
 	}
 	for _, kase := range kases {
-		res, err := generateInt32(kase.start, kase.end, kase.step)
+		res, err := generateInt32(context.TODO(), kase.start, kase.end, kase.step)
 		if kase.err {
 			require.NotNil(t, err)
 			continue
@@ -284,7 +285,7 @@ func TestDoGenerateInt64(t *testing.T) {
 		},
 	}
 	for _, kase := range kases {
-		res, err := generateInt64(kase.start, kase.end, kase.step)
+		res, err := generateInt64(context.TODO(), kase.start, kase.end, kase.step)
 		if kase.err {
 			require.NotNil(t, err)
 			continue
@@ -390,7 +391,7 @@ func TestGenerateTimestamp(t *testing.T) {
 		require.Nil(t, err)
 		end, err := types.ParseDatetime(kase.end, precision)
 		require.Nil(t, err)
-		res, err := generateDatetime(start, end, kase.step, precision)
+		res, err := generateDatetime(context.TODO(), start, end, kase.step, precision)
 		if kase.err {
 			require.NotNil(t, err)
 			continue
@@ -418,89 +419,87 @@ func getPrecision(s string) int32 {
 	return precision
 }
 
-func TestString(t *testing.T) {
-	String(nil, new(bytes.Buffer))
+func TestGenerateSeriesString(t *testing.T) {
+	generateSeriesString(nil, new(bytes.Buffer))
 }
 
-func TestPrepare(t *testing.T) {
-	err := Prepare(nil, new(bytes.Buffer))
+func TestGenerateSeriesPrepare(t *testing.T) {
+	err := generateSeriesPrepare(nil, nil)
 	require.Nil(t, err)
 }
 func TestGenStep(t *testing.T) {
+	ctx := context.TODO()
 	kase := "10 hour"
-	num, tp, err := genStep(kase)
+	num, tp, err := genStep(ctx, kase)
 	require.Nil(t, err)
 	require.Equal(t, int64(10), num)
 	require.Equal(t, types.Hour, tp)
 	kase = "10 houx"
-	_, _, err = genStep(kase)
+	_, _, err = genStep(ctx, kase)
 	require.NotNil(t, err)
 	kase = "hour"
-	_, _, err = genStep(kase)
+	_, _, err = genStep(ctx, kase)
 	require.NotNil(t, err)
 	kase = "989829829129131939147193 hour"
-	_, _, err = genStep(kase)
+	_, _, err = genStep(ctx, kase)
 	require.NotNil(t, err)
 }
 
-func TestCall(t *testing.T) {
+func TestGenerateSeriesCall(t *testing.T) {
 	proc := testutil.NewProc()
 	beforeCall := proc.Mp().CurrNB()
 	arg := &Argument{
-		Es: &Param{
-			Attrs: []string{"result"},
-		},
+		Attrs: []string{"result"},
 	}
-	param := arg.Es
 	proc.SetInputBatch(nil)
-	end, err := Call(0, proc, arg)
+	end, err := generateSeriesCall(0, proc, arg)
 	require.Nil(t, err)
 	require.Equal(t, true, end)
 
-	param.ExprList = makeInt64List(1, 3, 1)
+	arg.Args = makeInt64List(1, 3, 1)
 
-	bat := makeBatch()
+	bat := makeGenerateSeriesBatch()
 	proc.SetInputBatch(bat)
-	end, err = Call(0, proc, arg)
+	end, err = generateSeriesCall(0, proc, arg)
 	require.Nil(t, err)
 	require.Equal(t, false, end)
 	require.Equal(t, 3, proc.InputBatch().GetVector(0).Length())
 	proc.InputBatch().Clean(proc.Mp())
 
-	param.ExprList = makeDatetimeList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second", 0)
+	arg.Args = makeDatetimeList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second", 0)
 	proc.SetInputBatch(bat)
-	end, err = Call(0, proc, arg)
+	end, err = generateSeriesCall(0, proc, arg)
 	require.Nil(t, err)
 	require.Equal(t, false, end)
 	require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
 	proc.InputBatch().Clean(proc.Mp())
 
-	param.ExprList = makeVarcharList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second")
+	arg.Args = makeVarcharList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second")
 	proc.SetInputBatch(bat)
-	end, err = Call(0, proc, arg)
+	end, err = generateSeriesCall(0, proc, arg)
 	require.Nil(t, err)
 	require.Equal(t, false, end)
 	require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
 	proc.InputBatch().Clean(proc.Mp())
 
-	param.ExprList = makeVarcharList("1", "10", "3")
+	arg.Args = makeVarcharList("1", "10", "3")
 	proc.SetInputBatch(bat)
-	end, err = Call(0, proc, arg)
+	end, err = generateSeriesCall(0, proc, arg)
 	require.Nil(t, err)
 	require.Equal(t, false, end)
 	require.Equal(t, 4, proc.InputBatch().GetVector(0).Length())
 	proc.InputBatch().Clean(proc.Mp())
 
-	param.ExprList = param.ExprList[:2]
+	arg.Args = arg.Args[:2]
 	proc.SetInputBatch(bat)
-	_, err = Call(0, proc, arg)
+	_, err = generateSeriesCall(0, proc, arg)
 	require.NotNil(t, err)
 	bat.Clean(proc.Mp())
 	require.Equal(t, beforeCall, proc.Mp().CurrNB())
 
 }
 
-func makeBatch() *batch.Batch {
+func makeGenerateSeriesBatch() *batch.Batch {
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
 	bat.Vecs[0].Col = make([]int64, 1)

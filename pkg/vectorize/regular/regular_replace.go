@@ -25,12 +25,12 @@ import (
 
 func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type string) (string, error) {
 	if pos < 1 || occurrence < 0 || pos >= int64(len(expr)) {
-		return expr, moerr.NewInvalidInput("regexp_replace have invalid input")
+		return expr, moerr.NewInvalidInputNoCtx("regexp_replace have invalid input")
 	}
 	//regular expression pattern
 	reg, err := regexp.Compile(pat)
 	if err != nil {
-		return "", moerr.NewInvalidArg("regexp_replace have invalid regexp pattern arg", pat)
+		return "", moerr.NewInvalidArgNoCtx("regexp_replace have invalid regexp pattern arg", pat)
 	}
 	//match result indexs
 	matchRes := reg.FindAllStringIndex(expr, -1)
@@ -68,7 +68,7 @@ func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type st
 
 func RegularReplaceWithReg(expr string, pat *regexp.Regexp, repl string, pos, occurrence int64, match_type string) (string, error) {
 	if pos < 1 || occurrence < 0 || pos >= int64(len(expr)) {
-		return expr, moerr.NewInvalidInput("regexp_replace have invalid input")
+		return expr, moerr.NewInvalidInputNoCtx("regexp_replace have invalid input")
 	}
 	//match result indexs
 	matchRes := pat.FindAllStringIndex(expr, -1)
@@ -113,7 +113,7 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 	if len(expr) == 1 && len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
 		if err != nil {
-			return moerr.NewInvalidArg("regexp_replace have invalid regexp pattern arg", pat)
+			return moerr.NewInvalidArgNoCtx("regexp_replace have invalid regexp pattern arg", pat)
 		}
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
@@ -145,7 +145,7 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 	} else if len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
 		if err != nil {
-			return moerr.NewInvalidArg("regexp_replace have invalid regexp pattern arg", pat)
+			return moerr.NewInvalidArgNoCtx("regexp_replace have invalid regexp pattern arg", pat)
 		}
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {

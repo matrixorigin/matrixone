@@ -44,7 +44,9 @@ func TestGetActiveRow(t *testing.T) {
 	}
 	blk := &ablock{baseBlock: b}
 
-	blk.storage.mnode = mnode.Pin()
+	mnode.Ref()
+	n := NewNode(mnode)
+	blk.node.Store(n)
 
 	// appendnode1 [0,1)
 	an1, _ := mvcc.AddAppendNodeLocked(nil, 0, 1)
@@ -69,9 +71,9 @@ func TestGetActiveRow(t *testing.T) {
 	keysCtx.SelectAll()
 	err := idx.BatchUpsert(keysCtx, 0)
 	assert.NoError(t, err)
-	blk.storage.mnode.Item().pkIndex = idx
+	blk.node.Load().MustMNode().pkIndex = idx
 
-	node := blk.storage.mnode.Item()
+	node := blk.node.Load().MustMNode()
 	// row, err := blk.GetActiveRow(int8(1), ts2)
 	row, err := blk.getInMemoryRowByFilter(node, ts2, handle.NewEQFilter(int8(1)))
 	assert.NoError(t, err)

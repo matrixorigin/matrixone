@@ -37,7 +37,7 @@ func ExtractFromString(vectors []*vector.Vector, proc *process.Process) (*vector
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint32, 1)
 		unit := string(leftValues.Data)
-		inputDate, err := types.ParseDate(string(rightValues.Get(0)))
+		inputDate, err := types.ParseDateCast(string(rightValues.Get(0)))
 		if err != nil {
 			return nil, moerr.NewInternalError("invalid input")
 		}
@@ -79,7 +79,7 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		unit := leftValues[0]
 		_, err := extract.ExtractFromDate(unit, rightValues, resultValues)
 		if err != nil {
-			return nil, moerr.NewInternalError("invalid input")
+			return nil, moerr.NewInternalErrorNoCtx("invalid input")
 		}
 		return resultVector, nil
 	case left.IsScalar() && !right.IsScalar():
@@ -98,13 +98,13 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		}
 		return resultVector, nil
 	default:
-		return nil, moerr.NewInternalError("invalid input")
+		return nil, moerr.NewInternalErrorNoCtx("invalid input")
 	}
 }
 
 func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	leftValues, rightValues := vector.MustStrCols(left), vector.MustTCols[types.Datetime](right)
 	switch {
 	case left.IsScalar() && right.IsScalar():
@@ -115,7 +115,7 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 		unit := leftValues[0]
 		resultValues, err := extract.ExtractFromDatetime(unit, rightValues, resultValues)
 		if err != nil {
-			return nil, moerr.NewInternalError("invalid input")
+			return nil, moerr.NewInternalErrorNoCtx("invalid input")
 		}
 		return vector.NewConstString(resultType, 1, resultValues[0], proc.Mp()), nil
 	case left.IsScalar() && !right.IsScalar():
@@ -130,6 +130,6 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 		}
 		return vector.NewWithStrings(resultType, resultValues, right.Nsp, proc.Mp()), nil
 	default:
-		return nil, moerr.NewInternalError("invalid input")
+		return nil, moerr.NewInternalErrorNoCtx("invalid input")
 	}
 }

@@ -189,11 +189,9 @@ insert into t1 values ("2006-01-02", "2006-01-02 12:01:02", "2006-01-02 12:01:02
 select f1 from t1 where f1 between CAST("2006-1-1" as date) and CAST(20060101 as date);
 invalid argument operator cast, bad value [BIGINT DATE]
 select f1 from t1 where f1 between cast("2006-1-1" as date) and cast("2006.1.1" as date);
-f1
-2006-01-01
+invalid argument parsedate, bad value 2006.1.1
 select f1 from t1 where date(f1) between cast("2006-1-1" as date) and cast("2006.1.1" as date);
-f1
-2006-01-01
+invalid argument parsedate, bad value 2006.1.1
 select f3 from t1 where f3 between cast("2006-1-1 12:1:1" as datetime) and cast("2006-1-1 12:1:2" as datetime);
 f3
 2006-01-01 12:01:01

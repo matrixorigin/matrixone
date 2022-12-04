@@ -83,7 +83,7 @@ func TestCompile(t *testing.T) {
 	for _, tc := range tcs {
 		tc.proc.TxnClient = txnClient
 		c := New("", "test", tc.sql, "", context.TODO(), tc.e, tc.proc, tc.stmt)
-		err := c.Compile(tc.pn, nil, testPrint)
+		err := c.Compile(ctx, tc.pn, nil, testPrint)
 		require.NoError(t, err)
 		c.GetAffectedRows()
 		err = c.Run(0)
@@ -96,10 +96,11 @@ func TestCompile(t *testing.T) {
 func TestCompileWithFaults(t *testing.T) {
 	// Enable this line to trigger the Hung.
 	// fault.Enable()
-	fault.AddFaultPoint("panic_in_batch_append", ":::", "panic", 0, "")
+	var ctx = context.Background()
+	fault.AddFaultPoint(ctx, "panic_in_batch_append", ":::", "panic", 0, "")
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
 	c := New("", "test", tc.sql, "", context.TODO(), tc.e, tc.proc, nil)
-	err := c.Compile(tc.pn, nil, testPrint)
+	err := c.Compile(ctx, tc.pn, nil, testPrint)
 	require.NoError(t, err)
 	c.GetAffectedRows()
 	err = c.Run(0)
@@ -109,7 +110,7 @@ func TestCompileWithFaults(t *testing.T) {
 func newTestCase(sql string, t *testing.T) compileTestCase {
 	proc := testutil.NewProcess()
 	e, _, compilerCtx := testengine.New(context.Background())
-	stmts, err := mysql.Parse(sql)
+	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql)
 	require.NoError(t, err)
 	pn, err := plan2.BuildPlan(compilerCtx, stmts[0])
 	require.NoError(t, err)

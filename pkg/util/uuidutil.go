@@ -16,6 +16,7 @@ package util
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"hash/fnv"
 	"net"
@@ -25,7 +26,7 @@ import (
 )
 
 // getDefaultHardwareAddr returns hardware address(like mac addr), like the first valid val.
-var getDefaultHardwareAddr = func() (net.HardwareAddr, error) {
+var getDefaultHardwareAddr = func(ctx context.Context) (net.HardwareAddr, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return []byte{}, err
@@ -35,18 +36,18 @@ var getDefaultHardwareAddr = func() (net.HardwareAddr, error) {
 			return iface.HardwareAddr, nil
 		}
 	}
-	return []byte{}, moerr.NewInternalError("uuid: no Hardware address found")
+	return []byte{}, moerr.NewInternalError(ctx, "uuid: no Hardware address found")
 }
 
 // docker mac addr range: [02:42:ac:11:00:00, 02:42:ac:11:ff:ff]
 var dockerMacPrefix = []byte{0x02, 0x42, 0xac}
 
 // SetUUIDNodeID set all uuid generator's node_id
-func SetUUIDNodeID(nodeUuid []byte) error {
+func SetUUIDNodeID(ctx context.Context, nodeUuid []byte) error {
 	var err error
 	var hwAddr []byte
 	// situation 1: set by mac addr
-	hwAddr, err = getDefaultHardwareAddr()
+	hwAddr, err = getDefaultHardwareAddr(ctx)
 	if err == nil && !bytes.Equal(hwAddr[:len(dockerMacPrefix)], dockerMacPrefix) && uuid.SetNodeID(hwAddr) {
 		return nil
 	}
@@ -68,7 +69,7 @@ func SetUUIDNodeID(nodeUuid []byte) error {
 	var hash = make([]byte, 0, 16)
 	hash = hasher.Sum(hash[:])
 	if !uuid.SetNodeID(hash[:]) {
-		return moerr.NewInternalError("uuid: nodeID too short")
+		return moerr.NewInternalError(ctx, "uuid: nodeID too short")
 	}
 	return nil
 }

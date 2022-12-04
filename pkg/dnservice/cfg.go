@@ -15,6 +15,7 @@
 package dnservice
 
 import (
+	"context"
 	"path/filepath"
 	"time"
 
@@ -107,7 +108,7 @@ type Config struct {
 
 func (c *Config) Validate() error {
 	if c.UUID == "" {
-		return moerr.NewInternalError("Config.UUID not set")
+		return moerr.NewInternalError(context.Background(), "Config.UUID not set")
 	}
 	if c.DataDir == "" {
 		c.DataDir = defaultDataDir
@@ -127,7 +128,7 @@ func (c *Config) Validate() error {
 		c.Txn.Storage.LogBackend = defaultLogBackend
 	}
 	if _, ok := supportTxnStorageBackends[c.Txn.Storage.Backend]; !ok {
-		return moerr.NewInternalError("%s txn storage backend not support", c.Txn.Storage)
+		return moerr.NewInternalError(context.Background(), "%s txn storage backend not support", c.Txn.Storage)
 	}
 	if c.Txn.ZombieTimeout.Duration == 0 {
 		c.Txn.ZombieTimeout.Duration = defaultZombieTimeout

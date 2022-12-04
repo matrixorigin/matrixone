@@ -49,9 +49,24 @@ type CheckpointClient interface {
 	FlushTable(dbID, tableID uint64, ts types.TS) error
 }
 
+func DecideTableScope(tableID uint64) Scope {
+	var scope Scope
+	switch tableID {
+	case pkgcatalog.MO_DATABASE_ID:
+		scope = ScopeDatabases
+	case pkgcatalog.MO_TABLES_ID:
+		scope = ScopeTables
+	case pkgcatalog.MO_COLUMNS_ID:
+		scope = ScopeColumns
+	default:
+		scope = ScopeUserTables
+	}
+	return scope
+}
+
 func HandleSyncLogTailReq(
 	ckpClient CheckpointClient,
-	mgr *LogtailMgr,
+	mgr *Manager,
 	c *catalog.Catalog,
 	req api.SyncLogTailReq,
 	canRetry bool) (resp api.SyncLogTailResp, err error) {
@@ -84,7 +99,7 @@ func HandleSyncLogTailReq(
 		start = checkpointed.Next()
 	}
 
-	scope := mgr.DecideScope(tid)
+	scope := DecideTableScope(tid)
 
 	var visitor RespBuilder
 
@@ -102,7 +117,8 @@ func HandleSyncLogTailReq(
 	resp, err = visitor.BuildResp()
 
 	if canRetry && scope == ScopeUserTables { // check simple conditions first
-		if _, forceFlush := fault.TriggerFault("logtail_max_size"); forceFlush || resp.ProtoSize() > Size90M {
+		_, name, forceFlush := fault.TriggerFault("logtail_max_size")
+		if (forceFlush && name == tableEntry.GetSchema().Name) || resp.ProtoSize() > Size90M {
 			if err = ckpClient.FlushTable(did, tid, end); err != nil {
 				logutil.Errorf("[logtail] flush err: %v", err)
 				return api.SyncLogTailResp{}, err
@@ -461,7 +477,7 @@ func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode 
 
 	if metaNode.HasDropCommitted() {
 		if metaNode.DeletedAt.IsEmpty() {
-			panic(moerr.NewInternalError("no delete at time in a dropped entry"))
+			panic(moerr.NewInternalErrorNoCtx("no delete at time in a dropped entry"))
 		}
 		delBatch := b.blkMetaDelBatch
 		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.DeletedAt)

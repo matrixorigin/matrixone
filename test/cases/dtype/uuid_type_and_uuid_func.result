@@ -45,7 +45,8 @@ length(cast(a as varchar))
 36
 drop table t4;
 select length(cast(uuid() as varchar));
-internal error: Can't cast column from VARCHAR type to VARCHAR type because of one or more values in that column. Src length 36 is larger than Dest length 1
+length(cast(uuid() as varchar))
+36
 select length(cast(uuid() as char));
 internal error: Can't cast column from VARCHAR type to CHAR type because of one or more values in that column. Src length 36 is larger than Dest length 1
 select length(cast(uuid() as text));
@@ -58,5 +59,5 @@ book_id    BIGINT    YES        NULL
 rated_at    DATETIME    YES        CURRENT_TIMESTAMP
 score    TINYINT    YES        NULL
 user_id    BIGINT    YES        NULL
-__mo_cpkey_007book_id007user_id    VARCHAR(0)    NO    PRI    NULL
+__mo_cpkey_007book_id007user_id    VARCHAR(65535)    NO    PRI    NULL
 drop table ratings;

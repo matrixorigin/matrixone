@@ -25,9 +25,7 @@ insert into t1 values(-1.7976931348623157),(2.2250738585072014),(0),(2.225073858
 select * from t1;
 drop table t1;
 create table t1(a float(34));
--- @bvt:issue#4604
 show create table t1;
--- @bvt:issue
 drop table t1;
 create table t1 ( a double not null default 1, big double(30,5) );
 insert into t1 (big) values (-1),(12345678.901234567),(92233720368547.75807);
@@ -85,7 +83,7 @@ select * from t1 where a>='17.6660';
 drop table t1;
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a double(20),
-b VARCHAR(20));
+b VARCHAR(100));
 INSERT INTO t1 (id,a) VALUES
 (1,0),
 (2,CAST(0x7FFFFFFFFFFFFFFF AS UNSIGNED)),

@@ -25,7 +25,7 @@ import (
 
 func HexString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.New(types.T_varchar, 0, 0, 0)
+	resultType := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
 	inputValues := vector.MustStrCols(inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -43,7 +43,7 @@ func HexString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 
 func HexInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.New(types.T_varchar, 0, 0, 0)
+	resultType := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
 	inputValues := vector.MustTCols[int64](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {

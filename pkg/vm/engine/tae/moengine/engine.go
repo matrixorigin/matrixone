@@ -224,5 +224,5 @@ func (e *txnEngine) Close() (err error) {
 }
 
 func (e *txnEngine) Destroy() (err error) {
-	panic(moerr.NewNYI("Pls implement me!"))
+	panic(moerr.NewNYINoCtx("Pls implement me!"))
 }

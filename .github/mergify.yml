@@ -37,49 +37,49 @@ pull_request_rules:
 
   - name: label for Bug
     conditions: 
-      - body~=(?m)- \[(?i)x\] BUG
+      - body~=(?im)- \[x\] BUG
     actions:
       label:
         add:
           - kind/bug
   - name: label for Feature
     conditions: 
-      - body~=(?m)- \[(?i)x\] Feature
+      - body~=(?im)- \[x\] Feature
     actions:
       label:
         add:
           - kind/feature
   - name: label for Improvement
     conditions: 
-      - body~=(?m)- \[(?i)x\] Improvement
+      - body~=(?im)- \[x\] Improvement
     actions:
       label:
         add:
           - kind/enhancement
   - name: label for Documentation
     conditions: 
-      - body~=(?m)- \[(?i)x\] Documentation
+      - body~=(?im)- \[x\] Documentation
     actions:
       label:
         add:
           - kind/documentation
   - name: label for Test and CI
     conditions: 
-      - body~=(?m)- \[(?i)x\] Test and CI
+      - body~=(?im)- \[x\] Test and CI
     actions:
       label:
         add:
           - kind/test-ci
   - name: label for Code Refactoring
     conditions: 
-      - body~=(?m)- \[(?i)x\] Code Refactoring
+      - body~=(?im)- \[x\] Code Refactoring
     actions:
       label:
         add:
           - kind/refactor
   - name: label for API-change
     conditions: 
-      - body~=(?m)- \[(?i)x\] API-change
+      - body~=(?im)- \[x\] API-change
     actions:
       label:
         add:

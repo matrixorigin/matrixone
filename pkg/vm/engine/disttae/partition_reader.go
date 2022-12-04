@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -49,7 +50,7 @@ func (p *PartitionReader) Close() error {
 	return nil
 }
 
-func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
+func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
 	if p == nil {
 		return nil, nil
 	}
@@ -63,7 +64,7 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 		for i, name := range colNames {
 			b.Vecs[i] = vector.New(p.typsMap[name])
 		}
-		if _, err := b.Append(mp, bat); err != nil {
+		if _, err := b.Append(ctx, mp, bat); err != nil {
 			return nil, err
 		}
 		return b, nil

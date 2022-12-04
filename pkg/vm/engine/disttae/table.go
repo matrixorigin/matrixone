@@ -44,7 +44,7 @@ func (tbl *table) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, e
 	for _, blockmetas := range tbl.meta.blocks {
 		for _, blk := range blockmetas {
 			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
-				card += float64(blockRows(blk)) / 3
+				card += float64(blockRows(blk))
 			}
 		}
 	}
@@ -272,7 +272,7 @@ func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
 		for j := range bat.Vecs {
 			ibat.SetVector(int32(j), vector.New(bat.GetVector(int32(j)).GetType()))
 		}
-		if _, err := ibat.Append(tbl.db.txn.proc.Mp(), bat); err != nil {
+		if _, err := ibat.Append(ctx, tbl.db.txn.proc.Mp(), bat); err != nil {
 			return err
 		}
 		i := rand.Int() % len(tbl.db.txn.dnStores)
@@ -416,6 +416,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 		}
 	}
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
+	tbl.db.txn.Lock()
 	for i := range tbl.db.txn.writes {
 		for _, entry := range tbl.db.txn.writes[i] {
 			if entry.databaseId == tbl.db.databaseId &&
@@ -424,6 +425,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 			}
 		}
 	}
+	tbl.db.txn.Unlock()
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	for _, i := range tbl.dnList {
