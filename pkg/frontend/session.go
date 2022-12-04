@@ -1460,6 +1460,9 @@ func (th *TxnHandler) CommitTxn() error {
 	if ctx == nil {
 		panic("context should not be nil")
 	}
+	if ses.tempTablestorage != nil {
+		ctx = context.WithValue(ctx, "tempStorage", ses.tempTablestorage)
+	}
 	storage := th.GetStorage()
 	ctx, cancel := context.WithTimeout(
 		ctx,
@@ -1518,6 +1521,9 @@ func (th *TxnHandler) RollbackTxn() error {
 	ctx := ses.GetRequestContext()
 	if ctx == nil {
 		panic("context should not be nil")
+	}
+	if ses.tempTablestorage != nil {
+		ctx = context.WithValue(ctx, "tempStorage", ses.tempTablestorage)
 	}
 	storage := th.GetStorage()
 	ctx, cancel := context.WithTimeout(
