@@ -172,6 +172,8 @@ func adjustFloatBytes(b []byte, encode bool) {
 	}
 }
 
+const PackerMemUnit = 64
+
 type packer struct {
 	buf      []byte
 	size     int
@@ -179,26 +181,30 @@ type packer struct {
 	mp       *mpool.MPool
 }
 
-func NewPacker() *packer {
+func NewPacker(mp *mpool.MPool) *packer {
+	bytes, err := mp.Alloc(PackerMemUnit)
+	if err != nil {
+		panic(err)
+	}
 	return &packer{
-		buf: make([]byte, 0, 64),
+		buf:      bytes,
+		size:     0,
+		capacity: PackerMemUnit,
+		mp:       mp,
 	}
 }
 
-func NewPackerArray(size int, mp *mpool.MPool) []*packer {
-	packerArr := make([]*packer, size)
+func NewPackerArray(length int, mp *mpool.MPool) []*packer {
+	packerArr := make([]*packer, length)
 	for num := range packerArr {
-		//packerArr[num] = &packer{
-		//	buf: make([]byte, 0, 64),
-		//}
-		bytes, err := mp.Alloc(64)
+		bytes, err := mp.Alloc(PackerMemUnit)
 		if err != nil {
 			panic(err)
 		}
 		packerArr[num] = &packer{
 			buf:      bytes,
 			size:     0,
-			capacity: 64,
+			capacity: PackerMemUnit,
 			mp:       mp,
 		}
 	}
@@ -215,35 +221,32 @@ func (p *packer) FreeMem() {
 }
 
 func (p *packer) putByte(b byte) {
-	fmt.Printf("-----------------------putByte--------------------------------\n")
 	if p.size < p.capacity {
 		p.buf[p.size] = b
 		p.size++
 	} else {
-		p.buf, _ = p.mp.Grow(p.buf, 64)
-		p.capacity += 64
+		p.buf, _ = p.mp.Grow(p.buf, p.capacity+PackerMemUnit)
+		p.capacity += PackerMemUnit
 		p.buf[p.size] = b
 		p.size++
 	}
-	//p.buf = append(p.buf, b)
 }
 
 func (p *packer) putBytes(bs []byte) {
-	fmt.Printf("-----------------------putBytes--------------------------------\n")
 	if p.size+len(bs) < p.capacity {
 		for _, b := range bs {
 			p.buf[p.size] = b
 			p.size++
 		}
 	} else {
-		p.buf, _ = p.mp.Grow(p.buf, 64)
-		p.capacity += 64
+		incrementSize := ((len(bs) / PackerMemUnit) + 1) * PackerMemUnit
+		p.buf, _ = p.mp.Grow(p.buf, p.capacity+incrementSize)
+		p.capacity += incrementSize
 		for _, b := range bs {
 			p.buf[p.size] = b
 			p.size++
 		}
 	}
-	//p.buf = append(p.buf, b...)
 }
 
 func (p *packer) putBytesNil(b []byte, i int) {
@@ -410,7 +413,6 @@ func (p *packer) EncodeStringType(e []byte) {
 
 func (p *packer) GetBuf() []byte {
 	return p.buf[:p.size]
-	//return p.buf
 }
 
 func findTerminator(b []byte) int {

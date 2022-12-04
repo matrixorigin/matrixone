@@ -52,8 +52,9 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, p []*plan.ColDef
 		Attrs: make([]string, 1),
 		Vecs:  make([]*vector.Vector, 1),
 	}
-	isCPkey := JudgeIsCompositePrimaryKeyColumn(p[0].Name)
-	if isCPkey {
+	// Judge whether it is a compound unique key
+	isCompKey := JudgeIsCompositePrimaryKeyColumn(p[0].Name)
+	if isCompKey {
 		names := SplitCompositePrimaryKeyColumnName(p[0].Name)
 		cPkeyVecMap := make(map[string]*vector.Vector)
 		for num, attrName := range attrs {
@@ -79,7 +80,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, p []*plan.ColDef
 			}
 		}
 	}
-	if isCPkey {
+	if isCompKey {
 		b.Cnt = 1
 	} else {
 		v, needClean := compactUniqueKeyBatch(b.Vecs[0], proc)
