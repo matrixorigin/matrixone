@@ -56,7 +56,7 @@ type DB struct {
 	TxnMgr        *txnbase.TxnManager
 	TransferTable *model.HashPageTable
 
-	LogtailMgr *logtail.LogtailMgr
+	LogtailMgr *logtail.Manager
 	Wal        wal.Driver
 
 	Scheduler tasks.TaskScheduler

@@ -30,7 +30,8 @@ import (
 
 func ExtractCompositePrimaryKeyColumnFromColDefs(colDefs []*plan.ColDef) ([]*plan.ColDef, *plan.ColDef) {
 	for num := range colDefs {
-		if colDefs[num].IsCPkey {
+		isCPkey := JudgeIsCompositePrimaryKeyColumn(colDefs[num].Name)
+		if isCPkey {
 			cPKC := colDefs[num]
 			colDefs = append(colDefs[:num], colDefs[num+1:]...)
 			return colDefs, cPKC

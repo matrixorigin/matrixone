@@ -19,11 +19,11 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"go.uber.org/zap"
 )
 
 const (
@@ -87,9 +87,7 @@ func parseDnState(cfg hakeeper.Config,
 
 // checkReportedState generates Operators for reported state.
 // NB: the order of list is deterministic.
-func checkReportedState(
-	rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator, logger *zap.Logger,
-) []*operator.Operator {
+func checkReportedState(rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator) []*operator.Operator {
 	var ops []*operator.Operator
 
 	reported := rs.listShards()
@@ -105,7 +103,7 @@ func checkReportedState(
 			panic(fmt.Sprintf("shard `%d` not register", shardID))
 		}
 
-		steps := checkShard(shard, mapper, workingStores, idAlloc, logger)
+		steps := checkShard(shard, mapper, workingStores, idAlloc)
 		// avoid Operator with nil steps
 		if len(steps) > 0 {
 			ops = append(ops,
@@ -114,7 +112,7 @@ func checkReportedState(
 		}
 	}
 
-	logger.Debug(fmt.Sprintf("construct %d operators for reported dn shards", len(ops)))
+	runtime.ProcessLevelRuntime().Logger().Debug(fmt.Sprintf("construct %d operators for reported dn shards", len(ops)))
 
 	return ops
 }
@@ -123,8 +121,7 @@ func checkReportedState(
 // NB: the order of list is deterministic.
 func checkInitiatingShards(
 	rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator,
-	cluster pb.ClusterInfo, cfg hakeeper.Config, currTick uint64, logger *zap.Logger,
-) []*operator.Operator {
+	cluster pb.ClusterInfo, cfg hakeeper.Config, currTick uint64) []*operator.Operator {
 	// update the registered newly-created shards
 	for _, record := range cluster.DNShards {
 		shardID := record.ShardID
@@ -148,7 +145,7 @@ func checkInitiatingShards(
 
 	var ops []*operator.Operator
 	for _, id := range expired {
-		steps := checkShard(newDnShard(id), mapper, workingStores, idAlloc, logger)
+		steps := checkShard(newDnShard(id), mapper, workingStores, idAlloc)
 		if len(steps) > 0 { // avoid Operator with nil steps
 			ops = append(ops,
 				operator.NewOperator("dnservice", id, operator.NoopEpoch, steps...),
@@ -156,7 +153,7 @@ func checkInitiatingShards(
 		}
 	}
 
-	logger.Debug(fmt.Sprintf("construct %d operators for initiating dn shards", len(ops)))
+	runtime.ProcessLevelRuntime().Logger().Debug(fmt.Sprintf("construct %d operators for initiating dn shards", len(ops)))
 	if bootstrapping && len(ops) != 0 {
 		bootstrapping = false
 	}

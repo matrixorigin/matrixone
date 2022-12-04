@@ -52,9 +52,10 @@ type TableDef_DefType_Partition = plan.TableDef_DefType_Partition
 type PropertiesDef = plan.PropertiesDef
 type ViewDef = plan.ViewDef
 type PartitionInfo = plan.PartitionInfo
-type TableDef_DefType_Idx = plan.TableDef_DefType_Idx
-type IndexDef = plan.IndexDef
-type IndexInfo = plan.IndexInfo
+type TableDef_DefType_UIdx = plan.TableDef_DefType_UIdx
+type TableDef_DefType_SIdx = plan.TableDef_DefType_SIdx
+type UniqueIndexDef = plan.UniqueIndexDef
+type SecondaryIndexDef = plan.SecondaryIndexDef
 type OrderBySpec = plan.OrderBySpec
 
 type CompilerContext interface {

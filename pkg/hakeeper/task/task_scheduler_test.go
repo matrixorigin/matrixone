@@ -20,11 +20,23 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestMain(m *testing.M) {
+	logutil.SetupMOLogger(&logutil.LogConfig{
+		Level:  "debug",
+		Format: "console",
+	})
+
+	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
+	m.Run()
+}
 
 func TestGetExpiredTasks(t *testing.T) {
 	cases := []struct {
@@ -94,12 +106,15 @@ func TestGetCNOrderedMap(t *testing.T) {
 
 func TestScheduleCreatedTasks(t *testing.T) {
 	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
-	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{}, nil)
+	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{})
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
 	currentTick := uint64(0)
 
+	// Schedule empty task
+	scheduler.Schedule(cnState, currentTick)
+
 	// Create Task 1
-	service.Create(context.Background(), task.TaskMetadata{ID: "1"})
+	assert.NoError(t, service.Create(context.Background(), task.TaskMetadata{ID: "1"}))
 	query, err := service.QueryTask(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, task.TaskStatus_Created, query[0].Status)
@@ -113,7 +128,7 @@ func TestScheduleCreatedTasks(t *testing.T) {
 	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
 
 	// Create Task 2
-	service.Create(context.Background(), task.TaskMetadata{ID: "2"})
+	assert.NoError(t, service.Create(context.Background(), task.TaskMetadata{ID: "2"}))
 	query, err = service.QueryTask(context.Background(),
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
 	assert.NoError(t, err)
@@ -134,12 +149,12 @@ func TestScheduleCreatedTasks(t *testing.T) {
 
 func TestReallocateExpiredTasks(t *testing.T) {
 	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
-	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{}, nil)
+	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{})
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
 	currentTick := expiredTick - 1
 
 	// Create Task 1
-	service.Create(context.Background(), task.TaskMetadata{ID: "1"})
+	assert.NoError(t, service.Create(context.Background(), task.TaskMetadata{ID: "1"}))
 	query, err := service.QueryTask(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, task.TaskStatus_Created, query[0].Status)
@@ -179,5 +194,17 @@ func TestReallocateExpiredTasks(t *testing.T) {
 	assert.Equal(t, 1, len(query))
 	assert.Equal(t, "b", query[0].TaskRunner)
 	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
+}
 
+func TestSchedulerCreateTasks(t *testing.T) {
+	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
+	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{})
+	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
+	currentTick := uint64(0)
+
+	assert.NoError(t, scheduler.Create(context.Background(),
+		[]task.TaskMetadata{{ID: "1"}}))
+
+	// Schedule empty task
+	scheduler.Schedule(cnState, currentTick)
 }

@@ -233,7 +233,7 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 			return
 		}
 		l.bootstrapCheckCycles = checkBootstrapCycles
-		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo, nil)
+		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo)
 		l.assertHAKeeperState(pb.HAKeeperBootstrapCommandsReceived)
 	}
 }
@@ -247,7 +247,7 @@ func (l *store) checkBootstrap(state *pb.CheckerState) {
 	}
 
 	if l.bootstrapMgr == nil {
-		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo, nil)
+		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo)
 	}
 	if !l.bootstrapMgr.CheckBootstrap(state.LogState) {
 		l.bootstrapCheckCycles--
@@ -293,7 +293,7 @@ func (l *store) getScheduleCommand(check bool,
 	if check {
 		return l.checker.Check(l.alloc, *state), nil
 	}
-	m := bootstrap.NewBootstrapManager(state.ClusterInfo, nil)
+	m := bootstrap.NewBootstrapManager(state.ClusterInfo)
 	return m.Bootstrap(l.alloc, state.DNState, state.LogState)
 }
 
