@@ -4519,27 +4519,26 @@ func TestInsertPerf(t *testing.T) {
 }
 
 func TestAppendBat(t *testing.T) {
-	p, _ := ants.NewPool(20)
+	p, _ := ants.NewPool(100)
 	defer p.Release()
 	var wg sync.WaitGroup
 
 	schema := catalog.MockSchema(7, 2)
-	bat := catalog.MockBatch(schema, 40000)
+	bat := catalog.MockBatch(schema, 1000)
 	defer bat.Close()
 
 	run := func() {
 		defer wg.Done()
-		b := containers.BuildBatch(schema.Attrs(), schema.Types(), schema.Nullables(), &containers.Options{
+		b := containers.BuildBatch(schema.Attrs(), schema.Types(), schema.Nullables(), containers.Options{
 			Allocator: common.DefaultAllocator})
 		defer b.Close()
 		for i := 0; i < bat.Length(); i++ {
 			w := bat.Window(i, 1)
 			b.Extend(w)
 		}
-		time.Sleep(time.Millisecond)
 	}
 
-	for i := 0; i < 20000; i++ {
+	for i := 0; i < 200; i++ {
 		wg.Add(1)
 		_ = p.Submit(run)
 	}
