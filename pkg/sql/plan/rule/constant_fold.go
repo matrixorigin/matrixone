@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -103,6 +104,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process, isPrepa
 	ec := &plan.Expr_C{
 		C: c,
 	}
+	e.Typ = plan2.MakePlan2Type(&vec.Typ)
 	e.Expr = ec
 	return e
 }
