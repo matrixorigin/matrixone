@@ -157,6 +157,7 @@ type ColDef struct {
 	Comment       string
 	Default       Default
 	OnUpdate      OnUpdate
+	ClusterBy     bool
 }
 
 func (def *ColDef) GetName() string     { return def.Name }
@@ -168,6 +169,7 @@ func (def *ColDef) IsPhyAddr() bool       { return def.PhyAddr }
 func (def *ColDef) IsPrimary() bool       { return def.Primary }
 func (def *ColDef) IsAutoIncrement() bool { return def.AutoIncrement }
 func (def *ColDef) IsSortKey() bool       { return def.SortKey }
+func (def *ColDef) IsClusterBy() bool     { return def.ClusterBy }
 
 type SortKey struct {
 	Defs      []*ColDef
@@ -458,6 +460,10 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += 1
+		if err = binary.Read(r, binary.BigEndian, &def.ClusterBy); err != nil {
+			return
+		}
+		n += 1
 		def.Default = Default{}
 		length := uint64(0)
 		if err = binary.Read(r, binary.BigEndian, &length); err != nil {
@@ -558,6 +564,9 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		if err = binary.Write(&w, binary.BigEndian, def.SortKey); err != nil {
 			return
 		}
+		if err = binary.Write(&w, binary.BigEndian, def.ClusterBy); err != nil {
+			return
+		}
 		var data []byte
 		data, err = def.Default.Marshal()
 		if err != nil {
@@ -612,6 +621,8 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
 		def.NullAbility = i82bool(nullable)
 		isHidden := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsHidden)).Get(offset).(int8)
 		def.Hidden = i82bool(isHidden)
+		isClusterBy := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsClusterBy)).Get(offset).(int8)
+		def.ClusterBy = i82bool(isClusterBy)
 		isAutoIncrement := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsAutoIncrement)).Get(offset).(int8)
 		def.AutoIncrement = i82bool(isAutoIncrement)
 		def.Comment = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).Get(offset).([]byte))
@@ -770,6 +781,7 @@ func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 		NullAbility:   attrDefault.NullAbility,
 		AutoIncrement: attr.AutoIncrement,
 		OnUpdate:      attrOnUpdate,
+		ClusterBy:     attr.ClusterBy,
 	}
 	return s.AppendColDef(def)
 }

@@ -108,6 +108,9 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 		if col.constraintType == catalog.SystemColPKConstraint {
 			tbl.primaryIdx = i
 		}
+		if col.isClusterBy == 1 {
+			tbl.clusterByIdx = i
+		}
 		defs = append(defs, genTableDefOfColumn(col))
 	}
 	return tbl, defs, nil
@@ -724,7 +727,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 
 	// get min max data from Meta
 	datas, dataTypes, err := getZonemapDataFromMeta(ctx, columns, blkInfo, tableDef)
-	if err != nil {
+	if err != nil || datas == nil {
 		return true
 	}
 

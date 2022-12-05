@@ -16,6 +16,8 @@ package memoryengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -46,6 +48,10 @@ var _ plan.CompilerContext = new(CompilerContext)
 
 func (*CompilerContext) Cost(obj *plan.ObjectRef, e *plan.Expr) *plan.Cost {
 	return &plan.Cost{}
+}
+
+func (c *CompilerContext) GetProcess() *process.Process {
+	return nil
 }
 
 func (c *CompilerContext) DatabaseExists(name string) bool {
@@ -191,9 +197,10 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 			Size:        attr.Type.Size,
 			Scale:       attr.Type.Scale,
 		},
-		Default: attr.Default,
-		Primary: attr.Primary,
-		Pkidx:   int32(idx),
-		Comment: attr.Comment,
+		Default:   attr.Default,
+		Primary:   attr.Primary,
+		Pkidx:     int32(idx),
+		Comment:   attr.Comment,
+		ClusterBy: attr.ClusterBy,
 	}
 }
