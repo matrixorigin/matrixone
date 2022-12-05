@@ -129,7 +129,7 @@ func HandleSyncLogTailReq(
 			return newResp, err
 		}
 	}
-	return visitor.BuildResp()
+	return
 }
 
 type RespBuilder interface {

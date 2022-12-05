@@ -65,6 +65,7 @@ func TestEngine(t *testing.T) {
 
 	schema := catalog.MockSchema(13, 12)
 	defs, err := SchemaToDefs(schema)
+	assert.NoError(t, err)
 	defs[5].(*engine.AttributeDef).Attr.Default = &plan.Default{
 		NullAbility: true,
 		Expr: &plan.Expr{

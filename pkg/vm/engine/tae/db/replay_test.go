@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -1210,20 +1211,21 @@ func TestReplay10(t *testing.T) {
 	expr := &plan.Expr{}
 	exprbuf, err := expr.Marshal()
 	assert.NoError(t, err)
-	schema.ColDefs[1].Default = catalog.Default{
+
+	schema.ColDefs[1].Default, _ = types.Encode(&plan.Default{
 		NullAbility: false,
-		Expr:        exprbuf,
-	}
-	schema.ColDefs[1].OnUpdate = catalog.OnUpdate{
-		Expr: exprbuf,
-	}
-	schema.ColDefs[2].Default = catalog.Default{
+		Expr:        &plan.Expr{},
+	})
+	schema.ColDefs[1].OnUpdate, _ = types.Encode(&plan.OnUpdate{
+		Expr: &plan.Expr{},
+	})
+	schema.ColDefs[2].Default, _ = types.Encode(plan.Default{
 		NullAbility: true,
 		Expr:        nil,
-	}
-	schema.ColDefs[2].OnUpdate = catalog.OnUpdate{
+	})
+	schema.ColDefs[2].OnUpdate, _ = types.Encode(plan.OnUpdate{
 		Expr: nil,
-	}
+	})
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
 	defer bat.Close()
@@ -1239,11 +1241,23 @@ func TestReplay10(t *testing.T) {
 	checkAllColRowsByScan(t, rel, bat.Length(), false)
 	assert.NoError(t, txn.Commit())
 	schema1 := rel.GetMeta().(*catalog.TableEntry).GetSchema()
-	assert.Equal(t, exprbuf, schema1.ColDefs[1].Default.Expr)
-	assert.Equal(t, exprbuf, schema1.ColDefs[1].OnUpdate.Expr)
-	assert.Equal(t, []byte(nil), schema1.ColDefs[2].Default.Expr)
-	assert.Equal(t, []byte(nil), schema1.ColDefs[2].OnUpdate.Expr)
-	assert.Equal(t, true, schema1.ColDefs[2].Default.NullAbility)
+
+	d1 := &plan.Default{}
+	assert.NoError(t, types.Decode(schema1.ColDefs[1].Default, d1))
+	buf, _ := d1.Expr.Marshal()
+	assert.Equal(t, exprbuf, buf)
+	u1 := &plan.OnUpdate{}
+	assert.NoError(t, types.Decode(schema1.ColDefs[1].OnUpdate, u1))
+	buf, _ = u1.Expr.Marshal()
+	assert.Equal(t, exprbuf, buf)
+
+	d2 := &plan.Default{}
+	assert.NoError(t, types.Decode(schema1.ColDefs[2].Default, d2))
+	assert.Nil(t, d2.Expr)
+	u2 := &plan.OnUpdate{}
+	assert.NoError(t, types.Decode(schema1.ColDefs[2].OnUpdate, u2))
+	assert.Nil(t, u2.Expr)
+	assert.True(t, d2.NullAbility)
 }
 
 // create db,tbl,seg,blk
