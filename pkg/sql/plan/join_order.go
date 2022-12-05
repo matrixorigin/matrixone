@@ -249,7 +249,6 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		visited[firstConnected] = true
 
 		eligible := adjMat[firstConnected*nLeaf : (firstConnected+1)*nLeaf]
-		leftCard := subTrees[firstConnected].Cost.Card
 
 		for {
 			nextSibling := nLeaf
@@ -266,14 +265,14 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 
 			visited[nextSibling] = true
 
-			rightCard := subTrees[nextSibling].Cost.Card
-
 			children := []int32{nodeID, subTrees[nextSibling].NodeId}
-			if leftCard < rightCard {
-				//todo fix this when pipeline ready
-				children[0], children[1] = children[0], children[1]
-				//children[0], children[1] = children[1], children[0]
-			}
+			//todo fix this when pipeline ready
+			/*
+				leftCard := subTrees[firstConnected].Cost.Card
+				rightCard := subTrees[nextSibling].Cost.Card
+				if leftCard < rightCard {
+					children[0], children[1] = children[1], children[0]
+				}*/
 
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
@@ -452,11 +451,10 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 	for _, child := range dimensions {
 		leftID := vertex.node.NodeId
 		rightID := child.node.NodeId
-		if vertex.node.Cost.Card < child.node.Cost.Card {
-			//todo fix this when pipeline ready
-			leftID, rightID = leftID, rightID
-			//leftID, rightID = rightID, leftID
-		}
+		//todo fix this when pipeline ready
+		/*if vertex.node.Cost.Card < child.node.Cost.Card {
+			leftID, rightID = rightID, leftID
+		}*/
 
 		nodeId := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
