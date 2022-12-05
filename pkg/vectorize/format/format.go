@@ -344,7 +344,7 @@ func format(number string, precision string, comma, decimalPoint []byte) (string
 					buffer.Reset()
 					floatVar, err := strconv.ParseFloat(parts[0]+"."+parts[1], 64)
 					if err != nil {
-						return "", moerr.NewInvalidArg("format parser error", parts[0]+"."+parts[1])
+						return "", moerr.NewInvalidArgNoCtx("format parser error", parts[0]+"."+parts[1])
 					}
 					newNumber := strconv.FormatFloat(floatVar, 'f', int(position), 64)
 					newParts := strings.Split(newNumber, ".")
