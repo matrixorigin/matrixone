@@ -334,7 +334,7 @@ func getAvailablePort(host string) (string, error) {
 	}
 
 	if port == 0 {
-		return "", moerr.NewInternalError("failed to allocate")
+		return "", moerr.NewInternalErrorNoCtx("failed to allocate")
 	}
 	return strconv.Itoa(port), nil
 }

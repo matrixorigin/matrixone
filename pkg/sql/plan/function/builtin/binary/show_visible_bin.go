@@ -32,7 +32,7 @@ const (
 
 func ShowVisibleBin(vec []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if !vec[1].IsScalar() {
-		return nil, moerr.NewInvalidInput("show visible bin, the second argument must be a scalar")
+		return nil, moerr.NewInvalidInputNoCtx("show visible bin, the second argument must be a scalar")
 	}
 	var err error
 	tpSlice := vector.MustTCols[uint8](vec[1])
@@ -55,7 +55,7 @@ func ShowVisibleBin(vec []*vector.Vector, proc *process.Process) (*vector.Vector
 	case typWithLen:
 		ret, err = showType(srcSlice, true)
 	default:
-		return nil, moerr.NewNotSupported(fmt.Sprintf("show visible bin, the second argument must be in [0, 3], but got %d", tp))
+		return nil, moerr.NewNotSupportedNoCtx(fmt.Sprintf("show visible bin, the second argument must be in [0, 3], but got %d", tp))
 	}
 	if err != nil {
 		return nil, err

@@ -40,7 +40,7 @@ const (
 var (
 	crcTable = crc32.MakeTable(crc32.Castagnoli)
 
-	ErrChecksumNotMatch = moerr.NewInternalError("checksum not match")
+	ErrChecksumNotMatch = moerr.NewInternalErrorNoCtx("checksum not match")
 )
 
 func NewFileWithChecksum[T FileLike](

@@ -128,9 +128,10 @@ func TestGetSchemaForAccount(t *testing.T) {
 			wantPath: "/user1/*/*/*/*/statement_info/*.csv",
 		},
 	}
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			schemas := GetSchemaForAccount(tt.args.account)
+			schemas := GetSchemaForAccount(ctx, tt.args.account)
 			found := false
 			for _, sche := range schemas {
 				t.Logf("schma: %s", sche)
@@ -141,7 +142,7 @@ func TestGetSchemaForAccount(t *testing.T) {
 			require.Equal(t, 1, len(schemas))
 			require.Equal(t, true, found)
 			found = false
-			if strings.Contains(SingleStatementTable.ToCreateSql(true), "/*/*/*/*/*/statement_info/*.csv") {
+			if strings.Contains(SingleStatementTable.ToCreateSql(ctx, true), "/*/*/*/*/*/statement_info/*.csv") {
 				found = true
 			}
 			require.Equal(t, true, found)

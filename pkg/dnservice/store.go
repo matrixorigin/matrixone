@@ -249,7 +249,7 @@ func (s *store) createReplica(shard metadata.DNShard) error {
 			case <-ctx.Done():
 				return
 			default:
-				storage, err := s.createTxnStorage(shard)
+				storage, err := s.createTxnStorage(ctx, shard)
 				if err != nil {
 					r.logger.Error("start DNShard failed",
 						zap.Error(err))
@@ -327,7 +327,7 @@ func (s *store) initTxnServer() error {
 
 func (s *store) initClocker() error {
 	if s.rt.Clock() == nil {
-		return moerr.NewBadConfig("missing txn clock")
+		return moerr.NewBadConfigNoCtx("missing txn clock")
 	}
 	return nil
 }

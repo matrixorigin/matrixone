@@ -124,7 +124,7 @@ func newMetricCollector(factory func() ie.InternalExecutor, opts ...collectorOpt
 
 func (c *metricCollector) SendMetrics(ctx context.Context, mfs []*pb.MetricFamily) error {
 	for _, mf := range mfs {
-		if err := c.SendItem(mf); err != nil {
+		if err := c.SendItem(ctx, mf); err != nil {
 			return err
 		}
 	}
@@ -198,7 +198,7 @@ func (s *mfset) IsEmpty() bool {
 // GetBatch
 // getSql extracts a insert sql from a set of MetricFamily. the bytes.Buffer is
 // used to mitigate memory allocation
-func (s *mfset) GetBatch(buf *bytes.Buffer) string {
+func (s *mfset) GetBatch(ctx context.Context, buf *bytes.Buffer) string {
 	buf.Reset()
 	buf.WriteString(fmt.Sprintf("insert into %s.%s values ", MetricDBConst, s.mfs[0].GetName()))
 	lblsBuf := new(bytes.Buffer)
@@ -254,7 +254,7 @@ type metricFSCollector struct {
 
 func (c *metricFSCollector) SendMetrics(ctx context.Context, mfs []*pb.MetricFamily) error {
 	for _, mf := range mfs {
-		if err := c.SendItem(mf); err != nil {
+		if err := c.SendItem(ctx, mf); err != nil {
 			return err
 		}
 	}
@@ -311,7 +311,7 @@ type mfsetCSV struct {
 	multiTable    bool
 }
 
-func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {
+func (s *mfsetCSV) writeCsvOneLine(ctx context.Context, buf *bytes.Buffer, fields []string) {
 	opts := table.CommonCsvOptions
 	for idx, field := range fields {
 		if idx > 0 {
@@ -319,7 +319,7 @@ func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {
 		}
 		if strings.ContainsRune(field, opts.FieldTerminator) || strings.ContainsRune(field, opts.EncloseRune) || strings.ContainsRune(field, opts.Terminator) {
 			buf.WriteRune(opts.EncloseRune)
-			trace.QuoteFieldFunc(buf, field, opts.EncloseRune)
+			trace.QuoteFieldFunc(ctx, buf, field, opts.EncloseRune)
 			buf.WriteRune(opts.EncloseRune)
 		} else {
 			buf.WriteString(field)
@@ -328,14 +328,14 @@ func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {
 	buf.WriteRune(opts.Terminator)
 }
 
-func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) trace.CSVRequests {
+func (s *mfsetCSV) GetBatch(ctx context.Context, buf *bytes.Buffer) trace.CSVRequests {
 	if !s.multiTable {
-		return s.GetBatchSingleTable(buf)
+		return s.GetBatchSingleTable(ctx, buf)
 	}
-	return s.GetBatchMultiTable(buf)
+	return s.GetBatchMultiTable(ctx, buf)
 }
 
-func (s *mfsetCSV) GetBatchMultiTable(buf *bytes.Buffer) trace.CSVRequests {
+func (s *mfsetCSV) GetBatchMultiTable(ctx context.Context, buf *bytes.Buffer) trace.CSVRequests {
 
 	buf.Reset()
 
@@ -347,7 +347,7 @@ func (s *mfsetCSV) GetBatchMultiTable(buf *bytes.Buffer) trace.CSVRequests {
 		fields = append(fields, t)
 		fields = append(fields, fmt.Sprintf("%f", v))
 		fields = append(fields, lbls...)
-		s.writeCsvOneLine(buf, fields)
+		s.writeCsvOneLine(ctx, buf, fields)
 	}
 
 	for _, mf := range s.mfs {
@@ -375,14 +375,14 @@ func (s *mfsetCSV) GetBatchMultiTable(buf *bytes.Buffer) trace.CSVRequests {
 					writeValues(time, sample.GetValue(), lbls...)
 				}
 			default:
-				panic(moerr.NewInternalError("unsupported metric type %v", mf.GetType()))
+				panic(moerr.NewInternalError(ctx, "unsupported metric type %v", mf.GetType()))
 			}
 		}
 	}
 	return []*trace.CSVRequest{trace.NewCSVRequest(writer, buf.String())}
 }
 
-func (s *mfsetCSV) GetBatchSingleTable(buf *bytes.Buffer) trace.CSVRequests {
+func (s *mfsetCSV) GetBatchSingleTable(ctx context.Context, buf *bytes.Buffer) trace.CSVRequests {
 	buf.Reset()
 
 	ts := time.Now()
@@ -393,10 +393,10 @@ func (s *mfsetCSV) GetBatchSingleTable(buf *bytes.Buffer) trace.CSVRequests {
 			buf = bytes.NewBuffer(nil)
 			buffer[row.GetAccount()] = buf
 		}
-		s.writeCsvOneLine(buf, row.ToStrings())
+		s.writeCsvOneLine(ctx, buf, row.ToStrings())
 	}
 
-	row := SingleMetricTable.GetRow()
+	row := SingleMetricTable.GetRow(ctx)
 	for _, mf := range s.mfs {
 		for _, metric := range mf.Metric {
 
@@ -429,7 +429,7 @@ func (s *mfsetCSV) GetBatchSingleTable(buf *bytes.Buffer) trace.CSVRequests {
 					writeValues(row)
 				}
 			default:
-				panic(moerr.NewInternalError("unsupported metric type %v", mf.GetType()))
+				panic(moerr.NewInternalError(ctx, "unsupported metric type %v", mf.GetType()))
 			}
 		}
 	}

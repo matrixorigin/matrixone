@@ -46,9 +46,9 @@ func (h *MOErrorHolder) Free() {
 	h.Error = nil
 }
 
-func (h *MOErrorHolder) GetRow() *table.Row { return errorView.OriginTable.GetRow() }
+func (h *MOErrorHolder) GetRow() *table.Row { return errorView.OriginTable.GetRow(DefaultContext()) }
 
-func (h *MOErrorHolder) CsvFields(row *table.Row) []string {
+func (h *MOErrorHolder) CsvFields(ctx context.Context, row *table.Row) []string {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, errorView.Table)
 	row.SetColumnVal(timestampCol, Time2DatetimeString(h.Timestamp))

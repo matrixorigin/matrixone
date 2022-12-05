@@ -55,6 +55,8 @@ type Attribute struct {
 	OnUpdate *plan.OnUpdate
 	// Primary is primary key or not
 	Primary bool
+	// Clusterby means sort by this column
+	ClusterBy bool
 	// Comment of attribute
 	Comment string
 	// AutoIncrement is auto incr or not
@@ -72,6 +74,10 @@ type PropertiesDef struct {
 type Property struct {
 	Key   string
 	Value string
+}
+
+type ClusterByDef struct {
+	Name string
 }
 
 type Statistics interface {
@@ -121,25 +127,28 @@ type ViewDef struct {
 	View string
 }
 
-type ComputeIndexDef struct {
-	IndexNames []string
-	TableNames []string
-	Uniques    []bool
-	Fields     [][]string
+type UniqueIndexDef struct {
+	UniqueIndex string
+}
+
+type SecondaryIndexDef struct {
+	SecondaryIndex string
 }
 
 type TableDef interface {
 	tableDef()
 }
 
-func (*CommentDef) tableDef()      {}
-func (*PartitionDef) tableDef()    {}
-func (*ViewDef) tableDef()         {}
-func (*AttributeDef) tableDef()    {}
-func (*IndexTableDef) tableDef()   {}
-func (*PropertiesDef) tableDef()   {}
-func (*PrimaryIndexDef) tableDef() {}
-func (*ComputeIndexDef) tableDef() {}
+func (*CommentDef) tableDef()        {}
+func (*PartitionDef) tableDef()      {}
+func (*ViewDef) tableDef()           {}
+func (*AttributeDef) tableDef()      {}
+func (*IndexTableDef) tableDef()     {}
+func (*PropertiesDef) tableDef()     {}
+func (*PrimaryIndexDef) tableDef()   {}
+func (*UniqueIndexDef) tableDef()    {}
+func (*SecondaryIndexDef) tableDef() {}
+func (*ClusterByDef) tableDef()      {}
 
 type Relation interface {
 	Statistics
@@ -172,7 +181,7 @@ type Relation interface {
 
 type Reader interface {
 	Close() error
-	Read([]string, *plan.Expr, *mpool.MPool) (*batch.Batch, error)
+	Read(context.Context, []string, *plan.Expr, *mpool.MPool) (*batch.Batch, error)
 }
 
 type Database interface {

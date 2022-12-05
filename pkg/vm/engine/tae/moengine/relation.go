@@ -95,7 +95,7 @@ func (rel *baseRelation) GetPrimaryKeys(_ context.Context) ([]*engine.Attribute,
 func (rel *baseRelation) GetHideKeys(_ context.Context) ([]*engine.Attribute, error) {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	if schema.PhyAddrKey == nil {
-		return nil, moerr.NewNotSupported("system table has no rowid")
+		return nil, moerr.NewNotSupportedNoCtx("system table has no rowid")
 	}
 	key := new(engine.Attribute)
 	key.Name = schema.PhyAddrKey.Name

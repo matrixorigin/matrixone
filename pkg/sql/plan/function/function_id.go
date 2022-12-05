@@ -248,6 +248,8 @@ const (
 	TIMESTAMP    // TIMESTAMP
 	DATE_FORMAT  // DATE_FORMAT
 	JSON_EXTRACT // JSON_EXTRACT
+	FORMAT       // FORMAT
+	SLEEP // sleep for a while
 
 	UUID
 	SERIAL
@@ -269,7 +271,7 @@ const (
 
 	MO_SHOW_VISIBLE_BIN // parse type/onUpdate/default []byte to visible string
 
-	SLEEP // sleep for a while
+
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -456,12 +458,13 @@ var functionIdRegister = map[string]int32{
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
+	"format":                         FORMAT,
 	"sleep":                          SLEEP,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
-	fid, err := fromNameToFunctionId(name)
-	if err != nil {
+	fid, exists := fromNameToFunctionIdWithoutError(name)
+	if !exists {
 		return false
 	}
 	fs := functionRegister[fid].Overloads

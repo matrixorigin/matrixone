@@ -140,20 +140,20 @@ func (node *persistedNode) GetDataWindow(
 func (node *persistedNode) IsPersisted() bool { return true }
 
 func (node *persistedNode) PrepareAppend(rows uint32) (n uint32, err error) {
-	panic(moerr.NewInternalError("not supported"))
+	panic(moerr.NewInternalErrorNoCtx("not supported"))
 }
 
 func (node *persistedNode) ApplyAppend(
 	_ *containers.Batch,
 	_ txnif.AsyncTxn,
 ) (from int, err error) {
-	panic(moerr.NewInternalError("not supported"))
+	panic(moerr.NewInternalErrorNoCtx("not supported"))
 }
 
 func (node *persistedNode) GetValueByRow(row, col int) (v any) {
-	panic(moerr.NewInternalError("todo"))
+	panic(moerr.NewInternalErrorNoCtx("todo"))
 }
 
 func (node *persistedNode) GetRowsByKey(key any) ([]uint32, error) {
-	panic(moerr.NewInternalError("todo"))
+	panic(moerr.NewInternalErrorNoCtx("todo"))
 }

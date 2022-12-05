@@ -1,0 +1,195 @@
+SELECT FORMAT(12332.123456, 4);
+format(12332.123456, 4)
+12,332.1235
+SELECT FORMAT(12332.1,4);
+format(12332.1, 4)
+12,332.1000
+SELECT FORMAT(12332.2,0);
+format(12332.2, 0)
+12,332
+SELECT FORMAT(19999999.999999999,4);
+format(19999999.999999999, 4)
+20,000,000.0000
+SELECT FORMAT("-.12334.2",2);
+format(-.12334.2, 2)
+-0.12
+SELECT FORMAT("12332.123456", 4);
+format(12332.123456, 4)
+12,332.1235
+SELECT FORMAT("12332.1",4);
+format(12332.1, 4)
+12,332.1000
+SELECT FORMAT("12332.2",0);
+format(12332.2, 0)
+12,332
+SELECT FORMAT("19999999.999999999",4);
+format(19999999.999999999, 4)
+20,000,000.0000
+SELECT FORMAT(12332.123456, "4");
+format(12332.123456, 4)
+12,332.1235
+SELECT FORMAT(12332.1,"4");
+format(12332.1, 4)
+12,332.1000
+SELECT FORMAT(12332.2,"0");
+format(12332.2, 0)
+12,332
+SELECT FORMAT(19999999.999999999,"4");
+format(19999999.999999999, 4)
+20,000,000.0000
+SELECT FORMAT("-.12334.2","2");
+format(-.12334.2, 2)
+-0.12
+SELECT FORMAT("12332.123456", "4");
+format(12332.123456, 4)
+12,332.1235
+SELECT FORMAT("12332.1","4");
+format(12332.1, 4)
+12,332.1000
+SELECT FORMAT("12332.2","0");
+format(12332.2, 0)
+12,332
+SELECT FORMAT("19999999.999999999","4");
+format(19999999.999999999, 4)
+20,000,000.0000
+SELECT FORMAT("-.12334.2","2", "en_US");
+format(-.12334.2, 2, en_US)
+-0.12
+SELECT FORMAT("12332.123456", "4", "en_US");
+format(12332.123456, 4, en_US)
+12,332.1235
+SELECT FORMAT("12332.1","4",  "en_US");
+format(12332.1, 4, en_US)
+12,332.1000
+SELECT FORMAT("12332.2","0",  "en_US");
+format(12332.2, 0, en_US)
+12,332
+SELECT FORMAT("19999999.999999999","4", "en_US");
+format(19999999.999999999, 4, en_US)
+20,000,000.0000
+SELECT FORMAT("-.12334.2","2", "ar_SA");
+format(-.12334.2, 2, ar_SA)
+-0.12
+SELECT FORMAT("12332.123456", "4",  "ar_SA");
+format(12332.123456, 4, ar_SA)
+12332.1235
+SELECT FORMAT("12332.1","4",  "ar_SA");
+format(12332.1, 4, ar_SA)
+12332.1000
+SELECT FORMAT("12332.2","0",  "ar_SA");
+format(12332.2, 0, ar_SA)
+12332
+SELECT FORMAT("19999999.999999999","4",  "ar_SA");
+format(19999999.999999999, 4, ar_SA)
+20000000.0000
+SELECT FORMAT("-.12334.2","2", "be_BY");
+format(-.12334.2, 2, be_BY)
+-0,12
+SELECT FORMAT("12332.123456", "4",  "be_BY");
+format(12332.123456, 4, be_BY)
+12.332,1235
+SELECT FORMAT("12332.1","4",  "be_BY");
+format(12332.1, 4, be_BY)
+12.332,1000
+SELECT FORMAT("12332.2","0",  "be_BY");
+format(12332.2, 0, be_BY)
+12.332
+SELECT FORMAT("19999999.999999999","4",  "be_BY");
+format(19999999.999999999, 4, be_BY)
+20.000.000,0000
+SELECT FORMAT("-.12334.2","2", "bg_BG");
+format(-.12334.2, 2, bg_BG)
+-0,12
+SELECT FORMAT("12332.123456", "4",  "bg_BG");
+format(12332.123456, 4, bg_BG)
+12 332,1235
+SELECT FORMAT("12332.1","4",  "bg_BG");
+format(12332.1, 4, bg_BG)
+12 332,1000
+SELECT FORMAT("12332.2","0",  "bg_BG");
+format(12332.2, 0, bg_BG)
+12 332
+SELECT FORMAT("19999999.999999999","4",  "bg_BG");
+format(19999999.999999999, 4, bg_BG)
+20 000 000,0000
+SELECT FORMAT("-.12334.2","2", "de_CH");
+format(-.12334.2, 2, de_CH)
+-0.12
+SELECT FORMAT("12332.123456", "4",  "de_CH");
+format(12332.123456, 4, de_CH)
+12'332.1235
+SELECT FORMAT("12332.1","4",  "de_CH");
+format(12332.1, 4, de_CH)
+12'332.1000
+SELECT FORMAT("12332.2","0",  "de_CH");
+format(12332.2, 0, de_CH)
+12'332
+SELECT FORMAT("19999999.999999999","4",  "de_CH");
+format(19999999.999999999, 4, de_CH)
+20'000'000.0000
+create table test(a varchar(100), b varchar(100));
+insert into test values("-.12334.2","2");
+insert into test values("12332.123456", "4");
+insert into test values("12332.1","4");
+insert into test values("12332.2","0");
+insert into test values("19999999.999999999");
+invalid input: insert values does not match the number of columns
+SELECT FORMAT(a, b) from test;
+format(a, b)
+-0.12
+12,332.1235
+12,332.1000
+12,332
+SELECT FORMAT(a, b, null) from test;
+format(a, b, null)
+-0.12
+12,332.1235
+12,332.1000
+12,332
+SELECT FORMAT(a, b, "en_US") from test;
+format(a, b, en_US)
+-0.12
+12,332.1235
+12,332.1000
+12,332
+SELECT FORMAT(a, b, "ar_SA") from test;
+format(a, b, ar_SA)
+-0.12
+12332.1235
+12332.1000
+12332
+SELECT FORMAT(a, b, "be_BY") from test;
+format(a, b, be_BY)
+-0,12
+12.332,1235
+12.332,1000
+12.332
+SELECT FORMAT(a, b, "bg_BG") from test;
+format(a, b, bg_BG)
+-0,12
+12 332,1235
+12 332,1000
+12 332
+SELECT FORMAT(a, b, "de_CH") from test;
+format(a, b, de_CH)
+-0.12
+12'332.1235
+12'332.1000
+12'332
+drop table test;
+create table test(a varchar(100), b varchar(100), c varchar(20));
+insert into test values("-.12334.2","2", "en_US");
+insert into test values("12332.123456", "4", "en_US");
+insert into test values("12332.1","4", "en_US");
+insert into test values("12332.2","0", "en_US");
+insert into test values("19999999.999999999","en_US");
+invalid input: insert values does not match the number of columns
+create table test(a varchar(100), b varchar(100), c varchar(20));
+table test already exists
+insert into test values("-.12334.2","2", "de_CH");
+insert into test values("12332.123456", "4", "de_CH");
+insert into test values("12332.1","4", "de_CH");
+insert into test values("12332.2","0", "de_CH");
+insert into test values("19999999.999999999","de_CH");
+invalid input: insert values does not match the number of columns
+drop table test;

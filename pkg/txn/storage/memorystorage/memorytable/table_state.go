@@ -82,10 +82,10 @@ func (t *tableState[K, V]) merge(
 		if log.pair != nil && log.oldPair != nil {
 			// update
 			if oldPair == nil {
-				return nil, moerr.NewTxnWWConflict()
+				return nil, moerr.NewTxnWWConflictNoCtx()
 			}
 			if oldPair.ID != log.oldPair.ID {
-				return nil, moerr.NewTxnWWConflict()
+				return nil, moerr.NewTxnWWConflictNoCtx()
 			}
 			pivot.ID = log.pair.ID
 			pivot.Value = log.pair.Value
@@ -94,17 +94,17 @@ func (t *tableState[K, V]) merge(
 		} else if log.pair == nil {
 			// delete
 			if oldPair == nil {
-				return nil, moerr.NewTxnWWConflict()
+				return nil, moerr.NewTxnWWConflictNoCtx()
 			}
 			if oldPair.ID != log.oldPair.ID {
-				return nil, moerr.NewTxnWWConflict()
+				return nil, moerr.NewTxnWWConflictNoCtx()
 			}
 			t.unsetPair(pivot, oldPair)
 
 		} else if log.pair != nil && log.oldPair == nil {
 			// insert
 			if oldPair != nil {
-				return nil, moerr.NewTxnWWConflict()
+				return nil, moerr.NewTxnWWConflictNoCtx()
 			}
 			pivot.ID = log.pair.ID
 			pivot.Value = log.pair.Value

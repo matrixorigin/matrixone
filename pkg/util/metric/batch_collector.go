@@ -15,6 +15,8 @@
 package metric
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -74,7 +76,7 @@ func (c *statCaches) getOrInsert(key cacheKey, f func() any) any {
 type simpleEntry interface {
 	Desc() *prom.Desc
 	// entry return the metric for now. it can fetch from the caches or just compute by itself
-	Metric(*statCaches) (prom.Metric, error)
+	Metric(context.Context, *statCaches) (prom.Metric, error)
 }
 
 type batchStatsCollector struct {
@@ -108,9 +110,11 @@ func (c *batchStatsCollector) Describe(ch chan<- *prom.Desc) {
 func (c *batchStatsCollector) Collect(ch chan<- prom.Metric) {
 	c.Lock()
 	defer c.Unlock()
+	ctx, span := trace.Start(context.Background(), "batchStatsCollector.Collect")
+	defer span.End()
 	c.caches.invalidateAll()
 	for _, e := range c.entris {
-		m, err := e.Metric(c.caches)
+		m, err := e.Metric(ctx, c.caches)
 		if err != nil {
 			if err.Error() == "not implemented yet" && c.collected {
 				// log not implemented once, otherwise it is too annoying

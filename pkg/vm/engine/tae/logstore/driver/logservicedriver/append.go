@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
-var ErrTooMuchPenddings = moerr.NewInternalError("too much penddings")
+var ErrTooMuchPenddings = moerr.NewInternalErrorNoCtx("too much penddings")
 
 func (d *LogServiceDriver) Append(e *entry.Entry) error {
 	d.driverLsnMu.Lock()

@@ -91,7 +91,7 @@ func (t *Table[K, V, R]) getTransactionTable(
 				if i == 0 {
 					if tx.BeginTime.Less(t.history[0].Before) {
 						// too old
-						return nil, moerr.NewInternalError("transaction begin time too old")
+						return nil, moerr.NewInternalErrorNoCtx("transaction begin time too old")
 					}
 				}
 				state := t.history[i].State.cloneWithoutLogs()

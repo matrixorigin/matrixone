@@ -256,7 +256,7 @@ func (s *service) initEngine(
 		}
 
 	default:
-		return moerr.NewInternalError("unknown engine type: %s", s.cfg.Engine.Type)
+		return moerr.NewInternalError(ctx, "unknown engine type: %s", s.cfg.Engine.Type)
 
 	}
 
