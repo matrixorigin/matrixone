@@ -75,16 +75,17 @@ func TestIeProto(t *testing.T) {
 	p.PrepareBeforeProcessingResultSet()
 	_ = p.GetStats()
 	_ = p.ConnectionID()
+	ctx := context.TODO()
 	assert.Panics(t, func() { p.GetRequest([]byte{1}) })
 	assert.Panics(t, func() { p.Peer() })
-	assert.Nil(t, p.SendColumnDefinitionPacket(nil, 1))
+	assert.Nil(t, p.SendColumnDefinitionPacket(ctx, nil, 1))
 	assert.Nil(t, p.SendColumnCountPacket(1))
 	assert.Nil(t, p.SendEOFPacketIf(0, 1))
 	assert.Nil(t, p.sendOKPacket(1, 1, 0, 0, ""))
 	assert.Nil(t, p.sendEOFOrOkPacket(0, 1))
 
 	p.stashResult = true
-	p.SendResponse(&Response{
+	p.SendResponse(ctx, &Response{
 		category:     OkResponse,
 		status:       0,
 		affectedRows: 1,
@@ -92,7 +93,7 @@ func TestIeProto(t *testing.T) {
 	})
 	assert.Nil(t, nil, p.result.resultSet)
 	assert.Equal(t, uint64(1), p.result.affectedRows)
-	p.SendResponse(&Response{
+	p.SendResponse(ctx, &Response{
 		category: ResultResponse,
 		status:   0,
 		data: &MysqlExecutionResult{
@@ -124,7 +125,7 @@ func TestIeProto(t *testing.T) {
 
 func TestIeResult(t *testing.T) {
 	set := mockResultSet()
-	result := &internalExecResult{affectedRows: 1, resultSet: set, err: moerr.NewInternalError("random")}
+	result := &internalExecResult{affectedRows: 1, resultSet: set, err: moerr.NewInternalError(context.TODO(), "random")}
 	require.Equal(t, "internal error: random", result.Error().Error())
 	require.Equal(t, uint64(1), result.ColumnCount())
 	require.Equal(t, uint64(1), result.RowCount())

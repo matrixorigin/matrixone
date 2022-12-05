@@ -667,7 +667,6 @@ func TestDateFormatWithScalar(t *testing.T) {
 }
 
 func TestDatetimeFromat(t *testing.T) {
-
 	kases := []struct {
 		datestr string
 		format  []string

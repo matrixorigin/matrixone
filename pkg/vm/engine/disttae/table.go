@@ -272,7 +272,7 @@ func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
 		for j := range bat.Vecs {
 			ibat.SetVector(int32(j), vector.New(bat.GetVector(int32(j)).GetType()))
 		}
-		if _, err := ibat.Append(tbl.db.txn.proc.Mp(), bat); err != nil {
+		if _, err := ibat.Append(ctx, tbl.db.txn.proc.Mp(), bat); err != nil {
 			return err
 		}
 		i := rand.Int() % len(tbl.db.txn.dnStores)

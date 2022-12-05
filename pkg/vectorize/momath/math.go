@@ -58,7 +58,7 @@ func AtanWithTwoArg(firstArg, secondArg, result *vector.Vector) error {
 	resCol := vector.MustTCols[float64](result)
 	for i, v := range firstCol {
 		if v == 0 {
-			return moerr.NewInvalidArg("Atan first input", 0)
+			return moerr.NewInvalidArgNoCtx("Atan first input", 0)
 		}
 		resCol[i] = math.Atan(secondCol[i] / v)
 	}
@@ -84,7 +84,7 @@ func Cot(arg, result *vector.Vector) error {
 	for i, v := range argCol {
 		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
 			if v == 0 {
-				panic(moerr.NewInvalidArg("cot", "cot(0)"))
+				panic(moerr.NewInvalidArgNoCtx("cot", "cot(0)"))
 			} else {
 				resCol[i] = math.Tan(math.Pi/2.0 - v)
 			}
@@ -112,7 +112,7 @@ func Ln(arg, result *vector.Vector) error {
 	for i, v := range argCol {
 		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
 			if v <= 0 {
-				return moerr.NewInvalidArg("ln", v)
+				return moerr.NewInvalidArgNoCtx("ln", v)
 			} else {
 				resCol[i] = math.Log(v)
 			}
@@ -141,7 +141,7 @@ func Sinh(arg, result *vector.Vector) error {
 		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
 			r := math.Sinh(v)
 			if math.IsInf(r, 0) {
-				return moerr.NewOutOfRange("float64", "DOUBLE value is out of range in 'sinh(%v)'", v)
+				return moerr.NewOutOfRangeNoCtx("float64", "DOUBLE value is out of range in 'sinh(%v)'", v)
 			}
 			resCol[i] = r
 		}

@@ -224,9 +224,14 @@ func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	t := &plan.Expr{Expr: &plan.Expr_T{T: &plan.TargetType{
+	t := &plan.Expr{
 		Typ: targetType,
-	}}}
+		Expr: &plan.Expr_T{
+			T: &plan.TargetType{
+				Typ: targetType,
+			},
+		},
+	}
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{

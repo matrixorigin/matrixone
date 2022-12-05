@@ -14,14 +14,17 @@
 
 package memorytable
 
+// Ordered represents ordered value
 type Ordered[To any] interface {
 	Less(to To) bool
 }
 
 type min struct{}
 
+// Min is a value that smaller than all values except Min itself
 var Min min
 
 type max struct{}
 
+// Max is a value that greater than all values except Max itself
 var Max max

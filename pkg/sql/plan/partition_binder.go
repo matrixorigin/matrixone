@@ -37,13 +37,13 @@ func (p *PartitionBinder) BindColRef(name *tree.UnresolvedName, i int32, b bool)
 }
 
 func (p *PartitionBinder) BindAggFunc(s string, expr *tree.FuncExpr, i int32, b bool) (*plan.Expr, error) {
-	return nil, moerr.NewSyntaxError("aggregate functions not allowed in partition clause")
+	return nil, moerr.NewSyntaxErrorNoCtx("aggregate functions not allowed in partition clause")
 }
 
 func (p *PartitionBinder) BindWinFunc(s string, expr *tree.FuncExpr, i int32, b bool) (*plan.Expr, error) {
-	return nil, moerr.NewSyntaxError("window functions not allowed in partition clause")
+	return nil, moerr.NewSyntaxErrorNoCtx("window functions not allowed in partition clause")
 }
 
 func (p *PartitionBinder) BindSubquery(subquery *tree.Subquery, b bool) (*plan.Expr, error) {
-	return nil, moerr.NewSyntaxError("subquery not allowed in partition clause")
+	return nil, moerr.NewSyntaxErrorNoCtx("subquery not allowed in partition clause")
 }

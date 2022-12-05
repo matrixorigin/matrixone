@@ -54,11 +54,11 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	}
 	defer vec.Free(proc.Mp())
 	if proc.OperatorOutofMemory(int64(vec.Size())) {
-		return false, moerr.NewOOM()
+		return false, moerr.NewOOM(proc.Ctx)
 	}
 	anal.Alloc(int64(vec.Size()))
 	if !vec.GetType().IsBoolean() {
-		return false, moerr.NewInvalidInput("filter condition is not boolean")
+		return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 	}
 	bs := vector.GetColumn[bool](vec)
 	if vec.IsScalar() {

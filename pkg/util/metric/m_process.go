@@ -15,6 +15,7 @@
 package metric
 
 import (
+	"context"
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -53,10 +54,10 @@ func (c procCpuPercent) Desc() *prom.Desc {
 	)
 }
 
-func (c procCpuPercent) Metric(s *statCaches) (prom.Metric, error) {
+func (c procCpuPercent) Metric(ctx context.Context, s *statCaches) (prom.Metric, error) {
 	val := s.getOrInsert(cacheKeyProcess, getProcess)
 	if val == nil {
-		return nil, moerr.NewInternalError("empty process")
+		return nil, moerr.NewInternalError(ctx, "empty process")
 	}
 	proc := val.(*process.Process)
 
@@ -78,10 +79,10 @@ func (c procMemUsage) Desc() *prom.Desc {
 	)
 }
 
-func (c procMemUsage) Metric(s *statCaches) (prom.Metric, error) {
+func (c procMemUsage) Metric(ctx context.Context, s *statCaches) (prom.Metric, error) {
 	val := s.getOrInsert(cacheKeyProcess, getProcess)
 	if val == nil {
-		return nil, moerr.NewInternalError("empty process")
+		return nil, moerr.NewInternalError(ctx, "empty process")
 	}
 	proc := val.(*process.Process)
 	if mem, err := proc.MemoryInfo(); err != nil {
@@ -101,10 +102,10 @@ func (c procOpenFds) Desc() *prom.Desc {
 	)
 }
 
-func (c procOpenFds) Metric(s *statCaches) (prom.Metric, error) {
+func (c procOpenFds) Metric(ctx context.Context, s *statCaches) (prom.Metric, error) {
 	val := s.getOrInsert(cacheKeyProcess, getProcess)
 	if val == nil {
-		return nil, moerr.NewInternalError("empty process")
+		return nil, moerr.NewInternalError(ctx, "empty process")
 	}
 	proc := val.(*process.Process)
 	if fds, err := proc.NumFDs(); err != nil {
@@ -127,10 +128,10 @@ func (c procFdsLimit) Desc() *prom.Desc {
 	)
 }
 
-func (c procFdsLimit) Metric(s *statCaches) (prom.Metric, error) {
+func (c procFdsLimit) Metric(ctx context.Context, s *statCaches) (prom.Metric, error) {
 	val := s.getOrInsert(cacheKeyProcess, getProcess)
 	if val == nil {
-		return nil, moerr.NewInternalError("empty process")
+		return nil, moerr.NewInternalError(ctx, "empty process")
 	}
 	proc := val.(*process.Process)
 	if limits, err := proc.Rlimit(); err != nil {
@@ -141,6 +142,6 @@ func (c procFdsLimit) Metric(s *statCaches) (prom.Metric, error) {
 				return prom.MustNewConstMetric(c.Desc(), prom.GaugeValue, float64(limit.Soft)), nil
 			}
 		}
-		return nil, moerr.NewInternalError("empty limit")
+		return nil, moerr.NewInternalError(ctx, "empty limit")
 	}
 }

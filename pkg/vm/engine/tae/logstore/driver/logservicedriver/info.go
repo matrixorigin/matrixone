@@ -27,8 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-var ErrDriverLsnNotFound = moerr.NewInternalError("driver info: driver lsn not found")
-var ErrRetryTimeOut = moerr.NewInternalError("driver info: retry time out")
+var ErrDriverLsnNotFound = moerr.NewInternalErrorNoCtx("driver info: driver lsn not found")
+var ErrRetryTimeOut = moerr.NewInternalErrorNoCtx("driver info: retry time out")
 
 type driverInfo struct {
 	addr        map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate

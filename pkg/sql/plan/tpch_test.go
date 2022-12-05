@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,6 +27,8 @@ import (
 )
 
 func Test_TPCH_Plan2(t *testing.T) {
+	ctx := context.TODO()
+
 	_, fn, _, _ := runtime.Caller(0)
 	dir := filepath.Dir(fn)
 
@@ -34,7 +37,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		t.Errorf("Cannot open ddl file, error %v", err)
 	}
 
-	ddls, err := parsers.Parse(dialect.MYSQL, string(ddlf))
+	ddls, err := parsers.Parse(ctx, dialect.MYSQL, string(ddlf))
 	if ddls == nil || err != nil {
 		t.Errorf("DDL Parser failed, error %v", err)
 	}
@@ -53,7 +56,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 	if err != nil {
 		t.Errorf("Cannot open queries file, error %v", err)
 	}
-	qs, err := parsers.Parse(dialect.MYSQL, string(qf))
+	qs, err := parsers.Parse(ctx, dialect.MYSQL, string(qf))
 	if qs == nil || err != nil {
 		t.Errorf("Query Parser failed, error %v", err)
 	}
@@ -70,7 +73,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		if err != nil {
 			t.Errorf("Cannot open file of query %d, error %v", qn, err)
 		}
-		qns, err := parsers.Parse(dialect.MYSQL, string(qnf))
+		qns, err := parsers.Parse(ctx, dialect.MYSQL, string(qnf))
 		if qns == nil || err != nil {
 			t.Errorf("Query %d Parser failed, error %v", qn, err)
 		}
