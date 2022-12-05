@@ -3353,7 +3353,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		// reset some special stmt for execute statement
 		switch st := stmt.(type) {
 		case *tree.SetVar:
-			selfHandle = true
 			err = mce.handleSetVar(requestCtx, st)
 			if err != nil {
 				goto handleFailed
@@ -3361,7 +3360,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleSucceeded
 			}
 		case *tree.ShowVariables:
-			selfHandle = true
 			err = mce.handleShowVariables(st, proc)
 			if err != nil {
 				goto handleFailed
@@ -3369,7 +3367,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleSucceeded
 			}
 		case *tree.ShowErrors, *tree.ShowWarnings:
-			selfHandle = true
 			err = mce.handleShowErrors()
 			if err != nil {
 				goto handleFailed
