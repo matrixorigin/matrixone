@@ -17,6 +17,8 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -382,6 +384,10 @@ func (m *MockCompilerContext) GetAccountId() uint32 {
 
 func (m *MockCompilerContext) GetContext() context.Context {
 	return m.ctx
+}
+
+func (m *MockCompilerContext) GetProcess() *process.Process {
+	return testutil.NewProc()
 }
 
 type MockOptimizer struct {

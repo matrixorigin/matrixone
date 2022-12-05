@@ -75,3 +75,10 @@
 #select last_insert_id();
 #select a, b, c, year(d) from t1;
 #drop table t1;
+
+select now()=now();
+create table t1(a timestamp,b int auto_increment);
+prepare s1 from 'insert into t1(a) select now()';
+execute s1;
+execute s1;
+select t1.a=t2.a from t1,(select a from t1  where b=2)as t2 where b=1;

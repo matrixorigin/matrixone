@@ -29,7 +29,12 @@ func CurrentTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.
 	resultType := types.Type{Oid: types.T_timestamp, Size: 8, Precision: resultPrecision}
 	resultVector := vector.NewConst(resultType, 1)
 	result := make([]types.Timestamp, 1)
-	result[0] = types.CurrentTimestamp()
+	result[0] = types.UnixNanoToTimestamp(proc.UnixTime)
+	//if proc != nil {
+	//	result[0] = types.UnixNanoToTimestamp(proc.UnixTime)
+	//} else { // TODO remove branch after refactoring function framework
+	//	result[0] = types.CurrentTimestamp()
+	//}
 	vector.SetCol(resultVector, result)
 	return resultVector, nil
 }

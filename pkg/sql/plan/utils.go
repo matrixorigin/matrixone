@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -443,12 +444,12 @@ func combinePlanConjunction(exprs []*plan.Expr) (expr *plan.Expr, err error) {
 	return
 }
 
-func rejectsNull(filter *plan.Expr) bool {
+func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
 	filter = replaceColRefWithNull(DeepCopyExpr(filter))
 
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	filter, err := ConstantFold(bat, filter)
+	filter, err := ConstantFold(bat, filter, proc)
 	if err != nil {
 		return false
 	}
@@ -709,7 +710,7 @@ func ReCalcNodeCost(nodeID int32, builder *QueryBuilder, recursive bool) {
 
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil {
-			node.Cost = builder.compCtx.Cost(node.ObjRef, RewriteAndConstantFold(node.FilterList))
+			node.Cost = builder.compCtx.Cost(node.ObjRef, RewriteAndConstantFold(node.FilterList, builder.compCtx.GetProcess()))
 		}
 
 	default:
@@ -728,18 +729,18 @@ func ReCalcNodeCost(nodeID int32, builder *QueryBuilder, recursive bool) {
 	}
 }
 
-func RewriteAndConstantFold(exprList []*plan.Expr) *plan.Expr {
+func RewriteAndConstantFold(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
 	e := colexec.RewriteFilterExprList(exprList)
 	if e != nil {
 		bat := batch.NewWithSize(0)
 		bat.Zs = []int64{1}
-		filter, _ := ConstantFold(bat, DeepCopyExpr(e))
+		filter, _ := ConstantFold(bat, DeepCopyExpr(e), proc)
 		return filter
 	}
 	return nil
 }
 
-func ConstantFold(bat *batch.Batch, e *plan.Expr) (*plan.Expr, error) {
+func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
 	var err error
 
 	ef, ok := e.Expr.(*plan.Expr_F)
@@ -755,7 +756,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr) (*plan.Expr, error) {
 		return e, nil
 	}
 	for i := range ef.F.Args {
-		ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i])
+		ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc)
 		if err != nil {
 			return nil, err
 		}
@@ -766,7 +767,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr) (*plan.Expr, error) {
 	// XXX MPOOL
 	// This is a bug -- colexec EvalExpr need to eval, therefore, could potentially need
 	// a mpool.  proc is passed in a nil, where do I get a mpool?   Session?
-	vec, err := colexec.EvalExpr(bat, nil, e)
+	vec, err := colexec.EvalExpr(bat, proc, e)
 	if err != nil {
 		return nil, err
 	}

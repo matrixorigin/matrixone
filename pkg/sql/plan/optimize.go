@@ -73,7 +73,7 @@ func (opt *BaseOptimizer) exploreNode(n *Node) {
 	}
 	for _, rule := range opt.rules {
 		if rule.Match(n) {
-			rule.Apply(n, opt.qry)
+			rule.Apply(n, opt.qry, opt.ctx.GetProcess())
 		}
 	}
 }

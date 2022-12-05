@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"runtime"
 	"strings"
 	"sync"
@@ -1483,6 +1484,7 @@ type TxnCompilerContext struct {
 	QryTyp     QueryType
 	txnHandler *TxnHandler
 	ses        *Session
+	proc       *process.Process
 	mu         sync.Mutex
 }
 
@@ -1646,10 +1648,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Table:       tableName,
 					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
 				},
-				Primary:  attr.Attr.Primary,
-				Default:  attr.Attr.Default,
-				OnUpdate: attr.Attr.OnUpdate,
-				Comment:  attr.Attr.Comment,
+				Primary:   attr.Attr.Primary,
+				Default:   attr.Attr.Default,
+				OnUpdate:  attr.Attr.OnUpdate,
+				Comment:   attr.Attr.Comment,
+				ClusterBy: attr.Attr.ClusterBy,
 			}
 			if isCPkey {
 				CompositePkey = col
@@ -1880,6 +1883,18 @@ func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) (cost *
 	cost.Total = float64(rows)
 	cost.Card = cost.Total * plan2.DeduceSelectivity(e)
 	return
+}
+
+func (tcc *TxnCompilerContext) GetProcess() *process.Process {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.proc
+}
+
+func (tcc *TxnCompilerContext) SetProcess(proc *process.Process) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	tcc.proc = proc
 }
 
 // fakeDataSetFetcher gets the result set from the pipeline and save it in the session.

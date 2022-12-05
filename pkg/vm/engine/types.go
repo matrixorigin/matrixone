@@ -55,6 +55,8 @@ type Attribute struct {
 	OnUpdate *plan.OnUpdate
 	// Primary is primary key or not
 	Primary bool
+	// Clusterby means sort by this column
+	ClusterBy bool
 	// Comment of attribute
 	Comment string
 	// AutoIncrement is auto incr or not
@@ -72,6 +74,10 @@ type PropertiesDef struct {
 type Property struct {
 	Key   string
 	Value string
+}
+
+type ClusterByDef struct {
+	Name string
 }
 
 type Statistics interface {
@@ -142,6 +148,7 @@ func (*PropertiesDef) tableDef()     {}
 func (*PrimaryIndexDef) tableDef()   {}
 func (*UniqueIndexDef) tableDef()    {}
 func (*SecondaryIndexDef) tableDef() {}
+func (*ClusterByDef) tableDef()      {}
 
 type Relation interface {
 	Statistics
