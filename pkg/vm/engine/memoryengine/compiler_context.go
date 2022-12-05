@@ -197,9 +197,10 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 			Size:        attr.Type.Size,
 			Scale:       attr.Type.Scale,
 		},
-		Default: attr.Default,
-		Primary: attr.Primary,
-		Pkidx:   int32(idx),
-		Comment: attr.Comment,
+		Default:   attr.Default,
+		Primary:   attr.Primary,
+		Pkidx:     int32(idx),
+		Comment:   attr.Comment,
+		ClusterBy: attr.ClusterBy,
 	}
 }

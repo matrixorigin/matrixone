@@ -223,6 +223,8 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 			colData.Append([]byte(colDef.Comment))
 		case pkgcatalog.SystemColAttr_HasUpdate:
 			colData.Append(bool2i8(colDef.OnUpdate.Expr != nil))
+		case pkgcatalog.SystemColAttr_IsClusterBy:
+			colData.Append(bool2i8(colDef.IsClusterBy()))
 		case pkgcatalog.SystemColAttr_Update:
 			if val, err := colDef.OnUpdate.Marshal(); err == nil {
 				colData.Append(val)
