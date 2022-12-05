@@ -32,14 +32,14 @@ func init() {
 
 func unixToDatetime(loc *time.Location, xs []int64, rs []types.Datetime) []types.Datetime {
 	for i := range xs {
-		rs[i] = types.FromUnix(loc, xs[i])
+		rs[i] = types.DatetimeFromUnix(loc, xs[i])
 	}
 	return rs
 }
 
 func unixToDateTimeWithNsec(loc *time.Location, xs []int64, ns []int64, rs []types.Datetime) []types.Datetime {
 	for i := range xs {
-		rs[i] = types.FromUnixWithNsec(loc, xs[i], ns[i])
+		rs[i] = types.DatetimeFromUnixWithNsec(loc, xs[i], ns[i])
 	}
 	return rs
 }

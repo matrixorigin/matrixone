@@ -55,7 +55,7 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 			return proc.AllocScalarNullVector(resultType), nil
 		} else {
 			if types.ValidDate(int32(time.year), time.month, time.day) {
-				resCol := types.FromCalendar(int32(time.year), time.month, time.day)
+				resCol := types.DateFromCalendar(int32(time.year), time.month, time.day)
 				return vector.NewConstFixed[types.Date](resultType, 1, resCol, proc.Mp()), nil
 			} else {
 				// should be null
@@ -100,7 +100,7 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 			return proc.AllocScalarNullVector(resultType), nil
 		} else {
 			if types.ValidDatetime(int32(time.year), time.month, time.day) && types.ValidTimeInDay(time.hour, time.minute, time.second) {
-				resCol := types.FromClock(int32(time.year), time.month, time.day, time.hour, time.minute, time.second, time.microsecond)
+				resCol := types.DatetimeFromClock(int32(time.year), time.month, time.day, time.hour, time.minute, time.second, time.microsecond)
 				return vector.NewConstFixed[types.Datetime](resultType, 1, resCol, proc.Mp()), nil
 			} else {
 				// should be null
@@ -146,7 +146,7 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 			return proc.AllocScalarNullVector(resultType), nil
 		} else {
 			if types.ValidTime(uint64(time.hour), uint64(time.minute), uint64(time.second)) {
-				resCol := types.FromTimeClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
+				resCol := types.TimeFromClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
 				return vector.NewConstFixed[types.Time](resultType, 1, resCol, proc.Mp()), nil
 			} else {
 				// should be null
@@ -179,7 +179,7 @@ func CalcStrToDatetime(timestrs []string, format string, ns *nulls.Nulls, rNsp *
 			nulls.Add(rNsp, uint64(idx))
 		} else {
 			if types.ValidDatetime(int32(time.year), time.month, time.day) && types.ValidTimeInDay(time.hour, time.minute, time.second) {
-				res[idx] = types.FromClock(int32(time.year), time.month, time.day, time.hour, time.minute, time.second, time.microsecond)
+				res[idx] = types.DatetimeFromClock(int32(time.year), time.month, time.day, time.hour, time.minute, time.second, time.microsecond)
 			} else {
 				// should be null
 				nulls.Add(rNsp, uint64(idx))
@@ -203,7 +203,7 @@ func CalcStrToDate(timestrs []string, format string, ns *nulls.Nulls, rNsp *null
 			nulls.Add(rNsp, uint64(idx))
 		} else {
 			if types.ValidDate(int32(time.year), time.month, time.day) {
-				res[idx] = types.FromCalendar(int32(time.year), time.month, time.day)
+				res[idx] = types.DateFromCalendar(int32(time.year), time.month, time.day)
 			} else {
 				// should be null
 				nulls.Add(rNsp, uint64(idx))
@@ -227,7 +227,7 @@ func CalcStrToTime(timestrs []string, format string, ns *nulls.Nulls, rNsp *null
 			nulls.Add(rNsp, uint64(idx))
 		} else {
 			if types.ValidTime(uint64(time.hour), uint64(time.minute), uint64(time.second)) {
-				res[idx] = types.FromTimeClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
+				res[idx] = types.TimeFromClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
 			} else {
 				// should be null
 				nulls.Add(rNsp, uint64(idx))

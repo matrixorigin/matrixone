@@ -4382,7 +4382,7 @@ func TestCastDateAsDatetimeAndString(t *testing.T) {
 			name:       "Test01",
 			vecs:       makeTempVectors("1992-01-01", true, types.T_datetime),
 			proc:       procs,
-			wantValues: []types.Datetime{types.FromClock(1992, 1, 1, 0, 0, 0, 0)},
+			wantValues: []types.Datetime{types.DatetimeFromClock(1992, 1, 1, 0, 0, 0, 0)},
 			wantType:   types.T_datetime,
 			wantScalar: true,
 		},
@@ -4390,7 +4390,7 @@ func TestCastDateAsDatetimeAndString(t *testing.T) {
 			name:       "Test02",
 			vecs:       makeTempVectors("1992-01-01", false, types.T_datetime),
 			proc:       procs,
-			wantValues: []types.Datetime{types.FromClock(1992, 1, 1, 0, 0, 0, 0)},
+			wantValues: []types.Datetime{types.DatetimeFromClock(1992, 1, 1, 0, 0, 0, 0)},
 			wantType:   types.T_datetime,
 			wantScalar: false,
 		},
@@ -4454,7 +4454,7 @@ func TestCastDatetimeAsDateAndString(t *testing.T) {
 			name:       "Test01",
 			vecs:       makeTempVectors("1992-01-01 00:00:00", true, types.T_date),
 			proc:       procs,
-			wantValues: []types.Date{types.FromCalendar(1992, 1, 1)},
+			wantValues: []types.Date{types.DateFromCalendar(1992, 1, 1)},
 			wantType:   types.T_date,
 			wantScalar: true,
 		},
@@ -4462,7 +4462,7 @@ func TestCastDatetimeAsDateAndString(t *testing.T) {
 			name:       "Test02",
 			vecs:       makeTempVectors("1992-01-01 00:00:00", false, types.T_date),
 			proc:       procs,
-			wantValues: []types.Date{types.FromCalendar(1992, 1, 1)},
+			wantValues: []types.Date{types.DateFromCalendar(1992, 1, 1)},
 			wantType:   types.T_date,
 			wantScalar: false,
 		},
@@ -4717,7 +4717,7 @@ func TestCastStringToTime(t *testing.T) {
 			name:       "Test01",
 			vecs:       makeTempVectors("2022-12-01 11:22:33", true, types.T_time),
 			proc:       procs,
-			wantValues: []types.Time{types.FromTimeClock(false, 11, 22, 33, 0)},
+			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
 			wantType:   types.T_time,
 			precision:  0,
 			wantScalar: true,
@@ -4726,7 +4726,7 @@ func TestCastStringToTime(t *testing.T) {
 			name:       "Test02",
 			vecs:       makeTempVectors("2022-12-01 11:22:33.125", true, types.T_time),
 			proc:       procs,
-			wantValues: []types.Time{types.FromTimeClock(false, 11, 22, 33, 130000)},
+			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 130000)},
 			wantType:   types.T_time,
 			precision:  2,
 			wantScalar: true,
@@ -4735,7 +4735,7 @@ func TestCastStringToTime(t *testing.T) {
 			name:       "Test03",
 			vecs:       makeTempVectors("2022-12-01 11:22:33", true, types.T_time),
 			proc:       procs,
-			wantValues: []types.Time{types.FromTimeClock(false, 11, 22, 33, 0)},
+			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
 			wantType:   types.T_time,
 			precision:  6,
 			wantScalar: true,
@@ -4744,7 +4744,7 @@ func TestCastStringToTime(t *testing.T) {
 			name:       "Test04",
 			vecs:       makeTempVectors("-11223", true, types.T_time),
 			proc:       procs,
-			wantValues: []types.Time{types.FromTimeClock(true, 1, 12, 23, 0)},
+			wantValues: []types.Time{types.TimeFromClock(true, 1, 12, 23, 0)},
 			wantType:   types.T_time,
 			precision:  3,
 			wantScalar: true,
@@ -4753,7 +4753,7 @@ func TestCastStringToTime(t *testing.T) {
 			name:       "Test05",
 			vecs:       makeTempVectors("11223.4444", true, types.T_time),
 			proc:       procs,
-			wantValues: []types.Time{types.FromTimeClock(false, 1, 12, 23, 444000)},
+			wantValues: []types.Time{types.TimeFromClock(false, 1, 12, 23, 444000)},
 			wantType:   types.T_time,
 			precision:  3,
 			wantScalar: true,
@@ -4762,7 +4762,7 @@ func TestCastStringToTime(t *testing.T) {
 			name:       "Test06",
 			vecs:       makeTempVectors("-11223.4448", true, types.T_time),
 			proc:       procs,
-			wantValues: []types.Time{types.FromTimeClock(true, 1, 12, 23, 445000)},
+			wantValues: []types.Time{types.TimeFromClock(true, 1, 12, 23, 445000)},
 			wantType:   types.T_time,
 			precision:  3,
 			wantScalar: true,
@@ -4805,7 +4805,7 @@ func TestCastInt64ToTime(t *testing.T) {
 			name:       "Test01",
 			vecs:       makeTempVectors(112233, true, types.T_time),
 			proc:       procs,
-			wantValues: []types.Time{types.FromTimeClock(false, 11, 22, 33, 0)},
+			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
 			wantType:   types.T_time,
 			precision:  0,
 			wantScalar: false,
@@ -4814,7 +4814,7 @@ func TestCastInt64ToTime(t *testing.T) {
 			name:       "Test02",
 			vecs:       makeTempVectors(-223344, true, types.T_time),
 			proc:       procs,
-			wantValues: []types.Time{types.FromTimeClock(true, 22, 33, 44, 0)},
+			wantValues: []types.Time{types.TimeFromClock(true, 22, 33, 44, 0)},
 			wantType:   types.T_time,
 			precision:  2,
 			wantScalar: false,
@@ -4863,7 +4863,7 @@ func TestCastDecimal128ToTime(t *testing.T) {
 			name:       "Test01",
 			vecs:       makeTempVectors("112233.4444", true, types.T_time),
 			proc:       procs,
-			wantValues: []types.Time{types.FromTimeClock(false, 11, 22, 33, 444000)},
+			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 444000)},
 			wantType:   types.T_time,
 			precision:  3,
 			wantScalar: true,
@@ -4872,7 +4872,7 @@ func TestCastDecimal128ToTime(t *testing.T) {
 			name:       "Test02",
 			vecs:       makeTempVectors("-223344.4445", true, types.T_time),
 			proc:       procs,
-			wantValues: []types.Time{types.FromTimeClock(true, 22, 33, 44, 444000)},
+			wantValues: []types.Time{types.TimeFromClock(true, 22, 33, 44, 444000)},
 			wantType:   types.T_time,
 			precision:  3,
 			wantScalar: true,
@@ -4925,7 +4925,7 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 			name:       "Test01",
 			vecs:       makeTempVectors("2022-12-01", true, 0, types.T_date),
 			proc:       procs,
-			wantValues: []types.Time{types.FromTimeClock(false, 0, 0, 0, 0)},
+			wantValues: []types.Time{types.TimeFromClock(false, 0, 0, 0, 0)},
 			precision:  0,
 			wantScalar: true,
 		},
@@ -4933,7 +4933,7 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 			name:       "Test02",
 			vecs:       makeTempVectors("2022-12-01 11:22:33", false, 0, types.T_datetime),
 			proc:       procs,
-			wantValues: []types.Time{types.FromTimeClock(false, 11, 22, 33, 0)},
+			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
 			precision:  0,
 			wantScalar: false,
 		},
@@ -4941,7 +4941,7 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 			name:       "Test03",
 			vecs:       makeTempVectors("2022-12-01 11:22:33.123456", true, 0, types.T_datetime),
 			proc:       procs,
-			wantValues: []types.Time{types.FromTimeClock(false, 11, 22, 33, 123000)},
+			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 123000)},
 			precision:  3,
 			wantScalar: true,
 		},
@@ -4955,6 +4955,72 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, c.wantValues, castRes.Col)
 			require.Equal(t, types.T_time, castRes.Typ.Oid)
+			require.Equal(t, c.wantScalar, castRes.IsScalar())
+		})
+	}
+
+}
+
+func TestCastDateAndDatetimeToInt(t *testing.T) {
+	makeTempVectors := func(src string, srcIsConst bool, precision int32, srcType, dstType types.T) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		switch srcType {
+		case types.T_date:
+			date, err := types.ParseDateCast(src)
+			require.NoError(t, err)
+			vectors[0] = makeVector(date, srcIsConst)
+		case types.T_datetime:
+			datetime, err := types.ParseDatetime(src, 6)
+			require.NoError(t, err)
+			vectors[0] = makeVector(datetime, srcIsConst)
+		case types.T_timestamp:
+			datetime, err := types.ParseTimestamp(time.UTC, src, 6)
+			require.NoError(t, err)
+			vectors[0] = makeVector(datetime, srcIsConst)
+		default:
+			panic("wrong input test type")
+		}
+		vectors[1] = makeTypeVector(dstType)
+		return vectors
+	}
+
+	procs := testutil.NewProc()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantValues interface{}
+		wantScalar bool
+	}{
+		{
+			name:       "Test01",
+			vecs:       makeTempVectors("2022-12-01", true, 0, types.T_date, types.T_int32),
+			proc:       procs,
+			wantValues: []int32{19327},
+			wantScalar: true,
+		},
+		{
+			name:       "Test02",
+			vecs:       makeTempVectors("2022-12-01 12:34:56", false, 0, types.T_datetime, types.T_int64),
+			proc:       procs,
+			wantValues: []int64{1669898096},
+			wantScalar: false,
+		},
+		{
+			name:       "Test02",
+			vecs:       makeTempVectors("2022-12-01 12:34:56", false, 0, types.T_timestamp, types.T_int64),
+			proc:       procs,
+			wantValues: []int64{1669898096},
+			wantScalar: false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// setting precision
+			castRes, err := Cast(c.vecs, c.proc)
+			require.NoError(t, err)
+			require.Equal(t, c.wantValues, castRes.Col)
 			require.Equal(t, c.wantScalar, castRes.IsScalar())
 		})
 	}

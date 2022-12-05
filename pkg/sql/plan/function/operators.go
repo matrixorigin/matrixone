@@ -4770,6 +4770,42 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_time,
 				Fn:        operator.Cast,
 			},
+			{
+				Index:     336,
+				Args:      []types.T{types.T_date, types.T_int32},
+				ReturnTyp: types.T_int32,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     337,
+				Args:      []types.T{types.T_date, types.T_int64},
+				ReturnTyp: types.T_int32,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     338,
+				Args:      []types.T{types.T_datetime, types.T_int32},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     339,
+				Args:      []types.T{types.T_datetime, types.T_int64},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     340,
+				Args:      []types.T{types.T_timestamp, types.T_int32},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     341,
+				Args:      []types.T{types.T_timestamp, types.T_int64},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.Cast,
+			},
 		},
 	},
 
