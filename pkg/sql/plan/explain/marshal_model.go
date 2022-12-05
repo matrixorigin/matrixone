@@ -33,7 +33,7 @@ type Step struct {
 	Step        int       `json:"step"`
 	Description string    `json:"description"`
 	State       string    `json:"state"`
-	Stats       Stats     `json:"stats"`
+	PlanStats   PlanStats `json:"stats"`
 }
 
 type GraphData struct {
@@ -41,6 +41,9 @@ type GraphData struct {
 	Edges  []Edge  `json:"edges"`
 	Labels []Label `json:"labels"`
 	Global Global  `json:"global"`
+}
+
+type PlanStats struct {
 }
 
 type Stats struct {
