@@ -158,7 +158,6 @@ jobs:
           cd $GITHUB_WORKSPACE/matrixone
           if  [ -d  "./store"  ]; then rm -rf ./store; fi
           go test -c -tags service_test -cover -covermode=count -coverpkg=./pkg/... ./cmd/mo-service/ -o service_test
-          cp ./etc/cn-standalone-test.toml ./mo.toml
           ./service_test -test.coverprofile=${{ env.raw_bvt_coverage }} &>service.log &
           
       - name: Start BVT Test
@@ -166,7 +165,7 @@ jobs:
         id: bvt_on_pr_version
         continue-on-error: true
         run: |
-          sleep 30s
+          sleep 300s
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/cases 2>&1
 
@@ -176,7 +175,7 @@ jobs:
           cd $GITHUB_WORKSPACE/matrixone
           ps aux|grep 'service_test' | grep -v 'grep' | awk '{print $2}'
           ps aux|grep 'service_test' | grep -v 'grep' | awk '{print $2}' | xargs kill -s SIGINT
-          sleep 30
+          sleep 60
           cat ${{ env.raw_bvt_coverage }} | grep -v ${{ env.bvt_excluded_pkg }} > ${{ env.bvt_coverage }}
           echo "bvt_coverage finished"
           go tool cover -o ${{ env.bvt_html_coverage }} -html=${{ env.bvt_coverage }}
@@ -184,12 +183,12 @@ jobs:
 
 
       - name: Unit Test
-        timeout-minutes: 60
+        timeout-minutes: 120
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           test_scope=$(go list ./... | grep -v 'driver\|engine/aoe\|engine/memEngine\|pkg/catalog')
           echo "ut start"
-          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/matrixone/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/matrixone/cgo -lmo" go test -v -tags matrixone_test -p 1 -covermode=count -coverprofile=${{ env.raw_ut_coverage }} -coverpkg=./pkg/... ${test_scope} | tee ${{ env.ut_report }}
+          CGO_CFLAGS="-I${GITHUB_WORKSPACE}/matrixone/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/matrixone/cgo -lmo" go test -v -tags matrixone_test -p 6 -covermode=count -coverprofile=${{ env.raw_ut_coverage }} -coverpkg=./pkg/... ${test_scope} | tee ${{ env.ut_report }}
           echo "ut finished"
           cat ${{ env.raw_ut_coverage }} | grep -v ${{ env.ut_excluded_pkg }} > ${{ env.ut_coverage }}
           echo "ut_coverage finished"
@@ -240,8 +239,31 @@ jobs:
 
       - name: Generate Notice Content
         run: |
+          cd $GITHUB_WORKSPACE/matrixone
+          cat coverage_report.txt
           echo "Today=$(date -d now +%Y-%m-%d)" >> $GITHUB_ENV
           echo "Url=${{ github.event.repository.html_url }}/actions/runs/${{ github.run_id }}" >> $GITHUB_ENV
+          echo 'Detail<<EOF' >> $GITHUB_ENV
+          cat coverage_report.txt >> $GITHUB_ENV
+          echo 'EOF' >> $GITHUB_ENV
+          
+      - uses: actions/upload-artifact@v3
+        if: ${{ always() }}
+        continue-on-error: true
+        with:
+          name: code_quality_reports
+          path: |
+            ${{ github.workspace }}/matrixone/code_quality_reports.zip
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v3
+        if: ${{ failure() }}
+        continue-on-error: true
+        with:
+          name: test_reports
+          path: |
+            ${{ github.workspace }}/matrixone
+          retention-days: 7
 
       - name: WeChat Work notification
         id: notification
@@ -253,11 +275,13 @@ jobs:
           mentioned_list: '["@all"]'
           content: "<font color=\"warning\">Nightly Code Quality - ${{ env.Today }} </font>\nNumber of files failed static checks:<font color=\"warning\">${{ env.FAILED_FILES_NUM }}</font>\nUT Coverage Summary:<font color=\"warning\">${{ env.UT_CODE_COVERAGE }}</font>\nBVT Coverage Summary:<font color=\"warning\">${{ env.BVT_CODE_COVERAGE }}</font>\nGeneral Coverage Summary:<font color=\"warning\">${{ env.GENERAL_CODE_COVERAGE }}</font>\nFor details, please visit [Action Run](${{ env.Url }})\n"
 
-      - uses: actions/upload-artifact@v3
-        if: ${{ failure() }}
-        continue-on-error: true
+      - name: WeChat Work notification
+        id: detail-notification
+        uses: chf007/action-wechat-work@master
+        env:
+          WECHAT_WORK_BOT_WEBHOOK: ${{secrets.WECHAT_WORK_BOT_WEBHOOK}}
         with:
-          name: test_reports
-          path: |
-            ${{ github.workspace }}/matrixone
-          retention-days: 7
+          msgtype: text
+          mentioned_list: '["@all"]'
+          content: ${{ env.Detail }}
+          
