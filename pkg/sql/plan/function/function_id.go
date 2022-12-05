@@ -459,8 +459,8 @@ var functionIdRegister = map[string]int32{
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
-	fid, err := fromNameToFunctionId(name)
-	if err != nil {
+	fid, exists := fromNameToFunctionIdWithoutError(name)
+	if !exists {
 		return false
 	}
 	fs := functionRegister[fid].Overloads
