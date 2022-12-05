@@ -471,22 +471,22 @@ func TestUnionOne(t *testing.T) {
 	unionOneTest(t, types.T_date, mp, []types.Date{0, 1, 2, 3, 4, 5, 6, 7, 8}, []types.Date{3}, []types.Date{0, 1, 2, 3, 4, 5, 6, 7, 8, 3})
 	unionOneTest(t, types.T_datetime, mp, []types.Datetime{0, 1, 2, 3, 4, 5, 6, 7, 8}, []types.Datetime{3}, []types.Datetime{0, 1, 2, 3, 4, 5, 6, 7, 8, 3})
 
-	w10 := New(types.Type{Oid: types.T(types.T_char)})
+	w10 := New(types.Type{Oid: types.T(types.T_char), Width: types.MaxCharLen})
 	AppendString(w10, []string{"nihao", "nihao", "nihao", "nihao"}, mp)
-	v10 := New(types.Type{Oid: types.T(types.T_char)})
+	v10 := New(types.Type{Oid: types.T(types.T_char), Width: types.MaxCharLen})
 	err := UnionOne(v10, w10, 3, mp)
 	require.NoError(t, err)
 	v10vals := GetStrVectorValues(v10)
 	require.Equal(t, []string{"nihao"}, v10vals)
 
-	v10 = New(types.Type{Oid: types.T(types.T_char)})
+	v10 = New(types.Type{Oid: types.T(types.T_char), Width: types.MaxCharLen})
 	AppendString(v10, []string{"hello", "hello", "hello"}, mp)
 	err = UnionOne(v10, w10, 3, mp)
 	require.NoError(t, err)
 	v10vals = GetStrVectorValues(v10)
 	require.Equal(t, []string{"hello", "hello", "hello", "nihao"}, v10vals)
 
-	w101 := New(types.Type{Oid: types.T(types.T_char)})
+	w101 := New(types.Type{Oid: types.T(types.T_char), Width: types.MaxCharLen})
 	AppendString(w101, []string{"thanks"}, mp)
 	w101.isConst = true
 	err = UnionOne(v10, w101, 2, mp)
@@ -498,15 +498,15 @@ func TestUnionOne(t *testing.T) {
 	astr := "a123456789012345678901234567890"
 	bstr := "b123456789012345678901234567890AKQJ1098765432"
 
-	w102 := New(types.Type{Oid: types.T(types.T_char)})
+	w102 := New(types.Type{Oid: types.T(types.T_char), Width: types.MaxCharLen})
 	AppendString(w102, []string{astr, astr, astr, astr}, mp)
-	v102 := New(types.Type{Oid: types.T(types.T_char)})
+	v102 := New(types.Type{Oid: types.T(types.T_char), Width: types.MaxCharLen})
 	err = UnionOne(v102, w102, 3, mp)
 	require.NoError(t, err)
 	v102vals := GetStrVectorValues(v102)
 	require.Equal(t, []string{astr}, v102vals)
 
-	v102 = New(types.Type{Oid: types.T(types.T_char)})
+	v102 = New(types.Type{Oid: types.T(types.T_char), Width: types.MaxCharLen})
 	AppendString(v102, []string{bstr, bstr, bstr}, mp)
 	err = UnionOne(v102, w102, 3, mp)
 	require.NoError(t, err)
@@ -547,9 +547,9 @@ func TestUnionBatch(t *testing.T) {
 	unionBatchTest(t, types.T_date, mp, []types.Date{0, 1, 2, 3, 4, 5, 6, 7, 8}, []types.Date{3, 4}, []types.Date{0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4})
 	unionBatchTest(t, types.T_datetime, mp, []types.Datetime{0, 1, 2, 3, 4, 5, 6, 7, 8}, []types.Datetime{3, 4}, []types.Datetime{0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4})
 
-	w10 := New(types.Type{Oid: types.T(types.T_char)})
+	w10 := New(types.Type{Oid: types.T(types.T_char), Width: types.MaxCharLen})
 	AppendString(w10, []string{"nihao", "nihao", "nihao", "nihao"}, mp)
-	v10 := New(types.Type{Oid: types.T(types.T_char)})
+	v10 := New(types.Type{Oid: types.T(types.T_char), Width: types.MaxCharLen})
 	err := UnionBatch(v10, w10, 1, 2, []uint8{1, 1}, mp)
 	require.NoError(t, err)
 	require.Equal(t, []string{"nihao", "nihao"}, GetStrVectorValues(v10))

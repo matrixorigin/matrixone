@@ -1201,13 +1201,15 @@ func appendCastBeforeExpr(expr *Expr, toType *Type, isBin ...bool) (*Expr, error
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: getFunctionObjRef(funcID, "cast"),
-				Args: []*Expr{expr, {
-					Expr: &plan.Expr_T{
-						T: &plan.TargetType{
-							Typ: &typ,
+				Args: []*Expr{expr,
+					{
+						Typ: &typ,
+						Expr: &plan.Expr_T{
+							T: &plan.TargetType{
+								Typ: &typ,
+							},
 						},
-					},
-				}},
+					}},
 			},
 		},
 		Typ: &typ,

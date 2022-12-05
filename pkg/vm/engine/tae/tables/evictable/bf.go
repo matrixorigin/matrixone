@@ -16,6 +16,7 @@ package evictable
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
@@ -34,12 +35,27 @@ type BfNode struct {
 	colMetaFactory EvictableNodeFactory
 }
 
-func NewBfNode(mgr base.INodeManager, bfKey, metaKey string, fs *objectio.ObjectFS, idx uint16, metaloc string, typ types.Type) (node *BfNode, err error) {
+func NewBfNode(
+	idx uint16,
+	typ types.Type,
+	metaloc string,
+	bfKey, metaKey string,
+	mgr base.INodeManager,
+	fs *objectio.ObjectFS,
+) (node *BfNode, err error) {
 	node = &BfNode{
-		bfKey:          bfKey,
-		metaKey:        metaKey,
-		mgr:            mgr,
-		colMetaFactory: func() (base.INode, error) { return NewColumnMetaNode(mgr, metaKey, fs, idx, metaloc, typ), nil },
+		bfKey:   bfKey,
+		metaKey: metaKey,
+		mgr:     mgr,
+		colMetaFactory: func() (base.INode, error) {
+			return NewColumnMetaNode(
+				idx,
+				typ,
+				metaloc,
+				metaKey,
+				mgr,
+				fs), nil
+		},
 	}
 
 	h, err := PinEvictableNode(mgr, metaKey, node.colMetaFactory)

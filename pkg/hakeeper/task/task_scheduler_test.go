@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -92,7 +93,7 @@ func TestGetCNOrderedMap(t *testing.T) {
 }
 
 func TestScheduleCreatedTasks(t *testing.T) {
-	service := taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
+	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
 	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{}, nil)
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
 	currentTick := uint64(0)
@@ -132,7 +133,7 @@ func TestScheduleCreatedTasks(t *testing.T) {
 }
 
 func TestReallocateExpiredTasks(t *testing.T) {
-	service := taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
+	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
 	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{}, nil)
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
 	currentTick := expiredTick - 1

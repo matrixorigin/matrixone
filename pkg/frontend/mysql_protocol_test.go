@@ -57,7 +57,7 @@ func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
 	pro := NewMysqlClientProtocol(nextConnectionID(), rs, 1024, tRM.pu.SV)
 	pro.SetSkipCheckUser(true)
 	exe := NewMysqlCmdExecutor()
-	routine := NewRoutine(context.TODO(), pro, exe, tRM.pu)
+	routine := NewRoutine(context.TODO(), pro, exe, tRM.pu.SV, rs)
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
@@ -759,8 +759,8 @@ func makeMysqlDateResultSet() *MysqlResultSet {
 
 	rs.AddColumn(mysqlCol)
 
-	d1, _ := types.ParseDate("1997-01-01")
-	d2, _ := types.ParseDate("2008-02-02")
+	d1, _ := types.ParseDateCast("1997-01-01")
+	d2, _ := types.ParseDateCast("2008-02-02")
 	var cases = []types.Date{
 		d1,
 		d2,
@@ -881,8 +881,8 @@ func make9ColumnsResultSet() *MysqlResultSet {
 		"Double",
 	}
 
-	d1, _ := types.ParseDate("1997-01-01")
-	d2, _ := types.ParseDate("2008-02-02")
+	d1, _ := types.ParseDateCast("1997-01-01")
+	d2, _ := types.ParseDateCast("2008-02-02")
 
 	dt1, _ := types.ParseDatetime("2018-04-28 10:21:15", 0)
 	dt2, _ := types.ParseDatetime("2018-04-28 10:21:15.123", 0)
@@ -2102,7 +2102,7 @@ func Test_resultset(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
-		ses.Cmd = COM_STMT_EXECUTE
+		ses.cmd = COM_STMT_EXECUTE
 		proto.ses = ses
 
 		res := make9ColumnsResultSet()

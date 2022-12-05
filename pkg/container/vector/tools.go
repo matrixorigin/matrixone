@@ -442,7 +442,7 @@ func checkIntersect[T compT](cols1, cols2 []T, gtFun compFn[T], ltFun compFn[T])
 	// check v2 if some item >= min && <= max
 	for i := 0; i < len(cols2); i++ {
 		// cols2[i] >= min && cols2[i] <= max
-		if gtFun(cols1[i], min) && ltFun(cols1[i], max) {
+		if gtFun(cols2[i], min) && ltFun(cols2[i], max) {
 			return true, nil
 		}
 	}
@@ -603,7 +603,7 @@ func compareNumber[T constraints.Integer | constraints.Float | types.Date | type
 		}), nil
 	case "<=":
 		return runCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 T) bool {
-			return t1 >= t2
+			return t1 <= t2
 		}), nil
 	default:
 		return false, moerr.NewInternalError("unsupport compare function")

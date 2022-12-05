@@ -14,6 +14,8 @@
 
 package memorytable
 
+//TODO move to vector?
+
 import (
 	"fmt"
 
@@ -21,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+// VectorAt returns a nullable value at specifed index
 func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 	if vec.IsConst() {
 		i = 0

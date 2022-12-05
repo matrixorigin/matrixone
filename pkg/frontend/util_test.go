@@ -487,7 +487,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 			sv, ok := stmt.(*tree.SetVar)
 			cvey.So(ok, cvey.ShouldBeTrue)
 
-			value, err := GetSimpleExprValue(sv.Assignments[0].Value)
+			value, err := GetSimpleExprValue(sv.Assignments[0].Value, nil)
 			if kase.wantErr {
 				cvey.So(err, cvey.ShouldNotBeNil)
 			} else {

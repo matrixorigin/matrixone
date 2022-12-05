@@ -38,17 +38,3 @@ type Clock interface {
 	// unique timestamp.
 	SetNodeID(id uint16)
 }
-
-var (
-	defaultClock Clock
-)
-
-// SetupDefaultClock setup global default clock
-func SetupDefaultClock(clock Clock) {
-	defaultClock = clock
-}
-
-// DefaultClock return default clock
-func DefaultClock() Clock {
-	return defaultClock
-}

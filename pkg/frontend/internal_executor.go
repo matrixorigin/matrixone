@@ -34,7 +34,7 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 	}
 
 	if opts.IsInternal != nil {
-		sess.IsInternal = *opts.IsInternal
+		sess.isInternal = *opts.IsInternal
 	}
 }
 

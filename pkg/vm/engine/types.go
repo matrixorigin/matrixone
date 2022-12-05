@@ -75,6 +75,7 @@ type Property struct {
 }
 
 type Statistics interface {
+	FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error)
 	Rows(ctx context.Context) (int64, error)
 	Size(ctx context.Context, columnName string) (int64, error)
 }

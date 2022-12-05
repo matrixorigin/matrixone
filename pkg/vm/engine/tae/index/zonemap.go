@@ -16,6 +16,7 @@ package index
 
 import (
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -142,6 +143,23 @@ func (zm *ZoneMap) Contains(key any) (ok bool) {
 	if (zm.isInf || compute.CompareGeneric(key, zm.max, zm.typ) <= 0) && compute.CompareGeneric(key, zm.min, zm.typ) >= 0 {
 		ok = true
 	}
+	return
+}
+
+func (zm *ZoneMap) FastContainsAny(keys containers.Vector) (ok bool) {
+	if !zm.inited {
+		return
+	}
+	op := func(key any, _ int) (err error) {
+		if types.IsNull(key) ||
+			((zm.isInf || compute.CompareGeneric(key, zm.max, zm.typ) <= 0) &&
+				compute.CompareGeneric(key, zm.min, zm.typ) >= 0) {
+			err = moerr.GetOkExpectedEOB()
+			ok = true
+		}
+		return
+	}
+	keys.Foreach(op, nil)
 	return
 }
 

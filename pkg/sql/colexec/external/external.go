@@ -25,14 +25,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"path"
-	"path/filepath"
-	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
-
-	"math"
-	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -46,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/simdcsv"
@@ -54,6 +52,10 @@ import (
 
 var (
 	ONE_BATCH_MAX_ROW = 40000
+)
+
+var (
+	STATEMENT_ACCOUNT = "account"
 )
 
 func String(arg any, buf *bytes.Buffer) {
@@ -78,6 +80,10 @@ func Prepare(proc *process.Process, arg any) error {
 		if err := InitS3Param(param.extern); err != nil {
 			return err
 		}
+	} else {
+		if err := InitInfileParam(param.extern); err != nil {
+			return err
+		}
 	}
 	if param.extern.Format == tree.JSONLINE {
 		if param.extern.JsonData != tree.OBJECT && param.extern.JsonData != tree.ARRAY {
@@ -94,6 +100,7 @@ func Prepare(proc *process.Process, arg any) error {
 		param.Fileparam.End = true
 	}
 	param.Fileparam.FileCnt = len(param.FileList)
+	param.Ctx = proc.Ctx
 	return nil
 }
 
@@ -126,96 +133,206 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	return false, nil
 }
 
-func InitS3Param(param *tree.ExternParam) error {
-	param.S3Param = &tree.S3Parameter{}
-	for i := 0; i < len(param.S3option); i += 2 {
-		switch strings.ToLower(param.S3option[i]) {
-		case "endpoint":
-			param.S3Param.Endpoint = param.S3option[i+1]
-		case "region":
-			param.S3Param.Region = param.S3option[i+1]
-		case "access_key_id":
-			param.S3Param.APIKey = param.S3option[i+1]
-		case "secret_access_key":
-			param.S3Param.APISecret = param.S3option[i+1]
-		case "bucket":
-			param.S3Param.Bucket = param.S3option[i+1]
+func InitInfileParam(param *tree.ExternParam) error {
+	for i := 0; i < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
 		case "filepath":
-			param.Filepath = param.S3option[i+1]
+			param.Filepath = param.Option[i+1]
 		case "compression":
-			param.CompressType = param.S3option[i+1]
+			param.CompressType = param.Option[i+1]
+		case "format":
+			format := strings.ToLower(param.Option[i+1])
+			if format != tree.CSV && format != tree.JSONLINE {
+				return moerr.NewBadConfig("the format '%s' is not supported", format)
+			}
+			param.Format = format
+		case "jsondata":
+			jsondata := strings.ToLower(param.Option[i+1])
+			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
+				return moerr.NewBadConfig("the jsondata '%s' is not supported", jsondata)
+			}
+			param.JsonData = jsondata
+			param.Format = tree.JSONLINE
 		default:
-			return moerr.NewBadConfig("the keyword '%s' is not support", strings.ToLower(param.S3option[i]))
+			return moerr.NewBadConfig("the keyword '%s' is not support", strings.ToLower(param.Option[i]))
 		}
+	}
+	if len(param.Filepath) == 0 {
+		return moerr.NewBadConfig("the filepath must be specified")
+	}
+	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
+		return moerr.NewBadConfig("the jsondata must be specified")
+	}
+	if len(param.Format) == 0 {
+		param.Format = tree.CSV
 	}
 	return nil
 }
 
-func judgeContainAccount(expr *plan.Expr) (bool, []string) {
+func InitS3Param(param *tree.ExternParam) error {
+	param.S3Param = &tree.S3Parameter{}
+	for i := 0; i < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
+		case "endpoint":
+			param.S3Param.Endpoint = param.Option[i+1]
+		case "region":
+			param.S3Param.Region = param.Option[i+1]
+		case "access_key_id":
+			param.S3Param.APIKey = param.Option[i+1]
+		case "secret_access_key":
+			param.S3Param.APISecret = param.Option[i+1]
+		case "bucket":
+			param.S3Param.Bucket = param.Option[i+1]
+		case "filepath":
+			param.Filepath = param.Option[i+1]
+		case "compression":
+			param.CompressType = param.Option[i+1]
+		case "format":
+			format := strings.ToLower(param.Option[i+1])
+			if format != tree.CSV && format != tree.JSONLINE {
+				return moerr.NewBadConfig("the format '%s' is not supported", format)
+			}
+			param.Format = format
+		case "jsondata":
+			jsondata := strings.ToLower(param.Option[i+1])
+			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
+				return moerr.NewBadConfig("the jsondata '%s' is not supported", jsondata)
+			}
+			param.JsonData = jsondata
+			param.Format = tree.JSONLINE
+
+		default:
+			return moerr.NewBadConfig("the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+		}
+	}
+	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
+		return moerr.NewBadConfig("the jsondata must be specified")
+	}
+	if len(param.Format) == 0 {
+		param.Format = tree.CSV
+	}
+	return nil
+}
+
+func containColname(col string) bool {
+	return strings.Contains(col, STATEMENT_ACCOUNT) || strings.Contains(col, catalog.ExternalFilePath)
+}
+
+func judgeContainColname(expr *plan.Expr) bool {
 	expr_F, ok := expr.Expr.(*plan.Expr_F)
 	if !ok {
-		return false, nil
+		return false
 	}
 	if len(expr_F.F.Args) != 2 {
-		return false, nil
+		return false
 	}
 	if expr_F.F.Func.ObjName == "or" {
-		var ret []string
+		flag := true
 		for i := 0; i < len(expr_F.F.Args); i++ {
-			flag, tmp := judgeContainAccount(expr_F.F.Args[i])
-			if flag {
-				ret = append(ret, tmp...)
-			}
+			flag = flag && judgeContainColname(expr_F.F.Args[i])
 		}
-		return len(ret) != 0, ret
+		return flag
 	}
 	expr_Col, ok := expr_F.F.Args[0].Expr.(*plan.Expr_Col)
-	if !ok || !strings.Contains(expr_Col.Col.Name, "account") {
-		return false, nil
+	if !ok || !containColname(expr_Col.Col.Name) {
+		return false
 	}
 	_, ok = expr_F.F.Args[1].Expr.(*plan.Expr_C)
 	if !ok {
-		return false, nil
+		return false
 	}
 
 	str := expr_F.F.Args[1].Expr.(*plan.Expr_C).C.GetSval()
-	if str == "" {
-		return false, nil
-	}
-	return true, []string{str}
+	return str != ""
 }
 
-func FliterByAccount(node *plan.Node, proc *process.Process, fileList []string) ([]string, error) {
-	filterList := make([][]string, 0)
+func getAccountCol(filepath string) string {
+	pathDir := strings.Split(filepath, "/")
+	if len(pathDir) < 2 {
+		return ""
+	}
+	return pathDir[1]
+}
+
+func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*plan.Expr, fileList []string) *batch.Batch {
+	num := len(node.TableDef.Cols)
+	bat := &batch.Batch{
+		Attrs: make([]string, num),
+		Vecs:  make([]*vector.Vector, num),
+		Zs:    make([]int64, len(fileList)),
+	}
+	for i := 0; i < num; i++ {
+		bat.Attrs[i] = node.TableDef.Cols[i].Name
+		if bat.Attrs[i] == STATEMENT_ACCOUNT {
+			typ := types.Type{
+				Oid:   types.T(node.TableDef.Cols[i].Typ.Id),
+				Width: node.TableDef.Cols[i].Typ.Width,
+				Scale: node.TableDef.Cols[i].Typ.Scale,
+			}
+			vec := vector.NewOriginal(typ)
+			vector.PreAlloc(vec, len(fileList), len(fileList), proc.Mp())
+			vec.SetOriginal(false)
+			for j := 0; j < len(fileList); j++ {
+				vector.SetStringAt(vec, j, getAccountCol(fileList[j]), proc.Mp())
+			}
+			bat.Vecs[i] = vec
+		} else if bat.Attrs[i] == catalog.ExternalFilePath {
+			typ := types.Type{
+				Oid:   types.T_varchar,
+				Width: types.MaxVarcharLen,
+				Scale: 0,
+			}
+			vec := vector.NewOriginal(typ)
+			vector.PreAlloc(vec, len(fileList), len(fileList), proc.Mp())
+			vec.SetOriginal(false)
+			for j := 0; j < len(fileList); j++ {
+				vector.SetStringAt(vec, j, fileList[j], proc.Mp())
+			}
+			bat.Vecs[i] = vec
+		}
+	}
+	for k := 0; k < len(fileList); k++ {
+		bat.Zs[k] = 1
+	}
+	return bat
+}
+
+func fliterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList []string) ([]string, error) {
+	filterList, restList := make([]*plan.Expr, 0), make([]*plan.Expr, 0)
 	for i := 0; i < len(node.FilterList); i++ {
-		if ok, str := judgeContainAccount(node.FilterList[i]); ok {
-			filterList = append(filterList, str)
+		if judgeContainColname(node.FilterList[i]) {
+			filterList = append(filterList, node.FilterList[i])
+		} else {
+			restList = append(restList, node.FilterList[i])
 		}
 	}
 	if len(filterList) == 0 {
 		return fileList, nil
 	}
+	node.FilterList = restList
+	bat := makeFilepathBatch(node, proc, filterList, fileList)
+	filter := colexec.RewriteFilterExprList(filterList)
+	vec, err := colexec.EvalExpr(bat, proc, filter)
+	if err != nil {
+		return nil, err
+	}
 	ret := make([]string, 0)
-	for i := 0; i < len(fileList); i++ {
-		flag := false
-		for j := 0; j < len(filterList); j++ {
-			flag = false
-			for k := 0; k < len(fileList[j]); k++ {
-				if ok, _ := regexp.MatchString(filterList[j][k], fileList[i]); ok {
-					flag = true
-					break
-				}
-			}
-			if !flag {
-				flag = false
-				break
-			}
-		}
-		if flag {
+	bs := vector.GetColumn[bool](vec)
+	for i := 0; i < len(bs); i++ {
+		if bs[i] {
 			ret = append(ret, fileList[i])
 		}
 	}
 	return ret, nil
+}
+
+func FliterFileList(node *plan.Node, proc *process.Process, fileList []string) ([]string, error) {
+	var err error
+	fileList, err = fliterByAccountAndFilename(node, proc, fileList)
+	if err != nil {
+		return fileList, err
+	}
+	return fileList, nil
 }
 
 func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
@@ -239,10 +356,12 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 
 func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 	filePath := strings.TrimSpace(param.Filepath)
-	pathDir := strings.Split(filePath, "/")
+	filePath = path.Clean(filePath)
+	sep := "/"
+	pathDir := strings.Split(filePath, sep)
 	l := list.New()
 	if pathDir[0] == "" {
-		l.PushBack("/")
+		l.PushBack(sep)
 	} else {
 		l.PushBack(pathDir[0])
 	}
@@ -266,7 +385,10 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 				if entry.IsDir && i+1 == len(pathDir) {
 					continue
 				}
-				matched, _ := filepath.Match(pathDir[i], entry.Name)
+				matched, err := path.Match(pathDir[i], entry.Name)
+				if err != nil {
+					return nil, err
+				}
 				if !matched {
 					continue
 				}
@@ -876,7 +998,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				d, err := types.ParseDate(field)
+				d, err := types.ParseDateCast(field)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError("the input value '%v' is not Date type for column %d", field, colIdx)

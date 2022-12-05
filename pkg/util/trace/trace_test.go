@@ -27,7 +27,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +36,10 @@ func Test_initExport(t *testing.T) {
 		enableTracer bool
 		config       *tracerProviderConfig
 		needRecover  bool
+		shutdownCtx  context.Context
 	}
+	cancledCtx, cancle := context.WithCancel(context.Background())
+	cancle()
 	ch := make(chan string, 10)
 	tests := []struct {
 		name  string
@@ -49,6 +51,7 @@ func Test_initExport(t *testing.T) {
 			args: args{
 				enableTracer: false,
 				config:       &tracerProviderConfig{enable: false},
+				shutdownCtx:  nil,
 			},
 			empty: true,
 		},
@@ -58,8 +61,10 @@ func Test_initExport(t *testing.T) {
 				enableTracer: true,
 				config: &tracerProviderConfig{
 					enable: true, batchProcessMode: InternalExecutor, sqlExecutor: newDummyExecutorFactory(ch),
+					batchProcessor: noopBatchProcessor{},
 				},
 				needRecover: true,
+				shutdownCtx: context.Background(),
 			},
 			empty: false,
 		},
@@ -69,13 +74,27 @@ func Test_initExport(t *testing.T) {
 				enableTracer: true,
 				config: &tracerProviderConfig{
 					enable: true, batchProcessMode: FileService, sqlExecutor: newDummyExecutorFactory(ch),
-				}},
+					batchProcessor: noopBatchProcessor{},
+				},
+				shutdownCtx: context.Background(),
+			},
+			empty: false,
+		},
+		{
+			name: "enable_FileService_with_canceled_ctx",
+			args: args{
+				enableTracer: true,
+				config: &tracerProviderConfig{
+					enable: true, batchProcessMode: FileService, sqlExecutor: newDummyExecutorFactory(ch),
+					batchProcessor: noopBatchProcessor{},
+				},
+				shutdownCtx: cancledCtx,
+			},
 			empty: false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			export.ResetGlobalBatchProcessor()
 			if tt.args.needRecover {
 				defer func() {
 					if err := recover(); err != nil {
@@ -86,12 +105,8 @@ func Test_initExport(t *testing.T) {
 				}()
 			}
 			initExporter(context.TODO(), tt.args.config)
-			if tt.empty {
-				require.Equal(t, "*export.noopBatchProcessor", fmt.Sprintf("%v", reflect.ValueOf(export.GetGlobalBatchProcessor()).Type()))
-			} else {
-				require.Equal(t, "*export.MOCollector", fmt.Sprintf("%v", reflect.ValueOf(export.GetGlobalBatchProcessor()).Type()))
-			}
-			require.Equal(t, Shutdown(context.Background()), nil)
+			require.Equal(t, "trace.noopBatchProcessor", fmt.Sprintf("%v", reflect.ValueOf(GetGlobalBatchProcessor()).Type()))
+			require.Equal(t, Shutdown(tt.args.shutdownCtx), nil)
 		})
 	}
 }
