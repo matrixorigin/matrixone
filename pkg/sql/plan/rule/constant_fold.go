@@ -46,31 +46,31 @@ func (r *ConstantFold) Match(n *plan.Node) bool {
 	return true
 }
 
-func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process) {
+func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process, isPrepare bool) {
 	if n.Limit != nil {
-		n.Limit = r.constantFold(n.Limit, proc)
+		n.Limit = r.constantFold(n.Limit, proc, isPrepare)
 	}
 	if n.Offset != nil {
-		n.Offset = r.constantFold(n.Offset, proc)
+		n.Offset = r.constantFold(n.Offset, proc, isPrepare)
 	}
 	if len(n.OnList) > 0 {
 		for i := range n.OnList {
-			n.OnList[i] = r.constantFold(n.OnList[i], proc)
+			n.OnList[i] = r.constantFold(n.OnList[i], proc, isPrepare)
 		}
 	}
 	if len(n.FilterList) > 0 {
 		for i := range n.FilterList {
-			n.FilterList[i] = r.constantFold(n.FilterList[i], proc)
+			n.FilterList[i] = r.constantFold(n.FilterList[i], proc, isPrepare)
 		}
 	}
 	if len(n.ProjectList) > 0 {
 		for i := range n.ProjectList {
-			n.ProjectList[i] = r.constantFold(n.ProjectList[i], proc)
+			n.ProjectList[i] = r.constantFold(n.ProjectList[i], proc, isPrepare)
 		}
 	}
 }
 
-func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.Expr {
+func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process, isPrepare bool) *plan.Expr {
 	ef, ok := e.Expr.(*plan.Expr_F)
 	if !ok {
 		return e
@@ -83,8 +83,11 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	if f.Volatile { // function cannot be fold
 		return e
 	}
+	if f.RealTimeRelated && isPrepare {
+		return e
+	}
 	for i := range ef.F.Args {
-		ef.F.Args[i] = r.constantFold(ef.F.Args[i], proc)
+		ef.F.Args[i] = r.constantFold(ef.F.Args[i], proc, isPrepare)
 	}
 	if !isConstant(e) {
 		return e
@@ -173,6 +176,16 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 		return &plan.Const{
 			Value: &plan.Const_Sval{
 				Sval: vec.GetString(0),
+			},
+		}
+	case types.T_timestamp:
+		val := vector.MustTCols[types.Timestamp](vec)[0]
+		return &plan.Const{
+			Value: &plan.Const_Timestampval{
+				Timestampval: &plan.Timestamp{
+					Val:       int64(val),
+					Precision: vec.Typ.Precision,
+				},
 			},
 		}
 	default:

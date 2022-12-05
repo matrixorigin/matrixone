@@ -15,6 +15,11 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"sort"
 	"strconv"
 
@@ -295,5 +300,86 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		return expr, err
 	default:
 		return e, nil
+	}
+}
+
+type ResetRealTimeFunctionRule struct {
+	compCtx CompilerContext
+	bat     *batch.Batch
+}
+
+func NewResetRealTimeFunctionRule(compCtx CompilerContext) *ResetRealTimeFunctionRule {
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	return &ResetRealTimeFunctionRule{
+		compCtx: compCtx,
+		bat:     bat,
+	}
+}
+
+func (rule *ResetRealTimeFunctionRule) MatchNode(_ *Node) bool {
+	return false
+}
+
+func (rule *ResetRealTimeFunctionRule) IsApplyExpr() bool {
+	return true
+}
+
+func (rule *ResetRealTimeFunctionRule) ApplyNode(node *Node) error {
+	return nil
+}
+
+func (rule *ResetRealTimeFunctionRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	switch ef := e.Expr.(type) {
+	case *plan.Expr_F:
+		overloadID := ef.F.Func.GetObj()
+		f, err := function.GetFunctionByID(overloadID)
+		if err != nil {
+			return nil, err
+		}
+		if f.Volatile || !f.RealTimeRelated {
+			return e, nil
+		}
+		for i := range ef.F.Args {
+			ef.F.Args[i], err = rule.ApplyExpr(ef.F.Args[i])
+			if err != nil {
+				return nil, err
+			}
+		}
+		vec, err := colexec.EvalExpr(rule.bat, rule.compCtx.GetProcess(), e)
+		if err != nil {
+			return nil, err
+		}
+		c := getTimeRelatedConstant(vec)
+		if c == nil {
+			return e, nil
+		}
+		ec := &plan.Expr_C{
+			C: c,
+		}
+		e.Expr = ec
+		return e, nil
+	default:
+		return e, nil
+	}
+}
+
+func getTimeRelatedConstant(vec *vector.Vector) *plan.Const {
+	if nulls.Any(vec.Nsp) {
+		return &plan.Const{Isnull: true}
+	}
+	switch vec.Typ.Oid {
+	case types.T_timestamp:
+		val := vector.MustTCols[types.Timestamp](vec)[0]
+		return &plan.Const{
+			Value: &plan.Const_Timestampval{
+				Timestampval: &plan.Timestamp{
+					Val:       int64(val),
+					Precision: vec.Typ.Precision,
+				},
+			},
+		}
+	default:
+		return nil
 	}
 }

@@ -2210,7 +2210,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// replace ? and @var with their values
 		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
-		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule})
+		resetTimeRelatedRule := plan2.NewResetRealTimeFunctionRule(cwft.ses.GetTxnCompileCtx())
+		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, resetTimeRelatedRule})
 		err = vp.Visit()
 		if err != nil {
 			return nil, err
@@ -3046,6 +3047,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc.SessionInfo.UserId = rootID
 	}
 	ses.txnCompileCtx.SetProcess(proc)
+	ses.GetTxnCompileCtx().SetPrepare(false)
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,
 		ses.GetUserName(),
@@ -3181,6 +3183,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.PrepareStmt:
 			selfHandle = true
+			ses.GetTxnCompileCtx().SetPrepare(true)
 			prepareStmt, err = mce.handlePrepareStmt(requestCtx, st)
 			if err != nil {
 				goto handleFailed
@@ -3191,6 +3194,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.PrepareString:
 			selfHandle = true
+			ses.GetTxnCompileCtx().SetPrepare(true)
 			prepareStmt, err = mce.handlePrepareString(requestCtx, st)
 			if err != nil {
 				goto handleFailed

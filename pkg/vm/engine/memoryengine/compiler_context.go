@@ -54,6 +54,10 @@ func (c *CompilerContext) GetProcess() *process.Process {
 	return nil
 }
 
+func (c *CompilerContext) IsPrepare() bool {
+	return false
+}
+
 func (c *CompilerContext) DatabaseExists(name string) bool {
 	_, err := c.engine.Database(
 		c.ctx,
