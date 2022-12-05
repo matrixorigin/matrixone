@@ -577,7 +577,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		hkd := tcc.GetHideKeyDef("abc", "t1")
 		convey.So(hkd, convey.ShouldBeNil)
 
-		cost := tcc.Cost(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Expr{})
-		convey.So(cost, convey.ShouldNotBeNil)
+		stats := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Expr{})
+		convey.So(stats, convey.ShouldNotBeNil)
 	})
 }
