@@ -251,11 +251,11 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				Children: children,
 				JoinType: plan.Node_INNER,
 			}, nil)
-			newNode = builder.qry.Nodes[nodeID]
 		}
 	}
 
 	nodeID, _ = builder.pushdownFilters(nodeID, conds)
+	ReCalcNodeCost(nodeID, builder, true)
 
 	return nodeID
 }
