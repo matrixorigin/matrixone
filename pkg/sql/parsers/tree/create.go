@@ -2393,6 +2393,17 @@ const (
 	AccountStatusSuspend
 )
 
+func (aso AccountStatusOption) String() string {
+	switch aso {
+	case AccountStatusOpen:
+		return "open"
+	case AccountStatusSuspend:
+		return "suspend"
+	default:
+		return "open"
+	}
+}
+
 type AccountStatus struct {
 	Exist  bool
 	Option AccountStatusOption

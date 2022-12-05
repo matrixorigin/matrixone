@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"math/bits"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -812,9 +813,15 @@ const (
 	//privilege verification
 	checkTenantFormat = `select account_id,account_name from mo_catalog.mo_account where account_name = "%s";`
 
+	updateCommentsOfAccountFormat = `update mo_catalog.mo_account set comments = "%s" where account_name = "%s";`
+
+	updateStatusOfAccountFormat = `update mo_catalog.mo_account set status = "%s" where account_name = "%s";`
+
 	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s";`
 
 	getPasswordOfUserFormat = `select user_id,authentication_string,default_role from mo_catalog.mo_user where user_name = "%s";`
+
+	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" where user_name = "%s";`
 
 	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
@@ -1068,12 +1075,24 @@ func getSqlForCheckTenant(tenant string) string {
 	return fmt.Sprintf(checkTenantFormat, tenant)
 }
 
+func getSqlForUpdateCommentsOfAccount(comment, account string) string {
+	return fmt.Sprintf(updateCommentsOfAccountFormat, comment, account)
+}
+
+func getSqlForUpdateStatusOfAccount(status, account string) string {
+	return fmt.Sprintf(updateStatusOfAccountFormat, status, account)
+}
+
 func getSqlForDeleteAccountFromMoAccount(account string) string {
 	return fmt.Sprintf(deleteAccountFromMoAccountFormat, account)
 }
 
 func getSqlForPasswordOfUser(user string) string {
 	return fmt.Sprintf(getPasswordOfUserFormat, user)
+}
+
+func getSqlForUpdatePasswordOfUser(password, user string) string {
+	return fmt.Sprintf(updatePasswordOfUserFormat, password, user)
 }
 
 func getSqlForCheckRoleExists(roleID int, roleName string) string {
@@ -1789,6 +1808,160 @@ func normalizeNamesOfUsers(users []*tree.User) error {
 		}
 	}
 	return nil
+}
+
+func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) error {
+	var err error
+	var sql string
+	var erArray []ExecResult
+	var targetAccountId uint64
+	var accountExist bool
+	account := ses.GetTenantInfo()
+	if !(account.IsSysTenant() && account.IsMoAdminRole()) {
+		return moerr.NewInternalError(ctx, "tenant %s user %s role %s do not have the privilege to alter the account",
+			account.GetTenant(), account.GetUser(), account.GetDefaultRole())
+	}
+
+	optionBits := uint8(0)
+	if aa.AuthOption.Exist {
+		optionBits |= 1
+	}
+	if aa.StatusOption.Exist {
+		optionBits |= 1 << 1
+	}
+	if aa.Comment.Exist {
+		optionBits |= 1 << 2
+	}
+	optionCount := bits.OnesCount8(optionBits)
+	if optionCount == 0 {
+		return moerr.NewInternalError(ctx, "there is at least one option (auth_option, status_option, comment)")
+	}
+	if optionCount > 1 {
+		return moerr.NewInternalError(ctx, "there is at most one option (auth_option, status_option, comment)")
+	}
+
+	//normalize the name
+	aa.Name, err = normalizeName(aa.Name)
+	if err != nil {
+		return err
+	}
+
+	if aa.AuthOption.Exist {
+		aa.AuthOption.AdminName, err = normalizeName(aa.AuthOption.AdminName)
+		if err != nil {
+			return err
+		}
+		if aa.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
+			return moerr.NewInternalError(ctx, "only support specific password")
+		}
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//step 1: check account exists or not
+	//get accountID
+	sql = getSqlForCheckTenant(aa.Name)
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			targetAccountId, err = erArray[0].GetUint64(i, 0)
+			if err != nil {
+				goto handleFailed
+			}
+		}
+		accountExist = true
+	} else {
+		//IfExists :
+		// false : return an error
+		// true : skip and do nothing
+		if !aa.IfExists {
+			err = moerr.NewInternalError(ctx, "there is no account %s", aa.Name)
+			goto handleFailed
+		}
+	}
+
+	if accountExist {
+		//Option 1: alter the password of admin for the account
+		if aa.AuthOption.Exist {
+			//!!!NOTE!!!:switch into the target account's context, then update the table mo_user.
+			accountCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(targetAccountId))
+
+			//1, check the admin exists or not
+			sql = getSqlForPasswordOfUser(aa.AuthOption.AdminName)
+			bh.ClearExecResultSet()
+			err = bh.Exec(accountCtx, sql)
+			if err != nil {
+				goto handleFailed
+			}
+
+			erArray, err = getResultSet(accountCtx, bh)
+			if err != nil {
+				goto handleFailed
+			}
+
+			if !execResultArrayHasData(erArray) {
+				err = moerr.NewInternalError(accountCtx, "there is no user %s", aa.AuthOption.AdminName)
+				goto handleFailed
+			}
+
+			//2, update the password
+			sql = getSqlForUpdatePasswordOfUser(aa.AuthOption.IdentifiedType.Str, aa.AuthOption.AdminName)
+			bh.ClearExecResultSet()
+			err = bh.Exec(accountCtx, sql)
+			if err != nil {
+				goto handleFailed
+			}
+		}
+
+		//Option 2: alter the comment of the account
+		if aa.Comment.Exist {
+			sql = getSqlForUpdateCommentsOfAccount(aa.Comment.Comment, aa.Name)
+			bh.ClearExecResultSet()
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				goto handleFailed
+			}
+		}
+
+		//Option 3: suspend or resume the account
+		if aa.StatusOption.Exist {
+			sql = getSqlForUpdateStatusOfAccount(aa.StatusOption.Option.String(), aa.Name)
+			bh.ClearExecResultSet()
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				goto handleFailed
+			}
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return err
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
 }
 
 // doSwitchRole accomplishes the Use Role and Use Secondary Role statement
@@ -4669,7 +4842,7 @@ func createTablesInInformationSchema(ctx context.Context, bh BackgroundExec, ten
 	return err
 }
 
-func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.ParameterUnit, userName string) (bool, error) {
+func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, userName string) (bool, error) {
 	var sqlForCheckTenant string
 	var erArray []ExecResult
 	var err error
@@ -4746,7 +4919,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		goto handleFailed
 	}
 
-	exists, err = checkTenantExistsOrNot(ctx, bh, pu, ca.Name)
+	exists, err = checkTenantExistsOrNot(ctx, bh, ca.Name)
 	if err != nil {
 		goto handleFailed
 	}
