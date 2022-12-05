@@ -30,39 +30,40 @@ import (
 
 var _ engine.Relation = new(table)
 
-func (tbl *table) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error) {
+func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, int64, error) {
 	switch tbl.tableId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
-		return float64(1000000), nil
+		return 10, 100000, nil
 	}
 
 	if expr == nil {
-		r, err := tbl.Rows(ctx)
-		return float64(r), err
+		return tbl.Stats(ctx)
 	}
-	var card float64
+	var blockNum int32
+	var outcnt int64
 	for _, blockmetas := range tbl.meta.blocks {
 		for _, blk := range blockmetas {
 			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
-				card += float64(blockRows(blk))
+				outcnt += blockRows(blk)
+				blockNum++
 			}
 		}
 	}
-	return card, nil
+	return blockNum, outcnt, nil
 }
 
-func (tbl *table) Rows(ctx context.Context) (int64, error) {
+func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
 	var rows int64
 
 	if tbl.meta == nil {
-		return 0, nil
+		return 100, 1000000, nil
 	}
 	for _, blks := range tbl.meta.blocks {
 		for _, blk := range blks {
 			rows += blockRows(blk)
 		}
 	}
-	return rows, nil
+	return int32(len(tbl.meta.blocks)), rows, nil
 }
 
 func (tbl *table) Size(ctx context.Context, name string) (int64, error) {

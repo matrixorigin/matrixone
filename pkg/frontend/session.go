@@ -1860,8 +1860,8 @@ func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
 	}
 }
 
-func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (cost *plan2.Stats) {
-	cost = new(plan2.Stats)
+func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats *plan2.Stats) {
+	stats = new(plan2.Stats)
 	dbName := obj.GetSchemaName()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
@@ -1876,12 +1876,13 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (cost 
 		cols, _ := table.TableColumns(tcc.GetSession().GetRequestContext())
 		fixColumnName(cols, e)
 	}
-	rows, err := table.FilteredRows(tcc.GetSession().GetRequestContext(), e)
+	blockNum, rows, err := table.FilteredStats(tcc.GetSession().GetRequestContext(), e)
 	if err != nil {
 		return
 	}
-	cost.Cost = float64(rows)
-	cost.Outcnt = cost.Cost * plan2.DeduceSelectivity(e)
+	stats.Cost = float64(rows)
+	stats.Outcnt = stats.Cost * plan2.DeduceSelectivity(e)
+	stats.BlockNum = blockNum
 	return
 }
 
