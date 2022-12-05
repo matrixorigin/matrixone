@@ -204,14 +204,14 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 	}()
 
 	if !multiTable {
-		mustExec(SingleMetricTable.ToCreateSql(true))
+		mustExec(SingleMetricTable.ToCreateSql(ctx, true))
 		for desc := range descChan {
-			view := getView(desc)
-			sql := view.ToCreateSql(true)
+			view := getView(ctx, desc)
+			sql := view.ToCreateSql(ctx, true)
 			mustExec(sql)
 		}
 	} else {
-		optFactory := table.GetOptionFactory(table.ExternalTableEngine)
+		optFactory := table.GetOptionFactory(ctx, table.ExternalTableEngine)
 		buf := new(bytes.Buffer)
 		for desc := range descChan {
 			sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
@@ -245,13 +245,13 @@ func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer, optionsF
 	return buf.String()
 }
 
-func getView(desc *prom.Desc) *table.View {
+func getView(ctx context.Context, desc *prom.Desc) *table.View {
 	extra := newDescExtra(desc)
 	var labelNames = make([]string, 0, len(extra.labels))
 	for _, lbl := range extra.labels {
 		labelNames = append(labelNames, lbl.GetName())
 	}
-	return GetMetricViewWithLabels(extra.fqName, labelNames)
+	return GetMetricViewWithLabels(ctx, extra.fqName, labelNames)
 }
 
 type descExtra struct {
@@ -381,7 +381,7 @@ func NewMetricView(tbl string, opts ...table.ViewOption) *table.View {
 	return view
 }
 
-func NewMetricViewWithLabels(tbl string, lbls []string) *table.View {
+func NewMetricViewWithLabels(ctx context.Context, tbl string, lbls []string) *table.View {
 	var options []table.ViewOption
 	// check SubSystem
 	var subSystem *SubSystem = nil
@@ -392,7 +392,7 @@ func NewMetricViewWithLabels(tbl string, lbls []string) *table.View {
 		}
 	}
 	if subSystem == nil {
-		panic(moerr.NewNotSupported("metric unknown SubSystem: %s", tbl))
+		panic(moerr.NewNotSupported(ctx, "metric unknown SubSystem: %s", tbl))
 	}
 	options = append(options, table.SupportUserAccess(subSystem.SupportUserAccess))
 	// construct columns
@@ -411,7 +411,7 @@ var gView struct {
 	mu      sync.Mutex
 }
 
-func GetMetricViewWithLabels(tbl string, lbls []string) *table.View {
+func GetMetricViewWithLabels(ctx context.Context, tbl string, lbls []string) *table.View {
 	gView.mu.Lock()
 	defer gView.mu.Unlock()
 	if len(gView.content) == 0 {
@@ -419,18 +419,18 @@ func GetMetricViewWithLabels(tbl string, lbls []string) *table.View {
 	}
 	view, exist := gView.content[tbl]
 	if !exist {
-		view = NewMetricViewWithLabels(tbl, lbls)
+		view = NewMetricViewWithLabels(ctx, tbl, lbls)
 		gView.content[tbl] = view
 	}
 	return view
 }
 
 // GetSchemaForAccount return account's table, and view's schema
-func GetSchemaForAccount(account string) []string {
+func GetSchemaForAccount(ctx context.Context, account string) []string {
 	var sqls = make([]string, 0, 1)
 	tbl := SingleMetricTable.Clone()
 	tbl.Account = account
-	sqls = append(sqls, tbl.ToCreateSql(true))
+	sqls = append(sqls, tbl.ToCreateSql(ctx, true))
 
 	descChan := make(chan *prom.Desc, 10)
 	go func() {
@@ -441,10 +441,10 @@ func GetSchemaForAccount(account string) []string {
 	}()
 
 	for desc := range descChan {
-		view := getView(desc)
+		view := getView(ctx, desc)
 
 		if view.SupportUserAccess && view.OriginTable.SupportUserAccess {
-			sqls = append(sqls, view.ToCreateSql(true))
+			sqls = append(sqls, view.ToCreateSql(ctx, true))
 		}
 	}
 	return sqls
@@ -452,6 +452,6 @@ func GetSchemaForAccount(account string) []string {
 
 func init() {
 	if table.RegisterTableDefine(SingleMetricTable) != nil {
-		panic(moerr.NewInternalError("metric table already registered"))
+		panic(moerr.NewInternalError(context.Background(), "metric table already registered"))
 	}
 }

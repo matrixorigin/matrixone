@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"bytes"
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -125,7 +126,7 @@ func TestDoGenerateInt32(t *testing.T) {
 		},
 	}
 	for _, kase := range kases {
-		res, err := generateInt32(kase.start, kase.end, kase.step)
+		res, err := generateInt32(context.TODO(), kase.start, kase.end, kase.step)
 		if kase.err {
 			require.NotNil(t, err)
 			continue
@@ -284,7 +285,7 @@ func TestDoGenerateInt64(t *testing.T) {
 		},
 	}
 	for _, kase := range kases {
-		res, err := generateInt64(kase.start, kase.end, kase.step)
+		res, err := generateInt64(context.TODO(), kase.start, kase.end, kase.step)
 		if kase.err {
 			require.NotNil(t, err)
 			continue
@@ -390,7 +391,7 @@ func TestGenerateTimestamp(t *testing.T) {
 		require.Nil(t, err)
 		end, err := types.ParseDatetime(kase.end, precision)
 		require.Nil(t, err)
-		res, err := generateDatetime(start, end, kase.step, precision)
+		res, err := generateDatetime(context.TODO(), start, end, kase.step, precision)
 		if kase.err {
 			require.NotNil(t, err)
 			continue
@@ -427,19 +428,20 @@ func TestGenerateSeriesPrepare(t *testing.T) {
 	require.Nil(t, err)
 }
 func TestGenStep(t *testing.T) {
+	ctx := context.TODO()
 	kase := "10 hour"
-	num, tp, err := genStep(kase)
+	num, tp, err := genStep(ctx, kase)
 	require.Nil(t, err)
 	require.Equal(t, int64(10), num)
 	require.Equal(t, types.Hour, tp)
 	kase = "10 houx"
-	_, _, err = genStep(kase)
+	_, _, err = genStep(ctx, kase)
 	require.NotNil(t, err)
 	kase = "hour"
-	_, _, err = genStep(kase)
+	_, _, err = genStep(ctx, kase)
 	require.NotNil(t, err)
 	kase = "989829829129131939147193 hour"
-	_, _, err = genStep(kase)
+	_, _, err = genStep(ctx, kase)
 	require.NotNil(t, err)
 }
 

@@ -107,10 +107,10 @@ func (ie *ImportExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 func (ie *ImportExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
 	var err error
 	result := ie.result
-	info := moerr.NewLoadInfo(result.Records, result.Deleted, result.Skipped, result.Warnings, result.WriteTimeout).Error()
+	info := moerr.NewLoadInfo(ctx, result.Records, result.Deleted, result.Skipped, result.Warnings, result.WriteTimeout).Error()
 	resp := NewOkResponse(result.Records, 0, uint16(result.Warnings), 0, int(COM_QUERY), info)
-	if err = ses.GetMysqlProtocol().SendResponse(resp); err != nil {
-		return moerr.NewInternalError("routine send response failed. error:%v ", err)
+	if err = ses.GetMysqlProtocol().SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
 	}
 	return nil
 }
@@ -151,15 +151,15 @@ type PrepareStmtExecutor struct {
 func (pse *PrepareStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
 	var err2, retErr error
 	if ses.GetCmd() == COM_STMT_PREPARE {
-		if err2 = ses.GetMysqlProtocol().SendPrepareResponse(pse.prepareStmt); err2 != nil {
-			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
+		if err2 = ses.GetMysqlProtocol().SendPrepareResponse(ctx, pse.prepareStmt); err2 != nil {
+			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(ctx, ses, pse.GetAst(), fail, retErr)
 			return retErr
 		}
 	} else {
 		resp := NewOkResponse(pse.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
-		if err2 = ses.GetMysqlProtocol().SendResponse(resp); err2 != nil {
-			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
+		if err2 = ses.GetMysqlProtocol().SendResponse(ctx, resp); err2 != nil {
+			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(ctx, ses, pse.GetAst(), fail, retErr)
 			return retErr
 		}
@@ -185,15 +185,15 @@ type PrepareStringExecutor struct {
 func (pse *PrepareStringExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
 	var err2, retErr error
 	if ses.GetCmd() == COM_STMT_PREPARE {
-		if err2 = ses.GetMysqlProtocol().SendPrepareResponse(pse.prepareStmt); err2 != nil {
-			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
+		if err2 = ses.GetMysqlProtocol().SendPrepareResponse(ctx, pse.prepareStmt); err2 != nil {
+			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(ctx, ses, pse.GetAst(), fail, retErr)
 			return retErr
 		}
 	} else {
 		resp := NewOkResponse(pse.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
-		if err2 = ses.GetMysqlProtocol().SendResponse(resp); err2 != nil {
-			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
+		if err2 = ses.GetMysqlProtocol().SendResponse(ctx, resp); err2 != nil {
+			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(ctx, ses, pse.GetAst(), fail, retErr)
 			return retErr
 		}
@@ -221,8 +221,8 @@ func (de *DeallocateExecutor) ResponseAfterExec(ctx context.Context, ses *Sessio
 	//we will not send response in COM_STMT_CLOSE command
 	if ses.GetCmd() != COM_STMT_CLOSE {
 		resp := NewOkResponse(de.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
-		if err2 = ses.GetMysqlProtocol().SendResponse(resp); err2 != nil {
-			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
+		if err2 = ses.GetMysqlProtocol().SendResponse(ctx, resp); err2 != nil {
+			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(ctx, ses, de.GetAst(), fail, retErr)
 			return retErr
 		}
@@ -394,7 +394,7 @@ func (ge *GrantExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	case tree.GrantTypePrivilege:
 		return doGrantPrivilege(ctx, ses, &ge.g.GrantPrivilege)
 	}
-	return moerr.NewInternalError("no such grant type %v", ge.g.Typ)
+	return moerr.NewInternalError(ctx, "no such grant type %v", ge.g.Typ)
 }
 
 type RevokeExecutor struct {
@@ -409,7 +409,7 @@ func (re *RevokeExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	case tree.RevokeTypePrivilege:
 		return doRevokePrivilege(ctx, ses, &re.r.RevokePrivilege)
 	}
-	return moerr.NewInternalError("no such revoke type %v", re.r.Typ)
+	return moerr.NewInternalError(ctx, "no such revoke type %v", re.r.Typ)
 }
 
 type CreateTableExecutor struct {
@@ -457,8 +457,8 @@ func (ie *InsertExecutor) ResponseAfterExec(ctx context.Context, ses *Session) e
 	if ie.GetStatus() == stmtExecSuccess {
 		resp := NewOkResponse(ie.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
 		resp.lastInsertId = 1
-		if err = ses.GetMysqlProtocol().SendResponse(resp); err != nil {
-			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err)
+		if err = ses.GetMysqlProtocol().SendResponse(ctx, resp); err != nil {
+			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
 			logStatementStatus(ctx, ses, ie.GetAst(), fail, retErr)
 			return retErr
 		}

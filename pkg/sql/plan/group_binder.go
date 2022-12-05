@@ -56,20 +56,20 @@ func (b *GroupBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRo
 	}
 
 	if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
-		return nil, moerr.NewNYI("correlated columns in GROUP BY clause")
+		return nil, moerr.NewNYINoCtx("correlated columns in GROUP BY clause")
 	}
 
 	return expr, nil
 }
 
 func (b *GroupBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewInvalidInput("GROUP BY clause cannot contain aggregate functions")
+	return nil, moerr.NewInvalidInputNoCtx("GROUP BY clause cannot contain aggregate functions")
 }
 
 func (b *GroupBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewInvalidInput("GROUP BY clause cannot contain window functions")
+	return nil, moerr.NewInvalidInputNoCtx("GROUP BY clause cannot contain window functions")
 }
 
 func (b *GroupBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewNYI("subquery in GROUP BY clause")
+	return nil, moerr.NewNYINoCtx("subquery in GROUP BY clause")
 }

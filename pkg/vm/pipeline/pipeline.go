@@ -61,7 +61,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 
 	for {
 		// read data from storage engine
-		if bat, err = r.Read(p.attrs, nil, proc.Mp()); err != nil {
+		if bat, err = r.Read(proc.Ctx, p.attrs, nil, proc.Mp()); err != nil {
 			p.cleanup(proc, true)
 			return false, err
 		}

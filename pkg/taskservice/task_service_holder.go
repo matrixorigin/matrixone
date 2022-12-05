@@ -29,12 +29,12 @@ import (
 )
 
 var (
-	errNotReady = moerr.NewInvalidState("task store not ready")
+	errNotReady = moerr.NewInvalidStateNoCtx("task store not ready")
 )
 
 type taskServiceHolder struct {
 	rt                         runtime.Runtime
-	addressFactory             func() (string, error)
+	addressFactory             func(context.Context) (string, error)
 	taskStorageFactorySelector func(string, string, string) TaskStorageFactory
 	mu                         struct {
 		sync.RWMutex
@@ -47,7 +47,7 @@ type taskServiceHolder struct {
 // NewTaskServiceHolder create a task service hold, it will create task storage and task service from the hakeeper's schedule command.
 func NewTaskServiceHolder(
 	rt runtime.Runtime,
-	addressFactory func() (string, error)) TaskServiceHolder {
+	addressFactory func(context.Context) (string, error)) TaskServiceHolder {
 	return NewTaskServiceHolderWithTaskStorageFactorySelector(rt, addressFactory, func(username, password, database string) TaskStorageFactory {
 		return NewMySQLBasedTaskStorageFactory(username, password, database)
 	})
@@ -57,7 +57,7 @@ func NewTaskServiceHolder(
 // task storage facroty selector
 func NewTaskServiceHolderWithTaskStorageFactorySelector(
 	rt runtime.Runtime,
-	addressFactory func() (string, error),
+	addressFactory func(context.Context) (string, error),
 	selector func(string, string, string) TaskStorageFactory) TaskServiceHolder {
 	return &taskServiceHolder{
 		rt:                         rt,
@@ -88,7 +88,7 @@ func (h *taskServiceHolder) Create(command logservicepb.CreateTaskService) error
 	if command.User.Username == "" || command.User.Password == "" {
 		h.rt.Logger().Debug("start task runner skipped",
 			zap.String("reason", "empty task user and passwd"))
-		return moerr.NewInvalidState("empty task user and passwd")
+		return moerr.NewInvalidStateNoCtx("empty task user and passwd")
 	}
 
 	h.mu.Lock()
@@ -121,7 +121,7 @@ type refreshableTaskStorage struct {
 	rt             runtime.Runtime
 	refreshC       chan string
 	stopper        *stopper.Stopper
-	addressFactory func() (string, error)
+	addressFactory func(context.Context) (string, error)
 	storeFactory   TaskStorageFactory
 	mu             struct {
 		sync.RWMutex
@@ -133,7 +133,7 @@ type refreshableTaskStorage struct {
 
 func newRefreshableTaskStorage(
 	rt runtime.Runtime,
-	addressFactory func() (string, error),
+	addressFactory func(context.Context) (string, error),
 	storeFactory TaskStorageFactory) TaskStorage {
 	s := &refreshableTaskStorage{
 		rt:             rt,
@@ -143,7 +143,7 @@ func newRefreshableTaskStorage(
 		stopper: stopper.NewStopper("refresh-taskstorage",
 			stopper.WithLogger(rt.Logger().RawLogger())),
 	}
-	s.refresh("")
+	s.refresh(context.Background(), "")
 	if err := s.stopper.RunTask(s.refreshTask); err != nil {
 		panic(err)
 	}
@@ -313,7 +313,7 @@ func (s *refreshableTaskStorage) refreshTask(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case lastAddress := <-s.refreshC:
-			s.refresh(lastAddress)
+			s.refresh(ctx, lastAddress)
 			// see pkg/logservice/service_commands.go#132
 			select {
 			case <-ctx.Done():
@@ -324,7 +324,7 @@ func (s *refreshableTaskStorage) refreshTask(ctx context.Context) {
 	}
 }
 
-func (s *refreshableTaskStorage) refresh(lastAddress string) {
+func (s *refreshableTaskStorage) refresh(ctx context.Context, lastAddress string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -338,7 +338,7 @@ func (s *refreshableTaskStorage) refresh(lastAddress string) {
 	if lastAddress != "" && lastAddress != s.mu.lastAddress {
 		return
 	}
-	connectAddress, err := s.addressFactory()
+	connectAddress, err := s.addressFactory(ctx)
 	if err != nil {
 		s.rt.Logger().Error("failed to refresh task storage",
 			zap.Error(err))

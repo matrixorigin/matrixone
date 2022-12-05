@@ -53,7 +53,7 @@ func appendFunction(fid int, newFunctions Functions) error {
 
 		requiredIndex := len(functionRegister[fid].Overloads)
 		if int(newFunction.Index) != requiredIndex {
-			return moerr.NewInternalError("function (fid = %d, index = %d)'s index should be %d", fid, newFunction.Index, requiredIndex)
+			return moerr.NewInternalErrorNoCtx("function (fid = %d, index = %d)'s index should be %d", fid, newFunction.Index, requiredIndex)
 		}
 		functionRegister[fid].Overloads = append(functionRegister[fid].Overloads, newFunction)
 	}

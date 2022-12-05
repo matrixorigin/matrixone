@@ -38,11 +38,11 @@ func (b *WhereBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRo
 }
 
 func (b *WhereBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewSyntaxError("aggregate function %s not allowed in WHERE clause", funcName)
+	return nil, moerr.NewSyntaxErrorNoCtx("aggregate function %s not allowed in WHERE clause", funcName)
 }
 
 func (b *WhereBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewSyntaxError("window function %s not allowed in WHERE clause", funcName)
+	return nil, moerr.NewSyntaxErrorNoCtx("window function %s not allowed in WHERE clause", funcName)
 }
 
 func (b *WhereBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {

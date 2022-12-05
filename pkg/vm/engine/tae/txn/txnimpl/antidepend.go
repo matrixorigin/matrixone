@@ -38,7 +38,7 @@ func readWriteConfilictCheck(entry catalog.BaseEntry, ts types.TS) (err error) {
 		entry.RLock()
 	}
 	if entry.DeleteBefore(ts) {
-		err = moerr.NewTxnRWConflict()
+		err = moerr.NewTxnRWConflictNoCtx()
 	}
 	return
 }
@@ -123,7 +123,7 @@ func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
 	// 	logutil.Infof("checkOne blk=%s ts=%s err=%v", id.BlockString(), ts.ToString(), err)
 	// }()
 	if checker.HasConflict(id.BlockID) {
-		err = moerr.NewTxnRWConflict()
+		err = moerr.NewTxnRWConflictNoCtx()
 		return
 	}
 	entry := checker.readSet[id.BlockID]

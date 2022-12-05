@@ -40,7 +40,7 @@ var (
 	}
 )
 
-func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, error) {
+func (s *store) createTxnStorage(ctx context.Context, shard metadata.DNShard) (storage.TxnStorage, error) {
 	factory := s.createLogServiceClientFactroy(shard)
 	closeLogClientFn := func(logClient logservice.Client) {
 		if err := logClient.Close(); err != nil {
@@ -76,7 +76,7 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 		}
 		return ts, nil
 	default:
-		return nil, moerr.NewInternalError("not implment for %s", s.cfg.Txn.Storage.Backend)
+		return nil, moerr.NewInternalError(ctx, "not implment for %s", s.cfg.Txn.Storage.Backend)
 	}
 }
 

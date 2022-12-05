@@ -263,8 +263,8 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 		if nodeUUID, uuidErr = uuid.Parse(cfg.CN.UUID); uuidErr != nil {
 			nodeUUID = uuid.New()
 		}
-		if err := util.SetUUIDNodeID(nodeUUID[:]); err != nil {
-			return moerr.ConvertPanicError(err)
+		if err := util.SetUUIDNodeID(ctx, nodeUUID[:]); err != nil {
+			return moerr.ConvertPanicError(ctx, err)
 		}
 		UUID = nodeUUID.String()
 	case metadata.ServiceType_DN:
@@ -276,7 +276,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 
 	if !SV.DisableTrace || !SV.DisableMetric {
 		writerFactory = export.GetFSWriterFactory(fs, UUID, nodeRole)
-		_ = table.SetPathBuilder(SV.PathBuilder)
+		_ = table.SetPathBuilder(ctx, SV.PathBuilder)
 	}
 	if !SV.DisableTrace {
 		initWG.Add(1)
@@ -286,7 +286,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 				trace.WithNode(UUID, nodeRole),
 				trace.EnableTracer(!SV.DisableTrace),
 				trace.WithBatchProcessMode(SV.BatchProcessor),
-				trace.WithBatchProcessor(export.NewMOCollector()),
+				trace.WithBatchProcessor(export.NewMOCollector(ctx)),
 				trace.WithFSWriterFactory(export.GetFSWriterFactory4Trace(fs, UUID, nodeRole)),
 				trace.WithExportInterval(SV.TraceExportInterval),
 				trace.WithLongQueryTime(SV.LongQueryTime),
@@ -309,7 +309,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 			metric.WithExportInterval(SV.MetricExportInterval),
 			metric.WithMultiTable(SV.MetricMultiTable))
 	}
-	if err = export.InitMerge(SV.MergeCycle.Duration, SV.MergeMaxFileSize); err != nil {
+	if err = export.InitMerge(ctx, SV.MergeCycle.Duration, SV.MergeMaxFileSize); err != nil {
 		return err
 	}
 	return nil

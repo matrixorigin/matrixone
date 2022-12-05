@@ -396,7 +396,7 @@ func (tc *txnOperator) checkStatus(locked bool) error {
 	}
 
 	if tc.mu.closed {
-		return moerr.NewTxnClosed(tc.txnID)
+		return moerr.NewTxnClosedNoCtx(tc.txnID)
 	}
 	return nil
 }
@@ -542,7 +542,7 @@ func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) 
 
 	txnMeta := resp.Txn
 	if txnMeta == nil {
-		return moerr.NewTxnClosed(tc.txnID)
+		return moerr.NewTxnClosedNoCtx(tc.txnID)
 	}
 
 	switch txnMeta.Status {
@@ -550,7 +550,7 @@ func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) 
 		return nil
 	case txn.TxnStatus_Aborted, txn.TxnStatus_Aborting,
 		txn.TxnStatus_Committed, txn.TxnStatus_Committing:
-		return moerr.NewTxnClosed(tc.txnID)
+		return moerr.NewTxnClosedNoCtx(tc.txnID)
 	default:
 		tc.rt.Logger().Fatal("invalid response status for read or write",
 			util.TxnField(*txnMeta))
@@ -567,14 +567,14 @@ func (tc *txnOperator) checkTxnError(txnError *txn.TxnError, possibleErrorMap ma
 	txnCode := uint16(txnError.TxnErrCode)
 	if txnCode == moerr.ErrDNShardNotFound {
 		// do we still have the uuid and shard id?
-		return moerr.NewDNShardNotFound("", 0xDEADBEAF)
+		return moerr.NewDNShardNotFoundNoCtx("", 0xDEADBEAF)
 	}
 
 	if _, ok := possibleErrorMap[txnCode]; ok {
 		return txnError.UnwrapError()
 	}
 
-	panic(moerr.NewInternalError("invalid txn error, code %d, msg %s", txnCode, txnError.DebugString()))
+	panic(moerr.NewInternalErrorNoCtx("invalid txn error, code %d, msg %s", txnCode, txnError.DebugString()))
 }
 
 func (tc *txnOperator) checkResponseTxnStatusForCommit(resp txn.TxnResponse) error {
@@ -584,14 +584,14 @@ func (tc *txnOperator) checkResponseTxnStatusForCommit(resp txn.TxnResponse) err
 
 	txnMeta := resp.Txn
 	if txnMeta == nil {
-		return moerr.NewTxnClosed(tc.txnID)
+		return moerr.NewTxnClosedNoCtx(tc.txnID)
 	}
 
 	switch txnMeta.Status {
 	case txn.TxnStatus_Committed, txn.TxnStatus_Aborted:
 		return nil
 	default:
-		panic(moerr.NewInternalError("invalid respose status for commit, %v", txnMeta.Status))
+		panic(moerr.NewInternalErrorNoCtx("invalid respose status for commit, %v", txnMeta.Status))
 	}
 }
 
@@ -602,14 +602,14 @@ func (tc *txnOperator) checkResponseTxnStatusForRollback(resp txn.TxnResponse) e
 
 	txnMeta := resp.Txn
 	if txnMeta == nil {
-		return moerr.NewTxnClosed(tc.txnID)
+		return moerr.NewTxnClosedNoCtx(tc.txnID)
 	}
 
 	switch txnMeta.Status {
 	case txn.TxnStatus_Aborted:
 		return nil
 	default:
-		panic(moerr.NewInternalError("invalud response status for rollback %v", txnMeta.Status))
+		panic(moerr.NewInternalErrorNoCtx("invalud response status for rollback %v", txnMeta.Status))
 	}
 }
 

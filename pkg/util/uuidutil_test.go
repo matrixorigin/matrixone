@@ -16,6 +16,7 @@ package util
 
 import (
 	"bytes"
+	"context"
 	"net"
 	"testing"
 
@@ -24,10 +25,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var dummyRealHardwareAddr = func() (net.HardwareAddr, error) {
+var dummyRealHardwareAddr = func(ctx context.Context) (net.HardwareAddr, error) {
 	return net.ParseMAC("3e:bf:9f:39:60:c8")
 }
-var dummyDockerHardwareAdder = func() (net.HardwareAddr, error) {
+var dummyDockerHardwareAdder = func(ctx context.Context) (net.HardwareAddr, error) {
 	return net.ParseMAC("02:42:ac:11:00:02")
 }
 
@@ -102,17 +103,18 @@ func TestSetUUIDNodeID(t *testing.T) {
 			wantErr: false,
 		},
 	}
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var stubs *gostub.Stubs
 			if tt.fields.prepare != nil {
 				stubs = tt.fields.prepare()
 			}
-			if err := SetUUIDNodeID(tt.args.nodeUuid); (err != nil) != tt.wantErr {
+			if err := SetUUIDNodeID(ctx, tt.args.nodeUuid); (err != nil) != tt.wantErr {
 				t.Errorf("SetUUIDNodeID() error = %v, wantErr %v", err, tt.wantErr)
 			}
-			localMac, _ := getDefaultHardwareAddr()
-			mockMac, _ := dummyDockerHardwareAdder()
+			localMac, _ := getDefaultHardwareAddr(ctx)
+			mockMac, _ := dummyDockerHardwareAdder(ctx)
 			t.Logf("local mac: %s", localMac)
 			t.Logf("mock  mac: %s", mockMac)
 			t.Logf("nodeUUID : %x", tt.args.nodeUuid)

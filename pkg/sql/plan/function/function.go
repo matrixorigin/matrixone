@@ -155,7 +155,7 @@ func (f Function) ReturnType() (typ types.T, nullable bool) {
 
 func (f Function) VecFn(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if f.Fn == nil {
-		return nil, moerr.NewInternalError("no function")
+		return nil, moerr.NewInternalErrorNoCtx("no function")
 	}
 	return f.Fn(vs, proc)
 }
@@ -179,7 +179,7 @@ func fromNameToFunctionId(name string) (int32, error) {
 	if fid, ok := functionIdRegister[name]; ok {
 		return fid, nil
 	}
-	return -1, moerr.NewNotSupported("function or operator '%s'", name)
+	return -1, moerr.NewNotSupportedNoCtx("function or operator '%s'", name)
 }
 
 // EncodeOverloadID convert function-id and overload-index to be an overloadID
@@ -289,14 +289,14 @@ func GetFunctionByName(name string, args []types.Type) (int64, types.Type, []typ
 	case wrongFunctionParameters:
 		ArgsToPrint := getOidSlice(finalTypes) // arg information to print for error message
 		if len(fs.Overloads) > 0 && fs.Overloads[0].isFunction() {
-			return -1, emptyType, nil, moerr.NewInvalidArg("function "+name, ArgsToPrint)
+			return -1, emptyType, nil, moerr.NewInvalidArgNoCtx("function "+name, ArgsToPrint)
 		}
-		return -1, emptyType, nil, moerr.NewInvalidArg("operator "+name, ArgsToPrint)
+		return -1, emptyType, nil, moerr.NewInvalidArgNoCtx("operator "+name, ArgsToPrint)
 	case tooManyFunctionsMatched:
-		return -1, emptyType, nil, moerr.NewInvalidArg("too many overloads matched "+name, args)
+		return -1, emptyType, nil, moerr.NewInvalidArgNoCtx("too many overloads matched "+name, args)
 	case wrongFuncParamForAgg:
 		ArgsToPrint := getOidSlice(finalTypes)
-		return -1, emptyType, nil, moerr.NewInvalidArg("aggregate function "+name, ArgsToPrint)
+		return -1, emptyType, nil, moerr.NewInvalidArgNoCtx("aggregate function "+name, ArgsToPrint)
 	}
 
 	// make the real return type of function overload.

@@ -71,7 +71,7 @@ func (b *ProjectionBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, 
 }
 
 func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewNYI("window functions")
+	return nil, moerr.NewNYINoCtx("window functions")
 }
 
 func (b *ProjectionBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {

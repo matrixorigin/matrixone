@@ -1,11 +1,9 @@
 # default owner for stuff that is not explicitly set for ownership
 # for triage only
-* @yingfeng
 
 # github and CI related stuff
 .github @sukki37
 .github/actions @sukki37
-.github/ISSUE_TEMPLATE @JinHai-CN
 .github/workflow @sukki37
 
 # files under the top level directory
@@ -16,15 +14,11 @@
 /README_CN.md @dengn
 /LICENSE @fengttt
 /CODEOWNERS @fengttt
-/CODE_OF_CONDUCT.md @JinHai-CN
-/CONTRIBUTING.md @yingfeng
-/system_vars_config.toml @daviszhen
 
 # top level folders
 /cgo @fengttt
 /docs @dengn
 /etc @zhangxu19830126
-/LICENSES @JinHai-CN
 /optools @sukki37
 
 # cmd

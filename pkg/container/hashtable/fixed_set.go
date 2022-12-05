@@ -77,7 +77,7 @@ func (it *FixedSetIterator) Next() (key uint32, err error) {
 	}
 
 	if it.bitmapIdx == it.bitmapSize {
-		err = moerr.NewInternalError("out of range")
+		err = moerr.NewInternalErrorNoCtx("out of range")
 		return
 	}
 

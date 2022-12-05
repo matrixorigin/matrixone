@@ -44,7 +44,7 @@ func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req
 	tableRow, err := m.relations.Get(tx, tableID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return moerr.NewInternalError("invalid relation id %v", tableID)
+			return moerr.NewInternalError(ctx, "invalid relation id %v", tableID)
 		}
 		return err
 	}

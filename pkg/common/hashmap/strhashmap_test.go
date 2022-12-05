@@ -251,7 +251,7 @@ func newVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 		}
 		return newStringVector(n, typ, m, random, nil)
 	default:
-		panic(moerr.NewInternalError("unsupport vector's type '%v", typ))
+		panic(moerr.NewInternalErrorNoCtx("unsupport vector's type '%v", typ))
 	}
 }
 
