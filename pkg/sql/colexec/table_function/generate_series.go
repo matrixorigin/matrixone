@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package generate_series
+package table_function
 
 import (
 	"bytes"
@@ -29,15 +29,15 @@ import (
 	"strings"
 )
 
-func String(arg any, buf *bytes.Buffer) {
+func generateSeriesString(arg any, buf *bytes.Buffer) {
 	buf.WriteString("generate_series")
 }
 
-func Prepare(_ *process.Process, arg any) error {
+func generateSeriesPrepare(_ *process.Process, arg *Argument) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg any) (bool, error) {
+func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	var (
 		err                                               error
 		startVec, endVec, stepVec, startVecTmp, endVecTmp *vector.Vector
@@ -63,26 +63,25 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			endVecTmp.Free(proc.Mp())
 		}
 	}()
-	param := arg.(*Argument).Es
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
-	startVec, err = colexec.EvalExpr(bat, proc, param.ExprList[0])
+	startVec, err = colexec.EvalExpr(bat, proc, arg.Args[0])
 	if err != nil {
 		return false, err
 	}
-	endVec, err = colexec.EvalExpr(bat, proc, param.ExprList[1])
+	endVec, err = colexec.EvalExpr(bat, proc, arg.Args[1])
 	if err != nil {
 		return false, err
 	}
-	rbat = batch.New(false, param.Attrs)
+	rbat = batch.New(false, arg.Attrs)
 	rbat.Cnt = 1
-	for i := range param.Attrs {
+	for i := range arg.Attrs {
 		rbat.Vecs[i] = vector.New(dupType(plan.MakePlan2Type(&startVec.Typ)))
 	}
-	if len(param.ExprList) == 3 {
-		stepVec, err = colexec.EvalExpr(bat, proc, param.ExprList[2])
+	if len(arg.Args) == 3 {
+		stepVec, err = colexec.EvalExpr(bat, proc, arg.Args[2])
 		if err != nil {
 			return false, err
 		}
@@ -158,11 +157,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	return false, nil
 }
 
-func dupType(typ *plan.Type) types.Type {
-	return types.New(types.T(typ.Id), typ.Width, typ.Scale, typ.Precision)
-}
-
-func judgeArgs[T Number](start, end, step T) ([]T, error) {
+func judgeArgs[T generateSeriesNumber](start, end, step T) ([]T, error) {
 	if step == 0 {
 		return nil, moerr.NewInvalidInput("step size cannot equal zero")
 	}

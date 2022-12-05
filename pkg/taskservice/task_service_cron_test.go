@@ -20,11 +20,10 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 func TestScheduleCronTask(t *testing.T) {
@@ -102,7 +101,7 @@ func runScheduleCronTaskTest(t *testing.T,
 	fetchInterval = fetch
 
 	store := NewMemTaskStorage().(*memTaskStorage)
-	s := NewTaskService(store, logutil.GetPanicLoggerWithLevel(zap.DebugLevel)).(*taskService)
+	s := NewTaskService(runtime.DefaultRuntime(), store).(*taskService)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()

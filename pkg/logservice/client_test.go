@@ -28,6 +28,7 @@ import (
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -52,6 +53,8 @@ func runClientTest(
 	readOnly bool,
 	cCfgFn func(bool) ClientConfig,
 	fn func(*testing.T, *Service, ClientConfig, Client)) {
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+
 	defer leaktest.AfterTest(t)()
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
@@ -165,7 +168,7 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 	done := false
 	for i := 0; i < 1000; i++ {
 		si, ok, err := GetShardInfo(testServiceAddress, 1)
-		if err != nil {
+		if err != nil || !ok {
 			time.Sleep(10 * time.Millisecond)
 			continue
 		}
@@ -329,11 +332,8 @@ func TestClientSendWithMsgSize(t *testing.T) {
 		rand.Read(rec.Payload())
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
+		// client only writes message whose size less than 190
 		_, err := c.Append(ctx, rec)
-		require.NoError(t, err)
-
-		// client only accepts message whose size less than 190
-		_, _, err = c.Read(ctx, 4, math.MaxUint64)
 		require.Error(t, err)
 	}
 	runClientTest(t, false, cFn, fn)

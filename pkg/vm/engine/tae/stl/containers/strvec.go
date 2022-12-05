@@ -17,6 +17,7 @@ package containers
 import (
 	"fmt"
 	"io"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,11 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
-func NewStrVector[T any](opts ...*Options) *StrVector[T] {
+func NewStrVector[T any](opts ...Options) *StrVector[T] {
 	var capacity int
 	var alloc *mpool.MPool
-	vdataOpt := new(Options)
-	areaOpt := new(Options)
+	vdataOpt := Options{}
+	areaOpt := Options{}
 	if len(opts) > 0 {
 		opt := opts[0]
 		capacity = opt.Capacity
@@ -93,6 +94,7 @@ func (vec *StrVector[T]) Bytes() *stl.Bytes {
 
 	return bs
 }
+func (vec *StrVector[T]) SlicePtr() unsafe.Pointer { panic("not support") }
 func (vec *StrVector[T]) Slice() []T               { panic("not support") }
 func (vec *StrVector[T]) SliceWindow(_, _ int) []T { panic("not support") }
 func (vec *StrVector[T]) WindowAsBytes(offset, length int) *stl.Bytes {
@@ -195,7 +197,7 @@ func (vec *StrVector[T]) AppendMany(vals ...T) {
 }
 
 func (vec *StrVector[T]) Clone(offset, length int, allocator ...*mpool.MPool) stl.Vector[T] {
-	opts := &Options{
+	opts := Options{
 		Capacity: length,
 	}
 	if len(allocator) == 0 {

@@ -16,20 +16,26 @@ package memorytable
 
 import "sync/atomic"
 
+//TODO move to common?
+
+// Atomic is type-safe wrapper of atomic.Value
 type Atomic[T any] struct {
 	value atomic.Value
 }
 
+// NewAtomic creates a new atomic variable with passed value
 func NewAtomic[T any](value T) *Atomic[T] {
 	t := new(Atomic[T])
 	t.value.Store(value)
 	return t
 }
 
+// Load loads the value
 func (a *Atomic[T]) Load() T {
 	return a.value.Load().(T)
 }
 
+// Store stores a new value
 func (a *Atomic[T]) Store(value T) {
 	a.value.Store(value)
 }

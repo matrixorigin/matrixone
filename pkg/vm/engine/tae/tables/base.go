@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -54,13 +55,10 @@ type baseBlock struct {
 	scheduler tasks.TaskScheduler
 	meta      *catalog.BlockEntry
 	mvcc      *updates.MVCCHandle
-	storage   struct {
-		mu    sync.RWMutex
-		mnode *common.PinnedItem[*memoryNode]
-		pnode *common.PinnedItem[*persistedNode]
-	}
-	ttl  time.Time
-	impl data.Block
+	ttl       time.Time
+	impl      data.Block
+
+	node atomic.Pointer[Node]
 }
 
 func newBaseBlock(
@@ -86,26 +84,10 @@ func (blk *baseBlock) Close() {
 	// TODO
 }
 
-func (blk *baseBlock) PinMemoryNode() *common.PinnedItem[*memoryNode] {
-	blk.storage.mu.RLock()
-	defer blk.storage.mu.RUnlock()
-	if blk.storage.mnode != nil {
-		return blk.storage.mnode.Item().Pin()
-	}
-	return nil
-}
-
-func (blk *baseBlock) PinNode() (
-	mnode *common.PinnedItem[*memoryNode],
-	pnode *common.PinnedItem[*persistedNode]) {
-	blk.storage.mu.RLock()
-	defer blk.storage.mu.RUnlock()
-	if blk.storage.mnode != nil {
-		mnode = blk.storage.mnode.Item().Pin()
-	} else if blk.storage.pnode != nil {
-		pnode = blk.storage.pnode.Item().Pin()
-	}
-	return
+func (blk *baseBlock) PinNode() *Node {
+	n := blk.node.Load()
+	n.Ref()
+	return n
 }
 
 func (blk *baseBlock) GetColumnData(
@@ -113,42 +95,40 @@ func (blk *baseBlock) GetColumnData(
 	to uint32,
 	colIdx int,
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
-	mnode, pnode := blk.PinNode()
-	if mnode != nil {
-		defer mnode.Close()
+	node := blk.PinNode()
+	defer node.Unref()
+	if !node.IsPersisted() {
 		blk.RLock()
 		defer blk.RUnlock()
-		return mnode.Item().GetColumnDataWindow(from, to, colIdx, buffer)
-	} else if pnode != nil {
-		defer pnode.Close()
-		return pnode.Item().GetColumnDataWindow(from, to, colIdx, buffer)
+		return node.GetColumnDataWindow(from, to, colIdx, buffer)
+	} else {
+		return node.GetColumnDataWindow(from, to, colIdx, buffer)
 	}
-	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
 }
 
 func (blk *baseBlock) Rows() int {
-	mnode, pnode := blk.PinNode()
-	if mnode != nil {
-		defer mnode.Close()
+	node := blk.PinNode()
+	defer node.Unref()
+	if !node.IsPersisted() {
 		blk.RLock()
 		defer blk.RUnlock()
-		return int(mnode.Item().Rows())
-	} else if pnode != nil {
-		defer pnode.Close()
-		return int(pnode.Item().Rows())
+		return int(node.Rows())
+	} else {
+		return int(node.Rows())
 	}
-	panic(moerr.NewInternalError(fmt.Sprintf("bad block %s", blk.meta.String())))
 }
 
 func (blk *baseBlock) TryUpgrade() (err error) {
-	blk.storage.mu.Lock()
-	defer blk.storage.mu.Unlock()
-	if blk.storage.mnode != nil {
-		blk.storage.mnode.Close()
-		blk.storage.mnode = nil
+	node := blk.node.Load()
+	if node.IsPersisted() {
+		return
 	}
-	if blk.storage.pnode == nil {
-		blk.storage.pnode = newPersistedNode(blk).Pin()
+	pnode := newPersistedNode(blk)
+	nnode := NewNode(pnode)
+	nnode.Ref()
+
+	if !blk.node.CompareAndSwap(node, nnode) {
+		nnode.Unref()
 	}
 	return
 }
@@ -159,7 +139,7 @@ func (blk *baseBlock) GetFs() *objectio.ObjectFS    { return blk.fs }
 func (blk *baseBlock) GetID() *common.ID            { return blk.meta.AsCommonID() }
 
 func (blk *baseBlock) FillInMemoryDeletesLocked(
-	view *model.ColumnView,
+	view *model.BaseView,
 	rwlocker *sync.RWMutex) (err error) {
 	chain := blk.mvcc.GetDeleteChain()
 	n, err := chain.CollectDeletesLocked(view.Ts, false, rwlocker)
@@ -254,7 +234,7 @@ func (blk *baseBlock) LoadPersistedDeletes() (bat *containers.Batch, err error) 
 }
 
 func (blk *baseBlock) FillPersistedDeletes(
-	view *model.ColumnView) (err error) {
+	view *model.BaseView) (err error) {
 	deletes, err := blk.LoadPersistedDeletes()
 	if deletes == nil || err != nil {
 		return nil
@@ -276,6 +256,41 @@ func (blk *baseBlock) FillPersistedDeletes(
 		view.DeleteMask.Add(row)
 	}
 	return nil
+}
+
+func (blk *baseBlock) ResolvePersistedColumnDatas(
+	pnode *persistedNode,
+	ts types.TS,
+	colIdxs []int,
+	buffers []*bytes.Buffer,
+	skipDeletes bool) (view *model.BlockView, err error) {
+	data, err := blk.LoadPersistedData()
+	if err != nil {
+		return nil, err
+	}
+	view = model.NewBlockView(ts)
+	for _, colIdx := range colIdxs {
+		view.SetData(colIdx, data.Vecs[colIdx])
+	}
+
+	if skipDeletes {
+		return
+	}
+
+	defer func() {
+		if err != nil {
+			view.Close()
+		}
+	}()
+
+	if err = blk.FillPersistedDeletes(view.BaseView); err != nil {
+		return
+	}
+
+	blk.RLock()
+	defer blk.RUnlock()
+	err = blk.FillInMemoryDeletesLocked(view.BaseView, blk.RWMutex)
+	return
 }
 
 func (blk *baseBlock) ResolvePersistedColumnData(
@@ -301,13 +316,13 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 		}
 	}()
 
-	if err = blk.FillPersistedDeletes(view); err != nil {
+	if err = blk.FillPersistedDeletes(view.BaseView); err != nil {
 		return
 	}
 
 	blk.RLock()
 	defer blk.RUnlock()
-	err = blk.FillInMemoryDeletesLocked(view, blk.RWMutex)
+	err = blk.FillInMemoryDeletesLocked(view.BaseView, blk.RWMutex)
 	return
 }
 
@@ -318,6 +333,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 	rowmask *roaring.Bitmap,
 	dedupClosure func(
 		containers.Vector,
+		types.TS,
 		*roaring.Bitmap,
 		*catalog.ColDef,
 	) func(any, int) error) (err error) {
@@ -346,7 +362,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 		}
 	}
 	defer view.Close()
-	dedupFn := dedupClosure(view.GetData(), view.DeleteMask, def)
+	dedupFn := dedupClosure(view.GetData(), ts, view.DeleteMask, def)
 	err = keys.Foreach(dedupFn, sels)
 	return
 }
@@ -357,12 +373,12 @@ func (blk *baseBlock) getPersistedValue(
 	row, col int,
 	skipMemory bool) (v any, err error) {
 	view := model.NewColumnView(ts, col)
-	if err = blk.FillPersistedDeletes(view); err != nil {
+	if err = blk.FillPersistedDeletes(view.BaseView); err != nil {
 		return
 	}
 	if !skipMemory {
 		blk.RLock()
-		err = blk.FillInMemoryDeletesLocked(view, blk.RWMutex)
+		err = blk.FillInMemoryDeletesLocked(view.BaseView, blk.RWMutex)
 		blk.RUnlock()
 		if err != nil {
 			return

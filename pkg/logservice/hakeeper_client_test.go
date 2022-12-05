@@ -89,7 +89,7 @@ func TestHAKeeperClientConnectByReverseProxy(t *testing.T) {
 		done := false
 		for i := 0; i < 1000; i++ {
 			si, ok, err := GetShardInfo(testServiceAddress, hakeeper.DefaultHAKeeperShardID)
-			if err != nil {
+			if err != nil || !ok {
 				time.Sleep(10 * time.Millisecond)
 				continue
 			}

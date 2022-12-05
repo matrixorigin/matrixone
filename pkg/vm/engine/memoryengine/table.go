@@ -17,6 +17,7 @@ package memoryengine
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -32,6 +33,11 @@ type Table struct {
 }
 
 var _ engine.Relation = new(Table)
+
+func (t *Table) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error) {
+	r, err := t.Rows(ctx)
+	return float64(r), err
+}
 
 func (t *Table) Rows(ctx context.Context) (int64, error) {
 

@@ -53,9 +53,6 @@ var (
 	//listening unix domain socket
 	defaultUnixAddr = "/var/lib/mysql/mysql.sock"
 
-	//host mmu limitation. 1 << 40 = 1099511627776
-	defaultHostMmuLimitation = 1099511627776
-
 	//guest mmu limitation.  1 << 40 = 1099511627776
 	defaultGuestMmuLimitation = 1099511627776
 
@@ -158,9 +155,6 @@ type FrontendParameters struct {
 
 	//listening unix domain socket
 	UAddr string `toml:"UAddr"`
-
-	//host mmu limitation. default: 1 << 40 = 1099511627776
-	HostMmuLimitation int64 `toml:"hostMmuLimitation"`
 
 	//guest mmu limitation. default: 1 << 40 = 1099511627776
 	GuestMmuLimitation int64 `toml:"guestMmuLimitation"`
@@ -294,10 +288,6 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.UAddr == "" {
 		fp.UAddr = defaultUnixAddr
-	}
-
-	if fp.HostMmuLimitation == 0 {
-		fp.HostMmuLimitation = int64(defaultHostMmuLimitation)
 	}
 
 	if fp.GuestMmuLimitation == 0 {

@@ -524,6 +524,39 @@ func TestSetState(t *testing.T) {
 	}
 }
 
+func TestSetTaskSchedulerState(t *testing.T) {
+	tests := []struct {
+		initialState pb.TaskSchedulerState
+		newState     pb.TaskSchedulerState
+		result       pb.TaskSchedulerState
+	}{
+		{pb.TaskSchedulerCreated, pb.TaskSchedulerCreated, pb.TaskSchedulerCreated},
+		{pb.TaskSchedulerCreated, pb.TaskSchedulerRunning, pb.TaskSchedulerCreated},
+		{pb.TaskSchedulerCreated, pb.TaskSchedulerStopped, pb.TaskSchedulerCreated},
+
+		{pb.TaskSchedulerRunning, pb.TaskSchedulerCreated, pb.TaskSchedulerRunning},
+		{pb.TaskSchedulerRunning, pb.TaskSchedulerRunning, pb.TaskSchedulerRunning},
+		{pb.TaskSchedulerRunning, pb.TaskSchedulerStopped, pb.TaskSchedulerStopped},
+
+		{pb.TaskSchedulerStopped, pb.TaskSchedulerCreated, pb.TaskSchedulerStopped},
+		{pb.TaskSchedulerStopped, pb.TaskSchedulerRunning, pb.TaskSchedulerRunning},
+		{pb.TaskSchedulerStopped, pb.TaskSchedulerStopped, pb.TaskSchedulerStopped},
+	}
+
+	for _, tt := range tests {
+		rsm := stateMachine{
+			state: pb.HAKeeperRSMState{
+				State:              pb.HAKeeperRunning,
+				TaskSchedulerState: tt.initialState,
+			},
+		}
+		cmd := GetSetTaskSchedulerStateCmd(tt.newState)
+		_, err := rsm.Update(sm.Entry{Cmd: cmd})
+		require.NoError(t, err)
+		assert.Equal(t, tt.result, rsm.state.TaskSchedulerState)
+	}
+}
+
 func TestInitialClusterRequestCmd(t *testing.T) {
 	cmd := GetInitialClusterRequestCmd(2, 2, 3)
 	req := parseInitialClusterRequestCmd(cmd)

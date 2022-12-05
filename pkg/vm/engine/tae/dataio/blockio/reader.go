@@ -19,6 +19,7 @@ import (
 	"errors"
 	"io"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type Reader struct {
@@ -56,7 +58,7 @@ func NewReader(cxt context.Context, fs *objectio.ObjectFS, key string) (*Reader,
 	}, nil
 }
 
-func NewCheckpointReader(fs fileservice.FileService, key string) (*Reader, error) {
+func NewCheckpointReader(cxt context.Context, fs fileservice.FileService, key string) (*Reader, error) {
 	name, locs, err := DecodeMetaLocToMetas(key)
 	if err != nil {
 		return nil, err
@@ -66,12 +68,51 @@ func NewCheckpointReader(fs fileservice.FileService, key string) (*Reader, error
 		return nil, err
 	}
 	return &Reader{
-		fs:     objectio.NewObjectFS(fs, ""),
-		reader: reader,
-		key:    key,
-		name:   name,
-		locs:   locs,
+		fs:      objectio.NewObjectFS(fs, ""),
+		reader:  reader,
+		key:     key,
+		name:    name,
+		locs:    locs,
+		readCxt: cxt,
 	}, nil
+}
+
+func (r *Reader) BlkColumnByMetaLoadJob(
+	colTypes []types.Type,
+	colNames []string,
+	nullables []bool,
+	block objectio.BlockObject,
+) *tasks.Job {
+	exec := func(_ context.Context) (result *tasks.JobResult) {
+		bat, err := r.LoadBlkColumnsByMeta(colTypes, colNames, nullables, block)
+		return &tasks.JobResult{
+			Err: err,
+			Res: bat,
+		}
+	}
+	return tasks.NewJob(uuid.NewString(), r.readCxt, exec)
+}
+
+func (r *Reader) BlkColumnsByMetaAndIdxLoadJob(
+	colTypes []types.Type,
+	colNames []string,
+	nullables []bool,
+	block objectio.BlockObject,
+	idx int,
+) *tasks.Job {
+	exec := func(_ context.Context) (result *tasks.JobResult) {
+		bat, err := r.LoadBlkColumnsByMetaAndIdx(
+			colTypes,
+			colNames,
+			nullables,
+			block,
+			idx)
+		return &tasks.JobResult{
+			Err: err,
+			Res: bat,
+		}
+	}
+	return tasks.NewJob(uuid.NewString(), r.readCxt, exec)
 }
 
 func (r *Reader) LoadBlkColumnsByMeta(

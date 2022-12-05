@@ -99,6 +99,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
+		rbat.Clean(proc.Mp())
 		return err
 	}
 	count := bat.Length()
@@ -122,6 +123,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for _, sel := range sels {
 					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
 					if err != nil {
+						rbat.Clean(proc.Mp())
 						return err
 					}
 					bs := vec.Col.([]bool)

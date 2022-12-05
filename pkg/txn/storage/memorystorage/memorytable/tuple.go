@@ -20,10 +20,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+// Tuple represents multiple ordered values
 type Tuple []any
 
 var _ Ordered[Tuple] = Tuple{}
 
+// Less compares two tuples
 func (t Tuple) Less(than Tuple) bool {
 	i := 0
 	for i < len(t) {
