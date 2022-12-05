@@ -20,7 +20,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	prom "github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 )
@@ -104,7 +103,7 @@ func newRateCounterBase(desc *prom.Desc, doAvg bool, lvs ...string) *ratecounter
 
 func (c *ratecounter) Add(v float64) {
 	if v < 0 {
-		panic(moerr.NewInternalError("counter cannot decrease in value"))
+		panic("counter cannot decrease in value")
 	}
 
 	ival := uint64(v)

@@ -16,7 +16,6 @@ package memoryengine
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -102,6 +101,10 @@ func (c *CompilerContext) GetAccountId() uint32 {
 		return v.(uint32)
 	}
 	return 0
+}
+
+func (c *CompilerContext) GetContext() context.Context {
+	return c.ctx
 }
 
 func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {

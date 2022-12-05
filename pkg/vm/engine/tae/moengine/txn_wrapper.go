@@ -48,7 +48,7 @@ func (w *wrappedEngine) New(options ...client.TxnOption) (client.TxnOperator, er
 func (w *wrappedEngine) NewWithSnapshot(snapshot []byte) (client.TxnOperator, error) {
 	txn := w.engine.(*txnEngine).impl.TxnMgr.GetTxnByCtx(snapshot)
 	if txn == nil {
-		return nil, moerr.NewMissingTxn()
+		return nil, moerr.NewMissingTxnNoCtx()
 	}
 	return TxnToTxnOperator(txn), nil
 }

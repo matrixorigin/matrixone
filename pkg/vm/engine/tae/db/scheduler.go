@@ -28,8 +28,8 @@ import (
 )
 
 var (
-	ErrTaskDuplicated = moerr.NewInternalError("tae task: duplicated task found")
-	ErrTaskNotFound   = moerr.NewInternalError("tae task: task not found")
+	ErrTaskDuplicated = moerr.NewInternalErrorNoCtx("tae task: duplicated task found")
+	ErrTaskNotFound   = moerr.NewInternalErrorNoCtx("tae task: task not found")
 )
 
 type taskScheduler struct {

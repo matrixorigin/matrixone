@@ -36,7 +36,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
 			return nil
 		}
-		return moerr.NewDBAlreadyExists(dbName)
+		return moerr.NewDBAlreadyExists(c.ctx, dbName)
 	}
 	err := c.e.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql),
 		dbName, c.proc.TxnOperator)
@@ -52,7 +52,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}
-		return moerr.NewErrDropNonExistsDB(dbName)
+		return moerr.NewErrDropNonExistsDB(c.ctx, dbName)
 	}
 	return c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
 }
@@ -78,7 +78,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if dbName == "" {
-			return moerr.NewNoDB()
+			return moerr.NewNoDB(c.ctx)
 		}
 		return err
 	}
@@ -87,7 +87,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if qry.GetIfNotExists() {
 			return nil
 		}
-		return moerr.NewTableAlreadyExists(tblName)
+		return moerr.NewTableAlreadyExists(c.ctx, tblName)
 	}
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
@@ -102,7 +102,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 		if _, err := dbSource.Relation(c.ctx, def.Name); err == nil {
-			return moerr.NewTableAlreadyExists(def.Name)
+			return moerr.NewTableAlreadyExists(c.ctx, def.Name)
 		}
 		if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
 			return err
@@ -187,16 +187,6 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 			exeDefs[i] = &engine.PrimaryIndexDef{
 				Names: defVal.Pk.GetNames(),
 			}
-		case *plan.TableDef_DefType_Idx:
-			indexDef := &engine.ComputeIndexDef{}
-			indexDef.IndexNames = defVal.Idx.IndexNames
-			indexDef.TableNames = defVal.Idx.TableNames
-			indexDef.Uniques = defVal.Idx.Uniques
-			indexDef.Fields = make([][]string, 0)
-			for _, field := range defVal.Idx.Fields {
-				indexDef.Fields = append(indexDef.Fields, field.ColNames)
-			}
-			exeDefs[i] = indexDef
 		case *plan.TableDef_DefType_Properties:
 			properties := make([]engine.Property, len(defVal.Properties.GetProperties()))
 			for i, p := range defVal.Properties.GetProperties() {
@@ -220,6 +210,16 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 			exeDefs[i] = &engine.PartitionDef{
 				Partition: string(bytes),
 			}
+		case *plan.TableDef_DefType_UIdx:
+			bytes, err := defVal.UIdx.MarshalUniqueIndexDef()
+			if err != nil {
+				return nil, err
+			}
+			exeDefs[i] = &engine.UniqueIndexDef{
+				UniqueIndex: string(bytes),
+			}
+		case *plan.TableDef_DefType_SIdx:
+
 		}
 	}
 	return exeDefs, nil

@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
@@ -32,6 +33,9 @@ type MockCompilerContext struct {
 	pks     map[string][]int
 
 	mysqlCompatible bool
+
+	// ctx default: nil
+	ctx context.Context
 }
 
 func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -54,7 +58,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 		return result, nil
 	}
 
-	return nil, moerr.NewInternalError("var not found")
+	return nil, moerr.NewInternalError(m.ctx, "var not found")
 }
 
 type col struct {
@@ -70,6 +74,7 @@ func NewEmptyCompilerContext() *MockCompilerContext {
 	return &MockCompilerContext{
 		objects: make(map[string]*ObjectRef),
 		tables:  make(map[string]*TableDef),
+		ctx:     context.Background(),
 	}
 }
 
@@ -373,6 +378,10 @@ func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) *Cost {
 
 func (m *MockCompilerContext) GetAccountId() uint32 {
 	return 0
+}
+
+func (m *MockCompilerContext) GetContext() context.Context {
+	return m.ctx
 }
 
 type MockOptimizer struct {

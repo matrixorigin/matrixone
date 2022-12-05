@@ -55,7 +55,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 
 		chosen, value, ok := reflect.Select(ctr.receiverListener)
 		if !ok {
-			return false, moerr.NewInternalError("pipeline closed unexpectedly")
+			return false, moerr.NewInternalError(proc.Ctx, "pipeline closed unexpectedly")
 		}
 
 		pointer := value.UnsafePointer()

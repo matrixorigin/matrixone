@@ -33,15 +33,15 @@ func (s *store) initTaskHolder() {
 		return
 	}
 
-	addressFunc := func() (string, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	addressFunc := func(ctx context.Context) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 		defer cancel()
 		details, err := s.hakeeperClient.GetClusterDetails(ctx)
 		if err != nil {
 			return "", err
 		}
 		if len(details.CNStores) == 0 {
-			return "", moerr.NewInvalidState("no cn in the cluster")
+			return "", moerr.NewInvalidState(ctx, "no cn in the cluster")
 		}
 
 		n := rand.Intn(len(details.CNStores))

@@ -16,6 +16,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -78,6 +79,7 @@ func main() {
 			conn.Close()
 		}
 	}()
+	ctx := context.Background()
 	flag.StringVar(&username, "u", _username, "username")
 	flag.StringVar(&password, "p", _password, "password")
 	flag.StringVar(&host, "h", _host, "hostname")
@@ -86,7 +88,7 @@ func main() {
 	flag.Var(&tables, "tbl", "tableNameList, default all")
 	flag.Parse()
 	if len(database) == 0 {
-		err = moerr.NewInvalidInput("database must be specified")
+		err = moerr.NewInvalidInput(ctx, "database must be specified")
 		return
 	}
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", username, password, host, port, database)
@@ -106,7 +108,7 @@ func main() {
 	select {
 	case <-ch:
 	case <-time.After(timeout):
-		err = moerr.NewInternalError("connect to %s timeout", dsn)
+		err = moerr.NewInternalError(ctx, "connect to %s timeout", dsn)
 	}
 	if err != nil {
 		return
@@ -300,6 +302,9 @@ func showInsert(db string, tbl string) error {
 func convertValue(v interface{}, typ string) string {
 	typ = strings.ToLower(typ)
 	ret := *(v.(*interface{}))
+	if ret == nil {
+		return "NULL"
+	}
 	switch typ {
 	case "int", "tinyint", "smallint", "bigint":
 		tmp, _ := strconv.ParseInt(string(ret.([]byte)), 10, 64)
@@ -311,6 +316,6 @@ func convertValue(v interface{}, typ string) string {
 		tmp, _ := strconv.ParseFloat(string(ret.([]byte)), 64)
 		return fmt.Sprintf("%v", tmp)
 	default:
-		return fmt.Sprintf("'%v'", string(ret.([]byte)))
+		return "'" + strings.Replace(string(ret.([]byte)), "'", "\\'", -1) + "'"
 	}
 }

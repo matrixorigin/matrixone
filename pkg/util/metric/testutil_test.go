@@ -46,7 +46,7 @@ func waitWgTimeout(wg *sync.WaitGroup, after time.Duration) error {
 	}()
 	select {
 	case <-time.After(time.Second):
-		return moerr.NewInternalError("timeout")
+		return moerr.NewInternalError(context.Background(), "timeout")
 	case <-c:
 		return nil
 	}

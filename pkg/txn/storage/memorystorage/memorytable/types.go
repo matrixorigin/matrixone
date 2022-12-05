@@ -23,44 +23,58 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
+// ID represents a unique id
 type ID = memoryengine.ID
 
+// Text represents a string value
 type Text string
 
+// Less compares tow Texts
 func (t Text) Less(than Text) bool {
 	return t < than
 }
 
+// Bool represents a boolean value
 type Bool bool
 
+// Less compares tow Bools
 func (b Bool) Less(than Bool) bool {
 	return bool(!b && than)
 }
 
+// Int represents an integer value
 type Int int64
 
+// Less compares tow Ints
 func (i Int) Less(than Int) bool {
 	return i < than
 }
 
+// Unit represents an unsigned integer value
 type Uint int64
 
+// Less compares tow Uints
 func (i Uint) Less(than Uint) bool {
 	return i < than
 }
 
+// Float represents a floating-point value
 type Float float64
 
+// Less compares two Floats
 func (f Float) Less(than Float) bool {
 	return f < than
 }
 
+// Bytes represents a slice of bytes
 type Bytes []byte
 
+// Less compares two Bytes's
 func (b Bytes) Less(than Bytes) bool {
 	return bytes.Compare(b, than) < 0
 }
 
+// ToOrdered convert v to Ordered value
 func ToOrdered(v any) any {
 	if v == nil {
 		panic("should not be nil")
@@ -128,6 +142,7 @@ func ToOrdered(v any) any {
 	panic(fmt.Sprintf("unknown type: %T", v))
 }
 
+// TypeMatch reports whether v is typ typed
 func TypeMatch(v any, typ types.T) bool {
 	if v == nil {
 		panic("should not be nil")

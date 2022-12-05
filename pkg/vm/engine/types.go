@@ -127,26 +127,28 @@ type ViewDef struct {
 	View string
 }
 
-type ComputeIndexDef struct {
-	IndexNames []string
-	TableNames []string
-	Uniques    []bool
-	Fields     [][]string
+type UniqueIndexDef struct {
+	UniqueIndex string
+}
+
+type SecondaryIndexDef struct {
+	SecondaryIndex string
 }
 
 type TableDef interface {
 	tableDef()
 }
 
-func (*CommentDef) tableDef()      {}
-func (*PartitionDef) tableDef()    {}
-func (*ViewDef) tableDef()         {}
-func (*AttributeDef) tableDef()    {}
-func (*IndexTableDef) tableDef()   {}
-func (*PropertiesDef) tableDef()   {}
-func (*PrimaryIndexDef) tableDef() {}
-func (*ClusterByDef) tableDef()    {}
-func (*ComputeIndexDef) tableDef() {}
+func (*CommentDef) tableDef()        {}
+func (*PartitionDef) tableDef()      {}
+func (*ViewDef) tableDef()           {}
+func (*AttributeDef) tableDef()      {}
+func (*IndexTableDef) tableDef()     {}
+func (*PropertiesDef) tableDef()     {}
+func (*PrimaryIndexDef) tableDef()   {}
+func (*UniqueIndexDef) tableDef()    {}
+func (*SecondaryIndexDef) tableDef() {}
+func (*ClusterByDef) tableDef()      {}
 
 type Relation interface {
 	Statistics
@@ -179,7 +181,7 @@ type Relation interface {
 
 type Reader interface {
 	Close() error
-	Read([]string, *plan.Expr, *mpool.MPool) (*batch.Batch, error)
+	Read(context.Context, []string, *plan.Expr, *mpool.MPool) (*batch.Batch, error)
 }
 
 type Database interface {

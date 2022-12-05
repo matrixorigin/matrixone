@@ -113,7 +113,7 @@ func Decimal64Sum(rs, vs []types.Decimal64, start int64, count int64, vps []uint
 	rc := C.Decimal64_VecSum((*C.int64_t)(unsafe.Pointer(&rs[0])), (*C.int64_t)(unsafe.Pointer(&vs[0])),
 		(C.int64_t)(start), (C.int64_t)(count), (*C.uint64_t)(&vps[0]), (*C.int64_t)(&zs[0]), (*C.uint64_t)(nulls.Ptr(nsp)))
 	if rc != 0 {
-		return moerr.NewOutOfRange("decimal64", "decimal SUM")
+		return moerr.NewOutOfRangeNoCtx("decimal64", "decimal SUM")
 	}
 	return nil
 }
@@ -122,7 +122,7 @@ func Decimal64Sum128(rs []types.Decimal128, vs []types.Decimal64, start int64, c
 	rc := C.Decimal64_VecSumToDecimal128((*C.int64_t)(unsafe.Pointer(&rs[0])), (*C.int64_t)(unsafe.Pointer(&vs[0])),
 		(C.int64_t)(start), (C.int64_t)(count), (*C.uint64_t)(&vps[0]), (*C.int64_t)(&zs[0]), (*C.uint64_t)(nulls.Ptr(nsp)))
 	if rc != 0 {
-		return moerr.NewOutOfRange("decimal128", "decimal SUM")
+		return moerr.NewOutOfRangeNoCtx("decimal128", "decimal SUM")
 	}
 	return nil
 }
@@ -131,7 +131,7 @@ func Decimal128Sum(rs, vs []types.Decimal128, start int64, count int64, vps []ui
 	rc := C.Decimal128_VecSum((*C.int64_t)(unsafe.Pointer(&rs[0])), (*C.int64_t)(unsafe.Pointer(&vs[0])),
 		(C.int64_t)(start), (C.int64_t)(count), (*C.uint64_t)(&vps[0]), (*C.int64_t)(&zs[0]), (*C.uint64_t)(nulls.Ptr(nsp)))
 	if rc != 0 {
-		return moerr.NewOutOfRange("decimal128", "decimal SUM")
+		return moerr.NewOutOfRangeNoCtx("decimal128", "decimal SUM")
 	}
 	return nil
 }

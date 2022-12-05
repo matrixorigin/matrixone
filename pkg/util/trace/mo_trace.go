@@ -165,9 +165,9 @@ func (s *MOSpan) GetName() string {
 	return spanView.OriginTable.GetName()
 }
 
-func (s *MOSpan) GetRow() *table.Row { return spanView.OriginTable.GetRow() }
+func (s *MOSpan) GetRow() *table.Row { return spanView.OriginTable.GetRow(DefaultContext()) }
 
-func (s *MOSpan) CsvFields(row *table.Row) []string {
+func (s *MOSpan) CsvFields(ctx context.Context, row *table.Row) []string {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, spanView.Table)
 	row.SetColumnVal(spanIDCol, s.SpanID.String())

@@ -14,11 +14,11 @@
   <a href="https://www.codefactor.io/repository/github/matrixorigin/matrixone">
     <img src="https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0" alt="codefactor"/>
   </a>
-  <a href="https://docs.matrixorigin.io/0.5.1/MatrixOne/Release-Notes/v0.5.1/">
-   <img src="https://img.shields.io/badge/Release-v0.5.1-green.svg" alt="release"/>
+  <a href="https://docs.matrixorigin.io/0.6.0/MatrixOne/Release-Notes/v0.6.0/">
+   <img src="https://img.shields.io/badge/Release-v0.6.0-green.svg" alt="release"/>
   </a>
   <br>
-  <a href="https://docs.matrixorigin.io/0.5.1/">
+  <a href="https://docs.matrixorigin.io/0.6.0/">
     <b>Docs</b>
   </a>
   <b>||</b>
@@ -147,17 +147,19 @@ MatrixOne's architecture is as below:
   <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
 </p>
 
-For more details, you can checkout [MatrixOne Architecture](https://docs.matrixorigin.io/0.5.1/MatrixOne/Overview/matrixone-architecture/).
+For more details, you can checkout [MatrixOne Architecture](https://docs.matrixorigin.io/0.6.0/MatrixOne/Overview/matrixone-architecture/).
 
 
 ## ⚡️ <a id="quick-start">Quick start</a>
 
 ### ⚙️ Install MatrixOne
 MatrixOne supports Linux and MacOS. You can install MatrixOne either by [building from source](#building-from-source) or [using docker](#using-docker).
-For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.io/0.5.1/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
+For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.io/0.6.0/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
 #### **Building from source**
 
 **Step 1. Install Go (version 1.19 is required)**
+
+Click <a href="https://go.dev/doc/install" target="_blank">Go Download and install</a> to enter its official documentation, and follow the installation steps to complete the **Go** installation.
 
 **Step 2. Get the MatrixOne code to build MatrixOne**
 
@@ -167,76 +169,105 @@ Depending on your needs, choose whether you want to keep your code up to date, o
 
 The **main** branch is the default branch, the code on the main branch is always up-to-date but not stable enough.
 
-1. Get the MatrixOne(Develop Version, also called Pre0.6 version) code:
+1. Get the MatrixOne(Develop Version) code:
 
     ```
     git clone https://github.com/matrixorigin/matrixone.git
     cd matrixone
     ```
 
-2. You can run `make debug`, `make clean`, or anything else our Makefile offers.
+2. Run `make build` to compile the MatrixOne file:
 
     ```
     make build
     ```
 
-3. Launch MatrixOne server：
-
-    !!! note
-         The startup-config file of MatrixOne(Develop Version) is different from the startup-config file of MatrixOne(Stable Version). The startup-config file code of MatrixOne(Develop Version) is as below:
-
-    ```
-    ./mo-service -cfg ./etc/cn-standalone-test.toml
-    ```
+    __Tips__: You can also run `make debug`, `make clean`, or anything else our `Makefile` offers, `make debug` can be used to debug the build process, and `make clean` can be used to clean up the build process.
 
 - *Option 2*: Get the MatrixOne(Stable Version) code, build MatrixOne
 
-1. If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **0.5.1** first.
+1. If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **0.6.0** first.
 
     ```
     git clone https://github.com/matrixorigin/matrixone.git
-    git checkout 0.5.1
+    git checkout 0.6.0
     cd matrixone
     ```
 
-2. You can run `make debug`, `make clean`, or anything else our Makefile offers.
+2. Run `make config` and `make build` to compile the MatrixOne file:
 
     ```
     make config
     make build
     ```
 
-3. Launch MatrixOne server：
+    __Tips__: You can also run `make debug`, `make clean`, or anything else our `Makefile` offers, `make debug` can be used to debug the build process, and `make clean` can be used to clean up the build process.
 
-    !!! note
-         The startup-config file of MatrixOne(Stable Version) is different from the startup-config file of MatrixOne(Develop Version). The startup-config file code of MatrixOne(Stable Version) is as below:
+**Step 3. Launch MatrixOne server**
+
+Launch MatrixOne server in the frontend or backend as <a href="#launch">3. Launch MatrixOne server</a> suggests in **Building from source code**.
+
+- **Launch in the frontend**"
+
+    This launch method will keep the `mo-service` process running in the frontend, the system log will be printed in real time. If you'd like to stop MatrixOne server, just make a CTRL+C or close your current terminal.
 
     ```
-    ./mo-server system_vars_config.toml
+    # Start mo-service in the backend
+    ./mo-service -launch ./etc/quickstart/launch.toml
     ```
+
+- **Launch in the backend**"
+
+    This launch method will put the `mo-service` process running in the backend, the system log will be redirected to the `test.log` file. If you'd like to stop MatrixOne server, you need to find out its `PID` by and kill it by the following commands. Below is a full example of the whole process.
+
+    ```
+    # Start mo-service in the backend
+    nohup ./mo-service -launch ./etc/quickstart/launch.toml &> test.log &
+
+    # Find mo-service PID
+    ps aux | grep mo-service
+
+    [root@VM-0-10-centos ~]# ps aux | grep mo-service
+    root       15277  2.8 16.6 8870276 5338016 ?     Sl   Nov25 156:59 ./mo-service -launch ./etc/quickstart/launch.toml
+    root      836740  0.0  0.0  12136  1040 pts/0    S+   10:39   0:00 grep --color=auto mo-service
+
+    # Kill the mo-service process
+    kill -9 15277
+    ```
+
+    __Tips__: As shown in the above example, use the command `ps aux | grep mo-service` to find out that the process number running on MatrixOne is `15277`, and `kill -9 15277` means to stop MatrixOne with the process number `15277`.
 
 #### **Using docker**
-1. Make sure Docker is installed, verify Docker daemon is running in the background:
+
+1. Make sure <a href="https://docs.docker.com/get-docker/" target="_blank">Docker</a> is installed, verify Docker daemon is running in the background:
 
 ```
 $ docker --version
+```
+
+The successful installation results are as follows:
+
+```
+Docker version 20.10.17, build 100c701
 ```
 
 2. Create and run the container for the latest release of MatrixOne. It will pull the image from Docker Hub if not exists.
 
 It will pull the image from Docker Hub if not exists. You can choose to pull the stable version image or the develop version image.
 
-- Stable Version Image(0.5.1 version)
+- Stable Version Image(0.6.0 version)
 
 ```bash
-docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
+docker pull matrixorigin/matrixone:0.6.0
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.6.0
 ```
 
 - If you want to pull the develop version image, see [Docker Hub](https://hub.docker.com/r/matrixorigin/matrixone/tags), get the image tag. An example as below:
 
-    Develop Version Image(Pre0.6 version)
+    Develop Version Image
 
     ```bash
+    docker pull matrixorigin/matrixone:nightly-commitnumber
     docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commitnumber
     ```
 
@@ -247,9 +278,11 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
 
    To customize the configuration file, you can mount the custom configuration file stored on the local disk.
 
-```
-docker run -d -p 6001:6001 -v ${path_name}/system_vars_config.toml:/system_vars_config.toml:ro -v ${path_name}/store:/store:rw --name matrixone matrixorigin/matrixone:0.5.1
-```
+   - **Mount the configuration file**
+
+   ```
+   docker run -d -p 6001:6001 -v ${local_data_path}/etc:/etc:rw  --entrypoint "/mo-service" matrixorigin/matrixone:0.6.0 -launch /etc/quickstart/launch.toml
+   ```
 
 ### 🌟 Connecting to MatrixOne server
 
@@ -263,34 +296,36 @@ docker run -d -p 6001:6001 -v ${path_name}/system_vars_config.toml:/system_vars_
 
    - Click **Select OS Version** from the drop-down list.  Version 8.0.30 or later is recommended.
 
+   You can follow the <a href="https://dev.mysql.com/doc/refman/8.0/en/installing.html" target="_blank">Installing and Upgrading MySQL</a> official document to configure the MySQL client environment variables.
+
 2. Connect to MatrixOne server:
 
    When you finish installing and starting MatrixOne, many logs are generated in startup mode. Then you can start a new terminal and connect to a matrixone.
 
-```
-$ mysql -h IP -P PORT -uUsername -p
-```
-   The connection string is the same format as MySQL accepts. You need to provide a user name and a password.
+   ```
+   mysql -h IP -P PORT -uUsername -p
+   ```
 
-   Use the built-in test account for example:
+   After you enter the preceding command, the terminal will prompt you to provide the username and password. You can use our built-in account:
 
    - user: dump
    - password: 111
 
-```
-$ mysql -h 127.0.0.1 -P 6001 -udump -p
-Enter password:
-```
+   You can also use the following command line on the MySQL client to connect to the MatrixOne service:
+
+   ```
+   mysql -h 127.0.0.1 -P 6001 -udump -p
+   Enter password:
+   ```
+
 
 Now, MatrixOne only supports the TCP listener.
-
-
 
 
 ## 🙌 <a id="contributing">Contributing</a>
 
 Contributions to MatrixOne are welcome from everyone.  
- See [Contribution Guide](https://docs.matrixorigin.io/0.5.1/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
+ See [Contribution Guide](https://docs.matrixorigin.io/0.6.0/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
 
 ### 👏 All contributors
 

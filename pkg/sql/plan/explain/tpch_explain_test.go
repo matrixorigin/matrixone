@@ -15,6 +15,7 @@
 package explain
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,6 +30,8 @@ import (
 )
 
 func Test_TPCH_Plan2(t *testing.T) {
+	ctx := context.TODO()
+
 	mock := plan.NewMockOptimizer()
 	es := &ExplainOptions{
 		Verbose: true,
@@ -44,7 +47,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		t.Errorf("Cannot open ddl file, error %v", err)
 	}
 
-	ddls, err := parsers.Parse(dialect.MYSQL, string(ddlf))
+	ddls, err := parsers.Parse(ctx, dialect.MYSQL, string(ddlf))
 	if ddls == nil || err != nil {
 		t.Errorf("DDL Parser failed, error %v", err)
 	}
@@ -65,7 +68,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 	if err != nil {
 		t.Errorf("Cannot open queries file, error %v", err)
 	}
-	qs, err := parsers.Parse(dialect.MYSQL, string(qf))
+	qs, err := parsers.Parse(ctx, dialect.MYSQL, string(qf))
 	if qs == nil || err != nil {
 		t.Errorf("Query Parser failed, error %v", err)
 	}
@@ -78,7 +81,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		}
 		buffer := NewExplainDataBuffer()
 		explainQuery := NewExplainQueryImpl(query)
-		err = explainQuery.ExplainPlan(buffer, es)
+		err = explainQuery.ExplainPlan(ctx, buffer, es)
 		if err != nil {
 			t.Errorf("explain failed, WXL")
 		}
@@ -94,7 +97,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		t.Logf("--<%d> tpch file: %s/tpch/q%d.sql\n", qn, dir, qn)
 		t.Logf("SQL : %v \n", string(qnf))
 
-		qns, err := parsers.Parse(dialect.MYSQL, string(qnf))
+		qns, err := parsers.Parse(ctx, dialect.MYSQL, string(qnf))
 		if qns == nil || err != nil {
 			t.Errorf("Query %d Parser failed, error %v", qn, err)
 		}
@@ -105,7 +108,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 			}
 			buffer := NewExplainDataBuffer()
 			explainQuery := NewExplainQueryImpl(query)
-			err = explainQuery.ExplainPlan(buffer, es)
+			err = explainQuery.ExplainPlan(ctx, buffer, es)
 			if err != nil {
 				t.Errorf("explain failed, WXL %v", err)
 			}

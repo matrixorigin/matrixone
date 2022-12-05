@@ -59,7 +59,7 @@ func NewFileService(cfg Config) (FileService, error) {
 	case s3FileServiceBackend:
 		return newS3FileService(cfg)
 	default:
-		return nil, moerr.NewInternalError("file service backend %s not implemented", cfg.Backend)
+		return nil, moerr.NewInternalErrorNoCtx("file service backend %s not implemented", cfg.Backend)
 	}
 }
 

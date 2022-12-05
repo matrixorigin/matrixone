@@ -53,7 +53,7 @@ func Decimal64VecMult(xs, ys, rs *vector.Vector) error {
 	rc := C.Decimal64_VecMul(dec128PtrToC(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewOutOfRange("decimal64", "decimal MUL")
+		return moerr.NewOutOfRangeNoCtx("decimal64", "decimal MUL")
 	}
 	return nil
 }
@@ -74,7 +74,7 @@ func Decimal128VecMult(xs, ys, rs *vector.Vector) error {
 	rc := C.Decimal128_VecMul(dec128PtrToC(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewOutOfRange("decimal128", "decimal MUL")
+		return moerr.NewOutOfRangeNoCtx("decimal128", "decimal MUL")
 	}
 	return nil
 }

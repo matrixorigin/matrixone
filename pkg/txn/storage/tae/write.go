@@ -42,7 +42,7 @@ func (s *taeStorage) Write(
 		)
 
 	default:
-		panic(moerr.NewInfo("OpCode is not supported"))
+		panic(moerr.NewInfoNoCtx("OpCode is not supported"))
 
 	}
 

@@ -210,7 +210,7 @@ func mergeTable(ctx context.Context, fs *fileservice.LocalETLFS, table *table.Ta
 	logutil.Infof("[%v] create merge task", table.GetName())
 	ts, err := time.Parse("2006-01-02 15:04:05", "2022-11-03 00:00:00")
 	logutil.Infof("[%v] create ts: %v, err: %v", table.GetName(), ts, err)
-	err = merge.Main(ts)
+	err = merge.Main(ctx, ts)
 	if err != nil {
 		logutil.Infof("[%v] failed to merge: %v", table.GetName(), err)
 	} else {

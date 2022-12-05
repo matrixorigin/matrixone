@@ -31,12 +31,12 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 	if fs, ok := fs.(*FileServices); ok {
 		f, ok := fs.mappings[lowerName]
 		if !ok {
-			err = moerr.NewNoService(name)
+			err = moerr.NewNoServiceNoCtx(name)
 			return
 		}
 		res, ok = f.(T)
 		if !ok {
-			err = moerr.NewNoService(name)
+			err = moerr.NewNoServiceNoCtx(name)
 			return
 		}
 		return
@@ -44,11 +44,11 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 	var ok bool
 	res, ok = fs.(T)
 	if !ok {
-		err = moerr.NewNoService(name)
+		err = moerr.NewNoServiceNoCtx(name)
 		return
 	}
 	if !strings.EqualFold(fs.Name(), lowerName) {
-		err = moerr.NewNoService(name)
+		err = moerr.NewNoServiceNoCtx(name)
 		return
 	}
 	return
@@ -100,7 +100,7 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 			}
 
 		default:
-			err = moerr.NewInvalidInput("no such service: %s", fsPath.Service)
+			err = moerr.NewInvalidInputNoCtx("no such service: %s", fsPath.Service)
 		}
 
 		readPath = fsPath.File
@@ -119,7 +119,7 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 
 func newS3FSFromArguments(arguments []string) (*S3FS, error) {
 	if len(arguments) < 6 {
-		return nil, moerr.NewInvalidInput("invalid S3 arguments")
+		return nil, moerr.NewInvalidInputNoCtx("invalid S3 arguments")
 	}
 	endpoint := arguments[0]
 	region := arguments[1]
@@ -174,7 +174,7 @@ func newS3FSFromArguments(arguments []string) (*S3FS, error) {
 
 func newS3FSFromArgumentsWithoutKey(arguments []string) (*S3FS, error) {
 	if len(arguments) < 4 {
-		return nil, moerr.NewInvalidInput("invalid S3 arguments")
+		return nil, moerr.NewInvalidInputNoCtx("invalid S3 arguments")
 	}
 	endpoint := arguments[0]
 	region := arguments[1]
@@ -220,7 +220,7 @@ func newS3FSFromArgumentsWithoutKey(arguments []string) (*S3FS, error) {
 
 func newMinioS3FSFromArguments(arguments []string) (*S3FS, error) {
 	if len(arguments) < 6 {
-		return nil, moerr.NewInvalidInput("invalid S3 arguments")
+		return nil, moerr.NewInvalidInputNoCtx("invalid S3 arguments")
 	}
 	endpoint := arguments[0]
 	region := arguments[1]

@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"bytes"
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -87,12 +88,12 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		}
 	}
 	if !startVec.IsScalar() || !endVec.IsScalar() || (stepVec != nil && !stepVec.IsScalar()) {
-		return false, moerr.NewInvalidInput("generate_series only support scalar")
+		return false, moerr.NewInvalidInput(proc.Ctx, "generate_series only support scalar")
 	}
 	switch startVec.GetType().Oid {
 	case types.T_int32:
 		if endVec.Typ.Oid != types.T_int32 || (stepVec != nil && stepVec.Typ.Oid != types.T_int32) {
-			return false, moerr.NewInvalidInput("generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.Typ.Oid.String(), endVec.Typ.Oid.String())
+			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.Typ.Oid.String(), endVec.Typ.Oid.String())
 		}
 		err = handleInt[int32](startVec, endVec, stepVec, generateInt32, false, proc, rbat)
 		if err != nil {
@@ -100,7 +101,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		}
 	case types.T_int64:
 		if endVec.Typ.Oid != types.T_int64 || (stepVec != nil && stepVec.Typ.Oid != types.T_int64) {
-			return false, moerr.NewInvalidInput("generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.Typ.Oid.String(), endVec.Typ.Oid.String())
+			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.Typ.Oid.String(), endVec.Typ.Oid.String())
 		}
 		err = handleInt[int64](startVec, endVec, stepVec, generateInt64, false, proc, rbat)
 		if err != nil {
@@ -108,12 +109,12 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		}
 	case types.T_datetime:
 		if endVec.Typ.Oid != types.T_datetime || (stepVec != nil && stepVec.Typ.Oid != types.T_varchar) {
-			return false, moerr.NewInvalidInput("generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.Typ.Oid.String(), endVec.Typ.Oid.String())
+			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.Typ.Oid.String(), endVec.Typ.Oid.String())
 		}
 		err = handleDatetime(startVec, endVec, stepVec, false, proc, rbat)
 	case types.T_varchar:
 		if stepVec == nil {
-			return false, moerr.NewInvalidInput("generate_series must specify step")
+			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series must specify step")
 		}
 		startSlice := vector.MustStrCols(startVec)
 		endSlice := vector.MustStrCols(endVec)
@@ -150,16 +151,16 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		}
 
 	default:
-		return false, moerr.NewNotSupported("generate_series not support type %s", startVec.Typ.Oid.String())
+		return false, moerr.NewNotSupported(proc.Ctx, "generate_series not support type %s", startVec.Typ.Oid.String())
 
 	}
 	proc.SetInputBatch(rbat)
 	return false, nil
 }
 
-func judgeArgs[T generateSeriesNumber](start, end, step T) ([]T, error) {
+func judgeArgs[T generateSeriesNumber](ctx context.Context, start, end, step T) ([]T, error) {
 	if step == 0 {
-		return nil, moerr.NewInvalidInput("step size cannot equal zero")
+		return nil, moerr.NewInvalidInput(ctx, "step size cannot equal zero")
 	}
 	if start == end {
 		return []T{start}, nil
@@ -179,24 +180,24 @@ func trimStep(step string) string {
 	return step
 }
 
-func genStep(step string) (num int64, tp types.IntervalType, err error) {
+func genStep(ctx context.Context, step string) (num int64, tp types.IntervalType, err error) {
 	step = trimStep(step)
 	s := strings.Split(step, " ")
 	if len(s) != 2 {
-		err = moerr.NewInvalidInput("invalid step '%s'", step)
+		err = moerr.NewInvalidInput(ctx, "invalid step '%s'", step)
 		return
 	}
 	num, err = strconv.ParseInt(s[0], 10, 64)
 	if err != nil {
-		err = moerr.NewInvalidInput("invalid step '%s'", step)
+		err = moerr.NewInvalidInput(ctx, "invalid step '%s'", step)
 		return
 	}
 	tp, err = types.IntervalTypeOf(s[1])
 	return
 }
 
-func generateInt32(start, end, step int32) ([]int32, error) {
-	res, err := judgeArgs(start, end, step)
+func generateInt32(ctx context.Context, start, end, step int32) ([]int32, error) {
+	res, err := judgeArgs(ctx, start, end, step)
 	if err != nil {
 		return nil, err
 	}
@@ -221,8 +222,8 @@ func generateInt32(start, end, step int32) ([]int32, error) {
 	return res, nil
 }
 
-func generateInt64(start, end, step int64) ([]int64, error) {
-	res, err := judgeArgs(start, end, step)
+func generateInt64(ctx context.Context, start, end, step int64) ([]int64, error) {
+	res, err := judgeArgs(ctx, start, end, step)
 	if err != nil {
 		return nil, err
 	}
@@ -247,13 +248,13 @@ func generateInt64(start, end, step int64) ([]int64, error) {
 	return res, nil
 }
 
-func generateDatetime(start, end types.Datetime, stepStr string, precision int32) ([]types.Datetime, error) {
-	step, tp, err := genStep(stepStr)
+func generateDatetime(ctx context.Context, start, end types.Datetime, stepStr string, precision int32) ([]types.Datetime, error) {
+	step, tp, err := genStep(ctx, stepStr)
 	if err != nil {
 		return nil, err
 	}
 	var res []types.Datetime
-	res, err = judgeArgs(start, end, types.Datetime(step)) // here, transfer step to types.Datetime may change the inner behavior of datetime, but we just care the sign of step.
+	res, err = judgeArgs(ctx, start, end, types.Datetime(step)) // here, transfer step to types.Datetime may change the inner behavior of datetime, but we just care the sign of step.
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +267,7 @@ func generateDatetime(start, end types.Datetime, stepStr string, precision int32
 			var ok bool
 			i, ok = i.AddInterval(step, tp, types.DateTimeType)
 			if !ok {
-				return nil, moerr.NewInvalidInput("invalid step '%s'", stepStr)
+				return nil, moerr.NewInvalidInput(ctx, "invalid step '%s'", stepStr)
 			}
 		}
 	} else {
@@ -275,14 +276,14 @@ func generateDatetime(start, end types.Datetime, stepStr string, precision int32
 			var ok bool
 			i, ok = i.AddInterval(step, tp, types.DateTimeType)
 			if !ok {
-				return nil, moerr.NewInvalidInput("invalid step '%s'", stepStr)
+				return nil, moerr.NewInvalidInput(ctx, "invalid step '%s'", stepStr)
 			}
 		}
 	}
 	return res, nil
 }
 
-func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn func(T, T, T) ([]T, error), toString bool, proc *process.Process, rbat *batch.Batch) error {
+func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn func(context.Context, T, T, T) ([]T, error), toString bool, proc *process.Process, rbat *batch.Batch) error {
 	var (
 		start, end, step T
 	)
@@ -300,7 +301,7 @@ func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn 
 			step = -1
 		}
 	}
-	res, err := genFn(start, end, step)
+	res, err := genFn(proc.Ctx, start, end, step)
 	if err != nil {
 		return err
 	}
@@ -328,11 +329,11 @@ func handleDatetime(startVec, endVec, stepVec *vector.Vector, toString bool, pro
 	start = startSlice[0]
 	end = endSlice[0]
 	if stepVec == nil {
-		return moerr.NewInvalidInput("generate_series datetime must specify step")
+		return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime must specify step")
 	}
 	stepSlice := vector.MustStrCols(stepVec)
 	step = stepSlice[0]
-	res, err := generateDatetime(start, end, step, startVec.Typ.Precision)
+	res, err := generateDatetime(proc.Ctx, start, end, step, startVec.Typ.Precision)
 	if err != nil {
 		return err
 	}

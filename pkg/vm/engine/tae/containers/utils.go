@@ -58,7 +58,7 @@ func FillBufferWithBytes(bs *Bytes, buffer *bytes.Buffer) *Bytes {
 }
 
 func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...*mpool.MPool) (cloned Vector) {
-	opts := new(Options)
+	opts := Options{}
 	// XXX what does the following test mean?
 	if len(allocator) > 0 {
 		opts.Allocator = common.DefaultAllocator
@@ -223,7 +223,7 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 			bs.Header, bs.Storage = movec.MustVarlenaRawData(v)
 		}
 	default:
-		panic(any(moerr.NewInternalError("%s not supported", v.Typ.String())))
+		panic(any(moerr.NewInternalErrorNoCtx("%s not supported", v.Typ.String())))
 	}
 	var np *roaring64.Bitmap
 	if v.Nsp.Np != nil {
@@ -614,7 +614,7 @@ func UpdateValue(col *movec.Vector, row uint32, val any) {
 	case types.T_varchar, types.T_char, types.T_json, types.T_blob, types.T_text:
 		GenericUpdateBytes(col, row, val)
 	default:
-		panic(moerr.NewInternalError("%v not supported", col.Typ))
+		panic(moerr.NewInternalErrorNoCtx("%v not supported", col.Typ))
 	}
 }
 

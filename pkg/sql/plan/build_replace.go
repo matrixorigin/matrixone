@@ -21,5 +21,5 @@ import (
 
 func buildReplace(stmt *tree.Replace, ctx CompilerContext) (p *Plan, err error) {
 	// no support replace now
-	return nil, moerr.NewNotSupported("Not support replace statement")
+	return nil, moerr.NewNotSupported(ctx.GetContext(), "Not support replace statement")
 }
