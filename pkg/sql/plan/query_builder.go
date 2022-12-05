@@ -2140,7 +2140,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				}
 			}
 
-			if joinSides[i]&JoinSideRight != 0 && canTurnInner && node.JoinType == plan.Node_LEFT && rejectsNull(filter) {
+			if joinSides[i]&JoinSideRight != 0 && canTurnInner && node.JoinType == plan.Node_LEFT && rejectsNull(filter, builder.compCtx.GetProcess()) {
 				for _, cond := range node.OnList {
 					filters = append(filters, splitPlanConjunction(applyDistributivity(cond))...)
 				}

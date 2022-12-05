@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -45,6 +46,7 @@ func New(
 		TxnOperator:       txnOperator,
 		FileService:       fileService,
 		GetClusterDetails: getClusterDetails,
+		UnixTime:          time.Now().UnixNano(),
 		LastInsertID:      new(uint64),
 	}
 }
@@ -69,6 +71,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.SessionInfo = p.SessionInfo
 	proc.FileService = p.FileService
 	proc.GetClusterDetails = p.GetClusterDetails
+	proc.UnixTime = p.UnixTime
 
 	// reg and cancel
 	proc.Ctx = newctx

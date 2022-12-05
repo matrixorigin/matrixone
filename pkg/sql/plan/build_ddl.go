@@ -338,7 +338,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 				primaryKeys = pks
 			}
 
-			defaultValue, err := buildDefaultExpr(def, colType)
+			defaultValue, err := buildDefaultExpr(def, colType, ctx.GetProcess())
 			if err != nil {
 				return err
 			}
@@ -346,7 +346,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 				return moerr.NewInvalidInput(ctx.GetContext(), "invalid default value for '%s'", def.Name.Parts[0])
 			}
 
-			onUpdateExpr, err := buildOnUpdate(def, colType)
+			onUpdateExpr, err := buildOnUpdate(def, colType, ctx.GetProcess())
 			if err != nil {
 				return err
 			}
