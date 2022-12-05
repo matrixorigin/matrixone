@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -144,7 +145,7 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 	return nil, moerr.NewInternalErrorNoCtx("unknown data type")
 }
 
-func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, error) {
+func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Process) (*plan.Default, error) {
 	nullAbility := true
 	var expr tree.Expr = nil
 	for _, attr := range col.Attributes {
@@ -198,7 +199,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 	// try to calculate default value, return err if fails
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	newExpr, err := ConstantFold(bat, DeepCopyExpr(defaultExpr))
+	newExpr, err := ConstantFold(bat, DeepCopyExpr(defaultExpr), proc)
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +213,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 	}, nil
 }
 
-func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.OnUpdate, error) {
+func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Process) (*plan.OnUpdate, error) {
 	var expr tree.Expr = nil
 
 	for _, attr := range col.Attributes {
@@ -240,7 +241,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.OnUpdate, er
 	// try to calculate on update value, return err if fails
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	_, err = colexec.EvalExpr(bat, nil, onUpdateExpr)
+	_, err = colexec.EvalExpr(bat, proc, onUpdateExpr)
 	if err != nil {
 		return nil, err
 	}

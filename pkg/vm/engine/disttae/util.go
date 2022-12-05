@@ -198,7 +198,7 @@ func getZonemapDataFromMeta(ctx context.Context, columns []int, meta BlockMeta, 
 
 func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
 	if len(bat.Vecs) == 0 { //that's constant expr
-		e, err := plan2.ConstantFold(bat, expr)
+		e, err := plan2.ConstantFold(bat, expr, proc)
 		if err != nil {
 			return false, err
 		}
