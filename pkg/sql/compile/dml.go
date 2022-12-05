@@ -52,10 +52,14 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 		}
 		tableID = rel.GetTableID(c.ctx)
 
-		for _, info := range arg.DeleteCtxs[0].IndexInfos {
-			err = dbSource.Truncate(c.ctx, info.TableName)
-			if err != nil {
-				return 0, err
+		if arg.DeleteCtxs[0].UniqueIndexDef != nil {
+			for i := range arg.DeleteCtxs[0].UniqueIndexDef.TableNames {
+				if arg.DeleteCtxs[0].UniqueIndexDef.TableExists[i] {
+					err = dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].UniqueIndexDef.TableNames[i])
+					if err != nil {
+						return 0, err
+					}
+				}
 			}
 		}
 
@@ -156,18 +160,22 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 			}
 		}
 	}
-	for _, indexInfo := range p.IndexInfos {
-		indexRelation, err := dbSource.Relation(c.ctx, indexInfo.TableName)
-		if err != nil {
-			return 0, err
-		}
-		indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, indexInfo.Cols, c.proc)
-		if rowNum != 0 {
-			if err := indexRelation.Write(c.ctx, indexBatch); err != nil {
-				return 0, err
+	if p.UniqueIndexDef != nil {
+		for i := range p.UniqueIndexDef.IndexNames {
+			if p.UniqueIndexDef.TableExists[i] {
+				indexRelation, err := dbSource.Relation(c.ctx, p.UniqueIndexDef.TableNames[i])
+				if err != nil {
+					return 0, err
+				}
+				indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, p.UniqueIndexDef.Fields[i].Cols, c.proc)
+				if rowNum != 0 {
+					if err := indexRelation.Write(c.ctx, indexBatch); err != nil {
+						return 0, err
+					}
+				}
+				indexBatch.Clean(c.proc.Mp())
 			}
 		}
-		indexBatch.Clean(c.proc.Mp())
 	}
 
 	if err := relation.Write(c.ctx, bat); err != nil {

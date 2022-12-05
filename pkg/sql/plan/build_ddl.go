@@ -300,7 +300,6 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 					return moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
 				}
 			}
-
 			var pks []string
 			var comment string
 			var auto_incr bool
@@ -465,13 +464,13 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 }
 
 func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
-	indexNumber := 0
-	def := &plan.IndexDef{
+	def := &plan.UniqueIndexDef{
 		Fields: make([]*plan.Field, 0),
 	}
 
 	for _, indexInfo := range indexInfos {
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), true, indexNumber, indexInfo.Name)
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), true, indexInfo.Name)
+
 		if err != nil {
 			return err
 		}
@@ -479,20 +478,21 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			Name: indexTableName,
 		}
 		field := &plan.Field{
-			ColNames: make([]string, 0),
+			Parts: make([]string, 0),
+			Cols:  make([]*ColDef, 0),
 		}
 		for _, keyPart := range indexInfo.KeyParts {
 			name := keyPart.ColName.Parts[0]
 			if _, ok := colMap[name]; !ok {
 				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", name)
 			}
-			field.ColNames = append(field.ColNames, name)
+			field.Parts = append(field.Parts, name)
 		}
 
 		var keyName string
 		if len(indexInfo.KeyParts) == 1 {
-			keyName = field.ColNames[0]
-			tableDef.Cols = append(tableDef.Cols, &ColDef{
+			keyName = field.Parts[0]
+			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
@@ -504,7 +504,8 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 					Expr:         nil,
 					OriginString: "",
 				},
-			})
+			}
+			tableDef.Cols = append(tableDef.Cols, colDef)
 			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Pk{
 					Pk: &plan.PrimaryKeyDef{
@@ -512,9 +513,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 					},
 				},
 			})
+			field.Cols = append(field.Cols, colDef)
 		} else {
-			keyName = util.BuildCompositePrimaryKeyColumnName(field.ColNames)
-			tableDef.Cols = append(tableDef.Cols, &ColDef{
+			keyName = util.BuildCompositePrimaryKeyColumnName(field.Parts)
+			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
@@ -527,7 +529,8 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 					Expr:         nil,
 					OriginString: "",
 				},
-			})
+			}
+			tableDef.Cols = append(tableDef.Cols, colDef)
 			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Pk{
 					Pk: &plan.PrimaryKeyDef{
@@ -535,16 +538,17 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 					},
 				},
 			})
+			field.Cols = append(field.Cols, colDef)
 		}
 		def.IndexNames = append(def.IndexNames, indexInfo.Name)
 		def.TableNames = append(def.TableNames, indexTableName)
-		def.Uniques = append(def.Uniques, true)
 		def.Fields = append(def.Fields, field)
+		def.TableExists = append(def.TableExists, true)
 		createTable.IndexTables = append(createTable.IndexTables, tableDef)
 	}
 	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-		Def: &plan.TableDef_DefType_Idx{
-			Idx: def,
+		Def: &plan.TableDef_DefType_UIdx{
+			UIdx: def,
 		},
 	})
 	return nil
@@ -572,10 +576,21 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		if isView {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 		}
-		indexInfos := BuildIndexInfos(ctx, truncateTable.Database, tableDef.Defs)
-		truncateTable.IndexTableNames = make([]string, len(indexInfos))
-		for i := range indexInfos {
-			truncateTable.IndexTableNames[i] = indexInfos[i].TableName
+		uDef, sDef := buildIndexDefs(tableDef.Defs)
+		truncateTable.IndexTableNames = make([]string, 0)
+		if uDef != nil {
+			for i := 0; i < len(uDef.TableNames); i++ {
+				if uDef.TableExists[i] {
+					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, uDef.TableNames[i])
+				}
+			}
+		}
+		if sDef != nil {
+			for i := 0; i < len(sDef.TableNames); i++ {
+				if sDef.TableExists[i] {
+					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, sDef.TableNames[i])
+				}
+			}
 		}
 	}
 
@@ -624,10 +639,21 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			// drop table if exists v0, v0 is view
 			dropTable.Table = ""
 		}
-		indexInfos := BuildIndexInfos(ctx, dropTable.Database, tableDef.Defs)
-		dropTable.IndexTableNames = make([]string, len(indexInfos))
-		for i := range indexInfos {
-			dropTable.IndexTableNames[i] = indexInfos[i].TableName
+		uDef, sDef := buildIndexDefs(tableDef.Defs)
+		dropTable.IndexTableNames = make([]string, 0)
+		if uDef != nil {
+			for i := 0; i < len(uDef.TableNames); i++ {
+				if uDef.TableExists[i] {
+					dropTable.IndexTableNames = append(dropTable.IndexTableNames, uDef.TableNames[i])
+				}
+			}
+		}
+		if sDef != nil {
+			for i := 0; i < len(sDef.TableNames); i++ {
+				if sDef.TableExists[i] {
+					dropTable.IndexTableNames = append(dropTable.IndexTableNames, sDef.TableNames[i])
+				}
+			}
 		}
 	}
 	return &Plan{

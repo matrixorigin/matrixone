@@ -72,9 +72,6 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from view")
 	}
 
-	indexInfos := BuildIndexInfos(ctx, objRef.DbName, tableDef.Defs)
-	tableDef.IndexInfos = indexInfos
-
 	// optimize to truncate,
 	if stmt.Where == nil && stmt.Limit == nil {
 		return buildDelete2Truncate(objRef, tableDef)
@@ -106,14 +103,17 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 	usePlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_DELETE
 	qry := usePlan.Plan.(*plan.Plan_Query).Query
 
+	uDef, sDef := buildIndexDefs(tableDef.Defs)
+
 	// build delete node
 	d := &plan.DeleteTableCtx{
-		DbName:       objRef.SchemaName,
-		TblName:      tableDef.Name,
-		UseDeleteKey: useKey.Name,
-		CanTruncate:  false,
-		IndexInfos:   tableDef.IndexInfos,
-		IndexAttrs:   attrs,
+		DbName:            objRef.SchemaName,
+		TblName:           tableDef.Name,
+		UseDeleteKey:      useKey.Name,
+		CanTruncate:       false,
+		UniqueIndexDef:    uDef,
+		SecondaryIndexDef: sDef,
+		IndexAttrs:        attrs,
 	}
 	node := &Node{
 		NodeType:        plan.Node_DELETE,
@@ -131,11 +131,13 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 
 func buildDelete2Truncate(objRef *ObjectRef, tblDef *TableDef) (*Plan, error) {
 	// build delete node
+	uDef, sDef := buildIndexDefs(tblDef.Defs)
 	d := &plan.DeleteTableCtx{
-		DbName:      objRef.SchemaName,
-		TblName:     tblDef.Name,
-		CanTruncate: true,
-		IndexInfos:  tblDef.IndexInfos,
+		DbName:            objRef.SchemaName,
+		TblName:           tblDef.Name,
+		CanTruncate:       true,
+		UniqueIndexDef:    uDef,
+		SecondaryIndexDef: sDef,
 	}
 	node := &Node{
 		NodeType:        plan.Node_DELETE,
@@ -278,18 +280,35 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 
 	// make true we can get all the index col data before update, so we can delete index info.
 	indexColNameMap := make(map[string]bool)
-	for _, info := range tableDef.IndexInfos {
-		if info.Cols[0].IsCPkey {
-			colNames := util.SplitCompositePrimaryKeyColumnName(info.Cols[0].Name)
-			for _, colName := range colNames {
-				indexColNameMap[colName] = true
+	uDef, sDef := buildIndexDefs(tableDef.Defs)
+	if uDef != nil {
+		for _, def := range uDef.Fields {
+			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(def.Cols[0].Name)
+			if isCPkey {
+				colNames := util.SplitCompositePrimaryKeyColumnName(def.Cols[0].Name)
+				for _, colName := range colNames {
+					indexColNameMap[colName] = true
+				}
+			} else {
+				indexColNameMap[def.Cols[0].Name] = true
 			}
-		} else {
-			indexColNameMap[info.Cols[0].Name] = true
 		}
 	}
-	indexAttrs := make([]string, 0)
+	if sDef != nil {
+		for _, def := range sDef.Fields {
+			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(def.Cols[0].Name)
+			if isCPkey {
+				colNames := util.SplitCompositePrimaryKeyColumnName(def.Cols[0].Name)
+				for _, colName := range colNames {
+					indexColNameMap[colName] = true
+				}
+			} else {
+				indexColNameMap[def.Cols[0].Name] = true
+			}
+		}
+	}
 
+	indexAttrs := make([]string, 0)
 	for indexColName := range indexColNameMap {
 		indexAttrs = append(indexAttrs, indexColName)
 		e, _ := tree.NewUnresolvedName(ctx.GetContext(), tf.baseNameMap[tableDef.Name], indexColName)

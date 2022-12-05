@@ -62,8 +62,6 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		} else if tblRef.TableType == catalog.SystemViewRel {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "view is not support update operation")
 		}
-		indexInfos := BuildIndexInfos(ctx, tf.dbNames[i], tblRef.Defs)
-		tblRef.IndexInfos = indexInfos
 		objRefs = append(objRefs, objRef)
 		tblRefs = append(tblRefs, tblRef)
 	}
@@ -260,14 +258,31 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 		var onUpdateCols []updateCol
 		// make true we can get all the index col data before update, so we can delete index info.
 		indexColNameMap := make(map[string]bool)
-		for _, info := range tblRefs[k].IndexInfos {
-			if info.Cols[0].IsCPkey {
-				colNames := util.SplitCompositePrimaryKeyColumnName(info.Cols[0].Name)
-				for _, colName := range colNames {
-					indexColNameMap[colName] = true
+		uDef, sDef := buildIndexDefs(tblRefs[k].Defs)
+		if uDef != nil {
+			for _, def := range uDef.Fields {
+				isCPkey := util.JudgeIsCompositePrimaryKeyColumn(def.Cols[0].Name)
+				if isCPkey {
+					colNames := util.SplitCompositePrimaryKeyColumnName(def.Cols[0].Name)
+					for _, colName := range colNames {
+						indexColNameMap[colName] = true
+					}
+				} else {
+					indexColNameMap[def.Cols[0].Name] = true
 				}
-			} else {
-				indexColNameMap[info.Cols[0].Name] = true
+			}
+		}
+		if sDef != nil {
+			for _, def := range sDef.Fields {
+				isCPkey := util.JudgeIsCompositePrimaryKeyColumn(def.Cols[0].Name)
+				if isCPkey {
+					colNames := util.SplitCompositePrimaryKeyColumnName(def.Cols[0].Name)
+					for _, colName := range colNames {
+						indexColNameMap[colName] = true
+					}
+				} else {
+					indexColNameMap[def.Cols[0].Name] = true
+				}
 			}
 		}
 		for _, col := range tblRefs[k].Cols {
@@ -334,7 +349,7 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 			e, _ := tree.NewUnresolvedName(ctx.GetContext(), updateCols[0].aliasTblName, attr)
 			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 		}
-		if len(priKeys) > 0 && priKeys[0].IsCPkey {
+		if len(priKeys) > 0 && util.JudgeIsCompositePrimaryKeyColumn(priKeys[0].Name) {
 			ct.CompositePkey = priKeys[0]
 		}
 		updateCtxs = append(updateCtxs, ct)

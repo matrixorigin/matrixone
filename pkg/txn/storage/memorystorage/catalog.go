@@ -103,14 +103,16 @@ func (d *DatabaseRow) AttrByName(handler *MemHandler, tx *Transaction, name stri
 }
 
 type RelationRow struct {
-	ID           ID
-	DatabaseID   ID
-	Name         []byte
-	Type         memoryengine.RelationType
-	Comments     []byte
-	Properties   map[string]string
-	PartitionDef []byte
-	ViewDef      []byte
+	ID                ID
+	DatabaseID        ID
+	Name              []byte
+	Type              memoryengine.RelationType
+	Comments          []byte
+	Properties        map[string]string
+	PartitionDef      []byte
+	ViewDef           []byte
+	UniqueIndexDef    []byte
+	SecondaryIndexDef []byte
 }
 
 func (r *RelationRow) Key() ID {
@@ -339,36 +341,6 @@ func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name str
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
 	return
-}
-
-type IndexRow struct {
-	ID         ID
-	RelationID ID
-	IndexName  string
-	Unique     bool
-	TableName  string
-	Field      []string
-}
-
-func (i *IndexRow) Key() ID {
-	return i.ID
-}
-
-func (i *IndexRow) Value() *IndexRow {
-	return i
-}
-
-func (i *IndexRow) Indexes() []Tuple {
-	return []Tuple{
-		{index_RelationID, i.RelationID},
-		{index_RelationID_Name, i.RelationID, Text(i.IndexName)},
-	}
-}
-
-func (i *IndexRow) UniqueIndexes() []Tuple {
-	return []Tuple{
-		{index_RelationID_Name, i.RelationID, Text(i.IndexName)},
-	}
 }
 
 func verifyAttr(
