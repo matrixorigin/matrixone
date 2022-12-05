@@ -249,7 +249,7 @@ const (
 	DATE_FORMAT  // DATE_FORMAT
 	JSON_EXTRACT // JSON_EXTRACT
 	FORMAT       // FORMAT
-	SLEEP // sleep for a while
+	SLEEP        // sleep for a while
 
 	UUID
 	SERIAL
@@ -270,8 +270,6 @@ const (
 	MO_CTL
 
 	MO_SHOW_VISIBLE_BIN // parse type/onUpdate/default []byte to visible string
-
-
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
