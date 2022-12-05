@@ -232,6 +232,11 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
 }
 
+func (tbl *table) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
+	// implement me
+	return nil
+}
+
 func (tbl *table) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
 	var attrs []*engine.Attribute
 	for _, def := range tbl.defs {
