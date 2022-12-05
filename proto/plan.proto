@@ -56,7 +56,7 @@ message Const {
 		int64 datetimeval			= 16;
 		decimal64 decimal64val 		= 17;
 		decimal128 decimal128val 	= 18;
-		timestamp timestampval 			= 19;
+		int64 timestampval 			= 19;
 		string jsonval 				= 20;
 		bool defaultval 			= 21;
 		bool updateVal 				= 22;
@@ -195,10 +195,6 @@ message decimal64 {
 message decimal128 {
 	int64 a = 1;
 	int64 b = 2;
-}
-message timestamp{
-	int64 val = 1;
-	int32 precision = 2;
 }
 
 message ColDef {
@@ -507,7 +503,7 @@ message Node {
 
 	repeated Expr tbl_func_expr_list = 25;
 
-    // The pipeline will determine the parallelism by traversing the plan
+    // The pipeline will determine the parallelism by traversing the plan 
     // when it is received. Then the build is built based on this information.
     int32   parallelism = 26;
 }

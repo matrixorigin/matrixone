@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -104,7 +103,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process, isPrepa
 	ec := &plan.Expr_C{
 		C: c,
 	}
-	e.Typ = plan2.MakePlan2Type(&vec.Typ)
+	e.Typ = &plan.Type{Id: int32(vec.Typ.Oid), Precision: vec.Typ.Precision, Scale: vec.Typ.Scale, Width: vec.Typ.Width, Size: vec.Typ.Size}
 	e.Expr = ec
 	return e
 }
@@ -181,13 +180,9 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 			},
 		}
 	case types.T_timestamp:
-		val := vector.MustTCols[types.Timestamp](vec)[0]
 		return &plan.Const{
 			Value: &plan.Const_Timestampval{
-				Timestampval: &plan.Timestamp{
-					Val:       int64(val),
-					Precision: vec.Typ.Precision,
-				},
+				Timestampval: int64(vector.MustTCols[types.Timestamp](vec)[0]),
 			},
 		}
 	default:

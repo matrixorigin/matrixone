@@ -103,11 +103,11 @@ func getConstVec(proc *process.Process, expr *plan.Expr, length int) (*vector.Ve
 			d128 := types.Decimal128FromInt64Raw(cd128.A, cd128.B)
 			vec = vector.NewConstFixed(constDecimal128Type, length, d128, proc.Mp())
 		case *plan.Const_Timestampval:
-			pre := t.C.GetTimestampval().GetPrecision()
+			pre := expr.Typ.Precision
 			if pre < 0 || pre > 6 {
 				return nil, moerr.NewInternalError(moerr.Context(), "invalid timestamp precision")
 			}
-			vec = vector.NewConstFixed(constTimestampTypes[pre], length, types.Timestamp(t.C.GetTimestampval().GetVal()), proc.Mp())
+			vec = vector.NewConstFixed(constTimestampTypes[pre], length, types.Timestamp(t.C.GetTimestampval()), proc.Mp())
 		case *plan.Const_Sval:
 			sval := t.C.GetSval()
 			vec = vector.NewConstString(constSType, length, sval, proc.Mp())

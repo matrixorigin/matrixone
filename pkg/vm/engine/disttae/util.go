@@ -374,7 +374,7 @@ func getPkValueByExpr(expr *plan.Expr, pkName string, oid types.T) (bool, any) {
 	case *plan.Const_Decimal128Val:
 		return transferDecimal128val(val.Decimal128Val.A, val.Decimal128Val.B, oid)
 	case *plan.Const_Timestampval:
-		return transferTimestampval(val.Timestampval.Val, oid)
+		return transferTimestampval(val.Timestampval, oid)
 	case *plan.Const_Jsonval:
 		return transferSval(val.Jsonval, oid)
 	}

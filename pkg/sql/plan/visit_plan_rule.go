@@ -357,6 +357,7 @@ func (rule *ResetRealTimeFunctionRule) ApplyExpr(e *plan.Expr) (*plan.Expr, erro
 		ec := &plan.Expr_C{
 			C: c,
 		}
+		e.Typ = &plan.Type{Id: int32(vec.Typ.Oid), Precision: vec.Typ.Precision, Scale: vec.Typ.Scale, Width: vec.Typ.Width, Size: vec.Typ.Size}
 		e.Expr = ec
 		return e, nil
 	default:
@@ -373,10 +374,7 @@ func getTimeRelatedConstant(vec *vector.Vector) *plan.Const {
 		val := vector.MustTCols[types.Timestamp](vec)[0]
 		return &plan.Const{
 			Value: &plan.Const_Timestampval{
-				Timestampval: &plan.Timestamp{
-					Val:       int64(val),
-					Precision: vec.Typ.Precision,
-				},
+				Timestampval: int64(val),
 			},
 		}
 	default:
