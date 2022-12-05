@@ -238,7 +238,10 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		if util.FindPrimaryKey(createTable.TableDef) {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
 		}
-		colName := stmt.ClusterByOption.ColName.Parts[0]
+		if len(stmt.ClusterByOption.ColumnList) > 1 {
+			return nil, moerr.NewNYI(ctx.GetContext(), "cluster by multi columns")
+		}
+		colName := stmt.ClusterByOption.ColumnList[0].Parts[0]
 		var found bool
 		for _, col := range createTable.TableDef.Cols {
 			if col.Name == colName {

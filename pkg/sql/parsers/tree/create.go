@@ -1787,7 +1787,7 @@ func NewSubPartition(n Identifier, o []TableOption) *SubPartition {
 }
 
 type ClusterByOption struct {
-	ColName *UnresolvedName
+	ColumnList []*UnresolvedName
 }
 
 type PartitionOption struct {

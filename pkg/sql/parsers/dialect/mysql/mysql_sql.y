@@ -4560,7 +4560,14 @@ cluster_by_opt:
 |   CLUSTER BY column_name
     {
         $$ = &tree.ClusterByOption{
-            ColName : $3,
+            ColumnList : []*tree.UnresolvedName{$3},
+        }
+
+    }
+    | CLUSTER BY '(' column_name_list ')'
+    {
+        $$ = &tree.ClusterByOption{
+            ColumnList : $4,
         }
     }
 
