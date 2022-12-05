@@ -255,7 +255,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	}
 
 	nodeID, _ = builder.pushdownFilters(nodeID, conds)
-	ReCalcNodeCost(nodeID, builder, true)
+	ReCalcNodeStats(nodeID, builder, true)
 
 	return nodeID
 }

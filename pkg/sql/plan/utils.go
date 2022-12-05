@@ -621,12 +621,12 @@ func DeduceSelectivity(expr *plan.Expr) float64 {
 	return 1
 }
 
-func ReCalcNodeCost(nodeID int32, builder *QueryBuilder, recursive bool) {
+func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 	node := builder.qry.Nodes[nodeID]
 	if recursive {
 		if len(node.Children) > 0 {
 			for _, child := range node.Children {
-				ReCalcNodeCost(child, builder, recursive)
+				ReCalcNodeStats(child, builder, recursive)
 			}
 		}
 	}
