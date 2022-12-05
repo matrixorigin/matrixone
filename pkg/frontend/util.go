@@ -385,7 +385,7 @@ func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
 		bat := batch.NewWithSize(0)
 		bat.Zs = []int64{1}
-		vec, err := colexec.EvalExpr(bat, nil, planExpr)
+		vec, err := colexec.EvalExpr(bat, ses.txnCompileCtx.GetProcess(), planExpr)
 		if err != nil {
 			return nil, err
 		}

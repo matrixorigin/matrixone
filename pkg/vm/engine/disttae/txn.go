@@ -108,6 +108,9 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 		if col.constraintType == catalog.SystemColPKConstraint {
 			tbl.primaryIdx = i
 		}
+		if col.isClusterBy == 1 {
+			tbl.clusterByIdx = i
+		}
 		defs = append(defs, genTableDefOfColumn(col))
 	}
 	return tbl, defs, nil

@@ -207,6 +207,7 @@ message ColDef {
 	string comment		= 7;
 	OnUpdate on_update  = 8;
 	bool low_cardinality = 9;
+	bool clusterBy		=10;
 }
 
 message Default {
@@ -222,6 +223,10 @@ message OnUpdate {
 
 message PrimaryKeyDef {
 	repeated string names = 1;
+}
+
+message ClusterByDef {
+	string name = 1;
 }
 
 message Property {
@@ -299,6 +304,7 @@ message TableDef {
 			PartitionInfo partition				= 4;
 			UniqueIndexDef uIdx				= 5;
 			SecondaryIndexDef sIdx				= 6;
+			ClusterByDef cb				=7;
 		}
 	}
 	string name				= 1;

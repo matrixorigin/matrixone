@@ -86,6 +86,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	rowCount := 0
 	var pkDefs []string
+	var cbDef string
 
 	for _, col := range tableDef.Cols {
 		colName := col.Name
@@ -132,6 +133,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		if col.Primary {
 			pkDefs = append(pkDefs, colName)
 		}
+		if col.ClusterBy {
+			cbDef = col.Name
+		}
 	}
 	if tableDef.CompositePkey != nil {
 		pkDefs = append(pkDefs, util.SplitCompositePrimaryKeyColumnName(tableDef.CompositePkey.Name)...)
@@ -156,6 +160,11 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		createStr += "\n"
 	}
 	createStr += ")"
+
+	if len(cbDef) > 0 {
+		createStr += " CLUSTER BY "
+		createStr += fmt.Sprintf("`%s`", cbDef)
+	}
 
 	var comment string
 	var partition string
