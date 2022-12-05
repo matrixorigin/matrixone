@@ -35,12 +35,12 @@ func Sleep[T number](vs []*vector.Vector, proc *process.Process) (rs *vector.Vec
 	resultType := types.T_uint8.ToType()
 	inputs := vs[0]
 	if inputs.Nsp.Any() {
-		err = moerr.NewInvalidArg("sleep", "input contains null")
+		err = moerr.NewInvalidArg(proc.Ctx, "sleep", "input contains null")
 		return
 	}
 	sleepSlice := vector.MustTCols[T](inputs)
 	if checkNegative(sleepSlice) {
-		err = moerr.NewInvalidArg("sleep", "input contains negative")
+		err = moerr.NewInvalidArg(proc.Ctx, "sleep", "input contains negative")
 		return
 	}
 	if inputs.IsScalar() {
