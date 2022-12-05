@@ -323,12 +323,17 @@ message TableFunction{
 }
 
 
-message Cost {
-	double card		= 1;
-	double rowsize	= 2;
-	double ndv		= 3;
-	double start	= 4;
-	double total	= 5;
+message Stats {
+	//for scan, number of blocks to read from S3
+	//for other nodes, it's meaningless
+	int32  block_num        = 1;
+	//for scan, cost of reading from S3, basically the read lines
+	//for other nodes, it means the estimated cost of current node
+	double cost				= 2;
+	//number of output lines
+	double outcnt			= 3;
+	double rowsize	        = 4;
+	repeated double ndv		= 5;
 }
 
 message ColData {
@@ -475,7 +480,7 @@ message Node {
 
 	NodeType node_type = 1;
 	int32 node_id = 2;
-	Cost cost = 3;
+	Stats stats = 3;
 
 	repeated Expr project_list = 4;
 	repeated int32 children = 5;

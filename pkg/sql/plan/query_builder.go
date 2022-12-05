@@ -1704,7 +1704,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType:    nodeType,
-			Cost:        builder.compCtx.Cost(obj, nil),
+			Stats:       nil,
 			ObjRef:      obj,
 			TableDef:    tableDef,
 			BindingTags: []int32{builder.genNewTag()},

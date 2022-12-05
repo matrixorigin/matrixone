@@ -46,8 +46,8 @@ func (e *Engine) NewCompilerContext(
 
 var _ plan.CompilerContext = new(CompilerContext)
 
-func (*CompilerContext) Cost(obj *plan.ObjectRef, e *plan.Expr) *plan.Cost {
-	return &plan.Cost{}
+func (*CompilerContext) Stats(obj *plan.ObjectRef, e *plan.Expr) *plan.Stats {
+	return &plan.Stats{}
 }
 
 func (c *CompilerContext) GetProcess() *process.Process {

@@ -123,13 +123,13 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		newNode.TableDefVec[i] = DeepCopyTableDef(tbl)
 	}
 
-	if node.Cost != nil {
-		newNode.Cost = &plan.Cost{
-			Card:    node.Cost.Card,
-			Rowsize: node.Cost.Rowsize,
-			Ndv:     node.Cost.Ndv,
-			Start:   node.Cost.Start,
-			Total:   node.Cost.Total,
+	if node.Stats != nil {
+		newNode.Stats = &plan.Stats{
+			BlockNum: node.Stats.BlockNum,
+			Rowsize:  node.Stats.Rowsize,
+			Ndv:      node.Stats.Ndv,
+			Cost:     node.Stats.Cost,
+			Outcnt:   node.Stats.Outcnt,
 		}
 	}
 

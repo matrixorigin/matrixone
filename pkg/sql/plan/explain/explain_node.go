@@ -163,7 +163,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 
 		if options.Verbose {
 			costDescImpl := &CostDescribeImpl{
-				Cost: ndesc.Node.GetCost(),
+				Stats: ndesc.Node.GetStats(),
 			}
 			costInfo, err := costDescImpl.GetDescription(ctx, options)
 			if err != nil {
@@ -445,21 +445,24 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 }
 
 type CostDescribeImpl struct {
-	Cost *plan.Cost
+	Stats *plan.Stats
 }
 
 func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
-	//(cost=11.75..13.15 rows=140 width=4)
 	var result string
-	if c.Cost == nil {
-		result = " (total=0 card=0)"
+	if c.Stats == nil {
+		result = " (cost=0 outcnt=0)"
 		//result = " (cost=%.2f..%.2f rows=%.2f ndv=%.2f rowsize=%.f)"
 	} else {
-		result = " (total=" + strconv.FormatFloat(c.Cost.Total, 'f', 2, 64) +
-			" card=" + strconv.FormatFloat(c.Cost.Card, 'f', 2, 64) +
-			")"
-	}
+		var blockNumStr string
+		if c.Stats.BlockNum > 0 {
+			blockNumStr = " blockNum=" + strconv.FormatInt(int64(c.Stats.BlockNum), 10)
+		}
 
+		result = " (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +
+			" outcnt=" + strconv.FormatFloat(c.Stats.Outcnt, 'f', 2, 64) +
+			blockNumStr + ")"
+	}
 	return result, nil
 }
 

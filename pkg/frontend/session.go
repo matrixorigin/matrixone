@@ -1860,8 +1860,8 @@ func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
 	}
 }
 
-func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) (cost *plan2.Cost) {
-	cost = new(plan2.Cost)
+func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (cost *plan2.Stats) {
+	cost = new(plan2.Stats)
 	dbName := obj.GetSchemaName()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
@@ -1880,8 +1880,8 @@ func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) (cost *
 	if err != nil {
 		return
 	}
-	cost.Total = float64(rows)
-	cost.Card = cost.Total * plan2.DeduceSelectivity(e)
+	cost.Cost = float64(rows)
+	cost.Outcnt = cost.Cost * plan2.DeduceSelectivity(e)
 	return
 }
 

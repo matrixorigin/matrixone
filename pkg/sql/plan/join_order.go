@@ -28,7 +28,7 @@ type joinEdge struct {
 type joinVertex struct {
 	node      *plan.Node
 	pks       []int32
-	card      float64
+	outcnt    float64
 	pkSelRate float64
 
 	children map[int32]any
@@ -120,68 +120,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 			for i, child := range node.Children {
 				node.Children[i] = builder.determineJoinOrder(child)
 			}
-
-			switch node.NodeType {
-			case plan.Node_JOIN:
-				leftCost := builder.qry.Nodes[node.Children[0]].Cost
-				rightCost := builder.qry.Nodes[node.Children[1]].Cost
-
-				switch node.JoinType {
-				case plan.Node_LEFT:
-					card := leftCost.Card * rightCost.Card
-					if len(node.OnList) > 0 {
-						card *= 0.1
-						card += leftCost.Card
-					}
-					node.Cost = &plan.Cost{
-						Card: card,
-					}
-
-				case plan.Node_RIGHT:
-					card := leftCost.Card * rightCost.Card
-					if len(node.OnList) > 0 {
-						card *= 0.1
-						card += rightCost.Card
-					}
-					node.Cost = &plan.Cost{
-						Card: card,
-					}
-
-				case plan.Node_OUTER:
-					card := leftCost.Card * rightCost.Card
-					if len(node.OnList) > 0 {
-						card *= 0.1
-						card += leftCost.Card + rightCost.Card
-					}
-					node.Cost = &plan.Cost{
-						Card: card,
-					}
-
-				case plan.Node_SEMI, plan.Node_ANTI:
-					node.Cost.Card = leftCost.Card * .7
-
-				case plan.Node_SINGLE, plan.Node_MARK:
-					node.Cost.Card = leftCost.Card
-				}
-
-			case plan.Node_AGG:
-				if len(node.GroupBy) > 0 {
-					childCost := builder.qry.Nodes[node.Children[0]].Cost
-					node.Cost = &plan.Cost{
-						Card: childCost.Card * 0.1,
-					}
-				} else {
-					node.Cost = &plan.Cost{
-						Card: 1,
-					}
-				}
-
-			default:
-				childCost := builder.qry.Nodes[node.Children[0]].Cost
-				node.Cost.Card = childCost.Card
-			}
 		}
-
 		return nodeID
 	}
 
@@ -203,15 +142,15 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	}
 
 	sort.Slice(subTrees, func(i, j int) bool {
-		if subTrees[j].Cost == nil {
+		if subTrees[j].Stats == nil {
 			return false
 		}
 
-		if subTrees[i].Cost == nil {
+		if subTrees[i].Stats == nil {
 			return true
 		}
 
-		return subTrees[i].Cost.Card < subTrees[j].Cost.Card
+		return subTrees[i].Stats.Outcnt < subTrees[j].Stats.Outcnt
 	})
 
 	leafByTag := make(map[int32]int32)
@@ -300,11 +239,13 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 
 		for i := 1; i < len(subTrees); i++ {
 			children := []int32{nodeID, subTrees[i].NodeId}
-			leftCard, rightCard := newNode.Cost.Card, subTrees[i].Cost.Card
-			if leftCard < rightCard {
-				children[0], children[1] = children[1], children[0]
-			}
-
+			//todo fix this when pipeline ready
+			/*
+				leftCard, rightCard := newNode.Cost.Card, subTrees[i].Cost.Card
+				if leftCard < rightCard {
+					children[0], children[1] = children[1], children[0]
+				}
+			*/
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: children,
@@ -342,7 +283,7 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 	for i, node := range leaves {
 		vertices[i] = &joinVertex{
 			node:      node,
-			card:      node.Cost.Card,
+			outcnt:    node.Stats.Outcnt,
 			pkSelRate: 1.0,
 			children:  make(map[int32]any),
 			parent:    -1,
@@ -445,7 +386,7 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 	sort.Slice(dimensions, func(i, j int) bool {
 		return dimensions[i].pkSelRate < dimensions[j].pkSelRate ||
 			(dimensions[i].pkSelRate == dimensions[j].pkSelRate &&
-				dimensions[i].card < dimensions[j].card)
+				dimensions[i].outcnt < dimensions[j].outcnt)
 	})
 
 	for _, child := range dimensions {
@@ -462,10 +403,10 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 			JoinType: plan.Node_INNER,
 		}, nil)
 
-		vertex.card *= child.pkSelRate
+		vertex.outcnt *= child.pkSelRate
 		vertex.pkSelRate *= child.pkSelRate
 		vertex.node = builder.qry.Nodes[nodeId]
-		vertex.node.Cost.Card = vertex.card
+		vertex.node.Stats.Outcnt = vertex.outcnt
 	}
 }
 

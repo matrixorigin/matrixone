@@ -633,97 +633,97 @@ func ReCalcNodeCost(nodeID int32, builder *QueryBuilder, recursive bool) {
 	// TODO: better estimation
 	switch node.NodeType {
 	case plan.Node_JOIN:
-		leftCost := builder.qry.Nodes[node.Children[0]].Cost
-		rightCost := builder.qry.Nodes[node.Children[1]].Cost
-		ndv := math.Min(leftCost.Card, rightCost.Card)
+		leftStats := builder.qry.Nodes[node.Children[0]].Stats
+		rightStats := builder.qry.Nodes[node.Children[1]].Stats
+		ndv := math.Min(leftStats.Outcnt, rightStats.Outcnt)
 
 		switch node.JoinType {
 		case plan.Node_INNER:
-			card := leftCost.Card * rightCost.Card / ndv
+			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
 			if len(node.OnList) > 0 {
-				card *= 0.1
+				outcnt *= 0.1
 			}
-			node.Cost = &plan.Cost{
-				Card:  card,
-				Total: leftCost.Total + rightCost.Total,
+			node.Stats = &plan.Stats{
+				Outcnt: outcnt,
+				Cost:   leftStats.Cost + rightStats.Cost,
 			}
 
 		case plan.Node_LEFT:
-			card := leftCost.Card * rightCost.Card / ndv
+			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
 			if len(node.OnList) > 0 {
-				card *= 0.1
-				card += leftCost.Card
+				outcnt *= 0.1
+				outcnt += leftStats.Outcnt
 			}
-			node.Cost = &plan.Cost{
-				Card:  card,
-				Total: leftCost.Total + rightCost.Total,
+			node.Stats = &plan.Stats{
+				Outcnt: outcnt,
+				Cost:   leftStats.Cost + rightStats.Cost,
 			}
 
 		case plan.Node_RIGHT:
-			card := leftCost.Card * rightCost.Card / ndv
+			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
 			if len(node.OnList) > 0 {
-				card *= 0.1
-				card += rightCost.Card
+				outcnt *= 0.1
+				outcnt += rightStats.Outcnt
 			}
-			node.Cost = &plan.Cost{
-				Card:  card,
-				Total: leftCost.Total + rightCost.Total,
+			node.Stats = &plan.Stats{
+				Outcnt: outcnt,
+				Cost:   leftStats.Cost + rightStats.Cost,
 			}
 
 		case plan.Node_OUTER:
-			card := leftCost.Card * rightCost.Card / ndv
+			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
 			if len(node.OnList) > 0 {
-				card *= 0.1
-				card += leftCost.Card + rightCost.Card
+				outcnt *= 0.1
+				outcnt += leftStats.Outcnt + rightStats.Outcnt
 			}
-			node.Cost = &plan.Cost{
-				Card:  card,
-				Total: leftCost.Total + rightCost.Total,
+			node.Stats = &plan.Stats{
+				Outcnt: outcnt,
+				Cost:   leftStats.Cost + rightStats.Cost,
 			}
 
 		case plan.Node_SEMI, plan.Node_ANTI:
-			node.Cost = &plan.Cost{
-				Card:  leftCost.Card * .7,
-				Total: leftCost.Total + rightCost.Total,
+			node.Stats = &plan.Stats{
+				Outcnt: leftStats.Outcnt * .7,
+				Cost:   leftStats.Cost + rightStats.Cost,
 			}
 
 		case plan.Node_SINGLE, plan.Node_MARK:
-			node.Cost = &plan.Cost{
-				Card:  leftCost.Card,
-				Total: leftCost.Total + rightCost.Total,
+			node.Stats = &plan.Stats{
+				Outcnt: leftStats.Outcnt,
+				Cost:   leftStats.Cost + rightStats.Cost,
 			}
 		}
 
 	case plan.Node_AGG:
 		if len(node.GroupBy) > 0 {
-			childCost := builder.qry.Nodes[node.Children[0]].Cost
-			node.Cost = &plan.Cost{
-				Card:  childCost.Card * 0.1,
-				Total: childCost.Total,
+			childStats := builder.qry.Nodes[node.Children[0]].Stats
+			node.Stats = &plan.Stats{
+				Outcnt: childStats.Outcnt * 0.1,
+				Cost:   childStats.Cost,
 			}
 		} else {
-			node.Cost = &plan.Cost{
-				Card:  1,
-				Total: 100, //todo fix this
+			node.Stats = &plan.Stats{
+				Outcnt: 1000,
+				Cost:   1000000,
 			}
 		}
 
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil {
-			node.Cost = builder.compCtx.Cost(node.ObjRef, RewriteAndConstantFold(node.FilterList, builder.compCtx.GetProcess()))
+			node.Stats = builder.compCtx.Stats(node.ObjRef, RewriteAndConstantFold(node.FilterList, builder.compCtx.GetProcess()))
 		}
 
 	default:
 		if len(node.Children) > 0 {
-			childCost := builder.qry.Nodes[node.Children[0]].Cost
-			node.Cost = &plan.Cost{
-				Card:  childCost.Card,
-				Total: childCost.Total,
+			childStats := builder.qry.Nodes[node.Children[0]].Stats
+			node.Stats = &plan.Stats{
+				Outcnt: childStats.Outcnt,
+				Cost:   childStats.Cost,
 			}
-		} else if node.Cost == nil {
-			node.Cost = &plan.Cost{
-				Card:  1000,
-				Total: 1000000,
+		} else if node.Stats == nil {
+			node.Stats = &plan.Stats{
+				Outcnt: 1000,
+				Cost:   1000000,
 			}
 		}
 	}
