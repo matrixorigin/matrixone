@@ -1073,7 +1073,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	var rsset []ExecResult
 	var tenantID int64
 	var userID int64
-	var pwd string
+	var pwd, accountStatus string
 	var pwdBytes []byte
 	var isSpecial bool
 	var specialAccount *TenantInfo
@@ -1114,9 +1114,20 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, moerr.NewInternalError(ses.GetRequestContext(), "there is no tenant %s", tenant.GetTenant())
 	}
 
+	//account id
 	tenantID, err = rsset[0].GetInt64(0, 0)
 	if err != nil {
 		return nil, err
+	}
+
+	//account status
+	accountStatus, err = rsset[0].GetString(0, 2)
+	if err != nil {
+		return nil, err
+	}
+
+	if strings.ToLower(accountStatus) == tree.AccountStatusSuspend.String() {
+		return nil, moerr.NewInternalError(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
 	}
 
 	tenant.SetTenantID(uint32(tenantID))

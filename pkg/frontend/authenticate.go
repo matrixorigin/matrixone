@@ -690,7 +690,8 @@ var (
 				account_name varchar(300),
 				status varchar(300),
 				created_time timestamp,
-				comments varchar(256)
+				comments varchar(256),
+				suspended_time timestamp default NULL
 			);`,
 		`create table mo_role(
 				role_id int signed auto_increment,
@@ -811,11 +812,11 @@ var (
 
 const (
 	//privilege verification
-	checkTenantFormat = `select account_id,account_name from mo_catalog.mo_account where account_name = "%s";`
+	checkTenantFormat = `select account_id,account_name,status,suspended_time from mo_catalog.mo_account where account_name = "%s";`
 
 	updateCommentsOfAccountFormat = `update mo_catalog.mo_account set comments = "%s" where account_name = "%s";`
 
-	updateStatusOfAccountFormat = `update mo_catalog.mo_account set status = "%s" where account_name = "%s";`
+	updateStatusOfAccountFormat = `update mo_catalog.mo_account set status = "%s",suspended_time = "%s" where account_name = "%s";`
 
 	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s";`
 
@@ -1079,8 +1080,8 @@ func getSqlForUpdateCommentsOfAccount(comment, account string) string {
 	return fmt.Sprintf(updateCommentsOfAccountFormat, comment, account)
 }
 
-func getSqlForUpdateStatusOfAccount(status, account string) string {
-	return fmt.Sprintf(updateStatusOfAccountFormat, status, account)
+func getSqlForUpdateStatusOfAccount(status, timestamp, account string) string {
+	return fmt.Sprintf(updateStatusOfAccountFormat, status, timestamp, account)
 }
 
 func getSqlForDeleteAccountFromMoAccount(account string) string {
@@ -1834,10 +1835,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 	}
 	optionCount := bits.OnesCount8(optionBits)
 	if optionCount == 0 {
-		return moerr.NewInternalError(ctx, "there is at least one option (auth_option, status_option, comment)")
+		return moerr.NewInternalError(ctx, "at least one option at a time")
 	}
 	if optionCount > 1 {
-		return moerr.NewInternalError(ctx, "there is at most one option (auth_option, status_option, comment)")
+		return moerr.NewInternalError(ctx, "at most one option at a time")
 	}
 
 	//normalize the name
@@ -1852,7 +1853,14 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 			return err
 		}
 		if aa.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
-			return moerr.NewInternalError(ctx, "only support specific password")
+			return moerr.NewInternalError(ctx, "only support identified by password")
+		}
+	}
+
+	if aa.StatusOption.Exist {
+		//SYS account can not be suspended
+		if isSysTenant(aa.Name) {
+			return moerr.NewInternalError(ctx, "account sys can not be suspended")
 		}
 	}
 
@@ -1941,7 +1949,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 
 		//Option 3: suspend or resume the account
 		if aa.StatusOption.Exist {
-			sql = getSqlForUpdateStatusOfAccount(aa.StatusOption.Option.String(), aa.Name)
+			sql = getSqlForUpdateStatusOfAccount(aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name)
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sql)
 			if err != nil {
@@ -5097,7 +5105,7 @@ func createTablesInMoCatalogOfGeneralTenant2(tenant *TenantInfo, bh BackgroundEx
 	//TODO: fix the status of user or account
 	if ca.StatusOption.Exist {
 		if ca.StatusOption.Option == tree.AccountStatusSuspend {
-			status = "suspend"
+			status = tree.AccountStatusSuspend.String()
 		}
 	}
 	//the first user id in the general tenant

@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -6138,11 +6140,49 @@ func Test_doAlterAccount(t *testing.T) {
 		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
-		sql = getSqlForUpdateStatusOfAccount(stmt.StatusOption.Option.String(), stmt.Name)
+		sql = getSqlForUpdateStatusOfAccount(stmt.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), stmt.Name)
 		bh.sql2result[sql] = nil
 
 		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("alter account (status_option) fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.AlterAccount{
+			Name: "sys",
+			StatusOption: tree.AccountStatus{
+				Exist:  true,
+				Option: tree.AccountStatusSuspend,
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckTenant(stmt.Name)
+		bh.sql2result[sql] = nil
+
+		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = nil
+
+		sql = getSqlForUpdateStatusOfAccount(stmt.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), stmt.Name)
+		bh.sql2result[sql] = nil
+
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
 
