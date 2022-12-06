@@ -50,7 +50,7 @@ import (
 
 var (
 	configFile = flag.String("cfg", "", "toml configuration used to start mo-service")
-	launchFile = flag.String("launch", "./etc/launch-tae-multi-CN-tae-DN/launch.toml", "toml configuration used to launch mo cluster")
+	launchFile = flag.String("launch", "", "toml configuration used to launch mo cluster")
 	version    = flag.Bool("version", false, "print version information")
 )
 
@@ -78,16 +78,16 @@ func main() {
 	rand.Seed(seed)
 
 	stopper := stopper.NewStopper("main", stopper.WithLogger(logutil.GetGlobalLogger()))
-	if *configFile != "" {
+	if *launchFile != "" {
+		if err := startCluster(stopper); err != nil {
+			panic(err)
+		}
+	} else if *configFile != "" {
 		cfg := &Config{}
 		if err := parseConfigFromFile(*configFile, cfg); err != nil {
 			panic(fmt.Sprintf("failed to parse config from %s, error: %s", *configFile, err.Error()))
 		}
 		if err := startService(cfg, stopper); err != nil {
-			panic(err)
-		}
-	} else if *launchFile != "" {
-		if err := startCluster(stopper); err != nil {
 			panic(err)
 		}
 	}
