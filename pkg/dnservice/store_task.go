@@ -33,15 +33,15 @@ func (s *store) initTaskHolder() {
 		return
 	}
 
-	addressFunc := func() (string, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	addressFunc := func(ctx context.Context) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 		defer cancel()
 		details, err := s.hakeeperClient.GetClusterDetails(ctx)
 		if err != nil {
 			return "", err
 		}
 		if len(details.CNStores) == 0 {
-			return "", moerr.NewInvalidState("no cn in the cluster")
+			return "", moerr.NewInvalidState(ctx, "no cn in the cluster")
 		}
 
 		n := rand.Intn(len(details.CNStores))
@@ -49,7 +49,8 @@ func (s *store) initTaskHolder() {
 	}
 
 	if s.task.storageFactory != nil {
-		s.task.serviceHolder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(s.logger,
+		s.task.serviceHolder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(
+			s.rt,
 			addressFunc,
 			func(_, _, _ string) taskservice.TaskStorageFactory {
 				return s.task.storageFactory
@@ -57,7 +58,7 @@ func (s *store) initTaskHolder() {
 		return
 	}
 
-	s.task.serviceHolder = taskservice.NewTaskServiceHolder(s.logger, addressFunc)
+	s.task.serviceHolder = taskservice.NewTaskServiceHolder(s.rt, addressFunc)
 }
 
 func (s *store) createTaskService(command *logservicepb.CreateTaskService) {
@@ -71,7 +72,7 @@ func (s *store) createTaskService(command *logservicepb.CreateTaskService) {
 	// The account is always in the memory.
 	frontend.SetSpecialUser(command.User.Username, []byte(command.User.Password))
 	if err := s.task.serviceHolder.Create(*command); err != nil {
-		s.logger.Error("create task service failed",
+		s.rt.Logger().Error("create task service failed",
 			zap.Error(err))
 		return
 	}

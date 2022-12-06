@@ -200,7 +200,7 @@ func (w *OpWorker) SendOp(op iops.IOp) bool {
 }
 
 func (w *OpWorker) opCancelOp(op iops.IOp) {
-	op.SetError(moerr.NewInternalError("op cancelled"))
+	op.SetError(moerr.NewInternalErrorNoCtx("op cancelled"))
 }
 
 func (w *OpWorker) onOp(op iops.IOp) {

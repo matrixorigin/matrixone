@@ -31,7 +31,8 @@ func init() {
 	gob.Register(new(IndexTableDef))
 	gob.Register(new(PropertiesDef))
 	gob.Register(new(PrimaryIndexDef))
-	gob.Register(new(ComputeIndexDef))
+	gob.Register(new(UniqueIndexDef))
+	gob.Register(new(SecondaryIndexDef))
 
 	// register vector column types
 	gob.Register([]bool{})

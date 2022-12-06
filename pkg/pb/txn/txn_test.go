@@ -15,6 +15,7 @@
 package txn
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -22,7 +23,7 @@ import (
 )
 
 func TestErrorTypeConversion(t *testing.T) {
-	err := moerr.NewInfo("test")
+	err := moerr.NewInfo(context.TODO(), "test")
 
 	txnErr := WrapError(err, 0)
 	assert.Equal(t, txnErr.TxnErrCode, uint32(err.ErrorCode()))

@@ -38,7 +38,7 @@ func (i *ClosedInterval) Append(id uint64) error {
 	}
 	if id != i.End+1 {
 		logutil.Infof("invalid interval %v %v", i, id)
-		return moerr.NewInternalError("invalid interval")
+		return moerr.NewInternalErrorNoCtx("invalid interval")
 	}
 	i.End = id
 	return nil

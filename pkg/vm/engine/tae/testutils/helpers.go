@@ -15,6 +15,7 @@
 package testutils
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -33,6 +34,7 @@ func WaitExpect(timeout int, expect func() bool) {
 }
 
 func WaitChTimeout[T any](
+	ctx context.Context,
 	after time.Duration,
 	ch <-chan T,
 	onRecvCheck func(element T, closed bool) (moveOn bool, err error),
@@ -41,7 +43,7 @@ func WaitChTimeout[T any](
 	for {
 		select {
 		case <-timeout:
-			return moerr.NewInternalError("timeout")
+			return moerr.NewInternalError(ctx, "timeout")
 		case item, ok := <-ch:
 			moveOn, err := onRecvCheck(item, !ok)
 			if err != nil {

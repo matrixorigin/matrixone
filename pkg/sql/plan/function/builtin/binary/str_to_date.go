@@ -37,7 +37,7 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 
 	resultType := types.T_date.ToType()
 	if !formatVector.IsScalar() {
-		return nil, moerr.NewInvalidArg("to_date format", "not constant")
+		return nil, moerr.NewInvalidArgNoCtx("to_date format", "not constant")
 	}
 	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
@@ -82,7 +82,7 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 
 	resultType := types.T_datetime.ToType()
 	if !formatVector.IsScalar() {
-		return nil, moerr.NewInvalidArg("to_date format", "not constant")
+		return nil, moerr.NewInvalidArgNoCtx("to_date format", "not constant")
 	}
 	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
@@ -127,7 +127,7 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 
 	resultType := types.T_time.ToType()
 	if !formatVector.IsScalar() {
-		return nil, moerr.NewInvalidArg("to_date format", "not constant")
+		return nil, moerr.NewInvalidArgNoCtx("to_date format", "not constant")
 	}
 	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
@@ -287,10 +287,10 @@ func strToDate(t *GeneralTime, date string, format string, ctx map[string]int) (
 func checkMysqlTime(t *GeneralTime, ctx map[string]int) error {
 	if valueAMorPm, ok := ctx["%p"]; ok {
 		if _, ok := ctx["%H"]; ok {
-			return moerr.NewInternalError("Truncated incorrect %-.64s value: '%-.128s'", "time", t)
+			return moerr.NewInternalErrorNoCtx("Truncated incorrect %-.64s value: '%-.128s'", "time", t)
 		}
 		if t.getHour() == 0 {
-			return moerr.NewInternalError("Truncated incorrect %-.64s value: '%-.128s'", "time", t)
+			return moerr.NewInternalErrorNoCtx("Truncated incorrect %-.64s value: '%-.128s'", "time", t)
 		}
 		if t.getHour() == 12 {
 			// 12 is a special hour.

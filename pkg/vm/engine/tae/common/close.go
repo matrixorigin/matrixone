@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	ErrClose = moerr.NewInternalError("closed")
+	ErrClose = moerr.NewInternalErrorNoCtx("closed")
 )
 
 type Closable interface {

@@ -15,7 +15,7 @@
 package deletion
 
 import (
-	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -27,15 +27,17 @@ type Argument struct {
 }
 
 type DeleteCtx struct {
-	TableName    string
-	DbName       string
-	TableSource  engine.Relation
-	UseDeleteKey string
-	CanTruncate  bool
-	ColIndex     int32
-	IndexTables  []engine.Relation
-	IndexInfos   []*plan2.IndexInfo
-	IndexAttrs   []string
+	TableName            string
+	DbName               string
+	TableSource          engine.Relation
+	UseDeleteKey         string
+	CanTruncate          bool
+	ColIndex             int32
+	UniqueIndexTables    []engine.Relation
+	UniqueIndexDef       *plan.UniqueIndexDef
+	SecondaryIndexTables []engine.Relation
+	SecondaryIndexDef    *plan.SecondaryIndexDef
+	IndexAttrs           []string
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

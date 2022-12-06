@@ -96,6 +96,7 @@ func init() {
 		"snapshot":                 SNAPSHOT,
 		"sysdate":                  SYSDATE,
 		"create":                   CREATE,
+		"cluster":                  CLUSTER,
 		"cross":                    CROSS,
 		"current_date":             CURRENT_DATE,
 		"current_time":             CURRENT_TIME,

@@ -12,16 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memtable
+package morpc
 
-type Ordered[To any] interface {
-	Less(to To) bool
+import (
+	"github.com/pierrec/lz4/v4"
+)
+
+func compress(src, dst []byte) ([]byte, error) {
+	var c lz4.Compressor
+	n, err := c.CompressBlock(src, dst)
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		panic("BUG")
+	}
+	return dst[:n], nil
 }
 
-type min struct{}
-
-var Min min
-
-type max struct{}
-
-var Max max
+func uncompress(src, dst []byte) ([]byte, error) {
+	n, err := lz4.UncompressBlock(src, dst)
+	if err != nil {
+		return nil, err
+	}
+	return dst[:n], nil
+}

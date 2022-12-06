@@ -169,7 +169,7 @@ func (mgr *TxnManager) DeleteTxn(id string) (err error) {
 	defer mgr.Unlock()
 	txn := mgr.IDMap[id]
 	if txn == nil {
-		err = moerr.NewTxnNotFound()
+		err = moerr.NewTxnNotFoundNoCtx()
 		logutil.Warnf("Txn %s not found", id)
 		return
 	}
@@ -352,7 +352,7 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 
 		// Idempotent check
 		if state := op.Txn.GetTxnState(false); state != txnif.TxnStateActive {
-			op.Txn.WaitDone(moerr.NewTxnNotActive(txnif.TxnStrState(state)), false)
+			op.Txn.WaitDone(moerr.NewTxnNotActiveNoCtx(txnif.TxnStrState(state)), false)
 			continue
 		}
 

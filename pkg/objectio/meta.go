@@ -154,7 +154,7 @@ func (f *Footer) UnMarshalFooter(data []byte) error {
 		return err
 	}
 	if f.magic != uint64(Magic) {
-		return moerr.NewInternalError("object io: invalid footer")
+		return moerr.NewInternalErrorNoCtx("object io: invalid footer")
 	}
 	if f.blockCount*ExtentTypeSize+FooterSize > uint32(len(data)) {
 		return nil

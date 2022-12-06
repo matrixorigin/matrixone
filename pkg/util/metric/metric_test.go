@@ -126,7 +126,7 @@ func TestDescExtra(t *testing.T) {
 	assert.Equal(t, extra.labels[2].GetName(), "xy")
 }
 
-var dummyOptionsFactory = table.GetOptionFactory(table.NormalTableEngine)
+var dummyOptionsFactory = table.GetOptionFactory(context.TODO(), table.NormalTableEngine)
 
 func TestCreateTable(t *testing.T) {
 	buf := new(bytes.Buffer)
@@ -221,9 +221,10 @@ func TestGetSchemaForAccount(t *testing.T) {
 			wantPath: "/user1/*/*/*/*/metric/*.csv",
 		},
 	}
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			schemas := GetSchemaForAccount(tt.args.account)
+			schemas := GetSchemaForAccount(ctx, tt.args.account)
 			found := false
 			for _, sche := range schemas {
 				t.Logf("schma: %s", sche)
@@ -234,7 +235,7 @@ func TestGetSchemaForAccount(t *testing.T) {
 			require.Equal(t, 6, len(schemas))
 			require.Equal(t, true, found)
 			found = false
-			if strings.Contains(SingleMetricTable.ToCreateSql(true), "/*/*/*/*/*/metric/*.csv") {
+			if strings.Contains(SingleMetricTable.ToCreateSql(ctx, true), "/*/*/*/*/*/metric/*.csv") {
 				found = true
 			}
 			require.Equal(t, true, found)

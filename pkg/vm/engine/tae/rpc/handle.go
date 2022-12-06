@@ -128,7 +128,7 @@ func (h *Handle) HandleCommit(
 					&db.WriteResp{},
 				)
 			default:
-				panic(moerr.NewNYI("Pls implement me"))
+				panic(moerr.NewNYI(ctx, "Pls implement me"))
 			}
 			//Need to rollback the txn.
 			if err != nil {
@@ -236,7 +236,7 @@ func (h *Handle) HandlePrepare(
 					&db.WriteResp{},
 				)
 			default:
-				panic(moerr.NewNYI("Pls implement me"))
+				panic(moerr.NewNYI(ctx, "Pls implement me"))
 			}
 			//need to rollback the txn
 			if err != nil {
@@ -434,7 +434,7 @@ func (h *Handle) HandlePreCommitWrite(
 				return err
 			}
 		default:
-			panic(moerr.NewNYI(""))
+			panic(moerr.NewNYI(ctx, ""))
 		}
 	}
 	return nil
@@ -602,7 +602,7 @@ func (h *Handle) HandleWrite(
 		if req.FileName != "" {
 			//TODO::Precommit a block from S3
 			//tb.AppendBlock()
-			panic(moerr.NewNYI("Precommit a block is not implemented yet"))
+			panic(moerr.NewNYI(ctx, "Precommit a block is not implemented yet"))
 		}
 		//Add a batch into table
 		//TODO::add a parameter to Append for PreCommit-Append?

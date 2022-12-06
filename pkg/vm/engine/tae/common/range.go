@@ -21,8 +21,8 @@ import (
 )
 
 var (
-	ErrRangeNotContinuous = moerr.NewInternalError("tae: range not continuous")
-	ErrRangeInvalid       = moerr.NewInternalError("tae: invalid range")
+	ErrRangeNotContinuous = moerr.NewInternalErrorNoCtx("tae: range not continuous")
+	ErrRangeInvalid       = moerr.NewInternalErrorNoCtx("tae: invalid range")
 )
 
 type Range struct {

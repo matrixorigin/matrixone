@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"go.uber.org/zap"
@@ -32,8 +33,8 @@ func (s *Service) initTaskHolder() {
 		return
 	}
 
-	addressFunc := func() (string, error) {
-		ctx, cancel := context.WithTimeout(context.Background(),
+	addressFunc := func(ctx context.Context) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx,
 			time.Second*5)
 		defer cancel()
 		if s.haClient == nil {
@@ -44,7 +45,7 @@ func (s *Service) initTaskHolder() {
 			return "", err
 		}
 		if len(details.CNStores) == 0 {
-			return "", moerr.NewInvalidState("no cn in the cluster")
+			return "", moerr.NewInvalidState(ctx, "no cn in the cluster")
 		}
 
 		n := rand.Intn(len(details.CNStores))
@@ -52,14 +53,15 @@ func (s *Service) initTaskHolder() {
 	}
 
 	if s.task.storageFactory != nil {
-		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(s.logger,
+		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(
+			runtime.ProcessLevelRuntime(),
 			addressFunc,
 			func(_, _, _ string) taskservice.TaskStorageFactory {
 				return s.task.storageFactory
 			})
 		return
 	}
-	s.task.holder = taskservice.NewTaskServiceHolder(s.logger, addressFunc)
+	s.task.holder = taskservice.NewTaskServiceHolder(runtime.ProcessLevelRuntime(), addressFunc)
 }
 
 func (s *Service) createTaskService(command *logservicepb.CreateTaskService) {

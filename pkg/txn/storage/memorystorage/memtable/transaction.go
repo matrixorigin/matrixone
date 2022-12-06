@@ -14,12 +14,14 @@
 
 package memtable
 
+import "github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
+
 type Transaction struct {
 	ID              string
 	BeginTime       Time
 	Time            Time
 	CommitTime      Time
-	State           *Atomic[TransactionState]
+	State           *memorytable.Atomic[TransactionState]
 	IsolationPolicy IsolationPolicy
 	committers      map[TxCommitter]struct{}
 }
@@ -38,7 +40,7 @@ func NewTransaction(
 		ID:              id,
 		BeginTime:       t,
 		Time:            t,
-		State:           NewAtomic[TransactionState](Active),
+		State:           memorytable.NewAtomic[TransactionState](Active),
 		IsolationPolicy: isolationPolicy,
 		committers:      make(map[TxCommitter]struct{}),
 	}
@@ -76,7 +78,7 @@ func (t *Transaction) Abort() error {
 
 func (t *Transaction) Copy() *Transaction {
 	newTx := *t
-	newTx.State = new(Atomic[TransactionState])
+	newTx.State = new(memorytable.Atomic[TransactionState])
 	newTx.State.Store(t.State.Load())
 	newTx.committers = make(map[TxCommitter]struct{})
 	return &newTx

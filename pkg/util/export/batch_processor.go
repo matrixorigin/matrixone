@@ -37,6 +37,7 @@ const defaultQueueSize = 1310720 // queue mem cost = 10MB
 // #     ^                   |No                |Yes, go next call
 // #     |<------------------/Accept next Add
 type bufferHolder struct {
+	ctx context.Context
 	// name like a type
 	name string
 	// buffer is instance of batchpipe.ItemBuffer with its own elimination algorithm(like LRU, LFU)
@@ -59,9 +60,10 @@ const READONLY = 1
 
 type bufferSignalFunc func(*bufferHolder)
 
-func newBufferHolder(name batchpipe.HasName, impl batchpipe.PipeImpl[batchpipe.HasName, any], signal bufferSignalFunc) *bufferHolder {
+func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl batchpipe.PipeImpl[batchpipe.HasName, any], signal bufferSignalFunc) *bufferHolder {
 	buffer := impl.NewItemBuffer(name.GetName())
 	b := &bufferHolder{
+		ctx:      ctx,
 		name:     name.GetName(),
 		buffer:   buffer,
 		signal:   signal,
@@ -118,7 +120,7 @@ func (b *bufferHolder) StopAndGetBatch(buf *bytes.Buffer) bool {
 		return false
 	}
 	b.trigger.Stop()
-	if batch := b.buffer.GetBatch(buf); batch == nil {
+	if batch := b.buffer.GetBatch(b.ctx, buf); batch == nil {
 		b.batch = nil
 	} else {
 		b.batch = &batch
@@ -163,6 +165,7 @@ var _ trace.BatchProcessor = (*MOCollector)(nil)
 // MOCollector handle all bufferPipe
 type MOCollector struct {
 	trace.BatchProcessor
+	ctx context.Context
 
 	// mux control all changes on buffers
 	mux sync.RWMutex
@@ -190,8 +193,9 @@ type MOCollector struct {
 
 type MOCollectorOption func(*MOCollector)
 
-func NewMOCollector(opts ...MOCollectorOption) *MOCollector {
+func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector {
 	c := &MOCollector{
+		ctx:            ctx,
 		buffers:        make(map[string]*bufferHolder),
 		awakeCollect:   make(chan batchpipe.HasName, defaultQueueSize),
 		awakeGenerate:  make(chan *bufferHolder, 16),
@@ -273,6 +277,8 @@ func (c *MOCollector) Start() bool {
 // goroutine worker
 func (c *MOCollector) doCollect(idx int) {
 	defer c.stopWait.Done()
+	ctx, span := trace.Start(c.ctx, "MOCollector.doCollect")
+	defer span.End()
 	logutil.Debugf("doCollect %dth: start", idx)
 loop:
 	for {
@@ -286,9 +292,9 @@ loop:
 				if _, has := c.buffers[i.GetName()]; !has {
 					logutil.Debugf("doCollect %dth: init buffer done.", idx)
 					if impl, has := c.pipeImplHolder.Get(i.GetName()); !has {
-						panic(moerr.NewInternalError("unknown item type: %s", i.GetName()))
+						panic(moerr.NewInternalError(ctx, "unknown item type: %s", i.GetName()))
 					} else {
-						buf = newBufferHolder(i, impl, awakeBuffer(c))
+						buf = newBufferHolder(ctx, i, impl, awakeBuffer(c))
 						c.buffers[i.GetName()] = buf
 						buf.Add(i)
 						buf.Start()

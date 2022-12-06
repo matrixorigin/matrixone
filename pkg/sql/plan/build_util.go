@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -77,9 +78,9 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 				}
 			}
 			if n.InternalType.FamilyString == "char" && width > types.MaxCharLen {
-				return nil, moerr.NewOutOfRange("char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
+				return nil, moerr.NewOutOfRangeNoCtx("char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if n.InternalType.FamilyString == "varchar" && width > types.MaxVarcharLen {
-				return nil, moerr.NewOutOfRange("varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
+				return nil, moerr.NewOutOfRangeNoCtx("varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			}
 			if n.InternalType.FamilyString == "char" { // type char
 				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil
@@ -99,9 +100,9 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 				}
 			}
 			if n.InternalType.FamilyString == "char" && width > types.MaxCharLen {
-				return nil, moerr.NewOutOfRange("char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
+				return nil, moerr.NewOutOfRangeNoCtx("char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if n.InternalType.FamilyString == "varchar" && width > types.MaxVarcharLen {
-				return nil, moerr.NewOutOfRange("varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
+				return nil, moerr.NewOutOfRangeNoCtx("varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			}
 			if n.InternalType.FamilyString == "char" { // type char
 				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil
@@ -138,13 +139,13 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 		case defines.MYSQL_TYPE_LONG_BLOB:
 			return &plan.Type{Id: int32(types.T_blob), Size: types.VarlenaSize}, nil
 		default:
-			return nil, moerr.NewNYI("data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
+			return nil, moerr.NewNYINoCtx("data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}
 	}
-	return nil, moerr.NewInternalError("unknown data type")
+	return nil, moerr.NewInternalErrorNoCtx("unknown data type")
 }
 
-func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, error) {
+func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Process) (*plan.Default, error) {
 	nullAbility := true
 	var expr tree.Expr = nil
 	for _, attr := range col.Attributes {
@@ -163,11 +164,11 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 
 	if typ.Id == int32(types.T_json) {
 		if expr != nil && !isNullAstExpr(expr) {
-			return nil, moerr.NewNotSupported(fmt.Sprintf("JSON column '%s' cannot have default value", col.Name.Parts[0]))
+			return nil, moerr.NewNotSupportedNoCtx(fmt.Sprintf("JSON column '%s' cannot have default value", col.Name.Parts[0]))
 		}
 	}
 	if !nullAbility && isNullAstExpr(expr) {
-		return nil, moerr.NewInvalidInput("invalid default value for column '%s'", col.Name.Parts[0])
+		return nil, moerr.NewInvalidInputNoCtx("invalid default value for column '%s'", col.Name.Parts[0])
 	}
 
 	if expr == nil {
@@ -186,7 +187,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 
 	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
 		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" {
-			return nil, moerr.NewInvalidInput("invalid default value for column '%s'", col.Name.Parts[0])
+			return nil, moerr.NewInvalidInputNoCtx("invalid default value for column '%s'", col.Name.Parts[0])
 		}
 	}
 
@@ -198,7 +199,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 	// try to calculate default value, return err if fails
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	newExpr, err := ConstantFold(bat, DeepCopyExpr(defaultExpr))
+	newExpr, err := ConstantFold(bat, DeepCopyExpr(defaultExpr), proc)
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +213,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 	}, nil
 }
 
-func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.OnUpdate, error) {
+func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Process) (*plan.OnUpdate, error) {
 	var expr tree.Expr = nil
 
 	for _, attr := range col.Attributes {
@@ -240,7 +241,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.OnUpdate, er
 	// try to calculate on update value, return err if fails
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	_, err = colexec.EvalExpr(bat, nil, onUpdateExpr)
+	_, err = colexec.EvalExpr(bat, proc, onUpdateExpr)
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +305,7 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 
 func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
 	if !d.Default.NullAbility && d.Default.Expr == nil && !d.Typ.AutoIncr {
-		return nil, moerr.NewInvalidInput("invalid default value")
+		return nil, moerr.NewInvalidInputNoCtx("invalid default value")
 	}
 	if d.Default.Expr == nil {
 		return &Expr{

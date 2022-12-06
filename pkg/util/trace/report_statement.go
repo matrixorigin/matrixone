@@ -89,9 +89,9 @@ func (s *StatementInfo) Free() {
 	}
 }
 
-func (s *StatementInfo) GetRow() *table.Row { return SingleStatementTable.GetRow() }
+func (s *StatementInfo) GetRow() *table.Row { return SingleStatementTable.GetRow(DefaultContext()) }
 
-func (s *StatementInfo) CsvFields(row *table.Row) []string {
+func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.exported = true
@@ -121,7 +121,7 @@ func (s *StatementInfo) CsvFields(row *table.Row) []string {
 		row.SetColumnVal(errCodeCol, fmt.Sprintf("%d", errCode))
 		row.SetColumnVal(errorCol, fmt.Sprintf("%s", s.Error))
 	}
-	row.SetColumnVal(execPlanCol, s.ExecPlan2Json())
+	row.SetColumnVal(execPlanCol, s.ExecPlan2Json(ctx))
 	row.SetColumnVal(rowsReadCol, fmt.Sprintf("%d", s.RowsRead))
 	row.SetColumnVal(bytesScanCol, fmt.Sprintf("%d", s.BytesScan))
 
@@ -132,7 +132,7 @@ func (s *StatementInfo) CsvFields(row *table.Row) []string {
 // and set RowsRead, BytesScan from ExecPlan
 //
 // please used in s.mux.Lock()
-func (s *StatementInfo) ExecPlan2Json() string {
+func (s *StatementInfo) ExecPlan2Json(ctx context.Context) string {
 	var jsonByte []byte
 	if s.SerializeExecPlan == nil {
 		// use defaultSerializeExecPlan
@@ -140,15 +140,15 @@ func (s *StatementInfo) ExecPlan2Json() string {
 			uuidStr := uuid.UUID(s.StatementID).String()
 			return fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr)
 		} else {
-			jsonByte, s.RowsRead, s.BytesScan = f(s.ExecPlan, uuid.UUID(s.StatementID))
+			jsonByte, s.RowsRead, s.BytesScan = f(ctx, s.ExecPlan, uuid.UUID(s.StatementID))
 		}
 	} else {
 		// use s.SerializeExecPlan
 		// get real ExecPlan json-str
-		jsonByte, s.RowsRead, s.BytesScan = s.SerializeExecPlan(s.ExecPlan, uuid.UUID(s.StatementID))
+		jsonByte, s.RowsRead, s.BytesScan = s.SerializeExecPlan(ctx, s.ExecPlan, uuid.UUID(s.StatementID))
 		if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
 			// get nil ExecPlan json-str
-			jsonByte, _, _ = s.SerializeExecPlan(nil, uuid.UUID(s.StatementID))
+			jsonByte, _, _ = s.SerializeExecPlan(ctx, nil, uuid.UUID(s.StatementID))
 		}
 	}
 	return string(jsonByte)
@@ -156,7 +156,7 @@ func (s *StatementInfo) ExecPlan2Json() string {
 
 var defaultSerializeExecPlan atomic.Value
 
-type SerializeExecPlanFunc func(plan any, uuid2 uuid.UUID) (jsonByte []byte, rows int64, bytes int64)
+type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, rows int64, bytes int64)
 
 func SetDefaultSerializeExecPlan(f SerializeExecPlanFunc) {
 	defaultSerializeExecPlan.Store(f)
@@ -197,7 +197,7 @@ var EndStatement = func(ctx context.Context, err error) {
 	}
 	s := StatementFromContext(ctx)
 	if s == nil {
-		panic(moerr.NewInternalError("no statement info in context"))
+		panic(moerr.NewInternalError(ctx, "no statement info in context"))
 	}
 	s.mux.Lock()
 	defer s.mux.Unlock()

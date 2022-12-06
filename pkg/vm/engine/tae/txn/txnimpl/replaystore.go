@@ -101,7 +101,7 @@ func (store *replayTxnStore) applyRollback(txn txnif.AsyncTxn) (err error) {
 }
 
 func (store *replayTxnStore) prepareRollback(txn txnif.AsyncTxn) (err error) {
-	panic(moerr.NewInternalError("cannot prepareRollback rollback replay txn: %s",
+	panic(moerr.NewInternalErrorNoCtx("cannot prepareRollback rollback replay txn: %s",
 		txn.String()))
 }
 

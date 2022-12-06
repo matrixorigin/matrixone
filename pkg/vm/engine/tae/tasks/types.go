@@ -22,8 +22,8 @@ import (
 )
 
 var (
-	ErrBadTaskRequestPara    = moerr.NewInternalError("tae scheduler: bad task request parameters")
-	ErrScheduleScopeConflict = moerr.NewInternalError("tae scheduler: scope conflict")
+	ErrBadTaskRequestPara    = moerr.NewInternalErrorNoCtx("tae scheduler: bad task request parameters")
+	ErrScheduleScopeConflict = moerr.NewInternalErrorNoCtx("tae scheduler: scope conflict")
 )
 
 type FuncT = func() error
@@ -55,7 +55,7 @@ var taskNames = map[TaskType]string{
 func RegisterType(t TaskType, name string) {
 	_, ok := taskNames[t]
 	if ok {
-		panic(moerr.NewInternalError("duplicate task type: %d, %s", t, name))
+		panic(moerr.NewInternalErrorNoCtx("duplicate task type: %d, %s", t, name))
 	}
 	taskNames[t] = name
 }

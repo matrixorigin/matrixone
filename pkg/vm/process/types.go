@@ -77,6 +77,7 @@ type SessionInfo struct {
 	AccountId     uint32
 	RoleId        uint32
 	UserId        uint32
+	LastInsertID  uint64
 	Database      string
 	Version       string
 	TimeZone      *time.Location
@@ -132,6 +133,21 @@ type Process struct {
 	GetClusterDetails engine.GetClusterDetailsFunc
 
 	LoadTag bool
+
+	LastInsertID *uint64
+}
+
+func (proc *Process) SetLastInsertID(num uint64) {
+	if proc.LastInsertID != nil {
+		*proc.LastInsertID = num
+	}
+}
+
+func (proc *Process) GetLastInsertID() uint64 {
+	if proc.LastInsertID != nil {
+		return *proc.LastInsertID
+	}
+	return 0
 }
 
 type analyze struct {

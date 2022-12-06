@@ -150,7 +150,7 @@ func (writer *BFWriter) AddValues(values containers.Vector) error {
 		return nil
 	}
 	if writer.data.GetType() != values.GetType() {
-		return moerr.NewInternalError("wrong type")
+		return moerr.NewInternalErrorNoCtx("wrong type")
 	}
 	writer.data.Extend(values)
 	return nil

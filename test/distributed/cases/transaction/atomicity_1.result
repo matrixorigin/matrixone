@@ -110,7 +110,8 @@ col1    col2
 110    20
 122    20
 show create table atomic_table_3;
-[unknown result because it is related to issue#6010]
+Table    Create Table
+atomic_table_3    CREATE TABLE `atomic_table_3` (\n`col1` TINYINT DEFAULT NULL,\n`col2` SMALLINT DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`clo4` BIGINT DEFAULT NULL,\n`col5` TINYINT UNSIGNED DEFAULT NULL,\n`col6` SMALLINT UNSIGNED DEFAULT NULL,\n`col7` INT UNSIGNED DEFAULT NULL,\n`col8` BIGINT UNSIGNED DEFAULT NULL,\n`col9` FLOAT DEFAULT NULL,\n`col10` DOUBLE DEFAULT NULL,\n`col11` VARCHAR(255) DEFAULT NULL,\n`col12` DATE DEFAULT NULL,\n`col13` DATETIME DEFAULT NULL,\n`col14` TIMESTAMP DEFAULT NULL,\n`col15` BOOL DEFAULT NULL,\n`col16` DECIMAL(5,2) DEFAULT NULL,\n`col17` TEXT DEFAULT NULL,\n`col18` VARCHAR(255) DEFAULT NULL,\n`col19` VARCHAR(255) DEFAULT NULL,\n`col20` TEXT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n) partition by hash (col1) partitions 4
 rollback ;
 select  col1,col2 from atomic_table_3;
 col1    col2
@@ -137,7 +138,7 @@ rollback ;
 select num_col1  from  atomic_ex_table;
 SQL parser error: table "atomic_ex_table" does not exist
 show create table atomic_ex_table;
-[unknown result because it is related to issue#6010]
+no such table atomicity_1.atomic_ex_table
 desc atomic_ex_table;
 no such table atomicity_1.atomic_ex_table
 create TEMPORARY TABLE atomic_temp(a int);
@@ -157,7 +158,7 @@ rollback ;
 select * from atomic_temp;
 SQL parser error: table "atomic_temp" does not exist
 show create table atomic_temp;
-[unknown result because it is related to issue#6010]
+no such table atomicity_1.atomic_temp
 start transaction ;
 create TEMPORARY TABLE atomic_temp(a int);
 insert into atomic_temp values (5);

@@ -26,10 +26,10 @@ import (
 )
 
 var (
-	ErrGroupNotExist       = moerr.NewInternalError("group not existed")
-	ErrLsnNotExist         = moerr.NewInternalError("lsn not existed")
-	ErrVFileVersionTimeOut = moerr.NewInternalError("get vfile version timeout")
-	ErrLsnCheckpointed     = moerr.NewInternalError("lsn has been checkpointed")
+	ErrGroupNotExist       = moerr.NewInternalErrorNoCtx("group not existed")
+	ErrLsnNotExist         = moerr.NewInternalErrorNoCtx("lsn not existed")
+	ErrVFileVersionTimeOut = moerr.NewInternalErrorNoCtx("get vfile version timeout")
+	ErrLsnCheckpointed     = moerr.NewInternalErrorNoCtx("lsn has been checkpointed")
 )
 
 type syncBase struct {

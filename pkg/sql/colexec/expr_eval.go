@@ -103,7 +103,7 @@ func getConstVec(proc *process.Process, expr *plan.Expr, length int) (*vector.Ve
 			defaultVal := t.C.GetDefaultval()
 			vec = vector.NewConstFixed(constBType, length, defaultVal, proc.Mp())
 		default:
-			return nil, moerr.NewNYI(fmt.Sprintf("const expression %v", t.C.GetValue()))
+			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", t.C.GetValue()))
 		}
 	}
 	vec.SetIsBin(t.C.IsBin)
@@ -183,7 +183,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
-		return nil, moerr.NewNYI(fmt.Sprintf("unsupported eval expr '%v'", t))
+		return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported eval expr '%v'", t))
 	}
 }
 
@@ -249,7 +249,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
-		return nil, moerr.NewNYI(fmt.Sprintf("eval expr '%v'", t))
+		return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("eval expr '%v'", t))
 	}
 }
 
@@ -386,7 +386,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
-		return nil, moerr.NewNYI(fmt.Sprintf("unsupported eval expr '%v'", t))
+		return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported eval expr '%v'", t))
 	}
 }
 
@@ -453,7 +453,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
-		return nil, moerr.NewNYI(fmt.Sprintf("eval expr '%v'", t))
+		return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("eval expr '%v'", t))
 	}
 }
 
