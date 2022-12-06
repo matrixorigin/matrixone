@@ -36,9 +36,10 @@ type statementImpl struct {
 type QueryType string
 
 const (
-	QueryTypeDQL = "DQL" // (Data Query Language): Select, modump, analyze, Explain, ExplainAnalyze
-	QueryTypeDDL = "DDL" // (Data Definition Language): Create/Drop/Alter/Rename Database/Table/View/Index, TruncateTable
-	QueryTypeDML = "DML" // (Data Manipulation Language): Insert, Update, Delete, Load, Import, ValuesStatement?, With?
-	QueryTypeDCL = "DCL" // (Data Control Language): Grant, Revoke, Drop account, Set, Declare, Do, TableFunction?, Use?, Prepare, Execute, Deallocate
-	QueryTypeTCL = "TCL" // (Transaction Control Language): Begin, Savepoint, Rollback, Commit
+	QueryTypeDQL = "DQL"   // (Data Query Language): Select, modump, analyze, Explain, ExplainAnalyze
+	QueryTypeDDL = "DDL"   // (Data Definition Language): Create/Drop/Alter/Rename Database/Table/View/Index, TruncateTable
+	QueryTypeDML = "DML"   // (Data Manipulation Language): Insert, Update, Delete, Load, Import, ValuesStatement?, With?
+	QueryTypeDCL = "DCL"   // (Data Control Language): Grant, Revoke, Drop account, Set, Declare, Do, TableFunction?, Use?, Prepare, Execute, Deallocate
+	QueryTypeTCL = "TCL"   // (Transaction Control Language): Begin, Savepoint, Rollback, Commit
+	QueryTypeOth = "other" // syntax error
 )

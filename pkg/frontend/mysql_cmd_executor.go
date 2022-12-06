@@ -2898,16 +2898,10 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 
 func incStatementCounter(tenant string, stmt tree.Statement) {
 	switch stmt.(type) {
-	case *tree.Select:
-		metric.StatementCounter(tenant, metric.SQLTypeSelect).Inc()
-	case *tree.Insert:
-		metric.StatementCounter(tenant, metric.SQLTypeInsert).Inc()
-	case *tree.Delete:
-		metric.StatementCounter(tenant, metric.SQLTypeDelete).Inc()
-	case *tree.Update:
-		metric.StatementCounter(tenant, metric.SQLTypeUpdate).Inc()
+	case tree.StatementType:
+		metric.StatementCounter(tenant, stmt.GetStatementType()).Inc()
 	default:
-		metric.StatementCounter(tenant, metric.SQLTypeOther).Inc()
+		metric.StatementCounter(tenant, tree.QueryTypeOth).Inc()
 	}
 }
 
@@ -2924,16 +2918,10 @@ func incTransactionErrorsCounter(tenant string, t metric.SQLType) {
 
 func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 	switch stmt.(type) {
-	case *tree.Select:
-		metric.StatementErrorsCounter(tenant, metric.SQLTypeSelect).Inc()
-	case *tree.Insert:
-		metric.StatementErrorsCounter(tenant, metric.SQLTypeInsert).Inc()
-	case *tree.Delete:
-		metric.StatementErrorsCounter(tenant, metric.SQLTypeDelete).Inc()
-	case *tree.Update:
-		metric.StatementErrorsCounter(tenant, metric.SQLTypeUpdate).Inc()
+	case tree.StatementType:
+		metric.StatementErrorsCounter(tenant, stmt.GetStatementType()).Inc()
 	default:
-		metric.StatementErrorsCounter(tenant, metric.SQLTypeOther).Inc()
+		metric.StatementErrorsCounter(tenant, tree.QueryTypeOth).Inc()
 	}
 }
 
