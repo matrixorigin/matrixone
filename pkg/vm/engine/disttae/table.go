@@ -32,8 +32,12 @@ var _ engine.Relation = new(table)
 
 func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, int64, error) {
 	switch tbl.tableId {
-	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
-		return 10, 100000, nil
+	case catalog.MO_DATABASE_ID:
+		return 1, 1000, nil
+	case catalog.MO_TABLES_ID:
+		return 10, 10000, nil
+	case catalog.MO_COLUMNS_ID:
+		return 10, 10000, nil
 	}
 
 	if expr == nil {
@@ -54,16 +58,19 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 
 func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
 	var rows int64
+	var blockNum int
 
-	if tbl.meta == nil {
-		return 100, 1000000, nil
-	}
 	for _, blks := range tbl.meta.blocks {
+		blockNum += len(blks)
 		for _, blk := range blks {
 			rows += blockRows(blk)
 		}
 	}
-	return int32(len(tbl.meta.blocks)), rows, nil
+	if blockNum == 0 {
+		return 100, 1000000, nil
+	}
+
+	return int32(blockNum), rows, nil
 }
 
 func (tbl *table) Size(ctx context.Context, name string) (int64, error) {
