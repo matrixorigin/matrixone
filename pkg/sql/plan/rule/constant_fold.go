@@ -83,7 +83,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process, isPrepa
 	if f.Volatile { // function cannot be fold
 		return e
 	}
-	if f.RealTimeRelated && isPrepare {
+	if isPrepare { // prepare statement cannot be fold before put real arguments
 		return e
 	}
 	for i := range ef.F.Args {

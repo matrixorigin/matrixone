@@ -117,9 +117,6 @@ type Function struct {
 	// Volatile function cannot be fold
 	Volatile bool
 
-	// Whether the function is an realTimeRelated function
-	RealTimeRelated bool
-
 	// whether the function needs to append a hidden parameter, such as 'uuid'
 	AppendHideArg bool
 

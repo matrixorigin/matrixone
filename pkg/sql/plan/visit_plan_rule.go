@@ -15,11 +15,7 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"sort"
 	"strconv"
 
@@ -33,6 +29,7 @@ var (
 	_ VisitPlanRule = &ResetParamOrderRule{}
 	_ VisitPlanRule = &ResetParamRefRule{}
 	_ VisitPlanRule = &ResetVarRefRule{}
+	_ VisitPlanRule = &ConstantFoldRule{}
 )
 
 type GetParamRule struct {
@@ -303,81 +300,31 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	}
 }
 
-type ResetRealTimeFunctionRule struct {
+type ConstantFoldRule struct {
 	compCtx CompilerContext
-	bat     *batch.Batch
+	rule    *rule.ConstantFold
 }
 
-func NewResetRealTimeFunctionRule(compCtx CompilerContext) *ResetRealTimeFunctionRule {
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
-	return &ResetRealTimeFunctionRule{
+func NewConstantFoldRule(compCtx CompilerContext) *ConstantFoldRule {
+	return &ConstantFoldRule{
 		compCtx: compCtx,
-		bat:     bat,
+		rule:    rule.NewConstantFold(),
 	}
 }
 
-func (rule *ResetRealTimeFunctionRule) MatchNode(_ *Node) bool {
+func (r *ConstantFoldRule) MatchNode(node *Node) bool {
+	return r.rule.Match(node)
+}
+
+func (r *ConstantFoldRule) IsApplyExpr() bool {
 	return false
 }
 
-func (rule *ResetRealTimeFunctionRule) IsApplyExpr() bool {
-	return true
-}
-
-func (rule *ResetRealTimeFunctionRule) ApplyNode(node *Node) error {
+func (r *ConstantFoldRule) ApplyNode(node *Node) error {
+	r.rule.Apply(node, nil, r.compCtx.GetProcess(), false)
 	return nil
 }
 
-func (rule *ResetRealTimeFunctionRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
-	switch ef := e.Expr.(type) {
-	case *plan.Expr_F:
-		overloadID := ef.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadID)
-		if err != nil {
-			return nil, err
-		}
-		if f.Volatile || !f.RealTimeRelated {
-			return e, nil
-		}
-		for i := range ef.F.Args {
-			ef.F.Args[i], err = rule.ApplyExpr(ef.F.Args[i])
-			if err != nil {
-				return nil, err
-			}
-		}
-		vec, err := colexec.EvalExpr(rule.bat, rule.compCtx.GetProcess(), e)
-		if err != nil {
-			return nil, err
-		}
-		c := getTimeRelatedConstant(vec)
-		if c == nil {
-			return e, nil
-		}
-		ec := &plan.Expr_C{
-			C: c,
-		}
-		e.Typ = &plan.Type{Id: int32(vec.Typ.Oid), Precision: vec.Typ.Precision, Scale: vec.Typ.Scale, Width: vec.Typ.Width, Size: vec.Typ.Size}
-		e.Expr = ec
-		return e, nil
-	default:
-		return e, nil
-	}
-}
-
-func getTimeRelatedConstant(vec *vector.Vector) *plan.Const {
-	if nulls.Any(vec.Nsp) {
-		return &plan.Const{Isnull: true}
-	}
-	switch vec.Typ.Oid {
-	case types.T_timestamp:
-		val := vector.MustTCols[types.Timestamp](vec)[0]
-		return &plan.Const{
-			Value: &plan.Const_Timestampval{
-				Timestampval: int64(val),
-			},
-		}
-	default:
-		return nil
-	}
+func (r *ConstantFoldRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	return e, nil
 }

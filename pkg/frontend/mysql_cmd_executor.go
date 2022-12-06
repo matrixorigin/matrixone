@@ -2210,8 +2210,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// replace ? and @var with their values
 		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
-		resetTimeRelatedRule := plan2.NewResetRealTimeFunctionRule(cwft.ses.GetTxnCompileCtx())
-		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, resetTimeRelatedRule})
+		constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
+		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
 		err = vp.Visit()
 		if err != nil {
 			return nil, err
