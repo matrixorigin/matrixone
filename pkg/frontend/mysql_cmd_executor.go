@@ -2219,6 +2219,17 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// reset plan & stmt
 		cwft.stmt = prepareStmt.PrepareStmt
 		cwft.plan = newPlan
+		// reset some special stmt for execute statement
+		switch cwft.stmt.(type) {
+		case *tree.ShowColumns:
+			cwft.ses.SetShowStmtType(ShowColumns)
+			cwft.ses.SetData(nil)
+		case *tree.ShowTableStatus:
+			cwft.ses.showStmtType = ShowTableStatus
+			cwft.ses.SetData(nil)
+		case *tree.SetVar, *tree.ShowVariables, *tree.ShowErrors, *tree.ShowWarnings:
+			return nil, nil
+		}
 
 		//check privilege
 		err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
@@ -3339,6 +3350,30 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			goto handleFailed
 		}
 		stmt = cw.GetAst()
+		// reset some special stmt for execute statement
+		switch st := stmt.(type) {
+		case *tree.SetVar:
+			err = mce.handleSetVar(requestCtx, st)
+			if err != nil {
+				goto handleFailed
+			} else {
+				goto handleSucceeded
+			}
+		case *tree.ShowVariables:
+			err = mce.handleShowVariables(st, proc)
+			if err != nil {
+				goto handleFailed
+			} else {
+				goto handleSucceeded
+			}
+		case *tree.ShowErrors, *tree.ShowWarnings:
+			err = mce.handleShowErrors()
+			if err != nil {
+				goto handleFailed
+			} else {
+				goto handleSucceeded
+			}
+		}
 
 		runner = ret.(ComputationRunner)
 		if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
