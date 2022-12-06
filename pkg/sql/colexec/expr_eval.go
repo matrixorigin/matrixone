@@ -105,7 +105,7 @@ func getConstVec(proc *process.Process, expr *plan.Expr, length int) (*vector.Ve
 		case *plan.Const_Timestampval:
 			pre := expr.Typ.Precision
 			if pre < 0 || pre > 6 {
-				return nil, moerr.NewInternalError(moerr.Context(), "invalid timestamp precision")
+				return nil, moerr.NewInternalError(proc.Ctx, "invalid timestamp precision")
 			}
 			vec = vector.NewConstFixed(constTimestampTypes[pre], length, types.Timestamp(t.C.GetTimestampval()), proc.Mp())
 		case *plan.Const_Sval:
