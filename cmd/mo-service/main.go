@@ -18,6 +18,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/binary"
+	"errors"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -90,6 +91,8 @@ func main() {
 		if err := startService(cfg, stopper); err != nil {
 			panic(err)
 		}
+	} else {
+		panic(errors.New("no configuration specified"))
 	}
 
 	waitSignalToStop(stopper)
