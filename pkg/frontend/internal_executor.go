@@ -192,11 +192,11 @@ func (ip *internalProtocol) IsEstablished() bool {
 	return true
 }
 
-func (ip *internalProtocol) ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
+func (ip *internalProtocol) ParseExecuteData(ctx context.Context, stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
 	return nil, nil, nil
 }
 
-func (ip *internalProtocol) SendPrepareResponse(stmt *PrepareStmt) error {
+func (ip *internalProtocol) SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
 	return nil
 }
 
@@ -287,7 +287,7 @@ func (ip *internalProtocol) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet
 }
 
 // SendColumnDefinitionPacket the server send the column definition to the client
-func (ip *internalProtocol) SendColumnDefinitionPacket(column Column, cmd int) error {
+func (ip *internalProtocol) SendColumnDefinitionPacket(ctx context.Context, column Column, cmd int) error {
 	return nil
 }
 
@@ -297,7 +297,7 @@ func (ip *internalProtocol) SendColumnCountPacket(count uint64) error {
 }
 
 // SendResponse sends a response to the client for the application request
-func (ip *internalProtocol) SendResponse(resp *Response) error {
+func (ip *internalProtocol) SendResponse(ctx context.Context, resp *Response) error {
 	ip.Lock()
 	defer ip.Unlock()
 	ip.PrepareBeforeProcessingResultSet()

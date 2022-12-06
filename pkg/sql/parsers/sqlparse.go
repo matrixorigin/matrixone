@@ -15,6 +15,7 @@
 package parsers
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -22,24 +23,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func Parse(dialectType dialect.DialectType, sql string) ([]tree.Statement, error) {
+func Parse(ctx context.Context, dialectType dialect.DialectType, sql string) ([]tree.Statement, error) {
 	switch dialectType {
 	case dialect.MYSQL:
-		return mysql.Parse(sql)
+		return mysql.Parse(ctx, sql)
 	case dialect.POSTGRESQL:
-		return postgresql.Parse(sql)
+		return postgresql.Parse(ctx, sql)
 	default:
-		return nil, moerr.NewInternalError("type of dialect error")
+		return nil, moerr.NewInternalError(ctx, "type of dialect error")
 	}
 }
 
-func ParseOne(dialectType dialect.DialectType, sql string) (tree.Statement, error) {
+func ParseOne(ctx context.Context, dialectType dialect.DialectType, sql string) (tree.Statement, error) {
 	switch dialectType {
 	case dialect.MYSQL:
-		return mysql.ParseOne(sql)
+		return mysql.ParseOne(ctx, sql)
 	case dialect.POSTGRESQL:
-		return postgresql.ParseOne(sql)
+		return postgresql.ParseOne(ctx, sql)
 	default:
-		return nil, moerr.NewInternalError("type of dialect error")
+		return nil, moerr.NewInternalError(ctx, "type of dialect error")
 	}
 }

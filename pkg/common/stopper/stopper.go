@@ -23,13 +23,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"go.uber.org/zap"
 )
 
 var (
 	// ErrUnavailable stopper is not running
-	ErrUnavailable = moerr.NewInternalError("runner is unavailable")
+	ErrUnavailable = moerr.NewInternalErrorNoCtx("runner is unavailable")
 )
 
 var (
@@ -261,6 +262,7 @@ func (s *Stopper) doRunCancelableTask(ctx context.Context, taskID uint64, name s
 
 func (s *Stopper) allocate() (uint64, context.Context) {
 	ctx, cancel := context.WithCancel(context.Background())
+	ctx = trace.Generate(ctx) // fill span{trace_id} in ctx
 	id := s.nextTaskID()
 	s.cancels.Store(id, cancel)
 	return id, ctx

@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -238,7 +239,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, parsed, c.expected)
 			} else {
-				require.Equal(t, err, moerr.NewInvalidInput("invalid time value %s", c.inputStr))
+				require.Equal(t, err, moerr.NewInvalidInput(context.TODO(), "invalid time value %s", c.inputStr))
 			}
 		})
 
@@ -345,7 +346,7 @@ func TestTime_CastBetweenTimeInt64(t *testing.T) {
 				toInt := c.expected.ToInt64()
 				require.Equal(t, toInt, c.input)
 			} else {
-				require.Equal(t, err, moerr.NewInvalidInput("invalid time value %d", c.input))
+				require.Equal(t, err, moerr.NewInvalidInput(context.TODO(), "invalid time value %d", c.input))
 			}
 		})
 	}

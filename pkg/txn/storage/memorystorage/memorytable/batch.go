@@ -75,7 +75,7 @@ func (b *Batch[K, V, R]) Insert(row R) (err error) {
 
 	_, ok := b.state.rows.Get(pair)
 	if ok {
-		return moerr.NewDuplicate()
+		return moerr.NewDuplicateNoCtx()
 	}
 
 	pair.ID = atomic.AddInt64(&nextKVPairID, 1)

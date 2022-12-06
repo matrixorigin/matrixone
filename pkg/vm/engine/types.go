@@ -15,7 +15,9 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -55,6 +57,8 @@ type Attribute struct {
 	OnUpdate *plan.OnUpdate
 	// Primary is primary key or not
 	Primary bool
+	// Clusterby means sort by this column
+	ClusterBy bool
 	// Comment of attribute
 	Comment string
 	// AutoIncrement is auto incr or not
@@ -72,6 +76,10 @@ type PropertiesDef struct {
 type Property struct {
 	Key   string
 	Value string
+}
+
+type ClusterByDef struct {
+	Name string
 }
 
 type Statistics interface {
@@ -121,25 +129,95 @@ type ViewDef struct {
 	View string
 }
 
-type ComputeIndexDef struct {
-	IndexNames []string
-	TableNames []string
-	Uniques    []bool
-	Fields     [][]string
+type UniqueIndexDef struct {
+	UniqueIndex string
+}
+
+type SecondaryIndexDef struct {
+	SecondaryIndex string
 }
 
 type TableDef interface {
 	tableDef()
 }
 
-func (*CommentDef) tableDef()      {}
-func (*PartitionDef) tableDef()    {}
-func (*ViewDef) tableDef()         {}
-func (*AttributeDef) tableDef()    {}
-func (*IndexTableDef) tableDef()   {}
-func (*PropertiesDef) tableDef()   {}
-func (*PrimaryIndexDef) tableDef() {}
-func (*ComputeIndexDef) tableDef() {}
+func (*CommentDef) tableDef()        {}
+func (*PartitionDef) tableDef()      {}
+func (*ViewDef) tableDef()           {}
+func (*AttributeDef) tableDef()      {}
+func (*IndexTableDef) tableDef()     {}
+func (*PropertiesDef) tableDef()     {}
+func (*PrimaryIndexDef) tableDef()   {}
+func (*UniqueIndexDef) tableDef()    {}
+func (*SecondaryIndexDef) tableDef() {}
+func (*ClusterByDef) tableDef()      {}
+func (*ConstraintDef) tableDef()     {}
+
+type ConstraintDef struct {
+	Cts []Constraint
+}
+
+type ConstraintType int8
+
+const (
+	UniqueIndex ConstraintType = iota
+	SecondaryIndex
+)
+
+func (c *ConstraintDef) MarshalBinary() (data []byte, err error) {
+	buf := bytes.NewBuffer(make([]byte, 0))
+	for _, ct := range c.Cts {
+		switch def := ct.(type) {
+		case *UniqueIndexDef:
+			if err := binary.Write(buf, binary.BigEndian, UniqueIndex); err != nil {
+				return nil, err
+			}
+			if err := binary.Write(buf, binary.BigEndian, uint64(len([]byte(def.UniqueIndex)))); err != nil {
+				return nil, err
+			}
+			buf.Write([]byte(def.UniqueIndex))
+		case *SecondaryIndexDef:
+			if err := binary.Write(buf, binary.BigEndian, SecondaryIndex); err != nil {
+				return nil, err
+			}
+			if err := binary.Write(buf, binary.BigEndian, uint64(len([]byte(def.SecondaryIndex)))); err != nil {
+				return nil, err
+			}
+			buf.Write([]byte(def.SecondaryIndex))
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+func (c *ConstraintDef) UnmarshalBinary(data []byte) error {
+	l := 0
+	var length uint64
+	for l < len(data) {
+		typ := ConstraintType(data[l])
+		l += 1
+		switch typ {
+		case UniqueIndex:
+			length = binary.BigEndian.Uint64(data[l : l+8])
+			l += 8
+			c.Cts = append(c.Cts, &UniqueIndexDef{UniqueIndex: string(data[l : l+int(length)])})
+			l += int(length)
+		case SecondaryIndex:
+			length = binary.BigEndian.Uint64(data[l : l+8])
+			l += 8
+			c.Cts = append(c.Cts, &SecondaryIndexDef{SecondaryIndex: string(data[l : l+int(length)])})
+			l += int(length)
+		}
+	}
+	return nil
+}
+
+type Constraint interface {
+	constraint()
+}
+
+// TODO: UniqueIndexDef, SecondaryIndexDef will not be tabledef and need to be moved in Constraint to be able modified
+func (*UniqueIndexDef) constraint()    {}
+func (*SecondaryIndexDef) constraint() {}
 
 type Relation interface {
 	Statistics
@@ -162,6 +240,9 @@ type Relation interface {
 	AddTableDef(context.Context, TableDef) error
 	DelTableDef(context.Context, TableDef) error
 
+	// only ConstraintDef can be modified
+	UpdateConstraint(context.Context, *ConstraintDef) error
+
 	GetTableID(context.Context) string
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
@@ -172,7 +253,7 @@ type Relation interface {
 
 type Reader interface {
 	Close() error
-	Read([]string, *plan.Expr, *mpool.MPool) (*batch.Batch, error)
+	Read(context.Context, []string, *plan.Expr, *mpool.MPool) (*batch.Batch, error)
 }
 
 type Database interface {

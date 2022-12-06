@@ -8,8 +8,12 @@ on:
       - published
   workflow_dispatch:
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
-  docker:
+  dockerhub:
     runs-on: ubuntu-latest
 
     steps:
@@ -66,3 +70,32 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.prep.outputs.tags }}
+
+  ecr:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Prepare
+        id: prep
+        run: |
+          DOCKER_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/${GITHUB_REPOSITORY#*/}
+          VERSION=nightly-${GITHUB_SHA::8}
+          # If this is git tag, use the tag name as a docker tag
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          fi
+          # Set output parameters.
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Get image info
+        run: |
+          echo image-tags: ${{ steps.prep.outputs.version }}
+
+      # push image to ecr
+      - uses: ./.github/actions/ecr
+        with:
+          role: ${{ secrets.AWS_ROLE }}
+          tag:  ${{ steps.prep.outputs.version }}

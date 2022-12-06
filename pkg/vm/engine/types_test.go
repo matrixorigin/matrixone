@@ -12,33 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memtable
+package engine
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/stretchr/testify/require"
+	"testing"
 )
 
-type BatchIter func() (tuple []Nullable)
-
-func NewBatchIter(b *batch.Batch) BatchIter {
-	i := 0
-	iter := func() (tuple []Nullable) {
-		for {
-			if i >= b.Vecs[0].Length() {
-				return
-			}
-			if i < len(b.Zs) && b.Zs[i] == 0 {
-				i++
-				continue
-			}
-			break
-		}
-		for _, vec := range b.Vecs {
-			value := VectorAt(vec, i)
-			tuple = append(tuple, value)
-		}
-		i++
-		return
-	}
-	return iter
+func TestConstraintDefMarshalBinary(t *testing.T) {
+	a := &ConstraintDef{}
+	a.Cts = append(a.Cts, &UniqueIndexDef{UniqueIndex: "hello"})
+	a.Cts = append(a.Cts, &SecondaryIndexDef{SecondaryIndex: "world"})
+	data, err := a.MarshalBinary()
+	require.NoError(t, err)
+	b := &ConstraintDef{}
+	err = b.UnmarshalBinary(data)
+	require.NoError(t, err)
+	require.Equal(t, "hello", b.Cts[0].(*UniqueIndexDef).UniqueIndex)
+	require.Equal(t, "world", b.Cts[1].(*SecondaryIndexDef).SecondaryIndex)
 }

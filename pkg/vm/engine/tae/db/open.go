@@ -107,7 +107,10 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		dataFactory)
 	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
-	db.LogtailMgr = logtail.NewLogtailMgr(db.Opts.LogtailCfg.PageSize, db.Opts.Clock)
+	db.LogtailMgr = logtail.NewManager(
+		int(db.Opts.LogtailCfg.PageSize),
+		db.Opts.Clock,
+	)
 	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
 	db.TxnMgr.Start()
 	db.BGCheckpointRunner = checkpoint.NewRunner(

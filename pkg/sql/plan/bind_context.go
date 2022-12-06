@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -81,7 +83,7 @@ func (bc *BindContext) mergeContexts(left, right *BindContext) error {
 
 	for _, binding := range right.bindings {
 		if _, ok := bc.bindingByTable[binding.table]; ok {
-			return moerr.NewInvalidInput("table '%s' specified more than once", binding.table)
+			return moerr.NewInvalidInputNoCtx("table '%s' specified more than once", binding.table)
 		}
 
 		bc.bindings = append(bc.bindings, binding)
@@ -112,18 +114,18 @@ func (bc *BindContext) mergeContexts(left, right *BindContext) error {
 func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinFlag, left, right *BindContext) (*plan.Expr, error) {
 	leftBinding, ok := left.bindingByCol[col]
 	if !ok {
-		return nil, moerr.NewInvalidInput("column '%s' specified in USING clause does not exist in left table", col)
+		return nil, moerr.NewInvalidInputNoCtx("column '%s' specified in USING clause does not exist in left table", col)
 	}
 	if leftBinding == nil {
-		return nil, moerr.NewInvalidInput("common column '%s' appears more than once in left table", col)
+		return nil, moerr.NewInvalidInputNoCtx("common column '%s' appears more than once in left table", col)
 	}
 
 	rightBinding, ok := right.bindingByCol[col]
 	if !ok {
-		return nil, moerr.NewInvalidInput("column '%s' specified in USING clause does not exist in right table", col)
+		return nil, moerr.NewInvalidInputNoCtx("column '%s' specified in USING clause does not exist in right table", col)
 	}
 	if rightBinding == nil {
-		return nil, moerr.NewInvalidInput("common column '%s' appears more than once in right table", col)
+		return nil, moerr.NewInvalidInputNoCtx("common column '%s' appears more than once in right table", col)
 	}
 
 	if typ != plan.Node_RIGHT {
@@ -166,20 +168,20 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinFlag, left, rig
 	return expr, err
 }
 
-func (bc *BindContext) unfoldStar(table string) ([]tree.SelectExpr, []string, error) {
+func (bc *BindContext) unfoldStar(ctx context.Context, table string) ([]tree.SelectExpr, []string, error) {
 	if len(table) == 0 {
 		// unfold *
 		var exprs []tree.SelectExpr
 		var names []string
 
-		bc.doUnfoldStar(bc.bindingTree, make(map[string]any), &exprs, &names)
+		bc.doUnfoldStar(ctx, bc.bindingTree, make(map[string]any), &exprs, &names)
 
 		return exprs, names, nil
 	} else {
 		// unfold tbl.*
 		binding, ok := bc.bindingByTable[table]
 		if !ok {
-			return nil, nil, moerr.NewInvalidInput("missing FROM-clause entry for table '%s'", table)
+			return nil, nil, moerr.NewInvalidInput(ctx, "missing FROM-clause entry for table '%s'", table)
 		}
 
 		exprs := make([]tree.SelectExpr, len(binding.cols))
@@ -189,7 +191,7 @@ func (bc *BindContext) unfoldStar(table string) ([]tree.SelectExpr, []string, er
 			if catalog.ContainExternalHidenCol(col) {
 				continue
 			}
-			expr, _ := tree.NewUnresolvedName(table, col)
+			expr, _ := tree.NewUnresolvedName(ctx, table, col)
 			exprs[i] = tree.SelectExpr{Expr: expr}
 			names[i] = col
 		}
@@ -198,7 +200,7 @@ func (bc *BindContext) unfoldStar(table string) ([]tree.SelectExpr, []string, er
 	}
 }
 
-func (bc *BindContext) doUnfoldStar(root *BindingTreeNode, visitedUsingCols map[string]any, exprs *[]tree.SelectExpr, names *[]string) {
+func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, visitedUsingCols map[string]any, exprs *[]tree.SelectExpr, names *[]string) {
 	if root == nil {
 		return
 	}
@@ -208,7 +210,7 @@ func (bc *BindContext) doUnfoldStar(root *BindingTreeNode, visitedUsingCols map[
 				continue
 			}
 			if _, ok := visitedUsingCols[col]; !ok {
-				expr, _ := tree.NewUnresolvedName(root.binding.table, col)
+				expr, _ := tree.NewUnresolvedName(ctx, root.binding.table, col)
 				*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
 				*names = append(*names, col)
 			}
@@ -227,14 +229,14 @@ func (bc *BindContext) doUnfoldStar(root *BindingTreeNode, visitedUsingCols map[
 			handledUsingCols = append(handledUsingCols, using.col)
 			visitedUsingCols[using.col] = nil
 
-			expr, _ := tree.NewUnresolvedName(using.table, using.col)
+			expr, _ := tree.NewUnresolvedName(ctx, using.table, using.col)
 			*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
 			*names = append(*names, using.col)
 		}
 	}
 
-	bc.doUnfoldStar(root.left, visitedUsingCols, exprs, names)
-	bc.doUnfoldStar(root.right, visitedUsingCols, exprs, names)
+	bc.doUnfoldStar(ctx, root.left, visitedUsingCols, exprs, names)
+	bc.doUnfoldStar(ctx, root.right, visitedUsingCols, exprs, names)
 
 	for _, col := range handledUsingCols {
 		delete(visitedUsingCols, col)
@@ -322,7 +324,7 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, selectList tree.Sel
 					exprImpl.NumParts = 2
 					exprImpl.Parts[1] = binding.table
 				} else {
-					return nil, moerr.NewInvalidInput("ambiguouse column reference to '%s'", col)
+					return nil, moerr.NewInvalidInputNoCtx("ambiguouse column reference to '%s'", col)
 				}
 			}
 		}

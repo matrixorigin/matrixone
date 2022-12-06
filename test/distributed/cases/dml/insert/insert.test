@@ -155,3 +155,6 @@ select enable_fault_injection();
 select add_fault_point('logtail_max_size', ':::', 'echo', 0, 'flush_logtail');
 select * from flush_logtail;
 select disable_fault_injection();
+drop table if exists t1;
+create table t1 (a varchar(50));
+insert into t1 values("这是一个字节数超过五十的字符串，但是utf8没有超过");

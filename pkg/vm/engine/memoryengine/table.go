@@ -246,6 +246,11 @@ func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 //	return uint64(affectedRows), nil
 //}
 
+func (t *Table) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
+	// implement me
+	return nil
+}
+
 func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 
 	clusterDetails, err := t.engine.getClusterDetails()

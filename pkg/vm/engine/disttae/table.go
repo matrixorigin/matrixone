@@ -169,10 +169,11 @@ func (tbl *table) getTableDef() *plan.TableDef {
 						Scale:     attr.Attr.Type.Scale,
 						AutoIncr:  attr.Attr.AutoIncrement,
 					},
-					Primary:  attr.Attr.Primary,
-					Default:  attr.Attr.Default,
-					OnUpdate: attr.Attr.OnUpdate,
-					Comment:  attr.Attr.Comment,
+					Primary:   attr.Attr.Primary,
+					Default:   attr.Attr.Default,
+					OnUpdate:  attr.Attr.OnUpdate,
+					Comment:   attr.Attr.Comment,
+					ClusterBy: attr.Attr.ClusterBy,
 				})
 				i++
 			}
@@ -231,6 +232,11 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
 }
 
+func (tbl *table) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
+	// implement me
+	return nil
+}
+
 func (tbl *table) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
 	var attrs []*engine.Attribute
 	for _, def := range tbl.defs {
@@ -272,7 +278,7 @@ func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
 		for j := range bat.Vecs {
 			ibat.SetVector(int32(j), vector.New(bat.GetVector(int32(j)).GetType()))
 		}
-		if _, err := ibat.Append(tbl.db.txn.proc.Mp(), bat); err != nil {
+		if _, err := ibat.Append(ctx, tbl.db.txn.proc.Mp(), bat); err != nil {
 			return err
 		}
 		i := rand.Int() % len(tbl.db.txn.dnStores)

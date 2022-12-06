@@ -12,24 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memtable
+package morpc
 
-import "sync/atomic"
+import (
+	"strings"
+	"testing"
 
-type Atomic[T any] struct {
-	value atomic.Value
-}
+	"github.com/pierrec/lz4/v4"
+	"github.com/stretchr/testify/assert"
+)
 
-func NewAtomic[T any](value T) *Atomic[T] {
-	t := new(Atomic[T])
-	t.value.Store(value)
-	return t
-}
+func TestCompress(t *testing.T) {
+	src := []byte(strings.Repeat("hello", 100))
+	dst := make([]byte, lz4.CompressBlockBound(len(src)))
+	dst, err := compress(src, dst)
+	assert.NoError(t, err)
 
-func (a *Atomic[T]) Load() T {
-	return a.value.Load().(T)
-}
-
-func (a *Atomic[T]) Store(value T) {
-	a.value.Store(value)
+	v1 := make([]byte, len(dst)*100)
+	v1, err = uncompress(dst, v1)
+	assert.NoError(t, err)
+	assert.Equal(t, src, v1)
 }

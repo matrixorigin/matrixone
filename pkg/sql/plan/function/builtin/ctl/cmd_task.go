@@ -37,7 +37,7 @@ func handleTask(proc *process.Process,
 		taskservice.DebugCtlTaskFramwork(false)
 	default:
 		return pb.CtlResult{},
-			moerr.NewInvalidInput("task command only support %s and %s",
+			moerr.NewInvalidInputNoCtx("task command only support %s and %s",
 				enableTask,
 				disableTask)
 	}
