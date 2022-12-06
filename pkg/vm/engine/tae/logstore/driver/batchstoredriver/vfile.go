@@ -126,11 +126,11 @@ func (vf *vFile) Close() error {
 	return nil
 }
 
-func (vf *vFile) Commit() {
+func (vf *vFile) Commit(skipSync bool) {
 	logutil.Infof("Committing %s\n", vf.Name())
 	vf.wg.Wait()
 	vf.flushWg.Wait()
-	err := vf.Sync()
+	err := vf.Sync(skipSync)
 	if err != nil {
 		panic(err)
 	}
@@ -146,7 +146,7 @@ func (vf *vFile) Commit() {
 	// vf.FreeMeta()
 }
 
-func (vf *vFile) Sync() error {
+func (vf *vFile) Sync(skipSync bool) error {
 	vf.Lock()
 	defer vf.Unlock()
 	if vf.buf == nil {
@@ -175,9 +175,11 @@ func (vf *vFile) Sync() error {
 	vf.bufpos = 0
 	vf.buf.Reset()
 	// logutil.Infof("199bufpos is %v\n",vf.bufpos)
-	err = vf.File.Sync()
-	if err != nil {
-		return err
+	if !skipSync {
+		err = vf.File.Sync()
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

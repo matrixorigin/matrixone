@@ -54,6 +54,7 @@ func ParseVersion(name, prefix, suffix string) (n int, ok bool) {
 type rotateFile struct {
 	*sync.RWMutex
 	dir, name   string
+	skipSync    bool
 	checker     RotateChecker
 	uncommitted []*vFile
 	history     History
@@ -69,7 +70,7 @@ type rotateFile struct {
 }
 
 func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChecker,
-	historyFactory HistoryFactory, observer ReplayObserver) (*rotateFile, error) {
+	historyFactory HistoryFactory, observer ReplayObserver, skipSync bool) (*rotateFile, error) {
 	var err error
 	if mu == nil {
 		mu = new(sync.RWMutex)
@@ -98,6 +99,7 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 		checker:     rotateChecker,
 		commitQueue: make(chan *vFile, 10000),
 		history:     historyFactory(),
+		skipSync:    skipSync,
 	}
 	if !newDir {
 		files, err := os.ReadDir(dir)
@@ -197,7 +199,7 @@ func (rf *rotateFile) commitLoop() {
 		case <-rf.commitCtx.Done():
 			return
 		case file := <-rf.commitQueue:
-			file.Commit()
+			file.Commit(rf.skipSync)
 			rf.commitFile()
 			rf.commitWg.Done()
 		}
@@ -307,13 +309,13 @@ func (rf *rotateFile) Sync() error {
 	if len(rf.uncommitted) == 1 {
 		f := rf.uncommitted[0]
 		rf.RUnlock()
-		return f.Sync()
+		return f.Sync(rf.skipSync)
 	}
 	lastFile := rf.uncommitted[len(rf.uncommitted)-1]
 	waitFile := rf.uncommitted[len(rf.uncommitted)-2]
 	rf.RUnlock()
 	waitFile.WaitCommitted()
-	return lastFile.Sync()
+	return lastFile.Sync(rf.skipSync)
 }
 
 func (rf *rotateFile) Load(ver int, groupId uint32, lsn uint64) (*entry.Entry, error) {

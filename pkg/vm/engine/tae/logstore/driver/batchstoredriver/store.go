@@ -38,7 +38,10 @@ var (
 type StoreCfg struct {
 	RotateChecker  RotateChecker
 	HistoryFactory HistoryFactory
+	SkipSync       bool
 }
+
+func WithSkipSync(cfg *StoreCfg) { cfg.SkipSync = true }
 
 type baseStore struct {
 	syncBase
@@ -74,7 +77,7 @@ func NewBaseStore(dir, name string, cfg *StoreCfg) (*baseStore, error) {
 	if cfg == nil {
 		cfg = &StoreCfg{}
 	}
-	bs.file, err = OpenRotateFile(dir, name, nil, cfg.RotateChecker, cfg.HistoryFactory, bs)
+	bs.file, err = OpenRotateFile(dir, name, nil, cfg.RotateChecker, cfg.HistoryFactory, bs, cfg.SkipSync)
 	if err != nil {
 		return nil, err
 	}

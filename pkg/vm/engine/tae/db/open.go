@@ -85,7 +85,10 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	switch opts.LogStoreT {
 	case options.LogstoreBatchStore:
-		db.Wal = wal.NewDriverWithBatchStore(dirname, WALDir, nil)
+		walCfg := &wal.DriverConfig{
+			SkipSync: opts.SkipSync,
+		}
+		db.Wal = wal.NewDriverWithBatchStore(dirname, WALDir, walCfg)
 	case options.LogstoreLogservice:
 		db.Wal = wal.NewDriverWithLogservice(opts.Lc)
 	}

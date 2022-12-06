@@ -71,6 +71,12 @@ func WithCheckpointGlobalInterval(interval time.Duration) func(*Options) {
 	}
 }
 
+func WithSkipSync() func(*Options) {
+	return func(opts *Options) {
+		opts.SkipSync = true
+	}
+}
+
 func (o *Options) FillDefaults(dirname string) *Options {
 	if o == nil {
 		o = &Options{}

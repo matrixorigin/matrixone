@@ -72,4 +72,5 @@ type Options struct {
 	Lc        logservicedriver.LogServiceClientFactory
 	Shard     metadata.DNShard
 	LogStoreT LogstoreType
+	SkipSync  bool
 }
