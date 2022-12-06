@@ -216,14 +216,15 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		return nil
 	}
 	return &plan.ColDef{
-		Name:     col.Name,
-		Alg:      col.Alg,
-		Typ:      DeepCopyTyp(col.Typ),
-		Default:  DeepCopyDefault(col.Default),
-		Primary:  col.Primary,
-		Pkidx:    col.Pkidx,
-		Comment:  col.Comment,
-		OnUpdate: DeepCopyOnUpdate(col.OnUpdate),
+		Name:      col.Name,
+		Alg:       col.Alg,
+		Typ:       DeepCopyTyp(col.Typ),
+		Default:   DeepCopyDefault(col.Default),
+		Primary:   col.Primary,
+		Pkidx:     col.Pkidx,
+		Comment:   col.Comment,
+		OnUpdate:  DeepCopyOnUpdate(col.OnUpdate),
+		ClusterBy: col.ClusterBy,
 	}
 }
 

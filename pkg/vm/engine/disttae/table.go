@@ -169,10 +169,11 @@ func (tbl *table) getTableDef() *plan.TableDef {
 						Scale:     attr.Attr.Type.Scale,
 						AutoIncr:  attr.Attr.AutoIncrement,
 					},
-					Primary:  attr.Attr.Primary,
-					Default:  attr.Attr.Default,
-					OnUpdate: attr.Attr.OnUpdate,
-					Comment:  attr.Attr.Comment,
+					Primary:   attr.Attr.Primary,
+					Default:   attr.Attr.Default,
+					OnUpdate:  attr.Attr.OnUpdate,
+					Comment:   attr.Attr.Comment,
+					ClusterBy: attr.Attr.ClusterBy,
 				})
 				i++
 			}
@@ -229,6 +230,11 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	defs = append(defs, pro)
 	return defs, nil
 
+}
+
+func (tbl *table) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
+	// implement me
+	return nil
 }
 
 func (tbl *table) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {

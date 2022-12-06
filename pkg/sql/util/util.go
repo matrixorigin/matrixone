@@ -14,7 +14,10 @@
 
 package util
 
-import "strings"
+import (
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"strings"
+)
 
 func SplitTableAndColumn(name string) (string, string) {
 	var schema string
@@ -33,4 +36,14 @@ func SplitTableAndColumn(name string) (string, string) {
 		schema += xs[i]
 	}
 	return schema, xs[len(xs)-1]
+}
+
+func FindPrimaryKey(def *plan.TableDef) bool {
+	for _, def := range def.Defs {
+		switch def.Def.(type) {
+		case *plan.TableDef_DefType_Pk:
+			return true
+		}
+	}
+	return false
 }
