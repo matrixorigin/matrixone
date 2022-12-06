@@ -140,18 +140,22 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 // GetExecType get executor will execute base AP or TP
 func GetExecTypeFromPlan(pn *Plan) ExecInfo {
 	defInfo := ExecInfo{
-		Typ:        ExecTypeTP,
+		Typ:        ExecTypeAP,
 		WithGPU:    false,
 		WithBigMem: false,
 		CnNumbers:  2,
 	}
 
+	tp := true
 	for _, node := range pn.GetQuery().GetNodes() {
 		stats := node.Stats
-		if stats.Outcnt >= 100 || stats.BlockNum >= 4 {
-			defInfo.Typ = ExecTypeAP
+		if stats == nil || stats.Outcnt >= 100 || stats.BlockNum >= 4 {
+			tp = false
 			break
 		}
+	}
+	if tp {
+		defInfo.Typ = ExecTypeTP
 	}
 
 	return defInfo
