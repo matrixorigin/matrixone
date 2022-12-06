@@ -3058,7 +3058,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc.SessionInfo.UserId = rootID
 	}
 	ses.txnCompileCtx.SetProcess(proc)
-	ses.GetTxnCompileCtx().SetPrepare(false)
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,
 		ses.GetUserName(),
@@ -3196,6 +3195,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			selfHandle = true
 			ses.GetTxnCompileCtx().SetPrepare(true)
 			prepareStmt, err = mce.handlePrepareStmt(requestCtx, st)
+			ses.GetTxnCompileCtx().SetPrepare(false)
 			if err != nil {
 				goto handleFailed
 			}
@@ -3207,6 +3207,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			selfHandle = true
 			ses.GetTxnCompileCtx().SetPrepare(true)
 			prepareStmt, err = mce.handlePrepareString(requestCtx, st)
+			ses.GetTxnCompileCtx().SetPrepare(false)
 			if err != nil {
 				goto handleFailed
 			}
