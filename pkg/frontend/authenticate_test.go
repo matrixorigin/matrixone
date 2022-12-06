@@ -5774,8 +5774,8 @@ func Test_doAlterAccount(t *testing.T) {
 				Exist:     true,
 				AdminName: "rootx",
 				IdentifiedType: tree.AccountIdentified{
-					tree.AccountIdentifiedByPassword,
-					"111",
+					Typ: tree.AccountIdentifiedByPassword,
+					Str: "111",
 				},
 			},
 		}
@@ -5821,8 +5821,8 @@ func Test_doAlterAccount(t *testing.T) {
 				Exist:     true,
 				AdminName: "rootx",
 				IdentifiedType: tree.AccountIdentified{
-					tree.AccountIdentifiedByRandomPassword,
-					"111",
+					Typ: tree.AccountIdentifiedByRandomPassword,
+					Str: "111",
 				},
 			},
 		}
@@ -5868,8 +5868,8 @@ func Test_doAlterAccount(t *testing.T) {
 				Exist:     true,
 				AdminName: "rootx",
 				IdentifiedType: tree.AccountIdentified{
-					tree.AccountIdentifiedByRandomPassword,
-					"111",
+					Typ: tree.AccountIdentifiedByRandomPassword,
+					Str: "111",
 				},
 			},
 		}
@@ -5911,8 +5911,8 @@ func Test_doAlterAccount(t *testing.T) {
 				Exist:     true,
 				AdminName: "rootx",
 				IdentifiedType: tree.AccountIdentified{
-					tree.AccountIdentifiedByPassword,
-					"111",
+					Typ: tree.AccountIdentifiedByPassword,
+					Str: "111",
 				},
 			},
 		}
@@ -5955,8 +5955,8 @@ func Test_doAlterAccount(t *testing.T) {
 				Exist:     true,
 				AdminName: "rootx",
 				IdentifiedType: tree.AccountIdentified{
-					tree.AccountIdentifiedByPassword,
-					"111",
+					Typ: tree.AccountIdentifiedByPassword,
+					Str: "111",
 				},
 			},
 		}
@@ -6036,8 +6036,8 @@ func Test_doAlterAccount(t *testing.T) {
 				Exist:     true,
 				AdminName: "rootx",
 				IdentifiedType: tree.AccountIdentified{
-					tree.AccountIdentifiedByPassword,
-					"111",
+					Typ: tree.AccountIdentifiedByPassword,
+					Str: "111",
 				},
 			},
 			StatusOption: tree.AccountStatus{
