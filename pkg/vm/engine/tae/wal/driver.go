@@ -59,10 +59,13 @@ func NewDriverWithLogservice(factory logservicedriver.LogServiceClientFactory) D
 }
 
 func NewDriverWithBatchStore(dir, name string, cfg *DriverConfig) Driver {
-	batchStoreCfg := &batchstoredriver.StoreCfg{}
+	var batchStoreCfg *batchstoredriver.StoreCfg
 	ckpDuration := time.Second * 5
 	if cfg != nil {
 		batchStoreCfg = cfg.BatchStoreConfig
+		if batchStoreCfg == nil {
+			batchStoreCfg = &batchstoredriver.StoreCfg{}
+		}
 		ckpDuration = cfg.CheckpointDuration
 		batchStoreCfg.SkipSync = cfg.SkipSync
 	}

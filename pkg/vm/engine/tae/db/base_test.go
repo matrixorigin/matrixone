@@ -16,6 +16,7 @@ package db
 
 import (
 	"errors"
+	"os"
 	"sync"
 	"testing"
 
@@ -187,6 +188,12 @@ func (e *testEngine) truncate() {
 
 func initDB(t *testing.T, opts *options.Options) *DB {
 	dir := testutils.InitTestEnv(ModuleName, t)
+	if os.Getenv("skipSync") == "true" {
+		if opts == nil {
+			opts = &options.Options{}
+		}
+		options.WithSkipSync()(opts)
+	}
 	db, _ := Open(dir, opts)
 	return db
 }
