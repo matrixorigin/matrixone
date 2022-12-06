@@ -1648,10 +1648,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Table:       tableName,
 					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
 				},
-				Primary:  attr.Attr.Primary,
-				Default:  attr.Attr.Default,
-				OnUpdate: attr.Attr.OnUpdate,
-				Comment:  attr.Attr.Comment,
+				Primary:   attr.Attr.Primary,
+				Default:   attr.Attr.Default,
+				OnUpdate:  attr.Attr.OnUpdate,
+				Comment:   attr.Attr.Comment,
+				ClusterBy: attr.Attr.ClusterBy,
 			}
 			if isCPkey {
 				CompositePkey = col

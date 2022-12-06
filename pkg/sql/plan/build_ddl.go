@@ -234,6 +234,33 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 	bindContext := NewBindContext(builder, nil)
 
+	if stmt.ClusterByOption != nil {
+		if util.FindPrimaryKey(createTable.TableDef) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
+		}
+		if len(stmt.ClusterByOption.ColumnList) > 1 {
+			return nil, moerr.NewNYI(ctx.GetContext(), "cluster by multi columns")
+		}
+		colName := stmt.ClusterByOption.ColumnList[0].Parts[0]
+		var found bool
+		for _, col := range createTable.TableDef.Cols {
+			if col.Name == colName {
+				found = true
+				col.ClusterBy = true
+			}
+		}
+		if !found {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", colName)
+		}
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Cb{
+				Cb: &plan.ClusterByDef{
+					Name: colName,
+				},
+			},
+		})
+	}
+
 	// set partition(unsupport now)
 	if stmt.PartitionOption != nil {
 		nodeID := builder.appendNode(&plan.Node{

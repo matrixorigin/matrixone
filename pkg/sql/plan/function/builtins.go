@@ -2657,4 +2657,25 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	FORMAT: {
+		Id:     FORMAT,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.Format,
+			},
+			{
+				Index:     1,
+				Volatile:  true,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.Format,
+			},
+		},
+	},
 }

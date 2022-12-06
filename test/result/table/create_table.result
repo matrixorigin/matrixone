@@ -32,3 +32,19 @@ $table18
 table19$
 table17
 account
+create table test01(a int primary key, b int) cluster by a;
+not supported: cluster by with primary key is not support
+create table test01(a int, b int) cluster by a;
+create table test02(a int, b int) cluster by b;
+create table test03(a int, b int) cluster by c;
+invalid input: column 'c' doesn't exist in table
+create table test04(a int, b int) cluster by (a,b);
+cluster by multi columns is not yet implemented
+show create table test01;
+Table    Create Table
+test01    CREATE TABLE `test01` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL\n) CLUSTER BY `a`
+show create table test02;
+Table    Create Table
+test02    CREATE TABLE `test02` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL\n) CLUSTER BY `b`
+drop table test01;
+drop table test02;
