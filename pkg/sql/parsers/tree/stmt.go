@@ -19,8 +19,26 @@ import "fmt"
 type Statement interface {
 	fmt.Stringer
 	NodeFormatter
+	StatementType
+}
+
+type StatementType interface {
+	// GetStatementType return like insert, update, delete, begin, rename database, rename table, ...
+	GetStatementType() string
+	// GetQueryType return val like DQL, DML, DDL, ...
+	GetQueryType() string
 }
 
 type statementImpl struct {
 	Statement
 }
+
+type QueryType string
+
+const (
+	QueryTypeDQL = "DQL" // (Data Query Language): Select, modump, analyze
+	QueryTypeDDL = "DDL" // (Data Definition Language): Create/Drop/Alter/Rename Database/Table/View/Index, TruncateTable
+	QueryTypeDML = "DML" // (Data Manipulation Language): Insert, Update, Delete, Load, Import, ValuesStatement?, With?
+	QueryTypeDCL = "DCL" // (Data Control Language): Grant, Revoke, Drop account, Set, Declare, Do, TableFunction?, Use?
+	QueryTypeTCL = "TCL" // (Transaction Control Language): Begin, Savepoint, Rollback, Commit
+)
