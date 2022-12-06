@@ -132,15 +132,35 @@ message PrecommitWriteCmd {
 //          database_id = dbId
 //          table_name =  xxx
 //          database_name = xxx
+//          //segment_id :   The id of this bulk-loading segment which belongs to transaction's workspace, and
+//          //               it must be unique within transaction's workspace and snapshot,
+//          //               how to generate segment_id pls ref to ...
+//          segment_id   = xxx
 //
 //          // one S3 object file can hold many blocks.
 //          file_name = "s3 file name"
 //
 //          //  bat holds meta info for many blocks.
-//          //  "block_id" : the transient block uuid.
-//          //  "meta_loc" : the location of base data sorted by primary key.
+//          //  "block_id" : The id of block which should be unique within this segment.
+//          //  "meta_loc" : the location of block data which contains BF and ZM index and be sorted by primary key.
 //          bat.attrs = {"block_id", "meta_loc"}
 //      }
+
+// deletes/updates involves many rows need to write S3.
+//      Entry {
+//          entry_type = Delete
+//          table_id = tid
+//          database_id = dbId
+//          table_name =  xxx
+//          database_name = xxx
+//
+//          // one S3 object file can contains many blocks
+//          file_name = "s3 file name"
+
+//          // "delta_loc" : the location of deleted row-ids for a block
+//          bat.attrs = {"delta_loc"}
+//      }
+
 
 //  DML:
 // append a batch of data into table;
@@ -154,14 +174,15 @@ message PrecommitWriteCmd {
     //          bat.attrs = {"primary column value",  "column1 value", ...}
     //      }
 
+
 //  delete batch of data from table;
 //            Entry {
-    //          entry_type = Insert
+    //          entry_type = Delete
     //          table_id =  tid
     //          database_id = dbId
     //          table_name =  xxx
     //          database_name = xxx
-    //          file_name = "" 
+    //          file_name = ""
     //          bat.attrs = {"rowid"}
     //      }
 
@@ -177,6 +198,7 @@ message Entry {
     string    table_name = 4;
     string    database_name = 5;
     string    file_name = 6;
+    uint64    segment_id = 7;
     Batch     bat = 8;
 };
 

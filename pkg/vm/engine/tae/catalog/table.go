@@ -293,6 +293,20 @@ func (entry *TableEntry) LastAppendableSegmemt() (seg *SegmentEntry) {
 	return seg
 }
 
+func (entry *TableEntry) LastNonAppendableSegmemt() (seg *SegmentEntry) {
+	it := entry.MakeSegmentIt(false)
+	for it.Valid() {
+		itSeg := it.Get().GetPayload()
+		dropped := itSeg.HasDropCommitted()
+		if !itSeg.IsAppendable() && !dropped {
+			seg = itSeg
+			break
+		}
+		it.Next()
+	}
+	return seg
+}
+
 func (entry *TableEntry) AsCommonID() *common.ID {
 	return &common.ID{
 		TableID: entry.GetID(),

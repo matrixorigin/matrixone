@@ -446,12 +446,12 @@ func (store *txnStore) CreateSegment(dbId, tid uint64, is1PC bool) (seg handle.S
 	return db.CreateSegment(tid, is1PC)
 }
 
-func (store *txnStore) CreateNonAppendableSegment(dbId, tid uint64) (seg handle.Segment, err error) {
+func (store *txnStore) CreateNonAppendableSegment(dbId, tid uint64, is1PC bool) (seg handle.Segment, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateNonAppendableSegment(tid)
+	return db.CreateNonAppendableSegment(tid, is1PC)
 }
 
 func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {

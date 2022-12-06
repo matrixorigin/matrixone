@@ -20,8 +20,9 @@ import (
 )
 
 var (
-	ErrAppendableBlockNotFound   = moerr.NewAppendableBlockNotFound()
-	ErrAppendableSegmentNotFound = moerr.NewAppendableSegmentNotFound()
+	ErrAppendableBlockNotFound      = moerr.NewAppendableBlockNotFound()
+	ErrAppendableSegmentNotFound    = moerr.NewAppendableSegmentNotFound()
+	ErrNonAppendableSegmentNotFound = moerr.NewNonAppendableSegmentNotFound()
 )
 
 type TableHandle interface {
@@ -32,4 +33,7 @@ type TableHandle interface {
 type Table interface {
 	GetHandle() TableHandle
 	ApplyHandle(TableHandle)
+	GetLastNonAppendableSeg() (*common.ID, error)
+	CloseLastNonAppendableSeg()
+	SetLastNonAppendableSeg(id *common.ID)
 }

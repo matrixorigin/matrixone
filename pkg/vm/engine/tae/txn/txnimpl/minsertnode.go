@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"sync/atomic"
+	"time"
 )
 
 // memInsertNode corresponds to an uncommitted-standalone-appendable-block
@@ -48,6 +49,7 @@ func NewMemInsertNode(
 	impl.baseNode = newBaseNode(tbl, fs, mgr, sched, meta)
 	impl.storage.mnode = newMemoryNode(impl.baseNode)
 
+	//TODO::data of memInsertNode will not be managed by nodeManager
 	impl.storage.mnode.Node = buffer.NewNode(impl.storage.mnode, mgr, *meta.AsCommonID(), 0)
 	impl.storage.mnode.driver = driver
 	impl.storage.mnode.typ = txnbase.PersistNode
@@ -59,8 +61,8 @@ func NewMemInsertNode(
 	return impl
 }
 
-// NewMemInsertNodeWithCID is just for test.
-func NewMemInsertNodeWithCID(
+// NewMemInsertNodeWithID is just for test.
+func NewMemInsertNodeWithID(
 	tbl *txnTable,
 	mgr base.INodeManager,
 	id *common.ID,
@@ -99,7 +101,12 @@ func (n *memInsertNode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, db
 }
 
 func (n *memInsertNode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCmd, entry wal.LogEntry, err error) {
+	h, err := n.bufMgr.TryPin(n.storage.mnode, time.Second)
+	if err != nil {
+		return
+	}
 	if n.storage.mnode.data == nil {
+		h.Close()
 		return
 	}
 	composedCmd := NewAppendCmd(id, n)
@@ -115,6 +122,8 @@ func (n *memInsertNode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCm
 		ptrCmd.Group = wal.GroupUC
 		composedCmd.AddCmd(ptrCmd)
 	}
+	n.storage.mnode.ToTransient()
+	h.Close()
 	return composedCmd, entry, nil
 }
 
@@ -136,10 +145,6 @@ func (n *memInsertNode) Type() txnbase.NodeType { return NTInsert }
 
 func (n *memInsertNode) IsTransient() bool {
 	return atomic.LoadInt32(&n.storage.mnode.typ) == txnbase.TransientNode
-}
-
-func (n *memInsertNode) ToTransient() {
-	atomic.StoreInt32(&n.storage.mnode.typ, txnbase.TransientNode)
 }
 
 //func (n *memInsertNode) OnDestroy() {
@@ -173,7 +178,7 @@ func (n *memInsertNode) ToTransient() {
 //}
 
 func (n *memInsertNode) Close() error {
-	n.ToTransient()
+	n.storage.mnode.ToTransient()
 	return n.storage.mnode.Close()
 }
 
@@ -290,14 +295,6 @@ func (n *memInsertNode) FillColumnView(view *model.ColumnView, buffer *bytes.Buf
 	}
 	view.DeleteMask = n.storage.mnode.data.Deletes
 	return
-}
-
-//func (n *memInsertNode) GetSpace() uint32 {
-//	return txnbase.MaxNodeRows - n.storage.mnode.rows
-//}
-
-func (n *memInsertNode) Rows() uint32 {
-	return n.storage.mnode.rows
 }
 
 func (n *memInsertNode) RowsWithoutDeletes() uint32 {

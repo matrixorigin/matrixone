@@ -207,6 +207,21 @@ func (entry *SegmentEntry) GetAppendableBlockCnt() int {
 	}
 	return cnt
 }
+
+// GetNonAppendableBlockCnt Non-appendable segment only can contain non-appendable blocks;
+// Appendable segment can contain both of appendable blocks and non-appendable blocks
+func (entry *SegmentEntry) GetNonAppendableBlockCnt() int {
+	cnt := 0
+	it := entry.MakeBlockIt(true)
+	for it.Valid() {
+		if !it.Get().GetPayload().IsAppendable() {
+			cnt++
+		}
+		it.Next()
+	}
+	return cnt
+}
+
 func (entry *SegmentEntry) GetAppendableBlock() (blk *BlockEntry) {
 	it := entry.MakeBlockIt(false)
 	for it.Valid() {

@@ -384,8 +384,8 @@ func (tbl *txnTable) CreateSegment(is1PC bool) (seg handle.Segment, err error) {
 	return tbl.createSegment(catalog.ES_Appendable, is1PC)
 }
 
-func (tbl *txnTable) CreateNonAppendableSegment() (seg handle.Segment, err error) {
-	return tbl.createSegment(catalog.ES_NotAppendable, false)
+func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool) (seg handle.Segment, err error) {
+	return tbl.createSegment(catalog.ES_NotAppendable, is1PC)
 }
 
 func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool) (seg handle.Segment, err error) {

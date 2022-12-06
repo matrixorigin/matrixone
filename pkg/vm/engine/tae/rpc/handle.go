@@ -336,7 +336,9 @@ func (h *Handle) loadPksFromFS(
 	meta txn.TxnMeta,
 	req *db.WriteReq,
 ) (err error) {
-	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+	txn, err := h.eng.GetOrCreateTxnWithMeta(
+		nil,
+		meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
 		return err
@@ -345,7 +347,6 @@ func (h *Handle) loadPksFromFS(
 	if err != nil {
 		return
 	}
-
 	tb, err := dbase.GetRelationByID(ctx, req.TableID)
 	if err != nil {
 		return
@@ -521,10 +522,11 @@ func (h *Handle) HandlePreCommitWrite(
 				rows := catalog.GenRows(req.Batch)
 				req.Uuids = make([]string, len(rows))
 				req.MetaLocs = make([]string, len(rows))
-				for i, row := range rows {
-					req.Uuids[i] = string(row[catalog.BLOCKMETAONFS_ID_IDX].([]byte))
-					req.MetaLocs[i] = string(row[catalog.BLOCKMETAONFS_METALOC_IDX].([]byte))
-				}
+				//TODO::open it
+				//for i, row := range rows {
+				//	req.Uuids[i] = string(row[catalog.BLOCKMETAONFS_ID_IDX].([]byte))
+				//	req.MetaLocs[i] = string(row[catalog.BLOCKMETAONFS_METALOC_IDX].([]byte))
+				//}
 			}
 			if err = h.CacheTxnRequest(ctx, meta, req,
 				new(db.WriteResp)); err != nil {

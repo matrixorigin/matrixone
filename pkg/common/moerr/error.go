@@ -146,26 +146,27 @@ const (
 	ErrDNShardNotFound  uint16 = 20605
 	ErrShardNotReported uint16 = 20606
 	// Generic TAE error
-	ErrTAEError                  uint16 = 20607
-	ErrTAERead                   uint16 = 20608
-	ErrRpcError                  uint16 = 20609
-	ErrWaitTxn                   uint16 = 20610
-	ErrTxnNotFound               uint16 = 20611
-	ErrTxnNotActive              uint16 = 20612
-	ErrTAEWrite                  uint16 = 20613
-	ErrTAECommit                 uint16 = 20614
-	ErrTAERollback               uint16 = 20615
-	ErrTAEPrepare                uint16 = 20616
-	ErrTAEPossibleDuplicate      uint16 = 20617
-	ErrTxnRWConflict             uint16 = 20618
-	ErrTxnWWConflict             uint16 = 20619
-	ErrNotFound                  uint16 = 20620
-	ErrTxnInternal               uint16 = 20621
-	ErrTxnReadConflict           uint16 = 20622
-	ErrPrimaryKeyDuplicated      uint16 = 20623
-	ErrAppendableSegmentNotFound uint16 = 20624
-	ErrAppendableBlockNotFound   uint16 = 20625
-	ErrTAEDebug                  uint16 = 20626
+	ErrTAEError                     uint16 = 20607
+	ErrTAERead                      uint16 = 20608
+	ErrRpcError                     uint16 = 20609
+	ErrWaitTxn                      uint16 = 20610
+	ErrTxnNotFound                  uint16 = 20611
+	ErrTxnNotActive                 uint16 = 20612
+	ErrTAEWrite                     uint16 = 20613
+	ErrTAECommit                    uint16 = 20614
+	ErrTAERollback                  uint16 = 20615
+	ErrTAEPrepare                   uint16 = 20616
+	ErrTAEPossibleDuplicate         uint16 = 20617
+	ErrTxnRWConflict                uint16 = 20618
+	ErrTxnWWConflict                uint16 = 20619
+	ErrNotFound                     uint16 = 20620
+	ErrTxnInternal                  uint16 = 20621
+	ErrTxnReadConflict              uint16 = 20622
+	ErrPrimaryKeyDuplicated         uint16 = 20623
+	ErrAppendableSegmentNotFound    uint16 = 20624
+	ErrAppendableBlockNotFound      uint16 = 20625
+	ErrTAEDebug                     uint16 = 20626
+	ErrNonAppendableSegmentNotFound uint16 = 20627
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -857,6 +858,10 @@ func NewTxnReadConflict(msg string, args ...any) *Error {
 
 func NewPrimaryKeyDuplicated(k any) *Error {
 	return newWithDepth(Context(), ErrPrimaryKeyDuplicated, k)
+}
+
+func NewNonAppendableSegmentNotFound() *Error {
+	return newWithDepth(Context(), ErrNonAppendableSegmentNotFound)
 }
 
 func NewAppendableSegmentNotFound() *Error {

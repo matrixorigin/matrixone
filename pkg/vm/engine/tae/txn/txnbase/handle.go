@@ -68,16 +68,16 @@ func (rel *TxnRelation) Append(data *containers.Batch) error    { return nil }
 func (rel *TxnRelation) AppendBlocksOnFS([]containers.Vector, []string, string, []string, int32) error {
 	return nil
 }
-func (rel *TxnRelation) GetMeta() any                                                { return nil }
-func (rel *TxnRelation) GetSegment(id uint64) (seg handle.Segment, err error)        { return }
-func (rel *TxnRelation) SoftDeleteSegment(id uint64) (err error)                     { return }
-func (rel *TxnRelation) CreateSegment(bool) (seg handle.Segment, err error)          { return }
-func (rel *TxnRelation) CreateNonAppendableSegment() (seg handle.Segment, err error) { return }
-func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, err error)      { return }
-func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, err error)            { return }
-func (rel *TxnRelation) Update(*common.ID, uint32, uint16, any) (err error)          { return }
-func (rel *TxnRelation) DeleteByPhyAddrKey(any) (err error)                          { return }
-func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector) (err error)           { return }
+func (rel *TxnRelation) GetMeta() any                                                    { return nil }
+func (rel *TxnRelation) GetSegment(id uint64) (seg handle.Segment, err error)            { return }
+func (rel *TxnRelation) SoftDeleteSegment(id uint64) (err error)                         { return }
+func (rel *TxnRelation) CreateSegment(bool) (seg handle.Segment, err error)              { return }
+func (rel *TxnRelation) CreateNonAppendableSegment(bool) (seg handle.Segment, err error) { return }
+func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, err error)          { return }
+func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, err error)                { return }
+func (rel *TxnRelation) Update(*common.ID, uint32, uint16, any) (err error)              { return }
+func (rel *TxnRelation) DeleteByPhyAddrKey(any) (err error)                              { return }
+func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector) (err error)               { return }
 func (rel *TxnRelation) RangeDelete(*common.ID, uint32, uint32, handle.DeleteType) (err error) {
 	return
 }

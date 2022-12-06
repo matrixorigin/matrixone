@@ -65,13 +65,19 @@ type localSegment struct {
 	appendable base.INodeHandle
 	//index for primary key
 	index TableIndex
+	//nodes contains memInsertNode and persistedInsertNode.
 	nodes []InsertNode
+	//the max index of memInsertNode.
+	maxIdx uint32
 	//meta for non-appendable blocks on S3/FS
+	//TODO::will be removed.
 	blocks      map[string]*blockMeta
 	table       *txnTable
 	rows        uint32
 	appends     []*appendCtx
 	tableHandle data.TableHandle
+	//last non-appendable segment into which being added non-appendable blocks
+	lastNSeg data.Segment
 }
 
 func newLocalSegment(table *txnTable) *localSegment {
@@ -92,7 +98,11 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 	return npos, noffset
 }
 
-func (seg *localSegment) registerInsertNode() {
+func (seg *localSegment) registerPersistedInsertNode() {
+
+}
+
+func (seg *localSegment) registerMemInsertNode() {
 	var err error
 	if seg.appendable != nil {
 		seg.appendable.Close()
@@ -105,17 +115,21 @@ func (seg *localSegment) registerInsertNode() {
 		seg.table.store.nodesMgr,
 		seg.table.store.dataFactory.Scheduler, meta,
 		seg.table.store.driver)
+	//TODO::will be removed in next PR.
 	seg.appendable, err = seg.table.store.nodesMgr.TryPin(n.storage.mnode, time.Second)
 	if err != nil {
 		panic(err)
 	}
 	seg.nodes = append(seg.nodes, n)
+	seg.maxIdx = uint32(len(seg.nodes))
 }
 
+// ApplyAppend applies all the memInsertNodes into appendable blocks
+// and un-reference the appendable blocks which had been referenced when PrepareApply.
 func (seg *localSegment) ApplyAppend() (err error) {
 	var destOff int
 	defer func() {
-		// Close All unclosed Appends
+		// Close All unclosed Appends:un-reference the appendable block.
 		seg.CloseAppends()
 	}()
 	for _, ctx := range seg.appends {
@@ -137,8 +151,12 @@ func (seg *localSegment) ApplyAppend() (err error) {
 
 func (seg *localSegment) PrepareApply() (err error) {
 	defer func() {
+		//un-reference the last non-appendable segment.
+		seg.table.entry.GetTableData().CloseLastNonAppendableSeg()
+	}()
+	defer func() {
 		if err != nil {
-			// Close All unclosed Appends
+			// Close All unclosed Appends: un-reference all the appendable blocks.
 			seg.CloseAppends()
 		}
 	}()
@@ -147,14 +165,10 @@ func (seg *localSegment) PrepareApply() (err error) {
 			return
 		}
 	}
-	if len(seg.blocks) != 0 {
-		if err = seg.ApplyBlocksOnFS(seg.blocks); err != nil {
-			return
-		}
-	}
 	return
 }
 
+// TODO::will be removed.
 func (seg *localSegment) ApplyBlocksOnFS(blks map[string]*blockMeta) (err error) {
 	//create a appendable segment.
 	segH, err := seg.table.CreateSegment(true)
@@ -170,74 +184,101 @@ func (seg *localSegment) ApplyBlocksOnFS(blks map[string]*blockMeta) (err error)
 	return
 }
 
-// It is very important that appending a AppendNode into
-// block's MVCCHandle before applying data into block.
 func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
-	tableData := seg.table.entry.GetTableData()
-	if seg.tableHandle == nil {
-		seg.tableHandle = tableData.GetHandle()
-	}
-	appended := uint32(0)
-	for appended < node.RowsWithoutDeletes() {
-		appender, err := seg.tableHandle.GetAppender()
-		if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
-			segH, err := seg.table.CreateSegment(true)
-			if err != nil {
-				return err
-			}
-			blk, err := segH.CreateBlock(true)
-			if err != nil {
-				return err
-			}
-			appender = seg.tableHandle.SetAppender(blk.Fingerprint())
-		} else if moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound) {
-			id := appender.GetID()
-			blk, err := seg.table.CreateBlock(id.SegmentID, true)
-			if err != nil {
-				return err
-			}
-			appender = seg.tableHandle.SetAppender(blk.Fingerprint())
+	if !node.IsPersisted() {
+		tableData := seg.table.entry.GetTableData()
+		if seg.tableHandle == nil {
+			seg.tableHandle = tableData.GetHandle()
 		}
-		anode, created, toAppend, err := appender.PrepareAppend(
-			node.RowsWithoutDeletes()-appended,
-			seg.table.store.txn)
+		appended := uint32(0)
+		for appended < node.RowsWithoutDeletes() {
+			appender, err := seg.tableHandle.GetAppender()
+			if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
+				segH, err := seg.table.CreateSegment(true)
+				if err != nil {
+					return err
+				}
+				blk, err := segH.CreateBlock(true)
+				if err != nil {
+					return err
+				}
+				appender = seg.tableHandle.SetAppender(blk.Fingerprint())
+			} else if moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound) {
+				id := appender.GetID()
+				blk, err := seg.table.CreateBlock(id.SegmentID, true)
+				if err != nil {
+					return err
+				}
+				appender = seg.tableHandle.SetAppender(blk.Fingerprint())
+			}
+			//PrepareAppend: It is very important that appending a AppendNode into
+			// block's MVCCHandle before applying data into block.
+			anode, created, toAppend, err := appender.PrepareAppend(
+				node.RowsWithoutDeletes()-appended,
+				seg.table.store.txn)
+			if err != nil {
+				return err
+			}
+			toAppendWithDeletes := node.LengthWithDeletes(appended, toAppend)
+			ctx := &appendCtx{
+				driver: appender,
+				node:   node,
+				anode:  anode,
+				start:  node.OffsetWithDeletes(appended),
+				count:  toAppendWithDeletes,
+			}
+			if created {
+				seg.table.store.IncreateWriteCnt()
+				seg.table.txnEntries.Append(anode)
+			}
+			id := appender.GetID()
+			seg.table.store.warChecker.Insert(appender.GetMeta().(*catalog.BlockEntry))
+			seg.table.store.txn.GetMemo().AddBlock(seg.table.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
+			seg.appends = append(seg.appends, ctx)
+			logutil.Debugf("%s: toAppend %d, appended %d, blks=%d", id.String(), toAppend, appended, len(seg.appends))
+			appended += toAppend
+			if appended == node.Rows() {
+				break
+			}
+		}
+		return
+	}
+	//prepareApply persistedInsertNode.
+	tableData := seg.table.entry.GetTableData()
+	segID, err := tableData.GetLastNonAppendableSeg()
+	if moerr.IsMoErrCode(err, moerr.ErrNonAppendableSegmentNotFound) {
+		segH, err := seg.table.CreateNonAppendableSegment(true)
 		if err != nil {
 			return err
 		}
-		toAppendWithDeletes := node.LengthWithDeletes(appended, toAppend)
-		ctx := &appendCtx{
-			driver: appender,
-			node:   node,
-			anode:  anode,
-			start:  node.OffsetWithDeletes(appended),
-			count:  toAppendWithDeletes,
+		tableData.SetLastNonAppendableSeg(segH.GetMeta().(*catalog.SegmentEntry).AsCommonID())
+		//create non-appendable block.
+		_, err = segH.CreateNonAppendableBlockWithMeta(node.GetMetaLoc())
+		if err != nil {
+			return err
 		}
-		if created {
-			seg.table.store.IncreateWriteCnt()
-			seg.table.txnEntries.Append(anode)
-		}
-		id := appender.GetID()
-		seg.table.store.warChecker.Insert(appender.GetMeta().(*catalog.BlockEntry))
-		seg.table.store.txn.GetMemo().AddBlock(seg.table.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
-		seg.appends = append(seg.appends, ctx)
-		logutil.Debugf("%s: toAppend %d, appended %d, blks=%d", id.String(), toAppend, appended, len(seg.appends))
-		appended += toAppend
-		if appended == node.Rows() {
-			break
-		}
+		return err
+	}
+	metaLoc, delLoc := node.GetMetaLoc()
+	_, err = seg.table.CreateNonAppendableBlockWithMeta(segID.SegmentID, metaLoc, delLoc)
+	if err != nil {
+		return err
 	}
 	return
 }
 
+// CloseAppends un-reference the appendable blocks
 func (seg *localSegment) CloseAppends() {
 	for _, ctx := range seg.appends {
 		ctx.driver.Close()
 	}
 }
 
+// Append appends batch of data into memInsetNode.
+// TODO::need to refactor.
 func (seg *localSegment) Append(data *containers.Batch) (err error) {
 	if seg.appendable == nil {
-		seg.registerInsertNode()
+		seg.registerMemInsertNode()
 	}
 	appended := uint32(0)
 	offset := uint32(0)
@@ -247,7 +288,7 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 		n := h.GetNode().(*memoryNode)
 		space := n.GetSpace()
 		if space == 0 {
-			seg.registerInsertNode()
+			seg.registerMemInsertNode()
 			n = h.GetNode().(*memoryNode)
 		}
 		toAppend := n.PrepareAppend(data, offset)
@@ -282,6 +323,8 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 	return err
 }
 
+// AddBlocksWithMetaLoc transfer blocks with meta location into persistedInsertNodes
+// TODO::rename to AddBlocksWithMetaLoc(...)
 func (seg *localSegment) AppendBlocksOnFS(
 	pkVecs []containers.Vector,
 	uuids []string,
@@ -369,17 +412,18 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 	return err
 }
 
+// CollectCmd collect txnCmd for memInsertNode.
 func (seg *localSegment) CollectCmd(cmdMgr *commandManager) (err error) {
 	for i, node := range seg.nodes {
-		if node.IsPersisted() {
-			continue
-		}
-		//TODO::
-		h, err := seg.table.store.nodesMgr.TryPin(node.(*memInsertNode).storage.mnode, time.Second)
-		if err != nil {
-			return err
-		}
-		forceFlush := i < len(seg.nodes)-1
+		//if node.IsPersisted() {
+		//	continue
+		//}
+		//h, err := seg.table.store.nodesMgr.TryPin(node.(*memInsertNode).storage.mnode, time.Second)
+		//if err != nil {
+		//	return err
+		//}
+		//forceFlush := i < len(seg.nodes)-1
+		forceFlush := i < int(seg.maxIdx-1)
 		csn := uint32(0xffff) // Special cmd
 		cmd, entry, err := node.MakeCommand(csn, forceFlush)
 		if err != nil {
@@ -388,8 +432,8 @@ func (seg *localSegment) CollectCmd(cmdMgr *commandManager) (err error) {
 		if entry != nil {
 			seg.table.logs = append(seg.table.logs, entry)
 		}
-		node.ToTransient()
-		h.Close()
+		//node.ToTransient()
+		//h.Close()
 		if cmd != nil {
 			cmdMgr.AddInternalCmd(cmd)
 		}
@@ -490,7 +534,7 @@ func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {
 	return int(n.Rows())
 }
 
-// TODO::
+// TODO::need to refactor:call InsertNode's GetValue.
 func (seg *localSegment) GetValue(row uint32, col uint16) (any, error) {
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]
@@ -503,9 +547,9 @@ func (seg *localSegment) GetValue(row uint32, col uint16) (any, error) {
 	return v, nil
 }
 
-// TODO::
 func (seg *localSegment) Close() (err error) {
 	if seg.appendable != nil {
+		//unpin the memoryNode.
 		if err = seg.appendable.Close(); err != nil {
 			return
 		}

@@ -245,7 +245,7 @@ type TxnStore interface {
 
 	GetSegment(dbId uint64, id *common.ID) (handle.Segment, error)
 	CreateSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
-	CreateNonAppendableSegment(dbId, tid uint64) (handle.Segment, error)
+	CreateNonAppendableSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
 	CreateBlock(dbId, tid, sid uint64, is1PC bool) (handle.Block, error)
 	GetBlock(dbId uint64, id *common.ID) (handle.Block, error)
 	CreateNonAppendableBlock(dbId uint64, id *common.ID) (handle.Block, error)

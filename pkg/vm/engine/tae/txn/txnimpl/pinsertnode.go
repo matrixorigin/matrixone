@@ -37,8 +37,12 @@ func NewPersistedInsertNode(tbl *txnTable, meta *catalog.BlockEntry) *persistedI
 }
 
 func (n *persistedInsertNode) Close() error {
-	//TODO::
-	panic("not implemented yet ")
+	for i, index := range n.storage.pnode.indexes {
+		index.Close()
+		n.storage.pnode.indexes[i] = nil
+	}
+	n.storage.pnode.indexes = nil
+	return nil
 }
 
 func (n *persistedInsertNode) Append(data *containers.Batch, offset uint32) (appended uint32, err error) {
@@ -78,22 +82,9 @@ func (n *persistedInsertNode) Window(start, end uint32) (*containers.Batch, erro
 	panic("not implemented yet ")
 }
 
-func (n *persistedInsertNode) Rows() uint32 {
-	//TODO::
-	panic("not implemented yet ")
-}
-
 func (n *persistedInsertNode) GetValue(col int, row uint32) any {
 	//TODO::
 	panic("not implemented yet ")
-}
-
-func (n *persistedInsertNode) MakeCommand(uint32, bool) (txnif.TxnCmd, wal.LogEntry, error) {
-	panic("not supported ")
-}
-
-func (n *persistedInsertNode) ToTransient() {
-	panic("not supported ")
 }
 
 func (n *persistedInsertNode) AddApplyInfo(
@@ -120,4 +111,8 @@ func (n *persistedInsertNode) OffsetWithDeletes(count uint32) uint32 {
 
 func (n *persistedInsertNode) GetAppends() []*appendInfo {
 	panic("not supported ")
+}
+
+func (n *persistedInsertNode) MakeCommand(uint32, bool) (txnif.TxnCmd, wal.LogEntry, error) {
+	return nil, nil, nil
 }

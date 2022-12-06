@@ -318,12 +318,12 @@ func (db *txnDB) CreateSegment(tid uint64, is1PC bool) (seg handle.Segment, err 
 	return table.CreateSegment(is1PC)
 }
 
-func (db *txnDB) CreateNonAppendableSegment(tid uint64) (seg handle.Segment, err error) {
+func (db *txnDB) CreateNonAppendableSegment(tid uint64, is1PC bool) (seg handle.Segment, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateNonAppendableSegment()
+	return table.CreateNonAppendableSegment(is1PC)
 }
 
 func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {

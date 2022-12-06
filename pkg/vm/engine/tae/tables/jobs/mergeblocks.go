@@ -161,7 +161,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		common.OperandField(task))
 	var toSegEntry handle.Segment
 	if task.toSegEntry == nil {
-		if toSegEntry, err = task.rel.CreateNonAppendableSegment(); err != nil {
+		if toSegEntry, err = task.rel.CreateNonAppendableSegment(false); err != nil {
 			return err
 		}
 		task.toSegEntry = toSegEntry.GetMeta().(*catalog.SegmentEntry)

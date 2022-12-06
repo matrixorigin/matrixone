@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -63,13 +65,14 @@ type InsertNode interface {
 	Rows() uint32
 	GetValue(col int, row uint32) any
 	MakeCommand(uint32, bool) (txnif.TxnCmd, wal.LogEntry, error)
-	ToTransient()
+	//ToTransient()
 	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo
 	RowsWithoutDeletes() uint32
 	LengthWithDeletes(appended, toAppend uint32) uint32
 	OffsetWithDeletes(count uint32) uint32
 	GetAppends() []*appendInfo
 	GetTxn() txnif.AsyncTxn
+	GetMetaLoc() (string, string)
 }
 
 type appendInfo struct {
@@ -286,6 +289,10 @@ func (n *memoryNode) execUnload() (en wal.LogEntry) {
 	return
 }
 
+func (n *memoryNode) ToTransient() {
+	atomic.StoreInt32(&n.typ, txnbase.TransientNode)
+}
+
 func (n *memoryNode) OnDestroy() {
 	if n.data != nil {
 		n.data.Close()
@@ -336,9 +343,9 @@ func (n *memoryNode) makeLogEntry() wal.LogEntry {
 
 type persistedNode struct {
 	common.RefHelper
-	insertNode InsertNode
-	pk         containers.Vector
-	deletes    *roaring.Bitmap
+	bnode *baseNode
+	//pk         containers.Vector
+	deletes *roaring.Bitmap
 	//ZM and BF index for primary key
 	pkIndex indexwrapper.Index
 	//ZM and BF index for all columns
@@ -347,6 +354,11 @@ type persistedNode struct {
 
 func newPersistedNode(inode InsertNode) *persistedNode {
 	return nil
+}
+
+func (n *persistedNode) Rows() uint32 {
+	location := n.bnode.meta.GetMetaLoc()
+	return uint32(tables.ReadPersistedBlockRow(location))
 }
 
 type baseNode struct {
@@ -385,4 +397,18 @@ func (n *baseNode) IsPersisted() bool {
 
 func (n *baseNode) GetTxn() txnif.AsyncTxn {
 	return n.table.store.txn
+}
+
+func (n *baseNode) GetMetaLoc() (string, string) {
+	return n.meta.GetMetaLoc(), n.meta.GetDeltaLoc()
+}
+
+func (n *baseNode) Rows() uint32 {
+	if n.storage.mnode != nil {
+		return n.storage.mnode.rows
+	} else if n.storage.pnode != nil {
+		return n.storage.pnode.Rows()
+	}
+	panic(moerr.NewInternalError(
+		fmt.Sprintf("bad insertNode %s", n.meta.String())))
 }

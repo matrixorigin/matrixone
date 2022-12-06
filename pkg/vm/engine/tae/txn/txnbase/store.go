@@ -90,7 +90,7 @@ func (store *NoopTxnStore) GetSegment(dbId uint64, id *common.ID) (seg handle.Se
 func (store *NoopTxnStore) CreateSegment(dbId, tid uint64, is1PC bool) (seg handle.Segment, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateNonAppendableSegment(dbId, tid uint64) (seg handle.Segment, err error) {
+func (store *NoopTxnStore) CreateNonAppendableSegment(dbId, tid uint64, _ bool) (seg handle.Segment, err error) {
 	return
 }
 func (store *NoopTxnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) { return }

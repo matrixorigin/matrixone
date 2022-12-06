@@ -101,7 +101,7 @@ func TestInsertNode(t *testing.T) {
 				var cid common.ID
 				cid.BlockID = id
 				cid.Idx = uint16(i)
-				n := NewMemInsertNodeWithCID(tbl, tbl.store.nodesMgr, &cid, tbl.store.driver)
+				n := NewMemInsertNodeWithID(tbl, tbl.store.nodesMgr, &cid, tbl.store.driver)
 				nodes[i] = n
 				h := tbl.store.nodesMgr.Pin(n.storage.mnode)
 				var err error

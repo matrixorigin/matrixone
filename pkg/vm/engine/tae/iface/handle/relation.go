@@ -51,7 +51,7 @@ type Relation interface {
 
 	GetMeta() any
 	CreateSegment(bool) (Segment, error)
-	CreateNonAppendableSegment() (Segment, error)
+	CreateNonAppendableSegment(is1PC bool) (Segment, error)
 	GetSegment(id uint64) (Segment, error)
 
 	SoftDeleteSegment(id uint64) (err error)
