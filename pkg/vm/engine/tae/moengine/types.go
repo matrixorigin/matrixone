@@ -57,10 +57,11 @@ type Relation interface {
 	//Write just append data into txn's workspace, instead of applying data into state machine.
 	Write(context.Context, *batch.Batch) error
 
-	//AppendBlocksOnFS just append blocks into txn's workspace.
-	AppendBlocksOnFS(ctx context.Context, pks []containers.Vector,
-		uuid []string, file string, metaloc []string, flag int32) error
+	//AddBlksWithMetaLoc just add  non-appendable blocks into txn's workspace.
+	AddBlksWithMetaLoc(ctx context.Context, seg uint64, pks []containers.Vector,
+		ids []uint64, file string, metaloc []string, flag int32) error
 
+	//Delete by primary key or physical addr.
 	Delete(context.Context, *batch.Batch, string) error
 
 	DeleteByPhyAddrKeys(context.Context, *vector.Vector) error

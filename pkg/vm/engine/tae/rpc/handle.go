@@ -356,9 +356,9 @@ func (h *Handle) loadPksFromFS(
 		return
 	}
 	//start job for loading primary keys of blocks
-	req.Jobs = make([]*tasks.Job, len(req.Uuids))
+	req.Jobs = make([]*tasks.Job, len(req.Blks))
 	req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
-	for i := range req.Uuids {
+	for i := range req.Blks {
 		req.Jobs[i] = tasks.NewJob(
 			fmt.Sprintf("load-primaykey-%s", req.MetaLocs[i]),
 			ctx,
@@ -396,20 +396,32 @@ func (h *Handle) loadPksFromFS(
 	return
 }
 
+func (h *Handle) EvaluateTxnRequest(
+	ctx context.Context,
+	meta txn.TxnMeta,
+) (err error) {
+	//TODO::1. load primary keys or
+	//      2. load deleted batch of row ids from S3/FS.
+	//      3. get the length of batch from parsing delta location.
+	//      4. decode row id into segment id + block id + offset.
+	//
+	return nil
+}
+
 func (h *Handle) CacheTxnRequest(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req any,
 	rsp any) (err error) {
-	if r, ok := req.(db.WriteReq); ok {
-		if r.FileName != "" {
-			//start task for loading primary keys of block on S3
-			err = h.loadPksFromFS(ctx, meta, &r)
-			if err != nil {
-				return
-			}
-		}
-	}
+	//if r, ok := req.(db.WriteReq); ok {
+	//	if r.FileName != "" {
+	//		//start task for loading primary keys of block on S3
+	//		err = h.loadPksFromFS(ctx, meta, &r)
+	//		if err != nil {
+	//			return
+	//		}
+	//	}
+	//}
 	h.mu.Lock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	if !ok {
@@ -512,21 +524,28 @@ func (h *Handle) HandlePreCommitWrite(
 				Type:         db.EntryType(pe.EntryType),
 				DatabaseId:   pe.GetDatabaseId(),
 				TableID:      pe.GetTableId(),
+				SegID:        pe.GetSegmentId(),
 				DatabaseName: pe.GetDatabaseName(),
 				TableName:    pe.GetTableName(),
 				FileName:     pe.GetFileName(),
 				Batch:        moBat,
 			}
-			//for loading block on S3/FS
 			if req.FileName != "" {
 				rows := catalog.GenRows(req.Batch)
-				req.Uuids = make([]string, len(rows))
-				req.MetaLocs = make([]string, len(rows))
-				//TODO::open it
-				//for i, row := range rows {
-				//	req.Uuids[i] = string(row[catalog.BLOCKMETAONFS_ID_IDX].([]byte))
-				//	req.MetaLocs[i] = string(row[catalog.BLOCKMETAONFS_METALOC_IDX].([]byte))
-				//}
+				if req.Type == db.EntryInsert {
+					req.Blks = make([]uint64, len(rows))
+					req.MetaLocs = make([]string, len(rows))
+				} else {
+					req.DeltaLocs = make([]string, len(rows))
+				}
+				for i, row := range rows {
+					if req.Type == db.EntryInsert {
+						req.Blks[i] = row[catalog.BLOCKMETA_ID_ON_FS_IDX].(uint64)
+						req.MetaLocs[i] = string(row[catalog.BLOCKMETA_METALOC_ON_FS_IDX].([]byte))
+					} else {
+						req.DeltaLocs[i] = string(row[0].([]byte))
+					}
+				}
 			}
 			if err = h.CacheTxnRequest(ctx, meta, req,
 				new(db.WriteResp)); err != nil {
@@ -536,8 +555,8 @@ func (h *Handle) HandlePreCommitWrite(
 			panic(moerr.NewNYI(""))
 		}
 	}
-	return nil
-
+	//evaluate all the txn requests asynchronously.
+	return h.EvaluateTxnRequest(ctx, meta)
 }
 
 //Handle DDL commands.
@@ -707,8 +726,7 @@ func (h *Handle) HandleWrite(
 				}
 				pkVecs = append(pkVecs, req.JobRes[i].Res.(containers.Vector))
 			}
-			//TODO::AddBlocksWithMetaLoc()
-			err = tb.AppendBlocksOnFS(ctx, pkVecs, req.Uuids, req.FileName, req.MetaLocs, 0)
+			err = tb.AddBlksWithMetaLoc(ctx, req.SegID, pkVecs, req.Blks, req.FileName, req.MetaLocs, 0)
 			return
 		}
 		//Appends a batch of data into table.
@@ -717,8 +735,7 @@ func (h *Handle) HandleWrite(
 		return
 	}
 
-	//TODO::Handle delete rows of block had been bulk-loaded into S3.
-
+	//TODO::Handle deleted row ids on S3/FS
 	//Vecs[0]--> rowid
 	//Vecs[1]--> PrimaryKey
 	err = tb.DeleteByPhyAddrKeys(ctx, req.Batch.GetVector(0))

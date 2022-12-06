@@ -54,14 +54,15 @@ func (rel *txnRelation) Write(_ context.Context, bat *batch.Batch) error {
 	return rel.handle.Append(taeBatch)
 }
 
-func (rel *txnRelation) AppendBlocksOnFS(
+func (rel *txnRelation) AddBlksWithMetaLoc(
 	ctx context.Context,
+	segID uint64,
 	pkVecs []containers.Vector,
-	uuids []string,
+	ids []uint64,
 	file string,
 	metaLocs []string,
 	flag int32) error {
-	return rel.handle.AppendBlocksOnFS(pkVecs, uuids, file, metaLocs, flag)
+	return rel.handle.AddBlksWithMetaLoc(segID, pkVecs, ids, file, metaLocs, flag)
 }
 
 func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {

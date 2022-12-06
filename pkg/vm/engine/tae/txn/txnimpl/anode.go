@@ -31,25 +31,24 @@ import (
 	"time"
 )
 
-// memInsertNode corresponds to an uncommitted-standalone-appendable-block
-// whose data resides in memory
-type memInsertNode struct {
+// anode corresponds to an appendable block which belongs to txn's workspace and can be appended data.
+type anode struct {
 	*baseNode
 }
 
-// NewMemInsertNode creates a InsertNode with data in memory.
-func NewMemInsertNode(
+// NewANode creates a InsertNode with data in memory.
+func NewANode(
 	tbl *txnTable,
 	fs *objectio.ObjectFS,
 	mgr base.INodeManager,
 	sched tasks.TaskScheduler,
 	meta *catalog.BlockEntry,
-	driver wal.Driver) *memInsertNode {
-	impl := new(memInsertNode)
+	driver wal.Driver) *anode {
+	impl := new(anode)
 	impl.baseNode = newBaseNode(tbl, fs, mgr, sched, meta)
 	impl.storage.mnode = newMemoryNode(impl.baseNode)
 
-	//TODO::data of memInsertNode will not be managed by nodeManager
+	//TODO::data of anode will not be managed by nodeManager
 	impl.storage.mnode.Node = buffer.NewNode(impl.storage.mnode, mgr, *meta.AsCommonID(), 0)
 	impl.storage.mnode.driver = driver
 	impl.storage.mnode.typ = txnbase.PersistNode
@@ -66,8 +65,8 @@ func NewMemInsertNodeWithID(
 	tbl *txnTable,
 	mgr base.INodeManager,
 	id *common.ID,
-	driver wal.Driver) *memInsertNode {
-	impl := new(memInsertNode)
+	driver wal.Driver) *anode {
+	impl := new(anode)
 	impl.baseNode = newBaseNode(tbl, nil, mgr, nil, nil)
 	impl.storage.mnode = newMemoryNode(impl.baseNode)
 
@@ -82,10 +81,10 @@ func NewMemInsertNodeWithID(
 	return impl
 }
 
-func (n *memInsertNode) GetAppends() []*appendInfo {
+func (n *anode) GetAppends() []*appendInfo {
 	return n.storage.mnode.appends
 }
-func (n *memInsertNode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo {
+func (n *anode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo {
 	seq := len(n.storage.mnode.appends)
 	info := &appendInfo{
 		dest:    dest,
@@ -100,7 +99,7 @@ func (n *memInsertNode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, db
 	return info
 }
 
-func (n *memInsertNode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCmd, entry wal.LogEntry, err error) {
+func (n *anode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCmd, entry wal.LogEntry, err error) {
 	h, err := n.bufMgr.TryPin(n.storage.mnode, time.Second)
 	if err != nil {
 		return
@@ -127,9 +126,9 @@ func (n *memInsertNode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCm
 	return composedCmd, entry, nil
 }
 
-func (n *memInsertNode) Type() txnbase.NodeType { return NTInsert }
+func (n *anode) Type() txnbase.NodeType { return NTInsert }
 
-//func (n *memInsertNode) makeLogEntry() wal.LogEntry {
+//func (n *anode) makeLogEntry() wal.LogEntry {
 //	cmd := txnbase.NewBatchCmd(n.storage.mnode.data)
 //	buf, err := cmd.Marshal()
 //	e := entry.GetBase()
@@ -143,17 +142,17 @@ func (n *memInsertNode) Type() txnbase.NodeType { return NTInsert }
 //	return e
 //}
 
-func (n *memInsertNode) IsTransient() bool {
+func (n *anode) IsTransient() bool {
 	return atomic.LoadInt32(&n.storage.mnode.typ) == txnbase.TransientNode
 }
 
-//func (n *memInsertNode) OnDestroy() {
+//func (n *anode) OnDestroy() {
 //	if n.storage.mnode.data != nil {
 //		n.storage.mnode.data.Close()
 //	}
 //}
 
-//func (n *memInsertNode) OnLoad() {
+//func (n *anode) OnLoad() {
 //	if n.IsTransient() {
 //		return
 //	}
@@ -177,12 +176,12 @@ func (n *memInsertNode) IsTransient() bool {
 //	n.storage.mnode.data = cmd.(*txnbase.BatchCmd).Bat
 //}
 
-func (n *memInsertNode) Close() error {
+func (n *anode) Close() error {
 	n.storage.mnode.ToTransient()
 	return n.storage.mnode.Close()
 }
 
-//func (n *memInsertNode) OnUnload() {
+//func (n *anode) OnUnload() {
 //	entry := n.execUnload()
 //	if entry != nil {
 //		if err := entry.WaitDone(); err != nil {
@@ -192,7 +191,7 @@ func (n *memInsertNode) Close() error {
 //	}
 //}
 
-//func (n *memInsertNode) execUnload() (en wal.LogEntry) {
+//func (n *anode) execUnload() (en wal.LogEntry) {
 //	if n.IsTransient() {
 //		return
 //	}
@@ -220,7 +219,7 @@ func (n *memInsertNode) Close() error {
 //	return
 //}
 
-//func (n *memInsertNode) PrepareAppend(data *containers.Batch, offset uint32) uint32 {
+//func (n *anode) PrepareAppend(data *containers.Batch, offset uint32) uint32 {
 //	left := uint32(data.Length()) - offset
 //	nodeLeft := txnbase.MaxNodeRows - n.storage.mnode.rows
 //	if left <= nodeLeft {
@@ -229,7 +228,7 @@ func (n *memInsertNode) Close() error {
 //	return nodeLeft
 //}
 
-func (n *memInsertNode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
+func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
 	schema := n.table.entry.GetSchema()
 	if n.storage.mnode.data == nil {
 		opts := new(containers.Options)
@@ -260,7 +259,7 @@ func (n *memInsertNode) Append(data *containers.Batch, offset uint32) (an uint32
 	return
 }
 
-//func (n *memInsertNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
+//func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 //	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, n.meta.MakeKey(), startRow, length)
 //	if err != nil {
 //		return
@@ -271,7 +270,7 @@ func (n *memInsertNode) Append(data *containers.Batch, offset uint32) (an uint32
 //	return
 //}
 
-func (n *memInsertNode) FillBlockView(view *model.BlockView, buffers []*bytes.Buffer, colIdxes []int) (err error) {
+func (n *anode) FillBlockView(view *model.BlockView, buffers []*bytes.Buffer, colIdxes []int) (err error) {
 	for i, colIdx := range colIdxes {
 		orig := n.storage.mnode.data.Vecs[colIdx]
 		if buffers[i] != nil {
@@ -285,7 +284,7 @@ func (n *memInsertNode) FillBlockView(view *model.BlockView, buffers []*bytes.Bu
 	view.DeleteMask = n.storage.mnode.data.Deletes
 	return
 }
-func (n *memInsertNode) FillColumnView(view *model.ColumnView, buffer *bytes.Buffer) (err error) {
+func (n *anode) FillColumnView(view *model.ColumnView, buffer *bytes.Buffer) (err error) {
 	orig := n.storage.mnode.data.Vecs[view.ColIdx]
 	if buffer != nil {
 		buffer.Reset()
@@ -297,7 +296,7 @@ func (n *memInsertNode) FillColumnView(view *model.ColumnView, buffer *bytes.Buf
 	return
 }
 
-func (n *memInsertNode) RowsWithoutDeletes() uint32 {
+func (n *anode) RowsWithoutDeletes() uint32 {
 	deletes := uint32(0)
 	if n.storage.mnode.data != nil && n.storage.mnode.data.Deletes != nil {
 		deletes = uint32(n.storage.mnode.data.DeleteCnt())
@@ -305,7 +304,7 @@ func (n *memInsertNode) RowsWithoutDeletes() uint32 {
 	return n.storage.mnode.rows - deletes
 }
 
-func (n *memInsertNode) LengthWithDeletes(appended, toAppend uint32) uint32 {
+func (n *anode) LengthWithDeletes(appended, toAppend uint32) uint32 {
 	if !n.storage.mnode.data.HasDelete() {
 		return toAppend
 	}
@@ -315,7 +314,7 @@ func (n *memInsertNode) LengthWithDeletes(appended, toAppend uint32) uint32 {
 	return toAppendOffset - appendedOffset
 }
 
-func (n *memInsertNode) OffsetWithDeletes(count uint32) uint32 {
+func (n *anode) OffsetWithDeletes(count uint32) uint32 {
 	if !n.storage.mnode.data.HasDelete() {
 		return count
 	}
@@ -330,27 +329,27 @@ func (n *memInsertNode) OffsetWithDeletes(count uint32) uint32 {
 	return offset
 }
 
-func (n *memInsertNode) GetValue(col int, row uint32) any {
+func (n *anode) GetValue(col int, row uint32) any {
 	return n.storage.mnode.data.Vecs[col].Get(int(row))
 }
 
-func (n *memInsertNode) RangeDelete(start, end uint32) error {
+func (n *anode) RangeDelete(start, end uint32) error {
 	n.storage.mnode.data.RangeDelete(int(start), int(end+1))
 	return nil
 }
 
-func (n *memInsertNode) IsRowDeleted(row uint32) bool {
+func (n *anode) IsRowDeleted(row uint32) bool {
 	return n.storage.mnode.data.IsDeleted(int(row))
 }
 
-func (n *memInsertNode) PrintDeletes() string {
+func (n *anode) PrintDeletes() string {
 	if !n.storage.mnode.data.HasDelete() {
 		return "NoDeletes"
 	}
 	return n.storage.mnode.data.Deletes.String()
 }
 
-func (n *memInsertNode) Window(start, end uint32) (bat *containers.Batch, err error) {
+func (n *anode) Window(start, end uint32) (bat *containers.Batch, err error) {
 	bat = n.storage.mnode.data.CloneWindow(int(start), int(end-start))
 	bat.Compact()
 	return

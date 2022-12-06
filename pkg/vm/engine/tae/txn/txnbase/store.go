@@ -31,10 +31,10 @@ func (store *NoopTxnStore) GetLSN() uint64                                      
 func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                           {}
 func (store *NoopTxnStore) Close() error                                         { return nil }
 func (store *NoopTxnStore) Append(dbId, id uint64, data *containers.Batch) error { return nil }
-func (store *NoopTxnStore) AppendBlocksOnFS(
-	dbId, id uint64,
-	pkVecs []containers.Vector,
-	uuids []string, file string,
+func (store *NoopTxnStore) AddBlksWithMetaLoc(
+	dbId, tid, sid uint64,
+	pks []containers.Vector,
+	bids []uint64, file string,
 	metaLocs []string,
 	flag int32) error {
 	return nil

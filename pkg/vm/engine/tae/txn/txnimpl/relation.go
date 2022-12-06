@@ -162,17 +162,19 @@ func (h *txnRelation) Append(data *containers.Batch) error {
 	return h.Txn.GetStore().Append(h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
 }
 
-func (h *txnRelation) AppendBlocksOnFS(
+func (h *txnRelation) AddBlksWithMetaLoc(
+	sid uint64,
 	pkVecs []containers.Vector,
-	uuids []string,
+	ids []uint64,
 	file string,
 	metaLocs []string,
 	flag int32) error {
-	return h.Txn.GetStore().AppendBlocksOnFS(
+	return h.Txn.GetStore().AddBlksWithMetaLoc(
 		h.table.entry.GetDB().ID,
 		h.table.entry.GetID(),
+		sid,
 		pkVecs,
-		uuids,
+		ids,
 		file,
 		metaLocs,
 		flag,

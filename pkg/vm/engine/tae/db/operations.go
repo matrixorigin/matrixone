@@ -157,22 +157,23 @@ const (
 )
 
 type WriteReq struct {
-	Type         EntryType
-	DatabaseId   uint64
-	TableID      uint64
+	Type       EntryType
+	DatabaseId uint64
+	TableID    uint64
+	//transient segment id.
+	SegID        uint64
 	DatabaseName string
 	TableName    string
 	Batch        *batch.Batch
 	//S3 object file name
 	FileName string
-	//uuids for transient blocks on FS
-	Uuids    []string
+	Blks     []uint64
 	MetaLocs []string
-	//sorted primary keys.
-	//Pks 		[]*containers.Batch
-	//tasks for loading primary keys
+	//for delete on S3
+	DeltaLocs []string
+	//tasks for loading primary keys or deleted row ids
 	Jobs []*tasks.Job
-	//loaded sorted primary keys
+	//loaded sorted primary keys or deleted row ids.
 	JobRes []*tasks.JobResult
 }
 

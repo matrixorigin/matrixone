@@ -65,13 +65,13 @@ type localSegment struct {
 	appendable base.INodeHandle
 	//index for primary key
 	index TableIndex
-	//nodes contains memInsertNode and persistedInsertNode.
+	//nodes contains anode and persistedInsertNode.
 	nodes []InsertNode
-	//the max index of memInsertNode.
+	//the max index of anode.
 	maxIdx uint32
 	//meta for non-appendable blocks on S3/FS
 	//TODO::will be removed.
-	blocks      map[string]*blockMeta
+	//blocks      map[string]*blockMeta
 	table       *txnTable
 	rows        uint32
 	appends     []*appendCtx
@@ -85,7 +85,17 @@ func newLocalSegment(table *txnTable) *localSegment {
 	return &localSegment{
 		entry:   entry,
 		nodes:   make([]InsertNode, 0),
-		blocks:  make(map[string]*blockMeta),
+		index:   NewSimpleTableIndex(),
+		appends: make([]*appendCtx, 0),
+		table:   table,
+	}
+}
+
+func newLocalSegmentWithID(table *txnTable, sid uint64) *localSegment {
+	entry := catalog.NewStandaloneSegment(table.entry, sid, table.store.txn.GetStartTS())
+	return &localSegment{
+		entry:   entry,
+		nodes:   make([]InsertNode, 0),
 		index:   NewSimpleTableIndex(),
 		appends: make([]*appendCtx, 0),
 		table:   table,
@@ -102,14 +112,14 @@ func (seg *localSegment) registerPersistedInsertNode() {
 
 }
 
-func (seg *localSegment) registerMemInsertNode() {
+func (seg *localSegment) registerANode() {
 	var err error
 	if seg.appendable != nil {
 		seg.appendable.Close()
 	}
 	meta := catalog.NewStandaloneBlock(seg.entry, uint64(len(seg.nodes)), seg.table.store.txn.GetStartTS())
 	seg.entry.AddEntryLocked(meta)
-	n := NewMemInsertNode(
+	n := NewANode(
 		seg.table,
 		seg.table.store.dataFactory.Fs,
 		seg.table.store.nodesMgr,
@@ -124,7 +134,7 @@ func (seg *localSegment) registerMemInsertNode() {
 	seg.maxIdx = uint32(len(seg.nodes))
 }
 
-// ApplyAppend applies all the memInsertNodes into appendable blocks
+// ApplyAppend applies all the anodes into appendable blocks
 // and un-reference the appendable blocks which had been referenced when PrepareApply.
 func (seg *localSegment) ApplyAppend() (err error) {
 	var destOff int
@@ -163,22 +173,6 @@ func (seg *localSegment) PrepareApply() (err error) {
 	for _, node := range seg.nodes {
 		if err = seg.prepareApplyNode(node); err != nil {
 			return
-		}
-	}
-	return
-}
-
-// TODO::will be removed.
-func (seg *localSegment) ApplyBlocksOnFS(blks map[string]*blockMeta) (err error) {
-	//create a appendable segment.
-	segH, err := seg.table.CreateSegment(true)
-	if err != nil {
-		return err
-	}
-	for _, v := range blks {
-		_, err := segH.CreateNonAppendableBlockWithMeta(v.metaloc, "")
-		if err != nil {
-			return err
 		}
 	}
 	return
@@ -243,7 +237,6 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		}
 		return
 	}
-	//prepareApply persistedInsertNode.
 	tableData := seg.table.entry.GetTableData()
 	segID, err := tableData.GetLastNonAppendableSeg()
 	if moerr.IsMoErrCode(err, moerr.ErrNonAppendableSegmentNotFound) {
@@ -253,6 +246,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		}
 		tableData.SetLastNonAppendableSeg(segH.GetMeta().(*catalog.SegmentEntry).AsCommonID())
 		//create non-appendable block.
+		//TODO:: new MVCCNode for deletes ,push it into block's MVCC list.
 		_, err = segH.CreateNonAppendableBlockWithMeta(node.GetMetaLoc())
 		if err != nil {
 			return err
@@ -278,7 +272,7 @@ func (seg *localSegment) CloseAppends() {
 // TODO::need to refactor.
 func (seg *localSegment) Append(data *containers.Batch) (err error) {
 	if seg.appendable == nil {
-		seg.registerMemInsertNode()
+		seg.registerANode()
 	}
 	appended := uint32(0)
 	offset := uint32(0)
@@ -288,7 +282,7 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 		n := h.GetNode().(*memoryNode)
 		space := n.GetSpace()
 		if space == 0 {
-			seg.registerMemInsertNode()
+			seg.registerANode()
 			n = h.GetNode().(*memoryNode)
 		}
 		toAppend := n.PrepareAppend(data, offset)
@@ -323,21 +317,15 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 	return err
 }
 
-// AddBlocksWithMetaLoc transfer blocks with meta location into persistedInsertNodes
-// TODO::rename to AddBlocksWithMetaLoc(...)
-func (seg *localSegment) AppendBlocksOnFS(
+// AddBlksWithMetaLoc transfers blocks with meta location into persistedInsertNodes
+func (seg *localSegment) AddBlksWithMetaLoc(
 	pkVecs []containers.Vector,
-	uuids []string,
+	bids []uint64,
 	file string,
 	metaLocs []string,
 	flag int32) (err error) {
-	for i, id := range uuids {
-		seg.blocks[id] = &blockMeta{
-			uuid: id,
-			//pks:  nil,
-			metaloc: metaLocs[i],
-			file:    file,
-		}
+	for i, id := range bids {
+
 		if pkVecs != nil {
 			seg.blocks[id].pks = pkVecs[i]
 			//insert primary keys into seg.index
@@ -412,13 +400,13 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 	return err
 }
 
-// CollectCmd collect txnCmd for memInsertNode.
+// CollectCmd collect txnCmd for anode.
 func (seg *localSegment) CollectCmd(cmdMgr *commandManager) (err error) {
 	for i, node := range seg.nodes {
 		//if node.IsPersisted() {
 		//	continue
 		//}
-		//h, err := seg.table.store.nodesMgr.TryPin(node.(*memInsertNode).storage.mnode, time.Second)
+		//h, err := seg.table.store.nodesMgr.TryPin(node.(*anode).storage.mnode, time.Second)
 		//if err != nil {
 		//	return err
 		//}
@@ -495,7 +483,7 @@ func (seg *localSegment) GetColumnDataByIds(
 	view = model.NewBlockView(seg.table.store.txn.GetStartTS())
 	npos := int(blk.ID)
 	n := seg.nodes[npos]
-	h, err := seg.table.store.nodesMgr.TryPin(n.(*memInsertNode).storage.mnode, time.Second)
+	h, err := seg.table.store.nodesMgr.TryPin(n.(*anode).storage.mnode, time.Second)
 	if err != nil {
 		return
 	}
@@ -515,7 +503,7 @@ func (seg *localSegment) GetColumnDataById(
 	view = model.NewColumnView(seg.table.store.txn.GetStartTS(), colIdx)
 	npos := int(blk.ID)
 	n := seg.nodes[npos]
-	h, err := seg.table.store.nodesMgr.TryPin(n.(*memInsertNode).storage.mnode, time.Second)
+	h, err := seg.table.store.nodesMgr.TryPin(n.(*anode).storage.mnode, time.Second)
 	if err != nil {
 		return
 	}
@@ -538,7 +526,7 @@ func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {
 func (seg *localSegment) GetValue(row uint32, col uint16) (any, error) {
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]
-	h, err := seg.table.store.nodesMgr.TryPin(n.(*memInsertNode).storage.mnode, time.Second)
+	h, err := seg.table.store.nodesMgr.TryPin(n.(*anode).storage.mnode, time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -547,6 +535,7 @@ func (seg *localSegment) GetValue(row uint32, col uint16) (any, error) {
 	return v, nil
 }
 
+// Close free the resource when transaction commits.
 func (seg *localSegment) Close() (err error) {
 	if seg.appendable != nil {
 		//unpin the memoryNode.

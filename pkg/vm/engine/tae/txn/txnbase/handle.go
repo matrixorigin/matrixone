@@ -65,7 +65,7 @@ func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt        { return nil }
 func (rel *TxnRelation) MakeBlockIt() handle.BlockIt            { return nil }
 func (rel *TxnRelation) BatchDedup(col containers.Vector) error { return nil }
 func (rel *TxnRelation) Append(data *containers.Batch) error    { return nil }
-func (rel *TxnRelation) AppendBlocksOnFS([]containers.Vector, []string, string, []string, int32) error {
+func (rel *TxnRelation) AddBlksWithMetaLoc(uint64, []containers.Vector, []uint64, string, []string, int32) error {
 	return nil
 }
 func (rel *TxnRelation) GetMeta() any                                                    { return nil }

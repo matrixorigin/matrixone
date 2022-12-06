@@ -121,21 +121,22 @@ func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
 	return table.Append(bat)
 }
 
-func (db *txnDB) AppendBlocksOnFS(
-	id uint64,
+func (db *txnDB) AddBlksWithMetaLoc(
+	tid uint64,
+	sid uint64,
 	pkVecs []containers.Vector,
-	uuids []string,
+	bids []uint64,
 	file string,
 	metaLocs []string,
 	flag int32) error {
-	table, err := db.getOrSetTable(id)
+	table, err := db.getOrSetTable(tid)
 	if err != nil {
 		return err
 	}
 	if table.IsDeleted() {
 		return moerr.NewNotFound()
 	}
-	return table.AppendBlocksOnFS(pkVecs, uuids, file, metaLocs, flag)
+	return table.AddBlksWithMetaLoc(sid, pkVecs, bids, file, metaLocs, flag)
 }
 
 func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {

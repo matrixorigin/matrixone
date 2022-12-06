@@ -61,10 +61,11 @@ func (s *sysRelation) Write(_ context.Context, _ *batch.Batch) error {
 	return ErrReadOnly
 }
 
-func (s *sysRelation) AppendBlocksOnFS(
+func (s *sysRelation) AddBlksWithMetaLoc(
 	_ context.Context,
+	_ uint64,
 	_ []containers.Vector,
-	_ []string,
+	_ []uint64,
 	_ string,
 	_ []string,
 	_ int32,

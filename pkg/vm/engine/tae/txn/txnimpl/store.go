@@ -179,10 +179,10 @@ func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
 	return db.Append(id, data)
 }
 
-func (store *txnStore) AppendBlocksOnFS(
-	dbId, id uint64,
+func (store *txnStore) AddBlksWithMetaLoc(
+	dbId, tid, sid uint64,
 	pkVecs []containers.Vector,
-	uuids []string,
+	bids []uint64,
 	file string,
 	metaLoc []string,
 	flag int32,
@@ -192,7 +192,7 @@ func (store *txnStore) AppendBlocksOnFS(
 	if err != nil {
 		return err
 	}
-	return db.AppendBlocksOnFS(id, pkVecs, uuids, file, metaLoc, flag)
+	return db.AddBlksWithMetaLoc(tid, sid, pkVecs, bids, file, metaLoc, flag)
 }
 
 func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {

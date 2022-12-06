@@ -610,9 +610,10 @@ func (tbl *txnTable) Append(data *containers.Batch) (err error) {
 	return tbl.localSegment.Append(data)
 }
 
-func (tbl *txnTable) AppendBlocksOnFS(
+func (tbl *txnTable) AddBlksWithMetaLoc(
+	sid uint64,
 	pkVecs []containers.Vector,
-	uuids []string,
+	bids []uint64,
 	file string,
 	metaLocs []string,
 	flag int32) (err error) {
@@ -630,9 +631,9 @@ func (tbl *txnTable) AppendBlocksOnFS(
 		}
 	}
 	if tbl.localSegment == nil {
-		tbl.localSegment = newLocalSegment(tbl)
+		tbl.localSegment = newLocalSegmentWithID(tbl, sid)
 	}
-	return tbl.localSegment.AppendBlocksOnFS(pkVecs, uuids, file, metaLocs, flag)
+	return tbl.localSegment.AddBlksWithMetaLoc(pkVecs, bids, file, metaLocs, flag)
 }
 
 func (tbl *txnTable) RangeDeleteLocalRows(start, end uint32) (err error) {
