@@ -43,9 +43,10 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 	if expr == nil {
 		return tbl.Stats(ctx)
 	}
-	var blockNum int32
+	var blockNum, totalBlockCnt int
 	var outcnt int64
 	for _, blockmetas := range tbl.meta.blocks {
+		totalBlockCnt += len(blockmetas)
 		for _, blk := range blockmetas {
 			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
 				outcnt += blockRows(blk)
@@ -53,24 +54,27 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 			}
 		}
 	}
-	return blockNum, outcnt, nil
+	// before first execution, no metadata.
+	if totalBlockCnt == 0 {
+		return 100, 1000000, nil
+	}
+	return int32(blockNum), outcnt, nil
 }
 
 func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
 	var rows int64
-	var blockNum int
-
+	var totalBlockCnt int
 	for _, blks := range tbl.meta.blocks {
-		blockNum += len(blks)
+		totalBlockCnt += len(blks)
 		for _, blk := range blks {
 			rows += blockRows(blk)
 		}
 	}
-	if blockNum == 0 {
+	// before first execution, no metadata.
+	if totalBlockCnt == 0 {
 		return 100, 1000000, nil
 	}
-
-	return int32(blockNum), rows, nil
+	return int32(totalBlockCnt), rows, nil
 }
 
 func (tbl *table) Size(ctx context.Context, name string) (int64, error) {
