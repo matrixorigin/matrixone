@@ -461,7 +461,7 @@ func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode 
 		e.AsCommonID().String(), e.IsAppendable(),
 		metaNode.CreatedAt.ToString(), metaNode.DeletedAt.ToString(), metaNode.MetaLoc, metaNode.DeltaLoc)
 	is_sorted := false
-	if !e.IsAppendable() && e.GetSchema().HasPK() {
+	if !e.IsAppendable() && e.GetSchema().HasSortKey() {
 		is_sorted = true
 	}
 	insBatch := b.blkMetaInsBatch
