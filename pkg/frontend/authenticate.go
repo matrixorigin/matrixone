@@ -1632,7 +1632,7 @@ func verifyRoleFunc(ctx context.Context, bh BackgroundExec, sql, name string, ty
 	}
 
 	if execResultArrayHasData(erArray) {
-		roleId, err = erArray[0].GetInt64(0, 0)
+		roleId, err = erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -1888,7 +1888,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 
 	if execResultArrayHasData(erArray) {
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			targetAccountId, err = erArray[0].GetUint64(i, 0)
+			targetAccountId, err = erArray[0].GetUint64(ctx, i, 0)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2016,7 +2016,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 			goto handleFailed
 		}
 		if execResultArrayHasData(erArray) {
-			roleId, err = erArray[0].GetInt64(0, 0)
+			roleId, err = erArray[0].GetInt64(ctx, 0, 0)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2108,7 +2108,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	}
 
 	if execResultArrayHasData(erArray) {
-		accountId, err = erArray[0].GetInt64(0, 0)
+		accountId, err = erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
 			goto handleFailed
 		}
@@ -2159,7 +2159,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		}
 
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			db, err = erArray[0].GetString(i, 0)
+			db, err = erArray[0].GetString(ctx, i, 0)
 			if err != nil {
 				return err
 			}
@@ -2511,7 +2511,7 @@ func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbN
 	}
 
 	if execResultArrayHasData(erArray) {
-		id, err = erArray[0].GetInt64(0, 0)
+		id, err = erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
 			return 0, err
 		}
@@ -2702,7 +2702,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 
 		if execResultArrayHasData(erArray) {
 			for j := uint64(0); j < erArray[0].GetRowCount(); j++ {
-				roleId, err = erArray[0].GetInt64(j, 0)
+				roleId, err = erArray[0].GetInt64(ctx, j, 0)
 				if err != nil {
 					goto handleFailed
 				}
@@ -2773,7 +2773,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 			choice := 1
 			if execResultArrayHasData(erArray) {
 				for j := uint64(0); j < erArray[0].GetRowCount(); j++ {
-					_, err = erArray[0].GetInt64(j, 0)
+					_, err = erArray[0].GetInt64(ctx, j, 0)
 					if err != nil {
 						goto handleFailed
 					}
@@ -3089,13 +3089,13 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 		if execResultArrayHasData(erArray) {
 			for j := uint64(0); j < erArray[0].GetRowCount(); j++ {
 				//column grantedId
-				grantedId, err = erArray[0].GetInt64(j, 0)
+				grantedId, err = erArray[0].GetInt64(ctx, j, 0)
 				if err != nil {
 					goto handleFailed
 				}
 
 				//column granteeId
-				granteeId, err = erArray[0].GetInt64(j, 1)
+				granteeId, err = erArray[0].GetInt64(ctx, j, 1)
 				if err != nil {
 					goto handleFailed
 				}
@@ -3169,7 +3169,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 			choice := 1
 			if execResultArrayHasData(erArray) {
 				for j := uint64(0); j < erArray[0].GetRowCount(); j++ {
-					withGrantOption, err = erArray[0].GetInt64(j, 2)
+					withGrantOption, err = erArray[0].GetInt64(ctx, j, 2)
 					if err != nil {
 						goto handleFailed
 					}
@@ -3925,7 +3925,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 
 			if execResultArrayHasData(erArray) {
 				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-					roleB, err = erArray[0].GetInt64(i, 0)
+					roleB, err = erArray[0].GetInt64(ctx, i, 0)
 					if err != nil {
 						goto handleFailed
 					}
@@ -4004,7 +4004,7 @@ func loadAllSecondaryRoles(ctx context.Context, bh BackgroundExec, account *Tena
 
 		if execResultArrayHasData(erArray) {
 			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-				roleId, err = erArray[0].GetInt64(i, 0)
+				roleId, err = erArray[0].GetInt64(ctx, i, 0)
 				if err != nil {
 					return err
 				}
@@ -4204,7 +4204,7 @@ func getRoleSetThatRoleGrantedToWGO(ctx context.Context, bh BackgroundExec, role
 
 	if execResultArrayHasData(erArray) {
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			id, err = erArray[0].GetInt64(i, 0)
+			id, err = erArray[0].GetInt64(ctx, i, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -4342,7 +4342,7 @@ func getRoleSetThatPrivilegeGrantedToWGO(ctx context.Context, bh BackgroundExec,
 
 	if execResultArrayHasData(erArray) {
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			id, err = erArray[0].GetInt64(i, 0)
+			id, err = erArray[0].GetInt64(ctx, i, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -4642,7 +4642,7 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 	}
 
 	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		_, err = erArray[0].GetString(i, 0)
+		_, err = erArray[0].GetString(ctx, i, 0)
 		if err != nil {
 			return false, err
 		}
@@ -4664,7 +4664,7 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 	}
 
 	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		tableName, err = erArray[0].GetString(i, 0)
+		tableName, err = erArray[0].GetString(ctx, i, 0)
 		if err != nil {
 			return false, err
 		}
@@ -5037,7 +5037,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	}
 
 	if execResultArrayHasData(erArray) {
-		newTenantID, err = erArray[0].GetInt64(0, 0)
+		newTenantID, err = erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
 			goto handleFailed
 		}
@@ -5289,7 +5289,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 			err = moerr.NewInternalError(ctx, "there is no role %s", cu.Role.UserName)
 			goto handleFailed
 		}
-		newRoleId, err = erArray[0].GetInt64(0, 0)
+		newRoleId, err = erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
 			goto handleFailed
 		}
@@ -5415,7 +5415,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 			err = moerr.NewInternalError(ctx, "get the id of user %s failed", user.Username)
 			goto handleFailed
 		}
-		newUserId, err = erArray[0].GetInt64(0, 0)
+		newUserId, err = erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
 			goto handleFailed
 		}

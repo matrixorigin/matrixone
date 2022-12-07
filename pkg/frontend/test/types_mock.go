@@ -327,7 +327,7 @@ func (m *MockExecResult) EXPECT() *MockExecResultMockRecorder {
 }
 
 // GetInt64 mocks base method.
-func (m *MockExecResult) GetInt64(rindex, cindex uint64) (int64, error) {
+func (m *MockExecResult) GetInt64(ctx context.Context, rindex, cindex uint64) (int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetInt64", rindex, cindex)
 	ret0, _ := ret[0].(int64)
@@ -356,7 +356,7 @@ func (mr *MockExecResultMockRecorder) GetRowCount() *gomock.Call {
 }
 
 // GetString mocks base method.
-func (m *MockExecResult) GetString(rindex, cindex uint64) (string, error) {
+func (m *MockExecResult) GetString(ctx context.Context, rindex, cindex uint64) (string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetString", rindex, cindex)
 	ret0, _ := ret[0].(string)
@@ -371,7 +371,7 @@ func (mr *MockExecResultMockRecorder) GetString(rindex, cindex interface{}) *gom
 }
 
 // GetUint64 mocks base method.
-func (m *MockExecResult) GetUint64(rindex, cindex uint64) (uint64, error) {
+func (m *MockExecResult) GetUint64(ctx context.Context, rindex, cindex uint64) (uint64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetUint64", rindex, cindex)
 	ret0, _ := ret[0].(uint64)
