@@ -110,6 +110,8 @@ type Config struct {
 	RPC struct {
 		// MaxMessageSize is the max size for RPC message. The default value is 10MiB.
 		MaxMessageSize toml.ByteSize `toml:"max-message-size"`
+		// EnableCompress enable compress
+		EnableCompress bool `toml:"enable-compress"`
 	}
 
 	// BootstrapConfig is the configuration specified for the bootstrapping
@@ -387,6 +389,8 @@ type HAKeeperClientConfig struct {
 	// AllocateIDBatch how many IDs are assigned from hakeeper each time. Default is
 	// 100.
 	AllocateIDBatch uint64 `toml:"allocate-id-batch"`
+	// EnableCompress enable compress
+	EnableCompress bool `toml:"enable-compress"`
 }
 
 // Validate validates the HAKeeperClientConfig.
@@ -417,6 +421,8 @@ type ClientConfig struct {
 	ServiceAddresses []string
 	// MaxMessageSize is the max message size for RPC.
 	MaxMessageSize int
+	// EnableCompress enable compress
+	EnableCompress bool
 }
 
 // Validate validates the ClientConfig.
