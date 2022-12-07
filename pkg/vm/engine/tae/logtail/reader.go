@@ -33,7 +33,7 @@ func (r *Reader) GetDirty() (tree *common.Tree, count int) {
 		count++
 		return true
 	}
-	r.table.ForeachRowInBetween(r.from, r.to, op)
+	r.table.ForeachRowInBetween(r.from, r.to, nil, op)
 	return
 }
 
@@ -46,7 +46,11 @@ func (r *Reader) HasCatalogChanges() bool {
 		}
 		return true
 	}
-	r.table.ForeachRowInBetween(r.from, r.to, op)
+	skipFn := func(blk BlockT) bool {
+		summary := blk.summary.Load()
+		return summary != nil && !summary.hasCatalogChanges
+	}
+	r.table.ForeachRowInBetween(r.from, r.to, skipFn, op)
 	return changed
 }
 
@@ -60,7 +64,7 @@ func (r *Reader) GetDirtyByTable(
 		}
 		return true
 	}
-	r.table.ForeachRowInBetween(r.from, r.to, op)
+	r.table.ForeachRowInBetween(r.from, r.to, nil, op)
 	return
 }
 
@@ -69,6 +73,7 @@ func (r *Reader) GetMaxLSN() (maxLsn uint64) {
 	r.table.ForeachRowInBetween(
 		r.from,
 		r.to,
+		nil,
 		func(row RowT) (moveOn bool) {
 			lsn := row.GetLSN()
 			if lsn > maxLsn {

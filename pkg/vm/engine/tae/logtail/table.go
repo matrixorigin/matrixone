@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -26,6 +27,13 @@ import (
 
 type RowT = *txnRow
 type BlockT = *txnBlock
+
+type summary struct {
+	hasCatalogChanges bool
+	// TODO
+	// table ids
+	// maxLsn
+}
 
 type txnRow struct {
 	txnif.AsyncTxn
@@ -36,8 +44,9 @@ func (row *txnRow) Window(_, _ int) *txnRow { return nil }
 
 type txnBlock struct {
 	sync.RWMutex
-	bornTS types.TS
-	rows   []*txnRow
+	bornTS  types.TS
+	rows    []*txnRow
+	summary atomic.Pointer[summary]
 }
 
 func (blk *txnBlock) Length() int {
@@ -64,14 +73,35 @@ func (blk *txnBlock) Close() {
 	blk.rows = make([]*txnRow, 0)
 }
 
+func (blk *txnBlock) trySumary() {
+	summary := new(summary)
+	for _, row := range blk.rows {
+		if row.GetMemo().HasCatalogChanges() {
+			summary.hasCatalogChanges = true
+			break
+		}
+	}
+	blk.summary.CompareAndSwap(nil, summary)
+}
+
 func (blk *txnBlock) ForeachRowInBetween(
 	from, to types.TS,
-	op func(row RowT) (goNext bool),
-) (outOfRange bool) {
-	blk.RLock()
-	rows := blk.rows[:len(blk.rows)]
-	blk.RUnlock()
+	rowOp func(row RowT) (goNext bool),
+) (outOfRange bool, readRows int) {
+	var rows []*txnRow
+	if blk.summary.Load() == nil {
+		blk.RLock()
+		rows = blk.rows[:len(blk.rows)]
+		capacity := cap(blk.rows)
+		blk.RUnlock()
+		if capacity == len(rows) && blk.summary.Load() == nil {
+			blk.trySumary()
+		}
+	} else {
+		rows = blk.rows
+	}
 	for _, row := range rows {
+		readRows += 1
 		ts := row.GetPrepareTS()
 		if ts.IsEmpty() || ts.Greater(to) {
 			outOfRange = true
@@ -81,7 +111,7 @@ func (blk *txnBlock) ForeachRowInBetween(
 			continue
 		}
 
-		if !op(row) {
+		if !rowOp(row) {
 			outOfRange = true
 			return
 		}
@@ -146,8 +176,9 @@ func (table *TxnTable) TruncateByTimeStamp(ts types.TS) (cnt int) {
 
 func (table *TxnTable) ForeachRowInBetween(
 	from, to types.TS,
-	op func(row RowT) (goNext bool),
-) {
+	skipBlkOp func(blk BlockT) bool,
+	rowOp func(row RowT) (goNext bool),
+) (readRows int) {
 	snapshot := table.Snapshot()
 	pivot := &txnBlock{bornTS: from}
 	snapshot.Descend(pivot, func(blk BlockT) bool {
@@ -158,12 +189,18 @@ func (table *TxnTable) ForeachRowInBetween(
 		if blk.bornTS.Greater(to) {
 			return false
 		}
-		outOfRange := blk.ForeachRowInBetween(
+
+		if skipBlkOp != nil && skipBlkOp(blk) {
+			return blk.rows[len(blk.rows)-1].GetPrepareTS().LessEq(to)
+		}
+		outOfRange, cnt := blk.ForeachRowInBetween(
 			from,
 			to,
-			op,
+			rowOp,
 		)
+		readRows += cnt
 
 		return !outOfRange
 	})
+	return
 }
