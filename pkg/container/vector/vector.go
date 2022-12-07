@@ -17,6 +17,7 @@ package vector
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
 	"reflect"
 	"unsafe"
 
@@ -1301,7 +1302,7 @@ func UnionOne(v, w *Vector, sel int64, m *mpool.MPool) (err error) {
 		}
 		if v.GetType().IsVarlen() {
 			bs := w.GetBytes(sel)
-			if v.GetType().Width != 0 && len(bs) > int(v.GetType().Width) {
+			if v.GetType().Width != 0 && lengthutf8.CountUTF8CodePoints([]byte(bs)) > uint64(v.GetType().Width) {
 				return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
 			}
 			if v.GetType().Width == 0 && (v.GetType().Oid == types.T_varchar || v.GetType().Oid == types.T_char) {
@@ -1490,7 +1491,7 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPo
 		for idx, flg := range flags {
 			if flg > 0 {
 				bs := w.GetBytes(offset + int64(idx))
-				if v.GetType().Width != 0 && len(bs) > int(v.GetType().Width) {
+				if v.GetType().Width != 0 && lengthutf8.CountUTF8CodePoints([]byte(bs)) > uint64(v.GetType().Width) {
 					return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
 				}
 

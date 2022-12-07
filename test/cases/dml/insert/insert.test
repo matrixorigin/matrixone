@@ -141,3 +141,6 @@ insert into t1 values(2, '3');
 insert into t1 values(null, '1');
 insert into t1 values(null, '2');
 insert into t1 values(null, '2');
+drop table if exists t1;
+create table t1 (a varchar(50));
+insert into t1 values("这是一个字节数超过五十的字符串，但是utf8没有超过");
