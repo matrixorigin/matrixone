@@ -21,7 +21,6 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -188,7 +187,7 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		case pkgcatalog.SystemColAttr_RelName:
 			colData.Append([]byte(table.GetSchema().Name))
 		case pkgcatalog.SystemColAttr_ConstraintType:
-			if table.GetSchema().IsPartOfPK(i) {
+			if colDef.Primary {
 				colData.Append([]byte(pkgcatalog.SystemColPKConstraint))
 			} else {
 				colData.Append([]byte(pkgcatalog.SystemColNoConstraint))
@@ -198,14 +197,9 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		case pkgcatalog.SystemColAttr_NullAbility:
 			colData.Append(bool2i8(colDef.NullAbility))
 		case pkgcatalog.SystemColAttr_HasExpr:
-			colData.Append(bool2i8(true)) // @imlinjunhong says always has Default
+			colData.Append(bool2i8(len(colDef.Default) > 0)) // @imlinjunhong says always has Default, expect row_id
 		case pkgcatalog.SystemColAttr_DefaultExpr:
-			if val, err := colDef.Default.Marshal(); err == nil {
-				colData.Append(val)
-			} else {
-				logutil.Warnf("encode plan default expr err: %v", err)
-				colData.Append([]byte(""))
-			}
+			colData.Append(colDef.Default)
 		case pkgcatalog.SystemColAttr_IsDropped:
 			colData.Append(int8(0))
 		case pkgcatalog.SystemColAttr_IsHidden:
@@ -222,16 +216,11 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		case pkgcatalog.SystemColAttr_Comment:
 			colData.Append([]byte(colDef.Comment))
 		case pkgcatalog.SystemColAttr_HasUpdate:
-			colData.Append(bool2i8(colDef.OnUpdate.Expr != nil))
+			colData.Append(bool2i8(len(colDef.OnUpdate) > 0))
 		case pkgcatalog.SystemColAttr_IsClusterBy:
 			colData.Append(bool2i8(colDef.IsClusterBy()))
 		case pkgcatalog.SystemColAttr_Update:
-			if val, err := colDef.OnUpdate.Marshal(); err == nil {
-				colData.Append(val)
-			} else {
-				logutil.Warnf("encode plan onUpdate expr err: %v", err)
-				colData.Append([]byte(""))
-			}
+			colData.Append(colDef.OnUpdate)
 		default:
 			panic("unexpected colname. if add new catalog def, fill it in this switch")
 		}

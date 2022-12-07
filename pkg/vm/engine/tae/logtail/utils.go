@@ -699,7 +699,7 @@ func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err 
 				collector.data.bats[BLKDNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
 				collector.data.bats[BLKDNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd())
 				is_sorted := false
-				if !entry.IsAppendable() && entry.GetSchema().HasPK() {
+				if !entry.IsAppendable() && entry.GetSchema().HasSortKey() {
 					is_sorted = true
 				}
 				collector.data.bats[BLKDNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted)
@@ -730,7 +730,7 @@ func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err 
 				collector.data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
 				collector.data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd())
 				is_sorted := false
-				if !entry.IsAppendable() && entry.GetSchema().HasPK() {
+				if !entry.IsAppendable() && entry.GetSchema().HasSortKey() {
 					is_sorted = true
 				}
 				collector.data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted)
@@ -744,7 +744,7 @@ func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err 
 				collector.data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
 				collector.data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd())
 				is_sorted := false
-				if !entry.IsAppendable() && entry.GetSchema().HasPK() {
+				if !entry.IsAppendable() && entry.GetSchema().HasSortKey() {
 					is_sorted = true
 				}
 				collector.data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted)
