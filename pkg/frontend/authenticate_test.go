@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -258,7 +260,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		exists, err := checkTenantExistsOrNot(ctx, bh, pu, "test")
+		exists, err := checkTenantExistsOrNot(ctx, bh, "test")
 		convey.So(exists, convey.ShouldBeTrue)
 		convey.So(err, convey.ShouldBeNil)
 
@@ -5752,6 +5754,435 @@ func Test_doDropUser(t *testing.T) {
 
 		err := doDropUser(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeError)
+	})
+}
+
+func Test_doAlterAccount(t *testing.T) {
+	convey.Convey("alter account (auth_option) succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.AlterAccount{
+			Name: "acc",
+			AuthOption: tree.AlterAccountAuthOption{
+				Exist:     true,
+				AdminName: "rootx",
+				IdentifiedType: tree.AccountIdentified{
+					Typ: tree.AccountIdentifiedByPassword,
+					Str: "111",
+				},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckTenant(stmt.Name)
+		mrs := newMrsForCheckTenant([][]interface{}{
+			{0},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{
+			{10, "111", 0},
+		})
+
+		sql = getSqlForUpdatePasswordOfUser(stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = nil
+
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("alter account (auth_option) failed (wrong identifiedBy)", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.AlterAccount{
+			Name: "acc",
+			AuthOption: tree.AlterAccountAuthOption{
+				Exist:     true,
+				AdminName: "rootx",
+				IdentifiedType: tree.AccountIdentified{
+					Typ: tree.AccountIdentifiedByRandomPassword,
+					Str: "111",
+				},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckTenant(stmt.Name)
+		mrs := newMrsForCheckTenant([][]interface{}{
+			{0},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{
+			{10, "111", 0},
+		})
+
+		sql = getSqlForUpdatePasswordOfUser(stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = nil
+
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("alter account (auth_option) failed (no account)", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.AlterAccount{
+			Name: "acc",
+			AuthOption: tree.AlterAccountAuthOption{
+				Exist:     true,
+				AdminName: "rootx",
+				IdentifiedType: tree.AccountIdentified{
+					Typ: tree.AccountIdentifiedByRandomPassword,
+					Str: "111",
+				},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckTenant(stmt.Name)
+		bh.sql2result[sql] = nil
+
+		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = nil
+
+		sql = getSqlForUpdatePasswordOfUser(stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = nil
+
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("alter account (auth_option) succ (no account, if exists)", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.AlterAccount{
+			IfExists: true,
+			Name:     "acc",
+			AuthOption: tree.AlterAccountAuthOption{
+				Exist:     true,
+				AdminName: "rootx",
+				IdentifiedType: tree.AccountIdentified{
+					Typ: tree.AccountIdentifiedByPassword,
+					Str: "111",
+				},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckTenant(stmt.Name)
+		mrs := newMrsForCheckTenant([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = nil
+
+		sql = getSqlForUpdatePasswordOfUser(stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = nil
+
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("alter account (auth_option) failed (has account,if exists, no user)", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.AlterAccount{
+			IfExists: true,
+			Name:     "acc",
+			AuthOption: tree.AlterAccountAuthOption{
+				Exist:     true,
+				AdminName: "rootx",
+				IdentifiedType: tree.AccountIdentified{
+					Typ: tree.AccountIdentifiedByPassword,
+					Str: "111",
+				},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckTenant(stmt.Name)
+		mrs := newMrsForCheckTenant([][]interface{}{
+			{0},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{})
+
+		sql = getSqlForUpdatePasswordOfUser(stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = nil
+
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("alter account (auth_option) failed (no option)", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.AlterAccount{
+			IfExists: true,
+			Name:     "acc",
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckTenant(stmt.Name)
+		bh.sql2result[sql] = nil
+
+		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = nil
+
+		sql = getSqlForUpdatePasswordOfUser(stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = nil
+
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("alter account (auth_option) failed (two options)", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.AlterAccount{
+			IfExists: true,
+			Name:     "acc",
+			AuthOption: tree.AlterAccountAuthOption{
+				Exist:     true,
+				AdminName: "rootx",
+				IdentifiedType: tree.AccountIdentified{
+					Typ: tree.AccountIdentifiedByPassword,
+					Str: "111",
+				},
+			},
+			StatusOption: tree.AccountStatus{
+				Exist:  true,
+				Option: tree.AccountStatusOpen,
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckTenant(stmt.Name)
+		bh.sql2result[sql] = nil
+		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = nil
+
+		sql = getSqlForUpdatePasswordOfUser(stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = nil
+
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("alter account (auth_option) succ Comments", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.AlterAccount{
+			Name: "acc",
+			Comment: tree.AccountComment{
+				Exist:   true,
+				Comment: "new account",
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckTenant(stmt.Name)
+		mrs := newMrsForCheckTenant([][]interface{}{
+			{0},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = nil
+
+		sql = getSqlForUpdateCommentsOfAccount(stmt.Comment.Comment, stmt.Name)
+		bh.sql2result[sql] = nil
+
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("alter account (auth_option) succ Status", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.AlterAccount{
+			Name: "acc",
+			StatusOption: tree.AccountStatus{
+				Exist:  true,
+				Option: tree.AccountStatusSuspend,
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckTenant(stmt.Name)
+		mrs := newMrsForCheckTenant([][]interface{}{
+			{0},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = nil
+
+		sql = getSqlForUpdateStatusOfAccount(stmt.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), stmt.Name)
+		bh.sql2result[sql] = nil
+
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("alter account (status_option) fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.AlterAccount{
+			Name: "sys",
+			StatusOption: tree.AccountStatus{
+				Exist:  true,
+				Option: tree.AccountStatusSuspend,
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckTenant(stmt.Name)
+		bh.sql2result[sql] = nil
+
+		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		bh.sql2result[sql] = nil
+
+		sql = getSqlForUpdateStatusOfAccount(stmt.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), stmt.Name)
+		bh.sql2result[sql] = nil
+
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
 

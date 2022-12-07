@@ -1957,6 +1957,11 @@ func (mce *MysqlCmdExecutor) handleDropAccount(ctx context.Context, da *tree.Dro
 	return doDropAccount(ctx, mce.GetSession(), da)
 }
 
+// handleDropAccount drops a new user-level tenant
+func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, aa *tree.AlterAccount) error {
+	return doAlterAccount(ctx, mce.GetSession(), aa)
+}
+
 // handleCreateUser creates the user for the tenant
 func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.CreateUser) error {
 	ses := mce.GetSession()
@@ -3281,8 +3286,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleDropAccount(requestCtx, st); err != nil {
 				goto handleFailed
 			}
-		case *tree.AlterAccount: //TODO
+		case *tree.AlterAccount:
 			ses.InvalidatePrivilegeCache()
+			selfHandle = true
+			if err = mce.handleAlterAccount(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.CreateUser:
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
