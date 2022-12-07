@@ -14,6 +14,8 @@
 
 package tree
 
+import "fmt"
+
 type AlterUser struct {
 	statementImpl
 	IfExists bool
@@ -58,11 +60,31 @@ func NewAlterUser(ife bool, u []*User, r *Role, m UserMiscOption) *AlterUser {
 	}
 }
 
+type AlterAccountAuthOption struct {
+	Exist          bool
+	Equal          string
+	AdminName      string
+	IdentifiedType AccountIdentified
+}
+
+func (node *AlterAccountAuthOption) Format(ctx *FmtCtx) {
+	if node.Exist {
+		ctx.WriteString(" admin_name")
+		if len(node.Equal) != 0 {
+			ctx.WriteString(" ")
+			ctx.WriteString(node.Equal)
+		}
+
+		ctx.WriteString(fmt.Sprintf(" '%s'", node.AdminName))
+		node.IdentifiedType.Format(ctx)
+	}
+}
+
 type AlterAccount struct {
 	statementImpl
 	IfExists   bool
 	Name       string
-	AuthOption AccountAuthOption
+	AuthOption AlterAccountAuthOption
 	//status_option or not
 	StatusOption AccountStatus
 	//comment or not

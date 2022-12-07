@@ -1178,7 +1178,9 @@ func (mp *MysqlProtocolImpl) handleHandshake(ctx context.Context, payload []byte
 	if err = mp.authenticateUser(ctx, authResponse); err != nil {
 		logutil.Errorf("authenticate user failed.error:%v", err)
 		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
-		err2 = mp.sendErrPacket(fail.ErrorCode, fail.SqlStates[0], "Access denied for user")
+		tipsFormat := "Access denied for user %s. %s"
+		msg := fmt.Sprintf(tipsFormat, mp.username, err.Error())
+		err2 = mp.sendErrPacket(fail.ErrorCode, fail.SqlStates[0], msg)
 		if err2 != nil {
 			logutil.Errorf("send err packet failed.error:%v", err2)
 			return false, err2

@@ -23,13 +23,16 @@ import (
 	"github.com/fagongzi/goetty/v2/codec"
 	"github.com/fagongzi/goetty/v2/codec/length"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/pierrec/lz4/v4"
 )
 
 var (
-	flagPayloadMessage byte = 1
-	flagWithChecksum   byte = 2
-	flagCustomHeader   byte = 4
+	flagHashPayload     byte = 1
+	flagChecksumEnabled byte = 2
+	flagHasCustomHeader byte = 4
+	flagCompressEnabled byte = 8
 
 	defaultMaxMessageSize = 1024 * 1024 * 100
 	checksumFieldBytes    = 8
@@ -44,7 +47,7 @@ func GetMessageSize() int {
 // WithCodecEnableChecksum enable checksum
 func WithCodecEnableChecksum() CodecOption {
 	return func(c *messageCodec) {
-		c.bc.enableChecksum = true
+		c.bc.checksumEnabled = true
 	}
 }
 
@@ -70,6 +73,14 @@ func WithCodecMaxBodySize(size int) CodecOption {
 		}
 		c.codec = length.NewWithSize(c.bc, 0, 0, 0, size)
 		c.bc.maxBodySize = size
+	}
+}
+
+// WithCodecEnableCompress enable compress body and payload
+func WithCodecEnableCompress(pool *mpool.MPool) CodecOption {
+	return func(c *messageCodec) {
+		c.bc.compressEnabled = true
+		c.bc.pool = pool
 	}
 }
 
@@ -117,11 +128,13 @@ func (c *messageCodec) AddHeaderCodec(hc HeaderCodec) {
 }
 
 type baseCodec struct {
-	enableChecksum bool
-	payloadBufSize int
-	maxBodySize    int
-	messageFactory func() Message
-	headerCodecs   []HeaderCodec
+	pool            *mpool.MPool
+	checksumEnabled bool
+	compressEnabled bool
+	payloadBufSize  int
+	maxBodySize     int
+	messageFactory  func() Message
+	headerCodecs    []HeaderCodec
 }
 
 func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
@@ -149,7 +162,7 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 	offset += n
 
 	// 3.1 and 3.2
-	if err := readMessage(flag, data, offset, expectChecksum, payloadSize, &msg); err != nil {
+	if err := c.readMessage(flag, data, offset, expectChecksum, payloadSize, &msg); err != nil {
 		return nil, false, err
 	}
 
@@ -173,29 +186,21 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 
 	// 2.1 flag
 	flag := c.getFlag(msg.Message)
-	out.WriteByte(flag)
+	out.MustWriteByte(flag)
 	totalSize += 1
 
 	// 2.2 checksum, similar to totalSize, we do not currently know the size of the message body.
 	checksumAt := -1
-	if flag&flagWithChecksum != 0 {
+	if flag&flagChecksumEnabled != 0 {
 		checksumAt = skip(checksumFieldBytes, out)
 		totalSize += checksumFieldBytes
 	}
 
 	// 2.3 payload
 	var payloadData []byte
+	var compressedPayloadData []byte
 	var payloadMsg PayloadMessage
 	var hasPayload bool
-	if payloadMsg, hasPayload = msg.Message.(PayloadMessage); hasPayload {
-		// set payload filed to nil to avoid payload being written to the out buffer, and write directly
-		// to the socket afterwards to reduce one payload.
-		payloadData = payloadMsg.GetPayloadField()
-		payloadMsg.SetPayloadField(nil)
-
-		out.WriteInt(len(payloadData))
-		totalSize += payloadSizeFieldBytes + len(payloadData)
-	}
 
 	// skip all written data by this message
 	discardWritten := func() {
@@ -203,6 +208,27 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 		if hasPayload {
 			payloadMsg.SetPayloadField(payloadData)
 		}
+	}
+
+	if payloadMsg, hasPayload = msg.Message.(PayloadMessage); hasPayload {
+		// set payload filed to nil to avoid payload being written to the out buffer, and write directly
+		// to the socket afterwards to reduce one payload.
+		payloadData = payloadMsg.GetPayloadField()
+		payloadMsg.SetPayloadField(nil)
+		compressedPayloadData = payloadData
+
+		if c.compressEnabled && len(payloadData) > 0 {
+			v, err := c.compress(payloadData)
+			if err != nil {
+				discardWritten()
+				return err
+			}
+			defer c.pool.Free(v)
+			compressedPayloadData = v
+		}
+
+		out.WriteInt(len(compressedPayloadData))
+		totalSize += payloadSizeFieldBytes + len(compressedPayloadData)
 	}
 
 	// 2.4 Custom header size
@@ -213,7 +239,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 	totalSize += n
 
 	// 3.1 message body
-	bodySize, body, err := c.writeBody(out, msg.Message, totalSize)
+	body, err := c.writeBody(out, msg.Message, totalSize)
 	if err != nil {
 		discardWritten()
 		return err
@@ -221,12 +247,12 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 
 	// now, header and body are all determined, we need to fill the totalSize and checksum
 	// fill total size
-	totalSize += bodySize
+	totalSize += len(body)
 	writeIntAt(totalSizeAt, out, totalSize)
 
 	// fill checksum
 	if checksumAt != -1 {
-		if err := writeChecksum(checksumAt, out, body, payloadData); err != nil {
+		if err := writeChecksum(checksumAt, out, body, compressedPayloadData); err != nil {
 			discardWritten()
 			return err
 		}
@@ -236,7 +262,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 	if hasPayload {
 		// resume payload to payload message
 		payloadMsg.SetPayloadField(payloadData)
-		if err := writePayload(out, payloadData, conn, c.payloadBufSize); err != nil {
+		if err := writePayload(out, compressedPayloadData, conn, c.payloadBufSize); err != nil {
 			return err
 		}
 	}
@@ -244,16 +270,69 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 	return nil
 }
 
+func (c *baseCodec) compress(src []byte) ([]byte, error) {
+	n := lz4.CompressBlockBound(len(src))
+	dst, err := c.pool.Alloc(n)
+	if err != nil {
+		return nil, err
+	}
+	dst, err = c.compressTo(src, dst)
+	if err != nil {
+		c.pool.Free(dst)
+		return nil, err
+	}
+	return dst, nil
+}
+
+func (c *baseCodec) uncompress(src []byte) ([]byte, error) {
+	// The lz4 library requires a []byte with a large enough dst when
+	// decompressing, otherwise it will return an ErrInvalidSourceShortBuffer, we
+	// can't confirm how large a dst we need to give initially, so when we encounter
+	// an ErrInvalidSourceShortBuffer, we expand the size and retry.
+	n := len(src) * 2
+	for {
+		dst, err := c.pool.Alloc(n)
+		if err != nil {
+			return nil, err
+		}
+		dst, err = uncompress(src, dst)
+		if err == nil {
+			return dst, nil
+		}
+
+		c.pool.Free(dst)
+		if err != lz4.ErrInvalidSourceShortBuffer {
+			return nil, err
+		}
+		n *= 2
+	}
+}
+
+func (c *baseCodec) compressTo(src, dst []byte) ([]byte, error) {
+	dst, err := compress(src, dst)
+	if err != nil {
+		return nil, err
+	}
+	return dst, nil
+}
+
+func (c *baseCodec) compressBound(size int) int {
+	return lz4.CompressBlockBound(size)
+}
+
 func (c *baseCodec) getFlag(msg Message) byte {
 	flag := byte(0)
-	if c.enableChecksum {
-		flag |= flagWithChecksum
+	if c.checksumEnabled {
+		flag |= flagChecksumEnabled
+	}
+	if c.compressEnabled {
+		flag |= flagCompressEnabled
 	}
 	if len(c.headerCodecs) > 0 {
-		flag |= flagCustomHeader
+		flag |= flagHasCustomHeader
 	}
 	if _, ok := msg.(PayloadMessage); ok {
-		flag |= flagPayloadMessage
+		flag |= flagHashPayload
 	}
 	return flag
 }
@@ -275,7 +354,7 @@ func (c *baseCodec) encodeCustomHeaders(msg *RPCMessage, out *buf.ByteBuf) (int,
 }
 
 func (c *baseCodec) readCustomHeaders(flag byte, msg *RPCMessage, data []byte, offset int) (int, error) {
-	if flag&flagCustomHeader == 0 {
+	if flag&flagHasCustomHeader == 0 {
 		return 0, nil
 	}
 
@@ -288,6 +367,92 @@ func (c *baseCodec) readCustomHeaders(flag byte, msg *RPCMessage, data []byte, o
 		readed += n
 	}
 	return readed, nil
+}
+
+func (c *baseCodec) writeBody(
+	out *buf.ByteBuf,
+	msg Message,
+	writtenSize int) ([]byte, error) {
+	maxCanWrite := c.maxBodySize - writtenSize
+	size := msg.Size()
+	if size > maxCanWrite {
+		return nil,
+			moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
+				size+writtenSize,
+				c.maxBodySize)
+	}
+
+	if !c.compressEnabled {
+		index, _ := setWriterIndexAfterGow(out, size)
+		data := out.RawSlice(index, index+size)
+		if _, err := msg.MarshalTo(data); err != nil {
+			return nil, err
+		}
+		return data, nil
+	}
+
+	// we use mpool to compress body, then write the dst into the buffer
+	origin, err := c.pool.Alloc(size)
+	if err != nil {
+		return nil, err
+	}
+	defer c.pool.Free(origin)
+	if _, err := msg.MarshalTo(origin); err != nil {
+		return nil, err
+	}
+
+	n := c.compressBound(len(origin))
+	dst, err := c.pool.Alloc(n)
+	if err != nil {
+		return nil, err
+	}
+	defer c.pool.Free(dst)
+
+	dst, err = compress(origin, dst)
+	if err != nil {
+		return nil, err
+	}
+
+	index := out.GetWriteOffset()
+	out.MustWrite(dst)
+	return out.RawSlice(out.GetReadIndex()+index, out.GetWriteIndex()), nil
+}
+
+func (c *baseCodec) readMessage(flag byte, data []byte, offset int, expectChecksum uint64, payloadSize int, msg *RPCMessage) error {
+	body := data[offset : len(data)-payloadSize]
+	payload := data[len(data)-payloadSize:]
+	if flag&flagChecksumEnabled != 0 {
+		if err := validChecksum(body, payload, expectChecksum); err != nil {
+			return err
+		}
+	}
+
+	if flag&flagCompressEnabled != 0 {
+		dstBody, err := c.uncompress(body)
+		if err != nil {
+			return err
+		}
+		defer c.pool.Free(dstBody)
+		body = dstBody
+
+		if payloadSize > 0 {
+			dstPayload, err := c.uncompress(payload)
+			if err != nil {
+				return err
+			}
+			defer c.pool.Free(dstPayload)
+			payload = dstPayload
+		}
+	}
+
+	if err := msg.Message.Unmarshal(body); err != nil {
+		return err
+	}
+
+	if payloadSize > 0 {
+		msg.Message.(PayloadMessage).SetPayloadField(payload)
+	}
+	return nil
 }
 
 var (
@@ -320,24 +485,6 @@ func writeIntAt(offset int, out *buf.ByteBuf, value int) {
 func writeUint64At(offset int, out *buf.ByteBuf, value uint64) {
 	idx := out.GetReadIndex() + offset
 	buf.Uint64ToBytesTo(value, out.RawSlice(idx, idx+8))
-}
-
-func (c *baseCodec) writeBody(out *buf.ByteBuf, msg Message, writtenSize int) (int, []byte, error) {
-	maxCanWrite := c.maxBodySize - writtenSize
-	size := msg.Size()
-	if size > maxCanWrite {
-		return 0, nil,
-			moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
-				size+writtenSize,
-				c.maxBodySize)
-	}
-
-	index, _ := setWriterIndexAfterGow(out, size)
-	data := out.RawSlice(index, index+size)
-	if _, err := msg.MarshalTo(data); err != nil {
-		return 0, nil, err
-	}
-	return size, data, nil
 }
 
 func writePayload(out *buf.ByteBuf, payload []byte, conn io.Writer, copyBuffer int) error {
@@ -387,7 +534,7 @@ func readFlag(data []byte, offset int) (byte, int) {
 }
 
 func readChecksum(flag byte, data []byte, offset int) (uint64, int) {
-	if flag&flagWithChecksum == 0 {
+	if flag&flagChecksumEnabled == 0 {
 		return 0, 0
 	}
 
@@ -395,7 +542,7 @@ func readChecksum(flag byte, data []byte, offset int) (uint64, int) {
 }
 
 func readPayloadSize(flag byte, data []byte, offset int) (int, int) {
-	if flag&flagPayloadMessage == 0 {
+	if flag&flagHashPayload == 0 {
 		return 0, 0
 	}
 
@@ -421,25 +568,6 @@ func validChecksum(body, payload []byte, expectChecksum uint64) error {
 		return moerr.NewInternalErrorNoCtx("checksum mismatch, expect %d, got %d",
 			expectChecksum,
 			actulChecksum)
-	}
-	return nil
-}
-
-func readMessage(flag byte, data []byte, offset int, expectChecksum uint64, payloadSize int, msg *RPCMessage) error {
-	body := data[offset : len(data)-payloadSize]
-	payload := data[len(data)-payloadSize:]
-	if flag&flagWithChecksum != 0 {
-		if err := validChecksum(body, payload, expectChecksum); err != nil {
-			return err
-		}
-	}
-
-	if err := msg.Message.Unmarshal(body); err != nil {
-		return err
-	}
-
-	if payloadSize > 0 {
-		msg.Message.(PayloadMessage).SetPayloadField(payload)
 	}
 	return nil
 }
