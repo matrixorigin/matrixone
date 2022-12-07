@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -62,6 +63,13 @@ func WithSenderMaxMessageSize(maxMessageSize int) SenderOption {
 	}
 }
 
+// WithSenderEnableCompress enable compress
+func WithSenderEnableCompress(enable bool) SenderOption {
+	return func(s *sender) {
+		s.options.enableCompress = enable
+	}
+}
+
 type sender struct {
 	rt     moruntime.Runtime
 	client morpc.RPCClient
@@ -70,6 +78,7 @@ type sender struct {
 		localDispatch         LocalDispatch
 		payloadCopyBufferSize int
 		maxMessageSize        int
+		enableCompress        bool
 		backendCreateOptions  []morpc.BackendOption
 		clientOptions         []morpc.ClientOption
 	}
@@ -89,6 +98,7 @@ func NewSenderWithConfig(cfg Config,
 	options = append(options, WithSenderBackendOptions(cfg.getBackendOptions(rt.Logger().RawLogger())...))
 	options = append(options, WithSenderClientOptions(cfg.getClientOptions(rt.Logger().RawLogger())...))
 	options = append(options, WithSenderMaxMessageSize(int(cfg.MaxMessageSize)))
+	options = append(options, WithSenderEnableCompress(cfg.EnableCompress))
 	return NewSender(rt, options...)
 }
 
@@ -122,11 +132,23 @@ func NewSender(
 		},
 	}
 
-	codec := morpc.NewMessageCodec(func() morpc.Message { return s.acquireResponse() },
+	var codecOpts []morpc.CodecOption
+	codecOpts = append(codecOpts,
 		morpc.WithCodecIntegrationHLC(s.rt.Clock()),
 		morpc.WithCodecPayloadCopyBufferSize(s.options.payloadCopyBufferSize),
 		morpc.WithCodecEnableChecksum(),
 		morpc.WithCodecMaxBodySize(s.options.maxMessageSize))
+	if s.options.enableCompress {
+		mp, err := mpool.NewMPool("txn_rpc_sender", 0, mpool.NoFixed)
+		if err != nil {
+			return nil, err
+		}
+		codecOpts = append(codecOpts, morpc.WithCodecEnableCompress(mp))
+	}
+
+	codec := morpc.NewMessageCodec(
+		func() morpc.Message { return s.acquireResponse() },
+		codecOpts...)
 	bf := morpc.NewGoettyBasedBackendFactory(codec, s.options.backendCreateOptions...)
 	client, err := morpc.NewClient(bf, s.options.clientOptions...)
 	if err != nil {
