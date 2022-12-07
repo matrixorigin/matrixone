@@ -217,7 +217,7 @@ func init() {
 		"key":                      KEY,
 		"keys":                     KEYS,
 		"key_block_size":           KEY_BLOCK_SIZE,
-		"kill":                     UNUSED,
+		"kill":                     KILL,
 		"language":                 LANGUAGE,
 		"last":                     LAST,
 		"leading":                  LEADING,

@@ -236,14 +236,14 @@ func Test_mce(t *testing.T) {
 
 		mce := NewMysqlCmdExecutor()
 
-		mce.PrepareSessionBeforeExecRequest(ses)
+		mce.SetSession(ses)
 
 		req := &Request{
 			cmd:  COM_QUERY,
 			data: []byte("test anywhere"),
 		}
 
-		resp, err := mce.ExecRequest(ctx, req)
+		resp, err := mce.ExecRequest(ctx, ses, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldBeNil)
 
@@ -251,7 +251,7 @@ func Test_mce(t *testing.T) {
 			cmd:  COM_QUERY,
 			data: []byte("kill"),
 		}
-		resp, err = mce.ExecRequest(ctx, req)
+		resp, err = mce.ExecRequest(ctx, ses, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldNotBeNil)
 
@@ -260,7 +260,7 @@ func Test_mce(t *testing.T) {
 			data: []byte("kill 10"),
 		}
 		mce.SetRoutineManager(&RoutineManager{})
-		resp, err = mce.ExecRequest(ctx, req)
+		resp, err = mce.ExecRequest(ctx, ses, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldNotBeNil)
 
@@ -269,7 +269,7 @@ func Test_mce(t *testing.T) {
 			data: []byte("test anywhere"),
 		}
 
-		_, err = mce.ExecRequest(ctx, req)
+		_, err = mce.ExecRequest(ctx, ses, req)
 		convey.So(err, convey.ShouldBeNil)
 		//COM_INIT_DB replaced by changeDB()
 		//convey.So(resp.category, convey.ShouldEqual, OkResponse)
@@ -279,7 +279,7 @@ func Test_mce(t *testing.T) {
 			data: []byte("test anywhere"),
 		}
 
-		resp, err = mce.ExecRequest(ctx, req)
+		resp, err = mce.ExecRequest(ctx, ses, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp.category, convey.ShouldEqual, OkResponse)
 
@@ -288,7 +288,7 @@ func Test_mce(t *testing.T) {
 			data: []byte("test anywhere"),
 		}
 
-		resp, err = mce.ExecRequest(ctx, req)
+		resp, err = mce.ExecRequest(ctx, ses, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldBeNil)
 
@@ -343,7 +343,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		ses.SetRequestContext(ctx)
 
 		mce := NewMysqlCmdExecutor()
-		mce.PrepareSessionBeforeExecRequest(ses)
+		mce.SetSession(ses)
 		err = mce.handleChangeDB(ctx, "T")
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ses.GetDatabaseName(), convey.ShouldEqual, "T")
@@ -386,7 +386,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		ses.mrs = &MysqlResultSet{}
 
 		mce := NewMysqlCmdExecutor()
-		mce.PrepareSessionBeforeExecRequest(ses)
+		mce.SetSession(ses)
 
 		ses.mrs = &MysqlResultSet{}
 		st1, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@max_allowed_packet")
@@ -452,7 +452,7 @@ func Test_mce_selfhandle(t *testing.T) {
 			data: []byte{'A', 0},
 		}
 
-		resp, err := mce.ExecRequest(ctx, req)
+		resp, err := mce.ExecRequest(ctx, ses, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldBeNil)
 	})
@@ -730,7 +730,7 @@ func Test_handleSelectVariables(t *testing.T) {
 		ses.SetRequestContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
-		mce.PrepareSessionBeforeExecRequest(ses)
+		mce.SetSession(ses)
 		st2, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@tx_isolation")
 		convey.So(err, convey.ShouldBeNil)
 		sv2 := st2.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
@@ -774,7 +774,7 @@ func Test_handleShowVariables(t *testing.T) {
 		ses.SetRequestContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
-		mce.PrepareSessionBeforeExecRequest(ses)
+		mce.SetSession(ses)
 
 		sv := &tree.ShowVariables{Global: true}
 		convey.So(mce.handleShowVariables(sv, nil), convey.ShouldBeNil)
@@ -877,7 +877,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 		ses.SetRequestContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
-		mce.PrepareSessionBeforeExecRequest(ses)
+		mce.SetSession(ses)
 
 		convey.So(handleFun(mce), convey.ShouldBeNil)
 	})
@@ -975,7 +975,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		ses.mrs = &MysqlResultSet{}
 		ses.SetDatabaseName("t")
 		mce := &MysqlCmdExecutor{}
-		mce.PrepareSessionBeforeExecRequest(ses)
+		mce.SetSession(ses)
 
 		err = mce.doComQuery(ctx, cmdFieldListQuery)
 		convey.So(err, convey.ShouldBeNil)

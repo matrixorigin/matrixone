@@ -164,10 +164,26 @@ type Protocol interface {
 
 	SetUserName(string)
 
-	// Quit
-	Quit()
+	GetSequenceId() uint8
+
+	SetSequenceID(value uint8)
+
+	GetConciseProfile() string
+
+	GetTcpConnection() goetty.IOSession
+
+	GetCapability() uint32
+
+	IsTlsEstablished() bool
+
+	SetTlsEstablished()
+
+	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
 
 	SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error
+
+	// Quit
+	Quit()
 }
 
 type ProtocolImpl struct {
@@ -190,7 +206,19 @@ type ProtocolImpl struct {
 	// whether the tls handshake succeeded
 	tlsEstablished atomic.Bool
 
+	//The sequence-id is incremented with each packet and may wrap around.
+	//It starts at 0 and is reset to 0 when a new command begins in the Command Phase.
+	sequenceId atomic.Uint32
+
 	profiles [8]string
+}
+
+func (mp *ProtocolImpl) GetSequenceId() uint8 {
+	return uint8(mp.sequenceId.Load())
+}
+
+func (mp *ProtocolImpl) SetSequenceID(value uint8) {
+	mp.sequenceId.Store(uint32(value))
 }
 
 func (cpi *ProtocolImpl) makeProfile(profileTyp profileType) {
@@ -396,7 +424,6 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 	}
 }
 
-var _ Protocol = &FakeProtocol{}
 var _ MysqlProtocol = &FakeProtocol{}
 
 const (
@@ -407,6 +434,37 @@ const (
 type FakeProtocol struct {
 	username string
 	database string
+}
+
+func (fp *FakeProtocol) GetCapability() uint32 {
+	return DefaultCapability
+}
+
+func (fp *FakeProtocol) IsTlsEstablished() bool {
+	return true
+}
+
+func (fp *FakeProtocol) SetTlsEstablished() {
+
+}
+
+func (fp *FakeProtocol) HandleHandshake(ctx context.Context, payload []byte) (bool, error) {
+	return false, nil
+}
+
+func (fp *FakeProtocol) GetTcpConnection() goetty.IOSession {
+	return nil
+}
+
+func (fp *FakeProtocol) GetConciseProfile() string {
+	return "fake protocol"
+}
+
+func (fp *FakeProtocol) GetSequenceId() uint8 {
+	return 0
+}
+
+func (fp *FakeProtocol) SetSequenceID(value uint8) {
 }
 
 func (fp *FakeProtocol) makeProfile(profileTyp profileType) {
@@ -452,7 +510,7 @@ func (fp *FakeProtocol) sendEOFOrOkPacket(warnings uint16, status uint16) error 
 	return nil
 }
 
-func (fp *FakeProtocol) PrepareBeforeProcessingResultSet() {}
+func (fp *FakeProtocol) ResetStatistics() {}
 
 func (fp *FakeProtocol) GetStats() string {
 	return ""

@@ -95,7 +95,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(routine.GetClientProtocol(), nil, pu, gSysVariables, true)
+	ses := NewSession(routine.GetProtocol(), nil, pu, gSysVariables, true)
 	ses.SetRequestContext(routine.GetCancelRoutineCtx())
 	ses.SetFromRealUser(true)
 	routine.SetSession(ses)
@@ -139,9 +139,11 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 }
 
 /*
-KILL statement
+kill a connection or query.
+if killConnection is true, the query will be canceled first, then the network will be closed.
+if killConnection is false, only the query will be canceled. the connection keeps intact.
 */
-func (rm *RoutineManager) killStatement(id uint64) error {
+func (rm *RoutineManager) kill(killConnection bool, id uint64, statementId string) error {
 	var rt *Routine = nil
 	rm.mu.Lock()
 	for _, value := range rm.clients {
@@ -153,9 +155,13 @@ func (rm *RoutineManager) killStatement(id uint64) error {
 	rm.mu.Unlock()
 
 	if rt != nil {
-		logutil.Infof("will close the statement %d", id)
-		rt.notifyClose()
-		rt.notifyDone()
+		if killConnection {
+			logutil.Infof("kill connection %d", id)
+			rt.killConnection()
+		} else {
+			logutil.Infof("kill query %s on the connection %d", statementId, id)
+			rt.killQuery(statementId)
+		}
 	}
 	return nil
 }
@@ -181,7 +187,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		return err
 	}
 
-	protocol := routine.GetClientProtocol().(*MysqlProtocolImpl)
+	protocol := routine.GetProtocol()
 	protoProfile := protocol.GetConciseProfile()
 	packet, ok := msg.(*Packet)
 
@@ -223,10 +229,10 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			di := MakeDebugInfo(payload,80,8)
 			logutil.Infof("RP[%v] Payload80[%v]",rs.RemoteAddr(),di)
 		*/
-		ses := protocol.GetSession()
+		ses := routine.GetSession()
 		if protocol.GetCapability()&CLIENT_SSL != 0 && !protocol.IsTlsEstablished() {
 			logDebugf(protoProfile, "setup ssl")
-			isTlsHeader, err = protocol.handleHandshake(ctx, payload)
+			isTlsHeader, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
 				logErrorf(protoProfile, "error:%v", err)
 				return err
@@ -257,7 +263,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			}
 		} else {
 			logDebugf(protoProfile, "handleHandshake")
-			_, err = protocol.handleHandshake(ctx, payload)
+			_, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
 				logErrorf(protoProfile, "error:%v", err)
 				return err
@@ -272,7 +278,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		return nil
 	}
 
-	req := routine.GetClientProtocol().GetRequest(payload)
+	req := routine.GetProtocol().GetRequest(payload)
 	req.seq = seq
 	ch := routine.GetRequestChannel()
 	chLen := len(ch)

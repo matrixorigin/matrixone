@@ -26,10 +26,18 @@ import (
 
 // CmdExecutor handle the command from the client
 type CmdExecutor interface {
-	PrepareSessionBeforeExecRequest(*Session)
+	SetSession(*Session)
+
+	GetSession() *Session
 
 	// ExecRequest execute the request and get the response
-	ExecRequest(context.Context, *Request) (*Response, error)
+	ExecRequest(context.Context, *Session, *Request) (*Response, error)
+
+	//SetCancelFunc saves a cancel function for active request.
+	SetCancelFunc(context.CancelFunc)
+
+	// CancelRequest cancels the active request
+	CancelRequest()
 
 	Close()
 }

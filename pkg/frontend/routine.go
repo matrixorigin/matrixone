@@ -66,7 +66,7 @@ func (routine *Routine) GetCancelRoutineCtx() context.Context {
 	return routine.cancelRoutineCtx
 }
 
-func (routine *Routine) GetClientProtocol() Protocol {
+func (routine *Routine) GetProtocol() MysqlProtocol {
 	routine.mu.Lock()
 	defer routine.mu.Unlock()
 	return routine.protocol
@@ -79,7 +79,7 @@ func (routine *Routine) GetCmdExecutor() CmdExecutor {
 }
 
 func (routine *Routine) getConnID() uint32 {
-	return routine.GetClientProtocol().ConnectionID()
+	return routine.GetProtocol().ConnectionID()
 }
 
 func (routine *Routine) getParameters() *config.FrontendParameters {
@@ -153,12 +153,12 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		reqBegin := time.Now()
 
 		parameters := routine.getParameters()
-		mpi := routine.GetClientProtocol().(*MysqlProtocolImpl)
+		mpi := routine.GetProtocol()
 		mpi.SetSequenceID(req.seq)
 
 		cancelRequestCtx, cancelRequestFunc := context.WithTimeout(routineCtx, parameters.SessionTimeout.Duration)
 		executor := routine.GetCmdExecutor()
-		executor.(*MysqlCmdExecutor).setCancelRequestFunc(cancelRequestFunc)
+		executor.SetCancelFunc(cancelRequestFunc)
 		ses = routine.GetSession()
 		ses.MakeProfile()
 		tenant := ses.GetTenantInfo()
@@ -167,14 +167,14 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
 		tenantCtx = trace.ContextWithSpanContext(tenantCtx, trace.SpanContextWithID(trace.TraceID(ses.uuid), trace.SpanKindSession))
 		ses.SetRequestContext(tenantCtx)
-		executor.PrepareSessionBeforeExecRequest(routine.GetSession())
+		executor.SetSession(routine.GetSession())
 
-		if resp, err = executor.ExecRequest(tenantCtx, req); err != nil {
+		if resp, err = executor.ExecRequest(tenantCtx, ses, req); err != nil {
 			logErrorf(ses.GetConciseProfile(), "routine execute request failed. error:%v \n", err)
 		}
 
 		if resp != nil {
-			if err = routine.GetClientProtocol().SendResponse(tenantCtx, resp); err != nil {
+			if err = routine.GetProtocol().SendResponse(tenantCtx, resp); err != nil {
 				logErrorf(ses.GetConciseProfile(), "routine send response failed %v. error:%v ", resp, err)
 			}
 		}
@@ -201,43 +201,44 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 When the io is closed, the Quit will be called.
 */
 func (routine *Routine) Quit() {
+	routine.killConnection()
+}
+
+// if there is a running query, just cancel it.
+func (routine *Routine) killQuery(statementId string) {
+	executor := routine.GetCmdExecutor()
+	if executor != nil {
+		//just cancel the request context.
+		executor.CancelRequest()
+	}
+}
+
+// if there is a runing query, cancel it first.
+// then close the connection.
+func (routine *Routine) killConnection() {
+	//step 1: cancel the query if there is a running query.
+	//step 2: close the connection.
 	routine.closeOnce.Do(func() {
+		//step A: release the mempool related to the session
 		ses := routine.GetSession()
 		if ses != nil {
 			ses.Dispose()
 		}
-		routine.notifyClose()
 
+		//step B: cancel the root context of the connection.
+		//At the same time, it cancels all the contexts
+		//(includes the request context) derived from the root context.
 		cancel := routine.GetCancelRoutineFunc()
 		if cancel != nil {
 			cancel()
 		}
 
-		proto := routine.GetClientProtocol()
+		//step C: close the network connection
+		proto := routine.GetProtocol()
 		if proto != nil {
 			proto.Quit()
 		}
 	})
-}
-
-/*
-notify routine to quit
-*/
-func (routine *Routine) notifyClose() {
-	executor := routine.GetCmdExecutor()
-	if executor != nil {
-		executor.Close()
-	}
-}
-
-func (routine *Routine) notifyDone() {
-	executor := routine.GetCmdExecutor()
-	if executor != nil {
-		cancal := executor.(*MysqlCmdExecutor).getCancelRequestFunc()
-		if cancal != nil {
-			cancal()
-		}
-	}
 }
 
 func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecutor, parameters *config.FrontendParameters, rs goetty.IOSession) *Routine {

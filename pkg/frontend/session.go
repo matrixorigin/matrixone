@@ -1995,7 +1995,7 @@ func (bh *BackgroundHandler) Close() {
 }
 
 func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
-	bh.mce.PrepareSessionBeforeExecRequest(bh.ses.Session)
+	bh.mce.SetSession(bh.ses.Session)
 	if ctx == nil {
 		ctx = bh.ses.GetRequestContext()
 	}

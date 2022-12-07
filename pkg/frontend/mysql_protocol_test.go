@@ -1032,7 +1032,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	tRM.rwlock.RUnlock()
 	ctx := context.TODO()
 
-	pro := routine.GetClientProtocol().(*MysqlProtocolImpl)
+	pro := routine.GetProtocol()
 	if !ok {
 		return moerr.NewInternalError(ctx, "routine does not exist")
 	}
@@ -1046,7 +1046,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	payload := packet.Payload
 	for uint32(length) == MaxPayloadSize {
 		var err error
-		msg, err = pro.tcpConn.Read(goetty.ReadOptions{})
+		msg, err = pro.GetTcpConnection().Read(goetty.ReadOptions{})
 		if err != nil {
 			return moerr.NewInternalError(ctx, "read msg error")
 		}
@@ -1063,7 +1063,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 
 	// finish handshake process
 	if !pro.IsEstablished() {
-		_, err := pro.handleHandshake(ctx, payload)
+		_, err := pro.HandleHandshake(ctx, payload)
 		if err != nil {
 			return err
 		}
@@ -2423,15 +2423,15 @@ func Test_handleHandshake(t *testing.T) {
 		mp.tcpConn = ioses
 		mp.SetSkipCheckUser(true)
 		payload := []byte{'a'}
-		_, err := mp.handleHandshake(ctx, payload)
+		_, err := mp.HandleHandshake(ctx, payload)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		payload = append(payload, []byte{'b', 'c'}...)
-		_, err = mp.handleHandshake(ctx, payload)
+		_, err = mp.HandleHandshake(ctx, payload)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		payload = append(payload, []byte{'c', 'd', 0}...)
-		_, err = mp.handleHandshake(ctx, payload)
+		_, err = mp.HandleHandshake(ctx, payload)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -2458,14 +2458,14 @@ func Test_handleHandshake_Recover(t *testing.T) {
 		var payload []byte
 		for i := 0; i < count; i++ {
 			f.Fuzz(&payload)
-			_, _ = mp.handleHandshake(ctx, payload)
+			_, _ = mp.HandleHandshake(ctx, payload)
 			maxLen = Max(maxLen, len(payload))
 		}
 		maxLen = 0
 		var payload2 string
 		for i := 0; i < count; i++ {
 			f.Fuzz(&payload2)
-			_, _ = mp.handleHandshake(ctx, []byte(payload2))
+			_, _ = mp.HandleHandshake(ctx, []byte(payload2))
 			maxLen = Max(maxLen, len(payload2))
 		}
 	})
