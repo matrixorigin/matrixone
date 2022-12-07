@@ -458,6 +458,7 @@ func init() {
 		"date_sub":                 DATE_SUB,
 		"extract":                  EXTRACT,
 		"max":                      MAX,
+		"median":                   MEDIAN,
 		"mid":                      MID,
 		"now":                      NOW,
 		"position":                 POSITION,
