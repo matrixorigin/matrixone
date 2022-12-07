@@ -20,6 +20,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -80,8 +81,13 @@ func NewTxnServer(
 		opt(s)
 	}
 
+	mp, err := mpool.NewMPool("txn-server-rpc", 0, mpool.NoFixed)
+	if err != nil {
+		return nil, err
+	}
 	rpc, err := morpc.NewRPCServer("txn-server", address,
 		morpc.NewMessageCodec(s.acquireRequest,
+			morpc.WithCodecEnableCompress(mp),
 			morpc.WithCodecIntegrationHLC(rt.Clock()),
 			morpc.WithCodecEnableChecksum(),
 			morpc.WithCodecPayloadCopyBufferSize(16*1024),

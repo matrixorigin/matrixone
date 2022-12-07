@@ -25,6 +25,7 @@ import (
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/stretchr/testify/assert"
@@ -312,7 +313,10 @@ func TestCanSendWithLargeRequest(t *testing.T) {
 
 func newTestTxnServer(t assert.TestingT, addr string, opts ...morpc.CodecOption) morpc.RPCServer {
 	assert.NoError(t, os.RemoveAll(addr[7:]))
+	mp, err := mpool.NewMPool("test-txn-server", 0, mpool.NoFixed)
+	assert.NoError(t, err)
 	opts = append(opts,
+		morpc.WithCodecEnableCompress(mp),
 		morpc.WithCodecIntegrationHLC(newTestClock()),
 		morpc.WithCodecEnableChecksum())
 	codec := morpc.NewMessageCodec(func() morpc.Message { return &txn.TxnRequest{} },

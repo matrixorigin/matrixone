@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -122,7 +123,12 @@ func NewSender(
 		},
 	}
 
+	mp, err := mpool.NewMPool("txn-sender-rpc", 0, mpool.NoFixed)
+	if err != nil {
+		return nil, err
+	}
 	codec := morpc.NewMessageCodec(func() morpc.Message { return s.acquireResponse() },
+		morpc.WithCodecEnableCompress(mp),
 		morpc.WithCodecIntegrationHLC(s.rt.Clock()),
 		morpc.WithCodecPayloadCopyBufferSize(s.options.payloadCopyBufferSize),
 		morpc.WithCodecEnableChecksum(),
