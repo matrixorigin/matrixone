@@ -385,7 +385,6 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
 		s.ColDefs = append(s.ColDefs, def)
 		if def.Name == PhyAddrColumnName {
 			def.PhyAddr = true
-			s.PhyAddrKey = def
 		}
 		constraint := string(bat.GetVectorByName(pkgcatalog.SystemColAttr_ConstraintType).Get(offset).([]byte))
 		if constraint == "p" {
