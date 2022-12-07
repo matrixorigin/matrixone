@@ -349,7 +349,7 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	cc, err := getRPCClient(ctx, cfg1.ServiceAddress, c.respPool, defaultMaxMessageSize)
+	cc, err := getRPCClient(ctx, cfg1.ServiceAddress, c.respPool, defaultMaxMessageSize, false)
 	require.NoError(t, err)
 	c.addr = cfg1.ServiceAddress
 	c.client = cc
