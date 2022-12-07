@@ -27,6 +27,7 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -526,10 +527,16 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool, maxMessag
 	}
 	clientOpts = append(clientOpts, GetClientOptions(ctx)...)
 
+	mp, err := mpool.NewMPool("log_rpc_client", 0, mpool.NoFixed)
+	if err != nil {
+		return nil, err
+	}
+
 	// we set connection timeout to a constant value so if ctx's deadline is much
 	// larger, then we can ensure that all specified potential nodes have a chance
 	// to be attempted
 	codec := morpc.NewMessageCodec(mf,
+		morpc.WithCodecEnableCompress(mp),
 		morpc.WithCodecPayloadCopyBufferSize(defaultWriteSocketSize),
 		morpc.WithCodecEnableChecksum(),
 		morpc.WithCodecMaxBodySize(maxMessageSize))
