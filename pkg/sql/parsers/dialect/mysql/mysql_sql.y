@@ -175,6 +175,7 @@ import (
     cteList []*tree.CTE
 
     accountAuthOption tree.AccountAuthOption
+    alterAccountAuthOption tree.AlterAccountAuthOption
     accountIdentified tree.AccountIdentified
     accountStatus tree.AccountStatus
     accountComment tree.AccountComment
@@ -568,6 +569,7 @@ import (
 
 %type <str> account_name account_admin_name account_role_name
 %type <accountAuthOption> account_auth_option
+%type <alterAccountAuthOption> alter_account_auth_option
 %type <accountIdentified> account_identified
 %type <accountStatus> account_status_option
 %type <accountComment> account_comment_opt
@@ -1990,7 +1992,7 @@ alter_stmt:
 // |    alter_ddl_stmt
 
 alter_account_stmt:
-    ALTER ACCOUNT exists_opt account_name account_auth_option account_status_option account_comment_opt
+    ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
     {
     $$ = &tree.AlterAccount{
         IfExists:$3,
@@ -2000,6 +2002,22 @@ alter_account_stmt:
         Comment:$7,
     }
     }
+
+alter_account_auth_option:
+{
+    $$ = tree.AlterAccountAuthOption{
+       Exist: false,
+    }
+}
+| ADMIN_NAME equal_opt account_admin_name account_identified
+{
+    $$ = tree.AlterAccountAuthOption{
+        Exist: true,
+        Equal:$2,
+        AdminName:$3,
+        IdentifiedType:$4,
+    }
+}
 
 alter_user_stmt:
     ALTER USER exists_opt user_spec_list_of_create_user default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt

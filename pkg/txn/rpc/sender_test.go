@@ -25,6 +25,7 @@ import (
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/stretchr/testify/assert"
@@ -51,6 +52,45 @@ func TestSendWithSingleRequest(t *testing.T) {
 	})
 
 	sd, err := NewSender(newTestRuntime(newTestClock(), nil))
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, sd.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	req := txn.TxnRequest{
+		Method: txn.TxnMethod_Write,
+		CNRequest: &txn.CNOpRequest{
+			Target: metadata.DNShard{
+				Address: testDN1Addr,
+			},
+		},
+	}
+	result, err := sd.Send(ctx, []txn.TxnRequest{req})
+	assert.NoError(t, err)
+	defer result.Release()
+	assert.Equal(t, 1, len(result.Responses))
+	assert.Equal(t, txn.TxnMethod_Write, result.Responses[0].Method)
+}
+
+func TestSendEnableCompressWithSingleRequest(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	s := newTestTxnServer(t, testDN1Addr, morpc.WithCodecEnableCompress(mp))
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	s.RegisterRequestHandler(func(ctx context.Context, request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+		return cs.Write(ctx, &txn.TxnResponse{
+			RequestID: request.GetID(),
+			Method:    txn.TxnMethod_Write,
+		})
+	})
+
+	sd, err := NewSender(newTestRuntime(newTestClock(), nil), WithSenderEnableCompress(true))
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, sd.Close())
