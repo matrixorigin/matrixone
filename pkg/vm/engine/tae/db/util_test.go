@@ -39,9 +39,7 @@ func createBlockFn[R any](_ R) *model.TimedSliceBlock[R] {
 }
 
 func TestAOT1(t *testing.T) {
-	aot := model.NewAOT[
-		*model.TimedSliceBlock[*testRows],
-		*testRows](
+	aot := model.NewAOT(
 		10,
 		createBlockFn[*testRows],
 		func(a, b *model.TimedSliceBlock[*testRows]) bool {
@@ -66,9 +64,7 @@ func TestAOT2(t *testing.T) {
 			schema.Nullables(),
 			containers.Options{})
 	}
-	aot := model.NewAOT[
-		*model.BatchBlock,
-		*containers.Batch](
+	aot := model.NewAOT(
 		10,
 		factory,
 		func(a, b *model.BatchBlock) bool {

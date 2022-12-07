@@ -123,7 +123,7 @@ func NewDirtyCollector(
 		interceptor: interceptor,
 		clock:       types.NewTsAlloctor(clock),
 	}
-	collector.storage.entries = btree.NewBTreeGOptions[*DirtyTreeEntry](
+	collector.storage.entries = btree.NewBTreeGOptions(
 		func(a, b *DirtyTreeEntry) bool {
 			return a.start.Less(b.start) && a.end.Less(b.end)
 		}, btree.Options{

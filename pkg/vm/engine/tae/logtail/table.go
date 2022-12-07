@@ -153,9 +153,7 @@ func NewTxnTable(blockSize int, clock *types.TsAlloctor) *TxnTable {
 		}
 	}
 	return &TxnTable{
-		AOT: model.NewAOT[
-			BlockT,
-			RowT](
+		AOT: model.NewAOT(
 			blockSize,
 			factory,
 			blockCompareFn,
