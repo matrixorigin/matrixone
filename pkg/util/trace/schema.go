@@ -67,6 +67,8 @@ var (
 	execPlanCol  = table.Column{Name: "exec_plan", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "statement execution plan"}
 	rowsReadCol  = table.Column{Name: "rows_read", Type: bigintUnsignedType, Default: "0", Comment: "rows read total"}
 	bytesScanCol = table.Column{Name: "bytes_scan", Type: bigintUnsignedType, Default: "0", Comment: "bytes scan total"}
+	stmtTypeCol  = table.Column{Name: "statement_type", Type: "varchar(128)", Default: "", Comment: "statement type, val in [Insert, Delete, Update, Drop Table, Drop User, ...]"}
+	queryTypeCol = table.Column{Name: "query_type", Type: "varchar(128)", Default: "", Comment: "query type, val in [DQL, DDL, DML, DCL, TCL]"}
 
 	SingleStatementTable = &table.Table{
 		Account:  table.AccountAll,
@@ -94,6 +96,8 @@ var (
 			execPlanCol,
 			rowsReadCol,
 			bytesScanCol,
+			queryTypeCol,
+			stmtTypeCol,
 		},
 		PrimaryKeyColumn: []table.Column{stmtIDCol},
 		Engine:           table.ExternalTableEngine,

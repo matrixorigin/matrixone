@@ -45,6 +45,9 @@ type StatementInfo struct {
 	StatementTag         string    `json:"statement_tag"`
 	RequestAt            time.Time `json:"request_at"` // see WithRequestAt
 
+	StatementType string `json:"statement_type"`
+	QueryType     string `json:"query_type"`
+
 	// after
 	Status     StatementInfoStatus `json:"status"`
 	Error      error               `json:"error"`
@@ -124,6 +127,8 @@ func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string 
 	row.SetColumnVal(execPlanCol, s.ExecPlan2Json(ctx))
 	row.SetColumnVal(rowsReadCol, fmt.Sprintf("%d", s.RowsRead))
 	row.SetColumnVal(bytesScanCol, fmt.Sprintf("%d", s.BytesScan))
+	row.SetColumnVal(stmtTypeCol, s.StatementType)
+	row.SetColumnVal(queryTypeCol, s.QueryType)
 
 	return row.ToStrings()
 }

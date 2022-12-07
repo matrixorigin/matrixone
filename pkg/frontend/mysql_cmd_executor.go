@@ -235,6 +235,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		StatementFingerprint: "", // fixme: (Reserved)
 		StatementTag:         "", // fixme: (Reserved)
 		RequestAt:            requestAt,
+		StatementType:        cw.GetAst().GetStatementType(),
+		QueryType:            getQueryType(cw.GetAst()),
 	}
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
@@ -2897,12 +2899,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 }
 
 func incStatementCounter(tenant string, stmt tree.Statement) {
-	switch stmt.(type) {
-	case tree.StatementType:
-		metric.StatementCounter(tenant, stmt.GetStatementType()).Inc()
-	default:
-		metric.StatementCounter(tenant, tree.QueryTypeOth).Inc()
-	}
+	metric.StatementCounter(tenant, getQueryType(stmt)).Inc()
 }
 
 func incTransactionCounter(tenant string) {
@@ -2917,11 +2914,15 @@ func incTransactionErrorsCounter(tenant string, t metric.SQLType) {
 }
 
 func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
+	metric.StatementErrorsCounter(tenant, getQueryType(stmt)).Inc()
+}
+
+func getQueryType(stmt tree.Statement) string {
 	switch stmt.(type) {
 	case tree.StatementType:
-		metric.StatementErrorsCounter(tenant, stmt.GetStatementType()).Inc()
+		return stmt.GetQueryType()
 	default:
-		metric.StatementErrorsCounter(tenant, tree.QueryTypeOth).Inc()
+		return tree.QueryTypeOth
 	}
 }
 
