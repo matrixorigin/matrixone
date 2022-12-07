@@ -85,7 +85,7 @@ func (blk *txnBlock) tryAddStats() {
 func (blk *txnBlock) ForeachRowInBetween(
 	from, to types.TS,
 	rowOp func(row RowT) (goNext bool),
-) (outOfRange bool) {
+) (outOfRange bool, readRows int) {
 	var rows []*txnRow
 	if blk.stats.Load() == nil {
 		blk.RLock()
@@ -99,6 +99,7 @@ func (blk *txnBlock) ForeachRowInBetween(
 		rows = blk.rows
 	}
 	for _, row := range rows {
+		readRows += 1
 		ts := row.GetPrepareTS()
 		if ts.IsEmpty() || ts.Greater(to) {
 			outOfRange = true
@@ -177,7 +178,7 @@ func (table *TxnTable) ForeachRowInBetween(
 	from, to types.TS,
 	skipBlkOp func(blk BlockT) bool,
 	rowOp func(row RowT) (goNext bool),
-) {
+) (readRows int) {
 	snapshot := table.Snapshot()
 	pivot := &txnBlock{bornTS: from}
 	snapshot.Descend(pivot, func(blk BlockT) bool {
@@ -190,17 +191,16 @@ func (table *TxnTable) ForeachRowInBetween(
 		}
 
 		if skipBlkOp != nil && skipBlkOp(blk) {
-			if blk.rows[len(blk.rows)-1].GetPrepareTS().Greater(to) {
-				return false
-			}
-			return true
+			return blk.rows[len(blk.rows)-1].GetPrepareTS().LessEq(to)
 		}
-		outOfRange := blk.ForeachRowInBetween(
+		outOfRange, cnt := blk.ForeachRowInBetween(
 			from,
 			to,
 			rowOp,
 		)
+		readRows += cnt
 
 		return !outOfRange
 	})
+	return
 }
