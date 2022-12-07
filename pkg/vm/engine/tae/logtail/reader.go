@@ -47,8 +47,8 @@ func (r *Reader) HasCatalogChanges() bool {
 		return true
 	}
 	skipFn := func(blk BlockT) bool {
-		stats := blk.stats.Load()
-		return stats != nil && !stats.hasCatalogChanges
+		summary := blk.summary.Load()
+		return summary != nil && !summary.hasCatalogChanges
 	}
 	r.table.ForeachRowInBetween(r.from, r.to, skipFn, op)
 	return changed

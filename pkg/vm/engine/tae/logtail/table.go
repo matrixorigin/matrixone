@@ -28,9 +28,11 @@ import (
 type RowT = *txnRow
 type BlockT = *txnBlock
 
-type blockStats struct {
+type summary struct {
 	hasCatalogChanges bool
+	// TODO
 	// table ids
+	// maxLsn
 }
 
 type txnRow struct {
@@ -42,9 +44,9 @@ func (row *txnRow) Window(_, _ int) *txnRow { return nil }
 
 type txnBlock struct {
 	sync.RWMutex
-	bornTS types.TS
-	rows   []*txnRow
-	stats  atomic.Pointer[blockStats]
+	bornTS  types.TS
+	rows    []*txnRow
+	summary atomic.Pointer[summary]
 }
 
 func (blk *txnBlock) Length() int {
@@ -71,15 +73,15 @@ func (blk *txnBlock) Close() {
 	blk.rows = make([]*txnRow, 0)
 }
 
-func (blk *txnBlock) tryAddStats() {
-	stats := new(blockStats)
+func (blk *txnBlock) trySumary() {
+	summary := new(summary)
 	for _, row := range blk.rows {
 		if row.GetMemo().HasCatalogChanges() {
-			stats.hasCatalogChanges = true
+			summary.hasCatalogChanges = true
 			break
 		}
 	}
-	blk.stats.CompareAndSwap(nil, stats)
+	blk.summary.CompareAndSwap(nil, summary)
 }
 
 func (blk *txnBlock) ForeachRowInBetween(
@@ -87,13 +89,13 @@ func (blk *txnBlock) ForeachRowInBetween(
 	rowOp func(row RowT) (goNext bool),
 ) (outOfRange bool, readRows int) {
 	var rows []*txnRow
-	if blk.stats.Load() == nil {
+	if blk.summary.Load() == nil {
 		blk.RLock()
 		rows = blk.rows[:len(blk.rows)]
 		capacity := cap(blk.rows)
 		blk.RUnlock()
-		if capacity == len(rows) && blk.stats.Load() == nil {
-			blk.tryAddStats()
+		if capacity == len(rows) && blk.summary.Load() == nil {
+			blk.trySumary()
 		}
 	} else {
 		rows = blk.rows
