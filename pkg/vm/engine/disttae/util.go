@@ -187,8 +187,7 @@ func getZonemapDataFromMeta(ctx context.Context, columns []int, meta BlockMeta, 
 		min := zm.GetMin()
 		max := zm.GetMax()
 		if min == nil || max == nil {
-			// that's fine, not a bug. if nil just read the block
-			return nil, nil, moerr.NewInternalError(ctx, "zonemap is nil")
+			return nil, nil, nil
 		}
 		datas[i] = [2]any{min, max}
 	}
@@ -198,7 +197,7 @@ func getZonemapDataFromMeta(ctx context.Context, columns []int, meta BlockMeta, 
 
 func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
 	if len(bat.Vecs) == 0 { //that's constant expr
-		e, err := plan2.ConstantFold(bat, expr)
+		e, err := plan2.ConstantFold(bat, expr, proc)
 		if err != nil {
 			return false, err
 		}

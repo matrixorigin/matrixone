@@ -337,6 +337,8 @@ func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name str
 		ret.Value = []byte(a.Comment)
 	case rowIDColumnName:
 		ret.Value = a.ID.ToRowID()
+	case catalog.SystemColAttr_IsClusterBy:
+		ret.Value = boolToInt8(a.ClusterBy)
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}

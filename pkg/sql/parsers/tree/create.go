@@ -125,6 +125,7 @@ type CreateTable struct {
 	Defs            TableDefs
 	Options         []TableOption
 	PartitionOption *PartitionOption
+	ClusterByOption *ClusterByOption
 	Param           *ExternParam
 }
 
@@ -1783,6 +1784,10 @@ func NewSubPartition(n Identifier, o []TableOption) *SubPartition {
 		Name:    n,
 		Options: o,
 	}
+}
+
+type ClusterByOption struct {
+	ColumnList []*UnresolvedName
 }
 
 type PartitionOption struct {

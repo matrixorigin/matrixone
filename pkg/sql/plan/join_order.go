@@ -253,7 +253,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		var leftCard, rightCard float64
 		leftChild := subTrees[firstConnected]
 		if leftChild.ObjRef != nil {
-			leftCard = builder.compCtx.Cost(leftChild.ObjRef, RewriteAndConstantFold(leftChild.FilterList)).Card
+			leftCard = builder.compCtx.Cost(leftChild.ObjRef, RewriteAndConstantFold(leftChild.FilterList, builder.compCtx.GetProcess())).Card
 		} else {
 			leftCard = leftChild.Cost.Card
 		}
@@ -275,7 +275,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 
 			rightChild := subTrees[nextSibling]
 			if rightChild.ObjRef != nil {
-				rightCard = builder.compCtx.Cost(rightChild.ObjRef, RewriteAndConstantFold(rightChild.FilterList)).Card
+				rightCard = builder.compCtx.Cost(rightChild.ObjRef, RewriteAndConstantFold(rightChild.FilterList, builder.compCtx.GetProcess())).Card
 			} else {
 				rightCard = rightChild.Cost.Card
 			}
@@ -469,12 +469,12 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		rightChild := builder.qry.Nodes[rightID]
 		var leftCard, rightCard float64
 		if leftChild.ObjRef != nil {
-			leftCard = builder.compCtx.Cost(leftChild.ObjRef, RewriteAndConstantFold(leftChild.FilterList)).Card
+			leftCard = builder.compCtx.Cost(leftChild.ObjRef, RewriteAndConstantFold(leftChild.FilterList, builder.compCtx.GetProcess())).Card
 		} else {
 			leftCard = leftChild.Cost.Card
 		}
 		if rightChild.ObjRef != nil {
-			rightCard = builder.compCtx.Cost(rightChild.ObjRef, RewriteAndConstantFold(rightChild.FilterList)).Card
+			rightCard = builder.compCtx.Cost(rightChild.ObjRef, RewriteAndConstantFold(rightChild.FilterList, builder.compCtx.GetProcess())).Card
 		} else {
 			rightCard = rightChild.Cost.Card
 		}

@@ -175,6 +175,14 @@ func (f Function) isFunction() bool {
 var functionRegister []Functions
 
 // get function id from map functionIdRegister, see functionIds.go
+func fromNameToFunctionIdWithoutError(name string) (int32, bool) {
+	if fid, ok := functionIdRegister[name]; ok {
+		return fid, true
+	}
+	return -1, false
+}
+
+// get function id from map functionIdRegister, see functionIds.go
 func fromNameToFunctionId(name string) (int32, error) {
 	if fid, ok := functionIdRegister[name]; ok {
 		return fid, nil
@@ -199,11 +207,26 @@ func DecodeOverloadID(overloadID int64) (fid int32, index int32) {
 	return fid, index
 }
 
-// GetFunctionByID get function structure by its index id.
-func GetFunctionByID(overloadID int64) (Function, error) {
+// GetFunctionByIDWithoutError get function structure by its index id.
+func GetFunctionByIDWithoutError(overloadID int64) (*Function, bool) {
 	fid, overloadIndex := DecodeOverloadID(overloadID)
-	fs := functionRegister[fid].Overloads
-	return fs[overloadIndex], nil
+	if int(fid) < len(functionRegister) {
+		fs := functionRegister[fid].Overloads
+		return &fs[overloadIndex], true
+	} else {
+		return nil, false
+	}
+}
+
+// GetFunctionByID get function structure by its index id.
+func GetFunctionByID(overloadID int64) (*Function, error) {
+	fid, overloadIndex := DecodeOverloadID(overloadID)
+	if int(fid) < len(functionRegister) {
+		fs := functionRegister[fid].Overloads
+		return &fs[overloadIndex], nil
+	} else {
+		return nil, moerr.NewInvalidInputNoCtx("function overload id not found")
+	}
 }
 
 // deduce notNullable for function
@@ -212,7 +235,7 @@ func GetFunctionByID(overloadID int64) (Function, error) {
 // we can deduce that c1+1, cast c3 and c1=c3 is notNullable, abs(c2) is nullable
 // this message helps optimization sometimes
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
-	function, _ := GetFunctionByID(overloadID)
+	function, _ := GetFunctionByIDWithoutError(overloadID)
 	if function.TestFlag(plan.Function_PRODUCE_NULL) {
 		return false
 	}
@@ -229,8 +252,8 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 }
 
 func GetFunctionIsAggregateByName(name string) bool {
-	fid, err := fromNameToFunctionId(name)
-	if err != nil {
+	fid, exists := fromNameToFunctionIdWithoutError(name)
+	if !exists {
 		return false
 	}
 	fs := functionRegister[fid].Overloads
@@ -239,8 +262,8 @@ func GetFunctionIsAggregateByName(name string) bool {
 
 // Check whether the function needs to append a hidden parameter
 func GetFunctionAppendHideArgByID(overloadID int64) bool {
-	function, err := GetFunctionByID(overloadID)
-	if err != nil {
+	function, exists := GetFunctionByIDWithoutError(overloadID)
+	if !exists {
 		return false
 	}
 	return function.AppendHideArg
