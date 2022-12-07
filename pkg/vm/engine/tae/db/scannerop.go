@@ -82,7 +82,6 @@ func (processor *calibrationOp) onPostSegment(segmentEntry *catalog.SegmentEntry
 func (processor *calibrationOp) onBlock(blockEntry *catalog.BlockEntry) (err error) {
 	if !blockEntry.IsActive() {
 		// logutil.Debugf("Noop for block %s: table or db was dropped", blockEntry.Repr())
-		processor.blkCntOfSegment = 0
 		return
 	}
 
