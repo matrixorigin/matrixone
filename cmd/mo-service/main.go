@@ -18,6 +18,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/binary"
+	"errors"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -50,7 +51,7 @@ import (
 
 var (
 	configFile = flag.String("cfg", "", "toml configuration used to start mo-service")
-	launchFile = flag.String("launch", "./etc/launch-tae-multi-CN-tae-DN/launch.toml", "toml configuration used to launch mo cluster")
+	launchFile = flag.String("launch", "", "toml configuration used to launch mo cluster")
 	version    = flag.Bool("version", false, "print version information")
 )
 
@@ -90,6 +91,8 @@ func main() {
 		if err := startService(cfg, stopper); err != nil {
 			panic(err)
 		}
+	} else {
+		panic(errors.New("no configuration specified"))
 	}
 
 	waitSignalToStop(stopper)

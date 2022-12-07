@@ -42,7 +42,7 @@ func init() {
 }
 
 // this countUTF8CodePoints implementation bases on https://github.com/satanson/cpp_etudes/blob/master/include/string_functions.hh
-func countUTF8CodePoints(s []byte) uint64 {
+func CountUTF8CodePoints(s []byte) uint64 {
 	var charSize uint8
 	var count uint64 = 0
 	length := len(s)
@@ -57,7 +57,7 @@ func countUTF8CodePoints(s []byte) uint64 {
 
 func StrLengthUTF8(xs []string, rs []uint64) []uint64 {
 	for i, x := range xs {
-		rs[i] = countUTF8CodePoints([]byte(x))
+		rs[i] = CountUTF8CodePoints([]byte(x))
 	}
 	return rs
 }
