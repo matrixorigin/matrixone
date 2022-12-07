@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -26,6 +27,11 @@ import (
 
 type RowT = *txnRow
 type BlockT = *txnBlock
+
+type blockStats struct {
+	hasCatalogChanges bool
+	// table ids
+}
 
 type txnRow struct {
 	txnif.AsyncTxn
@@ -38,6 +44,7 @@ type txnBlock struct {
 	sync.RWMutex
 	bornTS types.TS
 	rows   []*txnRow
+	stats  atomic.Pointer[blockStats]
 }
 
 func (blk *txnBlock) Length() int {
@@ -64,13 +71,33 @@ func (blk *txnBlock) Close() {
 	blk.rows = make([]*txnRow, 0)
 }
 
+func (blk *txnBlock) tryAddStats() {
+	stats := new(blockStats)
+	for _, row := range blk.rows {
+		if row.GetMemo().HasCatalogChanges() {
+			stats.hasCatalogChanges = true
+			break
+		}
+	}
+	blk.stats.CompareAndSwap(nil, stats)
+}
+
 func (blk *txnBlock) ForeachRowInBetween(
 	from, to types.TS,
-	op func(row RowT) (goNext bool),
+	rowOp func(row RowT) (goNext bool),
 ) (outOfRange bool) {
-	blk.RLock()
-	rows := blk.rows[:len(blk.rows)]
-	blk.RUnlock()
+	var rows []*txnRow
+	if blk.stats.Load() == nil {
+		blk.RLock()
+		rows = blk.rows[:len(blk.rows)]
+		capacity := cap(blk.rows)
+		blk.RUnlock()
+		if capacity == len(rows) && blk.stats.Load() == nil {
+			blk.tryAddStats()
+		}
+	} else {
+		rows = blk.rows
+	}
 	for _, row := range rows {
 		ts := row.GetPrepareTS()
 		if ts.IsEmpty() || ts.Greater(to) {
@@ -81,7 +108,7 @@ func (blk *txnBlock) ForeachRowInBetween(
 			continue
 		}
 
-		if !op(row) {
+		if !rowOp(row) {
 			outOfRange = true
 			return
 		}
@@ -148,7 +175,8 @@ func (table *TxnTable) TruncateByTimeStamp(ts types.TS) (cnt int) {
 
 func (table *TxnTable) ForeachRowInBetween(
 	from, to types.TS,
-	op func(row RowT) (goNext bool),
+	skipBlkOp func(blk BlockT) bool,
+	rowOp func(row RowT) (goNext bool),
 ) {
 	snapshot := table.Snapshot()
 	pivot := &txnBlock{bornTS: from}
@@ -160,10 +188,17 @@ func (table *TxnTable) ForeachRowInBetween(
 		if blk.bornTS.Greater(to) {
 			return false
 		}
+
+		if skipBlkOp != nil && skipBlkOp(blk) {
+			if blk.rows[len(blk.rows)-1].GetPrepareTS().Greater(to) {
+				return false
+			}
+			return true
+		}
 		outOfRange := blk.ForeachRowInBetween(
 			from,
 			to,
-			op,
+			rowOp,
 		)
 
 		return !outOfRange

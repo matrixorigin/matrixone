@@ -20,6 +20,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"sync/atomic"
 	"time"
@@ -48,7 +49,9 @@ func (ts TS) Equal(rhs TS) bool {
 
 // Compare physical first then logical.
 func (ts TS) Compare(rhs TS) int {
-	p1, p2 := ts.Physical(), rhs.Physical()
+	p1 := *(*int64)(unsafe.Pointer(&ts[4]))
+	p2 := *(*int64)(unsafe.Pointer(&rhs[4]))
+	// p1, p2 := ts.Physical(), rhs.Physical()
 	if p1 < p2 {
 		return -1
 	}
