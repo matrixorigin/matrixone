@@ -313,7 +313,7 @@ func TestCanSendWithLargeRequest(t *testing.T) {
 
 func newTestTxnServer(t assert.TestingT, addr string, opts ...morpc.CodecOption) morpc.RPCServer {
 	assert.NoError(t, os.RemoveAll(addr[7:]))
-	mp, err := mpool.NewMPool("test-txn-server", 0, mpool.NoFixed)
+	mp, err := mpool.NewMPool("test_txn_server", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	opts = append(opts,
 		morpc.WithCodecEnableCompress(mp),

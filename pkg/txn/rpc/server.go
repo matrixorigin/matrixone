@@ -81,7 +81,7 @@ func NewTxnServer(
 		opt(s)
 	}
 
-	mp, err := mpool.NewMPool("txn-server-rpc", 0, mpool.NoFixed)
+	mp, err := mpool.NewMPool("txn_rpc_server", 0, mpool.NoFixed)
 	if err != nil {
 		return nil, err
 	}

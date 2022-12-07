@@ -123,7 +123,7 @@ func NewSender(
 		},
 	}
 
-	mp, err := mpool.NewMPool("txn-sender-rpc", 0, mpool.NoFixed)
+	mp, err := mpool.NewMPool("txn_rpc_sender", 0, mpool.NoFixed)
 	if err != nil {
 		return nil, err
 	}
