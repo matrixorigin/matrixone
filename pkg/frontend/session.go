@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"runtime"
 	"strings"
@@ -637,7 +638,7 @@ func (ses *Session) GetGlobalSysVars() *GlobalSystemVariables {
 // SetGlobalVar sets the value of system variable in global.
 // used by SET GLOBAL
 func (ses *Session) SetGlobalVar(name string, value interface{}) error {
-	return ses.GetGlobalSysVars().SetGlobalSysVar(name, value)
+	return ses.GetGlobalSysVars().SetGlobalSysVar(ses.GetRequestContext(), name, value)
 }
 
 // GetGlobalVar gets this value of the system variable in global
@@ -646,11 +647,11 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 	if def, val, ok := gSysVars.GetGlobalSysVar(name); ok {
 		if def.GetScope() == ScopeSession {
 			//empty
-			return nil, errorSystemVariableSessionEmpty
+			return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableSessionEmpty())
 		}
 		return val, nil
 	}
-	return nil, errorSystemVariableDoesNotExist
+	return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
 }
 
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
@@ -664,15 +665,16 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 	gSysVars := ses.GetGlobalSysVars()
 	if def, _, ok := gSysVars.GetGlobalSysVar(name); ok {
 		if def.GetScope() == ScopeGlobal {
-			return errorSystemVariableIsGlobal
+			return moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableIsGlobal())
 		}
 		//scope session & both
 		if !def.GetDynamic() {
-			return errorSystemVariableIsReadOnly
+			return moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableIsReadOnly())
 		}
 
 		cv, err := def.GetType().Convert(value)
 		if err != nil {
+			errutil.ReportError(ses.GetRequestContext(), err)
 			return err
 		}
 
@@ -682,7 +684,7 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 			return def.UpdateSessVar(ses, ses.GetSysVars(), def.GetName(), cv)
 		}
 	} else {
-		return errorSystemVariableDoesNotExist
+		return moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
 	}
 	return nil
 }
@@ -697,7 +699,7 @@ func (ses *Session) GetSessionVar(name string) (interface{}, error) {
 		}
 		return ses.GetSysVar(ciname), nil
 	} else {
-		return nil, errorSystemVariableDoesNotExist
+		return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
 	}
 }
 
