@@ -118,10 +118,12 @@ func (m *Median[T]) Grows(cnt int) {
 
 func (m *Median[T]) Eval(vs []float64) []float64 {
 	for i := range vs {
-		sort.Sort(m.Data[i].Values)
 		cnt := m.Data[i].Cnts
 		if cnt == 0 {
 			continue
+		}
+		if !sort.IsSorted(m.Data[i].Values) {
+			sort.Sort(m.Data[i].Values)
 		}
 		if cnt&1 == 1 {
 			vs[i] = float64(m.Data[i].Values[cnt>>1])
@@ -146,13 +148,26 @@ func (m *Median[T]) Fill(i int64, value T, _ float64, z int64, isEmpty bool, isN
 func (m *Median[T]) Merge(xIndex int64, yIndex int64, _ float64, _ float64, xEmpty bool, yEmpty bool, yMedian any) (float64, bool) {
 	if !yEmpty {
 		yM := yMedian.(*Median[T])
-		m.Data[xIndex].Cnts += yM.Data[yIndex].Cnts
-		for _, v := range yM.Data[yIndex].Values {
-			m.Data[xIndex].Values = append(m.Data[xIndex].Values, v)
+		if !sort.IsSorted(yM.Data[yIndex].Values) {
+			sort.Sort(yM.Data[yIndex].Values)
 		}
-		if !xEmpty {
+		if xEmpty {
+			m.Data[xIndex].Cnts = yM.Data[yIndex].Cnts
+			m.Data[xIndex].Values = make(numericSlice[T], len(yM.Data[yIndex].Values))
+			copy(m.Data[xIndex].Values, yM.Data[yIndex].Values)
 			return 0, false
 		}
+		m.Data[xIndex].Cnts += yM.Data[yIndex].Cnts
+		newData := make(numericSlice[T], m.Data[xIndex].Cnts)
+		if !sort.IsSorted(m.Data[xIndex].Values) {
+			sort.Sort(m.Data[xIndex].Values)
+		}
+		merge[T](m.Data[xIndex].Values, yM.Data[yIndex].Values, newData, func(a, b T) bool {
+			return a == b
+		}, func(a, b T) bool {
+			return a < b
+		})
+		m.Data[xIndex].Values = newData
 		return 0, false
 	}
 
@@ -182,10 +197,12 @@ func (m *Decimal64Median) Grows(cnt int) {
 
 func (m *Decimal64Median) Eval(vs []types.Decimal128) []types.Decimal128 {
 	for i := range vs {
-		sort.Sort(m.Data[i].Values)
 		cnt := m.Data[i].Cnts
 		if cnt == 0 {
 			continue
+		}
+		if !sort.IsSorted(m.Data[i].Values) {
+			sort.Sort(m.Data[i].Values)
 		}
 		if cnt&1 == 1 {
 			vs[i] = types.Decimal128_FromDecimal64(m.Data[i].Values[cnt>>1])
@@ -210,13 +227,26 @@ func (m *Decimal64Median) Fill(i int64, value types.Decimal64, ov types.Decimal1
 func (m *Decimal64Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128, _ types.Decimal128, xEmpty bool, yEmpty bool, yMedian any) (types.Decimal128, bool) {
 	if !yEmpty {
 		yM := yMedian.(*Decimal64Median)
-		m.Data[xIndex].Cnts += yM.Data[yIndex].Cnts
-		for _, v := range yM.Data[yIndex].Values {
-			m.Data[xIndex].Values = append(m.Data[xIndex].Values, v)
+		if !sort.IsSorted(yM.Data[yIndex].Values) {
+			sort.Sort(yM.Data[yIndex].Values)
 		}
-		if !xEmpty {
+		if xEmpty {
+			m.Data[xIndex].Cnts = yM.Data[yIndex].Cnts
+			m.Data[xIndex].Values = make(decimal64Slice, len(yM.Data[yIndex].Values))
+			copy(m.Data[xIndex].Values, yM.Data[yIndex].Values)
 			return types.Decimal128_Zero, false
 		}
+		m.Data[xIndex].Cnts += yM.Data[yIndex].Cnts
+		newData := make(decimal64Slice, m.Data[xIndex].Cnts)
+		if !sort.IsSorted(m.Data[xIndex].Values) {
+			sort.Sort(m.Data[xIndex].Values)
+		}
+		merge(m.Data[xIndex].Values, yM.Data[yIndex].Values, newData, func(a, b types.Decimal64) bool {
+			return a.Eq(b)
+		}, func(a, b types.Decimal64) bool {
+			return a.Lt(b)
+		})
+		m.Data[xIndex].Values = newData
 		return types.Decimal128_Zero, false
 	}
 
@@ -245,10 +275,12 @@ func (m *Decimal128Median) Grows(cnt int) {
 
 func (m *Decimal128Median) Eval(vs []types.Decimal128) []types.Decimal128 {
 	for i := range vs {
-		sort.Sort(m.Data[i].Values)
 		cnt := m.Data[i].Cnts
 		if cnt == 0 {
 			continue
+		}
+		if !sort.IsSorted(m.Data[i].Values) {
+			sort.Sort(m.Data[i].Values)
 		}
 		if cnt&1 == 1 {
 			vs[i] = m.Data[i].Values[cnt>>1]
@@ -273,16 +305,28 @@ func (m *Decimal128Median) Fill(i int64, value types.Decimal128, _ types.Decimal
 func (m *Decimal128Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128, _ types.Decimal128, xEmpty bool, yEmpty bool, yMedian any) (types.Decimal128, bool) {
 	if !yEmpty {
 		yM := yMedian.(*Decimal128Median)
-		m.Data[xIndex].Cnts += yM.Data[yIndex].Cnts
-		for _, v := range yM.Data[yIndex].Values {
-			m.Data[xIndex].Values = append(m.Data[xIndex].Values, v)
+		if !sort.IsSorted(yM.Data[yIndex].Values) {
+			sort.Sort(yM.Data[yIndex].Values)
 		}
-		if !xEmpty {
+		if xEmpty {
+			m.Data[xIndex].Cnts = yM.Data[yIndex].Cnts
+			m.Data[xIndex].Values = make(decimal128Slice, len(yM.Data[yIndex].Values))
+			copy(m.Data[xIndex].Values, yM.Data[yIndex].Values)
 			return types.Decimal128_Zero, false
 		}
+		m.Data[xIndex].Cnts += yM.Data[yIndex].Cnts
+		if !sort.IsSorted(m.Data[xIndex].Values) {
+			sort.Sort(m.Data[xIndex].Values)
+		}
+		newData := make(decimal128Slice, m.Data[xIndex].Cnts)
+		merge(m.Data[xIndex].Values, yM.Data[yIndex].Values, newData, func(a, b types.Decimal128) bool {
+			return a.Eq(b)
+		}, func(a, b types.Decimal128) bool {
+			return a.Lt(b)
+		})
+		m.Data[xIndex].Values = newData
 		return types.Decimal128_Zero, false
 	}
-
 	return types.Decimal128_Zero, xEmpty
 }
 
@@ -291,4 +335,36 @@ func (m *Decimal128Median) MarshalBinary() ([]byte, error) {
 }
 func (m *Decimal128Median) UnmarshalBinary(dt []byte) error {
 	return types.Decode(dt, &m.Data)
+}
+
+func merge[T Numeric | types.Decimal64 | types.Decimal128](s1, s2, rs []T, eq func(a, b T) bool, lt func(a, b T) bool) []T {
+	i, j, cnt := 0, 0, 0
+	for i < len(s1) && j < len(s2) {
+		if eq(s1[i], s2[j]) {
+			rs[cnt] = s1[i]
+			cnt++
+			i++
+			rs[cnt] = s2[j]
+			cnt++
+			j++
+			continue
+		}
+		if lt(s1[i], s2[j]) {
+			rs[cnt] = s1[i]
+			i++
+		} else {
+			rs[cnt] = s2[j]
+			j++
+		}
+		cnt++
+	}
+	for ; i < len(s1); i++ {
+		rs[cnt] = s1[i]
+		cnt++
+	}
+	for ; j < len(s2); j++ {
+		rs[cnt] = s2[j]
+		cnt++
+	}
+	return rs
 }
