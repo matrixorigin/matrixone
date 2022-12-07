@@ -3,18 +3,21 @@ package gc
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type GcTable struct {
 	table  map[string][]common.ID
 	delete map[string][]common.ID
+	fs     *objectio.ObjectFS
 }
 
-func NewGcTable() *GcTable {
+func NewGcTable(fs *objectio.ObjectFS) *GcTable {
 	table := &GcTable{
 		table:  make(map[string][]common.ID),
 		delete: make(map[string][]common.ID),
+		fs:     fs,
 	}
 	return table
 }
