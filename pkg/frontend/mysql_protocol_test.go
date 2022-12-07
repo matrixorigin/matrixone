@@ -1032,6 +1032,11 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	tRM.rwlock.RUnlock()
 	ctx := context.TODO()
 
+	pu, err := getParameterUnit("test/system_vars_config.toml", nil, nil)
+	if err != nil {
+		return err
+	}
+
 	pro := routine.GetClientProtocol().(*MysqlProtocolImpl)
 	if !ok {
 		return moerr.NewInternalError(ctx, "routine does not exist")
@@ -1041,6 +1046,10 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	if !ok {
 		return moerr.NewInternalError(ctx, "message is not Packet")
 	}
+
+	ses := NewSession(pro, nil, pu, nil, false)
+	ses.SetRequestContext(ctx)
+	pro.SetSession(ses)
 
 	length := packet.Length
 	payload := packet.Payload

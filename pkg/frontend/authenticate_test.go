@@ -161,7 +161,7 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 			dbs = append(dbs, k)
 		}
 		mrs1.EXPECT().GetRowCount().Return(uint64(len(sysWantedDatabases))).AnyTimes()
-		mrs1.EXPECT().GetString(gomock.Any(), gomock.Any()).DoAndReturn(func(r uint64, c uint64) (string, error) {
+		mrs1.EXPECT().GetString(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx2 context.Context, r uint64, c uint64) (string, error) {
 			return dbs[r], nil
 		}).AnyTimes()
 
@@ -172,7 +172,7 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		}
 
 		mrs2.EXPECT().GetRowCount().Return(uint64(len(sysWantedTables))).AnyTimes()
-		mrs2.EXPECT().GetString(gomock.Any(), gomock.Any()).DoAndReturn(func(r uint64, c uint64) (string, error) {
+		mrs2.EXPECT().GetString(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx2 context.Context, r uint64, c uint64) (string, error) {
 			return tables[r], nil
 		}).AnyTimes()
 
