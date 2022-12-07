@@ -26,14 +26,16 @@ import (
 )
 
 type ConstantFold struct {
-	bat *batch.Batch
+	bat       *batch.Batch
+	isPrepare bool // if target plan is from prepared statement
 }
 
-func NewConstantFold() *ConstantFold {
+func NewConstantFold(isPrepare bool) *ConstantFold {
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 	return &ConstantFold{
-		bat: bat,
+		bat:       bat,
+		isPrepare: isPrepare,
 	}
 }
 
@@ -46,31 +48,31 @@ func (r *ConstantFold) Match(n *plan.Node) bool {
 	return true
 }
 
-func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process, isPrepare bool) {
+func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process) {
 	if n.Limit != nil {
-		n.Limit = r.constantFold(n.Limit, proc, isPrepare)
+		n.Limit = r.constantFold(n.Limit, proc)
 	}
 	if n.Offset != nil {
-		n.Offset = r.constantFold(n.Offset, proc, isPrepare)
+		n.Offset = r.constantFold(n.Offset, proc)
 	}
 	if len(n.OnList) > 0 {
 		for i := range n.OnList {
-			n.OnList[i] = r.constantFold(n.OnList[i], proc, isPrepare)
+			n.OnList[i] = r.constantFold(n.OnList[i], proc)
 		}
 	}
 	if len(n.FilterList) > 0 {
 		for i := range n.FilterList {
-			n.FilterList[i] = r.constantFold(n.FilterList[i], proc, isPrepare)
+			n.FilterList[i] = r.constantFold(n.FilterList[i], proc)
 		}
 	}
 	if len(n.ProjectList) > 0 {
 		for i := range n.ProjectList {
-			n.ProjectList[i] = r.constantFold(n.ProjectList[i], proc, isPrepare)
+			n.ProjectList[i] = r.constantFold(n.ProjectList[i], proc)
 		}
 	}
 }
 
-func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process, isPrepare bool) *plan.Expr {
+func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.Expr {
 	ef, ok := e.Expr.(*plan.Expr_F)
 	if !ok {
 		return e
@@ -83,11 +85,11 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process, isPrepa
 	if f.Volatile { // function cannot be fold
 		return e
 	}
-	if isPrepare { // prepare statement cannot be fold before put real arguments
+	if r.isPrepare { // prepare statement cannot be fold before put real arguments
 		return e
 	}
 	for i := range ef.F.Args {
-		ef.F.Args[i] = r.constantFold(ef.F.Args[i], proc, isPrepare)
+		ef.F.Args[i] = r.constantFold(ef.F.Args[i], proc)
 	}
 	if !isConstant(e) {
 		return e

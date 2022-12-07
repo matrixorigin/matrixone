@@ -32,6 +32,10 @@ var (
 	_ VisitPlanRule = &ConstantFoldRule{}
 )
 
+var (
+	constantFoldRule = rule.NewConstantFold(false)
+)
+
 type GetParamRule struct {
 	params     map[int]int
 	mapTypes   map[int]int32
@@ -308,7 +312,7 @@ type ConstantFoldRule struct {
 func NewConstantFoldRule(compCtx CompilerContext) *ConstantFoldRule {
 	return &ConstantFoldRule{
 		compCtx: compCtx,
-		rule:    rule.NewConstantFold(),
+		rule:    constantFoldRule,
 	}
 }
 
@@ -321,7 +325,7 @@ func (r *ConstantFoldRule) IsApplyExpr() bool {
 }
 
 func (r *ConstantFoldRule) ApplyNode(node *Node) error {
-	r.rule.Apply(node, nil, r.compCtx.GetProcess(), false)
+	r.rule.Apply(node, nil, r.compCtx.GetProcess())
 	return nil
 }
 

@@ -390,10 +390,6 @@ func (m *MockCompilerContext) GetProcess() *process.Process {
 	return testutil.NewProc()
 }
 
-func (m *MockCompilerContext) IsPrepare() bool {
-	return false
-}
-
 type MockOptimizer struct {
 	ctxt MockCompilerContext
 }

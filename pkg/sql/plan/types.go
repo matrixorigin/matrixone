@@ -83,8 +83,6 @@ type CompilerContext interface {
 	GetContext() context.Context
 
 	GetProcess() *process.Process
-
-	IsPrepare() bool
 }
 
 type Optimizer interface {
@@ -93,8 +91,8 @@ type Optimizer interface {
 }
 
 type Rule interface {
-	Match(*Node) bool                            // rule match?
-	Apply(*Node, *Query, *process.Process, bool) // apply the rule
+	Match(*Node) bool                      // rule match?
+	Apply(*Node, *Query, *process.Process) // apply the rule
 }
 
 // BaseOptimizer is base optimizer, capable of handling only a few simple rules

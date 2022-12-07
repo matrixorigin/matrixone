@@ -1485,7 +1485,6 @@ type TxnCompilerContext struct {
 	txnHandler *TxnHandler
 	ses        *Session
 	proc       *process.Process
-	prepare    bool // prepare statement
 	mu         sync.Mutex
 }
 
@@ -1895,18 +1894,6 @@ func (tcc *TxnCompilerContext) SetProcess(proc *process.Process) {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	tcc.proc = proc
-}
-
-func (tcc *TxnCompilerContext) SetPrepare(f bool) {
-	tcc.mu.Lock()
-	defer tcc.mu.Unlock()
-	tcc.prepare = f
-}
-
-func (tcc *TxnCompilerContext) IsPrepare() bool {
-	tcc.mu.Lock()
-	defer tcc.mu.Unlock()
-	return tcc.prepare
 }
 
 // fakeDataSetFetcher gets the result set from the pipeline and save it in the session.

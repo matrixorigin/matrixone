@@ -3193,9 +3193,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.PrepareStmt:
 			selfHandle = true
-			ses.GetTxnCompileCtx().SetPrepare(true)
 			prepareStmt, err = mce.handlePrepareStmt(requestCtx, st)
-			ses.GetTxnCompileCtx().SetPrepare(false)
 			if err != nil {
 				goto handleFailed
 			}
@@ -3205,9 +3203,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.PrepareString:
 			selfHandle = true
-			ses.GetTxnCompileCtx().SetPrepare(true)
 			prepareStmt, err = mce.handlePrepareString(requestCtx, st)
-			ses.GetTxnCompileCtx().SetPrepare(false)
 			if err != nil {
 				goto handleFailed
 			}
