@@ -1079,7 +1079,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	var specialAccount *TenantInfo
 
 	//Get tenant info
-	tenant, err = GetTenantInfo(userInput)
+	tenant, err = GetTenantInfo(ses.GetRequestContext(), userInput)
 	if err != nil {
 		return nil, err
 	}

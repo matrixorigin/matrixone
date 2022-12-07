@@ -199,7 +199,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	sessInfo := proc.SessionInfo
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
-		tenant, _ = GetTenantInfo("internal")
+		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
 	var stmID uuid.UUID
 	copy(stmID[:], cw.GetUUID())
@@ -253,7 +253,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	sessInfo := proc.SessionInfo
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
-		tenant, _ = GetTenantInfo("internal")
+		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
 	stmID, _ := uuid.NewUUID()
 	var txnID uuid.UUID

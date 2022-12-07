@@ -1091,7 +1091,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 	} else {
 		logDebugf(mp.getProfile(profileTypeConcise), "skip authenticate user")
 		//Get tenant info
-		tenant, err = GetTenantInfo(mp.GetUserName())
+		tenant, err = GetTenantInfo(ctx, mp.GetUserName())
 		if err != nil {
 			return err
 		}
