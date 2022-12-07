@@ -75,6 +75,45 @@ func TestSendWithSingleRequest(t *testing.T) {
 	assert.Equal(t, txn.TxnMethod_Write, result.Responses[0].Method)
 }
 
+func TestSendEnableCompressWithSingleRequest(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	s := newTestTxnServer(t, testDN1Addr, morpc.WithCodecEnableCompress(mp))
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	s.RegisterRequestHandler(func(ctx context.Context, request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+		return cs.Write(ctx, &txn.TxnResponse{
+			RequestID: request.GetID(),
+			Method:    txn.TxnMethod_Write,
+		})
+	})
+
+	sd, err := NewSender(newTestRuntime(newTestClock(), nil), WithSenderEnableCompress(true))
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, sd.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	req := txn.TxnRequest{
+		Method: txn.TxnMethod_Write,
+		CNRequest: &txn.CNOpRequest{
+			Target: metadata.DNShard{
+				Address: testDN1Addr,
+			},
+		},
+	}
+	result, err := sd.Send(ctx, []txn.TxnRequest{req})
+	assert.NoError(t, err)
+	defer result.Release()
+	assert.Equal(t, 1, len(result.Responses))
+	assert.Equal(t, txn.TxnMethod_Write, result.Responses[0].Method)
+}
+
 func TestSendWithMultiDN(t *testing.T) {
 	addrs := []string{testDN1Addr, testDN2Addr, testDN3Addr}
 	for _, addr := range addrs {
@@ -313,10 +352,7 @@ func TestCanSendWithLargeRequest(t *testing.T) {
 
 func newTestTxnServer(t assert.TestingT, addr string, opts ...morpc.CodecOption) morpc.RPCServer {
 	assert.NoError(t, os.RemoveAll(addr[7:]))
-	mp, err := mpool.NewMPool("test_txn_server", 0, mpool.NoFixed)
-	assert.NoError(t, err)
 	opts = append(opts,
-		morpc.WithCodecEnableCompress(mp),
 		morpc.WithCodecIntegrationHLC(newTestClock()),
 		morpc.WithCodecEnableChecksum())
 	codec := morpc.NewMessageCodec(func() morpc.Message { return &txn.TxnRequest{} },

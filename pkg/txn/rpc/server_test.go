@@ -36,6 +36,28 @@ func TestHandleMessageWithSender(t *testing.T) {
 			return nil
 		})
 
+		cli, err := NewSender(newTestRuntime(newTestClock(), s.rt.Logger().RawLogger()),
+			WithSenderEnableCompress(true))
+		assert.NoError(t, err)
+		defer func() {
+			assert.NoError(t, cli.Close())
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		defer cancel()
+
+		v, err := cli.Send(ctx, []txn.TxnRequest{{CNRequest: &txn.CNOpRequest{Target: metadata.DNShard{Address: testDN1Addr}}}})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(v.Responses))
+	}, WithServerEnableCompress(true))
+}
+
+func TestHandleMessageEnableCompressWithSender(t *testing.T) {
+	runTestTxnServer(t, testDN1Addr, func(s *server) {
+		s.RegisterMethodHandler(txn.TxnMethod_Read, func(ctx context.Context, tr1 *txn.TxnRequest, tr2 *txn.TxnResponse) error {
+			return nil
+		})
+
 		cli, err := NewSender(newTestRuntime(newTestClock(), s.rt.Logger().RawLogger()))
 		assert.NoError(t, err)
 		defer func() {

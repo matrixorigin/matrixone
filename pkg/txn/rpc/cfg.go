@@ -52,6 +52,8 @@ type Config struct {
 	ReadBufferSize toml.ByteSize `toml:"read-buffer-size"`
 	// MaxMessageSize max size for read messages from dn. Default is 10M
 	MaxMessageSize toml.ByteSize `toml:"max-message-size"`
+	// EnableCompress enable compress message
+	EnableCompress bool `toml:"enable-compress"`
 }
 
 func (c *Config) adjust() {

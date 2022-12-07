@@ -34,6 +34,13 @@ func WithServerMaxMessageSize(maxMessageSize int) ServerOption {
 	}
 }
 
+// WithServerEnableCompress enable compress
+func WithServerEnableCompress(enable bool) ServerOption {
+	return func(s *server) {
+		s.options.enableCompress = enable
+	}
+}
+
 // set filter func. Requests can be modified or filtered out by the filter
 // before they are processed by the handler.
 func WithServerMessageFilter(filter func(*txn.TxnRequest) bool) ServerOption {
@@ -55,6 +62,7 @@ type server struct {
 	options struct {
 		filter         func(*txn.TxnRequest) bool
 		maxMessageSize int
+		enableCompress bool
 	}
 }
 
@@ -81,17 +89,22 @@ func NewTxnServer(
 		opt(s)
 	}
 
-	mp, err := mpool.NewMPool("txn_rpc_server", 0, mpool.NoFixed)
-	if err != nil {
-		return nil, err
+	var codecOpts []morpc.CodecOption
+	codecOpts = append(codecOpts,
+		morpc.WithCodecIntegrationHLC(rt.Clock()),
+		morpc.WithCodecEnableChecksum(),
+		morpc.WithCodecPayloadCopyBufferSize(16*1024),
+		morpc.WithCodecMaxBodySize(s.options.maxMessageSize))
+	if s.options.enableCompress {
+		mp, err := mpool.NewMPool("txn_rpc_server", 0, mpool.NoFixed)
+		if err != nil {
+			return nil, err
+		}
+		codecOpts = append(codecOpts, morpc.WithCodecEnableCompress(mp))
 	}
 	rpc, err := morpc.NewRPCServer("txn-server", address,
 		morpc.NewMessageCodec(s.acquireRequest,
-			morpc.WithCodecEnableCompress(mp),
-			morpc.WithCodecIntegrationHLC(rt.Clock()),
-			morpc.WithCodecEnableChecksum(),
-			morpc.WithCodecPayloadCopyBufferSize(16*1024),
-			morpc.WithCodecMaxBodySize(s.options.maxMessageSize)),
+			codecOpts...),
 		morpc.WithServerLogger(s.rt.Logger().RawLogger()),
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 			m := v.(morpc.RPCMessage)
