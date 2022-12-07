@@ -218,6 +218,7 @@ type Schema struct {
 	View             string
 	UniqueIndex      string
 	SecondaryIndex   string
+	Constraint       []byte
 
 	SortKey    *SortKey
 	PhyAddrKey *ColDef
@@ -411,6 +412,10 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
+	if s.Constraint, sn, err = common.ReadBytes(r); err != nil {
+		return
+	}
+	n += sn
 	colCnt := uint16(0)
 	if err = binary.Read(r, binary.BigEndian, &colCnt); err != nil {
 		return
@@ -528,6 +533,9 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	if _, err = common.WriteString(s.View, &w); err != nil {
+		return
+	}
+	if _, err = common.WriteBytes(s.Constraint, &w); err != nil {
 		return
 	}
 	if err = binary.Write(&w, binary.BigEndian, uint16(len(s.ColDefs))); err != nil {

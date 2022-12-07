@@ -1692,6 +1692,33 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					},
 				},
 			})
+		} else if c, ok := def.(*engine.ConstraintDef); ok {
+			for _, ct := range c.Cts {
+				switch k := ct.(type) {
+				case *engine.UniqueIndexDef:
+					u := &plan.UniqueIndexDef{}
+					err = u.UnMarshalUniqueIndexDef(([]byte)(k.UniqueIndex))
+					if err != nil {
+						return nil, nil
+					}
+					defs = append(defs, &plan.TableDef_DefType{
+						Def: &plan.TableDef_DefType_UIdx{
+							UIdx: u,
+						},
+					})
+				case *engine.SecondaryIndexDef:
+					s := &plan.SecondaryIndexDef{}
+					err = s.UnMarshalSecondaryIndexDef(([]byte)(k.SecondaryIndex))
+					if err != nil {
+						return nil, nil
+					}
+					defs = append(defs, &plan.TableDef_DefType{
+						Def: &plan.TableDef_DefType_SIdx{
+							SIdx: s,
+						},
+					})
+				}
+			}
 		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
 			properties = append(properties, &plan2.Property{
 				Key:   catalog.SystemRelAttr_Comment,

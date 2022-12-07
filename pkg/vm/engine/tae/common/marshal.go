@@ -28,6 +28,14 @@ func WriteString(str string, w io.Writer) (n int64, err error) {
 	return int64(wn + 2), err
 }
 
+func WriteBytes(b []byte, w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, uint16(len(b))); err != nil {
+		return
+	}
+	wn, err := w.Write(b)
+	return int64(wn + 2), err
+}
+
 func ReadString(r io.Reader) (str string, n int64, err error) {
 	strLen := uint16(0)
 	if err = binary.Read(r, binary.BigEndian, &strLen); err != nil {
@@ -38,6 +46,19 @@ func ReadString(r io.Reader) (str string, n int64, err error) {
 		return
 	}
 	str = string(buf)
+	n = 2 + int64(strLen)
+	return
+}
+
+func ReadBytes(r io.Reader) (buf []byte, n int64, err error) {
+	strLen := uint16(0)
+	if err = binary.Read(r, binary.BigEndian, &strLen); err != nil {
+		return
+	}
+	buf = make([]byte, strLen)
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
 	n = 2 + int64(strLen)
 	return
 }
