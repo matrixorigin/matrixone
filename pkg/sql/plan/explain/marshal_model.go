@@ -33,7 +33,7 @@ type Step struct {
 	Step        int       `json:"step"`
 	Description string    `json:"description"`
 	State       string    `json:"state"`
-	Stats       Stats     `json:"stats"`
+	PlanStats   PlanStats `json:"stats"`
 }
 
 type GraphData struct {
@@ -43,7 +43,15 @@ type GraphData struct {
 	Global Global  `json:"global"`
 }
 
+type PlanStats struct {
+}
+
 type Stats struct {
+	BlockNum int32     `json:"blocknum"`
+	Outcnt   float64   `json:"outcnt"`
+	Cost     float64   `json:"cost"`
+	Ndv      []float64 `json:"ndv"`
+	Rowsize  float64   `json:"rowsize"`
 }
 
 type Node struct {
@@ -52,7 +60,7 @@ type Node struct {
 	Title      string     `json:"title"`
 	Labels     []Label    `json:"labels"`
 	Statistics Statistics `json:"statistics"`
-	Cost       Cost       `json:"cost"`
+	Stats      Stats      `json:"stats"`
 	TotalStats TotalStats `json:"totalStats"`
 }
 
@@ -85,14 +93,6 @@ type Statistics struct {
 	Throughput []StatisticValue `json:"Throughput"`
 	IO         []StatisticValue `json:"IO"`
 	Network    []StatisticValue `json:"Network"`
-}
-
-type Cost struct {
-	Start   float64 `json:"start"`
-	Total   float64 `json:"total"`
-	Card    float64 `json:"card"`
-	Ndv     float64 `json:"ndv"`
-	Rowsize float64 `json:"rowsize"`
 }
 
 type StatisticValue struct {
