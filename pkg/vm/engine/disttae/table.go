@@ -64,6 +64,22 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 
 func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
 	var rows int64
+	var totalBlockCnt int
+	for _, blks := range tbl.meta.blocks {
+		totalBlockCnt += len(blks)
+		for _, blk := range blks {
+			rows += blockRows(blk)
+		}
+	}
+	// before first execution, no metadata.
+	if totalBlockCnt == 0 {
+		return 100, 1000000, nil
+	}
+	return int32(totalBlockCnt), rows, nil
+}
+
+func (tbl *table) Rows(ctx context.Context) (int64, error) {
+	var rows int64
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	tbl.db.txn.Lock()
 	for i := range tbl.db.txn.writes {
@@ -101,26 +117,20 @@ func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
 	for _, partition := range tbl.parts {
 		pRows, err := partition.Rows(tx, deletes, tbl.skipBlocks)
 		if err != nil {
-			return 0, 0, err
+			return 0, err
 		}
 		rows = rows + pRows
 	}
 
 	if tbl.meta == nil {
-		return 0, rows, nil
+		return rows, nil
 	}
-	var totalBlockCnt int
 	for _, blks := range tbl.meta.blocks {
-		totalBlockCnt += len(blks)
 		for _, blk := range blks {
 			rows += blockRows(blk)
 		}
 	}
-	// before first execution, no metadata.
-	if totalBlockCnt == 0 {
-		return 100, rows, nil
-	}
-	return int32(totalBlockCnt), rows, nil
+	return rows, nil
 }
 
 func (tbl *table) Size(ctx context.Context, name string) (int64, error) {

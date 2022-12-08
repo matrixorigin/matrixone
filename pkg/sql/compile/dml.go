@@ -54,7 +54,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 		if err != nil {
 			return 0, err
 		}
-		_, affectRows, err := rel.Stats(s.Proc.Ctx)
+		affectRows, err := rel.Rows(s.Proc.Ctx)
 		if err != nil {
 			return 0, err
 		}
