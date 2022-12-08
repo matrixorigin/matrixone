@@ -108,20 +108,22 @@ func (t *Table[K, V, R]) commit(tx *Transaction, state any, commitTime Time) (an
 
 	currentState := t.state.Load()
 	txState := state.(*tableState[K, V])
-	newState, err := currentState.merge(txState)
+	newState, logs, err := currentState.merge(txState)
 	if err != nil {
 		return nil, err
 	}
+	newState.id = currentState.id + 1
 	t.state.Store(newState)
 	if !commitTime.IsEmpty() && len(t.history) > 0 {
 		last := t.history[len(t.history)-1]
-		if !commitTime.Greater(last.Before) {
+		if !commitTime.Greater(last.EndTime) {
 			return nil, moerr.NewInternalErrorNoCtx("commit time too old")
 		}
 	}
 	t.history = append(t.history, &history[K, V]{
-		Before: commitTime,
-		State:  currentState,
+		EndTime:  commitTime,
+		EndState: currentState,
+		NewLogs:  logs,
 	})
 
 	return currentState, nil
@@ -131,7 +133,7 @@ func (t *Table[K, V, R]) commit(tx *Transaction, state any, commitTime Time) (an
 func (t *Table[K, V, R]) rollback(oldStateValue any) {
 	oldState := oldStateValue.(*tableState[K, V])
 	t.state.Store(oldState)
-	for len(t.history) > 0 && t.history[len(t.history)-1].State != oldState {
+	for len(t.history) > 0 && t.history[len(t.history)-1].EndState != oldState {
 		t.history = t.history[:len(t.history)-1]
 	}
 }

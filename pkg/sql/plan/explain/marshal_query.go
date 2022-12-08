@@ -27,7 +27,7 @@ func ConvertNode(ctx context.Context, node *plan.Node, options *ExplainOptions) 
 	newNode := &Node{
 		NodeId:     strconv.FormatInt(int64(node.NodeId), 10),
 		Statistics: marshalNodeImpl.GetStatistics(ctx, options),
-		Cost:       marshalNodeImpl.GetCost(),
+		Stats:      marshalNodeImpl.GetStats(),
 		TotalStats: marshalNodeImpl.GetTotalStats(),
 	}
 	name, err := marshalNodeImpl.GetNodeName(ctx)
@@ -55,7 +55,7 @@ type MarshalNode interface {
 	GetNodeTitle(ctx context.Context, options *ExplainOptions) (string, error)
 	GetNodeLabels(ctx context.Context, options *ExplainOptions) ([]Label, error)
 	GetStatistics(ctx context.Context, options *ExplainOptions) Statistics
-	GetCost() Cost
+	GetStats() Stats
 	GetTotalStats() TotalStats
 }
 
@@ -69,17 +69,17 @@ func NewMarshalNodeImpl(node *plan.Node) *MarshalNodeImpl {
 	}
 }
 
-func (m MarshalNodeImpl) GetCost() Cost {
-	if m.node.Cost != nil {
-		return Cost{
-			Start:   m.node.Cost.Start,
-			Total:   m.node.Cost.Total,
-			Card:    m.node.Cost.Card,
-			Ndv:     m.node.Cost.Ndv,
-			Rowsize: m.node.Cost.Rowsize,
+func (m MarshalNodeImpl) GetStats() Stats {
+	if m.node.Stats != nil {
+		return Stats{
+			BlockNum: m.node.Stats.BlockNum,
+			Cost:     m.node.Stats.Cost,
+			Outcnt:   m.node.Stats.Outcnt,
+			Ndv:      m.node.Stats.Ndv,
+			Rowsize:  m.node.Stats.Rowsize,
 		}
 	} else {
-		return Cost{}
+		return Stats{}
 	}
 }
 

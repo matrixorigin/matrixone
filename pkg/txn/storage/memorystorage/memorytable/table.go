@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/tidwall/btree"
 )
 
 // Table represents a table
@@ -56,10 +55,9 @@ func NewTable[
 		id: atomic.AddInt64(&nextTableID, 1),
 	}
 	state := &tableState[K, V]{
-		serial:  atomic.AddInt64(&nextTableStateSerial, 1),
-		rows:    btree.NewBTreeG(compareKVPair[K, V]),
-		logs:    btree.NewBTreeG(compareLog[K, V]),
-		indexes: btree.NewBTreeG(compareIndexEntry[K, V]),
+		rows:  NewBTreeRows[K, V](),
+		log:   NewBTreeLog[K, V](),
+		index: NewBTreeIndex[K, V](),
 	}
 	ret.state.Store(state)
 	return ret
@@ -85,16 +83,16 @@ func (t *Table[K, V, R]) getTransactionTable(
 			// get from history
 			i := sort.Search(len(t.history), func(i int) bool {
 				t := t.history[i]
-				return tx.BeginTime.Equal(t.Before) || tx.BeginTime.Less(t.Before)
+				return tx.BeginTime.Equal(t.EndTime) || tx.BeginTime.Less(t.EndTime)
 			})
 			if i < len(t.history) {
 				if i == 0 {
-					if tx.BeginTime.Less(t.history[0].Before) {
+					if tx.BeginTime.Less(t.history[0].EndTime) {
 						// too old
 						return nil, moerr.NewInternalErrorNoCtx("transaction begin time too old")
 					}
 				}
-				state := t.history[i].State.cloneWithoutLogs()
+				state := t.history[i].EndState.cloneWithoutLogs()
 				txTable.state.Store(state)
 			} else {
 				// after all history
@@ -207,5 +205,37 @@ func (t *Table[K, V, R]) Get(
 		return
 	}
 	value = pair.Value
+	return
+}
+
+// NewIndexIter creates new index iter
+func (t *Table[K, V, R]) NewIndexIter(tx *Transaction, min Tuple, max Tuple) (IndexIter[K, V], error) {
+	txTable, err := t.getTransactionTable(tx)
+	if err != nil {
+		return nil, err
+	}
+	state := txTable.state.Load().(*tableState[K, V])
+	iter := state.index.Copy().Iter()
+	return NewBoundedIndexIter(iter, min, max), nil
+}
+
+// Index finds entry in table
+func (t *Table[K, V, R]) Index(tx *Transaction, index Tuple) (entries []*IndexEntry[K, V], err error) {
+	iter, err := t.NewIndexIter(
+		tx,
+		index,
+		index,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+	for ok := iter.First(); ok; ok = iter.Next() {
+		entry, err := iter.Read()
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
 	return
 }

@@ -14,15 +14,13 @@
 
 package memorytable
 
-import "github.com/tidwall/btree"
-
 // TableIter represents an iter over a table
 type TableIter[
 	K Ordered[K],
 	V any,
 ] struct {
 	tx   *Transaction
-	iter btree.GenericIter[*KVPair[K, V]]
+	iter RowsIter[K, V]
 }
 
 // NewIter creates a new iter
@@ -43,7 +41,11 @@ var _ KVIter[Int, int] = new(TableIter[Int, int])
 
 // Read reads current key and value
 func (t *TableIter[K, V]) Read() (key K, value V, err error) {
-	pair := t.iter.Item()
+	var pair *KVPair[K, V]
+	pair, err = t.iter.Read()
+	if err != nil {
+		return
+	}
 	key = pair.Key
 	value = pair.Value
 	return
@@ -68,6 +70,5 @@ func (t *TableIter[K, V]) Seek(key K) bool {
 
 // Close closes the iter
 func (t *TableIter[K, V]) Close() error {
-	t.iter.Release()
-	return nil
+	return t.iter.Close()
 }
