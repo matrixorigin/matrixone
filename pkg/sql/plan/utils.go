@@ -1086,12 +1086,16 @@ func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Exp
 // checkNoNeedCast
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
-func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
-	switch constT {
+func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
+	switch constT.Oid {
 	case types.T_char, types.T_varchar:
-		switch columnT {
+		switch columnT.Oid {
 		case types.T_char, types.T_varchar:
-			return true
+			if constT.Width <= columnT.Width {
+				return true
+			} else {
+				return false
+			}
 		default:
 			return false
 		}
@@ -1102,7 +1106,7 @@ func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
 			return false
 		}
 		constVal := val.I64Val
-		switch columnT {
+		switch columnT.Oid {
 		case types.T_int8:
 			return constVal <= int64(math.MaxInt8) && constVal >= int64(math.MinInt8)
 		case types.T_int16:
@@ -1128,7 +1132,7 @@ func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
 			return false
 		}
 		constVal := val_u.U64Val
-		switch columnT {
+		switch columnT.Oid {
 		case types.T_int8:
 			return constVal <= math.MaxInt8
 		case types.T_int16:
