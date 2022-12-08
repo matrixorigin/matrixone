@@ -332,8 +332,11 @@ message Stats {
 	double cost				= 2;
 	//number of output lines
 	double outcnt			= 3;
+	// average size of one row, currently not used
 	double rowsize	        = 4;
-	repeated double ndv		= 5;
+	// hashmap size for nodes which build a hashmap
+	//for other nodes, it's meaningless
+	double hashmap_size		= 5;
 }
 
 message ColData {

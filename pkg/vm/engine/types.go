@@ -141,17 +141,15 @@ type TableDef interface {
 	tableDef()
 }
 
-func (*CommentDef) tableDef()        {}
-func (*PartitionDef) tableDef()      {}
-func (*ViewDef) tableDef()           {}
-func (*AttributeDef) tableDef()      {}
-func (*IndexTableDef) tableDef()     {}
-func (*PropertiesDef) tableDef()     {}
-func (*PrimaryIndexDef) tableDef()   {}
-func (*UniqueIndexDef) tableDef()    {}
-func (*SecondaryIndexDef) tableDef() {}
-func (*ClusterByDef) tableDef()      {}
-func (*ConstraintDef) tableDef()     {}
+func (*CommentDef) tableDef()      {}
+func (*PartitionDef) tableDef()    {}
+func (*ViewDef) tableDef()         {}
+func (*AttributeDef) tableDef()    {}
+func (*IndexTableDef) tableDef()   {}
+func (*PropertiesDef) tableDef()   {}
+func (*PrimaryIndexDef) tableDef() {}
+func (*ClusterByDef) tableDef()    {}
+func (*ConstraintDef) tableDef()   {}
 
 type ConstraintDef struct {
 	Cts []Constraint

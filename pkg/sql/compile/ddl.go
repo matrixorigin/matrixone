@@ -176,17 +176,18 @@ func (s *Scope) DropTable(c *Compile) error {
 }
 
 func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, error) {
-	exeDefs := make([]engine.TableDef, len(planDefs))
-	for i, def := range planDefs {
+	var exeDefs []engine.TableDef
+	c := new(engine.ConstraintDef)
+	for _, def := range planDefs {
 		switch defVal := def.GetDef().(type) {
 		case *plan.TableDef_DefType_Cb:
-			exeDefs[i] = &engine.ClusterByDef{
+			exeDefs = append(exeDefs, &engine.ClusterByDef{
 				Name: defVal.Cb.Name,
-			}
+			})
 		case *plan.TableDef_DefType_Pk:
-			exeDefs[i] = &engine.PrimaryIndexDef{
+			exeDefs = append(exeDefs, &engine.PrimaryIndexDef{
 				Names: defVal.Pk.GetNames(),
-			}
+			})
 		case *plan.TableDef_DefType_Properties:
 			properties := make([]engine.Property, len(defVal.Properties.GetProperties()))
 			for i, p := range defVal.Properties.GetProperties() {
@@ -195,32 +196,41 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 					Value: p.GetValue(),
 				}
 			}
-			exeDefs[i] = &engine.PropertiesDef{
+			exeDefs = append(exeDefs, &engine.PropertiesDef{
 				Properties: properties,
-			}
+			})
 		case *plan.TableDef_DefType_View:
-			exeDefs[i] = &engine.ViewDef{
+			exeDefs = append(exeDefs, &engine.ViewDef{
 				View: defVal.View.View,
-			}
+			})
 		case *plan.TableDef_DefType_Partition:
 			bytes, err := defVal.Partition.MarshalPartitionInfo()
 			if err != nil {
 				return nil, err
 			}
-			exeDefs[i] = &engine.PartitionDef{
+			exeDefs = append(exeDefs, &engine.PartitionDef{
 				Partition: string(bytes),
-			}
+			})
 		case *plan.TableDef_DefType_UIdx:
 			bytes, err := defVal.UIdx.MarshalUniqueIndexDef()
 			if err != nil {
 				return nil, err
 			}
-			exeDefs[i] = &engine.UniqueIndexDef{
+			c.Cts = append(c.Cts, &engine.UniqueIndexDef{
 				UniqueIndex: string(bytes),
-			}
+			})
 		case *plan.TableDef_DefType_SIdx:
-
+			bytes, err := defVal.SIdx.MarshalSecondaryIndexDef()
+			if err != nil {
+				return nil, err
+			}
+			c.Cts = append(c.Cts, &engine.SecondaryIndexDef{
+				SecondaryIndex: string(bytes),
+			})
 		}
+	}
+	if len(c.Cts) > 0 {
+		exeDefs = append(exeDefs, c)
 	}
 	return exeDefs, nil
 }
