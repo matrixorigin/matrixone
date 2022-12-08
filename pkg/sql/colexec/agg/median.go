@@ -162,11 +162,7 @@ func (m *Median[T]) Merge(xIndex int64, yIndex int64, _ float64, _ float64, xEmp
 		if !sort.IsSorted(m.Data[xIndex].Values) {
 			sort.Sort(m.Data[xIndex].Values)
 		}
-		merge[T](m.Data[xIndex].Values, yM.Data[yIndex].Values, newData, func(a, b T) bool {
-			return a == b
-		}, func(a, b T) bool {
-			return a < b
-		})
+		merge[T](m.Data[xIndex].Values, yM.Data[yIndex].Values, newData, func(a, b T) bool { return a < b })
 		m.Data[xIndex].Values = newData
 		return 0, false
 	}
@@ -241,11 +237,7 @@ func (m *Decimal64Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128, 
 		if !sort.IsSorted(m.Data[xIndex].Values) {
 			sort.Sort(m.Data[xIndex].Values)
 		}
-		merge(m.Data[xIndex].Values, yM.Data[yIndex].Values, newData, func(a, b types.Decimal64) bool {
-			return a.Eq(b)
-		}, func(a, b types.Decimal64) bool {
-			return a.Lt(b)
-		})
+		merge(m.Data[xIndex].Values, yM.Data[yIndex].Values, newData, func(a, b types.Decimal64) bool { return a.Lt(b) })
 		m.Data[xIndex].Values = newData
 		return types.Decimal128_Zero, false
 	}
@@ -319,11 +311,7 @@ func (m *Decimal128Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128,
 			sort.Sort(m.Data[xIndex].Values)
 		}
 		newData := make(decimal128Slice, m.Data[xIndex].Cnts)
-		merge(m.Data[xIndex].Values, yM.Data[yIndex].Values, newData, func(a, b types.Decimal128) bool {
-			return a.Eq(b)
-		}, func(a, b types.Decimal128) bool {
-			return a.Lt(b)
-		})
+		merge(m.Data[xIndex].Values, yM.Data[yIndex].Values, newData, func(a, b types.Decimal128) bool { return a.Lt(b) })
 		m.Data[xIndex].Values = newData
 		return types.Decimal128_Zero, false
 	}
@@ -337,18 +325,9 @@ func (m *Decimal128Median) UnmarshalBinary(dt []byte) error {
 	return types.Decode(dt, &m.Data)
 }
 
-func merge[T Numeric | types.Decimal64 | types.Decimal128](s1, s2, rs []T, eq func(a, b T) bool, lt func(a, b T) bool) []T {
+func merge[T Numeric | types.Decimal64 | types.Decimal128](s1, s2, rs []T, lt func(a, b T) bool) []T {
 	i, j, cnt := 0, 0, 0
 	for i < len(s1) && j < len(s2) {
-		if eq(s1[i], s2[j]) {
-			rs[cnt] = s1[i]
-			cnt++
-			i++
-			rs[cnt] = s2[j]
-			cnt++
-			j++
-			continue
-		}
 		if lt(s1[i], s2[j]) {
 			rs[cnt] = s1[i]
 			i++
