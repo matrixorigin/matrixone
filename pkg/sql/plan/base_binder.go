@@ -970,7 +970,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		case *plan.Expr_C:
 			if _, ok := args[1].Expr.(*plan.Expr_Col); ok {
 				if checkNoNeedCast(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id), leftExpr) {
-					tmpType := types.T(args[1].Typ.Id).ToType() // cast const_expr as column_expr's type
+					tmpType := argsType[1] // cast const_expr as column_expr's type
 					argsCastType = []types.Type{tmpType, tmpType}
 					// need to update function id
 					funcID, _, _, err = function.GetFunctionByName(name, argsCastType)
@@ -982,7 +982,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		case *plan.Expr_Col:
 			if rightExpr, ok := args[1].Expr.(*plan.Expr_C); ok {
 				if checkNoNeedCast(types.T(args[1].Typ.Id), types.T(args[0].Typ.Id), rightExpr) {
-					tmpType := types.T(args[0].Typ.Id).ToType() // cast const_expr as column_expr's type
+					tmpType := argsType[0] // cast const_expr as column_expr's type
 					argsCastType = []types.Type{tmpType, tmpType}
 					funcID, _, _, err = function.GetFunctionByName(name, argsCastType)
 					if err != nil {
