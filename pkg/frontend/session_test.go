@@ -546,8 +546,8 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetHideKeys(gomock.Any()).Return(nil, nil).AnyTimes()
-		table.EXPECT().FilteredRows(gomock.Any(), gomock.Any()).Return(float64(1000000), nil).AnyTimes()
-		table.EXPECT().Rows(gomock.Any()).Return(int64(1000000), nil).AnyTimes()
+		table.EXPECT().FilteredStats(gomock.Any(), gomock.Any()).Return(int32(100), int64(1000000), nil).AnyTimes()
+		table.EXPECT().Stats(gomock.Any()).Return(int32(100), int64(1000000), nil).AnyTimes()
 		table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
 		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
@@ -577,7 +577,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		hkd := tcc.GetHideKeyDef("abc", "t1")
 		convey.So(hkd, convey.ShouldBeNil)
 
-		cost := tcc.Cost(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Expr{})
-		convey.So(cost, convey.ShouldNotBeNil)
+		stats := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Expr{})
+		convey.So(stats, convey.ShouldNotBeNil)
 	})
 }

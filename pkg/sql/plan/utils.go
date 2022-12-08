@@ -621,6 +621,114 @@ func DeduceSelectivity(expr *plan.Expr) float64 {
 	return 1
 }
 
+func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
+	node := builder.qry.Nodes[nodeID]
+	if recursive {
+		if len(node.Children) > 0 {
+			for _, child := range node.Children {
+				ReCalcNodeStats(child, builder, recursive)
+			}
+		}
+	}
+	// TODO: better estimation
+	switch node.NodeType {
+	case plan.Node_JOIN:
+		leftStats := builder.qry.Nodes[node.Children[0]].Stats
+		rightStats := builder.qry.Nodes[node.Children[1]].Stats
+		ndv := math.Min(leftStats.Outcnt, rightStats.Outcnt)
+
+		switch node.JoinType {
+		case plan.Node_INNER:
+			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
+			if len(node.OnList) > 0 {
+				outcnt *= 0.1
+			}
+			node.Stats = &plan.Stats{
+				Outcnt: outcnt,
+				Cost:   leftStats.Cost + rightStats.Cost,
+			}
+
+		case plan.Node_LEFT:
+			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
+			if len(node.OnList) > 0 {
+				outcnt *= 0.1
+				outcnt += leftStats.Outcnt
+			}
+			node.Stats = &plan.Stats{
+				Outcnt: outcnt,
+				Cost:   leftStats.Cost + rightStats.Cost,
+			}
+
+		case plan.Node_RIGHT:
+			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
+			if len(node.OnList) > 0 {
+				outcnt *= 0.1
+				outcnt += rightStats.Outcnt
+			}
+			node.Stats = &plan.Stats{
+				Outcnt: outcnt,
+				Cost:   leftStats.Cost + rightStats.Cost,
+			}
+
+		case plan.Node_OUTER:
+			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
+			if len(node.OnList) > 0 {
+				outcnt *= 0.1
+				outcnt += leftStats.Outcnt + rightStats.Outcnt
+			}
+			node.Stats = &plan.Stats{
+				Outcnt: outcnt,
+				Cost:   leftStats.Cost + rightStats.Cost,
+			}
+
+		case plan.Node_SEMI, plan.Node_ANTI:
+			node.Stats = &plan.Stats{
+				Outcnt: leftStats.Outcnt * .7,
+				Cost:   leftStats.Cost + rightStats.Cost,
+			}
+
+		case plan.Node_SINGLE, plan.Node_MARK:
+			node.Stats = &plan.Stats{
+				Outcnt: leftStats.Outcnt,
+				Cost:   leftStats.Cost + rightStats.Cost,
+			}
+		}
+
+	case plan.Node_AGG:
+		if len(node.GroupBy) > 0 {
+			childStats := builder.qry.Nodes[node.Children[0]].Stats
+			node.Stats = &plan.Stats{
+				Outcnt: childStats.Outcnt * 0.1,
+				Cost:   childStats.Cost,
+			}
+		} else {
+			node.Stats = &plan.Stats{
+				Outcnt: 1000,
+				Cost:   1000000,
+			}
+		}
+
+	case plan.Node_TABLE_SCAN:
+		if node.ObjRef != nil {
+			node.Stats = builder.compCtx.Stats(node.ObjRef, RewriteAndConstantFold(node.FilterList, builder.compCtx.GetProcess()))
+		}
+
+	default:
+		if len(node.Children) > 0 {
+			childStats := builder.qry.Nodes[node.Children[0]].Stats
+			node.Stats = &plan.Stats{
+				Outcnt: childStats.Outcnt,
+				Cost:   childStats.Cost,
+			}
+		} else if node.Stats == nil {
+			node.Stats = &plan.Stats{
+				Outcnt: 1000,
+				Cost:   1000000,
+			}
+		}
+	}
+}
+
 func RewriteAndConstantFold(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
 	e := colexec.RewriteFilterExprList(exprList)
 	if e != nil {
