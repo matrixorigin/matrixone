@@ -164,6 +164,11 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 				tbl.viewdef = defVal.View
 			case *engine.PartitionDef:
 				tbl.partition = defVal.Partition
+			case *engine.ConstraintDef:
+				tbl.constraint, err = defVal.MarshalBinary()
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}

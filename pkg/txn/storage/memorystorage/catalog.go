@@ -113,6 +113,7 @@ type RelationRow struct {
 	ViewDef           []byte
 	UniqueIndexDef    []byte
 	SecondaryIndexDef []byte
+	Constraint        []byte
 }
 
 func (r *RelationRow) Key() ID {
@@ -191,6 +192,8 @@ func (r *RelationRow) AttrByName(handler *MemHandler, tx *Transaction, name stri
 		ret.Value = r.ID.ToRowID()
 	case catalog.SystemRelAttr_ViewDef:
 		ret.Value = []byte(r.ViewDef)
+	case catalog.SystemRelAttr_Constraint:
+		ret.Value = r.Constraint
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
