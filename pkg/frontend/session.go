@@ -1735,28 +1735,6 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Partition: p,
 				},
 			})
-		} else if indexDef, ok := def.(*engine.UniqueIndexDef); ok {
-			u := &plan.UniqueIndexDef{}
-			err = u.UnMarshalUniqueIndexDef(([]byte)(indexDef.UniqueIndex))
-			if err != nil {
-				return nil, nil
-			}
-			defs = append(defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_UIdx{
-					UIdx: u,
-				},
-			})
-		} else if indexDef, ok := def.(*engine.SecondaryIndexDef); ok {
-			s := &plan.SecondaryIndexDef{}
-			err = s.UnMarshalSecondaryIndexDef(([]byte)(indexDef.SecondaryIndex))
-			if err != nil {
-				return nil, nil
-			}
-			defs = append(defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_SIdx{
-					SIdx: s,
-				},
-			})
 		}
 	}
 	if len(properties) > 0 {
