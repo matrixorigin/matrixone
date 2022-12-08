@@ -17,6 +17,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
@@ -145,18 +146,35 @@ func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err er
 	for _, blk := range task.mergedBlks {
 		blks = fmt.Sprintf("%s%d,", blks, blk.GetID())
 	}
-	enc.AddString("blks", blks)
+	enc.AddString("from-blks", blks)
 	segs := ""
 	for _, seg := range task.mergedSegs {
 		segs = fmt.Sprintf("%s%d,", segs, seg.GetID())
 	}
-	enc.AddString("segs", segs)
+	enc.AddString("from-segs", segs)
+
+	toblks := ""
+	for _, blk := range task.createdBlks {
+		toblks = fmt.Sprintf("%s%d,", toblks, blk.GetID())
+	}
+	if toblks != "" {
+		enc.AddString("to-blks", toblks)
+	}
+
+	tosegs := ""
+	for _, seg := range task.createdSegs {
+		tosegs = fmt.Sprintf("%s%d,", tosegs, seg.GetID())
+	}
+	if tosegs != "" {
+		enc.AddString("to-segs", tosegs)
+	}
 	return
 }
 
 func (task *mergeBlocksTask) Execute() (err error) {
-	logutil.Info("[Start]", common.OperationField(fmt.Sprintf("[%d]mergeblocks", task.ID())),
+	logutil.Info("[Start] Mergeblocks", common.OperationField(task.Name()),
 		common.OperandField(task))
+	now := time.Now()
 	var toSegEntry handle.Segment
 	if task.toSegEntry == nil {
 		if toSegEntry, err = task.rel.CreateNonAppendableSegment(); err != nil {
@@ -188,7 +206,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	} else {
 		sortColDef = schema.PhyAddrKey
 	}
-
+	logutil.Infof("Mergeblocks on sort column %s\n", sortColDef.Name)
 	for i, block := range task.compacted {
 		if view, err = block.GetColumnDataById(sortColDef.Idx, nil); err != nil {
 			return
@@ -294,6 +312,10 @@ func (task *mergeBlocksTask) Execute() (err error) {
 
 	name := blockio.EncodeObjectName()
 	writer := blockio.NewWriter(context.Background(), task.mergedBlks[0].GetBlockData().GetFs(), name)
+	pkIdx := -1
+	if schema.HasPK() {
+		pkIdx = schema.GetSingleSortKeyIdx()
+	}
 	for _, bat := range batchs {
 		block, err := writer.WriteBlock(bat)
 		if err != nil {
@@ -303,7 +325,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			if phyAddr.Idx == idx {
 				continue
 			}
-			isPk := idx == sortColDef.Idx
+			isPk := idx == pkIdx
 			_, err = BuildColumnIndex(writer.GetWriter(), block, schema.ColDefs[idx], vec, isPk, isPk)
 			if err != nil {
 				return err
@@ -357,5 +379,11 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, ids); err != nil {
 		return err
 	}
+
+	logutil.Info("[Done] Mergeblocks",
+		common.AnyField("txn-start-ts", task.txn.GetStartTS().ToString()),
+		common.OperationField(task.Name()),
+		common.OperandField(task),
+		common.DurationField(time.Since(now)))
 	return err
 }
