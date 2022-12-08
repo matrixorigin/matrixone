@@ -451,17 +451,20 @@ type CostDescribeImpl struct {
 func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
 	var result string
 	if c.Stats == nil {
-		result = " (cost=0 outcnt=0)"
+		result = " (cost=0)"
 		//result = " (cost=%.2f..%.2f rows=%.2f ndv=%.2f rowsize=%.f)"
 	} else {
-		var blockNumStr string
+		var blockNumStr, hashmapSizeStr string
 		if c.Stats.BlockNum > 0 {
 			blockNumStr = " blockNum=" + strconv.FormatInt(int64(c.Stats.BlockNum), 10)
+		}
+		if c.Stats.HashmapSize > 0 {
+			hashmapSizeStr = " hashmapSize=" + strconv.FormatFloat(c.Stats.HashmapSize, 'f', 2, 64)
 		}
 
 		result = " (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +
 			" outcnt=" + strconv.FormatFloat(c.Stats.Outcnt, 'f', 2, 64) +
-			blockNumStr + ")"
+			blockNumStr + hashmapSizeStr + ")"
 	}
 	return result, nil
 }

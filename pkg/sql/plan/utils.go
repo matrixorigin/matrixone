@@ -630,13 +630,18 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 			}
 		}
 	}
-	// TODO: better estimation
+
+	var leftStats, rightStats, childStats *Stats
+	if len(node.Children) == 1 {
+		childStats = builder.qry.Nodes[node.Children[0]].Stats
+	} else if len(node.Children) == 2 {
+		leftStats = builder.qry.Nodes[node.Children[0]].Stats
+		rightStats = builder.qry.Nodes[node.Children[1]].Stats
+	}
+
 	switch node.NodeType {
 	case plan.Node_JOIN:
-		leftStats := builder.qry.Nodes[node.Children[0]].Stats
-		rightStats := builder.qry.Nodes[node.Children[1]].Stats
 		ndv := math.Min(leftStats.Outcnt, rightStats.Outcnt)
-
 		switch node.JoinType {
 		case plan.Node_INNER:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
@@ -644,8 +649,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				outcnt *= 0.1
 			}
 			node.Stats = &plan.Stats{
-				Outcnt: outcnt,
-				Cost:   leftStats.Cost + rightStats.Cost,
+				Outcnt:      outcnt,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
 			}
 
 		case plan.Node_LEFT:
@@ -655,8 +661,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				outcnt += leftStats.Outcnt
 			}
 			node.Stats = &plan.Stats{
-				Outcnt: outcnt,
-				Cost:   leftStats.Cost + rightStats.Cost,
+				Outcnt:      outcnt,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
 			}
 
 		case plan.Node_RIGHT:
@@ -666,8 +673,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				outcnt += rightStats.Outcnt
 			}
 			node.Stats = &plan.Stats{
-				Outcnt: outcnt,
-				Cost:   leftStats.Cost + rightStats.Cost,
+				Outcnt:      outcnt,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
 			}
 
 		case plan.Node_OUTER:
@@ -677,35 +685,76 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				outcnt += leftStats.Outcnt + rightStats.Outcnt
 			}
 			node.Stats = &plan.Stats{
-				Outcnt: outcnt,
-				Cost:   leftStats.Cost + rightStats.Cost,
+				Outcnt:      outcnt,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
 			}
 
 		case plan.Node_SEMI, plan.Node_ANTI:
 			node.Stats = &plan.Stats{
-				Outcnt: leftStats.Outcnt * .7,
-				Cost:   leftStats.Cost + rightStats.Cost,
+				Outcnt:      leftStats.Outcnt * .7,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
 			}
 
 		case plan.Node_SINGLE, plan.Node_MARK:
 			node.Stats = &plan.Stats{
-				Outcnt: leftStats.Outcnt,
-				Cost:   leftStats.Cost + rightStats.Cost,
+				Outcnt:      leftStats.Outcnt,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
 			}
 		}
 
 	case plan.Node_AGG:
 		if len(node.GroupBy) > 0 {
-			childStats := builder.qry.Nodes[node.Children[0]].Stats
 			node.Stats = &plan.Stats{
-				Outcnt: childStats.Outcnt * 0.1,
-				Cost:   childStats.Cost,
+				Outcnt:      childStats.Outcnt * 0.1,
+				Cost:        childStats.Outcnt,
+				HashmapSize: childStats.Outcnt,
 			}
 		} else {
 			node.Stats = &plan.Stats{
-				Outcnt: 1000,
-				Cost:   1000000,
+				Outcnt: 1,
+				Cost:   childStats.Cost,
 			}
+		}
+
+	case plan.Node_UNION:
+		node.Stats = &plan.Stats{
+			Outcnt:      (leftStats.Outcnt + rightStats.Outcnt) * 0.7,
+			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+			HashmapSize: rightStats.Outcnt,
+		}
+	case plan.Node_UNION_ALL:
+		node.Stats = &plan.Stats{
+			Outcnt: leftStats.Outcnt + rightStats.Outcnt,
+			Cost:   leftStats.Outcnt + rightStats.Outcnt,
+		}
+	case plan.Node_INTERSECT:
+		node.Stats = &plan.Stats{
+			Outcnt:      math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.5,
+			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+			HashmapSize: rightStats.Outcnt,
+		}
+	case plan.Node_INTERSECT_ALL:
+		node.Stats = &plan.Stats{
+			Outcnt:      math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.7,
+			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+			HashmapSize: rightStats.Outcnt,
+		}
+	case plan.Node_MINUS:
+		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
+		node.Stats = &plan.Stats{
+			Outcnt:      minus * 0.5,
+			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+			HashmapSize: rightStats.Outcnt,
+		}
+	case plan.Node_MINUS_ALL:
+		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
+		node.Stats = &plan.Stats{
+			Outcnt:      minus * 0.7,
+			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+			HashmapSize: rightStats.Outcnt,
 		}
 
 	case plan.Node_TABLE_SCAN:
@@ -715,10 +764,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 
 	default:
 		if len(node.Children) > 0 {
-			childStats := builder.qry.Nodes[node.Children[0]].Stats
 			node.Stats = &plan.Stats{
 				Outcnt: childStats.Outcnt,
-				Cost:   childStats.Cost,
+				Cost:   childStats.Outcnt,
 			}
 		} else if node.Stats == nil {
 			node.Stats = &plan.Stats{
