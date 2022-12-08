@@ -115,6 +115,14 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		defs = append(defs, indexDef)
 	}
 
+	if len(schema.Constraint) > 0 {
+		c := new(engine.ConstraintDef)
+		if err := c.UnmarshalBinary(schema.Constraint); err != nil {
+			return nil, err
+		}
+		defs = append(defs, c)
+	}
+
 	for _, col := range schema.ColDefs {
 		if col.IsPhyAddr() {
 			continue
@@ -191,16 +199,17 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 
 		case *engine.PartitionDef:
 			schema.Partition = defVal.Partition
-
 		case *engine.ViewDef:
 			schema.View = defVal.View
-
 		case *engine.UniqueIndexDef:
 			schema.UniqueIndex = defVal.UniqueIndex
-
 		case *engine.SecondaryIndexDef:
 			schema.SecondaryIndex = defVal.SecondaryIndex
-
+		case *engine.ConstraintDef:
+			schema.Constraint, err = defVal.MarshalBinary()
+			if err != nil {
+				return nil, err
+			}
 		default:
 			// We will not deal with other cases for the time being
 		}
@@ -261,6 +270,10 @@ func HandleDefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Sc
 		case *engine.CommentDef:
 			schema.Comment = defVal.Comment
 
+		case *engine.ConstraintDef:
+			if schema.Constraint, err = defVal.MarshalBinary(); err != nil {
+				return nil, err
+			}
 		default:
 			// We will not deal with other cases for the time being
 		}

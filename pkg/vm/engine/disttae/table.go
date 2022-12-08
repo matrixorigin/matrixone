@@ -220,6 +220,16 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 		viewDef.View = tbl.viewdef
 		defs = append(defs, viewDef)
 	}
+	if len(tbl.constraint) > 0 {
+		c := &engine.ConstraintDef{}
+		tbl.Lock()
+		err := c.UnmarshalBinary(tbl.constraint)
+		tbl.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		defs = append(defs, c)
+	}
 	for i, def := range tbl.defs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			if attr.Attr.Name != catalog.Row_ID {
@@ -244,8 +254,23 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
 }
 
-func (tbl *table) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
-	// implement me
+func (tbl *table) UpdateConstraint(ctx context.Context, c *engine.ConstraintDef) error {
+	var err error
+	tbl.Lock()
+	tbl.tmpConstraint, err = c.MarshalBinary()
+	tbl.Unlock()
+	if err != nil {
+		return err
+	}
+	bat, err := genTableConstraintTuple(tbl, tbl.db.txn.proc.Mp())
+	if err != nil {
+		return err
+	}
+	if err = tbl.db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0], -1); err != nil {
+		return err
+	}
+	tbl.db.txn.updateTables = append(tbl.db.txn.updateTables, tbl)
 	return nil
 }
 
