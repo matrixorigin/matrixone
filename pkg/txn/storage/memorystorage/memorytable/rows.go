@@ -14,25 +14,20 @@
 
 package memorytable
 
-// Iter represents a generic iterator
-type Iter[T any] interface {
-	First() bool
-	Next() bool
-	Read() (T, error)
-	Close() error
+type Rows[
+	K Ordered[K],
+	V any,
+] interface {
+	Copy() Rows[K, V]
+	Get(*KVPair[K, V]) (*KVPair[K, V], bool)
+	Set(*KVPair[K, V]) (*KVPair[K, V], bool)
+	Delete(*KVPair[K, V])
+	Iter() RowsIter[K, V]
 }
 
-// SeekIter represents a generic seekable iterator
-type SeekIter[T any] interface {
-	Iter[T]
-	Seek(T) bool
-}
-
-// KVIter represents a key-value iterator
-type KVIter[K any, V any] interface {
-	First() bool
-	Seek(K) bool
-	Next() bool
-	Close() error
-	Read() (K, V, error)
+type RowsIter[
+	K Ordered[K],
+	V any,
+] interface {
+	SeekIter[*KVPair[K, V]]
 }

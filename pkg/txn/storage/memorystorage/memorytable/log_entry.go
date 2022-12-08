@@ -14,25 +14,38 @@
 
 package memorytable
 
-// Iter represents a generic iterator
-type Iter[T any] interface {
-	First() bool
-	Next() bool
-	Read() (T, error)
-	Close() error
+import "fmt"
+
+type logEntry[
+	K Ordered[K],
+	V any,
+] struct {
+	serial  int64
+	key     K
+	pair    *KVPair[K, V]
+	oldPair *KVPair[K, V]
 }
 
-// SeekIter represents a generic seekable iterator
-type SeekIter[T any] interface {
-	Iter[T]
-	Seek(T) bool
+var nextLogSerial = int64(1 << 48)
+
+func compareLogEntry[
+	K Ordered[K],
+	V any,
+](a, b *logEntry[K, V]) bool {
+	if a.key.Less(b.key) {
+		return true
+	}
+	if b.key.Less(a.key) {
+		return false
+	}
+	return a.serial < b.serial
 }
 
-// KVIter represents a key-value iterator
-type KVIter[K any, V any] interface {
-	First() bool
-	Seek(K) bool
-	Next() bool
-	Close() error
-	Read() (K, V, error)
+func (l *logEntry[K, V]) String() string {
+	return fmt.Sprintf(
+		"log: serial %v, pair %v, old pair %v",
+		l.serial,
+		l.pair,
+		l.oldPair,
+	)
 }
