@@ -14,25 +14,24 @@
 
 package memorytable
 
-// Iter represents a generic iterator
-type Iter[T any] interface {
-	First() bool
-	Next() bool
-	Read() (T, error)
-	Close() error
+// IndexEntry represents an index entry
+type IndexEntry[
+	K Ordered[K],
+	V any,
+] struct {
+	Index Tuple
+	Key   K
 }
 
-// SeekIter represents a generic seekable iterator
-type SeekIter[T any] interface {
-	Iter[T]
-	Seek(T) bool
-}
-
-// KVIter represents a key-value iterator
-type KVIter[K any, V any] interface {
-	First() bool
-	Seek(K) bool
-	Next() bool
-	Close() error
-	Read() (K, V, error)
+func compareIndexEntry[
+	K Ordered[K],
+	V any,
+](a, b *IndexEntry[K, V]) bool {
+	if a.Index.Less(b.Index) {
+		return true
+	}
+	if b.Index.Less(a.Index) {
+		return false
+	}
+	return a.Key.Less(b.Key)
 }

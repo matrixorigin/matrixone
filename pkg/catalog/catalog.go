@@ -99,6 +99,13 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 					View: cmds[i].Viewdef,
 				})
 			}
+			if len(cmds[i].Constraint) > 0 {
+				c := new(engine.ConstraintDef)
+				if err = c.UnmarshalBinary(cmds[i].Constraint); err != nil {
+					return nil, nil, err
+				}
+				cmds[i].Defs = append(cmds[i].Defs, c)
+			}
 			if len(cmds[i].Partition) > 0 {
 				cmds[i].Defs = append(cmds[i].Defs, &engine.PartitionDef{
 					Partition: cmds[i].Partition,
@@ -175,6 +182,7 @@ func genCreateTables(rows [][]any) []CreateTable {
 		cmds[i].Comment = string(row[MO_TABLES_REL_COMMENT_IDX].([]byte))
 		cmds[i].Partition = string(row[MO_TABLES_PARTITIONED_IDX].([]byte))
 		cmds[i].Viewdef = string(row[MO_TABLES_VIEWDEF_IDX].([]byte))
+		cmds[i].Constraint = row[MO_TABLES_CONSTRAINT].([]byte)
 		cmds[i].RelKind = string(row[MO_TABLES_RELKIND_IDX].([]byte))
 	}
 	return cmds

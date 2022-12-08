@@ -31,30 +31,39 @@ import (
 
 var _ engine.Relation = new(table)
 
-func (tbl *table) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error) {
+func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, int64, error) {
 	switch tbl.tableId {
-	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
-		return float64(100), nil
+	case catalog.MO_DATABASE_ID:
+		return 1, 1000, nil
+	case catalog.MO_TABLES_ID:
+		return 10, 10000, nil
+	case catalog.MO_COLUMNS_ID:
+		return 10, 10000, nil
 	}
 
 	if expr == nil {
-		r, err := tbl.Rows(ctx)
-		return float64(r), err
+		return tbl.Stats(ctx)
 	}
-	var card float64
+	var blockNum, totalBlockCnt int
+	var outcnt int64
 	for _, blockmetas := range tbl.meta.blocks {
+		totalBlockCnt += len(blockmetas)
 		for _, blk := range blockmetas {
 			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
-				card += float64(blockRows(blk))
+				outcnt += blockRows(blk)
+				blockNum++
 			}
 		}
 	}
-	return card, nil
+	// before first execution, no metadata.
+	if totalBlockCnt == 0 {
+		return 100, 1000000, nil
+	}
+	return int32(blockNum), outcnt, nil
 }
 
-func (tbl *table) Rows(ctx context.Context) (int64, error) {
+func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
 	var rows int64
-
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	tbl.db.txn.Lock()
 	for i := range tbl.db.txn.writes {
@@ -92,20 +101,26 @@ func (tbl *table) Rows(ctx context.Context) (int64, error) {
 	for _, partition := range tbl.parts {
 		pRows, err := partition.Rows(tx, deletes, tbl.skipBlocks)
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		rows = rows + pRows
 	}
 
 	if tbl.meta == nil {
-		return 0, nil
+		return 0, rows, nil
 	}
+	var totalBlockCnt int
 	for _, blks := range tbl.meta.blocks {
+		totalBlockCnt += len(blks)
 		for _, blk := range blks {
 			rows += blockRows(blk)
 		}
 	}
-	return rows, nil
+	// before first execution, no metadata.
+	if totalBlockCnt == 0 {
+		return 100, rows, nil
+	}
+	return int32(totalBlockCnt), rows, nil
 }
 
 func (tbl *table) Size(ctx context.Context, name string) (int64, error) {
@@ -251,6 +266,16 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 		viewDef.View = tbl.viewdef
 		defs = append(defs, viewDef)
 	}
+	if len(tbl.constraint) > 0 {
+		c := &engine.ConstraintDef{}
+		tbl.Lock()
+		err := c.UnmarshalBinary(tbl.constraint)
+		tbl.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		defs = append(defs, c)
+	}
 	for i, def := range tbl.defs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			if attr.Attr.Name != catalog.Row_ID {
@@ -275,8 +300,23 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
 }
 
-func (tbl *table) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
-	// implement me
+func (tbl *table) UpdateConstraint(ctx context.Context, c *engine.ConstraintDef) error {
+	var err error
+	tbl.Lock()
+	tbl.tmpConstraint, err = c.MarshalBinary()
+	tbl.Unlock()
+	if err != nil {
+		return err
+	}
+	bat, err := genTableConstraintTuple(tbl, tbl.db.txn.proc.Mp())
+	if err != nil {
+		return err
+	}
+	if err = tbl.db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0], -1); err != nil {
+		return err
+	}
+	tbl.db.txn.updateTables = append(tbl.db.txn.updateTables, tbl)
 	return nil
 }
 
