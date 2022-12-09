@@ -136,8 +136,7 @@ func (m *Median[T]) Merge(xIndex int64, yIndex int64, _ float64, _ float64, xEmp
 			sort.Sort(yM.Vals[yIndex])
 		}
 		if xEmpty {
-			m.Vals[xIndex] = make(numericSlice[T], len(yM.Vals[yIndex]))
-			copy(m.Vals[xIndex], yM.Vals[yIndex])
+			m.Vals[xIndex] = append(m.Vals[xIndex], yM.Vals[yIndex]...)
 			return 0, false
 		}
 		newCnt := len(m.Vals[xIndex]) + len(yM.Vals[yIndex])
@@ -211,8 +210,7 @@ func (m *Decimal64Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128, 
 			sort.Sort(yM.Vals[yIndex])
 		}
 		if xEmpty {
-			m.Vals[xIndex] = make(decimal64Slice, len(yM.Vals[yIndex]))
-			copy(m.Vals[xIndex], yM.Vals[yIndex])
+			m.Vals[xIndex] = append(m.Vals[xIndex], yM.Vals[yIndex]...)
 			return types.Decimal128_Zero, false
 		}
 		newCnt := len(m.Vals[xIndex]) + len(yM.Vals[yIndex])
@@ -283,8 +281,7 @@ func (m *Decimal128Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128,
 			sort.Sort(yM.Vals[yIndex])
 		}
 		if xEmpty {
-			m.Vals[xIndex] = make(decimal128Slice, len(yM.Vals[yIndex]))
-			copy(m.Vals[xIndex], yM.Vals[yIndex])
+			m.Vals[xIndex] = append(m.Vals[xIndex], yM.Vals[yIndex]...)
 			return types.Decimal128_Zero, false
 		}
 		if !sort.IsSorted(m.Vals[xIndex]) {
