@@ -117,7 +117,6 @@ func (s *store) newMemTxnStorage(
 	}
 	return memorystorage.NewMemoryStorage(
 		mp,
-		memorystorage.SnapshotIsolation,
 		s.rt.Clock(),
 		memoryengine.NewHakeeperIDGenerator(hakeeper),
 	)
