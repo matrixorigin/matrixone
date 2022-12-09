@@ -201,8 +201,6 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if tenant == nil {
 		tenant, _ = GetTenantInfo("internal")
 	}
-	var stmID uuid.UUID
-	copy(stmID[:], cw.GetUUID())
 	var txnID uuid.UUID
 	var txn TxnOperator
 	var err error
@@ -220,14 +218,17 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !useEnv {
 		requestAt = time.Now()
 	}
+	var stmID uuid.UUID
 	var statement tree.Statement = nil
 	var text string
 	if cw != nil {
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		statement.Format(fmtCtx)
 		text = SubStringFromBegin(fmtCtx.String(), int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	} else {
+		stmID = uuid.New()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	}
 	stm := &trace.StatementInfo{
