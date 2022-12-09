@@ -135,6 +135,13 @@ func (s *Scanner) Scan() (int, string) {
 				}
 				return s.Scan()
 			}
+		case '$':
+			s.inc()
+			id, str := s.scanDollarTypeBlock()
+			if id == LEX_ERROR {
+				return id, str
+			}
+			return s.Scan()
 		default:
 			return int(ch), ""
 		}
@@ -395,6 +402,27 @@ func (s *Scanner) scanCommentTypeBlock() (int, string) {
 	start := s.Pos - 2
 	for {
 		if s.cur() == '*' {
+			s.inc()
+			if s.cur() == '/' {
+				s.inc()
+				break
+			}
+			continue
+		}
+		if s.cur() == eofChar {
+			return LEX_ERROR, s.buf[start:s.Pos]
+		}
+		s.inc()
+	}
+	return COMMENT, s.buf[start:s.Pos]
+}
+
+// scanDollarTypeBlock scans a '/$' delimited comment;
+// assumes the opening prefix has already been scanned
+func (s *Scanner) scanDollarTypeBlock() (int, string) {
+	start := s.Pos - 2
+	for {
+		if s.cur() == '$' {
 			s.inc()
 			if s.cur() == '/' {
 				s.inc()

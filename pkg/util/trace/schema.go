@@ -16,8 +16,9 @@ package trace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -56,6 +57,7 @@ var (
 	dbCol        = table.Column{Name: "database", Type: stringType, Default: "", Comment: "what database current session stay in."}
 	stmtCol      = table.Column{Name: "statement", Type: "TEXT", Default: "", Comment: "sql statement"}
 	stmtTagCol   = table.Column{Name: "statement_tag", Type: "TEXT", Default: "", Comment: "note tag in statement(Reserved)"}
+	sqlTypeCol   = table.Column{Name: "sql_source_type", Type: "TEXT", Default: "", Comment: "sql statement source type"}
 	stmtFgCol    = table.Column{Name: "statement_fingerprint", Type: "TEXT", Default: "", Comment: "note tag in statement(Reserved)"}
 	nodeUUIDCol  = table.Column{Name: "node_uuid", Type: uuidColType, Default: "0", Comment: "node uuid, which node gen this data."}
 	nodeTypeCol  = table.Column{Name: "node_type", Type: "varchar(64)", Default: "node", Comment: "node type in MO, val in [DN, CN, LOG]"}
@@ -82,6 +84,7 @@ var (
 			dbCol,
 			stmtCol,
 			stmtTagCol,
+			sqlTypeCol,
 			stmtFgCol,
 			nodeUUIDCol,
 			nodeTypeCol,

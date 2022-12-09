@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
@@ -164,6 +165,8 @@ type Session struct {
 	flag bool
 
 	lastInsertID uint64
+
+	sqlSourceType string
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
