@@ -22,8 +22,9 @@ type history[
 	K Ordered[K],
 	V any,
 ] struct {
-	Before Time
-	State  *tableState[K, V]
+	EndTime  Time
+	EndState *tableState[K, V]
+	NewLogs  []*logEntry[K, V]
 }
 
 // EraseHistory erases history before specified time
@@ -31,8 +32,8 @@ func (t *Table[K, V, R]) EraseHistory(before Time) {
 	t.Lock()
 	defer t.Unlock()
 	i := sort.Search(len(t.history), func(i int) bool {
-		return before.Equal(t.history[i].Before) ||
-			before.Less(t.history[i].Before)
+		return before.Equal(t.history[i].EndTime) ||
+			before.Less(t.history[i].EndTime)
 	})
 	if i < len(t.history) {
 		t.history = t.history[i:]

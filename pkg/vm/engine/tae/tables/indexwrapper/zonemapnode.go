@@ -15,6 +15,8 @@
 package indexwrapper
 
 import (
+	"fmt"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -94,6 +96,10 @@ type ZMWriter struct {
 
 func NewZMWriter() *ZMWriter {
 	return &ZMWriter{}
+}
+
+func (writer *ZMWriter) String() string {
+	return fmt.Sprintf("ZmWriter[Cid-%d,%s]", writer.colIdx, writer.zonemap.String())
 }
 
 func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockObject, cType common.CompressType, colIdx uint16, internalIdx uint16) error {

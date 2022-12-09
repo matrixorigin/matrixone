@@ -556,7 +556,7 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 		if err != nil {
 			return err
 		}
-		row[3], err = r.Rows(ses.requestCtx)
+		_, row[3], err = r.Stats(ses.requestCtx)
 		if err != nil {
 			return err
 		}

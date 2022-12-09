@@ -14,45 +14,19 @@
 
 package memorytable
 
-// IndexEntry represents an index entry
-type IndexEntry[
+type Index[
 	K Ordered[K],
 	V any,
-] struct {
-	Index Tuple
-	Key   K
+] interface {
+	Copy() Index[K, V]
+	Delete(*IndexEntry[K, V])
+	Set(*IndexEntry[K, V])
+	Iter() IndexIter[K, V]
 }
 
-func compareIndexEntry[
+type IndexIter[
 	K Ordered[K],
 	V any,
-](a, b *IndexEntry[K, V]) bool {
-	if a.Index.Less(b.Index) {
-		return true
-	}
-	if b.Index.Less(a.Index) {
-		return false
-	}
-	return a.Key.Less(b.Key)
-}
-
-// Index finds entry in table
-func (t *Table[K, V, R]) Index(tx *Transaction, index Tuple) (entries []*IndexEntry[K, V], err error) {
-	iter, err := t.NewIndexIter(
-		tx,
-		index,
-		index,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-	for ok := iter.First(); ok; ok = iter.Next() {
-		entry, err := iter.Read()
-		if err != nil {
-			return nil, err
-		}
-		entries = append(entries, entry)
-	}
-	return
+] interface {
+	SeekIter[*IndexEntry[K, V]]
 }
