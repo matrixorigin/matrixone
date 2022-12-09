@@ -57,6 +57,9 @@ type StatementInfo struct {
 	// RowsRead, BytesScan generated from ExecPlan
 	RowsRead  int64 `json:"rows_read"`  // see ExecPlan2Json
 	BytesScan int64 `json:"bytes_scan"` // see ExecPlan2Json
+	Cpu       int64 `json:"cpu"`        // see ExecPlan2Json
+	Memory    int64 `json:"memory"`     // see ExecPlan2Json
+	IO        int64 `json:"io"`         // see ExecPlan2Json
 	// SerializeExecPlan
 	SerializeExecPlan SerializeExecPlanFunc // see SetExecPlan, ExecPlan2Json
 
@@ -127,6 +130,9 @@ func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string 
 	row.SetColumnVal(execPlanCol, s.ExecPlan2Json(ctx))
 	row.SetColumnVal(rowsReadCol, fmt.Sprintf("%d", s.RowsRead))
 	row.SetColumnVal(bytesScanCol, fmt.Sprintf("%d", s.BytesScan))
+	row.SetColumnVal(cpuCol, fmt.Sprintf("%d", s.Cpu))
+	row.SetColumnVal(memoryCol, fmt.Sprintf("%d", s.Memory))
+	row.SetColumnVal(ioCol, fmt.Sprintf("%d", s.IO))
 	row.SetColumnVal(stmtTypeCol, s.StatementType)
 	row.SetColumnVal(queryTypeCol, s.QueryType)
 
