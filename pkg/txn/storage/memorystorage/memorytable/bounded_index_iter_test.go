@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestIndexIter(t *testing.T) {
+func TestBoundedIndexIter(t *testing.T) {
 	table := NewTable[Int, int, TestRow]()
 	tx := NewTransaction(Time{})
 	defer func() {

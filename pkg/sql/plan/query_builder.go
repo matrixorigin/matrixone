@@ -660,6 +660,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i, rootId := range builder.qry.Steps {
 		rootId, _ = builder.pushdownFilters(rootId, nil)
+		ReCalcNodeStats(rootId, builder, true)
 		rootId = builder.determineJoinOrder(rootId)
 		rootId = builder.pushdownSemiAntiJoins(rootId)
 		builder.qry.Steps[i] = rootId
@@ -1494,89 +1495,7 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 	node.NodeId = nodeID
 	builder.qry.Nodes = append(builder.qry.Nodes, node)
 	builder.ctxByNode = append(builder.ctxByNode, ctx)
-
-	// TODO: better estimation
-	switch node.NodeType {
-	case plan.Node_JOIN:
-		leftCost := builder.qry.Nodes[node.Children[0]].Cost
-		rightCost := builder.qry.Nodes[node.Children[1]].Cost
-
-		switch node.JoinType {
-		case plan.Node_INNER:
-			card := leftCost.Card * rightCost.Card
-			if len(node.OnList) > 0 {
-				card *= 0.1
-			}
-			node.Cost = &plan.Cost{
-				Card: card,
-			}
-
-		case plan.Node_LEFT:
-			card := leftCost.Card * rightCost.Card
-			if len(node.OnList) > 0 {
-				card *= 0.1
-				card += leftCost.Card
-			}
-			node.Cost = &plan.Cost{
-				Card: card,
-			}
-
-		case plan.Node_RIGHT:
-			card := leftCost.Card * rightCost.Card
-			if len(node.OnList) > 0 {
-				card *= 0.1
-				card += rightCost.Card
-			}
-			node.Cost = &plan.Cost{
-				Card: card,
-			}
-
-		case plan.Node_OUTER:
-			card := leftCost.Card * rightCost.Card
-			if len(node.OnList) > 0 {
-				card *= 0.1
-				card += leftCost.Card + rightCost.Card
-			}
-			node.Cost = &plan.Cost{
-				Card: card,
-			}
-
-		case plan.Node_SEMI, plan.Node_ANTI:
-			node.Cost = &plan.Cost{
-				Card: leftCost.Card * .7,
-			}
-
-		case plan.Node_SINGLE, plan.Node_MARK:
-			node.Cost = &plan.Cost{
-				Card: leftCost.Card,
-			}
-		}
-
-	case plan.Node_AGG:
-		if len(node.GroupBy) > 0 {
-			childCost := builder.qry.Nodes[node.Children[0]].Cost
-			node.Cost = &plan.Cost{
-				Card: childCost.Card * 0.1,
-			}
-		} else {
-			node.Cost = &plan.Cost{
-				Card: 1,
-			}
-		}
-
-	default:
-		if len(node.Children) > 0 {
-			childCost := builder.qry.Nodes[node.Children[0]].Cost
-			node.Cost = &plan.Cost{
-				Card: childCost.Card,
-			}
-		} else if node.Cost == nil {
-			node.Cost = &plan.Cost{
-				Card: 1,
-			}
-		}
-	}
-
+	ReCalcNodeStats(nodeID, builder, false)
 	return nodeID
 }
 
@@ -1785,7 +1704,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType:    nodeType,
-			Cost:        builder.compCtx.Cost(obj, nil),
+			Stats:       nil,
 			ObjRef:      obj,
 			TableDef:    tableDef,
 			BindingTags: []int32{builder.genNewTag()},

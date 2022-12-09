@@ -20,6 +20,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -30,6 +31,13 @@ import (
 func WithServerMaxMessageSize(maxMessageSize int) ServerOption {
 	return func(s *server) {
 		s.options.maxMessageSize = maxMessageSize
+	}
+}
+
+// WithServerEnableCompress enable compress
+func WithServerEnableCompress(enable bool) ServerOption {
+	return func(s *server) {
+		s.options.enableCompress = enable
 	}
 }
 
@@ -54,6 +62,7 @@ type server struct {
 	options struct {
 		filter         func(*txn.TxnRequest) bool
 		maxMessageSize int
+		enableCompress bool
 	}
 }
 
@@ -80,12 +89,22 @@ func NewTxnServer(
 		opt(s)
 	}
 
+	var codecOpts []morpc.CodecOption
+	codecOpts = append(codecOpts,
+		morpc.WithCodecIntegrationHLC(rt.Clock()),
+		morpc.WithCodecEnableChecksum(),
+		morpc.WithCodecPayloadCopyBufferSize(16*1024),
+		morpc.WithCodecMaxBodySize(s.options.maxMessageSize))
+	if s.options.enableCompress {
+		mp, err := mpool.NewMPool("txn_rpc_server", 0, mpool.NoFixed)
+		if err != nil {
+			return nil, err
+		}
+		codecOpts = append(codecOpts, morpc.WithCodecEnableCompress(mp))
+	}
 	rpc, err := morpc.NewRPCServer("txn-server", address,
 		morpc.NewMessageCodec(s.acquireRequest,
-			morpc.WithCodecIntegrationHLC(rt.Clock()),
-			morpc.WithCodecEnableChecksum(),
-			morpc.WithCodecPayloadCopyBufferSize(16*1024),
-			morpc.WithCodecMaxBodySize(s.options.maxMessageSize)),
+			codecOpts...),
 		morpc.WithServerLogger(s.rt.Logger().RawLogger()),
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 			m := v.(morpc.RPCMessage)

@@ -717,7 +717,7 @@ func (mp *MysqlProtocolImpl) readTime(data []byte, pos int, len uint8) (int, str
 	if negate == 1 {
 		symbol = '-'
 	}
-	day, pos, _ := mp.io.ReadUint64(data, pos)
+	day, pos, _ := mp.io.ReadUint32(data, pos)
 	hour := data[pos]
 	pos++
 	minute := data[pos]
@@ -726,7 +726,7 @@ func (mp *MysqlProtocolImpl) readTime(data []byte, pos int, len uint8) (int, str
 	pos++
 	// time with ms
 	if len == 12 {
-		ms, pos, _ := mp.io.ReadUint64(data, pos)
+		ms, pos, _ := mp.io.ReadUint32(data, pos)
 		if day > 0 {
 			return pos, fmt.Sprintf("%c%dd %02d:%02d:%02d.%06d", symbol, day, hour, minute, second, ms)
 		} else {
@@ -2334,7 +2334,7 @@ func (mp *MysqlProtocolImpl) appendTime(data []byte, t types.Time) []byte {
 		data = mp.append(data, 0)
 	} else {
 		hour, minute, sec, msec, isNeg := t.ClockFormat()
-		day := uint64(hour / 24)
+		day := uint32(hour / 24)
 		hour = hour % 24
 		if msec != 0 {
 			data = mp.append(data, 12)
@@ -2343,7 +2343,7 @@ func (mp *MysqlProtocolImpl) appendTime(data []byte, t types.Time) []byte {
 			} else {
 				data = append(data, byte(0))
 			}
-			data = mp.appendUint64(data, day)
+			data = mp.appendUint32(data, day)
 			data = mp.append(data, uint8(hour), minute, sec)
 			data = mp.appendUint64(data, msec)
 		} else {
@@ -2353,7 +2353,7 @@ func (mp *MysqlProtocolImpl) appendTime(data []byte, t types.Time) []byte {
 			} else {
 				data = append(data, byte(0))
 			}
-			data = mp.appendUint64(data, day)
+			data = mp.appendUint32(data, day)
 			data = mp.append(data, uint8(hour), minute, sec)
 		}
 	}

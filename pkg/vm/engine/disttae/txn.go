@@ -599,6 +599,16 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 	return bats, nil
 }
 
+func (txn *Transaction) updateCacheTableConstraint() {
+	for _, t := range txn.updateTables {
+		t.Lock()
+		t.constraint = t.tmpConstraint
+		t.tmpConstraint = nil
+		t.Unlock()
+	}
+	txn.updateTables = nil
+}
+
 func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	databaseId, tableId uint64) *batch.Batch {
 

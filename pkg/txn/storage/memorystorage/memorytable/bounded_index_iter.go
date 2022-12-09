@@ -14,46 +14,36 @@
 
 package memorytable
 
-import (
-	"fmt"
+import "fmt"
 
-	"github.com/tidwall/btree"
-)
-
-// IndexIter represents iterator over index entries
-type IndexIter[
+// BoundedIndexIter wraps another index iter within bounds
+type BoundedIndexIter[
 	K Ordered[K],
 	V any,
 ] struct {
-	tx   *Transaction
-	iter btree.GenericIter[*IndexEntry[K, V]]
+	iter IndexIter[K, V]
 	min  Tuple
 	max  Tuple
 }
 
-// NewIndexIter creates new index iter
-func (t *Table[K, V, R]) NewIndexIter(tx *Transaction, min Tuple, max Tuple) (*IndexIter[K, V], error) {
+func NewBoundedIndexIter[
+	K Ordered[K],
+	V any,
+](iter IndexIter[K, V], min Tuple, max Tuple) *BoundedIndexIter[K, V] {
 	if max.Less(min) {
 		panic(fmt.Sprintf("%v is less than %v", max, min))
 	}
-	txTable, err := t.getTransactionTable(tx)
-	if err != nil {
-		return nil, err
-	}
-	state := txTable.state.Load().(*tableState[K, V])
-	iter := state.indexes.Copy().Iter()
-	return &IndexIter[K, V]{
-		tx:   tx,
+	return &BoundedIndexIter[K, V]{
 		iter: iter,
 		min:  min,
 		max:  max,
-	}, nil
+	}
 }
 
-var _ Iter[*IndexEntry[Int, int]] = new(IndexIter[Int, int])
+var _ IndexIter[Int, int] = new(BoundedIndexIter[Int, int])
 
 // First sets the cursor to the first index entry
-func (i *IndexIter[K, V]) First() bool {
+func (i *BoundedIndexIter[K, V]) First() bool {
 	if !i.iter.First() {
 		return false
 	}
@@ -62,7 +52,10 @@ func (i *IndexIter[K, V]) First() bool {
 	}) {
 		return false
 	}
-	entry := i.iter.Item()
+	entry, err := i.iter.Read()
+	if err != nil {
+		panic(err)
+	}
 	if entry.Index.Less(i.min) {
 		return false
 	}
@@ -73,11 +66,14 @@ func (i *IndexIter[K, V]) First() bool {
 }
 
 // Next reports whether next entry is valid
-func (i *IndexIter[K, V]) Next() bool {
+func (i *BoundedIndexIter[K, V]) Next() bool {
 	if !i.iter.Next() {
 		return false
 	}
-	entry := i.iter.Item()
+	entry, err := i.iter.Read()
+	if err != nil {
+		panic(err)
+	}
 	if entry.Index.Less(i.min) {
 		return false
 	}
@@ -88,12 +84,16 @@ func (i *IndexIter[K, V]) Next() bool {
 }
 
 // Close closes the iter
-func (i *IndexIter[K, V]) Close() error {
-	i.iter.Release()
-	return nil
+func (i *BoundedIndexIter[K, V]) Close() error {
+	return i.iter.Close()
 }
 
-// Read reads the current entry
-func (i *IndexIter[K, V]) Read() (*IndexEntry[K, V], error) {
-	return i.iter.Item(), nil
+// Read returns the current entry
+func (i *BoundedIndexIter[K, V]) Read() (*IndexEntry[K, V], error) {
+	return i.iter.Read()
+}
+
+// Seek seeks to the pivot
+func (i *BoundedIndexIter[K, V]) Seek(pivot *IndexEntry[K, V]) bool {
+	return i.iter.Seek(pivot)
 }
