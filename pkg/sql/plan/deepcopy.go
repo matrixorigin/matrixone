@@ -125,11 +125,11 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 
 	if node.Stats != nil {
 		newNode.Stats = &plan.Stats{
-			BlockNum: node.Stats.BlockNum,
-			Rowsize:  node.Stats.Rowsize,
-			Ndv:      node.Stats.Ndv,
-			Cost:     node.Stats.Cost,
-			Outcnt:   node.Stats.Outcnt,
+			BlockNum:    node.Stats.BlockNum,
+			Rowsize:     node.Stats.Rowsize,
+			HashmapSize: node.Stats.HashmapSize,
+			Cost:        node.Stats.Cost,
+			Outcnt:      node.Stats.Outcnt,
 		}
 	}
 

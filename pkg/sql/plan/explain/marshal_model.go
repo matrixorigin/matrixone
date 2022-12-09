@@ -47,11 +47,11 @@ type PlanStats struct {
 }
 
 type Stats struct {
-	BlockNum int32     `json:"blocknum"`
-	Outcnt   float64   `json:"outcnt"`
-	Cost     float64   `json:"cost"`
-	Ndv      []float64 `json:"ndv"`
-	Rowsize  float64   `json:"rowsize"`
+	BlockNum    int32   `json:"blocknum"`
+	Outcnt      float64 `json:"outcnt"`
+	Cost        float64 `json:"cost"`
+	HashmapSize float64 `json:"hashmapsize"`
+	Rowsize     float64 `json:"rowsize"`
 }
 
 type Node struct {

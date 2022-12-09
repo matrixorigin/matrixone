@@ -103,18 +103,6 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		defs = append(defs, viewDef)
 	}
 
-	if schema.UniqueIndex != "" {
-		indexDef := new(engine.UniqueIndexDef)
-		indexDef.UniqueIndex = schema.UniqueIndex
-		defs = append(defs, indexDef)
-	}
-
-	if schema.SecondaryIndex != "" {
-		indexDef := new(engine.SecondaryIndexDef)
-		indexDef.SecondaryIndex = schema.SecondaryIndex
-		defs = append(defs, indexDef)
-	}
-
 	if len(schema.Constraint) > 0 {
 		c := new(engine.ConstraintDef)
 		if err := c.UnmarshalBinary(schema.Constraint); err != nil {
@@ -201,10 +189,6 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 			schema.Partition = defVal.Partition
 		case *engine.ViewDef:
 			schema.View = defVal.View
-		case *engine.UniqueIndexDef:
-			schema.UniqueIndex = defVal.UniqueIndex
-		case *engine.SecondaryIndexDef:
-			schema.SecondaryIndex = defVal.SecondaryIndex
 		case *engine.ConstraintDef:
 			schema.Constraint, err = defVal.MarshalBinary()
 			if err != nil {
