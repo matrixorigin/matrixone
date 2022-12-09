@@ -184,6 +184,13 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 	if s.View, sn, err = common.ReadString(r); err != nil {
 		return
 	}
+	if s.UniqueIndex, sn, err = common.ReadString(r); err != nil {
+		return
+	}
+	n += sn
+	if s.SecondaryIndex, sn, err = common.ReadString(r); err != nil {
+		return
+	}
 	n += sn
 	if s.Constraint, sn, err = common.ReadBytes(r); err != nil {
 		return
@@ -302,6 +309,12 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	if _, err = common.WriteBytes(s.Constraint, &w); err != nil {
+		return
+	}
+	if _, err = common.WriteString(s.UniqueIndex, &w); err != nil {
+		return
+	}
+	if _, err = common.WriteString(s.SecondaryIndex, &w); err != nil {
 		return
 	}
 	if err = binary.Write(&w, binary.BigEndian, uint16(len(s.ColDefs))); err != nil {
