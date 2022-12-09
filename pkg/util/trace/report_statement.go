@@ -39,6 +39,7 @@ type StatementInfo struct {
 	Account              string    `json:"account"`
 	User                 string    `json:"user"`
 	Host                 string    `json:"host"`
+	RoleId               uint32    `json:"role_id"`
 	Database             string    `json:"database"`
 	Statement            string    `json:"statement"`
 	StatementFingerprint string    `json:"statement_fingerprint"`
@@ -106,6 +107,7 @@ func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string 
 	row.SetColumnVal(txnIDCol, uuid.UUID(s.TransactionID).String())
 	row.SetColumnVal(sesIDCol, uuid.UUID(s.SessionID).String())
 	row.SetColumnVal(accountCol, s.Account)
+	row.SetColumnVal(roleIdCol, fmt.Sprintf("%d", s.RoleId))
 	row.SetColumnVal(userCol, s.User)
 	row.SetColumnVal(hostCol, s.Host)
 	row.SetColumnVal(dbCol, s.Database)

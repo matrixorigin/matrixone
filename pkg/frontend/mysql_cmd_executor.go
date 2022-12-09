@@ -235,6 +235,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		TransactionID:        txnID,
 		SessionID:            sesID,
 		Account:              tenant.GetTenant(),
+		RoleId:               proc.SessionInfo.RoleId,
 		User:                 tenant.GetUser(),
 		Host:                 sessInfo.GetHost(),
 		Database:             sessInfo.GetDatabase(),

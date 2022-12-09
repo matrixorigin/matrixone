@@ -51,6 +51,7 @@ var (
 	txnIDCol     = table.Column{Name: "transaction_id", Type: uuidColType, Default: "0", Comment: "txn uniq id"}
 	sesIDCol     = table.Column{Name: "session_id", Type: uuidColType, Default: "0", Comment: "session uniq id"}
 	accountCol   = table.Column{Name: "account", Type: stringType, Default: "", Comment: "account name"}
+	roleIdCol    = table.Column{Name: "role_id", Type: bigintUnsignedType, Default: "0", Comment: "role id"}
 	userCol      = table.Column{Name: "user", Type: stringType, Default: "", Comment: "user name"}
 	hostCol      = table.Column{Name: "host", Type: stringType, Default: "", Comment: "user client ip"}
 	dbCol        = table.Column{Name: "database", Type: stringType, Default: "", Comment: "what database current session stay in."}
@@ -104,6 +105,7 @@ var (
 			ioCol,
 			stmtTypeCol,
 			queryTypeCol,
+			roleIdCol,
 		},
 		PrimaryKeyColumn: []table.Column{stmtIDCol},
 		Engine:           table.ExternalTableEngine,
