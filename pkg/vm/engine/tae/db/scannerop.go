@@ -69,10 +69,10 @@ func (processor *calibrationOp) onPostSegment(segmentEntry *catalog.SegmentEntry
 		segmentData := segmentEntry.GetSegmentData()
 		taskFactory, taskType, scopes, err := segmentData.BuildCompactionTaskFactory()
 		if err != nil || taskFactory == nil {
-			logutil.Warnf("%s: %v", segmentData.MutationInfo(), err)
+			logutil.Warnf("[Mergeblocks] Schedule %s: %v", segmentData.MutationInfo(), err)
 		} else {
 			_, err = processor.db.Scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, taskFactory)
-			logutil.Debugf("[Mergeblocks] | %s | Scheduled | State=%v | Scopes=%s", segmentEntry.String(), err, common.IDArraryString(scopes))
+			logutil.Infof("[Mergeblocks] | %s | Scheduled | State=%v | Scopes=%s", segmentEntry.String(), err, common.BlockIDArraryString(scopes))
 		}
 	}
 	processor.blkCntOfSegment = 0
@@ -82,7 +82,6 @@ func (processor *calibrationOp) onPostSegment(segmentEntry *catalog.SegmentEntry
 func (processor *calibrationOp) onBlock(blockEntry *catalog.BlockEntry) (err error) {
 	if !blockEntry.IsActive() {
 		// logutil.Debugf("Noop for block %s: table or db was dropped", blockEntry.Repr())
-		processor.blkCntOfSegment = 0
 		return
 	}
 

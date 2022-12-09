@@ -265,7 +265,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	if stmt.PartitionOption != nil {
 		nodeID := builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_TABLE_SCAN,
-			Cost:        nil,
+			Stats:       nil,
 			ObjRef:      nil,
 			TableDef:    createTable.TableDef,
 			BindingTags: []int32{builder.genNewTag()},

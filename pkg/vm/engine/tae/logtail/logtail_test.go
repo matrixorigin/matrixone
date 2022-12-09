@@ -56,6 +56,7 @@ func TestTxnTable1(t *testing.T) {
 	table.ForeachRowInBetween(
 		timestamps[0].Prev(),
 		types.MaxTs(),
+		nil,
 		op,
 	)
 	assert.Equal(t, txnCnt, cnt)
@@ -64,6 +65,7 @@ func TestTxnTable1(t *testing.T) {
 	table.ForeachRowInBetween(
 		timestamps[1],
 		types.MaxTs(),
+		nil,
 		op,
 	)
 	assert.Equal(t, txnCnt-blockSize, cnt)
@@ -72,6 +74,7 @@ func TestTxnTable1(t *testing.T) {
 	table.ForeachRowInBetween(
 		timestamps[2],
 		types.MaxTs(),
+		nil,
 		op,
 	)
 	assert.Equal(t, txnCnt-2*blockSize, cnt)

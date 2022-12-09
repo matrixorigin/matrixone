@@ -45,7 +45,7 @@ const (
 	DefaultIOWorkers    = int(8)
 	DefaultAsyncWorkers = int(16)
 
-	DefaultLogtailTxnPageSize = 1024
+	DefaultLogtailTxnPageSize = 100
 
 	DefaultLogstoreType = LogstoreBatchStore
 )

@@ -73,7 +73,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 			return 0, err
 		}
 
-		affectRows, err := rel.Rows(s.Proc.Ctx)
+		_, affectRows, err := rel.Stats(s.Proc.Ctx)
 		return uint64(affectRows), err
 	}
 

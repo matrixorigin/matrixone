@@ -364,6 +364,7 @@ import (
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
+%type <statement> show_function_status_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> alter_account_stmt alter_user_stmt update_stmt use_stmt update_no_with_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
@@ -2163,6 +2164,7 @@ show_stmt:
 |   show_table_status_stmt
 |   show_grants_stmt
 |   show_collation_stmt
+|   show_function_status_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -2201,6 +2203,15 @@ from_or_in_opt:
 db_name_opt:
     {}
 |    db_name
+
+show_function_status_stmt:
+    SHOW FUNCTION STATUS like_opt where_expression_opt
+    {
+       $$ = &tree.ShowFunctionStatus{
+            Like: $4,
+            Where: $5,
+        }
+    }
 
 show_target_filter_stmt:
     SHOW show_target like_opt where_expression_opt
