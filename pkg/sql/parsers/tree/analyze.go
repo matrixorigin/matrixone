@@ -29,7 +29,7 @@ func (node *AnalyzeStmt) Format(ctx *FmtCtx) {
 	ctx.WriteString(")")
 }
 
-func (node *AnalyzeStmt) GetStatementType() string { return "Analyze" }
+func (node *AnalyzeStmt) GetStatementType() string { return "Analyze Table" }
 func (node *AnalyzeStmt) GetQueryType() string     { return QueryTypeDQL }
 
 func NewAnalyzeStmt(tbl *TableName, cols IdentifierList) *AnalyzeStmt {
