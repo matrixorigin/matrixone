@@ -160,6 +160,15 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 			return err
 		}
 
+	case *engine.ConstraintDef:
+		// update
+		if table.Constraint, err = def.MarshalBinary(); err != nil {
+			return nil
+		}
+		if err := m.relations.Update(tx, table); err != nil {
+			return err
+		}
+
 	case *engine.AttributeDef:
 		// add attribute
 		// check existence
@@ -192,16 +201,6 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 
 	case *engine.IndexTableDef:
 		// tea & mem do not use this def now.
-	case *engine.UniqueIndexDef:
-		table.UniqueIndexDef = []byte(def.UniqueIndex)
-		if err := m.relations.Update(tx, table); err != nil {
-			return err
-		}
-	case *engine.SecondaryIndexDef:
-		table.SecondaryIndexDef = []byte(def.SecondaryIndex)
-		if err := m.relations.Update(tx, table); err != nil {
-			return err
-		}
 	case *engine.PropertiesDef:
 		// update properties
 		for _, prop := range def.Properties {
@@ -349,17 +348,16 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 		case *engine.ViewDef:
 			row.ViewDef = []byte(def.View)
 
+		case *engine.ConstraintDef:
+			row.Constraint, err = def.MarshalBinary()
+			if err != nil {
+				return err
+			}
 		case *engine.AttributeDef:
 			relAttrs = append(relAttrs, def.Attr)
 
 		case *engine.IndexTableDef:
 			// do nothing
-
-		case *engine.UniqueIndexDef:
-			row.UniqueIndexDef = []byte(def.UniqueIndex)
-
-		case *engine.SecondaryIndexDef:
-			row.SecondaryIndexDef = []byte(def.SecondaryIndex)
 
 		case *engine.PropertiesDef:
 			for _, prop := range def.Properties {
@@ -478,14 +476,8 @@ func (m *MemHandler) HandleDelTableDef(ctx context.Context, meta txn.TxnMeta, re
 	case *engine.IndexTableDef:
 		// do nothing
 
-	case *engine.UniqueIndexDef:
-		table.UniqueIndexDef = nil
-		if err := m.relations.Update(tx, table); err != nil {
-			return err
-		}
-
-	case *engine.SecondaryIndexDef:
-		table.SecondaryIndexDef = nil
+	case *engine.ConstraintDef:
+		table.Constraint = nil
 		if err := m.relations.Update(tx, table); err != nil {
 			return err
 		}
@@ -925,16 +917,13 @@ func (m *MemHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, r
 		}
 	}
 
-	// indexes
-	if len(relRow.UniqueIndexDef) != 0 {
-		resp.Defs = append(resp.Defs, &engine.UniqueIndexDef{
-			UniqueIndex: string(relRow.UniqueIndexDef),
-		})
-	}
-	if len(relRow.ViewDef) != 0 {
-		resp.Defs = append(resp.Defs, &engine.SecondaryIndexDef{
-			SecondaryIndex: string(relRow.SecondaryIndexDef),
-		})
+	// Constraint
+	if len(relRow.Constraint) != 0 {
+		c := new(engine.ConstraintDef)
+		if err = c.UnmarshalBinary(relRow.Constraint); err != nil {
+			return err
+		}
+		resp.Defs = append(resp.Defs, c)
 	}
 
 	// properties

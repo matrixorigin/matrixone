@@ -42,17 +42,17 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	tableDef.Name2ColIndex = map[string]int32{}
 	node1 := &plan.Node{}
 	node1.NodeType = plan.Node_EXTERNAL_SCAN
-	node1.Cost = &plan.Cost{}
+	node1.Stats = &plan.Stats{}
 
 	node2 := &plan.Node{}
 	node2.NodeType = plan.Node_PROJECT
-	node2.Cost = &plan.Cost{}
+	node2.Stats = &plan.Stats{}
 	node2.NodeId = 1
 	node2.Children = []int32{0}
 
 	node3 := &plan.Node{}
 	node3.NodeType = plan.Node_INSERT
-	node3.Cost = &plan.Cost{}
+	node3.Stats = &plan.Stats{}
 	node3.NodeId = 2
 	node3.Children = []int32{1}
 
