@@ -24,9 +24,11 @@ import (
 
 func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	if len(stmt.Tables) == 1 && stmt.TableRefs == nil {
-		return buildDeleteSingleTable(stmt, ctx)
+		return buildLeftJoinForSingleTableDelete(ctx, stmt)
+		//return buildDeleteSingleTable(stmt, ctx)
 	}
-	return buildDeleteMultipleTable(stmt, ctx)
+	return buildLeftJoinForMultTableDelete(ctx, stmt)
+	//return buildDeleteMultipleTable(stmt, ctx)
 }
 
 func extractAliasTable(aliasTable *tree.AliasedTableExpr, tf *tableInfo, ctx CompilerContext) {
@@ -37,9 +39,9 @@ func extractAliasTable(aliasTable *tree.AliasedTableExpr, tf *tableInfo, ctx Com
 	tf.dbNames[0] = dbName
 	tf.tableNames[0] = string(aliasTable.Expr.(*tree.TableName).ObjectName)
 	if string(aliasTable.As.Alias) != "" {
-		tf.baseNameMap[string(aliasTable.As.Alias)] = tf.tableNames[0]
+		tf.alias2BaseNameMap[string(aliasTable.As.Alias)] = tf.tableNames[0]
 	} else {
-		tf.baseNameMap[tf.tableNames[0]] = tf.tableNames[0]
+		tf.alias2BaseNameMap[tf.tableNames[0]] = tf.tableNames[0]
 	}
 }
 
@@ -56,12 +58,12 @@ func reverseMap(m map[string]string) map[string]string {
 func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	// check database's name and table's name
 	tf := &tableInfo{
-		baseNameMap: make(map[string]string),
-		dbNames:     make([]string, 1),
-		tableNames:  make([]string, 1),
+		alias2BaseNameMap: make(map[string]string),
+		dbNames:           make([]string, 1),
+		tableNames:        make([]string, 1),
 	}
 	extractAliasTable(stmt.Tables[0].(*tree.AliasedTableExpr), tf, ctx)
-	tf.baseNameMap = reverseMap(tf.baseNameMap)
+	tf.alias2BaseNameMap = reverseMap(tf.alias2BaseNameMap)
 	objRef, tableDef := ctx.Resolve(tf.dbNames[0], tf.tableNames[0])
 	if tableDef == nil {
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "delete has no table def")
@@ -158,7 +160,7 @@ func buildDelete2Truncate(objRef *ObjectRef, tblDef *TableDef) (*Plan, error) {
 
 func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	// build map between base table and alias table
-	tf := &tableInfo{baseNameMap: make(map[string]string)}
+	tf := &tableInfo{alias2BaseNameMap: make(map[string]string)}
 	for _, expr := range stmt.TableRefs {
 		if err := extractExprTable(expr, tf, ctx); err != nil {
 			return nil, err
@@ -176,8 +178,8 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 			dbName = ctx.DefaultDatabase()
 		}
 		tblName := string(t.ObjectName)
-		if _, ok := tf.baseNameMap[tblName]; ok {
-			tblName = tf.baseNameMap[tblName]
+		if _, ok := tf.alias2BaseNameMap[tblName]; ok {
+			tblName = tf.alias2BaseNameMap[tblName]
 		}
 		objRefs[i], tblDefs[i] = ctx.Resolve(dbName, tblName)
 		if tblDefs[i] == nil {
@@ -189,11 +191,11 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from view")
 		}
 	}
-	originMap := tf.baseNameMap
-	tf.baseNameMap = reverseMap(tf.baseNameMap)
+	originMap := tf.alias2BaseNameMap
+	tf.alias2BaseNameMap = reverseMap(tf.alias2BaseNameMap)
 	for _, t := range tbs {
 		tblName := string(t.ObjectName)
-		if _, ok := tf.baseNameMap[tblName]; !ok {
+		if _, ok := tf.alias2BaseNameMap[tblName]; !ok {
 			if _, ok := originMap[tblName]; !ok {
 				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Unknown table '%v' in MULTI DELETE", tblName)
 			}
@@ -267,7 +269,7 @@ func getTableNames(tableExprs tree.TableExprs) []*tree.TableName {
 
 func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRef, tableDef *TableDef, tf *tableInfo, ctx CompilerContext) (tree.SelectExprs, *ColDef, []string, error) {
 	var useKey *ColDef
-	tblName := tf.baseNameMap[tableDef.Name]
+	tblName := tf.alias2BaseNameMap[tableDef.Name]
 
 	// we will allways return hideKey now
 	hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
@@ -311,7 +313,7 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 	indexAttrs := make([]string, 0)
 	for indexColName := range indexColNameMap {
 		indexAttrs = append(indexAttrs, indexColName)
-		e, _ := tree.NewUnresolvedName(ctx.GetContext(), tf.baseNameMap[tableDef.Name], indexColName)
+		e, _ := tree.NewUnresolvedName(ctx.GetContext(), tf.alias2BaseNameMap[tableDef.Name], indexColName)
 		ps = append(ps, tree.SelectExpr{Expr: e})
 	}
 	return ps, useKey, indexAttrs, nil

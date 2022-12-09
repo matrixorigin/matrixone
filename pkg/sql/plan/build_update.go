@@ -27,9 +27,24 @@ import (
 )
 
 type tableInfo struct {
-	dbNames     []string
-	tableNames  []string
-	baseNameMap map[string]string // key: alias name, value: base name
+	dbNames           []string
+	tableNames        []string
+	alias2BaseNameMap map[string]string // key: alias name, value: base name
+	baseName2AliasMap map[string]string //  key: base name, value: alias name, reverse asName2BaseNameMap
+}
+
+func newTableInfo() *tableInfo {
+	return &tableInfo{
+		alias2BaseNameMap: make(map[string]string),
+		baseName2AliasMap: make(map[string]string),
+	}
+}
+
+// reverse the map of alias <-> tableName into baseName2AliasMap
+func (tblInfo *tableInfo) reverseAliasMap() {
+	for k, v := range tblInfo.alias2BaseNameMap {
+		tblInfo.baseName2AliasMap[v] = k
+	}
 }
 
 type updateCol struct {
@@ -41,7 +56,7 @@ type updateCol struct {
 
 func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	// build map between base table and alias table
-	tf := &tableInfo{baseNameMap: make(map[string]string)}
+	tf := newTableInfo()
 	extractWithTable(stmt.With, tf, ctx)
 	for _, expr := range stmt.Tables {
 		if err := extractExprTable(expr, tf, ctx); err != nil {
@@ -67,7 +82,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	}
 
 	// check and build update's columns
-	updateCols, err := buildUpdateColumns(stmt.Exprs, objRefs, tblRefs, tf.baseNameMap, ctx)
+	updateCols, err := buildUpdateColumns(stmt.Exprs, objRefs, tblRefs, tf.alias2BaseNameMap, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +91,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	updateColsArray, updateExprsArray := groupUpdateAttrs(updateCols, stmt.Exprs)
 
 	// build update ctx and projection
-	updateCtxs, useProjectExprs, err := buildCtxAndProjection(updateColsArray, updateExprsArray, tf.baseNameMap, tblRefs, ctx)
+	updateCtxs, useProjectExprs, err := buildCtxAndProjection(updateColsArray, updateExprsArray, tf.alias2BaseNameMap, tblRefs, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +227,7 @@ func extractWithTable(with *tree.With, tf *tableInfo, ctx CompilerContext) {
 		if *tblName != "" {
 			tf.tableNames = append(tf.tableNames, *tblName)
 			tf.dbNames = append(tf.dbNames, *dbName)
-			tf.baseNameMap[string(cte.Name.Alias)] = *tblName
+			tf.alias2BaseNameMap[string(cte.Name.Alias)] = *tblName
 		}
 	}
 }
@@ -395,7 +410,7 @@ func extractExprTable(expr tree.TableExpr, tf *tableInfo, ctx CompilerContext) e
 	switch t := expr.(type) {
 	case *tree.TableName:
 		tblName := string(t.ObjectName)
-		if _, ok := tf.baseNameMap[tblName]; ok {
+		if _, ok := tf.alias2BaseNameMap[tblName]; ok {
 			return nil
 		}
 		dbName := string(t.SchemaName)
@@ -404,7 +419,7 @@ func extractExprTable(expr tree.TableExpr, tf *tableInfo, ctx CompilerContext) e
 		}
 		tf.tableNames = append(tf.tableNames, tblName)
 		tf.dbNames = append(tf.dbNames, dbName)
-		tf.baseNameMap[tblName] = tblName
+		tf.alias2BaseNameMap[tblName] = tblName
 		return nil
 	case *tree.AliasedTableExpr:
 		tn, ok := t.Expr.(*tree.TableName)
@@ -415,7 +430,7 @@ func extractExprTable(expr tree.TableExpr, tf *tableInfo, ctx CompilerContext) e
 			return moerr.NewInternalError(ctx.GetContext(), "syntax error at %s", tree.String(t, dialect.MYSQL))
 		}
 		tblName := string(tn.ObjectName)
-		if _, ok := tf.baseNameMap[tblName]; ok {
+		if _, ok := tf.alias2BaseNameMap[tblName]; ok {
 			return nil
 		}
 		dbName := string(tn.SchemaName)
@@ -426,9 +441,9 @@ func extractExprTable(expr tree.TableExpr, tf *tableInfo, ctx CompilerContext) e
 		tf.dbNames = append(tf.dbNames, dbName)
 		asName := string(t.As.Alias)
 		if asName != "" {
-			tf.baseNameMap[asName] = tblName
+			tf.alias2BaseNameMap[asName] = tblName
 		} else {
-			tf.baseNameMap[tblName] = tblName
+			tf.alias2BaseNameMap[tblName] = tblName
 		}
 		return nil
 	case *tree.JoinTableExpr:
