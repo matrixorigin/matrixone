@@ -64,7 +64,7 @@ type StatementInfo struct {
 	SerializeExecPlan SerializeExecPlanFunc // see SetExecPlan, ExecPlan2Json
 
 	// flow ctrl
-	end bool
+	end bool // cooperate with mux
 	mux sync.Mutex
 	// mark reported
 	reported bool
@@ -212,7 +212,7 @@ var EndStatement = func(ctx context.Context, err error) {
 	}
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	if !s.end {
+	if !s.end { // cooperate with s.mux
 		// do report
 		s.end = true
 		s.ResponseAt = time.Now()
