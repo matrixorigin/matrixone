@@ -121,7 +121,6 @@ func (builder *QueryBuilder) swapJoinOrderByStats(children []int32) []int32 {
 		return children
 	}
 }
-
 func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	node := builder.qry.Nodes[nodeID]
 
