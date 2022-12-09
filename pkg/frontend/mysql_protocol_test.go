@@ -20,7 +20,14 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/prashantv/gostub"
 	"math"
 	"reflect"
 	"strconv"
@@ -48,7 +55,7 @@ import (
 )
 
 type TestRoutineManager struct {
-	rwlock  sync.RWMutex
+	rwlock  sync.Mutex
 	clients map[goetty.IOSession]*Routine
 
 	pu *config.ParameterUnit
@@ -86,17 +93,16 @@ func NewTestRoutineManager(pu *config.ParameterUnit) *TestRoutineManager {
 }
 
 func TestMysqlClientProtocol_Handshake(t *testing.T) {
-	//TODO: fix data race
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
 	//client connect
 	//ion method: mysql -h 127.0.0.1 -P 6001 -udump -p
 
+	var db *sql.DB
+	var err error
 	//before anything using the configuration
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
-	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
-	if err != nil {
-		panic(err)
-	}
+	_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
+	require.NoError(t, err)
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	rm, _ := NewRoutineManager(ctx, pu)
@@ -111,13 +117,178 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 		echoServer(rm.Handler, rm, NewSqlCodec())
 	}()
 
-	// to := NewTimeout(1*time.Minute, false)
-	// for isClosed() && !to.isTimeout() {
-	// }
+	time.Sleep(time.Second * 2)
+	db, err = openDbConn(t, 6001)
+	require.NoError(t, err)
+	closeDbConn(t, db)
+
+	time.Sleep(time.Millisecond * 10)
+	//close server
+	setServer(1)
+	wg.Wait()
+}
+
+func newMrsForConnectionId(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("connection_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func TestKIll(t *testing.T) {
+	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
+	//client connect
+	//ion method: mysql -h 127.0.0.1 -P 6001 -udump -p
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	var conn1, conn2 *sql.DB
+	var err error
+	var connIdRow *sql.Row
+
+	//before anything using the configuration
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+	require.NoError(t, err)
+
+	sql1 := "select connection_id();"
+	var sql2, sql3, sql4 string
+	noResultSet := make(map[string]bool)
+
+	newMockWrapper := func(ses *Session, sql string, stmt tree.Statement, proc *process.Process) ComputationWrapper {
+		var mrs *MysqlResultSet
+		var columns []interface{}
+		if sql == sql1 {
+			mrs = newMrsForConnectionId([][]interface{}{
+				{ses.GetConnectionID()},
+			})
+			for _, col := range mrs.Columns {
+				columns = append(columns, col)
+			}
+		} else if _, ok := noResultSet[sql]; ok {
+			//no result set
+		} else {
+			panic(fmt.Sprintf("there is no mysqlResultset for the sql %s", sql))
+		}
+		uuid, _ := uuid.NewUUID()
+		runner := mock_frontend.NewMockComputationRunner(ctrl)
+		runner.EXPECT().Run(gomock.Any()).DoAndReturn(func(uint64) error {
+			proto := ses.GetMysqlProtocol()
+			if mrs != nil {
+				err = proto.SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount())
+				if err != nil {
+					logutil.Errorf("flush error %v", err)
+					return err
+				}
+			}
+			return nil
+		}).AnyTimes()
+		mcw := mock_frontend.NewMockComputationWrapper(ctrl)
+		mcw.EXPECT().GetAst().Return(stmt).AnyTimes()
+		mcw.EXPECT().GetProcess().Return(proc).AnyTimes()
+		mcw.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
+		mcw.EXPECT().GetColumns().Return(columns, nil).AnyTimes()
+		mcw.EXPECT().GetAffectedRows().Return(uint64(0)).AnyTimes()
+		mcw.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
+		mcw.EXPECT().GetUUID().Return(uuid[:]).AnyTimes()
+		mcw.EXPECT().RecordExecPlan(gomock.Any()).Return(nil).AnyTimes()
+		mcw.EXPECT().GetLoadTag().Return(false).AnyTimes()
+		return mcw
+	}
+
+	var wrapperStubFunc = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
+		var cw []ComputationWrapper = nil
+		var stmts []tree.Statement = nil
+		var cmdFieldStmt *InternalCmdFieldList
+		var err error
+		if isCmdFieldListSql(sql) {
+			cmdFieldStmt, err = parseCmdFieldList(proc.Ctx, sql)
+			if err != nil {
+				return nil, err
+			}
+			stmts = append(stmts, cmdFieldStmt)
+		} else {
+			stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		for _, stmt := range stmts {
+			cw = append(cw, newMockWrapper(ses, sql, stmt, proc))
+		}
+		return cw, nil
+	}
+
+	bhStub := gostub.Stub(&GetComputationWrapper, wrapperStubFunc)
+	defer bhStub.Reset()
+
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, pu)
+	rm.SetSkipCheckUser(true)
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+
+	//running server
+	go func() {
+		defer wg.Done()
+		echoServer(rm.Handler, rm, NewSqlCodec())
+	}()
 
 	time.Sleep(time.Second * 2)
-	db := open_db(t, 6001)
-	close_db(t, db)
+	conn1, err = openDbConn(t, 6001)
+	require.NoError(t, err)
+
+	time.Sleep(time.Second * 2)
+	conn2, err = openDbConn(t, 6001)
+	require.NoError(t, err)
+
+	//get the connection id of conn1
+	var conn1Id uint64
+	connIdRow = conn1.QueryRow(sql1)
+	err = connIdRow.Scan(&conn1Id)
+	require.NoError(t, err)
+
+	//get the connection id of conn2
+	var conn2Id uint64
+	connIdRow = conn2.QueryRow(sql1)
+	err = connIdRow.Scan(&conn2Id)
+	require.NoError(t, err)
+
+	//conn2 kills the query
+	sql3 = fmt.Sprintf("kill query %d;", conn1Id)
+	noResultSet[sql3] = true
+	_, err = conn2.Exec(sql3)
+	require.NoError(t, err)
+
+	//conn2 kills the connection 1
+	sql2 = fmt.Sprintf("kill %d;", conn1Id)
+	noResultSet[sql2] = true
+	_, err = conn2.Exec(sql2)
+	require.NoError(t, err)
+
+	//conn2 kills itself
+	sql4 = fmt.Sprintf("kill %d;", conn2Id)
+	noResultSet[sql4] = true
+	_, err = conn2.Exec(sql4)
+	require.NoError(t, err)
+
+	//close the connection
+	closeDbConn(t, conn1)
+	closeDbConn(t, conn2)
 
 	time.Sleep(time.Millisecond * 10)
 	//close server
@@ -325,7 +496,7 @@ func TestReadStringLenEnc(t *testing.T) {
 
 // 	time.Sleep(time.Second * 2)
 // 	db := open_tls_db(t, 6001)
-// 	close_db(t, db)
+// 	closeDbConn(t, db)
 
 // 	time.Sleep(time.Millisecond * 10)
 // 	//close server
@@ -1027,12 +1198,12 @@ func make16MBRowResult() *MysqlExecutionResult {
 }
 
 func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interface{}, _ uint64) error {
-	tRM.rwlock.RLock()
+	tRM.rwlock.Lock()
 	routine, ok := tRM.clients[rs]
-	tRM.rwlock.RUnlock()
+	tRM.rwlock.Unlock()
 	ctx := context.TODO()
 
-	pro := routine.GetProtocol()
+	pro := routine.getProtocol()
 	if !ok {
 		return moerr.NewInternalError(ctx, "routine does not exist")
 	}
@@ -1293,7 +1464,8 @@ func TestMysqlResultSet(t *testing.T) {
 	// }
 
 	time.Sleep(time.Second * 2)
-	db := open_db(t, 6001)
+	db, err := openDbConn(t, 6001)
+	require.NoError(t, err)
 
 	do_query_resp_resultset(t, db, false, false, "tiny", makeMysqlTinyIntResultSet(false))
 	do_query_resp_resultset(t, db, false, false, "tinyu", makeMysqlTinyIntResultSet(true))
@@ -1319,7 +1491,7 @@ func TestMysqlResultSet(t *testing.T) {
 	do_query_resp_resultset(t, db, false, false, "16mbrow", make16MBRowResultSet())
 	do_query_resp_resultset(t, db, false, false, "16mb", makeMoreThan16MBResultSet())
 
-	close_db(t, db)
+	closeDbConn(t, db)
 
 	time.Sleep(time.Millisecond * 10)
 	//close server
@@ -1377,11 +1549,11 @@ func TestMysqlResultSet(t *testing.T) {
 // 	return db
 // }
 
-func open_db(t *testing.T, port int) *sql.DB {
+func openDbConn(t *testing.T, port int) (*sql.DB, error) {
 	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=10s&timeout=10s&writeTimeout=10s", port)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
-		require.NoError(t, err)
+		return nil, err
 	} else {
 		db.SetConnMaxLifetime(time.Minute * 3)
 		db.SetMaxOpenConns(1)
@@ -1390,12 +1562,14 @@ func open_db(t *testing.T, port int) *sql.DB {
 
 		//ping opens the connection
 		err = db.Ping()
-		require.NoError(t, err)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return db
+	return db, err
 }
 
-func close_db(t *testing.T, db *sql.DB) {
+func closeDbConn(t *testing.T, db *sql.DB) {
 	err := db.Close()
 	require.NoError(t, err)
 }

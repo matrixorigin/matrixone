@@ -2027,10 +2027,11 @@ func doKill(ctx context.Context, rm *RoutineManager, ses *Session, k *tree.Kill)
 	var err error
 	//true: kill a connection
 	//false: kill a query in a connection
+	idThatKill := uint64(ses.GetConnectionID())
 	if !k.Option.Exist || k.Option.Typ == tree.KillTypeConnection {
-		err = rm.kill(true, k.ConnectionId, "")
+		err = rm.kill(ctx, true, idThatKill, k.ConnectionId, "")
 	} else {
-		err = rm.kill(false, k.ConnectionId, k.StmtOption.StatementId)
+		err = rm.kill(ctx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
 	}
 	return err
 }
@@ -2041,6 +2042,9 @@ func (mce *MysqlCmdExecutor) handleKill(ctx context.Context, k *tree.Kill) error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	err = doKill(ctx, mce.GetRoutineManager(), ses, k)
+	if err != nil {
+		return err
+	}
 	resp := NewGeneralOkResponse(COM_QUERY)
 	if err = proto.SendResponse(ctx, resp); err != nil {
 		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
@@ -2974,6 +2978,9 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
 	requestCtx, span := trace.Debug(requestCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
+	if ses.skipCheckPrivilege() {
+		return nil
+	}
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
@@ -3006,6 +3013,9 @@ func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Sessio
 
 // authenticateCanExecuteStatementAndPlan checks the user can execute the statement and its plan
 func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	if ses.skipCheckPrivilege() {
+		return nil
+	}
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
@@ -3424,9 +3434,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 
 		runner = ret.(ComputationRunner)
-		if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-			logInfof(ses.GetConciseProfile(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
-		}
+
+		logInfof(ses.GetConciseProfile(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
 
 		mrs = ses.GetMysqlResultSet()
 		// cw.Compile might rewrite sql, here we fetch the latest version
@@ -3514,9 +3523,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				}
 			}
 
-			if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-				logInfof(ses.GetConciseProfile(), "time of Exec.Run : %s", time.Since(runBegin).String())
-			}
+			logInfof(ses.GetConciseProfile(), "time of Exec.Run : %s", time.Since(runBegin).String())
+
 			/*
 				Step 3: Say goodbye
 				mysql COM_QUERY response: End after the data row has been sent.
@@ -3563,15 +3571,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 
-			if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-				logInfof(ses.GetConciseProfile(), "time of Exec.Run : %s", time.Since(runBegin).String())
-			}
+			logInfof(ses.GetConciseProfile(), "time of Exec.Run : %s", time.Since(runBegin).String())
 
 			rspLen = cw.GetAffectedRows()
 			echoTime := time.Now()
-			if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-				logInfof(ses.GetConciseProfile(), "time of SendResponse %s", time.Since(echoTime).String())
-			}
+
+			logInfof(ses.GetConciseProfile(), "time of SendResponse %s", time.Since(echoTime).String())
 
 			/*
 				Step 4: Serialize the execution plan by json
@@ -3626,9 +3631,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 
-			if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-				logInfof(ses.GetConciseProfile(), "time of Exec.Run : %s", time.Since(runBegin).String())
-			}
+			logInfof(ses.GetConciseProfile(), "time of Exec.Run : %s", time.Since(runBegin).String())
 
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
 				queryPlan := cwft.plan

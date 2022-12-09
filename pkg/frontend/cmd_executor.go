@@ -99,7 +99,6 @@ var _ StmtExecutor = &resultSetStmtExecutor{}
 func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec StmtExecutor, beginInstant time.Time, envStmt string, useEnv bool) error {
 	var err, err2 error
 	var cmpBegin, runBegin time.Time
-	pu := ses.GetParameterUnit()
 	ctx = RecordStatement(ctx, ses, proc, stmtExec, beginInstant, envStmt, useEnv)
 	err = stmtExec.Setup(ctx, ses)
 	if err != nil {
@@ -129,9 +128,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 		goto handleRet
 	}
 
-	if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-		logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
-	}
+	logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
 
 	err = stmtExec.ResponseBeforeExec(ctx, ses)
 	if err != nil {
@@ -145,9 +142,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 		goto handleRet
 	}
 
-	if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-		logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
-	}
+	logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 
 	_ = stmtExec.RecordExecPlan(ctx)
 

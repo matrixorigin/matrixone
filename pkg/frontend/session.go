@@ -164,6 +164,8 @@ type Session struct {
 	flag bool
 
 	lastInsertID uint64
+
+	skipAuth bool
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
@@ -294,6 +296,18 @@ func (bgs *BackgroundSession) Close() {
 		bgs.Session.gSysVars = nil
 	}
 	bgs = nil
+}
+
+func (ses *Session) setSkipCheckPrivilege(b bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.skipAuth = b
+}
+
+func (ses *Session) skipCheckPrivilege() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.skipAuth
 }
 
 func (ses *Session) makeProfile(profileTyp profileType) {

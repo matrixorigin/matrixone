@@ -95,10 +95,11 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(routine.GetProtocol(), nil, pu, gSysVariables, true)
-	ses.SetRequestContext(routine.GetCancelRoutineCtx())
+	ses := NewSession(routine.getProtocol(), nil, pu, gSysVariables, true)
+	ses.SetRequestContext(routine.getCancelRoutineCtx())
 	ses.SetFromRealUser(true)
-	routine.SetSession(ses)
+	ses.setSkipCheckPrivilege(rm.GetSkipCheckUser())
+	routine.setSession(ses)
 	pro.SetSession(ses)
 
 	logDebugf(pro.GetConciseProfile(), "have done some preparation for the connection %s", rs.RemoteAddress())
@@ -107,7 +108,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	err := pro.writePackets(hsV10pkt)
 	if err != nil {
 		logError(pro.GetConciseProfile(), "failed to handshake with server, quiting routine...")
-		routine.Quit()
+		routine.killConnection(true)
 		return
 	}
 
@@ -130,11 +131,11 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	rm.mu.Unlock()
 
 	if rt != nil {
-		ses := rt.GetSession()
+		ses := rt.getSession()
 		if ses != nil {
-			logDebugf(ses.GetConciseProfile(), "will close io session.")
+			logDebugf(ses.GetConciseProfile(), "the io session was closed.")
 		}
-		rt.Quit()
+		rt.cleanup()
 	}
 }
 
@@ -143,25 +144,28 @@ kill a connection or query.
 if killConnection is true, the query will be canceled first, then the network will be closed.
 if killConnection is false, only the query will be canceled. the connection keeps intact.
 */
-func (rm *RoutineManager) kill(killConnection bool, id uint64, statementId string) error {
+func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatKill, id uint64, statementId string) error {
 	var rt *Routine = nil
 	rm.mu.Lock()
 	for _, value := range rm.clients {
-		if uint64(value.getConnID()) == id {
+		if uint64(value.getConnectionID()) == id {
 			rt = value
 			break
 		}
 	}
 	rm.mu.Unlock()
 
+	myself := idThatKill == id
 	if rt != nil {
 		if killConnection {
 			logutil.Infof("kill connection %d", id)
-			rt.killConnection()
+			rt.killConnection(myself)
 		} else {
 			logutil.Infof("kill query %s on the connection %d", statementId, id)
-			rt.killQuery(statementId)
+			rt.killQuery(myself, statementId)
 		}
+	} else {
+		return moerr.NewInternalError(ctx, "Unknown thread id %d", id)
 	}
 	return nil
 }
@@ -186,8 +190,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
 	}
-
-	protocol := routine.GetProtocol()
+	routine.setInProcessRequest(true)
+	defer routine.setInProcessRequest(false)
+	protocol := routine.getProtocol()
 	protoProfile := protocol.GetConciseProfile()
 	packet, ok := msg.(*Packet)
 
@@ -229,7 +234,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			di := MakeDebugInfo(payload,80,8)
 			logutil.Infof("RP[%v] Payload80[%v]",rs.RemoteAddr(),di)
 		*/
-		ses := routine.GetSession()
+		ses := routine.getSession()
 		if protocol.GetCapability()&CLIENT_SSL != 0 && !protocol.IsTlsEstablished() {
 			logDebugf(protoProfile, "setup ssl")
 			isTlsHeader, err = protocol.HandleHandshake(ctx, payload)
@@ -278,15 +283,15 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		return nil
 	}
 
-	req := routine.GetProtocol().GetRequest(payload)
+	req := routine.getProtocol().GetRequest(payload)
 	req.seq = seq
-	ch := routine.GetRequestChannel()
-	chLen := len(ch)
-	capLen := cap(ch)
-	if chLen+1 > capLen {
-		logDebugf(protoProfile, "the request channel will block. length %d capacity %d", chLen, capLen)
+
+	//handle request
+	err = routine.handleRequest(req)
+	if err != nil {
+		logErrorf(protoProfile, "error:%v", err)
+		return err
 	}
-	ch <- req
 
 	return nil
 }

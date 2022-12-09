@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"os"
 	"strconv"
@@ -203,9 +204,7 @@ func Test_mce(t *testing.T) {
 		for i := 0; i < len(self_handle_sql); i++ {
 			select_2 := mock_frontend.NewMockComputationWrapper(ctrl)
 			stmts, err = parsers.Parse(ctx, dialect.MYSQL, self_handle_sql[i])
-			if err != nil {
-				t.Error(err)
-			}
+			convey.So(err, convey.ShouldBeNil)
 			select_2.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 			select_2.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
 			select_2.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
@@ -222,9 +221,7 @@ func Test_mce(t *testing.T) {
 		defer stubs.Reset()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
-		if err != nil {
-			t.Error(err)
-		}
+		convey.So(err, convey.ShouldBeNil)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
@@ -234,8 +231,11 @@ func Test_mce(t *testing.T) {
 		ses := NewSession(proto, nil, pu, &gSys, true)
 		ses.SetRequestContext(ctx)
 
-		mce := NewMysqlCmdExecutor()
+		ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, pu)
 
+		mce := NewMysqlCmdExecutor()
+		mce.SetRoutineManager(rm)
 		mce.SetSession(ses)
 
 		req := &Request{
@@ -248,31 +248,12 @@ func Test_mce(t *testing.T) {
 		convey.So(resp, convey.ShouldBeNil)
 
 		req = &Request{
-			cmd:  COM_QUERY,
-			data: []byte("kill"),
-		}
-		resp, err = mce.ExecRequest(ctx, ses, req)
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(resp, convey.ShouldNotBeNil)
-
-		req = &Request{
-			cmd:  COM_QUERY,
-			data: []byte("kill 10"),
-		}
-		mce.SetRoutineManager(&RoutineManager{})
-		resp, err = mce.ExecRequest(ctx, ses, req)
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(resp, convey.ShouldNotBeNil)
-
-		req = &Request{
 			cmd:  COM_INIT_DB,
 			data: []byte("test anywhere"),
 		}
 
 		_, err = mce.ExecRequest(ctx, ses, req)
 		convey.So(err, convey.ShouldBeNil)
-		//COM_INIT_DB replaced by changeDB()
-		//convey.So(resp.category, convey.ShouldEqual, OkResponse)
 
 		req = &Request{
 			cmd:  COM_PING,

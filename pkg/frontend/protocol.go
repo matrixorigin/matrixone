@@ -213,12 +213,12 @@ type ProtocolImpl struct {
 	profiles [8]string
 }
 
-func (mp *ProtocolImpl) GetSequenceId() uint8 {
-	return uint8(mp.sequenceId.Load())
+func (cpi *ProtocolImpl) GetSequenceId() uint8 {
+	return uint8(cpi.sequenceId.Load())
 }
 
-func (mp *ProtocolImpl) SetSequenceID(value uint8) {
-	mp.sequenceId.Store(uint32(value))
+func (cpi *ProtocolImpl) SetSequenceID(value uint8) {
+	cpi.sequenceId.Store(uint32(value))
 }
 
 func (cpi *ProtocolImpl) makeProfile(profileTyp profileType) {
