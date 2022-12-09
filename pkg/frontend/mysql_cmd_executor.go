@@ -220,9 +220,16 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !useEnv {
 		requestAt = time.Now()
 	}
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-	cw.GetAst().Format(fmtCtx)
-	text := SubStringFromBegin(fmtCtx.String(), int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	var statement tree.Statement = nil
+	var text string
+	if cw != nil {
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		statement = cw.GetAst()
+		statement.Format(fmtCtx)
+		text = SubStringFromBegin(fmtCtx.String(), int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	} else {
+		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	}
 	stm := &trace.StatementInfo{
 		StatementID:          stmID,
 		TransactionID:        txnID,
@@ -235,8 +242,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		StatementFingerprint: "", // fixme: (Reserved)
 		StatementTag:         "", // fixme: (Reserved)
 		RequestAt:            requestAt,
-		StatementType:        cw.GetAst().GetStatementType(),
-		QueryType:            getQueryType(cw.GetAst()),
+		StatementType:        getStatementType(statement).GetStatementType(),
+		QueryType:            getStatementType(statement).GetQueryType(),
 	}
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
@@ -249,44 +256,11 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 }
 
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string) context.Context {
-	if !trace.GetTracerProvider().IsEnable() {
-		return ctx
-	}
-	sessInfo := proc.SessionInfo
+	ctx = RecordStatement(ctx, ses, proc, nil, envBegin, envStmt, true)
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo("internal")
 	}
-	stmID, _ := uuid.NewUUID()
-	var txnID uuid.UUID
-	var txn TxnOperator
-	var err2 error
-	if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
-		txn, err2 = handler.GetTxn()
-		if err2 != nil {
-			logutil.Errorf("RecordParseErrorStatement. error:%v", err2)
-		} else {
-			copy(txnID[:], txn.Txn().ID)
-		}
-	}
-	var sesID uuid.UUID
-	copy(sesID[:], ses.GetUUID())
-	text := SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
-	stm := &trace.StatementInfo{
-		StatementID:          stmID,
-		TransactionID:        txnID,
-		SessionID:            sesID,
-		Account:              tenant.GetTenant(),
-		User:                 tenant.GetUser(),
-		Host:                 sessInfo.GetHost(),
-		Database:             sessInfo.GetDatabase(),
-		Statement:            text,
-		StatementFingerprint: "", // fixme: (Reserved)
-		StatementTag:         "", // fixme: (Reserved)
-		RequestAt:            envBegin,
-	}
-	sc := trace.SpanContextWithID(trace.TraceID(stmID), trace.SpanKindStatement)
-	ctx = trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 	incStatementCounter(tenant.GetTenant(), nil)
 	incStatementErrorsCounter(tenant.GetTenant(), nil)
 	return ctx
@@ -2899,7 +2873,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 }
 
 func incStatementCounter(tenant string, stmt tree.Statement) {
-	metric.StatementCounter(tenant, getQueryType(stmt)).Inc()
+	metric.StatementCounter(tenant, getStatementType(stmt).GetQueryType()).Inc()
 }
 
 func incTransactionCounter(tenant string) {
@@ -2914,15 +2888,22 @@ func incTransactionErrorsCounter(tenant string, t metric.SQLType) {
 }
 
 func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
-	metric.StatementErrorsCounter(tenant, getQueryType(stmt)).Inc()
+	metric.StatementErrorsCounter(tenant, getStatementType(stmt).GetQueryType()).Inc()
 }
 
-func getQueryType(stmt tree.Statement) string {
+type noopStatementType struct {
+	tree.StatementType
+}
+
+func (noopStatementType) GetStatementType() string { return "Unknown" }
+func (noopStatementType) GetQueryType() string     { return tree.QueryTypeOth }
+
+func getStatementType(stmt tree.Statement) tree.StatementType {
 	switch stmt.(type) {
 	case tree.StatementType:
-		return stmt.GetQueryType()
+		return stmt
 	default:
-		return tree.QueryTypeOth
+		return noopStatementType{}
 	}
 }
 
