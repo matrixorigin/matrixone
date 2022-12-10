@@ -9,10 +9,10 @@ import (
 )
 
 type Collector struct {
-	table *GcTable
+	table *GcEntry
 }
 
-func NewCollector(table *GcTable) *Collector {
+func NewCollector(table *GcEntry) *Collector {
 	return &Collector{
 		table: table,
 	}

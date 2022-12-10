@@ -2,7 +2,7 @@ package gc
 
 import "context"
 
-func ExecDelete(table *GcTable) error {
+func ExecDelete(table *GcEntry) error {
 	if len(table.delete) == 0 {
 		return nil
 	}
@@ -17,6 +17,8 @@ func ExecDelete(table *GcTable) error {
 			if err != nil {
 				return err
 			}
+			delete(table.table, name)
+			delete(table.delete, name)
 		}
 	}
 

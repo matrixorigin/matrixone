@@ -5,16 +5,18 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"sync"
 )
 
-type GcTable struct {
+type GcEntry struct {
+	sync.Mutex
 	table  map[string][]common.ID
 	delete map[string][]common.ID
 	fs     *objectio.ObjectFS
 }
 
-func NewGcTable(fs *objectio.ObjectFS) *GcTable {
-	table := &GcTable{
+func NewGcTable(fs *objectio.ObjectFS) *GcEntry {
+	table := &GcEntry{
 		table:  make(map[string][]common.ID),
 		delete: make(map[string][]common.ID),
 		fs:     fs,
@@ -22,17 +24,20 @@ func NewGcTable(fs *objectio.ObjectFS) *GcTable {
 	return table
 }
 
-func (t *GcTable) AddBlock(id common.ID, name string) {
+func (t *GcEntry) AddBlock(id common.ID, name string) {
+	t.Lock()
+	defer t.Unlock()
 	blockList := t.table[name]
 	if blockList != nil {
 		blockList = make([]common.ID, 0)
 	}
 
-	blockList = append(blockList, id)
 	t.table[name] = blockList
 }
 
-func (t *GcTable) DeleteBlock(id common.ID, name string) {
+func (t *GcEntry) DeleteBlock(id common.ID, name string) {
+	t.Lock()
+	defer t.Unlock()
 	blockList := t.delete[name]
 	if blockList != nil {
 		blockList = make([]common.ID, 0)
@@ -42,7 +47,9 @@ func (t *GcTable) DeleteBlock(id common.ID, name string) {
 	t.table[name] = blockList
 }
 
-func (t *GcTable) String() string {
+func (t *GcEntry) String() string {
+	t.Lock()
+	defer t.Unlock()
 	if len(t.table) == 0 {
 		return ""
 	}
