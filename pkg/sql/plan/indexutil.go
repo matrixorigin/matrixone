@@ -376,3 +376,9 @@ func (list *DeleteTableList) AddElement(objRef *ObjectRef, tableDef *TableDef, e
 	list.selectList = append(list.selectList, expr)
 	list.nextIndex++
 }
+
+// Complete the prefix for the table column,such as N_REGIONKEY -> NATION.N_REGIONKEY
+func supplyColumnPrefix(ctx CompilerContext, stmt *tree.Delete) error {
+	// TODO
+	return nil
+}

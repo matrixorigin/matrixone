@@ -271,6 +271,25 @@ func TestSystemVariableAndUserVariable(t *testing.T) {
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
+func TestSingleTableDeleteSQL(t *testing.T) {
+	sqls := []string{
+		"explain verbose DELETE FROM emp where sal > 2000",
+		"explain verbose delete from emp t1 where t1.sal > 2000",
+	}
+	mockOptimizer := plan.NewMockOptimizer()
+	runTestShouldPass(mockOptimizer, t, sqls)
+}
+
+func TestMultiTableDeleteSQL(t *testing.T) {
+	sqls := []string{
+		"explain verbose delete emp,dept from emp ,dept where emp.deptno = dept.deptno and emp.deptno = 10",
+		"explain verbose delete t1,t2  from emp as t1,dept as t2 where t1.deptno = t2.deptno and t1.deptno = 10",
+		"explain verbose delete t1,dept from emp as t1,dept where t1.deptno = dept.deptno and t1.deptno = 10",
+	}
+	mockOptimizer := plan.NewMockOptimizer()
+	runTestShouldPass(mockOptimizer, t, sqls)
+}
+
 func runTestShouldPass(opt plan.Optimizer, t *testing.T, sqls []string) {
 	for _, sql := range sqls {
 		err := runOneStmt(opt, t, sql)
