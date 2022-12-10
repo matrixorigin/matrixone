@@ -29,10 +29,11 @@ import (
 )
 
 var (
-	flagHashPayload     byte = 1
-	flagChecksumEnabled byte = 2
-	flagHasCustomHeader byte = 4
-	flagCompressEnabled byte = 8
+	flagHashPayload      byte = 1
+	flagChecksumEnabled  byte = 2
+	flagHasCustomHeader  byte = 4
+	flagCompressEnabled  byte = 8
+	flagStreamingMessage byte = 16
 
 	defaultMaxMessageSize = 1024 * 1024 * 100
 	checksumFieldBytes    = 8
@@ -96,7 +97,8 @@ type messageCodec struct {
 //     2.1. Flag, 1 byte, required.
 //     2.2. Checksum, 8 byte, optional. Set if has a checksun flag
 //     2.3. PayloadSize, 4 byte, optional. Set if the message is a morpc.PayloadMessage.
-//     2.4. Custom headers, optional. Set if has custom header codecs
+//     2.4. Streaming sequence, 4 byte, optional. Set if the message is in a streaming.
+//     2.5. Custom headers, optional. Set if has custom header codecs
 //  3. Message body
 //     3.1. message body, required.
 //     3.2. payload, optional. Set if has paylad flag.
@@ -161,6 +163,9 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 	}
 	offset += n
 
+	// 2.5
+	offset += readStreaming(flag, &msg, data, offset)
+
 	// 3.1 and 3.2
 	if err := c.readMessage(flag, data, offset, expectChecksum, payloadSize, &msg); err != nil {
 		return nil, false, err
@@ -185,7 +190,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 	totalSizeAt := skip(totalSizeFieldBytes, out)
 
 	// 2.1 flag
-	flag := c.getFlag(msg.Message)
+	flag := c.getFlag(msg)
 	out.MustWriteByte(flag)
 	totalSize += 1
 
@@ -237,6 +242,12 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 		return err
 	}
 	totalSize += n
+
+	// 2.5 streaming message
+	if msg.stream {
+		out.WriteUint32(msg.streamSequence)
+		totalSize += 4
+	}
 
 	// 3.1 message body
 	body, err := c.writeBody(out, msg.Message, totalSize)
@@ -320,7 +331,7 @@ func (c *baseCodec) compressBound(size int) int {
 	return lz4.CompressBlockBound(size)
 }
 
-func (c *baseCodec) getFlag(msg Message) byte {
+func (c *baseCodec) getFlag(msg RPCMessage) byte {
 	flag := byte(0)
 	if c.checksumEnabled {
 		flag |= flagChecksumEnabled
@@ -331,8 +342,11 @@ func (c *baseCodec) getFlag(msg Message) byte {
 	if len(c.headerCodecs) > 0 {
 		flag |= flagHasCustomHeader
 	}
-	if _, ok := msg.(PayloadMessage); ok {
+	if _, ok := msg.Message.(PayloadMessage); ok {
 		flag |= flagHashPayload
+	}
+	if msg.stream {
+		flag |= flagStreamingMessage
 	}
 	return flag
 }
@@ -547,6 +561,15 @@ func readPayloadSize(flag byte, data []byte, offset int) (int, int) {
 	}
 
 	return buf.Byte2Int(data[offset:]), payloadSizeFieldBytes
+}
+
+func readStreaming(flag byte, msg *RPCMessage, data []byte, offset int) int {
+	if flag&flagStreamingMessage == 0 {
+		return 0
+	}
+	msg.stream = true
+	msg.streamSequence = buf.Byte2Uint32(data[offset:])
+	return 4
 }
 
 func validChecksum(body, payload []byte, expectChecksum uint64) error {
