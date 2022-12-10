@@ -283,8 +283,9 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 	uDef, sDef := buildIndexDefs(tableDef.Defs)
 	if uDef != nil {
 		for _, def := range uDef.Fields {
-			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(def.Cols[0].Name)
-			if isCPkey {
+			// Judge whether it is a composite index key
+			isCompkey := util.JudgeIsCompositePrimaryKeyColumn(def.Cols[0].Name)
+			if isCompkey {
 				colNames := util.SplitCompositePrimaryKeyColumnName(def.Cols[0].Name)
 				for _, colName := range colNames {
 					indexColNameMap[colName] = true

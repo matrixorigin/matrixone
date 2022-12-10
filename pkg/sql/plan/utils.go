@@ -759,7 +759,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil {
-			node.Stats = builder.compCtx.Stats(node.ObjRef, RewriteAndConstantFold(node.FilterList, builder.compCtx.GetProcess()))
+			node.Stats = builder.compCtx.Stats(node.ObjRef, handleFiltersForStats(node.FilterList, builder.compCtx.GetProcess()))
 		}
 
 	default:
@@ -777,8 +777,27 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 	}
 }
 
-func RewriteAndConstantFold(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
-	e := colexec.RewriteFilterExprList(exprList)
+func containsParamRef(expr *plan.Expr) bool {
+	var ret bool
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			ret = ret || containsParamRef(arg)
+		}
+	case *plan.Expr_P:
+		return true
+	}
+	return ret
+}
+
+func handleFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
+	var newExprList []*plan.Expr
+	for _, expr := range exprList {
+		if !containsParamRef(expr) {
+			newExprList = append(newExprList, expr)
+		}
+	}
+	e := colexec.RewriteFilterExprList(newExprList)
 	if e != nil {
 		bat := batch.NewWithSize(0)
 		bat.Zs = []int64{1}
@@ -1086,15 +1105,27 @@ func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Exp
 // checkNoNeedCast
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
-func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
-	switch constT {
+func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
+	switch constT.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		switch columnT.Oid {
+		case types.T_char, types.T_varchar, types.T_text:
+			if constT.Width <= columnT.Width {
+				return true
+			} else {
+				return false
+			}
+		default:
+			return false
+		}
+
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
 		if !valOk {
 			return false
 		}
 		constVal := val.I64Val
-		switch columnT {
+		switch columnT.Oid {
 		case types.T_int8:
 			return constVal <= int64(math.MaxInt8) && constVal >= int64(math.MinInt8)
 		case types.T_int16:
@@ -1120,7 +1151,7 @@ func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
 			return false
 		}
 		constVal := val_u.U64Val
-		switch columnT {
+		switch columnT.Oid {
 		case types.T_int8:
 			return constVal <= math.MaxInt8
 		case types.T_int16:

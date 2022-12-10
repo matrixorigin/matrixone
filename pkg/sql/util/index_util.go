@@ -52,8 +52,9 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, p []*plan.ColDef
 		Attrs: make([]string, 1),
 		Vecs:  make([]*vector.Vector, 1),
 	}
-	isCPkey := JudgeIsCompositePrimaryKeyColumn(p[0].Name)
-	if isCPkey {
+	// Judge whether it is a compound unique key
+	isCompKey := JudgeIsCompositePrimaryKeyColumn(p[0].Name)
+	if isCompKey {
 		names := SplitCompositePrimaryKeyColumnName(p[0].Name)
 		cPkeyVecMap := make(map[string]*vector.Vector)
 		for num, attrName := range attrs {
@@ -79,7 +80,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, p []*plan.ColDef
 			}
 		}
 	}
-	if isCPkey {
+	if isCompKey {
 		b.Cnt = 1
 	} else {
 		v, needClean := compactUniqueKeyBatch(b.Vecs[0], proc)
@@ -112,7 +113,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_int8:
 		s := vector.MustTCols[int8](v)
-		ns := make([]int8, 0)
+		ns := make([]int8, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
@@ -121,7 +122,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_int16:
 		s := vector.MustTCols[int16](v)
-		ns := make([]int16, 0)
+		ns := make([]int16, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
@@ -130,7 +131,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_int32:
 		s := vector.MustTCols[int32](v)
-		ns := make([]int32, 0)
+		ns := make([]int32, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
@@ -139,7 +140,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_int64:
 		s := vector.MustTCols[int64](v)
-		ns := make([]int64, 0)
+		ns := make([]int64, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
@@ -148,7 +149,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_uint8:
 		s := vector.MustTCols[uint8](v)
-		ns := make([]uint8, 0)
+		ns := make([]uint8, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
@@ -157,7 +158,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_uint16:
 		s := vector.MustTCols[uint16](v)
-		ns := make([]uint16, 0)
+		ns := make([]uint16, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
@@ -166,7 +167,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_uint32:
 		s := vector.MustTCols[uint32](v)
-		ns := make([]uint32, 0)
+		ns := make([]uint32, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
@@ -175,7 +176,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_uint64:
 		s := vector.MustTCols[uint64](v)
-		ns := make([]uint64, 0)
+		ns := make([]uint64, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
@@ -184,7 +185,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_float32:
 		s := vector.MustTCols[float32](v)
-		ns := make([]float32, 0)
+		ns := make([]float32, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
@@ -193,7 +194,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_float64:
 		s := vector.MustTCols[float64](v)
-		ns := make([]float64, 0)
+		ns := make([]float64, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
@@ -202,7 +203,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_date:
 		s := vector.MustTCols[types.Date](v)
-		ns := make([]types.Date, 0)
+		ns := make([]types.Date, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
@@ -211,7 +212,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_time:
 		s := vector.MustTCols[types.Time](v)
-		ns := make([]types.Time, 0)
+		ns := make([]types.Time, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
@@ -220,7 +221,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_datetime:
 		s := vector.MustTCols[types.Datetime](v)
-		ns := make([]types.Datetime, 0)
+		ns := make([]types.Datetime, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
@@ -229,7 +230,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_timestamp:
 		s := vector.MustTCols[types.Timestamp](v)
-		ns := make([]types.Timestamp, 0)
+		ns := make([]types.Timestamp, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
@@ -238,7 +239,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_decimal64:
 		s := vector.MustTCols[types.Decimal64](v)
-		ns := make([]types.Decimal64, 0)
+		ns := make([]types.Decimal64, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
@@ -247,7 +248,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_decimal128:
 		s := vector.MustTCols[types.Decimal128](v)
-		ns := make([]types.Decimal128, 0)
+		ns := make([]types.Decimal128, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
@@ -256,7 +257,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_json, types.T_char, types.T_varchar, types.T_blob:
 		s := vector.GetStrVectorValues(v)
-		ns := make([]string, 0)
+		ns := make([]string, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.Nsp, uint64(i)) {
 				ns = append(ns, b)
