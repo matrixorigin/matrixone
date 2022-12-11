@@ -17,6 +17,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"math/rand"
 	"reflect"
 	"sync"
@@ -4543,4 +4544,38 @@ func TestAppendBat(t *testing.T) {
 		_ = p.Submit(run)
 	}
 	wg.Wait()
+}
+
+func TestGcWithCheckpoint(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 21)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+	now := time.Now()
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(time.Since(now))
+	t.Logf("Checkpointed: %d", tae.Scheduler.GetCheckpointedLSN())
+	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
+	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
+	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
+	manager := gc.NewManager()
+	for _, entry := range entries {
+		table := gc.NewGcTable(tae.Fs)
+		data, err := entry.Read(context.Background(), nil, tae.Fs)
+		assert.NoError(t, err)
+		table.UpdateTable(data)
+		manager.AddTable(table)
+	}
+
 }

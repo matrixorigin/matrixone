@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -72,19 +73,21 @@ func (t *GcTable) UpdateTable(data *logtail.CheckpointData) {
 		dbid := delTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
 		sid := delTxn.GetVectorByName(catalog.SnapshotAttr_SegID).Get(i).(uint64)
-		blkID := del.GetVectorByName(catalog.AttrRowID).Get(i).(uint64)
+		blkID := del.GetVectorByName(catalog.AttrRowID).Get(i).(types.Rowid)
 		metaLoc := string(delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
 		id := common.ID{
 			SegmentID: sid,
 			TableID:   tid,
-			BlockID:   blkID,
+			BlockID:   rowIDToU64(blkID),
 			PartID:    uint32(dbid),
 		}
 		name, _, _ := blockio.DecodeMetaLoc(metaLoc)
 		t.deleteBlock(id, name)
 	}
 }
-
+func rowIDToU64(rowID types.Rowid) uint64 {
+	return types.DecodeUint64(rowID[:8])
+}
 func (t *GcTable) String() string {
 	t.Lock()
 	defer t.Unlock()
