@@ -71,6 +71,16 @@ func WithCheckpointGlobalInterval(interval time.Duration) func(*Options) {
 	}
 }
 
+func WithForceUpdateCheckpointGlobalInterval(interval time.Duration) func(*Options) {
+	return func(opts *Options) {
+		if opts.CheckpointCfg == nil {
+			opts.CheckpointCfg = new(CheckpointCfg)
+		}
+		opts.CheckpointCfg.GlobalInterval = interval
+		opts.CheckpointCfg.ForceUpdateGlobalInterval = true
+	}
+}
+
 func (o *Options) FillDefaults(dirname string) *Options {
 	if o == nil {
 		o = &Options{}

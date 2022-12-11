@@ -137,7 +137,8 @@ type runner struct {
 		minIncrementalInterval time.Duration
 
 		// minimum global checkpoint interval duration
-		minGlobalInterval time.Duration
+		minGlobalInterval         time.Duration
+		forceUpdateGlobalInterval bool
 
 		// minimum count of uncheckpointed transactions allowed before the next checkpoint
 		minCount int
@@ -271,7 +272,7 @@ func (r *runner) onCheckpointEntries(items ...any) {
 	}
 
 	entry.SetState(ST_Finished)
-	logutil.Debugf("%s is done, takes %s", entry.String(), time.Since(now))
+	logutil.Infof("%s is done, takes %s", entry.String(), time.Since(now))
 
 	r.postCheckpointQueue.Enqueue(entry)
 }
@@ -586,7 +587,7 @@ func (r *runner) fillDefaults() {
 	if r.options.minIncrementalInterval <= 0 {
 		r.options.minIncrementalInterval = time.Minute
 	}
-	if r.options.minGlobalInterval < 10*r.options.minIncrementalInterval {
+	if r.options.minGlobalInterval < 10*r.options.minIncrementalInterval && !r.options.forceUpdateGlobalInterval {
 		r.options.minGlobalInterval = 10 * r.options.minIncrementalInterval
 	}
 	if r.options.minCount <= 0 {

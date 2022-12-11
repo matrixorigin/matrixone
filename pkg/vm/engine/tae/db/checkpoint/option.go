@@ -65,3 +65,9 @@ func WithForceFlushCheckInterval(interval time.Duration) Option {
 		r.options.forceFlushCheckInterval = interval
 	}
 }
+
+func WithForceUpdateGlobalCheckpointInterval(force bool) Option {
+	return func(r *runner) {
+		r.options.forceUpdateGlobalInterval = force
+	}
+}

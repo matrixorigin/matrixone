@@ -4545,10 +4545,11 @@ func TestAppendBat(t *testing.T) {
 	wg.Wait()
 }
 
-func TestGlobalCheckpoint(t *testing.T) {
+func TestGlobalCheckpoint1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
+	options.WithForceUpdateCheckpointGlobalInterval(time.Millisecond * 10)(opts)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(10, 2)
@@ -4569,6 +4570,17 @@ func TestGlobalCheckpoint(t *testing.T) {
 		testutils.WaitExpect(1000, func() bool {
 			return tae.Wal.GetPenddingCnt() == 0
 		})
+	}
+	checkpoints := tae.BGCheckpointRunner.GetAllCheckpoints()
+	var prevEnd types.TS
+	for i, entry := range checkpoints {
+		t.Log(entry.String())
+		if entry.IsIncremental() {
+			assert.True(t, entry.GetStart().Equal(prevEnd.Next()))
+		} else if i != 0 {
+			assert.True(t, entry.GetEnd().Equal(prevEnd.Next()))
+		}
+		prevEnd = entry.GetEnd()
 	}
 
 	tae.restart()

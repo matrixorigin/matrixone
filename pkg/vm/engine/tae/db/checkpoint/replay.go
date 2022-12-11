@@ -157,7 +157,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	}
 	for i := globalIdx; i < bat.Length(); i++ {
 		checkpointEntry := entries[i]
-		logutil.Infof("replay checkpoint %v",checkpointEntry)
+		logutil.Infof("replay checkpoint %v", checkpointEntry)
 		err = datas[i].ApplyReplayTo(r.catalog, dataFactory)
 		if err != nil {
 			return
