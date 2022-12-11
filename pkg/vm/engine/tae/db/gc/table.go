@@ -36,7 +36,7 @@ func (t *GcTable) addBlock(id common.ID, name string) {
 	if blockList != nil {
 		blockList = make([]common.ID, 0)
 	}
-
+	blockList = append(blockList, id)
 	t.table[name] = blockList
 }
 
@@ -49,7 +49,7 @@ func (t *GcTable) deleteBlock(id common.ID, name string) {
 	}
 
 	blockList = append(blockList, id)
-	t.table[name] = blockList
+	t.delete[name] = blockList
 }
 
 func (t *GcTable) UpdateTable(data *logtail.CheckpointData) {
