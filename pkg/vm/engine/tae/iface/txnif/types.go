@@ -221,8 +221,8 @@ type TxnStore interface {
 	LogBlockID(dbId, tid, bid uint64)
 
 	Append(dbId, id uint64, data *containers.Batch) error
-	AddBlksWithMetaLoc(dbId, id uint64, segID uint64,
-		pkVecs []containers.Vector, ids []uint64,
+	AddBlksWithMetaLoc(dbId, id uint64,
+		pkVecs []containers.Vector,
 		file string, metaLocs []string, flag int32) error
 
 	RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) error

@@ -132,18 +132,12 @@ message PrecommitWriteCmd {
 //          database_id = dbId
 //          table_name =  xxx
 //          database_name = xxx
-//          //segment_id :   The id of this bulk-loading segment which belongs to transaction's workspace, and
-//          //               it must be unique within transaction's workspace and snapshot,
-//          //               how to generate segment_id pls ref to ...
-//          segment_id   = xxx
-//
 //          // one S3 object file can hold many blocks.
 //          file_name = "s3 file name"
 //
-//          //  bat holds meta info for many blocks.
-//          //  "block_id" : The id of block which should be unique within this segment.
+//          //  bat holds meta locations for many blocks.
 //          //  "meta_loc" : the location of block data which contains BF and ZM index and be sorted by primary key.
-//          bat.attrs = {"block_id", "meta_loc"}
+//          bat.attrs = {"meta_loc"}
 //      }
 
 // deletes/updates involves many rows need to write S3.
@@ -198,7 +192,6 @@ message Entry {
     string    table_name = 4;
     string    database_name = 5;
     string    file_name = 6;
-    uint64    segment_id = 7;
     Batch     bat = 8;
 };
 

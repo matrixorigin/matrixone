@@ -58,6 +58,8 @@ type InsertNode interface {
 	IsRowDeleted(row uint32) bool
 	IsPersisted() bool
 	PrintDeletes() string
+	GetColumnDataByIds([]int, []*bytes.Buffer) (*model.BlockView, error)
+	GetColumnDataById(int, *bytes.Buffer) (*model.ColumnView, error)
 	FillBlockView(view *model.BlockView, buffers []*bytes.Buffer, colIdxes []int) (err error)
 	FillColumnView(*model.ColumnView, *bytes.Buffer) error
 	Window(start, end uint32) (*containers.Batch, error)
@@ -181,7 +183,7 @@ type memoryNode struct {
 	lsn    uint64
 	typ    txnbase.NodeState
 	//TODO::the above fields will be removed.
-
+	common.RefHelper
 	bnode *baseNode
 	//data resides in.
 	data    *containers.Batch
@@ -343,8 +345,8 @@ func (n *memoryNode) makeLogEntry() wal.LogEntry {
 
 type persistedNode struct {
 	common.RefHelper
-	bnode *baseNode
-	//pk         containers.Vector
+	bnode   *baseNode
+	rows    uint32
 	deletes *roaring.Bitmap
 	//ZM and BF index for primary key
 	pkIndex indexwrapper.Index
@@ -352,8 +354,47 @@ type persistedNode struct {
 	indexes map[int]indexwrapper.Index
 }
 
-func newPersistedNode(inode InsertNode) *persistedNode {
-	return nil
+func newPersistedNode(bnode *baseNode) *persistedNode {
+	node := &persistedNode{
+		bnode: bnode,
+	}
+	node.OnZeroCB = node.close
+	if bnode.meta.HasPersistedData() {
+		node.init()
+	}
+	return node
+}
+
+func (n *persistedNode) close() {
+	for i, index := range n.indexes {
+		index.Close()
+		n.indexes[i] = nil
+	}
+	n.indexes = nil
+}
+
+func (n *persistedNode) init() {
+	n.indexes = make(map[int]indexwrapper.Index)
+	schema := n.bnode.meta.GetSchema()
+	pkIdx := -1
+	if schema.HasPK() {
+		pkIdx = schema.GetSingleSortKeyIdx()
+	}
+	for i := range schema.ColDefs {
+		index := indexwrapper.NewImmutableIndex()
+		if err := index.ReadFrom(
+			n.bnode.bufMgr,
+			n.bnode.fs,
+			n.bnode.meta.AsCommonID(),
+			n.bnode.meta.GetMetaLoc(),
+			schema.ColDefs[i]); err != nil {
+			panic(err)
+		}
+		n.indexes[i] = index
+		if i == pkIdx {
+			n.pkIndex = index
+		}
+	}
 }
 
 func (n *persistedNode) Rows() uint32 {
@@ -411,4 +452,15 @@ func (n *baseNode) Rows() uint32 {
 	}
 	panic(moerr.NewInternalError(
 		fmt.Sprintf("bad insertNode %s", n.meta.String())))
+}
+
+func (n *baseNode) TryUpgrade() (err error) {
+	if n.storage.mnode != nil {
+		n.storage.mnode = nil
+	}
+	if n.storage.pnode == nil {
+		n.storage.pnode = newPersistedNode(n)
+		n.storage.pnode.Ref()
+	}
+	return
 }

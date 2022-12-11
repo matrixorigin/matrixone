@@ -180,9 +180,8 @@ func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
 }
 
 func (store *txnStore) AddBlksWithMetaLoc(
-	dbId, tid, sid uint64,
+	dbId, tid uint64,
 	pkVecs []containers.Vector,
-	bids []uint64,
 	file string,
 	metaLoc []string,
 	flag int32,
@@ -192,7 +191,7 @@ func (store *txnStore) AddBlksWithMetaLoc(
 	if err != nil {
 		return err
 	}
-	return db.AddBlksWithMetaLoc(tid, sid, pkVecs, bids, file, metaLoc, flag)
+	return db.AddBlksWithMetaLoc(tid, pkVecs, file, metaLoc, flag)
 }
 
 func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {

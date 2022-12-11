@@ -58,8 +58,8 @@ type Relation interface {
 	Write(context.Context, *batch.Batch) error
 
 	//AddBlksWithMetaLoc just add  non-appendable blocks into txn's workspace.
-	AddBlksWithMetaLoc(ctx context.Context, seg uint64, pks []containers.Vector,
-		ids []uint64, file string, metaloc []string, flag int32) error
+	AddBlksWithMetaLoc(ctx context.Context, pks []containers.Vector,
+		file string, metaloc []string, flag int32) error
 
 	//Delete by primary key or physical addr.
 	Delete(context.Context, *batch.Batch, string) error

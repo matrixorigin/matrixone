@@ -95,7 +95,6 @@ const (
 	BlockMeta_CommitTs   = "committs"
 	BlockMeta_SegmentID  = "segment_id"
 
-	BlockMeta_ID_ON_FS      = "block_id"
 	BlockMeta_MetaLoc_ON_FS = "meta_loc"
 
 	SystemCatalogName  = "def"
@@ -177,8 +176,7 @@ const (
 	BLOCKMETA_COMMITTS_IDX   = 5
 	BLOCKMETA_SEGID_IDX      = 6
 
-	BLOCKMETA_ID_ON_FS_IDX      = 0
-	BLOCKMETA_METALOC_ON_FS_IDX = 1
+	BLOCKMETA_METALOC_ON_FS_IDX = 0
 )
 
 type BlockInfo struct {
@@ -295,7 +293,6 @@ var (
 	}
 
 	MoTableMetaSchemaOnFS = []string{
-		BlockMeta_ID_ON_FS,
 		BlockMeta_MetaLoc_ON_FS,
 	}
 

@@ -123,9 +123,7 @@ func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
 
 func (db *txnDB) AddBlksWithMetaLoc(
 	tid uint64,
-	sid uint64,
 	pkVecs []containers.Vector,
-	bids []uint64,
 	file string,
 	metaLocs []string,
 	flag int32) error {
@@ -136,7 +134,7 @@ func (db *txnDB) AddBlksWithMetaLoc(
 	if table.IsDeleted() {
 		return moerr.NewNotFound()
 	}
-	return table.AddBlksWithMetaLoc(sid, pkVecs, bids, file, metaLocs, flag)
+	return table.AddBlksWithMetaLoc(pkVecs, file, metaLocs, flag)
 }
 
 func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {

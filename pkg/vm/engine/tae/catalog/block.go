@@ -89,6 +89,21 @@ func NewStandaloneBlock(segment *SegmentEntry, id uint64, ts types.TS) *BlockEnt
 	return e
 }
 
+func NewStandaloneBlockWithLoc(
+	segment *SegmentEntry,
+	id uint64,
+	ts types.TS,
+	metaLoc string,
+	delLoc string) *BlockEntry {
+	e := &BlockEntry{
+		MetaBaseEntry: NewMetaBaseEntry(id),
+		segment:       segment,
+		state:         ES_Appendable,
+	}
+	e.MetaBaseEntry.CreateWithLoc(ts, metaLoc, delLoc)
+	return e
+}
+
 func NewSysBlockEntry(segment *SegmentEntry, id uint64) *BlockEntry {
 	e := &BlockEntry{
 		MetaBaseEntry: NewMetaBaseEntry(id),

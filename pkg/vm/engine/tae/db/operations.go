@@ -161,13 +161,13 @@ type WriteReq struct {
 	DatabaseId uint64
 	TableID    uint64
 	//transient segment id.
-	SegID        uint64
+	//SegID        uint64
 	DatabaseName string
 	TableName    string
 	Batch        *batch.Batch
 	//S3 object file name
 	FileName string
-	Blks     []uint64
+	//Blks     []uint64
 	MetaLocs []string
 	//for delete on S3
 	DeltaLocs []string

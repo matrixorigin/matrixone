@@ -16,11 +16,15 @@ package txnimpl
 
 import (
 	"bytes"
+	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -31,16 +35,22 @@ type node struct {
 }
 
 // NewNode creates a InsertNode object with data in S3/FS.
-func NewNode(tbl *txnTable, meta *catalog.BlockEntry) *node {
-	return nil
+func NewNode(
+	tbl *txnTable,
+	fs *objectio.ObjectFS,
+	mgr base.INodeManager,
+	sched tasks.TaskScheduler,
+	meta *catalog.BlockEntry,
+) *node {
+	impl := new(node)
+	impl.baseNode = newBaseNode(tbl, fs, mgr, sched, meta)
+	impl.storage.pnode = newPersistedNode(impl.baseNode)
+	impl.storage.pnode.Ref()
+	return impl
 }
 
 func (n *node) Close() error {
-	for i, index := range n.storage.pnode.indexes {
-		index.Close()
-		n.storage.pnode.indexes[i] = nil
-	}
-	n.storage.pnode.indexes = nil
+	n.storage.pnode.close()
 	return nil
 }
 
@@ -48,19 +58,25 @@ func (n *node) Append(data *containers.Batch, offset uint32) (appended uint32, e
 	panic("not supported")
 }
 
-func (n *node) RangeDelete(start uint32, end uint32) error {
-	//TODO::
-	panic("not implemented yet ")
+func (n *node) RangeDelete(start uint32, end uint32) (err error) {
+	if n.storage.pnode.deletes == nil {
+		n.storage.pnode.deletes = roaring.New()
+	}
+	n.storage.pnode.deletes.AddRange(uint64(start), uint64(end))
+	return
 }
 
 func (n *node) IsRowDeleted(row uint32) bool {
-	//TODO::
-	panic("not implemented yet ")
+	return n.storage.pnode.deletes != nil &&
+		n.storage.pnode.deletes.ContainsInt(int(row))
 }
 
 func (n *node) PrintDeletes() string {
-	//TODO::
-	panic("not implemented yet ")
+	if n.storage.pnode.deletes == nil {
+		return "NoDeletes"
+	}
+	return n.storage.pnode.deletes.String()
+
 }
 
 func (n *node) FillBlockView(
@@ -114,4 +130,14 @@ func (n *node) GetAppends() []*appendInfo {
 
 func (n *node) MakeCommand(uint32, bool) (txnif.TxnCmd, wal.LogEntry, error) {
 	return nil, nil, nil
+}
+
+func (n *node) GetColumnDataByIds([]int, []*bytes.Buffer) (*model.BlockView, error) {
+	//TODO::
+	panic("not implemented yet ")
+}
+
+func (n *node) GetColumnDataById(int, *bytes.Buffer) (*model.ColumnView, error) {
+	//TODO::
+	panic("not implemented yet ")
 }

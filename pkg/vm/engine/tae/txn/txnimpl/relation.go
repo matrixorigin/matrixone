@@ -163,18 +163,14 @@ func (h *txnRelation) Append(data *containers.Batch) error {
 }
 
 func (h *txnRelation) AddBlksWithMetaLoc(
-	sid uint64,
 	pkVecs []containers.Vector,
-	ids []uint64,
 	file string,
 	metaLocs []string,
 	flag int32) error {
 	return h.Txn.GetStore().AddBlksWithMetaLoc(
 		h.table.entry.GetDB().ID,
 		h.table.entry.GetID(),
-		sid,
 		pkVecs,
-		ids,
 		file,
 		metaLocs,
 		flag,

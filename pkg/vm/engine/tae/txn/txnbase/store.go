@@ -32,9 +32,9 @@ func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                          
 func (store *NoopTxnStore) Close() error                                         { return nil }
 func (store *NoopTxnStore) Append(dbId, id uint64, data *containers.Batch) error { return nil }
 func (store *NoopTxnStore) AddBlksWithMetaLoc(
-	dbId, tid, sid uint64,
+	dbId, tid uint64,
 	pks []containers.Vector,
-	bids []uint64, file string,
+	file string,
 	metaLocs []string,
 	flag int32) error {
 	return nil

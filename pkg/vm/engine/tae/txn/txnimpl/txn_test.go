@@ -96,12 +96,12 @@ func TestInsertNode(t *testing.T) {
 		return func() {
 			defer wg.Done()
 			cnt := getNodes()
-			nodes := make([]*memInsertNode, cnt)
+			nodes := make([]*anode, cnt)
 			for i := 0; i < cnt; i++ {
 				var cid common.ID
 				cid.BlockID = id
 				cid.Idx = uint16(i)
-				n := NewMemInsertNodeWithID(tbl, tbl.store.nodesMgr, &cid, tbl.store.driver)
+				n := NewANodeWithID(tbl, tbl.store.nodesMgr, &cid, tbl.store.driver)
 				nodes[i] = n
 				h := tbl.store.nodesMgr.Pin(n.storage.mnode)
 				var err error

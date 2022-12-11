@@ -356,9 +356,9 @@ func (h *Handle) loadPksFromFS(
 		return
 	}
 	//start job for loading primary keys of blocks
-	req.Jobs = make([]*tasks.Job, len(req.Blks))
+	req.Jobs = make([]*tasks.Job, len(req.MetaLocs))
 	req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
-	for i := range req.Blks {
+	for i := range req.MetaLocs {
 		req.Jobs[i] = tasks.NewJob(
 			fmt.Sprintf("load-primaykey-%s", req.MetaLocs[i]),
 			ctx,
@@ -521,10 +521,10 @@ func (h *Handle) HandlePreCommitWrite(
 				panic(err)
 			}
 			req := db.WriteReq{
-				Type:         db.EntryType(pe.EntryType),
-				DatabaseId:   pe.GetDatabaseId(),
-				TableID:      pe.GetTableId(),
-				SegID:        pe.GetSegmentId(),
+				Type:       db.EntryType(pe.EntryType),
+				DatabaseId: pe.GetDatabaseId(),
+				TableID:    pe.GetTableId(),
+				//SegID:        pe.GetSegmentId(),
 				DatabaseName: pe.GetDatabaseName(),
 				TableName:    pe.GetTableName(),
 				FileName:     pe.GetFileName(),
@@ -533,14 +533,14 @@ func (h *Handle) HandlePreCommitWrite(
 			if req.FileName != "" {
 				rows := catalog.GenRows(req.Batch)
 				if req.Type == db.EntryInsert {
-					req.Blks = make([]uint64, len(rows))
+					//req.Blks = make([]uint64, len(rows))
 					req.MetaLocs = make([]string, len(rows))
 				} else {
 					req.DeltaLocs = make([]string, len(rows))
 				}
 				for i, row := range rows {
 					if req.Type == db.EntryInsert {
-						req.Blks[i] = row[catalog.BLOCKMETA_ID_ON_FS_IDX].(uint64)
+						//req.Blks[i] = row[catalog.BLOCKMETA_ID_ON_FS_IDX].(uint64)
 						req.MetaLocs[i] = string(row[catalog.BLOCKMETA_METALOC_ON_FS_IDX].([]byte))
 					} else {
 						req.DeltaLocs[i] = string(row[0].([]byte))
@@ -726,7 +726,7 @@ func (h *Handle) HandleWrite(
 				}
 				pkVecs = append(pkVecs, req.JobRes[i].Res.(containers.Vector))
 			}
-			err = tb.AddBlksWithMetaLoc(ctx, req.SegID, pkVecs, req.Blks, req.FileName, req.MetaLocs, 0)
+			err = tb.AddBlksWithMetaLoc(ctx, pkVecs, req.FileName, req.MetaLocs, 0)
 			return
 		}
 		//Appends a batch of data into table.

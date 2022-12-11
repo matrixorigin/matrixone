@@ -47,6 +47,7 @@ func NewANode(
 	impl := new(anode)
 	impl.baseNode = newBaseNode(tbl, fs, mgr, sched, meta)
 	impl.storage.mnode = newMemoryNode(impl.baseNode)
+	impl.storage.mnode.Ref()
 
 	//TODO::data of anode will not be managed by nodeManager
 	impl.storage.mnode.Node = buffer.NewNode(impl.storage.mnode, mgr, *meta.AsCommonID(), 0)
@@ -60,8 +61,8 @@ func NewANode(
 	return impl
 }
 
-// NewMemInsertNodeWithID is just for test.
-func NewMemInsertNodeWithID(
+// NewANodeWithID is just for test.
+func NewANodeWithID(
 	tbl *txnTable,
 	mgr base.INodeManager,
 	id *common.ID,
@@ -100,6 +101,9 @@ func (n *anode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint6
 }
 
 func (n *anode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCmd, entry wal.LogEntry, err error) {
+	if n.IsPersisted() {
+		return nil, nil, nil
+	}
 	h, err := n.bufMgr.TryPin(n.storage.mnode, time.Second)
 	if err != nil {
 		return
@@ -353,4 +357,14 @@ func (n *anode) Window(start, end uint32) (bat *containers.Batch, err error) {
 	bat = n.storage.mnode.data.CloneWindow(int(start), int(end-start))
 	bat.Compact()
 	return
+}
+
+func (n *anode) GetColumnDataByIds([]int, []*bytes.Buffer) (*model.BlockView, error) {
+	//TODO::
+	panic("not implemented yet ")
+}
+
+func (n *anode) GetColumnDataById(int, *bytes.Buffer) (*model.ColumnView, error) {
+	//TODO::
+	panic("not implemented yet ")
 }
