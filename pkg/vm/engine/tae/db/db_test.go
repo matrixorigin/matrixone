@@ -4571,6 +4571,7 @@ func TestGlobalCheckpoint1(t *testing.T) {
 			return tae.Wal.GetPenddingCnt() == 0
 		})
 	}
+
 	checkpoints := tae.BGCheckpointRunner.GetAllCheckpoints()
 	var prevEnd types.TS
 	for i, entry := range checkpoints {
@@ -4584,4 +4585,20 @@ func TestGlobalCheckpoint1(t *testing.T) {
 	}
 
 	tae.restart()
+	checkpoints = tae.BGCheckpointRunner.GetAllCheckpoints()
+	prevEnd = types.TS{}
+	for i, entry := range checkpoints {
+		t.Log(entry.String())
+		if entry.IsIncremental() {
+			assert.True(t, entry.GetStart().Equal(prevEnd.Next()))
+		} else if i != 0 {
+			assert.True(t, entry.GetEnd().Equal(prevEnd.Next()))
+		}
+		prevEnd = entry.GetEnd()
+	}
+
+	for _, entry := range checkpoints {
+		assert.NoError(t, entry.GCEntry(tae.Fs))
+		assert.NoError(t, entry.GCMetadata(tae.Fs))
+	}
 }

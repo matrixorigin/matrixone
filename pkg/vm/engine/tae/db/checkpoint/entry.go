@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -175,4 +176,20 @@ func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, 
 	}
 	ins, del, cnIns, err = data.GetTableData(tid)
 	return
+}
+
+func (e *CheckpointEntry) GCMetadata(fs *objectio.ObjectFS) error {
+	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, e.start, e.end)
+	err := fs.Delete(name)
+	logutil.Infof("GC checkpoint metadata %v, err %v", e.String(), err)
+	return err
+}
+
+func (e *CheckpointEntry) GCEntry(fs *objectio.ObjectFS) error {
+	fileName, _, err := blockio.DecodeMetaLocToMetas(e.location)
+	defer logutil.Infof("GC checkpoint metadata %v, err %v", e.String(), err)
+	if err != nil {
+		return err
+	}
+	return fs.Delete(fileName)
 }
