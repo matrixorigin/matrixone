@@ -307,7 +307,7 @@ import (
 %token <str> OVER PRECEDING FOLLOWING GROUPS
 
 // Supported SHOW tokens
-%token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
+%token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODELIST LOCKS
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
@@ -364,7 +364,7 @@ import (
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
-%type <statement> show_function_status_stmt
+%type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> alter_account_stmt alter_user_stmt update_stmt use_stmt update_no_with_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
@@ -2165,6 +2165,8 @@ show_stmt:
 |   show_grants_stmt
 |   show_collation_stmt
 |   show_function_status_stmt
+|   show_node_list_stmt
+|   show_locks_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -2211,6 +2213,18 @@ show_function_status_stmt:
             Like: $4,
             Where: $5,
         }
+    }
+
+show_node_list_stmt:
+    SHOW NODELIST
+    {
+       $$ = &tree.ShowNodeList{}
+    }
+
+show_locks_stmt:
+    SHOW LOCKS
+    {
+       $$ = &tree.ShowLocks{}
     }
 
 show_target_filter_stmt:
@@ -7769,6 +7783,8 @@ reserved_keyword:
 |   PRECEDING
 |   FOLLOWING
 |   GROUPS
+|   NODELIST
+|   LOCKS
 
 non_reserved_keyword:
     ACCOUNT
