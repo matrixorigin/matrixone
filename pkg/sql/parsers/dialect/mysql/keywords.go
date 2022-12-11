@@ -275,7 +275,7 @@ func init() {
 		"never":                    NEVER,
 		"not":                      NOT,
 		"no":                       NO,
-		"node":                     NODE,
+		"nodelist":                 NODELIST,
 		"no_write_to_binlog":       UNUSED,
 		"null":                     NULL,
 		"nulls":                    NULLS,
