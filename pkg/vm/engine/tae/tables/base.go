@@ -129,6 +129,8 @@ func (blk *baseBlock) TryUpgrade() (err error) {
 
 	if !blk.node.CompareAndSwap(node, nnode) {
 		nnode.Unref()
+	} else {
+		node.Unref()
 	}
 	return
 }
