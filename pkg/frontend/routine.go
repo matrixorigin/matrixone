@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"sync"
 	"time"
 
@@ -48,7 +49,21 @@ type Routine struct {
 
 	cancelled bool
 
+	connectionBeCounted bool
+
 	mu sync.Mutex
+}
+
+func (rt *Routine) setConnectionBeCounted(b bool) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.connectionBeCounted = b
+}
+
+func (rt *Routine) isConnectionBeCounted() bool {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.connectionBeCounted
 }
 
 func (rt *Routine) setCancelled(b bool) {
@@ -145,6 +160,11 @@ func (rt *Routine) handleRequest(req *Request) error {
 	ses.SetRequestContext(tenantCtx)
 	executor.SetSession(rt.getSession())
 
+	if !rt.isConnectionBeCounted() {
+		rt.setConnectionBeCounted(true)
+		metric.ConnectionCounter(ses.GetTenantInfo().GetTenant()).Inc()
+	}
+
 	if resp, err = executor.ExecRequest(tenantCtx, ses, req); err != nil {
 		logErrorf(ses.GetConciseProfile(), "rt execute request failed. error:%v \n", err)
 	}
@@ -169,6 +189,9 @@ func (rt *Routine) handleRequest(req *Request) error {
 	quit = quit || rt.isCancelled()
 
 	if quit {
+		if rt.isConnectionBeCounted() {
+			metric.ConnectionCounter(ses.GetTenantInfo().GetTenant()).Dec()
+		}
 		defer ses.Dispose()
 
 		//ensure cleaning the transaction
