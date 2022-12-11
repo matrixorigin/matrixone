@@ -4544,3 +4544,32 @@ func TestAppendBat(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestGlobalCheckpoint(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(10, 2)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 40)
+	batchCnt := 8
+	bats := bat.Split(batchCnt)
+
+	tae.createRelAndAppend(bats[0], true)
+	testutils.WaitExpect(1000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	for i := 1; i < batchCnt; i++ {
+		tae.DoAppend(bats[i])
+		testutils.WaitExpect(1000, func() bool {
+			return tae.Wal.GetPenddingCnt() == 0
+		})
+	}
+
+	tae.restart()
+}

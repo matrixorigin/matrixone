@@ -147,9 +147,17 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		return
 	}
 	t0 = time.Now()
+	globalIdx := 0
 	for i := 0; i < bat.Length(); i++ {
 		checkpointEntry := entries[i]
+		if !checkpointEntry.IsIncremental() {
+			globalIdx = i
+		}
 		r.tryAddNewCheckpointEntry(checkpointEntry)
+	}
+	for i := globalIdx; i < bat.Length(); i++ {
+		checkpointEntry := entries[i]
+		logutil.Infof("replay checkpoint %v",checkpointEntry)
 		err = datas[i].ApplyReplayTo(r.catalog, dataFactory)
 		if err != nil {
 			return

@@ -196,7 +196,7 @@ func NewRunner(
 		wal:       wal,
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.start.Less(b.start)
+		return a.end.Less(b.end)
 	}, btree.Options{
 		NoLocks: true,
 	})
@@ -414,8 +414,22 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 }
 
 func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) (err error) {
-	// TODO: do global checkpoint
-	return r.doIncrementalCheckpoint(entry)
+	factory := logtail.GlobalCheckpointDataFactory(entry.end)
+	data, err := factory(r.catalog)
+	if err != nil {
+		return
+	}
+	defer data.Close()
+
+	filename := uuid.NewString()
+	writer := blockio.NewWriter(context.Background(), r.fs, filename)
+	blks, err := data.WriteTo(writer)
+	if err != nil {
+		return
+	}
+	location := blockio.EncodeMetalocFromMetas(filename, blks)
+	entry.SetLocation(location)
+	return
 }
 
 func (r *runner) onPostCheckpointEntries(entries ...any) {
@@ -459,7 +473,7 @@ func (r *runner) tryAddNewCheckpointEntry(entry *CheckpointEntry) (success bool)
 
 	// if it is not the right candidate, skip this request
 	// [startTs, endTs] --> [endTs+1, ?]
-	if !maxEntry.GetEnd().Next().Equal(entry.GetStart()) {
+	if entry.IsIncremental() && !maxEntry.GetEnd().Next().Equal(entry.GetStart()) {
 		success = false
 		return
 	}
@@ -540,7 +554,7 @@ func (r *runner) tryScheduleCheckpoint() {
 
 	if prevGlobal != nil && r.globalPolicy.Check(prevGlobal.GetEnd()) {
 		// FIXME
-		r.tryScheduleGlobalCheckpoint(entry.GetEnd())
+		r.tryScheduleGlobalCheckpoint(entry.GetEnd().Next())
 		return
 	}
 
