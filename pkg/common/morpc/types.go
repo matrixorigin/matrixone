@@ -67,7 +67,9 @@ type RPCMessage struct {
 	// Message raw rpc message
 	Message Message
 
-	cancel context.CancelFunc
+	cancel         context.CancelFunc
+	stream         bool
+	streamSequence uint32
 }
 
 // RPCClient morpc is not a normal remote method call, rather it is a message-based asynchronous
