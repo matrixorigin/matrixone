@@ -376,7 +376,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 			for _, f := range messages {
 				id := f.message.Message.GetID()
 				if stopped {
-					rb.requestDone(ctx, id, nil, backendClosed, nil)
+					rb.requestDone(ctx, id, RPCMessage{}, backendClosed, nil)
 					continue
 				}
 
@@ -394,7 +394,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 							rb.logger.Error("write request failed",
 								zap.Uint64("request-id", f.message.Message.GetID()),
 								zap.Error(err))
-							rb.requestDone(ctx, id, nil, err, nil)
+							rb.requestDone(ctx, id, RPCMessage{}, err, nil)
 						}
 					}
 				}
@@ -412,7 +412,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 
 func (rb *remoteBackend) doWrite(ctx context.Context, id uint64, msg backendSendMessage) time.Duration {
 	if !rb.options.filter(msg.message.Message, rb.remote) {
-		rb.requestDone(ctx, id, nil, messageSkipped, nil)
+		rb.requestDone(ctx, id, RPCMessage{}, messageSkipped, nil)
 		return 0
 	}
 
@@ -423,7 +423,7 @@ func (rb *remoteBackend) doWrite(ctx context.Context, id uint64, msg backendSend
 
 	v, err := msg.message.GetTimeoutFromContext()
 	if err != nil {
-		rb.requestDone(ctx, id, nil, err, nil)
+		rb.requestDone(ctx, id, RPCMessage{}, err, nil)
 		return 0
 	}
 
@@ -442,7 +442,7 @@ func (rb *remoteBackend) doWrite(ctx context.Context, id uint64, msg backendSend
 		rb.logger.Error("write request failed",
 			zap.Uint64("request-id", id),
 			zap.Error(err))
-		rb.requestDone(ctx, id, nil, err, nil)
+		rb.requestDone(ctx, id, RPCMessage{}, err, nil)
 		return 0
 	}
 	return v
@@ -480,7 +480,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 				wg.Add(1)
 			}
 			resp := msg.(RPCMessage).Message
-			rb.requestDone(ctx, resp.GetID(), resp, nil, cb)
+			rb.requestDone(ctx, resp.GetID(), msg.(RPCMessage), nil, cb)
 			if rb.options.hasPayloadResponse {
 				wg.Wait()
 			}
@@ -521,7 +521,7 @@ func (rb *remoteBackend) makeAllWritesDoneWithClosed(ctx context.Context) {
 	for {
 		select {
 		case m := <-rb.writeC:
-			rb.requestDone(ctx, m.message.Message.GetID(), nil, backendClosed, nil)
+			rb.requestDone(ctx, m.message.Message.GetID(), RPCMessage{}, backendClosed, nil)
 			m.done()
 		default:
 			return
@@ -562,7 +562,7 @@ func (rb *remoteBackend) cancelActiveStreams() {
 	defer rb.mu.Unlock()
 
 	for _, st := range rb.mu.activeStreams {
-		st.done(nil)
+		st.done(RPCMessage{})
 	}
 }
 
@@ -583,7 +583,8 @@ func (rb *remoteBackend) stopWriteLoop() {
 	close(rb.stopWriteC)
 }
 
-func (rb *remoteBackend) requestDone(ctx context.Context, id uint64, response Message, err error, cb func()) {
+func (rb *remoteBackend) requestDone(ctx context.Context, id uint64, msg RPCMessage, err error, cb func()) {
+	response := msg.Message
 	if ce := rb.logger.Check(zap.DebugLevel, "read response"); ce != nil {
 		debugStr := ""
 		if response != nil {
@@ -607,7 +608,7 @@ func (rb *remoteBackend) requestDone(ctx context.Context, id uint64, response Me
 	} else if st, ok := rb.mu.activeStreams[id]; ok {
 		rb.mu.Unlock()
 		if response != nil {
-			st.done(response)
+			st.done(msg)
 		}
 	} else {
 		// future has been removed, e.g. it has timed out.
@@ -764,8 +765,10 @@ type stream struct {
 	cancel           context.CancelFunc
 
 	// reset fields
-	id uint64
-	mu struct {
+	id                   uint64
+	sequence             uint32
+	lastReceivedSequence uint32
+	mu                   struct {
 		sync.RWMutex
 		closed bool
 	}
@@ -790,6 +793,7 @@ func newStream(c chan Message,
 
 func (s *stream) init(id uint64, unlockAfterClose bool) {
 	s.id = id
+	s.sequence = 0
 	s.unlockAfterClose = unlockAfterClose
 	s.mu.closed = false
 	for {
@@ -826,7 +830,15 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 		return moerr.NewStreamClosedNoCtx()
 	}
 
-	return s.sendFunc(backendSendMessage{message: RPCMessage{Ctx: ctx, Message: request}})
+	s.sequence++
+	return s.sendFunc(backendSendMessage{
+		message: RPCMessage{
+			Ctx:            ctx,
+			Message:        request,
+			stream:         true,
+			streamSequence: s.sequence,
+		},
+	})
 }
 
 func (s *stream) Receive() (chan Message, error) {
@@ -846,6 +858,7 @@ func (s *stream) Close() error {
 		return nil
 	}
 
+	// the stream is reuseable, so use nil to notify stream is closed
 	s.c <- nil
 	s.mu.closed = true
 	s.unregisterFunc(s)
@@ -856,7 +869,7 @@ func (s *stream) ID() uint64 {
 	return s.id
 }
 
-func (s *stream) done(message Message) {
+func (s *stream) done(message RPCMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -864,7 +877,17 @@ func (s *stream) done(message Message) {
 		return
 	}
 
-	s.c <- message
+	response := message.Message
+	if response != nil && !message.stream {
+		panic("BUG")
+	}
+	if response != nil &&
+		message.streamSequence != s.lastReceivedSequence+1 {
+		response = nil
+	}
+
+	s.lastReceivedSequence = message.streamSequence
+	s.c <- response
 }
 
 type backendSendMessage struct {
