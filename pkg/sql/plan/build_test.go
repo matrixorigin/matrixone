@@ -965,6 +965,7 @@ func runOneStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 
 func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJSON bool, toFile bool) {
 	for _, sql := range sqls {
+		t.Log(sql)
 		logicPlan, err := runOneStmt(opt, t, sql)
 		if err != nil {
 			t.Fatalf("%+v, sql=%v", err, sql)

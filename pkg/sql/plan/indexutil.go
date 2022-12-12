@@ -21,7 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"strings"
 )
+
+// The name of the index column in the index table corresponding to the original table
+const Index_Column_Name string = "__mo_index_key"
 
 // When the original table contains an index table of multi table deletion statement, build a multi table join query
 // execution plan to query the rowid of the original table and the index table respectively
@@ -97,7 +101,7 @@ func buildLeftJoinForMultTableDelete(ctx CompilerContext, stmt *tree.Delete) (*P
 		for i := 0; i < len(unqiueIndexDef.TableNames); i++ {
 			// build left join with origin table and index table
 			indexTableExpr := buildIndexTableExpr(unqiueIndexDef.TableNames[i])
-			JoinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[i], unqiueIndexDef.Fields[i].Cols[0].Name)
+			JoinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[i], unqiueIndexDef.Fields[i])
 			leftJoinTableExpr = &tree.JoinTableExpr{
 				JoinType: tree.JOIN_TYPE_LEFT,
 				Left:     tableRefExpr,
@@ -209,7 +213,7 @@ func buildLeftJoinForSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (
 	for i := 0; i < len(unqiueIndexDef.TableNames); i++ {
 		// build left join with origin table and index table
 		indexTableExpr := buildIndexTableExpr(unqiueIndexDef.TableNames[i])
-		JoinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[i], unqiueIndexDef.Fields[i].Cols[0].Name)
+		JoinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[i], unqiueIndexDef.Fields[i])
 		leftJoinTableExpr = &tree.JoinTableExpr{
 			JoinType: tree.JOIN_TYPE_LEFT,
 			Left:     originTableExpr,
@@ -333,13 +337,45 @@ func buildIndexTableExpr(indexTableName string) tree.TableExpr {
 }
 
 // construct equivalent connection conditions between original table and index table
-func buildJoinOnCond(tbinfo *tableInfo, originTableName string, indexTableName string, uniqueColName string) *tree.OnJoinCond {
+func buildJoinOnCond(tbinfo *tableInfo, originTableName string, indexTableName string, indexField *plan.Field) *tree.OnJoinCond {
 	originTableAlias := tbinfo.baseName2AliasMap[originTableName]
+	uniqueColName := indexField.Parts[0]
 	leftExpr := tree.SetUnresolvedName(originTableAlias, uniqueColName)
 	rightExpr := tree.SetUnresolvedName(indexTableName, uniqueColName)
 
 	onCondExpr := tree.NewComparisonExprWithSubop(tree.EQUAL, tree.EQUAL, leftExpr, rightExpr)
 	return tree.NewOnJoinCond(onCondExpr)
+}
+
+// construct equivalent connection conditions between original table and index table
+func buildJoinOnCondNew(tbinfo *tableInfo, originTableName string, indexTableName string, indexField *plan.Field) *tree.OnJoinCond {
+	originTableAlias := tbinfo.baseName2AliasMap[originTableName]
+	// If it is a single column index
+	if len(indexField.Parts) == 1 {
+		uniqueColName := indexField.Parts[0]
+		leftExpr := tree.SetUnresolvedName(originTableAlias, uniqueColName)
+		rightExpr := tree.SetUnresolvedName(indexTableName, strings.ToLower(Index_Column_Name))
+
+		onCondExpr := tree.NewComparisonExprWithSubop(tree.EQUAL, tree.EQUAL, leftExpr, rightExpr)
+		return tree.NewOnJoinCond(onCondExpr)
+	} else { // If it is a composite index
+		funcName := tree.SetUnresolvedName(strings.ToLower("serial"))
+		// build function parameters
+		exprs := make(tree.Exprs, len(indexField.Cols))
+		for i, col := range indexField.Cols {
+			exprs[i] = tree.SetUnresolvedName(originTableAlias, col.Name)
+		}
+
+		// build composite index serialize function expression
+		leftExpr := &tree.FuncExpr{
+			Func:  tree.FuncName2ResolvableFunctionReference(funcName),
+			Exprs: exprs,
+		}
+
+		rightExpr := tree.SetUnresolvedName(indexTableName, strings.ToLower(Index_Column_Name))
+		onCondExpr := tree.NewComparisonExprWithSubop(tree.EQUAL, tree.EQUAL, leftExpr, rightExpr)
+		return tree.NewOnJoinCond(onCondExpr)
+	}
 }
 
 // table information to be deleted (original table and index table)

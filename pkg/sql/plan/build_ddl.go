@@ -542,6 +542,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			})
 			field.Cols = append(field.Cols, colDef)
 		} else {
+			// Creating Index Table Column Name for a composite unique index
 			keyName = util.BuildCompositePrimaryKeyColumnName(field.Parts)
 			colDef := &ColDef{
 				Name: keyName,
