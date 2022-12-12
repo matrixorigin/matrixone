@@ -1203,15 +1203,17 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	tRM.rwlock.Unlock()
 	ctx := context.TODO()
 
+
 	pro := routine.getProtocol()
-	if !ok {
-		return moerr.NewInternalError(ctx, "routine does not exist")
-	}
 	packet, ok := msg.(*Packet)
 	pro.SetSequenceID(uint8(packet.SequenceID + 1))
 	if !ok {
 		return moerr.NewInternalError(ctx, "message is not Packet")
 	}
+
+	ses := NewSession(pro, nil, pu, nil, false)
+	ses.SetRequestContext(ctx)
+	pro.SetSession(ses)
 
 	length := packet.Length
 	payload := packet.Payload
@@ -1633,13 +1635,13 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 				arg := scanArgs[i]
 				val := *(arg.(*[]byte))
 
-				column, err := mrs.GetColumn(i)
+				column, err := mrs.GetColumn(context.TODO(), i)
 				require.NoError(t, err)
 
 				col, ok := column.(*MysqlColumn)
 				require.True(t, ok)
 
-				isNUll, err := mrs.ColumnIsNull(rowIdx, i)
+				isNUll, err := mrs.ColumnIsNull(context.TODO(), rowIdx, i)
 				require.NoError(t, err)
 
 				if isNUll {
@@ -1648,7 +1650,7 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 					var data []byte = nil
 					switch col.ColumnType() {
 					case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
-						value, err := mrs.GetInt64(rowIdx, i)
+						value, err := mrs.GetInt64(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
 						if col.ColumnType() == defines.MYSQL_TYPE_YEAR {
 							if value == 0 {
@@ -1662,38 +1664,38 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 
 					case defines.MYSQL_TYPE_LONGLONG:
 						if uint32(col.Flag())&defines.UNSIGNED_FLAG != 0 {
-							value, err := mrs.GetUint64(rowIdx, i)
+							value, err := mrs.GetUint64(context.TODO(), rowIdx, i)
 							require.NoError(t, err)
 							data = strconv.AppendUint(data, value, 10)
 						} else {
-							value, err := mrs.GetInt64(rowIdx, i)
+							value, err := mrs.GetInt64(context.TODO(), rowIdx, i)
 							require.NoError(t, err)
 							data = strconv.AppendInt(data, value, 10)
 						}
 					case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING:
-						value, err := mrs.GetString(rowIdx, i)
+						value, err := mrs.GetString(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
 						data = []byte(value)
 					case defines.MYSQL_TYPE_FLOAT:
-						value, err := mrs.GetFloat64(rowIdx, i)
+						value, err := mrs.GetFloat64(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
 						data = strconv.AppendFloat(data, value, 'f', -1, 32)
 					case defines.MYSQL_TYPE_DOUBLE:
-						value, err := mrs.GetFloat64(rowIdx, i)
+						value, err := mrs.GetFloat64(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
 						data = strconv.AppendFloat(data, value, 'f', -1, 64)
 					case defines.MYSQL_TYPE_DATE:
-						value, err := mrs.GetValue(rowIdx, i)
+						value, err := mrs.GetValue(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
 						x := value.(types.Date).String()
 						data = []byte(x)
 					case defines.MYSQL_TYPE_TIME:
-						value, err := mrs.GetValue(rowIdx, i)
+						value, err := mrs.GetValue(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
 						x := value.(types.Time).String()
 						data = []byte(x)
 					case defines.MYSQL_TYPE_DATETIME:
-						value, err := mrs.GetValue(rowIdx, i)
+						value, err := mrs.GetValue(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
 						x := value.(types.Datetime).String()
 						data = []byte(x)
