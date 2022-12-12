@@ -72,6 +72,7 @@ func SplitCompositePrimaryKeyColumnName(s string) []string {
 	return names
 }
 
+// Build composite primary key batch
 func FillCompositePKeyBatch(bat *batch.Batch, p *plan.ColDef, proc *process.Process) error {
 	names := SplitCompositePrimaryKeyColumnName(p.Name)
 	cPkeyVecMap := make(map[string]*vector.Vector)

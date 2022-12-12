@@ -31,6 +31,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -171,32 +172,81 @@ func adjustFloatBytes(b []byte, encode bool) {
 	}
 }
 
+const PackerMemUnit = 64
+
 type packer struct {
-	buf []byte
+	buf      []byte
+	size     int
+	capacity int
+	mp       *mpool.MPool
 }
 
-func NewPacker() *packer {
+func NewPacker(mp *mpool.MPool) *packer {
+	bytes, err := mp.Alloc(PackerMemUnit)
+	if err != nil {
+		panic(err)
+	}
 	return &packer{
-		buf: make([]byte, 0, 64),
+		buf:      bytes,
+		size:     0,
+		capacity: PackerMemUnit,
+		mp:       mp,
 	}
 }
 
-func NewPackerArray(size int) []*packer {
-	packerArr := make([]*packer, size)
+func NewPackerArray(length int, mp *mpool.MPool) []*packer {
+	packerArr := make([]*packer, length)
 	for num := range packerArr {
+		bytes, err := mp.Alloc(PackerMemUnit)
+		if err != nil {
+			panic(err)
+		}
 		packerArr[num] = &packer{
-			buf: make([]byte, 0, 64),
+			buf:      bytes,
+			size:     0,
+			capacity: PackerMemUnit,
+			mp:       mp,
 		}
 	}
 	return packerArr
 }
 
-func (p *packer) putByte(b byte) {
-	p.buf = append(p.buf, b)
+func (p *packer) FreeMem() {
+	if p.buf != nil {
+		p.mp.Free(p.buf)
+		p.size = 0
+		p.capacity = 0
+		p.buf = nil
+	}
 }
 
-func (p *packer) putBytes(b []byte) {
-	p.buf = append(p.buf, b...)
+func (p *packer) putByte(b byte) {
+	if p.size < p.capacity {
+		p.buf[p.size] = b
+		p.size++
+	} else {
+		p.buf, _ = p.mp.Grow(p.buf, p.capacity+PackerMemUnit)
+		p.capacity += PackerMemUnit
+		p.buf[p.size] = b
+		p.size++
+	}
+}
+
+func (p *packer) putBytes(bs []byte) {
+	if p.size+len(bs) < p.capacity {
+		for _, b := range bs {
+			p.buf[p.size] = b
+			p.size++
+		}
+	} else {
+		incrementSize := ((len(bs) / PackerMemUnit) + 1) * PackerMemUnit
+		p.buf, _ = p.mp.Grow(p.buf, p.capacity+incrementSize)
+		p.capacity += incrementSize
+		for _, b := range bs {
+			p.buf[p.size] = b
+			p.size++
+		}
+	}
 }
 
 func (p *packer) putBytesNil(b []byte, i int) {
@@ -362,7 +412,7 @@ func (p *packer) EncodeStringType(e []byte) {
 }
 
 func (p *packer) GetBuf() []byte {
-	return p.buf
+	return p.buf[:p.size]
 }
 
 func findTerminator(b []byte) int {

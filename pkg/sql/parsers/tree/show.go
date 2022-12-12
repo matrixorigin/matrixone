@@ -492,3 +492,29 @@ func NewShowFunctionStatus(l *ComparisonExpr, w *Where) *ShowFunctionStatus {
 		Where: w,
 	}
 }
+
+// show node list
+type ShowNodeList struct {
+	showImpl
+}
+
+func (node *ShowNodeList) Format(ctx *FmtCtx) {
+	ctx.WriteString("show node list")
+}
+
+func NewShowNodeList() *ShowNodeList {
+	return &ShowNodeList{}
+}
+
+// show locks
+type ShowLocks struct {
+	showImpl
+}
+
+func (node *ShowLocks) Format(ctx *FmtCtx) {
+	ctx.WriteString("show locks")
+}
+
+func NewShowLocks() *ShowLocks {
+	return &ShowLocks{}
+}
