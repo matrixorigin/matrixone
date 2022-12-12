@@ -312,7 +312,7 @@ func (pi *ProtocolImpl) Quit() {
 	pi.m.Lock()
 	defer pi.m.Unlock()
 	//if it was quit, do nothing
-	if pi.quit.Load() {
+	if pi.setQuit(true) {
 		return
 	}
 	if pi.tcpConn != nil {
