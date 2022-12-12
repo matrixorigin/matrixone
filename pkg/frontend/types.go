@@ -100,7 +100,7 @@ const (
 	cmdFieldListSql = "__++__internal_cmd_field_list"
 	intereSql       = "internal_sql"
 	cloudUserSql    = "cloud_user_sql"
-	cloudNoUserSql  = "cloud_no_user_sql"
+	cloudNoUserSql  = "cloud_nouser_sql"
 	externSql       = "external_sql"
 )
 

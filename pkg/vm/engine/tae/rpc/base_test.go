@@ -695,6 +695,11 @@ func genCreateTableTuple(
 		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_TABLES_CONSTRAINT
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // constraint
+		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
+			return nil, err
+		}
 
 	}
 	return bat, nil

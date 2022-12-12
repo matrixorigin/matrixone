@@ -36,7 +36,7 @@ type TableDef = plan.TableDef
 type ColDef = plan.ColDef
 type ObjectRef = plan.ObjectRef
 type ColRef = plan.ColRef
-type Cost = plan.Cost
+type Stats = plan.Stats
 type Const = plan.Const
 type MaxValue = plan.MaxValue
 type Expr = plan.Expr
@@ -72,8 +72,8 @@ type CompilerContext interface {
 	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
 	// get the definition of hide key
 	GetHideKeyDef(dbName string, tableName string) *ColDef
-	// get estimated cost by table & expr
-	Cost(obj *ObjectRef, e *Expr) *Cost
+	// get estimated stats by table & expr
+	Stats(obj *ObjectRef, e *Expr) *Stats
 	// get origin sql string of the root
 	GetRootSql() string
 	// get username of current session

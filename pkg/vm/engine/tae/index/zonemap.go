@@ -15,9 +15,12 @@
 package index
 
 import (
+	"fmt"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -74,6 +77,15 @@ func NewZoneMap(typ types.Type) *ZoneMap {
 
 func (zm *ZoneMap) GetType() types.Type {
 	return zm.typ
+}
+
+func (zm *ZoneMap) String() string {
+	return fmt.Sprintf(
+		"ZM<init-%v,isInf-%v, %v-%v>",
+		zm.inited, zm.isInf,
+		common.TypeStringValue(zm.typ, zm.min),
+		common.TypeStringValue(zm.typ, zm.max),
+	)
 }
 
 func (zm *ZoneMap) init(v any) {

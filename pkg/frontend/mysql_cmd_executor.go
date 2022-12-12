@@ -192,7 +192,7 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
-var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, sqlSourceType string, useEnv bool) context.Context {
+var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt string, useEnv bool) context.Context {
 	if !trace.GetTracerProvider().IsEnable() {
 		return ctx
 	}
@@ -234,7 +234,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		Statement:            text,
 		StatementFingerprint: "", // fixme: (Reserved)
 		StatementTag:         "", // fixme: (Reserved)
-		SqlSourceType:        sqlSourceType,
+		SqlSourceType:        ses.sqlSourceType,
 		RequestAt:            requestAt,
 	}
 	if !stm.IsZeroTxnID() {
@@ -557,7 +557,7 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 		if err != nil {
 			return err
 		}
-		row[3], err = r.Rows(ses.requestCtx)
+		_, row[3], err = r.Stats(ses.requestCtx)
 		if err != nil {
 			return err
 		}
@@ -3021,8 +3021,7 @@ func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(request
 	return nil
 }
 
-func (mce *MysqlCmdExecutor) getSqlType(sql string) {
-	ses := mce.GetSession()
+func (ses *Session) getSqlType(sql string) {
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		ses.sqlSourceType = intereSql
@@ -3033,8 +3032,8 @@ func (mce *MysqlCmdExecutor) getSqlType(sql string) {
 		ses.sqlSourceType = intereSql
 		return
 	}
-	p1 := strings.Index(sql, "/$")
-	p2 := strings.Index(sql, "$/")
+	p1 := strings.Index(sql, "/*")
+	p2 := strings.Index(sql, "*/")
 	if p1 < 0 || p2 < 0 {
 		ses.sqlSourceType = externSql
 		return
@@ -3052,8 +3051,8 @@ func (mce *MysqlCmdExecutor) getSqlType(sql string) {
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) (retErr error) {
 	beginInstant := time.Now()
-	mce.getSqlType(sql)
 	ses := mce.GetSession()
+	ses.getSqlType(sql)
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
 	ses.SetSql(sql)
@@ -3127,7 +3126,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	for i, cw := range cws {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
-		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, ses.sqlSourceType, singleStatement)
+		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sql, singleStatement)
 		tenant := ses.GetTenantName(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
