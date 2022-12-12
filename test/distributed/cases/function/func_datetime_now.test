@@ -91,3 +91,5 @@ execute s1 using @b;
 set @b=2;
 execute s1 using @b;
 select t1.a=t2.a from t1,(select a from t1  where b=2)as t2 where b=1;
+
+select timestampdiff(microsecond,a,b) from  (select now(6) as a,  sleep(1), now(6) as b) t1;
