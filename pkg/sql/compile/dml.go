@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
@@ -53,7 +54,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 
 		if rel, err = dbSource.Relation(c.ctx, arg.DeleteCtxs[0].TableName); err != nil {
 			var e error
-			dbSource, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
+			dbSource, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
 			if e != nil {
 				return 0, err
 			}
@@ -96,7 +97,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 			if err != nil {
 				return 0, err
 			}
-			err = colexec.MoveAutoIncrCol(c.e, c.ctx, engine.GetTempTableName(arg.DeleteCtxs[0].DbName, arg.DeleteCtxs[0].TableName), dbSource, c.proc, tableID, engine.TEMPORARY_DBNAME)
+			err = colexec.MoveAutoIncrCol(c.e, c.ctx, engine.GetTempTableName(arg.DeleteCtxs[0].DbName, arg.DeleteCtxs[0].TableName), dbSource, c.proc, tableID, defines.TEMPORARY_DBNAME)
 		} else {
 			err = dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].TableName)
 			if err != nil {
@@ -150,7 +151,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	relation, err = dbSource.Relation(c.ctx, p.TblName)
 	if err != nil {
 		var e error // avoid contamination of error messages
-		dbSource, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		dbSource, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
 		if e != nil {
 			return 0, e
 		}
@@ -193,8 +194,8 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	if isTemp {
 		p.TblName = engine.GetTempTableName(p.DbName, p.TblName)
 		o := p.DbName
-		p.DbName = engine.TEMPORARY_DBNAME
-		if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, engine.TEMPORARY_DBNAME, p.TblName); err != nil {
+		p.DbName = defines.TEMPORARY_DBNAME
+		if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, defines.TEMPORARY_DBNAME, p.TblName); err != nil {
 			return 0, err
 		}
 		p.DbName = o
@@ -226,7 +227,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 				var err error
 				if isTemp {
 					indexRelation, err = dbSource.Relation(c.ctx, engine.GetTempTableName(p.DbName, p.UniqueIndexDef.TableNames[i]))
-				}else{
+				} else {
 					indexRelation, err = dbSource.Relation(c.ctx, p.UniqueIndexDef.TableNames[i])
 				}
 				if err != nil {

@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -357,7 +358,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 		relation, err = dbSource.Relation(proc.Ctx, n.DeleteTablesCtx[i].TblName)
 		if err != nil {
 			var e error
-			dbSource, e = eg.Database(proc.Ctx, engine.TEMPORARY_DBNAME, proc.TxnOperator)
+			dbSource, e = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
 			if e != nil {
 				return nil, err
 			}
@@ -411,7 +412,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 		var dbName string
 		var tblName string
 		if isTemp {
-			dbName = engine.TEMPORARY_DBNAME
+			dbName = defines.TEMPORARY_DBNAME
 			tblName = engine.GetTempTableName(n.DeleteTablesCtx[i].DbName, n.DeleteTablesCtx[i].TblName)
 		} else {
 			dbName = n.DeleteTablesCtx[i].DbName
@@ -450,7 +451,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	relation, err = db.Relation(proc.Ctx, n.TableDef.Name)
 	if err != nil {
 		var e error
-		db, e = eg.Database(proc.Ctx, engine.TEMPORARY_DBNAME, proc.TxnOperator)
+		db, e = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
 		if e != nil {
 			return nil, err
 		}
@@ -464,45 +465,45 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	uniqueIndexTables := make([]engine.Relation, 0)
 	secondaryIndexTables := make([]engine.Relation, 0)
 	uDef, sDef := buildIndexDefs(n.TableDef.Defs)
-		if uDef != nil {
-			for j := range uDef.TableNames {
+	if uDef != nil {
+		for j := range uDef.TableNames {
+			var indexTable engine.Relation
+			var err error
+			if uDef.TableExists[j] {
+				if isTemp {
+					indexTable, err = db.Relation(proc.Ctx, engine.GetTempTableName(n.ObjRef.SchemaName, uDef.TableNames[j]))
+				} else {
+					indexTable, err = db.Relation(proc.Ctx, uDef.TableNames[j])
+				}
+				if err != nil {
+					return nil, err
+				}
+				uniqueIndexTables = append(uniqueIndexTables, indexTable)
+			}
+		}
+	}
+	if sDef != nil {
+		for j := range sDef.TableNames {
+			if sDef.TableExists[j] {
 				var indexTable engine.Relation
 				var err error
-				if uDef.TableExists[j] {
-					if isTemp {
-						indexTable, err = db.Relation(proc.Ctx, engine.GetTempTableName(n.ObjRef.SchemaName, uDef.TableNames[j]))
-					} else {
-						indexTable, err = db.Relation(proc.Ctx, uDef.TableNames[j])
-					}
-					if err != nil {
-						return nil, err
-					}
-					uniqueIndexTables = append(uniqueIndexTables, indexTable)
+				if isTemp {
+					indexTable, err = db.Relation(proc.Ctx, engine.GetTempTableName(n.ObjRef.SchemaName, sDef.TableNames[j]))
+				} else {
+					indexTable, err = db.Relation(proc.Ctx, sDef.TableNames[j])
 				}
+				if err != nil {
+					return nil, err
+				}
+				secondaryIndexTables = append(secondaryIndexTables, indexTable)
 			}
 		}
-		if sDef != nil {
-			for j := range sDef.TableNames {
-				if sDef.TableExists[j] {
-					var indexTable engine.Relation
-					var err error
-					if isTemp {
-						indexTable, err = db.Relation(proc.Ctx, engine.GetTempTableName(n.ObjRef.SchemaName, sDef.TableNames[j]))
-					} else {
-						indexTable, err = db.Relation(proc.Ctx, sDef.TableNames[j])
-					}
-					if err != nil {
-						return nil, err
-					}
-					secondaryIndexTables = append(secondaryIndexTables, indexTable)
-				}
-			}
-		}
+	}
 
 	var dbName string
 	var tblName string
 	if isTemp {
-		dbName = engine.TEMPORARY_DBNAME
+		dbName = defines.TEMPORARY_DBNAME
 		tblName = engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name)
 	} else {
 		dbName = n.ObjRef.SchemaName
@@ -543,7 +544,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 		relation, err = dbSource.Relation(proc.Ctx, updateCtx.TblName)
 		if err != nil {
 			var e error
-			dbSource, e = eg.Database(proc.Ctx, engine.TEMPORARY_DBNAME, proc.TxnOperator)
+			dbSource, e = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
 			if e != nil {
 				return nil, err
 			}
@@ -555,7 +556,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 		}
 
 		if isTemp {
-			dbName[i] = engine.TEMPORARY_DBNAME
+			dbName[i] = defines.TEMPORARY_DBNAME
 			tblName[i] = engine.GetTempTableName(updateCtx.DbName, updateCtx.TblName)
 		} else {
 			dbName[i] = updateCtx.DbName

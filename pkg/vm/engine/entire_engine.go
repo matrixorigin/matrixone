@@ -19,27 +19,38 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
-
-const TEMPORARY_DBNAME = "%!%mo_temp_db"
 
 func GetTempTableName(DbName string, TblName string) string {
 	return strings.ReplaceAll(DbName, ".", "DOT") + "." + strings.ReplaceAll(TblName, ".", "DOT")
 }
 
 func (e *EntireEngine) New(ctx context.Context, op client.TxnOperator) error {
-	return e.Engine.New(ctx, op)
+	err := e.Engine.New(ctx, op)
+	if err == nil && e.TempEngine != nil {
+		return e.TempEngine.New(ctx, op)
+	}
+	return err
 }
 
 func (e *EntireEngine) Commit(ctx context.Context, op client.TxnOperator) error {
-	return e.Engine.Commit(ctx, op)
+	err := e.Engine.Commit(ctx, op)
+	if err == nil && e.TempEngine != nil {
+		return e.TempEngine.Commit(ctx, op)
+	}
+	return err
 }
 
 func (e *EntireEngine) Rollback(ctx context.Context, op client.TxnOperator) error {
-	return e.Engine.Rollback(ctx, op)
+	err := e.Engine.Rollback(ctx, op)
+	if err == nil && e.TempEngine != nil {
+		return e.TempEngine.Rollback(ctx, op)
+	}
+	return err
 }
 
 func (e *EntireEngine) Delete(ctx context.Context, databaseName string, op client.TxnOperator) error {
@@ -55,11 +66,11 @@ func (e *EntireEngine) Databases(ctx context.Context, op client.TxnOperator) (da
 }
 
 func (e *EntireEngine) Database(ctx context.Context, databaseName string, op client.TxnOperator) (Database, error) {
-	if databaseName == TEMPORARY_DBNAME {
+	if databaseName == defines.TEMPORARY_DBNAME {
 		if e.TempEngine != nil {
-			return e.TempEngine.Database(ctx, TEMPORARY_DBNAME, op)
+			return e.TempEngine.Database(ctx, defines.TEMPORARY_DBNAME, op)
 		} else {
-			return nil, moerr.NewInternalError("temporary engine not init yet")
+			return nil, moerr.NewInternalError(ctx, "temporary engine not init yet")
 		}
 	}
 	return e.Engine.Database(ctx, databaseName, op)

@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
@@ -658,7 +659,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		rel, err = db.Relation(c.ctx, n.TableDef.Name)
 		if err != nil {
 			var e error // avoid contamination of error messages
-			db, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
+			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
 			if e != nil {
 				panic(e)
 			}
@@ -1289,7 +1290,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	rel, err = db.Relation(c.ctx, n.TableDef.Name)
 	if err != nil {
 		var e error // avoid contamination of error messages
-		db, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
 		if e != nil {
 			return nil, e
 		}

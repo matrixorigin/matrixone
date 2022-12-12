@@ -19,12 +19,12 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -402,14 +402,9 @@ func (ses *Session) GetTempTableStorage() *memorystorage.Storage {
 	return ses.tempTablestorage
 }
 
-func (ses *Session) SetTempTableStorage() (*logservicepb.DNStore, error) {
+func (ses *Session) SetTempTableStorage(ck clock.Clock) (*logservicepb.DNStore, error) {
 	// Without concurrency, there is no potential for data competition
-	ck := clock.DefaultClock()
-	if ck == nil {
-		ck = clock.NewHLCClock(func() int64 {
-			return time.Now().Unix()
-		}, math.MaxInt)
-	}
+
 	// Arbitrary value is OK since it's single sharded. Let's use 0xbeef
 	// suggested by @reusee
 	shard := logservicepb.DNShardInfo{
@@ -419,8 +414,8 @@ func (ses *Session) SetTempTableStorage() (*logservicepb.DNStore, error) {
 	shards := []logservicepb.DNShardInfo{
 		shard,
 	}
-	// Any value is OK here. use "TempTable-DN-address".
-	dnAddr := "TempTable-DN-address"
+	// Arbitrary value is OK, for more information about TEMPORARY_TABLE_DN_ADDR, please refer to the comment in defines/const.go
+	dnAddr := defines.TEMPORARY_TABLE_DN_ADDR
 	dnStore := logservicepb.DNStore{
 		UUID:           uuid.NewString(),
 		ServiceAddress: dnAddr,
@@ -1461,7 +1456,7 @@ func (th *TxnHandler) CommitTxn() error {
 		panic("context should not be nil")
 	}
 	if ses.tempTablestorage != nil {
-		ctx = context.WithValue(ctx, "tempStorage", ses.tempTablestorage)
+		ctx = context.WithValue(ctx, defines.TemporaryDN{}, ses.tempTablestorage)
 	}
 	storage := th.GetStorage()
 	ctx, cancel := context.WithTimeout(
@@ -1523,7 +1518,7 @@ func (th *TxnHandler) RollbackTxn() error {
 		panic("context should not be nil")
 	}
 	if ses.tempTablestorage != nil {
-		ctx = context.WithValue(ctx, "tempStorage", ses.tempTablestorage)
+		ctx = context.WithValue(ctx, defines.TemporaryDN{}, ses.tempTablestorage)
 	}
 	storage := th.GetStorage()
 	ctx, cancel := context.WithTimeout(
@@ -1740,7 +1735,7 @@ func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName str
 	if err != nil {
 		return nil, err
 	}
-	db, err := e.Database(ctx, engine.TEMPORARY_DBNAME, txn)
+	db, err := e.Database(ctx, defines.TEMPORARY_DBNAME, txn)
 	if err != nil {
 		logutil.Errorf("get temp database error %v", err)
 		return nil, err

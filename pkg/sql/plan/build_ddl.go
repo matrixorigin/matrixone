@@ -22,12 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
@@ -740,8 +740,8 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 }
 
 func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan, error) {
-	if string(stmt.Name) == engine.TEMPORARY_DBNAME {
-		return nil, moerr.NewInternalError("this database name is used by mo temporary engine")
+	if string(stmt.Name) == defines.TEMPORARY_DBNAME {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "this database name is used by mo temporary engine")
 	}
 	createDB := &plan.CreateDatabase{
 		IfNotExists: stmt.IfNotExists,

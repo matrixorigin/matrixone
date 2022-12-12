@@ -17,6 +17,7 @@ package compile
 import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -167,7 +168,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		rel, err = db.Relation(c.ctx, s.DataSource.RelationName)
 		if err != nil {
 			var e error // avoid contamination of error messages
-			db, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, s.Proc.TxnOperator)
+			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
 			if e != nil {
 				return e
 			}
