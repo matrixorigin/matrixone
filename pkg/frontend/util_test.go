@@ -79,40 +79,9 @@ func Test_MinMax(t *testing.T) {
 		cvey.So(Min(9, 10), cvey.ShouldEqual, 9)
 	})
 
-	cvey.Convey("minInt64", t, func() {
-		cvey.So(MinInt64(10, 9), cvey.ShouldEqual, 9)
-		cvey.So(MinInt64(9, 10), cvey.ShouldEqual, 9)
-	})
-
-	cvey.Convey("minUint64", t, func() {
-		cvey.So(MinUint64(10, 9), cvey.ShouldEqual, 9)
-		cvey.So(MinUint64(9, 10), cvey.ShouldEqual, 9)
-	})
-
 	cvey.Convey("max", t, func() {
 		cvey.So(Max(10, 9), cvey.ShouldEqual, 10)
 		cvey.So(Max(9, 10), cvey.ShouldEqual, 10)
-	})
-
-	cvey.Convey("maxInt64", t, func() {
-		cvey.So(MaxInt64(10, 9), cvey.ShouldEqual, 10)
-		cvey.So(MaxInt64(9, 10), cvey.ShouldEqual, 10)
-	})
-
-	cvey.Convey("maxUint64", t, func() {
-		cvey.So(MaxUint64(10, 9), cvey.ShouldEqual, 10)
-		cvey.So(MaxUint64(9, 10), cvey.ShouldEqual, 10)
-	})
-}
-
-func Test_uint64list(t *testing.T) {
-	cvey.Convey("uint64list", t, func() {
-		var l = make(Uint64List, 3)
-		cvey.So(l.Len(), cvey.ShouldEqual, 3)
-		cvey.So(l.Less(0, 1), cvey.ShouldBeFalse)
-		a, b := l[0], l[1]
-		l.Swap(0, 1)
-		cvey.So(a == l[1] && b == l[0], cvey.ShouldBeTrue)
 	})
 }
 
@@ -120,23 +89,6 @@ func Test_routineid(t *testing.T) {
 	cvey.Convey("rtid", t, func() {
 		x := GetRoutineId()
 		cvey.So(x, cvey.ShouldBeGreaterThanOrEqualTo, 0)
-	})
-}
-
-func Test_debugcounter(t *testing.T) {
-	cvey.Convey("debugCounter", t, func() {
-		dc := NewDebugCounter(3)
-		dc.Set(0, 1)
-		cvey.So(dc.Get(0), cvey.ShouldEqual, 1)
-		dc.Add(0, 1)
-		cvey.So(dc.Get(0), cvey.ShouldEqual, 2)
-		cvey.So(dc.Len(), cvey.ShouldEqual, 3)
-
-		go dc.DCRoutine()
-
-		time.Sleep(6 * time.Second)
-
-		dc.Cf.Close()
 	})
 }
 

@@ -269,7 +269,7 @@ func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.Param
 	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars, false)
 	ses.SetOutputCallback(fakeDataSetFetcher)
 	if stmt := trace.StatementFromContext(ctx); stmt != nil {
-		logutil.Infof("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
+		logInfof(ses.GetConciseProfile(), "session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
 	}
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(ctx)
 	ses.SetRequestContext(cancelBackgroundCtx)
@@ -1482,9 +1482,10 @@ func (th *TxnHandler) GetStorage() engine.Engine {
 }
 
 func (th *TxnHandler) GetTxn() (TxnOperator, error) {
-	err := th.GetSession().TxnStart()
+	ses := th.GetSession()
+	err := ses.TxnStart()
 	if err != nil {
-		logutil.Errorf("GetTxn. error:%v", err)
+		logErrorf(ses.GetConciseProfile(), "GetTxn. error:%v", err)
 		return nil, err
 	}
 	return th.GetTxnOperator(), nil
