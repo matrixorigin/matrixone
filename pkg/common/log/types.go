@@ -65,10 +65,11 @@ var (
 // need to sample the output.
 type SampleType int
 
-var (
-	noneSample = SampleType(0)
+const (
+	noneSample SampleType = iota
+	SystemInitSample
 	// ExampleSample used in examples
-	ExampleSample = SampleType(math.MaxInt)
+	ExampleSample = math.MaxInt
 )
 
 // MOLogger mo logger based zap.logger. To standardize and standardize the logging
@@ -76,8 +77,13 @@ var (
 // rather MOLogger. MOLogger is compatible with the zap.logger log printing method
 // signature
 type MOLogger struct {
-	logger *zap.Logger
-	ctx    context.Context
+	logger  *zap.Logger
+	options LogOptions
+	ctx     context.Context
+}
+
+func (l *MOLogger) SetOptions(options LogOptions) {
+	l.options = options
 }
 
 // LogOptions log options

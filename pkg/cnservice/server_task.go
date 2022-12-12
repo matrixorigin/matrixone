@@ -157,7 +157,7 @@ func (s *service) waitSystemInitCompleted(ctx context.Context) {
 			ts, ok := s.GetTaskService()
 			if ok {
 				tasks, err := ts.QueryTask(ctx,
-					taskservice.WithTaskExecutorCond(taskservice.EQ, uint32(task.TaskCode_SystemInit)),
+					taskservice.WithTaskExecutorCond(taskservice.EQ, task.TaskCode_SystemInit),
 					taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Completed))
 				if err != nil {
 					s.logger.Error("wait all init task completed failed", zap.Error(err))
@@ -221,7 +221,7 @@ func (s *service) registerExecutorsLocked() {
 	if !ok {
 		panic(moerr.NewInternalErrorNoCtx("task Service not ok"))
 	}
-	s.task.runner.RegisterExecutor(uint32(task.TaskCode_SystemInit),
+	s.task.runner.RegisterExecutor(task.TaskCode_SystemInit,
 		func(ctx context.Context, t task.Task) error {
 			if err := frontend.InitSysTenant(moServerCtx); err != nil {
 				return err
@@ -245,6 +245,6 @@ func (s *service) registerExecutorsLocked() {
 		})
 
 	// init metric/log merge task executor
-	s.task.runner.RegisterExecutor(uint32(task.TaskCode_MetricLogMerge),
+	s.task.runner.RegisterExecutor(task.TaskCode_MetricLogMerge,
 		export.MergeTaskExecutorFactory(export.WithFileService(s.fileService)))
 }

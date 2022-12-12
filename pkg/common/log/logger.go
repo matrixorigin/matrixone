@@ -29,7 +29,9 @@ import (
 // GetServiceLogger returns service logger, it will using the service as the logger name, and
 // append FieldNameServiceUUID field to the logger
 func GetServiceLogger(logger *zap.Logger, service metadata.ServiceType, uuid string) *MOLogger {
-	return wrap(logger.Named(fmt.Sprintf("%s-service", strings.ToLower(service.String()))).With(zap.String(FieldNameServiceUUID, uuid)))
+	return wrap(logger.
+		Named(fmt.Sprintf("%s-service", strings.ToLower(service.String()))).
+		With(zap.String(FieldNameServiceUUID, uuid)))
 }
 
 // GetModuleLogger returns the module logger, it will add ".module" to logger name.
@@ -57,6 +59,13 @@ func (l *MOLogger) Named(name string) *MOLogger {
 	}
 }
 
+// WithProcess if the current log belongs to a certain process, the process name and process ID
+// can be recorded. When analyzing the log, all related logs can be retrieved according to the
+// process ID.
+func (l *MOLogger) WithProcess(process Process) *MOLogger {
+	return l.With(zap.String(FieldNameProcess, string(process)))
+}
+
 // Enabled returns true if the level is enabled
 func (l *MOLogger) Enabled(level zapcore.Level) bool {
 	return l.logger.Core().Enabled(level)
@@ -69,42 +78,42 @@ func (l *MOLogger) RawLogger() *zap.Logger {
 
 // Info shortcuts to print info log
 func (l *MOLogger) Info(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.InfoLevel), fields...)
+	return l.Log(msg, l.options.WithLevel(zap.InfoLevel), fields...)
 }
 
 // InfoAction shortcuts to print info action log
 func (l *MOLogger) InfoAction(msg string, fields ...zap.Field) func() {
-	return l.LogAction(msg, DefaultLogOptions().WithLevel(zap.InfoLevel), fields...)
+	return l.LogAction(msg, l.options.WithLevel(zap.InfoLevel), fields...)
 }
 
 // Debug shortcuts to  print debug log
 func (l *MOLogger) Debug(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.DebugLevel), fields...)
+	return l.Log(msg, l.options.WithLevel(zap.DebugLevel), fields...)
 }
 
 // InfoDebugAction shortcuts to print debug action log
 func (l *MOLogger) InfoDebugAction(msg string, fields ...zap.Field) func() {
-	return l.LogAction(msg, DefaultLogOptions().WithLevel(zap.DebugLevel), fields...)
+	return l.LogAction(msg, l.options.WithLevel(zap.DebugLevel), fields...)
 }
 
 // Error shortcuts to  print error log
 func (l *MOLogger) Error(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.ErrorLevel), fields...)
+	return l.Log(msg, l.options.WithLevel(zap.ErrorLevel), fields...)
 }
 
 // Warn shortcuts to  print warn log
 func (l *MOLogger) Warn(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.WarnLevel), fields...)
+	return l.Log(msg, l.options.WithLevel(zap.WarnLevel), fields...)
 }
 
 // Panic shortcuts to  print panic log
 func (l *MOLogger) Panic(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.PanicLevel), fields...)
+	return l.Log(msg, l.options.WithLevel(zap.PanicLevel), fields...)
 }
 
 // Fatal shortcuts to print fatal log
 func (l *MOLogger) Fatal(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.FatalLevel), fields...)
+	return l.Log(msg, l.options.WithLevel(zap.FatalLevel), fields...)
 }
 
 // Log is the entry point for mo log printing. Return true to indicate that the log
