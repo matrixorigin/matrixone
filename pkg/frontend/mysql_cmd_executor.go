@@ -127,6 +127,14 @@ type MysqlCmdExecutor struct {
 	mu sync.Mutex
 }
 
+func (mce *MysqlCmdExecutor) CancelRequest() {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
+	if mce.cancelRequestFunc != nil {
+		mce.cancelRequestFunc()
+	}
+}
+
 func (mce *MysqlCmdExecutor) ChooseDoQueryFunc(choice bool) {
 	mce.mu.Lock()
 	defer mce.mu.Unlock()
@@ -146,7 +154,7 @@ func (mce *MysqlCmdExecutor) GetDoQueryFunc() doComQueryFunc {
 	return mce.doQueryFunc
 }
 
-func (mce *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {
+func (mce *MysqlCmdExecutor) SetSession(ses *Session) {
 	mce.mu.Lock()
 	defer mce.mu.Unlock()
 	mce.ses = ses
@@ -593,7 +601,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	begin := time.Now()
 
 	proto := ses.GetMysqlProtocol()
-	proto.PrepareBeforeProcessingResultSet()
+	proto.ResetStatistics()
 
 	//Create a new temporary resultset per pipeline thread.
 	mrs := &MysqlResultSet{}
@@ -2015,6 +2023,35 @@ func (mce *MysqlCmdExecutor) handleSwitchRole(ctx context.Context, sr *tree.SetR
 	return doSwitchRole(ctx, mce.GetSession(), sr)
 }
 
+func doKill(ctx context.Context, rm *RoutineManager, ses *Session, k *tree.Kill) error {
+	var err error
+	//true: kill a connection
+	//false: kill a query in a connection
+	idThatKill := uint64(ses.GetConnectionID())
+	if !k.Option.Exist || k.Option.Typ == tree.KillTypeConnection {
+		err = rm.kill(ctx, true, idThatKill, k.ConnectionId, "")
+	} else {
+		err = rm.kill(ctx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
+	}
+	return err
+}
+
+// handleKill kill a connection or query
+func (mce *MysqlCmdExecutor) handleKill(ctx context.Context, k *tree.Kill) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = doKill(ctx, mce.GetRoutineManager(), ses, k)
+	if err != nil {
+		return err
+	}
+	resp := NewGeneralOkResponse(COM_QUERY)
+	if err = proto.SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
 func GetExplainColumns(ctx context.Context, explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
 		{Typ: &plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
@@ -2941,6 +2978,9 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
 	requestCtx, span := trace.Debug(requestCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
+	if ses.skipCheckPrivilege() {
+		return nil
+	}
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
@@ -2973,6 +3013,9 @@ func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Sessio
 
 // authenticateCanExecuteStatementAndPlan checks the user can execute the statement and its plan
 func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	if ses.skipCheckPrivilege() {
+		return nil
+	}
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
@@ -3344,6 +3387,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					goto handleFailed
 				}
 			}
+		case *tree.Kill:
+			selfHandle = true
+			ses.InvalidatePrivilegeCache()
+			if err = mce.handleKill(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		}
 
 		if selfHandle {
@@ -3385,9 +3434,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 
 		runner = ret.(ComputationRunner)
-		if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-			logInfof(ses.GetConciseProfile(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
-		}
+
+		logInfof(ses.GetConciseProfile(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
 
 		mrs = ses.GetMysqlResultSet()
 		// cw.Compile might rewrite sql, here we fetch the latest version
@@ -3475,9 +3523,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				}
 			}
 
-			if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-				logInfof(ses.GetConciseProfile(), "time of Exec.Run : %s", time.Since(runBegin).String())
-			}
+			logInfof(ses.GetConciseProfile(), "time of Exec.Run : %s", time.Since(runBegin).String())
+
 			/*
 				Step 3: Say goodbye
 				mysql COM_QUERY response: End after the data row has been sent.
@@ -3524,15 +3571,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 
-			if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-				logInfof(ses.GetConciseProfile(), "time of Exec.Run : %s", time.Since(runBegin).String())
-			}
+			logInfof(ses.GetConciseProfile(), "time of Exec.Run : %s", time.Since(runBegin).String())
 
 			rspLen = cw.GetAffectedRows()
 			echoTime := time.Now()
-			if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-				logInfof(ses.GetConciseProfile(), "time of SendResponse %s", time.Since(echoTime).String())
-			}
+
+			logInfof(ses.GetConciseProfile(), "time of SendResponse %s", time.Since(echoTime).String())
 
 			/*
 				Step 4: Serialize the execution plan by json
@@ -3587,9 +3631,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 
-			if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-				logInfof(ses.GetConciseProfile(), "time of Exec.Run : %s", time.Since(runBegin).String())
-			}
+			logInfof(ses.GetConciseProfile(), "time of Exec.Run : %s", time.Since(runBegin).String())
 
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
 				queryPlan := cwft.plan
@@ -3801,7 +3843,7 @@ func (mce *MysqlCmdExecutor) setResponse(cwIndex, cwsLen int, rspLen uint64) *Re
 }
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
-func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Request) (resp *Response, err error) {
+func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Session, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			moe, ok := e.(*moerr.Error)
@@ -3815,8 +3857,6 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 	}()
 
 	var sql string
-	var procID uint64
-	ses := mce.GetSession()
 	logDebugf(ses.GetCompleteProfile(), "cmd %v", req.GetCmd())
 	ses.SetCmd(req.GetCmd())
 	doComQuery := mce.GetDoQueryFunc()
@@ -3833,38 +3873,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		logInfo(ses.GetConciseProfile(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(SubStringFromBegin(query, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))))
-		seps := strings.Split(query, " ")
-		if len(seps) <= 0 {
-			resp = NewGeneralErrorResponse(COM_QUERY, moerr.NewInternalError(requestCtx, "invalid query"))
-			return resp, nil
-		}
-
-		if strings.ToLower(seps[0]) == "kill" {
-			//last one is processID
-			/*
-				The 'kill query xxx' is processed in an independent connection.
-				When a 'Ctrl+C' is received from the user in mysql client shell,
-				an independent connection is established and the 'kill query xxx'
-				is sent to the server. The server cancels the 'query xxx' after it
-				receives the 'kill query xxx'. The server responses the OK.
-				Then, the client quit this connection.
-			*/
-			procIdStr := seps[len(seps)-1]
-			procID, err = strconv.ParseUint(procIdStr, 10, 64)
-			if err != nil {
-				resp = NewGeneralErrorResponse(COM_QUERY, err)
-				return resp, nil
-			}
-			err = mce.GetRoutineManager().killStatement(procID)
-			if err != nil {
-				resp = NewGeneralErrorResponse(COM_QUERY, err)
-				return resp, nil
-			}
-			resp = NewGeneralOkResponse(COM_QUERY)
-			return resp, nil
-		}
-
-		err := doComQuery(requestCtx, query)
+		err = doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_QUERY, err)
 		}
@@ -3873,7 +3882,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		var dbname = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		query := "use `" + dbname + "`"
-		err := doComQuery(requestCtx, query)
+		err = doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_INIT_DB, err)
 		}
@@ -3883,7 +3892,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		var payload = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		query := makeCmdFieldListSql(payload)
-		err := doComQuery(requestCtx, query)
+		err = doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_FIELD_LIST, err)
 		}
@@ -3905,7 +3914,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
 		logInfo(ses.GetConciseProfile(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
-		err := doComQuery(requestCtx, sql)
+		err = doComQuery(requestCtx, sql)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, err)
 		}
@@ -3933,7 +3942,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		sql = fmt.Sprintf("deallocate prepare %s", stmtName)
 		logInfo(ses.GetConciseProfile(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
-		err := doComQuery(requestCtx, sql)
+		err = doComQuery(requestCtx, sql)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, err)
 		}
@@ -3980,16 +3989,10 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(requestCtx context.Context, data [
 	return sql, nil
 }
 
-func (mce *MysqlCmdExecutor) setCancelRequestFunc(cancelFunc context.CancelFunc) {
+func (mce *MysqlCmdExecutor) SetCancelFunc(cancelFunc context.CancelFunc) {
 	mce.mu.Lock()
 	defer mce.mu.Unlock()
 	mce.cancelRequestFunc = cancelFunc
-}
-
-func (mce *MysqlCmdExecutor) getCancelRequestFunc() context.CancelFunc {
-	mce.mu.Lock()
-	defer mce.mu.Unlock()
-	return mce.cancelRequestFunc
 }
 
 func (mce *MysqlCmdExecutor) Close() {}

@@ -173,7 +173,7 @@ type MysqlProtocol interface {
 	//the OK or EOF packet thread safe
 	sendEOFOrOkPacket(warnings uint16, status uint16) error
 
-	PrepareBeforeProcessingResultSet()
+	ResetStatistics()
 
 	GetStats() string
 
@@ -259,10 +259,6 @@ func (rh *rowHandler) resetFlushCount() {
 type MysqlProtocolImpl struct {
 	ProtocolImpl
 
-	//The sequence-id is incremented with each packet and may wrap around.
-	//It starts at 0 and is reset to 0 when a new command begins in the Command Phase.
-	sequenceId atomic.Uint32
-
 	//joint capability shared by the server and the client
 	capability uint32
 
@@ -326,10 +322,6 @@ func (mp *MysqlProtocolImpl) GetCapability() uint32 {
 	return mp.capability
 }
 
-func (mp *MysqlProtocolImpl) GetSequenceId() uint8 {
-	return uint8(mp.sequenceId.Load())
-}
-
 func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
 	mp.sequenceId.Add(uint32(a))
 }
@@ -370,7 +362,7 @@ func (mp *MysqlProtocolImpl) GetStats() string {
 		mp.String())
 }
 
-func (mp *MysqlProtocolImpl) PrepareBeforeProcessingResultSet() {
+func (mp *MysqlProtocolImpl) ResetStatistics() {
 	mp.ResetStats()
 	mp.resetFlushCount()
 }
@@ -1111,11 +1103,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 	return nil
 }
 
-func (mp *MysqlProtocolImpl) SetSequenceID(value uint8) {
-	mp.sequenceId.Store(uint32(value))
-}
-
-func (mp *MysqlProtocolImpl) handleHandshake(ctx context.Context, payload []byte) (bool, error) {
+func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte) (bool, error) {
 	var err, err2 error
 	if len(payload) < 2 {
 		return false, moerr.NewInternalError(ctx, "received a broken response packet")
@@ -2591,7 +2579,7 @@ func generate_salt(n int) []byte {
 func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
 	rand.Seed(time.Now().UTC().UnixNano())
 	salt := generate_salt(20)
-
+	tcp.Ref()
 	mysql := &MysqlProtocolImpl{
 		ProtocolImpl: ProtocolImpl{
 			io:           NewIOPackage(true),
