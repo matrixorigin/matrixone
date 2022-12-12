@@ -1203,8 +1203,12 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	tRM.rwlock.Unlock()
 	ctx := context.TODO()
 
+	pu, err := getParameterUnit("test/system_vars_config.toml", nil, nil)
+	if err != nil {
+		return err
+	}
 
-	pro := routine.getProtocol()
+	pro := routine.getProtocol().(*MysqlProtocolImpl)
 	packet, ok := msg.(*Packet)
 	pro.SetSequenceID(uint8(packet.SequenceID + 1))
 	if !ok {
