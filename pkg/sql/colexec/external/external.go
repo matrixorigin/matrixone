@@ -33,6 +33,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -42,6 +43,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/simdcsv"
@@ -50,6 +53,10 @@ import (
 
 var (
 	ONE_BATCH_MAX_ROW = 40000
+)
+
+var (
+	STATEMENT_ACCOUNT = "account"
 )
 
 func String(arg any, buf *bytes.Buffer) {
@@ -93,7 +100,6 @@ func Prepare(proc *process.Process, arg any) error {
 		logutil.Warnf("no such file '%s'", param.extern.Filepath)
 		param.Fileparam.End = true
 	}
-	param.extern.Filepath = ""
 	param.Fileparam.FileCnt = len(param.FileList)
 	param.Ctx = proc.Ctx
 	return nil
@@ -109,7 +115,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	if param.extern.Filepath == "" {
+	if param.plh == nil {
 		if param.Fileparam.FileIndex >= len(param.FileList) {
 			proc.SetInputBatch(nil)
 			return true, nil
@@ -207,6 +213,127 @@ func InitS3Param(param *tree.ExternParam) error {
 		param.Format = tree.CSV
 	}
 	return nil
+}
+
+func containColname(col string) bool {
+	return strings.Contains(col, STATEMENT_ACCOUNT) || strings.Contains(col, catalog.ExternalFilePath)
+}
+
+func judgeContainColname(expr *plan.Expr) bool {
+	expr_F, ok := expr.Expr.(*plan.Expr_F)
+	if !ok {
+		return false
+	}
+	if len(expr_F.F.Args) != 2 {
+		return false
+	}
+	if expr_F.F.Func.ObjName == "or" {
+		flag := true
+		for i := 0; i < len(expr_F.F.Args); i++ {
+			flag = flag && judgeContainColname(expr_F.F.Args[i])
+		}
+		return flag
+	}
+	expr_Col, ok := expr_F.F.Args[0].Expr.(*plan.Expr_Col)
+	if !ok || !containColname(expr_Col.Col.Name) {
+		return false
+	}
+	_, ok = expr_F.F.Args[1].Expr.(*plan.Expr_C)
+	if !ok {
+		return false
+	}
+
+	str := expr_F.F.Args[1].Expr.(*plan.Expr_C).C.GetSval()
+	return str != ""
+}
+
+func getAccountCol(filepath string) string {
+	pathDir := strings.Split(filepath, "/")
+	if len(pathDir) < 2 {
+		return ""
+	}
+	return pathDir[1]
+}
+
+func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*plan.Expr, fileList []string) *batch.Batch {
+	num := len(node.TableDef.Cols)
+	bat := &batch.Batch{
+		Attrs: make([]string, num),
+		Vecs:  make([]*vector.Vector, num),
+		Zs:    make([]int64, len(fileList)),
+	}
+	for i := 0; i < num; i++ {
+		bat.Attrs[i] = node.TableDef.Cols[i].Name
+		if bat.Attrs[i] == STATEMENT_ACCOUNT {
+			typ := types.Type{
+				Oid:   types.T(node.TableDef.Cols[i].Typ.Id),
+				Width: node.TableDef.Cols[i].Typ.Width,
+				Scale: node.TableDef.Cols[i].Typ.Scale,
+			}
+			vec := vector.NewOriginal(typ)
+			vector.PreAlloc(vec, len(fileList), len(fileList), proc.Mp())
+			vec.SetOriginal(false)
+			for j := 0; j < len(fileList); j++ {
+				vector.SetStringAt(vec, j, getAccountCol(fileList[j]), proc.Mp())
+			}
+			bat.Vecs[i] = vec
+		} else if bat.Attrs[i] == catalog.ExternalFilePath {
+			typ := types.Type{
+				Oid:   types.T_varchar,
+				Width: types.MaxVarcharLen,
+				Scale: 0,
+			}
+			vec := vector.NewOriginal(typ)
+			vector.PreAlloc(vec, len(fileList), len(fileList), proc.Mp())
+			vec.SetOriginal(false)
+			for j := 0; j < len(fileList); j++ {
+				vector.SetStringAt(vec, j, fileList[j], proc.Mp())
+			}
+			bat.Vecs[i] = vec
+		}
+	}
+	for k := 0; k < len(fileList); k++ {
+		bat.Zs[k] = 1
+	}
+	return bat
+}
+
+func fliterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList []string) ([]string, error) {
+	filterList, restList := make([]*plan.Expr, 0), make([]*plan.Expr, 0)
+	for i := 0; i < len(node.FilterList); i++ {
+		if judgeContainColname(node.FilterList[i]) {
+			filterList = append(filterList, node.FilterList[i])
+		} else {
+			restList = append(restList, node.FilterList[i])
+		}
+	}
+	if len(filterList) == 0 {
+		return fileList, nil
+	}
+	node.FilterList = restList
+	bat := makeFilepathBatch(node, proc, filterList, fileList)
+	filter := colexec.RewriteFilterExprList(filterList)
+	vec, err := colexec.EvalExpr(bat, proc, filter)
+	if err != nil {
+		return nil, err
+	}
+	ret := make([]string, 0)
+	bs := vector.GetColumn[bool](vec)
+	for i := 0; i < len(bs); i++ {
+		if bs[i] {
+			ret = append(ret, fileList[i])
+		}
+	}
+	return ret, nil
+}
+
+func FliterFileList(node *plan.Node, proc *process.Process, fileList []string) ([]string, error) {
+	var err error
+	fileList, err = fliterByAccountAndFilename(node, proc, fileList)
+	if err != nil {
+		return fileList, err
+	}
+	return fileList, nil
 }
 
 func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
@@ -353,9 +480,8 @@ func getUnCompressReader(param *tree.ExternParam, r io.ReadCloser) (io.ReadClose
 	}
 }
 
-func makeBatch(param *ExternalParam, plh *ParseLineHandler, mp *mpool.MPool) *batch.Batch {
+func makeBatch(param *ExternalParam, batchSize int, mp *mpool.MPool) *batch.Batch {
 	batchData := batch.New(true, param.Attrs)
-	batchSize := plh.batchSize
 	//alloc space for vector
 	for i := 0; i < len(param.Attrs); i++ {
 		typ := types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision)
@@ -386,8 +512,18 @@ func deleteEnclosed(param *ExternalParam, plh *ParseLineHandler) {
 	}
 }
 
+func getRealAttrCnt(attrs []string) int {
+	cnt := 0
+	for i := 0; i < len(attrs); i++ {
+		if catalog.ContainExternalHidenCol(attrs[i]) {
+			cnt++
+		}
+	}
+	return len(attrs) - cnt
+}
+
 func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
-	bat := makeBatch(param, plh, proc.Mp())
+	bat := makeBatch(param, plh.batchSize, proc.Mp())
 	var (
 		Line []string
 		err  error
@@ -402,10 +538,10 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 			}
 			plh.simdCsvLineArray[rowIdx] = Line
 		}
-		if len(Line) < len(param.Attrs) {
+		if len(Line) < getRealAttrCnt(param.Attrs) {
 			return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo())
 		}
-		err = getData(bat, Line, rowIdx, param, proc.Mp())
+		err = getOneRowData(bat, Line, rowIdx, param, proc.Mp())
 		if err != nil {
 			return nil, err
 		}
@@ -483,7 +619,6 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		plh.simdCsvReader.Close()
 		param.plh = nil
 		param.Fileparam.FileFin++
-		param.extern.Filepath = ""
 		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
 			param.Fileparam.End = true
 		}
@@ -587,9 +722,17 @@ func judgeInteger(field string) bool {
 	return true
 }
 
-func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
+func getStrFromLine(Line []string, colIdx int, param *ExternalParam) string {
+	if catalog.ContainExternalHidenCol(param.Attrs[colIdx]) {
+		return param.extern.Filepath
+	} else {
+		return Line[param.Name2ColIndex[param.Attrs[colIdx]]]
+	}
+}
+
+func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
 	for colIdx := range param.Attrs {
-		field := Line[param.Name2ColIndex[param.Attrs[colIdx]]]
+		field := getStrFromLine(Line, colIdx, param)
 		id := types.T(param.Cols[colIdx].Typ.Id)
 		if id != types.T_char && id != types.T_varchar {
 			field = strings.TrimSpace(field)

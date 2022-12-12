@@ -553,6 +553,10 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	if err != nil {
 		return nil, err
 	}
+	fileList, err = external.FliterFileList(n, c.proc, fileList)
+	if err != nil {
+		return nil, err
+	}
 	if param.LoadFile && len(fileList) == 0 {
 		return nil, moerr.NewInvalidInput(ctx, "the file does not exist in load flow")
 	}
