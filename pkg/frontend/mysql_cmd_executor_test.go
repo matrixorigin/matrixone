@@ -53,6 +53,7 @@ import (
 
 func init() {
 	trace.Init(context.Background(), trace.EnableTracer(false))
+	trace.DisableLogErrorReport(true)
 }
 
 func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
