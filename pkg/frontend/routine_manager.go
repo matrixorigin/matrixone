@@ -155,17 +155,17 @@ func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatK
 	}
 	rm.mu.Unlock()
 
-	myself := idThatKill == id
+	killMyself := idThatKill == id
 	if rt != nil {
 		if killConnection {
 			logutil.Infof("kill connection %d", id)
-			rt.killConnection(myself)
+			rt.killConnection(killMyself)
 		} else {
 			logutil.Infof("kill query %s on the connection %d", statementId, id)
-			rt.killQuery(myself, statementId)
+			rt.killQuery(killMyself, statementId)
 		}
 	} else {
-		return moerr.NewInternalError(ctx, "Unknown thread id %d", id)
+		return moerr.NewInternalError(ctx, "Unknown connection id %d", id)
 	}
 	return nil
 }

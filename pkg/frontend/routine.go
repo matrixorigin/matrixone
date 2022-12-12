@@ -18,6 +18,7 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -47,7 +48,7 @@ type Routine struct {
 
 	inProcessRequest bool
 
-	cancelled bool
+	cancelled atomic.Bool
 
 	connectionBeCounted bool
 
@@ -66,16 +67,12 @@ func (rt *Routine) isConnectionBeCounted() bool {
 	return rt.connectionBeCounted
 }
 
-func (rt *Routine) setCancelled(b bool) {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	rt.cancelled = b
+func (rt *Routine) setCancelled(b bool) bool {
+	return rt.cancelled.Swap(b)
 }
 
 func (rt *Routine) isCancelled() bool {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	return rt.cancelled
+	return rt.cancelled.Load()
 }
 
 func (rt *Routine) setInProcessRequest(b bool) {
@@ -212,8 +209,8 @@ func (rt *Routine) handleRequest(req *Request) error {
 }
 
 // killQuery if there is a running query, just cancel it.
-func (rt *Routine) killQuery(myself bool, statementId string) {
-	if !myself {
+func (rt *Routine) killQuery(killMyself bool, statementId string) {
+	if !killMyself {
 		executor := rt.getCmdExecutor()
 		if executor != nil {
 			//just cancel the request context.
@@ -225,15 +222,18 @@ func (rt *Routine) killQuery(myself bool, statementId string) {
 // killConnection close the network connection
 // myself: true -- the client kill itself.
 // myself: false -- the client kill another connection.
-func (rt *Routine) killConnection(myself bool) {
-	//attach a tag
-	rt.setCancelled(true)
-
+func (rt *Routine) killConnection(killMyself bool) {
 	//Case 1: kill the connection itself. Do not close the network connection here.
+	//label the connection with the cancelled tag
+	//if it was cancelled, do nothing
+	if rt.setCancelled(true) {
+		return
+	}
+
 	//Case 2: kill another connection. Close the network here.
 	//    if the connection is processing the request, the response may be dropped.
 	//    if the connection is not processing the request, it has no effect.
-	if !myself {
+	if !killMyself {
 		if !rt.isInProcessRequest() {
 			//If it is not in processing the request, just close the network
 			proto := rt.getProtocol()
@@ -244,6 +244,8 @@ func (rt *Routine) killConnection(myself bool) {
 			//If it is in processing the request, cancel the root context of the connection.
 			//At the same time, it cancels all the contexts
 			//(includes the request context) derived from the root context.
+			//After the context is cancelled. In handleRequest, the network
+			//will be closed finally.
 			cancel := rt.getCancelRoutineFunc()
 			if cancel != nil {
 				cancel()
