@@ -57,6 +57,7 @@ type localSegment struct {
 	rows        uint32
 	appends     []*appendCtx
 	tableHandle data.TableHandle
+	//sched  tasks.TaskScheduler
 }
 
 func newLocalSegment(table *txnTable) *localSegment {
@@ -117,6 +118,8 @@ func (seg *localSegment) registerANode() {
 	)
 	seg.appendable = n
 	seg.nodes = append(seg.nodes, n)
+	//TODO::if appendable insertNode >= 2, start to flush it into S3/FS.
+	//seg.sched.Scheduler()
 }
 
 // ApplyAppend applies all the anodes into appendable blocks
