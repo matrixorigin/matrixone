@@ -387,6 +387,20 @@ func (h *Handle) HandlePreCommitWrite(
 					return err
 				}
 			}
+		case []catalog.UpdateConstraint:
+			for _, cmd := range cmds {
+				req := db.UpdateConstraint{
+					TableName:    cmd.TableName,
+					TableId:      cmd.TableId,
+					DatabaseName: cmd.DatabaseName,
+					DatabaseId:   cmd.DatabaseId,
+					Constraint:   cmd.Constraint,
+				}
+				if err = h.CacheTxnRequest(ctx, meta, req,
+					new(db.UpdateConstraint)); err != nil {
+					return err
+				}
+			}
 		case []catalog.DropDatabase:
 			for _, cmd := range cmds {
 				req := db.DropDatabaseReq{
