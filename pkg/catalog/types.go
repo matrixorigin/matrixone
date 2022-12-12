@@ -306,21 +306,21 @@ var (
 		types.New(types.T_uint32, 0, 0, 0),     // account_id
 	}
 	MoTablesTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0),     // rel_id
-		types.New(types.T_varchar, 5000, 0, 0), // relname
-		types.New(types.T_varchar, 5000, 0, 0), // reldatabase
-		types.New(types.T_uint64, 0, 0, 0),     // reldatabase_id
-		types.New(types.T_varchar, 5000, 0, 0), // relpersistence
-		types.New(types.T_varchar, 5000, 0, 0), // relkind
-		types.New(types.T_varchar, 5000, 0, 0), // rel_comment
-		types.New(types.T_varchar, 5000, 0, 0), // rel_createsql
-		types.New(types.T_timestamp, 0, 0, 0),  // created_time
-		types.New(types.T_uint32, 0, 0, 0),     // creator
-		types.New(types.T_uint32, 0, 0, 0),     // owner
-		types.New(types.T_uint32, 0, 0, 0),     // account_id
-		types.New(types.T_blob, 0, 0, 0),       // partition
-		types.New(types.T_blob, 0, 0, 0),       // viewdef
-		types.New(types.T_varchar, 5000, 0, 0), // constraint
+		types.New(types.T_uint64, 0, 0, 0),          // rel_id
+		types.New(types.T_varchar, 5000, 0, 0),      // relname
+		types.New(types.T_varchar, 5000, 0, 0),      // reldatabase
+		types.New(types.T_uint64, 0, 0, 0),          // reldatabase_id
+		types.New(types.T_varchar, 5000, 0, 0),      // relpersistence
+		types.New(types.T_varchar, 5000, 0, 0),      // relkind
+		types.New(types.T_varchar, 5000, 0, 0),      // rel_comment
+		types.New(types.T_varchar, 100000000, 0, 0), // rel_createsql
+		types.New(types.T_timestamp, 0, 0, 0),       // created_time
+		types.New(types.T_uint32, 0, 0, 0),          // creator
+		types.New(types.T_uint32, 0, 0, 0),          // owner
+		types.New(types.T_uint32, 0, 0, 0),          // account_id
+		types.New(types.T_blob, 0, 0, 0),            // partition
+		types.New(types.T_blob, 0, 0, 0),            // viewdef
+		types.New(types.T_varchar, 5000, 0, 0),      // constraint
 	}
 	MoColumnsTypes = []types.Type{
 		types.New(types.T_varchar, 256, 0, 0),  // att_uniq_name
