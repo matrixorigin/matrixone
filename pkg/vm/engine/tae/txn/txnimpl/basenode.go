@@ -65,7 +65,7 @@ type InsertNode interface {
 	Window(start, end uint32) (*containers.Batch, error)
 	//GetSpace() uint32
 	Rows() uint32
-	GetValue(col int, row uint32) any
+	GetValue(col int, row uint32) (any, error)
 	MakeCommand(uint32, bool) (txnif.TxnCmd, wal.LogEntry, error)
 	//ToTransient()
 	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo
@@ -357,6 +357,7 @@ type persistedNode struct {
 func newPersistedNode(bnode *baseNode) *persistedNode {
 	node := &persistedNode{
 		bnode: bnode,
+		rows:  bnode.Rows(),
 	}
 	node.OnZeroCB = node.close
 	if bnode.meta.HasPersistedData() {
@@ -407,7 +408,7 @@ type baseNode struct {
 	fs     *objectio.ObjectFS
 	//scheduler is used to flush insertNode into S3/FS.
 	scheduler tasks.TaskScheduler
-	//meta for this standalone block.
+	//meta for this uncommitted standalone block.
 	meta    *catalog.BlockEntry
 	table   *txnTable
 	storage struct {
@@ -455,6 +456,7 @@ func (n *baseNode) Rows() uint32 {
 }
 
 func (n *baseNode) TryUpgrade() (err error) {
+	//TODO::update metaloc and deltaloc
 	if n.storage.mnode != nil {
 		n.storage.mnode = nil
 	}

@@ -333,8 +333,13 @@ func (n *anode) OffsetWithDeletes(count uint32) uint32 {
 	return offset
 }
 
-func (n *anode) GetValue(col int, row uint32) any {
-	return n.storage.mnode.data.Vecs[col].Get(int(row))
+func (n *anode) GetValue(col int, row uint32) (any, error) {
+	h, err := n.table.store.nodesMgr.TryPin(n.storage.mnode, time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer h.Close()
+	return n.storage.mnode.data.Vecs[col].Get(int(row)), nil
 }
 
 func (n *anode) RangeDelete(start, end uint32) error {
@@ -359,12 +364,24 @@ func (n *anode) Window(start, end uint32) (bat *containers.Batch, err error) {
 	return
 }
 
-func (n *anode) GetColumnDataByIds([]int, []*bytes.Buffer) (*model.BlockView, error) {
-	//TODO::
-	panic("not implemented yet ")
+func (n *anode) GetColumnDataByIds(colIdxes []int, buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+	view = model.NewBlockView(n.table.store.txn.GetStartTS())
+	h, err := n.table.store.nodesMgr.TryPin(n.storage.mnode, time.Second)
+	if err != nil {
+		return
+	}
+	err = n.FillBlockView(view, buffers, colIdxes)
+	h.Close()
+	return
 }
 
-func (n *anode) GetColumnDataById(int, *bytes.Buffer) (*model.ColumnView, error) {
-	//TODO::
-	panic("not implemented yet ")
+func (n *anode) GetColumnDataById(colIdx int, buffer *bytes.Buffer) (view *model.ColumnView, err error) {
+	view = model.NewColumnView(n.table.store.txn.GetStartTS(), colIdx)
+	h, err := n.table.store.nodesMgr.TryPin(n.storage.mnode, time.Second)
+	if err != nil {
+		return
+	}
+	err = n.FillColumnView(view, buffer)
+	h.Close()
+	return
 }

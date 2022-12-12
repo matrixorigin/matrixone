@@ -245,18 +245,21 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		}
 		tableData.SetLastNonAppendableSeg(segH.GetMeta().(*catalog.SegmentEntry).AsCommonID())
 		//create non-appendable block.
-		//TODO:: new MVCCNode for deletes ,push it into block's MVCC list?
 		_, err = segH.CreateNonAppendableBlockWithMeta(node.GetMetaLoc())
 		if err != nil {
 			return err
 		}
+		//TODO:: call RangeDelete()?
+		//blkH.RangeDelete()
 		return err
 	}
 	metaLoc, delLoc := node.GetMetaLoc()
 	_, err = seg.table.CreateNonAppendableBlockWithMeta(segID.SegmentID, metaLoc, delLoc)
 	if err != nil {
-		return err
+		return
 	}
+	//TODO::call RangeDelete()?
+	//blkH.RangeDelete()
 	return
 }
 
@@ -344,9 +347,12 @@ func (seg *localSegment) AddBlksWithMetaLoc(
 
 func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err error) {
 	for i := from; i <= to; i++ {
-		v := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
+		v, err := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
+		if err != nil {
+			return err
+		}
 		if err = seg.index.Delete(v); err != nil {
-			break
+			return err
 		}
 	}
 	return
@@ -523,7 +529,7 @@ func (seg *localSegment) GetValue(row uint32, col uint16) (any, error) {
 	//defer h.Close()
 	//v := n.GetValue(int(col), noffset)
 	//return v, nil
-	return n.GetValue(int(col), noffset), nil
+	return n.GetValue(int(col), noffset)
 }
 
 // Close free the resource when transaction commits.

@@ -80,7 +80,9 @@ func (table *dataTable) GetLastNonAppendableSeg() (seg *common.ID, err error) {
 }
 
 func (table *dataTable) CloseLastNonAppendableSeg() {
-	table.nseg.Unref()
+	if table.nseg != nil {
+		table.nseg.Unref()
+	}
 }
 
 func (table *dataTable) SetLastNonAppendableSeg(id *common.ID) {

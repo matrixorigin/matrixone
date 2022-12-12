@@ -345,11 +345,11 @@ func (h *Handle) loadPksFromFS(
 	}
 	dbase, err := h.eng.GetDatabaseByID(ctx, req.DatabaseId, txn)
 	if err != nil {
-		return
+		return err
 	}
 	tb, err := dbase.GetRelationByID(ctx, req.TableID)
 	if err != nil {
-		return
+		return err
 	}
 	schema := tb.GetSchema(ctx)
 	if !schema.HasPK() {
@@ -390,22 +390,31 @@ func (h *Handle) loadPksFromFS(
 			},
 		)
 		if err = h.jobScheduler.Schedule(req.Jobs[i]); err != nil {
-			return
+			return err
 		}
 	}
 	return
 }
 
+// EvaluateTxnRequest only evaluate the request ,do not change the state machine of TxnEngine.
 func (h *Handle) EvaluateTxnRequest(
 	ctx context.Context,
 	meta txn.TxnMeta,
 ) (err error) {
-	//TODO::1. load primary keys or
-	//      2. load deleted batch of row ids from S3/FS.
-	//      3. get the length of batch from parsing delta location.
-	//      4. decode row id into segment id + block id + offset.
-	//
-	return nil
+	//TODO::1. load primary keys from S3/FS
+	//      2. load deleted batch of row ids from S3/FS,
+	//         and decode row id into segment id + block id + offset.
+	h.mu.RLock()
+	txnCtx := h.mu.txnCtxs[string(meta.GetID())]
+	h.mu.RUnlock()
+	for _, e := range txnCtx.req {
+		if r, ok := e.(db.WriteReq); ok {
+			if r.FileName != "" && r.Type == db.EntryInsert {
+				return h.loadPksFromFS(ctx, meta, &r)
+			}
+		}
+	}
+	return
 }
 
 func (h *Handle) CacheTxnRequest(
@@ -413,15 +422,6 @@ func (h *Handle) CacheTxnRequest(
 	meta txn.TxnMeta,
 	req any,
 	rsp any) (err error) {
-	//if r, ok := req.(db.WriteReq); ok {
-	//	if r.FileName != "" {
-	//		//start task for loading primary keys of block on S3
-	//		err = h.loadPksFromFS(ctx, meta, &r)
-	//		if err != nil {
-	//			return
-	//		}
-	//	}
-	//}
 	h.mu.Lock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	if !ok {
@@ -691,7 +691,7 @@ func (h *Handle) HandleWrite(
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
-		return err
+		return
 	}
 
 	logutil.Infof("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",

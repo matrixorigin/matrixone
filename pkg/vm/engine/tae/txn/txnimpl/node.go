@@ -31,7 +31,7 @@ import (
 // node corresponds to an un-appendable block which belongs to txn's workspace.
 type node struct {
 	*baseNode
-	uuid string
+	//uuid string
 }
 
 // NewNode creates a InsertNode object with data in S3/FS.
@@ -97,7 +97,7 @@ func (n *node) Window(start, end uint32) (*containers.Batch, error) {
 	panic("not implemented yet ")
 }
 
-func (n *node) GetValue(col int, row uint32) any {
+func (n *node) GetValue(col int, row uint32) (any, error) {
 	//TODO::
 	panic("not implemented yet ")
 }
