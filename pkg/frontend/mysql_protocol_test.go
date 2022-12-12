@@ -1199,7 +1199,7 @@ func make16MBRowResult() *MysqlExecutionResult {
 
 func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interface{}, _ uint64) error {
 	tRM.rwlock.Lock()
-	routine, ok := tRM.clients[rs]
+	routine := tRM.clients[rs]
 	tRM.rwlock.Unlock()
 	ctx := context.TODO()
 
