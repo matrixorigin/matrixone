@@ -19,7 +19,6 @@ import (
 	"math/rand"
 	"path"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -78,68 +77,68 @@ func makeTable(t *testing.T, dir string, colCnt int, pkIdx int, bufSize uint64) 
 	return newTxnTable(store, rel.GetMeta().(*catalog.TableEntry))
 }
 
-func TestInsertNode(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
-	dir := testutils.InitTestEnv(ModuleName, t)
-	tbl := makeTable(t, dir, 2, 1, common.K*6)
-	defer tbl.store.driver.Close()
-	bat := catalog.MockBatch(tbl.GetSchema(), int(common.K))
-	defer bat.Close()
-	p, _ := ants.NewPool(5)
-	defer p.Release()
-
-	var wg sync.WaitGroup
-	var all uint64
-
-	worker := func(id uint64) func() {
-		return func() {
-			defer wg.Done()
-			cnt := getNodes()
-			nodes := make([]*anode, cnt)
-			for i := 0; i < cnt; i++ {
-				var cid common.ID
-				cid.BlockID = id
-				cid.Idx = uint16(i)
-				n := NewANodeWithID(tbl, tbl.store.nodesMgr, &cid, tbl.store.driver)
-				nodes[i] = n
-				h := tbl.store.nodesMgr.Pin(n.storage.mnode)
-				var err error
-				if err = n.storage.mnode.Expand(common.K*1, func() error {
-					_, err := n.Append(bat, 0)
-					return err
-				}); err != nil {
-					err = n.storage.mnode.Expand(common.K*1, func() error {
-						_, err := n.Append(bat, 0)
-						return err
-					})
-				}
-				if err != nil {
-					assert.NotNil(t, err)
-				}
-				h.Close()
-			}
-			for _, n := range nodes {
-				// n.ToTransient()
-				n.Close()
-			}
-			atomic.AddUint64(&all, uint64(len(nodes)))
-		}
-	}
-	idAlloc := common.NewIdAlloctor(1)
-	for {
-		id := idAlloc.Alloc()
-		if id > 10 {
-			break
-		}
-		wg.Add(1)
-		err := p.Submit(worker(id))
-		assert.Nil(t, err)
-	}
-	wg.Wait()
-	t.Log(all)
-	t.Log(tbl.store.nodesMgr.String())
-}
+//func TestInsertNode(t *testing.T) {
+//	defer testutils.AfterTest(t)()
+//	testutils.EnsureNoLeak(t)
+//	dir := testutils.InitTestEnv(ModuleName, t)
+//	tbl := makeTable(t, dir, 2, 1, common.K*6)
+//	defer tbl.store.driver.Close()
+//	bat := catalog.MockBatch(tbl.GetSchema(), int(common.K))
+//	defer bat.Close()
+//	p, _ := ants.NewPool(5)
+//	defer p.Release()
+//
+//	var wg sync.WaitGroup
+//	var all uint64
+//
+//	worker := func(id uint64) func() {
+//		return func() {
+//			defer wg.Done()
+//			cnt := getNodes()
+//			nodes := make([]*anode, cnt)
+//			for i := 0; i < cnt; i++ {
+//				var cid common.ID
+//				cid.BlockID = id
+//				cid.Idx = uint16(i)
+//				n := NewANodeWithID(tbl, tbl.store.nodesMgr, &cid, tbl.store.driver)
+//				nodes[i] = n
+//				h := tbl.store.nodesMgr.Pin(n.storage.mnode)
+//				var err error
+//				if err = n.storage.mnode.Expand(common.K*1, func() error {
+//					_, err := n.Append(bat, 0)
+//					return err
+//				}); err != nil {
+//					err = n.storage.mnode.Expand(common.K*1, func() error {
+//						_, err := n.Append(bat, 0)
+//						return err
+//					})
+//				}
+//				if err != nil {
+//					assert.NotNil(t, err)
+//				}
+//				h.Close()
+//			}
+//			for _, n := range nodes {
+//				// n.ToTransient()
+//				n.Close()
+//			}
+//			atomic.AddUint64(&all, uint64(len(nodes)))
+//		}
+//	}
+//	idAlloc := common.NewIdAlloctor(1)
+//	for {
+//		id := idAlloc.Alloc()
+//		if id > 10 {
+//			break
+//		}
+//		wg.Add(1)
+//		err := p.Submit(worker(id))
+//		assert.Nil(t, err)
+//	}
+//	wg.Wait()
+//	t.Log(all)
+//	t.Log(tbl.store.nodesMgr.String())
+//}
 
 func TestTable(t *testing.T) {
 	defer testutils.AfterTest(t)()
@@ -345,13 +344,13 @@ func TestNodeCommand(t *testing.T) {
 	assert.NoError(t, err)
 
 	for i, inode := range tbl.localSegment.nodes {
-		cmd, entry, err := inode.MakeCommand(uint32(i), false)
+		cmd, err := inode.MakeCommand(uint32(i))
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(cmd.(*AppendCmd).Cmds))
-		if entry != nil {
-			_ = entry.WaitDone()
-			entry.Free()
-		}
+		//if entry != nil {
+		//	_ = entry.WaitDone()
+		//	entry.Free()
+		//}
 		if cmd != nil {
 			t.Log(cmd.String())
 		}

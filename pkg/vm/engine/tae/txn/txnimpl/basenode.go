@@ -20,9 +20,7 @@ import (
 	"fmt"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -36,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"io"
-	"sync/atomic"
 )
 
 const (
@@ -50,8 +47,6 @@ const (
 )
 
 type InsertNode interface {
-	//base.INode
-	//PrepareAppend(data *containers.Batch, offset uint32) (toAppend uint32)
 	Close() error
 	Append(data *containers.Batch, offset uint32) (appended uint32, err error)
 	RangeDelete(start, end uint32) error
@@ -63,11 +58,10 @@ type InsertNode interface {
 	FillBlockView(view *model.BlockView, buffers []*bytes.Buffer, colIdxes []int) (err error)
 	FillColumnView(*model.ColumnView, *bytes.Buffer) error
 	Window(start, end uint32) (*containers.Batch, error)
-	//GetSpace() uint32
+	GetSpace() uint32
 	Rows() uint32
 	GetValue(col int, row uint32) (any, error)
-	MakeCommand(uint32, bool) (txnif.TxnCmd, wal.LogEntry, error)
-	//ToTransient()
+	MakeCommand(uint32) (txnif.TxnCmd, error)
 	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo
 	RowsWithoutDeletes() uint32
 	LengthWithDeletes(appended, toAppend uint32) uint32
@@ -176,10 +170,10 @@ func (info *appendInfo) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 type memoryNode struct {
-	*buffer.Node
-	driver wal.Driver
-	lsn    uint64
-	typ    txnbase.NodeState
+	//*buffer.Node
+	//driver wal.Driver
+	//lsn    uint64
+	//typ    txnbase.NodeState
 
 	common.RefHelper
 	bnode *baseNode
@@ -251,81 +245,81 @@ func (n *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	return
 }
 
-func (n *memoryNode) OnUnload() {
-	entry := n.execUnload()
-	if entry != nil {
-		if err := entry.WaitDone(); err != nil {
-			panic(err)
-		}
-		entry.Free()
-	}
-}
+//func (n *memoryNode) OnUnload() {
+//	entry := n.execUnload()
+//	if entry != nil {
+//		if err := entry.WaitDone(); err != nil {
+//			panic(err)
+//		}
+//		entry.Free()
+//	}
+//}
 
-func (n *memoryNode) execUnload() (en wal.LogEntry) {
-	if n.IsTransient() {
-		return
-	}
-	if atomic.LoadUint64(&n.lsn) != 0 {
-		return
-	}
-	if n.data == nil {
-		return
-	}
-	en = n.makeLogEntry()
-	info := &entry.Info{
-		Group:     wal.GroupUC,
-		Uncommits: n.bnode.table.store.txn.GetID(),
-	}
-	en.SetInfo(info)
-	if seq, err := n.driver.AppendEntry(wal.GroupUC, en); err != nil {
-		panic(err)
-	} else {
-		atomic.StoreUint64(&n.lsn, seq)
-		id := n.Key()
-		logutil.Debugf("Unloading lsn=%d id=%v", seq, id)
-	}
-	// e.WaitDone()
-	// e.Free()
-	return
-}
+//func (n *memoryNode) execUnload() (en wal.LogEntry) {
+//	if n.IsTransient() {
+//		return
+//	}
+//	if atomic.LoadUint64(&n.lsn) != 0 {
+//		return
+//	}
+//	if n.data == nil {
+//		return
+//	}
+//	en = n.makeLogEntry()
+//	info := &entry.Info{
+//		Group:     wal.GroupUC,
+//		Uncommits: n.bnode.table.store.txn.GetID(),
+//	}
+//	en.SetInfo(info)
+//	if seq, err := n.driver.AppendEntry(wal.GroupUC, en); err != nil {
+//		panic(err)
+//	} else {
+//		atomic.StoreUint64(&n.lsn, seq)
+//		id := n.Key()
+//		logutil.Debugf("Unloading lsn=%d id=%v", seq, id)
+//	}
+//	// e.WaitDone()
+//	// e.Free()
+//	return
+//}
 
-func (n *memoryNode) ToTransient() {
-	atomic.StoreInt32(&n.typ, txnbase.TransientNode)
-}
-
-func (n *memoryNode) OnDestroy() {
-	if n.data != nil {
-		n.data.Close()
-	}
-}
-
-func (n *memoryNode) OnLoad() {
-	if n.IsTransient() {
-		return
-	}
-
-	lsn := atomic.LoadUint64(&n.lsn)
-	if lsn == 0 {
-		return
-	}
-	e, err := n.driver.LoadEntry(wal.GroupUC, lsn)
-	if err != nil {
-		panic(err)
-	}
-	logutil.Debugf("GetPayloadSize=%d", e.GetPayloadSize())
-	buf := e.GetPayload()
-	e.Free()
-	r := bytes.NewBuffer(buf)
-	cmd, _, err := txnbase.BuildCommandFrom(r)
-	if err != nil {
-		panic(err)
-	}
-	n.data = cmd.(*txnbase.BatchCmd).Bat
-}
-
-func (n *memoryNode) IsTransient() bool {
-	return atomic.LoadInt32(&n.typ) == txnbase.TransientNode
-}
+//func (n *memoryNode) ToTransient() {
+//	atomic.StoreInt32(&n.typ, txnbase.TransientNode)
+//}
+//
+//func (n *memoryNode) OnDestroy() {
+//	if n.data != nil {
+//		n.data.Close()
+//	}
+//}
+//
+//func (n *memoryNode) OnLoad() {
+//	if n.IsTransient() {
+//		return
+//	}
+//
+//	lsn := atomic.LoadUint64(&n.lsn)
+//	if lsn == 0 {
+//		return
+//	}
+//	e, err := n.driver.LoadEntry(wal.GroupUC, lsn)
+//	if err != nil {
+//		panic(err)
+//	}
+//	logutil.Debugf("GetPayloadSize=%d", e.GetPayloadSize())
+//	buf := e.GetPayload()
+//	e.Free()
+//	r := bytes.NewBuffer(buf)
+//	cmd, _, err := txnbase.BuildCommandFrom(r)
+//	if err != nil {
+//		panic(err)
+//	}
+//	n.data = cmd.(*txnbase.BatchCmd).Bat
+//}
+//
+//func (n *memoryNode) IsTransient() bool {
+//	return atomic.LoadInt32(&n.typ) == txnbase.TransientNode
+//}
 
 func (n *memoryNode) makeLogEntry() wal.LogEntry {
 	cmd := txnbase.NewBatchCmd(n.data)

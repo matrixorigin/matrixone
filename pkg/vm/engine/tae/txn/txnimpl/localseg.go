@@ -17,14 +17,10 @@ package txnimpl
 import (
 	"bytes"
 	"fmt"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -52,7 +48,7 @@ func isLocalSegmentByID(id uint64) bool {
 
 type localSegment struct {
 	entry      *catalog.SegmentEntry
-	appendable base.INodeHandle
+	appendable InsertNode
 	//index for primary key
 	index TableIndex
 	//nodes contains anode and node.
@@ -112,23 +108,16 @@ func (seg *localSegment) registerNode(metaLoc string, deltaLoc string) {
 
 // register an appendable insertNode.
 func (seg *localSegment) registerANode() {
-	var err error
-	if seg.appendable != nil {
-		seg.appendable.Close()
-	}
 	meta := catalog.NewStandaloneBlock(seg.entry, uint64(len(seg.nodes)), seg.table.store.txn.GetStartTS())
 	seg.entry.AddEntryLocked(meta)
 	n := NewANode(
 		seg.table,
 		seg.table.store.dataFactory.Fs,
 		seg.table.store.nodesMgr,
-		seg.table.store.dataFactory.Scheduler, meta,
-		seg.table.store.driver,
+		seg.table.store.dataFactory.Scheduler,
+		meta,
 	)
-	seg.appendable, err = seg.table.store.nodesMgr.TryPin(n.storage.mnode, time.Second)
-	if err != nil {
-		panic(err)
-	}
+	seg.appendable = n
 	seg.nodes = append(seg.nodes, n)
 	seg.maxIdx = uint32(len(seg.nodes))
 }
@@ -271,7 +260,6 @@ func (seg *localSegment) CloseAppends() {
 }
 
 // Append appends batch of data into anode.
-// TODO::refactor.
 func (seg *localSegment) Append(data *containers.Batch) (err error) {
 	if seg.appendable == nil {
 		seg.registerANode()
@@ -281,24 +269,15 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 	length := uint32(data.Length())
 	for {
 		h := seg.appendable
-		n := h.GetNode().(*memoryNode)
-		space := n.GetSpace()
+		space := h.GetSpace()
 		if space == 0 {
 			seg.registerANode()
-			n = h.GetNode().(*memoryNode)
+			h = seg.appendable
 		}
-		toAppend := n.PrepareAppend(data, offset)
-		size := compute.EstimateSize(data, offset, toAppend)
-		logutil.Debugf("Offset=%d, ToAppend=%d, EstimateSize=%d", offset, toAppend, size)
-		err = n.Expand(size, func() error {
-			appended, err = n.Append(data, offset)
-			return err
-		})
+		appended, err = h.Append(data, offset)
 		if err != nil {
-			logutil.Info(seg.table.store.nodesMgr.String())
-			break
+			return
 		}
-		logutil.Debugf("Appended: %d, Space:%d", appended, space)
 		if seg.table.schema.HasPK() {
 			if err = seg.index.BatchInsert(
 				data.Attrs[seg.table.schema.GetSingleSortKeyIdx()],
@@ -316,7 +295,7 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 			break
 		}
 	}
-	return err
+	return
 }
 
 // AddBlksWithMetaLoc transfers blocks with meta location into non-appendable nodes
@@ -358,7 +337,7 @@ func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err 
 	return
 }
 
-// RangeDelete delete rows: [start, end]
+// RangeDelete delete rows : [start, end]
 func (seg *localSegment) RangeDelete(start, end uint32) error {
 	first, firstOffset := seg.GetLocalPhysicalAxis(start)
 	last, lastOffset := seg.GetLocalPhysicalAxis(end)
@@ -408,17 +387,13 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 	return err
 }
 
-// CollectCmd collect txnCmd for anode.
+// CollectCmd collect txnCmd for anode whose data resides in memory.
 func (seg *localSegment) CollectCmd(cmdMgr *commandManager) (err error) {
-	for i, node := range seg.nodes {
-		forceFlush := i < int(seg.maxIdx-1)
+	for _, node := range seg.nodes {
 		csn := uint32(0xffff) // Special cmd
-		cmd, entry, err := node.MakeCommand(csn, forceFlush)
+		cmd, err := node.MakeCommand(csn)
 		if err != nil {
 			panic(err)
-		}
-		if entry != nil {
-			seg.table.logs = append(seg.table.logs, entry)
 		}
 		if cmd != nil {
 			cmdMgr.AddInternalCmd(cmd)
@@ -475,18 +450,6 @@ func (seg *localSegment) GetColumnDataByIds(
 	blk *catalog.BlockEntry,
 	colIdxes []int,
 	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
-	//view = model.NewBlockView(seg.table.store.txn.GetStartTS())
-	//npos := int(blk.ID)
-	//n := seg.nodes[npos]
-	//h, err := seg.table.store.nodesMgr.TryPin(n.(*anode).storage.mnode, time.Second)
-	//if err != nil {
-	//	return
-	//}
-	//err = n.FillBlockView(view, buffers, colIdxes)
-	//h.Close()
-	//if err != nil {
-	//	return
-	//}
 	npos := int(blk.ID)
 	n := seg.nodes[npos]
 	return n.GetColumnDataByIds(colIdxes, buffers)
@@ -496,18 +459,6 @@ func (seg *localSegment) GetColumnDataById(
 	blk *catalog.BlockEntry,
 	colIdx int,
 	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
-	//view = model.NewColumnView(seg.table.store.txn.GetStartTS(), colIdx)
-	//npos := int(blk.ID)
-	//n := seg.nodes[npos]
-	//h, err := seg.table.store.nodesMgr.TryPin(n.(*anode).storage.mnode, time.Second)
-	//if err != nil {
-	//	return
-	//}
-	//err = n.FillColumnView(view, buffer)
-	//h.Close()
-	//if err != nil {
-	//	return
-	//}
 	npos := int(blk.ID)
 	n := seg.nodes[npos]
 	return n.GetColumnDataById(colIdx, buffer)
@@ -522,24 +473,11 @@ func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {
 func (seg *localSegment) GetValue(row uint32, col uint16) (any, error) {
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]
-	//h, err := seg.table.store.nodesMgr.TryPin(n.(*anode).storage.mnode, time.Second)
-	//if err != nil {
-	//	return nil, err
-	//}
-	//defer h.Close()
-	//v := n.GetValue(int(col), noffset)
-	//return v, nil
 	return n.GetValue(int(col), noffset)
 }
 
 // Close free the resource when transaction commits.
 func (seg *localSegment) Close() (err error) {
-	if seg.appendable != nil {
-		//unpin the memoryNode.
-		if err = seg.appendable.Close(); err != nil {
-			return
-		}
-	}
 	for _, node := range seg.nodes {
 		if err = node.Close(); err != nil {
 			return

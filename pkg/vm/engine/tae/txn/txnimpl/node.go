@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 // node corresponds to an un-appendable block which belongs to txn's workspace.
@@ -79,6 +78,10 @@ func (n *node) PrintDeletes() string {
 
 }
 
+func (n *node) GetSpace() uint32 {
+	panic("not supported ")
+}
+
 func (n *node) FillBlockView(
 	view *model.BlockView,
 	buffers []*bytes.Buffer,
@@ -128,8 +131,8 @@ func (n *node) GetAppends() []*appendInfo {
 	panic("not supported ")
 }
 
-func (n *node) MakeCommand(uint32, bool) (txnif.TxnCmd, wal.LogEntry, error) {
-	return nil, nil, nil
+func (n *node) MakeCommand(_ uint32) (txnif.TxnCmd, error) {
+	return nil, nil
 }
 
 func (n *node) GetColumnDataByIds([]int, []*bytes.Buffer) (*model.BlockView, error) {

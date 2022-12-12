@@ -17,7 +17,6 @@ package txnimpl
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -26,9 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
-	"sync/atomic"
-	"time"
 )
 
 // anode corresponds to an appendable block which belongs to txn's workspace and can be appended data.
@@ -43,44 +39,46 @@ func NewANode(
 	mgr base.INodeManager,
 	sched tasks.TaskScheduler,
 	meta *catalog.BlockEntry,
-	driver wal.Driver,
+	// driver wal.Driver,
 ) *anode {
 	impl := new(anode)
 	impl.baseNode = newBaseNode(tbl, fs, mgr, sched, meta)
 	impl.storage.mnode = newMemoryNode(impl.baseNode)
 	impl.storage.mnode.Ref()
 
-	impl.storage.mnode.Node = buffer.NewNode(impl.storage.mnode, mgr, *meta.AsCommonID(), 0)
-	impl.storage.mnode.driver = driver
-	impl.storage.mnode.typ = txnbase.PersistNode
-	impl.storage.mnode.UnloadFunc = impl.storage.mnode.OnUnload
-	impl.storage.mnode.DestroyFunc = impl.storage.mnode.OnDestroy
-	impl.storage.mnode.LoadFunc = impl.storage.mnode.OnLoad
-	mgr.RegisterNode(impl.storage.mnode)
+	//impl.storage.mnode.Node = buffer.NewNode(impl.storage.mnode, mgr, *meta.AsCommonID(), 0)
+	//impl.storage.mnode.driver = driver
+	//impl.storage.mnode.typ = txnbase.PersistNode
+	//impl.storage.mnode.UnloadFunc = impl.storage.mnode.OnUnload
+	//impl.storage.mnode.DestroyFunc = impl.storage.mnode.OnDestroy
+	//impl.storage.mnode.LoadFunc = impl.storage.mnode.OnLoad
+	//mgr.RegisterNode(impl.storage.mnode)
 
 	return impl
 }
 
 // NewANodeWithID is just for test.
-func NewANodeWithID(
-	tbl *txnTable,
-	mgr base.INodeManager,
-	id *common.ID,
-	driver wal.Driver) *anode {
-	impl := new(anode)
-	impl.baseNode = newBaseNode(tbl, nil, mgr, nil, nil)
-	impl.storage.mnode = newMemoryNode(impl.baseNode)
-	impl.storage.mnode.Ref()
-
-	impl.storage.mnode.Node = buffer.NewNode(impl.storage.mnode, mgr, *id, 0)
-	impl.storage.mnode.driver = driver
-	impl.storage.mnode.typ = txnbase.PersistNode
-	impl.storage.mnode.UnloadFunc = impl.storage.mnode.OnUnload
-	impl.storage.mnode.DestroyFunc = impl.storage.mnode.OnDestroy
-	impl.storage.mnode.LoadFunc = impl.storage.mnode.OnLoad
-	mgr.RegisterNode(impl.storage.mnode)
-	return impl
-}
+//func NewANodeWithID(
+//	tbl *txnTable,
+//	mgr base.INodeManager,
+//	id *common.ID,
+//	// driver wal.Driver,
+//) *anode {
+//	impl := new(anode)
+//	impl.baseNode = newBaseNode(tbl, nil, mgr, nil, nil)
+//	impl.storage.mnode = newMemoryNode(impl.baseNode)
+//	impl.storage.mnode.Ref()
+//
+//	//impl.storage.mnode.Node = buffer.NewNode(impl.storage.mnode, mgr, *id, 0)
+//	//impl.storage.mnode.driver = driver
+//	//impl.storage.mnode.typ = txnbase.PersistNode
+//	//impl.storage.mnode.UnloadFunc = impl.storage.mnode.OnUnload
+//	//impl.storage.mnode.DestroyFunc = impl.storage.mnode.OnDestroy
+//	//impl.storage.mnode.LoadFunc = impl.storage.mnode.OnLoad
+//	//mgr.RegisterNode(impl.storage.mnode)
+//
+//	return impl
+//}
 
 func (n *anode) GetAppends() []*appendInfo {
 	return n.storage.mnode.appends
@@ -100,37 +98,20 @@ func (n *anode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint6
 	return info
 }
 
-func (n *anode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCmd, entry wal.LogEntry, err error) {
+func (n *anode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	if n.IsPersisted() {
-		return nil, nil, nil
-	}
-	h, err := n.bufMgr.TryPin(n.storage.mnode, time.Second)
-	if err != nil {
-		return
+		return nil, nil
 	}
 	if n.storage.mnode.data == nil {
-		h.Close()
 		return
 	}
 	composedCmd := NewAppendCmd(id, n)
-	if n.storage.mnode.lsn == 0 && forceFlush {
-		entry = n.storage.mnode.execUnload()
-	}
-	if n.storage.mnode.lsn == 0 {
-		batCmd := txnbase.NewBatchCmd(n.storage.mnode.data)
-		composedCmd.AddCmd(batCmd)
-	} else {
-		ptrCmd := new(txnbase.PointerCmd)
-		ptrCmd.Lsn = n.storage.mnode.lsn
-		ptrCmd.Group = wal.GroupUC
-		composedCmd.AddCmd(ptrCmd)
-	}
-	n.storage.mnode.ToTransient()
-	h.Close()
-	return composedCmd, entry, nil
+	batCmd := txnbase.NewBatchCmd(n.storage.mnode.data)
+	composedCmd.AddCmd(batCmd)
+	return composedCmd, nil
 }
 
-func (n *anode) Type() txnbase.NodeType { return NTInsert }
+//func (n *anode) Type() txnbase.NodeType { return NTInsert }
 
 //func (n *anode) makeLogEntry() wal.LogEntry {
 //	cmd := txnbase.NewBatchCmd(n.storage.mnode.data)
@@ -146,9 +127,9 @@ func (n *anode) Type() txnbase.NodeType { return NTInsert }
 //	return e
 //}
 
-func (n *anode) IsTransient() bool {
-	return atomic.LoadInt32(&n.storage.mnode.typ) == txnbase.TransientNode
-}
+//func (n *anode) IsTransient() bool {
+//	return atomic.LoadInt32(&n.storage.mnode.typ) == txnbase.TransientNode
+//}
 
 //func (n *anode) OnDestroy() {
 //	if n.storage.mnode.data != nil {
@@ -180,9 +161,11 @@ func (n *anode) IsTransient() bool {
 //	n.storage.mnode.data = cmd.(*txnbase.BatchCmd).Bat
 //}
 
-func (n *anode) Close() error {
-	n.storage.mnode.ToTransient()
-	return n.storage.mnode.Close()
+func (n *anode) Close() (err error) {
+	if n.storage.mnode.data != nil {
+		n.storage.mnode.data.Close()
+	}
+	return
 }
 
 //func (n *anode) OnUnload() {
@@ -300,6 +283,10 @@ func (n *anode) FillColumnView(view *model.ColumnView, buffer *bytes.Buffer) (er
 	return
 }
 
+func (n *anode) GetSpace() uint32 {
+	return txnbase.MaxNodeRows - n.storage.mnode.rows
+}
+
 func (n *anode) RowsWithoutDeletes() uint32 {
 	deletes := uint32(0)
 	if n.storage.mnode.data != nil && n.storage.mnode.data.Deletes != nil {
@@ -334,12 +321,11 @@ func (n *anode) OffsetWithDeletes(count uint32) uint32 {
 }
 
 func (n *anode) GetValue(col int, row uint32) (any, error) {
-	h, err := n.table.store.nodesMgr.TryPin(n.storage.mnode, time.Second)
-	if err != nil {
-		return nil, err
+	if !n.IsPersisted() {
+		return n.storage.mnode.data.Vecs[col].Get(int(row)), nil
 	}
-	defer h.Close()
-	return n.storage.mnode.data.Vecs[col].Get(int(row)), nil
+	//TODO:: get value from S3/FS
+	panic("not implemented yet :GetValue from FS/S3 ")
 }
 
 func (n *anode) RangeDelete(start, end uint32) error {
@@ -364,24 +350,23 @@ func (n *anode) Window(start, end uint32) (bat *containers.Batch, err error) {
 	return
 }
 
-func (n *anode) GetColumnDataByIds(colIdxes []int, buffers []*bytes.Buffer) (view *model.BlockView, err error) {
-	view = model.NewBlockView(n.table.store.txn.GetStartTS())
-	h, err := n.table.store.nodesMgr.TryPin(n.storage.mnode, time.Second)
-	if err != nil {
+func (n *anode) GetColumnDataByIds(
+	colIdxes []int,
+	buffers []*bytes.Buffer,
+) (view *model.BlockView, err error) {
+	if !n.IsPersisted() {
+		view = model.NewBlockView(n.table.store.txn.GetStartTS())
+		err = n.FillBlockView(view, buffers, colIdxes)
 		return
 	}
-	err = n.FillBlockView(view, buffers, colIdxes)
-	h.Close()
-	return
+	panic("Not Implemented yet : GetColumnDataByIds from S3/FS ")
 }
 
 func (n *anode) GetColumnDataById(colIdx int, buffer *bytes.Buffer) (view *model.ColumnView, err error) {
-	view = model.NewColumnView(n.table.store.txn.GetStartTS(), colIdx)
-	h, err := n.table.store.nodesMgr.TryPin(n.storage.mnode, time.Second)
-	if err != nil {
+	if !n.IsPersisted() {
+		view = model.NewColumnView(n.table.store.txn.GetStartTS(), colIdx)
+		err = n.FillColumnView(view, buffer)
 		return
 	}
-	err = n.FillColumnView(view, buffer)
-	h.Close()
-	return
+	panic("Not Implemented yet : GetColumnDataByIds from S3/FS ")
 }
