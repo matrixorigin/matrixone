@@ -132,6 +132,14 @@ type CreateRelationReq struct {
 	Defs         []engine.TableDef
 }
 
+type UpdateConstraint struct {
+	TableId      uint64
+	TableName    string
+	DatabaseId   uint64
+	DatabaseName string
+	Constraint   []byte
+}
+
 type CreateRelationResp struct {
 	ID uint64
 }
