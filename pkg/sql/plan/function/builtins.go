@@ -2699,4 +2699,18 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	SPLIT_PART: {
+		Id:     SPLIT_PART,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_uint32},
+				ReturnTyp: types.T_varchar,
+				Volatile:  false,
+				Fn:        multi.SplitPart,
+			},
+		},
+	},
 }
