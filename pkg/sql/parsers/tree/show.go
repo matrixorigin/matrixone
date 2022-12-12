@@ -465,3 +465,56 @@ func NewShowIndex(t TableName, w *Where) *ShowIndex {
 		Where:     w,
 	}
 }
+
+// show Function statement
+
+type ShowFunctionStatus struct {
+	showImpl
+	Like  *ComparisonExpr
+	Where *Where
+}
+
+func (node *ShowFunctionStatus) Format(ctx *FmtCtx) {
+	ctx.WriteString("show function status")
+	if node.Like != nil {
+		ctx.WriteString(" like ")
+		node.Like.Format(ctx)
+	}
+	if node.Where != nil {
+		ctx.WriteByte(' ')
+		node.Where.Format(ctx)
+	}
+}
+
+func NewShowFunctionStatus(l *ComparisonExpr, w *Where) *ShowFunctionStatus {
+	return &ShowFunctionStatus{
+		Like:  l,
+		Where: w,
+	}
+}
+
+// show node list
+type ShowNodeList struct {
+	showImpl
+}
+
+func (node *ShowNodeList) Format(ctx *FmtCtx) {
+	ctx.WriteString("show node list")
+}
+
+func NewShowNodeList() *ShowNodeList {
+	return &ShowNodeList{}
+}
+
+// show locks
+type ShowLocks struct {
+	showImpl
+}
+
+func (node *ShowLocks) Format(ctx *FmtCtx) {
+	ctx.WriteString("show locks")
+}
+
+func NewShowLocks() *ShowLocks {
+	return &ShowLocks{}
+}
