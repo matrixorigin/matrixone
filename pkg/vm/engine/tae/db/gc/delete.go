@@ -1,37 +1,30 @@
 package gc
 
-import "context"
+import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+)
 
 type GcTask struct {
 	object []string
-	table  *GcTable
+	fs     *objectio.ObjectFS
 }
 
-func NewGcTask(table *GcTable) GcTask {
+func NewGcTask(fs *objectio.ObjectFS, names []string) GcTask {
 	return GcTask{
-		object: make([]string, 0),
-		table:  table,
+		object: names,
+		fs:     fs,
 	}
 }
 
 func (g *GcTask) ExecDelete() error {
-	if len(g.table.delete) == 0 {
+	if len(g.object) == 0 {
 		return nil
 	}
 
-	for name, ids := range g.table.delete {
-		blocks := g.table.table[name]
-		if blocks == nil {
-			panic(any("error"))
-		}
-		if len(blocks) == len(ids) {
-			err := g.table.fs.DelFile(context.Background(), name)
-			if err != nil {
-				return err
-			}
-			delete(g.table.table, name)
-			delete(g.table.delete, name)
-		}
+	err := g.fs.DelFiles(context.Background(), g.object)
+	if err != nil {
+		return err
 	}
 
 	return nil

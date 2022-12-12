@@ -5,7 +5,6 @@ import (
 	"fmt"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
@@ -17,14 +16,12 @@ type GcTable struct {
 	sync.Mutex
 	table  map[string][]common.ID
 	delete map[string][]common.ID
-	fs     *objectio.ObjectFS
 }
 
-func NewGcTable(fs *objectio.ObjectFS) GcTable {
+func NewGcTable() GcTable {
 	table := GcTable{
 		table:  make(map[string][]common.ID),
 		delete: make(map[string][]common.ID),
-		fs:     fs,
 	}
 	return table
 }

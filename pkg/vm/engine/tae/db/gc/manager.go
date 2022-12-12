@@ -1,6 +1,7 @@
 package gc
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 )
 
@@ -9,12 +10,14 @@ type Manager struct {
 	table      []GcTable
 	mergeCache []GcTable
 	gc         []string
+	fs         *objectio.ObjectFS
 }
 
-func NewManager() *Manager {
+func NewManager(fs *objectio.ObjectFS) *Manager {
 	return &Manager{
 		table: make([]GcTable, 0),
 		gc:    make([]string, 0),
+		fs:    fs,
 	}
 }
 
@@ -23,7 +26,7 @@ func (m *Manager) MergeTable() error {
 	m.mergeCache = m.table
 	m.table = make([]GcTable, 0)
 	m.Unlock()
-	mergeTable := NewGcTable(m.mergeCache[0].fs)
+	mergeTable := NewGcTable()
 	for _, table := range m.mergeCache {
 		for name, ids := range table.table {
 			mergeTable.table[name] = append(mergeTable.table[name], ids...)

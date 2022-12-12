@@ -54,6 +54,6 @@ func (o *ObjectFS) ListDir(dir string) ([]fileservice.DirEntry, error) {
 	return o.Service.List(context.Background(), dir)
 }
 
-func (o *ObjectFS) DelFile(ctx context.Context, name string) error {
-	return o.Service.Delete(ctx, name)
+func (o *ObjectFS) DelFiles(ctx context.Context, name []string) error {
+	return o.Service.Delete(ctx, name...)
 }
