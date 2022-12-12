@@ -3425,6 +3425,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			objType = objectTypeDatabase
 			typs = append(typs, PrivilegeTypeDump, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		}
+	case *tree.Kill:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}
