@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strings"
 	"testing"
@@ -273,7 +274,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 
-		ses := newSes(nil)
+		ses := newSes(nil, ctrl)
 		ses.tenant = tenant
 
 		err = InitGeneralTenant(ctx, ses, &tree.CreateAccount{
@@ -565,7 +566,7 @@ func Test_determineCreateAccount(t *testing.T) {
 
 		stmt := &tree.CreateAccount{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -595,7 +596,7 @@ func Test_determineCreateAccount(t *testing.T) {
 
 		stmt := &tree.CreateAccount{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -631,7 +632,7 @@ func Test_determineCreateUser(t *testing.T) {
 
 		stmt := &tree.CreateUser{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -665,7 +666,7 @@ func Test_determineCreateUser(t *testing.T) {
 
 		stmt := &tree.CreateUser{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -710,7 +711,7 @@ func Test_determineCreateUser(t *testing.T) {
 
 		stmt := &tree.CreateUser{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -765,7 +766,7 @@ func Test_determineDropUser(t *testing.T) {
 
 		stmt := &tree.DropUser{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -800,7 +801,7 @@ func Test_determineDropUser(t *testing.T) {
 
 		stmt := &tree.DropUser{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -845,7 +846,7 @@ func Test_determineDropUser(t *testing.T) {
 
 		stmt := &tree.DropUser{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -900,7 +901,7 @@ func Test_determineCreateRole(t *testing.T) {
 
 		stmt := &tree.CreateRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -934,7 +935,7 @@ func Test_determineCreateRole(t *testing.T) {
 
 		stmt := &tree.CreateRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -979,7 +980,7 @@ func Test_determineCreateRole(t *testing.T) {
 
 		stmt := &tree.CreateRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1034,7 +1035,7 @@ func Test_determineDropRole(t *testing.T) {
 
 		stmt := &tree.DropRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1068,7 +1069,7 @@ func Test_determineDropRole(t *testing.T) {
 
 		stmt := &tree.DropRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1113,7 +1114,7 @@ func Test_determineDropRole(t *testing.T) {
 
 		stmt := &tree.DropRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1168,7 +1169,7 @@ func Test_determineGrantRole(t *testing.T) {
 
 		stmt := &tree.GrantRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1205,7 +1206,7 @@ func Test_determineGrantRole(t *testing.T) {
 
 		stmt := &tree.GrantRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1264,7 +1265,7 @@ func Test_determineGrantRole(t *testing.T) {
 			gr.Roles = append(gr.Roles, &tree.Role{UserName: name})
 		}
 		priv := determinePrivilegeSetOfStatement(g)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1366,7 +1367,7 @@ func Test_determineGrantRole(t *testing.T) {
 			gr.Roles = append(gr.Roles, &tree.Role{UserName: name})
 		}
 		priv := determinePrivilegeSetOfStatement(g)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1468,7 +1469,7 @@ func Test_determineGrantRole(t *testing.T) {
 			gr.Roles = append(gr.Roles, &tree.Role{UserName: name})
 		}
 		priv := determinePrivilegeSetOfStatement(g)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1567,7 +1568,7 @@ func Test_determineGrantRole(t *testing.T) {
 			gr.Roles = append(gr.Roles, &tree.Role{UserName: name})
 		}
 		priv := determinePrivilegeSetOfStatement(g)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1657,7 +1658,7 @@ func Test_determineRevokeRole(t *testing.T) {
 
 		stmt := &tree.RevokeRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1692,7 +1693,7 @@ func Test_determineRevokeRole(t *testing.T) {
 
 		stmt := &tree.RevokeRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1738,7 +1739,7 @@ func Test_determineRevokeRole(t *testing.T) {
 
 		stmt := &tree.RevokeRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1823,7 +1824,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 		for _, stmt := range stmts {
 			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv)
+			ses := newSes(priv, ctrl)
 			ses.SetDatabaseName("db")
 
 			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
@@ -1897,7 +1898,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 		for _, stmt := range stmts {
 			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv)
+			ses := newSes(priv, ctrl)
 			ses.tenant = &TenantInfo{
 				Tenant:        "xxx",
 				User:          "xxx",
@@ -1999,7 +2000,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 		for _, stmt := range stmts {
 			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv)
+			ses := newSes(priv, ctrl)
 			ses.tenant = &TenantInfo{
 				Tenant:        "xxx",
 				User:          "xxx",
@@ -2091,7 +2092,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		var privType PrivilegeType
 		for _, stmt := range stmts {
 			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv)
+			ses := newSes(priv, ctrl)
 			ses.tenant = &TenantInfo{
 				Tenant:        "xxx",
 				User:          "xxx",
@@ -2172,7 +2173,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 		for _, stmt := range stmts {
 			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv)
+			ses := newSes(priv, ctrl)
 			ses.tenant = &TenantInfo{
 				Tenant:        "xxx",
 				User:          "xxx",
@@ -2244,7 +2245,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 		for _, stmt := range stmts {
 			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv)
+			ses := newSes(priv, ctrl)
 			ses.tenant = &TenantInfo{
 				Tenant:        "xxx",
 				User:          "xxx",
@@ -2305,7 +2306,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 		for _, stmt := range stmts {
 			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv)
+			ses := newSes(priv, ctrl)
 			ses.tenant = &TenantInfo{
 				Tenant:        "xxx",
 				User:          "xxx",
@@ -2355,11 +2356,13 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 func Test_determineRevokePrivilege(t *testing.T) {
 	convey.Convey("revoke privilege [ObjectType: Table] AdminRole succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
 		var stmts []*tree.RevokePrivilege
 
 		for _, stmt := range stmts {
 			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv)
+			ses := newSes(priv, ctrl)
 
 			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
 			convey.So(err, convey.ShouldBeNil)
@@ -2367,11 +2370,13 @@ func Test_determineRevokePrivilege(t *testing.T) {
 		}
 	})
 	convey.Convey("revoke privilege [ObjectType: Table] not AdminRole fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
 		var stmts []*tree.RevokePrivilege
 
 		for _, stmt := range stmts {
 			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv)
+			ses := newSes(priv, ctrl)
 			ses.tenant = &TenantInfo{
 				Tenant:        "xxx",
 				User:          "xxx",
@@ -2395,7 +2400,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 
 		stmt := &tree.CreateDatabase{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2429,7 +2434,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 
 		stmt := &tree.CreateDatabase{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2474,7 +2479,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 
 		stmt := &tree.CreateDatabase{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2529,7 +2534,7 @@ func Test_determineDropDatabase(t *testing.T) {
 
 		stmt := &tree.DropDatabase{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2564,7 +2569,7 @@ func Test_determineDropDatabase(t *testing.T) {
 
 		stmt := &tree.DropDatabase{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2608,7 +2613,7 @@ func Test_determineDropDatabase(t *testing.T) {
 
 		stmt := &tree.DropDatabase{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2662,7 +2667,7 @@ func Test_determineShowDatabase(t *testing.T) {
 
 		stmt := &tree.ShowDatabases{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2697,7 +2702,7 @@ func Test_determineShowDatabase(t *testing.T) {
 
 		stmt := &tree.ShowDatabases{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2742,7 +2747,7 @@ func Test_determineShowDatabase(t *testing.T) {
 
 		stmt := &tree.ShowDatabases{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2799,7 +2804,7 @@ func Test_determineUseDatabase(t *testing.T) {
 			Name: "db",
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2836,7 +2841,7 @@ func Test_determineUseDatabase(t *testing.T) {
 			Name: "db",
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2883,7 +2888,7 @@ func Test_determineUseDatabase(t *testing.T) {
 			Name: "db",
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2942,7 +2947,7 @@ func Test_determineCreateTable(t *testing.T) {
 
 		stmt := &tree.CreateTable{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -3001,7 +3006,7 @@ func Test_determineCreateTable(t *testing.T) {
 
 		stmt := &tree.CreateTable{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -3075,7 +3080,7 @@ func Test_determineCreateTable(t *testing.T) {
 
 		stmt := &tree.CreateTable{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -3156,7 +3161,7 @@ func Test_determineDropTable(t *testing.T) {
 
 		stmt := &tree.DropTable{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -3215,7 +3220,7 @@ func Test_determineDropTable(t *testing.T) {
 
 		stmt := &tree.DropTable{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -3289,7 +3294,7 @@ func Test_determineDropTable(t *testing.T) {
 
 		stmt := &tree.DropTable{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -3444,7 +3449,7 @@ func Test_determineDML(t *testing.T) {
 
 		for _, a := range args {
 			priv := determinePrivilegeSetOfStatement(a.stmt)
-			ses := newSes(priv)
+			ses := newSes(priv, ctrl)
 
 			rowsOfMoUserGrant := [][]interface{}{
 				{0, false},
@@ -3522,7 +3527,7 @@ func Test_determineDML(t *testing.T) {
 
 		for _, a := range args {
 			priv := determinePrivilegeSetOfStatement(a.stmt)
-			ses := newSes(priv)
+			ses := newSes(priv, ctrl)
 
 			rowsOfMoUserGrant := [][]interface{}{
 				{0, false},
@@ -3619,7 +3624,7 @@ func Test_determineDML(t *testing.T) {
 
 		for _, a := range args {
 			priv := determinePrivilegeSetOfStatement(a.stmt)
-			ses := newSes(priv)
+			ses := newSes(priv, ctrl)
 
 			rowsOfMoUserGrant := [][]interface{}{
 				{0, false},
@@ -3728,7 +3733,7 @@ func Test_doGrantRole(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -3797,7 +3802,7 @@ func Test_doGrantRole(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -3877,7 +3882,7 @@ func Test_doGrantRole(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -3983,7 +3988,7 @@ func Test_doGrantRole(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -4093,7 +4098,7 @@ func Test_doGrantRole(t *testing.T) {
 			GrantOption: true,
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -4203,7 +4208,7 @@ func Test_doGrantRole(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -4273,7 +4278,7 @@ func Test_doGrantRole(t *testing.T) {
 			GrantOption: true,
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -4388,7 +4393,7 @@ func Test_doGrantRole(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -4455,7 +4460,7 @@ func Test_doGrantRole(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -4532,7 +4537,7 @@ func Test_doRevokeRole(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -4595,7 +4600,7 @@ func Test_doRevokeRole(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -4658,7 +4663,7 @@ func Test_doRevokeRole(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -4726,7 +4731,7 @@ func Test_doRevokeRole(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -4798,7 +4803,7 @@ func Test_doRevokeRole(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -4865,7 +4870,7 @@ func Test_doGrantPrivilege(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -4959,7 +4964,7 @@ func Test_doGrantPrivilege(t *testing.T) {
 
 		for _, stmt := range stmts {
 			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv)
+			ses := newSes(priv, ctrl)
 
 			//no result set
 			bh.sql2result["begin;"] = nil
@@ -5090,7 +5095,7 @@ func Test_doGrantPrivilege(t *testing.T) {
 
 		for _, stmt := range stmts {
 			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv)
+			ses := newSes(priv, ctrl)
 			ses.SetDatabaseName("d")
 
 			//no result set
@@ -5167,7 +5172,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -5261,7 +5266,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 
 		for _, stmt := range stmts {
 			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv)
+			ses := newSes(priv, ctrl)
 
 			//no result set
 			bh.sql2result["begin;"] = nil
@@ -5392,7 +5397,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 
 		for _, stmt := range stmts {
 			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv)
+			ses := newSes(priv, ctrl)
 			ses.SetDatabaseName("d")
 
 			//no result set
@@ -5466,7 +5471,7 @@ func Test_doDropRole(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -5511,7 +5516,7 @@ func Test_doDropRole(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -5562,7 +5567,7 @@ func Test_doDropRole(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -5615,7 +5620,7 @@ func Test_doDropUser(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -5664,7 +5669,7 @@ func Test_doDropUser(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -5719,7 +5724,7 @@ func Test_doDropUser(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -5780,7 +5785,7 @@ func Test_doAlterAccount(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -5827,7 +5832,7 @@ func Test_doAlterAccount(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -5874,7 +5879,7 @@ func Test_doAlterAccount(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -5917,7 +5922,7 @@ func Test_doAlterAccount(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -5961,7 +5966,7 @@ func Test_doAlterAccount(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -5999,7 +6004,7 @@ func Test_doAlterAccount(t *testing.T) {
 			Name:     "acc",
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -6046,7 +6051,7 @@ func Test_doAlterAccount(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -6083,7 +6088,7 @@ func Test_doAlterAccount(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -6124,7 +6129,7 @@ func Test_doAlterAccount(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -6165,7 +6170,7 @@ func Test_doAlterAccount(t *testing.T) {
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -6201,7 +6206,7 @@ func Test_doDropAccount(t *testing.T) {
 			Name: "acc",
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -6242,7 +6247,7 @@ func Test_doDropAccount(t *testing.T) {
 			Name:     "acc",
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -6277,7 +6282,7 @@ func Test_doDropAccount(t *testing.T) {
 			Name: "acc",
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv)
+		ses := newSes(priv, ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -6468,13 +6473,17 @@ func Test_genRevokeCases(t *testing.T) {
 	}
 }
 
-func newSes(priv *privilege) *Session {
+func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 	pu.SV.SetDefaultValues()
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-	proto := NewMysqlClientProtocol(0, nil, 1024, pu.SV)
+	ioses := mock_frontend.NewMockIOSession(ctrl)
+	ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+	ioses.EXPECT().Ref().AnyTimes()
+	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 	ses := NewSession(proto, nil, pu, gSysVariables, false)
 	tenant := &TenantInfo{
