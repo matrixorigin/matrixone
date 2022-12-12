@@ -236,7 +236,7 @@ func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) 
 	length := vector.Length(v1)
 	vec := allocateBoolVector(length, proc)
 	veccol := vec.Col.([]bool)
-	if v1.Typ.Width <= types.VarlenaInlineSize && v1.Typ.Width <= types.VarlenaInlineSize {
+	if v1.Typ.Width <= types.VarlenaInlineSize && v2.Typ.Width <= types.VarlenaInlineSize {
 		for i := range veccol {
 			veccol[i] = fn((&col1[i]).ByteSlice(), (&col2[i]).ByteSlice(), v1.Typ.Width, v2.Typ.Width)
 		}
