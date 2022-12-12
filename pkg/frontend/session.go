@@ -1073,7 +1073,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	var rsset []ExecResult
 	var tenantID int64
 	var userID int64
-	var pwd string
+	var pwd, accountStatus string
 	var pwdBytes []byte
 	var isSpecial bool
 	var specialAccount *TenantInfo
@@ -1114,9 +1114,20 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, moerr.NewInternalError(ses.GetRequestContext(), "there is no tenant %s", tenant.GetTenant())
 	}
 
+	//account id
 	tenantID, err = rsset[0].GetInt64(0, 0)
 	if err != nil {
 		return nil, err
+	}
+
+	//account status
+	accountStatus, err = rsset[0].GetString(0, 2)
+	if err != nil {
+		return nil, err
+	}
+
+	if strings.ToLower(accountStatus) == tree.AccountStatusSuspend.String() {
+		return nil, moerr.NewInternalError(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
 	}
 
 	tenant.SetTenantID(uint32(tenantID))
@@ -1681,6 +1692,33 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					},
 				},
 			})
+		} else if c, ok := def.(*engine.ConstraintDef); ok {
+			for _, ct := range c.Cts {
+				switch k := ct.(type) {
+				case *engine.UniqueIndexDef:
+					u := &plan.UniqueIndexDef{}
+					err = u.UnMarshalUniqueIndexDef(([]byte)(k.UniqueIndex))
+					if err != nil {
+						return nil, nil
+					}
+					defs = append(defs, &plan.TableDef_DefType{
+						Def: &plan.TableDef_DefType_UIdx{
+							UIdx: u,
+						},
+					})
+				case *engine.SecondaryIndexDef:
+					s := &plan.SecondaryIndexDef{}
+					err = s.UnMarshalSecondaryIndexDef(([]byte)(k.SecondaryIndex))
+					if err != nil {
+						return nil, nil
+					}
+					defs = append(defs, &plan.TableDef_DefType{
+						Def: &plan.TableDef_DefType_SIdx{
+							SIdx: s,
+						},
+					})
+				}
+			}
 		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
 			properties = append(properties, &plan2.Property{
 				Key:   catalog.SystemRelAttr_Comment,
@@ -1695,28 +1733,6 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 			defs = append(defs, &plan2.TableDefType{
 				Def: &plan2.TableDef_DefType_Partition{
 					Partition: p,
-				},
-			})
-		} else if indexDef, ok := def.(*engine.UniqueIndexDef); ok {
-			u := &plan.UniqueIndexDef{}
-			err = u.UnMarshalUniqueIndexDef(([]byte)(indexDef.UniqueIndex))
-			if err != nil {
-				return nil, nil
-			}
-			defs = append(defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_UIdx{
-					UIdx: u,
-				},
-			})
-		} else if indexDef, ok := def.(*engine.SecondaryIndexDef); ok {
-			s := &plan.SecondaryIndexDef{}
-			err = s.UnMarshalSecondaryIndexDef(([]byte)(indexDef.SecondaryIndex))
-			if err != nil {
-				return nil, nil
-			}
-			defs = append(defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_SIdx{
-					SIdx: s,
 				},
 			})
 		}
@@ -1860,8 +1876,8 @@ func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
 	}
 }
 
-func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) (cost *plan2.Cost) {
-	cost = new(plan2.Cost)
+func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats *plan2.Stats) {
+	stats = new(plan2.Stats)
 	dbName := obj.GetSchemaName()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
@@ -1876,11 +1892,13 @@ func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) (cost *
 		cols, _ := table.TableColumns(tcc.GetSession().GetRequestContext())
 		fixColumnName(cols, e)
 	}
-	rows, err := table.FilteredRows(tcc.GetSession().GetRequestContext(), e)
+	blockNum, rows, err := table.FilteredStats(tcc.GetSession().GetRequestContext(), e)
 	if err != nil {
 		return
 	}
-	cost.Card = float64(rows) * plan2.DeduceSelectivity(e)
+	stats.Cost = float64(rows)
+	stats.Outcnt = stats.Cost * plan2.DeduceSelectivity(e)
+	stats.BlockNum = blockNum
 	return
 }
 

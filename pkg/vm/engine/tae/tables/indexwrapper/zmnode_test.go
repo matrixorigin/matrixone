@@ -78,6 +78,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 
 	_, err = writer.Finalize()
 	require.NoError(t, err)
+	t.Log(writer.String())
 
 	// col, err := fd.GetColumn(0)
 	// assert.Nil(t, err)

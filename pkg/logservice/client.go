@@ -27,6 +27,7 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -313,7 +314,7 @@ func connectToLogService(ctx context.Context,
 		addresses[i], addresses[j] = addresses[j], addresses[i]
 	})
 	for _, addr := range addresses {
-		cc, err := getRPCClient(ctx, addr, c.respPool, c.cfg.MaxMessageSize, cfg.Tag)
+		cc, err := getRPCClient(ctx, addr, c.respPool, c.cfg.MaxMessageSize, cfg.EnableCompress, cfg.Tag)
 		if err != nil {
 			e = err
 			continue
@@ -504,7 +505,13 @@ func (c *client) doGetTruncatedLsn(ctx context.Context) (Lsn, error) {
 	return resp.LogResponse.Lsn, nil
 }
 
-func getRPCClient(ctx context.Context, target string, pool *sync.Pool, maxMessageSize int, tag ...string) (morpc.RPCClient, error) {
+func getRPCClient(
+	ctx context.Context,
+	target string,
+	pool *sync.Pool,
+	maxMessageSize int,
+	enableCompress bool,
+	tag ...string) (morpc.RPCClient, error) {
 	mf := func() morpc.Message {
 		return pool.Get().(*RPCResponse)
 	}
@@ -526,13 +533,23 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool, maxMessag
 	}
 	clientOpts = append(clientOpts, GetClientOptions(ctx)...)
 
-	// we set connection timeout to a constant value so if ctx's deadline is much
-	// larger, then we can ensure that all specified potential nodes have a chance
-	// to be attempted
-	codec := morpc.NewMessageCodec(mf,
+	var codecOpts []morpc.CodecOption
+	codecOpts = append(codecOpts,
 		morpc.WithCodecPayloadCopyBufferSize(defaultWriteSocketSize),
 		morpc.WithCodecEnableChecksum(),
 		morpc.WithCodecMaxBodySize(maxMessageSize))
+	if enableCompress {
+		mp, err := mpool.NewMPool("log_rpc_client", 0, mpool.NoFixed)
+		if err != nil {
+			return nil, err
+		}
+		codecOpts = append(codecOpts, morpc.WithCodecEnableCompress(mp))
+	}
+
+	// we set connection timeout to a constant value so if ctx's deadline is much
+	// larger, then we can ensure that all specified potential nodes have a chance
+	// to be attempted
+	codec := morpc.NewMessageCodec(mf, codecOpts...)
 	bf := morpc.NewGoettyBasedBackendFactory(codec, backendOpts...)
 	return morpc.NewClient(bf, clientOpts...)
 }

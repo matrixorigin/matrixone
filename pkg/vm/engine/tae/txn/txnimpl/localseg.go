@@ -357,7 +357,7 @@ func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offs
 
 func (seg *localSegment) GetPKColumn() containers.Vector {
 	schema := seg.table.entry.GetSchema()
-	return seg.index.KeyToVector(schema.GetSortKeyType())
+	return seg.index.KeyToVector(schema.GetSingleSortKeyType())
 }
 
 func (seg *localSegment) BatchDedup(key containers.Vector) error {

@@ -15,7 +15,9 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -81,8 +83,8 @@ type ClusterByDef struct {
 }
 
 type Statistics interface {
-	FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error)
-	Rows(ctx context.Context) (int64, error)
+	FilteredStats(ctx context.Context, expr *plan.Expr) (int32, int64, error)
+	Stats(ctx context.Context) (int32, int64, error)
 	Size(ctx context.Context, columnName string) (int64, error)
 }
 
@@ -139,16 +141,81 @@ type TableDef interface {
 	tableDef()
 }
 
-func (*CommentDef) tableDef()        {}
-func (*PartitionDef) tableDef()      {}
-func (*ViewDef) tableDef()           {}
-func (*AttributeDef) tableDef()      {}
-func (*IndexTableDef) tableDef()     {}
-func (*PropertiesDef) tableDef()     {}
-func (*PrimaryIndexDef) tableDef()   {}
-func (*UniqueIndexDef) tableDef()    {}
-func (*SecondaryIndexDef) tableDef() {}
-func (*ClusterByDef) tableDef()      {}
+func (*CommentDef) tableDef()      {}
+func (*PartitionDef) tableDef()    {}
+func (*ViewDef) tableDef()         {}
+func (*AttributeDef) tableDef()    {}
+func (*IndexTableDef) tableDef()   {}
+func (*PropertiesDef) tableDef()   {}
+func (*PrimaryIndexDef) tableDef() {}
+func (*ClusterByDef) tableDef()    {}
+func (*ConstraintDef) tableDef()   {}
+
+type ConstraintDef struct {
+	Cts []Constraint
+}
+
+type ConstraintType int8
+
+const (
+	UniqueIndex ConstraintType = iota
+	SecondaryIndex
+)
+
+func (c *ConstraintDef) MarshalBinary() (data []byte, err error) {
+	buf := bytes.NewBuffer(make([]byte, 0))
+	for _, ct := range c.Cts {
+		switch def := ct.(type) {
+		case *UniqueIndexDef:
+			if err := binary.Write(buf, binary.BigEndian, UniqueIndex); err != nil {
+				return nil, err
+			}
+			if err := binary.Write(buf, binary.BigEndian, uint64(len([]byte(def.UniqueIndex)))); err != nil {
+				return nil, err
+			}
+			buf.Write([]byte(def.UniqueIndex))
+		case *SecondaryIndexDef:
+			if err := binary.Write(buf, binary.BigEndian, SecondaryIndex); err != nil {
+				return nil, err
+			}
+			if err := binary.Write(buf, binary.BigEndian, uint64(len([]byte(def.SecondaryIndex)))); err != nil {
+				return nil, err
+			}
+			buf.Write([]byte(def.SecondaryIndex))
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+func (c *ConstraintDef) UnmarshalBinary(data []byte) error {
+	l := 0
+	var length uint64
+	for l < len(data) {
+		typ := ConstraintType(data[l])
+		l += 1
+		switch typ {
+		case UniqueIndex:
+			length = binary.BigEndian.Uint64(data[l : l+8])
+			l += 8
+			c.Cts = append(c.Cts, &UniqueIndexDef{UniqueIndex: string(data[l : l+int(length)])})
+			l += int(length)
+		case SecondaryIndex:
+			length = binary.BigEndian.Uint64(data[l : l+8])
+			l += 8
+			c.Cts = append(c.Cts, &SecondaryIndexDef{SecondaryIndex: string(data[l : l+int(length)])})
+			l += int(length)
+		}
+	}
+	return nil
+}
+
+type Constraint interface {
+	constraint()
+}
+
+// TODO: UniqueIndexDef, SecondaryIndexDef will not be tabledef and need to be moved in Constraint to be able modified
+func (*UniqueIndexDef) constraint()    {}
+func (*SecondaryIndexDef) constraint() {}
 
 type Relation interface {
 	Statistics
@@ -170,6 +237,9 @@ type Relation interface {
 
 	AddTableDef(context.Context, TableDef) error
 	DelTableDef(context.Context, TableDef) error
+
+	// only ConstraintDef can be modified
+	UpdateConstraint(context.Context, *ConstraintDef) error
 
 	GetTableID(context.Context) string
 

@@ -112,6 +112,18 @@ func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch,
 	return bat, nil
 }
 
+func genTableConstraintTuple(tbl *table, m *mpool.MPool) (*batch.Batch, error) {
+	bat := batch.NewWithSize(1)
+	bat.Attrs = append(bat.Attrs, catalog.SystemRelAttr_Constraint)
+	bat.SetZs(1, m)
+
+	bat.Vecs[0] = vector.New(catalog.MoTablesTypes[0]) // constraint
+	if err := bat.Vecs[0].Append(tbl.tmpConstraint, false, m); err != nil {
+		return nil, err
+	}
+	return bat, nil
+}
+
 func genCreateTableTuple(tbl *table, sql string, accountId, userId, roleId uint32, name string,
 	tableId uint64, databaseId uint64, databaseName string,
 	comment string, m *mpool.MPool) (*batch.Batch, error) {
@@ -189,7 +201,11 @@ func genCreateTableTuple(tbl *table, sql string, accountId, userId, roleId uint3
 		if err := bat.Vecs[idx].Append([]byte(tbl.viewdef), false, m); err != nil {
 			return nil, err
 		}
-
+		idx = catalog.MO_TABLES_CONSTRAINT
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // constraint
+		if err := bat.Vecs[idx].Append(tbl.constraint, false, m); err != nil {
+			return nil, err
+		}
 	}
 	return bat, nil
 }

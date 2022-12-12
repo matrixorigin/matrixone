@@ -27,8 +27,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  "show variables like 'sql_mode'",
-		output: "show variables like sql_mode",
+		input: "alter account if exists abc admin_name 'root' identified by '111' comment 'str'",
 	}
 )
 
@@ -1725,6 +1724,27 @@ var (
 		},
 		{
 			input: `select count(a) over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1`,
+		},
+		{
+			input: "alter account if exists abc",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' open comment 'str'",
+		},
+		{
+			input: "alter account if exists abc open comment 'str'",
+		},
+		{
+			input: "alter account if exists abc comment 'str'",
+		},
+		{
+			input: "alter account if exists abc open",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' open",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' comment 'str'",
 		},
 	}
 )

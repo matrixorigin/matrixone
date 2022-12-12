@@ -158,7 +158,7 @@ jobs:
           cd $GITHUB_WORKSPACE/matrixone
           if  [ -d  "./store"  ]; then rm -rf ./store; fi
           go test -c -tags service_test -cover -covermode=count -coverpkg=./pkg/... ./cmd/mo-service/ -o service_test
-          ./service_test -test.coverprofile=${{ env.raw_bvt_coverage }} &>service.log &
+          ./service_test -test.coverprofile=${{ env.raw_bvt_coverage }} -launch ./etc/launch-tae-multi-CN-tae-DN/launch.toml &>service.log &
           
       - name: Start BVT Test
         if: ${{ env.Job-Status }} == 2
