@@ -52,9 +52,7 @@ type localSegment struct {
 	//index for primary key
 	index TableIndex
 	//nodes contains anode and node.
-	nodes []InsertNode
-	//the max index of anode.
-	maxIdx      uint32
+	nodes       []InsertNode
 	table       *txnTable
 	rows        uint32
 	appends     []*appendCtx
@@ -119,7 +117,6 @@ func (seg *localSegment) registerANode() {
 	)
 	seg.appendable = n
 	seg.nodes = append(seg.nodes, n)
-	seg.maxIdx = uint32(len(seg.nodes))
 }
 
 // ApplyAppend applies all the anodes into appendable blocks

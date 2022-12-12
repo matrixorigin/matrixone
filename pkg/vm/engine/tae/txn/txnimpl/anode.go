@@ -27,7 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
-// anode corresponds to an appendable block which belongs to txn's workspace and can be appended data.
+// anode corresponds to an appendable standalone-uncommitted block
+// which belongs to txn's workspace and can be appended data into.
 type anode struct {
 	*baseNode
 }

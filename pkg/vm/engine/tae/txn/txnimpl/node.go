@@ -27,7 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-// node corresponds to an un-appendable block which belongs to txn's workspace.
+// node corresponds to an un-appendable standalone-uncommitted block
+// which belongs to txn's workspace.
 type node struct {
 	*baseNode
 	//uuid string
