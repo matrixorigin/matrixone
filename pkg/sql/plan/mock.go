@@ -394,7 +394,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"__mo_rowid", types.T_Rowid, true, 0, 0},
 		},
 		idxs: []index{
-			index{
+			{
 				indexName: "",
 				tableName: "__mo_index_unique__6380d30e-79f8-11ed-9c02-000c29847904",
 				parts:     []string{"empno", "ename"},
