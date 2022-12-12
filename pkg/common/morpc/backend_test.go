@@ -419,6 +419,33 @@ func TestStreamClosedByConnReset(t *testing.T) {
 	)
 }
 
+func TestStreamClosedBySequenceNotMatch(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
+			resp := msg.(RPCMessage)
+			resp.streamSequence = 2
+			return conn.Write(resp, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+			defer cancel()
+
+			st, err := b.NewStream(false)
+			assert.NoError(t, err)
+			defer func() {
+				assert.NoError(t, st.Close())
+			}()
+			c, err := st.Receive()
+			assert.NoError(t, err)
+			assert.NoError(t, st.Send(ctx, &testMessage{id: st.ID()}))
+
+			v, ok := <-c
+			assert.True(t, ok)
+			assert.Nil(t, v)
+		},
+	)
+}
+
 func TestBusy(t *testing.T) {
 	n := 0
 	c := make(chan struct{})
@@ -470,7 +497,7 @@ func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
 	assert.NoError(t, s.Close())
 	assert.Nil(t, <-c)
 
-	s.done(nil)
+	s.done(RPCMessage{})
 }
 
 func TestGCStream(t *testing.T) {
