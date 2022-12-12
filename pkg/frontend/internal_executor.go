@@ -81,8 +81,8 @@ func (res *internalExecResult) ColumnCount() uint64 {
 	return res.resultSet.GetColumnCount()
 }
 
-func (res *internalExecResult) Column(i uint64) (name string, typ uint8, signed bool, err error) {
-	col, err := res.resultSet.GetColumn(i)
+func (res *internalExecResult) Column(ctx context.Context, i uint64) (name string, typ uint8, signed bool, err error) {
+	col, err := res.resultSet.GetColumn(ctx, i)
 	if err == nil {
 		name = col.Name()
 		typ = uint8(col.ColumnType())
@@ -95,23 +95,23 @@ func (res *internalExecResult) RowCount() uint64 {
 	return res.resultSet.GetRowCount()
 }
 
-func (res *internalExecResult) Row(i uint64) ([]interface{}, error) {
-	return res.resultSet.GetRow(i)
+func (res *internalExecResult) Row(ctx context.Context, i uint64) ([]interface{}, error) {
+	return res.resultSet.GetRow(ctx, i)
 }
 
-func (res *internalExecResult) Value(ridx uint64, cidx uint64) (interface{}, error) {
-	return res.resultSet.GetValue(ridx, cidx)
+func (res *internalExecResult) Value(ctx context.Context, ridx uint64, cidx uint64) (interface{}, error) {
+	return res.resultSet.GetValue(ctx, ridx, cidx)
 }
 
-func (res *internalExecResult) ValueByName(ridx uint64, col string) (interface{}, error) {
-	return res.resultSet.GetValueByName(ridx, col)
+func (res *internalExecResult) ValueByName(ctx context.Context, ridx uint64, col string) (interface{}, error) {
+	return res.resultSet.GetValueByName(ctx, ridx, col)
 }
 
-func (res *internalExecResult) StringValueByName(ridx uint64, col string) (string, error) {
-	if cidx, err := res.resultSet.columnName2Index(col); err != nil {
+func (res *internalExecResult) StringValueByName(ctx context.Context, ridx uint64, col string) (string, error) {
+	if cidx, err := res.resultSet.columnName2Index(ctx, col); err != nil {
 		return "", err
 	} else {
-		return res.resultSet.GetString(ridx, cidx)
+		return res.resultSet.GetString(ctx, ridx, cidx)
 	}
 }
 
