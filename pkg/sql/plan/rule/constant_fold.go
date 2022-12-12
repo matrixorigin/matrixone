@@ -26,16 +26,14 @@ import (
 )
 
 type ConstantFold struct {
-	bat       *batch.Batch
-	isPrepare bool // if target plan is from prepared statement
+	bat *batch.Batch
 }
 
-func NewConstantFold(isPrepare bool) *ConstantFold {
+func NewConstantFold() *ConstantFold {
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 	return &ConstantFold{
-		bat:       bat,
-		isPrepare: isPrepare,
+		bat: bat,
 	}
 }
 
@@ -83,9 +81,6 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 		return e
 	}
 	if f.Volatile { // function cannot be fold
-		return e
-	}
-	if r.isPrepare { // prepare statement cannot be fold before put real arguments
 		return e
 	}
 	for i := range ef.F.Args {
