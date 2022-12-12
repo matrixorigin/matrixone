@@ -2893,19 +2893,19 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 	metric.StatementErrorsCounter(tenant, getStatementType(stmt).GetQueryType()).Inc()
 }
 
-type noopStatementType struct {
+type unknownStatementType struct {
 	tree.StatementType
 }
 
-func (noopStatementType) GetStatementType() string { return "Unknown" }
-func (noopStatementType) GetQueryType() string     { return tree.QueryTypeOth }
+func (unknownStatementType) GetStatementType() string { return "Unknown" }
+func (unknownStatementType) GetQueryType() string     { return tree.QueryTypeOth }
 
 func getStatementType(stmt tree.Statement) tree.StatementType {
 	switch stmt.(type) {
 	case tree.StatementType:
 		return stmt
 	default:
-		return noopStatementType{}
+		return unknownStatementType{}
 	}
 }
 
