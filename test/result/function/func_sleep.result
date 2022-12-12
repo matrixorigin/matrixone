@@ -1,0 +1,23 @@
+select sleep();
+invalid argument function sleep, bad value []
+select sleep(1);
+sleep(1)
+0
+select sleep(1.5);
+sleep(1.5)
+0
+select sleep(null);
+invalid argument sleep, bad value input contains null
+select sleep(-1);
+invalid argument sleep, bad value input contains negative
+select sleep(-1.5);
+invalid argument sleep, bad value input contains negative
+
+create table t1 (a int,b int);
+insert into t1 values (1,1),(1,null);
+select sleep(a) from t1;
+sleep(a)
+0
+0
+select sleep(b) from t1;
+invalid argument sleep, bad value input contains null
