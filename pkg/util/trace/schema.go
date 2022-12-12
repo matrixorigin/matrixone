@@ -57,7 +57,6 @@ var (
 	dbCol        = table.Column{Name: "database", Type: stringType, Default: "", Comment: "what database current session stay in."}
 	stmtCol      = table.Column{Name: "statement", Type: "TEXT", Default: "", Comment: "sql statement"}
 	stmtTagCol   = table.Column{Name: "statement_tag", Type: "TEXT", Default: "", Comment: "note tag in statement(Reserved)"}
-	sqlTypeCol   = table.Column{Name: "sql_source_type", Type: "TEXT", Default: "", Comment: "sql statement source type"}
 	stmtFgCol    = table.Column{Name: "statement_fingerprint", Type: "TEXT", Default: "", Comment: "note tag in statement(Reserved)"}
 	nodeUUIDCol  = table.Column{Name: "node_uuid", Type: uuidColType, Default: "0", Comment: "node uuid, which node gen this data."}
 	nodeTypeCol  = table.Column{Name: "node_type", Type: "varchar(64)", Default: "node", Comment: "node type in MO, val in [DN, CN, LOG]"}
@@ -69,6 +68,7 @@ var (
 	execPlanCol  = table.Column{Name: "exec_plan", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "statement execution plan"}
 	rowsReadCol  = table.Column{Name: "rows_read", Type: bigintUnsignedType, Default: "0", Comment: "rows read total"}
 	bytesScanCol = table.Column{Name: "bytes_scan", Type: bigintUnsignedType, Default: "0", Comment: "bytes scan total"}
+	sqlTypeCol   = table.Column{Name: "sql_source_type", Type: "TEXT", Default: "", Comment: "sql statement source type"}
 
 	SingleStatementTable = &table.Table{
 		Account:  table.AccountAll,
@@ -84,7 +84,6 @@ var (
 			dbCol,
 			stmtCol,
 			stmtTagCol,
-			sqlTypeCol,
 			stmtFgCol,
 			nodeUUIDCol,
 			nodeTypeCol,
@@ -97,6 +96,7 @@ var (
 			execPlanCol,
 			rowsReadCol,
 			bytesScanCol,
+			sqlTypeCol,
 		},
 		PrimaryKeyColumn: []table.Column{stmtIDCol},
 		Engine:           table.ExternalTableEngine,

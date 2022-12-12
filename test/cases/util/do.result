@@ -1,4 +1,0 @@
-DO SLEEP(5);
-not supported: do sleep(5)
-DO 1;
-not supported: do 1
