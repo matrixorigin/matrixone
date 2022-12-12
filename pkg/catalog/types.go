@@ -23,6 +23,9 @@ const (
 	Row_ID               = "__mo_rowid"
 	PrefixPriColName     = "__mo_cpkey_"
 	PrefixIndexTableName = "__mo_index_"
+	// IndexTable has two column at most, the first is idx col, the second is origin table primary col
+	IndexTableIndexColName   = "__mo_index_idx_col"
+	IndexTablePrimaryColName = "__mo_index_pri_col"
 )
 
 const (

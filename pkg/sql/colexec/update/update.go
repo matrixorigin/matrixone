@@ -139,7 +139,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 					attrs = append(attrs, updateCtx.UpdateAttrs...)
 					attrs = append(attrs, updateCtx.OtherAttrs...)
 					attrs = append(attrs, updateCtx.IndexAttrs...)
-					oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[int(idx)+1:], attrs, updateCtx.UniqueIndexDef.Fields[num].Cols, proc)
+					oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[int(idx)+1:], attrs, updateCtx.UniqueIndexDef.Fields[num], proc)
 					if rowNum != 0 {
 						err := rel.Delete(proc.Ctx, oldBatch, updateCtx.UniqueIndexDef.Fields[num].Cols[0].Name)
 						if err != nil {
@@ -174,7 +174,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			for num := range updateCtx.UniqueIndexDef.IndexNames {
 				if updateCtx.UniqueIndexDef.TableExists[num] {
 					rel := updateCtx.UniqueIndexTables[relIdx]
-					b, rowNum := util.BuildUniqueKeyBatch(tmpBat.Vecs, tmpBat.Attrs, updateCtx.UniqueIndexDef.Fields[num].Cols, proc)
+					b, rowNum := util.BuildUniqueKeyBatch(tmpBat.Vecs, tmpBat.Attrs, updateCtx.UniqueIndexDef.Fields[num], proc)
 					if rowNum != 0 {
 						err = rel.Write(proc.Ctx, b)
 						if err != nil {

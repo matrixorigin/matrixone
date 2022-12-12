@@ -46,40 +46,42 @@ func BuildIndexTableName(ctx context.Context, unique bool, indexName string) (st
 	return name, nil
 }
 
-func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, p []*plan.ColDef, proc *process.Process) (*batch.Batch, int) {
+func JudgeIsCompositeIndexColumn(f *plan.Field) bool {
+	return len(f.Parts) > 1
+}
+
+func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, f *plan.Field, proc *process.Process) (*batch.Batch, int) {
 	b := &batch.Batch{
 		// make sure that when batch is cleaned, origin batch is not affected
 		Attrs: make([]string, 1),
 		Vecs:  make([]*vector.Vector, 1),
 	}
-	isCPkey := JudgeIsCompositePrimaryKeyColumn(p[0].Name)
-	if isCPkey {
-		names := SplitCompositePrimaryKeyColumnName(p[0].Name)
-		cPkeyVecMap := make(map[string]*vector.Vector)
+	isCompoundIndex := JudgeIsCompositeIndexColumn(f)
+	b.Attrs[0] = catalog.IndexTableIndexColName
+	if isCompoundIndex {
+		cIndexVecMap := make(map[string]*vector.Vector)
 		for num, attrName := range attrs {
-			for _, name := range names {
+			for _, name := range f.Parts {
 				if attrName == name {
-					cPkeyVecMap[name] = vecs[num]
+					cIndexVecMap[name] = vecs[num]
 				}
 			}
 		}
 		vs := make([]*vector.Vector, 0)
-		for _, name := range names {
-			v := cPkeyVecMap[name]
+		for _, part := range f.Parts {
+			v := cIndexVecMap[part]
 			vs = append(vs, v)
 		}
 		vec, _ := multi.Serial(vs, proc)
-		b.Attrs[0] = p[0].Name
 		b.Vecs[0] = vec
 	} else {
 		for i, name := range attrs {
-			b.Attrs[0] = p[0].Name
-			if p[0].Name == name {
+			if f.Parts[0] == name {
 				b.Vecs[0] = vecs[i]
 			}
 		}
 	}
-	if isCPkey {
+	if isCompoundIndex {
 		b.Cnt = 1
 	} else {
 		v, needClean := compactUniqueKeyBatch(b.Vecs[0], proc)

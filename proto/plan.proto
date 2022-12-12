@@ -522,9 +522,7 @@ message DeleteTableCtx {
 	string use_delete_key = 3;
 	bool can_truncate = 4;
 	int32 col_index = 5;
-	UniqueIndexDef unique_index_def = 6;
-	SecondaryIndexDef secondary_index_def = 7;
-	repeated string index_attrs = 8;
+	bool is_index_table_delete = 6;
 }
 
 message Query {

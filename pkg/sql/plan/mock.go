@@ -292,21 +292,21 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"__mo_rowid", types.T_Rowid, true, 0, 0},
 		},
 		idxs: []index{
-			index{
+			{
 				indexName: "",
 				tableName: "__mo_index_unique__412f4fad-77ba-11ed-b347-000c29847904",
 				parts:     []string{"empno"},
 				cols: []col{
-					{"empno", types.T_uint32, true, 0, 0},
+					{"__mo_index_idx_col", types.T_uint32, true, 0, 0},
 				},
 				tableExist: true,
 			},
-			index{
+			{
 				indexName: "",
 				tableName: "__mo_index_unique__412f5063-77ba-11ed-b347-000c29847904",
 				parts:     []string{"ename"},
 				cols: []col{
-					{"ename", types.T_varchar, true, 0, 0},
+					{"__mo_index_idx_col", types.T_varchar, true, 0, 0},
 				},
 				tableExist: true,
 			},
@@ -316,7 +316,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 
 	indexTestSchema["__mo_index_unique__412f4fad-77ba-11ed-b347-000c29847904"] = &Schema{
 		cols: []col{
-			{"empno", types.T_uint32, true, 32, 0},
+			{"__mo_index_idx_col", types.T_uint32, true, 32, 0},
 			{"__mo_rowid", types.T_Rowid, true, 0, 0},
 		},
 		pks:    []int{0},
@@ -325,7 +325,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 
 	indexTestSchema["__mo_index_unique__412f5063-77ba-11ed-b347-000c29847904"] = &Schema{
 		cols: []col{
-			{"ename", types.T_varchar, true, 15, 0},
+			{"__mo_index_idx_col", types.T_varchar, true, 15, 0},
 			{"__mo_rowid", types.T_Rowid, true, 0, 0},
 		},
 		pks:    []int{0},
@@ -347,12 +347,12 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"__mo_rowid", types.T_Rowid, true, 0, 0},
 		},
 		idxs: []index{
-			index{
+			{
 				indexName: "",
-				tableName: "__mo_index_unique__411fa962-77ba-11ed-b347-000c29847904",
+				tableName: "__mo_index_unique__8e3246dd-7a19-11ed-ba7d-000c29847904",
 				parts:     []string{"deptno"},
 				cols: []col{
-					{"deptno", types.T_uint32, true, 0, 0},
+					{"__mo_index_idx_col", types.T_uint32, true, 0, 0},
 				},
 				tableExist: true,
 			},
@@ -360,15 +360,27 @@ func NewMockCompilerContext() *MockCompilerContext {
 		outcnt: 4,
 	}
 
-	indexTestSchema["__mo_index_unique__411fa962-77ba-11ed-b347-000c29847904"] = &Schema{
+	indexTestSchema["__mo_index_unique__8e3246dd-7a19-11ed-ba7d-000c29847904"] = &Schema{
 		cols: []col{
-			{"deptno", types.T_uint32, true, 32, 0},
+			{"__mo_index_idx_col", types.T_uint32, true, 0, 0},
 			{"__mo_rowid", types.T_Rowid, true, 0, 0},
 		},
 		pks:    []int{0},
 		outcnt: 4,
 	}
 
+	//+----------+--------------+------+-----+---------+-------+
+	//| Field    | Type         | Null | Key | Default | Extra |
+	//+----------+--------------+------+-----+---------+-------+
+	//| empno    | int unsigned | YES  | MUL | NULL    |       |
+	//| ename    | varchar(15)  | YES  |     | NULL    |       |
+	//| job      | varchar(10)  | YES  |     | NULL    |       |
+	//| mgr      | int unsigned | YES  |     | NULL    |       |
+	//| hiredate | date         | YES  |     | NULL    |       |
+	//| sal      | decimal(7,2) | YES  |     | NULL    |       |
+	//| comm     | decimal(7,2) | YES  |     | NULL    |       |
+	//| deptno   | int unsigned | YES  |     | NULL    |       |
+	//+----------+--------------+------+-----+---------+-------+
 	indexTestSchema["employees"] = &Schema{
 		cols: []col{
 			{"empno", types.T_uint32, true, 32, 0},
@@ -387,7 +399,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 				tableName: "__mo_index_unique__6380d30e-79f8-11ed-9c02-000c29847904",
 				parts:     []string{"empno", "ename"},
 				cols: []col{
-					{"empno", types.T_varchar, true, 0, 0},
+					{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
 				},
 				tableExist: true,
 			},
@@ -397,7 +409,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 
 	indexTestSchema["__mo_index_unique__6380d30e-79f8-11ed-9c02-000c29847904"] = &Schema{
 		cols: []col{
-			{"__mo_index_key", types.T_varchar, true, 24, 0},
+			{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
 			{"__mo_rowid", types.T_Rowid, true, 0, 0},
 		},
 		pks:    []int{0},
