@@ -41,6 +41,7 @@ const (
 	DefaultCheckpointMinCount           = int64(100)
 	DefaultCheckpointIncremetalInterval = time.Minute
 	DefaultCheckpointGlobalInterval     = time.Minute * 60
+	DefaultGlobalVersionInterval        = time.Hour
 
 	DefaultIOWorkers    = int(8)
 	DefaultAsyncWorkers = int(16)

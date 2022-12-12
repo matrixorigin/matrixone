@@ -88,7 +88,15 @@ func (e *testEngine) checkRowsByScan(exp int, applyDelete bool) {
 	checkAllColRowsByScan(e.t, rel, exp, applyDelete)
 	assert.NoError(e.t, txn.Commit())
 }
-
+func (e *testEngine) dropRelation(t *testing.T) {
+	txn, err := e.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.GetDatabase(defaultTestDB)
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(e.schema.Name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+}
 func (e *testEngine) getRelation() (txn txnif.AsyncTxn, rel handle.Relation) {
 	return getRelation(e.t, e.tenantID, e.DB, defaultTestDB, e.schema.Name)
 }

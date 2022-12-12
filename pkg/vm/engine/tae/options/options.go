@@ -81,6 +81,15 @@ func WithForceUpdateCheckpointGlobalInterval(interval time.Duration) func(*Optio
 	}
 }
 
+func WithGlobalVersionInterval(interval time.Duration) func(*Options) {
+	return func(opts *Options) {
+		if opts.CheckpointCfg == nil {
+			opts.CheckpointCfg = new(CheckpointCfg)
+		}
+		opts.CheckpointCfg.GlobalVersionInterval = interval
+	}
+}
+
 func (o *Options) FillDefaults(dirname string) *Options {
 	if o == nil {
 		o = &Options{}
@@ -122,6 +131,9 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 	if o.CheckpointCfg.MinCount <= 0 {
 		o.CheckpointCfg.MinCount = DefaultCheckpointMinCount
+	}
+	if o.CheckpointCfg.GlobalVersionInterval <= 0 {
+		o.CheckpointCfg.GlobalVersionInterval = DefaultGlobalVersionInterval
 	}
 
 	if o.SchedulerCfg == nil {

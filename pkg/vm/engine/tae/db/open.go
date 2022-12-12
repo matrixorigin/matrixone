@@ -124,7 +124,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		checkpoint.WithMinCount(int(opts.CheckpointCfg.MinCount)),
 		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),
 		checkpoint.WithMinGlobalInterval(opts.CheckpointCfg.GlobalInterval),
-		checkpoint.WithForceUpdateGlobalCheckpointInterval(opts.CheckpointCfg.ForceUpdateGlobalInterval))
+		checkpoint.WithForceUpdateGlobalCheckpointInterval(opts.CheckpointCfg.ForceUpdateGlobalInterval),
+		checkpoint.WithGlobalVersionInterval(opts.CheckpointCfg.GlobalVersionInterval))
 
 	now := time.Now()
 	checkpointed, err := db.BGCheckpointRunner.Replay(dataFactory)

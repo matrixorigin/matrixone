@@ -139,6 +139,7 @@ type runner struct {
 		// minimum global checkpoint interval duration
 		minGlobalInterval         time.Duration
 		forceUpdateGlobalInterval bool
+		globalVersionInterval     time.Duration
 
 		// minimum count of uncheckpointed transactions allowed before the next checkpoint
 		minCount int
@@ -272,7 +273,7 @@ func (r *runner) onCheckpointEntries(items ...any) {
 	}
 
 	entry.SetState(ST_Finished)
-	logutil.Infof("%s is done, takes %s", entry.String(), time.Since(now))
+	logutil.Infof("%s is done, takes %s, truncate %d", entry.String(), time.Since(now), lsn)
 
 	r.postCheckpointQueue.Enqueue(entry)
 }
@@ -415,7 +416,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 }
 
 func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) (err error) {
-	factory := logtail.GlobalCheckpointDataFactory(entry.end)
+	factory := logtail.GlobalCheckpointDataFactory(entry.end, r.options.globalVersionInterval)
 	data, err := factory(r.catalog)
 	if err != nil {
 		return
@@ -734,7 +735,7 @@ func (r *runner) CollectCheckpointsInRange(start, end types.TS) (locations strin
 	tree := r.storage.entries.Copy()
 	r.storage.Unlock()
 	locs := make([]string, 0)
-	pivot := NewCheckpointEntry(start, end)
+	pivot := NewCheckpointEntry(start, start)
 
 	// For debug
 	// checkpoints := make([]*CheckpointEntry, 0)

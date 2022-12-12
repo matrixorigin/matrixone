@@ -73,8 +73,6 @@ const (
 
 const MaxIDX = BLKCNMetaInsertIDX + 1
 
-const VersionInterval = time.Hour
-
 type checkpointDataItem struct {
 	schema    *catalog.Schema
 	types     []types.Type
@@ -140,9 +138,9 @@ func IncrementalCheckpointDataFactory(start, end types.TS) func(c *catalog.Catal
 	}
 }
 
-func GlobalCheckpointDataFactory(end types.TS) func(c *catalog.Catalog) (*CheckpointData, error) {
+func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration) func(c *catalog.Catalog) (*CheckpointData, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
-		collector := NewGlobalCollector(end)
+		collector := NewGlobalCollector(end, versionInterval)
 		defer collector.Close()
 		err = c.RecurLoop(collector)
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
@@ -213,8 +211,8 @@ type GlobalCollector struct {
 	versionThershold types.TS
 }
 
-func NewGlobalCollector(end types.TS) *GlobalCollector {
-	versionThresholdTS := types.BuildTS(end.Physical()-VersionInterval.Nanoseconds(), 0)
+func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalCollector {
+	versionThresholdTS := types.BuildTS(end.Physical()-versionInterval.Nanoseconds(), 0)
 	collector := &GlobalCollector{
 		BaseCollector: &BaseCollector{
 			LoopProcessor: new(catalog.LoopProcessor),
@@ -702,6 +700,9 @@ func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.TableBaseEntry) {
 		return nil
 	}
+	if collector.isEntryDeletedBeforeThreshold(entry.GetDB().DBBaseEntry) {
+		return nil
+	}
 	return collector.BaseCollector.VisitTable(entry)
 }
 
@@ -737,6 +738,12 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 
 func (collector *GlobalCollector) VisitSeg(entry *catalog.SegmentEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.MetaBaseEntry) {
+		return nil
+	}
+	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().TableBaseEntry) {
+		return nil
+	}
+	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().GetDB().DBBaseEntry) {
 		return nil
 	}
 	return collector.BaseCollector.VisitSeg(entry)
@@ -842,6 +849,15 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 
 func (collector *GlobalCollector) VisitBlk(entry *catalog.BlockEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.MetaBaseEntry) {
+		return nil
+	}
+	if collector.isEntryDeletedBeforeThreshold(entry.GetSegment().MetaBaseEntry) {
+		return nil
+	}
+	if collector.isEntryDeletedBeforeThreshold(entry.GetSegment().GetTable().TableBaseEntry) {
+		return nil
+	}
+	if collector.isEntryDeletedBeforeThreshold(entry.GetSegment().GetTable().GetDB().DBBaseEntry) {
 		return nil
 	}
 	return collector.BaseCollector.VisitBlk(entry)

@@ -71,3 +71,9 @@ func WithForceUpdateGlobalCheckpointInterval(force bool) Option {
 		r.options.forceUpdateGlobalInterval = force
 	}
 }
+
+func WithGlobalVersionInterval(interval time.Duration) Option {
+	return func(r *runner) {
+		r.options.globalVersionInterval = interval
+	}
+}

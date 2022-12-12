@@ -34,6 +34,7 @@ type CheckpointCfg struct {
 	IncrementalInterval       time.Duration `toml:"checkpoint-incremental-interval"`
 	GlobalInterval            time.Duration `toml:"checkpoint-global-interval"`
 	ForceUpdateGlobalInterval bool
+	GlobalVersionInterval     time.Duration
 }
 
 type SchedulerCfg struct {
