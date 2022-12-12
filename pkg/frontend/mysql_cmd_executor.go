@@ -199,7 +199,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	sessInfo := proc.SessionInfo
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
-		tenant, _ = GetTenantInfo("internal")
+		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
 	var stmID uuid.UUID
 	copy(stmID[:], cw.GetUUID())
@@ -253,7 +253,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	sessInfo := proc.SessionInfo
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
-		tenant, _ = GetTenantInfo("internal")
+		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
 	stmID, _ := uuid.NewUUID()
 	var txnID uuid.UUID
@@ -1273,8 +1273,8 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, mrs)
 	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
 
-	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
-		return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
+	if err := proto.SendResponse(ses.GetRequestContext(), resp); err != nil {
+		return moerr.NewInternalError(ses.GetRequestContext(), "routine send response failed. error:%v ", err)
 	}
 	return err
 }
@@ -1624,7 +1624,7 @@ func (mce *MysqlCmdExecutor) handleShowErrors() error {
 
 func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables) error {
 	if sv.Like != nil && sv.Where != nil {
-		return moerr.NewSyntaxError(ses.requestCtx, "like clause and where clause cannot exist at the same time")
+		return moerr.NewSyntaxError(ses.GetRequestContext(), "like clause and where clause cannot exist at the same time")
 	}
 
 	var err error = nil
@@ -1667,7 +1667,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		row[0] = name
 		gsv, ok := gSysVariables.GetDefinitionOfSysVar(name)
 		if !ok {
-			return errorSystemVariableDoesNotExist
+			return moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
 		}
 		row[1] = value
 		if _, ok := gsv.GetType().(SystemVariableBoolType); ok {
