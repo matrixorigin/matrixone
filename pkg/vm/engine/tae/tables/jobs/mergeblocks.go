@@ -125,6 +125,9 @@ func (task *mergeBlocksTask) mergeColumn(
 	} else {
 		column, mapping = task.mergeColumnWithOutSort(vecs, fromLayout, toLayout)
 	}
+	for _, vec := range vecs {
+		vec.Close()
+	}
 	return
 }
 
@@ -190,7 +193,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 
 	schema := task.mergedBlks[0].GetSchema()
 	var view *model.ColumnView
-	vecs := make([]containers.Vector, 0)
+	sortVecs := make([]containers.Vector, 0)
 	rows := make([]uint32, 0)
 	skipBlks := make([]int, 0)
 	length := 0
@@ -220,7 +223,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			skipBlks = append(skipBlks, i)
 			continue
 		}
-		vecs = append(vecs, vec)
+		sortVecs = append(sortVecs, vec)
 		rows = append(rows, uint32(vec.Length()))
 		fromAddr = append(fromAddr, uint32(length))
 		length += vec.Length()
@@ -248,10 +251,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	buf := node[:length]
 	defer common.DefaultAllocator.Free(node)
 	sortedIdx := *(*[]uint32)(unsafe.Pointer(&buf))
-	vecs, mapping := task.mergeColumn(vecs, &sortedIdx, true, rows, to, schema.HasSortKey())
-	for _, vec := range vecs {
-		defer vec.Close()
-	}
+	vecs, mapping := task.mergeColumn(sortVecs, &sortedIdx, true, rows, to, schema.HasSortKey())
 	// logutil.Infof("mapping is %v", mapping)
 	// logutil.Infof("sortedIdx is %v", sortedIdx)
 	length = 0
@@ -274,8 +274,8 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		blockHandles = append(blockHandles, blk)
 		batch := containers.NewBatch()
 		batchs = append(batchs, batch)
+		vec.Close()
 	}
-	phyAddr := schema.PhyAddrKey
 
 	// Build and flush block index if sort key is defined
 	// Flush sort key it correlates to only one column
@@ -310,6 +310,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 
+	phyAddr := schema.PhyAddrKey
 	name := blockio.EncodeObjectName()
 	writer := blockio.NewWriter(context.Background(), task.mergedBlks[0].GetBlockData().GetFs(), name)
 	pkIdx := -1
