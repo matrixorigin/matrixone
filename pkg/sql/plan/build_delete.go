@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
@@ -28,7 +27,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 		//return buildDeleteSingleTable(stmt, ctx)
 	}
 	return buildLeftJoinForMultTableDelete(ctx, stmt)
-	//return buildDeleteMultipleTable(stmt, ctx)
+	// return buildDeleteMultipleTable(stmt, ctx)
 }
 
 func extractAliasTable(aliasTable *tree.AliasedTableExpr, tf *tableInfo, ctx CompilerContext) {
@@ -82,7 +81,7 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 	// find out use keys to delete
 	var useProjectExprs tree.SelectExprs = nil
 
-	useProjectExprs, useKey, attrs, err := buildUseProjection(stmt, useProjectExprs, objRef, tableDef, tf, ctx)
+	useProjectExprs, useKey, err := buildUseProjection(stmt, useProjectExprs, objRef, tableDef, tf, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -105,17 +104,13 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 	usePlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_DELETE
 	qry := usePlan.Plan.(*plan.Plan_Query).Query
 
-	uDef, sDef := buildIndexDefs(tableDef.Defs)
-
 	// build delete node
 	d := &plan.DeleteTableCtx{
-		DbName:            objRef.SchemaName,
-		TblName:           tableDef.Name,
-		UseDeleteKey:      useKey.Name,
-		CanTruncate:       false,
-		UniqueIndexDef:    uDef,
-		SecondaryIndexDef: sDef,
-		IndexAttrs:        attrs,
+		DbName:             objRef.SchemaName,
+		TblName:            tableDef.Name,
+		UseDeleteKey:       useKey.Name,
+		CanTruncate:        false,
+		IsIndexTableDelete: false,
 	}
 	node := &Node{
 		NodeType:        plan.Node_DELETE,
@@ -133,13 +128,11 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 
 func buildDelete2Truncate(objRef *ObjectRef, tblDef *TableDef) (*Plan, error) {
 	// build delete node
-	uDef, sDef := buildIndexDefs(tblDef.Defs)
 	d := &plan.DeleteTableCtx{
-		DbName:            objRef.SchemaName,
-		TblName:           tblDef.Name,
-		CanTruncate:       true,
-		UniqueIndexDef:    uDef,
-		SecondaryIndexDef: sDef,
+		DbName:             objRef.SchemaName,
+		TblName:            tblDef.Name,
+		CanTruncate:        true,
+		IsIndexTableDelete: false,
 	}
 	node := &Node{
 		NodeType:        plan.Node_DELETE,
@@ -206,11 +199,10 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 	var err error
 	useKeys := make([]*ColDef, tableCount)
 	colIndex := make([]int32, tableCount)
-	attrsArr := make([][]string, tableCount)
 	var useProjectExprs tree.SelectExprs = nil
 	for i := 0; i < tableCount; i++ {
 		colIndex[i] = int32(len(useProjectExprs))
-		useProjectExprs, useKeys[i], attrsArr[i], err = buildUseProjection(stmt, useProjectExprs, objRefs[i], tblDefs[i], tf, ctx)
+		useProjectExprs, useKeys[i], err = buildUseProjection(stmt, useProjectExprs, objRefs[i], tblDefs[i], tf, ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -237,12 +229,12 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 	ds := make([]*plan.DeleteTableCtx, tableCount)
 	for i := 0; i < tableCount; i++ {
 		ds[i] = &plan.DeleteTableCtx{
-			DbName:       objRefs[i].SchemaName,
-			TblName:      tblDefs[i].Name,
-			UseDeleteKey: useKeys[i].Name,
-			CanTruncate:  false,
-			ColIndex:     colIndex[i],
-			IndexAttrs:   attrsArr[i],
+			DbName:             objRefs[i].SchemaName,
+			TblName:            tblDefs[i].Name,
+			UseDeleteKey:       useKeys[i].Name,
+			CanTruncate:        false,
+			ColIndex:           colIndex[i],
+			IsIndexTableDelete: false,
 		}
 	}
 	node := &Node{
@@ -267,55 +259,19 @@ func getTableNames(tableExprs tree.TableExprs) []*tree.TableName {
 	return tbs
 }
 
-func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRef, tableDef *TableDef, tf *tableInfo, ctx CompilerContext) (tree.SelectExprs, *ColDef, []string, error) {
+func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRef, tableDef *TableDef, tf *tableInfo, ctx CompilerContext) (tree.SelectExprs, *ColDef, error) {
 	var useKey *ColDef
 	tblName := tf.alias2BaseNameMap[tableDef.Name]
 
 	// we will allways return hideKey now
 	hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
 	if hideKey == nil {
-		return nil, nil, nil, moerr.NewInvalidState(ctx.GetContext(), "cannot find hide key")
+		return nil, nil, moerr.NewInvalidState(ctx.GetContext(), "cannot find hide key")
 	}
 	e := tree.SetUnresolvedName(tblName, hideKey.Name)
 	ps = append(ps, tree.SelectExpr{Expr: e})
 	useKey = hideKey
 
-	// make true we can get all the index col data before update, so we can delete index info.
-	indexColNameMap := make(map[string]bool)
-	uDef, sDef := buildIndexDefs(tableDef.Defs)
-	if uDef != nil {
-		for _, def := range uDef.Fields {
-			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(def.Cols[0].Name)
-			if isCPkey {
-				colNames := util.SplitCompositePrimaryKeyColumnName(def.Cols[0].Name)
-				for _, colName := range colNames {
-					indexColNameMap[colName] = true
-				}
-			} else {
-				indexColNameMap[def.Cols[0].Name] = true
-			}
-		}
-	}
-	if sDef != nil {
-		for _, def := range sDef.Fields {
-			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(def.Cols[0].Name)
-			if isCPkey {
-				colNames := util.SplitCompositePrimaryKeyColumnName(def.Cols[0].Name)
-				for _, colName := range colNames {
-					indexColNameMap[colName] = true
-				}
-			} else {
-				indexColNameMap[def.Cols[0].Name] = true
-			}
-		}
-	}
-
-	indexAttrs := make([]string, 0)
-	for indexColName := range indexColNameMap {
-		indexAttrs = append(indexAttrs, indexColName)
-		e, _ := tree.NewUnresolvedName(ctx.GetContext(), tf.alias2BaseNameMap[tableDef.Name], indexColName)
-		ps = append(ps, tree.SelectExpr{Expr: e})
-	}
-	return ps, useKey, indexAttrs, nil
+	return ps, useKey, nil
 
 }

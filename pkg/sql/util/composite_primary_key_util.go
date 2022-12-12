@@ -40,6 +40,7 @@ func ExtractCompositePrimaryKeyColumnFromColDefs(colDefs []*plan.ColDef) ([]*pla
 	return colDefs, nil
 }
 
+// this func can't judge index table col is compound or not
 func JudgeIsCompositePrimaryKeyColumn(s string) bool {
 	if len(s) < len(catalog.PrefixPriColName) {
 		return false

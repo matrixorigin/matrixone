@@ -97,12 +97,18 @@ func buildLeftJoinForMultTableDelete(ctx CompilerContext, stmt *tree.Delete) (*P
 		for i := 0; i < len(unqiueIndexDef.TableNames); i++ {
 			// build left join with origin table and index table
 			indexTableExpr := buildIndexTableExpr(unqiueIndexDef.TableNames[i])
-			JoinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[i], unqiueIndexDef.Fields[i].Cols[0].Name)
+			var joinCond *tree.OnJoinCond
+			if len(unqiueIndexDef.Fields[i].Parts) == 1 {
+				joinCond = buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[i], unqiueIndexDef.Fields[i].Parts[0], unqiueIndexDef.Fields[i].Cols[0].Name)
+
+			} else {
+				// do nothing
+			}
 			leftJoinTableExpr = &tree.JoinTableExpr{
 				JoinType: tree.JOIN_TYPE_LEFT,
 				Left:     tableRefExpr,
 				Right:    indexTableExpr,
-				Cond:     JoinCond,
+				Cond:     joinCond,
 			}
 			tableRefExpr = leftJoinTableExpr
 		}
@@ -139,12 +145,12 @@ func buildLeftJoinForMultTableDelete(ctx CompilerContext, stmt *tree.Delete) (*P
 	delCtxs := make([]*plan.DeleteTableCtx, len(deleteTableList.delTables))
 	for i := 0; i < len(deleteTableList.delTables); i++ {
 		delCtxs[i] = &plan.DeleteTableCtx{
-			DbName:       deleteTableList.delTables[i].objRefs.SchemaName,
-			TblName:      deleteTableList.delTables[i].tblDefs.Name,
-			UseDeleteKey: "", // Confirm whether this field is useful
-			CanTruncate:  false,
-			ColIndex:     deleteTableList.delTables[i].colIndex,
-			IndexAttrs:   nil, // Confirm whether this field is useful
+			DbName:             deleteTableList.delTables[i].objRefs.SchemaName,
+			TblName:            deleteTableList.delTables[i].tblDefs.Name,
+			UseDeleteKey:       catalog.Row_ID, // Confirm whether this field is useful
+			CanTruncate:        false,
+			ColIndex:           deleteTableList.delTables[i].colIndex,
+			IsIndexTableDelete: deleteTableList.delTables[i].isIndexTableDelete,
 		}
 	}
 
@@ -209,12 +215,17 @@ func buildLeftJoinForSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (
 	for i := 0; i < len(unqiueIndexDef.TableNames); i++ {
 		// build left join with origin table and index table
 		indexTableExpr := buildIndexTableExpr(unqiueIndexDef.TableNames[i])
-		JoinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[i], unqiueIndexDef.Fields[i].Cols[0].Name)
+		var joinCond *tree.OnJoinCond
+		if len(unqiueIndexDef.Fields[i].Parts) == 1 {
+			joinCond = buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[i], unqiueIndexDef.Fields[i].Parts[0], unqiueIndexDef.Fields[i].Cols[0].Name)
+		} else {
+			// do nothing
+		}
 		leftJoinTableExpr = &tree.JoinTableExpr{
 			JoinType: tree.JOIN_TYPE_LEFT,
 			Left:     originTableExpr,
 			Right:    indexTableExpr,
-			Cond:     JoinCond,
+			Cond:     joinCond,
 		}
 		originTableExpr = leftJoinTableExpr
 	}
@@ -250,12 +261,12 @@ func buildLeftJoinForSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (
 	delCtxs := make([]*plan.DeleteTableCtx, len(deleteTableList.delTables))
 	for i := 0; i < len(deleteTableList.delTables); i++ {
 		delCtxs[i] = &plan.DeleteTableCtx{
-			DbName:       deleteTableList.delTables[i].objRefs.SchemaName,
-			TblName:      deleteTableList.delTables[i].tblDefs.Name,
-			UseDeleteKey: "", // Confirm whether this field is useful
-			CanTruncate:  false,
-			ColIndex:     deleteTableList.delTables[i].colIndex,
-			IndexAttrs:   nil, // Confirm whether this field is useful
+			DbName:             deleteTableList.delTables[i].objRefs.SchemaName,
+			TblName:            deleteTableList.delTables[i].tblDefs.Name,
+			UseDeleteKey:       catalog.Row_ID, // Confirm whether this field is useful
+			CanTruncate:        false,
+			ColIndex:           deleteTableList.delTables[i].colIndex,
+			IsIndexTableDelete: deleteTableList.delTables[i].isIndexTableDelete,
 		}
 	}
 
@@ -280,7 +291,7 @@ func buildDeleteProjection(objRef *ObjectRef, tableDef *TableDef, tbinfo *tableI
 	if err != nil {
 		return err
 	}
-	delTablelist.AddElement(objRef, tableDef, expr)
+	delTablelist.AddElement(objRef, tableDef, expr, false)
 
 	// make true we can get all the index col data before update, so we can delete index info.
 	uDef, _ := buildIndexDefs(tableDef.Defs)
@@ -292,7 +303,7 @@ func buildDeleteProjection(objRef *ObjectRef, tableDef *TableDef, tbinfo *tableI
 				if err != nil {
 					return err
 				}
-				delTablelist.AddElement(idxObjRef, idxTblDef, rowidExpr)
+				delTablelist.AddElement(idxObjRef, idxTblDef, rowidExpr, true)
 			} else {
 				continue
 			}
@@ -333,10 +344,10 @@ func buildIndexTableExpr(indexTableName string) tree.TableExpr {
 }
 
 // construct equivalent connection conditions between original table and index table
-func buildJoinOnCond(tbinfo *tableInfo, originTableName string, indexTableName string, uniqueColName string) *tree.OnJoinCond {
+func buildJoinOnCond(tbinfo *tableInfo, originTableName string, indexTableName string, originTableColName string, indexTableColName string) *tree.OnJoinCond {
 	originTableAlias := tbinfo.baseName2AliasMap[originTableName]
-	leftExpr := tree.SetUnresolvedName(originTableAlias, uniqueColName)
-	rightExpr := tree.SetUnresolvedName(indexTableName, uniqueColName)
+	leftExpr := tree.SetUnresolvedName(originTableAlias, originTableColName)
+	rightExpr := tree.SetUnresolvedName(indexTableName, indexTableColName)
 
 	onCondExpr := tree.NewComparisonExprWithSubop(tree.EQUAL, tree.EQUAL, leftExpr, rightExpr)
 	return tree.NewOnJoinCond(onCondExpr)
@@ -344,11 +355,12 @@ func buildJoinOnCond(tbinfo *tableInfo, originTableName string, indexTableName s
 
 // table information to be deleted (original table and index table)
 type deleteTableInfo struct {
-	objRefs  *ObjectRef
-	tblDefs  *TableDef
-	useKeys  *ColDef // Confirm whether this field is useful
-	colIndex int32
-	attrsArr []string // Confirm whether this field is useful
+	objRefs            *ObjectRef
+	tblDefs            *TableDef
+	useKeys            *ColDef // Confirm whether this field is useful
+	colIndex           int32
+	attrsArr           []string // Confirm whether this field is useful
+	isIndexTableDelete bool
 }
 
 type DeleteTableList struct {
@@ -364,13 +376,14 @@ func NewDeleteTableList() *DeleteTableList {
 	}
 }
 
-func (list *DeleteTableList) AddElement(objRef *ObjectRef, tableDef *TableDef, expr tree.SelectExpr) {
+func (list *DeleteTableList) AddElement(objRef *ObjectRef, tableDef *TableDef, expr tree.SelectExpr, isIndexTableDelete bool) {
 	delInfo := deleteTableInfo{
-		objRefs:  objRef,
-		tblDefs:  tableDef,
-		useKeys:  nil,
-		colIndex: int32(list.nextIndex),
-		attrsArr: nil,
+		objRefs:            objRef,
+		tblDefs:            tableDef,
+		useKeys:            nil,
+		colIndex:           int32(list.nextIndex),
+		attrsArr:           nil,
+		isIndexTableDelete: isIndexTableDelete,
 	}
 	list.delTables = append(list.delTables, delInfo)
 	list.selectList = append(list.selectList, expr)

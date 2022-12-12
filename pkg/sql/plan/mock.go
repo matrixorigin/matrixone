@@ -292,7 +292,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"__mo_rowid", types.T_Rowid, true, 0, 0},
 		},
 		idxs: []index{
-			index{
+			{
 				indexName: "",
 				tableName: "__mo_index_unique__412f4fad-77ba-11ed-b347-000c29847904",
 				parts:     []string{"empno"},
@@ -301,7 +301,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 				},
 				tableExist: true,
 			},
-			index{
+			{
 				indexName: "",
 				tableName: "__mo_index_unique__412f5063-77ba-11ed-b347-000c29847904",
 				parts:     []string{"ename"},
@@ -347,7 +347,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"__mo_rowid", types.T_Rowid, true, 0, 0},
 		},
 		idxs: []index{
-			index{
+			{
 				indexName: "",
 				tableName: "__mo_index_unique__411fa962-77ba-11ed-b347-000c29847904",
 				parts:     []string{"empno"},

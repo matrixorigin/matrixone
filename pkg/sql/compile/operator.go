@@ -354,45 +354,14 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			return nil, err
 		}
 
-		uniqueIndexTables := make([]engine.Relation, 0)
-		secondaryIndexTables := make([]engine.Relation, 0)
-		uDef := n.DeleteTablesCtx[i].UniqueIndexDef
-		sDef := n.DeleteTablesCtx[i].SecondaryIndexDef
-		if uDef != nil {
-			for i := range uDef.TableNames {
-				if uDef.TableExists[i] {
-					indexTable, err := dbSource.Relation(proc.Ctx, uDef.TableNames[i])
-					if err != nil {
-						return nil, err
-					}
-					uniqueIndexTables = append(uniqueIndexTables, indexTable)
-				}
-			}
-		}
-		if sDef != nil {
-			for i := range sDef.TableNames {
-				if sDef.TableExists[i] {
-					indexTable, err := dbSource.Relation(proc.Ctx, sDef.TableNames[i])
-					if err != nil {
-						return nil, err
-					}
-					secondaryIndexTables = append(secondaryIndexTables, indexTable)
-				}
-			}
-		}
-
 		ds[i] = &deletion.DeleteCtx{
-			TableSource:          relation,
-			TableName:            n.DeleteTablesCtx[i].TblName,
-			DbName:               n.DeleteTablesCtx[i].DbName,
-			UseDeleteKey:         n.DeleteTablesCtx[i].UseDeleteKey,
-			CanTruncate:          n.DeleteTablesCtx[i].CanTruncate,
-			ColIndex:             n.DeleteTablesCtx[i].ColIndex,
-			UniqueIndexDef:       n.DeleteTablesCtx[i].UniqueIndexDef,
-			SecondaryIndexDef:    n.DeleteTablesCtx[i].SecondaryIndexDef,
-			UniqueIndexTables:    uniqueIndexTables,
-			SecondaryIndexTables: secondaryIndexTables,
-			IndexAttrs:           n.DeleteTablesCtx[i].IndexAttrs,
+			TableSource:        relation,
+			TableName:          n.DeleteTablesCtx[i].TblName,
+			DbName:             n.DeleteTablesCtx[i].DbName,
+			UseDeleteKey:       n.DeleteTablesCtx[i].UseDeleteKey,
+			CanTruncate:        n.DeleteTablesCtx[i].CanTruncate,
+			ColIndex:           n.DeleteTablesCtx[i].ColIndex,
+			IsIndexTableDelete: n.DeleteTablesCtx[i].IsIndexTableDelete,
 		}
 	}
 

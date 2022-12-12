@@ -518,13 +518,13 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 
 		var keyName string
 		if len(indexInfo.KeyParts) == 1 {
-			keyName = field.Parts[0]
+			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
-					Id:   colMap[keyName].Typ.Id,
-					Size: colMap[keyName].Typ.Size,
+					Id:   colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
+					Size: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Size,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,
@@ -542,7 +542,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			})
 			field.Cols = append(field.Cols, colDef)
 		} else {
-			keyName = util.BuildCompositePrimaryKeyColumnName(field.Parts)
+			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
