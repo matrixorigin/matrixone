@@ -43,13 +43,13 @@ func NewANode(
 	mgr base.INodeManager,
 	sched tasks.TaskScheduler,
 	meta *catalog.BlockEntry,
-	driver wal.Driver) *anode {
+	driver wal.Driver,
+) *anode {
 	impl := new(anode)
 	impl.baseNode = newBaseNode(tbl, fs, mgr, sched, meta)
 	impl.storage.mnode = newMemoryNode(impl.baseNode)
 	impl.storage.mnode.Ref()
 
-	//TODO::data of anode will not be managed by nodeManager
 	impl.storage.mnode.Node = buffer.NewNode(impl.storage.mnode, mgr, *meta.AsCommonID(), 0)
 	impl.storage.mnode.driver = driver
 	impl.storage.mnode.typ = txnbase.PersistNode
@@ -70,6 +70,7 @@ func NewANodeWithID(
 	impl := new(anode)
 	impl.baseNode = newBaseNode(tbl, nil, mgr, nil, nil)
 	impl.storage.mnode = newMemoryNode(impl.baseNode)
+	impl.storage.mnode.Ref()
 
 	impl.storage.mnode.Node = buffer.NewNode(impl.storage.mnode, mgr, *id, 0)
 	impl.storage.mnode.driver = driver
@@ -77,7 +78,6 @@ func NewANodeWithID(
 	impl.storage.mnode.UnloadFunc = impl.storage.mnode.OnUnload
 	impl.storage.mnode.DestroyFunc = impl.storage.mnode.OnDestroy
 	impl.storage.mnode.LoadFunc = impl.storage.mnode.OnLoad
-	impl.table = tbl
 	mgr.RegisterNode(impl.storage.mnode)
 	return impl
 }
@@ -235,7 +235,7 @@ func (n *anode) Close() error {
 func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
 	schema := n.table.entry.GetSchema()
 	if n.storage.mnode.data == nil {
-		opts := new(containers.Options)
+		opts := containers.Options{}
 		opts.Capacity = data.Length() - int(offset)
 		if opts.Capacity > int(txnbase.MaxNodeRows) {
 			opts.Capacity = int(txnbase.MaxNodeRows)

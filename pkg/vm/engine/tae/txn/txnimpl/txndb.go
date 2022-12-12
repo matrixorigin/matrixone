@@ -132,7 +132,7 @@ func (db *txnDB) AddBlksWithMetaLoc(
 		return err
 	}
 	if table.IsDeleted() {
-		return moerr.NewNotFound()
+		return moerr.NewNotFoundNoCtx()
 	}
 	return table.AddBlksWithMetaLoc(pkVecs, file, metaLocs, flag)
 }

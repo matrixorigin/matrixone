@@ -176,13 +176,11 @@ func (info *appendInfo) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 type memoryNode struct {
-	//TODO::memoryNode will be persisted on S3/FS instead,
-	//     so the follow fields will be removed in next PR.
 	*buffer.Node
 	driver wal.Driver
 	lsn    uint64
 	typ    txnbase.NodeState
-	//TODO::the above fields will be removed.
+
 	common.RefHelper
 	bnode *baseNode
 	//data resides in.
@@ -214,7 +212,7 @@ func (n *memoryNode) PrepareAppend(data *containers.Batch, offset uint32) uint32
 func (n *memoryNode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
 	schema := n.bnode.table.entry.GetSchema()
 	if n.data == nil {
-		opts := new(containers.Options)
+		opts := containers.Options{}
 		opts.Capacity = data.Length() - int(offset)
 		if opts.Capacity > int(txnbase.MaxNodeRows) {
 			opts.Capacity = int(txnbase.MaxNodeRows)
@@ -451,7 +449,7 @@ func (n *baseNode) Rows() uint32 {
 	} else if n.storage.pnode != nil {
 		return n.storage.pnode.Rows()
 	}
-	panic(moerr.NewInternalError(
+	panic(moerr.NewInternalError(nil,
 		fmt.Sprintf("bad insertNode %s", n.meta.String())))
 }
 

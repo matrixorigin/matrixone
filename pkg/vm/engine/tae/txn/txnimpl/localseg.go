@@ -123,8 +123,8 @@ func (seg *localSegment) registerANode() {
 		seg.table.store.dataFactory.Fs,
 		seg.table.store.nodesMgr,
 		seg.table.store.dataFactory.Scheduler, meta,
-		seg.table.store.driver)
-	//TODO::will be removed in next PR.
+		seg.table.store.driver,
+	)
 	seg.appendable, err = seg.table.store.nodesMgr.TryPin(n.storage.mnode, time.Second)
 	if err != nil {
 		panic(err)

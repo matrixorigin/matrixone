@@ -869,10 +869,6 @@ func NewAppendableBlockNotFound(ctx context.Context) *Error {
 	return newError(ctx, ErrAppendableBlockNotFound)
 }
 
-func NewNonAppendableSegmentNotFound(ctx context.Context) *Error {
-	return newError(ctx, ErrNonAppendableSegmentNotFound)
-}
-
 var contextFunc atomic.Value
 
 func SetContextFunc(f func() context.Context) {

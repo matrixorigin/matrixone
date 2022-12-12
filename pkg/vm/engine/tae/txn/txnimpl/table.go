@@ -513,7 +513,7 @@ func (tbl *txnTable) createBlockWithMeta(
 		return
 	}
 	if !seg.IsAppendable() && state == catalog.ES_Appendable {
-		err = moerr.NewInternalError("not appendable")
+		err = moerr.NewInternalErrorNoCtx("not appendable")
 		return
 	}
 	var factory catalog.BlockDataFactory
