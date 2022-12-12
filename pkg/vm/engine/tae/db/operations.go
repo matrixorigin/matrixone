@@ -39,7 +39,7 @@ func init() {
 	gob.Register(new(engine.IndexTableDef))
 	gob.Register(new(engine.PropertiesDef))
 	gob.Register(new(engine.PrimaryIndexDef))
-	gob.Register(new(engine.ComputeIndexDef))
+	gob.Register(new(engine.ConstraintDef))
 
 	// register vector column types
 	gob.Register([]bool{})

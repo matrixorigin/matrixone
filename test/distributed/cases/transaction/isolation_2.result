@@ -58,9 +58,10 @@ insert into dis_table_02(b,c) values ('aaaa','2020-09-08');
 create table dis_table_03(b varchar(25) primary key,c datetime);
 begin ;
 insert into dis_table_03 select b,c from dis_table_02;
-[unknown result because it is related to issue#5950]
+Duplicate entry 'aaaa' for key 'b'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from dis_table_03;
-[unknown result because it is related to issue#5950]
+b    c
 insert into dis_table_03 select 'bbb','2012-09-30';
 update dis_table_03 set b='aaa';
 select * from dis_table_03;
@@ -75,9 +76,9 @@ select * from dis_table_03;
 b    c
 bbb    2012-09-30 00:00:00
 commit;
-w-w conflict
 select * from dis_table_03;
 b    c
+bbb    2012-09-30 00:00:00
 begin ;
 insert into dis_table_02 values (null,'ccc',null);
 select * from dis_table_02;
@@ -395,39 +396,34 @@ invalid database iso_db_02
 select * from iso_table_0001;
 SQL parser error: table "iso_table_0001" does not exist
 use isolation_2;
-[unknown result because it is related to issue#6028]
 create table dis_table_04(a int,b varchar(25) not null,c datetime,primary key(a),unique key bstr (b),key cdate (c));
-[unknown result because it is related to issue#6028]
 insert into dis_table_04 values (6666,'kkkk','2010-11-25');
-[unknown result because it is related to issue#6028]
 insert into dis_table_04 values (879,'oopp','2011-11-26');
-[unknown result because it is related to issue#6028]
 select * from dis_table_01;
-[unknown result because it is related to issue#6028]
+a    b
 start transaction ;
-[unknown result because it is related to issue#6028]
 use isolation_2;
-[unknown result because it is related to issue#6028]
 update dis_table_04 set b=(select 'ccccool' from dis_table_01 limit 1)  where a=879;
-[unknown result because it is related to issue#6028]
+constraint violation: Column 'b' cannot be null
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from dis_table_04 ;
-[unknown result because it is related to issue#6028]
+a    b    c
+6666    kkkk    2010-11-25 00:00:00
+879    oopp    2011-11-26 00:00:00
 begin ;
-[unknown result because it is related to issue#6028]
 use isolation_2;
-[unknown result because it is related to issue#6028]
 update dis_table_04 set b='uuyyy' where a=879;
-[unknown result because it is related to issue#6028]
 select * from dis_table_04;
-[unknown result because it is related to issue#6028]
+a    b    c
+879    uuyyy    2011-11-26 00:00:00
+6666    kkkk    2010-11-25 00:00:00
 commit;
-[unknown result because it is related to issue#6028]
 commit;
-[unknown result because it is related to issue#6028]
 update dis_table_04 set b=(select 'kkkk')  where a=879;
-[unknown result because it is related to issue#6028]
 select * from dis_table_04;
-[unknown result because it is related to issue#6028]
+a    b    c
+6666    kkkk    2010-11-25 00:00:00
+879    kkkk    2011-11-26 00:00:00
 begin ;
 use isolation_2;
 create temporary table dis_table_05(a int,b varchar(25) not null,c datetime,primary key(a),unique key bstr (b),key cdate (c));

@@ -23,8 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 )
 
-var ErrNoClientAvailable = moerr.NewInternalError("no client available")
-var ErrClientPoolClosed = moerr.NewInternalError("client pool closed")
+var ErrNoClientAvailable = moerr.NewInternalErrorNoCtx("no client available")
+var ErrClientPoolClosed = moerr.NewInternalErrorNoCtx("client pool closed")
 
 type clientConfig struct {
 	cancelDuration        time.Duration

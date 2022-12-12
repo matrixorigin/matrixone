@@ -49,9 +49,24 @@ type CheckpointClient interface {
 	FlushTable(dbID, tableID uint64, ts types.TS) error
 }
 
+func DecideTableScope(tableID uint64) Scope {
+	var scope Scope
+	switch tableID {
+	case pkgcatalog.MO_DATABASE_ID:
+		scope = ScopeDatabases
+	case pkgcatalog.MO_TABLES_ID:
+		scope = ScopeTables
+	case pkgcatalog.MO_COLUMNS_ID:
+		scope = ScopeColumns
+	default:
+		scope = ScopeUserTables
+	}
+	return scope
+}
+
 func HandleSyncLogTailReq(
 	ckpClient CheckpointClient,
-	mgr *LogtailMgr,
+	mgr *Manager,
 	c *catalog.Catalog,
 	req api.SyncLogTailReq,
 	canRetry bool) (resp api.SyncLogTailResp, err error) {
@@ -84,7 +99,7 @@ func HandleSyncLogTailReq(
 		start = checkpointed.Next()
 	}
 
-	scope := mgr.DecideScope(tid)
+	scope := DecideTableScope(tid)
 
 	var visitor RespBuilder
 
@@ -114,7 +129,7 @@ func HandleSyncLogTailReq(
 			return newResp, err
 		}
 	}
-	return visitor.BuildResp()
+	return
 }
 
 type RespBuilder interface {
@@ -446,7 +461,7 @@ func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode 
 		e.AsCommonID().String(), e.IsAppendable(),
 		metaNode.CreatedAt.ToString(), metaNode.DeletedAt.ToString(), metaNode.MetaLoc, metaNode.DeltaLoc)
 	is_sorted := false
-	if !e.IsAppendable() && e.GetSchema().HasPK() {
+	if !e.IsAppendable() && e.GetSchema().HasSortKey() {
 		is_sorted = true
 	}
 	insBatch := b.blkMetaInsBatch
@@ -462,7 +477,7 @@ func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode 
 
 	if metaNode.HasDropCommitted() {
 		if metaNode.DeletedAt.IsEmpty() {
-			panic(moerr.NewInternalError("no delete at time in a dropped entry"))
+			panic(moerr.NewInternalErrorNoCtx("no delete at time in a dropped entry"))
 		}
 		delBatch := b.blkMetaDelBatch
 		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.DeletedAt)

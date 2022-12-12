@@ -1,3 +1,4 @@
+set time_zone="+08:00";
 drop table if exists numbers;
 CREATE TABLE numbers
 (pk INTEGER PRIMARY KEY,
@@ -144,17 +145,17 @@ truncated type DATETIME value 9999-12-31 23:59:59.999999 for column time2, 1
 insert into t2 values ('9999-12-31', '9999-12-31 23:59:59.999999', '2038-01-19 03:14:07.999999');
 truncated type DATETIME value 9999-12-31 23:59:59.999999 for column time2, 1
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
-Data truncation: Incorrect datetime value: '1970-01-01 00:00:01.000000' for column 'time3' at row 1
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
-Data truncation: Incorrect datetime value: '1970-01-01 00:00:01.000000' for column 'time3' at row 1
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
-Data truncation: Incorrect datetime value: '1970-01-01 00:00:01.000000' for column 'time3' at row 1
 insert into t2 values ('2022-10-24', '2022-10-24 10:10:10.000000', '2022-10-24 00:00:01.000000');
 insert into t2 values ('2022-10-25', '2022-10-25 10:10:10.000000', '2022-10-25 00:00:01.000000');
 insert into t2 values ('2022-10-26', '2022-10-26 10:10:10.000000', '2022-10-26 00:00:01.000000');
 select * from t2;
 time1    time2    time3
 1000-01-01    0001-01-01 00:00:00    2038-01-19 03:14:08
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
 2022-10-24    2022-10-24 10:10:10    2022-10-24 00:00:01
 2022-10-25    2022-10-25 10:10:10    2022-10-25 00:00:01
 2022-10-26    2022-10-26 10:10:10    2022-10-26 00:00:01
@@ -170,6 +171,9 @@ time1    time2    time3
 execute s1 using @min_date;
 time1    time2    time3
 1000-01-01    0001-01-01 00:00:00    2038-01-19 03:14:08
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
 execute s1 using @max_datetime;
 time1    time2    time3
 execute s1 using @min_datetime;
@@ -189,6 +193,9 @@ time1    time2    time3
 execute s2 using @min_datetime;
 time1    time2    time3
 1000-01-01    0001-01-01 00:00:00    2038-01-19 03:14:08
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
 execute s2 using @max_timestamp;
 time1    time2    time3
 execute s2 using @min_timestamp;
@@ -205,6 +212,9 @@ execute s3 using @min_datetime;
 time1    time2    time3
 execute s3 using @max_timestamp;
 time1    time2    time3
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
 execute s3 using @min_timestamp;
 time1    time2    time3
 1000-01-01    0001-01-01 00:00:00    2038-01-19 03:14:08
@@ -221,6 +231,9 @@ execute s6 using @time3;
 select * from t2;
 time1    time2    time3
 1000-01-01    0001-01-01 00:00:00    2038-01-19 03:14:08
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
 DEALLOCATE PREPARE s4;
 DEALLOCATE PREPARE s5;
 DEALLOCATE PREPARE s6;
@@ -260,7 +273,6 @@ prepare s7 from 'select * from t3 where dec1 between ? and ?';
 prepare s8 from 'select * from t3 where dec1 not between ? and ?';
 execute s1 using @hit_dec1;
 dec1    dec2
-12.35    10000.2222233333
 123.45    1111122222.2222233333
 133.45    1111122222.2222233333
 153.45    1111122222.2222233333
@@ -303,6 +315,7 @@ execute s3 using @dec1_min;
 dec1    dec2
 execute s4 using @hit_dec1;
 dec1    dec2
+12.34    10000.2222233333
 execute s4 using @dec1_max;
 dec1    dec2
 12.35    10000.2222233333
@@ -314,7 +327,6 @@ execute s4 using @dec1_min;
 dec1    dec2
 execute s5 using @hit_dec1;
 dec1    dec2
-12.35    10000.2222233333
 123.45    1111122222.2222233333
 133.45    1111122222.2222233333
 153.45    1111122222.2222233333
@@ -335,7 +347,6 @@ dec1    dec2
 123.46    111112222233333.2222233333
 execute s6 using @hit_dec1;
 dec1    dec2
-12.35    10000.2222233333
 123.45    1111122222.2222233333
 133.45    1111122222.2222233333
 153.45    1111122222.2222233333

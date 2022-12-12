@@ -25,7 +25,7 @@ import (
 func Serial(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	for _, v := range vectors {
 		if v.IsScalar() {
-			return nil, moerr.NewConstraintViolation("serial function don't support constant value")
+			return nil, moerr.NewConstraintViolationNoCtx("serial function don't support constant value")
 		}
 	}
 	return SerialWithSomeCols(vectors, proc)
@@ -36,7 +36,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 	vct := types.T_varchar.ToType()
 	nsp := new(nulls.Nulls)
 	val := make([][]byte, 0, length)
-	ps := types.NewPackerArray(length)
+	ps := types.NewPackerArray(length, proc.Mp())
 	bitMap := new(nulls.Nulls)
 
 	for _, v := range vectors {
@@ -214,5 +214,8 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 
 	vec := vector.NewWithBytes(vct, val, nsp, proc.Mp())
 
+	for _, p := range ps {
+		p.FreeMem()
+	}
 	return vec, nil
 }

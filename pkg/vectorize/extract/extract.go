@@ -82,7 +82,7 @@ func ExtractFromOneDate(unit string, date types.Date) uint32 {
 
 func ExtractFromDate(unit string, dates []types.Date, results []uint32) ([]uint32, error) {
 	if _, ok := validDateUnit[unit]; !ok {
-		return []uint32{}, moerr.NewInternalError("invalid unit")
+		return []uint32{}, moerr.NewInternalErrorNoCtx("invalid unit")
 	}
 	switch unit {
 	case "day":
@@ -115,7 +115,7 @@ func ExtractFromDate(unit string, dates []types.Date, results []uint32) ([]uint3
 
 func ExtractFromDatetime(unit string, datetimes []types.Datetime, results []string) ([]string, error) {
 	if _, ok := validDatetimeUnit[unit]; !ok {
-		return nil, moerr.NewInternalError("invalid unit")
+		return nil, moerr.NewInternalErrorNoCtx("invalid unit")
 	}
 	switch unit {
 	case "microsecond":
@@ -224,7 +224,7 @@ func ExtractFromDatetime(unit string, datetimes []types.Datetime, results []stri
 
 func ExtractFromTime(unit string, times []types.Time, results []string) ([]string, error) {
 	if _, ok := validTimeUnit[unit]; !ok {
-		return []string{}, moerr.NewInternalError("invalid unit")
+		return []string{}, moerr.NewInternalErrorNoCtx("invalid unit")
 	}
 	switch unit {
 	case "microsecond":

@@ -27,8 +27,8 @@ import (
 )
 
 var (
-	ErrDispatcherNotFound = moerr.NewInternalError("tae sched: dispatcher not found")
-	ErrSchedule           = moerr.NewInternalError("tae sched: cannot schedule")
+	ErrDispatcherNotFound = moerr.NewInternalErrorNoCtx("tae sched: dispatcher not found")
+	ErrSchedule           = moerr.NewInternalErrorNoCtx("tae sched: cannot schedule")
 )
 
 type Scheduler interface {

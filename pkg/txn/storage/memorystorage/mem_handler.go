@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
@@ -46,7 +47,6 @@ type MemHandler struct {
 	databases  *memtable.Table[ID, *DatabaseRow, *DatabaseRow]
 	relations  *memtable.Table[ID, *RelationRow, *RelationRow]
 	attributes *memtable.Table[ID, *AttributeRow, *AttributeRow]
-	indexes    *memtable.Table[ID, *IndexRow, *IndexRow]
 
 	// data
 	data *memtable.Table[DataKey, DataValue, DataRow]
@@ -73,7 +73,7 @@ type MemHandler struct {
 }
 
 type Iter[
-	K memtable.Ordered[K],
+	K memorytable.Ordered[K],
 	V any,
 ] struct {
 	TableIter *memtable.TableIter[K, V]
@@ -95,7 +95,6 @@ func NewMemHandler(
 		databases:              memtable.NewTable[ID, *DatabaseRow, *DatabaseRow](),
 		relations:              memtable.NewTable[ID, *RelationRow, *RelationRow](),
 		attributes:             memtable.NewTable[ID, *AttributeRow, *AttributeRow](),
-		indexes:                memtable.NewTable[ID, *IndexRow, *IndexRow](),
 		data:                   memtable.NewTable[DataKey, DataValue, DataRow](),
 		mheap:                  mp,
 		defaultIsolationPolicy: defaultIsolationPolicy,
@@ -114,7 +113,7 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 
 	table, err := m.relations.Get(tx, req.TableID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return moerr.NewInternalError(
+		return moerr.NewInternalErrorNoCtx(
 			"invalid table id %v, db %v, name %v",
 			req.TableID,
 			req.DatabaseName,
@@ -161,6 +160,15 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 			return err
 		}
 
+	case *engine.ConstraintDef:
+		// update
+		if table.Constraint, err = def.MarshalBinary(); err != nil {
+			return nil
+		}
+		if err := m.relations.Update(tx, table); err != nil {
+			return err
+		}
+
 	case *engine.AttributeDef:
 		// add attribute
 		// check existence
@@ -173,7 +181,7 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 			return err
 		}
 		if len(entries) > 0 {
-			return moerr.NewConstraintViolation(`duplicate column "%s"`, def.Attr.Name)
+			return moerr.NewConstraintViolationNoCtx(`duplicate column "%s"`, def.Attr.Name)
 		}
 		// insert
 		id, err := m.idGenerator.NewID(ctx)
@@ -193,39 +201,6 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 
 	case *engine.IndexTableDef:
 		// tea & mem do not use this def now.
-	case *engine.ComputeIndexDef:
-		// add index
-		// check existence
-		for i := 0; i < len(def.IndexNames); i++ {
-			entries, err := m.indexes.Index(tx, Tuple{
-				index_RelationID_Name,
-				req.TableID,
-				Text(def.IndexNames[i]),
-			})
-			if err != nil {
-				return err
-			}
-			if len(entries) > 0 {
-				return moerr.NewDuplicate()
-			}
-			// insert
-			id, err := m.idGenerator.NewID(ctx)
-			if err != nil {
-				return err
-			}
-			idxRow := &IndexRow{
-				ID:         id,
-				RelationID: req.TableID,
-				IndexName:  def.IndexNames[i],
-				Unique:     def.Uniques[i],
-				TableName:  def.TableNames[i],
-				Field:      def.Fields[i],
-			}
-			if err := m.indexes.Insert(tx, idxRow); err != nil {
-				return err
-			}
-		}
-
 	case *engine.PropertiesDef:
 		// update properties
 		for _, prop := range def.Properties {
@@ -273,7 +248,7 @@ func (m *MemHandler) HandleCloseTableIter(ctx context.Context, meta txn.TxnMeta,
 	defer m.iterators.Unlock()
 	iter, ok := m.iterators.Map[req.IterID]
 	if !ok {
-		return moerr.NewInternalError("no such iter: %v", req.IterID)
+		return moerr.NewInternalErrorNoCtx("no such iter: %v", req.IterID)
 	}
 	delete(m.iterators.Map, req.IterID)
 	if err := iter.TableIter.Close(); err != nil {
@@ -294,7 +269,7 @@ func (m *MemHandler) HandleCreateDatabase(ctx context.Context, meta txn.TxnMeta,
 		return err
 	}
 	if len(entries) > 0 {
-		return moerr.NewDBAlreadyExists(req.Name)
+		return moerr.NewDBAlreadyExistsNoCtx(req.Name)
 	}
 
 	if req.ID.IsEmpty() {
@@ -323,7 +298,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 	if !req.DatabaseID.IsEmpty() {
 		_, err := m.databases.Get(tx, req.DatabaseID)
 		if errors.Is(err, sql.ErrNoRows) {
-			return moerr.NewNoDB()
+			return moerr.NewNoDBNoCtx()
 		}
 		if err != nil {
 			return err
@@ -340,7 +315,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 		return err
 	}
 	if len(entries) > 0 {
-		return moerr.NewTableAlreadyExists(req.Name)
+		return moerr.NewTableAlreadyExistsNoCtx(req.Name)
 	}
 
 	// row
@@ -360,7 +335,6 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 
 	// handle defs
 	var relAttrs []engine.Attribute
-	var relIndexes *engine.ComputeIndexDef
 	var primaryColumnNames []string
 	for _, def := range req.Defs {
 		switch def := def.(type) {
@@ -374,14 +348,16 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 		case *engine.ViewDef:
 			row.ViewDef = []byte(def.View)
 
+		case *engine.ConstraintDef:
+			row.Constraint, err = def.MarshalBinary()
+			if err != nil {
+				return err
+			}
 		case *engine.AttributeDef:
 			relAttrs = append(relAttrs, def.Attr)
 
 		case *engine.IndexTableDef:
 			// do nothing
-
-		case *engine.ComputeIndexDef:
-			relIndexes = def
 
 		case *engine.PropertiesDef:
 			for _, prop := range def.Properties {
@@ -397,7 +373,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 	}
 
 	if len(relAttrs) == 0 && len(row.ViewDef) == 0 {
-		return moerr.NewConstraintViolation("no schema")
+		return moerr.NewConstraintViolationNoCtx("no schema")
 	}
 
 	// add row id
@@ -415,7 +391,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 	nameSet := make(map[string]bool)
 	for i, attr := range relAttrs {
 		if _, ok := nameSet[attr.Name]; ok {
-			return moerr.NewConstraintViolation(`duplicate column "%s"`, attr.Name)
+			return moerr.NewConstraintViolationNoCtx(`duplicate column "%s"`, attr.Name)
 		}
 		nameSet[attr.Name] = true
 		if len(primaryColumnNames) > 0 {
@@ -444,27 +420,6 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 		}
 	}
 
-	// insert relation indexes
-	if relIndexes != nil {
-		for i := 0; i < len(relIndexes.IndexNames); i++ {
-			id, err := m.idGenerator.NewID(ctx)
-			if err != nil {
-				return err
-			}
-			idxRow := &IndexRow{
-				ID:         id,
-				RelationID: row.ID,
-				IndexName:  relIndexes.IndexNames[i],
-				Unique:     relIndexes.Uniques[i],
-				TableName:  relIndexes.TableNames[i],
-				Field:      relIndexes.Fields[i],
-			}
-			if err := m.indexes.Insert(tx, idxRow); err != nil {
-				return err
-			}
-		}
-	}
-
 	// insert relation
 	if err := m.relations.Insert(tx, row); err != nil {
 		return err
@@ -481,7 +436,7 @@ func (m *MemHandler) HandleDelTableDef(ctx context.Context, meta txn.TxnMeta, re
 
 	table, err := m.relations.Get(tx, req.TableID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return moerr.NewInternalError(
+		return moerr.NewInternalErrorNoCtx(
 			"invalid table id %v, db %v, name %v",
 			req.TableID,
 			req.DatabaseName,
@@ -519,19 +474,12 @@ func (m *MemHandler) HandleDelTableDef(ctx context.Context, meta txn.TxnMeta, re
 		}
 
 	case *engine.IndexTableDef:
-		// delete index
-		entries, err := m.indexes.Index(tx, Tuple{
-			index_RelationID_Name,
-			req.TableID,
-			Text(def.Name),
-		})
-		if err != nil {
+		// do nothing
+
+	case *engine.ConstraintDef:
+		table.Constraint = nil
+		if err := m.relations.Update(tx, table); err != nil {
 			return err
-		}
-		for _, entry := range entries {
-			if err := m.indexes.Delete(tx, entry.Key); err != nil {
-				return err
-			}
 		}
 
 	case *engine.PropertiesDef:
@@ -567,7 +515,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 	// by row id
 	if req.ColumnName == rowIDColumnName {
 		for i := 0; i < reqVecLen; i++ {
-			value := memtable.VectorAt(req.Vector, i)
+			value := memorytable.VectorAt(req.Vector, i)
 			rowID := value.Value.(types.Rowid)
 			entries, err := m.data.Index(tx, Tuple{
 				index_RowID, memtable.ToOrdered(rowID),
@@ -605,7 +553,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 		if attr.Name == req.ColumnName {
 			// by primary key
 			for i := 0; i < reqVecLen; i++ {
-				value := memtable.VectorAt(req.Vector, i)
+				value := memorytable.VectorAt(req.Vector, i)
 				key := DataKey{
 					tableID:    req.TableID,
 					primaryKey: Tuple{memtable.ToOrdered(value.Value)},
@@ -628,7 +576,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 		return err
 	}
 	if len(entries) == 0 {
-		return moerr.NewInternalError("no such column: %s", req.ColumnName)
+		return moerr.NewInternalErrorNoCtx("no such column: %s", req.ColumnName)
 	}
 	if len(entries) != 1 {
 		panic("impossible")
@@ -652,7 +600,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 			break
 		}
 		for i := 0; i < reqVecLen; i++ {
-			value := memtable.VectorAt(req.Vector, i)
+			value := memorytable.VectorAt(req.Vector, i)
 			if attrIndex >= len(dataValue) {
 				// attr not in row
 				continue
@@ -681,7 +629,7 @@ func (m *MemHandler) HandleDeleteDatabase(ctx context.Context, meta txn.TxnMeta,
 		return err
 	}
 	if len(entries) == 0 {
-		return moerr.NewNoDB()
+		return moerr.NewNoDBNoCtx()
 	}
 
 	for _, entry := range entries {
@@ -801,7 +749,7 @@ func (m *MemHandler) HandleTruncateRelation(ctx context.Context, meta txn.TxnMet
 	tx := m.getTx(meta)
 	_, err := m.relations.Get(tx, req.OldTableID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return moerr.NewNoSuchTable(req.DatabaseName, req.Name)
+		return moerr.NewNoSuchTableNoCtx(req.DatabaseName, req.Name)
 	}
 	return m.deleteRelationData(tx, req.OldTableID)
 }
@@ -969,34 +917,13 @@ func (m *MemHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, r
 		}
 	}
 
-	// indexes
-	{
-		entries, err := m.indexes.Index(tx, Tuple{
-			index_RelationID, req.TableID,
-		})
-		if err != nil {
+	// Constraint
+	if len(relRow.Constraint) != 0 {
+		c := new(engine.ConstraintDef)
+		if err = c.UnmarshalBinary(relRow.Constraint); err != nil {
 			return err
 		}
-		indexLen := len(entries)
-		if indexLen > 0 {
-			computeIndexDef := &engine.ComputeIndexDef{
-				IndexNames: make([]string, indexLen),
-				Uniques:    make([]bool, indexLen),
-				TableNames: make([]string, indexLen),
-				Fields:     make([][]string, indexLen),
-			}
-			for i, entry := range entries {
-				index, err := m.indexes.Get(tx, entry.Key)
-				if err != nil {
-					return err
-				}
-				computeIndexDef.IndexNames[i] = index.IndexName
-				computeIndexDef.Uniques[i] = index.Unique
-				computeIndexDef.TableNames[i] = index.TableName
-				computeIndexDef.Fields[i] = index.Field
-			}
-			resp.Defs = append(resp.Defs, computeIndexDef)
-		}
+		resp.Defs = append(resp.Defs, c)
 	}
 
 	// properties
@@ -1089,7 +1016,7 @@ func (m *MemHandler) HandleOpenDatabase(ctx context.Context, meta txn.TxnMeta, r
 	}
 
 	if len(entries) == 0 {
-		return moerr.NewNoDB()
+		return moerr.NewNoDBNoCtx()
 	}
 
 	entry := entries[0]
@@ -1114,7 +1041,7 @@ func (m *MemHandler) HandleOpenRelation(ctx context.Context, meta txn.TxnMeta, r
 		return err
 	}
 	if len(entries) == 0 {
-		return moerr.NewNoSuchTable(req.DatabaseName, req.Name)
+		return moerr.NewNoSuchTableNoCtx(req.DatabaseName, req.Name)
 	}
 	entry := entries[0]
 	rel, err := m.relations.Get(tx, entry.Key)
@@ -1139,7 +1066,7 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req memor
 	iter, ok := m.iterators.Map[req.IterID]
 	if !ok {
 		m.iterators.Unlock()
-		return moerr.NewInternalError("no such iter: %v", req.IterID)
+		return moerr.NewInternalErrorNoCtx("no such iter: %v", req.IterID)
 	}
 	m.iterators.Unlock()
 
@@ -1285,7 +1212,7 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 	}
 
 	if len(nameToAttrs) == 0 {
-		return moerr.NewInternalError(
+		return moerr.NewInternalErrorNoCtx(
 			"invalid table id %v, db %v, name %v",
 			tableID,
 			dbName,
@@ -1294,7 +1221,7 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 	}
 
 	// iter
-	batchIter := memtable.NewBatchIter(b)
+	batchIter := memorytable.NewBatchIter(b)
 	for {
 		row := batchIter()
 		if len(row) == 0 {

@@ -30,7 +30,7 @@ import (
 )
 
 var (
-	ErrTxnWWConflict = moerr.NewTxnWWConflict()
+	ErrTxnWWConflict = moerr.NewTxnWWConflictNoCtx()
 )
 
 type Txn2PC interface {

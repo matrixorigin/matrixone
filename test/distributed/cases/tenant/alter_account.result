@@ -1,0 +1,32 @@
+drop account if exists acc1;
+drop account if exists accx;
+alter account if exists nosys admin_name 'root' identified by '1234';
+alter account nosys admin_name 'root' identified by '1234';
+internal error: there is no account nosys
+create account acc1 admin_name "root1" identified by "111";
+alter account acc1 admin_name "rootx" identified by "111";
+internal error: there is no user rootx
+alter account if exists acc1 admin_name "rootx" identified by "111";
+internal error: there is no user rootx
+alter account acc1 admin_name "root1" identified by "1234";
+alter account if exists acc1 admin_name "root1" identified by "1234";
+alter account if exists acc1 admin_name "root1" IDENTIFIED BY RANDOM PASSWORD;
+internal error: only support identified by password
+alter account if exists acc1 admin_name "root1" IDENTIFIED WITH 'abc';
+internal error: only support identified by password
+alter account if exists acc1 admin_name "root1" identified by "1234" suspend;
+internal error: at most one option at a time
+alter account if exists acc1 suspend comment "acc1";
+internal error: at most one option at a time
+alter account if exists acc1 admin_name "root1" identified by "1234" comment "acc1";
+internal error: at most one option at a time
+alter account if exists acc1;
+internal error: at least one option at a time
+alter account acc1 comment "new accout";
+alter account if exists accx comment "new accout";
+create account accx admin_name "root1" identified by "111";
+alter account accx comment "new accout";
+alter account accx suspend;
+alter account accx open;
+drop account if exists acc1;
+drop account if exists accx;

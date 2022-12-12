@@ -1,5 +1,0 @@
-create table t1(a INT,  b float);
-insert into t1 values(12124, -4213.413), (12124, -42413.409);
-SELECT length(uuid()) FROM t1;
-SELECT uuid(1) FROM t1;
-drop table t1;

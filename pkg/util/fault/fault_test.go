@@ -15,6 +15,7 @@
 package fault
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -23,10 +24,11 @@ import (
 func TestCount(t *testing.T) {
 	var ok bool
 	var cnt int64
+	var ctx = context.TODO()
 
 	Enable()
-	AddFaultPoint("a", ":5::", "return", 0, "")
-	AddFaultPoint("aa", ":::", "getcount", 0, "a")
+	AddFaultPoint(ctx, "a", ":5::", "return", 0, "")
+	AddFaultPoint(ctx, "aa", ":::", "getcount", 0, "a")
 	_, _, ok = TriggerFault("a")
 	require.Equal(t, true, ok)
 	_, _, ok = TriggerFault("a")
@@ -55,11 +57,11 @@ func TestCount(t *testing.T) {
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(6), cnt)
 
-	RemoveFaultPoint("a")
-	RemoveFaultPoint("aa")
+	RemoveFaultPoint(ctx, "a")
+	RemoveFaultPoint(ctx, "aa")
 
-	AddFaultPoint("a", "3:8:2:", "return", 0, "")
-	AddFaultPoint("aa", ":::", "getcount", 0, "a")
+	AddFaultPoint(ctx, "a", "3:8:2:", "return", 0, "")
+	AddFaultPoint(ctx, "aa", ":::", "getcount", 0, "a")
 	_, _, ok = TriggerFault("a")
 	require.Equal(t, false, ok)
 	cnt, _, ok = TriggerFault("aa")
@@ -114,7 +116,7 @@ func wait(t *testing.T) {
 func TestEcho(t *testing.T) {
 	Enable()
 
-	AddFaultPoint("e", ":::", "echo", 21, "guns")
+	AddFaultPoint(context.TODO(), "e", ":::", "echo", 21, "guns")
 
 	i, s, ok := TriggerFault("e")
 	require.True(t, ok)
@@ -127,15 +129,16 @@ func TestEcho(t *testing.T) {
 func TestWait(t *testing.T) {
 	var ok bool
 	var cnt int64
+	var ctx = context.Background()
 
 	Enable()
 
-	AddFaultPoint("w", ":::", "wait", 0, "")
-	AddFaultPoint("n1", ":::", "notify", 0, "w")
-	AddFaultPoint("nall", ":::", "notifyall", 0, "w")
-	AddFaultPoint("gc", ":::", "getcount", 0, "w")
-	AddFaultPoint("gw", ":::", "getwaiters", 0, "w")
-	AddFaultPoint("s", ":::", "sleep", 1, "w")
+	AddFaultPoint(ctx, "w", ":::", "wait", 0, "")
+	AddFaultPoint(ctx, "n1", ":::", "notify", 0, "w")
+	AddFaultPoint(ctx, "nall", ":::", "notifyall", 0, "w")
+	AddFaultPoint(ctx, "gc", ":::", "getcount", 0, "w")
+	AddFaultPoint(ctx, "gw", ":::", "getwaiters", 0, "w")
+	AddFaultPoint(ctx, "s", ":::", "sleep", 1, "w")
 
 	for i := 0; i < 10; i++ {
 		go wait(t)

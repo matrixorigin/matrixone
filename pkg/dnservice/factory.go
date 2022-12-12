@@ -40,11 +40,11 @@ var (
 	}
 )
 
-func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, error) {
+func (s *store) createTxnStorage(ctx context.Context, shard metadata.DNShard) (storage.TxnStorage, error) {
 	factory := s.createLogServiceClientFactroy(shard)
 	closeLogClientFn := func(logClient logservice.Client) {
 		if err := logClient.Close(); err != nil {
-			s.logger.Error("close log client failed",
+			s.rt.Logger().Error("close log client failed",
 				zap.Error(err))
 		}
 	}
@@ -76,7 +76,7 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 		}
 		return ts, nil
 	default:
-		return nil, moerr.NewInternalError("not implment for %s", s.cfg.Txn.Storage.Backend)
+		return nil, moerr.NewInternalError(ctx, "not implment for %s", s.cfg.Txn.Storage.Backend)
 	}
 }
 
@@ -118,13 +118,13 @@ func (s *store) newMemTxnStorage(
 	return memorystorage.NewMemoryStorage(
 		mp,
 		memorystorage.SnapshotIsolation,
-		s.clock,
+		s.rt.Clock(),
 		memoryengine.NewHakeeperIDGenerator(hakeeper),
 	)
 }
 
 func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
-	return mem.NewKVTxnStorage(0, logClient, s.clock), nil
+	return mem.NewKVTxnStorage(0, logClient, s.rt.Clock()), nil
 }
 
 func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientFactory) (storage.TxnStorage, error) {
@@ -147,7 +147,7 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		shard,
 		factory,
 		fs,
-		s.clock,
+		s.rt.Clock(),
 		ckpcfg,
 		options.LogstoreType(s.cfg.Txn.Storage.LogBackend))
 }

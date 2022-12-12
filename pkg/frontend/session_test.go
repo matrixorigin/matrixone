@@ -51,7 +51,7 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 				if cnt%2 != 0 {
 					return txnOperator, nil
 				} else {
-					return nil, moerr.NewInternalError("startTxn failed")
+					return nil, moerr.NewInternalError(ctx, "startTxn failed")
 				}
 			}).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -88,12 +88,12 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		cnt := 0
 		txnOperator.EXPECT().Commit(gomock.Any()).DoAndReturn(
-			func(context.Context) error {
+			func(ctx context.Context) error {
 				cnt++
 				if cnt%2 != 0 {
 					return nil
 				} else {
-					return moerr.NewInternalError("commit failed")
+					return moerr.NewInternalError(ctx, "commit failed")
 				}
 			}).AnyTimes()
 
@@ -138,7 +138,7 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 				if cnt%2 != 0 {
 					return nil
 				} else {
-					return moerr.NewInternalError("rollback failed")
+					return moerr.NewInternalError(ctx, "rollback failed")
 				}
 			}).AnyTimes()
 
@@ -330,26 +330,26 @@ func TestVariables(t *testing.T) {
 		//same session global
 		_, err = ses.GetGlobalVar(v)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 		_, err = ses.GetTxnCompileCtx().ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 
 		//exist session global
 		_, err = existSes.GetGlobalVar(v)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 		_, err = existSes.GetTxnCompileCtx().ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 
 		//new session after session global
 		_, err = newSesAfterSession.GetGlobalVar(v)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 		_, err = newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 	}
 
 	convey.Convey("scope global", t, func() {
@@ -546,8 +546,8 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetHideKeys(gomock.Any()).Return(nil, nil).AnyTimes()
-		table.EXPECT().FilteredRows(gomock.Any(), gomock.Any()).Return(float64(1000000), nil).AnyTimes()
-		table.EXPECT().Rows(gomock.Any()).Return(int64(1000000), nil).AnyTimes()
+		table.EXPECT().FilteredStats(gomock.Any(), gomock.Any()).Return(int32(100), int64(1000000), nil).AnyTimes()
+		table.EXPECT().Stats(gomock.Any()).Return(int32(100), int64(1000000), nil).AnyTimes()
 		table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
 		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
@@ -577,7 +577,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		hkd := tcc.GetHideKeyDef("abc", "t1")
 		convey.So(hkd, convey.ShouldBeNil)
 
-		cost := tcc.Cost(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Expr{})
-		convey.So(cost, convey.ShouldNotBeNil)
+		stats := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Expr{})
+		convey.So(stats, convey.ShouldNotBeNil)
 	})
 }

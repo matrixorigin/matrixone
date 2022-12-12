@@ -104,6 +104,13 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 					View: cmds[i].Viewdef,
 				})
 			}
+			if len(cmds[i].Constraint) > 0 {
+				c := new(engine.ConstraintDef)
+				if err = c.UnmarshalBinary(cmds[i].Constraint); err != nil {
+					return nil, nil, err
+				}
+				cmds[i].Defs = append(cmds[i].Defs, c)
+			}
 			if len(cmds[i].Partition) > 0 {
 				cmds[i].Defs = append(cmds[i].Defs, &engine.PartitionDef{
 					Partition: cmds[i].Partition,
@@ -180,6 +187,7 @@ func genCreateTables(rows [][]any) []CreateTable {
 		cmds[i].Comment = string(row[MO_TABLES_REL_COMMENT_IDX].([]byte))
 		cmds[i].Partition = string(row[MO_TABLES_PARTITIONED_IDX].([]byte))
 		cmds[i].Viewdef = string(row[MO_TABLES_VIEWDEF_IDX].([]byte))
+		cmds[i].Constraint = row[MO_TABLES_CONSTRAINT].([]byte)
 		cmds[i].RelKind = string(row[MO_TABLES_RELKIND_IDX].([]byte))
 	}
 	return cmds
@@ -257,6 +265,7 @@ func genTableDefs(row []any) (engine.TableDef, error) {
 	attr.IsHidden = row[MO_COLUMNS_ATT_IS_HIDDEN_IDX].(int8) == 1
 	attr.AutoIncrement = row[MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX].(int8) == 1
 	attr.Primary = string(row[MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX].([]byte)) == "p"
+	attr.ClusterBy = row[MO_COLUMNS_ATT_IS_CLUSTERBY].(int8) == 1
 	return &engine.AttributeDef{Attr: attr}, nil
 }
 

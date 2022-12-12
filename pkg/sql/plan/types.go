@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -34,7 +36,7 @@ type TableDef = plan.TableDef
 type ColDef = plan.ColDef
 type ObjectRef = plan.ObjectRef
 type ColRef = plan.ColRef
-type Cost = plan.Cost
+type Stats = plan.Stats
 type Const = plan.Const
 type MaxValue = plan.MaxValue
 type Expr = plan.Expr
@@ -51,9 +53,10 @@ type TableDef_DefType_Partition = plan.TableDef_DefType_Partition
 type PropertiesDef = plan.PropertiesDef
 type ViewDef = plan.ViewDef
 type PartitionInfo = plan.PartitionInfo
-type TableDef_DefType_Idx = plan.TableDef_DefType_Idx
-type IndexDef = plan.IndexDef
-type IndexInfo = plan.IndexInfo
+type TableDef_DefType_UIdx = plan.TableDef_DefType_UIdx
+type TableDef_DefType_SIdx = plan.TableDef_DefType_SIdx
+type UniqueIndexDef = plan.UniqueIndexDef
+type SecondaryIndexDef = plan.SecondaryIndexDef
 type OrderBySpec = plan.OrderBySpec
 
 type CompilerContext interface {
@@ -69,13 +72,17 @@ type CompilerContext interface {
 	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
 	// get the definition of hide key
 	GetHideKeyDef(dbName string, tableName string) *ColDef
-	// get estimated cost by table & expr
-	Cost(obj *ObjectRef, e *Expr) *Cost
+	// get estimated stats by table & expr
+	Stats(obj *ObjectRef, e *Expr) *Stats
 	// get origin sql string of the root
 	GetRootSql() string
 	// get username of current session
 	GetUserName() string
 	GetAccountId() uint32
+	// GetContext get raw context.Context
+	GetContext() context.Context
+
+	GetProcess() *process.Process
 }
 
 type Optimizer interface {
@@ -84,8 +91,8 @@ type Optimizer interface {
 }
 
 type Rule interface {
-	Match(*Node) bool    // rule match?
-	Apply(*Node, *Query) // apply the rule
+	Match(*Node) bool                      // rule match?
+	Apply(*Node, *Query, *process.Process) // apply the rule
 }
 
 // BaseOptimizer is base optimizer, capable of handling only a few simple rules

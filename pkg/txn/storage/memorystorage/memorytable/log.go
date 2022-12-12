@@ -14,38 +14,18 @@
 
 package memorytable
 
-import "fmt"
-
-type log[
+type Log[
 	K Ordered[K],
 	V any,
-] struct {
-	serial  int64
-	key     K
-	pair    *KVPair[K, V]
-	oldPair *KVPair[K, V]
+] interface {
+	Copy() Log[K, V]
+	Iter() LogIter[K, V]
+	Set(*logEntry[K, V])
 }
 
-var nextLogSerial = int64(1 << 48)
-
-func compareLog[
+type LogIter[
 	K Ordered[K],
 	V any,
-](a, b *log[K, V]) bool {
-	if a.key.Less(b.key) {
-		return true
-	}
-	if b.key.Less(a.key) {
-		return false
-	}
-	return a.serial < b.serial
-}
-
-func (l *log[K, V]) String() string {
-	return fmt.Sprintf(
-		"log: serial %v, pair %v, old pair %v",
-		l.serial,
-		l.pair,
-		l.oldPair,
-	)
+] interface {
+	Iter[*logEntry[K, V]]
 }

@@ -14,13 +14,21 @@
 
 package memorytable
 
+// Iter represents a generic iterator
 type Iter[T any] interface {
 	First() bool
 	Next() bool
-	Close() error
 	Read() (T, error)
+	Close() error
 }
 
+// SeekIter represents a generic seekable iterator
+type SeekIter[T any] interface {
+	Iter[T]
+	Seek(T) bool
+}
+
+// KVIter represents a key-value iterator
 type KVIter[K any, V any] interface {
 	First() bool
 	Seek(K) bool

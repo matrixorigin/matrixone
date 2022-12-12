@@ -125,6 +125,7 @@ type CreateTable struct {
 	Defs            TableDefs
 	Options         []TableOption
 	PartitionOption *PartitionOption
+	ClusterByOption *ClusterByOption
 	Param           *ExternParam
 }
 
@@ -1785,6 +1786,10 @@ func NewSubPartition(n Identifier, o []TableOption) *SubPartition {
 	}
 }
 
+type ClusterByOption struct {
+	ColumnList []*UnresolvedName
+}
+
 type PartitionOption struct {
 	PartBy     PartitionBy
 	SubPartBy  *PartitionBy
@@ -2392,6 +2397,17 @@ const (
 	AccountStatusOpen AccountStatusOption = iota
 	AccountStatusSuspend
 )
+
+func (aso AccountStatusOption) String() string {
+	switch aso {
+	case AccountStatusOpen:
+		return "open"
+	case AccountStatusSuspend:
+		return "suspend"
+	default:
+		return "open"
+	}
+}
 
 type AccountStatus struct {
 	Exist  bool

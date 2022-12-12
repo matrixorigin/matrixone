@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -38,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/generate_series"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -67,7 +67,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -112,7 +111,7 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	// decode message and run it, get final analysis information and err info.
 	analysis, err := pipelineMessageHandle(ctx, message, cs, helper, cli)
 	if err != nil {
-		errData = pipeline.EncodedMessageError(err)
+		errData = pipeline.EncodedMessageError(ctx, err)
 	}
 	backMessage := messageAcquirer().(*pipeline.Message)
 	backMessage.Id = message.GetID()
@@ -203,7 +202,7 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextOperat
 	for {
 		select {
 		case <-c.ctx.Done():
-			return moerr.NewRPCTimeout()
+			return moerr.NewRPCTimeout(c.ctx)
 		case val = <-mChan:
 		}
 		m := val.(*pipeline.Message)
@@ -799,17 +798,13 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Cond:      t.Cond,
 			OnList:    t.OnList,
 		}
-	case *unnest.Argument:
+	case *table_function.Argument:
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs: t.Es.Attrs,
-			Cols:  t.Es.Cols,
-			Exprs: t.Es.ExprList,
-			Param: []byte(t.Es.ColName),
-		}
-	case *generate_series.Argument:
-		in.TableFunction = &pipeline.TableFunction{
-			Attrs: t.Es.Attrs,
-			Exprs: t.Es.ExprList,
+			Attrs:  t.Attrs,
+			Rets:   t.Rets,
+			Args:   t.Args,
+			Params: t.Params,
+			Name:   t.Name,
 		}
 	case *hashbuild.Argument:
 		in.HashBuild = &pipeline.HashBuild{
@@ -835,7 +830,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			FileList:      t.Es.FileList,
 		}
 	default:
-		return -1, nil, moerr.NewInternalError(fmt.Sprintf("unexpected operator: %v", opr.Op))
+		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
 	return ctxId, in, nil
 }
@@ -1030,21 +1025,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		v.Arg = &mergeorder.Argument{
 			Fs: opr.OrderBy,
 		}
-	case vm.Unnest:
-		v.Arg = &unnest.Argument{
-			Es: &unnest.Param{
-				Attrs:    opr.TableFunction.Attrs,
-				Cols:     opr.TableFunction.Cols,
-				ExprList: opr.TableFunction.Exprs,
-				ColName:  string(opr.TableFunction.Param),
-			},
-		}
-	case vm.GenerateSeries:
-		v.Arg = &generate_series.Argument{
-			Es: &generate_series.Param{
-				Attrs:    opr.TableFunction.Attrs,
-				ExprList: opr.TableFunction.Exprs,
-			},
+	case vm.TableFunction:
+		v.Arg = &table_function.Argument{
+			Attrs:  opr.TableFunction.Attrs,
+			Rets:   opr.TableFunction.Rets,
+			Args:   opr.TableFunction.Args,
+			Name:   opr.TableFunction.Name,
+			Params: opr.TableFunction.Params,
 		}
 	case vm.HashBuild:
 		t := opr.GetHashBuild()
@@ -1073,7 +1060,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			},
 		}
 	default:
-		return v, moerr.NewInternalError(fmt.Sprintf("unexpected operator: %v", opr.Op))
+		return v, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
 	return v, nil
 }

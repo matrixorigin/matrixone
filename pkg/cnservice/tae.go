@@ -66,7 +66,7 @@ func initTAE(
 	case options.LogstoreBatchStore, "":
 		opts.LogStoreT = options.LogstoreBatchStore
 	default:
-		return moerr.NewInternalError("invalid logstore type: %v", cfg.Engine.Logstore)
+		return moerr.NewInternalError(ctx, "invalid logstore type: %v", cfg.Engine.Logstore)
 	}
 	opts.CheckpointCfg = &options.CheckpointCfg{}
 	opts.CheckpointCfg.FlushInterval = cfg.Engine.FlushInterval.Duration

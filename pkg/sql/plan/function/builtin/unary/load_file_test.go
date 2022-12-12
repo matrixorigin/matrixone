@@ -133,7 +133,7 @@ func TestLoadFile(t *testing.T) {
 		{
 			name:     "Error Case",
 			filename: filepath,
-			want:     moerr.NewInternalError("Data too long for blob"),
+			want:     moerr.NewInternalError(ctx, "Data too long for blob"),
 		},
 	}
 	for _, c := range cases3 {

@@ -15,6 +15,7 @@
 package mysql
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -26,8 +27,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  "show variables like 'sql_mode'",
-		output: "show variables like sql_mode",
+		input: "alter account if exists abc admin_name 'root' identified by '111' comment 'str'",
 	}
 )
 
@@ -36,7 +36,7 @@ func TestDebug(t *testing.T) {
 	if debugSQL.output == "" {
 		debugSQL.output = debugSQL.input
 	}
-	ast, err := ParseOne(debugSQL.input)
+	ast, err := ParseOne(context.TODO(), debugSQL.input)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", debugSQL.input, err)
 		return
@@ -1725,15 +1725,37 @@ var (
 		{
 			input: `select count(a) over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1`,
 		},
+		{
+			input: "alter account if exists abc",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' open comment 'str'",
+		},
+		{
+			input: "alter account if exists abc open comment 'str'",
+		},
+		{
+			input: "alter account if exists abc comment 'str'",
+		},
+		{
+			input: "alter account if exists abc open",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' open",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' comment 'str'",
+		},
 	}
 )
 
 func TestValid(t *testing.T) {
+	ctx := context.TODO()
 	for _, tcase := range validSQL {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		ast, err := ParseOne(tcase.input)
+		ast, err := ParseOne(ctx, tcase.input)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -1760,11 +1782,12 @@ var (
 )
 
 func TestMulti(t *testing.T) {
+	ctx := context.TODO()
 	for _, tcase := range multiSQL {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		asts, err := Parse(tcase.input)
+		asts, err := Parse(ctx, tcase.input)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"go.uber.org/zap"
 )
 
@@ -34,8 +35,8 @@ var (
 	stateRunning = int32(0)
 	stateStopped = int32(1)
 
-	backendClosed  = moerr.NewBackendClosed()
-	messageSkipped = moerr.NewInvalidState("request is skipped")
+	backendClosed  = moerr.NewBackendClosedNoCtx()
+	messageSkipped = moerr.NewInvalidStateNoCtx("request is skipped")
 )
 
 // WithBackendLogger set the backend logger
@@ -262,7 +263,7 @@ func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	defer rb.stateMu.RUnlock()
 
 	if rb.stateMu.state == stateStopped {
-		return nil, moerr.NewBackendClosed()
+		return nil, moerr.NewBackendClosedNoCtx()
 	}
 
 	rb.mu.Lock()
@@ -279,7 +280,7 @@ func (rb *remoteBackend) doSend(m backendSendMessage) error {
 		rb.stateMu.RLock()
 		if rb.stateMu.state == stateStopped {
 			rb.stateMu.RUnlock()
-			return moerr.NewBackendClosed()
+			return moerr.NewBackendClosedNoCtx()
 		}
 
 		// The close method need acquire the write lock, so we cannot block at here.
@@ -361,7 +362,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	}()
 
 	defer func() {
-		rb.makeAllWritesDoneWithClosed()
+		rb.makeAllWritesDoneWithClosed(ctx)
 		close(rb.writeC)
 	}()
 
@@ -375,11 +376,11 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 			for _, f := range messages {
 				id := f.message.Message.GetID()
 				if stopped {
-					rb.requestDone(id, nil, backendClosed, nil)
+					rb.requestDone(ctx, id, RPCMessage{}, backendClosed, nil)
 					continue
 				}
 
-				if v := rb.doWrite(id, f); v > 0 {
+				if v := rb.doWrite(ctx, id, f); v > 0 {
 					writeTimeout += v
 					written++
 				}
@@ -393,7 +394,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 							rb.logger.Error("write request failed",
 								zap.Uint64("request-id", f.message.Message.GetID()),
 								zap.Error(err))
-							rb.requestDone(id, nil, err, nil)
+							rb.requestDone(ctx, id, RPCMessage{}, err, nil)
 						}
 					}
 				}
@@ -409,9 +410,9 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	}
 }
 
-func (rb *remoteBackend) doWrite(id uint64, msg backendSendMessage) time.Duration {
+func (rb *remoteBackend) doWrite(ctx context.Context, id uint64, msg backendSendMessage) time.Duration {
 	if !rb.options.filter(msg.message.Message, rb.remote) {
-		rb.requestDone(id, nil, messageSkipped, nil)
+		rb.requestDone(ctx, id, RPCMessage{}, messageSkipped, nil)
 		return 0
 	}
 
@@ -422,7 +423,7 @@ func (rb *remoteBackend) doWrite(id uint64, msg backendSendMessage) time.Duratio
 
 	v, err := msg.message.GetTimeoutFromContext()
 	if err != nil {
-		rb.requestDone(id, nil, err, nil)
+		rb.requestDone(ctx, id, RPCMessage{}, err, nil)
 		return 0
 	}
 
@@ -441,7 +442,7 @@ func (rb *remoteBackend) doWrite(id uint64, msg backendSendMessage) time.Duratio
 		rb.logger.Error("write request failed",
 			zap.Uint64("request-id", id),
 			zap.Error(err))
-		rb.requestDone(id, nil, err, nil)
+		rb.requestDone(ctx, id, RPCMessage{}, err, nil)
 		return 0
 	}
 	return v
@@ -479,7 +480,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 				wg.Add(1)
 			}
 			resp := msg.(RPCMessage).Message
-			rb.requestDone(resp.GetID(), resp, nil, cb)
+			rb.requestDone(ctx, resp.GetID(), msg.(RPCMessage), nil, cb)
 			if rb.options.hasPayloadResponse {
 				wg.Wait()
 			}
@@ -516,11 +517,11 @@ func (rb *remoteBackend) fetch(ctx context.Context,
 	return messages, false
 }
 
-func (rb *remoteBackend) makeAllWritesDoneWithClosed() {
+func (rb *remoteBackend) makeAllWritesDoneWithClosed(ctx context.Context) {
 	for {
 		select {
 		case m := <-rb.writeC:
-			rb.requestDone(m.message.Message.GetID(), nil, backendClosed, nil)
+			rb.requestDone(ctx, m.message.Message.GetID(), RPCMessage{}, backendClosed, nil)
 			m.done()
 		default:
 			return
@@ -561,7 +562,7 @@ func (rb *remoteBackend) cancelActiveStreams() {
 	defer rb.mu.Unlock()
 
 	for _, st := range rb.mu.activeStreams {
-		st.done(nil)
+		st.done(RPCMessage{})
 	}
 }
 
@@ -582,7 +583,8 @@ func (rb *remoteBackend) stopWriteLoop() {
 	close(rb.stopWriteC)
 }
 
-func (rb *remoteBackend) requestDone(id uint64, response Message, err error, cb func()) {
+func (rb *remoteBackend) requestDone(ctx context.Context, id uint64, msg RPCMessage, err error, cb func()) {
+	response := msg.Message
 	if ce := rb.logger.Check(zap.DebugLevel, "read response"); ce != nil {
 		debugStr := ""
 		if response != nil {
@@ -600,12 +602,13 @@ func (rb *remoteBackend) requestDone(id uint64, response Message, err error, cb 
 		if err == nil {
 			f.done(response, cb)
 		} else {
+			errutil.ReportError(ctx, err)
 			f.error(id, err, cb)
 		}
 	} else if st, ok := rb.mu.activeStreams[id]; ok {
 		rb.mu.Unlock()
 		if response != nil {
-			st.done(response)
+			st.done(msg)
 		}
 	} else {
 		// future has been removed, e.g. it has timed out.
@@ -642,7 +645,7 @@ func (rb *remoteBackend) resetConn() error {
 	sleep := time.Millisecond * 200
 	for {
 		if !rb.runningLocked() {
-			return moerr.NewBackendClosed()
+			return moerr.NewBackendClosedNoCtx()
 		}
 
 		rb.logger.Info("start connect to remote")
@@ -661,7 +664,7 @@ func (rb *remoteBackend) resetConn() error {
 			time.Sleep(sleep)
 			duration += sleep
 			if time.Since(start) > rb.options.connectTimeout {
-				return moerr.NewBackendClosed()
+				return moerr.NewBackendClosedNoCtx()
 			}
 			if duration >= wait {
 				break
@@ -762,8 +765,10 @@ type stream struct {
 	cancel           context.CancelFunc
 
 	// reset fields
-	id uint64
-	mu struct {
+	id                   uint64
+	sequence             uint32
+	lastReceivedSequence uint32
+	mu                   struct {
 		sync.RWMutex
 		closed bool
 	}
@@ -788,6 +793,7 @@ func newStream(c chan Message,
 
 func (s *stream) init(id uint64, unlockAfterClose bool) {
 	s.id = id
+	s.sequence = 0
 	s.unlockAfterClose = unlockAfterClose
 	s.mu.closed = false
 	for {
@@ -821,17 +827,25 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.mu.closed {
-		return moerr.NewStreamClosed()
+		return moerr.NewStreamClosedNoCtx()
 	}
 
-	return s.sendFunc(backendSendMessage{message: RPCMessage{Ctx: ctx, Message: request}})
+	s.sequence++
+	return s.sendFunc(backendSendMessage{
+		message: RPCMessage{
+			Ctx:            ctx,
+			Message:        request,
+			stream:         true,
+			streamSequence: s.sequence,
+		},
+	})
 }
 
 func (s *stream) Receive() (chan Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.mu.closed {
-		return nil, moerr.NewStreamClosed()
+		return nil, moerr.NewStreamClosedNoCtx()
 	}
 	return s.c, nil
 }
@@ -844,6 +858,7 @@ func (s *stream) Close() error {
 		return nil
 	}
 
+	// the stream is reuseable, so use nil to notify stream is closed
 	s.c <- nil
 	s.mu.closed = true
 	s.unregisterFunc(s)
@@ -854,7 +869,7 @@ func (s *stream) ID() uint64 {
 	return s.id
 }
 
-func (s *stream) done(message Message) {
+func (s *stream) done(message RPCMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -862,7 +877,17 @@ func (s *stream) done(message Message) {
 		return
 	}
 
-	s.c <- message
+	response := message.Message
+	if response != nil && !message.stream {
+		panic("BUG")
+	}
+	if response != nil &&
+		message.streamSequence != s.lastReceivedSequence+1 {
+		response = nil
+	}
+
+	s.lastReceivedSequence = message.streamSequence
+	s.c <- response
 }
 
 type backendSendMessage struct {

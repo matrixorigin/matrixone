@@ -133,7 +133,7 @@ func (h *Handle) HandleCommit(
 					&db.WriteResp{},
 				)
 			default:
-				panic(moerr.NewNYI("Pls implement me"))
+				panic(moerr.NewNYI(ctx, "Pls implement me"))
 			}
 			//Need to roll back the txn.
 			if err != nil {
@@ -241,7 +241,7 @@ func (h *Handle) HandlePrepare(
 					&db.WriteResp{},
 				)
 			default:
-				panic(moerr.NewNYI("Pls implement me"))
+				panic(moerr.NewNYI(ctx, "Pls implement me"))
 			}
 			//need to rollback the txn
 			if err != nil {
@@ -552,7 +552,7 @@ func (h *Handle) HandlePreCommitWrite(
 				return err
 			}
 		default:
-			panic(moerr.NewNYI(""))
+			panic(moerr.NewNYI(ctx, ""))
 		}
 	}
 	//evaluate all the txn requests asynchronously.

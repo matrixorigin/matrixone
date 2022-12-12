@@ -1339,7 +1339,7 @@ func TestPartitionKeysShouldShowError(t *testing.T) {
 }
 
 func buildSingleStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
-	statements, err := mysql.Parse(sql)
+	statements, err := mysql.Parse(opt.CurrentContext().GetContext(), sql)
 	if err != nil {
 		return nil, err
 	}

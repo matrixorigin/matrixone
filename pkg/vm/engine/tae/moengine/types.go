@@ -31,7 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
 
-var ErrReadOnly = moerr.NewInternalError("tae moengine: read only")
+var ErrReadOnly = moerr.NewInternalErrorNoCtx("tae moengine: read only")
 
 type Txn interface {
 	GetCtx() []byte

@@ -28,6 +28,7 @@ import (
 	"github.com/lni/dragonboat/v4"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -124,11 +125,21 @@ func NewService(
 	mf := func() morpc.Message {
 		return pool.Get().(*RPCRequest)
 	}
-	// TODO: check and fix all these magic numbers
-	codec := morpc.NewMessageCodec(mf,
-		morpc.WithCodecPayloadCopyBufferSize(16*1024),
+
+	var codecOpts []morpc.CodecOption
+	codecOpts = append(codecOpts, morpc.WithCodecPayloadCopyBufferSize(16*1024),
 		morpc.WithCodecEnableChecksum(),
 		morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)))
+	if cfg.RPC.EnableCompress {
+		mp, err := mpool.NewMPool("log_rpc_server", 0, mpool.NoFixed)
+		if err != nil {
+			return nil, err
+		}
+		codecOpts = append(codecOpts, morpc.WithCodecEnableCompress(mp))
+	}
+
+	// TODO: check and fix all these magic numbers
+	codec := morpc.NewMessageCodec(mf, codecOpts...)
 	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec,
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
 			respPool.Put(i.(morpc.RPCMessage).Message)

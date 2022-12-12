@@ -142,6 +142,8 @@ type Transaction struct {
 
 	// use to cache table
 	tableMap *sync.Map
+	// use to update table constraint
+	updateTables []*table
 	// use to cache database
 	databaseMap *sync.Map
 
@@ -196,6 +198,7 @@ type tableMeta struct {
 }
 
 type table struct {
+	sync.Mutex
 	tableId    uint64
 	tableName  string
 	dnList     []int
@@ -207,12 +210,15 @@ type table struct {
 	tableDef   *plan.TableDef
 	proc       *process.Process
 
-	primaryIdx int // -1 means no primary key
-	viewdef    string
-	comment    string
-	partition  string
-	relKind    string
-	createSql  string
+	primaryIdx    int // -1 means no primary key
+	clusterByIdx  int // -1 means no clusterBy key
+	viewdef       string
+	comment       string
+	partition     string
+	relKind       string
+	createSql     string
+	constraint    []byte
+	tmpConstraint []byte
 
 	updated bool
 	// use for skip rows
@@ -235,6 +241,7 @@ type column struct {
 	hasDef          int8
 	defaultExpr     []byte
 	constraintType  string
+	isClusterBy     int8
 	isHidden        int8
 	isAutoIncrement int8
 	hasUpdate       int8

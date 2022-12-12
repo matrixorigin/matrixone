@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -443,12 +444,12 @@ func combinePlanConjunction(exprs []*plan.Expr) (expr *plan.Expr, err error) {
 	return
 }
 
-func rejectsNull(filter *plan.Expr) bool {
+func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
 	filter = replaceColRefWithNull(DeepCopyExpr(filter))
 
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	filter, err := ConstantFold(bat, filter)
+	filter, err := ConstantFold(bat, filter, proc)
 	if err != nil {
 		return false
 	}
@@ -540,7 +541,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 	case *tree.ParenSelect:
 		*selects = append(*selects, leftStmt.Select)
 	default:
-		return moerr.NewParseError("unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL))
+		return moerr.NewParseErrorNoCtx("unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL))
 	}
 
 	// right is not UNION allways
@@ -564,7 +565,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 
 		*selects = append(*selects, rightStmt.Select)
 	default:
-		return moerr.NewParseError("unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
+		return moerr.NewParseErrorNoCtx("unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
 	}
 
 	switch stmt.Type {
@@ -582,7 +583,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 		}
 	case tree.EXCEPT, tree.UT_MINUS:
 		if stmt.All {
-			return moerr.NewNYI("EXCEPT/MINUS ALL clause")
+			return moerr.NewNYINoCtx("EXCEPT/MINUS ALL clause")
 		} else {
 			*unionTypes = append(*unionTypes, plan.Node_MINUS)
 		}
@@ -620,18 +621,193 @@ func DeduceSelectivity(expr *plan.Expr) float64 {
 	return 1
 }
 
-func RewriteAndConstantFold(exprList []*plan.Expr) *plan.Expr {
-	e := colexec.RewriteFilterExprList(exprList)
+func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
+	node := builder.qry.Nodes[nodeID]
+	if recursive {
+		if len(node.Children) > 0 {
+			for _, child := range node.Children {
+				ReCalcNodeStats(child, builder, recursive)
+			}
+		}
+	}
+
+	var leftStats, rightStats, childStats *Stats
+	if len(node.Children) == 1 {
+		childStats = builder.qry.Nodes[node.Children[0]].Stats
+	} else if len(node.Children) == 2 {
+		leftStats = builder.qry.Nodes[node.Children[0]].Stats
+		rightStats = builder.qry.Nodes[node.Children[1]].Stats
+	}
+
+	switch node.NodeType {
+	case plan.Node_JOIN:
+		ndv := math.Min(leftStats.Outcnt, rightStats.Outcnt)
+		switch node.JoinType {
+		case plan.Node_INNER:
+			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
+			if len(node.OnList) > 0 {
+				outcnt *= 0.1
+			}
+			node.Stats = &plan.Stats{
+				Outcnt:      outcnt,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
+			}
+
+		case plan.Node_LEFT:
+			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
+			if len(node.OnList) > 0 {
+				outcnt *= 0.1
+				outcnt += leftStats.Outcnt
+			}
+			node.Stats = &plan.Stats{
+				Outcnt:      outcnt,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
+			}
+
+		case plan.Node_RIGHT:
+			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
+			if len(node.OnList) > 0 {
+				outcnt *= 0.1
+				outcnt += rightStats.Outcnt
+			}
+			node.Stats = &plan.Stats{
+				Outcnt:      outcnt,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
+			}
+
+		case plan.Node_OUTER:
+			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
+			if len(node.OnList) > 0 {
+				outcnt *= 0.1
+				outcnt += leftStats.Outcnt + rightStats.Outcnt
+			}
+			node.Stats = &plan.Stats{
+				Outcnt:      outcnt,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
+			}
+
+		case plan.Node_SEMI, plan.Node_ANTI:
+			node.Stats = &plan.Stats{
+				Outcnt:      leftStats.Outcnt * .7,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
+			}
+
+		case plan.Node_SINGLE, plan.Node_MARK:
+			node.Stats = &plan.Stats{
+				Outcnt:      leftStats.Outcnt,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
+			}
+		}
+
+	case plan.Node_AGG:
+		if len(node.GroupBy) > 0 {
+			node.Stats = &plan.Stats{
+				Outcnt:      childStats.Outcnt * 0.1,
+				Cost:        childStats.Outcnt,
+				HashmapSize: childStats.Outcnt,
+			}
+		} else {
+			node.Stats = &plan.Stats{
+				Outcnt: 1,
+				Cost:   childStats.Cost,
+			}
+		}
+
+	case plan.Node_UNION:
+		node.Stats = &plan.Stats{
+			Outcnt:      (leftStats.Outcnt + rightStats.Outcnt) * 0.7,
+			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+			HashmapSize: rightStats.Outcnt,
+		}
+	case plan.Node_UNION_ALL:
+		node.Stats = &plan.Stats{
+			Outcnt: leftStats.Outcnt + rightStats.Outcnt,
+			Cost:   leftStats.Outcnt + rightStats.Outcnt,
+		}
+	case plan.Node_INTERSECT:
+		node.Stats = &plan.Stats{
+			Outcnt:      math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.5,
+			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+			HashmapSize: rightStats.Outcnt,
+		}
+	case plan.Node_INTERSECT_ALL:
+		node.Stats = &plan.Stats{
+			Outcnt:      math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.7,
+			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+			HashmapSize: rightStats.Outcnt,
+		}
+	case plan.Node_MINUS:
+		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
+		node.Stats = &plan.Stats{
+			Outcnt:      minus * 0.5,
+			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+			HashmapSize: rightStats.Outcnt,
+		}
+	case plan.Node_MINUS_ALL:
+		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
+		node.Stats = &plan.Stats{
+			Outcnt:      minus * 0.7,
+			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+			HashmapSize: rightStats.Outcnt,
+		}
+
+	case plan.Node_TABLE_SCAN:
+		if node.ObjRef != nil {
+			node.Stats = builder.compCtx.Stats(node.ObjRef, handleFiltersForStats(node.FilterList, builder.compCtx.GetProcess()))
+		}
+
+	default:
+		if len(node.Children) > 0 {
+			node.Stats = &plan.Stats{
+				Outcnt: childStats.Outcnt,
+				Cost:   childStats.Outcnt,
+			}
+		} else if node.Stats == nil {
+			node.Stats = &plan.Stats{
+				Outcnt: 1000,
+				Cost:   1000000,
+			}
+		}
+	}
+}
+
+func containsParamRef(expr *plan.Expr) bool {
+	var ret bool
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			ret = ret || containsParamRef(arg)
+		}
+	case *plan.Expr_P:
+		return true
+	}
+	return ret
+}
+
+func handleFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
+	var newExprList []*plan.Expr
+	for _, expr := range exprList {
+		if !containsParamRef(expr) {
+			newExprList = append(newExprList, expr)
+		}
+	}
+	e := colexec.RewriteFilterExprList(newExprList)
 	if e != nil {
 		bat := batch.NewWithSize(0)
 		bat.Zs = []int64{1}
-		filter, _ := ConstantFold(bat, DeepCopyExpr(e))
+		filter, _ := ConstantFold(bat, DeepCopyExpr(e), proc)
 		return filter
 	}
 	return nil
 }
 
-func ConstantFold(bat *batch.Batch, e *plan.Expr) (*plan.Expr, error) {
+func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
 	var err error
 
 	ef, ok := e.Expr.(*plan.Expr_F)
@@ -647,7 +823,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr) (*plan.Expr, error) {
 		return e, nil
 	}
 	for i := range ef.F.Args {
-		ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i])
+		ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc)
 		if err != nil {
 			return nil, err
 		}
@@ -658,7 +834,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr) (*plan.Expr, error) {
 	// XXX MPOOL
 	// This is a bug -- colexec EvalExpr need to eval, therefore, could potentially need
 	// a mpool.  proc is passed in a nil, where do I get a mpool?   Session?
-	vec, err := colexec.EvalExpr(bat, nil, e)
+	vec, err := colexec.EvalExpr(bat, proc, e)
 	if err != nil {
 		return nil, err
 	}
@@ -755,8 +931,8 @@ func isConstant(e *plan.Expr) bool {
 		return true
 	case *plan.Expr_F:
 		overloadID := ef.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadID)
-		if err != nil {
+		f, exists := function.GetFunctionByIDWithoutError(overloadID)
+		if !exists {
 			return false
 		}
 		if f.Volatile { // function cannot be fold
@@ -796,7 +972,7 @@ func rewriteTableFunction(tblFunc *tree.TableFunction, leftCtx *BindContext) err
 				tableName = binding.table
 				expr.Parts[1] = tableName
 			} else {
-				return moerr.NewInternalError("cannot find column '%s'", colName)
+				return moerr.NewInternalErrorNoCtx("cannot find column '%s'", colName)
 			}
 		}
 		//newTableName = newTableAliasMap[tableName]
@@ -929,15 +1105,27 @@ func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Exp
 // checkNoNeedCast
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
-func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
-	switch constT {
+func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
+	switch constT.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		switch columnT.Oid {
+		case types.T_char, types.T_varchar, types.T_text:
+			if constT.Width <= columnT.Width {
+				return true
+			} else {
+				return false
+			}
+		default:
+			return false
+		}
+
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
 		if !valOk {
 			return false
 		}
 		constVal := val.I64Val
-		switch columnT {
+		switch columnT.Oid {
 		case types.T_int8:
 			return constVal <= int64(math.MaxInt8) && constVal >= int64(math.MinInt8)
 		case types.T_int16:
@@ -963,7 +1151,7 @@ func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
 			return false
 		}
 		constVal := val_u.U64Val
-		switch columnT {
+		switch columnT.Oid {
 		case types.T_int8:
 			return constVal <= math.MaxInt8
 		case types.T_int16:

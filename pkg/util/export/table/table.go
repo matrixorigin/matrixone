@@ -15,6 +15,7 @@
 package table
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -47,13 +48,13 @@ type Column struct {
 // ToCreateSql return column scheme in create sql
 //   - case 1: `column_name` varchar(36) DEFAULT "def_val" COMMENT "what am I, with default."
 //   - case 2: `column_name` varchar(36) NOT NULL COMMENT "what am I. Without default, SO NOT NULL."
-func (col *Column) ToCreateSql() string {
+func (col *Column) ToCreateSql(ctx context.Context) string {
 	sb := strings.Builder{}
 	sb.WriteString(fmt.Sprintf("`%s` %s ", col.Name, col.Type))
 	if col.Type == "JSON" {
 		sb.WriteString("NOT NULL ")
 		if len(col.Default) == 0 {
-			panic(moerr.NewNotSupported("json column need default in csv, but not in schema"))
+			panic(moerr.NewNotSupported(ctx, "json column need default in csv, but not in schema"))
 		}
 	} else if len(col.Default) > 0 {
 		sb.WriteString(fmt.Sprintf("DEFAULT %q ", col.Default))
@@ -111,9 +112,9 @@ type TableOptions interface {
 	GetTableOptions(PathBuilder) string
 }
 
-func (tbl *Table) ToCreateSql(ifNotExists bool) string {
+func (tbl *Table) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 
-	TableOptions := tbl.GetTableOptions()
+	TableOptions := tbl.GetTableOptions(ctx)
 
 	const newLineCharacter = ",\n"
 	sb := strings.Builder{}
@@ -123,7 +124,7 @@ func (tbl *Table) ToCreateSql(ifNotExists bool) string {
 	case ExternalTableEngine:
 		sb.WriteString(TableOptions.GetCreateOptions())
 	default:
-		panic(moerr.NewInternalError("NOT support engine: %s", tbl.Engine))
+		panic(moerr.NewInternalError(ctx, "NOT support engine: %s", tbl.Engine))
 	}
 	sb.WriteString("TABLE ")
 	if ifNotExists {
@@ -138,7 +139,7 @@ func (tbl *Table) ToCreateSql(ifNotExists bool) string {
 		} else {
 			sb.WriteRune('\n')
 		}
-		sb.WriteString(col.ToCreateSql())
+		sb.WriteString(col.ToCreateSql(ctx))
 	}
 	// primary key
 	if len(tbl.PrimaryKeyColumn) > 0 && tbl.Engine != ExternalTableEngine {
@@ -158,11 +159,11 @@ func (tbl *Table) ToCreateSql(ifNotExists bool) string {
 	return sb.String()
 }
 
-func (tbl *Table) GetTableOptions() TableOptions {
+func (tbl *Table) GetTableOptions(ctx context.Context) TableOptions {
 	if tbl.TableOptions != nil {
 		return tbl.TableOptions
 	}
-	return GetOptionFactory(tbl.Engine)(tbl.Database, tbl.Table, tbl.Account)
+	return GetOptionFactory(ctx, tbl.Engine)(tbl.Database, tbl.Table, tbl.Account)
 }
 
 type ViewOption func(view *View)
@@ -197,7 +198,7 @@ func SupportUserAccess(support bool) ViewOption {
 	})
 }
 
-func (tbl *View) ToCreateSql(ifNotExists bool) string {
+func (tbl *View) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 	sb := strings.Builder{}
 	// create table
 	sb.WriteString("CREATE VIEW ")
@@ -239,7 +240,7 @@ type Row struct {
 	Name2ColumnIdx map[string]int
 }
 
-func (tbl *Table) GetRow() *Row {
+func (tbl *Table) GetRow(ctx context.Context) *Row {
 	row := &Row{
 		Table:          tbl,
 		AccountIdx:     -1,
@@ -252,7 +253,7 @@ func (tbl *Table) GetRow() *Row {
 	if tbl.AccountColumn != nil {
 		idx, exist := row.Name2ColumnIdx[tbl.AccountColumn.Name]
 		if !exist {
-			panic(moerr.NewInternalError("%s table missing %s column", tbl.GetName(), tbl.AccountColumn.Name))
+			panic(moerr.NewInternalError(ctx, "%s table missing %s column", tbl.GetName(), tbl.AccountColumn.Name))
 		}
 		row.AccountIdx = idx
 	}
@@ -379,7 +380,7 @@ func (o *CsvTableOptions) GetTableOptions(builder PathBuilder) string {
 	return ""
 }
 
-func GetOptionFactory(engine string) func(db, tbl, account string) TableOptions {
+func GetOptionFactory(ctx context.Context, engine string) func(db string, tbl string, account string) TableOptions {
 	var infileFormatter = ` infile{"filepath"="etl:%s","compression"="none"}` +
 		` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
 	switch engine {
@@ -390,7 +391,7 @@ func GetOptionFactory(engine string) func(db, tbl, account string) TableOptions 
 			return &CsvTableOptions{Formatter: infileFormatter, DbName: db, TblName: tbl, Account: account}
 		}
 	default:
-		panic(moerr.NewInternalError("unknown engine: %s", engine))
+		panic(moerr.NewInternalError(ctx, "unknown engine: %s", engine))
 	}
 }
 
@@ -427,11 +428,11 @@ func GetTable(b string) (*Table, bool) {
 	return tbl, exist
 }
 
-func SetPathBuilder(pathBuilder string) error {
+func SetPathBuilder(ctx context.Context, pathBuilder string) error {
 	tables := GetAllTable()
 	bp := PathBuilderFactory(pathBuilder)
 	if bp == nil {
-		return moerr.NewNotSupported("not support PathBuilder: %s", pathBuilder)
+		return moerr.NewNotSupported(ctx, "not support PathBuilder: %s", pathBuilder)
 	}
 	for _, tbl := range tables {
 		tbl.PathBuilder = bp

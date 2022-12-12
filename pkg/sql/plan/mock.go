@@ -15,7 +15,10 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -28,10 +31,13 @@ import (
 type MockCompilerContext struct {
 	objects map[string]*ObjectRef
 	tables  map[string]*TableDef
-	costs   map[string]*Cost
+	stats   map[string]*Stats
 	pks     map[string][]int
 
 	mysqlCompatible bool
+
+	// ctx default: nil
+	ctx context.Context
 }
 
 func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -54,7 +60,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 		return result, nil
 	}
 
-	return nil, moerr.NewInternalError("var not found")
+	return nil, moerr.NewInternalError(m.ctx, "var not found")
 }
 
 type col struct {
@@ -70,13 +76,14 @@ func NewEmptyCompilerContext() *MockCompilerContext {
 	return &MockCompilerContext{
 		objects: make(map[string]*ObjectRef),
 		tables:  make(map[string]*TableDef),
+		ctx:     context.Background(),
 	}
 }
 
 type Schema struct {
-	cols []col
-	pks  []int
-	card float64
+	cols   []col
+	pks    []int
+	outcnt float64
 }
 
 const SF float64 = 1
@@ -97,8 +104,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"n_regionkey", types.T_int32, false, 0, 0},
 			{"n_comment", types.T_varchar, true, 152, 0},
 		},
-		pks:  []int{0},
-		card: 25,
+		pks:    []int{0},
+		outcnt: 25,
 	}
 	tpchSchema["nation2"] = &Schema{
 		cols: []col{ //not exist in tpch, create for test NaturalJoin And UsingJoin
@@ -107,8 +114,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"r_regionkey", types.T_int32, false, 0, 0}, //change N_REGIONKEY to R_REGIONKEY for test NaturalJoin And UsingJoin
 			{"n_comment", types.T_varchar, true, 152, 0},
 		},
-		pks:  []int{0},
-		card: 25,
+		pks:    []int{0},
+		outcnt: 25,
 	}
 	tpchSchema["region"] = &Schema{
 		cols: []col{
@@ -116,8 +123,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"r_name", types.T_varchar, false, 25, 0},
 			{"r_comment", types.T_varchar, true, 152, 0},
 		},
-		pks:  []int{0},
-		card: 5,
+		pks:    []int{0},
+		outcnt: 5,
 	}
 	tpchSchema["part"] = &Schema{
 		cols: []col{
@@ -131,8 +138,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"p_retailprice", types.T_float64, false, 15, 2},
 			{"p_comment", types.T_varchar, false, 23, 0},
 		},
-		pks:  []int{0},
-		card: SF * 2e5,
+		pks:    []int{0},
+		outcnt: SF * 2e5,
 	}
 	tpchSchema["supplier"] = &Schema{
 		cols: []col{
@@ -144,8 +151,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"s_acctbal", types.T_float64, false, 15, 2},
 			{"s_comment", types.T_varchar, false, 101, 0},
 		},
-		pks:  []int{0},
-		card: SF * 1e4,
+		pks:    []int{0},
+		outcnt: SF * 1e4,
 	}
 	tpchSchema["partsupp"] = &Schema{
 		cols: []col{
@@ -155,8 +162,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"ps_supplycost", types.T_float64, false, 15, 2},
 			{"ps_comment", types.T_varchar, false, 199, 0},
 		},
-		pks:  []int{0, 1},
-		card: SF * 8e5,
+		pks:    []int{0, 1},
+		outcnt: SF * 8e5,
 	}
 	tpchSchema["customer"] = &Schema{
 		cols: []col{
@@ -169,8 +176,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"c_mktsegment", types.T_varchar, false, 10, 0},
 			{"c_comment", types.T_varchar, false, 117, 0},
 		},
-		pks:  []int{0},
-		card: SF * 15e4,
+		pks:    []int{0},
+		outcnt: SF * 15e4,
 	}
 	tpchSchema["orders"] = &Schema{
 		cols: []col{
@@ -184,8 +191,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"o_shippriority", types.T_int32, false, 0, 0},
 			{"o_comment", types.T_varchar, false, 79, 0},
 		},
-		pks:  []int{0},
-		card: SF * 15e5,
+		pks:    []int{0},
+		outcnt: SF * 15e5,
 	}
 	tpchSchema["lineitem"] = &Schema{
 		cols: []col{
@@ -206,8 +213,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"l_shipmode", types.T_varchar, false, 10, 0},
 			{"l_comment", types.T_varchar, false, 44, 0},
 		},
-		pks:  []int{0, 3},
-		card: SF * 6e6,
+		pks:    []int{0, 3},
+		outcnt: SF * 6e6,
 	}
 	// it's a view
 	tpchSchema["v1"] = &Schema{
@@ -248,7 +255,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 
 	objects := make(map[string]*ObjectRef)
 	tables := make(map[string]*TableDef)
-	costs := make(map[string]*Cost)
+	stats := make(map[string]*Stats)
 	pks := make(map[string][]int)
 	// build tpch/mo context data(schema)
 	for db, schema := range schemas {
@@ -315,11 +322,11 @@ func NewMockCompilerContext() *MockCompilerContext {
 			tables[tableName] = tableDef
 			tableIdx++
 
-			if table.card == 0 {
-				table.card = 1
+			if table.outcnt == 0 {
+				table.outcnt = 1
 			}
-			costs[tableName] = &plan.Cost{
-				Card: table.card,
+			stats[tableName] = &plan.Stats{
+				Outcnt: table.outcnt,
 			}
 
 			pks[tableName] = table.pks
@@ -329,7 +336,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 	return &MockCompilerContext{
 		objects: objects,
 		tables:  tables,
-		costs:   costs,
+		stats:   stats,
 		pks:     pks,
 	}
 }
@@ -367,12 +374,20 @@ func (m *MockCompilerContext) GetHideKeyDef(dbName string, tableName string) *Co
 	return m.tables[tableName].Cols[0]
 }
 
-func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) *Cost {
-	return m.costs[obj.ObjName]
+func (m *MockCompilerContext) Stats(obj *ObjectRef, e *Expr) *Stats {
+	return m.stats[obj.ObjName]
 }
 
 func (m *MockCompilerContext) GetAccountId() uint32 {
 	return 0
+}
+
+func (m *MockCompilerContext) GetContext() context.Context {
+	return m.ctx
+}
+
+func (m *MockCompilerContext) GetProcess() *process.Process {
+	return testutil.NewProc()
 }
 
 type MockOptimizer struct {

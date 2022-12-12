@@ -4363,7 +4363,7 @@ func TestCastBoolAsString(t *testing.T) {
 func TestCastDateAsDatetimeAndString(t *testing.T) {
 	makeTempVectors := func(src string, srcIsConst bool, destType types.T) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
-		date, _ := types.ParseDate(src)
+		date, _ := types.ParseDateCast(src)
 		vectors[0] = makeVector(date, srcIsConst)
 		vectors[1] = makeTypeVector(destType)
 		return vectors
@@ -4897,7 +4897,7 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 		vectors := make([]*vector.Vector, 2)
 		switch srcType {
 		case types.T_date:
-			date, err := types.ParseDate(src)
+			date, err := types.ParseDateCast(src)
 			require.NoError(t, err)
 			vectors[0] = makeVector(date, srcIsConst)
 		case types.T_datetime:

@@ -112,6 +112,18 @@ func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch,
 	return bat, nil
 }
 
+func genTableConstraintTuple(tbl *table, m *mpool.MPool) (*batch.Batch, error) {
+	bat := batch.NewWithSize(1)
+	bat.Attrs = append(bat.Attrs, catalog.SystemRelAttr_Constraint)
+	bat.SetZs(1, m)
+
+	bat.Vecs[0] = vector.New(catalog.MoTablesTypes[0]) // constraint
+	if err := bat.Vecs[0].Append(tbl.tmpConstraint, false, m); err != nil {
+		return nil, err
+	}
+	return bat, nil
+}
+
 func genCreateTableTuple(tbl *table, sql string, accountId, userId, roleId uint32, name string,
 	tableId uint64, databaseId uint64, databaseName string,
 	comment string, m *mpool.MPool) (*batch.Batch, error) {
@@ -189,7 +201,11 @@ func genCreateTableTuple(tbl *table, sql string, accountId, userId, roleId uint3
 		if err := bat.Vecs[idx].Append([]byte(tbl.viewdef), false, m); err != nil {
 			return nil, err
 		}
-
+		idx = catalog.MO_TABLES_CONSTRAINT
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // constraint
+		if err := bat.Vecs[idx].Append(tbl.constraint, false, m); err != nil {
+			return nil, err
+		}
 	}
 	return bat, nil
 }
@@ -303,6 +319,11 @@ func genCreateColumnTuple(col column, m *mpool.MPool) (*batch.Batch, error) {
 		idx = catalog.MO_COLUMNS_ATT_UPDATE_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_update
 		if err := bat.Vecs[idx].Append(col.updateExpr, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_COLUMNS_ATT_IS_CLUSTERBY
+		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_constraint_type
+		if err := bat.Vecs[idx].Append(col.isClusterBy, false, m); err != nil {
 			return nil, err
 		}
 
@@ -714,6 +735,7 @@ func getColumnsFromRows(rows [][]any) []column {
 		cols[i].hasUpdate = row[catalog.MO_COLUMNS_ATT_HAS_UPDATE_IDX].(int8)
 		cols[i].updateExpr = row[catalog.MO_COLUMNS_ATT_UPDATE_IDX].([]byte)
 		cols[i].num = row[catalog.MO_COLUMNS_ATTNUM_IDX].(int32)
+		cols[i].isClusterBy = row[catalog.MO_COLUMNS_ATT_IS_CLUSTERBY].(int8)
 	}
 	sort.Sort(Columns(cols))
 	return cols
@@ -745,6 +767,9 @@ func genTableDefOfColumn(col column) engine.TableDef {
 	if col.constraintType == catalog.SystemColPKConstraint {
 		attr.Primary = true
 	}
+	if col.isClusterBy == 1 {
+		attr.ClusterBy = true
+	}
 	return &engine.AttributeDef{Attr: attr}
 }
 
@@ -764,6 +789,10 @@ func genColumns(accountId uint32, tableName, databaseName string,
 					attr, _ := defs[mp[name]].(*engine.AttributeDef)
 					attr.Attr.Primary = true
 				}
+			}
+			if clusterByDef, ok := def.(*engine.ClusterByDef); ok {
+				attr, _ := defs[mp[clusterByDef.Name]].(*engine.AttributeDef)
+				attr.Attr.ClusterBy = true
 			}
 		}
 	}
@@ -822,6 +851,10 @@ func genColumns(accountId uint32, tableName, databaseName string,
 		} else {
 			col.constraintType = catalog.SystemColNoConstraint
 		}
+		if attrDef.Attr.ClusterBy {
+			col.isClusterBy = 1
+		}
+
 		cols = append(cols, col)
 		num++
 	}

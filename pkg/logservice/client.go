@@ -27,6 +27,7 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -57,13 +58,13 @@ type Client interface {
 	// 4 bytes of record type (pb.UserEntryUpdate) + 8 bytes DN replica ID +
 	// payloadLength bytes of actual payload.
 	GetLogRecord(payloadLength int) pb.LogRecord
-	// Append appends the specified LogRecrd into the Log Service. On success, the
+	// Append appends the specified LogRecord into the Log Service. On success, the
 	// assigned Lsn will be returned. For the specified LogRecord, only its Data
 	// field is used with all other fields ignored by Append(). Once returned, the
 	// pb.LogRecord can be reused.
 	Append(ctx context.Context, rec pb.LogRecord) (Lsn, error)
 	// Read reads the Log Service from the specified Lsn position until the
-	// returned LogRecord set reachs the specified maxSize in bytes. The returned
+	// returned LogRecord set reaches the specified maxSize in bytes. The returned
 	// Lsn indicates the next Lsn to use to resume the read, or it means
 	// everything available has been read when it equals to the specified Lsn.
 	// The returned pb.LogRecord records will have their Lsn and Type fields set,
@@ -263,7 +264,7 @@ func newClient(ctx context.Context, cfg ClientConfig) (*client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return nil, moerr.NewLogServiceNotReady()
+	return nil, moerr.NewLogServiceNotReady(ctx)
 }
 
 func connectToLogServiceByReverseProxy(ctx context.Context,
@@ -273,7 +274,7 @@ func connectToLogServiceByReverseProxy(ctx context.Context,
 		return nil, err
 	}
 	if !ok {
-		return nil, moerr.NewLogServiceNotReady()
+		return nil, moerr.NewLogServiceNotReady(ctx)
 	}
 	addresses := make([]string, 0)
 	leaderAddress, ok := si.Replicas[si.ReplicaID]
@@ -313,7 +314,7 @@ func connectToLogService(ctx context.Context,
 		addresses[i], addresses[j] = addresses[j], addresses[i]
 	})
 	for _, addr := range addresses {
-		cc, err := getRPCClient(ctx, addr, c.respPool, c.cfg.MaxMessageSize, cfg.Tag)
+		cc, err := getRPCClient(ctx, addr, c.respPool, c.cfg.MaxMessageSize, cfg.EnableCompress, cfg.Tag)
 		if err != nil {
 			e = err
 			continue
@@ -351,7 +352,7 @@ func (c *client) close() error {
 
 func (c *client) append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
 	if c.readOnly() {
-		return 0, moerr.NewInvalidInput("incompatible client")
+		return 0, moerr.NewInvalidInput(ctx, "incompatible client")
 	}
 	// TODO: check piggybacked hint on whether we are connected to the leader node
 	return c.doAppend(ctx, rec)
@@ -364,7 +365,7 @@ func (c *client) read(ctx context.Context,
 
 func (c *client) truncate(ctx context.Context, lsn Lsn) error {
 	if c.readOnly() {
-		return moerr.NewInvalidInput("incompatible client")
+		return moerr.NewInvalidInput(ctx, "incompatible client")
 	}
 	return c.doTruncate(ctx, lsn)
 }
@@ -383,7 +384,7 @@ func (c *client) readOnly() bool {
 
 func (c *client) connectReadWrite(ctx context.Context) error {
 	if c.readOnly() {
-		panic(moerr.NewInvalidInput("incompatible client"))
+		panic(moerr.NewInvalidInput(ctx, "incompatible client"))
 	}
 	return c.connect(ctx, pb.CONNECT)
 }
@@ -429,7 +430,7 @@ func (c *client) request(ctx context.Context,
 	if len(response.payload) > 0 {
 		MustUnmarshal(&recs, response.payload)
 	}
-	err = toError(response.Response)
+	err = toError(ctx, response.Response)
 	if err != nil {
 		return pb.Response{}, nil, err
 	}
@@ -462,7 +463,7 @@ func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
 	}
 	resp := response.Response
 	defer response.Release()
-	err = toError(response.Response)
+	err = toError(ctx, response.Response)
 	if err != nil {
 		return 0, err
 	}
@@ -504,7 +505,13 @@ func (c *client) doGetTruncatedLsn(ctx context.Context) (Lsn, error) {
 	return resp.LogResponse.Lsn, nil
 }
 
-func getRPCClient(ctx context.Context, target string, pool *sync.Pool, maxMessageSize int, tag ...string) (morpc.RPCClient, error) {
+func getRPCClient(
+	ctx context.Context,
+	target string,
+	pool *sync.Pool,
+	maxMessageSize int,
+	enableCompress bool,
+	tag ...string) (morpc.RPCClient, error) {
 	mf := func() morpc.Message {
 		return pool.Get().(*RPCResponse)
 	}
@@ -526,13 +533,23 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool, maxMessag
 	}
 	clientOpts = append(clientOpts, GetClientOptions(ctx)...)
 
-	// we set connection timeout to a constant value so if ctx's deadline is much
-	// larger, then we can ensure that all specified potential nodes have a chance
-	// to be attempted
-	codec := morpc.NewMessageCodec(mf,
+	var codecOpts []morpc.CodecOption
+	codecOpts = append(codecOpts,
 		morpc.WithCodecPayloadCopyBufferSize(defaultWriteSocketSize),
 		morpc.WithCodecEnableChecksum(),
 		morpc.WithCodecMaxBodySize(maxMessageSize))
+	if enableCompress {
+		mp, err := mpool.NewMPool("log_rpc_client", 0, mpool.NoFixed)
+		if err != nil {
+			return nil, err
+		}
+		codecOpts = append(codecOpts, morpc.WithCodecEnableCompress(mp))
+	}
+
+	// we set connection timeout to a constant value so if ctx's deadline is much
+	// larger, then we can ensure that all specified potential nodes have a chance
+	// to be attempted
+	codec := morpc.NewMessageCodec(mf, codecOpts...)
 	bf := morpc.NewGoettyBasedBackendFactory(codec, backendOpts...)
 	return morpc.NewClient(bf, clientOpts...)
 }

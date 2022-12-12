@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"testing"
 
 	"github.com/fagongzi/goetty/v2"
@@ -50,6 +51,7 @@ func Test_protocol(t *testing.T) {
 }
 
 func Test_SendResponse(t *testing.T) {
+	ctx := context.TODO()
 	convey.Convey("SendResponse succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -68,16 +70,16 @@ func Test_SendResponse(t *testing.T) {
 		mp.tcpConn = ioses
 		resp := &Response{}
 		resp.category = EoFResponse
-		err := mp.SendResponse(resp)
+		err := mp.SendResponse(ctx, resp)
 		convey.So(err, convey.ShouldBeNil)
 
-		resp.SetData(moerr.NewInternalError(""))
+		resp.SetData(moerr.NewInternalError(context.TODO(), ""))
 		resp.category = ErrorResponse
-		err = mp.SendResponse(resp)
+		err = mp.SendResponse(ctx, resp)
 		convey.So(err, convey.ShouldBeNil)
 
 		resp.category = -1
-		err = mp.SendResponse(resp)
+		err = mp.SendResponse(ctx, resp)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }

@@ -285,9 +285,9 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		case nil:
 			expr = makePlan2NullConstExprWithType()
 		case types.Decimal64, types.Decimal128:
-			err = moerr.NewNYI("decimal var")
+			err = moerr.NewNYINoCtx("decimal var")
 		default:
-			err = moerr.NewParseError("type of var %q is not supported now", exprImpl.V.Name)
+			err = moerr.NewParseErrorNoCtx("type of var %q is not supported now", exprImpl.V.Name)
 		}
 		if e.Typ.Id != int32(types.T_any) && expr.Typ.Id != e.Typ.Id {
 			return appendCastBeforeExpr(expr, e.Typ)

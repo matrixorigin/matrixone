@@ -114,6 +114,7 @@ import (
     unresolveNames []*tree.UnresolvedName
 
     partitionOption *tree.PartitionOption
+    clusterByOption *tree.ClusterByOption
     partitionBy *tree.PartitionBy
     windowSpec *tree.WindowSpec
     windowFrame *tree.WindowFrame
@@ -174,6 +175,7 @@ import (
     cteList []*tree.CTE
 
     accountAuthOption tree.AccountAuthOption
+    alterAccountAuthOption tree.AlterAccountAuthOption
     accountIdentified tree.AccountIdentified
     accountStatus tree.AccountStatus
     accountComment tree.AccountComment
@@ -260,7 +262,7 @@ import (
 %token <str> MAX_ROWS MIN_ROWS PACK_KEYS ROW_FORMAT STATS_AUTO_RECALC STATS_PERSISTENT STATS_SAMPLE_PAGES
 %token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
-%token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
+%token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS CLUSTER
 %token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL
 %token <str> PREPARE DEALLOCATE
 
@@ -296,7 +298,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT FROM_JSONLINE
+%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT
 
 // MODump
 %token <str> MODUMP
@@ -305,7 +307,7 @@ import (
 %token <str> OVER PRECEDING FOLLOWING GROUPS
 
 // Supported SHOW tokens
-%token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
+%token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODELIST LOCKS
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
@@ -339,13 +341,7 @@ import (
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
 //JSON function
-%token <str> JSON_EXTRACT ARROW
-
-// JSON table function
-%token <str> UNNEST
-
-// table function
-%token <str> GENERATE_SERIES
+%token <str> ARROW
 
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE
@@ -368,6 +364,7 @@ import (
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
+%type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> alter_account_stmt alter_user_stmt update_stmt use_stmt update_no_with_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
@@ -436,7 +433,6 @@ import (
 %type <funcExpr> function_call_keyword
 %type <funcExpr> function_call_nonkeyword
 %type <funcExpr> function_call_aggregate
-//%type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params
@@ -504,6 +500,7 @@ import (
 %type <privilegeLevel> priv_level
 %type <unresolveNames> column_name_list
 %type <partitionOption> partition_by_opt
+%type <clusterByOption> cluster_by_opt
 %type <partitionBy> partition_method sub_partition_method sub_partition_opt
 %type <windowSpec> window_spec_opt
 %type <windowFrame> window_frame window_frame_opt
@@ -573,6 +570,7 @@ import (
 
 %type <str> account_name account_admin_name account_role_name
 %type <accountAuthOption> account_auth_option
+%type <alterAccountAuthOption> alter_account_auth_option
 %type <accountIdentified> account_identified
 %type <accountStatus> account_status_option
 %type <accountComment> account_comment_opt
@@ -1995,7 +1993,7 @@ alter_stmt:
 // |    alter_ddl_stmt
 
 alter_account_stmt:
-    ALTER ACCOUNT exists_opt account_name account_auth_option account_status_option account_comment_opt
+    ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
     {
     $$ = &tree.AlterAccount{
         IfExists:$3,
@@ -2005,6 +2003,22 @@ alter_account_stmt:
         Comment:$7,
     }
     }
+
+alter_account_auth_option:
+{
+    $$ = tree.AlterAccountAuthOption{
+       Exist: false,
+    }
+}
+| ADMIN_NAME equal_opt account_admin_name account_identified
+{
+    $$ = tree.AlterAccountAuthOption{
+        Exist: true,
+        Equal:$2,
+        AdminName:$3,
+        IdentifiedType:$4,
+    }
+}
 
 alter_user_stmt:
     ALTER USER exists_opt user_spec_list_of_create_user default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
@@ -2150,6 +2164,9 @@ show_stmt:
 |   show_table_status_stmt
 |   show_grants_stmt
 |   show_collation_stmt
+|   show_function_status_stmt
+|   show_node_list_stmt
+|   show_locks_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -2188,6 +2205,27 @@ from_or_in_opt:
 db_name_opt:
     {}
 |    db_name
+
+show_function_status_stmt:
+    SHOW FUNCTION STATUS like_opt where_expression_opt
+    {
+       $$ = &tree.ShowFunctionStatus{
+            Like: $4,
+            Where: $5,
+        }
+    }
+
+show_node_list_stmt:
+    SHOW NODELIST
+    {
+       $$ = &tree.ShowNodeList{}
+    }
+
+show_locks_stmt:
+    SHOW LOCKS
+    {
+       $$ = &tree.ShowLocks{}
+    }
 
 show_target_filter_stmt:
     SHOW show_target like_opt where_expression_opt
@@ -3706,27 +3744,16 @@ table_subquery:
     }
 
 table_function:
-    UNNEST '(' expression_list ')'
+    ident '(' expression_list_opt ')'
     {
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
+        name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: $3,
-                Type: tree.FUNC_TYPE_TABLE,
+       	    Func: &tree.FuncExpr{
+        	Func: tree.FuncName2ResolvableFunctionReference(name),
+        	Exprs: $3,
+        	Type: tree.FUNC_TYPE_TABLE,
             },
-	}
-    }
-|   GENERATE_SERIES '(' expression_list ')'
-    {
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-	$$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-		Func: tree.FuncName2ResolvableFunctionReference(name),
-		Exprs: $3,
-		Type: tree.FUNC_TYPE_TABLE,
-	    },
-	}
+        }
     }
 
 aliased_table_name:
@@ -4462,7 +4489,7 @@ default_opt:
     }
 
 create_table_stmt:
-    CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt
+    CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
     {
         $$ = &tree.CreateTable {
             Temporary: $2,
@@ -4471,6 +4498,7 @@ create_table_stmt:
             Defs: $7,
             Options: $9,
             PartitionOption: $10,
+            ClusterByOption: $11, 
         }
     }
 |   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' load_param_opt_2
@@ -4565,6 +4593,24 @@ partition_by_opt:
             PartBy: *$3,
             SubPartBy: $5,
             Partitions: $6,
+        }
+    }
+
+cluster_by_opt:
+    {
+        $$ = nil
+    }
+|   CLUSTER BY column_name
+    {
+        $$ = &tree.ClusterByOption{
+            ColumnList : []*tree.UnresolvedName{$3},
+        }
+
+    }
+    | CLUSTER BY '(' column_name_list ')'
+    {
+        $$ = &tree.ClusterByOption{
+            ColumnList : $4,
         }
     }
 
@@ -5627,10 +5673,6 @@ simple_expr:
     {
         $$ = $1
     }
-//|     function_call_json
-//    {
-//        $$ = $1
-//    }
 
 else_opt:
     {
@@ -7741,6 +7783,8 @@ reserved_keyword:
 |   PRECEDING
 |   FOLLOWING
 |   GROUPS
+|   NODELIST
+|   LOCKS
 
 non_reserved_keyword:
     ACCOUNT
@@ -7757,6 +7801,7 @@ non_reserved_keyword:
 |   BOOL
 |   CHAIN
 |   CHECKSUM
+|   CLUSTER
 |   COMPRESSION
 |   COMMENT_KEYWORD
 |   COMMIT
@@ -7932,8 +7977,6 @@ func_not_keyword:
 |   SUBDATE
 |   SYSTEM_USER
 |   TRANSLATE
-|   UNNEST
-|   GENERATE_SERIES
 
 not_keyword:
     ADDDATE

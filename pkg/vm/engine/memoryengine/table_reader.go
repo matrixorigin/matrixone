@@ -147,7 +147,7 @@ func (t *Table) NewReader(
 
 var _ engine.Reader = new(TableReader)
 
-func (t *TableReader) Read(colNames []string, plan *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
+func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
 	if t == nil {
 		return nil, nil
 	}

@@ -30,7 +30,8 @@ import (
 
 func ExtractCompositePrimaryKeyColumnFromColDefs(colDefs []*plan.ColDef) ([]*plan.ColDef, *plan.ColDef) {
 	for num := range colDefs {
-		if colDefs[num].IsCPkey {
+		isCPkey := JudgeIsCompositePrimaryKeyColumn(colDefs[num].Name)
+		if isCPkey {
 			cPKC := colDefs[num]
 			colDefs = append(colDefs[:num], colDefs[num+1:]...)
 			return colDefs, cPKC
@@ -71,6 +72,7 @@ func SplitCompositePrimaryKeyColumnName(s string) []string {
 	return names
 }
 
+// Build composite primary key batch
 func FillCompositePKeyBatch(bat *batch.Batch, p *plan.ColDef, proc *process.Process) error {
 	names := SplitCompositePrimaryKeyColumnName(p.Name)
 	cPkeyVecMap := make(map[string]*vector.Vector)
@@ -88,7 +90,7 @@ func FillCompositePKeyBatch(bat *batch.Batch, p *plan.ColDef, proc *process.Proc
 	}
 	for _, v := range vs {
 		if nulls.Any(v.Nsp) {
-			return moerr.NewConstraintViolation("composite pkey don't support null value")
+			return moerr.NewConstraintViolation(proc.Ctx, "composite pkey don't support null value")
 		}
 	}
 	vec, err := multi.Serial(vs, proc)
