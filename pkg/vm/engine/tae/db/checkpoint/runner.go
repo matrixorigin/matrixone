@@ -733,9 +733,16 @@ func (r *runner) Stop() {
 func (r *runner) CollectCheckpointsInRange(start, end types.TS) (locations string, checkpointed types.TS) {
 	r.storage.Lock()
 	tree := r.storage.entries.Copy()
+	global := r.storage.prevGlobal
 	r.storage.Unlock()
 	locs := make([]string, 0)
-	pivot := NewCheckpointEntry(start, start)
+	newStart := start
+	if global != nil && global.HasOverlap(start, end) {
+		locs = append(locs, global.GetLocation())
+		newStart = global.end.Next()
+		checkpointed = global.GetEnd()
+	}
+	pivot := NewCheckpointEntry(newStart, newStart)
 
 	// For debug
 	// checkpoints := make([]*CheckpointEntry, 0)
@@ -760,7 +767,7 @@ func (r *runner) CollectCheckpointsInRange(start, end types.TS) (locations strin
 			if !e.IsCommitted() {
 				return
 			}
-			if e.HasOverlap(start, end) {
+			if e.HasOverlap(newStart, end) {
 				locs = append(locs, e.GetLocation())
 				checkpointed = e.GetEnd()
 				// checkpoints = append(checkpoints, e)
@@ -769,7 +776,7 @@ func (r *runner) CollectCheckpointsInRange(start, end types.TS) (locations strin
 		}
 		for {
 			e := iter.Item()
-			if !e.IsCommitted() || !e.HasOverlap(start, end) {
+			if !e.IsCommitted() || !e.HasOverlap(newStart, end) {
 				break
 			}
 			locs = append(locs, e.GetLocation())
@@ -787,7 +794,7 @@ func (r *runner) CollectCheckpointsInRange(start, end types.TS) (locations strin
 		// get last entry
 		e := iter.Item()
 		// if it is committed and visible, quick quit
-		if !e.IsCommitted() || !e.HasOverlap(start, end) {
+		if !e.IsCommitted() || !e.HasOverlap(newStart, end) {
 			return
 		}
 		locs = append(locs, e.GetLocation())
