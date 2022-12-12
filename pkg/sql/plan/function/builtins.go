@@ -181,11 +181,12 @@ var builtins = map[int]Functions{
 		},
 		Overloads: []Function{
 			{
-				Index:     0,
-				Volatile:  false,
-				Args:      []types.T{},
-				ReturnTyp: types.T_timestamp,
-				Fn:        multi.CurrentTimestamp,
+				Index:           0,
+				Volatile:        false,
+				RealTimeRelated: true,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_timestamp,
+				Fn:              multi.CurrentTimestamp,
 			},
 		},
 	},

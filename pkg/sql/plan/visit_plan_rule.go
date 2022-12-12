@@ -33,7 +33,7 @@ var (
 )
 
 var (
-	constantFoldRule = rule.NewConstantFold()
+	constantFoldRule = rule.NewConstantFold(false)
 )
 
 type GetParamRule struct {
