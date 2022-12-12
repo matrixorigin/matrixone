@@ -1091,7 +1091,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 	} else {
 		logDebugf(mp.getProfile(profileTypeConcise), "skip authenticate user")
 		//Get tenant info
-		tenant, err = GetTenantInfo(mp.GetUserName())
+		tenant, err = GetTenantInfo(ctx, mp.GetUserName())
 		if err != nil {
 			return err
 		}
@@ -1782,7 +1782,7 @@ func (mp *MysqlProtocolImpl) sendColumns(ctx context.Context, mrs *MysqlResultSe
 	//column_count * Protocol::ColumnDefinition packets
 	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
 		var col Column
-		col, err := mrs.GetColumn(i)
+		col, err := mrs.GetColumn(ctx, i)
 		if err != nil {
 			return err
 		}
@@ -1807,6 +1807,8 @@ func (mp *MysqlProtocolImpl) sendColumns(ctx context.Context, mrs *MysqlResultSe
 func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResultSet, rowIdx uint64) ([]byte, error) {
 	data = mp.append(data, defines.OKHeader) // append OkHeader
 
+	ctx := mp.ses.GetRequestContext()
+
 	// get null buffer
 	buffer := mp.binaryNullBuffer[:0]
 	columnsLength := mrs.GetColumnCount()
@@ -1815,7 +1817,7 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 		buffer = append(buffer, 0)
 	}
 	for i := uint64(0); i < columnsLength; i++ {
-		if isNil, err := mrs.ColumnIsNull(rowIdx, i); err != nil {
+		if isNil, err := mrs.ColumnIsNull(ctx, rowIdx, i); err != nil {
 			return nil, err
 		} else if isNil {
 			bytePos := (i + 2) / 8
@@ -1828,13 +1830,13 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 	data = mp.append(data, buffer...)
 
 	for i := uint64(0); i < columnsLength; i++ {
-		if isNil, err := mrs.ColumnIsNull(rowIdx, i); err != nil {
+		if isNil, err := mrs.ColumnIsNull(ctx, rowIdx, i); err != nil {
 			return nil, err
 		} else if isNil {
 			continue
 		}
 
-		column, err := mrs.GetColumn(uint64(i))
+		column, err := mrs.GetColumn(ctx, uint64(i))
 		if err != nil {
 			return nil, err
 		}
@@ -1845,68 +1847,68 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 
 		switch mysqlColumn.ColumnType() {
 		case defines.MYSQL_TYPE_TINY:
-			if value, err := mrs.GetInt64(rowIdx, i); err != nil {
+			if value, err := mrs.GetInt64(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
 				data = mp.appendUint8(data, uint8(value))
 			}
 		case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
-			if value, err := mrs.GetInt64(rowIdx, i); err != nil {
+			if value, err := mrs.GetInt64(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
 				data = mp.appendUint16(data, uint16(value))
 			}
 		case defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
-			if value, err := mrs.GetInt64(rowIdx, i); err != nil {
+			if value, err := mrs.GetInt64(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
 				buffer = mp.appendUint32(buffer, uint32(value))
 			}
 		case defines.MYSQL_TYPE_LONGLONG:
-			if value, err := mrs.GetUint64(rowIdx, i); err != nil {
+			if value, err := mrs.GetUint64(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
 				buffer = mp.appendUint64(buffer, value)
 			}
 		case defines.MYSQL_TYPE_FLOAT:
-			if value, err := mrs.GetFloat64(rowIdx, i); err != nil {
+			if value, err := mrs.GetFloat64(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
 				buffer = mp.appendUint32(buffer, math.Float32bits(float32(value)))
 			}
 		case defines.MYSQL_TYPE_DOUBLE:
-			if value, err := mrs.GetFloat64(rowIdx, i); err != nil {
+			if value, err := mrs.GetFloat64(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
 				buffer = mp.appendUint64(buffer, math.Float64bits(value))
 			}
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
-			if value, err := mrs.GetString(rowIdx, i); err != nil {
+			if value, err := mrs.GetString(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
 		// TODO: some type, we use string now. someday need fix it
 		case defines.MYSQL_TYPE_DECIMAL:
-			if value, err := mrs.GetString(rowIdx, i); err != nil {
+			if value, err := mrs.GetString(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
 		case defines.MYSQL_TYPE_UUID:
-			if value, err := mrs.GetString(rowIdx, i); err != nil {
+			if value, err := mrs.GetString(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
 		case defines.MYSQL_TYPE_DATE:
-			if value, err := mrs.GetValue(rowIdx, i); err != nil {
+			if value, err := mrs.GetValue(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
 				data = mp.appendDate(data, value.(types.Date))
 			}
 		case defines.MYSQL_TYPE_TIME:
-			if value, err := mrs.GetString(rowIdx, i); err != nil {
+			if value, err := mrs.GetString(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
 				var t types.Time
@@ -1923,13 +1925,13 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 					data = mp.appendTime(data, t)
 				}
 			}
-			if value, err := mrs.GetValue(rowIdx, i); err != nil {
+			if value, err := mrs.GetValue(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
 				data = mp.appendTime(data, value.(types.Time))
 			}
 		case defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
-			if value, err := mrs.GetString(rowIdx, i); err != nil {
+			if value, err := mrs.GetString(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
 				var dt types.Datetime
@@ -1953,7 +1955,7 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 		// 		data = mp.appendStringLenEnc(data, value)
 		// 	}
 		default:
-			return nil, moerr.NewInternalError(mp.ses.requestCtx, "type is not supported in binary text result row")
+			return nil, moerr.NewInternalError(ctx, "type is not supported in binary text result row")
 		}
 	}
 
@@ -1962,8 +1964,9 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 
 // the server convert every row of the result set into the format that mysql protocol needs
 func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultSet, r uint64) ([]byte, error) {
+	ctx := mp.ses.GetRequestContext()
 	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
-		column, err := mrs.GetColumn(i)
+		column, err := mrs.GetColumn(ctx, i)
 		if err != nil {
 			return nil, err
 		}
@@ -1972,7 +1975,7 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 			return nil, moerr.NewInternalError(mp.ses.requestCtx, "sendColumn need MysqlColumn")
 		}
 
-		if isNil, err1 := mrs.ColumnIsNull(r, i); err1 != nil {
+		if isNil, err1 := mrs.ColumnIsNull(ctx, r, i); err1 != nil {
 			return nil, err1
 		} else if isNil {
 			//NULL is sent as 0xfb
@@ -1982,31 +1985,31 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 
 		switch mysqlColumn.ColumnType() {
 		case defines.MYSQL_TYPE_JSON:
-			if value, err2 := mrs.GetString(r, i); err2 != nil {
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
 		case defines.MYSQL_TYPE_BOOL:
-			if value, err2 := mrs.GetString(r, i); err2 != nil {
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
 		case defines.MYSQL_TYPE_DECIMAL:
-			if value, err2 := mrs.GetString(r, i); err2 != nil {
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
 		case defines.MYSQL_TYPE_UUID:
-			if value, err2 := mrs.GetString(r, i); err2 != nil {
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
 		case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
-			if value, err2 := mrs.GetInt64(r, i); err2 != nil {
+			if value, err2 := mrs.GetInt64(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
 				if mysqlColumn.ColumnType() == defines.MYSQL_TYPE_YEAR {
@@ -2020,57 +2023,57 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 				}
 			}
 		case defines.MYSQL_TYPE_FLOAT:
-			if value, err2 := mrs.GetFloat64(r, i); err2 != nil {
+			if value, err2 := mrs.GetFloat64(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
 				data = mp.appendStringLenEncOfFloat64(data, value, 32)
 			}
 		case defines.MYSQL_TYPE_DOUBLE:
-			if value, err2 := mrs.GetFloat64(r, i); err2 != nil {
+			if value, err2 := mrs.GetFloat64(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
 				data = mp.appendStringLenEncOfFloat64(data, value, 64)
 			}
 		case defines.MYSQL_TYPE_LONGLONG:
 			if uint32(mysqlColumn.Flag())&defines.UNSIGNED_FLAG != 0 {
-				if value, err2 := mrs.GetUint64(r, i); err2 != nil {
+				if value, err2 := mrs.GetUint64(ctx, r, i); err2 != nil {
 					return nil, err2
 				} else {
 					data = mp.appendStringLenEncOfUint64(data, value)
 				}
 			} else {
-				if value, err2 := mrs.GetInt64(r, i); err2 != nil {
+				if value, err2 := mrs.GetInt64(ctx, r, i); err2 != nil {
 					return nil, err2
 				} else {
 					data = mp.appendStringLenEncOfInt64(data, value)
 				}
 			}
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
-			if value, err2 := mrs.GetString(r, i); err2 != nil {
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
 		case defines.MYSQL_TYPE_DATE:
-			if value, err2 := mrs.GetValue(r, i); err2 != nil {
+			if value, err2 := mrs.GetValue(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
 				data = mp.appendStringLenEnc(data, value.(types.Date).String())
 			}
 		case defines.MYSQL_TYPE_DATETIME:
-			if value, err2 := mrs.GetString(r, i); err2 != nil {
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
 		case defines.MYSQL_TYPE_TIME:
-			if value, err2 := mrs.GetString(r, i); err2 != nil {
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			if value, err2 := mrs.GetString(r, i); err2 != nil {
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
 				data = mp.appendStringLenEnc(data, value)

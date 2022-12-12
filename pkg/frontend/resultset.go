@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -87,7 +88,7 @@ type ResultSet interface {
 	GetColumnCount() uint64
 
 	//get the i th column
-	GetColumn(uint64) (Column, error)
+	GetColumn(context.Context, uint64) (Column, error)
 
 	//Add a data row
 	//return the index of row (start from 0)
@@ -97,13 +98,13 @@ type ResultSet interface {
 	GetRowCount() uint64
 
 	//get the i th data row
-	GetRow(uint64) ([]interface{}, error)
+	GetRow(context.Context, uint64) ([]interface{}, error)
 
 	//get the data of row i, column j
-	GetValue(uint64, uint64) (interface{}, error)
+	GetValue(context.Context, uint64, uint64) (interface{}, error)
 
 	//get the data of row i, column
-	GetValueByName(uint64, string) (interface{}, error)
+	GetValueByName(context.Context, uint64, string) (interface{}, error)
 }
 
 type MysqlColumn struct {
@@ -258,11 +259,11 @@ func (mrs *MysqlResultSet) GetColumnCount() uint64 {
 	return uint64(len(mrs.Columns))
 }
 
-func (mrs *MysqlResultSet) GetColumn(index uint64) (Column, error) {
+func (mrs *MysqlResultSet) GetColumn(ctx context.Context, index uint64) (Column, error) {
 	if index < mrs.GetColumnCount() {
 		return mrs.Columns[index], nil
 	} else {
-		return nil, moerr.NewInternalErrorNoCtx("index valid column index %d ", index)
+		return nil, moerr.NewInternalError(ctx, "index valid column index %d ", index)
 	}
 }
 
@@ -275,45 +276,45 @@ func (mrs *MysqlResultSet) GetRowCount() uint64 {
 	return uint64(len(mrs.Data))
 }
 
-func (mrs *MysqlResultSet) GetRow(index uint64) ([]interface{}, error) {
+func (mrs *MysqlResultSet) GetRow(ctx context.Context, index uint64) ([]interface{}, error) {
 	if index < mrs.GetRowCount() {
 		return mrs.Data[index], nil
 	} else {
-		return nil, moerr.NewInternalErrorNoCtx("index valid row index %d ", index)
+		return nil, moerr.NewInternalError(ctx, "index valid row index %d ", index)
 	}
 }
 
-func (mrs *MysqlResultSet) GetValue(rindex uint64, cindex uint64) (interface{}, error) {
-	if row, err := mrs.GetRow(rindex); err != nil {
+func (mrs *MysqlResultSet) GetValue(ctx context.Context, rindex uint64, cindex uint64) (interface{}, error) {
+	if row, err := mrs.GetRow(ctx, rindex); err != nil {
 		return nil, err
 	} else if cindex >= uint64(len(mrs.Columns)) {
-		return nil, moerr.NewInternalErrorNoCtx("index valid column index %d ", cindex)
+		return nil, moerr.NewInternalError(ctx, "index valid column index %d ", cindex)
 	} else {
 		return row[cindex], nil
 	}
 }
 
 // get the index of the column with name
-func (mrs *MysqlResultSet) columnName2Index(name string) (uint64, error) {
+func (mrs *MysqlResultSet) columnName2Index(ctx context.Context, name string) (uint64, error) {
 	if cindex, ok := mrs.Name2Index[name]; !ok {
-		return 0, moerr.NewInternalErrorNoCtx("column name does not exist. %s", name)
+		return 0, moerr.NewInternalError(ctx, "column name does not exist. %s", name)
 	} else {
 		return cindex, nil
 	}
 }
 
-func (mrs *MysqlResultSet) GetValueByName(rindex uint64, colName string) (interface{}, error) {
-	if cindex, err := mrs.columnName2Index(colName); err != nil {
+func (mrs *MysqlResultSet) GetValueByName(ctx context.Context, rindex uint64, colName string) (interface{}, error) {
+	if cindex, err := mrs.columnName2Index(ctx, colName); err != nil {
 		return nil, err
 	} else {
-		return mrs.GetValue(rindex, cindex)
+		return mrs.GetValue(ctx, rindex, cindex)
 	}
 }
 
 // the value in position (rindex,cindex) is null or not
 // return true - null ; false - not null
-func (mrs *MysqlResultSet) ColumnIsNull(rindex, cindex uint64) (bool, error) {
-	if value, err := mrs.GetValue(rindex, cindex); err != nil {
+func (mrs *MysqlResultSet) ColumnIsNull(ctx context.Context, rindex, cindex uint64) (bool, error) {
+	if value, err := mrs.GetValue(ctx, rindex, cindex); err != nil {
 		return false, err
 	} else {
 		return value == nil, nil
@@ -321,8 +322,8 @@ func (mrs *MysqlResultSet) ColumnIsNull(rindex, cindex uint64) (bool, error) {
 }
 
 // convert the value into int64
-func (mrs *MysqlResultSet) GetInt64(rindex, cindex uint64) (int64, error) {
-	value, err := mrs.GetValue(rindex, cindex)
+func (mrs *MysqlResultSet) GetInt64(ctx context.Context, rindex, cindex uint64) (int64, error) {
+	value, err := mrs.GetValue(ctx, rindex, cindex)
 	if err != nil {
 		return 0, err
 	}
@@ -363,13 +364,13 @@ func (mrs *MysqlResultSet) GetInt64(rindex, cindex uint64) (int64, error) {
 	case uint:
 		return int64(v), nil
 	default:
-		return 0, moerr.NewInternalErrorNoCtx("unsupported type %d ", v)
+		return 0, moerr.NewInternalError(ctx, "unsupported type %d ", v)
 	}
 }
 
 // convert the value into uint64
-func (mrs *MysqlResultSet) GetUint64(rindex, cindex uint64) (uint64, error) {
-	value, err := mrs.GetValue(rindex, cindex)
+func (mrs *MysqlResultSet) GetUint64(ctx context.Context, rindex, cindex uint64) (uint64, error) {
+	value, err := mrs.GetValue(ctx, rindex, cindex)
 	if err != nil {
 		return 0, err
 	}
@@ -410,13 +411,13 @@ func (mrs *MysqlResultSet) GetUint64(rindex, cindex uint64) (uint64, error) {
 	case uint:
 		return uint64(v), nil
 	default:
-		return 0, moerr.NewInternalErrorNoCtx("unsupported type %d ", v)
+		return 0, moerr.NewInternalError(ctx, "unsupported type %d ", v)
 	}
 }
 
 // convert the value into Float64
-func (mrs *MysqlResultSet) GetFloat64(rindex, cindex uint64) (float64, error) {
-	value, err := mrs.GetValue(rindex, cindex)
+func (mrs *MysqlResultSet) GetFloat64(ctx context.Context, rindex, cindex uint64) (float64, error) {
+	value, err := mrs.GetValue(ctx, rindex, cindex)
 	if err != nil {
 		return 0, err
 	}
@@ -457,13 +458,13 @@ func (mrs *MysqlResultSet) GetFloat64(rindex, cindex uint64) (float64, error) {
 	case uint:
 		return float64(v), nil
 	default:
-		return 0, moerr.NewInternalErrorNoCtx("unsupported type %d ", v)
+		return 0, moerr.NewInternalError(ctx, "unsupported type %d ", v)
 	}
 }
 
 // convert the value into string
-func (mrs *MysqlResultSet) GetString(rindex, cindex uint64) (string, error) {
-	value, err := mrs.GetValue(rindex, cindex)
+func (mrs *MysqlResultSet) GetString(ctx context.Context, rindex, cindex uint64) (string, error) {
+	value, err := mrs.GetValue(ctx, rindex, cindex)
 	if err != nil {
 		return "", err
 	}
@@ -512,7 +513,7 @@ func (mrs *MysqlResultSet) GetString(rindex, cindex uint64) (string, error) {
 	case types.Uuid:
 		return v.ToString(), nil
 	default:
-		return "", moerr.NewInternalErrorNoCtx("unsupported type %d ", v)
+		return "", moerr.NewInternalError(ctx, "unsupported type %d ", v)
 	}
 }
 
