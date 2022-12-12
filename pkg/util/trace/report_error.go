@@ -18,7 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"go.uber.org/zap"
 )
 
@@ -71,14 +72,22 @@ func (h *MOErrorHolder) CsvFields(ctx context.Context, row *table.Row) []string 
 
 func (h *MOErrorHolder) Format(s fmt.State, verb rune) { errbase.FormatError(h.Error, s, verb) }
 
+var disableLogErrorReport atomic.Bool
+
+func DisableLogErrorReport(disable bool) {
+	disableLogErrorReport.Store(disable)
+}
+
 // ReportError send to BatchProcessor
 func ReportError(ctx context.Context, err error, depth int) {
-	msg := fmt.Sprintf("error: %v", err)
-	sc := SpanFromContext(ctx).SpanContext()
-	if sc.IsEmpty() {
-		logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg)
-	} else {
-		logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg, ContextField(ctx))
+	if !disableLogErrorReport.Load() {
+		msg := fmt.Sprintf("error: %v", err)
+		sc := SpanFromContext(ctx).SpanContext()
+		if sc.IsEmpty() {
+			logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg)
+		} else {
+			logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg, ContextField(ctx))
+		}
 	}
 	if !GetTracerProvider().IsEnable() {
 		return

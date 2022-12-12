@@ -112,6 +112,15 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 	return nodeID
 }
 
+func (builder *QueryBuilder) swapJoinOrderByStats(children []int32) []int32 {
+	left := builder.qry.Nodes[children[0]].Stats.Outcnt
+	right := builder.qry.Nodes[children[1]].Stats.Outcnt
+	if left < right {
+		return []int32{children[1], children[0]}
+	} else {
+		return children
+	}
+}
 func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	node := builder.qry.Nodes[nodeID]
 
@@ -205,14 +214,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 			visited[nextSibling] = true
 
 			children := []int32{nodeID, subTrees[nextSibling].NodeId}
-			//todo fix this when pipeline ready
-			/*
-				leftCard := subTrees[firstConnected].Cost.Card
-				rightCard := subTrees[nextSibling].Cost.Card
-				if leftCard < rightCard {
-					children[0], children[1] = children[1], children[0]
-				}*/
-
+			children = builder.swapJoinOrderByStats(children)
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: children,
@@ -239,13 +241,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 
 		for i := 1; i < len(subTrees); i++ {
 			children := []int32{nodeID, subTrees[i].NodeId}
-			//todo fix this when pipeline ready
-			/*
-				leftCard, rightCard := newNode.Cost.Card, subTrees[i].Cost.Card
-				if leftCard < rightCard {
-					children[0], children[1] = children[1], children[0]
-				}
-			*/
+			children = builder.swapJoinOrderByStats(children)
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: children,
@@ -390,16 +386,12 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 	})
 
 	for _, child := range dimensions {
-		leftID := vertex.node.NodeId
-		rightID := child.node.NodeId
-		//todo fix this when pipeline ready
-		/*if vertex.node.Cost.Card < child.node.Cost.Card {
-			leftID, rightID = rightID, leftID
-		}*/
 
+		children := []int32{vertex.node.NodeId, child.node.NodeId}
+		children = builder.swapJoinOrderByStats(children)
 		nodeId := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{leftID, rightID},
+			Children: children,
 			JoinType: plan.Node_INNER,
 		}, nil)
 

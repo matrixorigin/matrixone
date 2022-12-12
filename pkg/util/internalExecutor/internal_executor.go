@@ -60,12 +60,12 @@ func (s *OptsBuilder) Finish() SessionOverrideOptions {
 type InternalExecResult interface {
 	Error() error
 	ColumnCount() uint64
-	Column(uint64) (string, uint8, bool, error) // type refer: pkg/defines/type.go & func convertEngineTypeToMysqlType
+	Column(context.Context, uint64) (string, uint8, bool, error) // type refer: pkg/defines/type.go & func convertEngineTypeToMysqlType
 	RowCount() uint64
-	Row(uint64) ([]interface{}, error)
-	Value(uint64, uint64) (interface{}, error)
-	ValueByName(uint64, string) (interface{}, error)
-	StringValueByName(uint64, string) (string, error)
+	Row(context.Context, uint64) ([]interface{}, error)
+	Value(context.Context, uint64, uint64) (interface{}, error)
+	ValueByName(context.Context, uint64, string) (interface{}, error)
+	StringValueByName(context.Context, uint64, string) (string, error)
 }
 
 type InternalExecutor interface {
