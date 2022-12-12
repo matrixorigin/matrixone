@@ -15,12 +15,17 @@
 package frontend
 
 import (
-	"fmt"
+	"context"
 	"io"
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/fagongzi/goetty/v2/codec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
+
+var (
+	errorInvalidLength0             = moerr.NewInvalidInput(context.Background(), "invalid length: 0")
+	errorLenOfWrittenNotEqLenOfData = moerr.NewInternalError(context.Background(), "len of written != len of the data")
 )
 
 const PacketHeaderLength = 4
@@ -47,7 +52,7 @@ func (c *sqlCodec) Decode(in *buf.ByteBuf) (interface{}, bool, error) {
 	header := in.PeekN(0, PacketHeaderLength)
 	length := int32(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
 	if length == 0 {
-		return nil, false, moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid length %d", length))
+		return nil, false, errorInvalidLength0
 	}
 
 	sequenceID := int8(header[3])
@@ -77,7 +82,7 @@ func (c *sqlCodec) Encode(data interface{}, out *buf.ByteBuf, writer io.Writer) 
 		return err
 	}
 	if tlen != xlen {
-		return moerr.NewInternalErrorNoCtx("len of written != len of the data")
+		return errorLenOfWrittenNotEqLenOfData
 	}
 	return nil
 }

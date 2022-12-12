@@ -53,6 +53,7 @@ import (
 
 func init() {
 	trace.Init(context.Background(), trace.EnableTracer(false))
+	trace.DisableLogErrorReport(true)
 }
 
 func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
@@ -384,6 +385,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		ses := NewSession(proto, nil, pu, &gSys, true)
 		ses.SetRequestContext(ctx)
 		ses.mrs = &MysqlResultSet{}
+		proto.SetSession(ses)
 
 		mce := NewMysqlCmdExecutor()
 		mce.PrepareSessionBeforeExecRequest(ses)
@@ -731,6 +733,7 @@ func Test_handleSelectVariables(t *testing.T) {
 		ses.mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 		mce.PrepareSessionBeforeExecRequest(ses)
+		proto.SetSession(ses)
 		st2, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@tx_isolation")
 		convey.So(err, convey.ShouldBeNil)
 		sv2 := st2.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
@@ -775,6 +778,7 @@ func Test_handleShowVariables(t *testing.T) {
 		ses.mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 		mce.PrepareSessionBeforeExecRequest(ses)
+		proto.SetSession(ses)
 
 		sv := &tree.ShowVariables{Global: true}
 		convey.So(mce.handleShowVariables(sv, nil), convey.ShouldBeNil)
