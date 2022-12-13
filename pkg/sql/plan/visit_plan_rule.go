@@ -301,4 +301,4 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	}
 }
 
-func (rule *ResetVarRefRule) getContext() context.Context { return rule.getContext() }
+func (rule *ResetVarRefRule) getContext() context.Context { return rule.compCtx.GetContext() }

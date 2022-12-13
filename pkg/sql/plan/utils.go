@@ -533,7 +533,7 @@ func getNumOfCharacters(str string) int {
 func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tree.Statement, unionTypes *[]plan.Node_NodeType) error {
 	switch leftStmt := stmt.Left.(type) {
 	case *tree.UnionClause:
-		err := getUnionSelects(nil, leftStmt, selects, unionTypes)
+		err := getUnionSelects(ctx, leftStmt, selects, unionTypes)
 		if err != nil {
 			return err
 		}

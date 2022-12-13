@@ -160,7 +160,7 @@ func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64,
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
-		}, key, genDatabaseIdExpr(nil, accountId, name))
+		}, key, genDatabaseIdExpr(ctx, accountId, name))
 	if err != nil {
 		return 0, err
 	}
