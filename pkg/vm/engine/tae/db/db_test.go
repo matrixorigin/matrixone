@@ -4569,13 +4569,18 @@ func TestGcWithCheckpoint(t *testing.T) {
 	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
 	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
-	manager := gc.NewManager()
+	manager := gc.NewManager(tae.Fs)
 	for _, entry := range entries {
-		table := gc.NewGcTable(tae.Fs)
+		table := gc.NewGcTable()
 		data, err := entry.Read(context.Background(), nil, tae.Fs)
 		assert.NoError(t, err)
 		table.UpdateTable(data)
 		manager.AddTable(table)
 	}
+	manager.MergeTable()
+	assert.Equal(t, 5, len(manager.GetGc()))
+	task := gc.NewGcTask(tae.Fs, manager.GetGc())
+	err := task.ExecDelete()
+	assert.Nil(t, err)
 
 }

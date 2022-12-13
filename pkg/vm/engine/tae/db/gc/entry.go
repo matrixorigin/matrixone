@@ -2,6 +2,7 @@ package gc
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"sync/atomic"
 )
 
 type TableEntry struct {
@@ -13,6 +14,7 @@ type TableEntry struct {
 
 type ObjectEntry struct {
 	common.RefHelper
+	refs  atomic.Int64
 	table TableEntry
 	drop  bool
 }
@@ -42,15 +44,11 @@ func (o *ObjectEntry) DropTable() {
 }
 
 func (o *ObjectEntry) Refs(n int) {
-	for i := 0; i < n; i++ {
-		o.Ref()
-	}
+	o.refs.Add(int64(n))
 }
 
 func (o *ObjectEntry) UnRefs(n int) {
-	for i := 0; i < n; i++ {
-		o.Unref()
-	}
+	o.refs.Add(int64(0 - n))
 }
 
 func (o *ObjectEntry) MergeEntry(entry ObjectEntry) {
@@ -73,7 +71,7 @@ func (o *ObjectEntry) MergeEntry(entry ObjectEntry) {
 }
 
 func (o *ObjectEntry) AllowGc() bool {
-	if o.table.drop || o.RefCount() == 0 {
+	if o.table.drop || o.refs.Load() < 1 {
 		o.table.delete = nil
 		o.table.blocks = nil
 		return true

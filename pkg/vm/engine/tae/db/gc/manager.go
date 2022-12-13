@@ -49,3 +49,7 @@ func (m *Manager) AddTable(table GcTable) {
 	defer m.Unlock()
 	m.table = append(m.table, table)
 }
+
+func (m *Manager) GetGc() []string {
+	return m.gc
+}

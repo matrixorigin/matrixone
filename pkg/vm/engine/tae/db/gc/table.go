@@ -100,9 +100,6 @@ func (t *GcTable) UpdateTable(data *logtail.CheckpointData) {
 		sid := insTxn.GetVectorByName(catalog.SnapshotAttr_SegID).Get(i).(uint64)
 		blkID := ins.GetVectorByName(pkgcatalog.BlockMeta_ID).Get(i).(uint64)
 		metaLoc := string(ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
-		if metaLoc == "" {
-			continue
-		}
 		id := common.ID{
 			SegmentID: sid,
 			TableID:   tid,
@@ -118,9 +115,7 @@ func (t *GcTable) UpdateTable(data *logtail.CheckpointData) {
 		sid := delTxn.GetVectorByName(catalog.SnapshotAttr_SegID).Get(i).(uint64)
 		blkID := del.GetVectorByName(catalog.AttrRowID).Get(i).(types.Rowid)
 		metaLoc := string(delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
-		if metaLoc == "" {
-			continue
-		}
+
 		id := common.ID{
 			SegmentID: sid,
 			TableID:   tid,
