@@ -714,7 +714,7 @@ func FloatToBytes[T constraints.Float](xs []T, rs []string) ([]string, error) {
 	return rs, nil
 }
 
-func decimal64ToDecimal128Pure(xs []types.Decimal64, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
+func decimal64ToDecimal128Pure(ctx context.Context, xs []types.Decimal64, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
 	var err error
 	for i, x := range xs {
 		if rs[i], err = types.Decimal128_FromDecimal64WithScale(x, width, scale); err != nil {
@@ -724,7 +724,7 @@ func decimal64ToDecimal128Pure(xs []types.Decimal64, rs []types.Decimal128, widt
 	return rs, nil
 }
 
-func IntToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
+func IntToDecimal128[T constraints.Integer](ctx context.Context, xs []T, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
 	var err error
 	for i, x := range xs {
 		if rs[i], err = types.InitDecimal128(int64(x), width, scale); err != nil {
@@ -734,7 +734,7 @@ func IntToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128, width
 	return rs, nil
 }
 
-func IntToDecimal64[T constraints.Integer](xs []T, rs []types.Decimal64, width, scale int32) ([]types.Decimal64, error) {
+func IntToDecimal64[T constraints.Integer](ctx context.Context, xs []T, rs []types.Decimal64, width, scale int32) ([]types.Decimal64, error) {
 	var err error
 	for i, x := range xs {
 		if rs[i], err = types.InitDecimal64(int64(x), width, scale); err != nil {
@@ -744,7 +744,7 @@ func IntToDecimal64[T constraints.Integer](xs []T, rs []types.Decimal64, width, 
 	return rs, nil
 }
 
-func UintToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
+func UintToDecimal128[T constraints.Integer](ctx context.Context, xs []T, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
 	var err error
 	for i, x := range xs {
 		if rs[i], err = types.InitDecimal128UsingUint(uint64(x), width, scale); err != nil {
@@ -754,87 +754,87 @@ func UintToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128, widt
 	return rs, nil
 }
 
-func timestampToDatetime(loc *time.Location, xs []types.Timestamp, rs []types.Datetime) ([]types.Datetime, error) {
+func timestampToDatetime(ctx context.Context, loc *time.Location, xs []types.Timestamp, rs []types.Datetime) ([]types.Datetime, error) {
 	return types.TimestampToDatetime(loc, xs, rs)
 }
 
-func timestampToVarchar(loc *time.Location, xs []types.Timestamp, rs []string, precision int32) ([]string, error) {
+func timestampToVarchar(ctx context.Context, loc *time.Location, xs []types.Timestamp, rs []string, precision int32) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = x.String2(loc, precision)
 	}
 	return rs, nil
 }
 
-func boolToBytes(xs []bool, rs []string) ([]string, error) {
+func boolToBytes(ctx context.Context, xs []bool, rs []string) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = types.BoolToIntString(x)
 	}
 	return rs, nil
 }
 
-func dateToDateTime(xs []types.Date, rs []types.Datetime) ([]types.Datetime, error) {
+func dateToDateTime(ctx context.Context, xs []types.Date, rs []types.Datetime) ([]types.Datetime, error) {
 	for i := range xs {
 		rs[i] = xs[i].ToDatetime()
 	}
 	return rs, nil
 }
 
-func dateToTime(xs []types.Date, rs []types.Time) ([]types.Time, error) {
+func dateToTime(ctx context.Context, xs []types.Date, rs []types.Time) ([]types.Time, error) {
 	for i := range xs {
 		rs[i] = xs[i].ToTime()
 	}
 	return rs, nil
 }
 
-func dateToBytes(xs []types.Date, rs []string) ([]string, error) {
+func dateToBytes(ctx context.Context, xs []types.Date, rs []string) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = x.String()
 	}
 	return rs, nil
 }
 
-func datetimeToDate(xs []types.Datetime, rs []types.Date) ([]types.Date, error) {
+func datetimeToDate(ctx context.Context, xs []types.Datetime, rs []types.Date) ([]types.Date, error) {
 	for i := range xs {
 		rs[i] = xs[i].ToDate()
 	}
 	return rs, nil
 }
 
-func datetimeToBytes(xs []types.Datetime, rs []string, precision int32) ([]string, error) {
+func datetimeToBytes(ctx context.Context, xs []types.Datetime, rs []string, precision int32) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = x.String2(precision)
 	}
 	return rs, nil
 }
-func datetimeToTime(xs []types.Datetime, rs []types.Time, precision int32) ([]types.Time, error) {
+func datetimeToTime(ctx context.Context, xs []types.Datetime, rs []types.Time, precision int32) ([]types.Time, error) {
 	for i, x := range xs {
 		rs[i] = x.ToTime(precision)
 	}
 	return rs, nil
 }
 
-func timeToBytes(xs []types.Time, rs []string, precision int32) ([]string, error) {
+func timeToBytes(ctx context.Context, xs []types.Time, rs []string, precision int32) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = x.String2(precision)
 	}
 	return rs, nil
 }
 
-func timeToDatetime(xs []types.Time, rs []types.Datetime, precision int32) ([]types.Datetime, error) {
+func timeToDatetime(ctx context.Context, xs []types.Time, rs []types.Datetime, precision int32) ([]types.Datetime, error) {
 	for i, x := range xs {
 		rs[i] = x.ToDatetime(precision)
 	}
 	return rs, nil
 }
 
-func timeToDate(xs []types.Time, rs []types.Date) ([]types.Date, error) {
+func timeToDate(ctx context.Context, xs []types.Time, rs []types.Date) ([]types.Date, error) {
 	for i, x := range xs {
 		rs[i] = x.ToDate()
 	}
 	return rs, nil
 }
 
-func NumericToTime[T constraints.Integer](xs []T, rs []types.Time, precision int32) ([]types.Time, error) {
+func NumericToTime[T constraints.Integer](ctx context.Context, xs []T, rs []types.Time, precision int32) ([]types.Time, error) {
 	for i, x := range xs {
 		var err error
 		rs[i], err = types.ParseInt64ToTime(int64(x), precision)
@@ -845,7 +845,7 @@ func NumericToTime[T constraints.Integer](xs []T, rs []types.Time, precision int
 	return rs, nil
 }
 
-func Decimal64ToTime(xs []types.Decimal64, rs []types.Time, precision int32) ([]types.Time, error) {
+func Decimal64ToTime(ctx context.Context, xs []types.Decimal64, rs []types.Time, precision int32) ([]types.Time, error) {
 	for i, x := range xs {
 		var err error
 		rs[i], err = types.ParseDecima64lToTime(x, precision)
@@ -856,7 +856,7 @@ func Decimal64ToTime(xs []types.Decimal64, rs []types.Time, precision int32) ([]
 	return rs, nil
 }
 
-func Decimal128ToTime(xs []types.Decimal128, rs []types.Time, precision int32) ([]types.Time, error) {
+func Decimal128ToTime(ctx context.Context, xs []types.Decimal128, rs []types.Time, precision int32) ([]types.Time, error) {
 	for i, x := range xs {
 		var err error
 		rs[i], err = types.ParseDecima128lToTime(x, precision)
@@ -876,10 +876,10 @@ func TimeToNumeric[T constraints.Integer](ctx context.Context, xs []types.Time, 
 	return NumericToNumeric(ctx, tmp, rs)
 }
 
-func TimeToDecimal64(xs []types.Time, rs []types.Decimal64, width, precision int32) ([]types.Decimal64, error) {
+func TimeToDecimal64(ctx context.Context, xs []types.Time, rs []types.Decimal64, width, precision int32) ([]types.Decimal64, error) {
 	for i, x := range xs {
 		var err error
-		rs[i], err = x.ToDecimal64(width, precision)
+		rs[i], err = x.ToDecimal64(ctx, width, precision)
 		if err != nil {
 			return rs, err
 		}
@@ -887,10 +887,10 @@ func TimeToDecimal64(xs []types.Time, rs []types.Decimal64, width, precision int
 	return rs, nil
 }
 
-func TimeToDecimal128(xs []types.Time, rs []types.Decimal128, width, precision int32) ([]types.Decimal128, error) {
+func TimeToDecimal128(ctx context.Context, xs []types.Time, rs []types.Decimal128, width, precision int32) ([]types.Decimal128, error) {
 	for i, x := range xs {
 		var err error
-		rs[i], err = x.ToDecimal128(width, precision)
+		rs[i], err = x.ToDecimal128(ctx, width, precision)
 		if err != nil {
 			return rs, err
 		}

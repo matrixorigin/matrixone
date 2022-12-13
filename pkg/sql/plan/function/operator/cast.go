@@ -750,7 +750,7 @@ func CastTimestampAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.
 	lvs := vector.MustTCols[types.Timestamp](lv)
 	if lv.IsScalar() {
 		rs := make([]types.Datetime, 1)
-		if _, err := binary.TimestampToDatetime(t, lvs, rs); err != nil {
+		if _, err := binary.TimestampToDatetime(proc.Ctx, t, lvs, rs); err != nil {
 			return nil, err
 		}
 		rs2 := make([]types.Date, 1)
@@ -765,7 +765,7 @@ func CastTimestampAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.
 	}
 	rs := vector.MustTCols[types.Date](vec)
 	rs2 := make([]types.Datetime, len(lvs), cap(lvs))
-	if _, err := binary.TimestampToDatetime(t, lvs, rs2); err != nil {
+	if _, err := binary.TimestampToDatetime(proc.Ctx, t, lvs, rs2); err != nil {
 		return nil, err
 	}
 	for i := 0; i < len(rs2); i++ {
@@ -1194,7 +1194,7 @@ func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector
 
 func CastSpecialIntToDecimal[T constraints.Integer](
 	lv, rv *vector.Vector,
-	i2d func(xs []T, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error),
+	i2d func(ctx context.Context, xs []T, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error),
 	proc *process.Process) (*vector.Vector, error) {
 	resultScale := int32(0)
 	resultTyp := types.T_decimal128.ToType()
@@ -1205,7 +1205,7 @@ func CastSpecialIntToDecimal[T constraints.Integer](
 		return proc.AllocConstNullVector(resultTyp, lv.Length()), nil
 	} else if lv.IsScalar() {
 		rs := make([]types.Decimal128, 1)
-		if _, err := i2d(lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
+		if _, err := i2d(proc.Ctx, lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
 			return nil, err
 		}
 		return vector.NewConstFixed(resultTyp, lv.Length(), rs[0], proc.Mp()), nil
@@ -1216,7 +1216,7 @@ func CastSpecialIntToDecimal[T constraints.Integer](
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Decimal128](vec)
-	if _, err := i2d(lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
+	if _, err := i2d(proc.Ctx, lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -1224,7 +1224,7 @@ func CastSpecialIntToDecimal[T constraints.Integer](
 
 func CastSpecialIntToDecimal64[T constraints.Integer](
 	lv, rv *vector.Vector,
-	i2d func(xs []T, rs []types.Decimal64, width, scale int32) ([]types.Decimal64, error),
+	i2d func(ctx context.Context, xs []T, rs []types.Decimal64, width, scale int32) ([]types.Decimal64, error),
 	proc *process.Process) (*vector.Vector, error) {
 
 	resultScale := int32(0)
@@ -1236,7 +1236,7 @@ func CastSpecialIntToDecimal64[T constraints.Integer](
 		return proc.AllocConstNullVector(resultTyp, lv.Length()), nil
 	} else if lv.IsScalar() {
 		rs := make([]types.Decimal64, 1)
-		if _, err := i2d(lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
+		if _, err := i2d(proc.Ctx, lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
 			return nil, err
 		}
 		return vector.NewConstFixed(resultTyp, lv.Length(), rs[0], proc.Mp()), nil
@@ -1247,7 +1247,7 @@ func CastSpecialIntToDecimal64[T constraints.Integer](
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Decimal64](vec)
-	if _, err := i2d(lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
+	if _, err := i2d(proc.Ctx, lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -1505,7 +1505,7 @@ func CastDecimal64AsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*v
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(resultTyp)
 		rs := make([]types.Decimal128, 1)
-		if _, err := binary.Decimal64ToDecimal128(lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
+		if _, err := binary.Decimal64ToDecimal128(proc.Ctx, lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -1518,7 +1518,7 @@ func CastDecimal64AsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*v
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Decimal128](vec)
-	if _, err := binary.Decimal64ToDecimal128(lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
+	if _, err := binary.Decimal64ToDecimal128(proc.Ctx, lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -1536,7 +1536,7 @@ func castTimeStampAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vec
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Datetime, 1)
-		if _, err := binary.TimestampToDatetime(t, lvs, rs); err != nil {
+		if _, err := binary.TimestampToDatetime(proc.Ctx, t, lvs, rs); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -1549,7 +1549,7 @@ func castTimeStampAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vec
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Datetime](vec)
-	if _, err := binary.TimestampToDatetime(t, lvs, rs); err != nil {
+	if _, err := binary.TimestampToDatetime(proc.Ctx, t, lvs, rs); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -1571,14 +1571,14 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 			return proc.AllocConstNullVector(resultType, lv.Length()), nil
 		}
 		rs := make([]string, 1)
-		if _, err := binary.TimestampToVarchar(t, lvs, rs, precision); err != nil {
+		if _, err := binary.TimestampToVarchar(proc.Ctx, t, lvs, rs, precision); err != nil {
 			return nil, err
 		}
 		return vector.NewConstString(resultType, lv.Length(), rs[0], proc.Mp()), nil
 	}
 
 	rs := make([]string, len(lvs))
-	if _, err := binary.TimestampToVarchar(t, lvs, rs, precision); err != nil {
+	if _, err := binary.TimestampToVarchar(proc.Ctx, t, lvs, rs, precision); err != nil {
 		return nil, err
 	}
 	return vector.NewWithStrings(resultType, rs, lv.Nsp, proc.Mp()), nil
@@ -1625,11 +1625,11 @@ func CastBoolToString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 	lvs := vector.MustTCols[bool](lv)
 	col := make([]string, len(lvs))
 	if lv.IsScalar() {
-		binary.BoolToBytes(lvs, col)
+		binary.BoolToBytes(proc.Ctx, lvs, col)
 		return vector.NewConstString(rv.Typ, lv.Length(), col[0], proc.Mp()), nil
 	}
 
-	if _, err = binary.BoolToBytes(lvs, col); err != nil {
+	if _, err = binary.BoolToBytes(proc.Ctx, lvs, col); err != nil {
 		return nil, err
 	}
 
@@ -1646,12 +1646,12 @@ func CastDateAsString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 	lvs := vector.MustTCols[types.Date](lv)
 	col := make([]string, len(lvs))
 	if lv.IsScalar() {
-		binary.DateToBytes(lvs, col)
+		binary.DateToBytes(proc.Ctx, lvs, col)
 		return vector.NewConstString(rv.Typ, lv.Length(), col[0], proc.Mp()), nil
 	}
 
 	// XXX All these binary functions should take null.Nulls as input
-	if col, err = binary.DateToBytes(lvs, col); err != nil {
+	if col, err = binary.DateToBytes(proc.Ctx, lvs, col); err != nil {
 		return nil, err
 	}
 	return vector.NewWithStrings(rv.Typ, col, lv.Nsp, proc.Mp()), nil
@@ -1664,7 +1664,7 @@ func CastDateAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
 		rs := make([]types.Datetime, 1)
-		if _, err := binary.DateToDatetime(lvs, rs); err != nil {
+		if _, err := binary.DateToDatetime(proc.Ctx, lvs, rs); err != nil {
 			return nil, err
 		}
 		return vector.NewConstFixed(rv.Typ, lv.Length(), rs[0], proc.Mp()), nil
@@ -1675,7 +1675,7 @@ func CastDateAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Datetime](vec)
-	if _, err := binary.DateToDatetime(lvs, rs); err != nil {
+	if _, err := binary.DateToDatetime(proc.Ctx, lvs, rs); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -1777,13 +1777,13 @@ func CastDatetimeAsString(lv, rv *vector.Vector, proc *process.Process) (*vector
 		if lv.IsScalarNull() {
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
-		if col, err = binary.DatetimeToBytes(lvs, col, lv.Typ.Precision); err != nil {
+		if col, err = binary.DatetimeToBytes(proc.Ctx, lvs, col, lv.Typ.Precision); err != nil {
 			return nil, err
 		}
 		return vector.NewConstString(rv.Typ, lv.Length(), col[0], proc.Mp()), nil
 	}
 
-	if col, err = binary.DatetimeToBytes(lvs, col, lv.Typ.Precision); err != nil {
+	if col, err = binary.DatetimeToBytes(proc.Ctx, lvs, col, lv.Typ.Precision); err != nil {
 		return nil, err
 	}
 	return vector.NewWithStrings(rv.Typ, col, lv.Nsp, proc.Mp()), nil
@@ -1796,7 +1796,7 @@ func CastDatetimeAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Date, 1)
-		if _, err := binary.DatetimeToDate(lvs, rs); err != nil {
+		if _, err := binary.DatetimeToDate(proc.Ctx, lvs, rs); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -1808,7 +1808,7 @@ func CastDatetimeAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Date](vec)
-	if _, err := binary.DatetimeToDate(lvs, rs); err != nil {
+	if _, err := binary.DatetimeToDate(proc.Ctx, lvs, rs); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -1933,13 +1933,13 @@ func CastTimeAsString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 		if lv.IsScalarNull() {
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
-		if col, err = binary.TimeToBytes(lvs, col, lv.Typ.Precision); err != nil {
+		if col, err = binary.TimeToBytes(proc.Ctx, lvs, col, lv.Typ.Precision); err != nil {
 			return nil, err
 		}
 		return vector.NewConstString(rv.Typ, lv.Length(), col[0], proc.Mp()), nil
 	}
 
-	if col, err = binary.TimeToBytes(lvs, col, lv.Typ.Precision); err != nil {
+	if col, err = binary.TimeToBytes(proc.Ctx, lvs, col, lv.Typ.Precision); err != nil {
 		return nil, err
 	}
 	return vector.NewWithStrings(rv.Typ, col, lv.Nsp, proc.Mp()), nil
@@ -1952,7 +1952,7 @@ func CastTimeAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Vecto
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
 		rs := make([]types.Date, 1)
-		if _, err := binary.TimeToDate(lvs, rs); err != nil {
+		if _, err := binary.TimeToDate(proc.Ctx, lvs, rs); err != nil {
 			return nil, err
 		}
 		return vector.NewConstFixed(rv.Typ, lv.Length(), rs[0], proc.Mp()), nil
@@ -1963,7 +1963,7 @@ func CastTimeAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Vecto
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Date](vec)
-	if _, err := binary.TimeToDate(lvs, rs); err != nil {
+	if _, err := binary.TimeToDate(proc.Ctx, lvs, rs); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -1976,7 +1976,7 @@ func CastDateAsTime(lv, rv *vector.Vector, proc *process.Process) (*vector.Vecto
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
 		rs := make([]types.Time, 1)
-		if _, err := binary.DateToTime(lvs, rs); err != nil {
+		if _, err := binary.DateToTime(proc.Ctx, lvs, rs); err != nil {
 			return nil, err
 		}
 		return vector.NewConstFixed(rv.Typ, lv.Length(), rs[0], proc.Mp()), nil
@@ -1987,7 +1987,7 @@ func CastDateAsTime(lv, rv *vector.Vector, proc *process.Process) (*vector.Vecto
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Time](vec)
-	if _, err := binary.DateToTime(lvs, rs); err != nil {
+	if _, err := binary.DateToTime(proc.Ctx, lvs, rs); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -2000,7 +2000,7 @@ func CastTimeAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
 		rs := make([]types.Datetime, 1)
-		if _, err := binary.TimeToDatetime(lvs, rs, rv.Typ.Precision); err != nil {
+		if _, err := binary.TimeToDatetime(proc.Ctx, lvs, rs, rv.Typ.Precision); err != nil {
 			return nil, err
 		}
 		return vector.NewConstFixed(rv.Typ, lv.Length(), rs[0], proc.Mp()), nil
@@ -2011,7 +2011,7 @@ func CastTimeAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Datetime](vec)
-	if _, err := binary.TimeToDatetime(lvs, rs, rv.Typ.Precision); err != nil {
+	if _, err := binary.TimeToDatetime(proc.Ctx, lvs, rs, rv.Typ.Precision); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -2025,7 +2025,7 @@ func CastDatetimeAsTime(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
 		rs := make([]types.Time, 1)
-		if _, err := binary.DatetimeToTime(lvs, rs, precision); err != nil {
+		if _, err := binary.DatetimeToTime(proc.Ctx, lvs, rs, precision); err != nil {
 			return nil, err
 		}
 		return vector.NewConstFixed(rv.Typ, lv.Length(), rs[0], proc.Mp()), nil
@@ -2036,7 +2036,7 @@ func CastDatetimeAsTime(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Time](vec)
-	if _, err := binary.DatetimeToTime(lvs, rs, precision); err != nil {
+	if _, err := binary.DatetimeToTime(proc.Ctx, lvs, rs, precision); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -2050,7 +2050,7 @@ func CastIntAsTime[T constraints.Signed](lv, rv *vector.Vector, proc *process.Pr
 		if int64(lvs[0]) < types.MinInputIntTime || int64(lvs[0]) > types.MaxInputIntTime {
 			nulls.Add(lv.Nsp, 0)
 		}
-		if _, err := binary.NumericToTime(lvs, rs, rv.Typ.Precision); err != nil {
+		if _, err := binary.NumericToTime(proc.Ctx, lvs, rs, rv.Typ.Precision); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -2067,7 +2067,7 @@ func CastIntAsTime[T constraints.Signed](lv, rv *vector.Vector, proc *process.Pr
 			nulls.Add(vec.Nsp, uint64(i))
 		}
 	}
-	if _, err := binary.NumericToTime(lvs, rs, rv.Typ.Precision); err != nil {
+	if _, err := binary.NumericToTime(proc.Ctx, lvs, rs, rv.Typ.Precision); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -2081,7 +2081,7 @@ func CastUIntAsTime[T constraints.Unsigned](lv, rv *vector.Vector, proc *process
 		if uint64(lvs[0]) > types.MaxInputIntTime {
 			nulls.Add(lv.Nsp, 0)
 		}
-		if _, err := binary.NumericToTime(lvs, rs, rv.Typ.Precision); err != nil {
+		if _, err := binary.NumericToTime(proc.Ctx, lvs, rs, rv.Typ.Precision); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -2098,7 +2098,7 @@ func CastUIntAsTime[T constraints.Unsigned](lv, rv *vector.Vector, proc *process
 			nulls.Add(vec.Nsp, uint64(i))
 		}
 	}
-	if _, err := binary.NumericToTime(lvs, rs, rv.Typ.Precision); err != nil {
+	if _, err := binary.NumericToTime(proc.Ctx, lvs, rs, rv.Typ.Precision); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -2109,7 +2109,7 @@ func CastDecimal64AsTime(lv, rv *vector.Vector, proc *process.Process) (*vector.
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Time, 1)
-		if _, err := binary.Decimal64ToTime(lvs, rs, rv.Typ.Precision); err != nil {
+		if _, err := binary.Decimal64ToTime(proc.Ctx, lvs, rs, rv.Typ.Precision); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -2121,7 +2121,7 @@ func CastDecimal64AsTime(lv, rv *vector.Vector, proc *process.Process) (*vector.
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Time](vec)
-	if _, err := binary.Decimal64ToTime(lvs, rs, rv.Typ.Precision); err != nil {
+	if _, err := binary.Decimal64ToTime(proc.Ctx, lvs, rs, rv.Typ.Precision); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -2132,7 +2132,7 @@ func CastDecimal128AsTime(lv, rv *vector.Vector, proc *process.Process) (*vector
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Time, 1)
-		if _, err := binary.Decimal128ToTime(lvs, rs, rv.Typ.Precision); err != nil {
+		if _, err := binary.Decimal128ToTime(proc.Ctx, lvs, rs, rv.Typ.Precision); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -2144,7 +2144,7 @@ func CastDecimal128AsTime(lv, rv *vector.Vector, proc *process.Process) (*vector
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Time](vec)
-	if _, err := binary.Decimal128ToTime(lvs, rs, rv.Typ.Precision); err != nil {
+	if _, err := binary.Decimal128ToTime(proc.Ctx, lvs, rs, rv.Typ.Precision); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -2178,7 +2178,7 @@ func CastTimeAsDecimal64(lv, rv *vector.Vector, proc *process.Process) (*vector.
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Decimal64, 1)
-		if _, err := binary.TimeToDecimal64(lvs, rs, rv.Typ.Width, lv.Typ.Precision); err != nil {
+		if _, err := binary.TimeToDecimal64(proc.Ctx, lvs, rs, rv.Typ.Width, lv.Typ.Precision); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -2190,7 +2190,7 @@ func CastTimeAsDecimal64(lv, rv *vector.Vector, proc *process.Process) (*vector.
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Decimal64](vec)
-	if _, err := binary.TimeToDecimal64(lvs, rs, rv.Typ.Width, lv.Typ.Precision); err != nil {
+	if _, err := binary.TimeToDecimal64(proc.Ctx, lvs, rs, rv.Typ.Width, lv.Typ.Precision); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -2201,7 +2201,7 @@ func CastTimeAsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*vector
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Decimal128, 1)
-		if _, err := binary.TimeToDecimal128(lvs, rs, rv.Typ.Width, lv.Typ.Precision); err != nil {
+		if _, err := binary.TimeToDecimal128(proc.Ctx, lvs, rs, rv.Typ.Width, lv.Typ.Precision); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -2213,7 +2213,7 @@ func CastTimeAsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*vector
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Decimal128](vec)
-	if _, err := binary.TimeToDecimal128(lvs, rs, rv.Typ.Width, lv.Typ.Precision); err != nil {
+	if _, err := binary.TimeToDecimal128(proc.Ctx, lvs, rs, rv.Typ.Width, lv.Typ.Precision); err != nil {
 		return nil, err
 	}
 	return vec, nil
