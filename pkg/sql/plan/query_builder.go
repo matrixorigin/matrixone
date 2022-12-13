@@ -2313,4 +2313,9 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	return nodeId, err
 }
 
-func (builder *QueryBuilder) GetContext() context.Context { return builder.compCtx.GetContext() }
+func (builder *QueryBuilder) GetContext() context.Context {
+	if builder == nil {
+		return context.TODO()
+	}
+	return builder.compCtx.GetContext()
+}
