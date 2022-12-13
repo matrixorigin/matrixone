@@ -523,8 +523,9 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
-					Id:   colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
-					Size: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Size,
+					Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
+					Size:  colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Size,
+					Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,

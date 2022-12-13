@@ -25,8 +25,10 @@ func TestSingleSQLQuery(t *testing.T) {
 	//sql := "delete from dept where deptno = 10"
 	//sql := "delete from dept where dname = 'xxx'"
 	//sql := "delete emp,dept from emp ,dept where emp.deptno = dept.deptno and emp.deptno = 10"
-	sql := "delete from dept where dname = 'RESEARCH'"
-
+	//sql := "delete from dept where dname = 'RESEARCH'"
+	//sql := "delete from emp where deptno = 20 order by sal limit 2"
+	//sql := "delete from employees where empno > 7800 order by empno limit 2"
+	sql := "DELETE FROM employees, dept USING employees INNER JOIN dept WHERE employees.deptno = dept.deptno"
 	mock := NewMockOptimizer()
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
@@ -46,6 +48,9 @@ func TestSingleTableDeleteSQL(t *testing.T) {
 		"delete from emp where ename = 'SMITH'",
 		"delete from dept where deptno = 10",
 		"delete from dept where dname = 'RESEARCH'",
+		"delete from dept where deptno = 10 order by dname limit 1",
+		"delete from emp where deptno = 20 order by sal limit 2",
+		"delete from emp where empno > 7800 order by empno limit 2",
 	}
 
 	runTestShouldPass(mock, t, sqls, false, false)
@@ -62,7 +67,10 @@ func TestCompositeUniqueIndexTableDeleteSQL(t *testing.T) {
 		"delete from employees where ename = 'SMITH'",
 		"delete from employees where empno = 7698",
 		"delete from employees where empno = 7698 and ename = 'BLAKE'",
+		"delete from employees where deptno = 20 order by sal limit 2",
+		"delete from employees where empno > 7800 order by empno limit 2",
 		"delete employees, dept from employees, dept where employees.deptno = dept.deptno and sal > 2000",
+		"DELETE FROM employees, dept USING employees INNER JOIN dept WHERE employees.deptno = dept.deptno",
 	}
 
 	runTestShouldPass(mock, t, sqls, false, false)
@@ -78,6 +86,7 @@ func TestMultiTableDeleteSQL(t *testing.T) {
 		"delete t1,dept from emp as t1,dept where t1.deptno = dept.deptno and t1.deptno = 10",
 		"delete emp,dept from emp ,dept where emp.deptno = dept.deptno and empno > 7800",
 		"delete emp,dept from emp ,dept where emp.deptno = dept.deptno and empno = 7839",
+		"DELETE FROM emp, dept USING emp INNER JOIN dept WHERE emp.deptno = dept.deptno",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 }

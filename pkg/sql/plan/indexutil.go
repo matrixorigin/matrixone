@@ -24,11 +24,9 @@ import (
 	"strings"
 )
 
-// The name of the index column in the index table corresponding to the original table
-const Index_Column_Name string = "__mo_index_key"
-
 // When the original table contains an index table of multi table deletion statement, build a multi table join query
 // execution plan to query the rowid of the original table and the index table respectively
+// link ref: https://dev.mysql.com/doc/refman/8.0/en/delete.html
 func buildLeftJoinForMultTableDelete(ctx CompilerContext, stmt *tree.Delete) (*Plan, error) {
 	// build map between base table and alias table
 	tbinfo := &tableInfo{
@@ -168,6 +166,7 @@ func buildLeftJoinForMultTableDelete(ctx CompilerContext, stmt *tree.Delete) (*P
 
 // When the original table contains an index table of single table deletion statement, build a multi table join query
 // execution plan to query the rowid of the original table and the index table respectively
+// link ref: https://dev.mysql.com/doc/refman/8.0/en/delete.html
 func buildLeftJoinForSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (*Plan, error) {
 	tbinfo := &tableInfo{
 		alias2BaseNameMap: make(map[string]string),
@@ -201,7 +200,7 @@ func buildLeftJoinForSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (
 		return nil, err
 	}
 
-	// 2.get origin table Expr
+	// 2.get origin table Expr, only one table
 	originTableExpr := stmt.Tables[0]
 	aliasTable := originTableExpr.(*tree.AliasedTableExpr)
 	originTableName := string(aliasTable.Expr.(*tree.TableName).ObjectName)
@@ -279,7 +278,6 @@ func buildLeftJoinForSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (
 
 // Build delete projection of delete node
 func buildDeleteProjection(objRef *ObjectRef, tableDef *TableDef, tbinfo *tableInfo, delTablelist *DeleteTableList, ctx CompilerContext) error {
-	//var selectlist tree.SelectExprs
 	expr, err := buildRowIdAstExpr(ctx, tbinfo, objRef.SchemaName, tableDef.Name)
 	if err != nil {
 		return err
@@ -371,10 +369,10 @@ func buildJoinOnCond(tbinfo *tableInfo, originTableName string, indexTableName s
 type deleteTableInfo struct {
 	objRefs            *ObjectRef
 	tblDefs            *TableDef
-	useKeys            *ColDef // Confirm whether this field is useful
+	useKeys            *ColDef // The column used when deletion(dml), currently, it is based on '__row_id' column
 	colIndex           int32
 	attrsArr           []string // Confirm whether this field is useful
-	isIndexTableDelete bool
+	isIndexTableDelete bool     // Identify whether the current table is an index table
 }
 
 type DeleteTableList struct {
@@ -402,10 +400,4 @@ func (list *DeleteTableList) AddElement(objRef *ObjectRef, tableDef *TableDef, e
 	list.delTables = append(list.delTables, delInfo)
 	list.selectList = append(list.selectList, expr)
 	list.nextIndex++
-}
-
-// Complete the prefix for the table column,such as N_REGIONKEY -> NATION.N_REGIONKEY
-func supplyColumnPrefix(ctx CompilerContext, stmt *tree.Delete) error {
-	// TODO
-	return nil
 }

@@ -275,6 +275,31 @@ func TestSingleTableDeleteSQL(t *testing.T) {
 	sqls := []string{
 		"explain verbose DELETE FROM emp where sal > 2000",
 		"explain verbose delete from emp t1 where t1.sal > 2000",
+		"explain verbose delete from emp where empno > 3000",
+		"explain verbose delete from emp where ename = 'SMITH'",
+		"explain verbose delete from dept where deptno = 10",
+		"explain verbose delete from dept where dname = 'RESEARCH'",
+		"explain verbose delete from dept where deptno = 10 order by dname limit 1",
+		"explain verbose delete from emp where deptno = 20 order by sal limit 2",
+		"explain verbose delete from emp where empno > 7800 order by empno limit 2",
+	}
+	mockOptimizer := plan.NewMockOptimizer()
+	runTestShouldPass(mockOptimizer, t, sqls)
+}
+
+// Composite unique index
+func TestCompositeUniqueIndexTableDeleteSQL(t *testing.T) {
+	sqls := []string{
+		"explain verbose delete from employees where sal > 2000",
+		"explain verbose delete from employees t1 where t1.sal > 2000",
+		"explain verbose delete from employees where empno > 3000",
+		"explain verbose delete from employees where ename = 'SMITH'",
+		"explain verbose delete from employees where empno = 7698",
+		"explain verbose delete from employees where empno = 7698 and ename = 'BLAKE'",
+		"explain verbose delete from employees where deptno = 20 order by sal limit 2",
+		"explain verbose delete from employees where empno > 7800 order by empno limit 2",
+		"explain verbose delete employees, dept from employees, dept where employees.deptno = dept.deptno and sal > 2000",
+		"explain verbose DELETE FROM employees, dept USING employees INNER JOIN dept WHERE employees.deptno = dept.deptno",
 	}
 	mockOptimizer := plan.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
@@ -283,8 +308,12 @@ func TestSingleTableDeleteSQL(t *testing.T) {
 func TestMultiTableDeleteSQL(t *testing.T) {
 	sqls := []string{
 		"explain verbose delete emp,dept from emp ,dept where emp.deptno = dept.deptno and emp.deptno = 10",
+		"explain verbose delete emp,dept from emp ,dept where emp.deptno = dept.deptno and sal > 2000",
 		"explain verbose delete t1,t2  from emp as t1,dept as t2 where t1.deptno = t2.deptno and t1.deptno = 10",
 		"explain verbose delete t1,dept from emp as t1,dept where t1.deptno = dept.deptno and t1.deptno = 10",
+		"explain verbose delete emp,dept from emp ,dept where emp.deptno = dept.deptno and empno > 7800",
+		"explain verbose delete emp,dept from emp ,dept where emp.deptno = dept.deptno and empno = 7839",
+		"explain verbose DELETE FROM emp, dept USING emp INNER JOIN dept WHERE emp.deptno = dept.deptno",
 	}
 	mockOptimizer := plan.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)

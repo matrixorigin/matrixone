@@ -29,7 +29,7 @@ type DeleteCtx struct {
 	TableName          string
 	DbName             string
 	TableSource        engine.Relation
-	UseDeleteKey       string
+	UseDeleteKey       string // The column used when deletion(dml), Currently, it is based on '__row_id' column
 	CanTruncate        bool
 	ColIndex           int32
 	IsIndexTableDelete bool
