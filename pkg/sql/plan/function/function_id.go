@@ -250,6 +250,7 @@ const (
 	JSON_EXTRACT // JSON_EXTRACT
 	FORMAT       // FORMAT
 	SLEEP        // sleep for a while
+	INSTR
 
 	UUID
 	SERIAL
@@ -458,6 +459,7 @@ var functionIdRegister = map[string]int32{
 	"field":                          FIELD,
 	"format":                         FORMAT,
 	"sleep":                          SLEEP,
+	"instr":                          INSTR,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

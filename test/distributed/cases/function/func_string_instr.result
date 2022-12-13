@@ -1,0 +1,59 @@
+select instr('aaa','a');
+instr(aaa, a)
+1
+select instr('aaa','ax');
+instr(aaa, ax)
+0
+select instr('aaa','aa');
+instr(aaa, aa)
+1
+select instr('aaa',1);
+instr(aaa, 1)
+0
+select instr('aaa','b');
+instr(aaa, b)
+0
+select instr(null,'a');
+instr(null, a)
+null
+select instr(1,null);
+instr(1, null)
+null
+select instr(null,null);
+instr(null, null)
+null
+select instr(null,'a');
+instr(null, a)
+null
+create table t1(a varchar,b varchar);
+insert into t1 values('axa','x'),('abababa','qq'),('qwer','er');
+select instr(a,b) from t1;
+instr(a, b)
+2
+0
+3
+select instr(a,null) from t1;
+instr(a, null)
+null
+null
+null
+select instr(null,b) from t1;
+instr(null, b)
+null
+null
+null
+select instr('axa','x') from t1;
+instr(axa, x)
+2
+2
+2
+select instr(a,'qw') from t1;
+instr(a, qw)
+0
+0
+1
+select instr('qwer',b) from t1;
+instr(qwer, b)
+0
+0
+3

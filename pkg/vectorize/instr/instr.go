@@ -1,0 +1,59 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package instr
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"strings"
+)
+
+func Instr(s1, s2 []string, rs []int64, nsp *nulls.Nulls) {
+	s1GoOn, s2GoOn := len(s1) > 1, len(s2) > 1
+	if s1GoOn && s2GoOn {
+		instr3(s1, s2, rs, nsp)
+	} else if s1GoOn {
+		instr1(s1, s2, rs, nsp)
+	} else {
+		instr2(s1, s2, rs, nsp)
+	}
+}
+
+func instr1(s1, s2 []string, rs []int64, nsp *nulls.Nulls) {
+	substr := s2[0]
+	for i, str := range s1 {
+		if nsp.Contains(uint64(i)) {
+			continue
+		}
+		rs[i] = int64(strings.Index(str, substr) + 1)
+	}
+}
+func instr2(s1, s2 []string, rs []int64, nsp *nulls.Nulls) {
+	str := s1[0]
+	for i, substr := range s2 {
+		if nsp.Contains(uint64(i)) {
+			continue
+		}
+		rs[i] = int64(strings.Index(str, substr) + 1)
+	}
+}
+
+func instr3(s1, s2 []string, rs []int64, nsp *nulls.Nulls) {
+	for i, str := range s1 {
+		if nsp.Contains(uint64(i)) {
+			continue
+		}
+		rs[i] = int64(strings.Index(str, s2[i]) + 1)
+	}
+}
