@@ -58,7 +58,6 @@ func New(
 
 	storage, err := memorystorage.NewMemoryStorage(
 		mpool.MustNewZero(),
-		memorystorage.SnapshotIsolation,
 		ck,
 		memoryengine.RandomIDGenerator,
 	)

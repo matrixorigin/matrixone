@@ -27,7 +27,6 @@ type tableState[
 	K Ordered[K],
 	V any,
 ] struct {
-	id    int64
 	rows  Rows[K, V]
 	log   Log[K, V]
 	index Index[K, V]
@@ -88,9 +87,7 @@ func (t *tableState[K, V]) merge(
 			if oldPair.ID != log.oldPair.ID {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
-			pivot.ID = log.pair.ID
-			pivot.Value = log.pair.Value
-			t.setPair(pivot, oldPair)
+			t.setPair(log.pair, oldPair)
 
 		} else if log.pair == nil {
 			// delete
@@ -107,9 +104,7 @@ func (t *tableState[K, V]) merge(
 			if oldPair != nil {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
-			pivot.ID = log.pair.ID
-			pivot.Value = log.pair.Value
-			t.setPair(pivot, oldPair)
+			t.setPair(log.pair, oldPair)
 		}
 
 	}
@@ -118,7 +113,6 @@ func (t *tableState[K, V]) merge(
 }
 
 func (s *tableState[K, V]) dump(w io.Writer) {
-	fmt.Fprintf(w, "table state, id %v\n", s.id)
 	{
 		iter := s.rows.Copy().Iter()
 		for ok := iter.First(); ok; ok = iter.Next() {
@@ -127,6 +121,16 @@ func (s *tableState[K, V]) dump(w io.Writer) {
 				panic(err)
 			}
 			fmt.Fprintf(w, "\trow %+v\n", row)
+		}
+	}
+	{
+		iter := s.index.Copy().Iter()
+		for ok := iter.First(); ok; ok = iter.Next() {
+			entry, err := iter.Read()
+			if err != nil {
+				panic(err)
+			}
+			fmt.Fprintf(w, "\tindex %+v\n", entry)
 		}
 	}
 	{
@@ -164,10 +168,11 @@ func (s *tableState[K, V]) setPair(pair *KVPair[K, V], oldPair *KVPair[K, V]) {
 
 		// add indexes
 		for _, index := range pair.Indexes {
-			s.index.Set(&IndexEntry[K, V]{
+			entry := &IndexEntry[K, V]{
 				Index: index,
 				Key:   pair.Key,
-			})
+			}
+			s.index.Set(entry)
 		}
 
 		// add log
