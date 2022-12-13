@@ -4651,3 +4651,55 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	assert.NoError(t, tae.Catalog.RecurLoop(p))
 	assert.False(t, tableExisted)
 }
+
+// append a segment
+// compact blks
+// global checkpoint
+// restart
+func TestGlobalCheckpoint3(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	options.WithForceUpdateCheckpointGlobalInterval(time.Millisecond * 10)(opts)
+	options.WithGlobalVersionInterval(time.Nanosecond * 1)(opts)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(10, 2)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 40)
+
+	_, rel := tae.createRelAndAppend(bat, true)
+	testutils.WaitExpect(1000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	tae.dropRelation(t)
+	testutils.WaitExpect(1000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	tae.createRelAndAppend(bat, false)
+	testutils.WaitExpect(1000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	p := &catalog.LoopProcessor{}
+	tableExisted := false
+	p.TableFn = func(te *catalog.TableEntry) error {
+		if te.ID == rel.ID() {
+			tableExisted = true
+		}
+		return nil
+	}
+
+	assert.NoError(t, tae.Catalog.RecurLoop(p))
+	assert.True(t, tableExisted)
+
+	tae.restart()
+
+	tableExisted = false
+	assert.NoError(t, tae.Catalog.RecurLoop(p))
+	assert.False(t, tableExisted)
+}

@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -159,6 +160,7 @@ type runner struct {
 	fs        *objectio.ObjectFS
 	observers *observers
 	wal       wal.Driver
+	disabled  atomic.Bool
 
 	stopper *stopper.Stopper
 
@@ -224,7 +226,19 @@ func (r *runner) DebugUpdateOptions(opts ...Option) {
 	}
 }
 
+// DisableCheckpoint stops generating checkpoint
+func (r *runner) DisableCheckpoint() {
+	r.disabled.Store(true)
+}
+
+func (r *runner) EnableCheckpoint() {
+	r.disabled.Store(false)
+}
+
 func (r *runner) onCheckpointEntries(items ...any) {
+	if r.disabled.Load() {
+		return
+	}
 	var err error
 	entry := r.MaxCheckpoint()
 	if entry.IsFinished() {
@@ -240,9 +254,12 @@ func (r *runner) onCheckpointEntries(items ...any) {
 		return
 	}
 
-	if !check() {
-		logutil.Debugf("%s is waiting", entry.String())
-		return
+	if entry.IsPendding() {
+		if !check() {
+			logutil.Debugf("%s is waiting", entry.String())
+			return
+		}
+		entry.SetState(ST_Running)
 	}
 
 	now := time.Now()
@@ -461,6 +478,11 @@ func (r *runner) MaxCheckpoint() *CheckpointEntry {
 	return entry
 }
 
+func (r *runner) maxCheckpointLocked() *CheckpointEntry {
+	entry, _ := r.storage.entries.Max()
+	return entry
+}
+
 func (r *runner) tryAddNewCheckpointEntry(entry *CheckpointEntry) (success bool) {
 	r.storage.Lock()
 	defer r.storage.Unlock()
@@ -525,6 +547,9 @@ func (r *runner) tryScheduleGlobalCheckpoint(ts types.TS) {
 }
 
 func (r *runner) tryScheduleCheckpoint() {
+	if r.disabled.Load() {
+		return
+	}
 	entry := r.MaxCheckpoint()
 
 	// no prev checkpoint found. try schedule the first
