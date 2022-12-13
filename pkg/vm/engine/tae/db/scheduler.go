@@ -64,7 +64,7 @@ func newTaskScheduler(db *DB, asyncWorkers int, ioWorkers int) *taskScheduler {
 		handler.Start()
 	}
 
-	ioDispatcher := tasks.NewBaseScopedDispatcher(tasks.DefaultScopeSharder)
+	ioDispatcher := tasks.NewBaseScopedDispatcher(nil)
 	for i := 0; i < ioWorkers; i++ {
 		handler := tasks.NewSingleWorkerHandler(fmt.Sprintf("[ioworker-%d]", i))
 		ioDispatcher.AddHandle(handler)

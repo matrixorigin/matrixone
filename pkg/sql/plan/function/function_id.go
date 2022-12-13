@@ -249,6 +249,7 @@ const (
 	DATE_FORMAT  // DATE_FORMAT
 	JSON_EXTRACT // JSON_EXTRACT
 	FORMAT       // FORMAT
+	SLEEP        // sleep for a while
 
 	UUID
 	SERIAL
@@ -456,6 +457,7 @@ var functionIdRegister = map[string]int32{
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
 	"format":                         FORMAT,
+	"sleep":                          SLEEP,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

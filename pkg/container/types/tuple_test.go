@@ -15,6 +15,7 @@
 package types
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"math"
 	"math/rand"
 	"testing"
@@ -36,9 +37,10 @@ func TestSimpleTupleAllTypes(t *testing.T) {
 	}
 	for _, test := range tests {
 		tuple := test.args
-		packer := NewPacker()
+		mp := mpool.MustNewZero()
+		packer := NewPacker(mp)
 		encodeBufToPacker(tuple, packer)
-		tt, _ := Unpack(packer.buf)
+		tt, _ := Unpack(packer.GetBuf())
 		require.Equal(t, tuple.String(), tt.String())
 		for i := range tuple {
 			require.Equal(t, tuple[i], tt[i])
@@ -104,9 +106,10 @@ func TestSingleTypeTuple(t *testing.T) {
 	}
 	for _, test := range tests {
 		tuple := test.args
-		packer := NewPacker()
+		mp := mpool.MustNewZero()
+		packer := NewPacker(mp)
 		encodeBufToPacker(tuple, packer)
-		tt, _ := Unpack(packer.buf)
+		tt, _ := Unpack(packer.GetBuf())
 		for i := range tuple {
 			require.Equal(t, tuple[i], tt[i])
 		}
@@ -133,9 +136,10 @@ func TestMulTypeTuple(t *testing.T) {
 
 	for _, test := range tests {
 		tuple := test.args
-		packer := NewPacker()
+		mp := mpool.MustNewZero()
+		packer := NewPacker(mp)
 		encodeBufToPacker(tuple, packer)
-		tt, _ := Unpack(packer.buf)
+		tt, _ := Unpack(packer.GetBuf())
 		for i := range tuple {
 			require.Equal(t, tuple[i], tt[i])
 		}

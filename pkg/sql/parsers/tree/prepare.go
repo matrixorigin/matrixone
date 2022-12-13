@@ -49,6 +49,11 @@ func (node *PrepareString) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Sql)
 }
 
+func (node *PrepareStmt) GetStatementType() string   { return "Prepare" }
+func (node *PrepareStmt) GetQueryType() string       { return QueryTypeDCL }
+func (node *PrepareString) GetStatementType() string { return "Prepare" }
+func (node *PrepareString) GetQueryType() string     { return QueryTypeDCL }
+
 func NewPrepareStmt(name Identifier, statement Statement) *PrepareStmt {
 	return &PrepareStmt{
 		Name: name,

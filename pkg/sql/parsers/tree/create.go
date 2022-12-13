@@ -109,6 +109,9 @@ func (node *CreateDatabase) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *CreateDatabase) GetStatementType() string { return "Create Database" }
+func (node *CreateDatabase) GetQueryType() string     { return QueryTypeDDL }
+
 func NewCreateDatabase(ine bool, name Identifier, opts []CreateOption) *CreateDatabase {
 	return &CreateDatabase{
 		IfNotExists:   ine,
@@ -239,6 +242,9 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		}
 	}
 }
+
+func (node *CreateTable) GetStatementType() string { return "Create Table" }
+func (node *CreateTable) GetQueryType() string     { return QueryTypeDDL }
 
 type TableDef interface {
 	NodeFormatter
@@ -1891,6 +1897,9 @@ func (node *CreateIndex) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *CreateIndex) GetStatementType() string { return "Create Index" }
+func (node *CreateIndex) GetQueryType() string     { return QueryTypeDDL }
+
 func NewCreateIndex(n Identifier, t TableName, ife bool, it IndexCategory, k []*KeyPart, i *IndexOption, m []MiscOption) *CreateIndex {
 	return &CreateIndex{
 		Name:        n,
@@ -1957,6 +1966,9 @@ func (node *CreateRole) Format(ctx *FmtCtx) {
 		prefix = ", "
 	}
 }
+
+func (node *CreateRole) GetStatementType() string { return "Create Role" }
+func (node *CreateRole) GetQueryType() string     { return QueryTypeDCL }
 
 func NewCreateRole(ife bool, r []*Role) *CreateRole {
 	return &CreateRole{
@@ -2318,6 +2330,9 @@ func (node *CreateUser) Format(ctx *FmtCtx) {
 	node.CommentOrAttribute.Format(ctx)
 }
 
+func (node *CreateUser) GetStatementType() string { return "Create User" }
+func (node *CreateUser) GetQueryType() string     { return QueryTypeDCL }
+
 func NewCreateUser(ife bool, u []*User, r *Role, misc UserMiscOption) *CreateUser {
 	return &CreateUser{
 		IfNotExists: ife,
@@ -2348,6 +2363,9 @@ func (ca *CreateAccount) Format(ctx *FmtCtx) {
 	ca.StatusOption.Format(ctx)
 	ca.Comment.Format(ctx)
 }
+
+func (ca *CreateAccount) GetStatementType() string { return "Create Account" }
+func (ca *CreateAccount) GetQueryType() string     { return QueryTypeDCL }
 
 type AccountAuthOption struct {
 	Equal          string
