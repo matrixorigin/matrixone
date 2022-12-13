@@ -15,8 +15,9 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -1109,12 +1110,14 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 	switch constT.Oid {
 	case types.T_char, types.T_varchar, types.T_text:
 		switch columnT.Oid {
-		case types.T_char, types.T_varchar, types.T_text:
+		case types.T_char, types.T_varchar:
 			if constT.Width <= columnT.Width {
 				return true
 			} else {
 				return false
 			}
+		case types.T_text:
+			return true
 		default:
 			return false
 		}
