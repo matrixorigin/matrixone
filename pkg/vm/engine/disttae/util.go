@@ -279,7 +279,7 @@ func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr) (bool, 
 
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	ret, err := colexec.EvalExpr(bat, nil, funExpr)
+	ret, err := colexec.EvalExpr(bat, process.NewFromNil(ctx), funExpr)
 	if err != nil {
 		return false, 0
 	}
