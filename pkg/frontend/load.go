@@ -459,8 +459,8 @@ func collectWriteBatchResult(handler *ParseLineHandler, wh *WriteBatchHandler, e
 	wh.simdCsvErr = nil
 }
 
-func makeParsedFailedError(tp, field, column string, line uint64, offset int) *moerr.Error {
-	return moerr.NewDataTruncatedNoCtx(tp, "value '%s' for column '%s' at row '%d'", field, column, line+uint64(offset))
+func makeParsedFailedError(ctx context.Context, tp, field, column string, line uint64, offset int) *moerr.Error {
+	return moerr.NewDataTruncated(ctx, tp, "value '%s' for column '%s' at row '%d'", field, column, line+uint64(offset))
 }
 
 func errorCanBeIgnored(err error) bool {
@@ -612,7 +612,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if err != nil {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = 0
@@ -623,7 +623,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if err != nil || d < math.MinInt8 || d > math.MaxInt8 {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = 0
@@ -641,7 +641,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if err != nil {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = 0
@@ -652,7 +652,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if err != nil || d < math.MinInt16 || d > math.MaxInt16 {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = 0
@@ -670,7 +670,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if err != nil {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = 0
@@ -681,7 +681,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if err != nil || d < math.MinInt32 || d > math.MaxInt32 {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = 0
@@ -699,7 +699,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if err != nil {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = 0
@@ -710,7 +710,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if err != nil || d < math.MinInt64 || d > math.MaxInt64 {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = 0
@@ -728,7 +728,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if err != nil {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = 0
@@ -739,7 +739,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if err != nil || d < 0 || d > math.MaxUint8 {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = 0
@@ -757,7 +757,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if err != nil {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = 0
@@ -768,7 +768,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if err != nil || d < 0 || d > math.MaxUint16 {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = 0
@@ -786,7 +786,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if err != nil {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = 0
@@ -797,7 +797,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if err != nil || d < 0 || d > math.MaxUint32 {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = 0
@@ -815,7 +815,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if err != nil {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = 0
@@ -826,7 +826,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if err != nil || d < 0 || d > math.MaxUint64 {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = 0
@@ -844,7 +844,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							result.Warnings++
 							d = 0
@@ -863,7 +863,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							result.Warnings++
 							d = 0
@@ -904,7 +904,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							result.Warnings++
 							d = 0
@@ -922,7 +922,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							result.Warnings++
 							d = 0
@@ -939,7 +939,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							result.Warnings++
 							d = 0
@@ -996,7 +996,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							result.Warnings++
 							d = types.Timestamp(0)
@@ -1012,7 +1012,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								return makeParsedFailedError(proc.Ctx, vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							result.Warnings++
 							d = types.Uuid{0}

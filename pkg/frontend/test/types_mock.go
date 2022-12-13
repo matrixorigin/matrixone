@@ -327,18 +327,18 @@ func (m *MockExecResult) EXPECT() *MockExecResultMockRecorder {
 }
 
 // GetInt64 mocks base method.
-func (m *MockExecResult) GetInt64(rindex, cindex uint64) (int64, error) {
+func (m *MockExecResult) GetInt64(ctx context.Context, rindex, cindex uint64) (int64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetInt64", rindex, cindex)
+	ret := m.ctrl.Call(m, "GetInt64", ctx, rindex, cindex)
 	ret0, _ := ret[0].(int64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetInt64 indicates an expected call of GetInt64.
-func (mr *MockExecResultMockRecorder) GetInt64(rindex, cindex interface{}) *gomock.Call {
+func (mr *MockExecResultMockRecorder) GetInt64(ctx, rindex, cindex interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetInt64", reflect.TypeOf((*MockExecResult)(nil).GetInt64), rindex, cindex)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetInt64", reflect.TypeOf((*MockExecResult)(nil).GetInt64), ctx, rindex, cindex)
 }
 
 // GetRowCount mocks base method.
@@ -356,33 +356,33 @@ func (mr *MockExecResultMockRecorder) GetRowCount() *gomock.Call {
 }
 
 // GetString mocks base method.
-func (m *MockExecResult) GetString(rindex, cindex uint64) (string, error) {
+func (m *MockExecResult) GetString(ctx context.Context, rindex, cindex uint64) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetString", rindex, cindex)
+	ret := m.ctrl.Call(m, "GetString", ctx, rindex, cindex)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetString indicates an expected call of GetString.
-func (mr *MockExecResultMockRecorder) GetString(rindex, cindex interface{}) *gomock.Call {
+func (mr *MockExecResultMockRecorder) GetString(ctx, rindex, cindex interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetString", reflect.TypeOf((*MockExecResult)(nil).GetString), rindex, cindex)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetString", reflect.TypeOf((*MockExecResult)(nil).GetString), ctx, rindex, cindex)
 }
 
 // GetUint64 mocks base method.
-func (m *MockExecResult) GetUint64(rindex, cindex uint64) (uint64, error) {
+func (m *MockExecResult) GetUint64(ctx context.Context, rindex, cindex uint64) (uint64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetUint64", rindex, cindex)
+	ret := m.ctrl.Call(m, "GetUint64", ctx, rindex, cindex)
 	ret0, _ := ret[0].(uint64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetUint64 indicates an expected call of GetUint64.
-func (mr *MockExecResultMockRecorder) GetUint64(rindex, cindex interface{}) *gomock.Call {
+func (mr *MockExecResultMockRecorder) GetUint64(ctx, rindex, cindex interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUint64", reflect.TypeOf((*MockExecResult)(nil).GetUint64), rindex, cindex)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUint64", reflect.TypeOf((*MockExecResult)(nil).GetUint64), ctx, rindex, cindex)
 }
 
 // MockBackgroundExec is a mock of BackgroundExec interface.

@@ -19,11 +19,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -43,6 +44,7 @@ type StatementInfo struct {
 	Statement            string    `json:"statement"`
 	StatementFingerprint string    `json:"statement_fingerprint"`
 	StatementTag         string    `json:"statement_tag"`
+	SqlSourceType        string    `json:"sql_source_type"`
 	RequestAt            time.Time `json:"request_at"` // see WithRequestAt
 
 	// after
@@ -105,6 +107,7 @@ func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string 
 	row.SetColumnVal(dbCol, s.Database)
 	row.SetColumnVal(stmtCol, s.Statement)
 	row.SetColumnVal(stmtTagCol, s.StatementTag)
+	row.SetColumnVal(sqlTypeCol, s.SqlSourceType)
 	row.SetColumnVal(stmtFgCol, s.StatementFingerprint)
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
