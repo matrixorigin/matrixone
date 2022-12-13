@@ -1916,7 +1916,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	}, ctx)
 	node := builder.qry.Nodes[nodeID]
 
-	ctx.binder = NewTableBinder(builder, ctx)
+	ctx.binder = NewTableBinder(builder.compCtx.GetContext(), builder, ctx)
 
 	switch cond := tbl.Cond.(type) {
 	case *tree.OnJoinCond:
@@ -2290,7 +2290,7 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		}
 		childId = builder.appendNode(scanNode, ctx)
 	}
-	ctx.binder = NewTableBinder(builder, ctx)
+	ctx.binder = NewTableBinder(ctx, builder, ctx)
 	exprs := make([]*plan.Expr, 0, len(tbl.Func.Exprs))
 	for _, v := range tbl.Func.Exprs {
 		curExpr, err := ctx.binder.BindExpr(v, 0, false)

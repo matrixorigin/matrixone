@@ -146,7 +146,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		// hasExplicitCols maybe true or false
 		binders := make([]*DefaultBinder, 0, len(explicitCols))
 		for _, col := range explicitCols {
-			binders = append(binders, NewDefaultBinder(nil, nil, col.Typ, nil))
+			binders = append(binders, NewDefaultBinder(nil, nil, nil, col.Typ, nil))
 		}
 		for i, row := range rows {
 			if row == nil || explicitCount != len(row) {

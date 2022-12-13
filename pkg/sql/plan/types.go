@@ -208,6 +208,7 @@ type Binder interface {
 }
 
 type baseBinder struct {
+	sysCtx    context.Context
 	builder   *QueryBuilder
 	ctx       *BindContext
 	impl      Binder

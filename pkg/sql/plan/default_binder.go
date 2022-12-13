@@ -15,14 +15,16 @@
 package plan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"strings"
 )
 
-func NewDefaultBinder(builder *QueryBuilder, ctx *BindContext, typ *Type, cols []string) *DefaultBinder {
-	b := &DefaultBinder{typ: typ, cols: cols}
+func NewDefaultBinder(goCtx context.Context, builder *QueryBuilder, ctx *BindContext, typ *Type, cols []string) *DefaultBinder {
+	b := &DefaultBinder{typ: typ, cols: cols, baseBinder: baseBinder{sysCtx: goCtx}}
 	b.builder = builder
 	b.ctx = ctx
 	b.impl = b
