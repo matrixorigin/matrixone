@@ -182,43 +182,76 @@ func CompareBytesNe(v1, v2 []byte, s1, s2 int32) bool {
 
 func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) (*vector.Vector, error) {
 	v1, v2 := vs[0], vs[1]
-	col1, col2 := vector.MustBytesCols(v1), vector.MustBytesCols(v2)
+
 	if v1.IsScalarNull() || v2.IsScalarNull() {
 		return handleScalarNull(v1, v2, proc)
 	}
 
 	if v1.IsScalar() && v2.IsScalar() {
-		return vector.NewConstFixed(boolType, 1, fn(col1[0], col2[0], v1.Typ.Scale, v2.Typ.Scale), proc.Mp()), nil
+		col1, col2 := vector.MustBytesCols(v1), vector.MustBytesCols(v2)
+		return vector.NewConstFixed(boolType, 1, fn(col1[0], col2[0], v1.Typ.Width, v2.Typ.Width), proc.Mp()), nil
 	}
 
 	if v1.IsScalar() {
+		col1 := vector.MustBytesCols(v1)
+		col2, area := vector.MustVarlenaRawData(v2)
 		length := vector.Length(v2)
 		vec := allocateBoolVector(length, proc)
 		veccol := vec.Col.([]bool)
-		for i := range veccol {
-			veccol[i] = fn(col1[0], col2[i], v1.Typ.Scale, v2.Typ.Scale)
+		if v2.Typ.Width <= types.VarlenaInlineSize {
+			for i := range veccol {
+				veccol[i] = fn(col1[0], (&col2[i]).ByteSlice(), v1.Typ.Width, v2.Typ.Width)
+			}
+		} else {
+			for i := range veccol {
+				veccol[i] = fn(col1[0], (&col2[i]).GetByteSlice(area), v1.Typ.Width, v2.Typ.Width)
+			}
 		}
 		nulls.Or(v2.Nsp, nil, vec.Nsp)
 		return vec, nil
 	}
 
 	if v2.IsScalar() {
+		col1, area := vector.MustVarlenaRawData(v1)
+		col2 := vector.MustBytesCols(v2)
 		length := vector.Length(v1)
 		vec := allocateBoolVector(length, proc)
 		veccol := vec.Col.([]bool)
-		for i := range veccol {
-			veccol[i] = fn(col1[i], col2[0], v1.Typ.Scale, v2.Typ.Scale)
+		if v1.Typ.Width <= types.VarlenaInlineSize {
+			for i := range veccol {
+				veccol[i] = fn((&col1[i]).ByteSlice(), col2[0], v1.Typ.Width, v2.Typ.Width)
+			}
+		} else {
+			for i := range veccol {
+				veccol[i] = fn((&col1[i]).GetByteSlice(area), col2[0], v1.Typ.Width, v2.Typ.Width)
+			}
 		}
 		nulls.Or(v1.Nsp, nil, vec.Nsp)
 		return vec, nil
 	}
 
 	// Vec Vec
+	col1, area1 := vector.MustVarlenaRawData(v1)
+	col2, area2 := vector.MustVarlenaRawData(v2)
 	length := vector.Length(v1)
 	vec := allocateBoolVector(length, proc)
 	veccol := vec.Col.([]bool)
-	for i := range veccol {
-		veccol[i] = fn(col1[i], col2[i], v1.Typ.Scale, v2.Typ.Scale)
+	if v1.Typ.Width <= types.VarlenaInlineSize && v2.Typ.Width <= types.VarlenaInlineSize {
+		for i := range veccol {
+			veccol[i] = fn((&col1[i]).ByteSlice(), (&col2[i]).ByteSlice(), v1.Typ.Width, v2.Typ.Width)
+		}
+	} else if v1.Typ.Width <= types.VarlenaInlineSize {
+		for i := range veccol {
+			veccol[i] = fn((&col1[i]).ByteSlice(), (&col2[i]).GetByteSlice(area2), v1.Typ.Width, v2.Typ.Width)
+		}
+	} else if v2.Typ.Width <= types.VarlenaInlineSize {
+		for i := range veccol {
+			veccol[i] = fn((&col1[i]).GetByteSlice(area1), (&col2[i]).ByteSlice(), v1.Typ.Width, v2.Typ.Width)
+		}
+	} else {
+		for i := range veccol {
+			veccol[i] = fn((&col1[i]).GetByteSlice(area1), (&col2[i]).GetByteSlice(area2), v1.Typ.Width, v2.Typ.Width)
+		}
 	}
 	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
 	return vec, nil

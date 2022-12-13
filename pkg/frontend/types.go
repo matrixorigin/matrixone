@@ -148,11 +148,11 @@ func (icfl *InternalCmdFieldList) Format(ctx *tree.FmtCtx) {
 type ExecResult interface {
 	GetRowCount() uint64
 
-	GetString(rindex, cindex uint64) (string, error)
+	GetString(ctx context.Context, rindex, cindex uint64) (string, error)
 
-	GetUint64(rindex, cindex uint64) (uint64, error)
+	GetUint64(ctx context.Context, rindex, cindex uint64) (uint64, error)
 
-	GetInt64(rindex, cindex uint64) (int64, error)
+	GetInt64(ctx context.Context, rindex, cindex uint64) (int64, error)
 }
 
 func execResultArrayHasData(arr []ExecResult) bool {

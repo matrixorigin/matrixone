@@ -174,7 +174,7 @@ func TestSession_TxnBegin(t *testing.T) {
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-
+		ioses.EXPECT().Ref().AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -232,7 +232,7 @@ func TestVariables(t *testing.T) {
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-
+		ioses.EXPECT().Ref().AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -330,26 +330,26 @@ func TestVariables(t *testing.T) {
 		//same session global
 		_, err = ses.GetGlobalVar(v)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 		_, err = ses.GetTxnCompileCtx().ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 
 		//exist session global
 		_, err = existSes.GetGlobalVar(v)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 		_, err = existSes.GetTxnCompileCtx().ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 
 		//new session after session global
 		_, err = newSesAfterSession.GetGlobalVar(v)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 		_, err = newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 	}
 
 	convey.Convey("scope global", t, func() {
@@ -509,7 +509,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-
+		ioses.EXPECT().Ref().AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
