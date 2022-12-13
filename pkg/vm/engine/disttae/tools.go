@@ -1027,20 +1027,23 @@ func genBlockMetas(
 	return metas, nil
 }
 
-func inBlockList(blk BlockMeta, blks []BlockMeta) bool {
-	for i := range blks {
-		if blk.Eq(blks[i]) {
-			return true
-		}
-	}
-	return false
+func inBlockMap(blk BlockMeta, blockMap map[uint64]bool) bool {
+	_, ok := blockMap[blk.Info.BlockID]
+	return ok
 }
 
 func genModifedBlocks(ctx context.Context, deletes map[uint64][]int, orgs, modfs []BlockMeta,
 	expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) []ModifyBlockMeta {
 	blks := make([]ModifyBlockMeta, 0, len(orgs)-len(modfs))
+
+	lenblks := len(modfs)
+	blockMap := make(map[uint64]bool, lenblks)
+	for i := 0; i < lenblks; i++ {
+		blockMap[modfs[i].Info.BlockID] = true
+	}
+
 	for i, blk := range orgs {
-		if !inBlockList(blk, modfs) {
+		if !inBlockMap(blk, blockMap) {
 			if needRead(ctx, expr, blk, tableDef, proc) {
 				blks = append(blks, ModifyBlockMeta{
 					meta:    orgs[i],
