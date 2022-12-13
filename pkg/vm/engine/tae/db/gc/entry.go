@@ -13,7 +13,6 @@ type TableEntry struct {
 }
 
 type ObjectEntry struct {
-	common.RefHelper
 	refs  atomic.Int64
 	table TableEntry
 	drop  bool
