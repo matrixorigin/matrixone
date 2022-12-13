@@ -17,12 +17,13 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"os"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 
 	"github.com/google/uuid"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1185,4 +1186,38 @@ func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, e
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
 	return plan.BuildPlan(ctx, stmts[0])
+}
+
+func Test_getSqlType(t *testing.T) {
+	convey.Convey("call getSqlType func", t, func() {
+		sql := "use db"
+		ses := &Session{}
+		ses.getSqlType(sql)
+		convey.So(ses.sqlSourceType, convey.ShouldEqual, intereSql)
+
+		user := "special_user"
+		tenant := &TenantInfo{
+			User: user,
+		}
+		ses.SetTenantInfo(tenant)
+		SetSpecialUser(user, nil)
+		ses.getSqlType(sql)
+		convey.So(ses.sqlSourceType, convey.ShouldEqual, intereSql)
+
+		tenant.User = "dump"
+		ses.getSqlType(sql)
+		convey.So(ses.sqlSourceType, convey.ShouldEqual, externSql)
+
+		sql = "/* cloud_user */ use db"
+		ses.getSqlType(sql)
+		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudUserSql)
+
+		sql = "/* cloud_nouser */ use db"
+		ses.getSqlType(sql)
+		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudNoUserSql)
+
+		sql = "/* json */ use db"
+		ses.getSqlType(sql)
+		convey.So(ses.sqlSourceType, convey.ShouldEqual, externSql)
+	})
 }
