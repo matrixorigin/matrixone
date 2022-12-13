@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/fagongzi/goetty/v2"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -40,7 +41,7 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 
 type internalMiniExec interface {
 	doComQuery(requestCtx context.Context, sql string) error
-	PrepareSessionBeforeExecRequest(*Session)
+	SetSession(*Session)
 }
 
 type internalExecutor struct {
@@ -120,7 +121,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	defer ie.Unlock()
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Dispose()
-	ie.executor.PrepareSessionBeforeExecRequest(sess)
+	ie.executor.SetSession(sess)
 	ie.proto.stashResult = false
 	return ie.executor.doComQuery(ctx, sql)
 }
@@ -130,7 +131,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	defer ie.Unlock()
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Dispose()
-	ie.executor.PrepareSessionBeforeExecRequest(sess)
+	ie.executor.SetSession(sess)
 	ie.proto.stashResult = true
 	err := ie.executor.doComQuery(ctx, sql)
 	res := ie.proto.swapOutResult()
@@ -178,6 +179,36 @@ type internalProtocol struct {
 	result      *internalExecResult
 	database    string
 	username    string
+}
+
+func (ip *internalProtocol) GetCapability() uint32 {
+	return DefaultCapability
+}
+
+func (ip *internalProtocol) IsTlsEstablished() bool {
+	return true
+}
+
+func (ip *internalProtocol) SetTlsEstablished() {
+}
+
+func (ip *internalProtocol) HandleHandshake(ctx context.Context, payload []byte) (bool, error) {
+	return false, nil
+}
+
+func (ip *internalProtocol) GetTcpConnection() goetty.IOSession {
+	return nil
+}
+
+func (ip *internalProtocol) GetConciseProfile() string {
+	return "internal protocol"
+}
+
+func (ip *internalProtocol) GetSequenceId() uint8 {
+	return 0
+}
+
+func (ip *internalProtocol) SetSequenceID(value uint8) {
 }
 
 func (ip *internalProtocol) makeProfile(profileTyp profileType) {
@@ -300,7 +331,7 @@ func (ip *internalProtocol) SendColumnCountPacket(count uint64) error {
 func (ip *internalProtocol) SendResponse(ctx context.Context, resp *Response) error {
 	ip.Lock()
 	defer ip.Unlock()
-	ip.PrepareBeforeProcessingResultSet()
+	ip.ResetStatistics()
 	if resp.category == ResultResponse {
 		if mer := resp.data.(*MysqlExecutionResult); mer != nil && mer.Mrs() != nil {
 			ip.sendRows(mer.Mrs(), mer.affectedRows)
@@ -328,7 +359,7 @@ func (ip *internalProtocol) sendEOFOrOkPacket(warnings uint16, status uint16) er
 	return nil
 }
 
-func (ip *internalProtocol) PrepareBeforeProcessingResultSet() {
+func (ip *internalProtocol) ResetStatistics() {
 	ip.result.affectedRows = 0
 	ip.result.dropped = 0
 	ip.result.err = nil

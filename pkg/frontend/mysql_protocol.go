@@ -173,7 +173,7 @@ type MysqlProtocol interface {
 	//the OK or EOF packet thread safe
 	sendEOFOrOkPacket(warnings uint16, status uint16) error
 
-	PrepareBeforeProcessingResultSet()
+	ResetStatistics()
 
 	GetStats() string
 
@@ -259,10 +259,6 @@ func (rh *rowHandler) resetFlushCount() {
 type MysqlProtocolImpl struct {
 	ProtocolImpl
 
-	//The sequence-id is incremented with each packet and may wrap around.
-	//It starts at 0 and is reset to 0 when a new command begins in the Command Phase.
-	sequenceId atomic.Uint32
-
 	//joint capability shared by the server and the client
 	capability uint32
 
@@ -326,10 +322,6 @@ func (mp *MysqlProtocolImpl) GetCapability() uint32 {
 	return mp.capability
 }
 
-func (mp *MysqlProtocolImpl) GetSequenceId() uint8 {
-	return uint8(mp.sequenceId.Load())
-}
-
 func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
 	mp.sequenceId.Add(uint32(a))
 }
@@ -370,7 +362,7 @@ func (mp *MysqlProtocolImpl) GetStats() string {
 		mp.String())
 }
 
-func (mp *MysqlProtocolImpl) PrepareBeforeProcessingResultSet() {
+func (mp *MysqlProtocolImpl) ResetStatistics() {
 	mp.ResetStats()
 	mp.resetFlushCount()
 }
@@ -719,34 +711,31 @@ func (mp *MysqlProtocolImpl) readDate(data []byte, pos int) (int, string) {
 }
 
 func (mp *MysqlProtocolImpl) readTime(data []byte, pos int, len uint8) (int, string) {
-	var symbol byte
+	var retStr string
 	negate := data[pos]
 	pos++
 	if negate == 1 {
-		symbol = '-'
+		retStr += "-"
 	}
 	day, pos, _ := mp.io.ReadUint32(data, pos)
+	if day > 0 {
+		retStr += fmt.Sprintf("%dd ", day)
+	}
 	hour := data[pos]
 	pos++
 	minute := data[pos]
 	pos++
 	second := data[pos]
 	pos++
-	// time with ms
+
 	if len == 12 {
-		ms, pos, _ := mp.io.ReadUint32(data, pos)
-		if day > 0 {
-			return pos, fmt.Sprintf("%c%dd %02d:%02d:%02d.%06d", symbol, day, hour, minute, second, ms)
-		} else {
-			return pos, fmt.Sprintf("%c%02d:%02d:%02d.%06d", symbol, hour, minute, second, ms)
-		}
+		ms, _, _ := mp.io.ReadUint32(data, pos)
+		retStr += fmt.Sprintf("%02d:%02d:%02d.%06d", hour, minute, second, ms)
+	} else {
+		retStr += fmt.Sprintf("%02d:%02d:%02d", hour, minute, second)
 	}
 
-	if day > 0 {
-		return pos, fmt.Sprintf("%c%dd %02d:%02d:%02d", symbol, day, hour, minute, second)
-	} else {
-		return pos, fmt.Sprintf("%c%02d:%02d:%02d", symbol, hour, minute, second)
-	}
+	return pos, retStr
 }
 
 func (mp *MysqlProtocolImpl) readDateTime(data []byte, pos int) (int, string) {
@@ -1111,11 +1100,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 	return nil
 }
 
-func (mp *MysqlProtocolImpl) SetSequenceID(value uint8) {
-	mp.sequenceId.Store(uint32(value))
-}
-
-func (mp *MysqlProtocolImpl) handleHandshake(ctx context.Context, payload []byte) (bool, error) {
+func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte) (bool, error) {
 	var err, err2 error
 	if len(payload) < 2 {
 		return false, moerr.NewInternalError(ctx, "received a broken response packet")
@@ -1925,11 +1910,6 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 					data = mp.appendTime(data, t)
 				}
 			}
-			if value, err := mrs.GetValue(ctx, rowIdx, i); err != nil {
-				return nil, err
-			} else {
-				data = mp.appendTime(data, value.(types.Time))
-			}
 		case defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
 			if value, err := mrs.GetString(ctx, rowIdx, i); err != nil {
 				return nil, err
@@ -2591,7 +2571,7 @@ func generate_salt(n int) []byte {
 func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
 	rand.Seed(time.Now().UTC().UnixNano())
 	salt := generate_salt(20)
-
+	tcp.Ref()
 	mysql := &MysqlProtocolImpl{
 		ProtocolImpl: ProtocolImpl{
 			io:           NewIOPackage(true),
