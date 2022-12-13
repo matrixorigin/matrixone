@@ -28,12 +28,12 @@ func NewObjectEntry() *ObjectEntry {
 }
 
 func (o *ObjectEntry) AddBlock(block common.ID) {
-	o.Ref()
+	o.table.tid = block.TableID
 	o.table.blocks = append(o.table.blocks, block)
 }
 
 func (o *ObjectEntry) DelBlock(block common.ID) {
-	o.Unref()
+	o.table.tid = block.TableID
 	o.table.delete = append(o.table.delete, block)
 }
 

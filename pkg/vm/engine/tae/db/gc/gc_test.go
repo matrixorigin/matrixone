@@ -77,7 +77,9 @@ func TestGcTable_Merge(t *testing.T) {
 	mp := mpool.MustNewZero()
 	fs := objectio.NewObjectFS(service, dir)
 	manger := NewManager(fs)
-	for i := 1; i < 10; i++ {
+	bid := uint64(1)
+	did := uint64(1)
+	for i := 1; i < 5; i++ {
 		id := i
 		name := fmt.Sprintf("%d.seg", id)
 		bat := newBatch(mp)
@@ -88,30 +90,36 @@ func TestGcTable_Merge(t *testing.T) {
 		assert.Nil(t, err)
 		_, err = objectWriter.Write(bat)
 		assert.Nil(t, err)
-		blocks, err := objectWriter.WriteEnd(context.Background())
+		_, err = objectWriter.WriteEnd(context.Background())
 		blockid := common.ID{
 			SegmentID: uint64(id),
 			TableID:   2,
 			PartID:    1,
 		}
 		table := NewGcTable()
-		blockid.BlockID = uint64(blocks[0].GetID() + uint32(i))
+		blockid.BlockID = bid
+		bid++
 		table.addBlock(blockid, name)
-		blockid.BlockID = uint64(blocks[1].GetID() + uint32(i))
+		blockid.BlockID = bid
+		bid++
 		table.addBlock(blockid, name)
-		manger.AddTable(table)
 		if i < 2 {
+			manger.AddTable(table)
 			continue
 		}
-		blockid.BlockID = uint64(blocks[0].GetID() + uint32(i-1))
+		blockid.BlockID = did
 		name = fmt.Sprintf("%d.seg", id-1)
 		table.deleteBlock(blockid, name)
+		did += 2
 		if i < 3 {
+			manger.AddTable(table)
 			continue
 		}
-		blockid.BlockID = uint64(blocks[1].GetID() + uint32(i-2))
+		blockid.BlockID = uint64((id - 2) * 2)
 		name = fmt.Sprintf("%d.seg", id-2)
 		table.deleteBlock(blockid, name)
+		manger.AddTable(table)
 	}
 	manger.MergeTable()
+	assert.Equal(t, 2, len(manger.gc))
 }

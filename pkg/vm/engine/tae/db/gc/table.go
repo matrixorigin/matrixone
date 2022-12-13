@@ -28,8 +28,9 @@ func (t *GcTable) addBlock(id common.ID, name string) {
 	t.Lock()
 	defer t.Unlock()
 	object := t.table[name]
-	if object != nil {
+	if object == nil {
 		object = NewObjectEntry()
+		object.table.tid = id.TableID
 	}
 	object.AddBlock(id)
 	t.table[name] = object
@@ -39,8 +40,9 @@ func (t *GcTable) deleteBlock(id common.ID, name string) {
 	t.Lock()
 	defer t.Unlock()
 	object := t.table[name]
-	if object != nil {
+	if object == nil {
 		object = NewObjectEntry()
+		object.table.tid = id.TableID
 	}
 	object.DelBlock(id)
 	t.table[name] = object
@@ -49,7 +51,7 @@ func (t *GcTable) deleteBlock(id common.ID, name string) {
 func (t *GcTable) Merge(table GcTable) {
 	for name, entry := range table.table {
 		object := t.table[name]
-		if object != nil {
+		if object == nil {
 			object = NewObjectEntry()
 		}
 
