@@ -14,14 +14,12 @@ import (
 
 type GcTable struct {
 	sync.Mutex
-	table  map[string][]common.ID
-	delete map[string][]common.ID
+	table map[string]*ObjectEntry
 }
 
 func NewGcTable() GcTable {
 	table := GcTable{
-		table:  make(map[string][]common.ID),
-		delete: make(map[string][]common.ID),
+		table: make(map[string]*ObjectEntry),
 	}
 	return table
 }
@@ -29,24 +27,49 @@ func NewGcTable() GcTable {
 func (t *GcTable) addBlock(id common.ID, name string) {
 	t.Lock()
 	defer t.Unlock()
-	blockList := t.table[name]
-	if blockList != nil {
-		blockList = make([]common.ID, 0)
+	object := t.table[name]
+	if object != nil {
+		object = NewObjectEntry()
 	}
-	blockList = append(blockList, id)
-	t.table[name] = blockList
+	object.AddBlock(id)
+	t.table[name] = object
 }
 
 func (t *GcTable) deleteBlock(id common.ID, name string) {
 	t.Lock()
 	defer t.Unlock()
-	blockList := t.delete[name]
-	if blockList != nil {
-		blockList = make([]common.ID, 0)
+	object := t.table[name]
+	if object != nil {
+		object = NewObjectEntry()
 	}
+	object.DelBlock(id)
+	t.table[name] = object
+}
 
-	blockList = append(blockList, id)
-	t.delete[name] = blockList
+func (t *GcTable) Merge(table GcTable) {
+	for name, entry := range table.table {
+		object := t.table[name]
+		if object != nil {
+			object = NewObjectEntry()
+		}
+
+		object.MergeEntry(*entry)
+		t.table[name] = object
+	}
+}
+
+func (t *GcTable) GetGcObject() []string {
+	gc := make([]string, 0)
+	for name := range t.table {
+		if t.table[name] == nil {
+			panic(any("error"))
+		}
+		if t.table[name].AllowGc() {
+			gc = append(gc, name)
+			delete(t.table, name)
+		}
+	}
+	return gc
 }
 
 func (t *GcTable) UpdateTable(data *logtail.CheckpointData) {
@@ -93,26 +116,19 @@ func (t *GcTable) String() string {
 	}
 	var w bytes.Buffer
 	_, _ = w.WriteString("table:[")
-	for name, ids := range t.table {
+	for name, entry := range t.table {
 		_, _ = w.WriteString(fmt.Sprintf(" %v", name))
 		_, _ = w.WriteString("block:[")
-		for _, id := range ids {
+		for _, id := range entry.table.blocks {
+			_, _ = w.WriteString(fmt.Sprintf(" %v", id.String()))
+		}
+		_, _ = w.WriteString("]\n")
+		_, _ = w.WriteString("delete:[")
+		for _, id := range entry.table.delete {
 			_, _ = w.WriteString(fmt.Sprintf(" %v", id.String()))
 		}
 		_, _ = w.WriteString("]\n")
 	}
 	_, _ = w.WriteString("]\n")
-	if len(t.delete) != 0 {
-		_, _ = w.WriteString("delete:[")
-		for name, ids := range t.delete {
-			_, _ = w.WriteString(fmt.Sprintf(" %v", name))
-			_, _ = w.WriteString("block:[")
-			for _, id := range ids {
-				_, _ = w.WriteString(fmt.Sprintf(" %v", id.String()))
-			}
-			_, _ = w.WriteString("]\n")
-		}
-		_, _ = w.WriteString("]\n")
-	}
 	return w.String()
 }

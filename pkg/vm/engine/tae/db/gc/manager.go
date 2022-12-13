@@ -28,25 +28,9 @@ func (m *Manager) MergeTable() error {
 	m.Unlock()
 	mergeTable := NewGcTable()
 	for _, table := range m.mergeCache {
-		for name, ids := range table.table {
-			mergeTable.table[name] = append(mergeTable.table[name], ids...)
-		}
-		for name, ids := range table.delete {
-			mergeTable.delete[name] = append(mergeTable.delete[name], ids...)
-		}
+		mergeTable.Merge(table)
 	}
-	gc := make([]string, 0)
-	for name, ids := range mergeTable.delete {
-		blocks := mergeTable.table[name]
-		if blocks == nil {
-			panic(any("error"))
-		}
-		if len(blocks) == len(ids) {
-			gc = append(gc, name)
-			delete(mergeTable.table, name)
-			delete(mergeTable.delete, name)
-		}
-	}
+	gc := mergeTable.GetGcObject()
 	if len(gc) > 0 {
 		m.Lock()
 		defer m.Unlock()
