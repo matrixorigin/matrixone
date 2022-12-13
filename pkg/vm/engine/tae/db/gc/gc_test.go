@@ -122,4 +122,8 @@ func TestGcTable_Merge(t *testing.T) {
 	}
 	manger.MergeTable()
 	assert.Equal(t, 2, len(manger.gc))
+
+	task := NewGcTask(fs, manger.gc)
+	err = task.ExecDelete()
+	assert.Nil(t, err)
 }
