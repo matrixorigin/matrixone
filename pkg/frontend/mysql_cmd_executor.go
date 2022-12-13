@@ -242,6 +242,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		Statement:            text,
 		StatementFingerprint: "", // fixme: (Reserved)
 		StatementTag:         "", // fixme: (Reserved)
+		SqlSourceType:        ses.sqlSourceType,
 		RequestAt:            requestAt,
 	}
 	if !stm.IsZeroTxnID() {
@@ -3063,10 +3064,38 @@ func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(request
 	return nil
 }
 
+func (ses *Session) getSqlType(sql string) {
+	tenant := ses.GetTenantInfo()
+	if tenant == nil {
+		ses.sqlSourceType = intereSql
+		return
+	}
+	flag, _, _ := isSpecialUser(tenant.User)
+	if flag {
+		ses.sqlSourceType = intereSql
+		return
+	}
+	p1 := strings.Index(sql, "/*")
+	p2 := strings.Index(sql, "*/")
+	if p1 < 0 || p2 < 0 {
+		ses.sqlSourceType = externSql
+		return
+	}
+	source := strings.TrimSpace(sql[p1+2 : p2-p1])
+	if source == "cloud_user" {
+		ses.sqlSourceType = cloudUserSql
+	} else if source == "cloud_nouser" {
+		ses.sqlSourceType = cloudNoUserSql
+	} else {
+		ses.sqlSourceType = externSql
+	}
+}
+
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) (retErr error) {
 	beginInstant := time.Now()
 	ses := mce.GetSession()
+	ses.getSqlType(sql)
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
 	ses.SetSql(sql)
