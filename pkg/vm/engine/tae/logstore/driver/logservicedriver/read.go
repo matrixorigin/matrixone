@@ -127,6 +127,9 @@ func (d *LogServiceDriver) resetReadCache() {
 
 func (d *LogServiceDriver) readSmallBatchFromLogService(lsn uint64) {
 	_, records := d.readFromLogService(lsn, int(d.config.ReadMaxSize))
+	if len(records) == 0 {
+		_, records = d.readFromLogService(lsn, MaxReadSize)
+	}
 	d.appendRecords(records, lsn, nil, 1)
 	if !d.IsReplaying() && len(d.lsns) > d.config.ReadCacheSize {
 		d.dropRecords()

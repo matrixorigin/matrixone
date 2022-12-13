@@ -189,6 +189,9 @@ import (
     indexHintScope tree.IndexHintScope
     indexHint *tree.IndexHint
     indexHintList []*tree.IndexHint
+
+    killOption tree.KillOption
+    statementOption tree.StatementOption
 }
 
 %token LEX_ERROR
@@ -379,6 +382,7 @@ import (
 %type <statement> declare_stmt
 %type <statement> values_stmt
 %type <statement> mo_dump_stmt
+%type <statement> kill_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -583,6 +587,10 @@ import (
 %type <indexHint> index_hint
 %type <indexHintList> index_hint_list index_hint_list_opt
 %type <updateList> on_duplicate_key_update_opt
+
+%token <str> KILL
+%type <killOption> kill_opt
+%type <statementOption> statement_id_opt
 %start start_command
 
 %%
@@ -634,11 +642,67 @@ stmt:
     {
         $$ = $1
     }
+|   kill_stmt
 |   /* EMPTY */
     {
         $$ = tree.Statement(nil)
     }
 
+kill_stmt:
+    KILL kill_opt INTEGRAL statement_id_opt
+    {
+        var connectionId uint64
+        switch v := $3.(type) {
+        case uint64:
+	    connectionId = v
+        case int64:
+	    connectionId = uint64(v)
+        default:
+	    yylex.Error("parse integral fail")
+	    return 1
+        }
+
+	$$ = &tree.Kill{
+            Option: $2,
+            ConnectionId: connectionId,
+            StmtOption:  $4,
+	}
+    }
+
+kill_opt:
+{
+    $$ = tree.KillOption{
+        Exist: false,
+    }
+}
+| CONNECTION
+{
+    $$ = tree.KillOption{
+	Exist: true,
+	Typ: tree.KillTypeConnection,
+    }
+}
+| QUERY
+{
+    $$ = tree.KillOption{
+	Exist: true,
+	Typ: tree.KillTypeQuery,
+    }
+}
+
+statement_id_opt:
+{
+    $$ = tree.StatementOption{
+        Exist: false,
+    }
+}
+| STRING
+{
+    $$ = tree.StatementOption{
+        Exist: true,
+        StatementId: $1,
+    }
+}
 
 mo_dump_stmt:
     MODUMP DATABASE database_id INTO STRING max_file_size_opt

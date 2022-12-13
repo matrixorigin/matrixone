@@ -16,6 +16,8 @@ package plan
 
 import (
 	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -186,6 +188,9 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string) ([]tree.Sel
 		names := make([]string, len(binding.cols))
 
 		for i, col := range binding.cols {
+			if catalog.ContainExternalHidenCol(col) {
+				continue
+			}
 			expr, _ := tree.NewUnresolvedName(ctx, table, col)
 			exprs[i] = tree.SelectExpr{Expr: expr}
 			names[i] = col
@@ -201,6 +206,9 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 	}
 	if root.binding != nil {
 		for _, col := range root.binding.cols {
+			if catalog.ContainExternalHidenCol(col) {
+				continue
+			}
 			if _, ok := visitedUsingCols[col]; !ok {
 				expr, _ := tree.NewUnresolvedName(ctx, root.binding.table, col)
 				*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
@@ -214,6 +222,9 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 	var handledUsingCols []string
 
 	for _, using := range root.using {
+		if catalog.ContainExternalHidenCol(using.col) {
+			continue
+		}
 		if _, ok := visitedUsingCols[using.col]; !ok {
 			handledUsingCols = append(handledUsingCols, using.col)
 			visitedUsingCols[using.col] = nil
