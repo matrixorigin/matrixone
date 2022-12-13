@@ -57,6 +57,8 @@ type localSegment struct {
 	rows        uint32
 	appends     []*appendCtx
 	tableHandle data.TableHandle
+	//non-appendable segment
+	nseg handle.Segment
 	//sched  tasks.TaskScheduler
 }
 
@@ -72,9 +74,6 @@ func newLocalSegment(table *txnTable) *localSegment {
 }
 
 func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
-	//npos := int(row) / int(txnbase.MaxNodeRows)
-	//noffset := row % uint32(txnbase.MaxNodeRows)
-	//return npos, noffset
 	var sum uint32
 	for i, node := range seg.nodes {
 		sum += node.Rows()
@@ -149,10 +148,6 @@ func (seg *localSegment) ApplyAppend() (err error) {
 
 func (seg *localSegment) PrepareApply() (err error) {
 	defer func() {
-		//un-reference the last non-appendable segment.
-		seg.table.entry.GetTableData().CloseLastNonAppendableSeg()
-	}()
-	defer func() {
 		if err != nil {
 			// Close All unclosed Appends: un-reference all the appendable blocks.
 			seg.CloseAppends()
@@ -225,29 +220,17 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		}
 		return
 	}
-	tableData := seg.table.entry.GetTableData()
-	segID, err := tableData.GetLastNonAppendableSeg()
-	if moerr.IsMoErrCode(err, moerr.ErrNonAppendableSegmentNotFound) {
-		segH, err := seg.table.CreateNonAppendableSegment(true)
+	if seg.nseg == nil {
+		seg.nseg, err = seg.table.CreateNonAppendableSegment(true)
 		if err != nil {
-			return err
+			return
 		}
-		tableData.SetLastNonAppendableSeg(segH.GetMeta().(*catalog.SegmentEntry).AsCommonID())
-		//create non-appendable block.
-		_, err = segH.CreateNonAppendableBlockWithMeta(node.GetMetaLoc())
-		if err != nil {
-			return err
-		}
-		//TODO:: call RangeDelete()?
-		//blkH.RangeDelete()
-		return err
 	}
-	metaLoc, delLoc := node.GetMetaLoc()
-	_, err = seg.table.CreateNonAppendableBlockWithMeta(segID.SegmentID, metaLoc, delLoc)
+	_, err = seg.nseg.CreateNonAppendableBlockWithMeta(node.GetMetaLoc())
 	if err != nil {
 		return
 	}
-	//TODO::call RangeDelete()?
+	//TODO:: call RangeDelete()?
 	//blkH.RangeDelete()
 	return
 }

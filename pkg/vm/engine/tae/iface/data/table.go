@@ -33,7 +33,4 @@ type TableHandle interface {
 type Table interface {
 	GetHandle() TableHandle
 	ApplyHandle(TableHandle)
-	GetLastNonAppendableSeg() (*common.ID, error)
-	CloseLastNonAppendableSeg()
-	SetLastNonAppendableSeg(id *common.ID)
 }

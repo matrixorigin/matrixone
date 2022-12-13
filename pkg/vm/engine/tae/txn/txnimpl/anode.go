@@ -40,46 +40,13 @@ func NewANode(
 	mgr base.INodeManager,
 	sched tasks.TaskScheduler,
 	meta *catalog.BlockEntry,
-	// driver wal.Driver,
 ) *anode {
 	impl := new(anode)
 	impl.baseNode = newBaseNode(tbl, fs, mgr, sched, meta)
 	impl.storage.mnode = newMemoryNode(impl.baseNode)
 	impl.storage.mnode.Ref()
-
-	//impl.storage.mnode.Node = buffer.NewNode(impl.storage.mnode, mgr, *meta.AsCommonID(), 0)
-	//impl.storage.mnode.driver = driver
-	//impl.storage.mnode.typ = txnbase.PersistNode
-	//impl.storage.mnode.UnloadFunc = impl.storage.mnode.OnUnload
-	//impl.storage.mnode.DestroyFunc = impl.storage.mnode.OnDestroy
-	//impl.storage.mnode.LoadFunc = impl.storage.mnode.OnLoad
-	//mgr.RegisterNode(impl.storage.mnode)
-
 	return impl
 }
-
-// NewANodeWithID is just for test.
-//func NewANodeWithID(
-//	tbl *txnTable,
-//	mgr base.INodeManager,
-//	id *common.ID,
-//	// driver wal.Driver,
-//) *anode {
-//	impl := new(anode)
-//	impl.baseNode = newBaseNode(tbl, nil, mgr, nil, nil)
-//	impl.storage.mnode = newMemoryNode(impl.baseNode)
-//	impl.storage.mnode.Ref()
-//
-//	//impl.storage.mnode.Node = buffer.NewNode(impl.storage.mnode, mgr, *id, 0)
-//	//impl.storage.mnode.driver = driver
-//	//impl.storage.mnode.typ = txnbase.PersistNode
-//	//impl.storage.mnode.UnloadFunc = impl.storage.mnode.OnUnload
-//	//impl.storage.mnode.DestroyFunc = impl.storage.mnode.OnDestroy
-//	//impl.storage.mnode.LoadFunc = impl.storage.mnode.OnLoad
-//	//mgr.RegisterNode(impl.storage.mnode)
-//
-//	return impl
-//}
 
 func (n *anode) GetAppends() []*appendInfo {
 	return n.storage.mnode.appends
@@ -112,109 +79,12 @@ func (n *anode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return composedCmd, nil
 }
 
-//func (n *anode) Type() txnbase.NodeType { return NTInsert }
-
-//func (n *anode) makeLogEntry() wal.LogEntry {
-//	cmd := txnbase.NewBatchCmd(n.storage.mnode.data)
-//	buf, err := cmd.Marshal()
-//	e := entry.GetBase()
-//	e.SetType(ETInsertNode)
-//	if err != nil {
-//		panic(err)
-//	}
-//	if err = e.SetPayload(buf); err != nil {
-//		panic(err)
-//	}
-//	return e
-//}
-
-//func (n *anode) IsTransient() bool {
-//	return atomic.LoadInt32(&n.storage.mnode.typ) == txnbase.TransientNode
-//}
-
-//func (n *anode) OnDestroy() {
-//	if n.storage.mnode.data != nil {
-//		n.storage.mnode.data.Close()
-//	}
-//}
-
-//func (n *anode) OnLoad() {
-//	if n.IsTransient() {
-//		return
-//	}
-//
-//	lsn := atomic.LoadUint64(&n.storage.mnode.lsn)
-//	if lsn == 0 {
-//		return
-//	}
-//	e, err := n.storage.mnode.driver.LoadEntry(wal.GroupUC, lsn)
-//	if err != nil {
-//		panic(err)
-//	}
-//	logutil.Debugf("GetPayloadSize=%d", e.GetPayloadSize())
-//	buf := e.GetPayload()
-//	e.Free()
-//	r := bytes.NewBuffer(buf)
-//	cmd, _, err := txnbase.BuildCommandFrom(r)
-//	if err != nil {
-//		panic(err)
-//	}
-//	n.storage.mnode.data = cmd.(*txnbase.BatchCmd).Bat
-//}
-
 func (n *anode) Close() (err error) {
 	if n.storage.mnode.data != nil {
 		n.storage.mnode.data.Close()
 	}
 	return
 }
-
-//func (n *anode) OnUnload() {
-//	entry := n.execUnload()
-//	if entry != nil {
-//		if err := entry.WaitDone(); err != nil {
-//			panic(err)
-//		}
-//		entry.Free()
-//	}
-//}
-
-//func (n *anode) execUnload() (en wal.LogEntry) {
-//	if n.IsTransient() {
-//		return
-//	}
-//	if atomic.LoadUint64(&n.storage.mnode.lsn) != 0 {
-//		return
-//	}
-//	if n.storage.mnode.data == nil {
-//		return
-//	}
-//	en = n.makeLogEntry()
-//	info := &entry.Info{
-//		Group:     wal.GroupUC,
-//		Uncommits: n.table.store.txn.GetID(),
-//	}
-//	en.SetInfo(info)
-//	if seq, err := n.storage.mnode.driver.AppendEntry(wal.GroupUC, en); err != nil {
-//		panic(err)
-//	} else {
-//		atomic.StoreUint64(&n.storage.mnode.lsn, seq)
-//		id := n.storage.mnode.Key()
-//		logutil.Debugf("Unloading lsn=%d id=%v", seq, id)
-//	}
-//	// e.WaitDone()
-//	// e.Free()
-//	return
-//}
-
-//func (n *anode) PrepareAppend(data *containers.Batch, offset uint32) uint32 {
-//	left := uint32(data.Length()) - offset
-//	nodeLeft := txnbase.MaxNodeRows - n.storage.mnode.rows
-//	if left <= nodeLeft {
-//		return left
-//	}
-//	return nodeLeft
-//}
 
 func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
 	schema := n.table.entry.GetSchema()
@@ -246,17 +116,6 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 	err = n.storage.mnode.FillPhyAddrColumn(from, an)
 	return
 }
-
-//func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
-//	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, n.meta.MakeKey(), startRow, length)
-//	if err != nil {
-//		return
-//	}
-//	defer col.Close()
-//	vec := n.storage.mnode.data.Vecs[n.table.entry.GetSchema().PhyAddrKey.Idx]
-//	vec.Extend(col)
-//	return
-//}
 
 func (n *anode) FillBlockView(view *model.BlockView, buffers []*bytes.Buffer, colIdxes []int) (err error) {
 	for i, colIdx := range colIdxes {

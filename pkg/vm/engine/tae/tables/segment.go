@@ -28,7 +28,6 @@ import (
 )
 
 type dataSegment struct {
-	common.RefHelper
 	common.ClosedState
 	meta      *catalog.SegmentEntry
 	bufMgr    base.INodeManager
