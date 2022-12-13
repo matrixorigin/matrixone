@@ -1029,10 +1029,7 @@ func genBlockMetas(
 
 func inBlockMap(blk BlockMeta, blockMap map[uint64]bool) bool {
 	_, ok := blockMap[blk.Info.BlockID]
-	if ok {
-		return true
-	}
-	return false
+	return ok
 }
 
 func genModifedBlocks(ctx context.Context, deletes map[uint64][]int, orgs, modfs []BlockMeta,
