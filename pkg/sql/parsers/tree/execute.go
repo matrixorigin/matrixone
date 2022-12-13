@@ -34,6 +34,9 @@ func (node *Execute) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *Execute) GetStatementType() string { return "Execute" }
+func (node *Execute) GetQueryType() string     { return QueryTypeDCL }
+
 func NewExecute(name Identifier) *Execute {
 	return &Execute{
 		Name: name,
