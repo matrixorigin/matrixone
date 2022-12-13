@@ -168,6 +168,8 @@ type Session struct {
 
 	lastInsertID uint64
 
+	skipAuth bool
+
 	sqlSourceType string
 }
 
@@ -299,6 +301,18 @@ func (bgs *BackgroundSession) Close() {
 		bgs.Session.gSysVars = nil
 	}
 	bgs = nil
+}
+
+func (ses *Session) setSkipCheckPrivilege(b bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.skipAuth = b
+}
+
+func (ses *Session) skipCheckPrivilege() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.skipAuth
 }
 
 func (ses *Session) makeProfile(profileTyp profileType) {
@@ -2008,7 +2022,7 @@ func (bh *BackgroundHandler) Close() {
 }
 
 func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
-	bh.mce.PrepareSessionBeforeExecRequest(bh.ses.Session)
+	bh.mce.SetSession(bh.ses.Session)
 	if ctx == nil {
 		ctx = bh.ses.GetRequestContext()
 	}

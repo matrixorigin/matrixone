@@ -46,7 +46,7 @@ func (e *miniExec) doComQuery(context.Context, string) error {
 	_ = e.sess.GetMysqlProtocol()
 	return nil
 }
-func (e *miniExec) PrepareSessionBeforeExecRequest(sess *Session) {
+func (e *miniExec) SetSession(sess *Session) {
 	e.sess = sess
 }
 
@@ -72,7 +72,7 @@ func TestIeProto(t *testing.T) {
 	assert.True(t, p.IsEstablished())
 	p.SetEstablished()
 	p.Quit()
-	p.PrepareBeforeProcessingResultSet()
+	p.ResetStatistics()
 	_ = p.GetStats()
 	_ = p.ConnectionID()
 	ctx := context.TODO()
@@ -104,20 +104,20 @@ func TestIeProto(t *testing.T) {
 	v, _ := p.result.Value(ctx, 0, 0)
 	assert.Equal(t, 42, v.(int))
 
-	p.PrepareBeforeProcessingResultSet()
+	p.ResetStatistics()
 	assert.NoError(t, p.SendResultSetTextBatchRowSpeedup(mockResultSet(), 1))
 	r := p.swapOutResult()
 	v, e := r.Value(ctx, 0, 0)
 	assert.NoError(t, e)
 	assert.Equal(t, 42, v.(int))
-	p.PrepareBeforeProcessingResultSet()
+	p.ResetStatistics()
 	assert.NoError(t, p.SendResultSetTextBatchRow(mockResultSet(), 1))
 	r = p.swapOutResult()
 	v, e = r.Value(ctx, 0, 0)
 	assert.NoError(t, e)
 	assert.Equal(t, 42, v.(int))
 	assert.Equal(t, uint64(1), r.affectedRows)
-	p.PrepareBeforeProcessingResultSet()
+	p.ResetStatistics()
 
 	r = p.swapOutResult()
 	assert.Equal(t, uint64(0), r.resultSet.GetRowCount())
