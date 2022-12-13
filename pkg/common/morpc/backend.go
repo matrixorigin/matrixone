@@ -109,15 +109,16 @@ func WithBackendGoettyOptions(options ...goetty.Option) BackendOption {
 }
 
 type remoteBackend struct {
-	remote     string
-	logger     *zap.Logger
-	codec      Codec
-	conn       goetty.IOSession
-	writeC     chan backendSendMessage
-	stopWriteC chan struct{}
-	resetConnC chan struct{}
-	stopper    *stopper.Stopper
-	closeOnce  sync.Once
+	remote      string
+	logger      *zap.Logger
+	codec       Codec
+	conn        goetty.IOSession
+	writeC      chan backendSendMessage
+	stopWriteC  chan struct{}
+	resetConnC  chan struct{}
+	stopper     *stopper.Stopper
+	readStopper *stopper.Stopper
+	closeOnce   sync.Once
 
 	options struct {
 		hasPayloadResponse bool
@@ -162,11 +163,12 @@ func NewRemoteBackend(
 	codec Codec,
 	options ...BackendOption) (Backend, error) {
 	rb := &remoteBackend{
-		stopper:    stopper.NewStopper(fmt.Sprintf("backend-%s", remote)),
-		remote:     remote,
-		codec:      codec,
-		resetConnC: make(chan struct{}),
-		stopWriteC: make(chan struct{}),
+		stopper:     stopper.NewStopper(fmt.Sprintf("backend-write-%s", remote)),
+		readStopper: stopper.NewStopper(fmt.Sprintf("backend-read-%s", remote)),
+		remote:      remote,
+		codec:       codec,
+		resetConnC:  make(chan struct{}),
+		stopWriteC:  make(chan struct{}),
 	}
 
 	for _, opt := range options {
@@ -357,6 +359,7 @@ func (rb *remoteBackend) inactive() {
 func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.logger.Info("write loop started")
 	defer func() {
+		rb.readStopper.Stop()
 		rb.closeConn(true)
 		rb.logger.Info("write loop stopped")
 	}()
@@ -684,7 +687,7 @@ func (rb *remoteBackend) activeReadLoop(locked bool) {
 		return
 	}
 
-	if err := rb.stopper.RunTask(rb.readLoop); err != nil {
+	if err := rb.readStopper.RunTask(rb.readLoop); err != nil {
 		rb.logger.Error("active read loop failed",
 			zap.Error(err))
 		return

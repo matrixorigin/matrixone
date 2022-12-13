@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"fmt"
 	"math"
 	bits2 "math/bits"
@@ -29,20 +30,23 @@ import (
 )
 
 var (
-	errorConvertToBoolFailed        = moerr.NewInternalErrorNoCtx("convert to the system variable bool type failed")
-	errorConvertToIntFailed         = moerr.NewInternalErrorNoCtx("convert to the system variable int type failed")
-	errorConvertToUintFailed        = moerr.NewInternalErrorNoCtx("convert to the system variable uint type failed")
-	errorConvertToDoubleFailed      = moerr.NewInternalErrorNoCtx("convert to the system variable double type failed")
-	errorConvertToEnumFailed        = moerr.NewInternalErrorNoCtx("convert to the system variable enum type failed")
-	errorConvertToSetFailed         = moerr.NewInternalErrorNoCtx("convert to the system variable set type failed")
-	errorConvertToStringFailed      = moerr.NewInternalErrorNoCtx("convert to the system variable string type failed")
-	errorConvertToNullFailed        = moerr.NewInternalErrorNoCtx("convert to the system variable null type failed")
-	errorSystemVariableDoesNotExist = moerr.NewInternalErrorNoCtx("the system variable does not exist")
-	errorSystemVariableIsSession    = moerr.NewInternalErrorNoCtx("the system variable is session")
-	errorSystemVariableSessionEmpty = moerr.NewInternalErrorNoCtx("the value of the system variable with scope session is empty")
-	errorSystemVariableIsGlobal     = moerr.NewInternalErrorNoCtx("the system variable is global")
-	errorSystemVariableIsReadOnly   = moerr.NewInternalErrorNoCtx("the system variable is read only")
+	errorConvertToBoolFailed   = moerr.NewInternalError(context.Background(), "convert to the system variable bool type failed")
+	errorConvertToIntFailed    = moerr.NewInternalError(context.Background(), "convert to the system variable int type failed")
+	errorConvertToUintFailed   = moerr.NewInternalError(context.Background(), "convert to the system variable uint type failed")
+	errorConvertToDoubleFailed = moerr.NewInternalError(context.Background(), "convert to the system variable double type failed")
+	errorConvertToEnumFailed   = moerr.NewInternalError(context.Background(), "convert to the system variable enum type failed")
+	errorConvertToSetFailed    = moerr.NewInternalError(context.Background(), "convert to the system variable set type failed")
+	errorConvertToStringFailed = moerr.NewInternalError(context.Background(), "convert to the system variable string type failed")
+	errorConvertToNullFailed   = moerr.NewInternalError(context.Background(), "convert to the system variable null type failed")
 )
+
+func errorSystemVariableDoesNotExist() string { return "the system variable does not exist" }
+func errorSystemVariableIsSession() string    { return "the system variable is session" }
+func errorSystemVariableSessionEmpty() string {
+	return "the value of the system variable with scope session is empty"
+}
+func errorSystemVariableIsGlobal() string   { return "the system variable is global" }
+func errorSystemVariableIsReadOnly() string { return "the system variable is read only" }
 
 type Scope int
 
@@ -437,7 +441,8 @@ func (svdt SystemVariableDoubleType) Zero() interface{} {
 }
 
 var (
-	errorEnumHasMoreThan65535Values = moerr.NewInternalErrorNoCtx("the enum has more than 65535 values")
+	// panic
+	errorEnumHasMoreThan65535Values = moerr.NewInternalError(context.Background(), "the enum has more than 65535 values")
 )
 
 type SystemVariableEnumType struct {
@@ -535,12 +540,13 @@ const (
 )
 
 var (
-	errorValuesOfSetIsEmpty       = moerr.NewInternalErrorNoCtx("the count of values for set is empty")
-	errorValuesOfSetGreaterThan64 = moerr.NewInternalErrorNoCtx("the count of value is greater than 64")
-	errorValueHasComma            = moerr.NewInternalErrorNoCtx("the value has the comma")
-	errorValueIsDuplicate         = moerr.NewInternalErrorNoCtx("the value is duplicate")
-	errorValuesAreNotEnough       = moerr.NewInternalErrorNoCtx("values are not enough")
-	errorValueIsInvalid           = moerr.NewInternalErrorNoCtx("the value is invalid")
+	// panic error
+	errorValuesOfSetIsEmpty       = moerr.NewInternalError(context.Background(), "the count of values for set is empty")
+	errorValuesOfSetGreaterThan64 = moerr.NewInternalError(context.Background(), "the count of value is greater than 64")
+	errorValueHasComma            = moerr.NewInternalError(context.Background(), "the value has the comma")
+	errorValueIsDuplicate         = moerr.NewInternalError(context.Background(), "the value is duplicate")
+	errorValuesAreNotEnough       = moerr.NewInternalError(context.Background(), "values are not enough") // convert
+	errorValueIsInvalid           = moerr.NewInternalError(context.Background(), "the value is invalid")  // convert
 )
 
 type SystemVariableSetType struct {
@@ -832,7 +838,7 @@ func (gsv *GlobalSystemVariables) AddSysVariables(vars []SystemVariable) {
 }
 
 // set values to system variables
-func (gsv *GlobalSystemVariables) SetValues(values map[string]interface{}) error {
+func (gsv *GlobalSystemVariables) SetValues(ctx context.Context, values map[string]interface{}) error {
 	gsv.mu.Lock()
 	defer gsv.mu.Unlock()
 	for name, val := range values {
@@ -844,7 +850,7 @@ func (gsv *GlobalSystemVariables) SetValues(values map[string]interface{}) error
 			}
 			gsv.sysVars[name] = cv
 		} else {
-			return errorSystemVariableDoesNotExist
+			return moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
 		}
 	}
 	return nil
@@ -885,16 +891,16 @@ func (gsv *GlobalSystemVariables) GetDefinitionOfSysVar(name string) (SystemVari
 }
 
 // set global dynamic variable by SET GLOBAL
-func (gsv *GlobalSystemVariables) SetGlobalSysVar(name string, value interface{}) error {
+func (gsv *GlobalSystemVariables) SetGlobalSysVar(ctx context.Context, name string, value interface{}) error {
 	gsv.mu.Lock()
 	defer gsv.mu.Unlock()
 	name = strings.ToLower(name)
 	if sv, ok := gSysVarsDefs[name]; ok {
 		if sv.GetScope() == ScopeSession {
-			return errorSystemVariableIsSession
+			return moerr.NewInternalError(ctx, errorSystemVariableIsSession())
 		}
 		if !sv.GetDynamic() {
-			return errorSystemVariableIsReadOnly
+			return moerr.NewInternalError(ctx, errorSystemVariableIsReadOnly())
 		}
 		val, err := sv.GetType().Convert(value)
 		if err != nil {
@@ -902,7 +908,7 @@ func (gsv *GlobalSystemVariables) SetGlobalSysVar(name string, value interface{}
 		}
 		gsv.sysVars[name] = val
 	} else {
-		return errorSystemVariableDoesNotExist
+		return moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
 	}
 	return nil
 }
