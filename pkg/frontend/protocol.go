@@ -164,19 +164,35 @@ type Protocol interface {
 
 	SetUserName(string)
 
-	// Quit
-	Quit()
+	GetSequenceId() uint8
+
+	SetSequenceID(value uint8)
+
+	GetConciseProfile() string
+
+	GetTcpConnection() goetty.IOSession
+
+	GetCapability() uint32
+
+	IsTlsEstablished() bool
+
+	SetTlsEstablished()
+
+	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
 
 	SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error
+
+	Quit()
 }
 
 type ProtocolImpl struct {
-	//mutex
-	lock sync.Mutex
+	m sync.Mutex
 
 	io IOPackage
 
 	tcpConn goetty.IOSession
+
+	quit atomic.Bool
 
 	//random bytes
 	salt []byte
@@ -190,32 +206,48 @@ type ProtocolImpl struct {
 	// whether the tls handshake succeeded
 	tlsEstablished atomic.Bool
 
+	//The sequence-id is incremented with each packet and may wrap around.
+	//It starts at 0 and is reset to 0 when a new command begins in the Command Phase.
+	sequenceId atomic.Uint32
+
 	profiles [8]string
 }
 
-func (cpi *ProtocolImpl) makeProfile(profileTyp profileType) {
+func (pi *ProtocolImpl) setQuit(b bool) bool {
+	return pi.quit.Swap(b)
+}
+
+func (pi *ProtocolImpl) GetSequenceId() uint8 {
+	return uint8(pi.sequenceId.Load())
+}
+
+func (pi *ProtocolImpl) SetSequenceID(value uint8) {
+	pi.sequenceId.Store(uint32(value))
+}
+
+func (pi *ProtocolImpl) makeProfile(profileTyp profileType) {
 	var mask profileType
 	var profile string
 	for i := uint8(0); i < 8; i++ {
 		mask = 1 << i
 		switch mask & profileTyp {
 		case profileTypeConnectionWithId:
-			if cpi.tcpConn != nil {
-				profile = fmt.Sprintf("connectionId %d", cpi.connectionID)
+			if pi.tcpConn != nil {
+				profile = fmt.Sprintf("connectionId %d", pi.connectionID)
 			}
 		case profileTypeConnectionWithIp:
-			if cpi.tcpConn != nil {
-				client := cpi.tcpConn.RemoteAddress()
+			if pi.tcpConn != nil {
+				client := pi.tcpConn.RemoteAddress()
 				profile = "client " + client
 			}
 		default:
 			profile = ""
 		}
-		cpi.profiles[i] = profile
+		pi.profiles[i] = profile
 	}
 }
 
-func (cpi *ProtocolImpl) getProfile(profileTyp profileType) string {
+func (pi *ProtocolImpl) getProfile(profileTyp profileType) string {
 	var mask profileType
 	sb := bytes.Buffer{}
 	for i := uint8(0); i < 8; i++ {
@@ -224,83 +256,89 @@ func (cpi *ProtocolImpl) getProfile(profileTyp profileType) string {
 			if sb.Len() != 0 {
 				sb.WriteByte(' ')
 			}
-			sb.WriteString(cpi.profiles[i])
+			sb.WriteString(pi.profiles[i])
 		}
 	}
 	return sb.String()
 }
 
-func (cpi *ProtocolImpl) MakeProfile() {
-	cpi.lock.Lock()
-	defer cpi.lock.Unlock()
-	cpi.makeProfile(profileTypeAll)
+func (pi *ProtocolImpl) MakeProfile() {
+	pi.m.Lock()
+	defer pi.m.Unlock()
+	pi.makeProfile(profileTypeAll)
 }
 
-func (cpi *ProtocolImpl) GetConciseProfile() string {
-	cpi.lock.Lock()
-	defer cpi.lock.Unlock()
-	return cpi.getProfile(profileTypeConcise)
+func (pi *ProtocolImpl) GetConciseProfile() string {
+	pi.m.Lock()
+	defer pi.m.Unlock()
+	return pi.getProfile(profileTypeConcise)
 }
 
-func (cpi *ProtocolImpl) GetSalt() []byte {
-	cpi.lock.Lock()
-	defer cpi.lock.Unlock()
-	return cpi.salt
+func (pi *ProtocolImpl) GetSalt() []byte {
+	pi.m.Lock()
+	defer pi.m.Unlock()
+	return pi.salt
 }
 
-func (cpi *ProtocolImpl) IsEstablished() bool {
-	return cpi.established.Load()
+func (pi *ProtocolImpl) IsEstablished() bool {
+	return pi.established.Load()
 }
 
-func (cpi *ProtocolImpl) SetEstablished() {
-	logDebugf(cpi.GetConciseProfile(), "SWITCH ESTABLISHED to true")
-	cpi.established.Store(true)
+func (pi *ProtocolImpl) SetEstablished() {
+	logDebugf(pi.GetConciseProfile(), "SWITCH ESTABLISHED to true")
+	pi.established.Store(true)
 }
 
-func (cpi *ProtocolImpl) IsTlsEstablished() bool {
-	return cpi.tlsEstablished.Load()
+func (pi *ProtocolImpl) IsTlsEstablished() bool {
+	return pi.tlsEstablished.Load()
 }
 
-func (cpi *ProtocolImpl) SetTlsEstablished() {
+func (pi *ProtocolImpl) SetTlsEstablished() {
 	logutil.Debugf("SWITCH TLS_ESTABLISHED to true")
-	cpi.tlsEstablished.Store(true)
+	pi.tlsEstablished.Store(true)
 }
 
-func (cpi *ProtocolImpl) ConnectionID() uint32 {
-	cpi.lock.Lock()
-	defer cpi.lock.Unlock()
-	return cpi.connectionID
+func (pi *ProtocolImpl) ConnectionID() uint32 {
+	pi.m.Lock()
+	defer pi.m.Unlock()
+	return pi.connectionID
 }
 
 // Quit kill tcpConn still connected.
 // before calling NewMysqlClientProtocol, tcpConn.Connected() must be true
 // please check goetty/application.go::doStart() and goetty/application.go::NewIOSession(...) for details
-func (cpi *ProtocolImpl) Quit() {
-	cpi.lock.Lock()
-	defer cpi.lock.Unlock()
-	if cpi.tcpConn != nil {
-		if !cpi.tcpConn.Connected() {
+func (pi *ProtocolImpl) Quit() {
+	var err error
+	pi.m.Lock()
+	defer pi.m.Unlock()
+	//if it was quit, do nothing
+	if pi.setQuit(true) {
+		return
+	}
+	if pi.tcpConn != nil {
+		err = pi.tcpConn.Disconnect()
+		if err != nil {
 			return
 		}
-		err := cpi.tcpConn.Close()
+		err = pi.tcpConn.Close()
 		if err != nil {
 			logutil.Errorf("close tcp conn failed. error:%v", err)
 		}
 	}
 }
 
-func (cpi *ProtocolImpl) GetLock() sync.Locker {
-	return &cpi.lock
+func (pi *ProtocolImpl) GetLock() sync.Locker {
+	return &pi.m
 }
 
-func (cpi *ProtocolImpl) GetTcpConnection() goetty.IOSession {
-	cpi.lock.Lock()
-	defer cpi.lock.Unlock()
-	return cpi.tcpConn
+func (pi *ProtocolImpl) GetTcpConnection() goetty.IOSession {
+	pi.m.Lock()
+	defer pi.m.Unlock()
+	return pi.tcpConn
 }
 
-func (cpi *ProtocolImpl) Peer() (string, string, string, string) {
-	tcp := cpi.GetTcpConnection()
+func (pi *ProtocolImpl) Peer() (string, string, string, string) {
+	tcp := pi.GetTcpConnection()
 	if tcp == nil {
 		return "", "", "", ""
 	}
@@ -396,7 +434,6 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 	}
 }
 
-var _ Protocol = &FakeProtocol{}
 var _ MysqlProtocol = &FakeProtocol{}
 
 const (
@@ -407,6 +444,37 @@ const (
 type FakeProtocol struct {
 	username string
 	database string
+}
+
+func (fp *FakeProtocol) GetCapability() uint32 {
+	return DefaultCapability
+}
+
+func (fp *FakeProtocol) IsTlsEstablished() bool {
+	return true
+}
+
+func (fp *FakeProtocol) SetTlsEstablished() {
+
+}
+
+func (fp *FakeProtocol) HandleHandshake(ctx context.Context, payload []byte) (bool, error) {
+	return false, nil
+}
+
+func (fp *FakeProtocol) GetTcpConnection() goetty.IOSession {
+	return nil
+}
+
+func (fp *FakeProtocol) GetConciseProfile() string {
+	return "fake protocol"
+}
+
+func (fp *FakeProtocol) GetSequenceId() uint8 {
+	return 0
+}
+
+func (fp *FakeProtocol) SetSequenceID(value uint8) {
 }
 
 func (fp *FakeProtocol) makeProfile(profileTyp profileType) {
@@ -452,7 +520,7 @@ func (fp *FakeProtocol) sendEOFOrOkPacket(warnings uint16, status uint16) error 
 	return nil
 }
 
-func (fp *FakeProtocol) PrepareBeforeProcessingResultSet() {}
+func (fp *FakeProtocol) ResetStatistics() {}
 
 func (fp *FakeProtocol) GetStats() string {
 	return ""

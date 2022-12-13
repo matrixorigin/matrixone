@@ -27,7 +27,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "alter account if exists abc admin_name 'root' identified by '111' comment 'str'",
+		input: `kill query 9223372036854775809`,
 	}
 )
 

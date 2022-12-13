@@ -16,15 +16,14 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"sync"
+	"sync/atomic"
 	"time"
-
-	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -38,206 +37,247 @@ type Routine struct {
 	//execution layer
 	executor CmdExecutor
 
-	//channel of request
-	requestChan chan *Request
-
 	cancelRoutineCtx  context.Context
 	cancelRoutineFunc context.CancelFunc
 
-	rs         goetty.IOSession
 	parameters *config.FrontendParameters
 
 	ses *Session
-	// TODO: the initialization and closure of application in goetty should be clear in 0.7
+
 	closeOnce sync.Once
+
+	inProcessRequest bool
+
+	cancelled atomic.Bool
+
+	connectionBeCounted bool
 
 	mu sync.Mutex
 }
 
-func (routine *Routine) GetCancelRoutineFunc() context.CancelFunc {
-	routine.mu.Lock()
-	defer routine.mu.Unlock()
-	return routine.cancelRoutineFunc
+func (rt *Routine) setConnectionBeCounted(b bool) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.connectionBeCounted = b
 }
 
-func (routine *Routine) GetCancelRoutineCtx() context.Context {
-	routine.mu.Lock()
-	defer routine.mu.Unlock()
-	return routine.cancelRoutineCtx
+func (rt *Routine) isConnectionBeCounted() bool {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.connectionBeCounted
 }
 
-func (routine *Routine) GetClientProtocol() Protocol {
-	routine.mu.Lock()
-	defer routine.mu.Unlock()
-	return routine.protocol
+func (rt *Routine) setCancelled(b bool) bool {
+	return rt.cancelled.Swap(b)
 }
 
-func (routine *Routine) GetCmdExecutor() CmdExecutor {
-	routine.mu.Lock()
-	defer routine.mu.Unlock()
-	return routine.executor
+func (rt *Routine) isCancelled() bool {
+	return rt.cancelled.Load()
 }
 
-func (routine *Routine) getConnID() uint32 {
-	return routine.GetClientProtocol().ConnectionID()
+func (rt *Routine) setInProcessRequest(b bool) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.inProcessRequest = b
 }
 
-func (routine *Routine) getParameters() *config.FrontendParameters {
-	routine.mu.Lock()
-	defer routine.mu.Unlock()
-	return routine.parameters
+func (rt *Routine) isInProcessRequest() bool {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.inProcessRequest
 }
 
-func (routine *Routine) SetSession(ses *Session) {
-	routine.mu.Lock()
-	defer routine.mu.Unlock()
-	routine.ses = ses
+func (rt *Routine) getCancelRoutineFunc() context.CancelFunc {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.cancelRoutineFunc
 }
 
-func (routine *Routine) GetSession() *Session {
-	routine.mu.Lock()
-	defer routine.mu.Unlock()
-	return routine.ses
+func (rt *Routine) getCancelRoutineCtx() context.Context {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.cancelRoutineCtx
 }
 
-func (routine *Routine) GetRequestChannel() chan *Request {
-	routine.mu.Lock()
-	defer routine.mu.Unlock()
-	return routine.requestChan
+func (rt *Routine) getProtocol() MysqlProtocol {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.protocol
 }
 
-func (routine *Routine) getIOSession() goetty.IOSession {
-	routine.mu.Lock()
-	defer routine.mu.Unlock()
-	return routine.rs
+func (rt *Routine) getCmdExecutor() CmdExecutor {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.executor
 }
 
-/*
-After the handshake with the client is done, the routine goes into processing loop.
-*/
-func (routine *Routine) Loop(routineCtx context.Context) {
-	var req *Request = nil
+func (rt *Routine) getConnectionID() uint32 {
+	return rt.getProtocol().ConnectionID()
+}
+
+func (rt *Routine) getParameters() *config.FrontendParameters {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.parameters
+}
+
+func (rt *Routine) setSession(ses *Session) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.ses = ses
+}
+
+func (rt *Routine) getSession() *Session {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.ses
+}
+
+func (rt *Routine) handleRequest(req *Request) error {
+	var ses *Session
+	var routineCtx context.Context
 	var err error
 	var resp *Response
-	var counted bool
-	var requestChan = routine.GetRequestChannel()
-	var ses *Session
-	rs := routine.getIOSession()
-	defer func(rs goetty.IOSession) {
-		if err := rs.Close(); err != nil {
-			logErrorf(routine.GetSession().GetConciseProfile(), "failed to close io session", zap.Error(err))
-		}
-	}(rs)
+	var quit bool
+	reqBegin := time.Now()
+	routineCtx = rt.getCancelRoutineCtx()
+	parameters := rt.getParameters()
+	mpi := rt.getProtocol()
+	mpi.SetSequenceID(req.seq)
+	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(routineCtx, parameters.SessionTimeout.Duration)
+	executor := rt.getCmdExecutor()
+	executor.SetCancelFunc(cancelRequestFunc)
+	ses = rt.getSession()
+	ses.MakeProfile()
+	tenant := ses.GetTenantInfo()
+	tenantCtx := context.WithValue(cancelRequestCtx, defines.TenantIDKey{}, tenant.GetTenantID())
+	tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenant.GetUserID())
+	tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
+	tenantCtx = trace.ContextWithSpanContext(tenantCtx, trace.SpanContextWithID(trace.TraceID(ses.uuid), trace.SpanKindSession))
+	ses.SetRequestContext(tenantCtx)
+	executor.SetSession(rt.getSession())
 
-	//session for the connection
-	for {
-		quit := false
-		select {
-		case <-routineCtx.Done():
-			logDebugf(routine.GetSession().GetConciseProfile(), "-----cancel routine")
-			quit = true
-			if counted {
-				metric.ConnectionCounter(routine.GetSession().GetTenantInfo().Tenant).Dec()
-			}
-		case req = <-requestChan:
-			if !counted {
-				counted = true
-				metric.ConnectionCounter(routine.GetSession().GetTenantInfo().Tenant).Inc()
-			}
-		}
-
-		if quit {
-			break
-		}
-
-		reqBegin := time.Now()
-
-		parameters := routine.getParameters()
-		mpi := routine.GetClientProtocol().(*MysqlProtocolImpl)
-		mpi.SetSequenceID(req.seq)
-
-		cancelRequestCtx, cancelRequestFunc := context.WithTimeout(routineCtx, parameters.SessionTimeout.Duration)
-		executor := routine.GetCmdExecutor()
-		executor.(*MysqlCmdExecutor).setCancelRequestFunc(cancelRequestFunc)
-		ses = routine.GetSession()
-		ses.MakeProfile()
-		tenant := ses.GetTenantInfo()
-		tenantCtx := context.WithValue(cancelRequestCtx, defines.TenantIDKey{}, tenant.GetTenantID())
-		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenant.GetUserID())
-		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
-		tenantCtx = trace.ContextWithSpanContext(tenantCtx, trace.SpanContextWithID(trace.TraceID(ses.uuid), trace.SpanKindSession))
-		ses.SetRequestContext(tenantCtx)
-		executor.PrepareSessionBeforeExecRequest(routine.GetSession())
-
-		if resp, err = executor.ExecRequest(tenantCtx, req); err != nil {
-			logErrorf(ses.GetConciseProfile(), "routine execute request failed. error:%v \n", err)
-		}
-
-		if resp != nil {
-			if err = routine.GetClientProtocol().SendResponse(tenantCtx, resp); err != nil {
-				logErrorf(ses.GetConciseProfile(), "routine send response failed %v. error:%v ", resp, err)
-			}
-		}
-
-		if !parameters.DisableRecordTimeElapsedOfSqlRequest {
-			logDebugf(ses.GetConciseProfile(), "the time of handling the request %s", time.Since(reqBegin).String())
-		}
-
-		cancelRequestFunc()
+	if !rt.isConnectionBeCounted() {
+		rt.setConnectionBeCounted(true)
+		metric.ConnectionCounter(ses.GetTenantInfo().GetTenant()).Inc()
 	}
 
-	ses = routine.GetSession()
-	//ensure cleaning the transaction
-	if ses != nil {
+	if resp, err = executor.ExecRequest(tenantCtx, ses, req); err != nil {
+		logErrorf(ses.GetConciseProfile(), "rt execute request failed. error:%v \n", err)
+	}
+
+	if resp != nil {
+		if err = rt.getProtocol().SendResponse(tenantCtx, resp); err != nil {
+			logErrorf(ses.GetConciseProfile(), "rt send response failed %v. error:%v ", resp, err)
+		}
+	}
+
+	logDebugf(ses.GetConciseProfile(), "the time of handling the request %s", time.Since(reqBegin).String())
+
+	cancelRequestFunc()
+
+	//check the connection has been already canceled or not.
+	select {
+	case <-routineCtx.Done():
+		quit = true
+	default:
+	}
+
+	quit = quit || rt.isCancelled()
+
+	if quit {
+		if rt.isConnectionBeCounted() {
+			metric.ConnectionCounter(ses.GetTenantInfo().GetTenant()).Dec()
+		}
+		defer ses.Dispose()
+
+		//ensure cleaning the transaction
 		logErrorf(ses.GetConciseProfile(), "rollback the txn.")
 		err = ses.TxnRollback()
 		if err != nil {
 			logErrorf(ses.GetConciseProfile(), "rollback txn failed.error:%v", err)
 		}
-	}
-}
 
-/*
-When the io is closed, the Quit will be called.
-*/
-func (routine *Routine) Quit() {
-	routine.closeOnce.Do(func() {
-		ses := routine.GetSession()
-		if ses != nil {
-			ses.Dispose()
-		}
-		routine.notifyClose()
-
-		cancel := routine.GetCancelRoutineFunc()
-		if cancel != nil {
-			cancel()
-		}
-
-		proto := routine.GetClientProtocol()
+		//close the network connection
+		proto := rt.getProtocol()
 		if proto != nil {
 			proto.Quit()
 		}
-	})
-}
-
-/*
-notify routine to quit
-*/
-func (routine *Routine) notifyClose() {
-	executor := routine.GetCmdExecutor()
-	if executor != nil {
-		executor.Close()
 	}
+
+	return nil
 }
 
-func (routine *Routine) notifyDone() {
-	executor := routine.GetCmdExecutor()
-	if executor != nil {
-		cancal := executor.(*MysqlCmdExecutor).getCancelRequestFunc()
-		if cancal != nil {
-			cancal()
+// killQuery if there is a running query, just cancel it.
+func (rt *Routine) killQuery(killMyself bool, statementId string) {
+	if !killMyself {
+		executor := rt.getCmdExecutor()
+		if executor != nil {
+			//just cancel the request context.
+			executor.CancelRequest()
 		}
 	}
+}
+
+// killConnection close the network connection
+// myself: true -- the client kill itself.
+// myself: false -- the client kill another connection.
+func (rt *Routine) killConnection(killMyself bool) {
+	//Case 1: kill the connection itself. Do not close the network connection here.
+	//label the connection with the cancelled tag
+	//if it was cancelled, do nothing
+	if rt.setCancelled(true) {
+		return
+	}
+
+	//Case 2: kill another connection. Close the network here.
+	//    if the connection is processing the request, the response may be dropped.
+	//    if the connection is not processing the request, it has no effect.
+	if !killMyself {
+		if !rt.isInProcessRequest() {
+			//If it is not in processing the request, just close the network
+			proto := rt.getProtocol()
+			if proto != nil {
+				proto.Quit()
+			}
+		} else {
+			//If it is in processing the request, cancel the root context of the connection.
+			//At the same time, it cancels all the contexts
+			//(includes the request context) derived from the root context.
+			//After the context is cancelled. In handleRequest, the network
+			//will be closed finally.
+			cancel := rt.getCancelRoutineFunc()
+			if cancel != nil {
+				cancel()
+			}
+		}
+	}
+}
+
+// cleanup When the io is closed, the cleanup will be called in callback Closed().
+// cleanup releases the resources only once.
+// both the client and the server can close the connection.
+func (rt *Routine) cleanup() {
+	//step 1: cancel the query if there is a running query.
+	//step 2: close the connection.
+	rt.closeOnce.Do(func() {
+		//step A: release the mempool related to the session
+		ses := rt.getSession()
+		if ses != nil {
+			ses.Dispose()
+		}
+
+		//step B: cancel the query
+		rt.killQuery(false, "")
+
+		//step C: cancel the root context of the connection.
+		//At the same time, it cancels all the contexts
+		//(includes the request context) derived from the root context.
+		cancel := rt.getCancelRoutineFunc()
+		if cancel != nil {
+			cancel()
+		}
+	})
 }
 
 func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecutor, parameters *config.FrontendParameters, rs goetty.IOSession) *Routine {
@@ -246,16 +286,10 @@ func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecuto
 	ri := &Routine{
 		protocol:          protocol,
 		executor:          executor,
-		requestChan:       make(chan *Request, 1),
 		cancelRoutineCtx:  cancelRoutineCtx,
 		cancelRoutineFunc: cancelRoutineFunc,
 		parameters:        parameters,
-		rs:                rs,
 	}
-	rs.Ref()
-
-	//async process request
-	go ri.Loop(cancelRoutineCtx)
 
 	return ri
 }

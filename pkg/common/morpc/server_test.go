@@ -156,6 +156,39 @@ func TestStreamServer(t *testing.T) {
 	})
 }
 
+func TestStreamServerWithSequenceNotMatch(t *testing.T) {
+	testRPCServer(t, func(rs *server) {
+		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+		defer cancel()
+
+		c := newTestClient(t)
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+
+		rs.RegisterRequestHandler(func(_ context.Context, request Message, _ uint64, cs ClientSession) error {
+			return cs.Write(ctx, request)
+		})
+
+		v, err := c.NewStream(testAddr, false)
+		assert.NoError(t, err)
+		st := v.(*stream)
+		defer func() {
+			assert.NoError(t, st.Close())
+		}()
+
+		st.sequence = 2
+		req := newTestMessage(st.ID())
+		assert.NoError(t, st.Send(ctx, req))
+
+		rc, err := st.Receive()
+		assert.NoError(t, err)
+		assert.NotNil(t, rc)
+		resp := <-rc
+		assert.Nil(t, resp)
+	})
+}
+
 func BenchmarkSend(b *testing.B) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
