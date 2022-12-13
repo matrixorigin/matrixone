@@ -105,5 +105,5 @@ func (ca *AlterAccount) Format(ctx *FmtCtx) {
 	ca.Comment.Format(ctx)
 }
 
-func (node *AlterAccount) GetStatementType() string { return "Alter Account" }
-func (node *AlterAccount) GetQueryType() string     { return QueryTypeDCL }
+func (ca *AlterAccount) GetStatementType() string { return "Alter Account" }
+func (ca *AlterAccount) GetQueryType() string     { return QueryTypeDCL }

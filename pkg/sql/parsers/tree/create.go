@@ -2364,6 +2364,9 @@ func (ca *CreateAccount) Format(ctx *FmtCtx) {
 	ca.Comment.Format(ctx)
 }
 
+func (ca *CreateAccount) GetStatementType() string { return "Create Account" }
+func (ca *CreateAccount) GetQueryType() string     { return QueryTypeDCL }
+
 type AccountAuthOption struct {
 	Equal          string
 	AdminName      string
@@ -2381,9 +2384,6 @@ func (node *AccountAuthOption) Format(ctx *FmtCtx) {
 	node.IdentifiedType.Format(ctx)
 
 }
-
-func (node *CreateAccount) GetStatementType() string { return "Create Account" }
-func (node *CreateAccount) GetQueryType() string     { return QueryTypeDCL }
 
 type AccountIdentifiedOption int
 
