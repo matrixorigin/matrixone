@@ -53,7 +53,7 @@ func makeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 		argTypes[i] = plan2.MakeTypeByPlan2Expr(arg)
 	}
 
-	funId, returnType, _, _ := function.GetFunctionByName(proc.Ctx, name, argTypes)
+	funId, returnType, _, _ := function.GetFunctionByName(context.TODO(), name, argTypes)
 
 	return &plan.Expr{
 		Typ: plan2.MakePlan2Type(&returnType),
@@ -168,7 +168,7 @@ func TestCheckExprIsMonotonic(t *testing.T) {
 
 	t.Run("test checkExprIsMonotonic", func(t *testing.T) {
 		for i, testCase := range testCases {
-			isMonotonic := checkExprIsMonotonic(testCase.expr)
+			isMonotonic := checkExprIsMonotonic(context.TODO(), testCase.expr)
 			if isMonotonic != testCase.result {
 				t.Fatalf("checkExprIsMonotonic testExprs[%d] is different with expected", i)
 			}
