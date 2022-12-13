@@ -16,8 +16,9 @@ package trace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -73,6 +74,7 @@ var (
 	ioCol        = table.Column{Name: "io", Type: bigintUnsignedType, Default: "0", Comment: "io count"}
 	stmtTypeCol  = table.Column{Name: "statement_type", Type: "varchar(128)", Default: "", Comment: "statement type, val in [Insert, Delete, Update, Drop Table, Drop User, ...]"}
 	queryTypeCol = table.Column{Name: "query_type", Type: "varchar(128)", Default: "", Comment: "query type, val in [DQL, DDL, DML, DCL, TCL]"}
+	sqlTypeCol   = table.Column{Name: "sql_source_type", Type: "TEXT", Default: "", Comment: "sql statement source type"}
 
 	SingleStatementTable = &table.Table{
 		Account:  table.AccountAll,
@@ -106,6 +108,7 @@ var (
 			stmtTypeCol,
 			queryTypeCol,
 			roleIdCol,
+			sqlTypeCol,
 		},
 		PrimaryKeyColumn: []table.Column{stmtIDCol},
 		Engine:           table.ExternalTableEngine,
