@@ -192,7 +192,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Pr
 		}
 	}
 
-	defaultExpr, err := makePlan2CastExpr(planExpr, typ)
+	defaultExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +234,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Proce
 		return nil, err
 	}
 
-	onUpdateExpr, err := makePlan2CastExpr(planExpr, typ)
+	onUpdateExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}

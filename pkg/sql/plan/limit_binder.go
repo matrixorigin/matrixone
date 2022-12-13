@@ -49,7 +49,7 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 			targetType := types.T_int64.ToType()
 			planTargetType := makePlan2Type(&targetType)
 			var err error
-			expr, err = appendCastBeforeExpr(expr, planTargetType)
+			expr, err = appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
 			if err != nil {
 				return nil, err
 			}

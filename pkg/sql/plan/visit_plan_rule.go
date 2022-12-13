@@ -241,7 +241,7 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
-			return bindFuncExprImplByPlanExpr(rule.compCtx.GetContext(), exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
+			return bindFuncExprImplByPlanExpr(rule.getContext(), exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
 		}
 		return e, nil
 	case *plan.Expr_V:
@@ -277,26 +277,28 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 			// when we build plan with constant in float, we cast them to decimal.
 			// so we cast @float_var to decimal too.
 			strVal := strconv.FormatFloat(float64(val), 'f', -1, 64)
-			expr, err = makePlan2DecimalExprWithType(strVal)
+			expr, err = makePlan2DecimalExprWithType(rule.getContext(), strVal)
 		case float64:
 			// when we build plan with constant in float, we cast them to decimal.
 			// so we cast @float_var to decimal too.
 			strVal := strconv.FormatFloat(val, 'f', -1, 64)
-			expr, err = makePlan2DecimalExprWithType(strVal)
+			expr, err = makePlan2DecimalExprWithType(rule.getContext(), strVal)
 		case bool:
 			expr = makePlan2BoolConstExprWithType(val)
 		case nil:
 			expr = makePlan2NullConstExprWithType()
 		case types.Decimal64, types.Decimal128:
-			err = moerr.NewNYI(rule.compCtx.GetContext(), "decimal var")
+			err = moerr.NewNYI(rule.getContext(), "decimal var")
 		default:
-			err = moerr.NewParseError(rule.compCtx.GetContext(), "type of var %q is not supported now", exprImpl.V.Name)
+			err = moerr.NewParseError(rule.getContext(), "type of var %q is not supported now", exprImpl.V.Name)
 		}
 		if e.Typ.Id != int32(types.T_any) && expr.Typ.Id != e.Typ.Id {
-			return appendCastBeforeExpr(expr, e.Typ)
+			return appendCastBeforeExpr(rule.getContext(), expr, e.Typ)
 		}
 		return expr, err
 	default:
 		return e, nil
 	}
 }
+
+func (rule *ResetVarRefRule) getContext() context.Context { return rule.getContext() }

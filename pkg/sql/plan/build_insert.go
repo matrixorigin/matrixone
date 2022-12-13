@@ -167,7 +167,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 						err = MakeInsertError(ctx.GetContext(), types.T(col.Typ.Id), col, rows, j, i, err)
 						return nil, err
 					}
-					resExpr, err := makePlan2CastExpr(planExpr, col.Typ)
+					resExpr, err := makePlan2CastExpr(ctx.GetContext(), planExpr, col.Typ)
 					if err != nil {
 						err = MakeInsertError(ctx.GetContext(), types.T(col.Typ.Id), col, rows, j, i, err)
 						return nil, err
@@ -277,7 +277,7 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 
 	// do type cast if needed
 	for i := range tableDef.Cols {
-		exprs[i], err = makePlan2CastExpr(exprs[i], tableDef.Cols[i].Typ)
+		exprs[i], err = makePlan2CastExpr(ctx.GetContext(), exprs[i], tableDef.Cols[i].Typ)
 		if err != nil {
 			return nil, err
 		}

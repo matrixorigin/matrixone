@@ -719,7 +719,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 		bat.Clean(proc.Mp())
 		return ifNeed
 	}
-	if !checkExprIsMonotonic(expr) {
+	if !checkExprIsMonotonic(ctx, expr) {
 		return true
 	}
 
@@ -823,7 +823,7 @@ func blockWrite(ctx context.Context, bat *batch.Batch, fs fileservice.FileServic
 	return writer.WriteEnd(ctx)
 }
 
-func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
+func needSyncDnStores(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef,
 	priKeys []*engine.Attribute, dnStores []DNStore) []int {
 	var pk *engine.Attribute
 
@@ -863,7 +863,7 @@ func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
 		}
 		return getListByItems(dnStores, intPkRange.items)
 	}
-	canComputeRange, hashVal := computeRangeByNonIntPk(expr, pk.Name)
+	canComputeRange, hashVal := computeRangeByNonIntPk(ctx, expr, pk.Name)
 	if !canComputeRange {
 		return fullList()
 	}

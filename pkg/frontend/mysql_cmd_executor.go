@@ -2254,7 +2254,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
 		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule})
-		err = vp.Visit()
+		err = vp.Visit(requestCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -2283,7 +2283,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// replace @var with their values
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
 		vp := plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{resetVarRule})
-		err = vp.Visit()
+		err = vp.Visit(requestCtx)
 		if err != nil {
 			return nil, err
 		}

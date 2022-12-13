@@ -204,7 +204,7 @@ func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, e
 		// expr must be bool type, if not, try to do type convert
 		// but just ignore the subQuery. It will be solved at optimizer.
 		if expr.GetSub() == nil {
-			expr, err = makePlan2CastExpr(expr, &plan.Type{Id: int32(types.T_bool)})
+			expr, err = makePlan2CastExpr(ctx.binder.GetContext(), expr, &plan.Type{Id: int32(types.T_bool)})
 			if err != nil {
 				return nil, err
 			}
@@ -816,7 +816,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 		return e, nil
 	}
 	overloadID := ef.F.Func.GetObj()
-	f, err := function.GetFunctionByID(overloadID)
+	f, err := function.GetFunctionByID(proc.Ctx, overloadID)
 	if err != nil {
 		return nil, err
 	}
