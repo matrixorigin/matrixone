@@ -72,7 +72,25 @@ func (t *GcTable) GetGcObject() []string {
 	return gc
 }
 
+func (t *GcTable) dropEntry(id common.ID) {
+	for name := range t.table {
+		if t.table[name].table.tid == id.TableID {
+			t.table[name].DropTable()
+		}
+	}
+}
+
 func (t *GcTable) UpdateTable(data *logtail.CheckpointData) {
+	_, _, _, del, delTxn := data.GetTblBatchs()
+	for i := 0; i < del.Length(); i++ {
+		dbid := delTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
+		tid := delTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
+		id := common.ID{
+			TableID: tid,
+			PartID:  uint32(dbid),
+		}
+		t.dropEntry(id)
+	}
 	ins, insTxn, del, delTxn := data.GetBlkBatchs()
 	for i := 0; i < ins.Length(); i++ {
 		dbid := insTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
@@ -80,6 +98,9 @@ func (t *GcTable) UpdateTable(data *logtail.CheckpointData) {
 		sid := insTxn.GetVectorByName(catalog.SnapshotAttr_SegID).Get(i).(uint64)
 		blkID := ins.GetVectorByName(pkgcatalog.BlockMeta_ID).Get(i).(uint64)
 		metaLoc := string(ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		if metaLoc == "" {
+			continue
+		}
 		id := common.ID{
 			SegmentID: sid,
 			TableID:   tid,
@@ -95,6 +116,9 @@ func (t *GcTable) UpdateTable(data *logtail.CheckpointData) {
 		sid := delTxn.GetVectorByName(catalog.SnapshotAttr_SegID).Get(i).(uint64)
 		blkID := del.GetVectorByName(catalog.AttrRowID).Get(i).(types.Rowid)
 		metaLoc := string(delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		if metaLoc == "" {
+			continue
+		}
 		id := common.ID{
 			SegmentID: sid,
 			TableID:   tid,
