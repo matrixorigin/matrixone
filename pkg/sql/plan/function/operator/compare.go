@@ -39,13 +39,13 @@ func handleScalarNull(v1, v2 *vector.Vector, proc *process.Process) (*vector.Vec
 	} else if v2.IsScalarNull() {
 		return proc.AllocConstNullVector(boolType, vector.Length(v1)), nil
 	}
-	panic(moerr.NewInternalErrorNoCtx("handleScalarNull failed."))
+	panic(moerr.NewInternalError(proc.Ctx, "handleScalarNull failed."))
 }
 
 func allocateBoolVector(length int, proc *process.Process) *vector.Vector {
 	vec, err := proc.AllocVectorOfRows(boolType, int64(length), nil)
 	if err != nil {
-		panic(moerr.NewOOMNoCtx())
+		panic(moerr.NewOOM(proc.Ctx))
 	}
 	return vec
 }
