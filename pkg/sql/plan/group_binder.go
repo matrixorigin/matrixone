@@ -23,6 +23,7 @@ import (
 
 func NewGroupBinder(builder *QueryBuilder, ctx *BindContext) *GroupBinder {
 	b := &GroupBinder{}
+	b.sysCtx = builder.compCtx.GetContext()
 	b.builder = builder
 	b.ctx = ctx
 	b.impl = b

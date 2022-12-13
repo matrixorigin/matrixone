@@ -19,7 +19,7 @@ import (
 )
 
 func MakeExpr(name string, args []*Expr) *plan.Expr {
-	expr, err := bindFuncExprImplByPlanExpr(name, args)
+	expr, err := bindFuncExprImplByPlanExpr(b.sysCtx, name, args)
 	if err != nil {
 		panic(err)
 	}

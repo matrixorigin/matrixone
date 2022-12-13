@@ -22,6 +22,7 @@ import (
 
 func NewPartitionBinder(builder *QueryBuilder, ctx *BindContext) *PartitionBinder {
 	p := &PartitionBinder{}
+	p.sysCtx = builder.compCtx.GetContext()
 	p.builder = builder
 	p.ctx = ctx
 	p.impl = p

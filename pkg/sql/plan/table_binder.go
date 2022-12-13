@@ -15,14 +15,14 @@
 package plan
 
 import (
-	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewTableBinder(sysCtx context.Context, builder *QueryBuilder, ctx *BindContext) *TableBinder {
-	b := &TableBinder{baseBinder{sysCtx: sysCtx}}
+func NewTableBinder(builder *QueryBuilder, ctx *BindContext) *TableBinder {
+	b := &TableBinder{}
+	b.sysCtx = builder.compCtx.GetContext()
 	b.builder = builder
 	b.ctx = ctx
 	b.impl = b

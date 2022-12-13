@@ -144,7 +144,7 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinFlag, left, rig
 
 	leftPos := leftBinding.colIdByName[col]
 	rightPos := rightBinding.colIdByName[col]
-	expr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
+	expr, err := bindFuncExprImplByPlanExpr(b.sysCtx, "=", []*plan.Expr{
 		{
 			Typ: leftBinding.types[leftPos],
 			Expr: &plan.Expr_Col{

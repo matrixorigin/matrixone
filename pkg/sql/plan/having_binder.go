@@ -26,6 +26,7 @@ func NewHavingBinder(builder *QueryBuilder, ctx *BindContext) *HavingBinder {
 	b := &HavingBinder{
 		insideAgg: false,
 	}
+	b.sysCtx = builder.compCtx.GetContext()
 	b.builder = builder
 	b.ctx = ctx
 	b.impl = b

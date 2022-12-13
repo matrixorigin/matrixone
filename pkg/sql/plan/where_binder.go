@@ -22,6 +22,7 @@ import (
 
 func NewWhereBinder(builder *QueryBuilder, ctx *BindContext) *WhereBinder {
 	b := &WhereBinder{}
+	b.sysCtx = builder.compCtx.GetContext()
 	b.builder = builder
 	b.ctx = ctx
 	b.impl = b

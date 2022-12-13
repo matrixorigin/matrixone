@@ -179,7 +179,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Pr
 		}, nil
 	}
 
-	binder := NewDefaultBinder(nil, nil, nil, typ, nil)
+	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
 	planExpr, err := binder.BindExpr(expr, 0, false)
 	if err != nil {
 		return nil, err
@@ -227,7 +227,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Proce
 		return nil, nil
 	}
 
-	binder := NewDefaultBinder(nil, nil, nil, typ, nil)
+	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
 	planExpr, err := binder.BindExpr(expr, 0, false)
 	if err != nil {
 		return nil, err

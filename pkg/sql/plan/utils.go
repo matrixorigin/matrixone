@@ -285,9 +285,9 @@ func applyDistributivity(expr *plan.Expr) *plan.Expr {
 		leftExpr, _ := combinePlanConjunction(leftOnlyConds)
 		rightExpr, _ := combinePlanConjunction(rightOnlyConds)
 
-		leftExpr, _ = bindFuncExprImplByPlanExpr("or", []*plan.Expr{leftExpr, rightExpr})
+		leftExpr, _ = bindFuncExprImplByPlanExpr(b.sysCtx, "or", []*plan.Expr{leftExpr, rightExpr})
 
-		expr, _ = bindFuncExprImplByPlanExpr("and", []*plan.Expr{expr, leftExpr})
+		expr, _ = bindFuncExprImplByPlanExpr(b.sysCtx, "and", []*plan.Expr{expr, leftExpr})
 	}
 
 	return expr
@@ -373,7 +373,7 @@ func walkThroughDNF(expr *plan.Expr, keywords string) *plan.Expr {
 			left := walkThroughDNF(exprImpl.F.Args[0], keywords)
 			right := walkThroughDNF(exprImpl.F.Args[1], keywords)
 			if left != nil && right != nil {
-				retExpr, _ = bindFuncExprImplByPlanExpr("or", []*plan.Expr{left, right})
+				retExpr, _ = bindFuncExprImplByPlanExpr(b.sysCtx, "or", []*plan.Expr{left, right})
 				return retExpr
 			}
 		} else if exprImpl.F.Func.ObjName == "and" {
@@ -384,7 +384,7 @@ func walkThroughDNF(expr *plan.Expr, keywords string) *plan.Expr {
 			} else if right == nil {
 				return left
 			} else {
-				retExpr, _ = bindFuncExprImplByPlanExpr("and", []*plan.Expr{left, right})
+				retExpr, _ = bindFuncExprImplByPlanExpr(b.sysCtx, "and", []*plan.Expr{left, right})
 				return retExpr
 			}
 		} else {
@@ -434,7 +434,7 @@ func combinePlanConjunction(exprs []*plan.Expr) (expr *plan.Expr, err error) {
 	expr = exprs[0]
 
 	for i := 1; i < len(exprs); i++ {
-		expr, err = bindFuncExprImplByPlanExpr("and", []*plan.Expr{expr, exprs[i]})
+		expr, err = bindFuncExprImplByPlanExpr(b.sysCtx, "and", []*plan.Expr{expr, exprs[i]})
 
 		if err != nil {
 			break
@@ -1067,13 +1067,13 @@ func clearBinding(ctx *BindContext) {
 
 func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Expr, idx int) (*plan.Expr, error) {
 	if idx == len(leftExprs)-1 {
-		return bindFuncExprImplByPlanExpr(op, []*plan.Expr{
+		return bindFuncExprImplByPlanExpr(b.sysCtx, op, []*plan.Expr{
 			leftExprs[idx],
 			rightExprs[idx],
 		})
 	}
 
-	expr, err := bindFuncExprImplByPlanExpr(nonEqOp, []*plan.Expr{
+	expr, err := bindFuncExprImplByPlanExpr(b.sysCtx, nonEqOp, []*plan.Expr{
 		DeepCopyExpr(leftExprs[idx]),
 		DeepCopyExpr(rightExprs[idx]),
 	})
@@ -1081,7 +1081,7 @@ func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Exp
 		return nil, err
 	}
 
-	eqExpr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
+	eqExpr, err := bindFuncExprImplByPlanExpr(b.sysCtx, "=", []*plan.Expr{
 		leftExprs[idx],
 		rightExprs[idx],
 	})
@@ -1094,12 +1094,12 @@ func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Exp
 		return nil, err
 	}
 
-	tailExpr, err = bindFuncExprImplByPlanExpr("and", []*plan.Expr{eqExpr, tailExpr})
+	tailExpr, err = bindFuncExprImplByPlanExpr(b.sysCtx, "and", []*plan.Expr{eqExpr, tailExpr})
 	if err != nil {
 		return nil, err
 	}
 
-	return bindFuncExprImplByPlanExpr("or", []*plan.Expr{expr, tailExpr})
+	return bindFuncExprImplByPlanExpr(b.sysCtx, "or", []*plan.Expr{expr, tailExpr})
 }
 
 // checkNoNeedCast

@@ -25,6 +25,7 @@ func NewProjectionBinder(builder *QueryBuilder, ctx *BindContext, havingBinder *
 	b := &ProjectionBinder{
 		havingBinder: havingBinder,
 	}
+	b.sysCtx = builder.compCtx.GetContext()
 	b.builder = builder
 	b.ctx = ctx
 	b.impl = b

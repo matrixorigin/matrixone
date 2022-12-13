@@ -23,8 +23,9 @@ import (
 	"strings"
 )
 
-func NewDefaultBinder(goCtx context.Context, builder *QueryBuilder, ctx *BindContext, typ *Type, cols []string) *DefaultBinder {
-	b := &DefaultBinder{typ: typ, cols: cols, baseBinder: baseBinder{sysCtx: goCtx}}
+func NewDefaultBinder(sysCtx context.Context, builder *QueryBuilder, ctx *BindContext, typ *Type, cols []string) *DefaultBinder {
+	b := &DefaultBinder{typ: typ, cols: cols}
+	b.sysCtx = sysCtx
 	b.builder = builder
 	b.ctx = ctx
 	b.impl = b

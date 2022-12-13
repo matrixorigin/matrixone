@@ -23,6 +23,7 @@ import (
 
 func NewLimitBinder(builder *QueryBuilder, ctx *BindContext) *LimitBinder {
 	lb := &LimitBinder{}
+	lb.sysCtx = builder.compCtx.GetContext()
 	lb.builder = builder
 	lb.ctx = ctx
 	lb.impl = lb

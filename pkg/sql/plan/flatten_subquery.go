@@ -236,7 +236,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			return 0, nil, err
 		}
 
-		expr, err = bindFuncExprImplByPlanExpr("not", []*plan.Expr{expr})
+		expr, err = bindFuncExprImplByPlanExpr(b.sysCtx, "not", []*plan.Expr{expr})
 		if err != nil {
 			return 0, nil, err
 		}
@@ -263,7 +263,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 		childList := childImpl.List.List
 		switch op {
 		case "=":
-			leftExpr, err := bindFuncExprImplByPlanExpr(op, []*plan.Expr{
+			leftExpr, err := bindFuncExprImplByPlanExpr(b.sysCtx, op, []*plan.Expr{
 				childList[0],
 				{
 					Typ: ctx.results[0].Typ,
@@ -280,7 +280,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 			}
 
 			for i := 1; i < len(childList); i++ {
-				rightExpr, err := bindFuncExprImplByPlanExpr(op, []*plan.Expr{
+				rightExpr, err := bindFuncExprImplByPlanExpr(b.sysCtx, op, []*plan.Expr{
 					childList[i],
 					{
 						Typ: ctx.results[i].Typ,
@@ -296,7 +296,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 					return nil, err
 				}
 
-				leftExpr, err = bindFuncExprImplByPlanExpr("and", []*plan.Expr{leftExpr, rightExpr})
+				leftExpr, err = bindFuncExprImplByPlanExpr(b.sysCtx, "and", []*plan.Expr{leftExpr, rightExpr})
 				if err != nil {
 					return nil, err
 				}
@@ -305,7 +305,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 			return leftExpr, nil
 
 		case "<>":
-			leftExpr, err := bindFuncExprImplByPlanExpr(op, []*plan.Expr{
+			leftExpr, err := bindFuncExprImplByPlanExpr(b.sysCtx, op, []*plan.Expr{
 				childList[0],
 				{
 					Typ: ctx.results[0].Typ,
@@ -322,7 +322,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 			}
 
 			for i := 1; i < len(childList); i++ {
-				rightExpr, err := bindFuncExprImplByPlanExpr(op, []*plan.Expr{
+				rightExpr, err := bindFuncExprImplByPlanExpr(b.sysCtx, op, []*plan.Expr{
 					childList[i],
 					{
 						Typ: ctx.results[i].Typ,
@@ -338,7 +338,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 					return nil, err
 				}
 
-				leftExpr, err = bindFuncExprImplByPlanExpr("or", []*plan.Expr{leftExpr, rightExpr})
+				leftExpr, err = bindFuncExprImplByPlanExpr(b.sysCtx, "or", []*plan.Expr{leftExpr, rightExpr})
 				if err != nil {
 					return nil, err
 				}
@@ -368,7 +368,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 		}
 
 	default:
-		return bindFuncExprImplByPlanExpr(op, []*plan.Expr{
+		return bindFuncExprImplByPlanExpr(b.sysCtx, op, []*plan.Expr{
 			child,
 			{
 				Typ: ctx.results[0].Typ,

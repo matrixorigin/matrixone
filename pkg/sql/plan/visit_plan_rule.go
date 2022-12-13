@@ -184,7 +184,7 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
-			return bindFuncExprImplByPlanExpr(exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
+			return bindFuncExprImplByPlanExpr(b.sysCtx, exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
 		}
 		return e, nil
 	case *plan.Expr_P:
@@ -238,7 +238,7 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
-			return bindFuncExprImplByPlanExpr(exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
+			return bindFuncExprImplByPlanExpr(b.sysCtx, exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
 		}
 		return e, nil
 	case *plan.Expr_V:
