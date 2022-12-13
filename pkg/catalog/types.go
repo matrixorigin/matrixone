@@ -371,7 +371,6 @@ var (
 	}
 
 	MoTableMetaTypesOnFS = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0),                    // block_id
 		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0), // meta_loc
 	}
 
