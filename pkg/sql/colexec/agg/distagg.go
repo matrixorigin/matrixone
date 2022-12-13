@@ -189,7 +189,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 				if hasNull {
 					continue
 				}
-				v := (any)(vec.GetString(int64(i) + start)).(T1)
+				v := (any)(vec.GetBytes(int64(i) + start)).(T1)
 				a.srcs[j] = append(a.srcs[j], v)
 				a.vs[j], a.es[j] = a.fill(int64(j), v, a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 			}

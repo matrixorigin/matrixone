@@ -1641,6 +1641,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		nodeType := plan.Node_TABLE_SCAN
 		if tableDef.TableType == catalog.SystemExternalRel {
 			nodeType = plan.Node_EXTERNAL_SCAN
+			col := &ColDef{
+				Name: catalog.ExternalFilePath,
+				Typ: &plan.Type{
+					Id:    int32(types.T_varchar),
+					Width: types.MaxVarcharLen,
+					Table: table,
+				},
+			}
+			tableDef.Cols = append(tableDef.Cols, col)
 		} else if tableDef.TableType == catalog.SystemViewRel {
 
 			// set view statment to CTE
@@ -1763,13 +1772,13 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var cols []string
 	var types []*plan.Type
 	var binding *Binding
+	var table string
 
 	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN {
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return moerr.NewSyntaxError(builder.compCtx.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
 		}
 
-		var table string
 		if alias.Alias != "" {
 			table = string(alias.Alias)
 		} else {
@@ -1812,7 +1821,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			return moerr.NewSyntaxError(builder.compCtx.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(headings), len(alias.Cols))
 		}
 
-		table := subCtx.cteName
+		table = subCtx.cteName
 		if len(alias.Alias) > 0 {
 			table = string(alias.Alias)
 		}
@@ -1845,7 +1854,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	ctx.bindingByTag[binding.tag] = binding
 	ctx.bindingByTable[binding.table] = binding
 
-	for _, col := range cols {
+	for _, col := range binding.cols {
 		if _, ok := ctx.bindingByCol[col]; ok {
 			ctx.bindingByCol[col] = nil
 		} else {

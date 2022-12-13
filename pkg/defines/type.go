@@ -85,6 +85,8 @@ func (typ *MysqlType) GetLength(width int32) uint32 {
 		return uint32(width) * 3
 	case MYSQL_TYPE_DATE:
 		return 64
+	case MYSQL_TYPE_TIME:
+		return 64
 	case MYSQL_TYPE_DATETIME:
 		return 64
 	case MYSQL_TYPE_TIMESTAMP:
