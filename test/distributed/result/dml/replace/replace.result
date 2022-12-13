@@ -1,4 +1,0 @@
-drop table if exists names;
-create table names(id int PRIMARY KEY,name VARCHAR(255),age int);
-replace into names(id, name, age) values(1,"Abby", 24);
-not supported: Not support replace statement
