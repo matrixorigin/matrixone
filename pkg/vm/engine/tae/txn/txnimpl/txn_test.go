@@ -51,31 +51,31 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
-func getNodes() int {
-	v := rand.Intn(100)
-	if v < 30 {
-		return 1 * 2
-	} else if v < 55 {
-		return 2 * 2
-	} else if v < 75 {
-		return 3 * 2
-	} else if v < 90 {
-		return 4 * 2
-	}
-	return 5 * 2
-}
+//func getNodes() int {
+//	v := rand.Intn(100)
+//	if v < 30 {
+//		return 1 * 2
+//	} else if v < 55 {
+//		return 2 * 2
+//	} else if v < 75 {
+//		return 3 * 2
+//	} else if v < 90 {
+//		return 4 * 2
+//	}
+//	return 5 * 2
+//}
 
-func makeTable(t *testing.T, dir string, colCnt int, pkIdx int, bufSize uint64) *txnTable {
-	mgr := buffer.NewNodeManager(bufSize, nil)
-	driver := wal.NewDriverWithBatchStore(dir, "store", nil)
-	id := common.NextGlobalSeqNum()
-	schema := catalog.MockSchemaAll(colCnt, pkIdx)
-	rel := mockTestRelation(id, schema)
-	txn := txnbase.NewTxn(nil, nil, common.NewTxnIDAllocator().Alloc(), types.NextGlobalTsForTest(), nil)
-	store := newStore(nil, driver, nil, mgr, nil)
-	store.BindTxn(txn)
-	return newTxnTable(store, rel.GetMeta().(*catalog.TableEntry))
-}
+//func makeTable(t *testing.T, dir string, colCnt int, pkIdx int, bufSize uint64) *txnTable {
+//	mgr := buffer.NewNodeManager(bufSize, nil)
+//	driver := wal.NewDriverWithBatchStore(dir, "store", nil)
+//	id := common.NextGlobalSeqNum()
+//	schema := catalog.MockSchemaAll(colCnt, pkIdx)
+//	rel := mockTestRelation(id, schema)
+//	txn := txnbase.NewTxn(nil, nil, common.NewTxnIDAllocator().Alloc(), types.NextGlobalTsForTest(), nil)
+//	store := newStore(nil, driver, nil, mgr, nil)
+//	store.BindTxn(txn)
+//	return newTxnTable(store, rel.GetMeta().(*catalog.TableEntry))
+//}
 
 //func TestInsertNode(t *testing.T) {
 //	defer testutils.AfterTest(t)()

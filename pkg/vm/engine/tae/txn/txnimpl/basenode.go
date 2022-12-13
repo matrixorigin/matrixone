@@ -26,13 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"io"
 )
 
@@ -245,20 +243,6 @@ func (n *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	return
 }
 
-func (n *memoryNode) makeLogEntry() wal.LogEntry {
-	cmd := txnbase.NewBatchCmd(n.data)
-	buf, err := cmd.Marshal()
-	e := entry.GetBase()
-	e.SetType(ETInsertNode)
-	if err != nil {
-		panic(err)
-	}
-	if err = e.SetPayload(buf); err != nil {
-		panic(err)
-	}
-	return e
-}
-
 type persistedNode struct {
 	common.RefHelper
 	bnode   *baseNode
@@ -367,7 +351,7 @@ func (n *baseNode) Rows() uint32 {
 	} else if n.storage.pnode != nil {
 		return n.storage.pnode.Rows()
 	}
-	panic(moerr.NewInternalError(nil,
+	panic(moerr.NewInternalErrorNoCtx(
 		fmt.Sprintf("bad insertNode %s", n.meta.String())))
 }
 
