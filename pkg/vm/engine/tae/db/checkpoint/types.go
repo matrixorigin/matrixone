@@ -30,6 +30,7 @@ const (
 )
 
 type Runner interface {
+	TestRunner
 	Start()
 	Stop()
 	EnqueueWait(any) error

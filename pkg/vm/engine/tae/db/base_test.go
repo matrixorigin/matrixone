@@ -18,6 +18,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -192,7 +193,19 @@ func (e *testEngine) truncate() {
 	assert.NoError(e.t, err)
 	assert.NoError(e.t, txn.Commit())
 }
-
+func (e *testEngine) globalCheckpoint(
+	versionInterval time.Duration,
+	enableAndCleanBGCheckpoint bool,
+	truncate bool,
+	waitFlush bool,
+) error {
+	if enableAndCleanBGCheckpoint{
+		e.DB.BGCheckpointRunner.DisableCheckpoint()
+		defer e.DB.BGCheckpointRunner.EnableCheckpoint()
+		e.DB.BGCheckpointRunner.CleanPenddingCheckpoint()
+	}
+	return nil
+}
 func initDB(t *testing.T, opts *options.Options) *DB {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	db, _ := Open(dir, opts)

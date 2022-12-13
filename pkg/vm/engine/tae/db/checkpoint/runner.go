@@ -266,7 +266,7 @@ func (r *runner) onCheckpointEntries(items ...any) {
 	if entry.IsIncremental() {
 		err = r.doIncrementalCheckpoint(entry)
 	} else {
-		err = r.doGlobalCheckpoint(entry)
+		err = r.doGlobalCheckpoint(entry, r.options.globalVersionInterval)
 	}
 	if err != nil {
 		logutil.Errorf("Do checkpoint %s: %v", entry.String(), err)
@@ -432,8 +432,8 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	return
 }
 
-func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) (err error) {
-	factory := logtail.GlobalCheckpointDataFactory(entry.end, r.options.globalVersionInterval)
+func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry, interval time.Duration) (err error) {
+	factory := logtail.GlobalCheckpointDataFactory(entry.end, interval)
 	data, err := factory(r.catalog)
 	if err != nil {
 		return
@@ -474,11 +474,6 @@ func (r *runner) MaxGlobalCheckpoint() *CheckpointEntry {
 func (r *runner) MaxCheckpoint() *CheckpointEntry {
 	r.storage.RLock()
 	defer r.storage.RUnlock()
-	entry, _ := r.storage.entries.Max()
-	return entry
-}
-
-func (r *runner) maxCheckpointLocked() *CheckpointEntry {
 	entry, _ := r.storage.entries.Max()
 	return entry
 }

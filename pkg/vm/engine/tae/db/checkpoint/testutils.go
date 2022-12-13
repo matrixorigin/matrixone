@@ -22,12 +22,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
+type TestRunner interface {
+	EnableCheckpoint()
+	DisableCheckpoint()
+
+	CleanPenddingCheckpoint()
+	ForceGlobalCheckpoint(versionInterval time.Duration) error
+	ForceIncrementalCheckpoint(end types.TS) error
+	IsAllChangesFlushed(start, end types.TS) bool
+}
+
 func (r *runner) CleanPenddingCheckpoint() {
-	r.storage.Lock()
-	defer r.storage.Unlock()
-	prev := r.maxCheckpointLocked()
+	prev := r.MaxCheckpoint()
+	if prev == nil{
+		return
+	}
 	if !prev.IsFinished() {
+		r.storage.Lock()
 		r.storage.entries.Delete(prev)
+		r.storage.Unlock()
 	}
 	if prev.IsRunning() {
 		logutil.Warnf("Delete a running checkpoint entry")
@@ -35,9 +48,7 @@ func (r *runner) CleanPenddingCheckpoint() {
 }
 
 func (r *runner) ForceGlobalCheckpoint(versionInterval time.Duration) error {
-	r.storage.Lock()
-	defer r.storage.Unlock()
-	prev := r.maxCheckpointLocked()
+	prev := r.MaxCheckpoint()
 	if prev == nil {
 		return errors.New("no incremental checkpoint")
 	}
@@ -48,33 +59,39 @@ func (r *runner) ForceGlobalCheckpoint(versionInterval time.Duration) error {
 		return errors.New("prev checkpoint is global")
 	}
 	entry := NewCheckpointEntry(types.TS{}, prev.end.Next())
+	r.storage.Lock()
 	r.storage.entries.Set(entry)
-	r.doGlobalCheckpoint(entry)
+	now := time.Now()
+	r.storage.Unlock()
+	r.doGlobalCheckpoint(entry, versionInterval)
 	if err := r.saveCheckpoint(entry.start, entry.end); err != nil {
 		return err
 	}
 	entry.SetState(ST_Finished)
+	logutil.Infof("%s is done, takes %s", entry.String(), time.Since(now))
 	return nil
 }
 
-func (r *runner) ForceIncrementalGlobalCheckpoint(end types.TS, versionInterval time.Duration) error {
-	r.storage.Lock()
-	defer r.storage.Unlock()
-	prev := r.maxCheckpointLocked()
-	if !prev.IsFinished() {
+func (r *runner) ForceIncrementalCheckpoint(end types.TS) error {
+	prev := r.MaxCheckpoint()
+	if prev!=nil&&!prev.IsFinished() {
 		return errors.New("prev checkpoint not finished")
 	}
 	start := types.TS{}
 	if prev != nil {
 		start = prev.end.Next()
 	}
-	entry := NewCheckpointEntry(start, prev.end.Next())
+	entry := NewCheckpointEntry(start, end)
+	r.storage.Lock()
 	r.storage.entries.Set(entry)
+	now := time.Now()
+	r.storage.Unlock()
 	r.doIncrementalCheckpoint(entry)
 	if err := r.saveCheckpoint(entry.start, entry.end); err != nil {
 		return err
 	}
 	entry.SetState(ST_Finished)
+	logutil.Infof("%s is done, takes %s", entry.String(), time.Since(now))
 	return nil
 }
 

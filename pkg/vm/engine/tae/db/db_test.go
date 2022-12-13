@@ -4652,10 +4652,6 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	assert.False(t, tableExisted)
 }
 
-// append a segment
-// compact blks
-// global checkpoint
-// restart
 func TestGlobalCheckpoint3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -4702,4 +4698,35 @@ func TestGlobalCheckpoint3(t *testing.T) {
 	tableExisted = false
 	assert.NoError(t, tae.Catalog.RecurLoop(p))
 	assert.False(t, tableExisted)
+}
+
+func TestGlobalCheckpoint4(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(18, 2)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	batCnt:=40
+	bat := catalog.MockBatch(schema, batCnt)
+	bats:=bat.Split(batCnt)
+
+	tae.createRelAndAppend(bats[0],true)
+	txn,_:=tae.StartTxn(nil)
+	endTS:=txn.GetStartTS()
+	assert.NoError(t,tae.BGCheckpointRunner.ForceIncrementalCheckpoint(endTS))
+	for i := 1; i < batCnt; i++ {
+		tae.DoAppend(bats[i])
+
+		tae.BGCheckpointRunner.DisableCheckpoint()
+		tae.BGCheckpointRunner.CleanPenddingCheckpoint()
+		txn,_:=tae.StartTxn(nil)
+		endTS=txn.GetStartTS()
+		assert.NoError(t,tae.BGCheckpointRunner.ForceIncrementalCheckpoint(endTS))
+		assert.NoError(t,tae.BGCheckpointRunner.ForceGlobalCheckpoint(0))
+		tae.BGCheckpointRunner.EnableCheckpoint()
+	}
 }
