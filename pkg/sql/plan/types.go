@@ -205,6 +205,7 @@ type Binder interface {
 	BindAggFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
 	BindWinFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
 	BindSubquery(*tree.Subquery, bool) (*plan.Expr, error)
+	GetContext() context.Context
 }
 
 type baseBinder struct {

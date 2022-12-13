@@ -70,13 +70,13 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 	}
 
 	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
-		return 0, nil, moerr.NewNYINoCtx("aggregation with non equal predicate in %s subquery  will be supported in future version", subquery.Typ.String())
+		return 0, nil, moerr.NewNYI(builder.compCtx.GetContext(), "aggregation with non equal predicate in %s subquery  will be supported in future version", subquery.Typ.String())
 	}
 
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
 
 	if len(filterPreds) > 0 && subquery.Typ >= plan.SubqueryRef_SCALAR {
-		return 0, nil, moerr.NewNYINoCtx("correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String())
+		return 0, nil, moerr.NewNYI(builder.compCtx.GetContext(), "correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String())
 	}
 
 	switch subquery.Typ {
@@ -236,7 +236,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			return 0, nil, err
 		}
 
-		expr, err = bindFuncExprImplByPlanExpr(b.sysCtx, "not", []*plan.Expr{expr})
+		expr, err = bindFuncExprImplByPlanExpr(builder.compCtx.GetContext(), "not", []*plan.Expr{expr})
 		if err != nil {
 			return 0, nil, err
 		}
@@ -253,7 +253,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		return nodeID, nil, nil
 
 	default:
-		return 0, nil, moerr.NewNotSupportedNoCtx("%s subquery not supported", subquery.Typ.String())
+		return 0, nil, moerr.NewNotSupported(builder.compCtx.GetContext(), "%s subquery not supported", subquery.Typ.String())
 	}
 }
 
@@ -263,7 +263,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 		childList := childImpl.List.List
 		switch op {
 		case "=":
-			leftExpr, err := bindFuncExprImplByPlanExpr(b.sysCtx, op, []*plan.Expr{
+			leftExpr, err := bindFuncExprImplByPlanExpr(builder.compCtx.GetContext(), op, []*plan.Expr{
 				childList[0],
 				{
 					Typ: ctx.results[0].Typ,
@@ -280,7 +280,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 			}
 
 			for i := 1; i < len(childList); i++ {
-				rightExpr, err := bindFuncExprImplByPlanExpr(b.sysCtx, op, []*plan.Expr{
+				rightExpr, err := bindFuncExprImplByPlanExpr(builder.compCtx.GetContext(), op, []*plan.Expr{
 					childList[i],
 					{
 						Typ: ctx.results[i].Typ,
@@ -296,7 +296,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 					return nil, err
 				}
 
-				leftExpr, err = bindFuncExprImplByPlanExpr(b.sysCtx, "and", []*plan.Expr{leftExpr, rightExpr})
+				leftExpr, err = bindFuncExprImplByPlanExpr(builder.compCtx.GetContext(), "and", []*plan.Expr{leftExpr, rightExpr})
 				if err != nil {
 					return nil, err
 				}
@@ -305,7 +305,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 			return leftExpr, nil
 
 		case "<>":
-			leftExpr, err := bindFuncExprImplByPlanExpr(b.sysCtx, op, []*plan.Expr{
+			leftExpr, err := bindFuncExprImplByPlanExpr(builder.compCtx.GetContext(), op, []*plan.Expr{
 				childList[0],
 				{
 					Typ: ctx.results[0].Typ,
@@ -322,7 +322,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 			}
 
 			for i := 1; i < len(childList); i++ {
-				rightExpr, err := bindFuncExprImplByPlanExpr(b.sysCtx, op, []*plan.Expr{
+				rightExpr, err := bindFuncExprImplByPlanExpr(builder.compCtx.GetContext(), op, []*plan.Expr{
 					childList[i],
 					{
 						Typ: ctx.results[i].Typ,
@@ -338,7 +338,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 					return nil, err
 				}
 
-				leftExpr, err = bindFuncExprImplByPlanExpr(b.sysCtx, "or", []*plan.Expr{leftExpr, rightExpr})
+				leftExpr, err = bindFuncExprImplByPlanExpr(builder.compCtx.GetContext(), "or", []*plan.Expr{leftExpr, rightExpr})
 				if err != nil {
 					return nil, err
 				}
@@ -364,11 +364,11 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 			return unwindTupleComparison(nonEqOp, op, childList, projList, 0)
 
 		default:
-			return nil, moerr.NewNotSupportedNoCtx("row constructor only support comparison operators")
+			return nil, moerr.NewNotSupported(builder.compCtx.GetContext(), "row constructor only support comparison operators")
 		}
 
 	default:
-		return bindFuncExprImplByPlanExpr(b.sysCtx, op, []*plan.Expr{
+		return bindFuncExprImplByPlanExpr(builder.compCtx.GetContext(), op, []*plan.Expr{
 			child,
 			{
 				Typ: ctx.results[0].Typ,

@@ -34,7 +34,7 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	switch astExpr.(type) {
 	case *tree.VarExpr, *tree.UnqualifiedStar:
 		// need check other expr
-		return nil, moerr.NewSyntaxErrorNoCtx("unsupported expr in limit clause")
+		return nil, moerr.NewSyntaxError(b.sysCtx, "unsupported expr in limit clause")
 	}
 
 	expr, err := b.baseBindExpr(astExpr, depth, isRoot)
@@ -54,7 +54,7 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				return nil, err
 			}
 		} else {
-			return nil, moerr.NewSyntaxErrorNoCtx("only int64 support in limit/offset clause")
+			return nil, moerr.NewSyntaxError(b.sysCtx, "only int64 support in limit/offset clause")
 		}
 	}
 
@@ -62,17 +62,17 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 }
 
 func (b *LimitBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewSyntaxErrorNoCtx("column not allowed in limit clause")
+	return nil, moerr.NewSyntaxError(b.sysCtx, "column not allowed in limit clause")
 }
 
 func (b *LimitBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewSyntaxErrorNoCtx("aggregate function not allowed in limit clause")
+	return nil, moerr.NewSyntaxError(b.sysCtx, "aggregate function not allowed in limit clause")
 }
 
 func (b *LimitBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewSyntaxErrorNoCtx("window function not allowed in limit clause")
+	return nil, moerr.NewSyntaxError(b.sysCtx, "window function not allowed in limit clause")
 }
 
 func (b *LimitBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewSyntaxErrorNoCtx("subquery not allowed in limit clause")
+	return nil, moerr.NewSyntaxError(b.sysCtx, "subquery not allowed in limit clause")
 }

@@ -1178,6 +1178,10 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	}
 }
 
+func (b *baseBinder) GetContext() context.Context {
+	return b.sysCtx
+}
+
 // --- util functions ----
 
 func appendCastBeforeExpr(expr *Expr, toType *Type, isBin ...bool) (*Expr, error) {
