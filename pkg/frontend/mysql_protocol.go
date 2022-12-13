@@ -711,34 +711,31 @@ func (mp *MysqlProtocolImpl) readDate(data []byte, pos int) (int, string) {
 }
 
 func (mp *MysqlProtocolImpl) readTime(data []byte, pos int, len uint8) (int, string) {
-	var symbol byte
+	var retStr string
 	negate := data[pos]
 	pos++
 	if negate == 1 {
-		symbol = '-'
+		retStr += "-"
 	}
 	day, pos, _ := mp.io.ReadUint32(data, pos)
+	if day > 0 {
+		retStr += fmt.Sprintf("%dd ", day)
+	}
 	hour := data[pos]
 	pos++
 	minute := data[pos]
 	pos++
 	second := data[pos]
 	pos++
-	// time with ms
+
 	if len == 12 {
-		ms, pos, _ := mp.io.ReadUint32(data, pos)
-		if day > 0 {
-			return pos, fmt.Sprintf("%c%dd %02d:%02d:%02d.%06d", symbol, day, hour, minute, second, ms)
-		} else {
-			return pos, fmt.Sprintf("%c%02d:%02d:%02d.%06d", symbol, hour, minute, second, ms)
-		}
+		ms, _, _ := mp.io.ReadUint32(data, pos)
+		retStr += fmt.Sprintf("%02d:%02d:%02d.%06d", hour, minute, second, ms)
+	} else {
+		retStr += fmt.Sprintf("%02d:%02d:%02d", hour, minute, second)
 	}
 
-	if day > 0 {
-		return pos, fmt.Sprintf("%c%dd %02d:%02d:%02d", symbol, day, hour, minute, second)
-	} else {
-		return pos, fmt.Sprintf("%c%02d:%02d:%02d", symbol, hour, minute, second)
-	}
+	return pos, retStr
 }
 
 func (mp *MysqlProtocolImpl) readDateTime(data []byte, pos int) (int, string) {
@@ -1912,11 +1909,6 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 				} else {
 					data = mp.appendTime(data, t)
 				}
-			}
-			if value, err := mrs.GetValue(ctx, rowIdx, i); err != nil {
-				return nil, err
-			} else {
-				data = mp.appendTime(data, value.(types.Time))
 			}
 		case defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
 			if value, err := mrs.GetString(ctx, rowIdx, i); err != nil {
