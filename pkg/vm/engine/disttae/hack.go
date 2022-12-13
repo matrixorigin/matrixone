@@ -19,5 +19,5 @@ func init() {
 	_ = blockMarshal
 	_ = genModifedBlocks
 	_ = needRead
-	_ = inBlockList
+	_ = inBlockMap
 }
