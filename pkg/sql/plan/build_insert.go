@@ -135,7 +135,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 			}
 			// build column
 			for j, col := range explicitCols {
-				expr, err := getDefaultExpr(col)
+				expr, err := getDefaultExpr(ctx.GetContext(), col)
 				if err != nil {
 					return nil, err
 				}
@@ -156,7 +156,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 			idx := 0
 			for j, col := range explicitCols {
 				if _, ok := row[idx].(*tree.DefaultVal); ok {
-					expr, err := getDefaultExpr(col)
+					expr, err := getDefaultExpr(ctx.GetContext(), col)
 					if err != nil {
 						return nil, err
 					}
@@ -178,7 +178,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 			}
 
 			for _, col := range otherCols {
-				expr, err := getDefaultExpr(col)
+				expr, err := getDefaultExpr(ctx.GetContext(), col)
 				if err != nil {
 					return nil, err
 				}
@@ -339,7 +339,7 @@ func getInsertExprs(ctx CompilerContext, stmt *tree.Insert, cols []*ColDef, tabl
 				}
 			} else {
 				var err error
-				exprs[i], err = getDefaultExpr(tableDef.Cols[i])
+				exprs[i], err = getDefaultExpr(ctx.GetContext(), tableDef.Cols[i])
 				if err != nil {
 					return nil, err
 				}

@@ -92,7 +92,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			return
 		}
 		var typ *Type
-		typ, err = getTypeFromAst(exprImpl.Type)
+		typ, err = getTypeFromAst(b.GetContext(), exprImpl.Type)
 		if err != nil {
 			return
 		}
