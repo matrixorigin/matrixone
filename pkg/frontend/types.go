@@ -98,6 +98,10 @@ Disguise the COMMAND CMD_FIELD_LIST as sql query.
 */
 const (
 	cmdFieldListSql = "__++__internal_cmd_field_list"
+	intereSql       = "internal_sql"
+	cloudUserSql    = "cloud_user_sql"
+	cloudNoUserSql  = "cloud_nouser_sql"
+	externSql       = "external_sql"
 )
 
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
