@@ -29,12 +29,12 @@ type Relation interface {
 	SimplePPString(common.PPLevel) string
 	GetCardinality(attr string) int64
 	Schema() any
+	UpdateConstraint([]byte) error
 	MakeSegmentIt() SegmentIt
 	MakeBlockIt() BlockIt
 
 	DeleteByPhyAddrKey(key any) error
 	GetValueByPhyAddrKey(key any, col int) (any, error)
-
 	DeleteByPhyAddrKeys(keys containers.Vector) error
 
 	RangeDelete(id *common.ID, start, end uint32, dt DeleteType) error
@@ -52,7 +52,6 @@ type Relation interface {
 	CreateSegment(bool) (Segment, error)
 	CreateNonAppendableSegment() (Segment, error)
 	GetSegment(id uint64) (Segment, error)
-
 	SoftDeleteSegment(id uint64) (err error)
 
 	GetDB() (Database, error)
