@@ -20,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -281,10 +280,8 @@ func (txn *Transaction) checkPrimaryKey(
 		return nil
 	}
 
-	t := memtable.Time{
-		Timestamp: txn.nextLocalTS(),
-	}
-	tx := memtable.NewTransaction(uuid.NewString(), t, memtable.SnapshotIsolation)
+	ts := txn.nextLocalTS()
+	tx := memorytable.NewTransaction(ts)
 	iter := memorytable.NewBatchIter(bat)
 	for {
 		tuple := iter()
@@ -341,7 +338,7 @@ func (txn *Transaction) checkPrimaryKey(
 
 		}
 	}
-	if err := tx.Commit(t); err != nil {
+	if err := tx.Commit(ts); err != nil {
 		return err
 	}
 
@@ -613,12 +610,10 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	databaseId, tableId uint64) *batch.Batch {
 
 	// tx for workspace operations
-	t := memtable.Time{
-		Timestamp: txn.nextLocalTS(),
-	}
-	tx := memtable.NewTransaction(uuid.NewString(), t, memtable.SnapshotIsolation)
+	ts := txn.nextLocalTS()
+	tx := memorytable.NewTransaction(ts)
 	defer func() {
-		if err := tx.Commit(t); err != nil {
+		if err := tx.Commit(ts); err != nil {
 			panic(err)
 		}
 	}()

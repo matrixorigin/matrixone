@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -131,7 +132,7 @@ type Transaction struct {
 	// writes cache stores any writes done by txn
 	// every statement is an element
 	writes    [][]Entry
-	workspace *memtable.Table[RowID, *workspaceRow, *workspaceRow]
+	workspace *memorytable.Table[RowID, *workspaceRow, *workspaceRow]
 	dnStores  []DNStore
 	proc      *process.Process
 

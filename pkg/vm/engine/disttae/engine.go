@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -236,7 +236,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		meta:           op.Txn(),
 		idGen:          e.idGen,
 		rowId:          [2]uint64{math.MaxUint64, 0},
-		workspace:      memtable.NewTable[RowID, *workspaceRow, *workspaceRow](),
+		workspace:      memorytable.NewTable[RowID, *workspaceRow, *workspaceRow](),
 		dnStores:       cluster.DNStores,
 		fileMap:        make(map[string]uint64),
 		tableMap:       new(sync.Map),
