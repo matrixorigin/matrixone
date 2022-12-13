@@ -685,7 +685,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	var unionTypes []plan.Node_NodeType
 
 	// get Union selectStmts
-	err := getUnionSelects(stmt, &selectStmts, &unionTypes)
+	err := getUnionSelects(builder.compCtx.GetContext(), stmt, &selectStmts, &unionTypes)
 	if err != nil {
 		return 0, err
 	}
@@ -2002,7 +2002,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 	case plan.Node_FILTER:
 		canPushdown = filters
 		for _, filter := range node.FilterList {
-			canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(filter))...)
+			canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(builder.compCtx.GetContext(), filter))...)
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown)
@@ -2014,7 +2014,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				if exprImpl.F.Func.ObjName == "or" {
 					keys := checkDNF(filter)
 					for _, key := range keys {
-						extraFilter := walkThroughDNF(filter, key)
+						extraFilter := walkThroughDNF(builder.compCtx.GetContext(), filter, key)
 						if extraFilter != nil {
 							extraFilters = append(extraFilters, DeepCopyExpr(extraFilter))
 						}
@@ -2044,7 +2044,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 		if node.JoinType == plan.Node_INNER {
 			for _, cond := range node.OnList {
-				filters = append(filters, splitPlanConjunction(applyDistributivity(cond))...)
+				filters = append(filters, splitPlanConjunction(applyDistributivity(builder.compCtx.GetContext(), cond))...)
 			}
 
 			node.OnList = nil
@@ -2070,7 +2070,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 			if joinSides[i]&JoinSideRight != 0 && canTurnInner && node.JoinType == plan.Node_LEFT && rejectsNull(filter, builder.compCtx.GetProcess()) {
 				for _, cond := range node.OnList {
-					filters = append(filters, splitPlanConjunction(applyDistributivity(cond))...)
+					filters = append(filters, splitPlanConjunction(applyDistributivity(builder.compCtx.GetContext(), cond))...)
 				}
 
 				node.JoinType = plan.Node_INNER
@@ -2092,7 +2092,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 		} else if node.JoinType == plan.Node_LEFT {
 			var newOnList []*plan.Expr
 			for _, cond := range node.OnList {
-				conj := splitPlanConjunction(applyDistributivity(cond))
+				conj := splitPlanConjunction(applyDistributivity(builder.compCtx.GetContext(), cond))
 				for _, conjElem := range conj {
 					side := getJoinSide(conjElem, leftTags, rightTags)
 					if side&JoinSideLeft == 0 {

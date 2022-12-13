@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"sort"
 	"strconv"
 
@@ -146,11 +147,13 @@ func (rule *ResetParamOrderRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 // ---------------------------
 
 type ResetParamRefRule struct {
+	ctx    context.Context
 	params []*Expr
 }
 
-func NewResetParamRefRule(params []*Expr) *ResetParamRefRule {
+func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
 	return &ResetParamRefRule{
+		ctx:    ctx,
 		params: params,
 	}
 }
@@ -184,7 +187,7 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
-			return bindFuncExprImplByPlanExpr(b.sysCtx, exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
+			return bindFuncExprImplByPlanExpr(rule.ctx, exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
 		}
 		return e, nil
 	case *plan.Expr_P:
@@ -238,7 +241,7 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
-			return bindFuncExprImplByPlanExpr(b.sysCtx, exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
+			return bindFuncExprImplByPlanExpr(rule.compCtx.GetContext(), exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
 		}
 		return e, nil
 	case *plan.Expr_V:
@@ -285,9 +288,9 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		case nil:
 			expr = makePlan2NullConstExprWithType()
 		case types.Decimal64, types.Decimal128:
-			err = moerr.NewNYINoCtx("decimal var")
+			err = moerr.NewNYI(rule.compCtx.GetContext(), "decimal var")
 		default:
-			err = moerr.NewParseErrorNoCtx("type of var %q is not supported now", exprImpl.V.Name)
+			err = moerr.NewParseError(rule.compCtx.GetContext(), "type of var %q is not supported now", exprImpl.V.Name)
 		}
 		if e.Typ.Id != int32(types.T_any) && expr.Typ.Id != e.Typ.Id {
 			return appendCastBeforeExpr(expr, e.Typ)

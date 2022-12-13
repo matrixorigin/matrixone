@@ -361,7 +361,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 			}
 
 			nonEqOp := op[:1] // <= -> <, >= -> >
-			return unwindTupleComparison(nonEqOp, op, childList, projList, 0)
+			return unwindTupleComparison(builder.compCtx.GetContext(), nonEqOp, op, childList, projList, 0)
 
 		default:
 			return nil, moerr.NewNotSupported(builder.compCtx.GetContext(), "row constructor only support comparison operators")
