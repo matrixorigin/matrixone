@@ -78,3 +78,6 @@ func (k *Kill) Format(ctx *FmtCtx) {
 		ctx.WriteByte('"')
 	}
 }
+
+func (k *Kill) GetStatementType() string { return "kill" }
+func (k *Kill) GetQueryType() string     { return QueryTypeDCL }
