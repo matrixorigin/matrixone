@@ -550,7 +550,7 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 		mrs.AddRow(row)
 	}
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
-		logErrorf(ses.GetConciseProfile(), "handleShowColumns error %v", err)
+		logErrorf(ses.GetConciseProfile(), "handleShowTableStatus error %v", err)
 		return err
 	}
 	return nil
@@ -3307,7 +3307,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.SetShowStmtType(ShowColumns)
 			ses.SetData(nil)
 		case *tree.ShowTableStatus:
-			ses.showStmtType = ShowTableStatus
+			ses.SetShowStmtType(ShowTableStatus)
 			ses.SetData(nil)
 		case *tree.Delete:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
