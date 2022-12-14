@@ -9,6 +9,7 @@ on:
 
 jobs:
   bvt-docker-compose:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     name: multi cn e2e bvt test docker compose
     timeout-minutes: 60
