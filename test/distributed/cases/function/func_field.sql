@@ -138,6 +138,6 @@ insert into t2 values (0.01, 0.01), (-1.0, -1), (0.000000001, -1);
 select field(t1.i, t2.i) from t1 inner join t2 on t1.i = t2.i;
 select t2.f, t1.f, field(t2.f, t1.f) from t1 right join t2 on t1.i = t2.i;
 
--- @bvt:issue#7088
+
 select t1.i, t2.f, field(t1.i, t2.f) from t1 left join t2 on t1.i = t2.i;
--- @bvt:issue
+
