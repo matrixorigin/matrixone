@@ -7,6 +7,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"sync"
@@ -126,9 +127,19 @@ func (t *GcTable) UpdateTable(data *logtail.CheckpointData) {
 		t.deleteBlock(id, name)
 	}
 }
+
 func rowIDToU64(rowID types.Rowid) uint64 {
 	return types.DecodeUint64(rowID[:8])
 }
+
+func (t *GcTable) ()  {
+	
+}
+
+func (t *GcTable) SaveTable() error {
+	bat := containers.NewBatch()
+}
+
 func (t *GcTable) String() string {
 	t.Lock()
 	defer t.Unlock()
