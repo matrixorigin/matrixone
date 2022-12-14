@@ -30,6 +30,9 @@ func (node *Deallocate) Format(ctx *FmtCtx) {
 	node.Name.Format(ctx)
 }
 
+func (node *Deallocate) GetStatementType() string { return "Deallocate" }
+func (node *Deallocate) GetQueryType() string     { return QueryTypeDCL }
+
 func NewDeallocate(name Identifier, isDrop bool) *Deallocate {
 	return &Deallocate{
 		IsDrop: isDrop,

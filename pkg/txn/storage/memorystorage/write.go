@@ -93,11 +93,6 @@ func (s *Storage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, pay
 			s.handler.HandleWrite,
 		)
 
-	case memoryengine.OpPreCommit:
-		return handleWrite(
-			ctx, txnMeta, payload,
-			s.handler.HandlePreCommit,
-		)
 	}
 
 	return
