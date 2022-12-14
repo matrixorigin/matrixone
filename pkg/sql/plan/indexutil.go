@@ -189,7 +189,7 @@ func buildLeftJoinForSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (
 
 	// optimize to truncate,
 	if stmt.Where == nil && stmt.Limit == nil {
-		return buildDelete2Truncate(objRef, tableDef)
+		return buildDelete2Truncate2(ctx, objRef, tableDef)
 	}
 
 	//----------------------------------------------------new code------------------------------------------------------------------
@@ -400,4 +400,56 @@ func (list *DeleteTableList) AddElement(objRef *ObjectRef, tableDef *TableDef, e
 	list.delTables = append(list.delTables, delInfo)
 	list.selectList = append(list.selectList, expr)
 	list.nextIndex++
+}
+
+// Perform the truncation operation of the table, When performing a delete operation,
+// if the original table can be truncated, its index table also needs to be truncated
+func buildDelete2Truncate2(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef) (*Plan, error) {
+	deleteTablesCtx := make([]*plan.DeleteTableCtx, 0)
+
+	// Build the context for deleting the original table
+	d := &plan.DeleteTableCtx{
+		DbName:             objRef.SchemaName,
+		TblName:            tableDef.Name,
+		CanTruncate:        true,
+		IsIndexTableDelete: false,
+	}
+
+	deleteTablesCtx = append(deleteTablesCtx, d)
+
+	// Build the context for deleting the index table
+	uDef, _ := buildIndexDefs(tableDef.Defs)
+	if uDef != nil {
+		for i, indexTblName := range uDef.TableNames {
+			if uDef.TableExists[i] {
+				idxObjRef, idxTblDef := ctx.Resolve(objRef.SchemaName, indexTblName)
+				delIndex := &plan.DeleteTableCtx{
+					DbName:             idxObjRef.SchemaName,
+					TblName:            idxTblDef.Name,
+					CanTruncate:        true,
+					IsIndexTableDelete: true,
+				}
+				deleteTablesCtx = append(deleteTablesCtx, delIndex)
+			} else {
+				continue
+			}
+		}
+	}
+
+	// build delete node
+	node := &Node{
+		NodeType:        plan.Node_DELETE,
+		ObjRef:          objRef,
+		TableDef:        tableDef,
+		DeleteTablesCtx: deleteTablesCtx,
+	}
+	return &Plan{
+		Plan: &plan.Plan_Query{
+			Query: &Query{
+				StmtType: plan.Query_DELETE,
+				Steps:    []int32{0},
+				Nodes:    []*Node{node},
+			},
+		},
+	}, nil
 }
