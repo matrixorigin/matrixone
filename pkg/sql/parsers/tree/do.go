@@ -26,3 +26,6 @@ func (node *Do) Format(ctx *FmtCtx) {
 		e.Format(ctx)
 	}
 }
+
+func (node *Do) GetStatementType() string { return "Do" }
+func (node *Do) GetQueryType() string     { return QueryTypeDCL }

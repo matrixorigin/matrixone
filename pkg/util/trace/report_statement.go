@@ -40,12 +40,16 @@ type StatementInfo struct {
 	Account              string    `json:"account"`
 	User                 string    `json:"user"`
 	Host                 string    `json:"host"`
+	RoleId               uint32    `json:"role_id"`
 	Database             string    `json:"database"`
 	Statement            string    `json:"statement"`
 	StatementFingerprint string    `json:"statement_fingerprint"`
 	StatementTag         string    `json:"statement_tag"`
 	SqlSourceType        string    `json:"sql_source_type"`
 	RequestAt            time.Time `json:"request_at"` // see WithRequestAt
+
+	StatementType string `json:"statement_type"`
+	QueryType     string `json:"query_type"`
 
 	// after
 	Status     StatementInfoStatus `json:"status"`
@@ -56,11 +60,14 @@ type StatementInfo struct {
 	// RowsRead, BytesScan generated from ExecPlan
 	RowsRead  int64 `json:"rows_read"`  // see ExecPlan2Json
 	BytesScan int64 `json:"bytes_scan"` // see ExecPlan2Json
+	Cpu       int64 `json:"cpu"`        // see ExecPlan2Json
+	Memory    int64 `json:"memory"`     // see ExecPlan2Json
+	IO        int64 `json:"io"`         // see ExecPlan2Json
 	// SerializeExecPlan
 	SerializeExecPlan SerializeExecPlanFunc // see SetExecPlan, ExecPlan2Json
 
 	// flow ctrl
-	end bool
+	end bool // cooperate with mux
 	mux sync.Mutex
 	// mark reported
 	reported bool
@@ -102,6 +109,7 @@ func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string 
 	row.SetColumnVal(txnIDCol, uuid.UUID(s.TransactionID).String())
 	row.SetColumnVal(sesIDCol, uuid.UUID(s.SessionID).String())
 	row.SetColumnVal(accountCol, s.Account)
+	row.SetColumnVal(roleIdCol, fmt.Sprintf("%d", s.RoleId))
 	row.SetColumnVal(userCol, s.User)
 	row.SetColumnVal(hostCol, s.Host)
 	row.SetColumnVal(dbCol, s.Database)
@@ -127,6 +135,11 @@ func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string 
 	row.SetColumnVal(execPlanCol, s.ExecPlan2Json(ctx))
 	row.SetColumnVal(rowsReadCol, fmt.Sprintf("%d", s.RowsRead))
 	row.SetColumnVal(bytesScanCol, fmt.Sprintf("%d", s.BytesScan))
+	row.SetColumnVal(cpuCol, fmt.Sprintf("%d", s.Cpu))
+	row.SetColumnVal(memoryCol, fmt.Sprintf("%d", s.Memory))
+	row.SetColumnVal(ioCol, fmt.Sprintf("%d", s.IO))
+	row.SetColumnVal(stmtTypeCol, s.StatementType)
+	row.SetColumnVal(queryTypeCol, s.QueryType)
 
 	return row.ToStrings()
 }
@@ -204,7 +217,7 @@ var EndStatement = func(ctx context.Context, err error) {
 	}
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	if !s.end {
+	if !s.end { // cooperate with s.mux
 		// do report
 		s.end = true
 		s.ResponseAt = time.Now()
