@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -196,13 +197,41 @@ func (e *testEngine) truncate() {
 func (e *testEngine) globalCheckpoint(
 	versionInterval time.Duration,
 	enableAndCleanBGCheckpoint bool,
-	truncate bool,
-	waitFlush bool,
 ) error {
-	if enableAndCleanBGCheckpoint{
+	if enableAndCleanBGCheckpoint {
 		e.DB.BGCheckpointRunner.DisableCheckpoint()
 		defer e.DB.BGCheckpointRunner.EnableCheckpoint()
 		e.DB.BGCheckpointRunner.CleanPenddingCheckpoint()
+	}
+	err := e.DB.BGCheckpointRunner.ForceGlobalCheckpoint(versionInterval)
+	assert.NoError(e.t, err)
+	return nil
+}
+
+func (e *testEngine) incrementalCheckpoint(
+	end types.TS,
+	enableAndCleanBGCheckpoint bool,
+	waitFlush bool,
+	truncate bool,
+) error {
+	if enableAndCleanBGCheckpoint {
+		e.DB.BGCheckpointRunner.DisableCheckpoint()
+		defer e.DB.BGCheckpointRunner.EnableCheckpoint()
+		e.DB.BGCheckpointRunner.CleanPenddingCheckpoint()
+	}
+	if waitFlush {
+		testutils.WaitExpect(4000, func() bool {
+			return e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end)
+		})
+		flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end)
+		assert.True(e.t, flushed)
+	}
+	err := e.DB.BGCheckpointRunner.ForceIncrementalCheckpoint(end)
+	assert.NoError(e.t, err)
+	if truncate {
+		lsn := e.DB.BGCheckpointRunner.MaxLSNInRange(end)
+		_, err := e.DB.Wal.RangeCheckpoint(1, lsn)
+		assert.NoError(e.t, err)
 	}
 	return nil
 }

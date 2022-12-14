@@ -4700,33 +4700,60 @@ func TestGlobalCheckpoint3(t *testing.T) {
 	assert.False(t, tableExisted)
 }
 
+// collect global
+// replay block,seg,table,db
 func TestGlobalCheckpoint4(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	opts := config.WithQuickScanAndCKPOpts(nil)
+	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
+	tae.BGCheckpointRunner.DisableCheckpoint()
+
 	schema := catalog.MockSchemaAll(18, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
 	tae.bindSchema(schema)
-	batCnt:=40
-	bat := catalog.MockBatch(schema, batCnt)
-	bats:=bat.Split(batCnt)
+	bat := catalog.MockBatch(schema, 40)
 
-	tae.createRelAndAppend(bats[0],true)
-	txn,_:=tae.StartTxn(nil)
-	endTS:=txn.GetStartTS()
-	assert.NoError(t,tae.BGCheckpointRunner.ForceIncrementalCheckpoint(endTS))
-	for i := 1; i < batCnt; i++ {
-		tae.DoAppend(bats[i])
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db", "")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
 
-		tae.BGCheckpointRunner.DisableCheckpoint()
-		tae.BGCheckpointRunner.CleanPenddingCheckpoint()
-		txn,_:=tae.StartTxn(nil)
-		endTS=txn.GetStartTS()
-		assert.NoError(t,tae.BGCheckpointRunner.ForceIncrementalCheckpoint(endTS))
-		assert.NoError(t,tae.BGCheckpointRunner.ForceGlobalCheckpoint(0))
-		tae.BGCheckpointRunner.EnableCheckpoint()
-	}
+	err = tae.incrementalCheckpoint(txn.GetCommitTS(), false, false, true)
+	assert.NoError(t, err)
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.DropDatabase("db")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	err = tae.incrementalCheckpoint(txn.GetCommitTS(), false, false, true)
+	assert.NoError(t, err)
+
+	err = tae.globalCheckpoint(0, false)
+	assert.NoError(t, err)
+
+	tae.restart()
+
+	tae.createRelAndAppend(bat, true)
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.GetDatabase("db")
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(schema.Name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	err = tae.incrementalCheckpoint(txn.GetCommitTS(), false, false, true)
+	assert.NoError(t, err)
+
+	err = tae.globalCheckpoint(0, false)
+	assert.NoError(t, err)
+
+	tae.restart()
 }

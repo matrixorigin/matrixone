@@ -30,11 +30,12 @@ type TestRunner interface {
 	ForceGlobalCheckpoint(versionInterval time.Duration) error
 	ForceIncrementalCheckpoint(end types.TS) error
 	IsAllChangesFlushed(start, end types.TS) bool
+	MaxLSNInRange(end types.TS) uint64
 }
 
 func (r *runner) CleanPenddingCheckpoint() {
 	prev := r.MaxCheckpoint()
-	if prev == nil{
+	if prev == nil {
 		return
 	}
 	if !prev.IsFinished() {
@@ -74,7 +75,7 @@ func (r *runner) ForceGlobalCheckpoint(versionInterval time.Duration) error {
 
 func (r *runner) ForceIncrementalCheckpoint(end types.TS) error {
 	prev := r.MaxCheckpoint()
-	if prev!=nil&&!prev.IsFinished() {
+	if prev != nil && !prev.IsFinished() {
 		return errors.New("prev checkpoint not finished")
 	}
 	start := types.TS{}

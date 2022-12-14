@@ -320,6 +320,9 @@ func (r *runner) MaxLSN() uint64 {
 	endTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	return r.source.GetMaxLSN(types.TS{}, endTs)
 }
+func (r *runner) MaxLSNInRange(end types.TS) uint64 {
+	return r.source.GetMaxLSN(types.TS{}, end)
+}
 func (r *runner) MockCheckpoint(end types.TS) {
 	var err error
 	entry := NewCheckpointEntry(types.TS{}, end)

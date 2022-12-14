@@ -582,7 +582,6 @@ func LoadCheckpointEntries(
 		return
 	}
 
-	logutil.Infof("cn consume %v",metLoc)
 	locations := strings.Split(metLoc, ";")
 	datas := make([]*CheckpointData, len(locations))
 	jobs := make([]*tasks.Job, len(locations))
