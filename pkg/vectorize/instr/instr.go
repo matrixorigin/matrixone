@@ -69,18 +69,22 @@ func Single(str string, substr string) int64 {
 	return kmp(r1, r2)
 }
 
-func Instr(s1, s2 []string, rs []int64, nsp *nulls.Nulls) {
+func Instr(s1, s2 []string, snsp []*nulls.Nulls, rs []int64, nsp *nulls.Nulls) {
 	s1GoOn, s2GoOn := len(s1) > 1, len(s2) > 1
 	if s1GoOn && s2GoOn {
-		instr3(s1, s2, rs, nsp)
+		instr3(s1, s2, snsp, rs, nsp)
 	} else if s1GoOn {
-		instr1(s1, s2, rs, nsp)
+		instr1(s1, s2, snsp, rs, nsp)
 	} else {
-		instr2(s1, s2, rs, nsp)
+		instr2(s1, s2, snsp, rs, nsp)
 	}
 }
 
-func instr1(s1, s2 []string, rs []int64, nsp *nulls.Nulls) {
+func instr1(s1, s2 []string, snsp []*nulls.Nulls, rs []int64, nsp *nulls.Nulls) {
+	if snsp[1].Contains(0) {
+		nulls.AddRange(nsp, 0, uint64(len(rs)))
+		return
+	}
 	substr := s2[0]
 	for i, str := range s1 {
 		if nsp.Contains(uint64(i)) {
@@ -89,7 +93,11 @@ func instr1(s1, s2 []string, rs []int64, nsp *nulls.Nulls) {
 		rs[i] = Single(str, substr)
 	}
 }
-func instr2(s1, s2 []string, rs []int64, nsp *nulls.Nulls) {
+func instr2(s1, s2 []string, snsp []*nulls.Nulls, rs []int64, nsp *nulls.Nulls) {
+	if snsp[0].Contains(0) {
+		nulls.AddRange(nsp, 0, uint64(len(rs)))
+		return
+	}
 	str := s1[0]
 	for i, substr := range s2 {
 		if nsp.Contains(uint64(i)) {
@@ -99,7 +107,7 @@ func instr2(s1, s2 []string, rs []int64, nsp *nulls.Nulls) {
 	}
 }
 
-func instr3(s1, s2 []string, rs []int64, nsp *nulls.Nulls) {
+func instr3(s1, s2 []string, snsp []*nulls.Nulls, rs []int64, nsp *nulls.Nulls) {
 	for i, str := range s1 {
 		if nsp.Contains(uint64(i)) {
 			continue
