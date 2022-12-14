@@ -2,13 +2,16 @@ package gc
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"sync"
 )
@@ -132,12 +135,57 @@ func rowIDToU64(rowID types.Rowid) uint64 {
 	return types.DecodeUint64(rowID[:8])
 }
 
-func (t *GcTable) ()  {
-	
+func (t *GcTable) collectData() []*containers.Batch {
+	add := containers.NewBatch()
+	del := containers.NewBatch()
+	for i, attr := range BlockSchemaAttr {
+		add.AddVector(attr, containers.MakeVector(BlockSchemaTypes[i], false))
+		del.AddVector(attr, containers.MakeVector(BlockSchemaTypes[i], false))
+	}
+	drop := containers.NewBatch()
+	for i, attr := range DropTableSchemaAttr {
+		drop.AddVector(attr, containers.MakeVector(DropTableSchemaTypes[i], false))
+	}
+	for name, object := range t.table {
+		if object.table.drop {
+			drop.GetVectorByName(GcAttrTableId).Append(object.table.tid)
+			drop.GetVectorByName(GcAttrDbId).Append(object.table.tid)
+			continue
+		}
+		for _, block := range object.table.blocks {
+			add.GetVectorByName(GcAttrBlockId).Append(block.BlockID)
+			add.GetVectorByName(GcAttrSegmentId).Append(block.SegmentID)
+			add.GetVectorByName(GcAttrTableId).Append(block.TableID)
+			add.GetVectorByName(GcAttrDbId).Append(block.PartID)
+			add.GetVectorByName(GcAttrObjectName).Append(name)
+		}
+		for _, block := range object.table.delete {
+			del.GetVectorByName(GcAttrBlockId).Append(block.BlockID)
+			del.GetVectorByName(GcAttrSegmentId).Append(block.SegmentID)
+			del.GetVectorByName(GcAttrTableId).Append(block.TableID)
+			del.GetVectorByName(GcAttrDbId).Append(block.PartID)
+			del.GetVectorByName(GcAttrObjectName).Append(name)
+		}
+	}
+	bats := make([]*containers.Batch, 3)
+	bats[CreateBlock] = add
+	bats[DeleteBlock] = del
+	bats[DropTable] = drop
+	return bats
 }
 
-func (t *GcTable) SaveTable() error {
-	bat := containers.NewBatch()
+func (t *GcTable) SaveTable(ckp checkpoint.CheckpointEntry, fs *objectio.ObjectFS) ([]objectio.BlockObject, error) {
+	bats := t.collectData()
+	name := blockio.EncodeCheckpointMetadataFileName(GcMetaDir, PrefixGcMeta, ckp.GetStart(), ckp.GetEnd())
+	writer := blockio.NewWriter(context.Background(), fs, name)
+	for i := range bats {
+		if _, err := writer.WriteBlock(bats[i]); err != nil {
+			return nil, err
+		}
+	}
+
+	blocks, err := writer.Sync()
+	return blocks, err
 }
 
 func (t *GcTable) String() string {
