@@ -11,9 +11,9 @@ select field(' ', 'a', ' ', '\t', '\n');
 select field('', ' ', NULL, '\r', '\n');
 select field('', '', '\r', '\n');
 
--- @bvt:issue#7074
+
 select field(1, '1', 1, 'true');
--- @bvt:issue
+
 
 select field(1, 1, 2, 3-2);
 select field(1, 3-2, 2, 1);
@@ -75,10 +75,8 @@ insert into t1 values ('',' '), ('aa', 'Aa'), ('null',null);
 insert into t2 values ('','\r'), ('aa', 'AA'), (null, 'null');
 select field(t1.str1, t2.str1) from t1 join t2 on t1.str1 = t2.str1;
 select field(t1.str2, t2.str2) from t1 join t2 on t1.str1 = t2.str1;
--- @bvt:issue#7084
 select field(t1.str1, t2.str1) from t1 left join t2 on t1.str1 = t2.str1;
 select field(t1.str1, t2.str1) from t1 right join t2 on t1.str1 = t2.str1;
--- @bvt:issue
 
 drop table if exists t1;
 drop table if exists t2;
@@ -97,9 +95,9 @@ insert into t2 values ('','\r'), ('aa', 'AA'), ('null', '');
 select field(t1.str1, t2.str1) from t1 inner join t2 on t1.str1 = t2.str1;
 select field(null, '');
 
--- @bvt:issue#7085
+
 select field(t1.str2, t2.str2) from t1 join t2 on t1.str1 = t2.str1;
--- @bvt:issue
+
 
 drop table if exists t1;
 drop table if exists t2;
@@ -140,6 +138,6 @@ insert into t2 values (0.01, 0.01), (-1.0, -1), (0.000000001, -1);
 select field(t1.i, t2.i) from t1 inner join t2 on t1.i = t2.i;
 select t2.f, t1.f, field(t2.f, t1.f) from t1 right join t2 on t1.i = t2.i;
 
--- @bvt:issue#7088
+
 select t1.i, t2.f, field(t1.i, t2.f) from t1 left join t2 on t1.i = t2.i;
--- @bvt:issue
+

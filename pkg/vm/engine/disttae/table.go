@@ -49,7 +49,7 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 	for _, blockmetas := range tbl.meta.blocks {
 		totalBlockCnt += len(blockmetas)
 		for _, blk := range blockmetas {
-			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
+			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.db.txn.proc) {
 				outcnt += blockRows(blk)
 				blockNum++
 			}
@@ -208,12 +208,12 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			tbl.meta.blocks[i], writes)
 		for _, blk := range blks {
 			tbl.skipBlocks[blk.Info.BlockID] = 0
-			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
+			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.db.txn.proc) {
 				ranges = append(ranges, blockMarshal(blk))
 			}
 		}
 		tbl.meta.modifedBlocks[i] = genModifedBlocks(ctx, deletes,
-			tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.proc)
+			tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.db.txn.proc)
 	}
 	return ranges, nil
 }
