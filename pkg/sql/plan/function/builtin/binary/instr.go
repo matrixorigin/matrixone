@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/instr"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
 )
 
 func Instr(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
@@ -39,8 +38,7 @@ func Instr(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, er
 	if v1.IsScalar() && v2.IsScalar() {
 		ret = proc.AllocScalarVector(resultType)
 		str, substr := s1[0], s2[0]
-		res := strings.Index(str, substr)
-		err = ret.Append(int64(res+1), false, proc.Mp())
+		err = ret.Append(instr.Single(str, substr), false, proc.Mp())
 		return
 	}
 	maxLen := len(s1)
