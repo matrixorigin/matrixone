@@ -167,7 +167,7 @@ jobs:
         run: |
           sleep 300s
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/cases 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases 2>&1
 
       - name: Generate BVT Coverage File
         timeout-minutes: 10
