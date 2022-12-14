@@ -685,15 +685,9 @@ func BytesToFloat[T constraints.Float](xs []string, rs []T, isBin bool, isEmptyS
 				}
 				return nil, moerr.NewInvalidArgNoCtx("cast to float", s)
 			}
-			val, err = strconv.ParseFloat(strconv.FormatUint(Uval, 10), bitSize)
-			if err != nil {
-				return nil, moerr.NewInvalidArgNoCtx("cast to float", s)
-			}
+			val, _ = strconv.ParseFloat(strconv.FormatUint(Uval, 10), bitSize)
 		} else {
 			val, err = strconv.ParseFloat(s, bitSize)
-			if err != nil {
-				return nil, moerr.NewInvalidArgNoCtx("cast to float", s)
-			}
 		}
 		if err != nil {
 			if usedEmptyStringOrNull {

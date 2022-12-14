@@ -17,7 +17,7 @@ select field('', '', '\r', '\n');
 field(, , \r, \n)
 1
 select field(1, '1', 1, 'true');
-invalid argument cast to float, bad value true
+strconv.ParseFloat: parsing "true": invalid syntax
 select field(1, 1, 2, 3-2);
 field(1, 1, 2, 3 - 2)
 1
