@@ -17,7 +17,7 @@ select field('', '', '\r', '\n');
 field(, , \r, \n)
 1
 select field(1, '1', 1, 'true');
-[unknown result because it is related to issue#7074]
+strconv.ParseFloat: parsing "true": invalid syntax
 select field(1, 1, 2, 3-2);
 field(1, 1, 2, 3 - 2)
 1
@@ -60,7 +60,7 @@ field(i, f, d, 0, 1, 2)
 4
 5
 1
-1
+2
 select field(null, f, d, 0, 1, 2) from t;
 field(null, f, d, 0, 1, 2)
 0
@@ -159,9 +159,15 @@ field(t1.str2, t2.str2)
 0
 0
 select field(t1.str1, t2.str1) from t1 left join t2 on t1.str1 = t2.str1;
-[unknown result because it is related to issue#7084]
+field(t1.str1, t2.str1)
+1
+1
+0
 select field(t1.str1, t2.str1) from t1 right join t2 on t1.str1 = t2.str1;
-[unknown result because it is related to issue#7084]
+field(t1.str1, t2.str1)
+1
+1
+0
 drop table if exists t1;
 drop table if exists t2;
 create table t1(
@@ -185,7 +191,10 @@ select field(null, '');
 field(null, )
 0
 select field(t1.str2, t2.str2) from t1 join t2 on t1.str1 = t2.str1;
-[unknown result because it is related to issue#7085]
+field(t1.str2, t2.str2)
+0
+0
+1
 drop table if exists t1;
 drop table if exists t2;
 create table t1(
@@ -245,4 +254,7 @@ f    f    field(t2.f, t1.f)
 -1.000    null    0
 -1.000    null    0
 select t1.i, t2.f, field(t1.i, t2.f) from t1 left join t2 on t1.i = t2.i;
-[unknown result because it is related to issue#7088]
+i    f    field(t1.i, t2.f)
+0.01    0.010    1
+0.0    null    0
+-1.0E-9    null    0
