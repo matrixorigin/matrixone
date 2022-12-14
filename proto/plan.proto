@@ -419,8 +419,8 @@ message TableDef {
 
 	PartitionDef partition		= 21;
 	ClusterByDef cluster_by		= 22;
-	repeated ViewDef views		= 23;
-	repeated PropertyDef props	= 24;
+	repeated PropertyDef props	= 23;
+	ViewDef view_sql			= 24;
 
 	// XXX: Deprecated and to be removed soon.
 	repeated DefType defs	= 31;
