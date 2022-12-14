@@ -84,7 +84,6 @@ func (s *service) initMemoryEngineNonDist(
 
 	storage, err := memorystorage.NewMemoryStorage(
 		mp,
-		memorystorage.SnapshotIsolation,
 		ck,
 		memoryengine.RandomIDGenerator,
 	)

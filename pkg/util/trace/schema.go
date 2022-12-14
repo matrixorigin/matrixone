@@ -52,6 +52,7 @@ var (
 	txnIDCol     = table.Column{Name: "transaction_id", Type: uuidColType, Default: "0", Comment: "txn uniq id"}
 	sesIDCol     = table.Column{Name: "session_id", Type: uuidColType, Default: "0", Comment: "session uniq id"}
 	accountCol   = table.Column{Name: "account", Type: stringType, Default: "", Comment: "account name"}
+	roleIdCol    = table.Column{Name: "role_id", Type: bigintUnsignedType, Default: "0", Comment: "role id"}
 	userCol      = table.Column{Name: "user", Type: stringType, Default: "", Comment: "user name"}
 	hostCol      = table.Column{Name: "host", Type: stringType, Default: "", Comment: "user client ip"}
 	dbCol        = table.Column{Name: "database", Type: stringType, Default: "", Comment: "what database current session stay in."}
@@ -68,6 +69,11 @@ var (
 	execPlanCol  = table.Column{Name: "exec_plan", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "statement execution plan"}
 	rowsReadCol  = table.Column{Name: "rows_read", Type: bigintUnsignedType, Default: "0", Comment: "rows read total"}
 	bytesScanCol = table.Column{Name: "bytes_scan", Type: bigintUnsignedType, Default: "0", Comment: "bytes scan total"}
+	cpuCol       = table.Column{Name: "cpu", Type: bigintUnsignedType, Default: "0", Comment: "cpu time, unit: ?"}
+	memoryCol    = table.Column{Name: "memory", Type: bigintUnsignedType, Default: "0", Comment: "memory cost byte"}
+	ioCol        = table.Column{Name: "io", Type: bigintUnsignedType, Default: "0", Comment: "io count"}
+	stmtTypeCol  = table.Column{Name: "statement_type", Type: "varchar(128)", Default: "", Comment: "statement type, val in [Insert, Delete, Update, Drop Table, Drop User, ...]"}
+	queryTypeCol = table.Column{Name: "query_type", Type: "varchar(128)", Default: "", Comment: "query type, val in [DQL, DDL, DML, DCL, TCL]"}
 	sqlTypeCol   = table.Column{Name: "sql_source_type", Type: "TEXT", Default: "", Comment: "sql statement source type"}
 
 	SingleStatementTable = &table.Table{
@@ -96,6 +102,12 @@ var (
 			execPlanCol,
 			rowsReadCol,
 			bytesScanCol,
+			cpuCol,
+			memoryCol,
+			ioCol,
+			stmtTypeCol,
+			queryTypeCol,
+			roleIdCol,
 			sqlTypeCol,
 		},
 		PrimaryKeyColumn: []table.Column{stmtIDCol},

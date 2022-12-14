@@ -17,6 +17,7 @@ package memoryengine
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -57,6 +58,11 @@ func (t *Table) Stats(ctx context.Context) (int32, int64, error) {
 	resp := resps[0]
 
 	return 0, int64(resp.Rows), nil
+}
+
+func (t *Table) Rows(ctx context.Context) (int64, error) {
+	_, rows, err := t.Stats(ctx)
+	return rows, err
 }
 
 func (t *Table) Size(ctx context.Context, columnName string) (int64, error) {
