@@ -671,12 +671,11 @@ func (mp *MPool) Grow(old []byte, sz int) ([]byte, error) {
 		}
 	}
 	newcap = roundupsize(newcap)
-
 	ret, err := mp.Realloc(old, newcap)
 	if err != nil {
 		return ret, err
 	}
-	return ret[:sz], nil
+	return ret, nil
 }
 
 func (mp *MPool) Grow2(old []byte, old2 []byte, sz int) ([]byte, error) {

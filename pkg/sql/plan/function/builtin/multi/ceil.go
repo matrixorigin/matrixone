@@ -34,7 +34,7 @@ func CeilFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 }
 
 func CeilDecimal128(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	scale := vecs[0].Typ.Scale
+	scale := vecs[0].GetType().Scale
 	cb := func(vs []types.Decimal128, rs []types.Decimal128, digits int64) []types.Decimal128 {
 		return ceil.CeilDecimal128(scale, vs, rs, digits)
 	}

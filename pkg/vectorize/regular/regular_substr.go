@@ -53,7 +53,7 @@ func RegularSubstrWithReg(expr string, pat *regexp.Regexp, pos, occurrence int64
 }
 
 func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []string, exprN, patN *nulls.Nulls, resultVector *vector.Vector, proc *process.Process, maxLen int) error {
-	rs := make([]string, maxLen)
+	rs := make([][]byte, maxLen)
 	var posValue int64
 	var occValue int64
 	if len(expr) == 1 && len(pat) == 1 {
@@ -63,7 +63,7 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 		}
 		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(0)) || pat[0] == "" {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(resultVector.GetNulls(), uint64(i))
 				continue
 			}
 			posValue, occValue = determineValuesWithTwo(pos, occ, i)
@@ -72,16 +72,18 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 				return err
 			}
 			if res == nil {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(resultVector.GetNulls(), uint64(i))
 				continue
 			}
-			rs[i] = res[occValue-1]
+			rs[i] = []byte(res[occValue-1])
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
+		if err := vector.AppendBytesList(resultVector, rs, nil, proc.Mp()); err != nil {
+			return err
+		}
 	} else if len(expr) == 1 {
 		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(i)) || pat[i] == "" {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(resultVector.GetNulls(), uint64(i))
 				continue
 			}
 			posValue, occValue = determineValuesWithTwo(pos, occ, i)
@@ -90,12 +92,14 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 				return err
 			}
 			if res == nil {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(resultVector.GetNulls(), uint64(i))
 				continue
 			}
-			rs[i] = res[occValue-1]
+			rs[i] = []byte(res[occValue-1])
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
+		if err := vector.AppendBytesList(resultVector, rs, nil, proc.Mp()); err != nil {
+			return err
+		}
 	} else if len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
 		if err != nil {
@@ -103,7 +107,7 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 		}
 		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(0)) || pat[0] == "" {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(resultVector.GetNulls(), uint64(i))
 				continue
 			}
 			posValue, occValue = determineValuesWithTwo(pos, occ, i)
@@ -112,16 +116,18 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 				return err
 			}
 			if res == nil {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(resultVector.GetNulls(), uint64(i))
 				continue
 			}
-			rs[i] = res[occValue-1]
+			rs[i] = []byte(res[occValue-1])
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
+		if err := vector.AppendBytesList(resultVector, rs, nil, proc.Mp()); err != nil {
+			return err
+		}
 	} else {
 		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(i)) || pat[i] == "" {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(resultVector.GetNulls(), uint64(i))
 				continue
 			}
 			posValue, occValue = determineValuesWithTwo(pos, occ, i)
@@ -130,12 +136,14 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 				return err
 			}
 			if res == nil {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(resultVector.GetNulls(), uint64(i))
 				continue
 			}
-			rs[i] = res[occValue-1]
+			rs[i] = []byte(res[occValue-1])
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
+		if err := vector.AppendBytesList(resultVector, rs, nil, proc.Mp()); err != nil {
+			return err
+		}
 	}
 	return nil
 }

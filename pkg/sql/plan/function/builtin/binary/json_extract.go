@@ -36,7 +36,7 @@ func JsonExtractByString(vectors []*vector.Vector, proc *process.Process) (*vect
 	jsonBytes, pathBytes := vectors[0], vectors[1]
 	resultType := types.T_json
 	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
-	if jsonBytes.IsScalar() && pathBytes.IsScalar() {
+	if jsonBytes.IsConst() && pathBytes.IsConst() {
 		resultValues := make([]*bytejson.ByteJson, 0, 1)
 		resultValues, err = json_extract.QueryByString(json, path, resultValues)
 		if err != nil {
@@ -88,7 +88,7 @@ func JsonExtractByJson(vectors []*vector.Vector, proc *process.Process) (*vector
 	jsonBytes, pathBytes := vectors[0], vectors[1]
 	resultType := types.T_json
 	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
-	if jsonBytes.IsScalar() && pathBytes.IsScalar() {
+	if jsonBytes.IsConst() && pathBytes.IsConst() {
 		resultValues := make([]*bytejson.ByteJson, 0, 1)
 		resultValues, err = json_extract.QueryByJson(json, path, resultValues)
 		if err != nil {

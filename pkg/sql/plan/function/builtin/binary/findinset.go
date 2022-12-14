@@ -27,7 +27,7 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	resultType := types.Type{Oid: types.T_uint64, Size: 8}
 	leftValues, rightValues := vector.MustStrCols(left), vector.MustStrCols(right)
 	switch {
-	case left.IsScalar() && right.IsScalar():
+	case left.IsConst() && right.IsConst():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -35,7 +35,7 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		resultValues := vector.MustTCols[uint64](resultVector)
 		findinset.FindInSetWithAllConst(leftValues[0], rightValues[0], resultValues)
 		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
+	case left.IsConst() && !right.IsConst():
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -45,7 +45,7 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		nulls.Set(resultVector.Nsp, right.Nsp)
 		findinset.FindInSetWithLeftConst(leftValues[0], rightValues, resultValues)
 		return resultVector, nil
-	case !left.IsScalar() && right.IsScalar():
+	case !left.IsConst() && right.IsConst():
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

@@ -40,7 +40,7 @@ type binFun[T binT] func(*vector.Vector, *vector.Vector, *process.Process) error
 func generalBin[T binT](vectors []*vector.Vector, proc *process.Process, cb binFun[T]) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

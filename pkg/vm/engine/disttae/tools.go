@@ -888,7 +888,7 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 			bats[i].SetVector(int32(j), vector.New(bat.GetVector(int32(j)).GetType()))
 		}
 	}
-	vs := vector.GetFixedVectorValues[int64](pvec)
+	vs := vector.MustTCols[int64](pvec)
 	for i := range bat.Vecs {
 		vec := bat.GetVector(int32(i))
 		for j, v := range vs {

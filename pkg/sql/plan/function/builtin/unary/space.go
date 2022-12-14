@@ -25,7 +25,7 @@ func SpaceNumber[T types.BuiltinNumber](vectors []*vector.Vector, proc *process.
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
 	inputValues := vector.MustTCols[T](inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocConstNullVector(resultType, inputVector.Length()), nil
 		}

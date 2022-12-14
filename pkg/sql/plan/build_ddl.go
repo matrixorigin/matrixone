@@ -58,7 +58,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		cols[idx] = &plan.ColDef{
 			Name: query.Headings[idx],
 			Alg:  plan.CompressType_Lz4,
-			Typ:  expr.Typ,
+			Typ:  expr.GetType(),
 			Default: &plan.Default{
 				NullAbility:  true,
 				Expr:         nil,
@@ -469,13 +469,13 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 	// check index invalid on the type
 	// for example, the text type don't support index
 	for _, str := range indexs {
-		if colMap[str].Typ.Id == int32(types.T_blob) {
+		if colMap[str].GetType().Id == int32(types.T_blob) {
 			return moerr.NewNotSupported(ctx.GetContext(), "blob type in index")
 		}
-		if colMap[str].Typ.Id == int32(types.T_text) {
+		if colMap[str].GetType().Id == int32(types.T_text) {
 			return moerr.NewNotSupported(ctx.GetContext(), "text type in index")
 		}
-		if colMap[str].Typ.Id == int32(types.T_json) {
+		if colMap[str].GetType().Id == int32(types.T_json) {
 			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
 		}
 	}
@@ -523,8 +523,8 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
-					Id:   colMap[keyName].Typ.Id,
-					Size: colMap[keyName].Typ.Size,
+					Id:   colMap[keyName].GetType().Id,
+					Size: colMap[keyName].GetType().Size,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,

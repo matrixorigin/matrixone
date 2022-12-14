@@ -74,7 +74,7 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions)
 
 	case *plan.Expr_F:
 		funcExpr := expr.Expr.(*plan.Expr_F)
-		funcDesc, err := funcExprExplain(ctx, funcExpr, expr.Typ, options)
+		funcDesc, err := funcExprExplain(ctx, funcExpr, expr.GetType(), options)
 		if err != nil {
 			return result, err
 		}

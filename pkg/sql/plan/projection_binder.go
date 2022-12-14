@@ -37,7 +37,7 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 
 	if colPos, ok := b.ctx.groupByAst[astStr]; ok {
 		return &plan.Expr{
-			Typ: b.ctx.groups[colPos].Typ,
+			Typ: b.ctx.groups[colPos].GetType(),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: b.ctx.groupTag,
@@ -49,7 +49,7 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 
 	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok {
 		return &plan.Expr{
-			Typ: b.ctx.aggregates[colPos].Typ,
+			Typ: b.ctx.aggregates[colPos].GetType(),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: b.ctx.aggregateTag,

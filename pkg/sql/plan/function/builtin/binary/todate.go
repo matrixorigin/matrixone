@@ -28,13 +28,13 @@ import (
 var usage = ""
 
 func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if !vectors[1].IsScalar() {
+	if !vectors[1].IsConst() {
 		return nil, moerr.NewInvalidArgNoCtx("the second parameter of function to_date", "not constant")
 	}
 	inputBytes0 := vector.MustStrCols(vectors[0])
 	inputBytes1 := vector.MustStrCols(vectors[1])
 	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
-	if vectors[0].IsScalar() && vectors[1].IsScalar() {
+	if vectors[0].IsConst() && vectors[1].IsConst() {
 		results := make([]string, 1)
 		format := inputBytes1[0]
 		inputNsp := vectors[0].Nsp

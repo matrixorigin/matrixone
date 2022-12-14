@@ -42,9 +42,9 @@ func Prepare(proc *process.Process, arg any) error {
 		ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions))
 		ap.ctr.evecs = make([]evalVector, len(ap.Conditions))
 	}
-	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
+	ap.ctr.bat = batch.NewWithSize(len(ap.GetType()s))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
-	for i, typ := range ap.Typs {
+	for i, typ := range ap.GetType()s {
 		ap.ctr.bat.Vecs[i] = vector.New(typ)
 	}
 

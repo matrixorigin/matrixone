@@ -36,16 +36,16 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	formatVector := vectors[1]
 
 	resultType := types.T_date.ToType()
-	if !formatVector.IsScalar() {
+	if !formatVector.IsConst() {
 		return nil, moerr.NewInvalidArgNoCtx("to_date format", "not constant")
 	}
-	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
+	if dateVector.IsConstNull() || formatVector.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 	// get the format string.
 	formatMask := formatVector.GetString(0)
 
-	if dateVector.IsScalar() {
+	if dateVector.IsConst() {
 		datestr := dateVector.GetString(0)
 		ctx := make(map[string]int)
 		time := NewGeneralTime()
@@ -81,16 +81,16 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	formatVector := vectors[1]
 
 	resultType := types.T_datetime.ToType()
-	if !formatVector.IsScalar() {
+	if !formatVector.IsConst() {
 		return nil, moerr.NewInvalidArgNoCtx("to_date format", "not constant")
 	}
-	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
+	if dateVector.IsConstNull() || formatVector.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 	// get the format string.
 	formatMask := formatVector.GetString(0)
 
-	if dateVector.IsScalar() {
+	if dateVector.IsConst() {
 		datetimestr := dateVector.GetString(0)
 		ctx := make(map[string]int)
 		time := NewGeneralTime()
@@ -126,16 +126,16 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	formatVector := vectors[1]
 
 	resultType := types.T_time.ToType()
-	if !formatVector.IsScalar() {
+	if !formatVector.IsConst() {
 		return nil, moerr.NewInvalidArgNoCtx("to_date format", "not constant")
 	}
-	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
+	if dateVector.IsConstNull() || formatVector.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 	// get the format string.
 	formatMask := formatVector.GetString(0)
 
-	if dateVector.IsScalar() {
+	if dateVector.IsConst() {
 		timestr := dateVector.GetString(0)
 
 		ctx := make(map[string]int)

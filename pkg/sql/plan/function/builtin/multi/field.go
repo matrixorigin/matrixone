@@ -41,10 +41,10 @@ func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	rs := vector.MustTCols[uint64](resultVector)
 
 	//if first vector is scalar
-	if firstVector.IsScalar() {
+	if firstVector.IsConst() {
 
 		//if first vector is null, the return value is 0
-		if firstVector.IsScalarNull() {
+		if firstVector.IsConstNull() {
 			return vector.NewConstFixed(returnType, vecLen, uint64(0), proc.Mp()), err
 		}
 
@@ -54,8 +54,8 @@ func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 		//detect in pre scalar vector
 		for i := 1; i < len(vs); i++ {
 			input := vs[i]
-			if input.IsScalar() {
-				if !input.IsScalarNull() {
+			if input.IsConst() {
+				if !input.IsConstNull() {
 					cols := vector.MustStrCols(input)
 					if firstValues[0] == cols[0] {
 						return vector.NewConstFixed(returnType, input.Length(), uint64(i), proc.Mp()), err
@@ -74,8 +74,8 @@ func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 			input := vs[i]
 			cols := vector.MustStrCols(input)
 
-			if input.IsScalar() {
-				if !input.IsScalarNull() {
+			if input.IsConst() {
+				if !input.IsConstNull() {
 					if firstValues[0] == cols[0] {
 						for j := 0; j < vecLen; j++ {
 							if rs[j] == 0 {
@@ -113,8 +113,8 @@ func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 			input := vs[i]
 			cols := vector.MustStrCols(input)
 
-			if input.IsScalar() {
-				if !input.IsScalarNull() {
+			if input.IsConst() {
+				if !input.IsConstNull() {
 					for j := 0; j < vecLen; j++ {
 						if rs[j] == 0 && firstValues[j] == cols[0] {
 							rs[j] = uint64(i)
@@ -156,10 +156,10 @@ func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.
 	rs := vector.MustTCols[uint64](resultVector)
 
 	//if first vector is scalar
-	if firstVector.IsScalar() {
+	if firstVector.IsConst() {
 
 		//if first vector is null, the return value is 0
-		if firstVector.IsScalarNull() {
+		if firstVector.IsConstNull() {
 			return vector.NewConstFixed(returnType, vecLen, uint64(0), proc.Mp()), err
 		}
 
@@ -169,8 +169,8 @@ func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.
 		//detect in pre scalar vector
 		for i := 1; i < len(vs); i++ {
 			input := vs[i]
-			if input.IsScalar() {
-				if !input.IsScalarNull() {
+			if input.IsConst() {
+				if !input.IsConstNull() {
 					cols := vector.MustTCols[T](input)
 					if firstValues[0] == cols[0] {
 						return vector.NewConstFixed(returnType, input.Length(), uint64(i), proc.Mp()), err
@@ -189,8 +189,8 @@ func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.
 			input := vs[i]
 			cols := vector.MustTCols[T](input)
 
-			if input.IsScalar() {
-				if !input.IsScalarNull() {
+			if input.IsConst() {
+				if !input.IsConstNull() {
 					if firstValues[0] == cols[0] {
 						for j := 0; j < vecLen; j++ {
 							if rs[j] == 0 {
@@ -228,8 +228,8 @@ func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.
 			input := vs[i]
 			cols := vector.MustTCols[T](input)
 
-			if input.IsScalar() {
-				if !input.IsScalarNull() {
+			if input.IsConst() {
+				if !input.IsConstNull() {
 					for j := 0; j < vecLen; j++ {
 						if rs[j] == 0 && firstValues[j] == cols[0] {
 							rs[j] = uint64(i)

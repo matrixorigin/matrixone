@@ -24,7 +24,7 @@ import (
 
 func Serial(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	for _, v := range vectors {
-		if v.IsScalar() {
+		if v.IsConst() {
 			return nil, moerr.NewConstraintViolationNoCtx("serial function don't support constant value")
 		}
 	}
@@ -40,7 +40,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 	bitMap := new(nulls.Nulls)
 
 	for _, v := range vectors {
-		switch v.Typ.Oid {
+		switch v.GetType().Oid {
 		case types.T_bool:
 			s := vector.MustTCols[bool](v)
 			for i, b := range s {
@@ -195,7 +195,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 				}
 			}
 		case types.T_json, types.T_char, types.T_varchar, types.T_blob, types.T_text:
-			vs := vector.GetStrVectorValues(v)
+			vs := vector.MustStrCols(v)
 			for i := range vs {
 				if nulls.Contains(v.Nsp, uint64(i)) {
 					nulls.Add(bitMap, uint64(i))

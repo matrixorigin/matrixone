@@ -69,17 +69,17 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		return 0, nil, err
 	}
 
-	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
-		return 0, nil, moerr.NewNYINoCtx("aggregation with non equal predicate in %s subquery  will be supported in future version", subquery.Typ.String())
+	if subquery.GetType() == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
+		return 0, nil, moerr.NewNYINoCtx("aggregation with non equal predicate in %s subquery  will be supported in future version", subquery.GetType().String())
 	}
 
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
 
-	if len(filterPreds) > 0 && subquery.Typ >= plan.SubqueryRef_SCALAR {
-		return 0, nil, moerr.NewNYINoCtx("correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String())
+	if len(filterPreds) > 0 && subquery.GetType() >= plan.SubqueryRef_SCALAR {
+		return 0, nil, moerr.NewNYINoCtx("correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.GetType().String())
 	}
 
-	switch subquery.Typ {
+	switch subquery.GetType() {
 	case plan.SubqueryRef_SCALAR:
 		var rewrite bool
 		// Uncorrelated subquery
@@ -110,7 +110,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		}
 
 		retExpr := &plan.Expr{
-			Typ: subCtx.results[0].Typ,
+			Typ: subCtx.results[0].GetType(),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: subCtx.rootTag(),
@@ -253,7 +253,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		return nodeID, nil, nil
 
 	default:
-		return 0, nil, moerr.NewNotSupportedNoCtx("%s subquery not supported", subquery.Typ.String())
+		return 0, nil, moerr.NewNotSupportedNoCtx("%s subquery not supported", subquery.GetType().String())
 	}
 }
 
@@ -266,7 +266,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 			leftExpr, err := bindFuncExprImplByPlanExpr(op, []*plan.Expr{
 				childList[0],
 				{
-					Typ: ctx.results[0].Typ,
+					Typ: ctx.results[0].GetType(),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: ctx.rootTag(),
@@ -283,7 +283,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 				rightExpr, err := bindFuncExprImplByPlanExpr(op, []*plan.Expr{
 					childList[i],
 					{
-						Typ: ctx.results[i].Typ,
+						Typ: ctx.results[i].GetType(),
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								RelPos: ctx.rootTag(),
@@ -308,7 +308,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 			leftExpr, err := bindFuncExprImplByPlanExpr(op, []*plan.Expr{
 				childList[0],
 				{
-					Typ: ctx.results[0].Typ,
+					Typ: ctx.results[0].GetType(),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: ctx.rootTag(),
@@ -325,7 +325,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 				rightExpr, err := bindFuncExprImplByPlanExpr(op, []*plan.Expr{
 					childList[i],
 					{
-						Typ: ctx.results[i].Typ,
+						Typ: ctx.results[i].GetType(),
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								RelPos: ctx.rootTag(),
@@ -350,7 +350,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 			projList := make([]*plan.Expr, len(childList))
 			for i := range projList {
 				projList[i] = &plan.Expr{
-					Typ: ctx.results[i].Typ,
+					Typ: ctx.results[i].GetType(),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: ctx.rootTag(),
@@ -371,7 +371,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 		return bindFuncExprImplByPlanExpr(op, []*plan.Expr{
 			child,
 			{
-				Typ: ctx.results[0].Typ,
+				Typ: ctx.results[0].GetType(),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: ctx.rootTag(),
@@ -481,7 +481,7 @@ func (builder *QueryBuilder) pullupThroughAgg(ctx *BindContext, node *plan.Node,
 		}
 
 		return &plan.Expr{
-			Typ: expr.Typ,
+			Typ: expr.GetType(),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: tag,
@@ -522,7 +522,7 @@ func (builder *QueryBuilder) pullupThroughProj(ctx *BindContext, node *plan.Node
 		}
 
 		return &plan.Expr{
-			Typ: expr.Typ,
+			Typ: expr.GetType(),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: tag,

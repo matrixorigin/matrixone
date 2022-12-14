@@ -30,7 +30,7 @@ func TestToDate(t *testing.T) {
 	proc := testutil.NewProc()
 	outputVec, err := ToDate(inputVecs, proc)
 	require.NoError(t, err)
-	require.Equal(t, []string{"2020-01-03", "2019-01-02"}, vector.GetStrVectorValues(outputVec)[:2])
+	require.Equal(t, []string{"2020-01-03", "2019-01-02"}, vector.MustStrCols(outputVec)[:2])
 	require.True(t, nulls.Contains(outputVec.Nsp, 2))
 
 	inputVec0 = testutil.MakeVarcharVector([]string{"01032020", "01022019", ""}, []uint64{2})
@@ -39,7 +39,7 @@ func TestToDate(t *testing.T) {
 	proc = testutil.NewProc()
 	outputVec, err = ToDate(inputVecs, proc)
 	require.NoError(t, err)
-	require.Equal(t, []string{"2020-01-03", "2019-01-02"}, vector.GetStrVectorValues(outputVec)[:2])
+	require.Equal(t, []string{"2020-01-03", "2019-01-02"}, vector.MustStrCols(outputVec)[:2])
 	require.True(t, nulls.Contains(outputVec.Nsp, 2))
 
 	inputVec0 = testutil.MakeVarcharVector([]string{"03012020", "02012019", ""}, []uint64{2})
@@ -48,7 +48,7 @@ func TestToDate(t *testing.T) {
 	proc = testutil.NewProc()
 	outputVec, err = ToDate(inputVecs, proc)
 	require.NoError(t, err)
-	require.Equal(t, []string{"2020-01-03", "2019-01-02"}, vector.GetStrVectorValues(outputVec)[:2])
+	require.Equal(t, []string{"2020-01-03", "2019-01-02"}, vector.MustStrCols(outputVec)[:2])
 	require.True(t, nulls.Contains(outputVec.Nsp, 2))
 
 	inputVec0 = testutil.MakeVarcharVector([]string{"01-03-2020", "01-02-2019", ""}, []uint64{2})
@@ -57,7 +57,7 @@ func TestToDate(t *testing.T) {
 	proc = testutil.NewProc()
 	outputVec, err = ToDate(inputVecs, proc)
 	require.NoError(t, err)
-	require.Equal(t, []string{"2020-01-03", "2019-01-02"}, vector.GetStrVectorValues(outputVec)[:2])
+	require.Equal(t, []string{"2020-01-03", "2019-01-02"}, vector.MustStrCols(outputVec)[:2])
 	require.True(t, nulls.Contains(outputVec.Nsp, 2))
 
 	inputVec0 = testutil.MakeVarcharVector([]string{"03-01-2020", "02-01-2019", ""}, []uint64{2})
@@ -66,7 +66,7 @@ func TestToDate(t *testing.T) {
 	proc = testutil.NewProc()
 	outputVec, err = ToDate(inputVecs, proc)
 	require.NoError(t, err)
-	require.Equal(t, []string{"2020-01-03", "2019-01-02"}, vector.GetStrVectorValues(outputVec)[:2])
+	require.Equal(t, []string{"2020-01-03", "2019-01-02"}, vector.MustStrCols(outputVec)[:2])
 	require.True(t, nulls.Contains(outputVec.Nsp, 2))
 
 	inputVec0 = testutil.MakeVarcharVector([]string{"32-01-2020", "02-01-2019", ""}, []uint64{2})

@@ -35,11 +35,11 @@ func NotScalar(_, nsv *vector.Vector, col1, col2 []bool, proc *process.Process) 
 func Not(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	v1 := vs[0]
 	col1 := vector.MustTCols[bool](v1)
-	if v1.IsScalarNull() {
+	if v1.IsConstNull() {
 		return proc.AllocScalarNullVector(boolType), nil
 	}
 
-	c1 := v1.IsScalar()
+	c1 := v1.IsConst()
 	switch {
 	case c1:
 		vec := proc.AllocScalarVector(boolType)

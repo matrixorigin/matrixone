@@ -55,7 +55,7 @@ func TestFillCompositePKeyBatch(t *testing.T) {
 	bat, col, valueCount := MakeBatch(columnSi, rowCount, proc.Mp())
 	err := FillCompositePKeyBatch(bat, col, proc)
 	require.Equal(t, err, nil)
-	bs := vector.GetBytesVectorValues(bat.Vecs[len(bat.Vecs)-1])
+	bs := vector.MustBytesCols(bat.Vecs[len(bat.Vecs)-1])
 	tuples := make([]types.Tuple, 0)
 	for i := 0; i < len(bs); i++ {
 		tuple, err := types.Unpack(bs[i])
@@ -93,7 +93,7 @@ func MakeBatch(columnSi int, rowCount int, mp *mpool.MPool) (*batch.Batch, *plan
 
 	for i := 0; i < idx; i++ {
 		bat.Vecs[i] = vector.New(types.Type{Oid: randType()})
-		randInsertValues(bat.Vecs[i], bat.Vecs[i].Typ.Oid, rowCount, valueCount, i*rowCount, mp)
+		randInsertValues(bat.Vecs[i], bat.Vecs[i].GetType().Oid, rowCount, valueCount, i*rowCount, mp)
 	}
 
 	bat.Vecs[idx] = vector.New(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})

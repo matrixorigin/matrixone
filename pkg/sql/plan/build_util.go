@@ -113,7 +113,7 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 		case defines.MYSQL_TYPE_TIME:
 			return &plan.Type{Id: int32(types.T_time), Size: 8, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_DATETIME:
-			// currently the ast's width for datetime's is 26, this is not accurate and may need revise, not important though, as we don't need it anywhere else except to differentiate empty vector.Typ.
+			// currently the ast's width for datetime's is 26, this is not accurate and may need revise, not important though, as we don't need it anywhere else except to differentiate empty vector.GetType().
 			return &plan.Type{Id: int32(types.T_datetime), Size: 8, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_TIMESTAMP:
 			return &plan.Type{Id: int32(types.T_timestamp), Size: 8, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
@@ -258,7 +258,7 @@ func isNullExpr(expr *plan.Expr) bool {
 	}
 	switch ef := expr.Expr.(type) {
 	case *plan.Expr_C:
-		return expr.Typ.Id == int32(types.T_any) && ef.C.Isnull
+		return expr.GetType().Id == int32(types.T_any) && ef.C.Isnull
 	default:
 		return false
 	}
@@ -273,11 +273,11 @@ func isNullAstExpr(expr tree.Expr) bool {
 }
 
 func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
-	if !isLogic && (len(args) != 2 || (args[0].Typ.Id != int32(types.T_bool) && args[1].Typ.Id != int32(types.T_bool))) {
+	if !isLogic && (len(args) != 2 || (args[0].GetType().Id != int32(types.T_bool) && args[1].GetType().Id != int32(types.T_bool))) {
 		return nil
 	}
 	for _, arg := range args {
-		if arg.Typ.Id == int32(types.T_bool) {
+		if arg.GetType().Id == int32(types.T_bool) {
 			continue
 		}
 		switch ex := arg.Expr.(type) {
@@ -289,7 +289,7 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 				} else {
 					ex.C.Value = &plan.Const_Bval{Bval: true}
 				}
-				arg.Typ.Id = int32(types.T_bool)
+				arg.GetType().Id = int32(types.T_bool)
 			}
 		}
 	}
@@ -304,7 +304,7 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 }
 
 func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
-	if !d.Default.NullAbility && d.Default.Expr == nil && !d.Typ.AutoIncr {
+	if !d.Default.NullAbility && d.Default.Expr == nil && !d.GetType().AutoIncr {
 		return nil, moerr.NewInvalidInputNoCtx("invalid default value")
 	}
 	if d.Default.Expr == nil {
@@ -315,7 +315,7 @@ func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
 				},
 			},
 			Typ: &plan.Type{
-				Id:          d.Typ.Id,
+				Id:          d.GetType().Id,
 				NotNullable: false,
 			},
 		}, nil

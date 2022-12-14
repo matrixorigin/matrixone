@@ -79,18 +79,18 @@ func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	formatVector := vectors[1]
 
 	resultType := types.T_varchar.ToType()
-	if !formatVector.IsScalar() {
+	if !formatVector.IsConst() {
 		return nil, moerr.NewInvalidArgNoCtx("date format format", "not constant")
 	}
 
-	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
+	if dateVector.IsConstNull() || formatVector.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 
 	// get the format string.
 	formatMask := string(formatVector.GetString(0))
 
-	if dateVector.IsScalar() {
+	if dateVector.IsConst() {
 		// XXX Null handling maybe broken.
 		datetimes := dateVector.Col.([]types.Datetime)
 		resCol, err := CalcDateFromat(datetimes, formatMask, dateVector.Nsp)

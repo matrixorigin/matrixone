@@ -187,7 +187,7 @@ func TestLikeVarchar2(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantBytes, likeRes.Col.([]bool))
-			require.Equal(t, c.wantScalar, likeRes.IsScalar())
+			require.Equal(t, c.wantScalar, likeRes.IsConst())
 		})
 	}
 }

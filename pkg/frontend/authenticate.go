@@ -3096,10 +3096,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.DropRole:
 		typs = append(typs, PrivilegeTypeDropRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
 	case *tree.Grant:
-		if st.Typ == tree.GrantTypeRole {
+		if st.GetType() == tree.GrantTypeRole {
 			kind = privilegeKindInherit
 			typs = append(typs, PrivilegeTypeManageGrants, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
-		} else if st.Typ == tree.GrantTypePrivilege {
+		} else if st.GetType() == tree.GrantTypePrivilege {
 			objType = objectTypeNone
 			kind = privilegeKindSpecial
 			special = specialTagAdmin | specialTagWithGrantOption | specialTagOwnerOfObject
@@ -3112,9 +3112,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		kind = privilegeKindSpecial
 		special = specialTagAdmin | specialTagWithGrantOption | specialTagOwnerOfObject
 	case *tree.Revoke:
-		if st.Typ == tree.RevokeTypeRole {
+		if st.GetType() == tree.RevokeTypeRole {
 			typs = append(typs, PrivilegeTypeManageGrants, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
-		} else if st.Typ == tree.RevokeTypePrivilege {
+		} else if st.GetType() == tree.RevokeTypePrivilege {
 			objType = objectTypeNone
 			kind = privilegeKindSpecial
 			special = specialTagAdmin
@@ -4409,7 +4409,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 
 		switch gp := stmt.(type) {
 		case *tree.Grant:
-			if gp.Typ == tree.GrantTypePrivilege {
+			if gp.GetType() == tree.GrantTypePrivilege {
 				yes, err := checkGrantPrivilege(&gp.GrantPrivilege)
 				if err != nil {
 					return yes, err
@@ -4419,7 +4419,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 				}
 			}
 		case *tree.Revoke:
-			if gp.Typ == tree.RevokeTypePrivilege {
+			if gp.GetType() == tree.RevokeTypePrivilege {
 				return checkRevokePrivilege()
 			}
 		case *tree.GrantPrivilege:
@@ -4910,7 +4910,7 @@ func createTablesInMoCatalogOfGeneralTenant2(tenant *TenantInfo, bh BackgroundEx
 	addSqlIntoSet(initMoRole2)
 
 	//step 3:add new user entry to the mo_user
-	if ca.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
+	if ca.AuthOption.IdentifiedType.GetType() != tree.AccountIdentifiedByPassword {
 		err = moerr.NewInternalErrorNoCtx("only support password verification now")
 		return err
 	}
@@ -5192,7 +5192,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 			goto handleFailed
 		}
 
-		if user.AuthOption.Typ != tree.AccountIdentifiedByPassword {
+		if user.AuthOption.GetType() != tree.AccountIdentifiedByPassword {
 			err = moerr.NewInternalErrorNoCtx("only support password verification now")
 			goto handleFailed
 		}

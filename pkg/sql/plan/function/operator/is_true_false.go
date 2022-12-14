@@ -40,8 +40,8 @@ func IsNotFalse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 func funcIs(vectors []*vector.Vector, proc *process.Process, nullValue bool, eqBool bool) (*vector.Vector, error) {
 	input := vectors[0]
 	retType := types.T_bool.ToType()
-	if input.IsScalar() {
-		if input.IsScalarNull() {
+	if input.IsConst() {
+		if input.IsConstNull() {
 			return vector.NewConstFixed(retType, input.Length(), nullValue, proc.Mp()), nil
 		} else {
 			col := vector.MustTCols[bool](input)

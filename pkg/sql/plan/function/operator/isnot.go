@@ -27,14 +27,14 @@ func IsNot(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	rv := vectors[1]
 	retType := types.T_bool.ToType()
 
-	if !rv.IsScalar() || rv.IsScalarNull() {
+	if !rv.IsConst() || rv.IsConstNull() {
 		return nil, moerr.NewInternalErrorNoCtx("second parameter of IS must be TRUE or FALSE")
 	}
 	right := vector.MustTCols[bool](rv)[0]
 
-	if lv.IsScalar() {
+	if lv.IsConst() {
 		vec := proc.AllocScalarVector(retType)
-		if lv.IsScalarNull() {
+		if lv.IsConstNull() {
 			vector.SetCol(vec, []bool{false})
 		} else {
 			lefts := vector.MustTCols[bool](lv)
@@ -45,7 +45,7 @@ func IsNot(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		lefts := vector.MustTCols[bool](lv)
 		l := int64(len(lefts))
 		col := make([]bool, l)
-		vec, err := proc.AllocVector(lv.Typ, l*1)
+		vec, err := proc.AllocVector(lv.GetType(), l*1)
 		if err != nil {
 			return nil, err
 		}

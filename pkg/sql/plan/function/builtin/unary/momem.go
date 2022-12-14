@@ -29,7 +29,7 @@ func MoMemUsage(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
 	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -48,7 +48,7 @@ func moMemUsageCmd(cmd string, vectors []*vector.Vector, proc *process.Process) 
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
 	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

@@ -23,11 +23,11 @@ import (
 func Length(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	if inputVector.IsScalarNull() {
+	if inputVector.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		ret := vector.NewConstFixed(resultType, inputVector.Length(), int64(len(inputValues[0])), proc.Mp())
 		return ret, nil
 	} else {

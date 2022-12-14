@@ -30,7 +30,7 @@ func DateDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 
 	resultType := types.T_int64.ToType()
 	switch {
-	case left.IsScalar() && right.IsScalar():
+	case left.IsConst() && right.IsConst():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -38,7 +38,7 @@ func DateDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		resultValues := vector.MustTCols[int64](resultVector)
 		datediff.DateDiff(leftValues, rightValues, resultValues)
 		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
+	case left.IsConst() && !right.IsConst():
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -49,7 +49,7 @@ func DateDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		resultValues := vector.MustTCols[int64](resultVector)
 		datediff.DateDiffLeftConst(leftValues[0], rightValues, resultValues)
 		return resultVector, nil
-	case !left.IsScalar() && right.IsScalar():
+	case !left.IsConst() && right.IsConst():
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

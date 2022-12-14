@@ -26,7 +26,7 @@ func Rtrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	resultType := types.T_varchar.ToType()
 	inputValues := vector.MustStrCols(inputVector)
 
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

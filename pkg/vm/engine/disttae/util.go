@@ -98,7 +98,7 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 		cvec := containers.NewVectorWithSharedMemory(vec, true)
 
 		// create zone map
-		zm := index.NewZoneMap(vec.Typ)
+		zm := index.NewZoneMap(vec.GetType())
 		ctx := new(index.KeysCtx)
 		ctx.Keys = cvec
 		ctx.Count = vec.Length()
@@ -175,7 +175,7 @@ func getZonemapDataFromMeta(ctx context.Context, columns []int, meta BlockMeta, 
 
 	for i := 0; i < dataLength; i++ {
 		idx := columns[i]
-		dataTypes[i] = uint8(tableDef.Cols[idx].Typ.Id)
+		dataTypes[i] = uint8(tableDef.Cols[idx].GetType().Id)
 		typ := types.T(dataTypes[i]).ToType()
 
 		zm := index.NewZoneMap(typ)
@@ -213,7 +213,7 @@ func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process) (b
 		if err != nil {
 			return false, err
 		}
-		if vec.Typ.Oid != types.T_bool {
+		if vec.GetType().Oid != types.T_bool {
 			return false, moerr.NewInternalError(proc.Ctx, "cannot eval filter expr")
 		}
 		cols := vector.MustTCols[bool](vec)
@@ -262,7 +262,7 @@ func getNewBlockName(accountId uint32) (string, error) {
 
 func getConstantExprHashValue(constExpr *plan.Expr) (bool, uint64) {
 	args := []*plan.Expr{constExpr}
-	argTypes := []types.Type{types.T(constExpr.Typ.Id).ToType()}
+	argTypes := []types.Type{types.T(constExpr.GetType().Id).ToType()}
 	funId, returnType, _, _ := function.GetFunctionByName(HASH_VALUE_FUN, argTypes)
 	funExpr := &plan.Expr{
 		Typ: plan2.MakePlan2Type(&returnType),
@@ -803,7 +803,7 @@ func checkIfDataInBlock(data any, meta BlockMeta, colIdx int, typ types.Type) (b
 }
 
 func findRowByPkValue(vec *vector.Vector, v any) int {
-	switch vec.Typ.Oid {
+	switch vec.GetType().Oid {
 	case types.T_int8:
 		rows := vector.MustTCols[int8](vec)
 		val := v.(int8)

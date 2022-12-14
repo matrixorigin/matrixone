@@ -463,7 +463,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		column := new(MysqlColumn)
 		column.SetName(columns[i].Name)
 
-		err = convertEngineTypeToMysqlType(ctx, types.T(columns[i].Typ.Id), column)
+		err = convertEngineTypeToMysqlType(ctx, types.T(columns[i].GetType().Id), column)
 		if err != nil {
 			return err
 		}

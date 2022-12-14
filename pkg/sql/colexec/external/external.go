@@ -358,7 +358,7 @@ func makeBatch(param *ExternalParam, plh *ParseLineHandler, mp *mpool.MPool) *ba
 	batchSize := plh.batchSize
 	//alloc space for vector
 	for i := 0; i < len(param.Attrs); i++ {
-		typ := types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision)
+		typ := types.New(types.T(param.Cols[i].GetType().Id), param.Cols[i].GetType().Width, param.Cols[i].GetType().Scale, param.Cols[i].GetType().Precision)
 		vec := vector.NewOriginal(typ)
 		vector.PreAlloc(vec, batchSize, batchSize, mp)
 		vec.SetOriginal(false)
@@ -590,7 +590,7 @@ func judgeInteger(field string) bool {
 func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
 	for colIdx := range param.Attrs {
 		field := Line[param.Name2ColIndex[param.Attrs[colIdx]]]
-		id := types.T(param.Cols[colIdx].Typ.Id)
+		id := types.T(param.Cols[colIdx].GetType().Id)
 		if id != types.T_char && id != types.T_varchar {
 			field = strings.TrimSpace(field)
 		}
@@ -788,7 +788,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
 				// origin float32 data type
-				if vec.Typ.Precision < 0 {
+				if vec.GetType().Precision < 0 {
 					d, err := strconv.ParseFloat(field, 32)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
@@ -797,7 +797,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 					cols[rowIdx] = float32(d)
 					continue
 				}
-				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Precision)
+				d, err := types.Decimal128_FromStringWithScale(field, vec.GetType().Width, vec.GetType().Precision)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float32 type for column %d", field, colIdx)
@@ -810,7 +810,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
 				// origin float64 data type
-				if vec.Typ.Precision < 0 {
+				if vec.GetType().Precision < 0 {
 					d, err := strconv.ParseFloat(field, 64)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
@@ -819,7 +819,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 					cols[rowIdx] = d
 					continue
 				}
-				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Precision)
+				d, err := types.Decimal128_FromStringWithScale(field, vec.GetType().Width, vec.GetType().Precision)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float64 type for column %d", field, colIdx)
@@ -872,7 +872,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				d, err := types.ParseTime(field, vec.Typ.Precision)
+				d, err := types.ParseTime(field, vec.GetType().Precision)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Time type for column %d", field, colIdx)
@@ -884,7 +884,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				d, err := types.ParseDatetime(field, vec.Typ.Precision)
+				d, err := types.ParseDatetime(field, vec.GetType().Precision)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Datetime type for column %d", field, colIdx)
@@ -896,7 +896,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				d, err := types.Decimal64_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Scale)
+				d, err := types.Decimal64_FromStringWithScale(field, vec.GetType().Width, vec.GetType().Scale)
 				if err != nil {
 					// we tolerate loss of digits.
 					if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
@@ -911,7 +911,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Scale)
+				d, err := types.Decimal128_FromStringWithScale(field, vec.GetType().Width, vec.GetType().Scale)
 				if err != nil {
 					// we tolerate loss of digits.
 					if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
@@ -927,7 +927,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
 				t := time.Local
-				d, err := types.ParseTimestamp(t, field, vec.Typ.Precision)
+				d, err := types.ParseTimestamp(t, field, vec.GetType().Precision)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Timestamp type for column %d", field, colIdx)
@@ -947,7 +947,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				cols[rowIdx] = d
 			}
 		default:
-			return moerr.NewInternalError(param.Ctx, "the value type %d is not support now", param.Cols[rowIdx].Typ.Id)
+			return moerr.NewInternalError(param.Ctx, "the value type %d is not support now", param.Cols[rowIdx].GetType().Id)
 		}
 	}
 	return nil

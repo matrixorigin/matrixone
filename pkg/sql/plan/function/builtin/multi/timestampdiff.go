@@ -40,7 +40,7 @@ func TimeStampDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		}
 	}
 
-	if firstVector.IsScalarNull() || secondVector.IsScalarNull() || thirdVector.IsScalarNull() {
+	if firstVector.IsConstNull() || secondVector.IsConstNull() || thirdVector.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 

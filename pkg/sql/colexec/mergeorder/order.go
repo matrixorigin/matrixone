@@ -133,7 +133,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 						} else {
 							nullsLast = desc
 						}
-						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, desc, nullsLast)
+						ctr.cmps[i] = compare.New(bat.Vecs[i].GetType(), desc, nullsLast)
 					}
 				}
 			} else {
@@ -153,7 +153,7 @@ func (ctr *container) processBatch(bat2 *batch.Batch, proc *process.Process) err
 	if bat1 == nil {
 		bat1 = batch.NewWithSize(len(bat1.Vecs))
 		for i, vec := range bat2.Vecs {
-			bat1.Vecs[i] = vector.New(vec.Typ)
+			bat1.Vecs[i] = vector.New(vec.GetType())
 		}
 	}
 	// union bat1 and bat2

@@ -25,33 +25,33 @@ func Left(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	leftVec := vs[0]
 	rightVec := vs[1]
 
-	if leftVec.IsScalarNull() || rightVec.IsScalarNull() {
-		return proc.AllocScalarNullVector(leftVec.Typ), nil
+	if leftVec.IsConstNull() || rightVec.IsConstNull() {
+		return proc.AllocScalarNullVector(leftVec.GetType()), nil
 	}
 	strValues := vector.MustStrCols(leftVec)
 	lengthValues := vector.MustTCols[int64](rightVec)
 
-	if leftVec.IsScalar() && rightVec.IsScalar() {
+	if leftVec.IsConst() && rightVec.IsConst() {
 		resultValues := make([]string, 1)
 		left.LeftAllConst(strValues, lengthValues, resultValues)
-		resultVector := vector.NewConstString(leftVec.Typ, 1, resultValues[0], proc.Mp())
+		resultVector := vector.NewConstString(leftVec.GetType(), 1, resultValues[0], proc.Mp())
 		return resultVector, nil
-	} else if leftVec.IsScalar() && !rightVec.IsScalar() {
+	} else if leftVec.IsConst() && !rightVec.IsConst() {
 		resultValues := make([]string, len(lengthValues))
 		left.LeftLeftConst(strValues, lengthValues, resultValues)
-		resultVector := vector.NewWithStrings(leftVec.Typ, resultValues, rightVec.Nsp, proc.Mp())
+		resultVector := vector.NewWithStrings(leftVec.GetType(), resultValues, rightVec.Nsp, proc.Mp())
 		return resultVector, nil
-	} else if !leftVec.IsScalar() && rightVec.IsScalar() {
+	} else if !leftVec.IsConst() && rightVec.IsConst() {
 		resultValues := make([]string, len(strValues))
 		left.LeftRightConst(strValues, lengthValues, resultValues)
-		resultVector := vector.NewWithStrings(leftVec.Typ, resultValues, leftVec.Nsp, proc.Mp())
+		resultVector := vector.NewWithStrings(leftVec.GetType(), resultValues, leftVec.Nsp, proc.Mp())
 		return resultVector, nil
 	} else {
 		resultValues := make([]string, len(strValues))
 		left.Left(strValues, lengthValues, resultValues)
 		resultNsp := nulls.NewWithSize(len(strValues))
 		nulls.Or(leftVec.Nsp, rightVec.Nsp, resultNsp)
-		resultVector := vector.NewWithStrings(leftVec.Typ, resultValues, resultNsp, proc.Mp())
+		resultVector := vector.NewWithStrings(leftVec.GetType(), resultValues, resultNsp, proc.Mp())
 		return resultVector, nil
 	}
 }

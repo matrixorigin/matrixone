@@ -611,7 +611,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Ibucket:   t.Ibucket,
 			Nbucket:   t.Nbucket,
 			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.Typs),
+			Types:     convertToPlanTypes(t.GetType()s),
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 			Result:    t.Result,
@@ -651,7 +651,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList:   relList,
 			ColList:   colList,
 			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.Typs),
+			Types:     convertToPlanTypes(t.GetType()s),
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 		}
@@ -663,7 +663,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList:   relList,
 			ColList:   colList,
 			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.Typs),
+			Types:     convertToPlanTypes(t.GetType()s),
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 		}
@@ -673,7 +673,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Anti = &pipeline.AntiJoin{
 			Result: t.Result,
 			Expr:   t.Cond,
-			Types:  convertToPlanTypes(t.Typs),
+			Types:  convertToPlanTypes(t.GetType()s),
 		}
 	case *loopjoin.Argument:
 		relList, colList := getRelColList(t.Result)
@@ -681,7 +681,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList: relList,
 			ColList: colList,
 			Expr:    t.Cond,
-			Types:   convertToPlanTypes(t.Typs),
+			Types:   convertToPlanTypes(t.GetType()s),
 		}
 	case *loopleft.Argument:
 		relList, colList := getRelColList(t.Result)
@@ -689,13 +689,13 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList: relList,
 			ColList: colList,
 			Expr:    t.Cond,
-			Types:   convertToPlanTypes(t.Typs),
+			Types:   convertToPlanTypes(t.GetType()s),
 		}
 	case *loopsemi.Argument:
 		in.SemiJoin = &pipeline.SemiJoin{
 			Result: t.Result,
 			Expr:   t.Cond,
-			Types:  convertToPlanTypes(t.Typs),
+			Types:  convertToPlanTypes(t.GetType()s),
 		}
 	case *loopsingle.Argument:
 		relList, colList := getRelColList(t.Result)
@@ -703,7 +703,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList: relList,
 			ColList: colList,
 			Expr:    t.Cond,
-			Types:   convertToPlanTypes(t.Typs),
+			Types:   convertToPlanTypes(t.GetType()s),
 		}
 	case *offset.Argument:
 		in.Offset = t.Offset
@@ -714,7 +714,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Product = &pipeline.Product{
 			RelList: relList,
 			ColList: colList,
-			Types:   convertToPlanTypes(t.Typs),
+			Types:   convertToPlanTypes(t.GetType()s),
 		}
 	case *projection.Argument:
 		in.ProjectList = t.Es
@@ -726,7 +726,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Nbucket:   t.Nbucket,
 			Result:    t.Result,
 			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.Typs),
+			Types:     convertToPlanTypes(t.GetType()s),
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 		}
@@ -738,7 +738,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList:   relList,
 			ColList:   colList,
 			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.Typs),
+			Types:     convertToPlanTypes(t.GetType()s),
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 		}
@@ -794,7 +794,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Result:    t.Result,
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
-			Types:     convertToPlanTypes(t.Typs),
+			Types:     convertToPlanTypes(t.GetType()s),
 			Cond:      t.Cond,
 			OnList:    t.OnList,
 		}
@@ -812,7 +812,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			NeedHash: t.NeedHashMap,
 			Ibucket:  t.Ibucket,
 			Nbucket:  t.Nbucket,
-			Types:    convertToPlanTypes(t.Typs),
+			Types:    convertToPlanTypes(t.GetType()s),
 			Conds:    t.Conditions,
 		}
 	case *external.Argument:

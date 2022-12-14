@@ -25,7 +25,7 @@ func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
 	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

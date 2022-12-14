@@ -72,7 +72,7 @@ func powerFloat64[T constraints.Integer | constraints.Float](t *testing.T, typ t
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantBytes, plus.Col)
-			require.Equal(t, c.wantScalar, plus.IsScalar())
+			require.Equal(t, c.wantScalar, plus.IsConst())
 		})
 	}
 }

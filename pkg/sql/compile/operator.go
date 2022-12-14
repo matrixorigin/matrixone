@@ -83,7 +83,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Ibucket:    t.Ibucket,
 			Nbucket:    t.Nbucket,
 			Cond:       t.Cond,
-			Typs:       t.Typs,
+			Typs:       t.GetType()s,
 			Conditions: t.Conditions,
 			Result:     t.Result,
 		}
@@ -104,7 +104,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:    t.Nbucket,
 			Result:     t.Result,
 			Cond:       t.Cond,
-			Typs:       t.Typs,
+			Typs:       t.GetType()s,
 			Conditions: t.Conditions,
 		}
 	case vm.Left:
@@ -114,7 +114,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:    t.Nbucket,
 			Cond:       t.Cond,
 			Result:     t.Result,
-			Typs:       t.Typs,
+			Typs:       t.GetType()s,
 			Conditions: t.Conditions,
 		}
 	case vm.Limit:
@@ -127,20 +127,20 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		res.Arg = &loopanti.Argument{
 			Result: t.Result,
 			Cond:   t.Cond,
-			Typs:   t.Typs,
+			Typs:   t.GetType()s,
 		}
 	case vm.LoopJoin:
 		t := sourceIns.Arg.(*loopanti.Argument)
 		res.Arg = &loopanti.Argument{
 			Result: t.Result,
 			Cond:   t.Cond,
-			Typs:   t.Typs,
+			Typs:   t.GetType()s,
 		}
 	case vm.LoopLeft:
 		t := sourceIns.Arg.(*loopleft.Argument)
 		res.Arg = &loopleft.Argument{
 			Cond:   t.Cond,
-			Typs:   t.Typs,
+			Typs:   t.GetType()s,
 			Result: t.Result,
 		}
 	case vm.LoopSemi:
@@ -148,14 +148,14 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		res.Arg = &loopsemi.Argument{
 			Result: t.Result,
 			Cond:   t.Cond,
-			Typs:   t.Typs,
+			Typs:   t.GetType()s,
 		}
 	case vm.LoopSingle:
 		t := sourceIns.Arg.(*loopsingle.Argument)
 		res.Arg = &loopsingle.Argument{
 			Result: t.Result,
 			Cond:   t.Cond,
-			Typs:   t.Typs,
+			Typs:   t.GetType()s,
 		}
 	case vm.Offset:
 		t := sourceIns.Arg.(*offset.Argument)
@@ -171,7 +171,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		t := sourceIns.Arg.(*product.Argument)
 		res.Arg = &product.Argument{
 			Result: t.Result,
-			Typs:   t.Typs,
+			Typs:   t.GetType()s,
 		}
 	case vm.Projection:
 		t := sourceIns.Arg.(*projection.Argument)
@@ -190,7 +190,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:    t.Nbucket,
 			Result:     t.Result,
 			Cond:       t.Cond,
-			Typs:       t.Typs,
+			Typs:       t.GetType()s,
 			Conditions: t.Conditions,
 		}
 	case vm.Single:
@@ -200,7 +200,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:    t.Nbucket,
 			Result:     t.Result,
 			Cond:       t.Cond,
-			Typs:       t.Typs,
+			Typs:       t.GetType()s,
 			Conditions: t.Conditions,
 		}
 	case vm.Top:
@@ -262,7 +262,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:    t.Nbucket,
 			Result:     t.Result,
 			Conditions: t.Conditions,
-			Typs:       t.Typs,
+			Typs:       t.GetType()s,
 			Cond:       t.Cond,
 			OnList:     t.OnList,
 		}
@@ -283,7 +283,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			NeedExpr:    t.NeedExpr,
 			Ibucket:     t.Ibucket,
 			Nbucket:     t.Nbucket,
-			Typs:        t.Typs,
+			Typs:        t.GetType()s,
 			Conditions:  t.Conditions,
 		}
 	case vm.External:
@@ -735,11 +735,11 @@ func constructGroup(n, cn *plan.Node, ibucket, nbucket int, needEval bool) *grou
 	}
 	typs := make([]types.Type, len(cn.ProjectList))
 	for i, e := range cn.ProjectList {
-		typs[i].Oid = types.T(e.Typ.Id)
-		typs[i].Width = e.Typ.Width
-		typs[i].Size = e.Typ.Size
-		typs[i].Scale = e.Typ.Scale
-		typs[i].Precision = e.Typ.Precision
+		typs[i].Oid = types.T(e.GetType().Id)
+		typs[i].Width = e.GetType().Width
+		typs[i].Size = e.GetType().Size
+		typs[i].Scale = e.GetType().Scale
+		typs[i].Precision = e.GetType().Precision
 	}
 	return &group.Argument{
 		Aggs:     aggs,
@@ -896,79 +896,79 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 		arg := in.Arg.(*anti.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: true,
-			Typs:        arg.Typs,
+			Typs:        arg.GetType()s,
 			Conditions:  arg.Conditions[1],
 		}
 	case vm.Mark:
 		arg := in.Arg.(*mark.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: true,
-			Typs:        arg.Typs,
+			Typs:        arg.GetType()s,
 			Conditions:  arg.Conditions[1],
 		}
 	case vm.Join:
 		arg := in.Arg.(*join.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: true,
-			Typs:        arg.Typs,
+			Typs:        arg.GetType()s,
 			Conditions:  arg.Conditions[1],
 		}
 	case vm.Left:
 		arg := in.Arg.(*left.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: true,
-			Typs:        arg.Typs,
+			Typs:        arg.GetType()s,
 			Conditions:  arg.Conditions[1],
 		}
 	case vm.Semi:
 		arg := in.Arg.(*semi.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: true,
-			Typs:        arg.Typs,
+			Typs:        arg.GetType()s,
 			Conditions:  arg.Conditions[1],
 		}
 	case vm.Single:
 		arg := in.Arg.(*single.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: true,
-			Typs:        arg.Typs,
+			Typs:        arg.GetType()s,
 			Conditions:  arg.Conditions[1],
 		}
 	case vm.Product:
 		arg := in.Arg.(*product.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: false,
-			Typs:        arg.Typs,
+			Typs:        arg.GetType()s,
 		}
 	case vm.LoopAnti:
 		arg := in.Arg.(*loopanti.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: false,
-			Typs:        arg.Typs,
+			Typs:        arg.GetType()s,
 		}
 	case vm.LoopJoin:
 		arg := in.Arg.(*loopjoin.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: false,
-			Typs:        arg.Typs,
+			Typs:        arg.GetType()s,
 		}
 	case vm.LoopLeft:
 		arg := in.Arg.(*loopleft.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: false,
-			Typs:        arg.Typs,
+			Typs:        arg.GetType()s,
 		}
 	case vm.LoopSemi:
 		arg := in.Arg.(*loopsemi.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: false,
-			Typs:        arg.Typs,
+			Typs:        arg.GetType()s,
 		}
 	case vm.LoopSingle:
 		arg := in.Arg.(*loopsingle.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: false,
-			Typs:        arg.Typs,
+			Typs:        arg.GetType()s,
 		}
 
 	default:
@@ -1004,7 +1004,7 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 			return expr, expr
 		}
 		return expr, &plan.Expr{
-			Typ: expr.Typ,
+			Typ: expr.GetType(),
 			Expr: &plan.Expr_C{
 				C: &plan.Const{
 					Value: &plan.Const_Bval{Bval: true},

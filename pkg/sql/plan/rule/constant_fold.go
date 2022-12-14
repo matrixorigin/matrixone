@@ -108,7 +108,7 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 	if nulls.Any(vec.Nsp) {
 		return &plan.Const{Isnull: true}
 	}
-	switch vec.Typ.Oid {
+	switch vec.GetType().Oid {
 	case types.T_bool:
 		return &plan.Const{
 			Value: &plan.Const_Bval{

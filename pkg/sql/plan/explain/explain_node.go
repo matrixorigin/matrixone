@@ -205,7 +205,7 @@ func (ndesc *NodeDescribeImpl) GetTableDef(ctx context.Context, options *Explain
 				result += ", "
 			}
 			first = false
-			//result += "'" + col.Name + "':" + col.Typ.Id.String()
+			//result += "'" + col.Name + "':" + col.GetType().Id.String()
 			result += strconv.Itoa(i) + ":'" + col.Name + "'"
 		}
 		result += ")"

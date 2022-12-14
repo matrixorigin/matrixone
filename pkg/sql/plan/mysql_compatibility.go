@@ -26,7 +26,7 @@ func (builder *QueryBuilder) wrapBareColRefsInAnyValue(expr *plan.Expr, ctx *Bin
 		colPos := len(ctx.aggregates)
 		ctx.aggregates = append(ctx.aggregates, newExpr)
 		return &plan.Expr{
-			Typ: ctx.aggregates[colPos].Typ,
+			Typ: ctx.aggregates[colPos].GetType(),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: ctx.aggregateTag,

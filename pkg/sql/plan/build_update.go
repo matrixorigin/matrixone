@@ -127,7 +127,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 					continue
 				}
 			}
-			lastNode.ProjectList[idx], err = makePlan2CastExpr(lastNode.ProjectList[idx], col.Typ)
+			lastNode.ProjectList[idx], err = makePlan2CastExpr(lastNode.ProjectList[idx], col.GetType())
 			if err != nil {
 				return nil, err
 			}

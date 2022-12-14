@@ -634,52 +634,52 @@ func vec2Str[T any](vec []T, typ types.Type, originalLen int) string {
 }
 
 func moVec2String(v *vector.Vector, printN int) string {
-	switch v.Typ.Oid {
+	switch v.GetType().Oid {
 	case types.T_bool:
-		return vec2Str(vector.MustTCols[bool](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[bool](v)[:printN], v.GetType(), v.Length())
 	case types.T_int8:
-		return vec2Str(vector.MustTCols[int8](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[int8](v)[:printN], v.GetType(), v.Length())
 	case types.T_int16:
-		return vec2Str(vector.MustTCols[int16](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[int16](v)[:printN], v.GetType(), v.Length())
 	case types.T_int32:
-		return vec2Str(vector.MustTCols[int32](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[int32](v)[:printN], v.GetType(), v.Length())
 	case types.T_int64:
-		return vec2Str(vector.MustTCols[int64](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[int64](v)[:printN], v.GetType(), v.Length())
 	case types.T_uint8:
-		return vec2Str(vector.MustTCols[uint8](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[uint8](v)[:printN], v.GetType(), v.Length())
 	case types.T_uint16:
-		return vec2Str(vector.MustTCols[uint16](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[uint16](v)[:printN], v.GetType(), v.Length())
 	case types.T_uint32:
-		return vec2Str(vector.MustTCols[uint32](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[uint32](v)[:printN], v.GetType(), v.Length())
 	case types.T_uint64:
-		return vec2Str(vector.MustTCols[uint64](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[uint64](v)[:printN], v.GetType(), v.Length())
 	case types.T_float32:
-		return vec2Str(vector.MustTCols[float32](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[float32](v)[:printN], v.GetType(), v.Length())
 	case types.T_float64:
-		return vec2Str(vector.MustTCols[float64](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[float64](v)[:printN], v.GetType(), v.Length())
 	case types.T_date:
-		return vec2Str(vector.MustTCols[types.Date](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[types.Date](v)[:printN], v.GetType(), v.Length())
 	case types.T_datetime:
-		return vec2Str(vector.MustTCols[types.Datetime](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[types.Datetime](v)[:printN], v.GetType(), v.Length())
 	case types.T_time:
-		return vec2Str(vector.MustTCols[types.Time](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[types.Time](v)[:printN], v.GetType(), v.Length())
 	case types.T_timestamp:
-		return vec2Str(vector.MustTCols[types.Timestamp](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[types.Timestamp](v)[:printN], v.GetType(), v.Length())
 	case types.T_decimal64:
-		return vec2Str(vector.MustTCols[types.Decimal64](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[types.Decimal64](v)[:printN], v.GetType(), v.Length())
 	case types.T_decimal128:
-		return vec2Str(vector.MustTCols[types.Decimal128](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[types.Decimal128](v)[:printN], v.GetType(), v.Length())
 	case types.T_uuid:
-		return vec2Str(vector.MustTCols[types.Uuid](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[types.Uuid](v)[:printN], v.GetType(), v.Length())
 	case types.T_TS:
-		return vec2Str(vector.MustTCols[types.TS](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[types.TS](v)[:printN], v.GetType(), v.Length())
 	case types.T_Rowid:
-		return vec2Str(vector.MustTCols[types.Rowid](v)[:printN], v.Typ, v.Length())
+		return vec2Str(vector.MustTCols[types.Rowid](v)[:printN], v.GetType(), v.Length())
 	}
-	if v.Typ.IsVarlen() {
+	if v.GetType().IsVarlen() {
 		return vec2Str(vector.MustBytesCols(v), types.T_varchar.ToType(), v.Length())
 	}
-	return fmt.Sprintf("unkown type vec... %v", v.Typ)
+	return fmt.Sprintf("unkown type vec... %v", v.GetType())
 }
 
 func debugMoBatch(moBat *batch.Batch) string {

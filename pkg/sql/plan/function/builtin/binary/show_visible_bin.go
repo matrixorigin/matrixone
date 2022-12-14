@@ -31,7 +31,7 @@ const (
 )
 
 func ShowVisibleBin(vec []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if !vec[1].IsScalar() {
+	if !vec[1].IsConst() {
 		return nil, moerr.NewInvalidInputNoCtx("show visible bin, the second argument must be a scalar")
 	}
 	var err error

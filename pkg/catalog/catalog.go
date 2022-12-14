@@ -265,107 +265,107 @@ func GenRows(bat *batch.Batch) [][]any {
 		vec := bat.GetVector(int32(i))
 		switch vec.GetType().Oid {
 		case types.T_bool:
-			col := vector.GetFixedVectorValues[bool](vec)
+			col := vector.MustTCols[bool](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_int8:
-			col := vector.GetFixedVectorValues[int8](vec)
+			col := vector.MustTCols[int8](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_int16:
-			col := vector.GetFixedVectorValues[int16](vec)
+			col := vector.MustTCols[int16](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_int32:
-			col := vector.GetFixedVectorValues[int32](vec)
+			col := vector.MustTCols[int32](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_int64:
-			col := vector.GetFixedVectorValues[int64](vec)
+			col := vector.MustTCols[int64](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_uint8:
-			col := vector.GetFixedVectorValues[uint8](vec)
+			col := vector.MustTCols[uint8](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_uint16:
-			col := vector.GetFixedVectorValues[uint16](vec)
+			col := vector.MustTCols[uint16](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_uint32:
-			col := vector.GetFixedVectorValues[uint32](vec)
+			col := vector.MustTCols[uint32](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_uint64:
-			col := vector.GetFixedVectorValues[uint64](vec)
+			col := vector.MustTCols[uint64](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_float32:
-			col := vector.GetFixedVectorValues[float32](vec)
+			col := vector.MustTCols[float32](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_float64:
-			col := vector.GetFixedVectorValues[float64](vec)
+			col := vector.MustTCols[float64](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_date:
-			col := vector.GetFixedVectorValues[types.Date](vec)
+			col := vector.MustTCols[types.Date](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_time:
-			col := vector.GetFixedVectorValues[types.Time](vec)
+			col := vector.MustTCols[types.Time](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_datetime:
-			col := vector.GetFixedVectorValues[types.Datetime](vec)
+			col := vector.MustTCols[types.Datetime](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_timestamp:
-			col := vector.GetFixedVectorValues[types.Timestamp](vec)
+			col := vector.MustTCols[types.Timestamp](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_decimal64:
-			col := vector.GetFixedVectorValues[types.Decimal64](vec)
+			col := vector.MustTCols[types.Decimal64](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_decimal128:
-			col := vector.GetFixedVectorValues[types.Decimal128](vec)
+			col := vector.MustTCols[types.Decimal128](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_uuid:
-			col := vector.GetFixedVectorValues[types.Uuid](vec)
+			col := vector.MustTCols[types.Uuid](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_TS:
-			col := vector.GetFixedVectorValues[types.TS](vec)
+			col := vector.MustTCols[types.TS](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_Rowid:
-			col := vector.GetFixedVectorValues[types.Rowid](vec)
+			col := vector.MustTCols[types.Rowid](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
-			col := vector.GetBytesVectorValues(vec)
+			col := vector.MustBytesCols(vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}

@@ -81,7 +81,7 @@ func TestDateToWeekFunc(t *testing.T) {
 			}
 			col := result.Col.([]uint8)
 			require.Equal(t, c.expected, col)
-			require.Equal(t, c.isScalar, result.IsScalar())
+			require.Equal(t, c.isScalar, result.IsConst())
 		})
 	}
 }
@@ -143,7 +143,7 @@ func TestDatetimeToWeekFunc(t *testing.T) {
 			}
 			col := result.Col.([]uint8)
 			require.Equal(t, c.expected, col)
-			require.Equal(t, c.isScalar, result.IsScalar())
+			require.Equal(t, c.isScalar, result.IsConst())
 		})
 	}
 }

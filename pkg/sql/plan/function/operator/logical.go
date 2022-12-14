@@ -33,7 +33,7 @@ const (
 
 func Logic(vectors []*vector.Vector, proc *process.Process, cfn logicFn, op logicType) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	if left.IsScalarNull() || right.IsScalarNull() {
+	if left.IsConstNull() || right.IsConstNull() {
 		if op == AND {
 			return HandleAndNullCol(vectors, proc)
 		}
@@ -43,7 +43,7 @@ func Logic(vectors []*vector.Vector, proc *process.Process, cfn logicFn, op logi
 		}
 
 		if op == XOR {
-			if left.IsScalarNull() {
+			if left.IsConstNull() {
 				return proc.AllocConstNullVector(boolType, vector.Length(right)), nil
 			} else {
 				return proc.AllocConstNullVector(boolType, vector.Length(left)), nil
@@ -51,7 +51,7 @@ func Logic(vectors []*vector.Vector, proc *process.Process, cfn logicFn, op logi
 		}
 	}
 
-	if left.IsScalar() && right.IsScalar() {
+	if left.IsConst() && right.IsConst() {
 		vec := proc.AllocScalarVector(boolType)
 		if err := cfn(left, right, vec); err != nil {
 			return nil, err
@@ -60,7 +60,7 @@ func Logic(vectors []*vector.Vector, proc *process.Process, cfn logicFn, op logi
 	}
 
 	length := vector.Length(left)
-	if left.IsScalar() {
+	if left.IsConst() {
 		length = vector.Length(right)
 	}
 	resultVector := allocateBoolVector(length, proc)
@@ -86,10 +86,10 @@ func LogicXor(args []*vector.Vector, proc *process.Process) (*vector.Vector, err
 
 func LogicNot(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	v1 := vs[0]
-	if v1.IsScalarNull() {
+	if v1.IsConstNull() {
 		return proc.AllocScalarNullVector(boolType), nil
 	}
-	if v1.IsScalar() {
+	if v1.IsConst() {
 		vec := proc.AllocScalarVector(boolType)
 		if err := logical.Not(v1, vec); err != nil {
 			return nil, err

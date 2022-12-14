@@ -82,7 +82,7 @@ func TestDateToDayFunc(t *testing.T) {
 			}
 			col := result.Col.([]uint8)
 			require.Equal(t, c.expected, col)
-			require.Equal(t, c.isScalar, result.IsScalar())
+			require.Equal(t, c.isScalar, result.IsConst())
 		})
 	}
 }
@@ -145,7 +145,7 @@ func TestDatetimeToDayFunc(t *testing.T) {
 			}
 			col := result.Col.([]uint8)
 			require.Equal(t, c.expected, col)
-			require.Equal(t, c.isScalar, result.IsScalar())
+			require.Equal(t, c.isScalar, result.IsConst())
 		})
 	}
 }

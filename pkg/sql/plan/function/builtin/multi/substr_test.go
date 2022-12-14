@@ -224,7 +224,7 @@ func TestSubStr(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantBytes, substr.GetBytes(0))
-			require.Equal(t, c.wantScalar, substr.IsScalar())
+			require.Equal(t, c.wantScalar, substr.IsConst())
 		})
 	}
 }
@@ -429,7 +429,7 @@ func TestSubStrUTF(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantBytes, substr.GetBytes(0))
-			require.Equal(t, c.wantScalar, substr.IsScalar())
+			require.Equal(t, c.wantScalar, substr.IsConst())
 		})
 	}
 }
@@ -634,7 +634,7 @@ func TestSubStrBlob(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantBytes, substr.GetBytes(0))
-			require.Equal(t, c.wantScalar, substr.IsScalar())
+			require.Equal(t, c.wantScalar, substr.IsConst())
 		})
 	}
 }

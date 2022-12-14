@@ -69,7 +69,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string, _ *plan.Expr, m *
 						r.pkName = column
 					}
 					colDef := r.tableDef.Cols[r.colIdxs[i]]
-					r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
+					r.colTypes[i] = types.T(colDef.GetType().Id).ToType()
 					if colDef.Default != nil {
 						r.colNulls[i] = colDef.Default.NullAbility
 					}
@@ -92,7 +92,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string, _ *plan.Expr, m *
 
 	// if expr like : pkCol = xx，  we will try to find(binary search) the row in batch
 	vec := bat.GetVector(int32(r.pkidxInColIdxs))
-	canCompute, v := getPkValueByExpr(r.expr, r.pkName, vec.Typ.Oid)
+	canCompute, v := getPkValueByExpr(r.expr, r.pkName, vec.GetType().Oid)
 	if canCompute {
 		row := findRowByPkValue(vec, v)
 		if row >= vec.Length() {
@@ -134,7 +134,7 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string, expr *plan.E
 				} else {
 					r.colIdxs[i] = uint16(r.tableDef.Name2ColIndex[column])
 					colDef := r.tableDef.Cols[r.colIdxs[i]]
-					r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
+					r.colTypes[i] = types.T(colDef.GetType().Id).ToType()
 					if colDef.Default != nil {
 						r.colNulls[i] = colDef.Default.NullAbility
 					}

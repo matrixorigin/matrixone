@@ -39,7 +39,7 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 	if !b.insideAgg {
 		if colPos, ok := b.ctx.groupByAst[astStr]; ok {
 			return &plan.Expr{
-				Typ: b.ctx.groups[colPos].Typ,
+				Typ: b.ctx.groups[colPos].GetType(),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: b.ctx.groupTag,
@@ -53,7 +53,7 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok {
 		if !b.insideAgg {
 			return &plan.Expr{
-				Typ: b.ctx.aggregates[colPos].Typ,
+				Typ: b.ctx.aggregates[colPos].GetType(),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: b.ctx.aggregateTag,
@@ -107,7 +107,7 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	b.ctx.aggregates = append(b.ctx.aggregates, expr)
 
 	return &plan.Expr{
-		Typ: expr.Typ,
+		Typ: expr.GetType(),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: b.ctx.aggregateTag,

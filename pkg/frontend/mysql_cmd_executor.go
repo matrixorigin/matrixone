@@ -698,11 +698,11 @@ func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int64, oq o
 	var rowIndex = int64(j)
 	for i, vec := range dataSet.Vecs { //col index
 		rowIndexBackup := rowIndex
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			row[i] = nil
 			continue
 		}
-		if vec.IsScalar() {
+		if vec.IsConst() {
 			rowIndex = 0
 		}
 
@@ -751,7 +751,7 @@ func formatFloatNum[T types.Floats](num T, Typ types.Type) T {
 // extractRowFromVector gets the rowIndex row from the i vector
 func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int64) error {
 	timeZone := ses.GetTimeZone()
-	switch vec.Typ.Oid { //get col
+	switch vec.GetType().Oid { //get col
 	case types.T_json:
 		if !nulls.Any(vec.Nsp) {
 			row[i] = types.DecodeJson(vec.GetBytes(rowIndex))
@@ -873,25 +873,25 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 	case types.T_float32:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]float32)
-			row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
+			row[i] = formatFloatNum(vs[rowIndex], vec.GetType())
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]float32)
-				row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
+				row[i] = formatFloatNum(vs[rowIndex], vec.GetType())
 			}
 		}
 	case types.T_float64:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]float64)
-			row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
+			row[i] = formatFloatNum(vs[rowIndex], vec.GetType())
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]float64)
-				row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
+				row[i] = formatFloatNum(vs[rowIndex], vec.GetType())
 			}
 		}
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
@@ -917,7 +917,7 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 			}
 		}
 	case types.T_datetime:
-		precision := vec.Typ.Precision
+		precision := vec.GetType().Precision
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Datetime)
 			row[i] = vs[rowIndex].String2(precision)
@@ -930,7 +930,7 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 			}
 		}
 	case types.T_time:
-		precision := vec.Typ.Precision
+		precision := vec.GetType().Precision
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Time)
 			row[i] = vs[rowIndex].String2(precision)
@@ -943,7 +943,7 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 			}
 		}
 	case types.T_timestamp:
-		precision := vec.Typ.Precision
+		precision := vec.GetType().Precision
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Timestamp)
 			row[i] = vs[rowIndex].String2(timeZone, precision)
@@ -956,7 +956,7 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 			}
 		}
 	case types.T_decimal64:
-		scale := vec.Typ.Scale
+		scale := vec.GetType().Scale
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Decimal64)
 			row[i] = vs[rowIndex].ToStringWithScale(scale)
@@ -969,7 +969,7 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 			}
 		}
 	case types.T_decimal128:
-		scale := vec.Typ.Scale
+		scale := vec.GetType().Scale
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Decimal128)
 			row[i] = vs[rowIndex].ToStringWithScale(scale)
@@ -994,8 +994,8 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 			}
 		}
 	default:
-		logErrorf(ses.GetConciseProfile(), "extractRowFromVector : unsupported type %d", vec.Typ.Oid)
-		return moerr.NewInternalError(ses.requestCtx, "extractRowFromVector : unsupported type %d", vec.Typ.Oid)
+		logErrorf(ses.GetConciseProfile(), "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
+		return moerr.NewInternalError(ses.requestCtx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
 	}
 	return nil
 }
@@ -2019,7 +2019,7 @@ func GetExplainColumns(ctx context.Context, explainColName string) ([]interface{
 	for i, col := range cols {
 		c := new(MysqlColumn)
 		c.SetName(col.Name)
-		err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
+		err = convertEngineTypeToMysqlType(ctx, types.T(col.GetType().Id), c)
 		if err != nil {
 			return nil, err
 		}
@@ -2157,17 +2157,17 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	for i, col := range cols {
 		c := new(MysqlColumn)
 		c.SetName(col.Name)
-		c.SetOrgTable(col.Typ.Table)
-		c.SetAutoIncr(col.Typ.AutoIncr)
+		c.SetOrgTable(col.GetType().Table)
+		c.SetAutoIncr(col.GetType().AutoIncr)
 		c.SetSchema(cwft.ses.GetTxnCompileCtx().DefaultDatabase())
-		err = convertEngineTypeToMysqlType(cwft.ses.requestCtx, types.T(col.Typ.Id), c)
+		err = convertEngineTypeToMysqlType(cwft.ses.requestCtx, types.T(col.GetType().Id), c)
 		if err != nil {
 			return nil, err
 		}
 		setColFlag(c)
-		setColLength(c, col.Typ.Width)
+		setColLength(c, col.GetType().Width)
 		setCharacter(c)
-		c.SetDecimal(uint8(col.Typ.Scale))
+		c.SetDecimal(uint8(col.GetType().Scale))
 		columns[i] = c
 	}
 	return columns, err
@@ -3312,7 +3312,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Grant:
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
-			switch st.Typ {
+			switch st.GetType() {
 			case tree.GrantTypeRole:
 				if err = mce.handleGrantRole(requestCtx, &st.GrantRole); err != nil {
 					goto handleFailed
@@ -3325,7 +3325,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Revoke:
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
-			switch st.Typ {
+			switch st.GetType() {
 			case tree.RevokeTypeRole:
 				if err = mce.handleRevokeRole(requestCtx, &st.RevokeRole); err != nil {
 					goto handleFailed

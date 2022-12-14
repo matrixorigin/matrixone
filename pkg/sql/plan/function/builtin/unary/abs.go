@@ -26,7 +26,7 @@ func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint64, Size: 8}
 	inputValues := vector.MustTCols[uint64](inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -39,7 +39,7 @@ func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.GetFixedVectorValues[uint64](resultVector)
+		resultValues := vector.MustTCols[uint64](resultVector)
 		abs.AbsUint64(inputValues, resultValues)
 		return resultVector, nil
 	}
@@ -50,7 +50,7 @@ func AbsInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
 	inputValues := vector.MustTCols[int64](inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -74,7 +74,7 @@ func AbsFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_float64, Size: 8}
 	inputValues := vector.MustTCols[float64](inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -95,9 +95,9 @@ func AbsFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 
 func AbsDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_decimal128, Size: 16, Scale: inputVector.Typ.Scale}
+	resultType := types.Type{Oid: types.T_decimal128, Size: 16, Scale: inputVector.GetType().Scale}
 	inputValues := vector.MustTCols[types.Decimal128](inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

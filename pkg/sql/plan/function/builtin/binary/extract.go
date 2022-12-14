@@ -29,7 +29,7 @@ func ExtractFromString(vectors []*vector.Vector, proc *process.Process) (*vector
 	resultType := types.Type{Oid: types.T_uint32, Size: 4}
 	resultElementSize := int(resultType.Size)
 	switch {
-	case left.IsScalar() && right.IsScalar():
+	case left.IsConst() && right.IsConst():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -47,7 +47,7 @@ func ExtractFromString(vectors []*vector.Vector, proc *process.Process) (*vector
 		}
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
+	case left.IsConst() && !right.IsConst():
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -70,7 +70,7 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 	resultElementSize := int(resultType.Size)
 	leftValues, rightValues := vector.MustStrCols(left), vector.MustTCols[types.Date](right)
 	switch {
-	case left.IsScalar() && right.IsScalar():
+	case left.IsConst() && right.IsConst():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -82,7 +82,7 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 			return nil, moerr.NewInternalErrorNoCtx("invalid input")
 		}
 		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
+	case left.IsConst() && !right.IsConst():
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -107,7 +107,7 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	leftValues, rightValues := vector.MustStrCols(left), vector.MustTCols[types.Datetime](right)
 	switch {
-	case left.IsScalar() && right.IsScalar():
+	case left.IsConst() && right.IsConst():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -118,7 +118,7 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 			return nil, moerr.NewInternalErrorNoCtx("invalid input")
 		}
 		return vector.NewConstString(resultType, 1, resultValues[0], proc.Mp()), nil
-	case left.IsScalar() && !right.IsScalar():
+	case left.IsConst() && !right.IsConst():
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

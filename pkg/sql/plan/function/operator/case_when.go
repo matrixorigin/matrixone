@@ -183,34 +183,34 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 		whencols := vector.MustTCols[bool](whenv)
 		thencols := vector.MustTCols[T](thenv)
 		switch {
-		case whenv.IsScalar() && thenv.IsScalar():
-			if !whenv.IsScalarNull() && whencols[0] {
-				if thenv.IsScalarNull() {
+		case whenv.IsConst() && thenv.IsConst():
+			if !whenv.IsConstNull() && whencols[0] {
+				if thenv.IsConstNull() {
 					return proc.AllocScalarNullVector(t), nil
 				} else {
 					r := proc.AllocScalarVector(t)
-					r.Typ.Precision = thenv.Typ.Precision
-					r.Typ.Width = thenv.Typ.Width
-					r.Typ.Scale = thenv.Typ.Scale
+					r.GetType().Precision = thenv.GetType().Precision
+					r.GetType().Width = thenv.GetType().Width
+					r.GetType().Scale = thenv.GetType().Scale
 					r.Col = make([]T, 1)
 					r.Col.([]T)[0] = thencols[0]
 					return r, nil
 				}
 			}
-		case whenv.IsScalar() && !thenv.IsScalar():
-			rs.Typ.Precision = thenv.Typ.Precision
-			rs.Typ.Width = thenv.Typ.Width
-			rs.Typ.Scale = thenv.Typ.Scale
-			if !whenv.IsScalarNull() && whencols[0] {
+		case whenv.IsConst() && !thenv.IsConst():
+			rs.GetType().Precision = thenv.GetType().Precision
+			rs.GetType().Width = thenv.GetType().Width
+			rs.GetType().Scale = thenv.GetType().Scale
+			if !whenv.IsConstNull() && whencols[0] {
 				copy(rscols, thencols)
-				rs.Nsp.Or(thenv.Nsp)
+				rs.GetNulls().Or(thenv.Nsp)
 				return rs, nil
 			}
-		case !whenv.IsScalar() && thenv.IsScalar():
-			rs.Typ.Precision = thenv.Typ.Precision
-			rs.Typ.Width = thenv.Typ.Width
-			rs.Typ.Scale = thenv.Typ.Scale
-			if thenv.IsScalarNull() {
+		case !whenv.IsConst() && thenv.IsConst():
+			rs.GetType().Precision = thenv.GetType().Precision
+			rs.GetType().Width = thenv.GetType().Width
+			rs.GetType().Scale = thenv.GetType().Scale
+			if thenv.IsConstNull() {
 				var j uint64
 				temp := make([]uint64, 0, l)
 				for j = 0; j < uint64(l); j++ {
@@ -222,7 +222,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 						flag[j] = true
 					}
 				}
-				nulls.Add(rs.Nsp, temp...)
+				nulls.Add(rs.GetNulls(), temp...)
 			} else {
 				for j := 0; j < l; j++ {
 					if flag[j] {
@@ -234,10 +234,10 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 					}
 				}
 			}
-		case !whenv.IsScalar() && !thenv.IsScalar():
-			rs.Typ.Precision = thenv.Typ.Precision
-			rs.Typ.Width = thenv.Typ.Width
-			rs.Typ.Scale = thenv.Typ.Scale
+		case !whenv.IsConst() && !thenv.IsConst():
+			rs.GetType().Precision = thenv.GetType().Precision
+			rs.GetType().Width = thenv.GetType().Width
+			rs.GetType().Scale = thenv.GetType().Scale
 			if nulls.Any(thenv.Nsp) {
 				var j uint64
 				temp := make([]uint64, 0, l)
@@ -254,7 +254,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 						flag[j] = true
 					}
 				}
-				nulls.Add(rs.Nsp, temp...)
+				nulls.Add(rs.GetNulls(), temp...)
 			} else {
 				for j := 0; j < l; j++ {
 					if whencols[j] {
@@ -270,7 +270,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 	}
 
 	// deal the ELSE part
-	if len(vs)%2 == 0 || vs[len(vs)-1].IsScalarNull() {
+	if len(vs)%2 == 0 || vs[len(vs)-1].IsConstNull() {
 		var i uint64
 		temp := make([]uint64, 0, l)
 		for i = 0; i < uint64(l); i++ {
@@ -278,11 +278,11 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 				temp = append(temp, i)
 			}
 		}
-		nulls.Add(rs.Nsp, temp...)
+		nulls.Add(rs.GetNulls(), temp...)
 	} else {
 		ev := vs[len(vs)-1]
 		ecols := ev.Col.([]T)
-		if ev.IsScalar() {
+		if ev.IsConst() {
 			for i := 0; i < l; i++ {
 				if !flag[i] {
 					rscols[i] = ecols[0]
@@ -301,7 +301,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 						}
 					}
 				}
-				nulls.Add(rs.Nsp, temp...)
+				nulls.Add(rs.GetNulls(), temp...)
 			} else {
 				for i := 0; i < l; i++ {
 					if !flag[i] {
@@ -329,9 +329,9 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 		whencols := vector.MustTCols[bool](whenv)
 		thencols := vector.MustStrCols(thenv)
 		switch {
-		case whenv.IsScalar() && thenv.IsScalar():
-			if !whenv.IsScalarNull() && whencols[0] {
-				if thenv.IsScalarNull() {
+		case whenv.IsConst() && thenv.IsConst():
+			if !whenv.IsConstNull() && whencols[0] {
+				if thenv.IsConstNull() {
 					for idx := range results {
 						if !flag[idx] {
 							nsp.Np.Add(uint64(idx))
@@ -347,8 +347,8 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 					}
 				}
 			}
-		case whenv.IsScalar() && !thenv.IsScalar():
-			if !whenv.IsScalarNull() && whencols[0] {
+		case whenv.IsConst() && !thenv.IsConst():
+			if !whenv.IsConstNull() && whencols[0] {
 				for idx := range results {
 					if !flag[idx] {
 						if nulls.Contains(thenv.Nsp, uint64(idx)) {
@@ -360,8 +360,8 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 					}
 				}
 			}
-		case !whenv.IsScalar() && thenv.IsScalar():
-			if thenv.IsScalarNull() {
+		case !whenv.IsConst() && thenv.IsConst():
+			if thenv.IsConstNull() {
 				for idx := range results {
 					if !flag[idx] {
 						if !nulls.Contains(whenv.Nsp, uint64(idx)) && whencols[idx] {
@@ -380,7 +380,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 					}
 				}
 			}
-		case !whenv.IsScalar() && !thenv.IsScalar():
+		case !whenv.IsConst() && !thenv.IsConst():
 			for idx := range results {
 				if !flag[idx] {
 					if !nulls.Contains(whenv.Nsp, uint64(idx)) && whencols[idx] {
@@ -397,7 +397,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 	}
 
 	// deal the ELSE part
-	if len(vs)%2 == 0 || vs[len(vs)-1].IsScalarNull() {
+	if len(vs)%2 == 0 || vs[len(vs)-1].IsConstNull() {
 		for idx := range results {
 			if !flag[idx] {
 				nulls.Add(nsp, uint64(idx))
@@ -407,7 +407,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 	} else {
 		ev := vs[len(vs)-1]
 		ecols := vector.MustStrCols(ev)
-		if ev.IsScalar() {
+		if ev.IsConst() {
 			for idx := range results {
 				if !flag[idx] {
 					results[idx] = ecols[0]

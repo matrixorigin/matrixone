@@ -52,8 +52,8 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			}
 
 			subquery := expr.Expr.(*plan.Expr_Sub)
-			if subquery.Sub.Typ == plan.SubqueryRef_EXISTS {
-				subquery.Sub.Typ = plan.SubqueryRef_NOT_EXISTS
+			if subquery.Sub.GetType() == plan.SubqueryRef_EXISTS {
+				subquery.Sub.GetType() = plan.SubqueryRef_NOT_EXISTS
 			}
 		} else {
 			expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
@@ -363,14 +363,14 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	}
 
 	if astExpr.Exists {
-		returnExpr.Typ = &plan.Type{
+		returnExpr.GetType() = &plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: true,
 			Size:        1,
 		}
-		returnExpr.Expr.(*plan.Expr_Sub).Sub.Typ = plan.SubqueryRef_EXISTS
+		returnExpr.Expr.(*plan.Expr_Sub).Sub.GetType() = plan.SubqueryRef_EXISTS
 	} else if rowSize == 1 {
-		returnExpr.Typ = subCtx.results[0].Typ
+		returnExpr.GetType() = subCtx.results[0].GetType()
 	}
 
 	return returnExpr, nil
@@ -525,7 +525,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					}
 				}
 
-				subquery.Sub.Typ = plan.SubqueryRef_IN
+				subquery.Sub.GetType() = plan.SubqueryRef_IN
 				subquery.Sub.Child = leftArg
 				return rightArg, nil
 			} else {
@@ -574,7 +574,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					}
 				}
 
-				subquery.Sub.Typ = plan.SubqueryRef_NOT_IN
+				subquery.Sub.GetType() = plan.SubqueryRef_NOT_IN
 				subquery.Sub.Child = leftArg
 				return rightArg, nil
 			} else {
@@ -626,9 +626,9 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 			switch astExpr.SubOp {
 			case tree.ANY, tree.SOME:
-				subquery.Sub.Typ = plan.SubqueryRef_ANY
+				subquery.Sub.GetType() = plan.SubqueryRef_ANY
 			case tree.ALL:
-				subquery.Sub.Typ = plan.SubqueryRef_ALL
+				subquery.Sub.GetType() = plan.SubqueryRef_ALL
 			}
 
 			return expr, nil
@@ -729,7 +729,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if len(args) == 0 {
 			return nil, moerr.NewInvalidArgNoCtx(name+" function have invalid input args length", len(args))
 		}
-		if args[0].Typ.Id != int32(types.T_varchar) && args[0].Typ.Id != int32(types.T_char) {
+		if args[0].GetType().Id != int32(types.T_varchar) && args[0].GetType().Id != int32(types.T_char) {
 			return appendCastBeforeExpr(args[0], &Type{
 				Id: int32(types.T_date),
 			})
@@ -749,7 +749,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	case "and", "or", "not", "xor":
 		// why not append cast function?
 		// for i := 0; i < len(args); i++ {
-		// 	if args[i].Typ.Id != types.T_bool {
+		// 	if args[i].GetType().Id != types.T_bool {
 		// 		arg, err := appendCastBeforeExpr(args[i], &plan.Type{
 		// 			Id: types.T_bool,
 		// 		})
@@ -800,25 +800,25 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if isNullExpr(args[1]) {
 			return args[1], nil
 		}
-		if args[0].Typ.Id == int32(types.T_date) && args[1].Typ.Id == int32(types.T_interval) {
+		if args[0].GetType().Id == int32(types.T_date) && args[1].GetType().Id == int32(types.T_interval) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[0], args[1])
-		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_date) {
+		} else if args[0].GetType().Id == int32(types.T_interval) && args[1].GetType().Id == int32(types.T_date) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[1], args[0])
-		} else if args[0].Typ.Id == int32(types.T_datetime) && args[1].Typ.Id == int32(types.T_interval) {
+		} else if args[0].GetType().Id == int32(types.T_datetime) && args[1].GetType().Id == int32(types.T_interval) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[0], args[1])
-		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_datetime) {
+		} else if args[0].GetType().Id == int32(types.T_interval) && args[1].GetType().Id == int32(types.T_datetime) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[1], args[0])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
+		} else if args[0].GetType().Id == int32(types.T_varchar) && args[1].GetType().Id == int32(types.T_interval) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[0], args[1])
-		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_varchar) {
+		} else if args[0].GetType().Id == int32(types.T_interval) && args[1].GetType().Id == int32(types.T_varchar) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[1], args[0])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
+		} else if args[0].GetType().Id == int32(types.T_varchar) && args[1].GetType().Id == int32(types.T_varchar) {
 			name = "concat"
 		}
 		if err != nil {
@@ -835,13 +835,13 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			return args[1], nil
 		}
 		// rewrite "date '2001' - interval '1 day'" to date_sub(date '2001', 1, day(unit))
-		if args[0].Typ.Id == int32(types.T_date) && args[1].Typ.Id == int32(types.T_interval) {
+		if args[0].GetType().Id == int32(types.T_date) && args[1].GetType().Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(args[0], args[1])
-		} else if args[0].Typ.Id == int32(types.T_datetime) && args[1].Typ.Id == int32(types.T_interval) {
+		} else if args[0].GetType().Id == int32(types.T_datetime) && args[1].GetType().Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(args[0], args[1])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
+		} else if args[0].GetType().Id == int32(types.T_varchar) && args[1].GetType().Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(args[0], args[1])
 		}
@@ -862,7 +862,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if len(args) == 0 {
 			return nil, moerr.NewInvalidArgNoCtx(name+" function have invalid input args length", len(args))
 		}
-		if args[0].Typ.Id == int32(types.T_uint64) {
+		if args[0].GetType().Id == int32(types.T_uint64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
 				Id:          int32(types.T_decimal128),
 				NotNullable: true,
@@ -875,7 +875,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if len(args) == 0 {
 			return nil, moerr.NewInvalidArgNoCtx(name+" function have invalid input args length", len(args))
 		}
-		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
+		if args[0].GetType().Id == int32(types.T_decimal128) || args[0].GetType().Id == int32(types.T_decimal64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
 				Id:          int32(types.T_float64),
 				NotNullable: true,
@@ -889,11 +889,11 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArgNoCtx(name+" function have invalid input args length", len(args))
 		}
-		if args[0].Typ.Id == int32(types.T_any) {
-			args[0].Typ.Id = int32(types.T_varchar)
+		if args[0].GetType().Id == int32(types.T_any) {
+			args[0].GetType().Id = int32(types.T_varchar)
 		}
-		if args[1].Typ.Id == int32(types.T_any) {
-			args[1].Typ.Id = int32(types.T_varchar)
+		if args[1].GetType().Id == int32(types.T_any) {
+			args[1].GetType().Id = int32(types.T_varchar)
 		}
 	case "timediff":
 		if len(args) != 2 {
@@ -905,7 +905,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			return nil, moerr.NewInvalidArgNoCtx(name+" function have invalid input args length", len(args))
 		}
 
-		if args[1].Typ.Id == int32(types.T_varchar) || args[1].Typ.Id == int32(types.T_char) {
+		if args[1].GetType().Id == int32(types.T_varchar) || args[1].GetType().Id == int32(types.T_char) {
 			if exprC, ok := args[1].Expr.(*plan.Expr_C); ok {
 				sval := exprC.C.Value.(*plan.Const_Sval)
 				tp, _ := binary.JudgmentToDateReturnType(sval.Sval)
@@ -913,14 +913,14 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			} else {
 				return nil, moerr.NewInvalidArgNoCtx("to_date format", "not constant")
 			}
-		} else if args[1].Typ.Id == int32(types.T_any) {
+		} else if args[1].GetType().Id == int32(types.T_any) {
 			args = append(args, makePlan2DateConstNullExpr(types.T_datetime))
 		} else {
 			return nil, moerr.NewInvalidArgNoCtx(name+" function have invalid input args length", len(args))
 		}
 	case "unix_timestamp":
 		if len(args) == 1 {
-			if types.IsString(types.T(args[0].Typ.Id)) {
+			if types.IsString(types.T(args[0].GetType().Id)) {
 				if exprC, ok := args[0].Expr.(*plan.Expr_C); ok {
 					sval := exprC.C.Value.(*plan.Const_Sval)
 					tp := judgeUnixTimestampReturnType(sval.Sval)
@@ -956,7 +956,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	}
 	if function.GetFunctionIsAggregateByName(name) {
 		if constExpr, ok := args[0].Expr.(*plan.Expr_C); ok && constExpr.C.Isnull {
-			args[0].Typ = makePlan2Type(&returnType)
+			args[0].GetType() = makePlan2Type(&returnType)
 		}
 	}
 
@@ -969,8 +969,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		switch leftExpr := args[0].Expr.(type) {
 		case *plan.Expr_C:
 			if _, ok := args[1].Expr.(*plan.Expr_Col); ok {
-				if checkNoNeedCast(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id), leftExpr) {
-					tmpType := types.T(args[1].Typ.Id).ToType() // cast const_expr as column_expr's type
+				if checkNoNeedCast(types.T(args[0].GetType().Id), types.T(args[1].GetType().Id), leftExpr) {
+					tmpType := types.T(args[1].GetType().Id).ToType() // cast const_expr as column_expr's type
 					argsCastType = []types.Type{tmpType, tmpType}
 					// need to update function id
 					funcID, _, _, err = function.GetFunctionByName(name, argsCastType)
@@ -981,8 +981,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			}
 		case *plan.Expr_Col:
 			if rightExpr, ok := args[1].Expr.(*plan.Expr_C); ok {
-				if checkNoNeedCast(types.T(args[1].Typ.Id), types.T(args[0].Typ.Id), rightExpr) {
-					tmpType := types.T(args[0].Typ.Id).ToType() // cast const_expr as column_expr's type
+				if checkNoNeedCast(types.T(args[1].GetType().Id), types.T(args[0].GetType().Id), rightExpr) {
+					tmpType := types.T(args[0].GetType().Id).ToType() // cast const_expr as column_expr's type
 					argsCastType = []types.Type{tmpType, tmpType}
 					funcID, _, _, err = function.GetFunctionByName(name, argsCastType)
 					if err != nil {
@@ -1180,10 +1180,10 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 // --- util functions ----
 
 func appendCastBeforeExpr(expr *Expr, toType *Type, isBin ...bool) (*Expr, error) {
-	if expr.Typ.Id == int32(types.T_any) {
+	if expr.GetType().Id == int32(types.T_any) {
 		return expr, nil
 	}
-	toType.NotNullable = expr.Typ.NotNullable
+	toType.NotNullable = expr.GetType().NotNullable
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),
@@ -1231,7 +1231,7 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 		Size: 8,
 	}
 
-	if firstExpr.Typ.Id == int32(types.T_varchar) || firstExpr.Typ.Id == int32(types.T_char) {
+	if firstExpr.GetType().Id == int32(types.T_varchar) || firstExpr.GetType().Id == int32(types.T_char) {
 		s := firstExpr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
 		returnNum, returnType, err := types.NormalizeInterval(s, intervalType)
 
@@ -1240,7 +1240,7 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 		}
 		// "date '2020-10-10' - interval 1 Hour"  will return datetime
 		// so we rewrite "date '2020-10-10' - interval 1 Hour"  to  "date_add(datetime, 1, hour)"
-		if dateExpr.Typ.Id == int32(types.T_date) {
+		if dateExpr.GetType().Id == int32(types.T_date) {
 			switch returnType {
 			case types.Day, types.Week, types.Month, types.Quarter, types.Year:
 			default:
@@ -1263,7 +1263,7 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 
 	// "date '2020-10-10' - interval 1 Hour"  will return datetime
 	// so we rewrite "date '2020-10-10' - interval 1 Hour"  to  "date_add(datetime, 1, hour)"
-	if dateExpr.Typ.Id == int32(types.T_date) {
+	if dateExpr.GetType().Id == int32(types.T_date) {
 		switch intervalType {
 		case types.Day, types.Week, types.Month, types.Quarter, types.Year:
 		default:

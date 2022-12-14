@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/pierrec/lz4"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -72,7 +73,7 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 	block := NewBlock(uint16(len(batch.Vecs)), w.object, w.name)
 	w.AddBlock(block.(*Block))
 	for i, vec := range batch.Vecs {
-		buf, err := vec.Show()
+		buf, err := vec.MarshalBinary()
 		if err != nil {
 			return nil, err
 		}

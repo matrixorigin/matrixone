@@ -23,9 +23,9 @@ import (
 
 func TimeToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_time, Size: 8, Precision: inputVector.Typ.Precision}
+	resultType := types.Type{Oid: types.T_time, Size: 8, Precision: inputVector.GetType().Precision}
 	inputValues := vector.MustTCols[types.Time](inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -47,10 +47,10 @@ func TimeToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 
 func DatetimeToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	inputPrecision := inputVector.Typ.Precision
+	inputPrecision := inputVector.GetType().Precision
 	resultType := types.Type{Oid: types.T_time, Size: 8, Precision: inputPrecision}
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -73,7 +73,7 @@ func DateToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_time, Size: 8}
 	inputValues := vector.MustTCols[types.Date](inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -97,7 +97,7 @@ func DateStringToTime(vectors []*vector.Vector, proc *process.Process) (*vector.
 	resultType := types.Type{Oid: types.T_time, Size: 8}
 	inputValues := vector.MustStrCols(inputVector)
 
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -122,7 +122,7 @@ func Int64ToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	resultType := types.Type{Oid: types.T_time, Size: 8}
 	inputValues := vector.MustTCols[int64](inputVector)
 
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -144,10 +144,10 @@ func Int64ToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 
 func Decimal128ToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_time, Size: 8, Precision: inputVector.Typ.Scale}
+	resultType := types.Type{Oid: types.T_time, Size: 8, Precision: inputVector.GetType().Scale}
 	inputValues := vector.MustTCols[types.Decimal128](inputVector)
 
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

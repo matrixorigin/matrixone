@@ -139,7 +139,7 @@ func TestJsonExtractByString(t *testing.T) {
 			vec := makeTestVector1(kase.json, kase.path)
 			gotvec, err := JsonExtractByString(vec, procs)
 			require.Nil(t, err)
-			got := vector.GetBytesVectorValues(gotvec)
+			got := vector.MustBytesCols(gotvec)
 			switch value := kase.want.(type) {
 			case []string:
 				for i := range value {

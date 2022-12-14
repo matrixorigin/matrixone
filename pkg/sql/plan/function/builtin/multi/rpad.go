@@ -25,14 +25,14 @@ import (
 )
 
 func Rpad(origVecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if origVecs[0].IsScalarNull() || origVecs[1].IsScalarNull() || origVecs[2].IsScalarNull() {
-		return proc.AllocScalarNullVector(origVecs[0].Typ), nil
+	if origVecs[0].IsConstNull() || origVecs[1].IsConstNull() || origVecs[2].IsConstNull() {
+		return proc.AllocScalarNullVector(origVecs[0].GetType()), nil
 	}
 
-	isConst := []bool{origVecs[0].IsScalar(), origVecs[1].IsScalar(), origVecs[2].IsScalar()}
+	isConst := []bool{origVecs[0].IsConst(), origVecs[1].IsConst(), origVecs[2].IsConst()}
 
 	// gets all args
-	strs := vector.GetStrVectorValues(origVecs[0])
+	strs := vector.MustStrCols(origVecs[0])
 	sizes := origVecs[1].Col
 	if _, ok := sizes.([]types.Varlena); ok {
 		sizes = vector.MustStrCols(origVecs[1])
@@ -41,7 +41,7 @@ func Rpad(origVecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	var padstrs interface{}
 	// resolve padstrs,
 	if origVecs[2].GetType().IsVarlen() {
-		padstrs = vector.GetStrVectorValues(origVecs[2])
+		padstrs = vector.MustStrCols(origVecs[2])
 	} else {
 		// keep orig type
 		padstrs = origVecs[2].Col
@@ -51,13 +51,13 @@ func Rpad(origVecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	// gets a new vector to store our result
 	rowCount := vector.Length(origVecs[0])
 
-	if origVecs[0].IsScalar() && origVecs[1].IsScalar() && origVecs[2].IsScalar() {
+	if origVecs[0].IsConst() && origVecs[1].IsConst() && origVecs[2].IsConst() {
 		//evaluate the result
 		result, nsp, err := rpad(rowCount, strs, sizes, padstrs, isConst, oriNsps)
 		if err != nil {
 			return nil, err
 		}
-		resultVec := vector.NewWithStrings(origVecs[0].Typ, result, nsp, proc.Mp())
+		resultVec := vector.NewWithStrings(origVecs[0].GetType(), result, nsp, proc.Mp())
 		return resultVec, nil
 	}
 
@@ -65,7 +65,7 @@ func Rpad(origVecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	if err != nil {
 		return nil, err
 	}
-	resultVec := vector.NewWithStrings(origVecs[0].Typ, result, nsp, proc.Mp())
+	resultVec := vector.NewWithStrings(origVecs[0].GetType(), result, nsp, proc.Mp())
 	return resultVec, nil
 }
 

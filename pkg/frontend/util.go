@@ -397,7 +397,7 @@ func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
 	if nulls.Any(vec.Nsp) {
 		return nil, nil
 	}
-	switch vec.Typ.Oid {
+	switch vec.GetType().Oid {
 	case types.T_bool:
 		return vector.GetValueAt[bool](vec, 0), nil
 	case types.T_int8:
@@ -446,9 +446,9 @@ func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
 		return val.String(), nil
 	case types.T_timestamp:
 		val := vector.GetValueAt[types.Timestamp](vec, 0)
-		return val.String2(ses.GetTimeZone(), vec.Typ.Precision), nil
+		return val.String2(ses.GetTimeZone(), vec.GetType().Precision), nil
 	default:
-		return nil, moerr.NewInvalidArg(ses.GetRequestContext(), "variable type", vec.Typ.Oid.String())
+		return nil, moerr.NewInvalidArg(ses.GetRequestContext(), "variable type", vec.GetType().Oid.String())
 	}
 }
 
@@ -572,7 +572,7 @@ func convertValueBat2Str(ctx context.Context, bat *batch.Batch, mp *mpool.MPool,
 	for i := 0; i < rbat.VectorCount(); i++ {
 		rbat.Vecs[i] = vector.New(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}) //TODO: check size
 		rs := make([]string, bat.Length())
-		switch bat.Vecs[i].Typ.Oid {
+		switch bat.Vecs[i].GetType().Oid {
 		case types.T_bool:
 			xs := vector.MustTCols[bool](bat.Vecs[i])
 			rs, err = dumpUtils.ParseBool(xs, bat.GetVector(int32(i)).GetNulls(), rs)
@@ -623,7 +623,7 @@ func convertValueBat2Str(ctx context.Context, bat *batch.Batch, mp *mpool.MPool,
 
 		case types.T_timestamp:
 			xs := vector.MustTCols[types.Timestamp](bat.Vecs[i])
-			rs, err = dumpUtils.ParseTimeStamp(xs, bat.GetVector(int32(i)).GetNulls(), rs, loc, bat.GetVector(int32(i)).Typ.Precision)
+			rs, err = dumpUtils.ParseTimeStamp(xs, bat.GetVector(int32(i)).GetNulls(), rs, loc, bat.GetVector(int32(i)).GetType().Precision)
 		case types.T_datetime:
 			xs := vector.MustTCols[types.Datetime](bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Datetime])
@@ -634,7 +634,7 @@ func convertValueBat2Str(ctx context.Context, bat *batch.Batch, mp *mpool.MPool,
 			xs := vector.MustTCols[types.Uuid](bat.Vecs[i])
 			rs, err = dumpUtils.ParseUuid(xs, bat.GetVector(int32(i)).GetNulls(), rs)
 		default:
-			err = moerr.NewNotSupported(ctx, "type %v", bat.Vecs[i].Typ.String())
+			err = moerr.NewNotSupported(ctx, "type %v", bat.Vecs[i].GetType().String())
 		}
 		if err != nil {
 			return nil, err

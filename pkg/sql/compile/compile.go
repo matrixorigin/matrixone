@@ -215,7 +215,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 	if err != nil {
 		return nil, err
 	}
-	if c.info.Typ == plan2.ExecTypeTP {
+	if c.info.GetType() == plan2.ExecTypeTP {
 		c.cnList = engine.Nodes{engine.Node{Mcpu: 1}}
 	} else {
 		if len(c.cnList) == 0 {
@@ -229,7 +229,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 	if err != nil {
 		return nil, err
 	}
-	if c.info.Typ == plan2.ExecTypeTP {
+	if c.info.GetType() == plan2.ExecTypeTP {
 		return c.compileTpQuery(qry, ss)
 	}
 	return c.compileApQuery(qry, ss)
@@ -768,7 +768,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 	isEq := isEquiJoin(n.OnList)
 	typs := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
-		typs[i] = dupType(expr.Typ)
+		typs[i] = dupType(expr.GetType())
 	}
 	switch joinTyp {
 	case plan.Node_INNER:
@@ -1262,7 +1262,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		return nodes, nil
 	}
 	if len(ranges[0]) == 0 {
-		if c.info.Typ == plan2.ExecTypeTP {
+		if c.info.GetType() == plan2.ExecTypeTP {
 			nodes = append(nodes, engine.Node{Mcpu: 1})
 		} else {
 			nodes = append(nodes, engine.Node{

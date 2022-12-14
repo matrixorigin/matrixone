@@ -26,7 +26,7 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	resultType := types.T_float64.ToType()
 	leftValues, rightValues := vector.MustTCols[float64](left), vector.MustTCols[float64](right)
 	switch {
-	case left.IsScalar() && right.IsScalar():
+	case left.IsConst() && right.IsConst():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -34,7 +34,7 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		resultValues := make([]float64, 1)
 		vector.SetCol(resultVector, power.Power(leftValues, rightValues, resultValues))
 		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
+	case left.IsConst() && !right.IsConst():
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -45,7 +45,7 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		resultValues := vector.MustTCols[float64](resultVector)
 		power.PowerScalarLeftConst(leftValues[0], rightValues, resultValues)
 		return resultVector, nil
-	case !left.IsScalar() && right.IsScalar():
+	case !left.IsConst() && right.IsConst():
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

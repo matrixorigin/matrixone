@@ -96,7 +96,7 @@ func _dupType(typ *plan.Type) *plan.Type {
 func _dupColDef(src *plan.ColDef) *plan.ColDef {
 	return &plan.ColDef{
 		Name: src.Name,
-		Typ:  _dupType(src.Typ),
+		Typ:  _dupType(src.GetType()),
 	}
 }
 

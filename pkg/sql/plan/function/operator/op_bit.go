@@ -85,10 +85,10 @@ func OpBitLeftShiftFun[T opBitT](args []*vector.Vector, proc *process.Process) (
 
 func goOpBitGeneral[T opBitT](xs, ys, rs *vector.Vector, bfn opBitFun[T]) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
-	if xs.IsScalar() {
-		if nulls.Any(ys.Nsp) {
+	if xs.IsConst() {
+		if nulls.Any(ys.GetNulls()) {
 			for i, y := range yt {
-				if !nulls.Contains(rs.Nsp, uint64(i)) {
+				if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 					rt[i] = bfn(xt[0], y)
 				}
 			}
@@ -98,10 +98,10 @@ func goOpBitGeneral[T opBitT](xs, ys, rs *vector.Vector, bfn opBitFun[T]) error 
 			}
 		}
 		return nil
-	} else if ys.IsScalar() {
-		if nulls.Any(xs.Nsp) {
+	} else if ys.IsConst() {
+		if nulls.Any(xs.GetNulls()) {
 			for i, x := range xt {
-				if !nulls.Contains(rs.Nsp, uint64(i)) {
+				if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 					rt[i] = bfn(x, yt[0])
 				}
 			}
@@ -112,9 +112,9 @@ func goOpBitGeneral[T opBitT](xs, ys, rs *vector.Vector, bfn opBitFun[T]) error 
 		}
 		return nil
 	} else {
-		if nulls.Any(rs.Nsp) {
+		if nulls.Any(rs.GetNulls()) {
 			for i, x := range xt {
-				if !nulls.Contains(rs.Nsp, uint64(i)) {
+				if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 					rt[i] = bfn(x, yt[i])
 				}
 			}

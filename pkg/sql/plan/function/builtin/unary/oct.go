@@ -27,7 +27,7 @@ func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_decimal128, Size: 16}
 	inputValues := vector.MustTCols[T](inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -57,7 +57,7 @@ func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_decimal128, Size: 16}
 	inputValues := vector.MustTCols[T](inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

@@ -22,10 +22,10 @@ import (
 
 func HandleOrNullCol(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	v1, v2 := vs[0], vs[1]
-	if v1.IsScalarNull() {
-		if v2.IsScalarNull() {
+	if v1.IsConstNull() {
+		if v2.IsConstNull() {
 			return proc.AllocScalarNullVector(boolType), nil
-		} else if v2.IsScalar() {
+		} else if v2.IsConst() {
 			vec := proc.AllocScalarVector(boolType)
 			vec.Col = make([]bool, 1)
 			value := v2.Col.([]bool)[0]
@@ -50,7 +50,7 @@ func HandleOrNullCol(vs []*vector.Vector, proc *process.Process) (*vector.Vector
 			return vec, nil
 		}
 	} else {
-		if v1.IsScalar() {
+		if v1.IsConst() {
 			vec := proc.AllocScalarVector(boolType)
 			vec.Col = make([]bool, 1)
 			value := v1.Col.([]bool)[0]
@@ -95,11 +95,11 @@ func ScalarOrNotScalar(_, nsv *vector.Vector, col1, col2 []bool, proc *process.P
 func Or(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	v1, v2 := vs[0], vs[1]
 	col1, col2 := vector.MustTCols[bool](v1), vector.MustTCols[bool](v2)
-	if v1.IsScalarNull() || v2.IsScalarNull() {
+	if v1.IsConstNull() || v2.IsConstNull() {
 		return HandleOrNullCol(vs, proc)
 	}
 
-	c1, c2 := v1.IsScalar(), v2.IsScalar()
+	c1, c2 := v1.IsConst(), v2.IsConst()
 	switch {
 	case c1 && c2:
 		vec := proc.AllocScalarVector(boolType)

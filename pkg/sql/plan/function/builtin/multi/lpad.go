@@ -36,8 +36,8 @@ Second Parameter: length
 Third Parameter: pad string
 */
 func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() || vecs[2].IsScalarNull() {
-		return proc.AllocScalarNullVector(vecs[0].Typ), nil
+	if vecs[0].IsConstNull() || vecs[1].IsConstNull() || vecs[2].IsConstNull() {
+		return proc.AllocScalarNullVector(vecs[0].GetType()), nil
 	}
 	sourceStr := vector.MustStrCols(vecs[ParameterSourceString]) //Get the first arg
 
@@ -47,7 +47,7 @@ func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 	//pad string
 	padStr := vector.MustStrCols(vecs[ParameterPadString])
 
-	constVectors := []bool{vecs[ParameterSourceString].IsScalar(), vecs[ParameterLengths].IsScalar(), vecs[ParameterPadString].IsScalar()}
+	constVectors := []bool{vecs[ParameterSourceString].IsConst(), vecs[ParameterLengths].IsConst(), vecs[ParameterPadString].IsConst()}
 	inputNulls := []*nulls.Nulls{vecs[ParameterSourceString].Nsp, vecs[ParameterLengths].Nsp, vecs[ParameterPadString].Nsp}
 	//evaluate bytes space for every row
 	rowCount := vector.Length(vecs[ParameterSourceString])

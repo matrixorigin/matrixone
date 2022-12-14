@@ -68,7 +68,7 @@ func RegularInstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		match_type = []string{"c"}
 	}
 
-	if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
+	if firstVector.IsConstNull() || secondVector.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 

@@ -173,10 +173,10 @@ func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
 }
 
 func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
-	vec := MakeVector(v.Typ, nullable)
+	vec := MakeVector(v.GetType(), nullable)
 	var bs *Bytes
 
-	switch v.Typ.Oid {
+	switch v.GetType().Oid {
 	case types.T_bool:
 		bs = movecToBytes[bool](v)
 	case types.T_int8:
@@ -223,7 +223,7 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 			bs.Header, bs.Storage = movec.MustVarlenaRawData(v)
 		}
 	default:
-		panic(any(moerr.NewInternalErrorNoCtx("%s not supported", v.Typ.String())))
+		panic(any(moerr.NewInternalErrorNoCtx("%s not supported", v.GetType().String())))
 	}
 	var np *roaring64.Bitmap
 	if v.Nsp.Np != nil {
@@ -245,7 +245,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 		for i := 0; i < cnt; i++ {
 			newBat := batch.New(true, bat.Attrs)
 			for j := 0; j < len(bat.Vecs); j++ {
-				window := movec.New(bat.Vecs[j].Typ)
+				window := movec.New(bat.Vecs[j].GetType())
 				movec.Window(bat.Vecs[j], i*rows, (i+1)*rows, window)
 				newBat.Vecs[j] = window
 			}
@@ -274,7 +274,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	for _, row := range rowArray {
 		newBat := batch.New(true, bat.Attrs)
 		for j := 0; j < len(bat.Vecs); j++ {
-			window := movec.New(bat.Vecs[j].Typ)
+			window := movec.New(bat.Vecs[j].GetType())
 			movec.Window(bat.Vecs[j], start, start+row, window)
 			newBat.Vecs[j] = window
 		}
@@ -467,7 +467,7 @@ func AppendBytes(vec *movec.Vector, v any) {
 }
 
 func AppendValue(vec *movec.Vector, v any) {
-	switch vec.Typ.Oid {
+	switch vec.GetType().Oid {
 	case types.T_bool:
 		AppendFixedValue[bool](vec, v)
 	case types.T_int8:
@@ -519,7 +519,7 @@ func GetValue(col *movec.Vector, row uint32) any {
 	if col.Nsp.Np != nil && col.Nsp.Np.Contains(uint64(row)) {
 		return types.Null{}
 	}
-	switch col.Typ.Oid {
+	switch col.GetType().Oid {
 	case types.T_bool:
 		return movec.GetValueAt[bool](col, int64(row))
 	case types.T_int8:
@@ -569,7 +569,7 @@ func GetValue(col *movec.Vector, row uint32) any {
 }
 
 func UpdateValue(col *movec.Vector, row uint32, val any) {
-	switch col.Typ.Oid {
+	switch col.GetType().Oid {
 	case types.T_bool:
 		GenericUpdateFixedValue[bool](col, row, val)
 	case types.T_int8:
@@ -614,7 +614,7 @@ func UpdateValue(col *movec.Vector, row uint32, val any) {
 	case types.T_varchar, types.T_char, types.T_json, types.T_blob, types.T_text:
 		GenericUpdateBytes(col, row, val)
 	default:
-		panic(moerr.NewInternalErrorNoCtx("%v not supported", col.Typ))
+		panic(moerr.NewInternalErrorNoCtx("%v not supported", col.GetType()))
 	}
 }
 
@@ -641,7 +641,7 @@ func BatchWindow(bat *batch.Batch, start, end int) *batch.Batch {
 	window := batch.New(true, bat.Attrs)
 	window.Vecs = make([]*movec.Vector, len(bat.Vecs))
 	for i := range window.Vecs {
-		vec := movec.New(bat.Vecs[i].Typ)
+		vec := movec.New(bat.Vecs[i].GetType())
 		movec.Window(bat.Vecs[i], start, end, vec)
 		window.Vecs[i] = vec
 	}

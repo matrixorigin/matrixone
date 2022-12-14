@@ -32,11 +32,11 @@ const (
 func FromUnixTimeInt64(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inVec := lv[0]
 	times := vector.MustTCols[int64](inVec)
-	if inVec.IsScalarNull() {
+	if inVec.IsConstNull() {
 		return proc.AllocScalarNullVector(types.T_datetime.ToType()), nil
 	}
 
-	if inVec.IsScalar() {
+	if inVec.IsConst() {
 		rs := make([]types.Datetime, 1)
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs)
 
@@ -64,10 +64,10 @@ func FromUnixTimeFloat64(lv []*vector.Vector, proc *process.Process) (*vector.Ve
 	inVec := lv[0]
 	times := vector.MustTCols[float64](inVec)
 	size := types.T(types.T_datetime).TypeLen()
-	if inVec.IsScalarNull() {
+	if inVec.IsConstNull() {
 		return proc.AllocScalarNullVector(types.T_datetime.ToType()), nil
 	}
-	if inVec.IsScalar() {
+	if inVec.IsConst() {
 		rs := make([]types.Datetime, 1)
 		ints, fracs := splitDecimalToIntAndFrac(times)
 		fromunixtime.UnixToDateTimeWithNsec(proc.SessionInfo.TimeZone, ints, fracs, rs)
@@ -99,15 +99,15 @@ func FromUnixTimeInt64Format(vs []*vector.Vector, proc *process.Process) (*vecto
 	inVec := vs[0]
 	formatVec := vs[1]
 	resultType := types.T_varchar.ToType()
-	if !formatVec.IsScalar() {
+	if !formatVec.IsConst() {
 		return nil, moerr.NewInvalidArgNoCtx("from_unixtime format", "not constant")
 	}
-	if inVec.IsScalarNull() || formatVec.IsScalarNull() {
+	if inVec.IsConstNull() || formatVec.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 
 	formatMask := formatVec.GetString(0)
-	if inVec.IsScalar() {
+	if inVec.IsConst() {
 		times := vector.MustTCols[int64](inVec)
 		rs := make([]types.Datetime, 1)
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs)
@@ -144,15 +144,15 @@ func FromUnixTimeFloat64Format(vs []*vector.Vector, proc *process.Process) (*vec
 	inVec := vs[0]
 	formatVec := vs[1]
 	resultType := types.T_varchar.ToType()
-	if !formatVec.IsScalar() {
+	if !formatVec.IsConst() {
 		return nil, moerr.NewInvalidArgNoCtx("from_unixtime format", "not constant")
 	}
-	if inVec.IsScalarNull() || formatVec.IsScalarNull() {
+	if inVec.IsConstNull() || formatVec.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 
 	formatMask := formatVec.GetString(0)
-	if inVec.IsScalar() {
+	if inVec.IsConst() {
 		times := vector.MustTCols[float64](inVec)
 		rs := make([]types.Datetime, 1)
 		ints, fracs := splitDecimalToIntAndFrac(times)
@@ -211,10 +211,10 @@ func FromUnixTimeUint64(lv []*vector.Vector, proc *process.Process) (*vector.Vec
 	}
 	inVec := lv[0]
 	times := vector.MustTCols[uint64](inVec)
-	if inVec.IsScalarNull() {
+	if inVec.IsConstNull() {
 		return proc.AllocScalarNullVector(types.T_datetime.ToType()), nil
 	}
-	if inVec.IsScalar() {
+	if inVec.IsConst() {
 		rs := make([]types.Datetime, 1)
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, uint64ToInt64(times), rs)
 		vec := vector.NewConstFixed(types.T_datetime.ToType(), 1, rs[0], proc.Mp())
@@ -251,15 +251,15 @@ func FromUnixTimeUint64Format(vs []*vector.Vector, proc *process.Process) (*vect
 	inVec := vs[0]
 	formatVec := vs[1]
 	resultType := types.T_varchar.ToType()
-	if !formatVec.IsScalar() {
+	if !formatVec.IsConst() {
 		return nil, moerr.NewInvalidArgNoCtx("from_unixtime format", "not constant")
 	}
-	if inVec.IsScalarNull() || formatVec.IsScalarNull() {
+	if inVec.IsConstNull() || formatVec.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 
 	formatMask := formatVec.GetString(0)
-	if inVec.IsScalar() {
+	if inVec.IsConst() {
 		times := vector.MustTCols[uint64](inVec)
 		rs := make([]types.Datetime, 1)
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, uint64ToInt64(times), rs)

@@ -192,7 +192,7 @@ func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process,
 }
 
 func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
-	idx, err := index.New(v.Typ, m)
+	idx, err := index.New(v.GetType(), m)
 	require.NoError(t, err)
 
 	err = idx.InsertBatch(v)

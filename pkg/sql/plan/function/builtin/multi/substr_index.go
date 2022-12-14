@@ -25,8 +25,8 @@ import (
 )
 
 func SubStrIndex(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() || vecs[2].IsScalarNull() {
-		return proc.AllocScalarNullVector(vecs[0].Typ), nil
+	if vecs[0].IsConstNull() || vecs[1].IsConstNull() || vecs[2].IsConstNull() {
+		return proc.AllocScalarNullVector(vecs[0].GetType()), nil
 	}
 	//get the first arg str
 	sourceCols := vector.MustStrCols(vecs[0])
@@ -46,7 +46,7 @@ func SubStrIndex(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
 	nulls.Or(vecs[2].Nsp, resultNsp, resultNsp)
 
-	constVectors := []bool{vecs[0].IsScalar(), vecs[1].IsScalar(), vecs[2].IsScalar()}
+	constVectors := []bool{vecs[0].IsConst(), vecs[1].IsConst(), vecs[2].IsConst()}
 	//get result values
 	substrindex.SubStrIndex(sourceCols, delimCols, countCols, rowCount, constVectors, resultValues)
 	resultVec = vector.NewWithStrings(types.T_varchar.ToType(), resultValues, resultNsp, proc.Mp())

@@ -161,7 +161,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		for idx, expr := range lastNode.ProjectList {
 			columns[idx] = &ColDef{
 				Name: query.Headings[idx],
-				Typ:  expr.Typ,
+				Typ:  expr.GetType(),
 			}
 		}
 

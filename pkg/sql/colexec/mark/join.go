@@ -131,7 +131,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	rbat := batch.NewWithSize(len(ap.Result) + 1)
 	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
+		rbat.Vecs[i] = vector.New(bat.Vecs[pos].GetType())
 	}
 	rbat.Vecs[len(ap.Result)] = vector.New(types.T_bool.ToType())
 	ctr.joinFlags = make([]bool, bat.Length())
@@ -173,7 +173,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	// vector.UnionBatch()
 	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
+		rbat.Vecs[i] = vector.New(bat.Vecs[pos].GetType())
 	}
 	lastIndex := len(rbat.Vecs) - 1
 	rbat.Vecs[lastIndex] = vector.New(types.T_bool.ToType())

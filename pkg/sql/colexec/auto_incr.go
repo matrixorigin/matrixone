@@ -100,7 +100,7 @@ loop:
 
 	offset, step := make([]uint64, 0), make([]uint64, 0)
 	for i, col := range param.colDefs {
-		if !col.Typ.AutoIncr {
+		if !col.GetType().AutoIncr {
 			continue
 		}
 		var d, s uint64
@@ -166,7 +166,7 @@ func getOneColRangeFromAutoIncrTable(ctx context.Context, param *AutoIncrParam, 
 	}
 	vec := bat.Vecs[pos]
 	maxNum := oriNum
-	switch vec.Typ.Oid {
+	switch vec.GetType().Oid {
 	case types.T_int8:
 		maxNum = getMaxnum[int8](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxInt8 {
@@ -219,14 +219,14 @@ func getOneColRangeFromAutoIncrTable(ctx context.Context, param *AutoIncrParam, 
 func updateBatchImpl(ctx context.Context, ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []uint64) error {
 	pos := 0
 	for i, col := range ColDefs {
-		if !col.Typ.AutoIncr {
+		if !col.GetType().AutoIncr {
 			continue
 		}
 		vec := bat.Vecs[i]
 		curNum := offset[pos]
 		stepNum := step[pos]
 		pos++
-		switch vec.Typ.Oid {
+		switch vec.GetType().Oid {
 		case types.T_int8:
 			updateVector[int8](vec, uint64(bat.Length()), curNum, stepNum)
 		case types.T_int16:
@@ -244,7 +244,7 @@ func updateBatchImpl(ctx context.Context, ColDefs []*plan.ColDef, bat *batch.Bat
 		case types.T_uint64:
 			updateVector[uint64](vec, uint64(bat.Length()), curNum, stepNum)
 		default:
-			return moerr.NewInvalidInput(ctx, "invalid auto_increment type '%v'", vec.Typ.Oid)
+			return moerr.NewInvalidInput(ctx, "invalid auto_increment type '%v'", vec.GetType().Oid)
 		}
 	}
 	return nil
@@ -425,7 +425,7 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 	}
 
 	for _, attr := range cols {
-		if !attr.Typ.AutoIncr {
+		if !attr.GetType().AutoIncr {
 			continue
 		}
 		rel2, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)

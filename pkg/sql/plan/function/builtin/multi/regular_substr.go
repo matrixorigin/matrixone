@@ -59,7 +59,7 @@ func RegularSubstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		match_type = []string{"c"}
 	}
 
-	if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
+	if firstVector.IsConstNull() || secondVector.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 

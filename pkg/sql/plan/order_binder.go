@@ -33,7 +33,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 	if colRef, ok := astExpr.(*tree.UnresolvedName); ok && colRef.NumParts == 1 {
 		if colPos, ok := b.ctx.aliasMap[colRef.Parts[0]]; ok {
 			return &plan.Expr{
-				Typ: b.ctx.projects[colPos].Typ,
+				Typ: b.ctx.projects[colPos].GetType(),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: b.ctx.projectTag,
@@ -57,7 +57,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 
 			colPos = colPos - 1
 			return &plan.Expr{
-				Typ: b.ctx.projects[colPos].Typ,
+				Typ: b.ctx.projects[colPos].GetType(),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: b.ctx.projectTag,
@@ -96,7 +96,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 	}
 
 	expr = &plan.Expr{
-		Typ: b.ctx.projects[colPos].Typ,
+		Typ: b.ctx.projects[colPos].GetType(),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: b.ctx.projectTag,

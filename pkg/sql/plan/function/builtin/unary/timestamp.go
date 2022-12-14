@@ -25,7 +25,7 @@ func DateToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.V
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_timestamp, Precision: 6, Size: 8}
 	inputValues := vector.MustTCols[types.Date](inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -47,9 +47,9 @@ func DateToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.V
 
 func DatetimeToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_timestamp, Precision: inputVector.Typ.Precision, Size: 8}
+	resultType := types.Type{Oid: types.T_timestamp, Precision: inputVector.GetType().Precision, Size: 8}
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -71,9 +71,9 @@ func DatetimeToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vect
 func TimestampToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	// XXX should this be an Noop?
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_timestamp, Precision: inputVector.Typ.Precision, Size: 8}
+	resultType := types.Type{Oid: types.T_timestamp, Precision: inputVector.GetType().Precision, Size: 8}
 	inputValues := vector.MustTCols[types.Timestamp](inputVector)
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -98,7 +98,7 @@ func DateStringToTimestamp(vectors []*vector.Vector, proc *process.Process) (*ve
 	resultType := types.Type{Oid: types.T_timestamp, Precision: 6, Size: 8}
 	inputValues := vector.MustStrCols(inputVector)
 
-	if inputVector.IsScalar() {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

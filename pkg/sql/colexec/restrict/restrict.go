@@ -61,7 +61,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 	}
 	bs := vector.GetColumn[bool](vec)
-	if vec.IsScalar() {
+	if vec.IsConst() {
 		if !bs[0] {
 			bat.Shrink(nil)
 		}

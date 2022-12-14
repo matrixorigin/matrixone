@@ -32,12 +32,12 @@ func UnixTimestamp(lv []*vector.Vector, proc *process.Process) (*vector.Vector, 
 
 	inVec := lv[0]
 	size := types.T(types.T_int64).TypeLen()
-	if inVec.IsScalarNull() {
+	if inVec.IsConstNull() {
 		return proc.AllocScalarNullVector(types.Type{Oid: types.T_int64, Size: int32(size)}), nil
 	}
 	times := vector.MustTCols[types.Timestamp](inVec)
 
-	if inVec.IsScalar() {
+	if inVec.IsConst() {
 		rs := make([]int64, 1)
 		unixtimestamp.UnixTimestampToInt(times, rs)
 		if rs[0] >= 0 {
@@ -71,11 +71,11 @@ func UnixTimestampVarcharToInt64(lv []*vector.Vector, proc *process.Process) (*v
 	inVec := lv[0]
 	resultType := types.T_int64.ToType()
 
-	if inVec.IsScalarNull() {
+	if inVec.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 
-	if inVec.IsScalar() {
+	if inVec.IsConst() {
 		tms := make([]types.Timestamp, 1)
 		rs := make([]int64, 1)
 		tms[0] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetString(0))
@@ -109,11 +109,11 @@ func UnixTimestampVarcharToInt64(lv []*vector.Vector, proc *process.Process) (*v
 func UnixTimestampVarcharToFloat64(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inVec := lv[0]
 	resultType := types.T_float64.ToType()
-	if inVec.IsScalarNull() {
+	if inVec.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 
-	if inVec.IsScalar() {
+	if inVec.IsConst() {
 		tms := make([]types.Timestamp, 1)
 		rs := make([]float64, 1)
 		tms[0] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetString(0))
@@ -151,11 +151,11 @@ var (
 func UnixTimestampVarcharToDecimal128(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inVec := lv[0]
 	resultType := types.Type{Oid: types.T_decimal128, Size: 16, Scale: 6}
-	if inVec.IsScalarNull() {
+	if inVec.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 
-	if inVec.IsScalar() {
+	if inVec.IsConst() {
 		tms := make([]types.Timestamp, 1)
 		rs := make([]types.Decimal128, 1)
 		tms[0] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetString(0))

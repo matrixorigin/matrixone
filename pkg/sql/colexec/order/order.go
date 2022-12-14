@@ -120,8 +120,8 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 	nullCnt := nulls.Length(ovec.Nsp)
 	// skip sort for all nulls
 	if nullCnt < ovec.Length() {
-		if ovec.Typ.IsString() {
-			strCol = vector.GetStrVectorValues(ovec)
+		if ovec.GetType().IsString() {
+			strCol = vector.MustStrCols(ovec)
 		} else {
 			strCol = nil
 		}
@@ -143,8 +143,8 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 		nullCnt = nulls.Length(vec.Nsp)
 		// skip sort for all nulls
 		if nullCnt < vec.Length() {
-			if vec.Typ.IsString() {
-				strCol = vector.GetStrVectorValues(vec)
+			if vec.GetType().IsString() {
+				strCol = vector.MustStrCols(vec)
 			} else {
 				strCol = nil
 			}

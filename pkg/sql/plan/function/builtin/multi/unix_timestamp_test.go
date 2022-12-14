@@ -65,7 +65,7 @@ func UnixtimeCase(t *testing.T, typ types.T, src types.Timestamp, res int64, isN
 				t.Errorf("unixtimestamp() want %v but got %v", c.wantBytes, plus.Col)
 			}
 			require.Equal(t, c.wantNull, plus.ConstVectorIsNull())
-			require.Equal(t, c.wantScalar, plus.IsScalar())
+			require.Equal(t, c.wantScalar, plus.IsConst())
 		})
 	}
 }

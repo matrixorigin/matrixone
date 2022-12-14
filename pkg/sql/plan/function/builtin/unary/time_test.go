@@ -245,7 +245,7 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 				return nil, moerr.ErrInvalidInput
 			}
 			vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, data, testutil.TestUtilMp)
-			vec[0].Typ.Precision = precision
+			vec[0].GetType().Precision = precision
 		case types.T_char, types.T_varchar:
 			vec[0] = vector.NewConstString(types.Type{Oid: types.T_varchar, Size: 26}, 1, str, testutil.TestUtilMp)
 		}
@@ -274,7 +274,7 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 			vec[0] = testutil.MakeDateVector(input, nil)
 		case types.T_datetime:
 			vec[0] = testutil.MakeDateTimeVector(input, nil)
-			vec[0].Typ.Precision = precision
+			vec[0].GetType().Precision = precision
 		case types.T_char:
 			vec[0] = testutil.MakeCharVector(input, nil)
 		case types.T_varchar:

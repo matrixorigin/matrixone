@@ -99,9 +99,9 @@ func (vq *VisitPlan) exploreNode(rule VisitPlanRule, node *Node, idx int32) erro
 			num := len(pl.Query.Nodes) - int(idx)
 			// last project Node
 			if num == 2 {
-				oldType := DeepCopyTyp(node.ProjectList[i].Typ)
+				oldType := DeepCopyTyp(node.ProjectList[i].GetType())
 				node.ProjectList[i], err = rule.ApplyExpr(node.ProjectList[i])
-				if node.ProjectList[i].Typ.Id != oldType.Id {
+				if node.ProjectList[i].GetType().Id != oldType.Id {
 					node.ProjectList[i], err = makePlan2CastExpr(node.ProjectList[i], oldType)
 				}
 			} else {

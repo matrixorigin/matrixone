@@ -41,10 +41,10 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		return nil, err
 	}
 
-	if expr.Typ.Id != int32(types.T_int64) {
+	if expr.GetType().Id != int32(types.T_int64) {
 		// limit '10' / offset '2'
 		// the valid string should be cast to int64
-		if expr.Typ.Id == int32(types.T_varchar) {
+		if expr.GetType().Id == int32(types.T_varchar) {
 			targetType := types.T_int64.ToType()
 			planTargetType := makePlan2Type(&targetType)
 			var err error

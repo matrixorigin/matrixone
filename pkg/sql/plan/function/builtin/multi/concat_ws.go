@@ -25,7 +25,7 @@ import (
 // todo(broccoli): revise this, maybe rewrite this? at least clean up the logic
 func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
-	if vectors[0].IsScalar() {
+	if vectors[0].IsConst() {
 		if vectors[0].ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -33,10 +33,10 @@ func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		inputCleaned := make([]*vector.Vector, 0) // no NULL const vectors
 		AllConst := true
 		for i := 1; i < len(vectors); i++ {
-			if vectors[i].IsScalarNull() {
+			if vectors[i].IsConstNull() {
 				continue
 			}
-			if vectors[i].IsScalar() {
+			if vectors[i].IsConst() {
 				vectorIsConst = append(vectorIsConst, true)
 			} else {
 				vectorIsConst = append(vectorIsConst, false)
@@ -54,10 +54,10 @@ func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		inputCleaned := make([]*vector.Vector, 0) // no NULL const vectors
 		AllConst := true
 		for i := 1; i < len(vectors); i++ {
-			if vectors[i].IsScalarNull() {
+			if vectors[i].IsConstNull() {
 				continue
 			}
-			if vectors[i].IsScalar() {
+			if vectors[i].IsConst() {
 				vectorIsConst = append(vectorIsConst, true)
 			} else {
 				vectorIsConst = append(vectorIsConst, false)

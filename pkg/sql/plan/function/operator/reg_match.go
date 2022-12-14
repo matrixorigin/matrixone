@@ -37,7 +37,7 @@ func generalRegMatch(vectors []*vector.Vector, proc *process.Process, isReg bool
 	resultType := types.T_bool.ToType()
 	leftValues, rightValues := vector.MustStrCols(left), vector.MustStrCols(right)
 	switch {
-	case left.IsScalar() && right.IsScalar():
+	case left.IsConst() && right.IsConst():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -48,7 +48,7 @@ func generalRegMatch(vectors []*vector.Vector, proc *process.Process, isReg bool
 			return nil, moerr.NewInvalidInputNoCtx("The Regular Expression have invalid parameter")
 		}
 		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
+	case left.IsConst() && !right.IsConst():
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -62,7 +62,7 @@ func generalRegMatch(vectors []*vector.Vector, proc *process.Process, isReg bool
 			return nil, moerr.NewInvalidInputNoCtx("The Regular Expression have invalid parameter")
 		}
 		return resultVector, nil
-	case !left.IsScalar() && right.IsScalar():
+	case !left.IsConst() && right.IsConst():
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

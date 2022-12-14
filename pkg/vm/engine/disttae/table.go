@@ -413,7 +413,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 	*/
 	if tbl.primaryIdx >= 0 && expr != nil {
 		pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-		ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
+		ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.GetType().Id))
 		if ok {
 			index = memtable.Tuple{
 				index_PrimaryKey,

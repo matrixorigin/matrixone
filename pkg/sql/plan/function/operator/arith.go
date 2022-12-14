@@ -44,11 +44,11 @@ func Arith[T1 arithT, T2 arithT](vectors []*vector.Vector, proc *process.Process
 	left, right := vectors[0], vectors[1]
 	leftValues, rightValues := vector.MustTCols[T1](left), vector.MustTCols[T1](right)
 
-	if left.IsScalarNull() || right.IsScalarNull() {
+	if left.IsConstNull() || right.IsConstNull() {
 		return proc.AllocScalarNullVector(typ), nil
 	}
 
-	if left.IsScalar() && right.IsScalar() {
+	if left.IsConst() && right.IsConst() {
 		resultVector := proc.AllocScalarVector(typ)
 		if err := afn(left, right, resultVector); err != nil {
 			return nil, err
@@ -57,7 +57,7 @@ func Arith[T1 arithT, T2 arithT](vectors []*vector.Vector, proc *process.Process
 	}
 
 	nEle := len(leftValues)
-	if left.IsScalar() {
+	if left.IsConst() {
 		nEle = len(rightValues)
 	}
 
@@ -84,7 +84,7 @@ func PlusFloat[T constraints.Float](args []*vector.Vector, proc *process.Process
 }
 func PlusDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := args[0], args[1]
-	lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
+	lvScale, rvScale := lv.GetType().Scale, rv.GetType().Scale
 	resultScale := lvScale
 	if lvScale < rvScale {
 		resultScale = rvScale
@@ -94,7 +94,7 @@ func PlusDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector
 }
 func PlusDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := args[0], args[1]
-	lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
+	lvScale, rvScale := lv.GetType().Scale, rv.GetType().Scale
 	resultScale := lvScale
 	if lvScale < rvScale {
 		resultScale = rvScale
@@ -115,7 +115,7 @@ func MinusFloat[T constraints.Float](args []*vector.Vector, proc *process.Proces
 }
 func MinusDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := args[0], args[1]
-	lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
+	lvScale, rvScale := lv.GetType().Scale, rv.GetType().Scale
 	resultScale := lvScale
 	if lvScale < rvScale {
 		resultScale = rvScale
@@ -125,8 +125,8 @@ func MinusDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vecto
 }
 func MinusDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := args[0], args[1]
-	lvScale := lv.Typ.Scale
-	rvScale := rv.Typ.Scale
+	lvScale := lv.GetType().Scale
+	rvScale := rv.GetType().Scale
 	resultScale := lvScale
 	if lvScale < rvScale {
 		resultScale = rvScale
@@ -152,13 +152,13 @@ func MultFloat[T constraints.Float](args []*vector.Vector, proc *process.Process
 }
 func MultDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := args[0], args[1]
-	resultScale := lv.Typ.Scale + rv.Typ.Scale
+	resultScale := lv.GetType().Scale + rv.GetType().Scale
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: resultScale}
 	return Arith[types.Decimal64, types.Decimal128](args, proc, resultTyp, mult.Decimal64VecMult)
 }
 func MultDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := args[0], args[1]
-	resultScale := lv.Typ.Scale + rv.Typ.Scale
+	resultScale := lv.GetType().Scale + rv.GetType().Scale
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: resultScale}
 	return Arith[types.Decimal128, types.Decimal128](args, proc, resultTyp, mult.Decimal128VecMult)
 }
@@ -169,20 +169,20 @@ func DivFloat[T constraints.Float](args []*vector.Vector, proc *process.Process)
 }
 func DivDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var scale int32
-	if args[0].Typ.Scale == 0 {
+	if args[0].GetType().Scale == 0 {
 		scale = types.MYSQL_DEFAULT_SCALE
 	} else {
-		scale = types.MYSQL_DEFAULT_SCALE + args[0].Typ.Scale
+		scale = types.MYSQL_DEFAULT_SCALE + args[0].GetType().Scale
 	}
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: scale}
 	return Arith[types.Decimal64, types.Decimal128](args, proc, resultTyp, div.Decimal64VecDiv)
 }
 func DivDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var scale int32
-	if args[0].Typ.Scale == 0 {
+	if args[0].GetType().Scale == 0 {
 		scale = types.MYSQL_DEFAULT_SCALE
 	} else {
-		scale = types.MYSQL_DEFAULT_SCALE + args[0].Typ.Scale
+		scale = types.MYSQL_DEFAULT_SCALE + args[0].GetType().Scale
 	}
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: scale}
 	return Arith[types.Decimal128, types.Decimal128](args, proc, resultTyp, div.Decimal128VecDiv)

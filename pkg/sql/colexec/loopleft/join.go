@@ -30,9 +30,9 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
+	ap.ctr.bat = batch.NewWithSize(len(ap.GetType()s))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
-	for i, typ := range ap.Typs {
+	for i, typ := range ap.GetType()s {
 		ap.ctr.bat.Vecs[i] = vector.New(typ)
 	}
 	return nil
@@ -95,7 +95,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Vecs[i] = bat.Vecs[rp.Pos]
 			bat.Vecs[rp.Pos] = nil
 		} else {
-			rbat.Vecs[i] = vector.NewConstNull(ctr.bat.Vecs[rp.Pos].Typ, count)
+			rbat.Vecs[i] = vector.NewConstNull(ctr.bat.Vecs[rp.Pos].GetType(), count)
 		}
 	}
 	rbat.Zs = bat.Zs
@@ -111,9 +111,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].Typ)
+			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].GetType())
 		} else {
-			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].Typ)
+			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].GetType())
 		}
 	}
 	count := bat.Length()

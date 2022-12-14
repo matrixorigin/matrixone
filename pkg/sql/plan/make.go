@@ -211,13 +211,13 @@ func MakePlan2NullTextConstExprWithType(v string) *plan.Expr {
 }
 
 func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
-	if isSameColumnType(expr.Typ, targetType) {
+	if isSameColumnType(expr.GetType(), targetType) {
 		return expr, nil
 	}
-	targetType.NotNullable = expr.Typ.NotNullable
+	targetType.NotNullable = expr.GetType().NotNullable
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
-	if types.T(expr.Typ.Id) == types.T_any {
-		expr.Typ = targetType
+	if types.T(expr.GetType().Id) == types.T_any {
+		expr.GetType() = targetType
 		return expr, nil
 	}
 	id, _, _, err := function.GetFunctionByName("cast", []types.Type{t1, t2})
@@ -285,15 +285,15 @@ var MakeTypeByPlan2Expr = makeTypeByPlan2Expr
 
 func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
 	var size int32 = 0
-	oid := types.T(expr.Typ.Id)
+	oid := types.T(expr.GetType().Id)
 	if oid != types.T_any && oid != types.T_interval {
 		size = int32(oid.TypeLen())
 	}
 	return types.Type{
 		Oid:       oid,
 		Size:      size,
-		Width:     expr.Typ.Width,
-		Scale:     expr.Typ.Scale,
-		Precision: expr.Typ.Precision,
+		Width:     expr.GetType().Width,
+		Scale:     expr.GetType().Scale,
+		Precision: expr.GetType().Precision,
 	}
 }

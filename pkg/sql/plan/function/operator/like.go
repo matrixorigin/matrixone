@@ -28,7 +28,7 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	lvs, rvs := vector.MustStrCols(lv), vector.MustBytesCols(rv)
 	rtyp := types.T_bool.ToType()
 
-	if lv.IsScalarNull() || rv.IsScalarNull() {
+	if lv.IsConstNull() || rv.IsConstNull() {
 		return proc.AllocConstNullVector(rtyp, lv.Length()), nil
 	}
 
@@ -36,7 +36,7 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	rs := make([]bool, lv.Length())
 
 	switch {
-	case !lv.IsScalar() && rv.IsScalar():
+	case !lv.IsConst() && rv.IsConst():
 		if nulls.Any(lv.Nsp) {
 			rs, err = like.BtSliceNullAndConst(lvs, rvs[0], lv.Nsp, rs)
 			if err != nil {
@@ -49,19 +49,19 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 			}
 		}
 		return vector.NewWithFixed(rtyp, rs, lv.Nsp, proc.Mp()), nil
-	case lv.IsScalar() && rv.IsScalar(): // in our design, this case should deal while pruning extends.
+	case lv.IsConst() && rv.IsConst(): // in our design, this case should deal while pruning extends.
 		ok, err := like.BtConstAndConst(lvs[0], rvs[0])
 		if err != nil {
 			return nil, err
 		}
 		return vector.NewConstFixed(rtyp, lv.Length(), ok, proc.Mp()), nil
-	case lv.IsScalar() && !rv.IsScalar():
+	case lv.IsConst() && !rv.IsConst():
 		rs, err = like.BtConstAndSliceNull(lvs[0], rvs, rv.Nsp, rs)
 		if err != nil {
 			return nil, err
 		}
 		return vector.NewWithFixed(rtyp, rs, lv.Nsp, proc.Mp()), nil
-	case !lv.IsScalar() && !rv.IsScalar():
+	case !lv.IsConst() && !rv.IsConst():
 		var nsp *nulls.Nulls
 		if nulls.Any(rv.Nsp) && nulls.Any(lv.Nsp) {
 			nsp = lv.Nsp.Or(rv.Nsp)

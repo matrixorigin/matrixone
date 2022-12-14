@@ -24,8 +24,8 @@ import (
 func IsNull(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	input := vectors[0]
 	retType := types.T_bool.ToType()
-	if input.IsScalar() {
-		if input.IsScalarNull() {
+	if input.IsConst() {
+		if input.IsConstNull() {
 			return vector.NewConstFixed(retType, input.Length(), true, proc.Mp()), nil
 		} else {
 			return vector.NewConstFixed(retType, input.Length(), false, proc.Mp()), nil

@@ -124,7 +124,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				}
 				ctr.bat = batch.NewWithSize(len(bat.Vecs))
 				for i, vec := range bat.Vecs {
-					ctr.bat.Vecs[i] = vector.New(vec.Typ)
+					ctr.bat.Vecs[i] = vector.New(vec.GetType())
 				}
 				ctr.cmps = make([]compare.Compare, len(bat.Vecs))
 				for i := range ctr.cmps {
@@ -139,7 +139,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 							nullsLast = desc
 						}
 					}
-					ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, desc, nullsLast)
+					ctr.cmps[i] = compare.New(bat.Vecs[i].GetType(), desc, nullsLast)
 				}
 			}
 			if err := ctr.processBatch(ap.Limit, bat, proc); err != nil {

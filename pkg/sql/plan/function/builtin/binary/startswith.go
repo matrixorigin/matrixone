@@ -27,7 +27,7 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
 	leftValues, rightValues := vector.MustStrCols(left), vector.MustStrCols(right)
 	switch {
-	case left.IsScalar() && right.IsScalar():
+	case left.IsConst() && right.IsConst():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -35,7 +35,7 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		resultValues := vector.MustTCols[uint8](resultVector)
 		startswith.StartsWithAllConst(leftValues[0], rightValues[0], resultValues)
 		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
+	case left.IsConst() && !right.IsConst():
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -46,7 +46,7 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		resultValues := vector.MustTCols[uint8](resultVector)
 		startswith.StartsWithLeftConst(leftValues[0], rightValues, resultValues)
 		return resultVector, nil
-	case !left.IsScalar() && right.IsScalar():
+	case !left.IsConst() && right.IsConst():
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

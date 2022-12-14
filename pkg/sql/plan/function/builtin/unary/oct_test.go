@@ -193,5 +193,5 @@ func checkOctResult(t *testing.T, result *vector.Vector, expected []types.Decima
 	col := result.Col.([]types.Decimal128)
 
 	require.Equal(t, expected, col)
-	require.Equal(t, isScalar, result.IsScalar())
+	require.Equal(t, isScalar, result.IsConst())
 }

@@ -24,7 +24,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -41,7 +40,7 @@ func New(ro bool, attrs []string) *Batch {
 
 func Reorder(bat *Batch, attrs []string) {
 	if bat.Ro {
-		Cow(bat)
+		cow(bat)
 	}
 	for i, name := range attrs {
 		for j, attr := range bat.Attrs {
@@ -53,18 +52,7 @@ func Reorder(bat *Batch, attrs []string) {
 	}
 }
 
-func SetLength(bat *Batch, n int) {
-	for _, vec := range bat.Vecs {
-		vector.SetLength(vec, n)
-	}
-	bat.Zs = bat.Zs[:n]
-}
-
-func Length(bat *Batch) int {
-	return len(bat.Zs)
-}
-
-func Cow(bat *Batch) {
+func cow(bat *Batch) {
 	attrs := make([]string, len(bat.Attrs))
 	copy(attrs, bat.Attrs)
 	bat.Ro = false
@@ -155,7 +143,7 @@ func (bat *Batch) Shrink(sels []int64) {
 			continue
 		}
 		mp[vec]++
-		vector.Shrink(vec, sels)
+		vec.Shrink(sels)
 	}
 	vs := bat.Zs
 	for i, sel := range sels {
@@ -172,11 +160,10 @@ func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
 				continue
 			}
 			mp[vec]++
-			if err := vector.Shuffle(vec, sels, m); err != nil {
+			if err := vec.Shuffle(sels, m); err != nil {
 				return err
 			}
 		}
-
 		ws := make([]int64, len(sels))
 		bat.Zs = shuffle.FixedLengthShuffle(bat.Zs, ws, sels)
 	}
@@ -196,14 +183,15 @@ func (bat *Batch) Length() int {
 	return len(bat.Zs)
 }
 
-func (bat *Batch) VectorCount() int {
-	return len(bat.Vecs)
+func (bat *Batch) SetLength(n int) {
+	for _, vec := range bat.Vecs {
+		vec.SetLength(n)
+	}
+	bat.Zs = bat.Zs[:n]
 }
 
-func (bat *Batch) Prefetch(poses []int32, vecs []*vector.Vector) {
-	for i, pos := range poses {
-		vecs[i] = bat.GetVector(pos)
-	}
+func (bat *Batch) VectorCount() int {
+	return len(bat.Vecs)
 }
 
 func (bat *Batch) SetAttributes(attrs []string) {
@@ -231,16 +219,13 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 	return rbat
 }
 
-func (bat *Batch) Clean(m *mpool.MPool) {
+func (bat *Batch) Free(m *mpool.MPool) {
 	if atomic.AddInt64(&bat.Cnt, -1) != 0 {
 		return
 	}
 	for _, vec := range bat.Vecs {
 		if vec != nil {
 			vec.Free(m)
-			if vec.IsLowCardinality() {
-				vec.Index().(*index.LowCardinalityIndex).Free()
-			}
 		}
 	}
 	for _, agg := range bat.Aggs {
@@ -267,7 +252,7 @@ func (bat *Batch) String() string {
 	return buf.String()
 }
 
-func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
+func (bat *Batch) Append(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch, error) {
 	if bat == nil {
 		return b, nil
 	}
@@ -282,24 +267,14 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 	// fault.AddFaultPoint("panic_in_batch_append", ":::", "PANIC", 0, "")
 	fault.TriggerFault("panic_in_batch_append")
 
-	flags := make([]uint8, vector.Length(b.Vecs[0]))
-	for i := range flags {
-		flags[i]++
-	}
-	for i := range bat.Vecs {
-		if err := vector.UnionBatch(bat.Vecs[i], b.Vecs[i], 0, vector.Length(b.Vecs[i]), flags[:vector.Length(b.Vecs[i])], mh); err != nil {
-			return bat, err
+	length := b.Length()
+	for i, vec := range b.Vecs {
+		if err := bat.Vecs[i].PreExtend(length, mp); err != nil {
+			return nil, err
 		}
-		if b.Vecs[i].IsLowCardinality() {
-			idx := b.Vecs[i].Index().(*index.LowCardinalityIndex)
-			if bat.Vecs[i].Index() == nil {
-				bat.Vecs[i].SetIndex(idx.Dup())
-			} else {
-				appendIdx := bat.Vecs[i].Index().(*index.LowCardinalityIndex)
-				dst, src := appendIdx.GetPoses(), idx.GetPoses()
-				if err := vector.UnionBatch(dst, src, 0, vector.Length(src), flags[:vector.Length(src)], mh); err != nil {
-					return bat, err
-				}
+		for j := 0; j < length; j++ {
+			if err := bat.Vecs[i].UnionOne(vec, int64(j), false, mp); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -307,7 +282,6 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 	return bat, nil
 }
 
-// XXX I will slowly remove all code that uses InitZsone.
 func (bat *Batch) SetZs(len int, m *mpool.MPool) {
 	bat.Zs = m.GetSels()
 	for i := 0; i < len; i++ {
@@ -315,8 +289,8 @@ func (bat *Batch) SetZs(len int, m *mpool.MPool) {
 	}
 }
 
-// InitZsOne init Batch.Zs and values are all 1
-func (bat *Batch) InitZsOne(len int) {
+// initZsOne init Batch.Zs and values are all 1
+func (bat *Batch) initZsOne(len int) {
 	bat.Zs = make([]int64, len)
 	for i := range bat.Zs {
 		bat.Zs[i]++

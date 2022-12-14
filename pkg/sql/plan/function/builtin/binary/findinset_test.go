@@ -117,7 +117,7 @@ func TestFindInSetLength(t *testing.T) {
 			}
 			col := result.Col.([]uint64)
 			require.Equal(t, c.expected, col)
-			require.Equal(t, c.isScalarL && c.isScalarR, result.IsScalar())
+			require.Equal(t, c.isScalarL && c.isScalarR, result.IsConst())
 		})
 	}
 }

@@ -82,8 +82,8 @@ func TestHex(t *testing.T) {
 			}
 			result, err := HexString([]*vector.Vector{inVector}, c.proc)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(vector.GetStrVectorValues(result), convey.ShouldResemble, c.expected)
-			convey.So(result.IsScalar(), convey.ShouldEqual, c.isScalar)
+			convey.So(vector.MustStrCols(result), convey.ShouldResemble, c.expected)
+			convey.So(result.IsConst(), convey.ShouldEqual, c.isScalar)
 		})
 	}
 
@@ -140,8 +140,8 @@ func TestHex(t *testing.T) {
 			}
 			result, err := HexInt64([]*vector.Vector{inVector}, c.proc)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(vector.GetStrVectorValues(result), convey.ShouldResemble, c.expected)
-			convey.So(result.IsScalar(), convey.ShouldEqual, c.isScalar)
+			convey.So(vector.MustStrCols(result), convey.ShouldResemble, c.expected)
+			convey.So(result.IsConst(), convey.ShouldEqual, c.isScalar)
 		})
 	}
 

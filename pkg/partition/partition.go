@@ -23,7 +23,7 @@ import (
 func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {
 	diffs[0] = true
 	diffs = diffs[:len(sels)]
-	switch vec.Typ.Oid {
+	switch vec.GetType().Oid {
 	case types.T_int8:
 		var n bool
 		var v int8
@@ -340,7 +340,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 	case types.T_char, types.T_varchar, types.T_json:
 		var n bool
 		var v string
-		vs := vector.GetStrVectorValues(vec)
+		vs := vector.MustStrCols(vec)
 		if nulls.Any(vec.Nsp) {
 			for i, sel := range sels {
 				w := vs[sel]

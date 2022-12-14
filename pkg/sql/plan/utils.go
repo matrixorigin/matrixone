@@ -471,7 +471,7 @@ func replaceColRefWithNull(expr *plan.Expr) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		expr = &plan.Expr{
-			Typ: expr.Typ,
+			Typ: expr.GetType(),
 			Expr: &plan.Expr_C{
 				C: &plan.Const{
 					Isnull: true,
@@ -678,7 +678,7 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 	if nulls.Any(vec.Nsp) {
 		return &plan.Const{Isnull: true}
 	}
-	switch vec.Typ.Oid {
+	switch vec.GetType().Oid {
 	case types.T_bool:
 		return &plan.Const{
 			Value: &plan.Const_Bval{

@@ -78,11 +78,11 @@ func (rule *GetParamRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_P:
 		pos := int(exprImpl.P.Pos)
 		rule.params[pos] = 0
-		if e.Typ.Id == int32(types.T_any) && e.Typ.NotNullable {
+		if e.GetType().Id == int32(types.T_any) && e.GetType().NotNullable {
 			// is not null, use string
 			rule.mapTypes[pos] = int32(types.T_varchar)
 		} else {
-			rule.mapTypes[pos] = e.Typ.Id
+			rule.mapTypes[pos] = e.GetType().Id
 		}
 		return e, nil
 	default:
@@ -189,7 +189,7 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		return e, nil
 	case *plan.Expr_P:
 		return &plan.Expr{
-			Typ:  e.Typ,
+			Typ:  e.GetType(),
 			Expr: rule.params[int(exprImpl.P.Pos)].Expr,
 		}, nil
 	default:
@@ -289,8 +289,8 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		default:
 			err = moerr.NewParseErrorNoCtx("type of var %q is not supported now", exprImpl.V.Name)
 		}
-		if e.Typ.Id != int32(types.T_any) && expr.Typ.Id != e.Typ.Id {
-			return appendCastBeforeExpr(expr, e.Typ)
+		if e.GetType().Id != int32(types.T_any) && expr.GetType().Id != e.GetType().Id {
+			return appendCastBeforeExpr(expr, e.GetType())
 		}
 		return expr, err
 	default:

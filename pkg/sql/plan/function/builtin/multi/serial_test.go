@@ -33,7 +33,7 @@ func TestSerial(t *testing.T) {
 	vs, valueCount := MakeVectors(columnSi, rowCount, proc.Mp())
 	newVec, err := Serial(vs, proc)
 	require.Equal(t, nil, err)
-	bs := vector.GetBytesVectorValues(newVec)
+	bs := vector.MustBytesCols(newVec)
 	tuples := make([]types.Tuple, 0)
 	for i := 0; i < len(bs); i++ {
 		tuple, err := types.Unpack(bs[i])
@@ -50,7 +50,7 @@ func MakeVectors(columnSi int, rowCount int, mp *mpool.MPool) ([]*vector.Vector,
 	vs := make([]*vector.Vector, columnSi)
 	for i := 0; i < columnSi; i++ {
 		vs[i] = vector.New(types.Type{Oid: randType()})
-		randInsertValues(vs[i], vs[i].Typ.Oid, rowCount, valueCount, i*rowCount, mp)
+		randInsertValues(vs[i], vs[i].GetType().Oid, rowCount, valueCount, i*rowCount, mp)
 	}
 	return vs, valueCount
 }

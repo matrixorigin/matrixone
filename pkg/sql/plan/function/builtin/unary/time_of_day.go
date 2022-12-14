@@ -24,8 +24,8 @@ func DatetimeToHour(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 	inputVector := vectors[0]
 	resultType := types.T_uint8.ToType()
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConstFixed(resultType, 1, uint8(inputValues[0].Hour()), proc.Mp())
@@ -56,8 +56,8 @@ func TimestampToHour(vectors []*vector.Vector, proc *process.Process) (*vector.V
 	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, inputValues, convertedInputValues); err != nil {
 		return nil, err
 	}
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConstFixed(resultType, 1, uint8(convertedInputValues[0].Hour()), proc.Mp())
@@ -85,8 +85,8 @@ func DatetimeToMinute(vectors []*vector.Vector, proc *process.Process) (*vector.
 	resultType := types.T_uint8.ToType()
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
 
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConstFixed(resultType, 1, uint8(inputValues[0].Minute()), proc.Mp())
@@ -117,8 +117,8 @@ func TimestampToMinute(vectors []*vector.Vector, proc *process.Process) (*vector
 	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, inputValues, convertedInputValues); err != nil {
 		return nil, err
 	}
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConstFixed(resultType, 1, uint8(convertedInputValues[0].Minute()), proc.Mp())
@@ -145,8 +145,8 @@ func DatetimeToSecond(vectors []*vector.Vector, proc *process.Process) (*vector.
 	inputVector := vectors[0]
 	resultType := types.T_uint8.ToType()
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConstFixed(resultType, 1, uint8(inputValues[0].Sec()), proc.Mp())
@@ -177,8 +177,8 @@ func TimestampToSecond(vectors []*vector.Vector, proc *process.Process) (*vector
 	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, inputValues, convertedInputValues); err != nil {
 		return nil, err
 	}
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConstFixed(resultType, 1, uint8(convertedInputValues[0].Sec()), proc.Mp())

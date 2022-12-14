@@ -26,10 +26,10 @@ func Concat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	isAllConst := true
 
 	for i := range vectors {
-		if vectors[i].IsScalarNull() {
+		if vectors[i].IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		if !vectors[i].IsScalar() {
+		if !vectors[i].IsConst() {
 			isAllConst = false
 		}
 	}
@@ -60,7 +60,7 @@ func concatWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 				nulls.Add(nsp, uint64(i))
 				break
 			}
-			if vectors[j].IsScalar() {
+			if vectors[j].IsConst() {
 				val[i] += vectors[j].GetString(int64(0))
 			} else {
 				val[i] += vectors[j].GetString(int64(i))
