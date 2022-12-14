@@ -72,8 +72,9 @@ var (
 	SQLTypeAutoRollback SQLType = "auto_rollback"
 )
 
-func StatementCounter(tenant string, t SQLType) Counter {
-	return StatementCounterFactory.WithLabelValues(tenant, string(t))
+// StatementCounter accept t as tree.QueryType
+func StatementCounter(tenant string, t string) Counter {
+	return StatementCounterFactory.WithLabelValues(tenant, t)
 }
 
 func TransactionCounter(tenant string) Counter {
@@ -84,6 +85,7 @@ func TransactionErrorsCounter(account string, t SQLType) Counter {
 	return TransactionErrorsFactory.WithLabelValues(account, string(t))
 }
 
-func StatementErrorsCounter(account string, t SQLType) Counter {
-	return StatementErrorsFactory.WithLabelValues(account, string(t))
+// StatementErrorsCounter accept t as tree.QueryType
+func StatementErrorsCounter(account string, t string) Counter {
+	return StatementErrorsFactory.WithLabelValues(account, t)
 }
