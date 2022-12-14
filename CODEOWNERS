@@ -102,4 +102,4 @@
 /pkg/vm/engine/memoryengine @reusee
 
 # from the initial CODEOWNERS file
-/test @aressu1985
+/test @aressu1985 @heni02
