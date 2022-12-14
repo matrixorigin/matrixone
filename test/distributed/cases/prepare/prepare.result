@@ -292,3 +292,6 @@ execute stmt1;
 Field    Type    Null    Key     Default    Extra    Comment
 a    INT    YES        NULL            
 b    INT    YES        NULL            
+prepare stmt1 from 'show variables like "aaaa"';
+execute stmt1;
+Variable_name    Value

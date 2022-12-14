@@ -483,30 +483,36 @@ func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) 
 }
 
 func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, error) {
-	if stmt.Like != nil && stmt.Where != nil {
-		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
-	}
-
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
-	binder := NewWhereBinder(builder, &BindContext{})
-
 	showVariables := &plan.ShowVariables{
 		Global: stmt.Global,
 	}
-	if stmt.Like != nil {
-		expr, err := binder.bindComparisonExpr(stmt.Like, 0, false)
-		if err != nil {
-			return nil, err
-		}
-		showVariables.Where = append(showVariables.Where, expr)
-	}
-	if stmt.Where != nil {
-		exprs, err := splitAndBindCondition(stmt.Where.Expr, &BindContext{})
-		if err != nil {
-			return nil, err
-		}
-		showVariables.Where = append(showVariables.Where, exprs...)
-	}
+
+	// we deal with 'show vriables' statement in frontend now.
+	// so just return an empty plan in building plan for prepare statment is ok.
+
+	// if stmt.Like != nil && stmt.Where != nil {
+	// 	return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
+	// }
+
+	// builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	// binder := NewWhereBinder(builder, &BindContext{})
+
+	// if stmt.Like != nil {
+	//  // here will error because stmt.Like.Left is nil, you need add left expr like : stmt.Like.Left = tree.SetUnresolvedName("column_name")
+	//  // but we have no column name, because Variables is save in a hashmap in frontend, not a table.
+	// 	expr, err := binder.bindComparisonExpr(stmt.Like, 0, false)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	showVariables.Where = append(showVariables.Where, expr)
+	// }
+	// if stmt.Where != nil {
+	// 	exprs, err := splitAndBindCondition(stmt.Where.Expr, &BindContext{})
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	showVariables.Where = append(showVariables.Where, exprs...)
+	// }
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{

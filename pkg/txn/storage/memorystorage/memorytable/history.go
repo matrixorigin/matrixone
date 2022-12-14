@@ -24,7 +24,6 @@ type history[
 ] struct {
 	EndTime  Time
 	EndState *tableState[K, V]
-	NewLogs  []*logEntry[K, V]
 }
 
 // EraseHistory erases history before specified time

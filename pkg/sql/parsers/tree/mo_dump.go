@@ -43,3 +43,6 @@ func (node *MoDump) Format(ctx *FmtCtx) {
 		ctx.WriteString(strconv.FormatInt(node.MaxFileSize, 10))
 	}
 }
+
+func (node *MoDump) GetStatementType() string { return "Modump" }
+func (node *MoDump) GetQueryType() string     { return QueryTypeDQL }
