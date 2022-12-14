@@ -292,6 +292,12 @@ func (r *runner) onCheckpointEntries(items ...any) {
 	entry.SetState(ST_Finished)
 	logutil.Infof("%s is done, takes %s, truncate %d", entry.String(), time.Since(now), lsn)
 
+	if !entry.IsIncremental() {
+		r.storage.Lock()
+		r.storage.prevGlobal = entry
+		r.storage.Unlock()
+	}
+
 	r.postCheckpointQueue.Enqueue(entry)
 }
 func (r *runner) collectCheckpointMetadata() *containers.Batch {
@@ -325,9 +331,9 @@ func (r *runner) MockCheckpoint(end types.TS) {
 	}
 	r.storage.Lock()
 	r.storage.entries.Set(entry)
+	r.storage.prevGlobal = entry
 	r.storage.Unlock()
 	entry.SetState(ST_Finished)
-	r.storage.prevGlobal = entry
 	lsn := r.source.GetMaxLSN(entry.start, entry.end)
 	e, err := r.wal.RangeCheckpoint(1, lsn)
 	if err != nil {
@@ -386,10 +392,11 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 
 func (r *runner) TestCheckpoint(entry *CheckpointEntry) {
 	r.doIncrementalCheckpoint(entry)
+	r.storage.Lock()
 	r.storage.entries.Set(entry)
+	r.storage.prevGlobal = entry
 	r.storage.Unlock()
 	entry.SetState(ST_Finished)
-	r.storage.prevGlobal = entry
 	lsn := r.source.GetMaxLSN(entry.start, entry.end)
 	e, err := r.wal.RangeCheckpoint(1, lsn)
 	if err != nil {
@@ -504,9 +511,6 @@ func (r *runner) tryAddNewCheckpointEntry(entry *CheckpointEntry) (success bool)
 	}
 
 	r.storage.entries.Set(entry)
-	if !maxEntry.IsIncremental() {
-		r.storage.prevGlobal = maxEntry
-	}
 
 	success = true
 	return
@@ -751,10 +755,10 @@ func (r *runner) Stop() {
 }
 
 func (r *runner) CollectCheckpointsInRange(start, end types.TS) (locations string, checkpointed types.TS) {
-	r.storage.Lock()
+	r.storage.RLock()
 	tree := r.storage.entries.Copy()
 	global := r.storage.prevGlobal
-	r.storage.Unlock()
+	r.storage.RUnlock()
 	locs := make([]string, 0)
 	newStart := start
 	if global != nil && global.HasOverlap(start, end) {
