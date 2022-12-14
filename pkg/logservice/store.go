@@ -142,13 +142,13 @@ type store struct {
 
 func newLogStore(cfg Config,
 	taskServiceGetter func() taskservice.TaskService,
-	runtime runtime.Runtime) (*store, error) {
+	rt runtime.Runtime) (*store, error) {
 	nh, err := dragonboat.NewNodeHost(getNodeHostConfig(cfg))
 	if err != nil {
 		return nil, err
 	}
 	hakeeperConfig := cfg.GetHAKeeperConfig()
-	runtime.Logger().Info("HAKeeper Timeout Configs",
+	rt.SubLogger(runtime.SystemInit).Info("HAKeeper Timeout Configs",
 		zap.Int64("LogStoreTimeout", int64(hakeeperConfig.LogStoreTimeout)),
 		zap.Int64("DNStoreTimeout", int64(hakeeperConfig.DNStoreTimeout)),
 		zap.Int64("CNStoreTimeout", int64(hakeeperConfig.CNStoreTimeout)),
@@ -161,14 +161,14 @@ func newLogStore(cfg Config,
 		alloc:         newIDAllocator(),
 		stopper:       stopper.NewStopper("log-store"),
 		tickerStopper: stopper.NewStopper("hakeeper-ticker"),
-		runtime:       runtime,
+		runtime:       rt,
 
 		shardSnapshotInfo: newShardSnapshotInfo(),
 		snapshotMgr:       newSnapshotManager(&cfg),
 	}
 	ls.mu.metadata = metadata.LogStore{UUID: cfg.UUID}
 	if err := ls.stopper.RunNamedTask("truncation-worker", func(ctx context.Context) {
-		runtime.Logger().Info("logservice truncation worker started")
+		rt.SubLogger(runtime.SystemInit).Info("logservice truncation worker started")
 		ls.truncationWorker(ctx)
 	}); err != nil {
 		return nil, err
@@ -220,7 +220,7 @@ func (l *store) startHAKeeperReplica(replicaID uint64,
 	atomic.StoreUint64(&l.haKeeperReplicaID, replicaID)
 	if !l.cfg.DisableWorkers {
 		if err := l.tickerStopper.RunNamedTask("hakeeper-ticker", func(ctx context.Context) {
-			l.runtime.Logger().Info("HAKeeper ticker started")
+			l.runtime.SubLogger(runtime.SystemInit).Info("HAKeeper ticker started")
 			l.ticker(ctx)
 		}); err != nil {
 			return err
