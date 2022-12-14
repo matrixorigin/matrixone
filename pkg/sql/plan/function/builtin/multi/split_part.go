@@ -41,8 +41,9 @@ func SplitPart(vectors []*vector.Vector, proc *process.Process) (vec *vector.Vec
 	}()
 	v1, v2, v3 := vectors[0], vectors[1], vectors[2]
 	resultType := types.T_varchar.ToType()
+	maxLen := findMaxLen(vectors)
 	if v1.IsScalarNull() || v2.IsScalarNull() || v3.IsScalarNull() {
-		vec = proc.AllocScalarNullVector(resultType)
+		vec = proc.AllocConstNullVector(resultType, maxLen)
 		return
 	}
 	if !validCount(v3) {
@@ -60,7 +61,6 @@ func SplitPart(vectors []*vector.Vector, proc *process.Process) (vec *vector.Vec
 		err = vec.Append([]byte(ret), false, proc.Mp())
 		return
 	}
-	maxLen := findMaxLen(vectors)
 	vec, err = proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
 	if err != nil {
 		return
