@@ -15,9 +15,10 @@
 package checkpoint
 
 import (
-	"errors"
+	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -51,13 +52,13 @@ func (r *runner) CleanPenddingCheckpoint() {
 func (r *runner) ForceGlobalCheckpoint(versionInterval time.Duration) error {
 	prev := r.MaxCheckpoint()
 	if prev == nil {
-		return errors.New("no incremental checkpoint")
+		return moerr.NewInternalError(context.Background(), "no incremental checkpoint")
 	}
 	if !prev.IsFinished() {
-		return errors.New("prev checkpoint not finished")
+		return moerr.NewInternalError(context.Background(), "prev checkpoint not finished")
 	}
 	if !prev.IsIncremental() {
-		return errors.New("prev checkpoint is global")
+		return moerr.NewInternalError(context.Background(), "prev checkpoint is global")
 	}
 	entry := NewCheckpointEntry(types.TS{}, prev.end.Next())
 	r.storage.Lock()
@@ -76,7 +77,7 @@ func (r *runner) ForceGlobalCheckpoint(versionInterval time.Duration) error {
 func (r *runner) ForceIncrementalCheckpoint(end types.TS) error {
 	prev := r.MaxCheckpoint()
 	if prev != nil && !prev.IsFinished() {
-		return errors.New("prev checkpoint not finished")
+		return moerr.NewInternalError(context.Background(), "prev checkpoint not finished")
 	}
 	start := types.TS{}
 	if prev != nil {
