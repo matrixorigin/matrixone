@@ -79,6 +79,11 @@ func (rel *baseRelation) Stats(context.Context) (int32, int64, error) {
 	return 0, rel.handle.Rows(), nil
 }
 
+func (rel *baseRelation) Rows(c context.Context) (int64, error) {
+	_, rows, err := rel.Stats(c)
+	return rows, err
+}
+
 func (rel *baseRelation) GetPrimaryKeys(_ context.Context) ([]*engine.Attribute, error) {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	if !schema.HasPK() {
