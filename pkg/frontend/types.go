@@ -148,6 +148,9 @@ func (icfl *InternalCmdFieldList) Format(ctx *tree.FmtCtx) {
 	ctx.WriteString(makeCmdFieldListSql(icfl.tableName))
 }
 
+func (icfl *InternalCmdFieldList) GetStatementType() string { return "InternalCmd" }
+func (icfl *InternalCmdFieldList) GetQueryType() string     { return tree.QueryTypeDQL }
+
 // ExecResult is the result interface of the execution
 type ExecResult interface {
 	GetRowCount() uint64
