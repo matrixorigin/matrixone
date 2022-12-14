@@ -205,25 +205,31 @@ func buildLeftJoinForSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (
 	aliasTable := originTableExpr.(*tree.AliasedTableExpr)
 	originTableName := string(aliasTable.Expr.(*tree.TableName).ObjectName)
 
-	// 3.get the definition of the unique index of the original table
+	// 3.build FromClause
+	var fromClause *tree.From
+
+	// 4.get the definition of the unique index of the original table
 	unqiueIndexDef, _ := buildIndexDefs(tableDef.Defs)
 
-	var leftJoinTableExpr tree.TableExpr
-	for i := 0; i < len(unqiueIndexDef.TableNames); i++ {
-		// build left join with origin table and index table
-		indexTableExpr := buildIndexTableExpr(unqiueIndexDef.TableNames[i])
-		joinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[i], unqiueIndexDef.Fields[i])
-		leftJoinTableExpr = &tree.JoinTableExpr{
-			JoinType: tree.JOIN_TYPE_LEFT,
-			Left:     originTableExpr,
-			Right:    indexTableExpr,
-			Cond:     joinCond,
+	if unqiueIndexDef != nil {
+		var leftJoinTableExpr tree.TableExpr
+		for i := 0; i < len(unqiueIndexDef.TableNames); i++ {
+			// build left join with origin table and index table
+			indexTableExpr := buildIndexTableExpr(unqiueIndexDef.TableNames[i])
+			joinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[i], unqiueIndexDef.Fields[i])
+			leftJoinTableExpr = &tree.JoinTableExpr{
+				JoinType: tree.JOIN_TYPE_LEFT,
+				Left:     originTableExpr,
+				Right:    indexTableExpr,
+				Cond:     joinCond,
+			}
+			originTableExpr = leftJoinTableExpr
 		}
-		originTableExpr = leftJoinTableExpr
+		// 4.build FromClause
+		fromClause = &tree.From{Tables: tree.TableExprs{leftJoinTableExpr}}
+	} else {
+		fromClause = &tree.From{Tables: stmt.Tables}
 	}
-
-	// 4.build FromClause
-	fromClause := &tree.From{Tables: tree.TableExprs{leftJoinTableExpr}}
 
 	// 5.build complete query clause abstract syntax tree for delete
 	selectStmt := &tree.Select{
@@ -375,6 +381,7 @@ type deleteTableInfo struct {
 	isIndexTableDelete bool     // Identify whether the current table is an index table
 }
 
+// DeleteTableList: information list of tables to be deleted
 type DeleteTableList struct {
 	delTables  []deleteTableInfo // table information list to be deleted
 	selectList tree.SelectExprs  // The rowid projection expression that needs to be deleted
@@ -388,6 +395,7 @@ func NewDeleteTableList() *DeleteTableList {
 	}
 }
 
+// Add the information element[deleteTableInfo] of the table to be deleted
 func (list *DeleteTableList) AddElement(objRef *ObjectRef, tableDef *TableDef, expr tree.SelectExpr, isIndexTableDelete bool) {
 	delInfo := deleteTableInfo{
 		objRefs:            objRef,
@@ -414,7 +422,6 @@ func buildDelete2Truncate2(ctx CompilerContext, objRef *ObjectRef, tableDef *Tab
 		CanTruncate:        true,
 		IsIndexTableDelete: false,
 	}
-
 	deleteTablesCtx = append(deleteTablesCtx, d)
 
 	// Build the context for deleting the index table
