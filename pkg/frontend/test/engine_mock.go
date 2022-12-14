@@ -337,6 +337,11 @@ func (m *MockRelation) Stats(ctx context.Context) (int32, int64, error) {
 	return ret0, ret1, ret2
 }
 
+func (m *MockRelation) Rows(ctx context.Context) (int64, error) {
+	_, rows, err := m.Stats(ctx)
+	return rows, err
+}
+
 // Stats indicates an expected call of Stats.
 func (mr *MockRelationMockRecorder) Stats(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()

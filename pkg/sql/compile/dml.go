@@ -50,6 +50,15 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 		if rel, err = dbSource.Relation(c.ctx, arg.DeleteCtxs[0].TableName); err != nil {
 			return 0, err
 		}
+		_, err = rel.Ranges(c.ctx, nil)
+		if err != nil {
+			return 0, err
+		}
+		affectRows, err := rel.Rows(s.Proc.Ctx)
+		if err != nil {
+			return 0, err
+		}
+
 		tableID = rel.GetTableID(c.ctx)
 
 		if arg.DeleteCtxs[0].UniqueIndexDef != nil {
@@ -73,7 +82,6 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 			return 0, err
 		}
 
-		_, affectRows, err := rel.Stats(s.Proc.Ctx)
 		return uint64(affectRows), err
 	}
 
