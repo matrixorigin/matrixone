@@ -83,6 +83,12 @@ message ColRef {
 	string	name	= 3;
 }
 
+// Reference a column by its internal table id and column id
+message RawColRef {
+	uint64 tbl_id = 1;
+	uint64 col_id = 2;
+}
+
 // Reference a correlated column in the proj list of a node.
 message CorrColRef {
 	int32 rel_pos	= 1;
@@ -174,12 +180,13 @@ message Expr {
 		ParamRef	p		= 3;
 		VarRef		v		= 4;
 		ColRef		col 	= 5;
-		Function	f		= 6;
-		SubqueryRef	sub		= 7;
-		CorrColRef	corr	= 8;
-		TargetType  t		= 9;
-		ExprList	list	= 10;
-		MaxValue max = 11;
+		RawColRef	raw		= 6;
+		Function	f		= 7;
+		SubqueryRef	sub		= 8;
+		CorrColRef	corr	= 9;
+		TargetType  t		= 10;
+		ExprList	list	= 11;
+		MaxValue	max		= 12;
 	}
 }
 
@@ -198,22 +205,29 @@ message decimal128 {
 }
 
 message ColDef {
-	string name 		= 1;
-	CompressType alg 	= 2;
-	Type typ			= 3;
-	Default default 	= 4;
-	bool primary        = 5;
-	int32 pkidx 		= 6;
-	string comment		= 7;
-	OnUpdate on_update  = 8;
-	bool low_cardinality = 9;
-	bool clusterBy		=10;
+	uint64 col_id		= 1;
+	string name 		= 2;
+	bool hidden			= 3;
+	CompressType alg 	= 4;
+	Type typ			= 5;
+	bool not_null		= 6;
+	Default default 	= 7;
+	string comment		= 8;
+	OnUpdate on_update  = 9;
+	bool low_card 		= 10;
+
+	// XXX: Deprecated and to be removed soon.
+	bool clusterBy		= 11;
+	bool primary        = 12;
+	int32 pkidx 		= 13;
 }
 
 message Default {
-	bool null_ability = 1;
-	Expr expr = 2;
-	string origin_string = 3;
+	Expr expr = 1;
+	string origin_string = 2;
+
+	// XXX: Deprecated and to be removed soon.
+	bool null_ability = 3;
 }
 
 message OnUpdate {
@@ -221,12 +235,68 @@ message OnUpdate {
 	string origin_string = 2;
 }
 
+message IndexOption {
+	bool create_extra_table = 1;
+}
+
 message PrimaryKeyDef {
-	repeated string names = 1;
+	repeated uint64 cols	= 1;
+	uint64 pkey_col_id		= 2;
+	IndexOption option		= 3;
+
+	// Composed primary key column name: __mo_cpkey
+
+	// XXX: Deprecated and to be removed soon.
+	repeated string names = 4;
+}
+
+message IndexDef {
+	// Generate UUID for each index
+	string idx_id			= 1;
+	string name				= 2;
+	// Name for anonymous indices, __mo_idx_[INDEX_ID]
+	bool unique				= 3;
+	repeated Expr parts		= 4;
+	IndexOption option		= 5;
+
+	// Index table name: __mo_idx_[TABLE_ID]_[INDEX_ID]
+	// Column name for indexed column(s): __mo_idx_key
+	// Column name for original primary key: __mo_orig_pkey
+}
+
+message ForeignKeyDef {
+	enum RefAction {
+		RESTRICT	= 0;
+		CASCADE		= 1;
+		SET_NULL	= 2;
+		SET_DEFAULT	= 3;
+		NO_ACTION	= 4;
+	}
+
+	string name						= 1;
+	repeated uint64 cols			= 2;
+	uint64 foreign_tbl				= 3;
+	repeated uint64 foreign_cols	= 4;
+	RefAction on_delete				= 5;
+	RefAction on_update				= 6;
+}
+
+message CheckDef {
+	string name	= 1;
+	// Name for anonymous constraints, __mo_chk_[INDEX_ID]
+	Expr check	= 2;
 }
 
 message ClusterByDef {
-	string name = 1;
+	repeated Expr parts = 1;
+
+	// XXX: Deprecated and to be removed soon.
+	string name = 2;
+}
+
+message PropertyDef {
+	string key 		= 1;
+	string value 	= 2;
 }
 
 message Property {
@@ -272,6 +342,30 @@ message PartitionItem {
 	repeated Expr in_values = 6;
 }
 
+message PartitionDef {
+	enum PartitionType {
+		KEY = 0;
+		LINEAR_KEY = 1;
+		HASH = 2;
+		LINEAR_HASH = 3;
+		RANGE = 4;
+		RANGE_COLUMNS = 5;
+		LIST = 6;
+		LIST_COLUMNS = 7;
+	}
+
+	PartitionType type = 1;
+	Expr Expr = 2;
+	Expr partition_expression = 3;
+	repeated Expr Columns = 4;
+	repeated string partition_columns = 5;
+	uint64 partitionNum = 6;
+	repeated PartitionItem partitions = 7;
+	int64 algorithm = 8;
+	bool is_sub_partition = 9;
+	string partition_msg = 10;
+}
+
 message ViewDef {
 	string view  = 1;
 }
@@ -296,25 +390,42 @@ message Field {
 }
 
 message TableDef {
+	// XXX: Deprecated and to be removed soon.
 	message DefType {
 		oneof def {
 			PrimaryKeyDef pk			= 1;
 			PropertiesDef properties	= 2;
 			ViewDef view				= 3;
-			PartitionInfo partition				= 4;
-			UniqueIndexDef uIdx				= 5;
-			SecondaryIndexDef sIdx				= 6;
+			PartitionInfo partition		= 4;
+			UniqueIndexDef uIdx			= 5;
+			SecondaryIndexDef sIdx		= 6;
 			ClusterByDef cb				=7;
 		}
 	}
-	string name				= 1;
-	repeated ColDef cols	= 2;
-	repeated DefType defs	= 3;
-	string table_type 		= 4;
-	string createsql 		= 5;
-	map<string, int32> name2col_index = 6;
-	ColDef composite_pkey = 7;
-	TableFunction tbl_func = 8;
+
+	uint64 tbl_id			= 1;
+	string name				= 2;
+	bool hidden				= 3;
+	repeated ColDef cols	= 4;
+	string table_type 		= 5;
+	string createsql 		= 6;
+	TableFunction tbl_func	= 7;
+
+	PrimaryKeyDef pkey				= 11;
+	repeated IndexDef indices		= 12;
+	repeated ForeignKeyDef fkeys	= 13;
+	repeated uint64 ref_child_tbls	= 14;
+	repeated CheckDef checks		= 15;
+
+	PartitionDef partition		= 21;
+	ClusterByDef cluster_by		= 22;
+	repeated PropertyDef props	= 23;
+	ViewDef view_sql			= 24;
+
+	// XXX: Deprecated and to be removed soon.
+	repeated DefType defs	= 31;
+	map<string, int32> name2col_index = 32;
+	ColDef composite_pkey = 33;
 }
 
 message TableFunction{
