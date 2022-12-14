@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -50,14 +49,19 @@ func JudgeIsCompositeIndexColumn(f *plan.Field) bool {
 	return len(f.Parts) > 1
 }
 
-func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, f *plan.Field, proc *process.Process) (*batch.Batch, int) {
+func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, f *plan.Field, originTablePrimaryKey string, proc *process.Process) (*batch.Batch, int) {
 	b := &batch.Batch{
 		// make sure that when batch is cleaned, origin batch is not affected
-		Attrs: make([]string, 1),
-		Vecs:  make([]*vector.Vector, 1),
+		Attrs: make([]string, len(f.Cols)),
+		Vecs:  make([]*vector.Vector, len(f.Cols)),
+		Cnt:   1,
 	}
 	isCompoundIndex := JudgeIsCompositeIndexColumn(f)
 	b.Attrs[0] = catalog.IndexTableIndexColName
+	if len(b.Attrs) > 1 {
+		b.Attrs[1] = catalog.IndexTablePrimaryColName
+	}
+	bitMap := new(nulls.Nulls)
 	if isCompoundIndex {
 		cIndexVecMap := make(map[string]*vector.Vector)
 		for num, attrName := range attrs {
@@ -72,33 +76,226 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, f *plan.Field, p
 			v := cIndexVecMap[part]
 			vs = append(vs, v)
 		}
-		vec, _ := multi.Serial(vs, proc)
-		b.Vecs[0] = vec
+		b.Vecs[0], bitMap = serialWithCompacted(vs, proc)
 	} else {
+		var vec *vector.Vector
 		for i, name := range attrs {
 			if f.Parts[0] == name {
-				b.Vecs[0] = vecs[i]
+				vec = vecs[i]
 			}
 		}
+		b.Vecs[0], bitMap = compactSingleIndexCol(vec, proc)
 	}
-	if isCompoundIndex {
-		b.Cnt = 1
-	} else {
-		v, needClean := compactUniqueKeyBatch(b.Vecs[0], proc)
-		if needClean {
-			b.Cnt = 1
-		} else {
-			b.Cnt = 2
+
+	if len(b.Attrs) > 1 {
+		var vec *vector.Vector
+		for i, name := range attrs {
+			if originTablePrimaryKey == name {
+				vec = vecs[i]
+			}
 		}
-		b.Vecs[0] = v
+		b.Vecs[1] = compactPrimaryCol(vec, bitMap, proc)
 	}
+
 	return b, vector.Length(b.Vecs[0])
 }
 
-func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vector, bool) {
-	if !nulls.Any(v.Nsp) {
-		return v, false
+// SerialWithCompacted have a similar function named Serial
+// SerialWithCompacted function is used by BuildUniqueKeyBatch
+// when vs have null value, the function will ignore the row in
+// the vs
+// for example:
+// input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
+// result vec is [serial(1, 2, 3), serial(1, 2, 3)]
+// result bitmap is [2]
+func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls) {
+	// resolve vs
+	length := vector.Length(vs[0])
+	vct := types.T_varchar.ToType()
+	nsp := new(nulls.Nulls)
+	val := make([][]byte, 0, length)
+	ps := types.NewPackerArray(length)
+	bitMap := new(nulls.Nulls)
+
+	for _, v := range vs {
+		switch v.Typ.Oid {
+		case types.T_bool:
+			s := vector.MustTCols[bool](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeBool(b)
+				}
+			}
+		case types.T_int8:
+			s := vector.MustTCols[int8](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeInt8(b)
+				}
+			}
+		case types.T_int16:
+			s := vector.MustTCols[int16](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeInt16(b)
+				}
+			}
+		case types.T_int32:
+			s := vector.MustTCols[int32](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeInt32(b)
+				}
+			}
+		case types.T_int64:
+			s := vector.MustTCols[int64](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeInt64(b)
+				}
+			}
+		case types.T_uint8:
+			s := vector.MustTCols[uint8](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeUint8(b)
+				}
+			}
+		case types.T_uint16:
+			s := vector.MustTCols[uint16](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeUint16(b)
+				}
+			}
+		case types.T_uint32:
+			s := vector.MustTCols[uint32](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeUint32(b)
+				}
+			}
+		case types.T_uint64:
+			s := vector.MustTCols[uint64](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeUint64(b)
+				}
+			}
+		case types.T_float32:
+			s := vector.MustTCols[float32](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeFloat32(b)
+				}
+			}
+		case types.T_float64:
+			s := vector.MustTCols[float64](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeFloat64(b)
+				}
+			}
+		case types.T_date:
+			s := vector.MustTCols[types.Date](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeDate(b)
+				}
+			}
+		case types.T_time:
+			s := vector.MustTCols[types.Time](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeTime(b)
+				}
+			}
+		case types.T_datetime:
+			s := vector.MustTCols[types.Datetime](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeDatetime(b)
+				}
+			}
+		case types.T_timestamp:
+			s := vector.MustTCols[types.Timestamp](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeTimestamp(b)
+				}
+			}
+		case types.T_decimal64:
+			s := vector.MustTCols[types.Decimal64](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeDecimal64(b)
+				}
+			}
+		case types.T_decimal128:
+			s := vector.MustTCols[types.Decimal128](v)
+			for i, b := range s {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeDecimal128(b)
+				}
+			}
+		case types.T_json, types.T_char, types.T_varchar, types.T_blob, types.T_text:
+			vs := vector.GetStrVectorValues(v)
+			for i := range vs {
+				if nulls.Contains(v.Nsp, uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeStringType([]byte(vs[i]))
+				}
+			}
+		}
 	}
+
+	for i := range ps {
+		if !nulls.Contains(bitMap, uint64(i)) {
+			val = append(val, ps[i].GetBuf())
+		}
+	}
+
+	vec := vector.NewWithBytes(vct, val, nsp, proc.Mp())
+
+	return vec, bitMap
+}
+
+func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls) {
 	nsp := new(nulls.Nulls)
 	var vec *vector.Vector
 	length := vector.Length(v)
@@ -266,5 +463,175 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 		}
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	}
-	return vec, true
+	return vec, v.Nsp
+}
+func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Process) *vector.Vector {
+	nsp := new(nulls.Nulls)
+	var vec *vector.Vector
+	length := vector.Length(v)
+	switch v.Typ.Oid {
+	case types.T_bool:
+		s := vector.MustTCols[bool](v)
+		ns := make([]bool, 0, length)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_int8:
+		s := vector.MustTCols[int8](v)
+		ns := make([]int8, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_int16:
+		s := vector.MustTCols[int16](v)
+		ns := make([]int16, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_int32:
+		s := vector.MustTCols[int32](v)
+		ns := make([]int32, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_int64:
+		s := vector.MustTCols[int64](v)
+		ns := make([]int64, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_uint8:
+		s := vector.MustTCols[uint8](v)
+		ns := make([]uint8, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_uint16:
+		s := vector.MustTCols[uint16](v)
+		ns := make([]uint16, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_uint32:
+		s := vector.MustTCols[uint32](v)
+		ns := make([]uint32, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_uint64:
+		s := vector.MustTCols[uint64](v)
+		ns := make([]uint64, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_float32:
+		s := vector.MustTCols[float32](v)
+		ns := make([]float32, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_float64:
+		s := vector.MustTCols[float64](v)
+		ns := make([]float64, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_date:
+		s := vector.MustTCols[types.Date](v)
+		ns := make([]types.Date, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_time:
+		s := vector.MustTCols[types.Time](v)
+		ns := make([]types.Time, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_datetime:
+		s := vector.MustTCols[types.Datetime](v)
+		ns := make([]types.Datetime, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_timestamp:
+		s := vector.MustTCols[types.Timestamp](v)
+		ns := make([]types.Timestamp, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_decimal64:
+		s := vector.MustTCols[types.Decimal64](v)
+		ns := make([]types.Decimal64, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_decimal128:
+		s := vector.MustTCols[types.Decimal128](v)
+		ns := make([]types.Decimal128, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_json, types.T_char, types.T_varchar, types.T_blob:
+		s := vector.GetStrVectorValues(v)
+		ns := make([]string, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	}
+	return vec
 }

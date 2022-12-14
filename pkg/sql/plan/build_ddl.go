@@ -568,6 +568,20 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			})
 			field.Cols = append(field.Cols, colDef)
 		}
+		if pkeyName != "" {
+			colDef := &ColDef{
+				Name: catalog.IndexTablePrimaryColName,
+				Alg:  plan.CompressType_Lz4,
+				Typ:  colMap[pkeyName].Typ,
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			}
+			tableDef.Cols = append(tableDef.Cols, colDef)
+			field.Cols = append(field.Cols, colDef)
+		}
 		def.IndexNames = append(def.IndexNames, indexInfo.Name)
 		def.TableNames = append(def.TableNames, indexTableName)
 		def.Fields = append(def.Fields, field)
