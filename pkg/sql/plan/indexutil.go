@@ -77,9 +77,9 @@ func buildLeftJoinForMultTableDelete(ctx CompilerContext, stmt *tree.Delete) (*P
 		}
 	}
 	//-----------------------------------------new code-----------------------------------------------------------------
-	tableRefExpr := stmt.TableRefs[0]
 
-	var leftJoinTableExpr tree.TableExpr
+	leftJoinTableExpr := stmt.TableRefs[0]
+
 	deleteTableList := NewDeleteTableList()
 
 	for i := 0; i < tableCount; i++ {
@@ -90,23 +90,27 @@ func buildLeftJoinForMultTableDelete(ctx CompilerContext, stmt *tree.Delete) (*P
 		if err != nil {
 			return nil, err
 		}
+
 		// 2.get origin table Name
 		originTableName := tbinfo.alias2BaseNameMap[string(tbs[i].ObjectName)]
 
 		// 3.get the definition of the unique index of the original table
 		unqiueIndexDef, _ := buildIndexDefs(tableDef.Defs)
 
-		for i := 0; i < len(unqiueIndexDef.TableNames); i++ {
-			// build left join with origin table and index table
-			indexTableExpr := buildIndexTableExpr(unqiueIndexDef.TableNames[i])
-			joinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[i], unqiueIndexDef.Fields[i])
-			leftJoinTableExpr = &tree.JoinTableExpr{
-				JoinType: tree.JOIN_TYPE_LEFT,
-				Left:     tableRefExpr,
-				Right:    indexTableExpr,
-				Cond:     joinCond,
+		if unqiueIndexDef != nil {
+			for j := 0; j < len(unqiueIndexDef.TableNames); j++ {
+				// build left join with origin table and index table
+				indexTableExpr := buildIndexTableExpr(unqiueIndexDef.TableNames[j])
+				joinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[j], unqiueIndexDef.Fields[j])
+				leftJoinTableExpr = &tree.JoinTableExpr{
+					JoinType: tree.JOIN_TYPE_LEFT,
+					Left:     leftJoinTableExpr,
+					Right:    indexTableExpr,
+					Cond:     joinCond,
+				}
 			}
-			tableRefExpr = leftJoinTableExpr
+		} else {
+			continue
 		}
 	}
 

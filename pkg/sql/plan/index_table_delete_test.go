@@ -28,7 +28,9 @@ func TestSingleSQLQuery(t *testing.T) {
 	//sql := "delete from dept where dname = 'RESEARCH'"
 	//sql := "delete from emp where deptno = 20 order by sal limit 2"
 	//sql := "delete from employees where empno > 7800 order by empno limit 2"
-	sql := "DELETE FROM employees, dept USING employees INNER JOIN dept WHERE employees.deptno = dept.deptno"
+	//sql := "DELETE FROM employees, dept USING employees INNER JOIN dept WHERE employees.deptno = dept.deptno"
+	sql := "delete emp from emp left join dept on emp.deptno = dept.deptno where dept.deptno = 20"
+	//sql := "delete emp from emp left join dept on emp.deptno = dept.deptno where emp.sal > 2000"
 	mock := NewMockOptimizer()
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
@@ -87,6 +89,26 @@ func TestMultiTableDeleteSQL(t *testing.T) {
 		"delete emp,dept from emp ,dept where emp.deptno = dept.deptno and empno > 7800",
 		"delete emp,dept from emp ,dept where emp.deptno = dept.deptno and empno = 7839",
 		"DELETE FROM emp, dept USING emp INNER JOIN dept WHERE emp.deptno = dept.deptno",
+		"delete emp,dept from emp,dept where emp.deptno = dept.deptno",
+		"delete emp from emp left join dept on emp.deptno = dept.deptno where dept.deptno = 20",
+		"delete emp from emp left join dept on emp.deptno = dept.deptno where emp.sal > 2000",
+		"delete t1 from emp as t1 left join dept as t2 on t1.deptno = t2.deptno where t1.sal > 2000",
 	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+// Delete without index table
+func TestWithoutIndexTableDeleteSQL(t *testing.T) {
+	mock := NewMockOptimizer()
+
+	sqls := []string{
+		"delete from nation",
+		"delete nation, nation2 from nation join nation2 on nation.n_name = nation2.n_name",
+		"DELETE FROM NATION",
+		"DELETE FROM NATION WHERE N_NATIONKEY > 10",
+		"DELETE FROM NATION WHERE N_NATIONKEY > 10 ORDER BY N_NAME LIMIT 5",
+		"DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
+	}
+
 	runTestShouldPass(mock, t, sqls, false, false)
 }
