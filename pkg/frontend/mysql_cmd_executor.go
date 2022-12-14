@@ -209,8 +209,6 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
-	var stmID uuid.UUID
-	copy(stmID[:], cw.GetUUID())
 	var txnID uuid.UUID
 	var txn TxnOperator
 	var err error
@@ -228,14 +226,25 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !useEnv {
 		requestAt = time.Now()
 	}
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-	cw.GetAst().Format(fmtCtx)
-	text := SubStringFromBegin(fmtCtx.String(), int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	var stmID uuid.UUID
+	var statement tree.Statement = nil
+	var text string
+	if cw != nil {
+		copy(stmID[:], cw.GetUUID())
+		statement = cw.GetAst()
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		statement.Format(fmtCtx)
+		text = SubStringFromBegin(fmtCtx.String(), int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	} else {
+		stmID = uuid.New()
+		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	}
 	stm := &trace.StatementInfo{
 		StatementID:          stmID,
 		TransactionID:        txnID,
 		SessionID:            sesID,
 		Account:              tenant.GetTenant(),
+		RoleId:               proc.SessionInfo.RoleId,
 		User:                 tenant.GetUser(),
 		Host:                 sessInfo.GetHost(),
 		Database:             sessInfo.GetDatabase(),
@@ -244,6 +253,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		StatementTag:         "", // fixme: (Reserved)
 		SqlSourceType:        ses.sqlSourceType,
 		RequestAt:            requestAt,
+		StatementType:        getStatementType(statement).GetStatementType(),
+		QueryType:            getStatementType(statement).GetQueryType(),
 	}
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
@@ -256,44 +267,11 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 }
 
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string) context.Context {
-	if !trace.GetTracerProvider().IsEnable() {
-		return ctx
-	}
-	sessInfo := proc.SessionInfo
+	ctx = RecordStatement(ctx, ses, proc, nil, envBegin, envStmt, true)
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
-	stmID, _ := uuid.NewUUID()
-	var txnID uuid.UUID
-	var txn TxnOperator
-	var err2 error
-	if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
-		txn, err2 = handler.GetTxn()
-		if err2 != nil {
-			logutil.Errorf("RecordParseErrorStatement. error:%v", err2)
-		} else {
-			copy(txnID[:], txn.Txn().ID)
-		}
-	}
-	var sesID uuid.UUID
-	copy(sesID[:], ses.GetUUID())
-	text := SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
-	stm := &trace.StatementInfo{
-		StatementID:          stmID,
-		TransactionID:        txnID,
-		SessionID:            sesID,
-		Account:              tenant.GetTenant(),
-		User:                 tenant.GetUser(),
-		Host:                 sessInfo.GetHost(),
-		Database:             sessInfo.GetDatabase(),
-		Statement:            text,
-		StatementFingerprint: "", // fixme: (Reserved)
-		StatementTag:         "", // fixme: (Reserved)
-		RequestAt:            envBegin,
-	}
-	sc := trace.SpanContextWithID(trace.TraceID(stmID), trace.SpanKindStatement)
-	ctx = trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 	incStatementCounter(tenant.GetTenant(), nil)
 	incStatementErrorsCounter(tenant.GetTenant(), nil)
 	return ctx
@@ -2935,18 +2913,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 }
 
 func incStatementCounter(tenant string, stmt tree.Statement) {
-	switch stmt.(type) {
-	case *tree.Select:
-		metric.StatementCounter(tenant, metric.SQLTypeSelect).Inc()
-	case *tree.Insert:
-		metric.StatementCounter(tenant, metric.SQLTypeInsert).Inc()
-	case *tree.Delete:
-		metric.StatementCounter(tenant, metric.SQLTypeDelete).Inc()
-	case *tree.Update:
-		metric.StatementCounter(tenant, metric.SQLTypeUpdate).Inc()
-	default:
-		metric.StatementCounter(tenant, metric.SQLTypeOther).Inc()
-	}
+	metric.StatementCounter(tenant, getStatementType(stmt).GetQueryType()).Inc()
 }
 
 func incTransactionCounter(tenant string) {
@@ -2961,17 +2928,22 @@ func incTransactionErrorsCounter(tenant string, t metric.SQLType) {
 }
 
 func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
+	metric.StatementErrorsCounter(tenant, getStatementType(stmt).GetQueryType()).Inc()
+}
+
+type unknownStatementType struct {
+	tree.StatementType
+}
+
+func (unknownStatementType) GetStatementType() string { return "Unknown" }
+func (unknownStatementType) GetQueryType() string     { return tree.QueryTypeOth }
+
+func getStatementType(stmt tree.Statement) tree.StatementType {
 	switch stmt.(type) {
-	case *tree.Select:
-		metric.StatementErrorsCounter(tenant, metric.SQLTypeSelect).Inc()
-	case *tree.Insert:
-		metric.StatementErrorsCounter(tenant, metric.SQLTypeInsert).Inc()
-	case *tree.Delete:
-		metric.StatementErrorsCounter(tenant, metric.SQLTypeDelete).Inc()
-	case *tree.Update:
-		metric.StatementErrorsCounter(tenant, metric.SQLTypeUpdate).Inc()
+	case tree.StatementType:
+		return stmt
 	default:
-		metric.StatementErrorsCounter(tenant, metric.SQLTypeOther).Inc()
+		return unknownStatementType{}
 	}
 }
 

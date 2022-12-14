@@ -461,6 +461,38 @@ func (p *Partition) IterDeletedRowIDs(ctx context.Context, blockIDs []uint64, ts
 	}
 }
 
+func (p *Partition) Rows(
+	tx *memtable.Transaction,
+	deletes map[types.Rowid]uint8,
+	skipBlocks map[uint64]uint8) (int64, error) {
+	var rows int64 = 0
+	iter := p.data.NewIter(tx)
+	defer iter.Close()
+	for ok := iter.First(); ok; ok = iter.Next() {
+		dataKey, dataValue, err := iter.Read()
+		if err != nil {
+			return 0, err
+		}
+
+		if _, ok := deletes[types.Rowid(dataKey)]; ok {
+			continue
+		}
+
+		if dataValue.op == opDelete {
+			continue
+		}
+
+		if skipBlocks != nil {
+			if _, ok := skipBlocks[rowIDToBlockID(dataKey)]; ok {
+				continue
+			}
+		}
+		rows++
+	}
+
+	return rows, nil
+}
+
 func (p *Partition) NewReader(
 	ctx context.Context,
 	readerNumber int,

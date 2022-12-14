@@ -85,6 +85,7 @@ type ClusterByDef struct {
 type Statistics interface {
 	FilteredStats(ctx context.Context, expr *plan.Expr) (int32, int64, error)
 	Stats(ctx context.Context) (int32, int64, error)
+	Rows(ctx context.Context) (int64, error)
 	Size(ctx context.Context, columnName string) (int64, error)
 }
 
