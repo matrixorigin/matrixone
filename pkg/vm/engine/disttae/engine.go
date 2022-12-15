@@ -198,7 +198,7 @@ func (e *Engine) hasDuplicate(ctx context.Context, txn *Transaction) bool {
 			if e.bat.Length() == 0 {
 				continue
 			}
-			key := genTableKey(ctx, e.tableName, e.databaseId)
+			key := genTableKey(ctx, e.tableName, e.databaseName, e.databaseId)
 			v, ok := txn.tableMap.Load(key)
 			if !ok {
 				continue

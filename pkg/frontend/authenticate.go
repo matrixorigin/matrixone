@@ -1057,11 +1057,11 @@ var (
 
 	// the databases that can not operated by the real user
 	bannedCatalogDatabases = map[string]int8{
-		"mo_catalog":         0,
-		"information_schema": 0,
-		"system":             0,
-		"system_metrics":     0,
-		"mysql":              0,
+		//"mo_catalog":         0,
+		//"information_schema": 0,
+		//"system":             0,
+		//"system_metrics":     0,
+		//"mysql":              0,
 	}
 
 	// the privileges that can not be granted or revoked

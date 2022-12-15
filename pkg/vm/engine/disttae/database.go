@@ -34,7 +34,7 @@ func (db *database) Relations(ctx context.Context) ([]string, error) {
 }
 
 func (db *database) Relation(ctx context.Context, name string) (engine.Relation, error) {
-	key := genTableKey(ctx, name, db.databaseId)
+	key := genTableKey(ctx, name, db.databaseName, db.databaseId)
 	if tbl, ok := db.txn.tableMap.Load(key); ok {
 		return tbl.(*table), nil
 	}
@@ -55,7 +55,7 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 		return db.openSysTable(key, id, name, defs), nil
 
 	}
-	tbl, defs, err := db.txn.getTableInfo(ctx, db.databaseId, name)
+	tbl, defs, err := db.txn.getTableInfo(ctx, db.databaseId, db.databaseName, name)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +78,7 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 }
 
 func (db *database) Delete(ctx context.Context, name string) error {
-	key := genTableKey(ctx, name, db.databaseId)
+	key := genTableKey(ctx, name, db.databaseName, db.databaseId)
 	db.txn.tableMap.Delete(key)
 	id, err := db.txn.getTableId(ctx, db.databaseId, name)
 	if err != nil {
@@ -105,7 +105,7 @@ func (db *database) Truncate(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	key := genTableKey(ctx, name, db.databaseId)
+	key := genTableKey(ctx, name, db.databaseName, db.databaseId)
 	if v, ok := db.txn.tableMap.Load(key); ok {
 		tbl = v.(*table)
 	}

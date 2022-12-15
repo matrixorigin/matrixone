@@ -17,6 +17,7 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
+	"go/constant"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1743,6 +1744,53 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		}
 
 		err = builder.addBinding(nodeID, tbl.As, ctx)
+		if err != nil {
+			return
+		}
+		objRef := builder.qry.Nodes[nodeID].ObjRef
+		if objRef != nil {
+			database := objRef.SchemaName
+			table := objRef.ObjName
+			if len(database) == 0 {
+				database = builder.compCtx.DefaultDatabase()
+			}
+			if builder.compCtx.GetAccountId() != catalog.System_Account && database == catalog.MO_CATALOG {
+				var accountFilterExprs []*plan.Expr
+				predefinedTables := map[string]int8{
+					"mo_database":             0,
+					"mo_tables":               0,
+					"mo_columns":              0,
+					"mo_user":                 0,
+					"mo_role":                 0,
+					"mo_user_grant":           0,
+					"mo_role_grant":           0,
+					"mo_role_privs":           0,
+					"%!%mo_increment_columns": 0,
+				}
+				//also it is not index table
+				if _, ok := predefinedTables[table]; !ok && !strings.HasPrefix(table, "__mo_index_unique") {
+					ctx.binder = NewWhereBinder(builder, ctx)
+					//account_id = accX
+					left := &tree.UnresolvedName{
+						NumParts: 1,
+						Parts:    tree.NameParts{},
+					}
+					left.Parts[0] = "account_id"
+					right := tree.NewNumVal(constant.MakeUint64(uint64(builder.compCtx.GetAccountId())), "", false)
+					right.ValType = tree.P_uint64
+					accountFilter := &tree.ComparisonExpr{
+						Op:    tree.EQUAL,
+						Left:  left,
+						Right: right,
+					}
+					accountFilterExprs, err = splitAndBindCondition(accountFilter, ctx)
+					if err != nil {
+						return 0, err
+					}
+				}
+				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+			}
+		}
 
 		return
 

@@ -57,9 +57,11 @@ func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]
 	return tableList, nil
 }
 
-func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
+func (txn *Transaction) getTableInfo(ctx context.Context,
+	databaseId uint64,
+	dbName string,
 	name string) (*table, []engine.TableDef, error) {
-	accountId := getAccountId(ctx)
+	accountId := getAccountIdWithClusterTable(ctx, dbName, name)
 	key := genTableIndexKey(name, databaseId, accountId)
 	rows, err := txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, "",
 		txn.dnStores[:1], catalog.MoTablesSchema, key,

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -965,11 +966,33 @@ func genDatabaseKey(ctx context.Context, name string) databaseKey {
 	}
 }
 
-func genTableKey(ctx context.Context, name string, databaseId uint64) tableKey {
+func getAccountIdWithClusterTable(ctx context.Context, dbName string, name string) uint32 {
+	//
+	predefinedTables := map[string]int8{
+		"mo_database":             0,
+		"mo_tables":               0,
+		"mo_columns":              0,
+		"mo_user":                 0,
+		"mo_role":                 0,
+		"mo_user_grant":           0,
+		"mo_role_grant":           0,
+		"mo_role_privs":           0,
+		"%!%mo_increment_columns": 0,
+	}
+	accountId := getAccountId(ctx)
+	if accountId != catalog.System_Account && dbName == catalog.MO_CATALOG {
+		if _, ok := predefinedTables[name]; !ok && !strings.HasPrefix(name, "__mo_index_unique") {
+			accountId = catalog.System_Account
+		}
+	}
+	return accountId
+}
+
+func genTableKey(ctx context.Context, name string, dbName string, databaseId uint64) tableKey {
 	return tableKey{
 		name:       name,
 		databaseId: databaseId,
-		accountId:  getAccountId(ctx),
+		accountId:  getAccountIdWithClusterTable(ctx, dbName, name),
 	}
 }
 
