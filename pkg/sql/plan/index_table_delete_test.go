@@ -29,8 +29,9 @@ func TestSingleSQLQuery(t *testing.T) {
 	//sql := "delete from emp where deptno = 20 order by sal limit 2"
 	//sql := "delete from employees where empno > 7800 order by empno limit 2"
 	//sql := "DELETE FROM employees, dept USING employees INNER JOIN dept WHERE employees.deptno = dept.deptno"
-	sql := "delete emp from emp left join dept on emp.deptno = dept.deptno where dept.deptno = 20"
+	//sql := "delete emp from emp left join dept on emp.deptno = dept.deptno where dept.deptno = 20"
 	//sql := "delete emp from emp left join dept on emp.deptno = dept.deptno where emp.sal > 2000"
+	sql := "update emp set comm = 1200 where deptno = 10"
 	mock := NewMockOptimizer()
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
@@ -108,6 +109,17 @@ func TestWithoutIndexTableDeleteSQL(t *testing.T) {
 		"DELETE FROM NATION WHERE N_NATIONKEY > 10",
 		"DELETE FROM NATION WHERE N_NATIONKEY > 10 ORDER BY N_NAME LIMIT 5",
 		"DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
+	}
+
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestSingleTableUpdate(t *testing.T) {
+	mock := NewMockOptimizer()
+
+	sqls := []string{
+		"update dept set dname = 'XXX' where deptno = 10",
+		"update emp set comm = 1200 where deptno = 10",
 	}
 
 	runTestShouldPass(mock, t, sqls, false, false)

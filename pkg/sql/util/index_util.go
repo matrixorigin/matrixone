@@ -82,6 +82,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, f *plan.Field, o
 		for i, name := range attrs {
 			if f.Parts[0] == name {
 				vec = vecs[i]
+				break
 			}
 		}
 		b.Vecs[0], bitMap = compactSingleIndexCol(vec, proc)
