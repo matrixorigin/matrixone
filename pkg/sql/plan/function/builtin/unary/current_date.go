@@ -29,10 +29,7 @@ func CurrentDate(_ []*vector.Vector, proc *process.Process) (resultVec *vector.V
 		}
 	}()
 	resultType := types.T_date.ToType()
-	resultVec, err = proc.AllocVectorOfRows(resultType, 1, nil)
-	if err != nil {
-		return
-	}
+	resultVec = proc.AllocScalarVector(resultType)
 	loc := proc.SessionInfo.TimeZone
 	if loc == nil {
 		logutil.Warn("missing timezone in session info")
