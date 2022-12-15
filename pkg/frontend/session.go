@@ -178,8 +178,8 @@ type Session struct {
 
 	skipAuth bool
 
-	sqlSourceType string
-	InitTempEngine bool
+	sqlSourceType    string
+	InitTempEngine   bool
 	tempTablestorage *memorystorage.Storage
 }
 
@@ -424,7 +424,6 @@ func (ses *Session) SetTempTableStorage(ck clock.Clock) (*logservicepb.DNStore, 
 
 	ms, err := memorystorage.NewMemoryStorage(
 		mpool.MustNewZero(),
-		memorystorage.SnapshotIsolation,
 		ck,
 		memoryengine.RandomIDGenerator,
 	)
