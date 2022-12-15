@@ -36,7 +36,7 @@ var (
 		types.New(types.T_uint64, 0, 0, 0),
 		types.New(types.T_uint64, 0, 0, 0),
 		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_uint32, 0, 0, 0),
 		types.New(types.T_varchar, 5000, 0, 0),
 	}
 

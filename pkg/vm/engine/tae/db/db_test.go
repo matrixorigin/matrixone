@@ -4575,6 +4575,7 @@ func TestGcWithCheckpoint(t *testing.T) {
 		data, err := entry.Read(context.Background(), nil, tae.Fs)
 		assert.NoError(t, err)
 		table.UpdateTable(data)
+		table.SaveTable(entry, tae.Fs)
 		manager.AddTable(table)
 	}
 	manager.MergeTable()

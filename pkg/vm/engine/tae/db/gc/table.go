@@ -157,14 +157,14 @@ func (t *GcTable) collectData() []*containers.Batch {
 			add.GetVectorByName(GcAttrSegmentId).Append(block.SegmentID)
 			add.GetVectorByName(GcAttrTableId).Append(block.TableID)
 			add.GetVectorByName(GcAttrDbId).Append(block.PartID)
-			add.GetVectorByName(GcAttrObjectName).Append(name)
+			add.GetVectorByName(GcAttrObjectName).Append([]byte(name))
 		}
 		for _, block := range object.table.delete {
 			del.GetVectorByName(GcAttrBlockId).Append(block.BlockID)
 			del.GetVectorByName(GcAttrSegmentId).Append(block.SegmentID)
 			del.GetVectorByName(GcAttrTableId).Append(block.TableID)
 			del.GetVectorByName(GcAttrDbId).Append(block.PartID)
-			del.GetVectorByName(GcAttrObjectName).Append(name)
+			del.GetVectorByName(GcAttrObjectName).Append([]byte(name))
 		}
 	}
 	bats := make([]*containers.Batch, 3)
@@ -174,7 +174,7 @@ func (t *GcTable) collectData() []*containers.Batch {
 	return bats
 }
 
-func (t *GcTable) SaveTable(ckp checkpoint.CheckpointEntry, fs *objectio.ObjectFS) ([]objectio.BlockObject, error) {
+func (t *GcTable) SaveTable(ckp *checkpoint.CheckpointEntry, fs *objectio.ObjectFS) ([]objectio.BlockObject, error) {
 	bats := t.collectData()
 	name := blockio.EncodeCheckpointMetadataFileName(GcMetaDir, PrefixGcMeta, ckp.GetStart(), ckp.GetEnd())
 	writer := blockio.NewWriter(context.Background(), fs, name)
