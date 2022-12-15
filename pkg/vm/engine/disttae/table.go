@@ -46,10 +46,14 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 	}
 	var blockNum, totalBlockCnt int
 	var outcnt int64
+
+	exprMono := checkExprIsMonotonic(expr)
+	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
+
 	for _, blockmetas := range tbl.meta.blocks {
 		totalBlockCnt += len(blockmetas)
 		for _, blk := range blockmetas {
-			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.db.txn.proc) {
+			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
 				outcnt += blockRows(blk)
 				blockNum++
 			}
@@ -203,12 +207,15 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 		return ranges, nil
 	}
 	tbl.meta.modifedBlocks = make([][]ModifyBlockMeta, len(tbl.meta.blocks))
+
+	exprMono := checkExprIsMonotonic(expr)
+	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range dnList {
 		blks, deletes := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
 			tbl.meta.blocks[i], writes)
 		for _, blk := range blks {
 			tbl.skipBlocks[blk.Info.BlockID] = 0
-			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.db.txn.proc) {
+			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
 				ranges = append(ranges, blockMarshal(blk))
 			}
 		}
