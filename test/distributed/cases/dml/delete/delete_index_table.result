@@ -74,29 +74,6 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 7900    JAMES    CLERK    7698    1981-12-03    950.00    null    30
 null    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
 delete from employees where deptno = 10;
-internal error: panic extend instead of shink vector: 
-github.com/matrixorigin/matrixone/pkg/container/vector.SetVectorLength
-	/home/yiming/workspace/matrixone/pkg/container/vector/vector.go:881
-github.com/matrixorigin/matrixone/pkg/container/vector.SetLength
-	/home/yiming/workspace/matrixone/pkg/container/vector/vector.go:875
-github.com/matrixorigin/matrixone/pkg/sql/colexec.EvalExpr
-	/home/yiming/workspace/matrixone/pkg/sql/colexec/expr_eval.go:181
-github.com/matrixorigin/matrixone/pkg/sql/colexec/left.(*container).evalJoinCondition
-	/home/yiming/workspace/matrixone/pkg/sql/colexec/left/join.go:226
-github.com/matrixorigin/matrixone/pkg/sql/colexec/left.(*container).probe
-	/home/yiming/workspace/matrixone/pkg/sql/colexec/left/join.go:133
-github.com/matrixorigin/matrixone/pkg/sql/colexec/left.Call
-	/home/yiming/workspace/matrixone/pkg/sql/colexec/left/join.go:75
-github.com/matrixorigin/matrixone/pkg/vm.Run
-	/home/yiming/workspace/matrixone/pkg/vm/vm.go:60
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).MergeRun
-	/home/yiming/workspace/matrixone/pkg/vm/pipeline/pipeline.go:131
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun
-	/home/yiming/workspace/matrixone/pkg/sql/compile/scope.go:111
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun.func2
-	/home/yiming/workspace/matrixone/pkg/sql/compile/scope.go:82
-runtime.goexit
-	/usr/local/go/src/runtime/asm_amd64.s:1594
 select * from employees;
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
@@ -105,14 +82,11 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 7566    JONES    MANAGER    7839    1981-04-02    2975.00    null    20
 7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    1400.00    30
 7698    BLAKE    MANAGER    7839    1981-05-01    2850.00    null    30
-7782    CLARK    MANAGER    7839    1981-06-09    2450.00    null    10
 7788    SCOTT    ANALYST    7566    0087-07-13    3000.00    null    20
-7839    KING    PRESIDENT    null    1981-11-17    5000.00    null    10
 7844    TURNER    SALESMAN    7698    1981-09-08    1500.00    0.00    30
 7876    ADAMS    CLERK    7788    0087-07-13    1100.00    null    20
 7900    null    CLERK    7698    1981-12-03    950.00    null    30
 7902    FORD    null    7566    1981-12-03    3000.00    null    20
-null    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
 delete from employees where empno = 7698 and ename = 'BLAKE';
 select count(*) from employees where empno = 7698 and ename = 'BLAKE';
 count(*)
@@ -139,17 +113,22 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
 7521    WARD    SALESMAN    7698    1981-02-22    1250.00    500.00    30
 7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    1400.00    30
-7782    CLARK    MANAGER    7839    1981-06-09    2450.00    null    10
-7839    KING    PRESIDENT    null    1981-11-17    5000.00    null    10
 7844    TURNER    SALESMAN    7698    1981-09-08    1500.00    0.00    30
 7876    ADAMS    CLERK    7788    0087-07-13    1100.00    null    20
 7900    null    CLERK    7698    1981-12-03    950.00    null    30
-null    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
 select * from dept;
 deptno    dname    loc
 30    SALES    CHICAGO
 40    OPERATIONS    BOSTON
+truncate table emp;
+select * from emp;
+empno    ename    job    mgr    hiredate    sal    comm    deptno
+truncate table dept;
+select * from dept;
+deptno    dname    loc
+truncate table employees;
+select * from employees;
+empno    ename    job    mgr    hiredate    sal    comm    deptno
 drop table dept;
-drop table empl;
-no such table delete_index_table.empl
+drop table emp;
 drop table employees;

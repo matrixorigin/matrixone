@@ -1,4 +1,3 @@
-
 drop table if exists dept;
 create table dept(
 deptno int unsigned COMMENT '部门编号',
@@ -92,6 +91,17 @@ delete employees, dept from employees, dept where employees.deptno = dept.deptno
 select * from employees;
 select * from dept;
 
+
+truncate table emp;
+select * from emp;
+
+truncate table dept;
+select * from dept;
+
+truncate table employees;
+select * from employees;
+
+
 drop table dept;
-drop table empl;
+drop table emp;
 drop table employees;

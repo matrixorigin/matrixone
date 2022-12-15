@@ -82,6 +82,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, f *plan.Field, o
 		for i, name := range attrs {
 			if f.Parts[0] == name {
 				vec = vecs[i]
+				break
 			}
 		}
 		b.Vecs[0], bitMap = compactSingleIndexCol(vec, proc)
@@ -461,7 +462,7 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+		vec = vector.NewWithStrings(v.Typ, ns, nsp, proc.Mp())
 	}
 	return vec, v.Nsp
 }
@@ -631,7 +632,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+		vec = vector.NewWithStrings(v.Typ, ns, nsp, proc.Mp())
 	}
 	return vec
 }
