@@ -264,8 +264,14 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 		return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("eval expr '%v'", t))
 	}
 }
-
-func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
+func constVectorBool(b bool, vecTrue, vecFalse *vector.Vector) *vector.Vector {
+	if b {
+		return vecTrue
+	} else {
+		return vecFalse
+	}
+}
+func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Expr, vecTrue, vecFalse *vector.Vector) (*vector.Vector, error) {
 	var vec *vector.Vector
 
 	if len(bat.Zs) == 0 {
@@ -299,7 +305,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		}
 		vs := make([]*vector.Vector, len(t.F.Args))
 		for i := range vs {
-			v, err := EvalExprByZonemapBat(bat, proc, t.F.Args[i])
+			v, err := EvalExprByZonemapBat(bat, proc, t.F.Args[i], vecTrue, vecFalse)
 			if err != nil {
 				if proc != nil {
 					mp := make(map[*vector.Vector]uint8)
@@ -334,9 +340,9 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 			if err != nil {
 				// if cann't compare, just return true.
 				// that means we don't known this filter expr's return, so you must readBlock
-				return vector.NewConstFixed(types.T_bool.ToType(), 1, true, proc.Mp()), nil
+				return constVectorBool(true, vecTrue, vecFalse), nil
 			}
-			return vector.NewConstFixed(types.T_bool.ToType(), 1, isTrue, proc.Mp()), nil
+			return constVectorBool(isTrue, vecTrue, vecFalse), nil
 		}
 
 		switch t.F.Func.ObjName {
@@ -364,28 +370,28 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 				if leftHasTrue {
 					for _, rightHasTrue := range cols2 {
 						if rightHasTrue {
-							return vector.NewConstFixed(types.T_bool.ToType(), 1, true, proc.Mp()), nil
+							return constVectorBool(true, vecTrue, vecFalse), nil
 						}
 					}
 					break
 				}
 			}
-			return vector.NewConstFixed(types.T_bool.ToType(), 1, false, proc.Mp()), nil
+			return constVectorBool(false, vecTrue, vecFalse), nil
 		case "or":
 			// if some one is true in left/right, that will be true
 			cols1 := vector.MustTCols[bool](vs[0])
 			cols2 := vector.MustTCols[bool](vs[1])
 			for _, flag := range cols1 {
 				if flag {
-					return vector.NewConstFixed(types.T_bool.ToType(), 1, true, proc.Mp()), nil
+					return constVectorBool(true, vecTrue, vecFalse), nil
 				}
 			}
 			for _, flag := range cols2 {
 				if flag {
-					return vector.NewConstFixed(types.T_bool.ToType(), 1, true, proc.Mp()), nil
+					return constVectorBool(true, vecTrue, vecFalse), nil
 				}
 			}
-			return vector.NewConstFixed(types.T_bool.ToType(), 1, false, proc.Mp()), nil
+			return constVectorBool(false, vecTrue, vecFalse), nil
 		}
 
 		vec, err = f.VecFn(vs, proc)

@@ -228,7 +228,9 @@ func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process) (b
 		}
 		return false, moerr.NewInternalError(proc.Ctx, "cannot eval filter expr")
 	} else {
-		vec, err := colexec.EvalExprByZonemapBat(bat, proc, expr)
+		vecTrue := vector.NewConstFixed(types.T_bool.ToType(), 1, true, proc.Mp())
+		vecFalse := vector.NewConstFixed(types.T_bool.ToType(), 1, false, proc.Mp())
+		vec, err := colexec.EvalExprByZonemapBat(bat, proc, expr, vecTrue, vecFalse)
 		if err != nil {
 			return false, err
 		}
