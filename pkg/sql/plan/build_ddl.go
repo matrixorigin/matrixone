@@ -75,13 +75,9 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	if err != nil {
 		return nil, err
 	}
-	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-		Def: &plan.TableDef_DefType_View{
-			View: &plan.ViewDef{
-				View: string(viewData),
-			},
-		},
-	})
+	createTable.TableDef.ViewSql = &plan.ViewDef{
+		View: string(viewData),
+	}
 	properties := []*plan.Property{
 		{
 			Key:   catalog.SystemRelAttr_Kind,
@@ -593,16 +589,10 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 	} else {
-		isView := false
-		for _, def := range tableDef.Defs {
-			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
-				isView = true
-				break
-			}
-		}
-		if isView {
+		if tableDef.ViewSql != nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 		}
+
 		uDef, sDef := buildIndexDefs(tableDef.Defs)
 		truncateTable.IndexTableNames = make([]string, 0)
 		if uDef != nil {
@@ -652,13 +642,8 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 	} else {
-		isView := false
-		for _, def := range tableDef.Defs {
-			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
-				isView = true
-				break
-			}
-		}
+		isView := (tableDef.ViewSql != nil)
+
 		if isView && !dropTable.IfExists {
 			// drop table v0, v0 is view
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
@@ -714,14 +699,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 	} else {
-		isView := false
-		for _, def := range tableDef.Defs {
-			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
-				isView = true
-				break
-			}
-		}
-		if !isView {
+		if tableDef.ViewSql == nil {
 			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 	}

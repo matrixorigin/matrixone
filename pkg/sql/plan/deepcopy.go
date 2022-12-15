@@ -263,13 +263,14 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		copy(newTable.TblFunc.Param, table.TblFunc.Param)
 	}
 
-	// FIX ME: don't support now
-	// for idx, def := range table.Defs {
-	// 	newTable.Cols[idx] = &plan.TableDef_DefType{}
-	// }
-
 	if table.CompositePkey != nil {
 		newTable.CompositePkey = DeepCopyColDef(table.CompositePkey)
+	}
+
+	if table.ViewSql != nil {
+		newTable.ViewSql = &plan.ViewDef{
+			View: table.ViewSql.View,
+		}
 	}
 
 	for idx, def := range table.Defs {
@@ -314,14 +315,6 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 			newTable.Defs[idx] = &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_SIdx{
 					SIdx: indexDef,
-				},
-			}
-		case *plan.TableDef_DefType_View:
-			newTable.Defs[idx] = &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_View{
-					View: &plan.ViewDef{
-						View: defImpl.View.GetView(),
-					},
 				},
 			}
 		case *plan.TableDef_DefType_Properties:
