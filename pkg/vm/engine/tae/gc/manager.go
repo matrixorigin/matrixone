@@ -98,14 +98,14 @@ func (mgr *Manager) process(jobs ...any) {
 }
 
 // main run loop
-// 1. init all gc cron jobs
-// 2. loop
-//    2.1 sort all cron jobs by next time
-//    2.2 create a timer using the jobs' minimum next time
-//    2.3
-//        2.3.1 wait timer timeout. enqueue jobs with the next time before the
-//              timer's timeout time into the process queue. reschdule the job
-//        2.3.2 wait context timeout. exit the loop
+//  1. init all gc cron jobs
+//  2. loop
+//     2.1 sort all cron jobs by next time
+//     2.2 create a timer using the jobs' minimum next time
+//     2.3
+//     2.3.1 wait timer timeout. enqueue jobs with the next time before the
+//     timer's timeout time into the process queue. reschdule the job
+//     2.3.2 wait context timeout. exit the loop
 func (mgr *Manager) loop(ctx context.Context) {
 	// init all job next time
 	now := time.Now()
