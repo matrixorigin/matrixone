@@ -2951,7 +2951,6 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
 	requestCtx, span := trace.Debug(requestCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
-	return nil
 	if ses.skipCheckPrivilege() {
 		return nil
 	}
@@ -2987,7 +2986,6 @@ func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Sessio
 
 // authenticateCanExecuteStatementAndPlan checks the user can execute the statement and its plan
 func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
-	return nil
 	if ses.skipCheckPrivilege() {
 		return nil
 	}
