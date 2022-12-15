@@ -16,6 +16,7 @@ package checkpoint
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"strings"
 	"sync"
 	"time"
@@ -158,7 +159,8 @@ type runner struct {
 	observers *observers
 	wal       wal.Driver
 
-	stopper *stopper.Stopper
+	stopper   *stopper.Stopper
+	gcManager *gc.Manager
 
 	// memory storage of the checkpoint entries
 	storage struct {
@@ -195,6 +197,7 @@ func NewRunner(
 		observers: new(observers),
 		wal:       wal,
 	}
+	r.gcManager = gc.NewManager(fs)
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
 		return a.start.Less(b.start)
 	}, btree.Options{
@@ -410,7 +413,12 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	}
 	location := blockio.EncodeMetalocFromMetas(filename, blks)
 	entry.SetLocation(location)
-	return
+
+	table := gc.NewGcTable()
+	table.UpdateTable(data)
+	r.gcManager.AddTable(table)
+	_, err = table.SaveTable(entry, r.fs)
+	return err
 }
 
 func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) (err error) {
