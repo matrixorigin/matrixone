@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
 
 var (
@@ -29,6 +30,11 @@ var (
 	_ VisitPlanRule = &ResetParamOrderRule{}
 	_ VisitPlanRule = &ResetParamRefRule{}
 	_ VisitPlanRule = &ResetVarRefRule{}
+	_ VisitPlanRule = &ConstantFoldRule{}
+)
+
+var (
+	constantFoldRule = rule.NewConstantFold(false)
 )
 
 type GetParamRule struct {
@@ -302,3 +308,32 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 }
 
 func (rule *ResetVarRefRule) getContext() context.Context { return rule.compCtx.GetContext() }
+
+type ConstantFoldRule struct {
+	compCtx CompilerContext
+	rule    *rule.ConstantFold
+}
+
+func NewConstantFoldRule(compCtx CompilerContext) *ConstantFoldRule {
+	return &ConstantFoldRule{
+		compCtx: compCtx,
+		rule:    constantFoldRule,
+	}
+}
+
+func (r *ConstantFoldRule) MatchNode(node *Node) bool {
+	return r.rule.Match(node)
+}
+
+func (r *ConstantFoldRule) IsApplyExpr() bool {
+	return false
+}
+
+func (r *ConstantFoldRule) ApplyNode(node *Node) error {
+	r.rule.Apply(node, nil, r.compCtx.GetProcess())
+	return nil
+}
+
+func (r *ConstantFoldRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	return e, nil
+}

@@ -73,7 +73,6 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	tbl.parts = parts
 	tbl.tableName = name
 	tbl.insertExpr = genInsertExpr(ctx, defs, len(parts))
-	tbl.proc = db.txn.proc
 	db.txn.tableMap.Store(key, tbl)
 	return tbl, nil
 }
@@ -213,7 +212,6 @@ func (db *database) openSysTable(key tableKey, id uint64, name string,
 		defs:       defs,
 		parts:      parts,
 		primaryIdx: -1,
-		proc:       db.txn.proc,
 	}
 	// find primary idx
 	for i, def := range defs {

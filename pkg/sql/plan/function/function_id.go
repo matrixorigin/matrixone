@@ -184,6 +184,7 @@ const (
 	SINH       //SINH
 	SPACE
 	SPLIT         // SPLIT
+	SPLIT_PART    // SPLIT_PART
 	STARCOUNT     // STARTCOUNT
 	STARTSWITH    // STARTSWITH
 	STDDEV_POP    // STDDEV_POP
@@ -458,6 +459,7 @@ var functionIdRegister = map[string]int32{
 	"field":                          FIELD,
 	"format":                         FORMAT,
 	"sleep":                          SLEEP,
+	"split_part":                     SPLIT_PART,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

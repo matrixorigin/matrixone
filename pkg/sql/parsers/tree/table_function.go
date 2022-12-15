@@ -30,3 +30,6 @@ func (t TableFunction) Id() string {
 	_, _, name := t.Func.Func.FunctionReference.(*UnresolvedName).GetNames()
 	return name
 }
+
+func (t *TableFunction) GetStatementType() string { return "Table Function" }
+func (t *TableFunction) GetQueryType() string     { return QueryTypeDCL }

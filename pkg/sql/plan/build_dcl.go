@@ -33,7 +33,7 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		*tree.Update, *tree.Delete, *tree.Insert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
-		opt := NewBaseOptimizer(ctx)
+		opt := NewPrepareOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt)
 		if err != nil {
 			return nil, err

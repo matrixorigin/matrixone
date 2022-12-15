@@ -43,6 +43,7 @@ jobs:
          
          
   ut-mac-x86:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: macos-12
     name: UT Test on Darwin/x86
 
@@ -63,6 +64,7 @@ jobs:
 
           
   ut-linux-arm:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: arm64-runner
     name: UT Test on Linux/Arm
 
