@@ -314,7 +314,9 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 					}
 					for j := 0; j < i; j++ {
 						if _, ok := mp[vs[j]]; !ok {
-							vector.Clean(vs[j], proc.Mp())
+							if vs[j] != vecFalse && vs[j] != vecTrue {
+								vector.Clean(vs[j], proc.Mp())
+							}
 						}
 					}
 				}
@@ -330,7 +332,9 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 				}
 				for i := range vs {
 					if _, ok := mp[vs[i]]; !ok {
-						vector.Clean(vs[i], proc.Mp())
+						if vs[i] != vecFalse && vs[i] != vecTrue {
+							vector.Clean(vs[i], proc.Mp())
+						}
 					}
 				}
 			}
