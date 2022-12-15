@@ -11,7 +11,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"sync"
 )
@@ -174,9 +173,9 @@ func (t *GcTable) collectData() []*containers.Batch {
 	return bats
 }
 
-func (t *GcTable) SaveTable(ckp *checkpoint.CheckpointEntry, fs *objectio.ObjectFS) ([]objectio.BlockObject, error) {
+func (t *GcTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS) ([]objectio.BlockObject, error) {
 	bats := t.collectData()
-	name := blockio.EncodeCheckpointMetadataFileName(GcMetaDir, PrefixGcMeta, ckp.GetStart(), ckp.GetEnd())
+	name := blockio.EncodeCheckpointMetadataFileName(GcMetaDir, PrefixGcMeta, start, end)
 	writer := blockio.NewWriter(context.Background(), fs, name)
 	for i := range bats {
 		if _, err := writer.WriteBlock(bats[i]); err != nil {
