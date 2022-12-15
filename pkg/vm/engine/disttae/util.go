@@ -47,6 +47,9 @@ const (
 )
 
 func checkExprIsMonotonic(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
@@ -68,6 +71,9 @@ func checkExprIsMonotonic(expr *plan.Expr) bool {
 }
 
 func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
+	if expr == nil {
+		return
+	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
