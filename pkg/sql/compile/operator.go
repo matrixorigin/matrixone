@@ -478,20 +478,15 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 		}
 
 		us[i] = &update.UpdateCtx{
-			PriKey:               updateCtx.PriKey,
-			PriKeyIdx:            updateCtx.PriKeyIdx,
-			HideKey:              updateCtx.HideKey,
-			HideKeyIdx:           updateCtx.HideKeyIdx,
-			UpdateAttrs:          colNames,
-			OtherAttrs:           updateCtx.OtherAttrs,
-			OrderAttrs:           updateCtx.OrderAttrs,
-			TableSource:          relation,
-			CPkeyColDef:          updateCtx.CompositePkey,
-			UniqueIndexDef:       uDef,
-			SecondaryIndexDef:    sDef,
-			IndexAttrs:           updateCtx.IndexAttrs,
-			UniqueIndexTables:    uniqueIndexTables,
-			SecondaryIndexTables: secondaryIndexTables,
+			HideKey:           updateCtx.HideKey,
+			HideKeyIdx:        updateCtx.HideKeyIdx,
+			UpdateAttrs:       colNames,
+			OtherAttrs:        updateCtx.OtherAttrs,
+			OrderAttrs:        updateCtx.OrderAttrs,
+			TableSource:       relation,
+			CPkeyColDef:       updateCtx.CompositePkey,
+			UniqueIndexDef:    uDef,
+			SecondaryIndexDef: sDef,
 		}
 	}
 	return &update.Argument{

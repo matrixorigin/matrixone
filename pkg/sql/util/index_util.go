@@ -461,7 +461,7 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+		vec = vector.NewWithStrings(v.Typ, ns, nsp, proc.Mp())
 	}
 	return vec, v.Nsp
 }
@@ -631,7 +631,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+		vec = vector.NewWithStrings(v.Typ, ns, nsp, proc.Mp())
 	}
 	return vec
 }

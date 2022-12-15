@@ -17,8 +17,6 @@ package plan
 import (
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -120,12 +118,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	// rebuild projection for update cols to get right type and default value
 	lastNode := qry.Nodes[qry.Steps[len(qry.Steps)-1]]
 	for _, ct := range updateCtxs {
-		var idx int
-		if ct.PriKeyIdx != -1 {
-			idx = int(ct.PriKeyIdx) + 1
-		} else {
-			idx = int(ct.HideKeyIdx) + 1
-		}
+		var idx = int(ct.HideKeyIdx) + 1
 
 		for _, col := range ct.UpdateCols {
 			if c := lastNode.ProjectList[idx].GetC(); c != nil {
@@ -238,11 +231,6 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 	var offset int32 = 0
 
 	for i, updateCols := range updateColsArray {
-		// figure out if primary key update
-		var priKey string
-		var priKeyIdx int32 = -1
-		priKeys := ctx.GetPrimaryKeyDef(updateCols[0].dbName, updateCols[0].tblName)
-
 		// use hide key to update if primary key will not be updated
 		hideKey := ctx.GetHideKeyDef(updateCols[0].dbName, updateCols[0].tblName).GetName()
 		if hideKey == "" {
@@ -271,35 +259,6 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 
 		// figure out other cols that will not be updated
 		var onUpdateCols []updateCol
-		// make true we can get all the index col data before update, so we can delete index info.
-		indexColNameMap := make(map[string]bool)
-		uDef, sDef := buildIndexDefs(tblRefs[k].Defs)
-		if uDef != nil {
-			for _, def := range uDef.Fields {
-				isCPkey := util.JudgeIsCompositePrimaryKeyColumn(def.Cols[0].Name)
-				if isCPkey {
-					colNames := util.SplitCompositePrimaryKeyColumnName(def.Cols[0].Name)
-					for _, colName := range colNames {
-						indexColNameMap[colName] = true
-					}
-				} else {
-					indexColNameMap[def.Cols[0].Name] = true
-				}
-			}
-		}
-		if sDef != nil {
-			for _, def := range sDef.Fields {
-				isCPkey := util.JudgeIsCompositePrimaryKeyColumn(def.Cols[0].Name)
-				if isCPkey {
-					colNames := util.SplitCompositePrimaryKeyColumnName(def.Cols[0].Name)
-					for _, colName := range colNames {
-						indexColNameMap[colName] = true
-					}
-				} else {
-					indexColNameMap[def.Cols[0].Name] = true
-				}
-			}
-		}
 		for _, col := range tblRefs[k].Cols {
 			if col.Name == hideKey {
 				continue
@@ -321,33 +280,17 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 				}
 			}
 		}
-		var indexAttrs []string = nil
 
-		for indexColName := range indexColNameMap {
-			find := false
-
-			for _, otherAttr := range otherAttrs {
-				if otherAttr == indexColName {
-					find = true
-					break
-				}
-			}
-			if !find {
-				indexAttrs = append(indexAttrs, indexColName)
-			}
-		}
 		offset += int32(len(orderAttrs)) + 1
 
 		ct := &plan.UpdateCtx{
-			DbName:     updateCols[0].dbName,
-			TblName:    updateCols[0].tblName,
-			PriKey:     priKey,
-			PriKeyIdx:  priKeyIdx,
-			HideKey:    hideKey,
-			HideKeyIdx: hideKeyIdx,
-			OtherAttrs: otherAttrs,
-			OrderAttrs: orderAttrs,
-			IndexAttrs: indexAttrs,
+			DbName:        updateCols[0].dbName,
+			TblName:       updateCols[0].tblName,
+			HideKey:       hideKey,
+			HideKeyIdx:    hideKeyIdx,
+			OtherAttrs:    otherAttrs,
+			OrderAttrs:    orderAttrs,
+			CompositePkey: tblRefs[k].CompositePkey,
 		}
 		for _, u := range updateCols {
 			ct.UpdateCols = append(ct.UpdateCols, u.colDef)
@@ -359,13 +302,6 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 		for _, o := range otherAttrs {
 			e, _ := tree.NewUnresolvedName(ctx.GetContext(), updateCols[0].aliasTblName, o)
 			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
-		}
-		for _, attr := range indexAttrs {
-			e, _ := tree.NewUnresolvedName(ctx.GetContext(), updateCols[0].aliasTblName, attr)
-			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
-		}
-		if len(priKeys) > 0 && util.JudgeIsCompositePrimaryKeyColumn(priKeys[0].Name) {
-			ct.CompositePkey = priKeys[0]
 		}
 		updateCtxs = append(updateCtxs, ct)
 
