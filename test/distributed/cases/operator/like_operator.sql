@@ -209,3 +209,8 @@ drop table t1;
 create table t1(a tinyint unsigned, b smallint unsigned, c int unsigned, d bigint unsigned);
 insert into t1 values(121, 121, 121, 121);
 select * from t1 where (a like '%2%' and b like '%2%' and c like '%2%' and d like '%2%');
+
+drop table t1;
+create table t1(a text);
+insert into t1 values(rpad('1',50000,'1') + rpad('1',50000,'1'));
+select * from t1 where a like ".";
