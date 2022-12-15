@@ -700,39 +700,20 @@ func (h *transactionHeap) Pop() any {
 }
 
 // needRead determine if a block needs to be read
-func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc *process.Process) bool {
+func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, columnMap map[int]int, columns []int, maxCol int, proc *process.Process) bool {
 	var err error
 	if expr == nil {
 		return true
 	}
-
-	// key = expr's ColPos,  value = tableDef's ColPos
-	columnMap := getColumnsByExpr(expr, tableDef)
-
 	// if expr match no columns, just eval expr
-	if len(columnMap) == 0 {
+	if len(columns) == 0 {
 		bat := batch.NewWithSize(0)
+		defer bat.Clean(proc.Mp())
 		ifNeed, err := evalFilterExpr(expr, bat, proc)
 		if err != nil {
 			return true
 		}
-		bat.Clean(proc.Mp())
 		return ifNeed
-	}
-	if !checkExprIsMonotonic(expr) {
-		return true
-	}
-
-	maxCol := 0
-	useColumn := len(columnMap)
-	columns := make([]int, useColumn)
-	i := 0
-	for k, v := range columnMap {
-		if k > maxCol {
-			maxCol = k
-		}
-		columns[i] = v //tableDef's ColPos
-		i = i + 1
 	}
 
 	// get min max data from Meta
@@ -744,6 +725,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	// use all min/max data to build []vectors.
 	buildVectors := buildVectorsByData(datas, dataTypes, proc.Mp())
 	bat := batch.NewWithSize(maxCol + 1)
+	defer bat.Clean(proc.Mp())
 	for k, v := range columnMap {
 		for i, realIdx := range columns {
 			if realIdx == v {
@@ -756,11 +738,8 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 
 	ifNeed, err := evalFilterExpr(expr, bat, proc)
 	if err != nil {
-		bat.Clean(proc.Mp())
 		return true
 	}
-	bat.Clean(proc.Mp())
-
 	return ifNeed
 
 }
