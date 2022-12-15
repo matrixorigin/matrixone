@@ -1,0 +1,3 @@
+select cast(now() as date)=curdate() q;
+q
+true
