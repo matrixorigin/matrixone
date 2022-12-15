@@ -2181,13 +2181,13 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 		c.SetOrgTable(col.Typ.Table)
 		c.SetAutoIncr(col.Typ.AutoIncr)
 		c.SetSchema(cwft.ses.GetTxnCompileCtx().DefaultDatabase())
+		setCharacter(c)
 		err = convertEngineTypeToMysqlType(cwft.ses.requestCtx, types.T(col.Typ.Id), c)
 		if err != nil {
 			return nil, err
 		}
 		setColFlag(c)
 		setColLength(c, col.Typ.Width)
-		setCharacter(c)
 		c.SetDecimal(uint8(col.Typ.Scale))
 		columns[i] = c
 	}
