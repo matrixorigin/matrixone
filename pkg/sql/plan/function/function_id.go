@@ -462,6 +462,8 @@ var functionIdRegister = map[string]int32{
 	"sleep":                          SLEEP,
 	"split_part":                     SPLIT_PART,
 	"instr":                          INSTR,
+	"curdate":                        CURRENT_DATE,
+	"current_date":                   CURRENT_DATE,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
