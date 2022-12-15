@@ -30,7 +30,7 @@ type TestRunner interface {
 	CleanPenddingCheckpoint()
 	ForceGlobalCheckpoint(versionInterval time.Duration) error
 	ForceIncrementalCheckpoint(end types.TS) error
-	IsAllChangesFlushed(start, end types.TS) bool
+	IsAllChangesFlushed(start, end types.TS, printTree bool) bool
 	MaxLSNInRange(end types.TS) uint64
 }
 
@@ -97,8 +97,11 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS) error {
 	return nil
 }
 
-func (r *runner) IsAllChangesFlushed(start, end types.TS) bool {
+func (r *runner) IsAllChangesFlushed(start, end types.TS, printTree bool) bool {
 	tree := r.source.ScanInRangePruned(start, end)
 	tree.GetTree().Compact()
+	if printTree && !tree.IsEmpty() {
+		logutil.Infof("%v", tree.String())
+	}
 	return tree.IsEmpty()
 }

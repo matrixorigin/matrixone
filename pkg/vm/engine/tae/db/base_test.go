@@ -221,9 +221,10 @@ func (e *testEngine) incrementalCheckpoint(
 	}
 	if waitFlush {
 		testutils.WaitExpect(4000, func() bool {
-			return e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end)
+			flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end, false)
+			return flushed
 		})
-		flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end)
+		flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end, true)
 		assert.True(e.t, flushed)
 	}
 	err := e.DB.BGCheckpointRunner.ForceIncrementalCheckpoint(end)

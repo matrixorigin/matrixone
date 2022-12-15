@@ -4705,10 +4705,11 @@ func TestGlobalCheckpoint3(t *testing.T) {
 func TestGlobalCheckpoint4(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	opts := config.WithLongScanAndCKPOpts(nil)
+	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
 	tae.BGCheckpointRunner.DisableCheckpoint()
+	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 
 	schema := catalog.MockSchemaAll(18, 2)
 	schema.BlockMaxRows = 10
@@ -4722,7 +4723,7 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	err = tae.incrementalCheckpoint(txn.GetCommitTS(), false, false, true)
+	err = tae.incrementalCheckpoint(txn.GetCommitTS(), false, true, true)
 	assert.NoError(t, err)
 
 	txn, err = tae.StartTxn(nil)
@@ -4731,15 +4732,21 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	err = tae.incrementalCheckpoint(txn.GetCommitTS(), false, false, true)
+	err = tae.incrementalCheckpoint(txn.GetCommitTS(), false, true, true)
 	assert.NoError(t, err)
 
-	err = tae.globalCheckpoint(0, false)
+	err = tae.globalCheckpoint(time.Second, false)
 	assert.NoError(t, err)
-
-	tae.restart()
 
 	tae.createRelAndAppend(bat, true)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.restart()
+	tae.BGCheckpointRunner.DisableCheckpoint()
+	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	// tae.createRelAndAppend(bat, false)
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -4749,11 +4756,17 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	err = tae.incrementalCheckpoint(txn.GetCommitTS(), false, false, true)
+	err = tae.incrementalCheckpoint(txn.GetCommitTS(), false, true, true)
 	assert.NoError(t, err)
 
-	err = tae.globalCheckpoint(0, false)
+	err = tae.globalCheckpoint(time.Second, false)
 	assert.NoError(t, err)
 
+	tae.createRelAndAppend(bat, false)
+
+	t.Log(tae.Catalog.SimplePPString(3))
 	tae.restart()
+	tae.BGCheckpointRunner.DisableCheckpoint()
+	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
+	t.Log(tae.Catalog.SimplePPString(3))
 }

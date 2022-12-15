@@ -212,7 +212,7 @@ type GlobalCollector struct {
 }
 
 func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalCollector {
-	versionThresholdTS := types.BuildTS(end.Physical()-versionInterval.Nanoseconds(), 0)
+	versionThresholdTS := types.BuildTS(end.Physical()-versionInterval.Nanoseconds(), end.Logical())
 	collector := &GlobalCollector{
 		BaseCollector: &BaseCollector{
 			LoopProcessor: new(catalog.LoopProcessor),
