@@ -1042,9 +1042,11 @@ func genModifedBlocks(ctx context.Context, deletes map[uint64][]int, orgs, modfs
 		blockMap[modfs[i].Info.BlockID] = true
 	}
 
+	exprMono := checkExprIsMonotonic(expr)
+	columnMap, columns, maxCol := getColumnsByExpr(expr, tableDef)
 	for i, blk := range orgs {
 		if !inBlockMap(blk, blockMap) {
-			if needRead(ctx, expr, blk, tableDef, proc) {
+			if !exprMono || needRead(ctx, expr, blk, tableDef, columnMap, columns, maxCol, proc) {
 				blks = append(blks, ModifyBlockMeta{
 					meta:    orgs[i],
 					deletes: deletes[orgs[i].Info.BlockID],
