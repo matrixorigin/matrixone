@@ -1,31 +1,71 @@
 package gc
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 type Manager struct {
 	sync.RWMutex
-	table      []GcTable
-	mergeCache []GcTable
-	gc         []string
-	fs         *objectio.ObjectFS
-	ckpRunner  checkpoint.Runner
-	ckp        *checkpoint.CheckpointEntry
-	catalog    *catalog.Catalog
+	options struct {
+		consumeInterval time.Duration
+	}
+	table       []GcTable
+	mergeCache  []GcTable
+	gc          []string
+	fs          *objectio.ObjectFS
+	ckpRunner   checkpoint.Runner
+	ckp         *checkpoint.CheckpointEntry
+	catalog     *catalog.Catalog
+	waitConsume atomic.Int32
+	stopper     *stopper.Stopper
+	onceStart   sync.Once
+	onceStop    sync.Once
 }
 
 func NewManager(fs *objectio.ObjectFS, runner checkpoint.Runner, catalog *catalog.Catalog) *Manager {
-	return &Manager{
+	m := &Manager{
 		table:     make([]GcTable, 0),
 		gc:        make([]string, 0),
 		fs:        fs,
 		ckpRunner: runner,
 		catalog:   catalog,
+	}
+	m.options.consumeInterval = time.Second * 1
+	return m
+}
+
+func (m *Manager) TryGC() {
+	m.waitConsume.Add(1)
+}
+
+func (m *Manager) consume(num int32) {
+	m.waitConsume.Add(0 - num)
+}
+
+func (m *Manager) cronjob(ctx context.Context) {
+	hb := w.NewHeartBeaterWithFunc(m.options.consumeInterval, m.tryConsume, nil)
+	hb.Start()
+	<-ctx.Done()
+	hb.Stop()
+}
+
+func (m *Manager) tryConsume() {
+	num := m.waitConsume.Load()
+	for i := int32(0); i < num; i++ {
+		err := m.CronTask()
+		if err != nil {
+			m.consume(i + 1)
+			break
+		}
 	}
 }
 
@@ -113,4 +153,18 @@ func (m *Manager) consumeCheckpoint(entry *checkpoint.CheckpointEntry) (err erro
 	_, err = table.SaveTable(entry.GetStart(), entry.GetEnd(), m.fs)
 	m.AddTable(table)
 	return err
+}
+
+func (m *Manager) Start() {
+	m.onceStart.Do(func() {
+		if err := m.stopper.RunNamedTask("gc-job", m.cronjob); err != nil {
+			panic(err)
+		}
+	})
+}
+
+func (m *Manager) Stop() {
+	m.onceStop.Do(func() {
+		m.stopper.Stop()
+	})
 }
