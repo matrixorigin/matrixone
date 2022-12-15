@@ -84,10 +84,23 @@ func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map
 	}
 }
 
-func getColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) map[int]int {
+func getColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) (map[int]int, []int, int) {
 	columnMap := make(map[int]int)
+	// key = expr's ColPos,  value = tableDef's ColPos
 	getColumnMapByExpr(expr, tableDef, &columnMap)
-	return columnMap
+
+	maxCol := 0
+	useColumn := len(columnMap)
+	columns := make([]int, useColumn)
+	i := 0
+	for k, v := range columnMap {
+		if k > maxCol {
+			maxCol = k
+		}
+		columns[i] = v //tableDef's ColPos
+		i = i + 1
+	}
+	return columnMap, columns, maxCol
 }
 
 func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, objectio.IndexData, error) {
