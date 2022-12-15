@@ -124,3 +124,10 @@ CREATE external TABLE rawlog_withnull (
 infile{"filepath"='$resources/external_table_file/rawlog_withnull.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select raw_item,node_uuid,node_type,span_id,statement_id,logger_name,timestamp from rawlog_withnull order by 1 limit 1;
 drop table if exists rawlog_withnull;
+create database unique_index;
+create table unique_index.t1 (a int, b int, c int);
+insert into unique_index.t1 values (1, 2, 3), (4, 5, 6);
+create unique index idx on unique_index.t1 (a, b);
+select count(*) >= 3 from mo_catalog.mo_tables where reldatabase = 'unique_index';
+drop index idx on unique_index.t1;
+drop database unique_index;
