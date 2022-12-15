@@ -2189,6 +2189,7 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 		setColLength(c, col.Typ.Width)
 		setCharacter(c)
 		c.SetDecimal(uint8(col.Typ.Scale))
+		convertMysqlTextTypeToBlobType(c)
 		columns[i] = c
 	}
 	return columns, err
@@ -4174,14 +4175,22 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_decimal128:
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
-	case types.T_blob, types.T_text:
+	case types.T_blob:
 		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	case types.T_text:
+		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
 	case types.T_uuid:
 		col.SetColumnType(defines.MYSQL_TYPE_UUID)
 	default:
 		return moerr.NewInternalError(ctx, "RunWhileSend : unsupported type %d", engineType)
 	}
 	return nil
+}
+
+func convertMysqlTextTypeToBlobType(col *MysqlColumn) {
+	if col.ColumnType() == defines.MYSQL_TYPE_TEXT {
+		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	}
 }
 
 // build plan json when marhal plan error
