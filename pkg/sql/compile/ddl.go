@@ -145,6 +145,9 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	ct := defs[0].(*engine.ConstraintDef)
 
 	tblDefs, err := r.TableDefs(c.ctx)
+	if err != nil {
+		return err
+	}
 	var oldCt *engine.ConstraintDef
 	for _, def := range tblDefs {
 		if ct, ok := def.(*engine.ConstraintDef); ok {
@@ -161,10 +164,15 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		return err
 	}
 
+	// TODO: implement by insert ... select ...
 	// insert data into index table
-	switch t := planDefs[0].Def.(type) {
+	switch t := qry.GetIndex().GetTableDef().Defs[0].Def.(type) {
 	case *plan.TableDef_DefType_UIdx:
-		rds, err := r.NewReader(c.ctx, 1, nil, nil)
+		ret, err := r.Ranges(c.ctx, nil)
+		if err != nil {
+			return err
+		}
+		rds, err := r.NewReader(c.ctx, 1, nil, ret)
 		if err != nil {
 			return err
 		}
@@ -206,6 +214,9 @@ func (s *Scope) DropIndex(c *Compile) error {
 
 	// build and update constraint def
 	tblDefs, err := r.TableDefs(c.ctx)
+	if err != nil {
+		return err
+	}
 	var oldCt *engine.ConstraintDef
 	for _, def := range tblDefs {
 		if ct, ok := def.(*engine.ConstraintDef); ok {
@@ -246,6 +257,7 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 			}
 			for i, name := range u.IndexNames {
 				if dropName == name {
+					// If all indexes of a table are not defined in plan.UniqueIndexDef, the code will be much simpler
 					u.IndexNames = append(u.IndexNames[:i], u.IndexNames[i+1:]...)
 					u.TableNames = append(u.TableNames[:i], u.TableNames[i+1:]...)
 					u.Fields = append(u.Fields[:i], u.Fields[i+1:]...)
