@@ -197,7 +197,7 @@ func genUpdateConstraint(rows [][]any) []UpdateConstraint {
 		cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
 		cmds[i].TableName = string(row[MO_TABLES_REL_NAME_IDX].([]byte))
 		cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
-		cmds[i].Constraint = row[4].([]byte)
+		cmds[i].Constraint = row[MO_TABLES_UPDATE_CONSTRAINT].([]byte)
 	}
 	return cmds
 }

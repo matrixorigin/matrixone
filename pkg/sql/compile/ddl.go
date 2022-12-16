@@ -125,8 +125,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	def := qry.GetIndex().GetIndexTables()[0]
 	planCols := def.GetCols()
 	exeCols := planColsToExeCols(planCols)
-	planDefs := def.GetDefs()
-	exeDefs, err := planDefsToExeDefs(planDefs)
+	exeDefs, err := planDefsToExeDefs(def)
 	if err != nil {
 		return err
 	}
@@ -138,7 +137,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 
 	// build and update constraint def
-	defs, err := planDefsToExeDefs(qry.GetIndex().GetTableDef().GetDefs())
+	defs, err := planDefsToExeDefs(qry.GetIndex().GetTableDef())
 	if err != nil {
 		return err
 	}

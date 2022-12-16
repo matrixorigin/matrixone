@@ -140,8 +140,9 @@ func genTableConstraintTuple(tblId, dbId uint64, tblName, dbName string, constra
 		if err := bat.Vecs[idx].Append(dbId, false, m); err != nil {
 			return nil, err
 		}
-		bat.Vecs[4] = vector.New(catalog.MoTablesTypes[catalog.MO_TABLES_CONSTRAINT]) // constraint
-		if err := bat.Vecs[4].Append(constraint, false, m); err != nil {
+		idx = catalog.MO_TABLES_UPDATE_CONSTRAINT
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[catalog.MO_TABLES_CONSTRAINT]) // constraint
+		if err := bat.Vecs[idx].Append(constraint, false, m); err != nil {
 			return nil, err
 		}
 	}

@@ -126,6 +126,11 @@ const (
 	MO_COLUMNS_ID  = 3
 )
 
+// index use to update constraint
+const (
+	MO_TABLES_UPDATE_CONSTRAINT = 4
+)
+
 // column's index in catalog table
 const (
 	MO_DATABASE_DAT_ID_IDX           = 0
