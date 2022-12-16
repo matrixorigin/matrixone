@@ -45,9 +45,7 @@ func Instr(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, er
 		err = ret.Append(instr.Single(str, substr), false, proc.Mp())
 		return
 	}
-	nsp := nulls.NewWithSize(maxLen)
-	nulls.Or(v1.Nsp, v2.Nsp, nsp)
-	ret, err = proc.AllocVectorOfRows(resultType, int64(maxLen), nsp)
+	ret, err = proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
 	if err != nil {
 		return
 	}

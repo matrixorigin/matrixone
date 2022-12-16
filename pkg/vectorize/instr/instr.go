@@ -81,26 +81,20 @@ func Instr(s1, s2 []string, snsp []*nulls.Nulls, rs []int64, nsp *nulls.Nulls) {
 }
 
 func instr1(s1, s2 []string, snsp []*nulls.Nulls, rs []int64, nsp *nulls.Nulls) {
-	if snsp[1].Contains(0) {
-		nulls.AddRange(nsp, 0, uint64(len(rs)))
-		return
-	}
 	substr := s2[0]
 	for i, str := range s1 {
-		if nsp.Contains(uint64(i)) {
+		if snsp[0].Contains(uint64(i)) {
+			nsp.Set(uint64(i))
 			continue
 		}
 		rs[i] = Single(str, substr)
 	}
 }
 func instr2(s1, s2 []string, snsp []*nulls.Nulls, rs []int64, nsp *nulls.Nulls) {
-	if snsp[0].Contains(0) {
-		nulls.AddRange(nsp, 0, uint64(len(rs)))
-		return
-	}
 	str := s1[0]
 	for i, substr := range s2 {
-		if nsp.Contains(uint64(i)) {
+		if snsp[1].Contains(uint64(i)) {
+			nsp.Set(uint64(i))
 			continue
 		}
 		rs[i] = Single(str, substr)
@@ -109,7 +103,8 @@ func instr2(s1, s2 []string, snsp []*nulls.Nulls, rs []int64, nsp *nulls.Nulls) 
 
 func instr3(s1, s2 []string, snsp []*nulls.Nulls, rs []int64, nsp *nulls.Nulls) {
 	for i, str := range s1 {
-		if nsp.Contains(uint64(i)) {
+		if snsp[0].Contains(uint64(i)) || snsp[1].Contains(uint64(i)) {
+			nsp.Set(uint64(i))
 			continue
 		}
 		rs[i] = Single(str, s2[i])
