@@ -435,6 +435,18 @@ func buildShowTarget(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error) 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowLocks(stmt *tree.ShowLocks, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_LOCKS
+	sql := "select 1 where 0"
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowNodeList(stmt *tree.ShowNodeList, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_NODE_LIST
+	sql := "select 1 where 0"
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
 func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	dbName := string(stmt.TableName.Schema())
 	if dbName == "" {

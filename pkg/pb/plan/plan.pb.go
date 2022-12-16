@@ -622,6 +622,8 @@ const (
 	DataDefinition_SHOW_TABLE_STATUS   DataDefinition_DdlType = 24
 	DataDefinition_SHOW_TARGET         DataDefinition_DdlType = 25
 	DataDefinition_SHOW_COLLATION      DataDefinition_DdlType = 26
+	DataDefinition_SHOW_LOCKS          DataDefinition_DdlType = 27
+	DataDefinition_SHOW_NODE_LIST      DataDefinition_DdlType = 28
 )
 
 var DataDefinition_DdlType_name = map[int32]string{
@@ -652,6 +654,8 @@ var DataDefinition_DdlType_name = map[int32]string{
 	24: "SHOW_TABLE_STATUS",
 	25: "SHOW_TARGET",
 	26: "SHOW_COLLATION",
+	27: "SHOW_LOCKS",
+	28: "SHOW_NODE_LIST",
 }
 
 var DataDefinition_DdlType_value = map[string]int32{
@@ -682,6 +686,8 @@ var DataDefinition_DdlType_value = map[string]int32{
 	"SHOW_TABLE_STATUS":   24,
 	"SHOW_TARGET":         25,
 	"SHOW_COLLATION":      26,
+	"SHOW_LOCKS":          27,
+	"SHOW_NODE_LIST":      28,
 }
 
 func (x DataDefinition_DdlType) String() string {
