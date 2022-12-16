@@ -17,6 +17,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"math/rand"
 	"reflect"
@@ -4575,6 +4576,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 		data, err := entry.Read(context.Background(), nil, tae.Fs)
 		assert.NoError(t, err)
 		table.UpdateTable(data)
+		logutil.Infof("table is %v", table.String())
 		//table.SaveTable(entry.GetStart(), entry.GetEnd(), tae.Fs)
 		manager.AddTable(table)
 	}

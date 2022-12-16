@@ -1,6 +1,8 @@
 package gc
 
 import (
+	"bytes"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"sync/atomic"
 )
@@ -31,11 +33,13 @@ func NewObjectEntry() *ObjectEntry {
 func (o *ObjectEntry) AddBlock(block common.ID) {
 	o.table.tid = block.TableID
 	o.table.blocks = append(o.table.blocks, block)
+	o.Refs(1)
 }
 
 func (o *ObjectEntry) DelBlock(block common.ID) {
 	o.table.tid = block.TableID
 	o.table.delete = append(o.table.delete, block)
+	o.UnRefs(1)
 }
 
 func (o *ObjectEntry) DropTable() {
@@ -76,4 +80,22 @@ func (o *ObjectEntry) AllowGC() bool {
 		return true
 	}
 	return false
+}
+
+func (o *ObjectEntry) String() string {
+	var w bytes.Buffer
+	_, _ = w.WriteString("entry:[")
+	_, _ = w.WriteString(fmt.Sprintf("tid: %d, isdrop: %t refs: %d ", o.table.tid, o.table.drop, o.refs.Load()))
+	_, _ = w.WriteString("block:[")
+	for _, block := range o.table.blocks {
+		_, _ = w.WriteString(fmt.Sprintf(" %v", block.String()))
+	}
+	_, _ = w.WriteString("]")
+	_, _ = w.WriteString("delete:[")
+	for _, id := range o.table.delete {
+		_, _ = w.WriteString(fmt.Sprintf(" %v", id.String()))
+	}
+	_, _ = w.WriteString("]")
+	_, _ = w.WriteString("]\n")
+	return w.String()
 }

@@ -194,19 +194,10 @@ func (t *GCTable) String() string {
 		return ""
 	}
 	var w bytes.Buffer
-	_, _ = w.WriteString("table:[")
+	_, _ = w.WriteString("table:[\n")
 	for name, entry := range t.table {
-		_, _ = w.WriteString(fmt.Sprintf(" %v", name))
-		_, _ = w.WriteString("block:[")
-		for _, id := range entry.table.blocks {
-			_, _ = w.WriteString(fmt.Sprintf(" %v", id.String()))
-		}
-		_, _ = w.WriteString("]\n")
-		_, _ = w.WriteString("delete:[")
-		for _, id := range entry.table.delete {
-			_, _ = w.WriteString(fmt.Sprintf(" %v", id.String()))
-		}
-		_, _ = w.WriteString("]\n")
+		_, _ = w.WriteString(fmt.Sprintf("name: %v ", name))
+		_, _ = w.WriteString(entry.String())
 	}
 	_, _ = w.WriteString("]\n")
 	return w.String()
