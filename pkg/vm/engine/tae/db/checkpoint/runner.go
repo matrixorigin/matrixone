@@ -291,6 +291,7 @@ func (r *runner) GetAllCheckpoints() []*CheckpointEntry {
 	r.storage.Unlock()
 	return snapshot.Items()
 }
+
 func (r *runner) MaxLSN() uint64 {
 	endTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	return r.source.GetMaxLSN(types.TS{}, endTs)
