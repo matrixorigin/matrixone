@@ -1,10 +1,13 @@
 package gc
 
 import (
+	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"sync"
 	"sync/atomic"
 )
@@ -168,4 +171,52 @@ func (m *DiskCleaner) consumeCheckpoint(entry *checkpoint.CheckpointEntry) (err 
 	_, err = table.SaveTable(entry.GetStart(), entry.GetEnd(), m.fs)
 	m.AddTable(table)
 	return err
+}
+
+func (m *DiskCleaner) Replay() error {
+	dirs, err := m.fs.ListDir(GCMetaDir)
+	if err != nil {
+		return err
+	}
+	if len(dirs) == 0 {
+		return nil
+	}
+	jobs := make([]*tasks.Job, len(dirs))
+	jobScheduler := tasks.NewParallelJobScheduler(100)
+	defer jobScheduler.Stop()
+	makeJob := func(i int) (job *tasks.Job) {
+		dir := dirs[i]
+		exec := func(ctx context.Context) (result *tasks.JobResult) {
+			result = &tasks.JobResult{}
+			table := NewGCTable()
+			err := table.ReadTable(ctx, dir.Name, m.fs)
+			if err != nil {
+				result.Err = err
+				return
+			}
+			m.AddTable(table)
+			return
+		}
+		job = tasks.NewJob(
+			fmt.Sprintf("load-%s", dir),
+			context.Background(),
+			exec)
+		return
+	}
+
+	for i := range dirs {
+		jobs[i] = makeJob(i)
+		if err = jobScheduler.Schedule(jobs[i]); err != nil {
+			return err
+		}
+	}
+
+	for _, job := range jobs {
+		result := job.WaitDone()
+		if err = result.Err; err != nil {
+			return err
+		}
+	}
+	m.MergeTable()
+	return nil
 }

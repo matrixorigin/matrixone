@@ -3,6 +3,7 @@ package gc
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"os"
 )
 
 type GCTask struct {
@@ -23,7 +24,7 @@ func (g *GCTask) ExecDelete() error {
 	}
 
 	err := g.fs.DelFiles(context.Background(), g.object)
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
 

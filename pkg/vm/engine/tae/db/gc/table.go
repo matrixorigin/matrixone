@@ -6,6 +6,7 @@ import (
 	"fmt"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -18,11 +19,13 @@ import (
 type GCTable struct {
 	sync.Mutex
 	table map[string]*ObjectEntry
+	drop  []common.ID
 }
 
 func NewGCTable() GCTable {
 	table := GCTable{
 		table: make(map[string]*ObjectEntry),
+		drop:  make([]common.ID, 0),
 	}
 	return table
 }
@@ -78,6 +81,7 @@ func (t *GCTable) GetGCObject() []string {
 }
 
 func (t *GCTable) dropEntry(id common.ID) {
+	t.drop = append(t.drop, id)
 	for name := range t.table {
 		if t.table[name].table.tid == id.TableID {
 			t.table[name].DropTable()
@@ -86,16 +90,6 @@ func (t *GCTable) dropEntry(id common.ID) {
 }
 
 func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
-	_, _, _, del, delTxn := data.GetTblBatchs()
-	for i := 0; i < del.Length(); i++ {
-		dbid := delTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
-		tid := delTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
-		id := common.ID{
-			TableID: tid,
-			PartID:  uint32(dbid),
-		}
-		t.dropEntry(id)
-	}
 	ins, insTxn, del, delTxn := data.GetBlkBatchs()
 	for i := 0; i < ins.Length(); i++ {
 		dbid := insTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
@@ -128,13 +122,63 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 		name, _, _ := blockio.DecodeMetaLoc(metaLoc)
 		t.deleteBlock(id, name)
 	}
+	_, _, _, del, delTxn = data.GetTblBatchs()
+	for i := 0; i < del.Length(); i++ {
+		dbid := delTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
+		tid := delTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
+		id := common.ID{
+			TableID: tid,
+			PartID:  uint32(dbid),
+		}
+		t.dropEntry(id)
+	}
 }
 
 func rowIDToU64(rowID types.Rowid) uint64 {
 	return types.DecodeUint64(rowID[:8])
 }
 
-func (t *GCTable) collectData() []*containers.Batch {
+func (t *GCTable) rebuildTable(bats []*containers.Batch) {
+	for i := 0; i < bats[CreateBlock].Length(); i++ {
+		dbid := bats[CreateBlock].GetVectorByName(GCAttrDBId).Get(i).(uint64)
+		tid := bats[CreateBlock].GetVectorByName(GCAttrTableId).Get(i).(uint64)
+		sid := bats[CreateBlock].GetVectorByName(GCAttrSegmentId).Get(i).(uint64)
+		blkID := bats[CreateBlock].GetVectorByName(GCAttrBlockId).Get(i).(uint64)
+		name := string(bats[CreateBlock].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
+		id := common.ID{
+			SegmentID: sid,
+			TableID:   tid,
+			BlockID:   blkID,
+			PartID:    uint32(dbid),
+		}
+		t.addBlock(id, name)
+	}
+	for i := 0; i < bats[DeleteBlock].Length(); i++ {
+		dbid := bats[DeleteBlock].GetVectorByName(GCAttrDBId).Get(i).(uint64)
+		tid := bats[DeleteBlock].GetVectorByName(GCAttrTableId).Get(i).(uint64)
+		sid := bats[DeleteBlock].GetVectorByName(GCAttrSegmentId).Get(i).(uint64)
+		blkID := bats[DeleteBlock].GetVectorByName(GCAttrBlockId).Get(i).(uint64)
+		name := string(bats[DeleteBlock].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
+		id := common.ID{
+			SegmentID: sid,
+			TableID:   tid,
+			BlockID:   blkID,
+			PartID:    uint32(dbid),
+		}
+		t.deleteBlock(id, name)
+	}
+	for i := 0; i < bats[DropTable].Length(); i++ {
+		dbid := bats[DropTable].GetVectorByName(GCAttrDBId).Get(i).(uint64)
+		tid := bats[DropTable].GetVectorByName(GCAttrTableId).Get(i).(uint64)
+		id := common.ID{
+			TableID: tid,
+			PartID:  uint32(dbid),
+		}
+		t.dropEntry(id)
+	}
+}
+
+func (t *GCTable) makeBatchWithGCTable() []*containers.Batch {
 	add := containers.NewBatch()
 	del := containers.NewBatch()
 	for i, attr := range BlockSchemaAttr {
@@ -145,27 +189,6 @@ func (t *GCTable) collectData() []*containers.Batch {
 	for i, attr := range DropTableSchemaAttr {
 		drop.AddVector(attr, containers.MakeVector(DropTableSchemaTypes[i], false))
 	}
-	for name, object := range t.table {
-		if object.table.drop {
-			drop.GetVectorByName(GCAttrTableId).Append(object.table.tid)
-			drop.GetVectorByName(GCAttrDbId).Append(object.table.tid)
-			continue
-		}
-		for _, block := range object.table.blocks {
-			add.GetVectorByName(GCAttrBlockId).Append(block.BlockID)
-			add.GetVectorByName(GCAttrSegmentId).Append(block.SegmentID)
-			add.GetVectorByName(GCAttrTableId).Append(block.TableID)
-			add.GetVectorByName(GCAttrDbId).Append(block.PartID)
-			add.GetVectorByName(GCAttrObjectName).Append([]byte(name))
-		}
-		for _, block := range object.table.delete {
-			del.GetVectorByName(GCAttrBlockId).Append(block.BlockID)
-			del.GetVectorByName(GCAttrSegmentId).Append(block.SegmentID)
-			del.GetVectorByName(GCAttrTableId).Append(block.TableID)
-			del.GetVectorByName(GCAttrDbId).Append(block.PartID)
-			del.GetVectorByName(GCAttrObjectName).Append([]byte(name))
-		}
-	}
 	bats := make([]*containers.Batch, 3)
 	bats[CreateBlock] = add
 	bats[DeleteBlock] = del
@@ -173,8 +196,80 @@ func (t *GCTable) collectData() []*containers.Batch {
 	return bats
 }
 
+func (t *GCTable) closeBatch(bs []*containers.Batch) {
+	for i := range bs {
+		bs[i].Close()
+	}
+}
+
+func (t *GCTable) collectData() []*containers.Batch {
+	bats := t.makeBatchWithGCTable()
+	for i, attr := range BlockSchemaAttr {
+		bats[CreateBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i], false))
+		bats[DeleteBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i], false))
+	}
+	for i, attr := range DropTableSchemaAttr {
+		bats[DropTable].AddVector(attr, containers.MakeVector(DropTableSchemaTypes[i], false))
+	}
+	for name, object := range t.table {
+		if object.table.drop {
+			bats[DropTable].GetVectorByName(GCAttrTableId).Append(object.table.tid)
+			bats[DropTable].GetVectorByName(GCAttrDBId).Append(object.table.tid)
+			continue
+		}
+		for _, block := range object.table.blocks {
+			bats[CreateBlock].GetVectorByName(GCAttrBlockId).Append(block.BlockID)
+			bats[CreateBlock].GetVectorByName(GCAttrSegmentId).Append(block.SegmentID)
+			bats[CreateBlock].GetVectorByName(GCAttrTableId).Append(block.TableID)
+			bats[CreateBlock].GetVectorByName(GCAttrDBId).Append(block.PartID)
+			bats[CreateBlock].GetVectorByName(GCAttrObjectName).Append([]byte(name))
+		}
+		for _, block := range object.table.delete {
+			bats[DeleteBlock].GetVectorByName(GCAttrBlockId).Append(block.BlockID)
+			bats[DeleteBlock].GetVectorByName(GCAttrSegmentId).Append(block.SegmentID)
+			bats[DeleteBlock].GetVectorByName(GCAttrTableId).Append(block.TableID)
+			bats[DeleteBlock].GetVectorByName(GCAttrDBId).Append(block.PartID)
+			bats[DeleteBlock].GetVectorByName(GCAttrObjectName).Append([]byte(name))
+		}
+	}
+	return bats
+}
+
+func (t *GCTable) replayData(ctx context.Context,
+	typ BatchType,
+	attrs []string,
+	types []types.Type,
+	bats []*containers.Batch,
+	bs []objectio.BlockObject) error {
+	for i := range attrs {
+		col, err := bs[typ].GetColumn(uint16(i))
+		if err != nil {
+			return err
+		}
+		colData, err := col.GetData(ctx, common.DefaultAllocator)
+		if err != nil {
+			return err
+		}
+		pkgVec := vector.New(types[i])
+		v := make([]byte, len(colData.Entries[0].Object.([]byte)))
+		copy(v, colData.Entries[0].Object.([]byte))
+		if err = pkgVec.Read(v); err != nil {
+			return err
+		}
+		var vec containers.Vector
+		if pkgVec.Length() == 0 {
+			vec = containers.MakeVector(types[i], false)
+		} else {
+			vec = containers.NewVectorWithSharedMemory(pkgVec, false)
+		}
+		bats[typ].AddVector(attrs[i], vec)
+	}
+	return nil
+}
+
 func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS) ([]objectio.BlockObject, error) {
 	bats := t.collectData()
+	defer t.closeBatch(bats)
 	name := blockio.EncodeCheckpointMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
 	writer := blockio.NewWriter(context.Background(), fs, name)
 	for i := range bats {
@@ -185,6 +280,34 @@ func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS) ([]objec
 
 	blocks, err := writer.Sync()
 	return blocks, err
+}
+
+func (t *GCTable) ReadTable(ctx context.Context, name string, fs *objectio.ObjectFS) error {
+	reader, err := objectio.NewObjectReader(name, fs.Service)
+	if err != nil {
+		return err
+	}
+	bs, err := reader.ReadAllMeta(ctx, int64(DropTable+1), common.DefaultAllocator)
+	if err != nil {
+		return err
+	}
+	bats := t.makeBatchWithGCTable()
+	defer t.closeBatch(bats)
+	err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs)
+	if err != nil {
+		return err
+	}
+	err = t.replayData(ctx, DeleteBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs)
+	if err != nil {
+		return err
+	}
+	err = t.replayData(ctx, DropTable, DropTableSchemaAttr, DropTableSchemaTypes, bats, bs)
+	if err != nil {
+		return err
+	}
+
+	t.rebuildTable(bats)
+	return nil
 }
 
 func (t *GCTable) String() string {
