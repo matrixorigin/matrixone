@@ -58,6 +58,12 @@ func (l *MOLogger) Named(name string) *MOLogger {
 }
 
 func (l *MOLogger) WithContext(ctx context.Context) *MOLogger {
+	if ctx == nil || ctx == context.TODO() || ctx == context.Background() {
+		panic("nil, context.TODO() and context.Background() are not supported")
+	}
+	if sc := trace.SpanFromContext(ctx).SpanContext(); sc.IsEmpty() {
+		panic("context with empty SpanContext are not supported")
+	}
 	return &MOLogger{
 		logger: l.logger,
 		ctx:    ctx,
