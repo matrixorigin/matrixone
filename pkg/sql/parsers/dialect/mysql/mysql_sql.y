@@ -2242,7 +2242,7 @@ show_grants_stmt:
     {
         $$ = &tree.ShowGrants{}
     }
-|    SHOW GRANTS    FOR user_name using_roles_opt
+|    SHOW GRANTS FOR user_name using_roles_opt
     {
         $$ = &tree.ShowGrants{Username: $4.Username, Hostname: $4.Hostname, Roles: $5}
     }
