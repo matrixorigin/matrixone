@@ -294,11 +294,10 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 			copy(indexDef.TableExists, defImpl.UIdx.TableExists)
 			for idx, oldField := range defImpl.UIdx.Fields {
 				newField := &plan.Field{
-					Cols: make([]*plan.ColDef, len(oldField.Cols)),
+					Parts: make([]string, len(oldField.Parts)),
+					Cols:  make([]*plan.ColDef, len(oldField.Cols)),
 				}
-				if len(oldField.Parts) > 0 {
-					copy(newField.Parts, oldField.Parts)
-				}
+				copy(newField.Parts, oldField.Parts)
 				for i, col := range oldField.Cols {
 					newField.Cols[i] = DeepCopyColDef(col)
 				}
