@@ -669,7 +669,16 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string) ([]s
 	}
 	for _, attr := range attrs {
 		if val, ok := jsonMap[attr]; ok {
-			res = append(res, fmt.Sprintf("%v", val))
+			switch v := val.(type) {
+			case map[string]interface{}, []interface{}:
+				dt, err := json.Marshal(v)
+				if err != nil {
+					return nil, err
+				}
+				res = append(res, string(dt))
+			default:
+				res = append(res, fmt.Sprintf("%v", v))
+			}
 		} else {
 			return nil, moerr.NewInvalidInput(ctx, "the attr %s is not in json", attr)
 		}
@@ -691,8 +700,17 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string) ([]st
 	if len(jsonArray) < len(attrs) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo())
 	}
-	for idx := range attrs {
-		res = append(res, fmt.Sprintf("%v", jsonArray[idx]))
+	for _, val := range jsonArray {
+		switch v := val.(type) {
+		case map[string]interface{}, []interface{}:
+			dt, err := json.Marshal(v)
+			if err != nil {
+				return nil, err
+			}
+			res = append(res, string(dt))
+		default:
+			res = append(res, fmt.Sprintf("%v", v))
+		}
 	}
 	return res, nil
 }
