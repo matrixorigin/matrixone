@@ -6,7 +6,7 @@ import (
 
 const (
 	PrefixGCMeta = "gc"
-	GCMetaDir    = "gc"
+	GCMetaDir    = "gc/"
 )
 
 type BatchType int8

@@ -4584,6 +4584,10 @@ func TestGCWithCheckpoint(t *testing.T) {
 	err := task.ExecDelete()
 	assert.Nil(t, err)
 
+	manager2 := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	err = manager2.Replay()
+	assert.Nil(t, err)
+
 }
 
 func TestGCManager(t *testing.T) {

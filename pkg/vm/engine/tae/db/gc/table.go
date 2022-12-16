@@ -140,7 +140,7 @@ func rowIDToU64(rowID types.Rowid) uint64 {
 
 func (t *GCTable) rebuildTable(bats []*containers.Batch) {
 	for i := 0; i < bats[CreateBlock].Length(); i++ {
-		dbid := bats[CreateBlock].GetVectorByName(GCAttrDBId).Get(i).(uint64)
+		dbid := bats[CreateBlock].GetVectorByName(GCAttrDBId).Get(i).(uint32)
 		tid := bats[CreateBlock].GetVectorByName(GCAttrTableId).Get(i).(uint64)
 		sid := bats[CreateBlock].GetVectorByName(GCAttrSegmentId).Get(i).(uint64)
 		blkID := bats[CreateBlock].GetVectorByName(GCAttrBlockId).Get(i).(uint64)
@@ -154,7 +154,7 @@ func (t *GCTable) rebuildTable(bats []*containers.Batch) {
 		t.addBlock(id, name)
 	}
 	for i := 0; i < bats[DeleteBlock].Length(); i++ {
-		dbid := bats[DeleteBlock].GetVectorByName(GCAttrDBId).Get(i).(uint64)
+		dbid := bats[DeleteBlock].GetVectorByName(GCAttrDBId).Get(i).(uint32)
 		tid := bats[DeleteBlock].GetVectorByName(GCAttrTableId).Get(i).(uint64)
 		sid := bats[DeleteBlock].GetVectorByName(GCAttrSegmentId).Get(i).(uint64)
 		blkID := bats[DeleteBlock].GetVectorByName(GCAttrBlockId).Get(i).(uint64)
@@ -168,7 +168,7 @@ func (t *GCTable) rebuildTable(bats []*containers.Batch) {
 		t.deleteBlock(id, name)
 	}
 	for i := 0; i < bats[DropTable].Length(); i++ {
-		dbid := bats[DropTable].GetVectorByName(GCAttrDBId).Get(i).(uint64)
+		dbid := bats[DropTable].GetVectorByName(GCAttrDBId).Get(i).(uint32)
 		tid := bats[DropTable].GetVectorByName(GCAttrTableId).Get(i).(uint64)
 		id := common.ID{
 			TableID: tid,
@@ -181,14 +181,7 @@ func (t *GCTable) rebuildTable(bats []*containers.Batch) {
 func (t *GCTable) makeBatchWithGCTable() []*containers.Batch {
 	add := containers.NewBatch()
 	del := containers.NewBatch()
-	for i, attr := range BlockSchemaAttr {
-		add.AddVector(attr, containers.MakeVector(BlockSchemaTypes[i], false))
-		del.AddVector(attr, containers.MakeVector(BlockSchemaTypes[i], false))
-	}
 	drop := containers.NewBatch()
-	for i, attr := range DropTableSchemaAttr {
-		drop.AddVector(attr, containers.MakeVector(DropTableSchemaTypes[i], false))
-	}
 	bats := make([]*containers.Batch, 3)
 	bats[CreateBlock] = add
 	bats[DeleteBlock] = del
@@ -282,12 +275,12 @@ func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS) ([]objec
 	return blocks, err
 }
 
-func (t *GCTable) ReadTable(ctx context.Context, name string, fs *objectio.ObjectFS) error {
+func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS) error {
 	reader, err := objectio.NewObjectReader(name, fs.Service)
 	if err != nil {
 		return err
 	}
-	bs, err := reader.ReadAllMeta(ctx, int64(DropTable+1), common.DefaultAllocator)
+	bs, err := reader.ReadAllMeta(ctx, size, common.DefaultAllocator)
 	if err != nil {
 		return err
 	}

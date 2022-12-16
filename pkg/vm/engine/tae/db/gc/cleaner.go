@@ -189,7 +189,7 @@ func (m *DiskCleaner) Replay() error {
 		exec := func(ctx context.Context) (result *tasks.JobResult) {
 			result = &tasks.JobResult{}
 			table := NewGCTable()
-			err := table.ReadTable(ctx, dir.Name, m.fs)
+			err := table.ReadTable(ctx, GCMetaDir+dir.Name, dir.Size, m.fs)
 			if err != nil {
 				result.Err = err
 				return
