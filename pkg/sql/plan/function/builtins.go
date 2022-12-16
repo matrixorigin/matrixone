@@ -2714,4 +2714,19 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	CURRENT_DATE: {
+		Id:     CURRENT_DATE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_date,
+				Volatile:        false,
+				RealTimeRelated: true,
+				Fn:              unary.CurrentDate,
+			},
+		},
+	},
 }
