@@ -4700,8 +4700,6 @@ func TestGlobalCheckpoint3(t *testing.T) {
 	assert.False(t, tableExisted)
 }
 
-// collect global
-// replay block,seg,table,db
 func TestGlobalCheckpoint4(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -4710,6 +4708,7 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	defer tae.Close()
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
+	globalCkpInterval := time.Second
 
 	schema := catalog.MockSchemaAll(18, 2)
 	schema.BlockMaxRows = 10
@@ -4735,7 +4734,7 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	err = tae.incrementalCheckpoint(txn.GetCommitTS(), false, true, true)
 	assert.NoError(t, err)
 
-	err = tae.globalCheckpoint(time.Second, false)
+	err = tae.globalCheckpoint(globalCkpInterval, false)
 	assert.NoError(t, err)
 
 	tae.createRelAndAppend(bat, true)
@@ -4759,7 +4758,7 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	err = tae.incrementalCheckpoint(txn.GetCommitTS(), false, true, true)
 	assert.NoError(t, err)
 
-	err = tae.globalCheckpoint(time.Second, false)
+	err = tae.globalCheckpoint(globalCkpInterval, false)
 	assert.NoError(t, err)
 
 	tae.createRelAndAppend(bat, false)
@@ -4769,4 +4768,68 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t.Log(tae.Catalog.SimplePPString(3))
+}
+
+func TestGlobalCheckpoint5(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	tae.BGCheckpointRunner.DisableCheckpoint()
+	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
+	globalCkpInterval := time.Duration(0)
+
+	schema := catalog.MockSchemaAll(18, 2)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 60)
+	bats := bat.Split(3)
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	err = tae.incrementalCheckpoint(txn.GetStartTS(), false, true, true)
+	assert.NoError(t, err)
+
+	tae.createRelAndAppend(bats[0], true)
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	err = tae.incrementalCheckpoint(txn.GetStartTS(), false, true, true)
+	assert.NoError(t, err)
+
+	err = tae.globalCheckpoint(globalCkpInterval, false)
+	assert.NoError(t, err)
+
+	tae.DoAppend(bats[1])
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	err = tae.incrementalCheckpoint(txn.GetStartTS(), false, true, true)
+	assert.NoError(t, err)
+
+	err = tae.globalCheckpoint(globalCkpInterval, false)
+	assert.NoError(t, err)
+
+	tae.checkRowsByScan(40, true)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.restart()
+	tae.BGCheckpointRunner.DisableCheckpoint()
+	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	tae.checkRowsByScan(40, true)
+
+	tae.DoAppend(bats[2])
+
+	tae.checkRowsByScan(60, true)
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	err = tae.incrementalCheckpoint(txn.GetStartTS(), false, true, true)
+	assert.NoError(t, err)
+
+	err = tae.globalCheckpoint(globalCkpInterval, false)
+	assert.NoError(t, err)
 }
