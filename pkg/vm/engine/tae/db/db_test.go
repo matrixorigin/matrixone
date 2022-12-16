@@ -4569,7 +4569,7 @@ func TestGcWithCheckpoint(t *testing.T) {
 	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
 	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
-	manager := gc.NewManager(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	for _, entry := range entries {
 		table := gc.NewGcTable()
 		data, err := entry.Read(context.Background(), nil, tae.Fs)
@@ -4608,7 +4608,7 @@ func TestGcManager(t *testing.T) {
 	t.Logf("Checkpointed: %d", tae.Scheduler.GetCheckpointedLSN())
 	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
-	manager := gc.NewManager(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	err := manager.CronTask()
 	assert.Nil(t, err)
 	err = manager.CronTask()

@@ -1,23 +1,24 @@
 package gc
 
 import (
-	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
-type Manager struct {
+type CleanerState int8
+
+const (
+	Idle CleanerState = iota
+	Running
+)
+
+type DiskCleaner struct {
 	sync.RWMutex
-	options struct {
-		consumeInterval time.Duration
-	}
+	state       CleanerState
 	table       []GcTable
 	mergeCache  []GcTable
 	gc          []string
@@ -26,50 +27,60 @@ type Manager struct {
 	ckp         *checkpoint.CheckpointEntry
 	catalog     *catalog.Catalog
 	waitConsume atomic.Int32
-	stopper     *stopper.Stopper
-	onceStart   sync.Once
-	onceStop    sync.Once
 }
 
-func NewManager(fs *objectio.ObjectFS, runner checkpoint.Runner, catalog *catalog.Catalog) *Manager {
-	m := &Manager{
+func NewDiskCleaner(fs *objectio.ObjectFS, runner checkpoint.Runner, catalog *catalog.Catalog) *DiskCleaner {
+	m := &DiskCleaner{
 		table:     make([]GcTable, 0),
 		gc:        make([]string, 0),
 		fs:        fs,
 		ckpRunner: runner,
 		catalog:   catalog,
+		state:     Idle,
 	}
-	m.options.consumeInterval = time.Second * 1
 	return m
 }
 
-func (m *Manager) TryGC() {
+func (m *DiskCleaner) TryGC() {
 	m.waitConsume.Add(1)
+	m.tryConsume()
 }
 
-func (m *Manager) consume(num int32) {
+func (m *DiskCleaner) SetIdle() {
+	m.Lock()
+	defer m.Unlock()
+	m.state = Idle
+}
+
+func (m *DiskCleaner) GetState() CleanerState {
+	m.RLock()
+	defer m.RUnlock()
+	return m.state
+}
+
+func (m *DiskCleaner) consume(num int32) {
 	m.waitConsume.Add(0 - num)
 }
 
-func (m *Manager) cronjob(ctx context.Context) {
-	hb := w.NewHeartBeaterWithFunc(m.options.consumeInterval, m.tryConsume, nil)
-	hb.Start()
-	<-ctx.Done()
-	hb.Stop()
-}
-
-func (m *Manager) tryConsume() {
-	num := m.waitConsume.Load()
-	for i := int32(0); i < num; i++ {
-		err := m.CronTask()
-		if err != nil {
-			m.consume(i + 1)
-			break
-		}
+func (m *DiskCleaner) tryConsume() {
+	if m.GetState() == Running {
+		return
 	}
+	go func() {
+		defer m.SetIdle()
+		num := m.waitConsume.Load()
+		for i := int32(0); i < num; i++ {
+			err := m.CronTask()
+			if err != nil {
+				m.consume(i + 1)
+				break
+			}
+		}
+		m.MergeTable()
+	}()
 }
 
-func (m *Manager) CronTask() error {
+func (m *DiskCleaner) CronTask() error {
 	prvCkp := m.GetCkp()
 	ckp := m.GetCheckpoint(prvCkp)
 	if ckp == nil {
@@ -83,20 +94,24 @@ func (m *Manager) CronTask() error {
 	return err
 }
 
-func (m *Manager) GetCkp() *checkpoint.CheckpointEntry {
+func (m *DiskCleaner) GetCkp() *checkpoint.CheckpointEntry {
 	m.RLock()
 	defer m.RUnlock()
 	return m.ckp
 }
 
-func (m *Manager) SetCkp(ckp *checkpoint.CheckpointEntry) {
+func (m *DiskCleaner) SetCkp(ckp *checkpoint.CheckpointEntry) {
 	m.Lock()
 	defer m.Unlock()
 	m.ckp = ckp
 }
 
-func (m *Manager) MergeTable() error {
+func (m *DiskCleaner) MergeTable() error {
 	m.Lock()
+	if len(m.table) < 2 {
+		m.Unlock()
+		return nil
+	}
 	m.mergeCache = m.table
 	m.table = make([]GcTable, 0)
 	m.Unlock()
@@ -118,17 +133,17 @@ func (m *Manager) MergeTable() error {
 	return nil
 }
 
-func (m *Manager) AddTable(table GcTable) {
+func (m *DiskCleaner) AddTable(table GcTable) {
 	m.Lock()
 	defer m.Unlock()
 	m.table = append(m.table, table)
 }
 
-func (m *Manager) GetGc() []string {
+func (m *DiskCleaner) GetGc() []string {
 	return m.gc
 }
 
-func (m *Manager) GetCheckpoint(entry *checkpoint.CheckpointEntry) *checkpoint.CheckpointEntry {
+func (m *DiskCleaner) GetCheckpoint(entry *checkpoint.CheckpointEntry) *checkpoint.CheckpointEntry {
 	ckps := m.ckpRunner.GetAllCheckpoints()
 	if entry == nil {
 		return ckps[0]
@@ -141,7 +156,7 @@ func (m *Manager) GetCheckpoint(entry *checkpoint.CheckpointEntry) *checkpoint.C
 	return nil
 }
 
-func (m *Manager) consumeCheckpoint(entry *checkpoint.CheckpointEntry) (err error) {
+func (m *DiskCleaner) consumeCheckpoint(entry *checkpoint.CheckpointEntry) (err error) {
 	factory := logtail.IncrementalCheckpointDataFactory(entry.GetStart(), entry.GetEnd())
 	data, err := factory(m.catalog)
 	if err != nil {
@@ -153,18 +168,4 @@ func (m *Manager) consumeCheckpoint(entry *checkpoint.CheckpointEntry) (err erro
 	_, err = table.SaveTable(entry.GetStart(), entry.GetEnd(), m.fs)
 	m.AddTable(table)
 	return err
-}
-
-func (m *Manager) Start() {
-	m.onceStart.Do(func() {
-		if err := m.stopper.RunNamedTask("gc-job", m.cronjob); err != nil {
-			panic(err)
-		}
-	})
-}
-
-func (m *Manager) Stop() {
-	m.onceStop.Do(func() {
-		m.stopper.Stop()
-	})
 }
