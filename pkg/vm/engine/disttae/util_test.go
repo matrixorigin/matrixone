@@ -326,7 +326,7 @@ func TestComputeRangeByNonIntPk(t *testing.T) {
 	}
 
 	getHash := func(e *plan.Expr) uint64 {
-		_, ret := getConstantExprHashValue(context.TODO(), e)
+		_, ret := getConstantExprHashValue(context.TODO(), e, testutil.NewProc())
 		return ret
 	}
 
@@ -402,7 +402,7 @@ func TestComputeRangeByNonIntPk(t *testing.T) {
 
 	t.Run("test computeRangeByNonIntPk", func(t *testing.T) {
 		for i, testCase := range testCases {
-			result, data := computeRangeByNonIntPk(context.TODO(), testCase.expr, "a")
+			result, data := computeRangeByNonIntPk(context.TODO(), testCase.expr, "a", testutil.NewProc())
 			if result != testCase.result {
 				t.Fatalf("test computeRangeByNonIntPk at cases[%d], get result is different with expected", i)
 			}

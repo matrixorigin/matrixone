@@ -169,7 +169,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			}
 		}
 	}
-	dnList := needSyncDnStores(ctx, expr, tbl.tableDef, priKeys, tbl.db.txn.dnStores)
+	dnList := needSyncDnStores(ctx, expr, tbl.tableDef, priKeys, tbl.db.txn.dnStores, tbl.db.txn.proc)
 	switch {
 	case tbl.tableId == catalog.MO_DATABASE_ID:
 		tbl.dnList = []int{0}

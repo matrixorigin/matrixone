@@ -803,7 +803,7 @@ func blockWrite(ctx context.Context, bat *batch.Batch, fs fileservice.FileServic
 }
 
 func needSyncDnStores(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef,
-	priKeys []*engine.Attribute, dnStores []DNStore) []int {
+	priKeys []*engine.Attribute, dnStores []DNStore, proc *process.Process) []int {
 	var pk *engine.Attribute
 
 	fullList := func() []int {
@@ -842,7 +842,7 @@ func needSyncDnStores(ctx context.Context, expr *plan.Expr, tableDef *plan.Table
 		}
 		return getListByItems(dnStores, intPkRange.items)
 	}
-	canComputeRange, hashVal := computeRangeByNonIntPk(ctx, expr, pk.Name)
+	canComputeRange, hashVal := computeRangeByNonIntPk(ctx, expr, pk.Name, proc)
 	if !canComputeRange {
 		return fullList()
 	}
