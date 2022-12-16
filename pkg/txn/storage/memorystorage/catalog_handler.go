@@ -17,11 +17,9 @@ package memorystorage
 import (
 	"context"
 	"fmt"
-	"math"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
@@ -58,14 +56,9 @@ func NewCatalogHandler(upstream *MemHandler) (*CatalogHandler, error) {
 	}
 	handler.iterators.Map = make(map[ID]any)
 
-	now := Time{
-		Timestamp: timestamp.Timestamp{
-			PhysicalTime: math.MinInt64,
-		},
-	}
-	tx := memtable.NewTransaction(uuid.NewString(), now, memtable.SnapshotIsolation)
+	now := memorytable.Now(upstream.clock)
+	tx := memorytable.NewTransaction(now)
 	defer func() {
-		now.Statement = math.MaxInt
 		if err := tx.Commit(now); err != nil {
 			panic(err)
 		}
@@ -382,21 +375,30 @@ func (c *CatalogHandler) HandleNewTableIter(ctx context.Context, meta txn.TxnMet
 		var iter any
 		switch name {
 		case catalog.MO_DATABASE:
-			tableIter := c.upstream.databases.NewIter(tx)
+			tableIter, err := c.upstream.databases.NewIter(tx)
+			if err != nil {
+				return err
+			}
 			iter = &DatabaseRowIter{
 				TableIter: tableIter,
 				AttrsMap:  attrsMap,
 				nextFunc:  tableIter.First,
 			}
 		case catalog.MO_TABLES:
-			tableIter := c.upstream.relations.NewIter(tx)
+			tableIter, err := c.upstream.relations.NewIter(tx)
+			if err != nil {
+				return err
+			}
 			iter = &RelationRowIter{
 				TableIter: tableIter,
 				AttrsMap:  attrsMap,
 				nextFunc:  tableIter.First,
 			}
 		case catalog.MO_COLUMNS:
-			tableIter := c.upstream.attributes.NewIter(tx)
+			tableIter, err := c.upstream.attributes.NewIter(tx)
+			if err != nil {
+				return err
+			}
 			iter = &AttributeRowIter{
 				TableIter: tableIter,
 				AttrsMap:  attrsMap,

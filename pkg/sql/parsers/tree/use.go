@@ -51,6 +51,9 @@ func (node *Use) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *Use) GetStatementType() string { return "Use" }
+func (node *Use) GetQueryType() string     { return QueryTypeDCL }
+
 // IsUseRole checks the statement is:
 //
 //	USE SECONDARY ROLE { ALL | NONE };

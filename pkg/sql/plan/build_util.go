@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
@@ -37,7 +38,7 @@ func appendQueryNode(query *Query, node *Node) int32 {
 	return nodeID
 }
 
-func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
+func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*plan.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
 		switch defines.MysqlType(n.InternalType.Oid) {
 		case defines.MYSQL_TYPE_TINY:
@@ -78,9 +79,9 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 				}
 			}
 			if n.InternalType.FamilyString == "char" && width > types.MaxCharLen {
-				return nil, moerr.NewOutOfRangeNoCtx("char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
+				return nil, moerr.NewOutOfRange(ctx, "char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if n.InternalType.FamilyString == "varchar" && width > types.MaxVarcharLen {
-				return nil, moerr.NewOutOfRangeNoCtx("varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
+				return nil, moerr.NewOutOfRange(ctx, "varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			}
 			if n.InternalType.FamilyString == "char" { // type char
 				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil
@@ -100,9 +101,9 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 				}
 			}
 			if n.InternalType.FamilyString == "char" && width > types.MaxCharLen {
-				return nil, moerr.NewOutOfRangeNoCtx("char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
+				return nil, moerr.NewOutOfRange(ctx, "char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if n.InternalType.FamilyString == "varchar" && width > types.MaxVarcharLen {
-				return nil, moerr.NewOutOfRangeNoCtx("varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
+				return nil, moerr.NewOutOfRange(ctx, "varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			}
 			if n.InternalType.FamilyString == "char" { // type char
 				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil
@@ -139,10 +140,10 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 		case defines.MYSQL_TYPE_LONG_BLOB:
 			return &plan.Type{Id: int32(types.T_blob), Size: types.VarlenaSize}, nil
 		default:
-			return nil, moerr.NewNYINoCtx("data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
+			return nil, moerr.NewNYI(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}
 	}
-	return nil, moerr.NewInternalErrorNoCtx("unknown data type")
+	return nil, moerr.NewInternalError(ctx, "unknown data type")
 }
 
 func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Process) (*plan.Default, error) {
@@ -164,11 +165,11 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Pr
 
 	if typ.Id == int32(types.T_json) {
 		if expr != nil && !isNullAstExpr(expr) {
-			return nil, moerr.NewNotSupportedNoCtx(fmt.Sprintf("JSON column '%s' cannot have default value", col.Name.Parts[0]))
+			return nil, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("JSON column '%s' cannot have default value", col.Name.Parts[0]))
 		}
 	}
 	if !nullAbility && isNullAstExpr(expr) {
-		return nil, moerr.NewInvalidInputNoCtx("invalid default value for column '%s'", col.Name.Parts[0])
+		return nil, moerr.NewInvalidInput(proc.Ctx, "invalid default value for column '%s'", col.Name.Parts[0])
 	}
 
 	if expr == nil {
@@ -179,7 +180,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Pr
 		}, nil
 	}
 
-	binder := NewDefaultBinder(nil, nil, typ, nil)
+	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
 	planExpr, err := binder.BindExpr(expr, 0, false)
 	if err != nil {
 		return nil, err
@@ -187,11 +188,11 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Pr
 
 	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
 		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" {
-			return nil, moerr.NewInvalidInputNoCtx("invalid default value for column '%s'", col.Name.Parts[0])
+			return nil, moerr.NewInvalidInput(proc.Ctx, "invalid default value for column '%s'", col.Name.Parts[0])
 		}
 	}
 
-	defaultExpr, err := makePlan2CastExpr(planExpr, typ)
+	defaultExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -227,13 +228,13 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Proce
 		return nil, nil
 	}
 
-	binder := NewDefaultBinder(nil, nil, typ, nil)
+	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
 	planExpr, err := binder.BindExpr(expr, 0, false)
 	if err != nil {
 		return nil, err
 	}
 
-	onUpdateExpr, err := makePlan2CastExpr(planExpr, typ)
+	onUpdateExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -303,9 +304,9 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 	}
 }
 
-func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
+func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 	if !d.Default.NullAbility && d.Default.Expr == nil && !d.Typ.AutoIncr {
-		return nil, moerr.NewInvalidInputNoCtx("invalid default value")
+		return nil, moerr.NewInvalidInput(ctx, "invalid default value")
 	}
 	if d.Default.Expr == nil {
 		return &Expr{

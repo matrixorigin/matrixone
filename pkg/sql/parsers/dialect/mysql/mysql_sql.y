@@ -310,7 +310,7 @@ import (
 %token <str> OVER PRECEDING FOLLOWING GROUPS
 
 // Supported SHOW tokens
-%token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODELIST LOCKS
+%token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
@@ -339,7 +339,7 @@ import (
 // Built-in function
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT_DISTINCT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
-%token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV
+%token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
@@ -2287,7 +2287,7 @@ show_function_status_stmt:
     }
 
 show_node_list_stmt:
-    SHOW NODELIST
+    SHOW NODE LIST
     {
        $$ = &tree.ShowNodeList{}
     }
@@ -6181,6 +6181,16 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
+|   MEDIAN '(' func_type_opt expression ')' window_spec_opt
+    {
+	name := tree.SetUnresolvedName(strings.ToLower($1))
+	$$ = &tree.FuncExpr{
+	    Func: tree.FuncName2ResolvableFunctionReference(name),
+	    Exprs: tree.Exprs{$4},
+	    Type: $3,
+	    WindowSpec: $6,
+	}
+    }
 
 std_dev_pop:
     STD
@@ -7854,7 +7864,7 @@ reserved_keyword:
 |   PRECEDING
 |   FOLLOWING
 |   GROUPS
-|   NODELIST
+|   NODE
 |   LOCKS
 
 non_reserved_keyword:

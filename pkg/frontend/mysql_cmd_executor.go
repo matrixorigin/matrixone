@@ -209,8 +209,6 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
-	var stmID uuid.UUID
-	copy(stmID[:], cw.GetUUID())
 	var txnID uuid.UUID
 	var txn TxnOperator
 	var err error
@@ -228,14 +226,25 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !useEnv {
 		requestAt = time.Now()
 	}
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-	cw.GetAst().Format(fmtCtx)
-	text := SubStringFromBegin(fmtCtx.String(), int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	var stmID uuid.UUID
+	var statement tree.Statement = nil
+	var text string
+	if cw != nil {
+		copy(stmID[:], cw.GetUUID())
+		statement = cw.GetAst()
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		statement.Format(fmtCtx)
+		text = SubStringFromBegin(fmtCtx.String(), int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	} else {
+		stmID = uuid.New()
+		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	}
 	stm := &trace.StatementInfo{
 		StatementID:          stmID,
 		TransactionID:        txnID,
 		SessionID:            sesID,
 		Account:              tenant.GetTenant(),
+		RoleId:               proc.SessionInfo.RoleId,
 		User:                 tenant.GetUser(),
 		Host:                 sessInfo.GetHost(),
 		Database:             sessInfo.GetDatabase(),
@@ -244,6 +253,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		StatementTag:         "", // fixme: (Reserved)
 		SqlSourceType:        ses.sqlSourceType,
 		RequestAt:            requestAt,
+		StatementType:        getStatementType(statement).GetStatementType(),
+		QueryType:            getStatementType(statement).GetQueryType(),
 	}
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
@@ -256,44 +267,11 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 }
 
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string) context.Context {
-	if !trace.GetTracerProvider().IsEnable() {
-		return ctx
-	}
-	sessInfo := proc.SessionInfo
+	ctx = RecordStatement(ctx, ses, proc, nil, envBegin, envStmt, true)
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
-	stmID, _ := uuid.NewUUID()
-	var txnID uuid.UUID
-	var txn TxnOperator
-	var err2 error
-	if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
-		txn, err2 = handler.GetTxn()
-		if err2 != nil {
-			logutil.Errorf("RecordParseErrorStatement. error:%v", err2)
-		} else {
-			copy(txnID[:], txn.Txn().ID)
-		}
-	}
-	var sesID uuid.UUID
-	copy(sesID[:], ses.GetUUID())
-	text := SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
-	stm := &trace.StatementInfo{
-		StatementID:          stmID,
-		TransactionID:        txnID,
-		SessionID:            sesID,
-		Account:              tenant.GetTenant(),
-		User:                 tenant.GetUser(),
-		Host:                 sessInfo.GetHost(),
-		Database:             sessInfo.GetDatabase(),
-		Statement:            text,
-		StatementFingerprint: "", // fixme: (Reserved)
-		StatementTag:         "", // fixme: (Reserved)
-		RequestAt:            envBegin,
-	}
-	sc := trace.SpanContextWithID(trace.TraceID(stmID), trace.SpanKindStatement)
-	ctx = trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 	incStatementCounter(tenant.GetTenant(), nil)
 	incStatementErrorsCounter(tenant.GetTenant(), nil)
 	return ctx
@@ -572,7 +550,7 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 		mrs.AddRow(row)
 	}
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
-		logErrorf(ses.GetConciseProfile(), "handleShowColumns error %v", err)
+		logErrorf(ses.GetConciseProfile(), "handleShowTableStatus error %v", err)
 		return err
 	}
 	return nil
@@ -1697,7 +1675,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		if err != nil {
 			return err
 		}
-		binder := plan2.NewDefaultBinder(nil, nil, &plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
+		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, &plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
 		planExpr, err := binder.BindExpr(sv.Where.Expr, 0, false)
 		if err != nil {
 			return err
@@ -2211,6 +2189,7 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 		setColLength(c, col.Typ.Width)
 		setCharacter(c)
 		c.SetDecimal(uint8(col.Typ.Scale))
+		convertMysqlTextTypeToBlobType(c)
 		columns[i] = c
 	}
 	return columns, err
@@ -2251,10 +2230,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
 
 		// replace ? and @var with their values
-		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
+		resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
-		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule})
-		err = vp.Visit()
+		constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
+		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
+		err = vp.Visit(requestCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -2283,7 +2263,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// replace @var with their values
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
 		vp := plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{resetVarRule})
-		err = vp.Visit()
+		err = vp.Visit(requestCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -2935,18 +2915,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 }
 
 func incStatementCounter(tenant string, stmt tree.Statement) {
-	switch stmt.(type) {
-	case *tree.Select:
-		metric.StatementCounter(tenant, metric.SQLTypeSelect).Inc()
-	case *tree.Insert:
-		metric.StatementCounter(tenant, metric.SQLTypeInsert).Inc()
-	case *tree.Delete:
-		metric.StatementCounter(tenant, metric.SQLTypeDelete).Inc()
-	case *tree.Update:
-		metric.StatementCounter(tenant, metric.SQLTypeUpdate).Inc()
-	default:
-		metric.StatementCounter(tenant, metric.SQLTypeOther).Inc()
-	}
+	metric.StatementCounter(tenant, getStatementType(stmt).GetQueryType()).Inc()
 }
 
 func incTransactionCounter(tenant string) {
@@ -2961,17 +2930,22 @@ func incTransactionErrorsCounter(tenant string, t metric.SQLType) {
 }
 
 func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
+	metric.StatementErrorsCounter(tenant, getStatementType(stmt).GetQueryType()).Inc()
+}
+
+type unknownStatementType struct {
+	tree.StatementType
+}
+
+func (unknownStatementType) GetStatementType() string { return "Unknown" }
+func (unknownStatementType) GetQueryType() string     { return tree.QueryTypeOth }
+
+func getStatementType(stmt tree.Statement) tree.StatementType {
 	switch stmt.(type) {
-	case *tree.Select:
-		metric.StatementErrorsCounter(tenant, metric.SQLTypeSelect).Inc()
-	case *tree.Insert:
-		metric.StatementErrorsCounter(tenant, metric.SQLTypeInsert).Inc()
-	case *tree.Delete:
-		metric.StatementErrorsCounter(tenant, metric.SQLTypeDelete).Inc()
-	case *tree.Update:
-		metric.StatementErrorsCounter(tenant, metric.SQLTypeUpdate).Inc()
+	case tree.StatementType:
+		return stmt
 	default:
-		metric.StatementErrorsCounter(tenant, metric.SQLTypeOther).Inc()
+		return unknownStatementType{}
 	}
 }
 
@@ -3335,7 +3309,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.SetShowStmtType(ShowColumns)
 			ses.SetData(nil)
 		case *tree.ShowTableStatus:
-			ses.showStmtType = ShowTableStatus
+			ses.SetShowStmtType(ShowTableStatus)
 			ses.SetData(nil)
 		case *tree.Delete:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
@@ -4201,14 +4175,22 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_decimal128:
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
-	case types.T_blob, types.T_text:
+	case types.T_blob:
 		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	case types.T_text:
+		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
 	case types.T_uuid:
 		col.SetColumnType(defines.MYSQL_TYPE_UUID)
 	default:
 		return moerr.NewInternalError(ctx, "RunWhileSend : unsupported type %d", engineType)
 	}
 	return nil
+}
+
+func convertMysqlTextTypeToBlobType(col *MysqlColumn) {
+	if col.ColumnType() == defines.MYSQL_TYPE_TEXT {
+		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	}
 }
 
 // build plan json when marhal plan error
