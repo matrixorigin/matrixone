@@ -17,7 +17,6 @@ type TableEntry struct {
 type ObjectEntry struct {
 	refs  atomic.Int64
 	table TableEntry
-	drop  bool
 }
 
 func NewObjectEntry() *ObjectEntry {
