@@ -1653,13 +1653,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		} else if tableDef.TableType == catalog.SystemViewRel {
 
 			// set view statment to CTE
-			viewDefString := ""
-			for _, def := range tableDef.Defs {
-				if viewDef, ok := def.Def.(*plan.TableDef_DefType_View); ok {
-					viewDefString = viewDef.View.View
-					break
-				}
-			}
+			viewDefString := tableDef.ViewSql.View
+
 			if viewDefString != "" {
 				if ctx.cteByName == nil {
 					ctx.cteByName = make(map[string]*CTERef)

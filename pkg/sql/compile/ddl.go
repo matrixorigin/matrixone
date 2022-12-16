@@ -65,8 +65,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	exeCols := planColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
-	planDefs := qry.GetTableDef().GetDefs()
-	exeDefs, err := planDefsToExeDefs(planDefs)
+	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
 		return err
 	}
@@ -96,8 +95,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	for _, def := range qry.IndexTables {
 		planCols = def.GetCols()
 		exeCols = planColsToExeCols(planCols)
-		planDefs = def.GetDefs()
-		exeDefs, err = planDefsToExeDefs(planDefs)
+		exeDefs, err = planDefsToExeDefs(def)
 		if err != nil {
 			return err
 		}
@@ -175,7 +173,8 @@ func (s *Scope) DropTable(c *Compile) error {
 	return colexec.DeleteAutoIncrCol(c.e, c.ctx, rel, c.proc, dbName, rel.GetTableID(c.ctx))
 }
 
-func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, error) {
+func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
+	planDefs := tableDef.GetDefs()
 	var exeDefs []engine.TableDef
 	c := new(engine.ConstraintDef)
 	for _, def := range planDefs {
@@ -198,10 +197,6 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 			}
 			exeDefs = append(exeDefs, &engine.PropertiesDef{
 				Properties: properties,
-			})
-		case *plan.TableDef_DefType_View:
-			exeDefs = append(exeDefs, &engine.ViewDef{
-				View: defVal.View.View,
 			})
 		case *plan.TableDef_DefType_Partition:
 			bytes, err := defVal.Partition.MarshalPartitionInfo()
@@ -229,6 +224,13 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 			})
 		}
 	}
+
+	if tableDef.ViewSql != nil {
+		exeDefs = append(exeDefs, &engine.ViewDef{
+			View: tableDef.ViewSql.View,
+		})
+	}
+
 	if len(c.Cts) > 0 {
 		exeDefs = append(exeDefs, c)
 	}
