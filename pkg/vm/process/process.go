@@ -86,14 +86,6 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	return proc
 }
 
-// NewFromNil return Process, which behave like (*Process)(nil), see Process.GetMPool
-func NewFromNil(ctx context.Context) *Process {
-	return &Process{
-		mp:  xxxProcMp,
-		Ctx: ctx,
-	}
-}
-
 func (wreg *WaitRegister) MarshalBinary() ([]byte, error) {
 	return nil, nil
 }
