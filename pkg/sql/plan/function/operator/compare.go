@@ -16,7 +16,6 @@ package operator
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/compare"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
+	"unsafe"
 )
 
 type compareT interface {
@@ -161,6 +161,12 @@ func LeDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector,
 // string compare
 type compStringFn func(v1, v2 []byte, s1, s2 int32) bool
 
+type compValenaInlineFn func(p1, p2 unsafe.Pointer) bool
+
+func CompareValenaInlineEq(p1, p2 unsafe.Pointer) bool {
+	return *(*int64)(p1) == *(*int64)(p2) && *(*int64)(unsafe.Add(p1, 8)) == *(*int64)(unsafe.Add(p2, 8)) && *(*int64)(unsafe.Add(p1, 16)) == *(*int64)(unsafe.Add(p2, 16))
+}
+
 func CompareBytesEq(v1, v2 []byte, s1, s2 int32) bool {
 	return bytes.Equal(v1, v2)
 }
@@ -178,6 +184,45 @@ func CompareBytesGt(v1, v2 []byte, s1, s2 int32) bool {
 }
 func CompareBytesNe(v1, v2 []byte, s1, s2 int32) bool {
 	return !bytes.Equal(v1, v2)
+}
+
+func CompareValenaInline(vs []*vector.Vector, fn compValenaInlineFn, proc *process.Process) (*vector.Vector, error) {
+	v1, v2 := vs[0], vs[1]
+	if v1.IsScalarNull() || v2.IsScalarNull() {
+		return handleScalarNull(v1, v2, proc)
+	}
+	col1, _ := vector.MustVarlenaRawData(v1)
+	col2, _ := vector.MustVarlenaRawData(v2)
+
+	if v1.IsScalar() && v2.IsScalar() {
+		return vector.NewConstFixed(boolType, 1, fn(col1[0].UnsafePtr(), col2[0].UnsafePtr()), proc.Mp()), nil
+	}
+
+	length := vector.Length(v1)
+	if length < vector.Length(v2) {
+		length = vector.Length(v2)
+	}
+	vec := allocateBoolVector(length, proc)
+	veccol := vec.Col.([]bool)
+
+	if !v1.IsScalar() && !v2.IsScalar() {
+		for i := range veccol {
+			veccol[i] = fn(col1[i].UnsafePtr(), col2[i].UnsafePtr())
+		}
+		nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
+	} else if v1.IsScalar() {
+		for i := range veccol {
+			veccol[i] = fn(col1[0].UnsafePtr(), col2[i].UnsafePtr())
+		}
+		nulls.Or(nil, v2.Nsp, vec.Nsp)
+	} else {
+		for i := range veccol {
+			veccol[i] = fn(col1[i].UnsafePtr(), col2[0].UnsafePtr())
+		}
+		nulls.Or(v1.Nsp, nil, vec.Nsp)
+	}
+
+	return vec, nil
 }
 
 func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) (*vector.Vector, error) {
@@ -258,6 +303,9 @@ func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) 
 }
 
 func EqString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if vs[0].GetArea() == nil && vs[1].GetArea() == nil {
+		return CompareValenaInline(vs, CompareValenaInlineEq, proc)
+	}
 	return CompareString(vs, CompareBytesEq, proc)
 }
 
