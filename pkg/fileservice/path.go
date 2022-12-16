@@ -50,6 +50,7 @@ func ParsePath(s string) (path Path, err error) {
 		if r >= '0' && r <= '9' ||
 			r >= 'a' && r <= 'z' ||
 			r >= 'A' && r <= 'Z' ||
+			r == '@' ||
 			r == '/' {
 			continue
 		}

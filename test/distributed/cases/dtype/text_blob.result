@@ -167,7 +167,7 @@ insert into blob_01 values ('',' hhhh@126.com','0001-01-01');
 insert into blob_01 values ('#$%^&*()',NULL,null);
 select * from blob_01;
 b1    b2    b3
-no    中文    89233432234234 
+no    ä¸­æ    89233432234234 
      hhhh@126.com    0001-01-01
 #$%^&*()    null    null
 select length(b1),length(b2),length(b3) from blob_01;
@@ -185,7 +185,7 @@ count(b1)
 3
 select max(b2),min(b3) from blob_01;
 max(b2)    min(b3)
-中文    0001-01-01
+ä¸­æ    0001-01-01
 select b1||b2 from blob_01;
 concat(b1, b2)
 no中文
@@ -225,7 +225,7 @@ tom    50
 drop table blob_02;
 select cast('苏轼' as blob),cast('alex' as blob),cast('123' as blob);
 cast(苏轼 as blob)    cast(alex as blob)    cast(123 as blob)
-苏轼    alex    123
+èè½¼    alex    123
 select cast('@#$%^' as blob),cast('hhh@123'as blob);
 cast(@#$%^ as blob)    cast(hhh@123 as blob)
 @#$%^    hhh@123
@@ -233,7 +233,7 @@ create table blob_03(t1 text,t2 time,t3 json,t4 blob,t5 int,t6 varchar(100),t7 d
 insert into blob_03 values ('枫叶','0150','{"a":"1","b":"2"}','checkin',30,'zzzow',89.02,23.90);
 select cast(t1 as blob),cast(t2 as blob),cast(t5 as blob),cast(t6 as blob),cast(t7 as blob),cast(t8 as blob) from blob_03;
 cast(t1 as blob)    cast(t2 as blob)    cast(t5 as blob)    cast(t6 as blob)    cast(t7 as blob)    cast(t8 as blob)
-枫叶    00:01:50    30    zzzow    89.02    23.900
+æ«å¶    00:01:50    30    zzzow    89.02    23.900
 select cast(t3 as blob) from blob_03;
 invalid argument operator cast, bad value [JSON BLOB]
 select cast(t4 as varchar(255))from blob_03;
