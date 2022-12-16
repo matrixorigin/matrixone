@@ -1869,8 +1869,8 @@ var operators = map[int]Functions{
 			{
 				Index: 2,
 				Args: []types.T{
-					types.T_char,
-					types.T_char,
+					types.T_text,
+					types.T_text,
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.Like,

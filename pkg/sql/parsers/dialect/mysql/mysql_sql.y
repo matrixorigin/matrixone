@@ -189,6 +189,9 @@ import (
     indexHintScope tree.IndexHintScope
     indexHint *tree.IndexHint
     indexHintList []*tree.IndexHint
+
+    killOption tree.KillOption
+    statementOption tree.StatementOption
 }
 
 %token LEX_ERROR
@@ -307,7 +310,7 @@ import (
 %token <str> OVER PRECEDING FOLLOWING GROUPS
 
 // Supported SHOW tokens
-%token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODELIST LOCKS
+%token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
@@ -336,7 +339,7 @@ import (
 // Built-in function
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT_DISTINCT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
-%token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV
+%token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
@@ -379,6 +382,7 @@ import (
 %type <statement> declare_stmt
 %type <statement> values_stmt
 %type <statement> mo_dump_stmt
+%type <statement> kill_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -583,6 +587,10 @@ import (
 %type <indexHint> index_hint
 %type <indexHintList> index_hint_list index_hint_list_opt
 %type <updateList> on_duplicate_key_update_opt
+
+%token <str> KILL
+%type <killOption> kill_opt
+%type <statementOption> statement_id_opt
 %start start_command
 
 %%
@@ -634,11 +642,67 @@ stmt:
     {
         $$ = $1
     }
+|   kill_stmt
 |   /* EMPTY */
     {
         $$ = tree.Statement(nil)
     }
 
+kill_stmt:
+    KILL kill_opt INTEGRAL statement_id_opt
+    {
+        var connectionId uint64
+        switch v := $3.(type) {
+        case uint64:
+	    connectionId = v
+        case int64:
+	    connectionId = uint64(v)
+        default:
+	    yylex.Error("parse integral fail")
+	    return 1
+        }
+
+	$$ = &tree.Kill{
+            Option: $2,
+            ConnectionId: connectionId,
+            StmtOption:  $4,
+	}
+    }
+
+kill_opt:
+{
+    $$ = tree.KillOption{
+        Exist: false,
+    }
+}
+| CONNECTION
+{
+    $$ = tree.KillOption{
+	Exist: true,
+	Typ: tree.KillTypeConnection,
+    }
+}
+| QUERY
+{
+    $$ = tree.KillOption{
+	Exist: true,
+	Typ: tree.KillTypeQuery,
+    }
+}
+
+statement_id_opt:
+{
+    $$ = tree.StatementOption{
+        Exist: false,
+    }
+}
+| STRING
+{
+    $$ = tree.StatementOption{
+        Exist: true,
+        StatementId: $1,
+    }
+}
 
 mo_dump_stmt:
     MODUMP DATABASE database_id INTO STRING max_file_size_opt
@@ -2216,7 +2280,7 @@ show_function_status_stmt:
     }
 
 show_node_list_stmt:
-    SHOW NODELIST
+    SHOW NODE LIST
     {
        $$ = &tree.ShowNodeList{}
     }
@@ -6110,6 +6174,16 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
+|   MEDIAN '(' func_type_opt expression ')' window_spec_opt
+    {
+	name := tree.SetUnresolvedName(strings.ToLower($1))
+	$$ = &tree.FuncExpr{
+	    Func: tree.FuncName2ResolvableFunctionReference(name),
+	    Exprs: tree.Exprs{$4},
+	    Type: $3,
+	    WindowSpec: $6,
+	}
+    }
 
 std_dev_pop:
     STD
@@ -7783,7 +7857,7 @@ reserved_keyword:
 |   PRECEDING
 |   FOLLOWING
 |   GROUPS
-|   NODELIST
+|   NODE
 |   LOCKS
 
 non_reserved_keyword:

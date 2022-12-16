@@ -15,25 +15,19 @@
 package memorystorage
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 type (
-	ID              = memoryengine.ID
-	IsolationPolicy = memtable.IsolationPolicy
-	Nullable        = memtable.Nullable
-	Transaction     = memtable.Transaction
-	Tuple           = memtable.Tuple
-	Text            = memtable.Text
-	Uint            = memtable.Uint
-	Bool            = memtable.Bool
-	Time            = memtable.Time
-)
-
-var (
-	SnapshotIsolation = memtable.SnapshotIsolation
-	Serializable      = memtable.Serializable
+	ID          = memoryengine.ID
+	Nullable    = memorytable.Nullable
+	Transaction = memorytable.Transaction
+	Tuple       = memorytable.Tuple
+	Text        = memorytable.Text
+	Uint        = memorytable.Uint
+	Bool        = memorytable.Bool
+	Time        = memorytable.Time
 )
 
 func boolToInt8(b bool) int8 {

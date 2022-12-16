@@ -610,7 +610,7 @@ func LoadCheckpointEntries(
 				return
 			}
 			data := NewCheckpointData()
-			if err = data.ReadFrom(reader, jobScheduler, common.DefaultAllocator); err != nil {
+			if err = data.ReadFrom(reader, nil, common.DefaultAllocator); err != nil {
 				result.Err = err
 				return
 			}

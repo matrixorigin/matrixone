@@ -19,6 +19,7 @@ import (
 	"math/rand"
 	"strconv"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -45,10 +46,14 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 	}
 	var blockNum, totalBlockCnt int
 	var outcnt int64
+
+	exprMono := checkExprIsMonotonic(expr)
+	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
+
 	for _, blockmetas := range tbl.meta.blocks {
 		totalBlockCnt += len(blockmetas)
 		for _, blk := range blockmetas {
-			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
+			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
 				outcnt += blockRows(blk)
 				blockNum++
 			}
@@ -75,6 +80,61 @@ func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
 		return 100, 1000000, nil
 	}
 	return int32(totalBlockCnt), rows, nil
+}
+
+func (tbl *table) Rows(ctx context.Context) (int64, error) {
+	var rows int64
+	writes := make([]Entry, 0, len(tbl.db.txn.writes))
+	tbl.db.txn.Lock()
+	for i := range tbl.db.txn.writes {
+		for _, entry := range tbl.db.txn.writes[i] {
+			if entry.databaseId == tbl.db.databaseId &&
+				entry.tableId == tbl.tableId {
+				writes = append(writes, entry)
+			}
+		}
+	}
+	tbl.db.txn.Unlock()
+
+	deletes := make(map[types.Rowid]uint8)
+	for _, entry := range writes {
+		if entry.typ == INSERT {
+			rows = rows + int64(entry.bat.Length())
+		} else {
+			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					deletes[v] = 0
+				}
+			}
+		}
+	}
+
+	t := memtable.Time{
+		Timestamp: tbl.db.txn.meta.SnapshotTS,
+	}
+	tx := memtable.NewTransaction(
+		uuid.NewString(),
+		t,
+		memtable.SnapshotIsolation,
+	)
+	for _, partition := range tbl.parts {
+		pRows, err := partition.Rows(tx, deletes, tbl.skipBlocks)
+		if err != nil {
+			return 0, err
+		}
+		rows = rows + pRows
+	}
+
+	if tbl.meta == nil {
+		return rows, nil
+	}
+	for _, blks := range tbl.meta.blocks {
+		for _, blk := range blks {
+			rows += blockRows(blk)
+		}
+	}
+	return rows, nil
 }
 
 func (tbl *table) Size(ctx context.Context, name string) (int64, error) {
@@ -147,17 +207,20 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 		return ranges, nil
 	}
 	tbl.meta.modifedBlocks = make([][]ModifyBlockMeta, len(tbl.meta.blocks))
+
+	exprMono := checkExprIsMonotonic(expr)
+	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range dnList {
 		blks, deletes := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
 			tbl.meta.blocks[i], writes)
 		for _, blk := range blks {
 			tbl.skipBlocks[blk.Info.BlockID] = 0
-			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
+			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
 				ranges = append(ranges, blockMarshal(blk))
 			}
 		}
 		tbl.meta.modifedBlocks[i] = genModifedBlocks(ctx, deletes,
-			tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.proc)
+			tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.db.txn.proc)
 	}
 	return ranges, nil
 }
