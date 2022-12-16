@@ -30,6 +30,7 @@ type DiskCleaner struct {
 	ckp         *checkpoint.CheckpointEntry
 	catalog     *catalog.Catalog
 	waitConsume atomic.Int32
+	gcTask      *GCTask
 }
 
 func NewDiskCleaner(fs *objectio.ObjectFS, runner checkpoint.Runner, catalog *catalog.Catalog) *DiskCleaner {
@@ -41,6 +42,7 @@ func NewDiskCleaner(fs *objectio.ObjectFS, runner checkpoint.Runner, catalog *ca
 		catalog:   catalog,
 		state:     Idle,
 	}
+	m.gcTask = NewGCTask(fs)
 	return m
 }
 
@@ -80,6 +82,19 @@ func (m *DiskCleaner) tryConsume() {
 			}
 		}
 		m.MergeTable()
+	}()
+}
+
+func (m *DiskCleaner) tryDelete() {
+	if m.gcTask.GetState() == Running {
+		return
+	}
+	go func() {
+		m.Lock()
+		gc := m.gc
+		m.gc = make([]string, 0)
+		m.Unlock()
+		m.gcTask.ExecDelete(gc)
 	}()
 }
 
@@ -134,6 +149,10 @@ func (m *DiskCleaner) MergeTable() error {
 	m.AddTable(mergeTable)
 	m.mergeCache = nil
 	return nil
+}
+
+func (m *DiskCleaner) delObject() {
+
 }
 
 func (m *DiskCleaner) AddTable(table GCTable) {

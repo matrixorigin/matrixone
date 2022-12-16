@@ -4580,12 +4580,16 @@ func TestGCWithCheckpoint(t *testing.T) {
 	}
 	manager.MergeTable()
 	assert.Equal(t, 5, len(manager.GetGC()))
-	task := gc.NewGCTask(tae.Fs, manager.GetGC())
-	err := task.ExecDelete()
+	task := gc.NewGCTask(tae.Fs)
+	err := task.ExecDelete(manager.GetGC())
 	assert.Nil(t, err)
 
 	manager2 := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	err = manager2.Replay()
+	assert.Nil(t, err)
+	assert.Equal(t, 5, len(manager2.GetGC()))
+	task = gc.NewGCTask(tae.Fs)
+	err = task.ExecDelete(manager.GetGC())
 	assert.Nil(t, err)
 
 }
@@ -4619,8 +4623,8 @@ func TestGCManager(t *testing.T) {
 	assert.Nil(t, err)
 	manager.MergeTable()
 	assert.Equal(t, 5, len(manager.GetGC()))
-	task := gc.NewGCTask(tae.Fs, manager.GetGC())
-	err = task.ExecDelete()
+	task := gc.NewGCTask(tae.Fs)
+	err = task.ExecDelete(manager.GetGC())
 	assert.Nil(t, err)
 
 }
