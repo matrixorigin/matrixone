@@ -26,14 +26,16 @@ import (
 )
 
 type ConstantFold struct {
-	bat *batch.Batch
+	bat        *batch.Batch
+	isPrepared bool
 }
 
-func NewConstantFold() *ConstantFold {
+func NewConstantFold(isPrepared bool) *ConstantFold {
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 	return &ConstantFold{
-		bat: bat,
+		bat:        bat,
+		isPrepared: isPrepared,
 	}
 }
 
@@ -83,6 +85,9 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	if f.Volatile { // function cannot be fold
 		return e
 	}
+	if f.RealTimeRelated && r.isPrepared {
+		return e
+	}
 	for i := range ef.F.Args {
 		ef.F.Args[i] = r.constantFold(ef.F.Args[i], proc)
 	}
@@ -100,6 +105,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	ec := &plan.Expr_C{
 		C: c,
 	}
+	e.Typ = &plan.Type{Id: int32(vec.Typ.Oid), Precision: vec.Typ.Precision, Scale: vec.Typ.Scale, Width: vec.Typ.Width, Size: vec.Typ.Size}
 	e.Expr = ec
 	return e
 }
@@ -173,6 +179,12 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 		return &plan.Const{
 			Value: &plan.Const_Sval{
 				Sval: vec.GetString(0),
+			},
+		}
+	case types.T_timestamp:
+		return &plan.Const{
+			Value: &plan.Const_Timestampval{
+				Timestampval: int64(vector.MustTCols[types.Timestamp](vec)[0]),
 			},
 		}
 	default:
