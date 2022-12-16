@@ -22,11 +22,15 @@ import (
 )
 
 var defaultRules = []Rule{}
+var prepareRules = []Rule{}
 
 func init() {
 	defaultRules = []Rule{
-		rule.NewConstantFold(),
+		rule.NewConstantFold(false),
 		// rule.NewPredicatePushdown(),
+	}
+	prepareRules = []Rule{
+		rule.NewConstantFold(true),
 	}
 }
 
@@ -34,6 +38,13 @@ func NewBaseOptimizer(ctx CompilerContext) *BaseOptimizer {
 	return &BaseOptimizer{
 		ctx:   ctx,
 		rules: defaultRules,
+	}
+}
+
+func NewPrepareOptimizer(ctx CompilerContext) *BaseOptimizer {
+	return &BaseOptimizer{
+		ctx:   ctx,
+		rules: prepareRules,
 	}
 }
 
