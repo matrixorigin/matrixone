@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -50,7 +51,7 @@ func (builder *QueryBuilder) remapExpr(expr *Expr, colMap map[[2]int32][2]int32)
 			ne.Col.ColPos = ids[1]
 			ne.Col.Name = builder.nameByColRef[mapId]
 		} else {
-			return moerr.NewParseError(builder.compCtx.GetContext(), "can't find column %v in context's map %v", mapId, colMap)
+			return moerr.NewParseError(builder.GetContext(), "can't find column %v in context's map %v", mapId, colMap)
 		}
 
 	case *plan.Expr_F:
@@ -649,7 +650,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		})
 
 	default:
-		return nil, moerr.NewInternalError(builder.compCtx.GetContext(), "unsupport node type")
+		return nil, moerr.NewInternalError(builder.GetContext(), "unsupport node type")
 	}
 
 	node.BindingTags = nil
@@ -685,7 +686,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	var unionTypes []plan.Node_NodeType
 
 	// get Union selectStmts
-	err := getUnionSelects(stmt, &selectStmts, &unionTypes)
+	err := getUnionSelects(builder.GetContext(), stmt, &selectStmts, &unionTypes)
 	if err != nil {
 		return 0, err
 	}
@@ -758,7 +759,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			}
 		} else {
 			if projectLength != len(builder.qry.Nodes[nodeID].ProjectList) {
-				return 0, moerr.NewParseError(builder.compCtx.GetContext(), "SELECT statements have different number of columns")
+				return 0, moerr.NewParseError(builder.GetContext(), "SELECT statements have different number of columns")
 			}
 		}
 
@@ -782,9 +783,9 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		}
 
 		if len(tmpArgsType) > 0 {
-			_, _, argsCastType, err := function.GetFunctionByName("coalesce", tmpArgsType)
+			_, _, argsCastType, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
 			if err != nil {
-				return 0, moerr.NewParseError(builder.compCtx.GetContext(), "the %d column cann't cast to a same type", columnIdx)
+				return 0, moerr.NewParseError(builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
 			}
 
 			if len(argsCastType) > 0 && int(argsCastType[0].Oid) == int(types.T_datetime) {
@@ -811,7 +812,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 					if argsType[idx].Oid == types.T_any {
 						node.ProjectList[columnIdx].Typ = targetType
 					} else {
-						node.ProjectList[columnIdx], err = appendCastBeforeExpr(node.ProjectList[columnIdx], targetType)
+						node.ProjectList[columnIdx], err = appendCastBeforeExpr(builder.GetContext(), node.ProjectList[columnIdx], targetType)
 						if err != nil {
 							return 0, err
 						}
@@ -1021,7 +1022,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 			name := string(cte.Name.Alias)
 			if _, ok := ctx.cteByName[name]; ok {
-				return 0, moerr.NewSyntaxError(builder.compCtx.GetContext(), "WITH query name %q specified more than once", name)
+				return 0, moerr.NewSyntaxError(builder.GetContext(), "WITH query name %q specified more than once", name)
 			}
 
 			var maskedCTEs map[string]any
@@ -1054,7 +1055,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				_, err = builder.buildSelect(stmt.Select, subCtx, false)
 
 			default:
-				err = moerr.NewParseError(builder.compCtx.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
+				err = moerr.NewParseError(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
 			}
 
 			if err != nil {
@@ -1077,13 +1078,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if selectClause, ok := stmt.Select.(*tree.ParenSelect); ok {
 			if selectClause.Select.OrderBy != nil {
 				if astOrderBy != nil {
-					return 0, moerr.NewSyntaxError(builder.compCtx.GetContext(), "multiple ORDER BY clauses not allowed")
+					return 0, moerr.NewSyntaxError(builder.GetContext(), "multiple ORDER BY clauses not allowed")
 				}
 				astOrderBy = selectClause.Select.OrderBy
 			}
 			if selectClause.Select.Limit != nil {
 				if astLimit != nil {
-					return 0, moerr.NewSyntaxError(builder.compCtx.GetContext(), "multiple LIMIT clauses not allowed")
+					return 0, moerr.NewSyntaxError(builder.GetContext(), "multiple LIMIT clauses not allowed")
 				}
 				astLimit = selectClause.Select.Limit
 			}
@@ -1099,9 +1100,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	case *tree.UnionClause:
 		return builder.buildUnion(selectClause, astOrderBy, astLimit, ctx, isRoot)
 	case *tree.ValuesClause:
-		return 0, moerr.NewNYI(builder.compCtx.GetContext(), "'SELECT FROM VALUES'")
+		return 0, moerr.NewNYI(builder.GetContext(), "'SELECT FROM VALUES'")
 	default:
-		return 0, moerr.NewNYI(builder.compCtx.GetContext(), "statement '%s'", tree.String(stmt, dialect.MYSQL))
+		return 0, moerr.NewNYI(builder.GetContext(), "statement '%s'", tree.String(stmt, dialect.MYSQL))
 	}
 
 	// build FROM clause
@@ -1116,7 +1117,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	for _, selectExpr := range clause.Exprs {
 		switch expr := selectExpr.Expr.(type) {
 		case tree.UnqualifiedStar:
-			cols, names, err := ctx.unfoldStar(builder.compCtx.GetContext(), "")
+			cols, names, err := ctx.unfoldStar(builder.GetContext(), "")
 			if err != nil {
 				return 0, err
 			}
@@ -1125,7 +1126,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		case *tree.UnresolvedName:
 			if expr.Star {
-				cols, names, err := ctx.unfoldStar(builder.compCtx.GetContext(), expr.Parts[0])
+				cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.Parts[0])
 				if err != nil {
 					return 0, err
 				}
@@ -1193,7 +1194,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	if len(selectList) == 0 {
-		return 0, moerr.NewParseError(builder.compCtx.GetContext(), "No tables used")
+		return 0, moerr.NewParseError(builder.GetContext(), "No tables used")
 	}
 
 	// rewrite right join to left join
@@ -1356,7 +1357,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, err
 		}
 		if strings.Contains(mode.(string), "ONLY_FULL_GROUP_BY") {
-			return 0, moerr.NewSyntaxError(builder.compCtx.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0])
+			return 0, moerr.NewSyntaxError(builder.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0])
 		}
 
 		// For MySQL compatibility, wrap bare ColRefs in any_value()
@@ -1420,7 +1421,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		if proj == nil {
 			// TODO: implement MARK join to better support non-scalar subqueries
-			return 0, moerr.NewNYI(builder.compCtx.GetContext(), "non-scalar subquery in SELECT clause")
+			return 0, moerr.NewNYI(builder.GetContext(), "non-scalar subquery in SELECT clause")
 		}
 
 		ctx.projects[i] = proj
@@ -1564,7 +1565,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		subCtx := NewBindContext(builder, ctx)
 		nodeID, err = builder.buildSelect(tbl, subCtx, false)
 		if subCtx.isCorrelated {
-			return 0, moerr.NewNYI(builder.compCtx.GetContext(), "correlated subquery in FROM clause")
+			return 0, moerr.NewNYI(builder.GetContext(), "correlated subquery in FROM clause")
 		}
 
 		if subCtx.hasSingleRow {
@@ -1603,7 +1604,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					nodeID, err = builder.buildSelect(stmt.Select, subCtx, false)
 
 				default:
-					err = moerr.NewParseError(builder.compCtx.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
+					err = moerr.NewParseError(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
 				}
 
 				if err != nil {
@@ -1617,7 +1618,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 				cols := cteRef.ast.Name.Cols
 
 				if len(cols) > len(subCtx.headings) {
-					return 0, moerr.NewSyntaxError(builder.compCtx.GetContext(), "table %q has %d columns available but %d columns specified", table, len(subCtx.headings), len(cols))
+					return 0, moerr.NewSyntaxError(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(subCtx.headings), len(cols))
 				}
 
 				for i, col := range cols {
@@ -1631,7 +1632,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 		obj, tableDef := builder.compCtx.Resolve(schema, table)
 		if tableDef == nil {
-			return 0, moerr.NewParseError(builder.compCtx.GetContext(), "table %q does not exist", table)
+			return 0, moerr.NewParseError(builder.GetContext(), "table %q does not exist", table)
 		}
 
 		tableDef.Name2ColIndex = map[string]int32{}
@@ -1666,13 +1667,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					return 0, err
 				}
 
-				originStmts, err := mysql.Parse(builder.compCtx.GetContext(), viewData.Stmt)
+				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt)
 				if err != nil {
 					return 0, err
 				}
 				viewStmt, ok := originStmts[0].(*tree.CreateView)
 				if !ok {
-					return 0, moerr.NewParseError(builder.compCtx.GetContext(), "can not get view statement")
+					return 0, moerr.NewParseError(builder.GetContext(), "can not get view statement")
 				}
 
 				viewName := viewStmt.Name.ObjectName
@@ -1728,7 +1729,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
 		if _, ok := tbl.Expr.(*tree.Select); ok {
 			if tbl.As.Alias == "" {
-				return 0, moerr.NewSyntaxError(builder.compCtx.GetContext(), "subquery in FROM must have an alias: %T", stmt)
+				return 0, moerr.NewSyntaxError(builder.GetContext(), "subquery in FROM must have an alias: %T", stmt)
 			}
 		}
 
@@ -1742,11 +1743,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		return
 
 	case *tree.StatementSource:
-		return 0, moerr.NewParseError(builder.compCtx.GetContext(), "unsupport table expr: %T", stmt)
+		return 0, moerr.NewParseError(builder.GetContext(), "unsupport table expr: %T", stmt)
 
 	default:
 		// Values table not support
-		return 0, moerr.NewParseError(builder.compCtx.GetContext(), "unsupport table expr: %T", stmt)
+		return 0, moerr.NewParseError(builder.GetContext(), "unsupport table expr: %T", stmt)
 	}
 
 	return
@@ -1771,21 +1772,21 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 
 	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN {
 		if len(alias.Cols) > len(node.TableDef.Cols) {
-			return moerr.NewSyntaxError(builder.compCtx.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
+			return moerr.NewSyntaxError(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
 		}
 
 		if alias.Alias != "" {
 			table = string(alias.Alias)
 		} else {
 			if node.NodeType == plan.Node_FUNCTION_SCAN {
-				return moerr.NewSyntaxError(builder.compCtx.GetContext(), "Every table function must have an alias")
+				return moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
 			}
 
 			table = node.TableDef.Name
 		}
 
 		if _, ok := ctx.bindingByTable[table]; ok {
-			return moerr.NewSyntaxError(builder.compCtx.GetContext(), "table name %q specified more than once", table)
+			return moerr.NewSyntaxError(builder.GetContext(), "table name %q specified more than once", table)
 		}
 
 		cols = make([]string, len(node.TableDef.Cols))
@@ -1813,7 +1814,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		projects := subCtx.projects
 
 		if len(alias.Cols) > len(headings) {
-			return moerr.NewSyntaxError(builder.compCtx.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(headings), len(alias.Cols))
+			return moerr.NewSyntaxError(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(headings), len(alias.Cols))
 		}
 
 		table = subCtx.cteName
@@ -1824,7 +1825,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			table = fmt.Sprintf("mo_table_subquery_alias_%d", tag)
 		}
 		if _, ok := ctx.bindingByTable[table]; ok {
-			return moerr.NewSyntaxError(builder.compCtx.GetContext(), "table name %q specified more than once", table)
+			return moerr.NewSyntaxError(builder.GetContext(), "table name %q specified more than once", table)
 		}
 
 		cols = make([]string, len(headings))
@@ -1886,7 +1887,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		return 0, err
 	}
 	if _, ok := tbl.Right.(*tree.TableFunction); ok {
-		return 0, moerr.NewSyntaxError(builder.compCtx.GetContext(), "Every table function must have an alias")
+		return 0, moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
 	}
 	if tblFn, ok := tbl.Right.(*tree.AliasedTableExpr).Expr.(*tree.TableFunction); ok {
 		err = buildTableFunctionStmt(tblFn, tbl.Left, leftCtx)
@@ -1997,7 +1998,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 	case plan.Node_FILTER:
 		canPushdown = filters
 		for _, filter := range node.FilterList {
-			canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(filter))...)
+			canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(builder.GetContext(), filter))...)
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown)
@@ -2009,7 +2010,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				if exprImpl.F.Func.ObjName == "or" {
 					keys := checkDNF(filter)
 					for _, key := range keys {
-						extraFilter := walkThroughDNF(filter, key)
+						extraFilter := walkThroughDNF(builder.GetContext(), filter, key)
 						if extraFilter != nil {
 							extraFilters = append(extraFilters, DeepCopyExpr(extraFilter))
 						}
@@ -2039,7 +2040,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 		if node.JoinType == plan.Node_INNER {
 			for _, cond := range node.OnList {
-				filters = append(filters, splitPlanConjunction(applyDistributivity(cond))...)
+				filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
 			}
 
 			node.OnList = nil
@@ -2065,7 +2066,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 			if joinSides[i]&JoinSideRight != 0 && canTurnInner && node.JoinType == plan.Node_LEFT && rejectsNull(filter, builder.compCtx.GetProcess()) {
 				for _, cond := range node.OnList {
-					filters = append(filters, splitPlanConjunction(applyDistributivity(cond))...)
+					filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
 				}
 
 				node.JoinType = plan.Node_INNER
@@ -2087,7 +2088,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 		} else if node.JoinType == plan.Node_LEFT {
 			var newOnList []*plan.Expr
 			for _, cond := range node.OnList {
-				conj := splitPlanConjunction(applyDistributivity(cond))
+				conj := splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))
 				for _, conjElem := range conj {
 					side := getJoinSide(conjElem, leftTags, rightTags)
 					if side&JoinSideLeft == 0 {
@@ -2301,8 +2302,15 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	case "generate_series":
 		nodeId = builder.buildGenerateSeries(tbl, ctx, exprs, childId)
 	default:
-		err = moerr.NewNotSupported(builder.compCtx.GetContext(), "table function '%s' not supported", id)
+		err = moerr.NewNotSupported(builder.GetContext(), "table function '%s' not supported", id)
 	}
 	clearBinding(ctx)
 	return nodeId, err
+}
+
+func (builder *QueryBuilder) GetContext() context.Context {
+	if builder == nil {
+		return context.TODO()
+	}
+	return builder.compCtx.GetContext()
 }

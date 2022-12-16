@@ -100,7 +100,7 @@ func FromUnixTimeInt64Format(vs []*vector.Vector, proc *process.Process) (*vecto
 	formatVec := vs[1]
 	resultType := types.T_varchar.ToType()
 	if !formatVec.IsScalar() {
-		return nil, moerr.NewInvalidArgNoCtx("from_unixtime format", "not constant")
+		return nil, moerr.NewInvalidArg(proc.Ctx, "from_unixtime format", "not constant")
 	}
 	if inVec.IsScalarNull() || formatVec.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
@@ -111,7 +111,7 @@ func FromUnixTimeInt64Format(vs []*vector.Vector, proc *process.Process) (*vecto
 		times := vector.MustTCols[int64](inVec)
 		rs := make([]types.Datetime, 1)
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs)
-		resCol, err := binary.CalcDateFromat(rs, formatMask, inVec.Nsp)
+		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.Nsp)
 		if err != nil {
 			return nil, err
 		}
@@ -125,7 +125,7 @@ func FromUnixTimeInt64Format(vs []*vector.Vector, proc *process.Process) (*vecto
 		times := vector.MustTCols[int64](inVec)
 		rs := make([]types.Datetime, len(times))
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs)
-		resCol, err := binary.CalcDateFromat(rs, formatMask, inVec.Nsp)
+		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.Nsp)
 		if err != nil {
 			return nil, err
 		}
@@ -145,7 +145,7 @@ func FromUnixTimeFloat64Format(vs []*vector.Vector, proc *process.Process) (*vec
 	formatVec := vs[1]
 	resultType := types.T_varchar.ToType()
 	if !formatVec.IsScalar() {
-		return nil, moerr.NewInvalidArgNoCtx("from_unixtime format", "not constant")
+		return nil, moerr.NewInvalidArg(proc.Ctx, "from_unixtime format", "not constant")
 	}
 	if inVec.IsScalarNull() || formatVec.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
@@ -157,7 +157,7 @@ func FromUnixTimeFloat64Format(vs []*vector.Vector, proc *process.Process) (*vec
 		rs := make([]types.Datetime, 1)
 		ints, fracs := splitDecimalToIntAndFrac(times)
 		fromunixtime.UnixToDateTimeWithNsec(proc.SessionInfo.TimeZone, ints, fracs, rs)
-		resCol, err := binary.CalcDateFromat(rs, formatMask, inVec.Nsp)
+		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.Nsp)
 		if err != nil {
 			return nil, err
 		}
@@ -172,7 +172,7 @@ func FromUnixTimeFloat64Format(vs []*vector.Vector, proc *process.Process) (*vec
 		rs := make([]types.Datetime, len(times))
 		ints, fracs := splitDecimalToIntAndFrac(times)
 		fromunixtime.UnixToDateTimeWithNsec(proc.SessionInfo.TimeZone, ints, fracs, rs)
-		resCol, err := binary.CalcDateFromat(rs, formatMask, inVec.Nsp)
+		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.Nsp)
 		if err != nil {
 			return nil, err
 		}
@@ -252,7 +252,7 @@ func FromUnixTimeUint64Format(vs []*vector.Vector, proc *process.Process) (*vect
 	formatVec := vs[1]
 	resultType := types.T_varchar.ToType()
 	if !formatVec.IsScalar() {
-		return nil, moerr.NewInvalidArgNoCtx("from_unixtime format", "not constant")
+		return nil, moerr.NewInvalidArg(proc.Ctx, "from_unixtime format", "not constant")
 	}
 	if inVec.IsScalarNull() || formatVec.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
@@ -263,7 +263,7 @@ func FromUnixTimeUint64Format(vs []*vector.Vector, proc *process.Process) (*vect
 		times := vector.MustTCols[uint64](inVec)
 		rs := make([]types.Datetime, 1)
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, uint64ToInt64(times), rs)
-		resCol, err := binary.CalcDateFromat(rs, formatMask, inVec.Nsp)
+		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.Nsp)
 		if err != nil {
 			return nil, err
 		}
@@ -277,7 +277,7 @@ func FromUnixTimeUint64Format(vs []*vector.Vector, proc *process.Process) (*vect
 		times := vector.MustTCols[uint64](inVec)
 		rs := make([]types.Datetime, len(times))
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, uint64ToInt64(times), rs)
-		resCol, err := binary.CalcDateFromat(rs, formatMask, inVec.Nsp)
+		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.Nsp)
 		if err != nil {
 			return nil, err
 		}

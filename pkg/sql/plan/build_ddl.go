@@ -314,7 +314,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 	for _, item := range defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
-			colType, err := getTypeFromAst(def.Type)
+			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
 			if err != nil {
 				return err
 			}

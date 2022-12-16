@@ -104,7 +104,7 @@ func Bin[T constraints.Unsigned | constraints.Signed](intputVector, resultVector
 
 func BinFloat[T constraints.Float](intputVector, resultVector *vector.Vector, proc *process.Process) error {
 	xs := vector.MustTCols[T](intputVector)
-	err := binary.NumericToNumericOverflow(xs, []int64{})
+	err := binary.NumericToNumericOverflow(proc.Ctx, xs, []int64{})
 	if err != nil {
 		return err
 	}

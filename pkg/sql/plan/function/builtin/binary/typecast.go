@@ -15,6 +15,7 @@
 package binary
 
 import (
+	"context"
 	"encoding/hex"
 	"math"
 	"strconv"
@@ -176,8 +177,8 @@ var (
 	UuidToBytes         = uuidToBytes
 )
 
-func NumericToNumeric[T1, T2 constraints.Integer | constraints.Float](xs []T1, rs []T2) ([]T2, error) {
-	if err := NumericToNumericOverflow(xs, rs); err != nil {
+func NumericToNumeric[T1, T2 constraints.Integer | constraints.Float](ctx context.Context, xs []T1, rs []T2) ([]T2, error) {
+	if err := NumericToNumericOverflow(ctx, xs, rs); err != nil {
 		return nil, err
 	}
 	for i, x := range xs {
@@ -186,7 +187,7 @@ func NumericToNumeric[T1, T2 constraints.Integer | constraints.Float](xs []T1, r
 	return rs, nil
 }
 
-func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs []T1, rs []T2) error {
+func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](ctx context.Context, xs []T1, rs []T2) error {
 	var t1 T1
 	var t2 T2
 	var li interface{} = &t1
@@ -197,7 +198,7 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *uint8, *uint16, *uint32, *uint64:
 			for _, x := range xs {
 				if x < 0 {
-					return moerr.NewOutOfRangeNoCtx("uint", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint", "value '%v'", x)
 				}
 			}
 		}
@@ -206,19 +207,19 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if int16(x) < math.MinInt8 || x > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range xs {
 				if x < 0 || int64(x) > math.MaxUint8 {
-					return moerr.NewOutOfRangeNoCtx("uint8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16, *uint32, *uint64:
 			for _, x := range xs {
 				if x < 0 {
-					return moerr.NewOutOfRangeNoCtx("uint", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint", "value '%v'", x)
 				}
 			}
 		}
@@ -227,31 +228,31 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if int32(x) < math.MinInt8 || x > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range xs {
 				if int32(x) < math.MinInt16 || int32(x) > math.MaxInt16 {
-					return moerr.NewOutOfRangeNoCtx("int16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range xs {
 				if x < 0 || int64(x) > math.MaxUint8 {
-					return moerr.NewOutOfRangeNoCtx("uint8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range xs {
 				if x < 0 || int64(x) > math.MaxUint16 {
-					return moerr.NewOutOfRangeNoCtx("uint16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32, *uint64:
 			for _, x := range xs {
 				if x < 0 {
-					return moerr.NewOutOfRangeNoCtx("uint", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint", "value '%v'", x)
 				}
 			}
 		}
@@ -260,43 +261,43 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if int64(x) < math.MinInt8 || x > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range xs {
 				if int64(x) < math.MinInt16 || int64(x) > math.MaxInt16 {
-					return moerr.NewOutOfRangeNoCtx("int16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for _, x := range xs {
 				if int64(x) < math.MinInt32 || int64(x) > math.MaxInt32 {
-					return moerr.NewOutOfRangeNoCtx("int32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range xs {
 				if x < 0 || int64(x) > math.MaxUint8 {
-					return moerr.NewOutOfRangeNoCtx("uint8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range xs {
 				if x < 0 || int64(x) > math.MaxUint16 {
-					return moerr.NewOutOfRangeNoCtx("uint16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for _, x := range xs {
 				if x < 0 || int64(x) > math.MaxUint32 {
-					return moerr.NewOutOfRangeNoCtx("uint32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
 			for _, x := range xs {
 				if x < 0 {
-					return moerr.NewOutOfRangeNoCtx("uint64", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", x)
 				}
 			}
 		}
@@ -305,7 +306,7 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if x > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		}
@@ -314,19 +315,19 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if x > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range xs {
 				if uint16(x) > math.MaxInt16 {
-					return moerr.NewOutOfRangeNoCtx("int16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range xs {
 				if uint16(x) > math.MaxUint8 {
-					return moerr.NewOutOfRangeNoCtx("uint8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		}
@@ -335,31 +336,31 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if x > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range xs {
 				if uint32(x) > math.MaxInt16 {
-					return moerr.NewOutOfRangeNoCtx("int16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for _, x := range xs {
 				if uint32(x) > math.MaxInt32 {
-					return moerr.NewOutOfRangeNoCtx("int32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range xs {
 				if uint32(x) > math.MaxUint8 {
-					return moerr.NewOutOfRangeNoCtx("uint8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range xs {
 				if uint32(x) > math.MaxUint16 {
-					return moerr.NewOutOfRangeNoCtx("uint16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		}
@@ -368,43 +369,43 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if x > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range xs {
 				if uint64(x) > math.MaxInt16 {
-					return moerr.NewOutOfRangeNoCtx("int16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for _, x := range xs {
 				if uint64(x) > math.MaxInt32 {
-					return moerr.NewOutOfRangeNoCtx("int32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:
 			for _, x := range xs {
 				if uint64(x) > math.MaxInt64 {
-					return moerr.NewOutOfRangeNoCtx("int64", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range xs {
 				if uint64(x) > math.MaxUint8 {
-					return moerr.NewOutOfRangeNoCtx("uint8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range xs {
 				if uint64(x) > math.MaxUint16 {
-					return moerr.NewOutOfRangeNoCtx("uint16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for _, x := range xs {
 				if uint64(x) > math.MaxUint32 {
-					return moerr.NewOutOfRangeNoCtx("uint16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		}
@@ -413,49 +414,49 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxInt16 {
-					return moerr.NewOutOfRangeNoCtx("int16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxInt32 {
-					return moerr.NewOutOfRangeNoCtx("int32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxInt64 {
-					return moerr.NewOutOfRangeNoCtx("int64", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxUint8 {
-					return moerr.NewOutOfRangeNoCtx("uint8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxUint16 {
-					return moerr.NewOutOfRangeNoCtx("uint16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxUint32 {
-					return moerr.NewOutOfRangeNoCtx("uint32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxUint64 {
-					return moerr.NewOutOfRangeNoCtx("uint64", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", x)
 				}
 			}
 		}
@@ -464,55 +465,55 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxInt16 {
-					return moerr.NewOutOfRangeNoCtx("int16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxInt32 {
-					return moerr.NewOutOfRangeNoCtx("int32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxInt64 || math.Round(float64(x)) < math.MinInt64 {
-					return moerr.NewOutOfRangeNoCtx("int64", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxUint8 {
-					return moerr.NewOutOfRangeNoCtx("uint8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxUint16 {
-					return moerr.NewOutOfRangeNoCtx("uint16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxUint32 {
-					return moerr.NewOutOfRangeNoCtx("uint32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxUint64 {
-					return moerr.NewOutOfRangeNoCtx("uint64", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", x)
 				}
 			}
 		case *float32:
 			for _, x := range xs {
 				if float64(x) > math.MaxFloat32 {
-					return moerr.NewOutOfRangeNoCtx("float32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "float32", "value '%v'", x)
 				}
 			}
 		}
@@ -520,8 +521,8 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 	return nil
 }
 
-func FloatToIntWithoutError[T1 constraints.Float, T2 constraints.Integer](xs []T1, rs []T2) ([]T2, error) {
-	if err := NumericToNumericOverflow(xs, rs); err != nil {
+func FloatToIntWithoutError[T1 constraints.Float, T2 constraints.Integer](ctx context.Context, xs []T1, rs []T2) ([]T2, error) {
+	if err := NumericToNumericOverflow(ctx, xs, rs); err != nil {
 		return nil, err
 	}
 	for i, x := range xs {
@@ -530,14 +531,14 @@ func FloatToIntWithoutError[T1 constraints.Float, T2 constraints.Integer](xs []T
 	return rs, nil
 }
 
-func float64ToInt64(xs []float64, rs []int64, isEmptyStringOrNull ...[]int) ([]int64, error) {
+func float64ToInt64(ctx context.Context, xs []float64, rs []int64, isEmptyStringOrNull ...[]int) ([]int64, error) {
 	usedEmptyStringOrNull := len(isEmptyStringOrNull) > 0
 	for i, x := range xs {
 		if x > math.MaxInt64 || x < math.MinInt64 {
 			if usedEmptyStringOrNull {
 				isEmptyStringOrNull[0][i] = 1
 			} else {
-				return nil, moerr.NewOutOfRangeNoCtx("int64", "value '%v'", x)
+				return nil, moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
 			}
 		}
 		rs[i] = int64(math.Round((x)))
@@ -545,31 +546,31 @@ func float64ToInt64(xs []float64, rs []int64, isEmptyStringOrNull ...[]int) ([]i
 	return rs, nil
 }
 
-func uint64ToInt64(xs []uint64, rs []int64) ([]int64, error) {
+func uint64ToInt64(ctx context.Context, xs []uint64, rs []int64) ([]int64, error) {
 	overflowFlag := uint64(0)
 	for i, x := range xs {
 		rs[i] = int64(x)
 		overflowFlag |= x >> 63
 	}
 	if overflowFlag != 0 {
-		return nil, moerr.NewOutOfRangeNoCtx("int64", "")
+		return nil, moerr.NewOutOfRange(ctx, "int64", "")
 	}
 	return rs, nil
 }
 
-func int64ToUint64(xs []int64, rs []uint64) ([]uint64, error) {
+func int64ToUint64(ctx context.Context, xs []int64, rs []uint64) ([]uint64, error) {
 	overflowFlag := int64(0)
 	for i, x := range xs {
 		rs[i] = uint64(x)
 		overflowFlag |= x >> 63
 	}
 	if overflowFlag != 0 {
-		return nil, moerr.NewOutOfRangeNoCtx("uint64", "")
+		return nil, moerr.NewOutOfRange(ctx, "uint64", "")
 	}
 	return rs, nil
 }
 
-func BytesToInt[T constraints.Signed](xs []string, rs []T, isBin ...bool) ([]T, error) {
+func BytesToInt[T constraints.Signed](ctx context.Context, xs []string, rs []T, isBin ...bool) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
 	var err error
 	var val int64
@@ -578,31 +579,31 @@ func BytesToInt[T constraints.Signed](xs []string, rs []T, isBin ...bool) ([]T, 
 			val, err = strconv.ParseInt(hex.EncodeToString(*(*[]byte)(unsafe.Pointer(&s))), 16, 64)
 			if err != nil {
 				if strings.Contains(err.Error(), "value out of range") {
-					return nil, moerr.NewOutOfRangeNoCtx("int", "") // the string maybe non-visibile,don't print it
+					return nil, moerr.NewOutOfRange(ctx, "int", "") // the string maybe non-visibile,don't print it
 				}
-				return nil, moerr.NewInvalidArgNoCtx("cast to int", s)
+				return nil, moerr.NewInvalidArg(ctx, "cast to int", s)
 			}
 		} else {
 			val, err = strconv.ParseInt(strings.TrimSpace(s), 10, bitSize)
 			if err != nil {
 				if strings.Contains(err.Error(), "value out of range") {
-					return nil, moerr.NewOutOfRangeNoCtx("int", "value '%v'", s)
+					return nil, moerr.NewOutOfRange(ctx, "int", "value '%v'", s)
 				}
-				return nil, moerr.NewInvalidArgNoCtx("cast to int", s)
+				return nil, moerr.NewInvalidArg(ctx, "cast to int", s)
 			}
 		}
 		if err != nil {
 			if strings.Contains(err.Error(), "value out of range") {
-				return nil, moerr.NewOutOfRangeNoCtx("int", "value '%v'", s)
+				return nil, moerr.NewOutOfRange(ctx, "int", "value '%v'", s)
 			}
-			return nil, moerr.NewInvalidArgNoCtx("cast to int", s)
+			return nil, moerr.NewInvalidArg(ctx, "cast to int", s)
 		}
 		rs[i] = T(val)
 	}
 	return rs, nil
 }
 
-func BytesToUint[T constraints.Unsigned](xs []string, rs []T, isBin ...bool) ([]T, error) {
+func BytesToUint[T constraints.Unsigned](ctx context.Context, xs []string, rs []T, isBin ...bool) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
 	var err error
 	var val uint64
@@ -614,9 +615,9 @@ func BytesToUint[T constraints.Unsigned](xs []string, rs []T, isBin ...bool) ([]
 		}
 		if err != nil {
 			if strings.Contains(err.Error(), "value out of range") {
-				return nil, moerr.NewOutOfRangeNoCtx("uint", "value '%v'", s)
+				return nil, moerr.NewOutOfRange(ctx, "uint", "value '%v'", s)
 			}
-			return nil, moerr.NewInvalidArgNoCtx("cast to uint", s)
+			return nil, moerr.NewInvalidArg(ctx, "cast to uint", s)
 		}
 		rs[i] = T(val)
 	}
@@ -670,7 +671,7 @@ func Decimal128ToBytes(xs []types.Decimal128, rs []string, scale int32) ([]strin
 	return rs, nil
 }
 
-func BytesToFloat[T constraints.Float](xs []string, rs []T, isBin bool, isEmptyStringOrNull ...[]int) ([]T, error) {
+func BytesToFloat[T constraints.Float](ctx context.Context, xs []string, rs []T, isBin bool, isEmptyStringOrNull ...[]int) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
 	usedEmptyStringOrNull := len(isEmptyStringOrNull) > 0
 	for i, s := range xs {
@@ -681,9 +682,9 @@ func BytesToFloat[T constraints.Float](xs []string, rs []T, isBin bool, isEmptyS
 			Uval, err := strconv.ParseUint(hex.EncodeToString(*(*[]byte)(unsafe.Pointer(&s))), 16, 64)
 			if err != nil {
 				if strings.Contains(err.Error(), "value out of range") {
-					return nil, moerr.NewOutOfRangeNoCtx("float", "value '%v'", s)
+					return nil, moerr.NewOutOfRange(ctx, "float", "value '%v'", s)
 				}
-				return nil, moerr.NewInvalidArgNoCtx("cast to float", s)
+				return nil, moerr.NewInvalidArg(ctx, "cast to float", s)
 			}
 			val, _ = strconv.ParseFloat(strconv.FormatUint(Uval, 10), bitSize)
 		} else {
@@ -713,7 +714,7 @@ func FloatToBytes[T constraints.Float](xs []T, rs []string) ([]string, error) {
 	return rs, nil
 }
 
-func decimal64ToDecimal128Pure(xs []types.Decimal64, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
+func decimal64ToDecimal128Pure(ctx context.Context, xs []types.Decimal64, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
 	var err error
 	for i, x := range xs {
 		if rs[i], err = types.Decimal128_FromDecimal64WithScale(x, width, scale); err != nil {
@@ -723,7 +724,7 @@ func decimal64ToDecimal128Pure(xs []types.Decimal64, rs []types.Decimal128, widt
 	return rs, nil
 }
 
-func IntToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
+func IntToDecimal128[T constraints.Integer](ctx context.Context, xs []T, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
 	var err error
 	for i, x := range xs {
 		if rs[i], err = types.InitDecimal128(int64(x), width, scale); err != nil {
@@ -733,7 +734,7 @@ func IntToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128, width
 	return rs, nil
 }
 
-func IntToDecimal64[T constraints.Integer](xs []T, rs []types.Decimal64, width, scale int32) ([]types.Decimal64, error) {
+func IntToDecimal64[T constraints.Integer](ctx context.Context, xs []T, rs []types.Decimal64, width, scale int32) ([]types.Decimal64, error) {
 	var err error
 	for i, x := range xs {
 		if rs[i], err = types.InitDecimal64(int64(x), width, scale); err != nil {
@@ -743,7 +744,7 @@ func IntToDecimal64[T constraints.Integer](xs []T, rs []types.Decimal64, width, 
 	return rs, nil
 }
 
-func UintToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
+func UintToDecimal128[T constraints.Integer](ctx context.Context, xs []T, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
 	var err error
 	for i, x := range xs {
 		if rs[i], err = types.InitDecimal128UsingUint(uint64(x), width, scale); err != nil {
@@ -753,87 +754,87 @@ func UintToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128, widt
 	return rs, nil
 }
 
-func timestampToDatetime(loc *time.Location, xs []types.Timestamp, rs []types.Datetime) ([]types.Datetime, error) {
+func timestampToDatetime(ctx context.Context, loc *time.Location, xs []types.Timestamp, rs []types.Datetime) ([]types.Datetime, error) {
 	return types.TimestampToDatetime(loc, xs, rs)
 }
 
-func timestampToVarchar(loc *time.Location, xs []types.Timestamp, rs []string, precision int32) ([]string, error) {
+func timestampToVarchar(ctx context.Context, loc *time.Location, xs []types.Timestamp, rs []string, precision int32) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = x.String2(loc, precision)
 	}
 	return rs, nil
 }
 
-func boolToBytes(xs []bool, rs []string) ([]string, error) {
+func boolToBytes(ctx context.Context, xs []bool, rs []string) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = types.BoolToIntString(x)
 	}
 	return rs, nil
 }
 
-func dateToDateTime(xs []types.Date, rs []types.Datetime) ([]types.Datetime, error) {
+func dateToDateTime(ctx context.Context, xs []types.Date, rs []types.Datetime) ([]types.Datetime, error) {
 	for i := range xs {
 		rs[i] = xs[i].ToDatetime()
 	}
 	return rs, nil
 }
 
-func dateToTime(xs []types.Date, rs []types.Time) ([]types.Time, error) {
+func dateToTime(ctx context.Context, xs []types.Date, rs []types.Time) ([]types.Time, error) {
 	for i := range xs {
 		rs[i] = xs[i].ToTime()
 	}
 	return rs, nil
 }
 
-func dateToBytes(xs []types.Date, rs []string) ([]string, error) {
+func dateToBytes(ctx context.Context, xs []types.Date, rs []string) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = x.String()
 	}
 	return rs, nil
 }
 
-func datetimeToDate(xs []types.Datetime, rs []types.Date) ([]types.Date, error) {
+func datetimeToDate(ctx context.Context, xs []types.Datetime, rs []types.Date) ([]types.Date, error) {
 	for i := range xs {
 		rs[i] = xs[i].ToDate()
 	}
 	return rs, nil
 }
 
-func datetimeToBytes(xs []types.Datetime, rs []string, precision int32) ([]string, error) {
+func datetimeToBytes(ctx context.Context, xs []types.Datetime, rs []string, precision int32) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = x.String2(precision)
 	}
 	return rs, nil
 }
-func datetimeToTime(xs []types.Datetime, rs []types.Time, precision int32) ([]types.Time, error) {
+func datetimeToTime(ctx context.Context, xs []types.Datetime, rs []types.Time, precision int32) ([]types.Time, error) {
 	for i, x := range xs {
 		rs[i] = x.ToTime(precision)
 	}
 	return rs, nil
 }
 
-func timeToBytes(xs []types.Time, rs []string, precision int32) ([]string, error) {
+func timeToBytes(ctx context.Context, xs []types.Time, rs []string, precision int32) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = x.String2(precision)
 	}
 	return rs, nil
 }
 
-func timeToDatetime(xs []types.Time, rs []types.Datetime, precision int32) ([]types.Datetime, error) {
+func timeToDatetime(ctx context.Context, xs []types.Time, rs []types.Datetime, precision int32) ([]types.Datetime, error) {
 	for i, x := range xs {
 		rs[i] = x.ToDatetime(precision)
 	}
 	return rs, nil
 }
 
-func timeToDate(xs []types.Time, rs []types.Date) ([]types.Date, error) {
+func timeToDate(ctx context.Context, xs []types.Time, rs []types.Date) ([]types.Date, error) {
 	for i, x := range xs {
 		rs[i] = x.ToDate()
 	}
 	return rs, nil
 }
 
-func NumericToTime[T constraints.Integer](xs []T, rs []types.Time, precision int32) ([]types.Time, error) {
+func NumericToTime[T constraints.Integer](ctx context.Context, xs []T, rs []types.Time, precision int32) ([]types.Time, error) {
 	for i, x := range xs {
 		var err error
 		rs[i], err = types.ParseInt64ToTime(int64(x), precision)
@@ -844,7 +845,7 @@ func NumericToTime[T constraints.Integer](xs []T, rs []types.Time, precision int
 	return rs, nil
 }
 
-func Decimal64ToTime(xs []types.Decimal64, rs []types.Time, precision int32) ([]types.Time, error) {
+func Decimal64ToTime(ctx context.Context, xs []types.Decimal64, rs []types.Time, precision int32) ([]types.Time, error) {
 	for i, x := range xs {
 		var err error
 		rs[i], err = types.ParseDecima64lToTime(x, precision)
@@ -855,7 +856,7 @@ func Decimal64ToTime(xs []types.Decimal64, rs []types.Time, precision int32) ([]
 	return rs, nil
 }
 
-func Decimal128ToTime(xs []types.Decimal128, rs []types.Time, precision int32) ([]types.Time, error) {
+func Decimal128ToTime(ctx context.Context, xs []types.Decimal128, rs []types.Time, precision int32) ([]types.Time, error) {
 	for i, x := range xs {
 		var err error
 		rs[i], err = types.ParseDecima128lToTime(x, precision)
@@ -866,19 +867,19 @@ func Decimal128ToTime(xs []types.Decimal128, rs []types.Time, precision int32) (
 	return rs, nil
 }
 
-func TimeToNumeric[T constraints.Integer](xs []types.Time, rs []T) ([]T, error) {
+func TimeToNumeric[T constraints.Integer](ctx context.Context, xs []types.Time, rs []T) ([]T, error) {
 	tmp := make([]int64, 0)
 	for _, x := range xs {
 		tmp = append(tmp, x.ToInt64())
 
 	}
-	return NumericToNumeric(tmp, rs)
+	return NumericToNumeric(ctx, tmp, rs)
 }
 
-func TimeToDecimal64(xs []types.Time, rs []types.Decimal64, width, precision int32) ([]types.Decimal64, error) {
+func TimeToDecimal64(ctx context.Context, xs []types.Time, rs []types.Decimal64, width, precision int32) ([]types.Decimal64, error) {
 	for i, x := range xs {
 		var err error
-		rs[i], err = x.ToDecimal64(width, precision)
+		rs[i], err = x.ToDecimal64(ctx, width, precision)
 		if err != nil {
 			return rs, err
 		}
@@ -886,10 +887,10 @@ func TimeToDecimal64(xs []types.Time, rs []types.Decimal64, width, precision int
 	return rs, nil
 }
 
-func TimeToDecimal128(xs []types.Time, rs []types.Decimal128, width, precision int32) ([]types.Decimal128, error) {
+func TimeToDecimal128(ctx context.Context, xs []types.Time, rs []types.Decimal128, width, precision int32) ([]types.Decimal128, error) {
 	for i, x := range xs {
 		var err error
-		rs[i], err = x.ToDecimal128(width, precision)
+		rs[i], err = x.ToDecimal128(ctx, width, precision)
 		if err != nil {
 			return rs, err
 		}
@@ -926,64 +927,64 @@ func Decimal128ToTimestamp(xs []types.Decimal128, precision int32, scale int32, 
 	return rs, nil
 }
 
-func Decimal64ToFloat32(xs []types.Decimal64, scale int32, rs []float32) ([]float32, error) {
+func Decimal64ToFloat32(ctx context.Context, xs []types.Decimal64, scale int32, rs []float32) ([]float32, error) {
 	for i, x := range xs {
 		xStr := string(x.ToStringWithScale(scale))
 		result, err := strconv.ParseFloat(xStr, 32)
 		if err != nil {
-			return []float32{}, moerr.NewOutOfRangeNoCtx("float32", "value '%v'", xStr)
+			return []float32{}, moerr.NewOutOfRange(ctx, "float32", "value '%v'", xStr)
 		}
 		rs[i] = float32(result)
 	}
 	return rs, nil
 }
 
-func Decimal128ToFloat32(xs []types.Decimal128, scale int32, rs []float32) ([]float32, error) {
+func Decimal128ToFloat32(ctx context.Context, xs []types.Decimal128, scale int32, rs []float32) ([]float32, error) {
 	for i, x := range xs {
 		xStr := x.ToStringWithScale(scale)
 		result, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
-			return []float32{}, moerr.NewOutOfRangeNoCtx("float32", "value '%v'", xStr)
+			return []float32{}, moerr.NewOutOfRange(ctx, "float32", "value '%v'", xStr)
 		}
 		rs[i] = float32(result)
 	}
 	return rs, nil
 }
 
-func Decimal64ToFloat64(xs []types.Decimal64, scale int32, rs []float64) ([]float64, error) {
+func Decimal64ToFloat64(ctx context.Context, xs []types.Decimal64, scale int32, rs []float64) ([]float64, error) {
 	for i, x := range xs {
 		xStr := x.ToStringWithScale(scale)
 		result, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
-			return []float64{}, moerr.NewOutOfRangeNoCtx("float64", "value '%v'", xStr)
+			return []float64{}, moerr.NewOutOfRange(ctx, "float64", "value '%v'", xStr)
 		}
 		rs[i] = result
 	}
 	return rs, nil
 }
 
-func Decimal128ToFloat64(xs []types.Decimal128, scale int32, rs []float64) ([]float64, error) {
+func Decimal128ToFloat64(ctx context.Context, xs []types.Decimal128, scale int32, rs []float64) ([]float64, error) {
 	for i, x := range xs {
 		xStr := x.ToStringWithScale(scale)
 		result, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
-			return []float64{}, moerr.NewOutOfRangeNoCtx("float64", "value '%v'", xStr)
+			return []float64{}, moerr.NewOutOfRange(ctx, "float64", "value '%v'", xStr)
 		}
 		rs[i] = result
 	}
 	return rs, nil
 }
 
-func Decimal64ToInt64(xs []types.Decimal64, scale int32, rs []int64) ([]int64, error) {
+func Decimal64ToInt64(ctx context.Context, xs []types.Decimal64, scale int32, rs []int64) ([]int64, error) {
 	for i, x := range xs {
 		xStr := x.ToStringWithScale(scale)
 		floatRepresentation, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
-			return []int64{}, moerr.NewOutOfRangeNoCtx("int64", "value '%v'", xStr)
+			return []int64{}, moerr.NewOutOfRange(ctx, "int64", "value '%v'", xStr)
 		}
 
 		if floatRepresentation > math.MaxInt64 || floatRepresentation < math.MinInt64 {
-			return []int64{}, moerr.NewOutOfRangeNoCtx("int64", "value '%v'", xStr)
+			return []int64{}, moerr.NewOutOfRange(ctx, "int64", "value '%v'", xStr)
 		}
 
 		result := int64(math.Round(floatRepresentation))
@@ -992,50 +993,50 @@ func Decimal64ToInt64(xs []types.Decimal64, scale int32, rs []int64) ([]int64, e
 	return rs, nil
 }
 
-func Decimal128ToInt64(xs []types.Decimal128, scale int32, rs []int64) ([]int64, error) {
+func Decimal128ToInt64(ctx context.Context, xs []types.Decimal128, scale int32, rs []int64) ([]int64, error) {
 	var err error
 	for i, x := range xs {
 		xStr := x.ToStringWithScale(0)
 		rs[i], err = strconv.ParseInt(xStr, 10, 64)
 		if err != nil {
-			return []int64{}, moerr.NewOutOfRangeNoCtx("int64", "value '%v'", xStr)
+			return []int64{}, moerr.NewOutOfRange(ctx, "int64", "value '%v'", xStr)
 		}
 	}
 	return rs, nil
 }
 
-func Decimal128ToInt32(xs []types.Decimal128, scale int32, rs []int32) ([]int32, error) {
+func Decimal128ToInt32(ctx context.Context, xs []types.Decimal128, scale int32, rs []int32) ([]int32, error) {
 	for i, x := range xs {
 		xStr := x.ToStringWithScale(0)
 		ret, err := strconv.ParseInt(xStr, 10, 32)
 		if err != nil {
-			return []int32{}, moerr.NewOutOfRangeNoCtx("int32", "value '%v'", xStr)
+			return []int32{}, moerr.NewOutOfRange(ctx, "int32", "value '%v'", xStr)
 		}
 		rs[i] = int32(ret)
 	}
 	return rs, nil
 }
 
-func Decimal64ToUint64(xs []types.Decimal64, scale int32, rs []uint64) ([]uint64, error) {
+func Decimal64ToUint64(ctx context.Context, xs []types.Decimal64, scale int32, rs []uint64) ([]uint64, error) {
 	for i, x := range xs {
 		xStr := x.ToStringWithScale(scale)
 		xStr = strings.Split(xStr, ".")[0]
 		xVal, err := strconv.ParseUint(xStr, 10, 64)
 		if err != nil {
-			return []uint64{}, moerr.NewOutOfRangeNoCtx("uint64", "value '%v'", xStr)
+			return []uint64{}, moerr.NewOutOfRange(ctx, "uint64", "value '%v'", xStr)
 		}
 		rs[i] = xVal
 	}
 	return rs, nil
 }
 
-func Decimal128ToUint64(xs []types.Decimal128, scale int32, rs []uint64) ([]uint64, error) {
+func Decimal128ToUint64(ctx context.Context, xs []types.Decimal128, scale int32, rs []uint64) ([]uint64, error) {
 	for i, x := range xs {
 		xStr := x.ToStringWithScale(scale)
 		xStr = strings.Split(xStr, ".")[0]
 		xVal, err := strconv.ParseUint(xStr, 10, 64)
 		if err != nil {
-			return []uint64{}, moerr.NewOutOfRangeNoCtx("uint64", "value '%v'", xStr)
+			return []uint64{}, moerr.NewOutOfRange(ctx, "uint64", "value '%v'", xStr)
 		}
 		rs[i] = xVal
 	}
@@ -1044,35 +1045,35 @@ func Decimal128ToUint64(xs []types.Decimal128, scale int32, rs []uint64) ([]uint
 
 // the scale of decimal128 is guaranteed to be less than 18
 // this cast function is too slow, and therefore only temporary, rewrite needed
-func Decimal128ToDecimal64(xs []types.Decimal128, width, scale int32, rs []types.Decimal64) ([]types.Decimal64, error) {
+func Decimal128ToDecimal64(ctx context.Context, xs []types.Decimal128, width, scale int32, rs []types.Decimal64) ([]types.Decimal64, error) {
 	var err error
 	for i, x := range xs {
 		rs[i], err = x.ToDecimal64(width, scale)
 		if err != nil {
-			return []types.Decimal64{}, moerr.NewOutOfRangeNoCtx("dec64", "value '%v'", x)
+			return []types.Decimal64{}, moerr.NewOutOfRange(ctx, "dec64", "value '%v'", x)
 		}
 	}
 	return rs, nil
 }
 
-func Decimal128ToDecimal128(xs []types.Decimal128, width, scale int32, rs []types.Decimal128) ([]types.Decimal128, error) {
+func Decimal128ToDecimal128(ctx context.Context, xs []types.Decimal128, width, scale int32, rs []types.Decimal128) ([]types.Decimal128, error) {
 	var err error
 	for i, x := range xs {
 		xStr := x.ToStringWithScale(scale)
 		rs[i], err = types.Decimal128_FromString(xStr)
 		if err != nil {
-			return []types.Decimal128{}, moerr.NewOutOfRangeNoCtx("dec128", "value '%v'", x)
+			return []types.Decimal128{}, moerr.NewOutOfRange(ctx, "dec128", "value '%v'", x)
 		}
 	}
 	return rs, nil
 }
 
-func BinaryByteToDecimal128(xs []string, rs []types.Decimal128) ([]types.Decimal128, error) {
+func BinaryByteToDecimal128(ctx context.Context, xs []string, rs []types.Decimal128) ([]types.Decimal128, error) {
 	var err error
 	for i, x := range xs {
 		rs[i], err = types.Decimal128_FromString(hex.EncodeToString(*(*[]byte)(unsafe.Pointer(&x))))
 		if err != nil {
-			return []types.Decimal128{}, moerr.NewOutOfRangeNoCtx("dec128", "value '%v'", x)
+			return []types.Decimal128{}, moerr.NewOutOfRange(ctx, "dec128", "value '%v'", x)
 		}
 	}
 	return rs, nil
