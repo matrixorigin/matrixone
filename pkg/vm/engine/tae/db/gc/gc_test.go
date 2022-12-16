@@ -76,7 +76,7 @@ func TestGCTable_Merge(t *testing.T) {
 	assert.Nil(t, err)
 	mp := mpool.MustNewZero()
 	fs := objectio.NewObjectFS(service, dir)
-	manger := NewDiskCleaner(fs, nil, nil)
+	manger := NewDiskCleanerTmp(fs, nil, nil)
 	bid := uint64(1)
 	did := uint64(1)
 	for i := 1; i < 5; i++ {

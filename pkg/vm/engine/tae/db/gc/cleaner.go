@@ -20,7 +20,7 @@ const (
 	Running
 )
 
-type DiskCleaner struct {
+type DiskCleanerTmp struct {
 	sync.RWMutex
 	state       CleanerState
 	table       []GCTable
@@ -34,8 +34,8 @@ type DiskCleaner struct {
 	gcTask      *GCTask
 }
 
-func NewDiskCleaner(fs *objectio.ObjectFS, runner checkpoint.Runner, catalog *catalog.Catalog) *DiskCleaner {
-	m := &DiskCleaner{
+func NewDiskCleanerTmp(fs *objectio.ObjectFS, runner checkpoint.Runner, catalog *catalog.Catalog) *DiskCleanerTmp {
+	m := &DiskCleanerTmp{
 		table:     make([]GCTable, 0),
 		gc:        make([]string, 0),
 		fs:        fs,
@@ -47,28 +47,28 @@ func NewDiskCleaner(fs *objectio.ObjectFS, runner checkpoint.Runner, catalog *ca
 	return m
 }
 
-func (m *DiskCleaner) TryGC() {
+func (m *DiskCleanerTmp) TryGC() {
 	m.waitConsume.Add(1)
 	m.tryConsume()
 }
 
-func (m *DiskCleaner) SetIdle() {
+func (m *DiskCleanerTmp) SetIdle() {
 	m.Lock()
 	defer m.Unlock()
 	m.state = Idle
 }
 
-func (m *DiskCleaner) GetState() CleanerState {
+func (m *DiskCleanerTmp) GetState() CleanerState {
 	m.RLock()
 	defer m.RUnlock()
 	return m.state
 }
 
-func (m *DiskCleaner) consume(num int32) {
+func (m *DiskCleanerTmp) consume(num int32) {
 	m.waitConsume.Add(0 - num)
 }
 
-func (m *DiskCleaner) tryConsume() {
+func (m *DiskCleanerTmp) tryConsume() {
 	if m.GetState() == Running {
 		return
 	}
@@ -86,7 +86,7 @@ func (m *DiskCleaner) tryConsume() {
 	}()
 }
 
-func (m *DiskCleaner) tryDelete() {
+func (m *DiskCleanerTmp) tryDelete() {
 	if m.gcTask.GetState() == Running {
 		return
 	}
@@ -99,7 +99,7 @@ func (m *DiskCleaner) tryDelete() {
 	}()
 }
 
-func (m *DiskCleaner) CronTask() error {
+func (m *DiskCleanerTmp) CronTask() error {
 	prvCkp := m.GetCkp()
 	ckp := m.GetCheckpoint(prvCkp)
 	if ckp == nil {
@@ -113,19 +113,19 @@ func (m *DiskCleaner) CronTask() error {
 	return err
 }
 
-func (m *DiskCleaner) GetCkp() *checkpoint.CheckpointEntry {
+func (m *DiskCleanerTmp) GetCkp() *checkpoint.CheckpointEntry {
 	m.RLock()
 	defer m.RUnlock()
 	return m.ckp
 }
 
-func (m *DiskCleaner) SetCkp(ckp *checkpoint.CheckpointEntry) {
+func (m *DiskCleanerTmp) SetCkp(ckp *checkpoint.CheckpointEntry) {
 	m.Lock()
 	defer m.Unlock()
 	m.ckp = ckp
 }
 
-func (m *DiskCleaner) MergeTable() error {
+func (m *DiskCleanerTmp) MergeTable() error {
 	m.Lock()
 	if len(m.table) < 2 {
 		m.Unlock()
@@ -152,21 +152,21 @@ func (m *DiskCleaner) MergeTable() error {
 	return nil
 }
 
-func (m *DiskCleaner) delObject() {
+func (m *DiskCleanerTmp) delObject() {
 
 }
 
-func (m *DiskCleaner) AddTable(table GCTable) {
+func (m *DiskCleanerTmp) AddTable(table GCTable) {
 	m.Lock()
 	defer m.Unlock()
 	m.table = append(m.table, table)
 }
 
-func (m *DiskCleaner) GetGC() []string {
+func (m *DiskCleanerTmp) GetGC() []string {
 	return m.gc
 }
 
-func (m *DiskCleaner) GetCheckpoint(entry *checkpoint.CheckpointEntry) *checkpoint.CheckpointEntry {
+func (m *DiskCleanerTmp) GetCheckpoint(entry *checkpoint.CheckpointEntry) *checkpoint.CheckpointEntry {
 	ckps := m.ckpRunner.GetAllCheckpoints()
 	if entry == nil {
 		return ckps[0]
@@ -179,7 +179,7 @@ func (m *DiskCleaner) GetCheckpoint(entry *checkpoint.CheckpointEntry) *checkpoi
 	return nil
 }
 
-func (m *DiskCleaner) consumeCheckpoint(entry *checkpoint.CheckpointEntry) (err error) {
+func (m *DiskCleanerTmp) consumeCheckpoint(entry *checkpoint.CheckpointEntry) (err error) {
 	factory := logtail.IncrementalCheckpointDataFactory(entry.GetStart(), entry.GetEnd())
 	data, err := factory(m.catalog)
 	if err != nil {
@@ -193,7 +193,7 @@ func (m *DiskCleaner) consumeCheckpoint(entry *checkpoint.CheckpointEntry) (err 
 	return err
 }
 
-func (m *DiskCleaner) Replay() error {
+func (m *DiskCleanerTmp) Replay() error {
 	dirs, err := m.fs.ListDir(GCMetaDir)
 	if err != nil {
 		return err

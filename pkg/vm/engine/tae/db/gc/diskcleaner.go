@@ -2,6 +2,8 @@ package gc
 
 import (
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"sync"
 	"sync/atomic"
 
@@ -60,7 +62,7 @@ type diskCleaner struct {
 	onceStop  sync.Once
 }
 
-func newDiskCleaner(
+func NewDiskCleaner(
 	fs *objectio.ObjectFS,
 	ckpClient checkpoint.Client,
 	catalog *catalog.Catalog,
@@ -89,8 +91,51 @@ func (cleaner *diskCleaner) tryClean(ctx context.Context) (err error) {
 	return
 }
 
-func (cleaner *diskCleaner) replay() {
-	// TODO
+func (cleaner *diskCleaner) replay() error {
+	dirs, err := cleaner.fs.ListDir(GCMetaDir)
+	if err != nil {
+		return err
+	}
+	if len(dirs) == 0 {
+		return nil
+	}
+	jobs := make([]*tasks.Job, len(dirs))
+	jobScheduler := tasks.NewParallelJobScheduler(100)
+	defer jobScheduler.Stop()
+	makeJob := func(i int) (job *tasks.Job) {
+		dir := dirs[i]
+		exec := func(ctx context.Context) (result *tasks.JobResult) {
+			result = &tasks.JobResult{}
+			table := NewGCTable()
+			err := table.ReadTable(ctx, GCMetaDir+dir.Name, dir.Size, cleaner.fs)
+			if err != nil {
+				result.Err = err
+				return
+			}
+			cleaner.updateInputs(table)
+			return
+		}
+		job = tasks.NewJob(
+			fmt.Sprintf("load-%s", dir.Name),
+			context.Background(),
+			exec)
+		return
+	}
+
+	for i := range dirs {
+		jobs[i] = makeJob(i)
+		if err = jobScheduler.Schedule(jobs[i]); err != nil {
+			return err
+		}
+	}
+
+	for _, job := range jobs {
+		result := job.WaitDone()
+		if err = result.Err; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (cleaner *diskCleaner) process(items ...any) {
@@ -114,25 +159,25 @@ func (cleaner *diskCleaner) process(items ...any) {
 	if len(candidates) == 0 {
 		return
 	}
-	candidate := candidates[0]
+	for _, candidate := range candidates {
+		data, err := cleaner.collectCkpData(candidate)
+		if err != nil {
+			logutil.Errorf("processing clean %s: %v", candidate.String(), err)
+			// TODO
+			return
+		}
+		defer data.Close()
 
-	data, err := cleaner.collectCkpData(candidate)
-	if err != nil {
-		logutil.Errorf("processing clean %s: %v", candidate.String(), err)
-		// TODO
-		return
+		var input GCTable
+
+		if input, err = cleaner.createNewInput(candidate, data); err != nil {
+			logutil.Errorf("processing clean %s: %v", candidate.String(), err)
+			// TODO
+			return
+		}
+		cleaner.updateInputs(input)
+		cleaner.updateMaxConsumed(candidate)
 	}
-	defer data.Close()
-
-	var input GCTable
-
-	if input, err = cleaner.createNewInput(candidate, data); err != nil {
-		logutil.Errorf("processing clean %s: %v", candidate.String(), err)
-		// TODO
-		return
-	}
-	cleaner.updateInputs(input)
-	cleaner.updateMaxConsumed(candidate)
 }
 
 func (cleaner *diskCleaner) collectCkpData(

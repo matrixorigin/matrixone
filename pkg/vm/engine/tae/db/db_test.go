@@ -17,6 +17,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"math/rand"
 	"reflect"
@@ -4569,7 +4570,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
 	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
-	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager := gc.NewDiskCleanerTmp(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	for _, entry := range entries {
 		table := gc.NewGCTable()
 		data, err := entry.Read(context.Background(), nil, tae.Fs)
@@ -4584,13 +4585,48 @@ func TestGCWithCheckpoint(t *testing.T) {
 	err := task.ExecDelete(manager.GetGC())
 	assert.Nil(t, err)
 
-	manager2 := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2 := gc.NewDiskCleanerTmp(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	err = manager2.Replay()
 	assert.Nil(t, err)
 	assert.Equal(t, 5, len(manager2.GetGC()))
 	task = gc.NewGCTask(tae.Fs)
 	err = task.ExecDelete(manager.GetGC())
 	assert.Nil(t, err)
+
+}
+
+func TestGCWithCheckpoint2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 21)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+	now := time.Now()
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(time.Since(now))
+	t.Logf("Checkpointed: %d", tae.Scheduler.GetCheckpointedLSN())
+	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
+	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
+	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
+	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager.Start()
+	defer manager.Stop()
+	for i := 0; i < len(entries); i++ {
+		err := manager.JobFactory(context.Background())
+		assert.Nil(t, err)
+	}
+	time.Sleep(5 * time.Second)
+	logutil.Infof("manager %v", manager)
 
 }
 
@@ -4616,7 +4652,7 @@ func TestGCManager(t *testing.T) {
 	t.Logf("Checkpointed: %d", tae.Scheduler.GetCheckpointedLSN())
 	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
-	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager := gc.NewDiskCleanerTmp(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	err := manager.CronTask()
 	assert.Nil(t, err)
 	err = manager.CronTask()
