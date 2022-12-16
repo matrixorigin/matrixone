@@ -3,13 +3,14 @@ package gc
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"sync"
-	"sync/atomic"
 )
 
 type CleanerState int8
@@ -198,7 +199,7 @@ func (m *DiskCleaner) Replay() error {
 			return
 		}
 		job = tasks.NewJob(
-			fmt.Sprintf("load-%s", dir),
+			fmt.Sprintf("load-%s", dir.Name),
 			context.Background(),
 			exec)
 		return
