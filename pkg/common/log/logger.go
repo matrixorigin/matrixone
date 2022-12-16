@@ -57,6 +57,13 @@ func (l *MOLogger) Named(name string) *MOLogger {
 	}
 }
 
+func (l *MOLogger) WithContext(ctx context.Context) *MOLogger {
+	return &MOLogger{
+		logger: l.logger,
+		ctx:    ctx,
+	}
+}
+
 // Enabled returns true if the level is enabled
 func (l *MOLogger) Enabled(level zapcore.Level) bool {
 	return l.logger.Core().Enabled(level)
