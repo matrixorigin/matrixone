@@ -395,11 +395,10 @@ message TableDef {
 		oneof def {
 			PrimaryKeyDef pk			= 1;
 			PropertiesDef properties	= 2;
-			ViewDef view				= 3;
-			PartitionInfo partition		= 4;
-			UniqueIndexDef uIdx			= 5;
-			SecondaryIndexDef sIdx		= 6;
-			ClusterByDef cb				=7;
+			PartitionInfo partition		= 3;
+			UniqueIndexDef uIdx			= 4;
+			SecondaryIndexDef sIdx		= 5;
+			ClusterByDef cb				= 6;
 		}
 	}
 
