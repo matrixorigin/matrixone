@@ -15,6 +15,7 @@
 package binary
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -51,8 +52,7 @@ func TestDateFormat(t *testing.T) {
 			{
 				datestr: "2012-10-01 00:00:00",
 				expect:  `Oct October 10 10 1st 01 1 275 0 12 00 AM 12:00:00 AM 00:00:00 00 000000 40 40 40 40 Mon Monday 1 2012 2012 2012 12 %`,
-			},
-			{
+			}, {
 				datestr: "2009-10-04 22:23:00",
 				expect:  `Oct October 10 10 4th 04 4 277 22 10 23 PM 10:23:00 PM 22:23:00 00 000000 40 40 40 40 Sun Sunday 0 2009 2009 2009 09 %`,
 			},
@@ -686,7 +686,7 @@ func TestDatetimeFromat(t *testing.T) {
 		}
 
 		for i := 0; i < len(k.format); i++ {
-			res, err := datetimeFormat(datetime, k.format[i])
+			res, err := datetimeFormat(context.TODO(), datetime, k.format[i])
 			if err != nil {
 				t.Fatalf("dateformat exec error: %+v", err)
 			}
@@ -737,7 +737,7 @@ func TestDatetimeFromat(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse datetime string err %+v", err)
 			}
-			result, err := datetimeFormat(datetime, c.format)
+			result, err := datetimeFormat(context.TODO(), datetime, c.format)
 			if err != nil {
 				t.Fatalf("dateformat exec error: %+v", err)
 			}

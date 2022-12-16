@@ -47,7 +47,7 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 	var blockNum, totalBlockCnt int
 	var outcnt int64
 
-	exprMono := checkExprIsMonotonic(expr)
+	exprMono := checkExprIsMonotonic(ctx, expr)
 	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
 
 	for _, blockmetas := range tbl.meta.blocks {
@@ -169,7 +169,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			}
 		}
 	}
-	dnList := needSyncDnStores(expr, tbl.tableDef, priKeys, tbl.db.txn.dnStores)
+	dnList := needSyncDnStores(ctx, expr, tbl.tableDef, priKeys, tbl.db.txn.dnStores, tbl.db.txn.proc)
 	switch {
 	case tbl.tableId == catalog.MO_DATABASE_ID:
 		tbl.dnList = []int{0}
@@ -208,7 +208,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	}
 	tbl.meta.modifedBlocks = make([][]ModifyBlockMeta, len(tbl.meta.blocks))
 
-	exprMono := checkExprIsMonotonic(expr)
+	exprMono := checkExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
 	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range dnList {
 		blks, deletes := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
