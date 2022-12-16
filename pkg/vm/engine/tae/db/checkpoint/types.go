@@ -29,6 +29,10 @@ const (
 	ST_Finished
 )
 
+type Client interface {
+	GetAllCheckpoints() []*CheckpointEntry
+}
+
 type Runner interface {
 	Start()
 	Stop()
