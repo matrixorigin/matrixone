@@ -47,6 +47,14 @@ func (p *timeBasedPolicy) Check(last types.TS) bool {
 	return physical <= time.Now().UTC().UnixNano()-p.interval.Nanoseconds()
 }
 
+type countBasedPolicy struct {
+	minCount int
+}
+
+func (p *countBasedPolicy) Check(count int) bool {
+	return count >= p.minCount
+}
+
 // Q: What does runner do?
 // A: A checkpoint runner organizes and manages	all checkpoint-related behaviors. It roughly
 //    does the following things:
@@ -138,7 +146,7 @@ type runner struct {
 		minIncrementalInterval time.Duration
 
 		// minimum global checkpoint interval duration
-		minGlobalInterval         time.Duration
+		globalMinCount            int
 		forceUpdateGlobalInterval bool
 		globalVersionInterval     time.Duration
 
@@ -173,7 +181,7 @@ type runner struct {
 
 	// checkpoint policy
 	incrementalPolicy *timeBasedPolicy
-	globalPolicy      *timeBasedPolicy
+	globalPolicy      *countBasedPolicy
 
 	dirtyEntryQueue     sm.Queue
 	waitQueue           sm.Queue
@@ -210,7 +218,7 @@ func NewRunner(
 	r.fillDefaults()
 
 	r.incrementalPolicy = &timeBasedPolicy{interval: r.options.minIncrementalInterval}
-	r.globalPolicy = &timeBasedPolicy{interval: r.options.minGlobalInterval}
+	r.globalPolicy = &countBasedPolicy{minCount: r.options.globalMinCount}
 	r.stopper = stopper.NewStopper("CheckpointRunner")
 	r.dirtyEntryQueue = sm.NewSafeQueue(r.options.dirtyEntryQueueSize, 100, r.onDirtyEntries)
 	r.waitQueue = sm.NewSafeQueue(r.options.waitQueueSize, 100, r.onWaitWaitableItems)
@@ -579,10 +587,7 @@ func (r *runner) tryScheduleCheckpoint() {
 		return
 	}
 
-	prevGlobal := r.MaxGlobalCheckpoint()
-
-	if prevGlobal != nil && r.globalPolicy.Check(prevGlobal.GetEnd()) {
-		// FIXME
+	if r.globalPolicy.Check(r.getPenddingIncrementalCount()) {
 		r.tryScheduleGlobalCheckpoint(entry.GetEnd().Next())
 		return
 	}
@@ -590,6 +595,18 @@ func (r *runner) tryScheduleCheckpoint() {
 	if r.incrementalPolicy.Check(entry.GetEnd()) {
 		r.tryScheduleIncrementalCheckpoint(entry.GetEnd())
 	}
+}
+
+func (r *runner) getPenddingIncrementalCount() int {
+	entries := r.GetAllCheckpoints()
+	count := 0
+	for i := len(entries) - 1; i >= 0; i-- {
+		if !entries[i].IsIncremental() {
+			break
+		}
+		count++
+	}
+	return count
 }
 
 func (r *runner) fillDefaults() {
@@ -615,8 +632,8 @@ func (r *runner) fillDefaults() {
 	if r.options.minIncrementalInterval <= 0 {
 		r.options.minIncrementalInterval = time.Minute
 	}
-	if r.options.minGlobalInterval < 10*r.options.minIncrementalInterval && !r.options.forceUpdateGlobalInterval {
-		r.options.minGlobalInterval = 10 * r.options.minIncrementalInterval
+	if r.options.globalMinCount <= 0 {
+		r.options.globalMinCount = 10
 	}
 	if r.options.minCount <= 0 {
 		r.options.minCount = 10000

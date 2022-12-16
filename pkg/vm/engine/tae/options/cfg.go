@@ -32,7 +32,7 @@ type CheckpointCfg struct {
 	MinCount                  int64         `toml:"checkpoint-min-count"`
 	ScanInterval              time.Duration `toml:"scan-interval"`
 	IncrementalInterval       time.Duration `toml:"checkpoint-incremental-interval"`
-	GlobalInterval            time.Duration `toml:"checkpoint-global-interval"`
+	GlobalMinCount            int64         `toml:"checkpoint-global-interval"`
 	ForceUpdateGlobalInterval bool
 	GlobalVersionInterval     time.Duration
 }

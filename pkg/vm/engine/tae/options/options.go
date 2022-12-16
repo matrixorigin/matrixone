@@ -62,22 +62,12 @@ func WithCheckpointIncrementaInterval(interval time.Duration) func(*Options) {
 	}
 }
 
-func WithCheckpointGlobalInterval(interval time.Duration) func(*Options) {
+func WithCheckpointGlobalMinCount(count int64) func(*Options) {
 	return func(opts *Options) {
 		if opts.CheckpointCfg == nil {
 			opts.CheckpointCfg = new(CheckpointCfg)
 		}
-		opts.CheckpointCfg.GlobalInterval = interval
-	}
-}
-
-func WithForceUpdateCheckpointGlobalInterval(interval time.Duration) func(*Options) {
-	return func(opts *Options) {
-		if opts.CheckpointCfg == nil {
-			opts.CheckpointCfg = new(CheckpointCfg)
-		}
-		opts.CheckpointCfg.GlobalInterval = interval
-		opts.CheckpointCfg.ForceUpdateGlobalInterval = true
+		opts.CheckpointCfg.GlobalMinCount = count
 	}
 }
 
@@ -126,8 +116,8 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.CheckpointCfg.IncrementalInterval <= 0 {
 		o.CheckpointCfg.IncrementalInterval = DefaultCheckpointIncremetalInterval
 	}
-	if o.CheckpointCfg.GlobalInterval <= 0 {
-		o.CheckpointCfg.GlobalInterval = DefaultCheckpointGlobalInterval
+	if o.CheckpointCfg.GlobalMinCount <= 0 {
+		o.CheckpointCfg.GlobalMinCount = DefaultCheckpointMinCount
 	}
 	if o.CheckpointCfg.MinCount <= 0 {
 		o.CheckpointCfg.MinCount = DefaultCheckpointMinCount
