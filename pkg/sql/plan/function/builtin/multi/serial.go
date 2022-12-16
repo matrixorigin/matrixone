@@ -25,7 +25,7 @@ import (
 func Serial(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	for _, v := range vectors {
 		if v.IsScalar() {
-			return nil, moerr.NewConstraintViolationNoCtx("serial function don't support constant value")
+			return nil, moerr.NewConstraintViolation(proc.Ctx, "serial function don't support constant value")
 		}
 	}
 	return SerialWithSomeCols(vectors, proc)

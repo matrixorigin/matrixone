@@ -1,0 +1,90 @@
+select median(null);
+median(null)
+null
+drop table if exists t1;
+create table t1 (a int,b int);
+insert into t1 values (1,null);
+select median(b) from t1;
+median(b)
+null
+insert into t1 values (1,1);
+select median(b) from t1;
+median(b)
+1.0
+insert into t1 values (1,2);
+select median(b) from t1;
+median(b)
+1.5
+select median(b) from t1 group by a order by a;
+median(b)
+1.5
+insert into t1 values (2,1),(2,2),(2,3),(2,4);
+select median(b) from t1 group by a order by a;
+median(b)
+1.5
+2.5
+insert into t1 values (2,null);
+select median(b) from t1 group by a order by a;
+median(b)
+1.5
+2.5
+drop table if exists t1;
+create table t1 (a int,b float,c double);
+insert into t1 values (1,null,null);
+select median(b),median(c) from t1;
+median(b)    median(c)
+null    null
+insert into t1 values (1,1.1,1.1);
+select median(b),median(c) from t1;
+median(b)    median(c)
+1.100000023841858    1.1
+insert into t1 values (1,2.2,2.2);
+select median(b),median(c) from t1;
+median(b)    median(c)
+1.6500000953674316    1.6500000000000001
+select median(b),median(c) from t1 group by a order by a;
+median(b)    median(c)
+1.6500000953674316    1.6500000000000001
+insert into t1 values (2,1.1,1.1),(2,2.2,2.2),(2,3.3,3.3),(2,4.4,4.4);
+select median(b),median(c) from t1 group by a order by a;
+median(b)    median(c)
+1.6500000953674316    1.6500000000000001
+2.75    2.75
+insert into t1 values (2,null,null);
+select median(b),median(c) from t1 group by a order by a;
+median(b)    median(c)
+1.6500000953674316    1.6500000000000001
+2.75    2.75
+drop table if exists t1;
+create table t1 (a int,b decimal(10,2),c decimal(34,10));
+insert into t1 values (1,null,null);
+select median(b),median(c) from t1;
+median(b)    median(c)
+null    null
+insert into t1 values (1,'1.1','1.1');
+select median(b),median(c) from t1;
+median(b)    median(c)
+1.10    1.1000000000
+insert into t1 values (1,'2.2','2.2');
+select median(b),median(c) from t1;
+median(b)    median(c)
+1.65    1.6500000000
+select median(b),median(c) from t1 group by a order by a;
+median(b)    median(c)
+1.65    1.6500000000
+insert into t1 values (2,'1.1','1.1'),('2','2.2','2.2'),('2','3.3','3.3'),('2','4.4','4.4');
+select median(b),median(c) from t1 group by a order by a;
+median(b)    median(c)
+1.65    1.6500000000
+2.75    2.7500000000
+insert into t1 values (2,null,null);
+select median(b),median(c) from t1 group by a order by a;
+median(b)    median(c)
+1.65    1.6500000000
+2.75    2.7500000000
+select median(distinct a) from t1;
+not supported: median in distinct mode
+drop table if exists t1;
+create table t1 (a int,b varchar(10));
+select median(b) from t1;
+invalid argument aggregate function median, bad value [VARCHAR]

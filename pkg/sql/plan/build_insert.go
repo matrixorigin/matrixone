@@ -135,7 +135,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 			}
 			// build column
 			for j, col := range explicitCols {
-				expr, err := getDefaultExpr(col)
+				expr, err := getDefaultExpr(ctx.GetContext(), col)
 				if err != nil {
 					return nil, err
 				}
@@ -146,7 +146,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		// hasExplicitCols maybe true or false
 		binders := make([]*DefaultBinder, 0, len(explicitCols))
 		for _, col := range explicitCols {
-			binders = append(binders, NewDefaultBinder(nil, nil, col.Typ, nil))
+			binders = append(binders, NewDefaultBinder(ctx.GetContext(), nil, nil, col.Typ, nil))
 		}
 		for i, row := range rows {
 			if row == nil || explicitCount != len(row) {
@@ -156,7 +156,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 			idx := 0
 			for j, col := range explicitCols {
 				if _, ok := row[idx].(*tree.DefaultVal); ok {
-					expr, err := getDefaultExpr(col)
+					expr, err := getDefaultExpr(ctx.GetContext(), col)
 					if err != nil {
 						return nil, err
 					}
@@ -167,7 +167,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 						err = MakeInsertError(ctx.GetContext(), types.T(col.Typ.Id), col, rows, j, i, err)
 						return nil, err
 					}
-					resExpr, err := makePlan2CastExpr(planExpr, col.Typ)
+					resExpr, err := makePlan2CastExpr(ctx.GetContext(), planExpr, col.Typ)
 					if err != nil {
 						err = MakeInsertError(ctx.GetContext(), types.T(col.Typ.Id), col, rows, j, i, err)
 						return nil, err
@@ -178,7 +178,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 			}
 
 			for _, col := range otherCols {
-				expr, err := getDefaultExpr(col)
+				expr, err := getDefaultExpr(ctx.GetContext(), col)
 				if err != nil {
 					return nil, err
 				}
@@ -277,7 +277,7 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 
 	// do type cast if needed
 	for i := range tableDef.Cols {
-		exprs[i], err = makePlan2CastExpr(exprs[i], tableDef.Cols[i].Typ)
+		exprs[i], err = makePlan2CastExpr(ctx.GetContext(), exprs[i], tableDef.Cols[i].Typ)
 		if err != nil {
 			return nil, err
 		}
@@ -339,7 +339,7 @@ func getInsertExprs(ctx CompilerContext, stmt *tree.Insert, cols []*ColDef, tabl
 				}
 			} else {
 				var err error
-				exprs[i], err = getDefaultExpr(tableDef.Cols[i])
+				exprs[i], err = getDefaultExpr(ctx.GetContext(), tableDef.Cols[i])
 				if err != nil {
 					return nil, err
 				}

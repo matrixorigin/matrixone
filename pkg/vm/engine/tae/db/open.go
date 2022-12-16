@@ -15,6 +15,7 @@
 package db
 
 import (
+	"context"
 	"path"
 	"sync/atomic"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
@@ -147,11 +149,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
 	calibrationOp := newCalibrationOp(db)
-	gcCollector := newGarbageCollector(
-		db,
-		opts.CheckpointCfg.FlushInterval)
 	scanner.RegisterOp(calibrationOp)
-	scanner.RegisterOp(gcCollector)
 	db.Wal.Start()
 	db.BGCheckpointRunner.Start()
 
@@ -159,6 +157,19 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		opts.CheckpointCfg.ScanInterval,
 		scanner)
 	db.BGScanner.Start()
+
+	// Init gc manager at last
+	db.GCManager = gc.NewManager(
+		gc.WithCronJob(
+			"clean-transfer-table",
+			opts.CheckpointCfg.FlushInterval,
+			func(_ context.Context) (err error) {
+				db.TransferTable.RunTTL(time.Now())
+				return
+			}),
+	)
+
+	db.GCManager.Start()
 
 	// For debug or test
 	// logutil.Info(db.Catalog.SimplePPString(common.PPL2))

@@ -16,8 +16,9 @@ package plan
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -48,7 +49,6 @@ type Type = plan.Type
 type Plan_Query = plan.Plan_Query
 type Property = plan.Property
 type TableDef_DefType_Properties = plan.TableDef_DefType_Properties
-type TableDef_DefType_View = plan.TableDef_DefType_View
 type TableDef_DefType_Partition = plan.TableDef_DefType_Partition
 type PropertiesDef = plan.PropertiesDef
 type ViewDef = plan.ViewDef
@@ -205,9 +205,11 @@ type Binder interface {
 	BindAggFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
 	BindWinFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
 	BindSubquery(*tree.Subquery, bool) (*plan.Expr, error)
+	GetContext() context.Context
 }
 
 type baseBinder struct {
+	sysCtx    context.Context
 	builder   *QueryBuilder
 	ctx       *BindContext
 	impl      Binder

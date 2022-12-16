@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,17 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package plan
+package gc
 
 import (
-	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"time"
 )
 
-func MakeExpr(ctx context.Context, name string, args []*Expr) *plan.Expr {
-	expr, err := bindFuncExprImplByPlanExpr(ctx, name, args)
-	if err != nil {
-		panic(err)
+type Option = func(*Manager)
+
+func WithCronJob(
+	name string,
+	interval time.Duration,
+	job Job,
+) Option {
+	return func(mgr *Manager) {
+		mgr.addJob(name, interval, job)
 	}
-	return expr
 }
