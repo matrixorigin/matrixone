@@ -15,13 +15,14 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"context"
 	"sort"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
 
 var (
@@ -152,11 +153,13 @@ func (rule *ResetParamOrderRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 // ---------------------------
 
 type ResetParamRefRule struct {
+	ctx    context.Context
 	params []*Expr
 }
 
-func NewResetParamRefRule(params []*Expr) *ResetParamRefRule {
+func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
 	return &ResetParamRefRule{
+		ctx:    ctx,
 		params: params,
 	}
 }
@@ -190,7 +193,7 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
-			return bindFuncExprImplByPlanExpr(exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
+			return bindFuncExprImplByPlanExpr(rule.ctx, exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
 		}
 		return e, nil
 	case *plan.Expr_P:
@@ -244,7 +247,7 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
-			return bindFuncExprImplByPlanExpr(exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
+			return bindFuncExprImplByPlanExpr(rule.getContext(), exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
 		}
 		return e, nil
 	case *plan.Expr_V:
@@ -280,29 +283,31 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 			// when we build plan with constant in float, we cast them to decimal.
 			// so we cast @float_var to decimal too.
 			strVal := strconv.FormatFloat(float64(val), 'f', -1, 64)
-			expr, err = makePlan2DecimalExprWithType(strVal)
+			expr, err = makePlan2DecimalExprWithType(rule.getContext(), strVal)
 		case float64:
 			// when we build plan with constant in float, we cast them to decimal.
 			// so we cast @float_var to decimal too.
 			strVal := strconv.FormatFloat(val, 'f', -1, 64)
-			expr, err = makePlan2DecimalExprWithType(strVal)
+			expr, err = makePlan2DecimalExprWithType(rule.getContext(), strVal)
 		case bool:
 			expr = makePlan2BoolConstExprWithType(val)
 		case nil:
 			expr = makePlan2NullConstExprWithType()
 		case types.Decimal64, types.Decimal128:
-			err = moerr.NewNYINoCtx("decimal var")
+			err = moerr.NewNYI(rule.getContext(), "decimal var")
 		default:
-			err = moerr.NewParseErrorNoCtx("type of var %q is not supported now", exprImpl.V.Name)
+			err = moerr.NewParseError(rule.getContext(), "type of var %q is not supported now", exprImpl.V.Name)
 		}
 		if e.Typ.Id != int32(types.T_any) && expr.Typ.Id != e.Typ.Id {
-			return appendCastBeforeExpr(expr, e.Typ)
+			return appendCastBeforeExpr(rule.getContext(), expr, e.Typ)
 		}
 		return expr, err
 	default:
 		return e, nil
 	}
 }
+
+func (rule *ResetVarRefRule) getContext() context.Context { return rule.compCtx.GetContext() }
 
 type ConstantFoldRule struct {
 	compCtx CompilerContext

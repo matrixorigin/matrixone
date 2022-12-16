@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -42,7 +43,7 @@ func initRelatedStructure() {
 
 // appendFunction is a method only used at init-functions to add a new function into supported-function list.
 // Ensure that no duplicate functions will be added.
-func appendFunction(fid int, newFunctions Functions) error {
+func appendFunction(ctx context.Context, fid int, newFunctions Functions) error {
 	functionRegister[fid].TypeCheckFn = newFunctions.TypeCheckFn
 	functionRegister[fid].Id = newFunctions.Id
 	registerMutex.Lock()
@@ -53,7 +54,7 @@ func appendFunction(fid int, newFunctions Functions) error {
 
 		requiredIndex := len(functionRegister[fid].Overloads)
 		if int(newFunction.Index) != requiredIndex {
-			return moerr.NewInternalErrorNoCtx("function (fid = %d, index = %d)'s index should be %d", fid, newFunction.Index, requiredIndex)
+			return moerr.NewInternalError(ctx, "function (fid = %d, index = %d)'s index should be %d", fid, newFunction.Index, requiredIndex)
 		}
 		functionRegister[fid].Overloads = append(functionRegister[fid].Overloads, newFunction)
 	}

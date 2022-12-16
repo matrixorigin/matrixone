@@ -411,7 +411,7 @@ func TestTime_ParseTimeFromDecimal128(t *testing.T) {
 				require.Equal(t, parsed, c.expected)
 
 				// Time to Decimal
-				toDcm, err := c.expected.ToDecimal128(34, c.precision)
+				toDcm, err := c.expected.ToDecimal128(context.TODO(), 34, c.precision)
 				println("the toDecimal is ", toDcm.String())
 				require.NoError(t, err)
 				if c.isCarry {
