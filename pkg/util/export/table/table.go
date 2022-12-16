@@ -105,6 +105,7 @@ func (tbl *Table) GetDatabase() string {
 	return tbl.Database
 }
 
+// GetIdentify return identify like database.table
 func (tbl *Table) GetIdentify() string {
 	return fmt.Sprintf("%s.%s", tbl.Database, tbl.Table)
 }
@@ -325,6 +326,7 @@ func (r *Row) ToRawStrings() []string {
 }
 
 func (r *Row) ParseRow(cols []string) error {
+	// fixme: check len(r.Name2ColumnIdx) != len(cols)
 	r.Columns = cols
 	return nil
 }
