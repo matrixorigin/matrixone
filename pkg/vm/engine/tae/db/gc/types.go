@@ -5,8 +5,8 @@ import (
 )
 
 const (
-	PrefixGcMeta = "gc"
-	GcMetaDir    = "gc/"
+	PrefixGCMeta = "gc"
+	GCMetaDir    = "gc/"
 )
 
 type BatchType int8
@@ -17,20 +17,20 @@ const (
 	DropTable
 )
 const (
-	GcAttrObjectName = "name"
-	GcAttrBlockId    = "block_id"
-	GcAttrTableId    = "table_id"
-	GcAttrSegmentId  = "segment_id"
-	GcAttrDbId       = "db_id"
+	GCAttrObjectName = "name"
+	GCAttrBlockId    = "block_id"
+	GCAttrTableId    = "table_id"
+	GCAttrSegmentId  = "segment_id"
+	GCAttrDbId       = "db_id"
 )
 
 var (
 	BlockSchemaAttr = []string{
-		GcAttrBlockId,
-		GcAttrSegmentId,
-		GcAttrTableId,
-		GcAttrDbId,
-		GcAttrObjectName,
+		GCAttrBlockId,
+		GCAttrSegmentId,
+		GCAttrTableId,
+		GCAttrDbId,
+		GCAttrObjectName,
 	}
 	BlockSchemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),
@@ -41,9 +41,9 @@ var (
 	}
 
 	DropTableSchemaAttr = []string{
-		GcAttrTableId,
-		GcAttrDbId,
-		GcAttrObjectName,
+		GCAttrTableId,
+		GCAttrDbId,
+		GCAttrObjectName,
 	}
 	DropTableSchemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),

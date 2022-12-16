@@ -4546,7 +4546,7 @@ func TestAppendBat(t *testing.T) {
 	wg.Wait()
 }
 
-func TestGcWithCheckpoint(t *testing.T) {
+func TestGCWithCheckpoint(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -4571,7 +4571,7 @@ func TestGcWithCheckpoint(t *testing.T) {
 	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
 	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	for _, entry := range entries {
-		table := gc.NewGcTable()
+		table := gc.NewGCTable()
 		data, err := entry.Read(context.Background(), nil, tae.Fs)
 		assert.NoError(t, err)
 		table.UpdateTable(data)
@@ -4579,14 +4579,14 @@ func TestGcWithCheckpoint(t *testing.T) {
 		manager.AddTable(table)
 	}
 	manager.MergeTable()
-	assert.Equal(t, 5, len(manager.GetGc()))
-	task := gc.NewGcTask(tae.Fs, manager.GetGc())
+	assert.Equal(t, 5, len(manager.GetGC()))
+	task := gc.NewGCTask(tae.Fs, manager.GetGC())
 	err := task.ExecDelete()
 	assert.Nil(t, err)
 
 }
 
-func TestGcManager(t *testing.T) {
+func TestGCManager(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -4614,8 +4614,8 @@ func TestGcManager(t *testing.T) {
 	err = manager.CronTask()
 	assert.Nil(t, err)
 	manager.MergeTable()
-	assert.Equal(t, 5, len(manager.GetGc()))
-	task := gc.NewGcTask(tae.Fs, manager.GetGc())
+	assert.Equal(t, 5, len(manager.GetGC()))
+	task := gc.NewGCTask(tae.Fs, manager.GetGC())
 	err = task.ExecDelete()
 	assert.Nil(t, err)
 

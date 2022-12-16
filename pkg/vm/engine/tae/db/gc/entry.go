@@ -69,7 +69,7 @@ func (o *ObjectEntry) MergeEntry(entry ObjectEntry) {
 	}
 }
 
-func (o *ObjectEntry) AllowGc() bool {
+func (o *ObjectEntry) AllowGC() bool {
 	if o.table.drop || o.refs.Load() < 1 {
 		o.table.delete = nil
 		o.table.blocks = nil

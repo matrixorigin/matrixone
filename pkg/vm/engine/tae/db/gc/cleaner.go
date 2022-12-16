@@ -19,8 +19,8 @@ const (
 type DiskCleaner struct {
 	sync.RWMutex
 	state       CleanerState
-	table       []GcTable
-	mergeCache  []GcTable
+	table       []GCTable
+	mergeCache  []GCTable
 	gc          []string
 	fs          *objectio.ObjectFS
 	ckpRunner   checkpoint.Runner
@@ -31,7 +31,7 @@ type DiskCleaner struct {
 
 func NewDiskCleaner(fs *objectio.ObjectFS, runner checkpoint.Runner, catalog *catalog.Catalog) *DiskCleaner {
 	m := &DiskCleaner{
-		table:     make([]GcTable, 0),
+		table:     make([]GCTable, 0),
 		gc:        make([]string, 0),
 		fs:        fs,
 		ckpRunner: runner,
@@ -113,13 +113,13 @@ func (m *DiskCleaner) MergeTable() error {
 		return nil
 	}
 	m.mergeCache = m.table
-	m.table = make([]GcTable, 0)
+	m.table = make([]GCTable, 0)
 	m.Unlock()
-	mergeTable := NewGcTable()
+	mergeTable := NewGCTable()
 	for _, table := range m.mergeCache {
 		mergeTable.Merge(table)
 	}
-	gc := mergeTable.GetGcObject()
+	gc := mergeTable.GetGCObject()
 	if len(gc) > 0 {
 		m.Lock()
 		defer m.Unlock()
@@ -133,13 +133,13 @@ func (m *DiskCleaner) MergeTable() error {
 	return nil
 }
 
-func (m *DiskCleaner) AddTable(table GcTable) {
+func (m *DiskCleaner) AddTable(table GCTable) {
 	m.Lock()
 	defer m.Unlock()
 	m.table = append(m.table, table)
 }
 
-func (m *DiskCleaner) GetGc() []string {
+func (m *DiskCleaner) GetGC() []string {
 	return m.gc
 }
 
@@ -163,7 +163,7 @@ func (m *DiskCleaner) consumeCheckpoint(entry *checkpoint.CheckpointEntry) (err 
 		return
 	}
 	defer data.Close()
-	table := NewGcTable()
+	table := NewGCTable()
 	table.UpdateTable(data)
 	_, err = table.SaveTable(entry.GetStart(), entry.GetEnd(), m.fs)
 	m.AddTable(table)

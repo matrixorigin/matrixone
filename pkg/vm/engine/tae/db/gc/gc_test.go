@@ -64,7 +64,7 @@ func newVector(tye types.Type, buf []byte) *vector.Vector {
 	return vector
 }
 
-func TestGcTable_Merge(t *testing.T) {
+func TestGCTable_Merge(t *testing.T) {
 	dir := InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
 	c := fileservice.Config{
@@ -96,7 +96,7 @@ func TestGcTable_Merge(t *testing.T) {
 			TableID:   2,
 			PartID:    1,
 		}
-		table := NewGcTable()
+		table := NewGCTable()
 		blockid.BlockID = bid
 		bid++
 		table.addBlock(blockid, name)
@@ -123,7 +123,7 @@ func TestGcTable_Merge(t *testing.T) {
 	manger.MergeTable()
 	assert.Equal(t, 2, len(manger.gc))
 
-	task := NewGcTask(fs, manger.gc)
+	task := NewGCTask(fs, manger.gc)
 	err = task.ExecDelete()
 	assert.Nil(t, err)
 }

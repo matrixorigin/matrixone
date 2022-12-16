@@ -5,19 +5,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
-type GcTask struct {
+type GCTask struct {
 	object []string
 	fs     *objectio.ObjectFS
 }
 
-func NewGcTask(fs *objectio.ObjectFS, names []string) GcTask {
-	return GcTask{
+func NewGCTask(fs *objectio.ObjectFS, names []string) GCTask {
+	return GCTask{
 		object: names,
 		fs:     fs,
 	}
 }
 
-func (g *GcTask) ExecDelete() error {
+func (g *GCTask) ExecDelete() error {
 	if len(g.object) == 0 {
 		return nil
 	}
