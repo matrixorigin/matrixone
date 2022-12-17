@@ -133,17 +133,17 @@ func (l *MOLogger) Log(msg string, opts LogOptions, fields ...zap.Field) bool {
 		}
 	}
 
-	logger := l.logger
-	if opts.callerSkip > 0 {
-		logger = logger.WithOptions(zap.AddCallerSkip(opts.callerSkip))
+	if opts.ctx == nil {
+		opts.ctx = l.ctx
 	}
 
+	logger := l.logger.WithOptions(zap.AddCallerSkip(opts.callerSkip + 1))
 	if ce := logger.Check(opts.level, msg); ce != nil {
 		if len(opts.fields) > 0 {
 			fields = append(fields, opts.fields...)
 		}
-		if l.ctx != nil {
-			fields = append(fields, trace.ContextField(l.ctx))
+		if opts.ctx != nil {
+			fields = append(fields, trace.ContextField(opts.ctx))
 		}
 
 		ce.Write(fields...)
@@ -188,7 +188,7 @@ func wrapWithContext(logger *zap.Logger, ctx context.Context) *MOLogger {
 	}
 
 	return &MOLogger{
-		logger: logger.WithOptions(zap.AddCallerSkip(1), zap.AddStacktrace(zap.ErrorLevel)),
+		logger: logger.WithOptions(zap.AddStacktrace(zap.ErrorLevel)),
 		ctx:    ctx,
 	}
 }
