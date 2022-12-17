@@ -195,6 +195,7 @@ func (e *testEngine) truncate() {
 	assert.NoError(e.t, txn.Commit())
 }
 func (e *testEngine) globalCheckpoint(
+	endTs types.TS,
 	versionInterval time.Duration,
 	enableAndCleanBGCheckpoint bool,
 ) error {
@@ -203,7 +204,7 @@ func (e *testEngine) globalCheckpoint(
 		defer e.DB.BGCheckpointRunner.EnableCheckpoint()
 		e.DB.BGCheckpointRunner.CleanPenddingCheckpoint()
 	}
-	err := e.DB.BGCheckpointRunner.ForceGlobalCheckpoint(versionInterval)
+	err := e.DB.BGCheckpointRunner.ForceGlobalCheckpoint(endTs, versionInterval)
 	assert.NoError(e.t, err)
 	return nil
 }
@@ -231,8 +232,9 @@ func (e *testEngine) incrementalCheckpoint(
 	assert.NoError(e.t, err)
 	if truncate {
 		lsn := e.DB.BGCheckpointRunner.MaxLSNInRange(end)
-		_, err := e.DB.Wal.RangeCheckpoint(1, lsn)
+		entry, err := e.DB.Wal.RangeCheckpoint(1, lsn)
 		assert.NoError(e.t, err)
+		assert.NoError(e.t, entry.WaitDone())
 	}
 	return nil
 }

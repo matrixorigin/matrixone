@@ -35,14 +35,16 @@ type CheckpointEntry struct {
 	sync.RWMutex
 	start, end types.TS
 	state      State
+	entryType  EntryType
 	location   string
 }
 
-func NewCheckpointEntry(start, end types.TS) *CheckpointEntry {
+func NewCheckpointEntry(start, end types.TS, typ EntryType) *CheckpointEntry {
 	return &CheckpointEntry{
-		start: start,
-		end:   end,
-		state: ST_Pending,
+		start:     start,
+		end:       end,
+		state:     ST_Pending,
+		entryType: typ,
 	}
 }
 
@@ -110,7 +112,7 @@ func (e *CheckpointEntry) IsFinished() bool {
 }
 
 func (e *CheckpointEntry) IsIncremental() bool {
-	return !e.start.IsEmpty()
+	return e.entryType == ET_Incremental
 }
 
 func (e *CheckpointEntry) String() string {

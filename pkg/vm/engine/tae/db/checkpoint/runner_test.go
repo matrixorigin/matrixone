@@ -21,17 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
-	"github.com/tidwall/btree"
 )
 
 func TestCkpCheck(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	r := &runner{}
-	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(b.end)
-	}, btree.Options{
-		NoLocks: true,
-	})
+	r := NewRunner(nil, nil, nil, nil, nil)
 
 	for i := 0; i < 100; i += 10 {
 		r.storage.entries.Set(&CheckpointEntry{
@@ -154,8 +148,7 @@ func TestGetCheckpoints2(t *testing.T) {
 				state:    ST_Finished,
 				location: fmt.Sprintf("global%d", i),
 			}
-			r.storage.entries.Set(entry)
-			r.storage.prevGlobal = entry
+			r.storage.globals.Set(entry)
 		}
 		start := timestamps[i].Next()
 		if addGlobal {

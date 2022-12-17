@@ -28,10 +28,19 @@ type TestRunner interface {
 	DisableCheckpoint()
 
 	CleanPenddingCheckpoint()
-	ForceGlobalCheckpoint(versionInterval time.Duration) error
+	ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error
 	ForceIncrementalCheckpoint(end types.TS) error
 	IsAllChangesFlushed(start, end types.TS, printTree bool) bool
 	MaxLSNInRange(end types.TS) uint64
+}
+
+// DisableCheckpoint stops generating checkpoint
+func (r *runner) DisableCheckpoint() {
+	r.disabled.Store(true)
+}
+
+func (r *runner) EnableCheckpoint() {
+	r.disabled.Store(false)
 }
 
 func (r *runner) CleanPenddingCheckpoint() {
@@ -49,28 +58,18 @@ func (r *runner) CleanPenddingCheckpoint() {
 	}
 }
 
-func (r *runner) ForceGlobalCheckpoint(versionInterval time.Duration) error {
-	prev := r.MaxCheckpoint()
-	if prev == nil {
-		return moerr.NewInternalError(context.Background(), "no incremental checkpoint")
+func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error {
+	if r.GetPenddingIncrementalCount() == 0 {
+		err := r.ForceIncrementalCheckpoint(end)
+		if err != nil {
+			return err
+		}
 	}
-	if !prev.IsFinished() {
-		return moerr.NewInternalError(context.Background(), "prev checkpoint not finished")
-	}
-	if !prev.IsIncremental() {
-		return moerr.NewInternalError(context.Background(), "prev checkpoint is global")
-	}
-	entry := NewCheckpointEntry(types.TS{}, prev.end.Next())
-	r.storage.Lock()
-	r.storage.entries.Set(entry)
-	now := time.Now()
-	r.storage.Unlock()
-	r.doGlobalCheckpoint(entry, versionInterval)
-	if err := r.saveCheckpoint(entry.start, entry.end); err != nil {
-		return err
-	}
-	entry.SetState(ST_Finished)
-	logutil.Infof("%s is done, takes %s", entry.String(), time.Since(now))
+	r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
+		force:    true,
+		end:      end,
+		interval: versionInterval,
+	})
 	return nil
 }
 
@@ -83,7 +82,7 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS) error {
 	if prev != nil {
 		start = prev.end.Next()
 	}
-	entry := NewCheckpointEntry(start, end)
+	entry := NewCheckpointEntry(start, end, ET_Incremental)
 	r.storage.Lock()
 	r.storage.entries.Set(entry)
 	now := time.Now()
