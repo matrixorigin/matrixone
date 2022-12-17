@@ -55,8 +55,8 @@ func (t *GCTable) Merge(GCTable GCTable) {
 		db := t.dbs[did]
 		if db == nil {
 			db = NewDropDB(did)
-			db.merge(entry)
 		}
+		db.merge(entry)
 		if !db.drop {
 			db.drop = entry.drop
 		}

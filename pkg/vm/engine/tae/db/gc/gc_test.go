@@ -9,6 +9,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -119,6 +120,9 @@ func TestGCTable_Merge(t *testing.T) {
 		name = fmt.Sprintf("%d.seg", id-2)
 		table.deleteBlock(blockid, name)
 		manger.updateInputs(table)
+	}
+	for _, tb := range manger.inputs.tables {
+		logutil.Infof("manger string %v", tb.String())
 	}
 	gc := manger.softGC()
 	assert.Equal(t, 2, len(gc))

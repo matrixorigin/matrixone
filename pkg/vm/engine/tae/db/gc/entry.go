@@ -95,6 +95,6 @@ func (o *ObjectEntry) String() string {
 		_, _ = w.WriteString(fmt.Sprintf(" %v", id.String()))
 	}
 	_, _ = w.WriteString("]")
-	_, _ = w.WriteString("]\n")
+	_, _ = w.WriteString("]")
 	return w.String()
 }

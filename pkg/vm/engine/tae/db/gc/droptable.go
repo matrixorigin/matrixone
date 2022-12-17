@@ -74,11 +74,11 @@ func (d *dropTable) String() string {
 		return ""
 	}
 	var w bytes.Buffer
-	_, _ = w.WriteString("object:[\n")
+	_, _ = w.WriteString("object:[")
 	for name, entry := range d.object {
-		_, _ = w.WriteString(fmt.Sprintf("name: %v", name))
+		_, _ = w.WriteString(fmt.Sprintf("name: %v ", name))
 		_, _ = w.WriteString(entry.String())
 	}
-	_, _ = w.WriteString("]\n")
+	_, _ = w.WriteString("]")
 	return w.String()
 }

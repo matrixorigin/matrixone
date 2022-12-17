@@ -79,11 +79,11 @@ func (d *dropDB) String() string {
 		return ""
 	}
 	var w bytes.Buffer
-	_, _ = w.WriteString("tables:[\n")
+	_, _ = w.WriteString("tables:[")
 	for id, entry := range d.tables {
 		_, _ = w.WriteString(fmt.Sprintf("table: %d, isdrop: %t", id, entry.drop))
 		_, _ = w.WriteString(entry.String())
 	}
-	_, _ = w.WriteString("]\n")
+	_, _ = w.WriteString("],")
 	return w.String()
 }
