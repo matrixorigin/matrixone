@@ -17,8 +17,6 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"database/sql"
-	"errors"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -282,26 +280,21 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			indexes = append(indexes, index)
 		}
 
-		_, err := p.data.Get(tx, rowID)
-		if errors.Is(err, sql.ErrNoRows) {
-			err = p.data.Upsert(tx, &DataRow{
-				rowID:   rowID,
-				value:   dataValue,
-				indexes: indexes,
-			})
-			// if conflict comes up here,  probably the checkpoint from dn
-			// has duplicated history versions. As txn write conflict has been
-			// checked in dn, so it is safe to ignore this error
-			if moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
-				continue
-			}
-			if err != nil {
-				return err
-			}
-			if err := tx.Commit(t); err != nil {
-				return err
-			}
-		} else if err != nil {
+		err = p.data.Upsert(tx, &DataRow{
+			rowID:   rowID,
+			value:   dataValue,
+			indexes: indexes,
+		})
+		// if conflict comes up here,  probably the checkpoint from dn
+		// has duplicated history versions. As txn write conflict has been
+		// checked in dn, so it is safe to ignore this error
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := tx.Commit(t); err != nil {
 			return err
 		}
 	}
