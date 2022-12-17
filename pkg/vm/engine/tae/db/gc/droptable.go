@@ -1,6 +1,10 @@
 package gc
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+import (
+	"bytes"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+)
 
 type dropTable struct {
 	tid    uint64
@@ -63,4 +67,18 @@ func (d *dropTable) softGC() []string {
 		}
 	}
 	return gc
+}
+
+func (d *dropTable) String() string {
+	if len(d.object) == 0 {
+		return ""
+	}
+	var w bytes.Buffer
+	_, _ = w.WriteString("object:[\n")
+	for name, entry := range d.object {
+		_, _ = w.WriteString(fmt.Sprintf("name: %v", name))
+		_, _ = w.WriteString(entry.String())
+	}
+	_, _ = w.WriteString("]\n")
+	return w.String()
 }

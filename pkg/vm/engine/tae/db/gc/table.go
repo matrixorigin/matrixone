@@ -18,14 +18,12 @@ import (
 
 type GCTable struct {
 	sync.Mutex
-	table map[string]*ObjectEntry
-	drop  map[uint32]*dropDB
+	dbs map[uint32]*dropDB
 }
 
 func NewGCTable() GCTable {
 	table := GCTable{
-		table: make(map[string]*ObjectEntry),
-		drop:  make(map[uint32]*dropDB),
+		dbs: make(map[uint32]*dropDB),
 	}
 	return table
 }
@@ -33,28 +31,28 @@ func NewGCTable() GCTable {
 func (t *GCTable) addBlock(id common.ID, name string) {
 	t.Lock()
 	defer t.Unlock()
-	db := t.drop[id.PartID]
+	db := t.dbs[id.PartID]
 	if db == nil {
 		db = NewDropDB(id.PartID)
 	}
 	db.addBlock(id, name)
-	t.drop[id.PartID] = db
+	t.dbs[id.PartID] = db
 }
 
 func (t *GCTable) deleteBlock(id common.ID, name string) {
 	t.Lock()
 	defer t.Unlock()
-	db := t.drop[id.PartID]
+	db := t.dbs[id.PartID]
 	if db == nil {
 		db = NewDropDB(id.PartID)
 	}
 	db.deleteBlock(id, name)
-	t.drop[id.PartID] = db
+	t.dbs[id.PartID] = db
 }
 
 func (t *GCTable) Merge(GCTable GCTable) {
-	for did, entry := range GCTable.drop {
-		db := t.drop[did]
+	for did, entry := range GCTable.dbs {
+		db := t.dbs[did]
 		if db == nil {
 			db = NewDropDB(did)
 			db.merge(entry)
@@ -62,14 +60,14 @@ func (t *GCTable) Merge(GCTable GCTable) {
 		if !db.drop {
 			db.drop = entry.drop
 		}
-		t.drop[did] = db
+		t.dbs[did] = db
 	}
 }
 
 func (t *GCTable) SoftGC() []string {
 	gc := make([]string, 0)
-	for id, db := range t.drop {
-		if t.drop[id] == nil {
+	for id, db := range t.dbs {
+		if t.dbs[id] == nil {
 			panic(any("error"))
 		}
 		objects := db.softGC()
@@ -81,23 +79,23 @@ func (t *GCTable) SoftGC() []string {
 func (t *GCTable) dropDB(id common.ID) {
 	t.Lock()
 	defer t.Unlock()
-	db := t.drop[id.PartID]
+	db := t.dbs[id.PartID]
 	if db == nil {
 		db = NewDropDB(id.PartID)
 	}
 	db.drop = true
-	t.drop[id.PartID] = db
+	t.dbs[id.PartID] = db
 }
 
 func (t *GCTable) dropTable(id common.ID) {
 	t.Lock()
 	defer t.Unlock()
-	db := t.drop[id.PartID]
+	db := t.dbs[id.PartID]
 	if db == nil {
 		db = NewDropDB(id.PartID)
 	}
 	db.DropTable(id)
-	t.drop[id.PartID] = db
+	t.dbs[id.PartID] = db
 }
 
 func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
@@ -233,7 +231,7 @@ func (t *GCTable) collectData() []*containers.Batch {
 	for i, attr := range DropDBSchemaAtt {
 		bats[DropDB].AddVector(attr, containers.MakeVector(DropDBSchemaTypes[i], false))
 	}
-	for did, entry := range t.drop {
+	for did, entry := range t.dbs {
 		if entry.drop {
 			bats[DropDB].GetVectorByName(GCAttrDBId).Append(did)
 		}
@@ -340,15 +338,13 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 }
 
 func (t *GCTable) String() string {
-	t.Lock()
-	defer t.Unlock()
-	if len(t.table) == 0 {
+	if len(t.dbs) == 0 {
 		return ""
 	}
 	var w bytes.Buffer
-	_, _ = w.WriteString("table:[\n")
-	for name, entry := range t.table {
-		_, _ = w.WriteString(fmt.Sprintf("name: %v ", name))
+	_, _ = w.WriteString("dbs:[\n")
+	for id, entry := range t.dbs {
+		_, _ = w.WriteString(fmt.Sprintf("db: %d, isdrop: %t ", id, entry.drop))
 		_, _ = w.WriteString(entry.String())
 	}
 	_, _ = w.WriteString("]\n")

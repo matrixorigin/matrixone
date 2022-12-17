@@ -10,6 +10,7 @@ const (
 )
 
 type BatchType int8
+type CleanerState int8
 
 const (
 	CreateBlock BatchType = iota
@@ -17,6 +18,12 @@ const (
 	DropTable
 	DropDB
 )
+
+const (
+	Idle CleanerState = iota
+	Running
+)
+
 const (
 	GCAttrObjectName = "name"
 	GCAttrBlockId    = "block_id"

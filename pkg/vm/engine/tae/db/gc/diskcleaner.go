@@ -55,6 +55,7 @@ type diskCleaner struct {
 		sync.RWMutex
 		tables []GCTable
 	}
+	delTask *GCTask
 
 	processQueue sm.Queue
 
@@ -72,6 +73,7 @@ func NewDiskCleaner(
 		ckpClient: ckpClient,
 		catalog:   catalog,
 	}
+	cleaner.delTask = NewGCTask(fs)
 	cleaner.processQueue = sm.NewSafeQueue(10000, 1000, cleaner.process)
 	return cleaner
 }
@@ -176,13 +178,11 @@ func (cleaner *diskCleaner) process(items ...any) {
 	cleaner.updateMaxConsumed(candidates[len(candidates)-1])
 
 	// TODO:
-	task := NewGCTask(cleaner.fs)
-	gc := cleaner.softGC()
-	err = task.ExecDelete(gc)
-	if err != nil {
-		logutil.Errorf("processing delete: %v", err)
+	if cleaner.delTask.GetState() == Running {
 		return
 	}
+	gc := cleaner.softGC()
+	go cleaner.delTask.ExecDelete(gc)
 
 }
 

@@ -76,7 +76,7 @@ func TestGCTable_Merge(t *testing.T) {
 	assert.Nil(t, err)
 	mp := mpool.MustNewZero()
 	fs := objectio.NewObjectFS(service, dir)
-	manger := NewDiskCleanerTmp(fs, nil, nil)
+	manger := NewDiskCleaner(fs, nil, nil)
 	bid := uint64(1)
 	did := uint64(1)
 	for i := 1; i < 5; i++ {
@@ -104,7 +104,7 @@ func TestGCTable_Merge(t *testing.T) {
 		bid++
 		table.addBlock(blockid, name)
 		if i < 2 {
-			manger.AddTable(table)
+			manger.updateInputs(table)
 			continue
 		}
 		blockid.BlockID = did
@@ -112,18 +112,18 @@ func TestGCTable_Merge(t *testing.T) {
 		table.deleteBlock(blockid, name)
 		did += 2
 		if i < 3 {
-			manger.AddTable(table)
+			manger.updateInputs(table)
 			continue
 		}
 		blockid.BlockID = uint64((id - 2) * 2)
 		name = fmt.Sprintf("%d.seg", id-2)
 		table.deleteBlock(blockid, name)
-		manger.AddTable(table)
+		manger.updateInputs(table)
 	}
-	manger.MergeTable()
-	assert.Equal(t, 2, len(manger.gc))
+	gc := manger.softGC()
+	assert.Equal(t, 2, len(gc))
 
 	task := NewGCTask(fs)
-	err = task.ExecDelete(manger.gc)
+	err = task.ExecDelete(gc)
 	assert.Nil(t, err)
 }

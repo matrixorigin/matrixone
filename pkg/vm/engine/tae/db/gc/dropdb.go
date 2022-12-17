@@ -1,6 +1,10 @@
 package gc
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+import (
+	"bytes"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+)
 
 type dropDB struct {
 	dbid   uint32
@@ -68,4 +72,18 @@ func (d *dropDB) DropTable(id common.ID) {
 	table := d.getTable(id)
 	table.drop = true
 	d.tables[id.TableID] = table
+}
+
+func (d *dropDB) String() string {
+	if len(d.tables) == 0 {
+		return ""
+	}
+	var w bytes.Buffer
+	_, _ = w.WriteString("tables:[\n")
+	for id, entry := range d.tables {
+		_, _ = w.WriteString(fmt.Sprintf("table: %d, isdrop: %t", id, entry.drop))
+		_, _ = w.WriteString(entry.String())
+	}
+	_, _ = w.WriteString("]\n")
+	return w.String()
 }
