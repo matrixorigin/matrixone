@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -245,21 +246,21 @@ func (t Time) ToInt64() int64 {
 	return trans
 }
 
-func (t Time) ToDecimal64(width, precision int32) (Decimal64, error) {
+func (t Time) ToDecimal64(ctx context.Context, width, precision int32) (Decimal64, error) {
 	tToStr := t.NumericString(precision)
 	ret, err := ParseStringToDecimal64(tToStr, width, precision, false)
 	if err != nil {
-		return ret, moerr.NewInternalErrorNoCtx("exsit time cant't cast to decimal64")
+		return ret, moerr.NewInternalError(ctx, "exsit time cant't cast to decimal64")
 	}
 
 	return ret, nil
 }
 
-func (t Time) ToDecimal128(width, precision int32) (Decimal128, error) {
+func (t Time) ToDecimal128(ctx context.Context, width, precision int32) (Decimal128, error) {
 	tToStr := t.NumericString(precision)
 	ret, err := ParseStringToDecimal128(tToStr, width, precision, false)
 	if err != nil {
-		return ret, moerr.NewInternalErrorNoCtx("exsit time cant't cast to decimal128")
+		return ret, moerr.NewInternalError(ctx, "exsit time cant't cast to decimal128")
 	}
 
 	return ret, nil
@@ -356,7 +357,7 @@ func (t Time) AddInterval(nums int64, its IntervalType) (Time, bool) {
 	return newTime, true
 }
 
-func (t Time) ConvertToInterval(its string) (int64, error) {
+func (t Time) ConvertToInterval(ctx context.Context, its string) (int64, error) {
 	switch its {
 	case "microsecond":
 		return int64(t), nil
@@ -367,7 +368,7 @@ func (t Time) ConvertToInterval(its string) (int64, error) {
 	case "hour":
 		return int64(t) / (microSecsPerSec * secsPerHour), nil
 	}
-	return 0, moerr.NewInvalidInputNoCtx("invalid time input")
+	return 0, moerr.NewInvalidInput(ctx, "invalid time input")
 }
 
 func (t Time) sec() int64 {
