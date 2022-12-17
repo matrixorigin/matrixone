@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -299,7 +300,7 @@ func TestMOCollector_HangBug(t *testing.T) {
 	defer _stubSignalFunc.Reset()
 	// prepare awakeBuffer
 	var ctrlC = make(chan *bufferHolder, 1)
-	var ctrlTimeoutCnt = 0
+	var ctrlTimeoutCnt atomic.Int32
 	_stubAwakeBuffer := gostub.Stub(&awakeBuffer, func(c *MOCollector) func(holder *bufferHolder) {
 		return func(holder *bufferHolder) {
 			var ctrlTimer = time.NewTimer(timeo)
@@ -307,7 +308,7 @@ func TestMOCollector_HangBug(t *testing.T) {
 			select {
 			case ctrlC <- holder:
 			case <-ctrlTimer.C:
-				ctrlTimeoutCnt += 1
+				ctrlTimeoutCnt.Add(1)
 			}
 		}
 	})
@@ -350,13 +351,13 @@ loop:
 		case holder := <-ctrlC:
 			holder.StopAndGetBatch(buf)
 			jobs++
-			t.Logf("job done count: %d, timeoutCnt: %d", jobs, ctrlTimeoutCnt)
-			if jobs > 1 && ctrlTimeoutCnt == 0 {
+			t.Logf("job done count: %d, timeoutCnt: %d", jobs, ctrlTimeoutCnt.Load())
+			if jobs > 1 && ctrlTimeoutCnt.Load() == 0 {
 				break loop
 			}
 		case <-timer.C:
 			require.Equal(t, 0, len(collector.awakeGenerate), "meet timeout, means dead lock")
-			require.Equal(t, 0, ctrlTimeoutCnt, "meet timeout, means dead lock")
+			require.Equal(t, 0, ctrlTimeoutCnt.Load(), "meet timeout, means dead lock")
 			break loop
 		}
 	}

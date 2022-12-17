@@ -115,7 +115,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		for _, col := range ct.UpdateCols {
 			if c := lastNode.ProjectList[idx].GetC(); c != nil {
 				if c.GetDefaultval() {
-					if lastNode.ProjectList[idx], err = getDefaultExpr(col); err != nil {
+					if lastNode.ProjectList[idx], err = getDefaultExpr(ctx.GetContext(), col); err != nil {
 						return nil, err
 					}
 					idx++
@@ -127,7 +127,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 					continue
 				}
 			}
-			lastNode.ProjectList[idx], err = makePlan2CastExpr(lastNode.ProjectList[idx], col.Typ)
+			lastNode.ProjectList[idx], err = makePlan2CastExpr(ctx.GetContext(), lastNode.ProjectList[idx], col.Typ)
 			if err != nil {
 				return nil, err
 			}

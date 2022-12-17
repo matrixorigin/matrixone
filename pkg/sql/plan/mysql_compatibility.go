@@ -22,7 +22,7 @@ func (builder *QueryBuilder) wrapBareColRefsInAnyValue(expr *plan.Expr, ctx *Bin
 		if exprImpl.Col.RelPos == ctx.groupTag || exprImpl.Col.RelPos == ctx.aggregateTag {
 			return expr
 		}
-		newExpr, _ := bindFuncExprImplByPlanExpr("any_value", []*plan.Expr{expr})
+		newExpr, _ := bindFuncExprImplByPlanExpr(builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
 		colPos := len(ctx.aggregates)
 		ctx.aggregates = append(ctx.aggregates, newExpr)
 		return &plan.Expr{

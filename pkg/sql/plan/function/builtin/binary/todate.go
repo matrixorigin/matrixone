@@ -15,6 +15,7 @@
 package binary
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,7 +30,7 @@ var usage = ""
 
 func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if !vectors[1].IsScalar() {
-		return nil, moerr.NewInvalidArgNoCtx("the second parameter of function to_date", "not constant")
+		return nil, moerr.NewInvalidArg(proc.Ctx, "the second parameter of function to_date", "not constant")
 	}
 	inputBytes0 := vector.MustStrCols(vectors[0])
 	inputBytes1 := vector.MustStrCols(vectors[1])
@@ -38,7 +39,7 @@ func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 		results := make([]string, 1)
 		format := inputBytes1[0]
 		inputNsp := vectors[0].Nsp
-		result, resultNsp, err := ToDateInputBytes(inputBytes0, format, inputNsp, results)
+		result, resultNsp, err := ToDateInputBytes(proc.Ctx, inputBytes0, format, inputNsp, results)
 		if err != nil {
 			return nil, err
 		}
@@ -49,7 +50,7 @@ func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 		results := make([]string, len(inputBytes0))
 		format := inputBytes1[0]
 		inputNsp := vectors[0].Nsp
-		results, resultNsp, err := ToDateInputBytes(inputBytes0, format, inputNsp, results)
+		results, resultNsp, err := ToDateInputBytes(proc.Ctx, inputBytes0, format, inputNsp, results)
 		if err != nil {
 			return nil, err
 		}
@@ -68,7 +69,7 @@ var otherFormats = map[string]string{
 	"YYYYMMDD HHMMSS": "20060102 15:04:05",
 }
 
-func ToDateInputBytes(inputs []string, format string, inputNsp *nulls.Nulls, result []string) ([]string, *nulls.Nulls, error) {
+func ToDateInputBytes(ctx context.Context, inputs []string, format string, inputNsp *nulls.Nulls, result []string) ([]string, *nulls.Nulls, error) {
 	resultNsp := new(nulls.Nulls)
 	for i := range inputs {
 		if nulls.Contains(inputNsp, uint64(i)) {
@@ -78,14 +79,14 @@ func ToDateInputBytes(inputs []string, format string, inputNsp *nulls.Nulls, res
 		if val, ok := otherFormats[format]; ok {
 			t, err := time.Parse(val, inputs[i])
 			if err != nil {
-				return nil, nil, moerr.NewInvalidArgNoCtx("date format", format)
+				return nil, nil, moerr.NewInvalidArg(ctx, "date format", format)
 			}
 			result[i] = t.Format("2006-01-02") // this is our output format
 		} else {
 			//  XXX the only diff from if branch is error message.  Is this really correct?
 			t, err := time.Parse(val, inputs[i])
 			if err != nil {
-				return nil, nil, moerr.NewInvalidArgNoCtx("date format", format)
+				return nil, nil, moerr.NewInvalidArg(ctx, "date format", format)
 			}
 			result[i] = t.Format("2006-01-02") // this is our output format
 		}
