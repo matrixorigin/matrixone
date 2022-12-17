@@ -31,7 +31,9 @@ func TestSingleSQLQuery(t *testing.T) {
 	//sql := "DELETE FROM employees, dept USING employees INNER JOIN dept WHERE employees.deptno = dept.deptno"
 	//sql := "delete emp from emp left join dept on emp.deptno = dept.deptno where dept.deptno = 20"
 	//sql := "delete emp from emp left join dept on emp.deptno = dept.deptno where emp.sal > 2000"
-	sql := "update emp set comm = 1200 where deptno = 10"
+	//sql := "update emp set comm = 1200 where deptno = 10"
+	//sql := "update dept set dname = 'XXX' where deptno = 10"
+	sql := "update emp set sal = sal + 500, comm = 1200 where deptno = 10"
 	mock := NewMockOptimizer()
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
