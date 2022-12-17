@@ -24,17 +24,6 @@ import (
 
 func (p *Path) init(subs []subPath) {
 	p.paths = subs
-	for _, sub := range subs {
-		if sub.tp == subPathDoubleStar {
-			p.flag |= pathFlagDoubleStar
-		}
-		if sub.tp == subPathKey && sub.key == "*" {
-			p.flag |= pathFlagSingleStar
-		}
-		if sub.tp == subPathIdx && sub.idx == subPathIdxALL {
-			p.flag |= pathFlagSingleStar
-		}
-	}
 }
 
 func (p Path) empty() bool {
@@ -54,12 +43,25 @@ func (p Path) String() string {
 	for _, sub := range p.paths {
 		switch sub.tp {
 		case subPathIdx:
-			if sub.idx == subPathIdxALL {
-				s.WriteString("[*]")
-			} else {
+			switch sub.idx.tp {
+			case numberIndices:
 				s.WriteString("[")
-				s.WriteString(strconv.Itoa(sub.idx))
+				if sub.idx.num == subPathIdxALL {
+					s.WriteString("*")
+				} else {
+					s.WriteString(strconv.Itoa(sub.idx.num))
+				}
 				s.WriteString("]")
+			case lastIndices:
+				s.WriteString("[")
+				s.WriteString(lastKey)
+				if sub.idx.num > 0 {
+					s.WriteString(" - ")
+					s.WriteString(strconv.Itoa(sub.idx.num))
+				}
+				s.WriteString("]")
+			default:
+				panic("invalid index type")
 			}
 		case subPathKey:
 			s.WriteString(".")
@@ -72,7 +74,7 @@ func (p Path) String() string {
 	return s.String()
 }
 
-func NewPathGenerator(path string) *pathGenerator {
+func newPathGenerator(path string) *pathGenerator {
 	return &pathGenerator{
 		pathStr: path,
 		pos:     0,
@@ -98,6 +100,15 @@ func (pg *pathGenerator) next() byte {
 }
 func (pg pathGenerator) front() byte {
 	return pg.pathStr[pg.pos]
+}
+func (pg pathGenerator) tryNext(inc int) string {
+	if pg.pos+inc > len(pg.pathStr) {
+		return ""
+	}
+	return pg.pathStr[pg.pos : pg.pos+inc]
+}
+func (pg *pathGenerator) skip(inc int) {
+	pg.pos += inc
 }
 
 func (pg *pathGenerator) nextUtil(f func(byte) bool) (string, bool) {
@@ -126,6 +137,52 @@ func (pg *pathGenerator) generateDoubleStar(legs []subPath) ([]subPath, bool) {
 	})
 	return legs, true
 }
+
+func (pg *pathGenerator) tryIndices(rs *subPathIndices) bool {
+	rs.num = 0
+	if pg.tryNext(lastKeyLen) == lastKey {
+		rs.tp = lastIndices
+		pg.skip(lastKeyLen)
+		pg.trimSpace()
+		if !pg.hasNext() {
+			return false
+		}
+		if pg.front() == '-' {
+			pg.next()
+			pg.trimSpace()
+			if !pg.hasNext() {
+				return false
+			}
+			if idx, ok := pg.tryNumberIndex(); ok {
+				rs.num = idx
+				return true
+			}
+			return false
+		}
+		return true
+	}
+	if idx, ok := pg.tryNumberIndex(); ok {
+		rs.tp = numberIndices
+		rs.num = idx
+		return true
+	}
+	return false
+}
+
+func (pg *pathGenerator) tryNumberIndex() (int, bool) {
+	str, isEnd := pg.nextUtil(func(b byte) bool { // now only support non-negative integer
+		return b >= '0' && b <= '9'
+	})
+	if isEnd {
+		return 0, false
+	}
+	index, err := strconv.Atoi(str)
+	if err != nil || index > math.MaxUint32 {
+		return 0, false
+	}
+	return index, true
+}
+
 func (pg *pathGenerator) generateIndex(legs []subPath) ([]subPath, bool) {
 	pg.next()
 	pg.trimSpace()
@@ -135,25 +192,61 @@ func (pg *pathGenerator) generateIndex(legs []subPath) ([]subPath, bool) {
 	if pg.front() == '*' {
 		pg.next()
 		legs = append(legs, subPath{
-			tp:  subPathIdx,
-			idx: subPathIdxALL,
+			tp: subPathIdx,
+			idx: &subPathIndices{
+				tp:  numberIndices,
+				num: subPathIdxALL,
+			},
 		})
-	} else {
-		str, isEnd := pg.nextUtil(func(b byte) bool { // now only support non-negative integer
-			return b >= '0' && b <= '9'
-		})
-		if isEnd {
+		pg.trimSpace()
+		if !pg.hasNext() || pg.next() != ']' {
 			return nil, false
 		}
-		index, err := strconv.Atoi(str)
-		if err != nil || index > math.MaxUint32 {
+		return legs, true
+	}
+	i1 := &subPathIndices{}
+	ok := pg.tryIndices(i1)
+	if !ok {
+		return nil, false
+	}
+	if !pg.hasNext() {
+		return nil, false
+	}
+	pg.trimSpace()
+	if pg.tryNext(toKeyLen) == toKey {
+		if pg.pathStr[pg.pos-1] != ' ' {
+			return nil, false
+		}
+		pg.skip(toKeyLen)
+		if !pg.hasNext() {
+			return nil, false
+		}
+		if pg.front() != ' ' {
+			return nil, false
+		}
+		pg.trimSpace()
+		i2 := &subPathIndices{}
+		ok = pg.tryIndices(i2)
+		if !ok {
+			return nil, false
+		}
+		if i1.tp == lastIndices && i2.tp == lastIndices && i1.num < i2.num {
 			return nil, false
 		}
 		legs = append(legs, subPath{
+			tp: subPathRange,
+			iRange: &subPathRangeExpr{
+				start: i1,
+				end:   i2,
+			},
+		})
+	} else {
+		legs = append(legs, subPath{
 			tp:  subPathIdx,
-			idx: index,
+			idx: i1,
 		})
 	}
+
 	pg.trimSpace()
 	if !pg.hasNext() || pg.next() != ']' {
 		return nil, false
@@ -213,4 +306,30 @@ func (pg *pathGenerator) generateKey(legs []subPath) ([]subPath, bool) {
 		})
 	}
 	return legs, true
+}
+
+func (i subPathIndices) genIndex(cnt int) (int, int) {
+	switch i.tp {
+	case numberIndices:
+		if i.num >= cnt {
+			return subPathIdxErr, cnt - 1
+		}
+		return i.num, i.num
+	case lastIndices:
+		idx := cnt - i.num - 1
+		if idx < 0 {
+			return subPathIdxErr, 0
+		}
+		return idx, idx
+	}
+	return subPathIdxErr, subPathIdxErr
+}
+
+func (r subPathRangeExpr) genRange(cnt int) (ret [2]int) {
+	_, ret[0] = r.start.genIndex(cnt)
+	_, ret[1] = r.end.genIndex(cnt)
+	if ret[0] > ret[1] {
+		ret[0], ret[1] = subPathIdxErr, subPathIdxErr
+	}
+	return
 }
