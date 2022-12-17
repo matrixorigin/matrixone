@@ -122,6 +122,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildShowLocks(stmt, ctx)
 	case *tree.ShowNodeList:
 		return buildShowNodeList(stmt, ctx)
+	case *tree.ShowFunctionStatus:
+		return buildShowFunctionStatus(stmt, ctx)
 	case *tree.SetVar:
 		return buildSetVariables(stmt, ctx)
 	case *tree.Execute:

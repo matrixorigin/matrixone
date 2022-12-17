@@ -3448,7 +3448,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants,
 			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation,
-			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowLocks, *tree.ShowNodeList:
+			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionStatus:
 			columns, err = cw.GetColumns()
 			if err != nil {
 				logErrorf(ses.GetConciseProfile(), "GetColumns from Computation handler failed. error: %v", err)
