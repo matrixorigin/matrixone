@@ -17,7 +17,6 @@ package db
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"math/rand"
 	"reflect"
@@ -4625,8 +4624,12 @@ func TestGCWithCheckpoint2(t *testing.T) {
 		err := manager.JobFactory(context.Background())
 		assert.Nil(t, err)
 	}
-	time.Sleep(5 * time.Second)
-	logutil.Infof("manager %v", manager)
+	manager2 := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2.Start()
+	defer manager2.Stop()
+	err := manager2.Replay()
+	time.Sleep(time.Second)
+	assert.Nil(t, err)
 
 }
 

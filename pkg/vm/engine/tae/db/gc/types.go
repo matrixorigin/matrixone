@@ -15,6 +15,7 @@ const (
 	CreateBlock BatchType = iota
 	DeleteBlock
 	DropTable
+	DropDB
 )
 const (
 	GCAttrObjectName = "name"
@@ -43,11 +44,16 @@ var (
 	DropTableSchemaAttr = []string{
 		GCAttrTableId,
 		GCAttrDBId,
-		GCAttrObjectName,
 	}
 	DropTableSchemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_varchar, 5000, 0, 0),
+		types.New(types.T_uint32, 0, 0, 0),
+	}
+
+	DropDBSchemaAtt = []string{
+		GCAttrDBId,
+	}
+	DropDBSchemaTypes = []types.Type{
+		types.New(types.T_uint32, 0, 0, 0),
 	}
 )

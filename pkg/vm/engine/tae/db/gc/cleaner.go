@@ -138,7 +138,7 @@ func (m *DiskCleanerTmp) MergeTable() error {
 	for _, table := range m.mergeCache {
 		mergeTable.Merge(table)
 	}
-	gc := mergeTable.GetGCObject()
+	gc := mergeTable.SoftGC()
 	if len(gc) > 0 {
 		m.Lock()
 		defer m.Unlock()

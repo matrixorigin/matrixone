@@ -28,7 +28,7 @@ func tempSeekLT(
 		return
 	}
 	if startTs.IsEmpty() {
-		entries = append(entries, all[0])
+		entries = append(entries, all...)
 		return
 	}
 	for _, ckp := range all {
@@ -78,6 +78,11 @@ func NewDiskCleaner(
 
 func (cleaner *diskCleaner) JobFactory(ctx context.Context) (err error) {
 	return cleaner.tryClean(ctx)
+}
+
+func (cleaner *diskCleaner) Replay() (err error) {
+	cleaner.tryReplay()
+	return nil
 }
 
 func (cleaner *diskCleaner) tryReplay() {
@@ -154,30 +159,31 @@ func (cleaner *diskCleaner) process(items ...any) {
 
 	// TODO: implemnet ICKPSeekLT
 	// candidates := cleaner.ckpClient.ICKPSeekLT(ts, 1)
-	candidates := tempSeekLT(cleaner.ckpClient, ts, 1)
+	candidates := tempSeekLT(cleaner.ckpClient, ts, 10)
 
 	if len(candidates) == 0 {
 		return
 	}
-	for _, candidate := range candidates {
-		data, err := cleaner.collectCkpData(candidate)
-		if err != nil {
-			logutil.Errorf("processing clean %s: %v", candidate.String(), err)
-			// TODO
-			return
-		}
-		defer data.Close()
 
-		var input GCTable
-
-		if input, err = cleaner.createNewInput(candidate, data); err != nil {
-			logutil.Errorf("processing clean %s: %v", candidate.String(), err)
-			// TODO
-			return
-		}
-		cleaner.updateInputs(input)
-		cleaner.updateMaxConsumed(candidate)
+	var input GCTable
+	var err error
+	if input, err = cleaner.createNewInput(candidates); err != nil {
+		logutil.Errorf("processing clean %s: %v", candidates[0].String(), err)
+		// TODO
+		return
 	}
+	cleaner.updateInputs(input)
+	cleaner.updateMaxConsumed(candidates[len(candidates)-1])
+
+	// TODO:
+	task := NewGCTask(cleaner.fs)
+	gc := cleaner.softGC()
+	err = task.ExecDelete(gc)
+	if err != nil {
+		logutil.Errorf("processing delete: %v", err)
+		return
+	}
+
 }
 
 func (cleaner *diskCleaner) collectCkpData(
@@ -192,16 +198,38 @@ func (cleaner *diskCleaner) collectCkpData(
 }
 
 func (cleaner *diskCleaner) createNewInput(
-	ckp *checkpoint.CheckpointEntry,
-	data *logtail.CheckpointData) (input GCTable, err error) {
+	ckps []*checkpoint.CheckpointEntry) (input GCTable, err error) {
 	input = NewGCTable()
-	input.UpdateTable(data)
+	var data *logtail.CheckpointData
+	for _, candidate := range ckps {
+		data, err = cleaner.collectCkpData(candidate)
+		if err != nil {
+			logutil.Errorf("processing clean %s: %v", candidate.String(), err)
+			// TODO
+			return
+		}
+		defer data.Close()
+		input.UpdateTable(data)
+	}
 	_, err = input.SaveTable(
-		ckp.GetStart(),
-		ckp.GetEnd(),
+		ckps[0].GetStart(),
+		ckps[len(ckps)-1].GetEnd(),
 		cleaner.fs,
 	)
 	return
+}
+
+func (cleaner *diskCleaner) softGC() []string {
+	cleaner.inputs.Lock()
+	defer cleaner.inputs.Unlock()
+	mergeTable := NewGCTable()
+	for _, table := range cleaner.inputs.tables {
+		mergeTable.Merge(table)
+	}
+	gc := mergeTable.SoftGC()
+	cleaner.inputs.tables = make([]GCTable, 0)
+	cleaner.inputs.tables = append(cleaner.inputs.tables, mergeTable)
+	return gc
 }
 
 func (cleaner *diskCleaner) updateMaxConsumed(e *checkpoint.CheckpointEntry) {
