@@ -17,30 +17,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
-// TODO
-// TO BE REMOVED
-func tempSeekLT(
-	client checkpoint.Client,
-	startTs types.TS,
-	_ int,
-) (entries []*checkpoint.CheckpointEntry) {
-	all := client.GetAllCheckpoints()
-	if len(all) == 0 {
-		return
-	}
-	if startTs.IsEmpty() {
-		entries = append(entries, all...)
-		return
-	}
-	for _, ckp := range all {
-		if ckp.GetStart().Greater(startTs) {
-			entries = append(entries, ckp)
-			return
-		}
-	}
-	return
-}
-
 const (
 	MessgeReplay = iota
 	MessgeNormal
@@ -83,9 +59,8 @@ func (cleaner *diskCleaner) JobFactory(ctx context.Context) (err error) {
 	return cleaner.tryClean(ctx)
 }
 
-func (cleaner *diskCleaner) Replay() (err error) {
+func (cleaner *diskCleaner) Replay() {
 	cleaner.tryReplay()
-	return nil
 }
 
 func (cleaner *diskCleaner) tryReplay() {
@@ -158,7 +133,10 @@ func (cleaner *diskCleaner) replay() error {
 
 func (cleaner *diskCleaner) process(items ...any) {
 	if items[0].(int) == MessgeReplay {
-		cleaner.replay()
+		err := cleaner.replay()
+		if err != nil {
+			panic(err)
+		}
 		if len(items) == 1 {
 			return
 		}
@@ -219,6 +197,7 @@ func (cleaner *diskCleaner) createNewInput(
 		}
 		defer data.Close()
 		input.UpdateTable(data)
+		logutil.Infof("input %v", input.String())
 	}
 	_, err = input.SaveTable(
 		ckps[0].GetStart(),

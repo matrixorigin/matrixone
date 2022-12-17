@@ -4579,8 +4579,41 @@ func TestGCWithCheckpoint(t *testing.T) {
 	manager2 := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager2.Start()
 	defer manager2.Stop()
-	err := manager2.Replay()
+	manager2.Replay()
 	time.Sleep(time.Second)
-	assert.Nil(t, err)
 
+}
+
+func TestGCDropDB(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 210)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err := txn.DropDatabase(defaultTestDB)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetDeleteAt())
+	now := time.Now()
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(time.Since(now))
+	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager.Start()
+	defer manager.Stop()
+	err = manager.JobFactory(context.Background())
+	assert.Nil(t, err)
+	time.Sleep(time.Second)
+	tae.restart()
 }

@@ -59,7 +59,7 @@ func (d *dropTable) softGC() []string {
 		if d.drop {
 			gc = append(gc, name)
 			delete(d.object, name)
-			return gc
+			continue
 		}
 		if d.object[name].AllowGC() {
 			gc = append(gc, name)
@@ -74,7 +74,7 @@ func (d *dropTable) String() string {
 		return ""
 	}
 	var w bytes.Buffer
-	_, _ = w.WriteString("object:[")
+	_, _ = w.WriteString(" object:[\n")
 	for name, entry := range d.object {
 		_, _ = w.WriteString(fmt.Sprintf("name: %v ", name))
 		_, _ = w.WriteString(entry.String())

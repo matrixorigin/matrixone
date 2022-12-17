@@ -11,7 +11,6 @@ type TableEntry struct {
 	tid    uint64
 	blocks []common.ID
 	delete []common.ID
-	drop   bool
 }
 
 type ObjectEntry struct {
@@ -24,7 +23,6 @@ func NewObjectEntry() *ObjectEntry {
 		table: TableEntry{
 			blocks: make([]common.ID, 0),
 			delete: make([]common.ID, 0),
-			drop:   false,
 		},
 	}
 }
@@ -41,10 +39,6 @@ func (o *ObjectEntry) DelBlock(block common.ID) {
 	o.UnRefs(1)
 }
 
-func (o *ObjectEntry) DropTable() {
-	o.table.drop = true
-}
-
 func (o *ObjectEntry) Refs(n int) {
 	o.refs.Add(int64(n))
 }
@@ -54,11 +48,6 @@ func (o *ObjectEntry) UnRefs(n int) {
 }
 
 func (o *ObjectEntry) MergeEntry(entry ObjectEntry) {
-	if o.table.drop || entry.table.drop {
-		o.table.delete = nil
-		o.table.blocks = nil
-		return
-	}
 	refs := len(entry.table.blocks)
 	unRefs := len(entry.table.delete)
 	if refs > 0 {
@@ -73,7 +62,7 @@ func (o *ObjectEntry) MergeEntry(entry ObjectEntry) {
 }
 
 func (o *ObjectEntry) AllowGC() bool {
-	if o.table.drop || o.refs.Load() < 1 {
+	if o.refs.Load() < 1 {
 		o.table.delete = nil
 		o.table.blocks = nil
 		return true
@@ -83,8 +72,8 @@ func (o *ObjectEntry) AllowGC() bool {
 
 func (o *ObjectEntry) String() string {
 	var w bytes.Buffer
-	_, _ = w.WriteString("entry:[")
-	_, _ = w.WriteString(fmt.Sprintf("tid: %d, isdrop: %t refs: %d ", o.table.tid, o.table.drop, o.refs.Load()))
+	_, _ = w.WriteString("entry:[\n")
+	_, _ = w.WriteString(fmt.Sprintf("tid: %d, refs: %d ", o.table.tid, o.refs.Load()))
 	_, _ = w.WriteString("block:[")
 	for _, block := range o.table.blocks {
 		_, _ = w.WriteString(fmt.Sprintf(" %v", block.String()))
