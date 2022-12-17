@@ -442,7 +442,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			})
 		} else {
 			pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
-			createTable.TableDef.Cols = append(createTable.TableDef.Cols, &ColDef{
+			colDef := &ColDef{
 				Name: pkeyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
@@ -455,7 +455,9 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 					Expr:         nil,
 					OriginString: "",
 				},
-			})
+			}
+			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
+			colMap[pkeyName] = colDef
 			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Pk{
 					Pk: &plan.PrimaryKeyDef{
