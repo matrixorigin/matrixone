@@ -519,6 +519,9 @@ func (node *ShowFunctionStatus) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *ShowFunctionStatus) GetStatementType() string { return "Show Function Status" }
+func (node *ShowFunctionStatus) GetQueryType() string     { return QueryTypeDQL }
+
 func NewShowFunctionStatus(l *ComparisonExpr, w *Where) *ShowFunctionStatus {
 	return &ShowFunctionStatus{
 		Like:  l,
@@ -535,6 +538,9 @@ func (node *ShowNodeList) Format(ctx *FmtCtx) {
 	ctx.WriteString("show node list")
 }
 
+func (node *ShowNodeList) GetStatementType() string { return "Show Node List" }
+func (node *ShowNodeList) GetQueryType() string     { return QueryTypeDQL }
+
 func NewShowNodeList() *ShowNodeList {
 	return &ShowNodeList{}
 }
@@ -547,6 +553,9 @@ type ShowLocks struct {
 func (node *ShowLocks) Format(ctx *FmtCtx) {
 	ctx.WriteString("show locks")
 }
+
+func (node *ShowLocks) GetStatementType() string { return "Show Locks" }
+func (node *ShowLocks) GetQueryType() string     { return QueryTypeDQL }
 
 func NewShowLocks() *ShowLocks {
 	return &ShowLocks{}
