@@ -26,17 +26,17 @@ func (p *Path) init(subs []subPath) {
 	p.paths = subs
 }
 
-func (p Path) empty() bool {
+func (p *Path) empty() bool {
 	return len(p.paths) == 0
 }
 
-func (p Path) step() (sub subPath, newP Path) {
+func (p *Path) step() (sub subPath, newP Path) {
 	sub = p.paths[0]
 	newP.init(p.paths[1:])
 	return
 }
 
-func (p Path) String() string {
+func (p *Path) String() string {
 	var s strings.Builder
 
 	s.WriteString("$")
@@ -89,7 +89,7 @@ func (pg *pathGenerator) trimSpace() {
 	}
 }
 
-func (pg pathGenerator) hasNext() bool {
+func (pg *pathGenerator) hasNext() bool {
 	return pg.pos < len(pg.pathStr)
 }
 
@@ -98,10 +98,10 @@ func (pg *pathGenerator) next() byte {
 	pg.pos++
 	return ret
 }
-func (pg pathGenerator) front() byte {
+func (pg *pathGenerator) front() byte {
 	return pg.pathStr[pg.pos]
 }
-func (pg pathGenerator) tryNext(inc int) string {
+func (pg *pathGenerator) tryNext(inc int) string {
 	if pg.pos+inc > len(pg.pathStr) {
 		return ""
 	}
@@ -326,10 +326,12 @@ func (i subPathIndices) genIndex(cnt int) (int, int) {
 }
 
 func (r subPathRangeExpr) genRange(cnt int) (ret [2]int) {
-	_, ret[0] = r.start.genIndex(cnt)
-	_, ret[1] = r.end.genIndex(cnt)
-	if ret[0] > ret[1] {
+	true1, mdf1 := r.start.genIndex(cnt)
+	true2, mdf2 := r.end.genIndex(cnt)
+	if mdf1 > mdf2 || (true1 == subPathIdxErr && true2 == subPathIdxErr) {
 		ret[0], ret[1] = subPathIdxErr, subPathIdxErr
+		return
 	}
+	ret[0], ret[1] = mdf1, mdf2
 	return
 }
