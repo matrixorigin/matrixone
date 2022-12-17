@@ -72,6 +72,14 @@ func (s *sysRelation) DeleteByPhyAddrKeys(_ context.Context, _ *vector.Vector) e
 	return ErrReadOnly
 }
 
+func (s *sysRelation) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
+	return ErrReadOnly
+}
+
+func (s *sysRelation) UpdateConstraintWithBin(context.Context, []byte) error {
+	return ErrReadOnly
+}
+
 func (s *sysRelation) TableColumns(_ context.Context) ([]*engine.Attribute, error) {
 	colDefs := s.handle.GetMeta().(*catalog.TableEntry).GetSchema().ColDefs
 	cols, _ := ColDefsToAttrs(colDefs)

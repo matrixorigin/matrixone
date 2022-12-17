@@ -639,18 +639,20 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 		}
 		tblNode := node.(*catalog.TableMVCCNode)
 		if !tblNode.HasDropCommitted() {
-			for _, syscol := range catalog.SystemColumnSchema.ColDefs {
-				txnimpl.FillColumnRow(
-					entry,
-					syscol.Name,
-					collector.data.bats[TBLColInsertIDX].GetVectorByName(syscol.Name),
-				)
-			}
-			rowidVec := collector.data.bats[TBLColInsertIDX].GetVectorByName(catalog.AttrRowID)
-			commitVec := collector.data.bats[TBLColInsertIDX].GetVectorByName(catalog.AttrCommitTs)
-			for _, usercol := range entry.GetSchema().ColDefs {
-				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))))
-				commitVec.Append(tblNode.GetEnd())
+			if !tblNode.IsUpdate { // update constraints won't affect mo_columns
+				for _, syscol := range catalog.SystemColumnSchema.ColDefs {
+					txnimpl.FillColumnRow(
+						entry,
+						syscol.Name,
+						collector.data.bats[TBLColInsertIDX].GetVectorByName(syscol.Name),
+					)
+				}
+				rowidVec := collector.data.bats[TBLColInsertIDX].GetVectorByName(catalog.AttrRowID)
+				commitVec := collector.data.bats[TBLColInsertIDX].GetVectorByName(catalog.AttrCommitTs)
+				for _, usercol := range entry.GetSchema().ColDefs {
+					rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))))
+					commitVec.Append(tblNode.GetEnd())
+				}
 			}
 
 			collector.data.bats[TBLInsertTxnIDX].GetVectorByName(
@@ -674,13 +676,15 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			collector.data.bats[TBLDeleteTxnIDX].GetVectorByName(
 				SnapshotAttr_TID).Append(entry.GetID())
 
-			rowidVec := collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrRowID)
-			commitVec := collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrCommitTs)
-			for _, usercol := range entry.GetSchema().ColDefs {
-				rowidVec.Append(
-					bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))),
-				)
-				commitVec.Append(tblNode.GetEnd())
+			if !tblNode.IsUpdate {
+				rowidVec := collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrRowID)
+				commitVec := collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrCommitTs)
+				for _, usercol := range entry.GetSchema().ColDefs {
+					rowidVec.Append(
+						bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))),
+					)
+					commitVec.Append(tblNode.GetEnd())
+				}
 			}
 
 			catalogEntry2Batch(
