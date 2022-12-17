@@ -46,7 +46,7 @@ func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]
 			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
 			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
 		},
-		genTableListExpr(getAccountId(ctx), databaseId))
+		genTableListExpr(ctx, getAccountId(ctx), databaseId))
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +63,7 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	key := genTableIndexKey(name, databaseId, accountId)
 	rows, err := txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, "",
 		txn.dnStores[:1], catalog.MoTablesSchema, key,
-		genTableInfoExpr(accountId, databaseId, name))
+		genTableInfoExpr(ctx, accountId, databaseId, name))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -97,7 +97,7 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	*/
 	rows, err = txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, "",
 		txn.dnStores[:1], catalog.MoColumnsSchema, genColumnIndexKey(tbl.tableId),
-		genColumnInfoExpr(accountId, databaseId, tbl.tableId))
+		genColumnInfoExpr(ctx, accountId, databaseId, tbl.tableId))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -127,7 +127,7 @@ func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
 			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
 		},
-		genTableIdExpr(accountId, databaseId, name))
+		genTableIdExpr(ctx, accountId, databaseId, name))
 	if err != nil {
 		return 0, err
 	}
@@ -141,7 +141,7 @@ func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
 		},
-		genDatabaseListExpr(getAccountId(ctx)))
+		genDatabaseListExpr(ctx, getAccountId(ctx)))
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +160,7 @@ func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64,
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
-		}, key, genDatabaseIdExpr(accountId, name))
+		}, key, genDatabaseIdExpr(ctx, accountId, name))
 	if err != nil {
 		return 0, err
 	}
@@ -802,8 +802,8 @@ func blockWrite(ctx context.Context, bat *batch.Batch, fs fileservice.FileServic
 	return writer.WriteEnd(ctx)
 }
 
-func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
-	priKeys []*engine.Attribute, dnStores []DNStore) []int {
+func needSyncDnStores(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef,
+	priKeys []*engine.Attribute, dnStores []DNStore, proc *process.Process) []int {
 	var pk *engine.Attribute
 
 	fullList := func() []int {
@@ -842,7 +842,7 @@ func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
 		}
 		return getListByItems(dnStores, intPkRange.items)
 	}
-	canComputeRange, hashVal := computeRangeByNonIntPk(expr, pk.Name)
+	canComputeRange, hashVal := computeRangeByNonIntPk(ctx, expr, pk.Name, proc)
 	if !canComputeRange {
 		return fullList()
 	}

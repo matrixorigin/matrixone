@@ -15,12 +15,13 @@
 package multi
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestSplitPart(t *testing.T) {
@@ -77,11 +78,12 @@ func TestSplitPart(t *testing.T) {
 	_, err = testSplitPart([]*vector.Vector{v1, v2, v3ScalarNull}, proc)
 	require.NoError(t, err)
 	_, err = testSplitPart([]*vector.Vector{v1ScalarNull, v2ScalarNull, v3ScalarNull}, proc)
+	require.NoError(t, err)
 
 	// error case
 	vector.AppendString(v1, []string{"a,b,c"}, mp)
 	vector.AppendString(v2, []string{","}, mp)
-	vector.AppendFixed[uint32](v3, []uint32{0}, mp)
+	vector.AppendFixed(v3, []uint32{0}, mp)
 	_, err = testSplitPart([]*vector.Vector{v1, v2, v3}, proc)
 	require.Error(t, err)
 }
