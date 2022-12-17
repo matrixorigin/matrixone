@@ -61,7 +61,7 @@ func (l *MOLogger) WithContext(ctx context.Context) *MOLogger {
 	if ctx == nil || ctx == context.TODO() || ctx == context.Background() {
 		panic("nil, context.TODO() and context.Background() are not supported")
 	}
-	if sc := trace.SpanFromContext(ctx).SpanContext(); sc.IsEmpty() {
+	if sc := trace.SpanFromContext(ctx).SpanContext(); trace.GetTracerProvider().IsEnable() && sc.IsEmpty() {
 		panic("context with empty SpanContext are not supported")
 	}
 	return &MOLogger{
@@ -208,7 +208,7 @@ func (opts LogOptions) WithContext(ctx context.Context) LogOptions {
 	if ctx == context.TODO() || ctx == context.Background() {
 		panic("TODO and Background contexts are not supported")
 	}
-	if sc := trace.SpanFromContext(ctx).SpanContext(); sc.IsEmpty() {
+	if sc := trace.SpanFromContext(ctx).SpanContext(); trace.GetTracerProvider().IsEnable() && sc.IsEmpty() {
 		panic("context with empty SpanContext are not supported")
 	}
 
