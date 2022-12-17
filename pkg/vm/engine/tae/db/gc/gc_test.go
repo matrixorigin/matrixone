@@ -65,22 +65,16 @@ func newVector(tye types.Type, buf []byte) *vector.Vector {
 	return vector
 }
 
-func TestGCTable_Merge(t *testing.T) {
-	dir := InitTestEnv(ModuleName, t)
-	dir = path.Join(dir, "/local")
-	c := fileservice.Config{
-		Name:    defines.LocalFileServiceName,
-		Backend: "DISK",
-		DataDir: dir,
-	}
-	service, err := fileservice.NewFileService(c)
-	assert.Nil(t, err)
-	mp := mpool.MustNewZero()
-	fs := objectio.NewObjectFS(service, dir)
-	manger := NewDiskCleaner(fs, nil, nil)
+func MockEntry(
+	mid common.ID,
+	count int,
+	manger *diskCleaner,
+	t *testing.T,
+	mp *mpool.MPool,
+	service fileservice.FileService) {
 	bid := uint64(1)
 	did := uint64(1)
-	for i := 1; i < 5; i++ {
+	for i := 1; i < count; i++ {
 		id := i
 		name := fmt.Sprintf("%d.seg", id)
 		bat := newBatch(mp)
@@ -94,8 +88,8 @@ func TestGCTable_Merge(t *testing.T) {
 		_, err = objectWriter.WriteEnd(context.Background())
 		blockid := common.ID{
 			SegmentID: uint64(id),
-			TableID:   2,
-			PartID:    1,
+			TableID:   mid.TableID,
+			PartID:    mid.PartID,
 		}
 		table := NewGCTable()
 		blockid.BlockID = bid
@@ -121,11 +115,63 @@ func TestGCTable_Merge(t *testing.T) {
 		table.deleteBlock(blockid, name)
 		manger.updateInputs(table)
 	}
+}
+
+func TestGCTable_Merge(t *testing.T) {
+	dir := InitTestEnv(ModuleName, t)
+	dir = path.Join(dir, "/local")
+	c := fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+	}
+	service, err := fileservice.NewFileService(c)
+	assert.Nil(t, err)
+	mp := mpool.MustNewZero()
+	fs := objectio.NewObjectFS(service, dir)
+	manger := NewDiskCleaner(fs, nil, nil)
+	id := common.ID{
+		TableID: 1,
+		PartID:  0,
+	}
+	MockEntry(id, 5, manger, t, mp, service)
 	for _, tb := range manger.inputs.tables {
 		logutil.Infof("manger string %v", tb.String())
 	}
 	gc := manger.softGC()
 	assert.Equal(t, 2, len(gc))
+
+	task := NewGCTask(fs)
+	err = task.ExecDelete(gc)
+	assert.Nil(t, err)
+}
+
+func TestGCDropTable(t *testing.T) {
+	dir := InitTestEnv(ModuleName, t)
+	dir = path.Join(dir, "/local")
+	c := fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+	}
+	service, err := fileservice.NewFileService(c)
+	assert.Nil(t, err)
+	mp := mpool.MustNewZero()
+	fs := objectio.NewObjectFS(service, dir)
+	manger := NewDiskCleaner(fs, nil, nil)
+	id := common.ID{
+		TableID: 1,
+		PartID:  0,
+	}
+	MockEntry(id, 10, manger, t, mp, service)
+	id = common.ID{
+		TableID: 2,
+		PartID:  1,
+	}
+	MockEntry(id, 10, manger, t, mp, service)
+	manger.inputs.tables[len(manger.inputs.tables)-1].dbs[1].tables[2].drop = true
+	gc := manger.softGC()
+	assert.Equal(t, 16, len(gc))
 
 	task := NewGCTask(fs)
 	err = task.ExecDelete(gc)
