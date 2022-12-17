@@ -207,6 +207,13 @@ func TestGetCheckpoints2(t *testing.T) {
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "global3;ckp3", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
+
+	// [22,29]
+	location, checkpointed = r.CollectCheckpointsInRange(types.BuildTS(22, 1), types.BuildTS(29, 0))
+	t.Log(location)
+	t.Log(checkpointed.ToString())
+	assert.Equal(t, "global3", location)
+	assert.True(t, checkpointed.Equal(types.BuildTS(30, 1)))
 }
 func TestICKPSeekLT(t *testing.T) {
 	defer testutils.AfterTest(t)()

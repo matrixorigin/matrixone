@@ -757,6 +757,10 @@ func (r *runner) CollectCheckpointsInRange(start, end types.TS) (locations strin
 		if ok = iter.Prev(); ok {
 			e := iter.Item()
 			if !e.IsCommitted() {
+				if len(locs) == 0 {
+					return
+				}
+				locations = strings.Join(locs, ";")
 				return
 			}
 			if e.HasOverlap(newStart, end) {
@@ -781,12 +785,20 @@ func (r *runner) CollectCheckpointsInRange(start, end types.TS) (locations strin
 	} else {
 		// if it is empty, quick quit
 		if ok = iter.Last(); !ok {
+			if len(locs) == 0 {
+				return
+			}
+			locations = strings.Join(locs, ";")
 			return
 		}
 		// get last entry
 		e := iter.Item()
 		// if it is committed and visible, quick quit
 		if !e.IsCommitted() || !e.HasOverlap(newStart, end) {
+			if len(locs) == 0 {
+				return
+			}
+			locations = strings.Join(locs, ";")
 			return
 		}
 		locs = append(locs, e.GetLocation())
