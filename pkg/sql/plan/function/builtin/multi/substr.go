@@ -15,6 +15,7 @@
 package multi
 
 import (
+	"context"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,7 +27,7 @@ import (
 )
 
 // Cast, cast ...  sigh.
-func castConstAsInt64(vec *vector.Vector, idx int64) (int64, error) {
+func castConstAsInt64(ctx context.Context, vec *vector.Vector, idx int64) (int64, error) {
 	switch vec.GetType().Oid {
 	case types.T_uint8:
 		return int64(vector.GetValueAt[uint8](vec, idx)), nil
@@ -37,7 +38,7 @@ func castConstAsInt64(vec *vector.Vector, idx int64) (int64, error) {
 	case types.T_uint64:
 		val := vector.GetValueAt[uint64](vec, idx)
 		if val > uint64(math.MaxInt64) {
-			return 0, moerr.NewInvalidArgNoCtx("function substring(str, start, lenth)", val)
+			return 0, moerr.NewInvalidArg(ctx, "function substring(str, start, lenth)", val)
 		}
 		return int64(val), nil
 	case types.T_int8:
@@ -53,7 +54,7 @@ func castConstAsInt64(vec *vector.Vector, idx int64) (int64, error) {
 	case types.T_float64:
 		val := vector.GetValueAt[float64](vec, idx)
 		if val > float64(math.MaxInt64) {
-			return 0, moerr.NewInvalidArgNoCtx("function substring(str, start, lenth)", val)
+			return 0, moerr.NewInvalidArg(ctx, "function substring(str, start, lenth)", val)
 		}
 		return int64(val), nil
 	default:
@@ -157,7 +158,7 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 	if startVector.IsScalar() {
 		if paramNum == 2 {
 			// get start constant value
-			startValue, err := castConstAsInt64(startVector, 0)
+			startValue, err := castConstAsInt64(proc.Ctx, startVector, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -173,12 +174,12 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 			lengthVector := inputVecs[2]
 			if lengthVector.IsScalar() {
 				// get start constant value
-				startValue, err := castConstAsInt64(startVector, 0)
+				startValue, err := castConstAsInt64(proc.Ctx, startVector, 0)
 				if err != nil {
 					return nil, err
 				}
 				// get length constant value
-				lengthValue, err := castConstAsInt64(lengthVector, 0)
+				lengthValue, err := castConstAsInt64(proc.Ctx, lengthVector, 0)
 				if err != nil {
 					return nil, err
 				}
@@ -239,7 +240,7 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 	if startVector.IsScalar() {
 		if paramNum == 2 {
 			// get start constant value
-			startValue, err := castConstAsInt64(startVector, 0)
+			startValue, err := castConstAsInt64(proc.Ctx, startVector, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -257,12 +258,12 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 			// if length parameter is constant
 			if lengthVector.IsScalar() {
 				// get start constant value
-				startValue, err := castConstAsInt64(startVector, 0)
+				startValue, err := castConstAsInt64(proc.Ctx, startVector, 0)
 				if err != nil {
 					return nil, err
 				}
 				// get length constant value
-				lengthValue, err := castConstAsInt64(lengthVector, 0)
+				lengthValue, err := castConstAsInt64(proc.Ctx, lengthVector, 0)
 				if err != nil {
 					return nil, err
 				}

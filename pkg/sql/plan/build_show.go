@@ -250,12 +250,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`"
 	var viewStr string
 	if tableDef.TableType == catalog.SystemViewRel {
-		for _, def := range tableDef.Defs {
-			if viewDef, ok := def.Def.(*plan.TableDef_DefType_View); ok {
-				viewStr = viewDef.View.View
-				break
-			}
-		}
+		viewStr = tableDef.ViewSql.View
 	}
 
 	var viewData ViewData

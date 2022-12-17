@@ -1675,7 +1675,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		if err != nil {
 			return err
 		}
-		binder := plan2.NewDefaultBinder(nil, nil, &plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
+		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, &plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
 		planExpr, err := binder.BindExpr(sv.Where.Expr, 0, false)
 		if err != nil {
 			return err
@@ -2230,11 +2230,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
 
 		// replace ? and @var with their values
-		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
+		resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
 		constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
 		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
-		err = vp.Visit()
+		err = vp.Visit(requestCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -2263,7 +2263,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// replace @var with their values
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
 		vp := plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{resetVarRule})
-		err = vp.Visit()
+		err = vp.Visit(requestCtx)
 		if err != nil {
 			return nil, err
 		}
