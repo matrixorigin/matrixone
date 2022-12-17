@@ -82,42 +82,42 @@ func (l *MOLogger) RawLogger() *zap.Logger {
 
 // Info shortcuts to print info log
 func (l *MOLogger) Info(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.InfoLevel), fields...)
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
 }
 
 // InfoAction shortcuts to print info action log
 func (l *MOLogger) InfoAction(msg string, fields ...zap.Field) func() {
-	return l.LogAction(msg, DefaultLogOptions().WithLevel(zap.InfoLevel), fields...)
+	return l.LogAction(msg, DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
 }
 
 // Debug shortcuts to  print debug log
 func (l *MOLogger) Debug(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.DebugLevel), fields...)
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
 }
 
 // InfoDebugAction shortcuts to print debug action log
 func (l *MOLogger) InfoDebugAction(msg string, fields ...zap.Field) func() {
-	return l.LogAction(msg, DefaultLogOptions().WithLevel(zap.DebugLevel), fields...)
+	return l.LogAction(msg, DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
 }
 
 // Error shortcuts to  print error log
 func (l *MOLogger) Error(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.ErrorLevel), fields...)
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
 }
 
 // Warn shortcuts to  print warn log
 func (l *MOLogger) Warn(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.WarnLevel), fields...)
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.WarnLevel).AddCallerSkip(1), fields...)
 }
 
 // Panic shortcuts to  print panic log
 func (l *MOLogger) Panic(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.PanicLevel), fields...)
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.PanicLevel).AddCallerSkip(1), fields...)
 }
 
 // Fatal shortcuts to print fatal log
 func (l *MOLogger) Fatal(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.FatalLevel), fields...)
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.FatalLevel).AddCallerSkip(1), fields...)
 }
 
 // Log is the entry point for mo log printing. Return true to indicate that the log
@@ -133,7 +133,12 @@ func (l *MOLogger) Log(msg string, opts LogOptions, fields ...zap.Field) bool {
 		}
 	}
 
-	if ce := l.logger.Check(opts.level, msg); ce != nil {
+	logger := l.logger
+	if opts.callerSkip > 0 {
+		logger = logger.WithOptions(zap.AddCallerSkip(opts.callerSkip))
+	}
+
+	if ce := logger.Check(opts.level, msg); ce != nil {
 		if len(opts.fields) > 0 {
 			fields = append(fields, opts.fields...)
 		}
@@ -160,7 +165,7 @@ func (l *MOLogger) Log(msg string, opts LogOptions, fields ...zap.Field) bool {
 // logs appear in pairs, can also be used to check whether a function has been executed.
 func (l *MOLogger) LogAction(action string, opts LogOptions, fields ...zap.Field) func() {
 	startAt := time.Now()
-	if !l.Log(action, opts, fields...) {
+	if !l.Log(action, opts.AddCallerSkip(1), fields...) {
 		return nothing
 	}
 	return func() {
@@ -183,7 +188,7 @@ func wrapWithContext(logger *zap.Logger, ctx context.Context) *MOLogger {
 	}
 
 	return &MOLogger{
-		logger: logger,
+		logger: logger.WithOptions(zap.AddCallerSkip(1), zap.AddStacktrace(zap.ErrorLevel)),
 		ctx:    ctx,
 	}
 }
@@ -217,6 +222,12 @@ func (opts LogOptions) WithLevel(level zapcore.Level) LogOptions {
 // WithSample sample print the log, using log counts as sampling frequency. First time must output.
 func (opts LogOptions) WithSample(sampleType SampleType) LogOptions {
 	opts.sampleType = sampleType
+	return opts
+}
+
+// AddCallerSkip help to show the logger real caller, by skip n call stack
+func (opts LogOptions) AddCallerSkip(n int) LogOptions {
+	opts.callerSkip += n
 	return opts
 }
 

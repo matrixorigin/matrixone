@@ -86,6 +86,7 @@ type LogOptions struct {
 	level      zapcore.Level
 	fields     []zap.Field
 	sampleType SampleType
+	callerSkip int
 }
 
 // logFilter used to filter the print log, returns false to abort this print
