@@ -3,6 +3,7 @@ package gc
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"sync"
 	"sync/atomic"
@@ -109,6 +110,14 @@ func (cleaner *diskCleaner) replay() error {
 	jobs := make([]*tasks.Job, len(dirs))
 	jobScheduler := tasks.NewParallelJobScheduler(100)
 	defer jobScheduler.Stop()
+	maxConsumed := types.TS{}
+	for _, dir := range dirs {
+		_, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
+		if maxConsumed.IsEmpty() || maxConsumed.Less(end) {
+			maxConsumed = end
+			continue
+		}
+	}
 	makeJob := func(i int) (job *tasks.Job) {
 		dir := dirs[i]
 		exec := func(ctx context.Context) (result *tasks.JobResult) {
@@ -142,6 +151,8 @@ func (cleaner *diskCleaner) replay() error {
 			return err
 		}
 	}
+	ckp := checkpoint.NewCheckpointEntry(types.TS{}, maxConsumed)
+	cleaner.updateMaxConsumed(ckp)
 	return nil
 }
 
@@ -156,12 +167,10 @@ func (cleaner *diskCleaner) process(items ...any) {
 	var ts types.TS
 	maxConsumed := cleaner.maxConsumed.Load()
 	if maxConsumed != nil {
-		ts = maxConsumed.GetStart()
+		ts = maxConsumed.GetEnd()
 	}
 
-	// TODO: implemnet ICKPSeekLT
-	// candidates := cleaner.ckpClient.ICKPSeekLT(ts, 1)
-	candidates := tempSeekLT(cleaner.ckpClient, ts, 10)
+	candidates := cleaner.ckpClient.ICKPSeekLT(ts, 10)
 
 	if len(candidates) == 0 {
 		return

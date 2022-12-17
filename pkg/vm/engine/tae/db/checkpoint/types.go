@@ -31,6 +31,7 @@ const (
 
 type Client interface {
 	GetAllCheckpoints() []*CheckpointEntry
+	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
 }
 
 type Runner interface {
