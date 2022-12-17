@@ -263,27 +263,44 @@ func (node *ShowTableStatus) GetQueryType() string     { return QueryTypeDQL }
 
 type ShowGrants struct {
 	showImpl
-	Username string
-	Hostname string
-	Roles    []*Role
+	Username      string
+	Hostname      string
+	Roles         []*Role
+	ShowGrantType ShowGrantType
 }
 
+type ShowGrantType int
+
+const (
+	GrantForUser = iota
+	GrantForRole
+)
+
 func (node *ShowGrants) Format(ctx *FmtCtx) {
-	ctx.WriteString("show grants")
-	if node.Username != "" {
-		ctx.WriteString(" for ")
-		ctx.WriteString(node.Username)
-		if node.Hostname != "" {
-			ctx.WriteString("@")
-			ctx.WriteString(node.Hostname)
+	if node.ShowGrantType == GrantForRole {
+		ctx.WriteString("show grants")
+		if node.Roles != nil {
+			ctx.WriteString("for")
+			ctx.WriteString(" ")
+			ctx.WriteString(node.Roles[0].UserName)
 		}
-	}
-	if node.Roles != nil {
-		prefix := ""
-		for _, r := range node.Roles {
-			ctx.WriteString(prefix)
-			r.Format(ctx)
-			prefix = ", "
+	} else {
+		ctx.WriteString("show grants")
+		if node.Username != "" {
+			ctx.WriteString(" for ")
+			ctx.WriteString(node.Username)
+			if node.Hostname != "" {
+				ctx.WriteString("@")
+				ctx.WriteString(node.Hostname)
+			}
+		}
+		if node.Roles != nil {
+			prefix := ""
+			for _, r := range node.Roles {
+				ctx.WriteString(prefix)
+				r.Format(ctx)
+				prefix = ", "
+			}
 		}
 	}
 }
