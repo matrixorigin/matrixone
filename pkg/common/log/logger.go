@@ -208,6 +208,9 @@ func (opts LogOptions) WithContext(ctx context.Context) LogOptions {
 	if ctx == context.TODO() || ctx == context.Background() {
 		panic("TODO and Background contexts are not supported")
 	}
+	if sc := trace.SpanFromContext(ctx).SpanContext(); sc.IsEmpty() {
+		panic("context with empty SpanContext are not supported")
+	}
 
 	opts.ctx = ctx
 	return opts
