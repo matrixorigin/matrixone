@@ -78,12 +78,13 @@ func MockEntry(
 	manger *diskCleaner,
 	t *testing.T,
 	mp *mpool.MPool,
-	service fileservice.FileService) {
+	service fileservice.FileService,
+	suffix string) {
 	bid := uint64(1)
 	did := uint64(1)
 	for i := 1; i < count; i++ {
 		id := i
-		name := fmt.Sprintf("%d.seg", id)
+		name := fmt.Sprintf("%d.%v", id, suffix)
 		bat := newBatch(mp)
 		defer bat.Clean(mp)
 		objectWriter, err := objectio.NewObjectWriter(name, service)
@@ -142,7 +143,7 @@ func TestGCTable_Merge(t *testing.T) {
 		TableID: 1,
 		PartID:  0,
 	}
-	MockEntry(id, 5, manger, t, mp, service)
+	MockEntry(id, 5, manger, t, mp, service, "seg")
 	for _, tb := range manger.inputs.tables {
 		logutil.Infof("manger string %v", tb.String())
 	}
@@ -171,15 +172,15 @@ func TestGCDropTable(t *testing.T) {
 		TableID: 1,
 		PartID:  0,
 	}
-	MockEntry(id, 10, manger, t, mp, service)
+	MockEntry(id, 5, manger, t, mp, service, "seg")
 	id = common.ID{
 		TableID: 2,
 		PartID:  1,
 	}
-	MockEntry(id, 10, manger, t, mp, service)
+	MockEntry(id, 5, manger, t, mp, service, "blk")
 	manger.inputs.tables[len(manger.inputs.tables)-1].dbs[1].tables[2].drop = true
 	gc := manger.softGC()
-	assert.Equal(t, 16, len(gc))
+	assert.Equal(t, 9, len(gc))
 
 	task := NewGCTask(fs)
 	err = task.ExecDelete(gc)
