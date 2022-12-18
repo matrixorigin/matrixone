@@ -137,6 +137,8 @@ func (cleaner *diskCleaner) process(items ...any) {
 		if err != nil {
 			panic(err)
 		}
+		// TODO:
+		cleaner.tryGC()
 		if len(items) == 1 {
 			return
 		}
@@ -165,11 +167,7 @@ func (cleaner *diskCleaner) process(items ...any) {
 	cleaner.updateMaxConsumed(candidates[len(candidates)-1])
 
 	// TODO:
-	if cleaner.delTask.GetState() == Running {
-		return
-	}
-	gc := cleaner.softGC()
-	go cleaner.delTask.ExecDelete(gc)
+	cleaner.tryGC()
 
 }
 
@@ -207,9 +205,23 @@ func (cleaner *diskCleaner) createNewInput(
 	return
 }
 
+func (cleaner *diskCleaner) tryGC() {
+	if cleaner.delTask.GetState() == Running {
+		return
+	}
+	gc := cleaner.softGC()
+	if len(gc) == 0 {
+		return
+	}
+	go cleaner.delTask.ExecDelete(gc)
+}
+
 func (cleaner *diskCleaner) softGC() []string {
 	cleaner.inputs.Lock()
 	defer cleaner.inputs.Unlock()
+	if len(cleaner.inputs.tables) == 0 {
+		return nil
+	}
 	mergeTable := NewGCTable()
 	for _, table := range cleaner.inputs.tables {
 		mergeTable.Merge(table)
@@ -228,6 +240,10 @@ func (cleaner *diskCleaner) updateInputs(input GCTable) {
 	cleaner.inputs.Lock()
 	defer cleaner.inputs.Unlock()
 	cleaner.inputs.tables = append(cleaner.inputs.tables, input)
+}
+
+func (cleaner *diskCleaner) GetMaxConsumed() *checkpoint.CheckpointEntry {
+	return cleaner.maxConsumed.Load()
 }
 
 func (cleaner *diskCleaner) Start() {

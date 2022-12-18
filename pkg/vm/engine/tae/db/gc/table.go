@@ -194,7 +194,6 @@ func (t *GCTable) rebuildTable(bats []*containers.Batch) {
 		}
 		t.dropTable(id)
 	}
-
 	for i := 0; i < bats[DropDB].Length(); i++ {
 		dbid := bats[DropDB].GetVectorByName(GCAttrDBId).Get(i).(uint32)
 		id := common.ID{
@@ -329,6 +328,10 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 		return err
 	}
 	err = t.replayData(ctx, DropTable, DropTableSchemaAttr, DropTableSchemaTypes, bats, bs)
+	if err != nil {
+		return err
+	}
+	err = t.replayData(ctx, DropDB, DropDBSchemaAtt, DropDBSchemaTypes, bats, bs)
 	if err != nil {
 		return err
 	}

@@ -4568,20 +4568,32 @@ func TestGCWithCheckpoint(t *testing.T) {
 	t.Logf("Checkpointed: %d", tae.Scheduler.GetCheckpointedLSN())
 	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
-	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
 	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager.Start()
 	defer manager.Stop()
-	for i := 0; i < len(entries); i++ {
-		err := manager.JobFactory(context.Background())
-		assert.Nil(t, err)
-	}
+	err := manager.JobFactory(context.Background())
+	assert.Nil(t, err)
+	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
+	num := len(entries)
+	assert.Greater(t, num, 0)
+	testutils.WaitExpect(1000, func() bool {
+		if manager.GetMaxConsumed() == nil {
+			return false
+		}
+		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
+	})
+	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
 	manager2 := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager2.Start()
 	defer manager2.Stop()
 	manager2.Replay()
-	time.Sleep(time.Second)
-
+	testutils.WaitExpect(1000, func() bool {
+		if manager2.GetMaxConsumed() == nil {
+			return false
+		}
+		return entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd())
+	})
+	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd()))
 }
 
 func TestGCDropDB(t *testing.T) {
@@ -4614,6 +4626,15 @@ func TestGCDropDB(t *testing.T) {
 	defer manager.Stop()
 	err = manager.JobFactory(context.Background())
 	assert.Nil(t, err)
-	time.Sleep(time.Second)
+	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
+	num := len(entries)
+	assert.Greater(t, num, 0)
+	testutils.WaitExpect(1000, func() bool {
+		if manager.GetMaxConsumed() == nil {
+			return false
+		}
+		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
+	})
+	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
 	tae.restart()
 }
