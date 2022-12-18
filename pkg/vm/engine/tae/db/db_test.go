@@ -4625,6 +4625,7 @@ func TestUpdateCstr(t *testing.T) {
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	assert.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
 }
+
 func TestGlobalCheckpoint1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -4637,22 +4638,19 @@ func TestGlobalCheckpoint1(t *testing.T) {
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
 	tae.bindSchema(schema)
-	bat := catalog.MockBatch(schema, 40)
-	batchCnt := 8
-	bats := bat.Split(batchCnt)
+	bat := catalog.MockBatch(schema, 400)
 
-	tae.createRelAndAppend(bats[0], true)
-	testutils.WaitExpect(1000, func() bool {
+	tae.createRelAndAppend(bat, true)
+
+	tae.restart()
+	tae.checkRowsByScan(400, true)
+
+	testutils.WaitExpect(4000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
 
-	for i := 1; i < batchCnt; i++ {
-		tae.DoAppend(bats[i])
-		testutils.WaitExpect(1000, func() bool {
-			return tae.Wal.GetPenddingCnt() == 0
-		})
-	}
 	tae.restart()
+	tae.checkRowsByScan(400, true)
 
 	checkpoints := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	for _, entry := range checkpoints {
