@@ -246,6 +246,12 @@ func (cleaner *diskCleaner) GetMaxConsumed() *checkpoint.CheckpointEntry {
 	return cleaner.maxConsumed.Load()
 }
 
+func (cleaner *diskCleaner) GetInputs() []GCTable {
+	cleaner.inputs.RLock()
+	defer cleaner.inputs.RUnlock()
+	return cleaner.inputs.tables
+}
+
 func (cleaner *diskCleaner) Start() {
 	cleaner.onceStart.Do(func() {
 		cleaner.processQueue.Start()

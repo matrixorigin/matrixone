@@ -74,6 +74,27 @@ func (d *dropDB) DropTable(id common.ID) {
 	d.tables[id.TableID] = table
 }
 
+func (d *dropDB) Compare(db *dropDB) bool {
+	if d.drop != db.drop {
+		return false
+	}
+	if len(d.tables) != len(db.tables) {
+		return false
+	}
+	for id, entry := range d.tables {
+		table := db.tables[id]
+		if table == nil {
+			return false
+		}
+		ok := entry.Compare(table)
+		if !ok {
+			return ok
+		}
+
+	}
+	return true
+}
+
 func (d *dropDB) String() string {
 	if len(d.tables) == 0 {
 		return ""

@@ -340,6 +340,24 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	return nil
 }
 
+func (t *GCTable) Compare(table GCTable) bool {
+	if len(t.dbs) != len(table.dbs) {
+		return false
+	}
+	for id, entry := range t.dbs {
+		db := table.dbs[id]
+		if db == nil {
+			return false
+		}
+		ok := entry.Compare(db)
+		if !ok {
+			return ok
+		}
+
+	}
+	return true
+}
+
 func (t *GCTable) String() string {
 	if len(t.dbs) == 0 {
 		return ""

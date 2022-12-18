@@ -4576,7 +4576,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
 	num := len(entries)
 	assert.Greater(t, num, 0)
-	testutils.WaitExpect(1000, func() bool {
+	testutils.WaitExpect(5000, func() bool {
 		if manager.GetMaxConsumed() == nil {
 			return false
 		}
@@ -4587,13 +4587,17 @@ func TestGCWithCheckpoint(t *testing.T) {
 	manager2.Start()
 	defer manager2.Stop()
 	manager2.Replay()
-	testutils.WaitExpect(1000, func() bool {
+	testutils.WaitExpect(5000, func() bool {
 		if manager2.GetMaxConsumed() == nil {
 			return false
 		}
 		return entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd())
 	})
 	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd()))
+	tables1 := manager.GetInputs()
+	tables2 := manager2.GetInputs()
+	assert.Equal(t, len(tables1), len(tables2))
+	assert.True(t, tables1[0].Compare(tables2[0]))
 }
 
 func TestGCDropDB(t *testing.T) {
@@ -4629,13 +4633,28 @@ func TestGCDropDB(t *testing.T) {
 	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
 	num := len(entries)
 	assert.Greater(t, num, 0)
-	testutils.WaitExpect(1000, func() bool {
+	testutils.WaitExpect(5000, func() bool {
 		if manager.GetMaxConsumed() == nil {
 			return false
 		}
 		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
 	})
 	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
+	manager2 := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2.Start()
+	defer manager2.Stop()
+	manager2.Replay()
+	testutils.WaitExpect(5000, func() bool {
+		if manager2.GetMaxConsumed() == nil {
+			return false
+		}
+		return entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd())
+	})
+	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd()))
+	tables1 := manager.GetInputs()
+	tables2 := manager2.GetInputs()
+	assert.Equal(t, len(tables1), len(tables2))
+	assert.True(t, tables1[0].Compare(tables2[0]))
 	tae.restart()
 }
 
@@ -4694,5 +4713,20 @@ func TestGCDropTable(t *testing.T) {
 		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
 	})
 	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
+	manager2 := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2.Start()
+	defer manager2.Stop()
+	manager2.Replay()
+	testutils.WaitExpect(5000, func() bool {
+		if manager2.GetMaxConsumed() == nil {
+			return false
+		}
+		return entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd())
+	})
+	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd()))
+	tables1 := manager.GetInputs()
+	tables2 := manager2.GetInputs()
+	assert.Equal(t, len(tables1), len(tables2))
+	assert.True(t, tables1[0].Compare(tables2[0]))
 	tae.restart()
 }

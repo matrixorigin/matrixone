@@ -69,6 +69,27 @@ func (d *dropTable) softGC() []string {
 	return gc
 }
 
+func (d *dropTable) Compare(table *dropTable) bool {
+	if d.drop != table.drop {
+		return false
+	}
+	if len(d.object) != len(table.object) {
+		return false
+	}
+	for name, entry := range d.object {
+		object := table.object[name]
+		if object == nil {
+			return false
+		}
+		ok := entry.Compare(object)
+		if !ok {
+			return ok
+		}
+
+	}
+	return true
+}
+
 func (d *dropTable) String() string {
 	if len(d.object) == 0 {
 		return ""

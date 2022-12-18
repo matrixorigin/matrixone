@@ -70,6 +70,19 @@ func (o *ObjectEntry) AllowGC() bool {
 	return false
 }
 
+func (o *ObjectEntry) Compare(object *ObjectEntry) bool {
+	if o.refs.Load() != object.refs.Load() {
+		return false
+	}
+	if len(o.table.blocks) != len(object.table.blocks) {
+		return false
+	}
+	if len(o.table.delete) != len(object.table.delete) {
+		return false
+	}
+	return true
+}
+
 func (o *ObjectEntry) String() string {
 	var w bytes.Buffer
 	_, _ = w.WriteString("entry:[\n")
