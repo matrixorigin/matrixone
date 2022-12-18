@@ -93,6 +93,7 @@ func MockEntry(
 		_, err = objectWriter.Write(bat)
 		assert.Nil(t, err)
 		_, err = objectWriter.WriteEnd(context.Background())
+		assert.Nil(t, err)
 		blockid := common.ID{
 			SegmentID: uint64(id),
 			TableID:   mid.TableID,
