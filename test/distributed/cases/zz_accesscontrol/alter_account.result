@@ -47,6 +47,7 @@ admin    test:aaa
 drop account abc;
 create account if not exists test ADMIN_NAME '1WERDFT3YG' IDENTIFIED BY '123456';
 alter account test admin_name='1WERDFT3YG'  IDENTIFIED BY '';
+internal error: there is no user 1WERDFT3YG
 alter account not_exist_account ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 internal error: there is no account not_exist_account
 alter account if exists not_exist_account ADMIN_NAME 'admin' IDENTIFIED BY '123456';
@@ -79,11 +80,11 @@ al_role
 show databases;
 Database
 system
-mo_catalog
 system_metrics
 information_schema
 mysql
 al_db
+mo_catalog
 drop database al_db;
 drop account alaccount;
 create account if not exists testcomment ADMIN_NAME 'test_user' IDENTIFIED BY 'Asd1235' comment 'account comment';
@@ -93,10 +94,10 @@ account_name    comments
 testcomment    new account comment
 show databases;
 Database
-mo_catalog
 system
 system_metrics
 information_schema
+mo_catalog
 mysql
 alter account testcomment comment '';
 select account_name,comments from mo_catalog.mo_account where account_name='testcomment';
@@ -177,7 +178,7 @@ internal error: at most one option at a time
 alter account test admin_name='adminuser';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 42 near ";";
 drop account test;
-drop user al_user_2;
+drop user if exists al_user_2;
 create user 'al_user_2' identified by '123456';
 create role if not exists al_role2;
 grant all on account * to al_role2;
