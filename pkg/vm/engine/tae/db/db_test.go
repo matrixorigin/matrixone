@@ -4638,3 +4638,61 @@ func TestGCDropDB(t *testing.T) {
 	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
 	tae.restart()
 }
+
+func TestGCDropTable(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 210)
+	defer bat.Close()
+	schema2 := catalog.MockSchemaAll(3, 1)
+	schema2.BlockMaxRows = 10
+	schema2.SegmentMaxBlocks = 2
+	bat2 := catalog.MockBatch(schema2, 210)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+	txn, _ := tae.StartTxn(nil)
+	db, err := txn.GetDatabase(defaultTestDB)
+	assert.Nil(t, err)
+	rel, _ := db.CreateRelation(schema2)
+	rel.Append(bat2)
+	assert.Nil(t, txn.Commit())
+
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase(defaultTestDB)
+	assert.Nil(t, err)
+	_, err = db.DropRelationByName(schema2.Name)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	now := time.Now()
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetDeleteAt())
+	t.Log(time.Since(now))
+	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager.Start()
+	defer manager.Stop()
+	err = manager.JobFactory(context.Background())
+	assert.Nil(t, err)
+	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
+	num := len(entries)
+	assert.Greater(t, num, 0)
+	testutils.WaitExpect(10000, func() bool {
+		if manager.GetMaxConsumed() == nil {
+			return false
+		}
+		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
+	})
+	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
+	tae.restart()
+}
