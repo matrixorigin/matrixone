@@ -4597,8 +4597,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd()))
 	tables1 := manager.GetInputs()
 	tables2 := manager2.GetInputs()
-	assert.Equal(t, len(tables1), len(tables2))
-	assert.True(t, tables1[0].Compare(tables2[0]))
+	assert.True(t, tables1.Compare(tables2))
 }
 
 func TestGCDropDB(t *testing.T) {
@@ -4654,8 +4653,7 @@ func TestGCDropDB(t *testing.T) {
 	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd()))
 	tables1 := manager.GetInputs()
 	tables2 := manager2.GetInputs()
-	assert.Equal(t, len(tables1), len(tables2))
-	assert.True(t, tables1[0].Compare(tables2[0]))
+	assert.True(t, tables1.Compare(tables2))
 	tae.restart()
 }
 
@@ -4727,8 +4725,7 @@ func TestGCDropTable(t *testing.T) {
 	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd()))
 	tables1 := manager.GetInputs()
 	tables2 := manager2.GetInputs()
-	assert.Equal(t, len(tables1), len(tables2))
-	assert.True(t, tables1[0].Compare(tables2[0]))
+	assert.True(t, tables1.Compare(tables2))
 	tae.restart()
 }
 

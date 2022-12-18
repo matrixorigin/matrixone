@@ -44,7 +44,7 @@ type diskCleaner struct {
 	maxConsumed atomic.Pointer[checkpoint.CheckpointEntry]
 	inputs      struct {
 		sync.RWMutex
-		tables []GCTable
+		tables []*GCTable
 	}
 	delTask *GCTask
 
@@ -170,7 +170,7 @@ func (cleaner *diskCleaner) process(items ...any) {
 		return
 	}
 
-	var input GCTable
+	var input *GCTable
 	var err error
 	if input, err = cleaner.createNewInput(candidates); err != nil {
 		logutil.Errorf("processing clean %s: %v", candidates[0].String(), err)
@@ -197,7 +197,7 @@ func (cleaner *diskCleaner) collectCkpData(
 }
 
 func (cleaner *diskCleaner) createNewInput(
-	ckps []*checkpoint.CheckpointEntry) (input GCTable, err error) {
+	ckps []*checkpoint.CheckpointEntry) (input *GCTable, err error) {
 	input = NewGCTable()
 	var data *logtail.CheckpointData
 	for _, candidate := range ckps {
@@ -241,7 +241,7 @@ func (cleaner *diskCleaner) softGC() []string {
 		mergeTable.Merge(table)
 	}
 	gc := mergeTable.SoftGC()
-	cleaner.inputs.tables = make([]GCTable, 0)
+	cleaner.inputs.tables = make([]*GCTable, 0)
 	cleaner.inputs.tables = append(cleaner.inputs.tables, mergeTable)
 	return gc
 }
@@ -250,7 +250,7 @@ func (cleaner *diskCleaner) updateMaxConsumed(e *checkpoint.CheckpointEntry) {
 	cleaner.maxConsumed.Store(e)
 }
 
-func (cleaner *diskCleaner) updateInputs(input GCTable) {
+func (cleaner *diskCleaner) updateInputs(input *GCTable) {
 	cleaner.inputs.Lock()
 	defer cleaner.inputs.Unlock()
 	cleaner.inputs.tables = append(cleaner.inputs.tables, input)
@@ -260,10 +260,10 @@ func (cleaner *diskCleaner) GetMaxConsumed() *checkpoint.CheckpointEntry {
 	return cleaner.maxConsumed.Load()
 }
 
-func (cleaner *diskCleaner) GetInputs() []GCTable {
+func (cleaner *diskCleaner) GetInputs() *GCTable {
 	cleaner.inputs.RLock()
 	defer cleaner.inputs.RUnlock()
-	return cleaner.inputs.tables
+	return cleaner.inputs.tables[0]
 }
 
 func (cleaner *diskCleaner) Start() {

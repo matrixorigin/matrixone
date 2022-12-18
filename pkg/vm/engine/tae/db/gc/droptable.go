@@ -59,7 +59,7 @@ func (d *dropTable) merge(dropTable *dropTable) {
 		if object == nil {
 			object = NewObjectEntry()
 		}
-		object.MergeEntry(*entry)
+		object.MergeEntry(entry)
 		d.object[name] = object
 	}
 }

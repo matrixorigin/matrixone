@@ -35,11 +35,11 @@ type GCTable struct {
 	dbs map[uint32]*dropDB
 }
 
-func NewGCTable() GCTable {
+func NewGCTable() *GCTable {
 	table := GCTable{
 		dbs: make(map[uint32]*dropDB),
 	}
-	return table
+	return &table
 }
 
 func (t *GCTable) addBlock(id common.ID, name string) {
@@ -64,7 +64,7 @@ func (t *GCTable) deleteBlock(id common.ID, name string) {
 	t.dbs[id.PartID] = db
 }
 
-func (t *GCTable) Merge(GCTable GCTable) {
+func (t *GCTable) Merge(GCTable *GCTable) {
 	for did, entry := range GCTable.dbs {
 		db := t.dbs[did]
 		if db == nil {
@@ -354,7 +354,7 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	return nil
 }
 
-func (t *GCTable) Compare(table GCTable) bool {
+func (t *GCTable) Compare(table *GCTable) bool {
 	if len(t.dbs) != len(table.dbs) {
 		return false
 	}

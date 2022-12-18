@@ -61,7 +61,7 @@ func (o *ObjectEntry) UnRefs(n int) {
 	o.refs.Add(int64(0 - n))
 }
 
-func (o *ObjectEntry) MergeEntry(entry ObjectEntry) {
+func (o *ObjectEntry) MergeEntry(entry *ObjectEntry) {
 	refs := len(entry.table.blocks)
 	unRefs := len(entry.table.delete)
 	if refs > 0 {
