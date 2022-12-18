@@ -490,27 +490,14 @@ func (r *runner) tryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (su
 	return
 }
 
-func (r *runner) tryScheduleFirstCheckpoint() {
+func (r *runner) tryScheduleIncrementalCheckpoint(start types.TS) {
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	_, count := r.source.ScanInRange(types.TS{}, ts)
+	_, count := r.source.ScanInRange(start, ts)
 	if count < r.options.minCount {
 		return
 	}
-
-	entry := NewCheckpointEntry(types.TS{}, ts, ET_Incremental)
+	entry := NewCheckpointEntry(start, ts, ET_Incremental)
 	r.tryAddNewIncrementalCheckpointEntry(entry)
-	r.incrementalCheckpointQueue.Enqueue(struct{}{})
-}
-
-func (r *runner) tryScheduleIncrementalCheckpoint(prev types.TS) {
-	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	_, count := r.source.ScanInRange(prev.Next(), ts)
-	if count < r.options.minCount {
-		return
-	}
-	entry := NewCheckpointEntry(prev.Next(), ts, ET_Incremental)
-	r.tryAddNewIncrementalCheckpointEntry(entry)
-	r.incrementalCheckpointQueue.Enqueue(struct{}{})
 }
 
 func (r *runner) tryScheduleCheckpoint() {
@@ -522,7 +509,7 @@ func (r *runner) tryScheduleCheckpoint() {
 	// no prev checkpoint found. try schedule the first
 	// checkpoint
 	if entry == nil {
-		r.tryScheduleFirstCheckpoint()
+		r.tryScheduleIncrementalCheckpoint(types.TS{})
 		return
 	}
 
@@ -551,7 +538,7 @@ func (r *runner) tryScheduleCheckpoint() {
 	}
 
 	if r.incrementalPolicy.Check(entry.GetEnd()) {
-		r.tryScheduleIncrementalCheckpoint(entry.GetEnd())
+		r.tryScheduleIncrementalCheckpoint(entry.GetEnd().Next())
 	}
 }
 
@@ -723,10 +710,10 @@ func (r *runner) Stop() {
 }
 
 func (r *runner) CollectCheckpointsInRange(start, end types.TS) (locations string, checkpointed types.TS) {
-	r.storage.RLock()
+	r.storage.Lock()
 	tree := r.storage.entries.Copy()
 	global, _ := r.storage.globals.Max()
-	r.storage.RUnlock()
+	r.storage.Unlock()
 	locs := make([]string, 0)
 	newStart := start
 	if global != nil && global.HasOverlap(start, end) {
