@@ -325,7 +325,7 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 		dbid := ins.GetVectorByName(pkgcatalog.SystemRelAttr_DBID).Get(i).(uint64)
 		name := string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Name).Get(i).([]byte))
 		schema := NewEmptySchema(name)
-		schemaOffset = schema.ReadFromBatch(insCol, schemaOffset)
+		schemaOffset = schema.ReadFromBatch(insCol, schemaOffset, tid)
 		schema.Comment = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).Get(i).([]byte))
 		schema.Partition = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).Get(i).([]byte))
 		schema.Relkind = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).Get(i).([]byte))
@@ -348,8 +348,8 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 		txnNode := txnbase.ReadTuple(delTxn, i)
 		catalog.onReplayDeleteTable(dbid, tid, txnNode)
 	}
-
 }
+
 func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, txnNode *txnbase.TxnMVCCNode, dataFactory DataFactory) {
 	catalog.OnReplayTableID(tid)
 	db, err := catalog.GetDatabaseByID(dbid)
@@ -360,9 +360,20 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl, _ := db.GetTableEntryByID(tid)
 	if tbl != nil {
 		tblCreatedAt := tbl.GetCreatedAt()
-		if !tblCreatedAt.Equal(txnNode.End) {
+		if tblCreatedAt.Greater(txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
+		// update constraint
+		un := &TableMVCCNode{
+			EntryMVCCNode: &EntryMVCCNode{
+				CreatedAt: tblCreatedAt,
+			},
+			TxnMVCCNode:       txnNode,
+			IsUpdate:          true,
+			SchemaConstraints: string(schema.Constraint),
+		}
+		tbl.Insert(un)
+
 		return
 	}
 	tbl = NewReplayTableEntry()
@@ -375,7 +386,8 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnNode.End,
 		},
-		TxnMVCCNode: txnNode,
+		TxnMVCCNode:       txnNode,
+		SchemaConstraints: string(schema.Constraint),
 	}
 	tbl.Insert(un)
 }

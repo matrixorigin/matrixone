@@ -87,6 +87,7 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	tbl.comment = string(row[catalog.MO_TABLES_REL_COMMENT_IDX].([]byte))
 	tbl.partition = string(row[catalog.MO_TABLES_PARTITIONED_IDX].([]byte))
 	tbl.createSql = string(row[catalog.MO_TABLES_REL_CREATESQL_IDX].([]byte))
+	tbl.constraint = row[catalog.MO_TABLES_CONSTRAINT].([]byte)
 	/*
 		rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 			txn.dnStores[:1], catalog.MoColumnsTableDefs, catalog.MoColumnsSchema,
@@ -597,16 +598,6 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 		bats[i] = bat
 	}
 	return bats, nil
-}
-
-func (txn *Transaction) updateCacheTableConstraint() {
-	for _, t := range txn.updateTables {
-		t.Lock()
-		t.constraint = t.tmpConstraint
-		t.tmpConstraint = nil
-		t.Unlock()
-	}
-	txn.updateTables = nil
 }
 
 func (txn *Transaction) deleteBatch(bat *batch.Batch,
