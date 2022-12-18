@@ -211,15 +211,15 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestPara
 				err = vec.Append(int32(i), false, proc.Mp())
 			case "index":
 				val, ok := ures[i][arg.Attrs[j]]
-				if !ok {
+				if !ok || val == nil {
 					err = vec.Append(int32(0), true, proc.Mp())
 				} else {
-					intVal, _ := strconv.Atoi(val)
+					intVal, _ := strconv.ParseInt(string(val), 10, 32)
 					err = vec.Append(int32(intVal), false, proc.Mp())
 				}
 			case "key", "path", "value", "this":
 				val, ok := ures[i][arg.Attrs[j]]
-				err = vec.Append([]byte(val), !ok, proc.Mp())
+				err = vec.Append(val, !ok || val == nil, proc.Mp())
 			default:
 				err = moerr.NewInvalidArg(proc.Ctx, "unnest: invalid column name:%s", arg.Attrs[j])
 			}
