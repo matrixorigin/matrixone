@@ -251,6 +251,7 @@ const (
 	JSON_EXTRACT // JSON_EXTRACT
 	FORMAT       // FORMAT
 	SLEEP        // sleep for a while
+	INSTR
 
 	UUID
 	SERIAL
@@ -461,6 +462,7 @@ var functionIdRegister = map[string]int32{
 	"format":                         FORMAT,
 	"sleep":                          SLEEP,
 	"split_part":                     SPLIT_PART,
+	"instr":                          INSTR,
 	"curdate":                        CURRENT_DATE,
 	"current_date":                   CURRENT_DATE,
 }
