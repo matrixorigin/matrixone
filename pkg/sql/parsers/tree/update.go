@@ -176,6 +176,7 @@ type Load struct {
 	Local             bool
 	DuplicateHandling DuplicateKey
 	Table             *TableName
+	Accounts          IdentifierList
 	//Partition
 	Param *ExternParam
 }
@@ -244,6 +245,12 @@ func (node *Load) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(" into table ")
 	node.Table.Format(ctx)
+
+	if node.Accounts != nil {
+		ctx.WriteString(" accounts(")
+		node.Accounts.Format(ctx)
+		ctx.WriteByte(')')
+	}
 
 	if node.Param.Tail.Fields != nil {
 		ctx.WriteByte(' ')
