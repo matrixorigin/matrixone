@@ -202,6 +202,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 				CompositePkey:     tblRef.CompositePkey,
 				UniqueIndexDef:    uDef,
 				SecondaryIndexDef: sDef,
+				IsClusterTable:    tblRef.GetTableType() == catalog.SystemClusterRel,
 			},
 		},
 	}, nil

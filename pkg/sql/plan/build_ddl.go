@@ -17,6 +17,7 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -27,6 +28,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+)
+
+var (
+	clusterTableAttributeName = "account_id"
+	clusterTableAttributeType = &tree.T{InternalType: tree.InternalType{
+		Family:   tree.IntFamily,
+		Width:    32,
+		Oid:      uint32(defines.MYSQL_TYPE_LONG),
+		Unsigned: true,
+	}}
 )
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
@@ -121,7 +132,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	// set tableDef
-	err := buildTableDefs(stmt.Defs, ctx, createTable)
+	err := buildTableDefs(stmt, ctx, createTable)
 	if err != nil {
 		return nil, err
 	}
@@ -209,10 +220,14 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 				},
 			}})
 	} else {
+		kind := catalog.SystemOrdinaryRel
+		if stmt.IsClusterTable {
+			kind = catalog.SystemClusterRel
+		}
 		properties := []*plan.Property{
 			{
 				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.SystemOrdinaryRel,
+				Value: kind,
 			},
 			{
 				Key:   catalog.SystemRelAttr_CreateSQL,
@@ -306,12 +321,12 @@ func buildPartitionByClause(partitionBinder *PartitionBinder, stmt *tree.CreateT
 	return err
 }
 
-func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.CreateTable) error {
+func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable) error {
 	var primaryKeys []string
 	var indexs []string
 	colMap := make(map[string]*ColDef)
 	indexInfos := make([]*tree.UniqueIndex, 0)
-	for _, item := range defs {
+	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
 			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
@@ -418,6 +433,26 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 		default:
 			return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
 		}
+	}
+
+	//add cluster table attribute
+	if stmt.IsClusterTable {
+		if _, ok := colMap[clusterTableAttributeName]; ok {
+			return moerr.NewInvalidInput(ctx.GetContext(), "the attribute account_id in the cluster table can not be defined directly by the user")
+		}
+		colType, err := getTypeFromAst(ctx.GetContext(), clusterTableAttributeType)
+		if err != nil {
+			return err
+		}
+		colDef := &ColDef{
+			Name:    clusterTableAttributeName,
+			Alg:     plan.CompressType_Lz4,
+			Typ:     colType,
+			NotNull: true,
+			Comment: "the account_id added by the mo",
+		}
+		colMap[clusterTableAttributeName] = colDef
+		createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 	}
 
 	pkeyName := ""

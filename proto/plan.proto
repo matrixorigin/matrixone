@@ -729,6 +729,7 @@ message InsertValues {
 	ColDef composite_pkey = 7;
 	UniqueIndexDef unique_index_def = 8;
 	SecondaryIndexDef secondary_index_def = 9;
+	bool is_cluster_table = 10;//insert into a cluster table
 }
 
 message column{

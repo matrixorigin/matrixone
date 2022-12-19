@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"math"
 	"math/bits"
 	"strings"
@@ -319,6 +318,8 @@ const (
 	dumpCreatorID     = rootID
 	dumpOwnerRoleID   = moAdminRoleID
 	dumpDefaultRoleID = moAdminRoleID
+
+	moCatalog = "mo_catalog"
 )
 
 type objectType int
@@ -674,6 +675,7 @@ var (
 		"mo_database":             0,
 		"mo_tables":               0,
 		"mo_columns":              0,
+		"mo_account":              0,
 		"mo_user":                 0,
 		"mo_role":                 0,
 		"mo_user_grant":           0,
@@ -1283,7 +1285,7 @@ func getSqlForDeleteUser(userId int64) []string {
 
 // isClusterTable decides a table is the cluster table or not
 func isClusterTable(dbName, name string) bool {
-	if dbName == catalog.MO_CATALOG {
+	if dbName == moCatalog {
 		//if it is neither among the tables nor the index table,
 		//it is the cluster table.
 		if _, ok := predefinedTables[name]; !ok && !strings.HasPrefix(name, "__mo_index_unique") {
@@ -1332,6 +1334,8 @@ type privilege struct {
 	special specialTag
 	//the statement writes the database or table directly like drop database and table
 	writeDatabaseAndTableDirectly bool
+	//if it creates the cluster table, the label createClusterTable will be true.
+	createClusterTable bool
 }
 
 func (p *privilege) objectType() objectType {
@@ -3257,6 +3261,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	objType := objectTypeAccount
 	var extraEntries []privilegeEntry
 	writeDatabaseAndTableDirectly := false
+	createClusterTable := false
 	dbName := ""
 	switch st := stmt.(type) {
 	case *tree.CreateAccount:
@@ -3348,6 +3353,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		createClusterTable = st.IsClusterTable
 		dbName = string(st.Table.SchemaName)
 	case *tree.CreateView:
 		objType = objectTypeDatabase
@@ -3463,7 +3469,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		entries[i].databaseName = dbName
 	}
 	entries = append(entries, extraEntries...)
-	return &privilege{kind, objType, entries, special, writeDatabaseAndTableDirectly}
+	return &privilege{kind, objType, entries, special, writeDatabaseAndTableDirectly, createClusterTable}
 }
 
 // privilege will be done on the table
@@ -3745,10 +3751,15 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 		return false, nil
 	}
 
-	verifyRealUserOperatesCatalog := func(ses *Session, dbName string, writeDBTableDirect bool) bool {
+	verifyRealUserOperatesCatalog := func(ses *Session, dbName string, writeDBTableDirect, createClusterTable bool) bool {
 		if ses.GetFromRealUser() && writeDBTableDirect {
 			if len(dbName) == 0 {
 				dbName = ses.GetDatabaseName()
+			}
+			//TODO: put it into another function with check the account id.
+			//sys account can create cluster table
+			if dbName == moCatalog && createClusterTable {
+				return false
 			}
 			if ok2 := isBannedDatabase(dbName); ok2 {
 				return ok2
@@ -3769,7 +3780,8 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 				if err != nil {
 					return false, err
 				}
-				operateCatalog = verifyRealUserOperatesCatalog(ses, entry.databaseName, priv.writeDatabaseAndTableDirectly)
+				//TODO: put it above
+				operateCatalog = verifyRealUserOperatesCatalog(ses, entry.databaseName, priv.writeDatabaseAndTableDirectly, priv.createClusterTable)
 				if operateCatalog {
 					yes = false
 				}
@@ -3820,7 +3832,8 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							if err != nil {
 								return false, err
 							}
-							operateCatalog = verifyRealUserOperatesCatalog(ses, tempEntry.databaseName, priv.writeDatabaseAndTableDirectly)
+							//TODO: put it above
+							operateCatalog = verifyRealUserOperatesCatalog(ses, tempEntry.databaseName, priv.writeDatabaseAndTableDirectly, priv.createClusterTable)
 							if operateCatalog {
 								yes = false
 							}

@@ -113,6 +113,9 @@ const (
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
 	SystemExternalRel     = "e"
+	//the cluster table created by the sys account
+	//and read only by the general account
+	SystemClusterRel = "cluster"
 
 	SystemColPKConstraint = "p"
 	SystemColNoConstraint = "n"
