@@ -58,3 +58,8 @@ insert into json_table_1 values('{"key10": "value1", "key2": "value2"}'),('{"key
 select json_extract('{"a":"a1","b":"b1"}','$.*') from json_table_1;
 create view v1 as select json_extract('{"a":1}','$.a');
 desc v1;
+select json_extract('{"a":1}',null);
+select json_extract(null,'$');
+select json_extract(null,null);
+select json_extract('{"a":1}',null) from json_table_1;
+select json_extract(null,'$') from json_table_1;

@@ -159,6 +159,10 @@ func errorUsage(ctx context.Context) {
 	// case 4: NewWithContext, store db & log
 	// removed
 
+	// case 5: ContextWithNoReport
+	noReportCtx := errutil.ContextWithNoReport(newCtx, true)
+	errutil.ReportError(noReportCtx, base)
+
 }
 
 type FunctionRequest struct {
