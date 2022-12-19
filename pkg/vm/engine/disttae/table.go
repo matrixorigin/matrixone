@@ -47,7 +47,7 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 	var blockNum, totalBlockCnt int
 	var outcnt int64
 
-	exprMono := checkExprIsMonotonic(expr)
+	exprMono := checkExprIsMonotonic(ctx, expr)
 	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
 
 	for _, blockmetas := range tbl.meta.blocks {
@@ -169,7 +169,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			}
 		}
 	}
-	dnList := needSyncDnStores(expr, tbl.tableDef, priKeys, tbl.db.txn.dnStores)
+	dnList := needSyncDnStores(ctx, expr, tbl.tableDef, priKeys, tbl.db.txn.dnStores, tbl.db.txn.proc)
 	switch {
 	case tbl.tableId == catalog.MO_DATABASE_ID:
 		tbl.dnList = []int{0}
@@ -208,7 +208,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	}
 	tbl.meta.modifedBlocks = make([][]ModifyBlockMeta, len(tbl.meta.blocks))
 
-	exprMono := checkExprIsMonotonic(expr)
+	exprMono := checkExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
 	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range dnList {
 		blks, deletes := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
@@ -285,9 +285,7 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	}
 	if len(tbl.constraint) > 0 {
 		c := &engine.ConstraintDef{}
-		tbl.Lock()
 		err := c.UnmarshalBinary(tbl.constraint)
-		tbl.Unlock()
 		if err != nil {
 			return nil, err
 		}
@@ -318,22 +316,19 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 }
 
 func (tbl *table) UpdateConstraint(ctx context.Context, c *engine.ConstraintDef) error {
-	var err error
-	tbl.Lock()
-	tbl.tmpConstraint, err = c.MarshalBinary()
-	tbl.Unlock()
+	ct, err := c.MarshalBinary()
 	if err != nil {
 		return err
 	}
-	bat, err := genTableConstraintTuple(tbl, tbl.db.txn.proc.Mp())
+	bat, err := genTableConstraintTuple(tbl.tableId, tbl.db.databaseId, tbl.tableName, tbl.db.databaseName, ct, tbl.db.txn.proc.Mp())
 	if err != nil {
 		return err
 	}
-	if err = tbl.db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+	if err = tbl.db.txn.WriteBatch(UPDATE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0], -1); err != nil {
 		return err
 	}
-	tbl.db.txn.updateTables = append(tbl.db.txn.updateTables, tbl)
+	tbl.constraint = ct
 	return nil
 }
 

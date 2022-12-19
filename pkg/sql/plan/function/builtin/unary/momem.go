@@ -24,7 +24,7 @@ import (
 
 func MoMemUsage(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if len(vectors) != 1 {
-		return nil, moerr.NewInvalidInputNoCtx("no mpool name")
+		return nil, moerr.NewInvalidInput(proc.Ctx, "no mpool name")
 	}
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
@@ -37,13 +37,13 @@ func MoMemUsage(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		memUsage := mpool.ReportMemUsage(inputValues[0])
 		return vector.NewConstString(resultType, inputVector.Length(), memUsage, proc.Mp()), nil
 	} else {
-		panic(moerr.NewInvalidInputNoCtx("mo mem usage can only take scalar input"))
+		panic(moerr.NewInvalidInput(proc.Ctx, "mo mem usage can only take scalar input"))
 	}
 }
 
 func moMemUsageCmd(cmd string, vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if len(vectors) != 1 {
-		return nil, moerr.NewInvalidInputNoCtx("no mpool name")
+		return nil, moerr.NewInvalidInput(proc.Ctx, "no mpool name")
 	}
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
@@ -56,7 +56,7 @@ func moMemUsageCmd(cmd string, vectors []*vector.Vector, proc *process.Process) 
 		ok := mpool.MPoolControl(inputValues[0], cmd)
 		return vector.NewConstString(resultType, inputVector.Length(), ok, proc.Mp()), nil
 	} else {
-		panic(moerr.NewInvalidInputNoCtx("mo mem usage can only take scalar input"))
+		panic(moerr.NewInvalidInput(proc.Ctx, "mo mem usage can only take scalar input"))
 	}
 }
 

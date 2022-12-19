@@ -46,20 +46,20 @@ const (
 	MAX_RANGE_SIZE int64  = 200
 )
 
-func checkExprIsMonotonic(expr *plan.Expr) bool {
+func checkExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			isMonotonic := checkExprIsMonotonic(arg)
+			isMonotonic := checkExprIsMonotonic(ctx, arg)
 			if !isMonotonic {
 				return false
 			}
 		}
 
-		isMonotonic, _ := function.GetFunctionIsMonotonicById(exprImpl.F.Func.GetObj())
+		isMonotonic, _ := function.GetFunctionIsMonotonicById(ctx, exprImpl.F.Func.GetObj())
 		if !isMonotonic {
 			return false
 		}
@@ -279,10 +279,10 @@ func getNewBlockName(accountId uint32) (string, error) {
 	return fmt.Sprintf("%d_%s.blk", accountId, uuid.ToString()), nil
 }
 
-func getConstantExprHashValue(constExpr *plan.Expr) (bool, uint64) {
+func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *process.Process) (bool, uint64) {
 	args := []*plan.Expr{constExpr}
 	argTypes := []types.Type{types.T(constExpr.Typ.Id).ToType()}
-	funId, returnType, _, _ := function.GetFunctionByName(HASH_VALUE_FUN, argTypes)
+	funId, returnType, _, _ := function.GetFunctionByName(ctx, HASH_VALUE_FUN, argTypes)
 	funExpr := &plan.Expr{
 		Typ: plan2.MakePlan2Type(&returnType),
 		Expr: &plan.Expr_F{
@@ -298,7 +298,7 @@ func getConstantExprHashValue(constExpr *plan.Expr) (bool, uint64) {
 
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	ret, err := colexec.EvalExpr(bat, nil, funExpr)
+	ret, err := colexec.EvalExpr(bat, proc, funExpr)
 	if err != nil {
 		return false, 0
 	}
@@ -403,12 +403,12 @@ func getPkValueByExpr(expr *plan.Expr, pkName string, oid types.T) (bool, any) {
 // only support function :["and", "="]
 // support eg: pk="a",  pk="a" and noPk > 200
 // unsupport eg: pk>"a", pk=otherFun("a"),  pk="a" or noPk > 200,
-func computeRangeByNonIntPk(expr *plan.Expr, pkName string) (bool, uint64) {
+func computeRangeByNonIntPk(ctx context.Context, expr *plan.Expr, pkName string, proc *process.Process) (bool, uint64) {
 	canCompute, valExpr := getPkExpr(expr, pkName)
 	if !canCompute {
 		return canCompute, 0
 	}
-	ok, pkHashValue := getConstantExprHashValue(valExpr)
+	ok, pkHashValue := getConstantExprHashValue(ctx, valExpr, proc)
 	if !ok {
 		return false, 0
 	}

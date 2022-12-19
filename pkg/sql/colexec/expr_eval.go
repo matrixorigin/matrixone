@@ -150,7 +150,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		return vec, nil
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadId)
+		f, err := function.GetFunctionByID(proc.Ctx, overloadId)
 		if err != nil {
 			return nil, err
 		}
@@ -220,7 +220,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 		return s.Vecs[t.Col.ColPos], nil
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadId)
+		f, err := function.GetFunctionByID(proc.Ctx, overloadId)
 		if err != nil {
 			return nil, err
 		}
@@ -293,7 +293,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		return vec, nil
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadId)
+		f, err := function.GetFunctionByID(proc.Ctx, overloadId)
 		if err != nil {
 			return nil, err
 		}
@@ -423,7 +423,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 		return s.Vecs[t.Col.ColPos].ToConst(sRow, proc.Mp()), nil
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadId)
+		f, err := function.GetFunctionByID(proc.Ctx, overloadId)
 		if err != nil {
 			return nil, err
 		}

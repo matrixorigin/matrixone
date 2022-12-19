@@ -58,9 +58,16 @@ func (rel *baseRelation) TableDefs(_ context.Context) ([]engine.TableDef, error)
 	return defs, nil
 }
 
-func (rel *baseRelation) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
-	// implement me
-	return nil
+func (rel *baseRelation) UpdateConstraint(_ context.Context, def *engine.ConstraintDef) error {
+	bin, err := def.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	return rel.handle.UpdateConstraint(bin)
+}
+
+func (rel *baseRelation) UpdateConstraintWithBin(_ context.Context, bin []byte) error {
+	return rel.handle.UpdateConstraint(bin)
 }
 
 func (rel *baseRelation) TableColumns(_ context.Context) ([]*engine.Attribute, error) {

@@ -15,12 +15,13 @@
 package plan
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-func makePlan2DecimalExprWithType(v string, isBin ...bool) (*plan.Expr, error) {
+func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
 	_, scale, err := types.ParseStringToDecimal128WithoutTable(v, isBin...)
 	if err != nil {
 		return nil, err
@@ -32,7 +33,7 @@ func makePlan2DecimalExprWithType(v string, isBin ...bool) (*plan.Expr, error) {
 		Precision:   34,
 		NotNullable: true,
 	}
-	return appendCastBeforeExpr(makePlan2StringConstExprWithType(v, isBin...), typ)
+	return appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(v, isBin...), typ)
 }
 
 func makePlan2DateConstNullExpr(t types.T) *plan.Expr {
@@ -210,7 +211,7 @@ func MakePlan2NullTextConstExprWithType(v string) *plan.Expr {
 	}
 }
 
-func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
+func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, error) {
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
 	}
@@ -220,7 +221,7 @@ func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
 		expr.Typ = targetType
 		return expr, nil
 	}
-	id, _, _, err := function.GetFunctionByName("cast", []types.Type{t1, t2})
+	id, _, _, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
 	}

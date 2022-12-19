@@ -89,5 +89,5 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		}
 		return vector.NewWithFixed(rtyp, rs, nsp, proc.Mp()), nil
 	}
-	return nil, moerr.NewInternalErrorNoCtx("unexpected case for LIKE operator")
+	return nil, moerr.NewInternalError(proc.Ctx, "unexpected case for LIKE operator")
 }

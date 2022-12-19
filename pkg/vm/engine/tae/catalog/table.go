@@ -58,24 +58,7 @@ func genTblFullName(tenantID uint32, name string) string {
 
 func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) *TableEntry {
 	id := db.catalog.NextTable()
-	if txnCtx != nil {
-		// Only in unit test, txnCtx can be nil
-		schema.AcInfo.TenantID = txnCtx.GetTenantID()
-		schema.AcInfo.UserID, schema.AcInfo.RoleID = txnCtx.GetUserAndRoleID()
-	}
-	schema.AcInfo.CreateAt = types.CurrentTimestamp()
-	e := &TableEntry{
-		TableBaseEntry: NewTableBaseEntry(id),
-		db:             db,
-		schema:         schema,
-		link:           common.NewGenericSortedDList(compareSegmentFn),
-		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
-	}
-	if dataFactory != nil {
-		e.tableData = dataFactory(e)
-	}
-	e.CreateWithTxn(txnCtx)
-	return e
+	return NewTableEntryWithTableId(db, schema, txnCtx, dataFactory, id)
 }
 
 func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory, tableId uint64) *TableEntry {
@@ -95,7 +78,7 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 	if dataFactory != nil {
 		e.tableData = dataFactory(e)
 	}
-	e.CreateWithTxn(txnCtx)
+	e.CreateWithTxn(txnCtx, schema)
 	return e
 }
 

@@ -267,7 +267,7 @@ import (
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS CLUSTER
 %token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL
-%token <str> PREPARE DEALLOCATE
+%token <str> PREPARE DEALLOCATE RESET
 
 // MO table option
 %token <str> PROPERTIES
@@ -339,7 +339,7 @@ import (
 // Built-in function
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT_DISTINCT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
-%token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV
+%token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
@@ -376,7 +376,7 @@ import (
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt import_data_stmt
 %type <statement> analyze_stmt
-%type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt
+%type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt reset_stmt
 %type <statement> replace_stmt
 %type <statement> do_stmt
 %type <statement> declare_stmt
@@ -445,7 +445,7 @@ import (
 %type <str> reserved_keyword non_reserved_keyword
 %type <str> equal_opt reserved_sql_id reserved_table_id
 %type <str> as_name_opt as_opt_id table_id id_or_var name_string ident
-%type <str> database_id table_alias explain_sym prepare_sym deallocate_sym stmt_name
+%type <str> database_id table_alias explain_sym prepare_sym deallocate_sym stmt_name reset_sym
 %type <unresolvedObjectName> unresolved_object_name table_column_name
 %type <unresolvedObjectName> table_name_unresolved
 %type <comparisionExpr> like_opt
@@ -623,6 +623,7 @@ stmt:
 |   explain_stmt
 |   prepare_stmt
 |   deallocate_stmt
+|   reset_stmt
 |   execute_stmt
 |   show_stmt
 |   alter_stmt
@@ -1923,6 +1924,12 @@ deallocate_stmt:
         $$ = tree.NewDeallocate(tree.Identifier($3), false)
     }
 
+reset_stmt:
+    reset_sym PREPARE stmt_name
+    {
+        $$ = tree.NewReset(tree.Identifier($3))
+    }
+
 explainable_stmt:
     delete_stmt
 |   insert_stmt
@@ -2011,6 +2018,9 @@ deallocate_sym:
 
 execute_sym:
     EXECUTE
+
+reset_sym:
+    RESET
 
 explain_sym:
     EXPLAIN
@@ -6173,6 +6183,16 @@ function_call_aggregate:
             Type: $3,
             WindowSpec: $6,
         }
+    }
+|   MEDIAN '(' func_type_opt expression ')' window_spec_opt
+    {
+	name := tree.SetUnresolvedName(strings.ToLower($1))
+	$$ = &tree.FuncExpr{
+	    Func: tree.FuncName2ResolvableFunctionReference(name),
+	    Exprs: tree.Exprs{$4},
+	    Type: $3,
+	    WindowSpec: $6,
+	}
     }
 
 std_dev_pop:

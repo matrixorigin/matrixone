@@ -377,7 +377,7 @@ func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 		// set @a = on, type of a is bool.
 		return v.Parts[0], nil
 	default:
-		binder := plan2.NewDefaultBinder(nil, nil, nil, nil)
+		binder := plan2.NewDefaultBinder(ses.GetRequestContext(), nil, nil, nil, nil)
 		planExpr, err := binder.BindExpr(e, 0, false)
 		if err != nil {
 			return nil, err
