@@ -740,6 +740,16 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc string) (err error) 
 	return
 }
 
+func (tbl *txnTable) UpdateConstraint(cstr []byte) (err error) {
+	tbl.store.IncreateWriteCnt()
+	tbl.store.txn.GetMemo().AddCatalogChange()
+	isNewNode, err := tbl.entry.UpdateConstraint(tbl.store.txn, cstr)
+	if isNewNode {
+		tbl.txnEntries.Append(tbl.entry)
+	}
+	return
+}
+
 func (tbl *txnTable) UncommittedRows() uint32 {
 	if tbl.localSegment == nil {
 		return 0

@@ -301,7 +301,6 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 			txn.db.delMetaTable(name)
 		}
 	}
-	txn.updateCacheTableConstraint()
 	return err
 }
 

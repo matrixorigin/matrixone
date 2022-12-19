@@ -110,6 +110,10 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return c.scope.CreateTable(c)
 	case DropTable:
 		return c.scope.DropTable(c)
+	case CreateIndex:
+		return c.scope.CreateIndex(c)
+	case DropIndex:
+		return c.scope.DropIndex(c)
 	case TruncateTable:
 		return c.scope.TruncateTable(c)
 	case Deletion:

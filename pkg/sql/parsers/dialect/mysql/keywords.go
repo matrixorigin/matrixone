@@ -504,6 +504,7 @@ func init() {
 		"second_microsecond":       SECOND_MICROSECOND,
 		"prepare":                  PREPARE,
 		"deallocate":               DEALLOCATE,
+		"reset":                    RESET,
 		"intersect":                INTERSECT,
 		"minus":                    MINUS,
 		"admin_name":               ADMIN_NAME,

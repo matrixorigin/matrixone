@@ -212,3 +212,7 @@ create table t1(c1 int primary key auto_increment,c2 tinyint not null default 4,
 show create table t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (\n`c1` INT NOT NULL AUTO_INCREMENT,\n`c2` TINYINT DEFAULT 4,\n`c3` SMALLINT DEFAULT NULL,\n`c4` BIGINT DEFAULT NULL,\n`c5` TINYINT UNSIGNED DEFAULT NULL,\n`c6` SMALLINT UNSIGNED DEFAULT NULL,\n`c7` INT UNSIGNED DEFAULT NULL,\n`c8` BIGINT UNSIGNED DEFAULT NULL,\n`c9` FLOAT DEFAULT NULL,\n`c10` DOUBLE DEFAULT NULL,\n`c11` DATE DEFAULT NULL,\n`c12` DATETIME DEFAULT NULL,\n`c13` TIMESTAMP DEFAULT NULL ON UPDATE current_timestamp(),\n`c14` CHAR(1) DEFAULT NULL,\n`c15` VARCHAR(65535) DEFAULT 'q',\n`c16` JSON DEFAULT NULL,\n`c17` DECIMAL(34,0) DEFAULT NULL,\n`c18` TEXT DEFAULT NULL,\n`c19` BLOB DEFAULT NULL,\n`c20` UUID DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
+SHOW TRIGGERS;
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+SHOW TRIGGERS like '*%';
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
