@@ -829,6 +829,8 @@ message CreateTable {
 	string database 	= 3;
 	TableDef table_def 	= 4;
 	repeated TableDef index_tables = 5;
+	// we need the table name of foreign key when create table. but we don't need it in ForeignKeyDef
+	repeated string fk_tables = 6;
 }
 
 message AlterTable {

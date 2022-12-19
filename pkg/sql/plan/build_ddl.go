@@ -412,7 +412,56 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			}
 		case *tree.UniqueIndex:
 			indexInfos = append(indexInfos, def)
-		case *tree.CheckIndex, *tree.ForeignKey, *tree.FullTextIndex:
+		case *tree.ForeignKey:
+			refer := def.Refer
+			fkDef := &plan.ForeignKeyDef{
+				Name:        def.Name,
+				Cols:        make([]uint64, len(def.KeyParts)),
+				OnDelete:    getRefAction(refer.OnDelete),
+				OnUpdate:    getRefAction(refer.OnUpdate),
+				ForeignCols: make([]uint64, len(refer.KeyParts)),
+			}
+
+			for i, keyPart := range def.KeyParts {
+				getCol := false
+				colName := keyPart.ColName.String()
+				for idx, col := range createTable.TableDef.Cols {
+					if col.Name == colName {
+						//we set pos of column while creating. need to reset to ColId after created.
+						fkDef.Cols[i] = uint64(idx)
+						getCol = true
+						break
+					}
+				}
+				if !getCol {
+					return moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in the creating table '%v'", colName, createTable.TableDef.Name)
+				}
+			}
+
+			fkTableName := string(refer.TableName.ObjectName)
+			createTable.FkTables = append(createTable.FkTables, fkTableName)
+
+			_, tableRef := ctx.Resolve("", fkTableName)
+			if tableRef == nil {
+				return moerr.NewNoSuchTable(ctx.GetContext(), ctx.DefaultDatabase(), fkTableName)
+			}
+			fkDef.ForeignTbl = tableRef.TblId
+			for i, keyPart := range refer.KeyParts {
+				getCol := false
+				colName := keyPart.ColName.String()
+				for _, col := range tableRef.Cols {
+					if col.Name == colName {
+						fkDef.ForeignCols[i] = col.ColId
+						getCol = true
+						break
+					}
+				}
+				if !getCol {
+					return moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in table '%v'", colName, fkTableName)
+				}
+			}
+			createTable.TableDef.Fkeys = append(createTable.TableDef.Fkeys, fkDef)
+		case *tree.CheckIndex, *tree.FullTextIndex:
 			// unsupport in plan. will support in next version.
 			return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
 		default:
@@ -484,6 +533,23 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 		}
 	}
 	return nil
+}
+
+func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
+	switch typ {
+	case tree.REFERENCE_OPTION_CASCADE:
+		return plan.ForeignKeyDef_CASCADE
+	case tree.REFERENCE_OPTION_NO_ACTION:
+		return plan.ForeignKeyDef_NO_ACTION
+	case tree.REFERENCE_OPTION_RESTRICT:
+		return plan.ForeignKeyDef_RESTRICT
+	case tree.REFERENCE_OPTION_SET_NULL:
+		return plan.ForeignKeyDef_SET_NULL
+	case tree.REFERENCE_OPTION_SET_DEFAULT:
+		return plan.ForeignKeyDef_SET_DEFAULT
+	default:
+		return plan.ForeignKeyDef_RESTRICT
+	}
 }
 
 func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {

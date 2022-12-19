@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -92,6 +93,33 @@ func (s *Scope) CreateTable(c *Compile) error {
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
+
+	fkTables := qry.GetFkTables()
+	newRelation, err := dbSource.Relation(c.ctx, tblName)
+	if err != nil {
+		return err
+	}
+	newTableDef, err := newRelation.TableDefs(c.ctx)
+	if err != nil {
+		return err
+	}
+	for _, fkey := range qry.GetTableDef().Fkeys {
+		// need to reset Fkey.Cols
+	}
+	// reset fkey.Cols
+
+	for _, fkTableName := range qry.GetFkTables() {
+		// append refChild to parent table's tableDef
+		fkRelation, err := dbSource.Relation(c.ctx, fkTables[i])
+		if err != nil {
+			return err
+		}
+		fkTableDef, err := fkRelation.TableDefs(c.ctx)
+		if err != nil {
+			return err
+		}
+	}
+
 	// build index table
 	for _, def := range qry.IndexTables {
 		planCols = def.GetCols()
@@ -446,6 +474,18 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 	if tableDef.ViewSql != nil {
 		exeDefs = append(exeDefs, &engine.ViewDef{
 			View: tableDef.ViewSql.View,
+		})
+	}
+
+	if len(tableDef.Fkeys) > 0 {
+		c.Cts = append(c.Cts, &engine.ForeignKeyDef{
+			Fkeys: tableDef.Fkeys,
+		})
+	}
+
+	if len(tableDef.RefChildTbls) > 0 {
+		c.Cts = append(c.Cts, &engine.RefChildTableDef{
+			Tables: tableDef.RefChildTbls,
 		})
 	}
 
