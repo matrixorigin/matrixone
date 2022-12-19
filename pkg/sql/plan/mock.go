@@ -335,6 +335,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 		tables:  tables,
 		stats:   stats,
 		pks:     pks,
+		ctx:     context.TODO(),
 	}
 }
 

@@ -127,3 +127,128 @@ func TestGetCheckpoints(t *testing.T) {
 	assert.Equal(t, "ckp2;ckp3", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
 }
+
+func TestICKPSeekLT(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	r := NewRunner(nil, nil, nil, nil, nil)
+
+	// ckp0[0,10]
+	// ckp1[10,20]
+	// ckp2[20,30]
+	// ckp3[30,40]
+	// ckp4[40,50(unfinished)]
+	timestamps := make([]types.TS, 0)
+	for i := 0; i < 6; i++ {
+		ts := types.BuildTS(int64(i*10), 0)
+		timestamps = append(timestamps, ts)
+	}
+	for i := 0; i < 5; i++ {
+		entry := &CheckpointEntry{
+			start:    timestamps[i].Next(),
+			end:      timestamps[i+1],
+			state:    ST_Finished,
+			location: fmt.Sprintf("ckp%d", i),
+		}
+		if i == 4 {
+			entry.state = ST_Pending
+		}
+		r.storage.entries.Set(entry)
+	}
+
+	// 0, 1
+	ckps := r.ICKPSeekLT(types.BuildTS(0, 0), 1)
+	for _, e := range ckps {
+		t.Log(e.String())
+	}
+	assert.Equal(t, 1, len(ckps))
+	assert.Equal(t, "ckp0", ckps[0].location)
+
+	// 0, 0
+	ckps = r.ICKPSeekLT(types.BuildTS(0, 0), 0)
+	for _, e := range ckps {
+		t.Log(e.String())
+	}
+	assert.Equal(t, 0, len(ckps))
+
+	// 0, 2
+	ckps = r.ICKPSeekLT(types.BuildTS(0, 0), 4)
+	for _, e := range ckps {
+		t.Log(e.String())
+	}
+	assert.Equal(t, 4, len(ckps))
+	assert.Equal(t, "ckp0", ckps[0].location)
+	assert.Equal(t, "ckp1", ckps[1].location)
+
+	// 0, 4
+	ckps = r.ICKPSeekLT(types.BuildTS(0, 0), 4)
+	for _, e := range ckps {
+		t.Log(e.String())
+	}
+	assert.Equal(t, 4, len(ckps))
+	assert.Equal(t, "ckp0", ckps[0].location)
+	assert.Equal(t, "ckp1", ckps[1].location)
+	assert.Equal(t, "ckp2", ckps[2].location)
+	assert.Equal(t, "ckp3", ckps[3].location)
+
+	// 0,10
+	ckps = r.ICKPSeekLT(types.BuildTS(0, 0), 10)
+	for _, e := range ckps {
+		t.Log(e.String())
+	}
+	assert.Equal(t, 4, len(ckps))
+	assert.Equal(t, "ckp0", ckps[0].location)
+	assert.Equal(t, "ckp1", ckps[1].location)
+	assert.Equal(t, "ckp2", ckps[2].location)
+	assert.Equal(t, "ckp3", ckps[3].location)
+
+	// 5,1
+	ckps = r.ICKPSeekLT(types.BuildTS(5, 0), 1)
+	for _, e := range ckps {
+		t.Log(e.String())
+	}
+	assert.Equal(t, 1, len(ckps))
+	assert.Equal(t, "ckp1", ckps[0].location)
+
+	// 50,1
+	ckps = r.ICKPSeekLT(types.BuildTS(50, 0), 1)
+	for _, e := range ckps {
+		t.Log(e.String())
+	}
+	assert.Equal(t, 0, len(ckps))
+
+	// 55,3
+	ckps = r.ICKPSeekLT(types.BuildTS(55, 0), 3)
+	for _, e := range ckps {
+		t.Log(e.String())
+	}
+	assert.Equal(t, 0, len(ckps))
+
+	// 40,3
+	ckps = r.ICKPSeekLT(types.BuildTS(40, 0), 3)
+	for _, e := range ckps {
+		t.Log(e.String())
+	}
+	assert.Equal(t, 0, len(ckps))
+
+	// 35,3
+	ckps = r.ICKPSeekLT(types.BuildTS(35, 0), 3)
+	for _, e := range ckps {
+		t.Log(e.String())
+	}
+	assert.Equal(t, 0, len(ckps))
+
+	// 30,3
+	ckps = r.ICKPSeekLT(types.BuildTS(30, 0), 3)
+	for _, e := range ckps {
+		t.Log(e.String())
+	}
+	assert.Equal(t, 1, len(ckps))
+	assert.Equal(t, "ckp3", ckps[0].location)
+
+	// 30-2,3
+	ckps = r.ICKPSeekLT(types.BuildTS(30, 2), 3)
+	for _, e := range ckps {
+		t.Log(e.String())
+	}
+	assert.Equal(t, 0, len(ckps))
+}

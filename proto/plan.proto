@@ -844,8 +844,9 @@ message DropTable {
 }
 
 message CreateIndex {
-	bool if_not_exists 	= 1;
-	string index 		= 2;
+	string database = 1;
+	string table = 2;
+	CreateTable index = 3;
 }
 
 message AlterIndex {
@@ -853,8 +854,10 @@ message AlterIndex {
 }
 
 message DropIndex {
-	bool if_exists 	= 1;
-	string index 	= 2;
+	string database = 1;
+	string table = 2;
+	string index_name = 3;
+	string index_table_name = 4;
 }
 
 message TruncateTable {

@@ -338,7 +338,7 @@ db
 use db;
 create table table3(a int, b int);
 create index index_table3 on tab1(a);
-not supported: statement: 'create index index_table3 on tab1 (a)'
+no such table db.tab1
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 insert into table3 values (2000, 3000);
 invalid input: insert table is invalid 'table3'
