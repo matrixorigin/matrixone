@@ -16,112 +16,85 @@ package binary
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/json_extract"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func JsonExtractByString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var (
-		err    error
-		length int
-		ret    *vector.Vector
-	)
-	defer func() {
-		if err != nil && ret != nil {
-			ret.Free(proc.Mp())
-		}
-	}()
-	jsonBytes, pathBytes := vectors[0], vectors[1]
-	resultType := types.T_json
-	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
-	if jsonBytes.IsScalar() && pathBytes.IsScalar() {
-		resultValues := make([]*bytejson.ByteJson, 0, 1)
-		resultValues, err = json_extract.QueryByString(json, path, resultValues)
-		if err != nil {
-			return nil, err
-		}
-		ret = vector.New(types.Type{Oid: resultType})
-		for _, v := range resultValues {
-			dt, _ := v.Marshal()
-			err = ret.Append(dt, v.IsNull(), proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-		}
-		ret.MakeScalar(1)
-		return ret, nil
-	}
-	if len(json) > len(path) {
-		length = len(json)
-	} else {
-		length = len(path)
-	}
-	resultValues := make([]*bytejson.ByteJson, 0, length)
-	resultValues, err = json_extract.QueryByString(json, path, resultValues)
+type computeFn func([]byte, *bytejson.Path) (*bytejson.ByteJson, error)
+
+func computeJson(json []byte, path *bytejson.Path) (*bytejson.ByteJson, error) {
+	bj := types.DecodeJson(json)
+	return bj.Query(path), nil
+}
+func computeString(json []byte, path *bytejson.Path) (*bytejson.ByteJson, error) {
+	bj, err := types.ParseSliceToByteJson(json)
 	if err != nil {
 		return nil, err
 	}
-	ret = vector.New(types.Type{Oid: resultType})
-	for _, v := range resultValues {
-		dt, _ := v.Marshal()
-		err = ret.Append(dt, v.IsNull(), proc.Mp())
-		if err != nil {
-			return nil, err
-		}
-	}
-	return ret, nil
+	return bj.Query(path), nil
 }
 
-func JsonExtractByJson(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var (
-		err    error
-		length int
-		ret    *vector.Vector
-	)
+func JsonExtract(vectors []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
 	defer func() {
 		if err != nil && ret != nil {
 			ret.Free(proc.Mp())
 		}
 	}()
 	jsonBytes, pathBytes := vectors[0], vectors[1]
-	resultType := types.T_json
+	maxLen := jsonBytes.Length()
+	if maxLen < pathBytes.Length() {
+		maxLen = pathBytes.Length()
+	}
+	resultType := types.T_json.ToType()
+	if jsonBytes.IsScalarNull() || pathBytes.IsScalarNull() {
+		ret = proc.AllocConstNullVector(resultType, maxLen)
+		return
+	}
+
+	var fn computeFn
+	switch jsonBytes.Typ.Oid {
+	case types.T_json:
+		fn = computeJson
+	default:
+		fn = computeString
+	}
+
 	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
 	if jsonBytes.IsScalar() && pathBytes.IsScalar() {
-		resultValues := make([]*bytejson.ByteJson, 0, 1)
-		resultValues, err = json_extract.QueryByJson(json, path, resultValues)
+		ret = proc.AllocScalarVector(resultType)
+		resultValues := make([]*bytejson.ByteJson, 1)
+		resultValues, err = json_extract.JsonExtract(json, path, []*nulls.Nulls{jsonBytes.Nsp, pathBytes.Nsp}, resultValues, ret.Nsp, fn)
 		if err != nil {
-			return nil, err
+			return
 		}
-		ret = vector.New(types.Type{Oid: resultType})
-		for _, v := range resultValues {
-			dt, _ := v.Marshal()
-			err = ret.Append(dt, v.IsNull(), proc.Mp())
-			if err != nil {
-				return nil, err
-			}
+		if ret.Nsp.Contains(0) {
+			return
 		}
-		ret.MakeScalar(1)
-		return ret, nil
+		dt, _ := resultValues[0].Marshal()
+		err = vector.SetBytesAt(ret, 0, dt, proc.Mp())
+		return
 	}
-	if len(json) > len(path) {
-		length = len(json)
-	} else {
-		length = len(path)
-	}
-	resultValues := make([]*bytejson.ByteJson, 0, length)
-	resultValues, err = json_extract.QueryByJson(json, path, resultValues)
+	ret, err = proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
 	if err != nil {
-		return nil, err
+		return
 	}
-	ret = vector.New(types.Type{Oid: resultType})
-	for _, v := range resultValues {
+	resultValues := make([]*bytejson.ByteJson, maxLen)
+	resultValues, err = json_extract.JsonExtract(json, path, []*nulls.Nulls{jsonBytes.Nsp, pathBytes.Nsp}, resultValues, ret.Nsp, fn)
+	if err != nil {
+		return
+	}
+	for idx, v := range resultValues {
+		if ret.Nsp.Contains(uint64(idx)) {
+			continue
+		}
 		dt, _ := v.Marshal()
-		err = ret.Append(dt, v.IsNull(), proc.Mp())
+		err = vector.SetBytesAt(ret, idx, dt, proc.Mp())
 		if err != nil {
-			return nil, err
+			return
 		}
 	}
-	return ret, nil
+	return
 }

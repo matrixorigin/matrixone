@@ -2038,17 +2038,17 @@ var builtins = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Volatile:  true,
+				Volatile:  false,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_json,
-				Fn:        binary.JsonExtractByString,
+				Fn:        binary.JsonExtract,
 			},
 			{
 				Index:     1,
-				Volatile:  true,
+				Volatile:  false,
 				Args:      []types.T{types.T_json, types.T_varchar},
 				ReturnTyp: types.T_json,
-				Fn:        binary.JsonExtractByJson,
+				Fn:        binary.JsonExtract,
 			},
 		},
 	},
