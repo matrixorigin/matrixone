@@ -52,27 +52,25 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		objRefs = append(objRefs, objRef)
 		tblRefs = append(tblRefs, tblRef)
 	}
-
-	updateTableList, err := buildUpdateTableList(stmt.Exprs, objRefs, tblRefs, tbinfo.alias2BaseNameMap, ctx)
+	//1. get the updated list information of the original table
+	updateTableList, err := buildUpdateTableList(stmt.Exprs, objRefs, tblRefs, tbinfo, ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// build update ctx and projection
-	updateCtxs, tableDefs, useProjectExprs, err := buildUpdateProject(updateTableList, ctx)
+	//2. build update ctx and projection
+	updateCtxs, tableDefs, useProjectExprs, err := buildUpdateProject(updateTableList, tbinfo, ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	leftJoinTableExpr := stmt.Tables[0]
 	for _, updateTableinfo := range updateTableList.updateTables {
-		//objRef := updateTableinfo.objRef
 		tableDef := updateTableinfo.tblDef
-
-		// 2.get origin table Name
+		// 3.get origin table Name
 		originTableName := tableDef.Name
 
-		// 3.get the definition of the unique index of the original table
+		// 4.get the definition of the unique index of the original table
 		unqiueIndexDef, _ := buildIndexDefs(tableDef.Defs)
 
 		if unqiueIndexDef != nil {
@@ -97,17 +95,16 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		}
 	}
 
-	// 4.build FromClause
+	// 5.build FromClause
 	fromClause := &tree.From{Tables: tree.TableExprs{leftJoinTableExpr}}
 
-	// build the stmt of select and append select node
+	//6. build the stmt of select and append select node
 	if len(stmt.OrderBy) > 0 && (stmt.Where == nil && stmt.Limit == nil) {
 		stmt.OrderBy = nil
 	}
 	selectStmt := &tree.Select{
 		Select: &tree.SelectClause{
 			Exprs: useProjectExprs,
-			//From:  &tree.From{Tables: stmt.Tables},
 			From:  fromClause,
 			Where: stmt.Where,
 		},
@@ -156,7 +153,7 @@ func alignProjectExprType(node *Node, updateCtxs []*plan.UpdateCtx) error {
 		if updateCtx.IsIndexTableUpdate {
 			continue
 		} else {
-			startPosition := updateCtx.HideKeyIdx // one table rowid index posistion
+			startPosition := updateCtx.HideKeyIdx // table rowid index posistion
 			for i, updateCol := range updateCtx.UpdateCols {
 				offset := startPosition + int32(i) + 1
 				if c := projectList[offset].GetC(); c != nil {
@@ -186,7 +183,7 @@ func alignProjectExprType(node *Node, updateCtxs []*plan.UpdateCtx) error {
 }
 
 // Build projection list for table updates
-func buildUpdateProject(updateTableList *UpdateTableList, ctx CompilerContext) ([]*plan.UpdateCtx, []*TableDef, tree.SelectExprs, error) {
+func buildUpdateProject(updateTableList *UpdateTableList, tbinfo *tableInfo, ctx CompilerContext) ([]*plan.UpdateCtx, []*TableDef, tree.SelectExprs, error) {
 	var useProjectExprs tree.SelectExprs
 	var offset int32 = 0
 
@@ -196,7 +193,7 @@ func buildUpdateProject(updateTableList *UpdateTableList, ctx CompilerContext) (
 	for _, updateTableinfo := range updateTableList.updateTables {
 		updateCols := updateTableinfo.updateCols
 
-		expr, err := buildRowIdAstExpr(ctx, nil, updateTableinfo.objRef.SchemaName, updateTableinfo.tblDef.Name)
+		expr, err := buildRowIdAstExpr(ctx, tbinfo, updateTableinfo.objRef.SchemaName, updateTableinfo.tblDef.Name)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -347,7 +344,7 @@ func checkIndexTableNeedUpdate(field *plan.Field, updateCols []updateCol) bool {
 	return false
 }
 
-func buildUpdateTableList(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblDefs []*TableDef, baseNameMap map[string]string, ctx CompilerContext) (*UpdateTableList, error) {
+func buildUpdateTableList(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblDefs []*TableDef, tbinfo *tableInfo, ctx CompilerContext) (*UpdateTableList, error) {
 	// The map of columns to be updated of all different tables explicitly specified in the Update statement.
 	// The key is the column name with the table name prefix,such as: 't1.col'
 	colCountMap := make(map[string]int)
@@ -374,7 +371,7 @@ func buildUpdateTableList(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblDefs 
 		var upCol updateCol
 		// check tableName
 		if tableName != "" {
-			realTableName, ok := baseNameMap[tableName]
+			realTableName, ok := tbinfo.alias2BaseNameMap[tableName]
 			if !ok {
 				return nil, moerr.NewInternalError(ctx.GetContext(), "the target table %s of the UPDATE is not updatable", tableName)
 			}
@@ -452,7 +449,7 @@ func buildUpdateTableList(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblDefs 
 
 						upCol.dbName = objRefs[i].SchemaName
 						upCol.tblName = tblDefs[i].Name
-						upCol.aliasTblName = tblDefs[i].Name
+						upCol.aliasTblName = tbinfo.baseName2AliasMap[tblDefs[i].Name]
 						upCol.colDef = col
 
 						updateInfo, ok := tableUpdateInfoMap[tblDefs[i].Name]
@@ -498,13 +495,11 @@ func buildUpdateTableList(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblDefs 
 type UpdateTableList struct {
 	updateTables []*updateTableInfo // table information list to be updated
 	selectList   tree.SelectExprs
-	nextIndex    int
 }
 
 func NewUpdateTableList() *UpdateTableList {
 	return &UpdateTableList{
 		updateTables: make([]*updateTableInfo, 0),
-		nextIndex:    0,
 	}
 }
 

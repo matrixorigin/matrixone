@@ -20,10 +20,6 @@ import (
 
 // only use in developing
 func TestSingleSQLQuery(t *testing.T) {
-	//sql := "delete from emp where empno > 3000"
-	//sql := "delete from emp where ename = 'SMITH'"
-	//sql := "delete from dept where deptno = 10"
-	//sql := "delete from dept where dname = 'xxx'"
 	//sql := "delete emp,dept from emp ,dept where emp.deptno = dept.deptno and emp.deptno = 10"
 	//sql := "delete from dept where dname = 'RESEARCH'"
 	//sql := "delete from emp where deptno = 20 order by sal limit 2"
@@ -34,7 +30,15 @@ func TestSingleSQLQuery(t *testing.T) {
 	//sql := "update emp set comm = 1200 where deptno = 10"
 	//sql := "update dept set dname = 'XXX' where deptno = 10"
 	//sql := "update emp set sal = sal + 500, comm = 1200 where deptno = 10"
-	sql := "update emp set empno = empno + 500, ename = 'LINJUNHONG' where deptno = 10"
+	//sql := "update emp set empno = empno + 500, ename = 'LINJUNHONG' where deptno = 10"
+	//sql := "update emp t1 set t1.sal = t1.sal + 500, t1.comm = 1200 where t1.deptno = 10"
+	//sql := "update emp t1 set sal = sal + 500, comm = 1200 where t1.deptno = 10"
+	//sql := "update emp t1 set t1.sal = sal + 500, comm = 1200 where deptno = 10"
+
+	//sql := "update employees set ename = 'XXX', sal = sal + 2000 where empno = 7654"
+	//sql := "update employees set ename = 'XXX' where empno = 7654"
+	sql := "update employees set ename = 'XXX', sal = sal + 2000 where deptno = 10"
+
 	mock := NewMockOptimizer()
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
@@ -122,9 +126,33 @@ func TestSingleTableUpdate(t *testing.T) {
 
 	sqls := []string{
 		"update dept set dname = 'XXX' where deptno = 10",
+		"update dept set deptno = '50' where loc = 'NEW YORK'",
 		"update emp set comm = 1200 where deptno = 10",
 		"update emp set sal = sal + 500, comm = 1200 where deptno = 10",
 		"update emp set empno = empno + 500, ename = 'LINJUNHONG' where deptno = 10",
+		"update employees set ename = 'XXX', sal = sal + 2000 where empno = 7654",
+		"update employees set ename = 'XXX' where empno = 7654",
+		"update employees set ename = 'XXX', sal = sal + 2000 where deptno = 10",
+	}
+
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestSingleTableWithAliasUpdate(t *testing.T) {
+	mock := NewMockOptimizer()
+
+	sqls := []string{
+		"update emp t1 set t1.sal = t1.sal + 500, t1.comm = 1200 where t1.deptno = 10",
+		"update emp t1 set sal = sal + 500, comm = 1200 where t1.deptno = 10",
+		"update emp t1 set t1.sal = sal + 500, comm = 1200 where t1.deptno = 10",
+		"update emp t1 set t1.sal = t1.sal + 500, comm = 1200 where t1.deptno = 10",
+		"update emp t1 set t1.sal = sal + 500, comm = 1200 where deptno = 10",
+
+		"update emp t1 set t1.empno = t1.empno + 500, t1.ename = 'LINJUNHONG' where t1.deptno = 10",
+		"update emp t1 set empno = empno + 500, ename = 'LINJUNHONG' where t1.deptno = 10",
+		"update emp t1 set empno = empno + 500, ename = 'LINJUNHONG' where deptno = 10",
+		"update emp t1 set t1.empno = empno + 500, ename = 'LINJUNHONG' where t1.deptno = 10",
+		"update emp t1 set t1.empno = t1.empno + 500, ename = 'LINJUNHONG' where t1.deptno = 10",
 	}
 
 	runTestShouldPass(mock, t, sqls, false, false)
