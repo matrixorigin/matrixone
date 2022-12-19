@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,17 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package plan
+package tree
 
-import (
-	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-)
+type Reset struct {
+	Statement
+	Name Identifier
+}
 
-func MakeExpr(ctx context.Context, name string, args []*Expr) *plan.Expr {
-	expr, err := bindFuncExprImplByPlanExpr(ctx, name, args)
-	if err != nil {
-		panic(err)
+func (node *Reset) Format(ctx *FmtCtx) {
+	ctx.WriteString("reset")
+	ctx.WriteString(" prepare ")
+	node.Name.Format(ctx)
+}
+
+func (node *Reset) GetStatementType() string { return "Reset" }
+func (node *Reset) GetQueryType() string     { return QueryTypeDCL }
+
+func NewReset(name Identifier) *Reset {
+	return &Reset{
+		Name: name,
 	}
-	return expr
 }

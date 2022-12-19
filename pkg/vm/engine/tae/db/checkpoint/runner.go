@@ -445,6 +445,28 @@ func (r *runner) MaxCheckpoint() *CheckpointEntry {
 	return entry
 }
 
+func (r *runner) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {
+	r.storage.RLock()
+	tree := r.storage.entries.Copy()
+	r.storage.RUnlock()
+	it := tree.Iter()
+	ok := it.Seek(NewCheckpointEntry(ts, ts))
+	incrementals := make([]*CheckpointEntry, 0)
+	if ok {
+		for len(incrementals) < cnt {
+			e := it.Item()
+			if !e.IsFinished() {
+				break
+			}
+			incrementals = append(incrementals, e)
+			if !it.Next() {
+				break
+			}
+		}
+	}
+	return incrementals
+}
+
 func (r *runner) tryAddNewCheckpointEntry(entry *CheckpointEntry) (success bool) {
 	r.storage.Lock()
 	defer r.storage.Unlock()

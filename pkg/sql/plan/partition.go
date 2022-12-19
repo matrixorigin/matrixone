@@ -37,7 +37,7 @@ const (
 func buildHashPartition(partitionBinder *PartitionBinder, stmt *tree.CreateTable, tableDef *TableDef) error {
 	partitionOp := stmt.PartitionOption
 	if partitionOp.SubPartBy != nil {
-		return moerr.NewInvalidInputNoCtx("no subpartition")
+		return moerr.NewInvalidInput(partitionBinder.GetContext(), "no subpartition")
 	}
 	partitionsNum := partitionOp.PartBy.Num
 	// If you do not include a PARTITIONS clause, the number of partitions defaults to 1.
@@ -45,7 +45,7 @@ func buildHashPartition(partitionBinder *PartitionBinder, stmt *tree.CreateTable
 		partitionsNum = 1
 	}
 	// check partition number
-	if err := checkPartitionsNumber(partitionsNum); err != nil {
+	if err := checkPartitionsNumber(partitionBinder, partitionsNum); err != nil {
 		return err
 	}
 
@@ -95,7 +95,7 @@ func buildHashPartition(partitionBinder *PartitionBinder, stmt *tree.CreateTable
 func buildKeyPartition(partitionBinder *PartitionBinder, stmt *tree.CreateTable, tableDef *TableDef) error {
 	partitionOp := stmt.PartitionOption
 	if partitionOp.SubPartBy != nil {
-		return moerr.NewInvalidInputNoCtx("no subpartition")
+		return moerr.NewInvalidInput(partitionBinder.GetContext(), "no subpartition")
 	}
 
 	// if you do not include a PARTITIONS clause, the number of partitions defaults to 1.
@@ -104,14 +104,14 @@ func buildKeyPartition(partitionBinder *PartitionBinder, stmt *tree.CreateTable,
 		partitionsNum = 1
 	}
 	// check partition number
-	if err := checkPartitionsNumber(partitionsNum); err != nil {
+	if err := checkPartitionsNumber(partitionBinder, partitionsNum); err != nil {
 		return err
 	}
 
 	partitionType := partitionOp.PartBy.PType.(*tree.KeyType)
 	// check the algorithm option
 	if partitionType.Algorithm != 1 && partitionType.Algorithm != 2 {
-		return moerr.NewInvalidInputNoCtx("the 'ALGORITHM' option has too many values")
+		return moerr.NewInvalidInput(partitionBinder.GetContext(), "the 'ALGORITHM' option has too many values")
 	}
 
 	partitionInfo := &plan.PartitionInfo{
@@ -161,7 +161,7 @@ func buildRangePartition(partitionBinder *PartitionBinder, stmt *tree.CreateTabl
 
 	partitionNum := len(partitionOp.Partitions)
 	if partitionOp.PartBy.Num != 0 && uint64(partitionNum) != partitionOp.PartBy.Num {
-		return moerr.NewParseErrorNoCtx("build range partition")
+		return moerr.NewParseError(partitionBinder.GetContext(), "build range partition")
 	}
 
 	partitionInfo := &plan.PartitionInfo{
@@ -219,7 +219,7 @@ func buildListPartitiion(partitionBinder *PartitionBinder, stmt *tree.CreateTabl
 
 	partitionNum := len(partitionOp.Partitions)
 	if partitionOp.PartBy.Num != 0 && uint64(partitionNum) != partitionOp.PartBy.Num {
-		return moerr.NewParseErrorNoCtx("build list partition")
+		return moerr.NewParseError(partitionBinder.GetContext(), "build list partition")
 	}
 
 	partitionInfo := &plan.PartitionInfo{
@@ -276,7 +276,7 @@ func buildPartitionColumns(partitionBinder *PartitionBinder, partitionInfo *plan
 	for i, column := range columnList {
 		colExpr, err := partitionBinder.BindColRef(column, 0, true)
 		if err != nil {
-			return moerr.NewParseErrorNoCtx("build partition columns")
+			return moerr.NewParseError(partitionBinder.GetContext(), "build partition columns")
 		}
 		columnsExpr[i] = colExpr
 		partitionColumns[i] = tree.String(column, dialect.MYSQL)
@@ -368,7 +368,7 @@ func buildEvalPartitionExpression(partitionBinder *PartitionBinder, stmt *tree.C
 					astExprs[i] = keyPart.ColName
 				}
 			} else {
-				return moerr.NewInvalidInputNoCtx("Field in list of fields for partition function not found in table")
+				return moerr.NewInvalidInput(partitionBinder.GetContext(), "Field in list of fields for partition function not found in table")
 			}
 		} else {
 			keyList := partitionType.ColumnList
@@ -784,7 +784,7 @@ func checkColumnsPartitionType(partitionBinder *PartitionBinder, partitionInfo *
 	for i, planexpr := range columnPlanExprs {
 		t := types.T(planexpr.Typ.Id)
 		if !types.IsInteger(t) && !types.IsString(t) && !types.IsDateRelate(t) {
-			return moerr.NewSyntaxErrorNoCtx("type %s of column %s not allowd in partition clause", t.String(), columnNames[i])
+			return moerr.NewSyntaxError(partitionBinder.GetContext(), "type %s of column %s not allowd in partition clause", t.String(), columnNames[i])
 		}
 	}
 	return nil
@@ -803,7 +803,7 @@ func checkTableDefPartition(partitionBinder *PartitionBinder, tableDef *TableDef
 	}
 	if partitionInfo.Type == plan.PartitionType_KEY || partitionInfo.Type == plan.PartitionType_LINEAR_KEY {
 		if len(partitionInfo.Columns) == 0 {
-			return handleEmptyKeyPartition(tableDef, partitionInfo)
+			return handleEmptyKeyPartition(partitionBinder, tableDef, partitionInfo)
 		}
 	}
 	return nil
@@ -818,12 +818,12 @@ func checkPartitionFuncType(partitionBinder *PartitionBinder, tableDef *TableDef
 		// expr must return a nonconstant, nonrandom integer value (in other words, it should be varying but deterministic)
 		// XXX Why?   I may want to use a const to force partition into one dn.
 		if isConstant(expr) {
-			return moerr.NewInvalidInputNoCtx("partition functin is not const")
+			return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition functin is not const")
 		}
 
 		t := types.T(expr.Typ.Id)
 		if !types.IsInteger(t) {
-			return moerr.NewSyntaxErrorNoCtx("type %s not allowed in partition clause", t.String())
+			return moerr.NewSyntaxError(partitionBinder.GetContext(), "type %s not allowed in partition clause", t.String())
 		}
 	}
 	return nil
@@ -865,12 +865,12 @@ func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *T
 
 		if partitionInfo.PartitionColumns != nil {
 			if !checkUniqueKeyIncludePartKey(partitionInfo.PartitionColumns, pkcols) {
-				return moerr.NewInvalidInputNoCtx("partition key is not part of primary key")
+				return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
 			}
 		} else {
 			extractCols := extractColFromExpr(partitionBinder, partitionInfo.Expr)
 			if !checkUniqueKeyIncludePartKey(extractCols, pkcols) {
-				return moerr.NewInvalidInputNoCtx("partition key is not part of primary key")
+				return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
 			}
 		}
 	}
@@ -880,12 +880,12 @@ func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *T
 			uniqueKeyCols := field.Parts
 			if partitionInfo.PartitionColumns != nil {
 				if !checkUniqueKeyIncludePartKey(partitionInfo.PartitionColumns, uniqueKeyCols) {
-					return moerr.NewInvalidInputNoCtx("partition key is not part of primary key")
+					return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
 				}
 			} else {
 				extractCols := extractColFromExpr(partitionBinder, partitionInfo.Expr)
 				if !checkUniqueKeyIncludePartKey(extractCols, uniqueKeyCols) {
-					return moerr.NewInvalidInputNoCtx("partition key is not part of primary key")
+					return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
 				}
 			}
 		}
@@ -893,7 +893,7 @@ func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *T
 
 	if partitionInfo.Type == plan.PartitionType_KEY {
 		if len(partitionInfo.Columns) == 0 && !hasUniqueKey && !hasPrimaryKey {
-			return moerr.NewInvalidInputNoCtx("Field in list of fields for partition function not found in table")
+			return moerr.NewInvalidInput(partitionBinder.GetContext(), "Field in list of fields for partition function not found in table")
 		}
 	}
 
@@ -922,35 +922,35 @@ func findColumnInIndexCols(c string, pkcols []string) bool {
 
 func checkPartitionDefinitionConstraints(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionInfo) error {
 	var err error
-	if err = checkPartitionNameUnique(partitionInfo); err != nil {
+	if err = checkPartitionNameUnique(partitionBinder, partitionInfo); err != nil {
 		return err
 	}
-	if err = checkPartitionsNumber(uint64(len(partitionInfo.Partitions))); err != nil {
+	if err = checkPartitionsNumber(partitionBinder, uint64(len(partitionInfo.Partitions))); err != nil {
 		return err
 	}
-	if err = checkPartitionColumnsUnique(partitionInfo); err != nil {
+	if err = checkPartitionColumnsUnique(partitionBinder, partitionInfo); err != nil {
 		return err
 	}
 
 	if len(partitionInfo.Partitions) == 0 {
 		if partitionInfo.Type == plan.PartitionType_RANGE || partitionInfo.Type == plan.PartitionType_RANGE_COLUMNS {
-			return moerr.NewInvalidInputNoCtx("range partition cannot be empty")
+			return moerr.NewInvalidInput(partitionBinder.GetContext(), "range partition cannot be empty")
 		} else if partitionInfo.Type == plan.PartitionType_LIST || partitionInfo.Type == plan.PartitionType_LIST_COLUMNS {
-			return moerr.NewInvalidInputNoCtx("list partition cannot be empty")
+			return moerr.NewInvalidInput(partitionBinder.GetContext(), "list partition cannot be empty")
 		}
 	}
 	return err
 }
 
 // checkPartitionColumnsUnique check partition columns for duplicate columns
-func checkPartitionColumnsUnique(partitionInfo *plan.PartitionInfo) error {
+func checkPartitionColumnsUnique(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionInfo) error {
 	if len(partitionInfo.PartitionColumns) <= 1 {
 		return nil
 	}
 	var columnsMap = make(map[string]byte)
 	for _, column := range partitionInfo.PartitionColumns {
 		if _, ok := columnsMap[column]; ok {
-			return moerr.NewSyntaxErrorNoCtx("duplicate partition column %s", column)
+			return moerr.NewSyntaxError(partitionBinder.GetContext(), "duplicate partition column %s", column)
 		}
 		columnsMap[column] = 1
 	}
@@ -958,21 +958,21 @@ func checkPartitionColumnsUnique(partitionInfo *plan.PartitionInfo) error {
 }
 
 // checkPartitionsNumber: check whether check partition number exceeds the limit
-func checkPartitionsNumber(partNum uint64) error {
+func checkPartitionsNumber(partitionBinder *PartitionBinder, partNum uint64) error {
 	if partNum > uint64(PartitionNumberLimit) {
-		return moerr.NewInvalidInputNoCtx("too many (%d) partitions", partNum)
+		return moerr.NewInvalidInput(partitionBinder.GetContext(), "too many (%d) partitions", partNum)
 	}
 	return nil
 }
 
 // Check whether the partition name is duplicate
-func checkPartitionNameUnique(pd *plan.PartitionInfo) error {
+func checkPartitionNameUnique(partitionBinder *PartitionBinder, pd *plan.PartitionInfo) error {
 	partitions := pd.Partitions
 
 	partNames := make(map[string]byte, len(partitions))
 	for _, par := range partitions {
 		if _, ok := partNames[par.PartitionName]; ok {
-			return moerr.NewSyntaxErrorNoCtx("duplicate partition name %s", par.PartitionName)
+			return moerr.NewSyntaxError(partitionBinder.GetContext(), "duplicate partition name %s", par.PartitionName)
 		}
 		partNames[par.PartitionName] = 1
 	}
@@ -1006,7 +1006,7 @@ func extractColFromFunc(partitionBinder *PartitionBinder, funcExpr *plan.Expr_F)
 	return result
 }
 
-func handleEmptyKeyPartition(tableDef *TableDef, partitionInfo *plan.PartitionInfo) error {
+func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDef, partitionInfo *plan.PartitionInfo) error {
 	defs := tableDef.Defs
 	hasPrimaryKey := false
 	hasUniqueKey := false
@@ -1043,7 +1043,7 @@ func handleEmptyKeyPartition(tableDef *TableDef, partitionInfo *plan.PartitionIn
 			for _, field := range uniqueKey.Fields {
 				// A UNIQUE INDEX must include all columns in the table's partitioning function
 				if !checkUniqueKeyIncludePartKey(pkcols, field.Parts) {
-					return moerr.NewInvalidInputNoCtx("partition key is not part of primary key")
+					return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
 				}
 			}
 		}
@@ -1058,12 +1058,12 @@ func handleEmptyKeyPartition(tableDef *TableDef, partitionInfo *plan.PartitionIn
 
 			for _, field := range uniqueKey.Fields {
 				if !checkUniqueKeyIncludePartKey(firstUniqueKeyCols, field.Parts) {
-					return moerr.NewInvalidInputNoCtx("partition key is not part of primary key")
+					return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
 				}
 			}
 		}
 	} else {
-		return moerr.NewInvalidInputNoCtx("Field in list of fields for partition function not found in table")
+		return moerr.NewInvalidInput(partitionBinder.GetContext(), "Field in list of fields for partition function not found in table")
 	}
 	return nil
 }
