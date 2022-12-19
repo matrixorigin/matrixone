@@ -104,10 +104,6 @@ id
 2022-01-02 00:00:00
 SELECT * from t_timestamp WHERE id IN (2.0200101e7,2.0200102e7 );
 id
-SELECT * from t_timestamp WHERE id IN ('2.0200101e7','2.0200102e7');
-Can't cast '2.0200101e7' from VARCHAR type to TIMESTAMP type.
-SELECT * from t_timestamp WHERE id BETWEEN 20191231 AND 20200101;
-id
 SELECT * from t_timestamp WHERE id BETWEEN 2.0200101e7 and 2.0200102e7;
 id
 2020-01-01 23:59:59.999999
