@@ -543,7 +543,11 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 		if err != nil {
 			return err
 		}
-		_, row[3], err = r.Stats(ses.requestCtx)
+		_, err = r.Ranges(ses.requestCtx, nil)
+		if err != nil {
+			return err
+		}
+		row[3], err = r.Rows(ses.requestCtx)
 		if err != nil {
 			return err
 		}

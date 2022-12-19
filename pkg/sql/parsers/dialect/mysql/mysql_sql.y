@@ -277,7 +277,7 @@ import (
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN
 
 // Alter
-%token <str> EXPIRE ACCOUNT UNLOCK DAY NEVER PUMP
+%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP
 
 // Time
 %token <str> SECOND ASCII COALESCE COLLATION HOUR MICROSECOND MINUTE MONTH QUARTER REPEAT
@@ -402,7 +402,7 @@ import (
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
 %type <str> insert_column
-%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list
+%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_opt accounts_list
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 
 %type <tableDefs> table_elem_list_opt table_elem_list
@@ -739,15 +739,16 @@ import_data_stmt:
     }
 
 load_data_stmt:
-    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt
+    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name accounts_opt tail_param_opt
     {
         $$ = &tree.Load{
             Local: $3,
             Param: $4,
             DuplicateHandling: $5,
             Table: $8,
+            Accounts: $9,
         }
-        $$.(*tree.Load).Param.Tail = $9
+        $$.(*tree.Load).Param.Tail = $10
     }
 
 load_set_spec_opt:
@@ -2844,11 +2845,31 @@ insert_stmt:
         $$ = ins
     }
 
-insert_data:
-    VALUES values_list
+accounts_opt:
     {
-        vc := tree.NewValuesClause($2)
+        $$ = nil
+    }
+|   ACCOUNTS '(' accounts_list ')'
+    {
+        $$ = $3
+    }
+
+accounts_list:
+    account_name
+    {
+        $$ = tree.IdentifierList{tree.Identifier($1)}
+    }
+|   accounts_list ',' account_name
+    {
+        $$ = append($1, tree.Identifier($3))
+    }
+
+insert_data:
+    accounts_opt VALUES values_list
+    {
+        vc := tree.NewValuesClause($3)
         $$ = &tree.Insert{
+            Accounts: $1,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -2858,43 +2879,54 @@ insert_data:
             Rows: $1,
         }
     }
-|   '(' insert_column_list ')' VALUES values_list
+|   ACCOUNTS '(' accounts_list ')' select_stmt
+   {
+        $$ = &tree.Insert{
+            Accounts: $3,
+	    Rows: $5,
+        }
+    }
+|   '(' insert_column_list ')' accounts_opt VALUES values_list
+    {
+        vc := tree.NewValuesClause($6)
+        $$ = &tree.Insert{
+            Columns: $2,
+            Accounts: $4,
+            Rows: tree.NewSelect(vc, nil, nil),
+        }
+    }
+|   '(' ')' accounts_opt VALUES values_list
     {
         vc := tree.NewValuesClause($5)
         $$ = &tree.Insert{
-            Columns: $2,
+            Accounts: $3,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
-|   '(' ')' VALUES values_list
-    {
-        vc := tree.NewValuesClause($4)
-        $$ = &tree.Insert{
-            Rows: tree.NewSelect(vc, nil, nil),
-        }
-    }
-|   '(' insert_column_list ')' select_stmt
+|   '(' insert_column_list ')' accounts_opt select_stmt
     {
         $$ = &tree.Insert{
             Columns: $2,
-            Rows: $4,
+            Accounts: $4,
+            Rows: $5,
         }
     }
-|    SET set_value_list
+|   accounts_opt SET set_value_list
     {
-        if $2 == nil {
+        if $3 == nil {
             yylex.Error("the set list of insert can not be empty")
             return 1
         }
         var identList tree.IdentifierList
         var valueList tree.Exprs
-        for _, a := range $2 {
+        for _, a := range $3 {
             identList = append(identList, a.Column)
             valueList = append(valueList, a.Expr)
         }
         vc := tree.NewValuesClause([]tree.Exprs{valueList})
         $$ = &tree.Insert{
             Columns: identList,
+            Accounts: $1,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -4584,7 +4616,18 @@ create_table_stmt:
             Param: $9,
         }
     }
-
+|   CREATE CLUSTER TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
+    {
+        $$ = &tree.CreateTable {
+            IsClusterTable: true,
+            IfNotExists: $4,
+            Table: *$5,
+            Defs: $7,
+            Options: $9,
+            PartitionOption: $10,
+            ClusterByOption: $11,
+        }
+    }
 load_param_opt_2:
     load_param_opt tail_param_opt
     {
@@ -7872,6 +7915,7 @@ reserved_keyword:
 
 non_reserved_keyword:
     ACCOUNT
+|   ACCOUNTS
 |   AGAINST
 |   AVG_ROW_LENGTH
 |   AUTO_RANDOM
