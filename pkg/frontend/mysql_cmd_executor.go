@@ -1927,9 +1927,18 @@ func doDeallocate(ctx context.Context, ses *Session, st *tree.Deallocate) error 
 	return nil
 }
 
+func doReset(ctx context.Context, ses *Session, st *tree.Reset) error {
+	return nil
+}
+
 // handleDeallocate
 func (mce *MysqlCmdExecutor) handleDeallocate(ctx context.Context, st *tree.Deallocate) error {
 	return doDeallocate(ctx, mce.GetSession(), st)
+}
+
+// handleReset
+func (mce *MysqlCmdExecutor) handleReset(ctx context.Context, st *tree.Reset) error {
+	return doReset(ctx, mce.GetSession(), st)
 }
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
@@ -3267,6 +3276,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+		case *tree.Reset:
+			selfHandle = true
+			err = mce.handleReset(requestCtx, st)
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.SetVar:
 			selfHandle = true
 			err = mce.handleSetVar(requestCtx, st)
@@ -3734,6 +3749,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					return retErr
 				}
 			}
+
+		case *tree.Reset:
+			resp := mce.setResponse(i, len(cws), rspLen)
+			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
+				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
+				return retErr
+			}
 		}
 		logStatementStatus(requestCtx, ses, stmt, success, nil)
 		goto handleNext
@@ -3951,6 +3974,20 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		}
 		return resp, nil
 
+	case COM_STMT_RESET:
+		data := req.GetData().([]byte)
+
+		//Payload of COM_STMT_RESET
+		stmtID := binary.LittleEndian.Uint32(data[0:4])
+		stmtName := getPrepareStmtName(stmtID)
+		sql = fmt.Sprintf("reset prepare %s", stmtName)
+		logInfo(ses.GetConciseProfile(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+		err = doComQuery(requestCtx, sql)
+		if err != nil {
+			resp = NewGeneralErrorResponse(COM_STMT_RESET, err)
+		}
+		return resp, nil
+
 	default:
 		resp = NewGeneralErrorResponse(req.GetCmd(), moerr.NewInternalError(requestCtx, "unsupported command. 0x%x", req.GetCmd()))
 	}
@@ -4037,7 +4074,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 			return false, err
 		}
 		return StatementCanBeExecutedInUncommittedTransaction(ses, preStmt.PrepareStmt)
-	case *tree.Deallocate:
+	case *tree.Deallocate, *tree.Reset:
 		return true, nil
 	case *tree.Use:
 		/*

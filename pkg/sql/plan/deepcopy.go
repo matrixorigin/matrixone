@@ -536,8 +536,14 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	case *plan.DataDefinition_CreateIndex:
 		newDf.Definition = &plan.DataDefinition_CreateIndex{
 			CreateIndex: &plan.CreateIndex{
-				IfNotExists: df.CreateIndex.IfNotExists,
-				Index:       df.CreateIndex.Index,
+				Database: df.CreateIndex.Database,
+				Table:    df.CreateIndex.Table,
+				Index: &plan.CreateTable{
+					IfNotExists: df.CreateIndex.Index.IfNotExists,
+					Temporary:   df.CreateIndex.Index.Temporary,
+					Database:    df.CreateIndex.Index.Database,
+					TableDef:    DeepCopyTableDef(df.CreateIndex.Index.TableDef),
+				},
 			},
 		}
 
@@ -551,8 +557,9 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	case *plan.DataDefinition_DropIndex:
 		newDf.Definition = &plan.DataDefinition_DropIndex{
 			DropIndex: &plan.DropIndex{
-				IfExists: df.DropIndex.IfExists,
-				Index:    df.DropIndex.Index,
+				Database:  df.DropIndex.Database,
+				Table:     df.DropIndex.Table,
+				IndexName: df.DropIndex.IndexName,
 			},
 		}
 

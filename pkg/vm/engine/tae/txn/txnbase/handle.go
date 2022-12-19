@@ -85,6 +85,7 @@ func (rel *TxnRelation) DeleteByFilter(filter *handle.Filter) (err error)       
 func (rel *TxnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return
 }
+func (rel *TxnRelation) UpdateConstraint(cstr []byte) (err error) { return }
 
 func (seg *TxnSegment) GetMeta() any                     { return nil }
 func (seg *TxnSegment) String() string                   { return "" }
