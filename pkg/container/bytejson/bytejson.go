@@ -18,11 +18,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"sort"
 	"strconv"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func (bj ByteJson) String() string {
@@ -69,6 +68,17 @@ func (bj *ByteJson) UnmarshalJSON(data []byte) error {
 		bj.Type = tpCode
 	}
 	return nil
+}
+
+func (bj *ByteJson) UnmarshalObject(obj interface{}) (err error) {
+	buf := make([]byte, 0, 64)
+	var tpCode TpCode
+	if tpCode, buf, err = addElem(buf, obj); err != nil {
+		return
+	}
+	bj.Type = tpCode
+	bj.Data = buf
+	return
 }
 
 func (bj ByteJson) IsNull() bool {
