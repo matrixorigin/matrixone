@@ -753,36 +753,118 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 }
 
 func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error) {
-	return nil, moerr.NewNotSupported(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
-	// todo unsupport now
-	// createIndex := &plan.CreateIndex{}
-	// return &Plan{
-	// 	Plan: &plan.Plan_Ddl{
-	// 		Ddl: &plan.DataDefinition{
-	// 			DdlType: plan.DataDefinition_CREATE_INDEX,
-	// 			Definition: &plan.DataDefinition_CreateIndex{
-	// 				CreateIndex: createIndex,
-	// 			},
-	// 		},
-	// 	},
-	// }, nil
+	createIndex := &plan.CreateIndex{}
+	if len(stmt.Table.SchemaName) == 0 {
+		createIndex.Database = ctx.DefaultDatabase()
+	} else {
+		createIndex.Database = string(stmt.Table.SchemaName)
+	}
+	// check table
+	tableName := string(stmt.Table.ObjectName)
+	_, tableDef := ctx.Resolve(createIndex.Database, tableName)
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), createIndex.Database, tableName)
+	}
+	// check index
+	indexName := string(stmt.Name)
+	for _, def := range tableDef.Defs {
+		switch idx := def.Def.(type) {
+		case *plan.TableDef_DefType_UIdx:
+			for _, name := range idx.UIdx.IndexNames {
+				if indexName == name {
+					return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
+				}
+			}
+		case *plan.TableDef_DefType_SIdx:
+			for _, name := range idx.SIdx.IndexNames {
+				if indexName == name {
+					return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
+				}
+			}
+		}
+	}
+	// build index
+	var idx *tree.UniqueIndex
+	switch stmt.IndexCat {
+	case tree.INDEX_CATEGORY_UNIQUE:
+		idx = &tree.UniqueIndex{
+			Name:        indexName,
+			KeyParts:    stmt.KeyParts,
+			IndexOption: stmt.IndexOption,
+		}
+	default:
+		// secondary key, not implement
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
+	}
+	colMap := make(map[string]*ColDef)
+	for _, col := range tableDef.Cols {
+		colMap[col.Name] = col
+	}
+	// index.TableDef.Defs store info of index need to be modified
+	// index.IndexTables store index table need to be created
+	index := &plan.CreateTable{TableDef: &TableDef{}}
+	if err := buildUniqueIndexTable(index, []*tree.UniqueIndex{idx}, colMap, "", ctx); err != nil {
+		return nil, err
+	}
+	createIndex.Index = index
+	createIndex.Table = tableName
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_CREATE_INDEX,
+				Definition: &plan.DataDefinition_CreateIndex{
+					CreateIndex: createIndex,
+				},
+			},
+		},
+	}, nil
 }
 
 func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
-	return nil, moerr.NewNotSupported(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
-	// todo unsupport now
-	// dropIndex := &plan.DropIndex{
-	// 	IfExists: stmt.IfExists,
-	// 	Index:    string(stmt.Name),
-	// }
-	// return &Plan{
-	// 	Plan: &plan.Plan_Ddl{
-	// 		Ddl: &plan.DataDefinition{
-	// 			DdlType: plan.DataDefinition_DROP_INDEX,
-	// 			Definition: &plan.DataDefinition_DropIndex{
-	// 				DropIndex: dropIndex,
-	// 			},
-	// 		},
-	// 	},
-	// }, nil
+	dropIndex := &plan.DropIndex{}
+	if len(stmt.TableName.SchemaName) == 0 {
+		dropIndex.Database = ctx.DefaultDatabase()
+	} else {
+		dropIndex.Database = string(stmt.TableName.SchemaName)
+	}
+
+	// check table
+	dropIndex.Table = string(stmt.TableName.ObjectName)
+	_, tableDef := ctx.Resolve(dropIndex.Database, dropIndex.Table)
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropIndex.Database, dropIndex.Table)
+	}
+
+	// check index
+	dropIndex.IndexName = string(stmt.Name)
+	found := false
+	for _, def := range tableDef.Defs {
+		switch idx := def.Def.(type) {
+		case *plan.TableDef_DefType_UIdx:
+			for i, name := range idx.UIdx.IndexNames {
+				if dropIndex.IndexName == name {
+					dropIndex.IndexTableName = idx.UIdx.TableNames[i]
+					found = true
+					break
+				}
+			}
+		case *plan.TableDef_DefType_SIdx:
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "secondary key")
+		}
+	}
+	if !found {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "not found index: %s", dropIndex.IndexName)
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_DROP_INDEX,
+				Definition: &plan.DataDefinition_DropIndex{
+					DropIndex: dropIndex,
+				},
+			},
+		},
+	}, nil
 }

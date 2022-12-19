@@ -83,12 +83,13 @@ func (be *TableBaseEntry) CreateWithTS(ts types.TS) {
 	be.Insert(node)
 }
 
-func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
+func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn, schema *Schema) {
 	node := &TableMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnif.UncommitTS,
 		},
-		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
+		TxnMVCCNode:       txnbase.NewTxnMVCCNodeWithTxn(txn),
+		SchemaConstraints: string(schema.Constraint),
 	}
 	be.Insert(node)
 }
@@ -109,6 +110,27 @@ func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader) (isNewNode bool, err
 	var entry *TableMVCCNode
 	isNewNode, entry = be.getOrSetUpdateNode(txn)
 	entry.Delete()
+	entry.IsUpdate = false
+	return
+}
+
+func (be *TableBaseEntry) UpdateConstraint(txn txnif.TxnReader, cstr []byte) (isNewNode bool, err error) {
+	be.Lock()
+	defer be.Unlock()
+	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		be.Unlock()
+		txnToWait.GetTxnState(true)
+		be.Lock()
+	}
+	err = be.CheckConflict(txn)
+	if err != nil {
+		return
+	}
+	var entry *TableMVCCNode
+	isNewNode, entry = be.getOrSetUpdateNode(txn)
+	entry.SchemaConstraints = string(cstr)
+	entry.IsUpdate = true
 	return
 }
 
