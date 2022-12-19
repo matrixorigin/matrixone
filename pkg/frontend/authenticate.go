@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"math"
 	"math/bits"
 	"strings"
@@ -668,6 +669,18 @@ var (
 		"mo_role_privs":           0,
 		`%!%mo_increment_columns`: 0,
 	}
+	//predefined tables of the database mo_catalog in every account
+	predefinedTables = map[string]int8{
+		"mo_database":             0,
+		"mo_tables":               0,
+		"mo_columns":              0,
+		"mo_user":                 0,
+		"mo_role":                 0,
+		"mo_user_grant":           0,
+		"mo_role_grant":           0,
+		"mo_role_privs":           0,
+		"%!%mo_increment_columns": 0,
+	}
 	createAutoTableSql = "create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);"
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
@@ -1266,6 +1279,18 @@ func getSqlForDeleteUser(userId int64) []string {
 		fmt.Sprintf(deleteUserFromMoUserFormat, userId),
 		fmt.Sprintf(deleteUserFromMoUserGrantFormat, userId),
 	}
+}
+
+// isClusterTable decides a table is the cluster table or not
+func isClusterTable(dbName, name string) bool {
+	if dbName == catalog.MO_CATALOG {
+		//if it is neither among the tables nor the index table,
+		//it is the cluster table.
+		if _, ok := predefinedTables[name]; !ok && !strings.HasPrefix(name, "__mo_index_unique") {
+			return true
+		}
+	}
+	return false
 }
 
 func isBannedDatabase(dbName string) bool {
