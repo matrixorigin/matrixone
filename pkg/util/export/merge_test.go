@@ -50,9 +50,9 @@ func init() {
 
 var mux sync.Mutex
 
-var dummyStrColumn = table.Column{Name: "str", Type: "varchar(32)", Default: "", Comment: "str column"}
-var dummyInt64Column = table.Column{Name: "int64", Type: "BIGINT", Default: "0", Comment: "int64 column"}
-var dummyFloat64Column = table.Column{Name: "float64", Type: "DOUBLE", Default: "0.0", Comment: "float64 column"}
+var dummyStrColumn = table.Column{Name: "str", Type: "varchar(32)", ColType: table.TVarchar, Default: "", Comment: "str column"}
+var dummyInt64Column = table.Column{Name: "int64", Type: "BIGINT", ColType: table.TInt64, Default: "0", Comment: "int64 column"}
+var dummyFloat64Column = table.Column{Name: "float64", Type: "DOUBLE", ColType: table.TFloat64, Default: "0.0", Comment: "float64 column"}
 
 var dummyTable = &table.Table{
 	Account:          "test",
