@@ -86,7 +86,10 @@ func (blk *baseBlock) Close() {
 
 func (blk *baseBlock) PinNode() *Node {
 	n := blk.node.Load()
-	n.Ref()
+	// if ref fails, reload.
+	// Note: avoid bad case where releasing happens before Ref()
+	for ; !n.RefIfHasRef(); n = blk.node.Load() {
+	}
 	return n
 }
 

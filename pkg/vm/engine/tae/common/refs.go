@@ -34,6 +34,9 @@ func (item *PinnedItem[T]) Item() T { return item.Val }
 // would be called.
 type IRef interface {
 	RefCount() int64
+	// RefIfHasRef increment refcnt if existing cnt > 0 and return true.
+	// Note: the udpate is atomic, if existing cnt is zero or update fails, return false
+	RefIfHasRef() bool
 	Ref()
 	Unref()
 }
@@ -51,6 +54,13 @@ func (helper *RefHelper) RefCount() int64 {
 
 func (helper *RefHelper) Ref() {
 	helper.Refs.Add(1)
+}
+
+func (helper *RefHelper) RefIfHasRef() bool {
+	if val := helper.Refs.Load(); val > 0 {
+		return helper.Refs.CompareAndSwap(val, val+1)
+	}
+	return false
 }
 
 func (helper *RefHelper) Unref() {
