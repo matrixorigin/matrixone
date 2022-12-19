@@ -525,5 +525,7 @@ func init() {
 		"preceding":                PRECEDING,
 		"following":                FOLLOWING,
 		"groups":                   GROUPS,
+		"number":                   NUMBER,
+		"size":                     SIZE,
 	}
 }
