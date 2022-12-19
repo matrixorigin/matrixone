@@ -309,9 +309,7 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 		}
 		updateCtxs = append(updateCtxs, ct)
-
 	}
-
 	return updateCtxs, useProjectExprs, nil
 }
 

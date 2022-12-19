@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"strings"
 )
 
 func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
@@ -32,7 +33,6 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 			return nil, err
 		}
 	}
-
 	// Reverse the mapping of aliases to table names
 	tbinfo.reverseAliasMap()
 
@@ -59,12 +59,10 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	}
 
 	// build update ctx and projection
-	updateCtxs, useProjectExprs, err := buildUpdateProject(updateTableList, ctx)
+	updateCtxs, tableDefs, useProjectExprs, err := buildUpdateProject(updateTableList, ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	//var leftJoinTableExpr *tree.JoinTableExpr
 
 	leftJoinTableExpr := stmt.Tables[0]
 	for _, updateTableinfo := range updateTableList.updateTables {
@@ -79,14 +77,19 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 
 		if unqiueIndexDef != nil {
 			for j := 0; j < len(unqiueIndexDef.TableNames); j++ {
-				// build left join with origin table and index table
-				indexTableExpr := buildIndexTableExpr(unqiueIndexDef.TableNames[j])
-				joinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[j], unqiueIndexDef.Fields[j])
-				leftJoinTableExpr = &tree.JoinTableExpr{
-					JoinType: tree.JOIN_TYPE_LEFT,
-					Left:     leftJoinTableExpr,
-					Right:    indexTableExpr,
-					Cond:     joinCond,
+				// check whether the the index table needs to be updated and whether the index exists
+				if checkIndexTableNeedUpdate(unqiueIndexDef.Fields[j], updateTableinfo.updateCols) && unqiueIndexDef.TableExists[j] {
+					// build left join with origin table and index table
+					indexTableExpr := buildIndexTableExpr(unqiueIndexDef.TableNames[j])
+					joinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[j], unqiueIndexDef.Fields[j])
+					leftJoinTableExpr = &tree.JoinTableExpr{
+						JoinType: tree.JOIN_TYPE_LEFT,
+						Left:     leftJoinTableExpr,
+						Right:    indexTableExpr,
+						Cond:     joinCond,
+					}
+				} else {
+					continue
 				}
 			}
 		} else {
@@ -126,38 +129,6 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 
 	// rebuild projection for update cols to get right type and default value
 	lastNode := qry.Nodes[qry.Steps[len(qry.Steps)-1]]
-	/*
-		for _, ct := range updateCtxs {
-			var idx int
-			if ct.PriKeyIdx != -1 {
-				idx = int(ct.PriKeyIdx) + 1
-			} else {
-				idx = int(ct.HideKeyIdx) + 1
-			}
-
-			for _, col := range ct.UpdateCols {
-				if c := lastNode.ProjectList[idx].GetC(); c != nil {
-					if c.GetDefaultval() {
-						if lastNode.ProjectList[idx], err = getDefaultExpr(col); err != nil {
-							return nil, err
-						}
-						idx++
-						continue
-					}
-					if c.GetUpdateVal() {
-						lastNode.ProjectList[idx] = col.OnUpdate.Expr
-						idx++
-						continue
-					}
-				}
-				lastNode.ProjectList[idx], err = makePlan2CastExpr(lastNode.ProjectList[idx], col.Typ)
-				if err != nil {
-					return nil, err
-				}
-				idx++
-			}
-		}
-	*/
 	err = alignProjectExprType(lastNode, updateCtxs)
 	if err != nil {
 		return nil, err
@@ -167,7 +138,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		NodeType:    plan.Node_UPDATE,
 		ObjRef:      nil,
 		TableDef:    nil,
-		TableDefVec: tblRefs,
+		TableDefVec: tableDefs,
 		Children:    []int32{qry.Steps[len(qry.Steps)-1]},
 		NodeId:      int32(len(qry.Nodes)),
 		UpdateCtxs:  updateCtxs,
@@ -178,51 +149,56 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	return usePlan, nil
 }
 
+// Align the projection column expression to the target column type
 func alignProjectExprType(node *Node, updateCtxs []*plan.UpdateCtx) error {
 	projectList := node.ProjectList
 	for _, updateCtx := range updateCtxs {
-		//if !updateCtx.isIndexTableUpdate {
-		//}
-		startPosition := updateCtx.HideKeyIdx // one table rowid index posistion
-		for i, updateCol := range updateCtx.UpdateCols {
-			offset := startPosition + int32(i) + 1
-			if c := projectList[offset].GetC(); c != nil {
-				if c.GetDefaultval() {
-					expr, err := getDefaultExpr(updateCol)
-					if err != nil {
-						return err
+		if updateCtx.IsIndexTableUpdate {
+			continue
+		} else {
+			startPosition := updateCtx.HideKeyIdx // one table rowid index posistion
+			for i, updateCol := range updateCtx.UpdateCols {
+				offset := startPosition + int32(i) + 1
+				if c := projectList[offset].GetC(); c != nil {
+					if c.GetDefaultval() {
+						expr, err := getDefaultExpr(updateCol)
+						if err != nil {
+							return err
+						}
+						projectList[offset] = expr
+						continue
 					}
-					projectList[offset] = expr
-					continue
+					if c.GetUpdateVal() {
+						projectList[offset] = updateCol.OnUpdate.Expr
+						continue
+					}
 				}
-				if c.GetUpdateVal() {
-					projectList[offset] = updateCol.OnUpdate.Expr
-					continue
-				}
-			}
 
-			expr, err := makePlan2CastExpr(projectList[offset], updateCol.Typ)
-			if err != nil {
-				return err
+				expr, err := makePlan2CastExpr(projectList[offset], updateCol.Typ)
+				if err != nil {
+					return err
+				}
+				projectList[offset] = expr
 			}
-			projectList[offset] = expr
 		}
 	}
 	return nil
 }
 
-func buildUpdateProject(updateTableList *UpdateTableList, ctx CompilerContext) ([]*plan.UpdateCtx, tree.SelectExprs, error) {
+// Build projection list for table updates
+func buildUpdateProject(updateTableList *UpdateTableList, ctx CompilerContext) ([]*plan.UpdateCtx, []*TableDef, tree.SelectExprs, error) {
 	var useProjectExprs tree.SelectExprs
 	var offset int32 = 0
 
 	updateCtxs := make([]*plan.UpdateCtx, 0)
+	tableDefs := make([]*TableDef, 0)
 
 	for _, updateTableinfo := range updateTableList.updateTables {
 		updateCols := updateTableinfo.updateCols
 
 		expr, err := buildRowIdAstExpr(ctx, nil, updateTableinfo.objRef.SchemaName, updateTableinfo.tblDef.Name)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		useProjectExprs = append(useProjectExprs, expr)
 		hideKeyIdx := offset
@@ -262,27 +238,14 @@ func buildUpdateProject(updateTableList *UpdateTableList, ctx CompilerContext) (
 			}
 		}
 
-		//-------------------
-		//offset += int32(len(orderAttrs)) + 1
-		//
-		//uDef, _ := buildIndexDefs(updateTableinfo.tblDef.Defs)
-		//if uDef != nil {
-		//	updateCtx, exprs, err := buildIndexTableUpdateCtx(updateTableinfo.objRef, updateTableinfo.tblDef, uDef, offset, ctx)
-		//	if err != nil {
-		//		return nil, nil, err
-		//	}
-		//	updateCtxs = append(updateCtxs, updateCtx...)
-		//	useProjectExprs = append(useProjectExprs, exprs...)
-		//}
-		//----------------------
 		ct := &plan.UpdateCtx{
-			DbName:     updateCols[0].dbName,
-			TblName:    updateCols[0].tblName,
-			HideKey:    catalog.Row_ID,
-			HideKeyIdx: hideKeyIdx,
-			OtherAttrs: otherAttrs,
-			OrderAttrs: orderAttrs,
-			//isIndexTableUpdate: false
+			DbName:             updateCols[0].dbName,
+			TblName:            updateCols[0].tblName,
+			HideKey:            catalog.Row_ID,
+			HideKeyIdx:         hideKeyIdx,
+			OtherAttrs:         otherAttrs,
+			OrderAttrs:         orderAttrs,
+			IsIndexTableUpdate: false,
 		}
 		for _, u := range updateCols {
 			ct.UpdateCols = append(ct.UpdateCols, u.colDef)
@@ -296,37 +259,43 @@ func buildUpdateProject(updateTableList *UpdateTableList, ctx CompilerContext) (
 			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 		}
 		updateCtxs = append(updateCtxs, ct)
+		tableDefs = append(tableDefs, updateTableinfo.tblDef)
 
 		offset += int32(len(orderAttrs)) + 1
 		uDef, _ := buildIndexDefs(updateTableinfo.tblDef.Defs)
 		if uDef != nil {
-			updateCtx, exprs, err := buildIndexTableUpdateCtx(updateTableinfo.objRef, updateTableinfo.tblDef, uDef, offset, ctx)
+			idxUpdateCtxs, idxTableDefs, exprs, err := buildIndexTableUpdateCtx(updateTableinfo.objRef, updateTableinfo.updateCols, uDef, &offset, ctx)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
-			updateCtxs = append(updateCtxs, updateCtx...)
-			useProjectExprs = append(useProjectExprs, exprs...)
+			for i := range idxUpdateCtxs {
+				pos := len(updateCtxs)
+				ct.UniqueIndexPos = append(ct.UniqueIndexPos, int32(pos))
+				updateCtxs = append(updateCtxs, idxUpdateCtxs[i])
+				tableDefs = append(tableDefs, idxTableDefs[i])
+				useProjectExprs = append(useProjectExprs, exprs[i])
+			}
 		}
 	}
-	return updateCtxs, useProjectExprs, nil
+	return updateCtxs, tableDefs, useProjectExprs, nil
 }
 
 // build the update context and projected columns of the index table
-func buildIndexTableUpdateCtx(objRef *ObjectRef, tableDef *TableDef, uDef *UniqueIndexDef, offset int32, ctx CompilerContext) ([]*plan.UpdateCtx, tree.SelectExprs, error) {
+func buildIndexTableUpdateCtx(objRef *ObjectRef, updateCols []updateCol, uDef *UniqueIndexDef, offset *int32, ctx CompilerContext) ([]*plan.UpdateCtx, []*TableDef, tree.SelectExprs, error) {
 	var selectList tree.SelectExprs
 	indexUpCtxs := make([]*plan.UpdateCtx, 0)
-	schemaName := objRef.SchemaName
+	indexTableDefs := make([]*TableDef, 0)
 
-	for i, _ := range uDef.IndexNames {
-		if uDef.TableExists[i] {
+	for i := range uDef.IndexNames {
+		// check whether the the index table needs to be updated and whether the index exists
+		if checkIndexTableNeedUpdate(uDef.Fields[i], updateCols) && uDef.TableExists[i] {
 			indexTableName := uDef.TableNames[i]
-			//indexField := uDef.Fields[i]
 
 			// Get the definition information of the index table
-			idxObjRef, idxTblDef := ctx.Resolve(schemaName, indexTableName)
+			idxObjRef, idxTblDef := ctx.Resolve(objRef.SchemaName, indexTableName)
 			rowidExpr, err := buildRowIdAstExpr(ctx, nil, idxObjRef.SchemaName, indexTableName)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			selectList = append(selectList, rowidExpr)
 
@@ -334,21 +303,23 @@ func buildIndexTableUpdateCtx(objRef *ObjectRef, tableDef *TableDef, uDef *Uniqu
 			orderAttrs := getOrderedColNames(idxTblDef)
 
 			updatectx := &plan.UpdateCtx{
-				DbName:     schemaName,
-				TblName:    indexTableName,
-				HideKey:    catalog.Row_ID,
-				HideKeyIdx: offset,
-				UpdateCols: idxTblDef.Cols,
-				OtherAttrs: nil,
-				OrderAttrs: orderAttrs,
-				//isIndexTableUpdate: true
+				DbName:             objRef.SchemaName,
+				TblName:            indexTableName,
+				HideKey:            catalog.Row_ID,
+				HideKeyIdx:         *offset,
+				UpdateCols:         idxTblDef.Cols,
+				OtherAttrs:         nil,
+				OrderAttrs:         orderAttrs,
+				IsIndexTableUpdate: true,
 			}
 			indexUpCtxs = append(indexUpCtxs, updatectx)
+			indexTableDefs = append(indexTableDefs, idxTblDef)
+			(*offset)++
 		} else {
 			continue
 		}
 	}
-	return indexUpCtxs, selectList, nil
+	return indexUpCtxs, indexTableDefs, selectList, nil
 }
 
 // Get the sorting string array of the table explicit column according to the table definition
@@ -365,16 +336,23 @@ func getOrderedColNames(tabledef *TableDef) []string {
 }
 
 // Check whether the index table needs to be updated
-func checkIndexTableNeedUpdate() bool {
-	return true
+func checkIndexTableNeedUpdate(field *plan.Field, updateCols []updateCol) bool {
+	for _, updateCol := range updateCols {
+		for _, part := range field.Parts {
+			if strings.EqualFold(updateCol.colDef.Name, part) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func buildUpdateTableList(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblDefs []*TableDef, baseNameMap map[string]string, ctx CompilerContext) (*UpdateTableList, error) {
-	tableUpdateInfoMap := make(map[string]*updateTableInfo)
-
 	// The map of columns to be updated of all different tables explicitly specified in the Update statement.
 	// The key is the column name with the table name prefix,such as: 't1.col'
 	colCountMap := make(map[string]int)
+
+	tableUpdateInfoMap := make(map[string]*updateTableInfo)
 	for _, expr := range exprs {
 		dbName, tableName, columnName := expr.Names[0].GetNames()
 		// check dbName
@@ -391,7 +369,6 @@ func buildUpdateTableList(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblDefs 
 			if !hasFindDbName {
 				return nil, moerr.NewInternalError(ctx.GetContext(), "cannot find update database of %s", dbName)
 			}
-			//upCol.dbName = dbName
 		}
 
 		var upCol updateCol
@@ -422,7 +399,6 @@ func buildUpdateTableList(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblDefs 
 							} else {
 								colCountMap[colName]++
 							}
-
 							upCol.colDef = col
 							break
 						}
@@ -433,7 +409,6 @@ func buildUpdateTableList(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblDefs 
 					upCol.dbName = objRefs[i].SchemaName
 					upCol.tblName = realTableName
 					upCol.aliasTblName = tableName
-
 					break
 				}
 			}
@@ -542,109 +517,4 @@ type updateTableInfo struct {
 	updateCols         []updateCol // The columns of the table that will be updated in the table
 	updateExprs        tree.Exprs  // The exec expression of the column which will be updated in the table
 	isIndexTableUpdate bool        // Identify whether the current table is an index table
-}
-
-//-----------------
-
-// Add the information element[updateTableInfo] of the table which will be update
-func (list *UpdateTableList) AddElement(objRef *ObjectRef, tableDef *TableDef, expr tree.SelectExpr, isIndexTableUpdate bool) {
-	updateInfo := &updateTableInfo{
-		objRef:             objRef,
-		tblDef:             tableDef,
-		useKey:             nil,
-		colIndex:           int32(list.nextIndex),
-		isIndexTableUpdate: isIndexTableUpdate,
-	}
-	list.updateTables = append(list.updateTables, updateInfo)
-	list.selectList = append(list.selectList, expr)
-	list.nextIndex++
-}
-
-func buildUpdateCtxAndProjectionNew(updateColsArray [][]updateCol, updateExprsArray []tree.Exprs, objRefs []*ObjectRef, tblDefs []*TableDef, ctx CompilerContext) ([]*plan.UpdateCtx, tree.SelectExprs, error) {
-	var useProjectExprs tree.SelectExprs
-	updateCtxs := make([]*plan.UpdateCtx, 0)
-	var offset int32 = 0
-
-	for i, updateCols := range updateColsArray {
-		expr, err := buildRowIdAstExpr(ctx, nil, updateCols[0].dbName, updateCols[0].tblName)
-		if err != nil {
-			return nil, nil, err
-		}
-		useProjectExprs = append(useProjectExprs, expr)
-		hideKeyIdx := offset
-
-		// construct projection for list of update expr
-		for _, updateExpr := range updateExprsArray[i] {
-			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: updateExpr})
-		}
-
-		// construct other cols and table offset
-		var otherAttrs []string = nil
-		var k int
-
-		// get table reference index
-		for k = 0; k < len(tblDefs); k++ {
-			if updateCols[0].tblName == tblDefs[k].Name {
-				break
-			}
-		}
-
-		// figure out other cols that will not be updated
-		var onUpdateCols []updateCol
-
-		//orderAttrs := getOrderedColNames(tblDefs[k])
-		orderAttrs := make([]string, 0, len(tblDefs[k].Cols))
-
-		for _, col := range tblDefs[k].Cols {
-			orderAttrs = append(orderAttrs, col.Name)
-
-			isUpdateCol := false
-			for _, updateCol := range updateCols {
-				if updateCol.colDef.Name == col.Name {
-					isUpdateCol = true
-				}
-			}
-			if !isUpdateCol {
-				if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
-					onUpdateCols = append(onUpdateCols, updateCol{colDef: col})
-				} else {
-					otherAttrs = append(otherAttrs, col.Name)
-				}
-			}
-		}
-
-		offset += int32(len(orderAttrs)) + 1
-		uDef, _ := buildIndexDefs(tblDefs[k].Defs)
-		if uDef != nil {
-			updateCtx, exprs, err := buildIndexTableUpdateCtx(objRefs[k], tblDefs[k], uDef, offset, ctx)
-			if err != nil {
-				return nil, nil, err
-			}
-			updateCtxs = append(updateCtxs, updateCtx...)
-			useProjectExprs = append(useProjectExprs, exprs...)
-		}
-
-		ct := &plan.UpdateCtx{
-			DbName:     updateCols[0].dbName,
-			TblName:    updateCols[0].tblName,
-			HideKey:    catalog.Row_ID,
-			HideKeyIdx: hideKeyIdx,
-			OtherAttrs: otherAttrs,
-			OrderAttrs: orderAttrs,
-			//isIndexTableUpdate: false
-		}
-		for _, u := range updateCols {
-			ct.UpdateCols = append(ct.UpdateCols, u.colDef)
-		}
-		for _, u := range onUpdateCols {
-			ct.UpdateCols = append(ct.UpdateCols, u.colDef)
-			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: &tree.UpdateVal{}})
-		}
-		for _, o := range otherAttrs {
-			e, _ := tree.NewUnresolvedName(ctx.GetContext(), updateCols[0].aliasTblName, o)
-			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
-		}
-		updateCtxs = append(updateCtxs, ct)
-	}
-	return updateCtxs, useProjectExprs, nil
 }

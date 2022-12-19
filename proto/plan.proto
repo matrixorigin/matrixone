@@ -386,6 +386,9 @@ message UpdateCtx {
 	repeated string other_attrs = 6;
 	repeated string order_attrs = 7;
 	ColDef composite_pkey = 8;
+	bool is_index_table_update = 9;
+	repeated int32 uniqueIndexPos = 10;
+	repeated int32	secondaryIndexPos = 11;
 }
 
 message AnalyzeInfo {

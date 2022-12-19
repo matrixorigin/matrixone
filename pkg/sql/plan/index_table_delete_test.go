@@ -33,7 +33,8 @@ func TestSingleSQLQuery(t *testing.T) {
 	//sql := "delete emp from emp left join dept on emp.deptno = dept.deptno where emp.sal > 2000"
 	//sql := "update emp set comm = 1200 where deptno = 10"
 	//sql := "update dept set dname = 'XXX' where deptno = 10"
-	sql := "update emp set sal = sal + 500, comm = 1200 where deptno = 10"
+	//sql := "update emp set sal = sal + 500, comm = 1200 where deptno = 10"
+	sql := "update emp set empno = empno + 500, ename = 'LINJUNHONG' where deptno = 10"
 	mock := NewMockOptimizer()
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
@@ -122,6 +123,8 @@ func TestSingleTableUpdate(t *testing.T) {
 	sqls := []string{
 		"update dept set dname = 'XXX' where deptno = 10",
 		"update emp set comm = 1200 where deptno = 10",
+		"update emp set sal = sal + 500, comm = 1200 where deptno = 10",
+		"update emp set empno = empno + 500, ename = 'LINJUNHONG' where deptno = 10",
 	}
 
 	runTestShouldPass(mock, t, sqls, false, false)

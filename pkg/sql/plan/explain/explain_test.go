@@ -28,25 +28,15 @@ import (
 
 func TestSingleSql(t *testing.T) {
 	// input := "explain verbose SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20"
-	input := "explain verbose SELECT N_REGIONKEY + 2 as a FROM NATION WHERE -N_NATIONKEY < -20"
+	//input := "explain verbose SELECT N_REGIONKEY + 2 as a FROM NATION WHERE -N_NATIONKEY < -20"
 	// input := "explain verbose select c_custkey from (select c_custkey from CUSTOMER group by c_custkey ) a"
 	// input := "explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE N_REGIONKEY > 0 AND N_NAME LIKE '%AA'"
 	// input := "explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 AND N_NATIONKEY < 10"
 	//input := "explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 OR N_NATIONKEY < 10"
 	//input := "explain verbose select * from part where p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')"
-	//input := `explain verbose
-	//    select
-	//         case
-	//              when p_type like 'PROMO%'
-	//                  then l_extendedprice * (1 - l_discount)
-	//              when p_type like 'PRX%'
-	//                  then l_extendedprice * (2 - l_discount)
-	//         else 0 end
-	//	from lineitem,part
-	//	where l_shipdate < date '1996-04-01' + interval '1 month'`
 	//input := "explain select abs(N_REGIONKEY) from NATION"
 	//input := "explain verbose SELECT l.L_ORDERKEY a FROM CUSTOMER c, ORDERS o, LINEITEM l WHERE c.C_CUSTKEY = o.O_CUSTKEY and l.L_ORDERKEY = o.O_ORDERKEY and o.O_ORDERKEY < 10"
-
+	input := "explain verbose update emp set sal = sal + 500, comm = 1200 where deptno = 10"
 	mock := plan.NewMockOptimizer()
 	err := runOneStmt(mock, t, input)
 	if err != nil {
@@ -271,6 +261,8 @@ func TestSystemVariableAndUserVariable(t *testing.T) {
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
+//---------------------------------------------index table begin--------------------------------------------------------
+
 func TestSingleTableDeleteSQL(t *testing.T) {
 	sqls := []string{
 		"explain verbose DELETE FROM emp where sal > 2000",
@@ -318,6 +310,8 @@ func TestMultiTableDeleteSQL(t *testing.T) {
 	mockOptimizer := plan.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
+
+//---------------------------------------------index table begin--------------------------------------------------------
 
 func runTestShouldPass(opt plan.Optimizer, t *testing.T, sqls []string) {
 	for _, sql := range sqls {
