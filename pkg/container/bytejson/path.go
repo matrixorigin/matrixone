@@ -331,15 +331,15 @@ func (pg *pathGenerator) generateKey(legs []subPath) ([]subPath, bool) {
 }
 
 // genIndex returns originVal,modifiedVal,ok
-func (i subPathIndices) genIndex(cnt int) (int, int, bool) {
-	switch i.tp {
+func (pi subPathIndices) genIndex(cnt int) (int, int, bool) {
+	switch pi.tp {
 	case numberIndices:
-		if i.num >= cnt {
-			return i.num, cnt - 1, false
+		if pi.num >= cnt {
+			return pi.num, cnt - 1, false
 		}
-		return i.num, i.num, false
+		return pi.num, pi.num, false
 	case lastIndices:
-		idx := cnt - i.num - 1
+		idx := cnt - pi.num - 1
 		if idx < 0 {
 			return idx, 0, true
 		}
@@ -348,9 +348,9 @@ func (i subPathIndices) genIndex(cnt int) (int, int, bool) {
 	return subPathIdxErr, subPathIdxErr, false
 }
 
-func (r subPathRangeExpr) genRange(cnt int) (ret [2]int) {
-	orig1, mdf1, _ := r.start.genIndex(cnt)
-	orig2, mdf2, _ := r.end.genIndex(cnt)
+func (pe subPathRangeExpr) genRange(cnt int) (ret [2]int) {
+	orig1, mdf1, _ := pe.start.genIndex(cnt)
+	orig2, mdf2, _ := pe.end.genIndex(cnt)
 	if orig1 > orig2 {
 		ret[0], ret[1] = subPathIdxErr, subPathIdxErr
 		return
