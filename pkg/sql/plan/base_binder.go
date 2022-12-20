@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -254,6 +255,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	relPos := NotFound
 	colPos := NotFound
 	var typ *plan.Type
+	localErrCtx := errutil.ContextWithNoReport(b.GetContext(), true)
 
 	if len(table) == 0 {
 		if binding, ok := b.ctx.bindingByCol[col]; ok {
@@ -266,7 +268,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				return nil, moerr.NewInvalidInput(b.GetContext(), "ambiguous column reference '%v'", name)
 			}
 		} else {
-			err = moerr.NewInvalidInput(b.GetContext(), "column %s does not exist", name)
+			err = moerr.NewInvalidInput(localErrCtx, "column %s does not exist", name)
 		}
 	} else {
 		if binding, ok := b.ctx.bindingByTable[table]; ok {
@@ -278,10 +280,10 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				typ = binding.types[colPos]
 				relPos = binding.tag
 			} else {
-				err = moerr.NewInvalidInput(b.GetContext(), "column '%s' does not exist", name)
+				err = moerr.NewInvalidInput(localErrCtx, "column '%s' does not exist", name)
 			}
 		} else {
-			err = moerr.NewInvalidInput(b.GetContext(), "missing FROM-clause entry for table '%v'", table)
+			err = moerr.NewInvalidInput(localErrCtx, "missing FROM-clause entry for table '%v'", table)
 		}
 	}
 
@@ -308,7 +310,9 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				},
 			}
 		}
-
+		if err != nil {
+			errutil.ReportError(b.GetContext(), err)
+		}
 		return
 	}
 
@@ -318,6 +322,9 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	}
 
 	if parent == nil {
+		if err != nil {
+			errutil.ReportError(b.GetContext(), err)
+		}
 		return
 	}
 
