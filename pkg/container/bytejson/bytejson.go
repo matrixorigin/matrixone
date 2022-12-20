@@ -272,7 +272,7 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 	if bj.Type == TpCodeObject {
 		switch sub.tp {
 		case subPathIdx:
-			start, _ := sub.idx.genIndex(1)
+			start, _, _ := sub.idx.genIndex(1)
 			if start == 0 {
 				cur = bj.query(cur, &nPath)
 			}
@@ -304,8 +304,8 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 		cnt := bj.GetElemCnt()
 		switch sub.tp {
 		case subPathIdx:
-			idx, _ := sub.idx.genIndex(cnt)
-			if idx == subPathIdxErr {
+			idx, _, last := sub.idx.genIndex(cnt)
+			if last && idx < 0 {
 				tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
 				cur = append(cur, tmp)
 				return cur
@@ -385,7 +385,7 @@ func (bj ByteJson) queryWithSubPath(keys []string, vals []ByteJson, path *Path, 
 		cnt := bj.GetElemCnt()
 		switch sub.tp {
 		case subPathIdx:
-			start, _ := sub.idx.genIndex(cnt)
+			start, _, _ := sub.idx.genIndex(1)
 			if start == 0 {
 				newPathStr := fmt.Sprintf("%s[%d]", pathStr, start)
 				keys, vals = bj.queryWithSubPath(keys, vals, &nPath, newPathStr)
@@ -413,22 +413,22 @@ func (bj ByteJson) queryWithSubPath(keys []string, vals []ByteJson, path *Path, 
 		cnt := bj.GetElemCnt()
 		switch sub.tp {
 		case subPathIdx:
-			start, _ := sub.idx.genIndex(cnt)
-			if start == subPathIdxErr {
+			idx, _, last := sub.idx.genIndex(cnt)
+			if last && idx < 0 {
 				tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
 				newPathStr := fmt.Sprintf("%s[%d]", pathStr, sub.idx.num)
 				keys = append(keys, newPathStr)
 				vals = append(vals, tmp)
 				return keys, vals
 			}
-			if start == subPathIdxALL {
+			if idx == subPathIdxALL {
 				for i := 0; i < cnt; i++ {
 					newPathStr := fmt.Sprintf("%s[%d]", pathStr, i)
 					keys, vals = bj.getArrayElem(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
 				}
 			} else {
-				newPathStr := fmt.Sprintf("%s[%d]", pathStr, start)
-				keys, vals = bj.getArrayElem(start).queryWithSubPath(keys, vals, &nPath, newPathStr)
+				newPathStr := fmt.Sprintf("%s[%d]", pathStr, idx)
+				keys, vals = bj.getArrayElem(idx).queryWithSubPath(keys, vals, &nPath, newPathStr)
 			}
 		case subPathRange:
 			se := sub.iRange.genRange(cnt)
