@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -451,7 +452,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 			OtherAttrs:         updateCtx.OtherAttrs,
 			OrderAttrs:         updateCtx.OrderAttrs,
 			TableSource:        relation,
-			CPkeyColDef:        updateCtx.CompositePkey, // yes or no use?
+			CPkeyColDef:        updateCtx.CompositePkey,
 			IsIndexTableUpdate: updateCtx.IsIndexTableUpdate,
 			IndexParts:         updateCtx.IndexParts,
 		}
@@ -665,13 +666,13 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	}
 }
 
-func constructGroup(n, cn *plan.Node, ibucket, nbucket int, needEval bool) *group.Argument {
+func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool) *group.Argument {
 	aggs := make([]agg.Aggregate, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
 			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 			obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
-			fun, err := function.GetFunctionByID(obj)
+			fun, err := function.GetFunctionByID(ctx, obj)
 			if err != nil {
 				panic(err)
 			}

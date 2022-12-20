@@ -15,9 +15,11 @@
 package catalog
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -27,6 +29,8 @@ import (
 type TableMVCCNode struct {
 	*EntryMVCCNode
 	*txnbase.TxnMVCCNode
+	IsUpdate          bool   // if true, mo_columns won't send to cn
+	SchemaConstraints string // store as immutable, bytes actually
 }
 
 func NewEmptyTableMVCCNode() txnif.MVCCNode {
@@ -44,21 +48,26 @@ func (e *TableMVCCNode) CloneAll() txnif.MVCCNode {
 	node := &TableMVCCNode{}
 	node.EntryMVCCNode = e.EntryMVCCNode.Clone()
 	node.TxnMVCCNode = e.TxnMVCCNode.CloneAll()
+	node.IsUpdate = e.IsUpdate
+	node.SchemaConstraints = e.SchemaConstraints
 	return node
 }
 
 func (e *TableMVCCNode) CloneData() txnif.MVCCNode {
 	return &TableMVCCNode{
-		EntryMVCCNode: e.EntryMVCCNode.CloneData(),
-		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
+		EntryMVCCNode:     e.EntryMVCCNode.CloneData(),
+		TxnMVCCNode:       &txnbase.TxnMVCCNode{},
+		IsUpdate:          e.IsUpdate,
+		SchemaConstraints: e.SchemaConstraints,
 	}
 }
 
 func (e *TableMVCCNode) String() string {
 
-	return fmt.Sprintf("%s%s",
+	return fmt.Sprintf("%s%scstr[%d]",
 		e.TxnMVCCNode.String(),
-		e.EntryMVCCNode.String())
+		e.EntryMVCCNode.String(),
+		len(e.SchemaConstraints))
 }
 
 // for create drop in one txn
@@ -66,6 +75,8 @@ func (e *TableMVCCNode) Update(vun txnif.MVCCNode) {
 	un := vun.(*TableMVCCNode)
 	e.CreatedAt = un.CreatedAt
 	e.DeletedAt = un.DeletedAt
+	e.IsUpdate = un.IsUpdate
+	e.SchemaConstraints = un.SchemaConstraints
 }
 
 func (e *TableMVCCNode) ApplyCommit(index *wal.Index) (err error) {
@@ -107,6 +118,21 @@ func (e *TableMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
+	if err = binary.Write(w, binary.BigEndian, e.IsUpdate); err != nil {
+		return
+	}
+	n += 1
+	condata := []byte(e.SchemaConstraints)
+	l := uint32(len(condata))
+	if err = binary.Write(w, binary.BigEndian, l); err != nil {
+		return
+	}
+	n += 4
+	var n1 int
+	if n1, err = w.Write(condata); err != nil {
+		return
+	}
+	n += int64(n1)
 	return
 }
 
@@ -122,5 +148,25 @@ func (e *TableMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
+
+	if err = binary.Read(r, binary.BigEndian, &e.IsUpdate); err != nil {
+		return
+	}
+	n += 1
+	length := uint32(0)
+	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+		return
+	}
+	n += 4
+	buf := make([]byte, length)
+	var n2 int
+	n2, err = r.Read(buf)
+	if err != nil {
+		return
+	}
+	if n2 != int(length) {
+		panic(moerr.NewInternalErrorNoCtx("logic err %d!=%d, %v", n2, length, err))
+	}
+	e.SchemaConstraints = string(buf)
 	return
 }

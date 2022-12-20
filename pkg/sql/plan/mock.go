@@ -17,9 +17,10 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -507,13 +508,9 @@ func NewMockCompilerContext() *MockCompilerContext {
 					Stmt:            "select n_name from nation where n_nationkey > ?",
 					DefaultDatabase: "tpch",
 				})
-				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-					Def: &plan.TableDef_DefType_View{
-						View: &plan.ViewDef{
-							View: string(viewData),
-						},
-					},
-				})
+				tableDef.ViewSql = &plan.ViewDef{
+					View: string(viewData),
+				}
 				properties := []*plan.Property{
 					{
 						Key:   catalog.SystemRelAttr_Kind,
@@ -548,6 +545,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 		tables:  tables,
 		stats:   stats,
 		pks:     pks,
+		ctx:     context.TODO(),
 	}
 }
 

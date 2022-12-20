@@ -50,17 +50,3 @@ type UpdateCtx struct {
 	SecondaryIndexPos []int
 	IndexParts        []string
 }
-
-/*
-type Argument2 struct {
-	Ts           uint64
-	AffectedRows uint64
-	UpdateCtxs   []*UpdateCtx
-	TableDefVec  []*plan.TableDef
-	Engine       engine.Engine
-	DBs          []engine.Database
-	TableIDs     []string
-	DBNames      []string
-	TableNames   []string
-}
-*/

@@ -166,6 +166,7 @@ const (
 	ErrAppendableSegmentNotFound uint16 = 20624
 	ErrAppendableBlockNotFound   uint16 = 20625
 	ErrTAEDebug                  uint16 = 20626
+	ErrDuplicateKey              uint16 = 20626
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -290,6 +291,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrPrimaryKeyDuplicated:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicated primary key %v"},
 	ErrAppendableSegmentNotFound: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable segment not found"},
 	ErrAppendableBlockNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable block not found"},
+	ErrDuplicateKey:              {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -857,6 +859,10 @@ func NewTxnReadConflict(ctx context.Context, msg string, args ...any) *Error {
 
 func NewPrimaryKeyDuplicated(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrPrimaryKeyDuplicated, k)
+}
+
+func NewDuplicateKey(ctx context.Context, k string) *Error {
+	return newError(ctx, ErrDuplicateKey, k)
 }
 
 func NewAppendableSegmentNotFound(ctx context.Context) *Error {

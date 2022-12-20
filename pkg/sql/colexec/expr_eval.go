@@ -44,7 +44,15 @@ var (
 	constDatetimeType   = types.Type{Oid: types.T_datetime}
 	constDecimal64Type  = types.Type{Oid: types.T_decimal64}
 	constDecimal128Type = types.Type{Oid: types.T_decimal128}
-	constTimestampType  = types.Type{Oid: types.T_timestamp}
+	constTimestampTypes = []types.Type{
+		{Oid: types.T_timestamp},
+		{Oid: types.T_timestamp, Precision: 1},
+		{Oid: types.T_timestamp, Precision: 2},
+		{Oid: types.T_timestamp, Precision: 3},
+		{Oid: types.T_timestamp, Precision: 4},
+		{Oid: types.T_timestamp, Precision: 5},
+		{Oid: types.T_timestamp, Precision: 6},
+	}
 )
 
 func getConstVec(proc *process.Process, expr *plan.Expr, length int) (*vector.Vector, error) {
@@ -95,7 +103,11 @@ func getConstVec(proc *process.Process, expr *plan.Expr, length int) (*vector.Ve
 			d128 := types.Decimal128FromInt64Raw(cd128.A, cd128.B)
 			vec = vector.NewConstFixed(constDecimal128Type, length, d128, proc.Mp())
 		case *plan.Const_Timestampval:
-			vec = vector.NewConstFixed(constTimestampType, length, types.Timestamp(t.C.GetTimestampval()), proc.Mp())
+			pre := expr.Typ.Precision
+			if pre < 0 || pre > 6 {
+				return nil, moerr.NewInternalError(proc.Ctx, "invalid timestamp precision")
+			}
+			vec = vector.NewConstFixed(constTimestampTypes[pre], length, types.Timestamp(t.C.GetTimestampval()), proc.Mp())
 		case *plan.Const_Sval:
 			sval := t.C.GetSval()
 			vec = vector.NewConstString(constSType, length, sval, proc.Mp())
@@ -138,7 +150,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		return vec, nil
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadId)
+		f, err := function.GetFunctionByID(proc.Ctx, overloadId)
 		if err != nil {
 			return nil, err
 		}
@@ -208,7 +220,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 		return s.Vecs[t.Col.ColPos], nil
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadId)
+		f, err := function.GetFunctionByID(proc.Ctx, overloadId)
 		if err != nil {
 			return nil, err
 		}
@@ -281,7 +293,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		return vec, nil
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadId)
+		f, err := function.GetFunctionByID(proc.Ctx, overloadId)
 		if err != nil {
 			return nil, err
 		}
@@ -411,7 +423,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 		return s.Vecs[t.Col.ColPos].ToConst(sRow, proc.Mp()), nil
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadId)
+		f, err := function.GetFunctionByID(proc.Ctx, overloadId)
 		if err != nil {
 			return nil, err
 		}

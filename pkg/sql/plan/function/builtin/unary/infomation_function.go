@@ -61,7 +61,7 @@ func adapter(vectors []*vector.Vector,
 			return vector.NewConstFixed(resultType, 1, uvals[0], proc.Mp()), nil
 		}
 	}
-	return nil, moerr.NewInternalErrorNoCtx("the parameter is invalid")
+	return nil, moerr.NewInternalError(proc.Ctx, "the parameter is invalid")
 }
 
 func evaluateMemoryCapacityForDatabase(proc *process.Process, params ...interface{}) (int, error) {

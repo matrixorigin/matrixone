@@ -18,6 +18,7 @@ package tree
 type Insert struct {
 	statementImpl
 	Table             TableExpr
+	Accounts          IdentifierList
 	PartitionNames    IdentifierList
 	Columns           IdentifierList
 	Rows              *Select
@@ -39,6 +40,11 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		node.Columns.Format(ctx)
 		ctx.WriteByte(')')
 	}
+	if node.Accounts != nil {
+		ctx.WriteString(" accounts(")
+		node.Accounts.Format(ctx)
+		ctx.WriteByte(')')
+	}
 	if node.Rows != nil {
 		ctx.WriteByte(' ')
 		node.Rows.Format(ctx)
@@ -48,6 +54,9 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		node.OnDuplicateUpdate.Format(ctx)
 	}
 }
+
+func (node *Insert) GetStatementType() string { return "Insert" }
+func (node *Insert) GetQueryType() string     { return QueryTypeDML }
 
 func NewInsert(t TableExpr, c IdentifierList, r *Select, p IdentifierList) *Insert {
 	return &Insert{

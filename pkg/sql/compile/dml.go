@@ -54,6 +54,15 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 				if rel, err = dbSource.Relation(c.ctx, deleteCtx.TableName); err != nil {
 					return 0, err
 				}
+				_, err = rel.Ranges(c.ctx, nil)
+				if err != nil {
+					return 0, err
+				}
+				affectRow, err := rel.Rows(s.Proc.Ctx)
+				if err != nil {
+					return 0, err
+				}
+
 				tableID := rel.GetTableID(c.ctx)
 
 				err = dbSource.Truncate(c.ctx, deleteCtx.TableName)
@@ -69,12 +78,9 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 				if deleteCtx.IsIndexTableDelete {
 					continue
 				} else {
-					_, affectRow, err := rel.Stats(s.Proc.Ctx)
-					if err != nil {
-						return uint64(affectRow), err
-					}
 					affectRows += affectRow
 				}
+
 			}
 		}
 		return uint64(affectRows), nil

@@ -126,7 +126,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 
 	// rebuild projection for update cols to get right type and default value
 	lastNode := qry.Nodes[qry.Steps[len(qry.Steps)-1]]
-	err = alignProjectExprType(lastNode, updateCtxs)
+	err = alignProjectExprType(lastNode, updateCtxs, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +147,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 }
 
 // Align the projection column expression to the target column type
-func alignProjectExprType(node *Node, updateCtxs []*plan.UpdateCtx) error {
+func alignProjectExprType(node *Node, updateCtxs []*plan.UpdateCtx, ctx CompilerContext) error {
 	projectList := node.ProjectList
 	for _, updateCtx := range updateCtxs {
 		if updateCtx.IsIndexTableUpdate {
@@ -158,7 +158,7 @@ func alignProjectExprType(node *Node, updateCtxs []*plan.UpdateCtx) error {
 				offset := startPosition + int32(i) + 1
 				if c := projectList[offset].GetC(); c != nil {
 					if c.GetDefaultval() {
-						expr, err := getDefaultExpr(updateCol)
+						expr, err := getDefaultExpr(ctx.GetContext(), updateCol)
 						if err != nil {
 							return err
 						}
@@ -171,7 +171,7 @@ func alignProjectExprType(node *Node, updateCtxs []*plan.UpdateCtx) error {
 					}
 				}
 
-				expr, err := makePlan2CastExpr(projectList[offset], updateCol.Typ)
+				expr, err := makePlan2CastExpr(ctx.GetContext(), projectList[offset], updateCol.Typ)
 				if err != nil {
 					return err
 				}

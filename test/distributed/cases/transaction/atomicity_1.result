@@ -205,6 +205,7 @@ commit ;
 select * from t_code_rule;
 code_id    code_no    org_no    org_name    code_type
 insert into t_code_rule values (18373453,'aaaaaa','fffff','ccccc',5);
+Duplicate entry '5' for key 'code_type'
 begin;
 update t_code_rule set org_name=NULL where code_id=18373453;
 constraint violation: Column 'org_name' cannot be null

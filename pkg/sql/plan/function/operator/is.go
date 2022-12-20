@@ -29,7 +29,7 @@ func Is(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 
 	lefts := vector.MustTCols[bool](lv)
 	if !rv.IsScalar() || rv.IsScalarNull() {
-		return nil, moerr.NewInternalErrorNoCtx("second parameter of IS must be TRUE or FALSE")
+		return nil, moerr.NewInternalError(proc.Ctx, "second parameter of IS must be TRUE or FALSE")
 	}
 	right := vector.MustTCols[bool](rv)[0]
 

@@ -76,7 +76,6 @@ func buildLeftJoinForMultTableDelete(ctx CompilerContext, stmt *tree.Delete) (*P
 			}
 		}
 	}
-	//-----------------------------------------new code-----------------------------------------------------------------
 
 	leftJoinTableExpr := stmt.TableRefs[0]
 
@@ -196,7 +195,6 @@ func buildLeftJoinForSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (
 		return buildDelete2Truncate2(ctx, objRef, tableDef)
 	}
 
-	//----------------------------------------------------new code------------------------------------------------------------------
 	// 1.build select list exprs
 	deleteTableList := NewDeleteTableList()
 	err := buildDeleteProjection(objRef, tableDef, tbinfo, deleteTableList, ctx)
