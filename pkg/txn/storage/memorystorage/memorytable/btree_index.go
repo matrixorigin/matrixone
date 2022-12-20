@@ -14,7 +14,15 @@
 
 package memorytable
 
-import "github.com/tidwall/btree"
+import (
+	"bytes"
+	"encoding"
+	"encoding/gob"
+	"errors"
+	"io"
+
+	"github.com/tidwall/btree"
+)
 
 type BTreeIndex[
 	K Ordered[K],
@@ -81,4 +89,45 @@ func (b *btreeIndexIter[K, V]) Read() (*IndexEntry[K, V], error) {
 
 func (b *btreeIndexIter[K, V]) Seek(pivot *IndexEntry[K, V]) bool {
 	return b.iter.Seek(pivot)
+}
+
+var _ encoding.BinaryMarshaler = new(BTreeIndex[Int, int])
+
+func (b *BTreeIndex[K, V]) MarshalBinary() ([]byte, error) {
+	gobRegister(b)
+	buf := new(bytes.Buffer)
+	encoder := gob.NewEncoder(buf)
+	iter := b.index.Copy().Iter()
+	defer iter.Release()
+	for ok := iter.First(); ok; ok = iter.Next() {
+		entry := iter.Item()
+		if err := encoder.Encode(entry); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+var _ encoding.BinaryUnmarshaler = new(BTreeIndex[Int, int])
+
+func (b *BTreeIndex[K, V]) UnmarshalBinary(data []byte) error {
+	gobRegister(b)
+	index := b.index
+	if index == nil {
+		index = btree.NewBTreeG(compareIndexEntry[K, V])
+	}
+	decoder := gob.NewDecoder(bytes.NewReader(data))
+	for {
+		var entry *IndexEntry[K, V]
+		err := decoder.Decode(&entry)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return err
+		}
+		index.Set(entry)
+	}
+	b.index = index
+	return nil
 }
