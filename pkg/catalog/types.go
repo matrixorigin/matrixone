@@ -373,7 +373,6 @@ var (
 		types.New(types.T_TS, 0, 0, 0),                        // committs
 		types.New(types.T_uint64, 0, 0, 0),                    // segment_id
 	}
-
 	// used by memengine or tae
 	MoDatabaseTableDefs = []engine.TableDef{}
 	// used by memengine or tae
