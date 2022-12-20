@@ -20,6 +20,7 @@ func init() {
 	keywords = map[string]int{
 		"accessible":               UNUSED,
 		"account":                  ACCOUNT,
+		"accounts":                 ACCOUNTS,
 		"add":                      ADD,
 		"action":                   ACTION,
 		"against":                  AGAINST,
@@ -504,6 +505,7 @@ func init() {
 		"second_microsecond":       SECOND_MICROSECOND,
 		"prepare":                  PREPARE,
 		"deallocate":               DEALLOCATE,
+		"reset":                    RESET,
 		"intersect":                INTERSECT,
 		"minus":                    MINUS,
 		"admin_name":               ADMIN_NAME,
