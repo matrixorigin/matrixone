@@ -557,6 +557,9 @@ func constructExternal(n *plan.Node, ctx context.Context, fileList []string) *ex
 			Ctx:           ctx,
 			FileList:      fileList,
 			Fileparam:     new(external.ExternalFileparam),
+			Filter: &external.FilterParam{
+				FilterExpr: colexec.RewriteFilterExprList(n.FilterList),
+			},
 		},
 	}
 }

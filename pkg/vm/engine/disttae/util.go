@@ -46,6 +46,10 @@ const (
 	MAX_RANGE_SIZE int64  = 200
 )
 
+func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
+	return checkExprIsMonotonic(ctx, expr)
+}
+
 func checkExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 	if expr == nil {
 		return false
@@ -88,6 +92,10 @@ func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map
 		colIdx := tableDef.Name2ColIndex[colName]
 		(*columnMap)[int(idx)] = int(colIdx)
 	}
+}
+
+func GetColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) (map[int]int, []int, int) {
+	return getColumnsByExpr(expr, tableDef)
 }
 
 func getColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) (map[int]int, []int, int) {
