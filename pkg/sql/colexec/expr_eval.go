@@ -343,19 +343,19 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		switch t.F.Func.ObjName {
 		case ">":
 			// if some one in left > some one in right, that will be true
-			return compareAndReturn(vs[0].CompareAndCheckAnyResultIsTrue(vs[1], ">"))
+			return compareAndReturn(vs[0].CompareAndCheckAnyResultIsTrue(ctx, vs[1], ">"))
 		case "<":
 			// if some one in left < some one in right, that will be true
-			return compareAndReturn(vs[0].CompareAndCheckAnyResultIsTrue(vs[1], "<"))
+			return compareAndReturn(vs[0].CompareAndCheckAnyResultIsTrue(ctx, vs[1], "<"))
 		case "=":
 			// if left intersect right, that will be true
-			return compareAndReturn(vs[0].CompareAndCheckIntersect(vs[1]))
+			return compareAndReturn(vs[0].CompareAndCheckIntersect(ctx, vs[1]))
 		case ">=":
 			// if some one in left >= some one in right, that will be true
-			return compareAndReturn(vs[0].CompareAndCheckAnyResultIsTrue(vs[1], ">="))
+			return compareAndReturn(vs[0].CompareAndCheckAnyResultIsTrue(ctx, vs[1], ">="))
 		case "<=":
 			// if some one in left <= some one in right, that will be true
-			return compareAndReturn(vs[0].CompareAndCheckAnyResultIsTrue(vs[1], "<="))
+			return compareAndReturn(vs[0].CompareAndCheckAnyResultIsTrue(ctx, vs[1], "<="))
 		case "and":
 			// if left has one true and right has one true, that will be true
 			cols1 := vector.MustTCols[bool](vs[0])
