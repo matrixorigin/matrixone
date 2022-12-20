@@ -20,6 +20,7 @@ func init() {
 	keywords = map[string]int{
 		"accessible":               UNUSED,
 		"account":                  ACCOUNT,
+		"accounts":                 ACCOUNTS,
 		"add":                      ADD,
 		"action":                   ACTION,
 		"against":                  AGAINST,
