@@ -630,7 +630,7 @@ func NewShowTableSize(table *UnresolvedObjectName, dbname string) *ShowTableSize
 	}
 }
 
-//show table values
+// show table values
 type ShowTableValues struct {
 	showImpl
 	Table  *UnresolvedObjectName
