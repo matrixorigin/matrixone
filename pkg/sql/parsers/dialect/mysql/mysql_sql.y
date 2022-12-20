@@ -318,6 +318,7 @@ import (
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS
+%token <str> TABLE_NUMBER TABLE_SIZE COLUMN_NUMBER TABLE_VALUES
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
@@ -375,6 +376,7 @@ import (
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
+%type <statement> show_table_num_stmt show_column_num_stmt show_table_size_stmt show_table_values_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> alter_account_stmt alter_user_stmt update_stmt use_stmt update_no_with_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
@@ -2266,6 +2268,10 @@ show_stmt:
 |   show_function_status_stmt
 |   show_node_list_stmt
 |   show_locks_stmt
+|   show_table_num_stmt
+|   show_column_num_stmt
+|   show_table_size_stmt
+|   show_table_values_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -2324,6 +2330,30 @@ show_locks_stmt:
     SHOW LOCKS
     {
        $$ = &tree.ShowLocks{}
+    }
+
+show_table_num_stmt:
+    SHOW TABLE_NUMBER from_or_in_opt db_name_opt
+    {
+      $$ = &tree.ShowTableNumber{DbName: $4}
+    }
+
+show_column_num_stmt:
+    SHOW COLUMN_NUMBER table_column_name database_name_opt
+    {
+       $$ = &tree.ShowColumnNumber{Table: $3, DbName: $4}
+    }
+
+show_table_size_stmt:
+    SHOW TABLE_SIZE table_column_name database_name_opt
+    {
+       $$ = &tree.ShowTableSize{Table: $3, DbName: $4}
+    }
+
+show_table_values_stmt:
+   SHOW TABLE_VALUES table_column_name database_name_opt
+    {
+       $$ = &tree.ShowTableValues{Table: $3, DbName: $4}
     }
 
 show_target_filter_stmt:
@@ -8037,6 +8067,10 @@ reserved_keyword:
 |   GROUPS
 |   NODE
 |   LOCKS
+|   TABLE_NUMBER
+|   TABLE_SIZE
+|   COLUMN_NUMBER
+|   TABLE_VALUES
 |   RETURNS
 
 non_reserved_keyword:
