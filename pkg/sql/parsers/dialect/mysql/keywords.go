@@ -528,5 +528,7 @@ func init() {
 		"groups":                   GROUPS,
 		"number":                   NUMBER,
 		"size":                     SIZE,
+		"returns":                  RETURNS,
+		"extension":                EXTENSION,
 	}
 }

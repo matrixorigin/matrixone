@@ -1778,6 +1778,42 @@ var (
 			input:  "load data infile 'data.txt' into table db.a accounts(a1, a2) fields terminated by '\t' escaped by '\t'",
 			output: "load data infile data.txt into table db.a accounts(a1, a2) fields terminated by \t escaped by \t",
 		},
+		{
+			input:  `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
+			output: `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
+		},
+		{
+			input:  `create function twosum (x int, y int) returns int language sql as 'select $1 + $2'`,
+			output: `create function twosum (x int, y int) returns int language sql as 'select $1 + $2'`,
+		},
+		{
+			input:  `create function charat (x int) returns char language sql as 'select $1'`,
+			output: `create function charat (x int) returns char language sql as 'select $1'`,
+		},
+		{
+			input:  `create function charat (x int default 15) returns char language sql as 'select $1'`,
+			output: `create function charat (x int default 15) returns char language sql as 'select $1'`,
+		},
+		{
+			input:  `drop function helloworld ()`,
+			output: `drop function helloworld ()`,
+		},
+		{
+			input:  `drop function charat (int)`,
+			output: `drop function charat (int)`,
+		},
+		{
+			input:  `drop function twosum (int, int)`,
+			output: `drop function twosum (int, int)`,
+		},
+		{
+			input:  `create extension python as strutil file 'stringutils.whl'`,
+			output: `create extension python as strutil file stringutils.whl`,
+		},
+		{
+			input:  `load strutil`,
+			output: `load strutil`,
+		},
 	}
 )
 
