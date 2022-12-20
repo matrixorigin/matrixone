@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/tidwall/btree"
@@ -660,13 +661,14 @@ var (
 		"system_metrics":     0,
 	}
 	sysWantedTables = map[string]int8{
-		"mo_user":                 0,
-		"mo_account":              0,
-		"mo_role":                 0,
-		"mo_user_grant":           0,
-		"mo_role_grant":           0,
-		"mo_role_privs":           0,
-		`%!%mo_increment_columns`: 0,
+		"mo_user":                  0,
+		"mo_account":               0,
+		"mo_role":                  0,
+		"mo_user_grant":            0,
+		"mo_role_grant":            0,
+		"mo_role_privs":            0,
+		"mo_user_defined_function": 0,
+		`%!%mo_increment_columns`:  0,
 	}
 	createAutoTableSql = "create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);"
 	//the sqls creating many tables for the tenant.
@@ -727,6 +729,16 @@ var (
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
+		`create table mo_user_defined_function(
+				function_id int auto_increment,
+				name     varchar(100),
+				args     text,
+				retType  varchar(20),
+				body     text,
+				language varchar(20),
+				db       varchar(100),
+				PRIMARY KEY(function_id)
+			);`,
 	}
 
 	//drop tables for the tenant
@@ -738,6 +750,14 @@ var (
 		`drop table if exists mo_catalog.mo_role_privs;`,
 		//"drop table if exists mo_catalog.`%!%mo_increment_columns`;",
 	}
+
+	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
+				name,
+				args,
+				retType,
+				body,
+				language,
+				db) values ("%s","%s","%s","%s","%s","%s");`
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
 				account_id,
@@ -1043,6 +1063,9 @@ const (
 	deleteUserFromMoUserFormat = `delete from mo_catalog.mo_user where user_id = %d;`
 
 	deleteUserFromMoUserGrantFormat = `delete from mo_catalog.mo_user_grant where user_id = %d;`
+
+	// delete user defined function from mo_user_defined_function
+	deleteUserDefinedFunctionFormat = `delete from mo_catalog.mo_user_defined_function where name = "%s" and args = "%s" and db = "%s";`
 )
 
 var (
@@ -2380,7 +2403,41 @@ handleFailed:
 }
 
 func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) error {
-	return nil
+	var err error
+	var sql string
+
+	// validate database name
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, df.Name.Name, "", ses.GetDatabaseName())
+
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
 }
 
 // doRevokePrivilege accomplishes the RevokePrivilege statement
@@ -5563,5 +5620,57 @@ handleFailed:
 }
 
 func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) error {
-	return nil
+	var err error
+	var initMoUdf string
+	var retTypeStr string
+	var argsStr string
+	var fmtctx *tree.FmtCtx
+
+	// a database must be selected when create a function
+	if ses.DatabaseNameIsEmpty() {
+		return moerr.NewNoDBNoCtx()
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+	cf.ReturnType.Format(fmtctx)
+	retTypeStr = fmtctx.String()
+	fmtctx.Reset()
+
+	for i, def := range cf.Args {
+		if i != 0 {
+			fmtctx.WriteString(",")
+			fmtctx.WriteByte(' ')
+		}
+		def.Format(fmtctx)
+	}
+
+	argsStr = fmtctx.String()
+
+	initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat, cf.Name.Name, argsStr, retTypeStr, cf.Body, cf.Language, ses.GetDatabaseName())
+	err = bh.Exec(ctx, initMoUdf)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return err
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
 }
