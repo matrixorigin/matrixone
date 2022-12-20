@@ -269,10 +269,10 @@ func (mr *MockRelationMockRecorder) GetPrimaryKeys(arg0 interface{}) *gomock.Cal
 }
 
 // GetTableID mocks base method.
-func (m *MockRelation) GetTableID(arg0 context.Context) string {
+func (m *MockRelation) GetTableID(arg0 context.Context) uint64 {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetTableID", arg0)
-	ret0, _ := ret[0].(string)
+	ret0, _ := ret[0].(uint64)
 	return ret0
 }
 

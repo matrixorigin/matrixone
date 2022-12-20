@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"context"
+	"fmt"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -46,7 +47,7 @@ type AutoIncrParam struct {
 	colDefs []*plan.ColDef
 }
 
-func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID, dbName, tblName string) error {
+func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID uint64, dbName, tblName string) error {
 	incrParam := &AutoIncrParam{
 		eg:      e,
 		ctx:     ctx,
@@ -83,7 +84,7 @@ func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.
 
 // get autoincr columns values.  This function updates the auto incr table.
 // multiple txn may cause a conflicts, but we retry off band transactions.
-func getRangeFromAutoIncrTable(ctx context.Context, param *AutoIncrParam, bat *batch.Batch, tableID string) ([]uint64, []uint64, error) {
+func getRangeFromAutoIncrTable(ctx context.Context, param *AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
 	var err error
 	loopCnt := 0
 loop:
@@ -108,7 +109,8 @@ loop:
 		if err != nil {
 			goto loop
 		}
-		if d, s, err = getOneColRangeFromAutoIncrTable(ctx, param, bat, tableID+"_"+col.Name, i); err != nil {
+		name := fmt.Sprintf("%d_%s", tableID, col.Name)
+		if d, s, err = getOneColRangeFromAutoIncrTable(ctx, param, bat, name, i); err != nil {
 			RolllbackTxn(param.eg, txn, param.ctx)
 			goto loop
 		}
@@ -417,7 +419,7 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 	if err != nil {
 		return err
 	}
-	name := rel.GetTableID(ctx) + "_"
+	name := fmt.Sprintf("%d_", rel.GetTableID(ctx))
 
 	txn, err := NewTxn(eg, proc, ctx)
 	if err != nil {
@@ -447,7 +449,7 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 }
 
 // for delete table operation, delete col in mo_increment_columns table
-func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, rel engine.Relation, proc *process.Process, dbName, tableID string) error {
+func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, rel engine.Relation, proc *process.Process, dbName string, tableID uint64) error {
 	txn, err := NewTxn(eg, proc, ctx)
 	if err != nil {
 		return err
@@ -468,7 +470,8 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, rel engine.Relatio
 			if !d.Attr.AutoIncrement {
 				continue
 			}
-			bat, _ := GetDeleteBatch(rel2, ctx, tableID+"_"+d.Attr.Name, proc.Mp())
+			name := fmt.Sprintf("%d_%s", tableID, d.Attr.Name)
+			bat, _ := GetDeleteBatch(rel2, ctx, name, proc.Mp())
 			if bat == nil {
 				return moerr.NewInternalError(ctx, "the deleted batch is nil")
 			}
@@ -489,7 +492,7 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, rel engine.Relatio
 }
 
 // for delete table operation, move old col as new col in mo_increment_columns table
-func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, oldTableID, dbName string) error {
+func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, oldTableID uint64, dbName string) error {
 	var err error
 	newRel, err := db.Relation(ctx, tblName)
 	if err != nil {
@@ -509,7 +512,7 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 		return err
 	}
 
-	newName := newRel.GetTableID(ctx) + "_"
+	newName := fmt.Sprintf("%d_", newRel.GetTableID(ctx))
 	for _, def := range defs {
 		switch d := def.(type) {
 		case *engine.AttributeDef:
@@ -517,7 +520,8 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 				continue
 			}
 
-			bat, currentNum := GetDeleteBatch(autoRel, ctx, oldTableID+"_"+d.Attr.Name, proc.Mp())
+			delName := fmt.Sprintf("%d_%s", oldTableID, d.Attr.Name)
+			bat, currentNum := GetDeleteBatch(autoRel, ctx, delName, proc.Mp())
 			if bat == nil {
 				return moerr.NewInternalError(ctx, "the deleted batch is nil")
 			}
@@ -544,7 +548,7 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 }
 
 // for truncate table operation, reset col in mo_increment_columns table
-func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, tableID, dbName string) error {
+func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, tableID uint64, dbName string) error {
 	rel, err := db.Relation(ctx, tblName)
 	if err != nil {
 		return err
@@ -563,14 +567,15 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 		return err
 	}
 
-	name := rel.GetTableID(ctx) + "_"
+	name := fmt.Sprintf("%d_", rel.GetTableID(ctx))
 	for _, def := range defs {
 		switch d := def.(type) {
 		case *engine.AttributeDef:
 			if !d.Attr.AutoIncrement {
 				continue
 			}
-			bat, _ := GetDeleteBatch(autoRel, ctx, tableID+"_"+d.Attr.Name, proc.Mp())
+			delName := fmt.Sprintf("%d_%s", tableID, d.Attr.Name)
+			bat, _ := GetDeleteBatch(autoRel, ctx, delName, proc.Mp())
 			if bat == nil {
 				return moerr.NewInternalError(ctx, "the deleted batch is nil")
 			}

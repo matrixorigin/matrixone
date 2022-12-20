@@ -1670,7 +1670,8 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(attr.Attr.Name)
 			col := &plan2.ColDef{
-				Name: attr.Attr.Name,
+				ColId: uint64(attr.Attr.ID),
+				Name:  attr.Attr.Name,
 				Typ: &plan2.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
