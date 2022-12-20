@@ -164,22 +164,14 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		}
 	}
 	if p.UniqueIndexDef != nil {
-		primaryKeyName := ""
-		for _, col := range p.ExplicitCols {
-			if col.Primary {
-				primaryKeyName = col.Name
-			}
-		}
-		if p.CompositePkey != nil {
-			primaryKeyName = p.CompositePkey.Name
-		}
+		primaryKeyName := update.GetTablePriKeyName(p.ExplicitCols, p.CompositePkey)
 		for i := range p.UniqueIndexDef.IndexNames {
 			if p.UniqueIndexDef.TableExists[i] {
 				indexRelation, err := dbSource.Relation(c.ctx, p.UniqueIndexDef.TableNames[i])
 				if err != nil {
 					return 0, err
 				}
-				indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, p.UniqueIndexDef.Fields[i], primaryKeyName, c.proc)
+				indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, p.UniqueIndexDef.Fields[i].Parts, primaryKeyName, c.proc)
 				if rowNum != 0 {
 					if err := indexRelation.Write(c.ctx, indexBatch); err != nil {
 						return 0, err

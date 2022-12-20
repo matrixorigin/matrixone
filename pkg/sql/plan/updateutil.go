@@ -308,6 +308,7 @@ func buildIndexTableUpdateCtx(objRef *ObjectRef, updateCols []updateCol, uDef *U
 				OtherAttrs:         nil,
 				OrderAttrs:         orderAttrs,
 				IsIndexTableUpdate: true,
+				IndexParts:         uDef.Fields[i].Parts,
 			}
 			indexUpCtxs = append(indexUpCtxs, updatectx)
 			indexTableDefs = append(indexTableDefs, idxTblDef)

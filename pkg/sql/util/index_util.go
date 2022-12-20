@@ -49,14 +49,25 @@ func JudgeIsCompositeIndexColumn(f *plan.Field) bool {
 	return len(f.Parts) > 1
 }
 
-func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, f *plan.Field, originTablePrimaryKey string, proc *process.Process) (*batch.Batch, int) {
-	b := &batch.Batch{
-		// make sure that when batch is cleaned, origin batch is not affected
-		Attrs: make([]string, len(f.Cols)),
-		Vecs:  make([]*vector.Vector, len(f.Cols)),
-		Cnt:   1,
+func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, originTablePrimaryKey string, proc *process.Process) (*batch.Batch, int) {
+	var b *batch.Batch
+	if originTablePrimaryKey == "" {
+		b = &batch.Batch{
+			Attrs: make([]string, 1),
+			Vecs:  make([]*vector.Vector, 1),
+			Cnt:   1,
+		}
+	} else {
+		b = &batch.Batch{
+			Attrs: make([]string, 2),
+			Vecs:  make([]*vector.Vector, 2),
+			Cnt:   1,
+		}
 	}
-	isCompoundIndex := JudgeIsCompositeIndexColumn(f)
+	isCompoundIndex := false
+	if len(parts) > 1 {
+		isCompoundIndex = true
+	}
 	b.Attrs[0] = catalog.IndexTableIndexColName
 	if len(b.Attrs) > 1 {
 		b.Attrs[1] = catalog.IndexTablePrimaryColName
@@ -65,14 +76,14 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, f *plan.Field, o
 	if isCompoundIndex {
 		cIndexVecMap := make(map[string]*vector.Vector)
 		for num, attrName := range attrs {
-			for _, name := range f.Parts {
+			for _, name := range parts {
 				if attrName == name {
 					cIndexVecMap[name] = vecs[num]
 				}
 			}
 		}
 		vs := make([]*vector.Vector, 0)
-		for _, part := range f.Parts {
+		for _, part := range parts {
 			v := cIndexVecMap[part]
 			vs = append(vs, v)
 		}
@@ -80,7 +91,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, f *plan.Field, o
 	} else {
 		var vec *vector.Vector
 		for i, name := range attrs {
-			if f.Parts[0] == name {
+			if parts[0] == name {
 				vec = vecs[i]
 				break
 			}

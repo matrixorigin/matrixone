@@ -389,6 +389,7 @@ message UpdateCtx {
 	bool is_index_table_update = 9;
 	repeated int32 uniqueIndexPos = 10;
 	repeated int32	secondaryIndexPos = 11;
+	repeated string indexParts = 12;
 }
 
 message AnalyzeInfo {

@@ -136,37 +136,10 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			batch.Reorder(tmpBat, updateCtx.OrderAttrs)
 			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 
-			// in update, we can get a batch[b(update), b(old)]
-			// we should use old b as delete info
-			//if updateCtx.UniqueIndexDef != nil {
-			//	relIdx := 0
-			//	for num := range updateCtx.UniqueIndexDef.IndexNames {
-			//		if updateCtx.UniqueIndexDef.TableExists[num] {
-			//			rel := updateCtx.UniqueIndexTables[relIdx]
-			//			var attrs []string = nil
-			//			attrs = append(attrs, updateCtx.UpdateAttrs...)
-			//			attrs = append(attrs, updateCtx.OtherAttrs...)
-			//			attrs = append(attrs, updateCtx.IndexAttrs...)
-			//			oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[int(idx)+1:], attrs, updateCtx.UniqueIndexDef.Fields[num], proc)
-			//			if rowNum != 0 {
-			//				err := rel.Delete(proc.Ctx, oldBatch, updateCtx.UniqueIndexDef.Fields[num].Cols[0].Name)
-			//				if err != nil {
-			//					delBat.Clean(proc.Mp())
-			//					tmpBat.Clean(proc.Mp())
-			//					oldBatch.Clean(proc.Mp())
-			//					return false, err
-			//				}
-			//			}
-			//			oldBatch.Clean(proc.Mp())
-			//			relIdx++
-			//		}
-			//	}
-			//}
-
 			if len(updateCtx.UniqueIndexPos) > 0 {
 				// get Primary key name of the original table
 				tableDef := p.TableDefVec[i]
-				oriPriKeyName := getTablePriKeyName(tableDef)
+				oriPriKeyName := GetTablePriKeyName(tableDef.Cols, tableDef.CompositePkey)
 				// Update the index table records
 				for _, indexPos := range updateCtx.UniqueIndexPos {
 					indexTableUpdateCtx := p.UpdateCtxs[indexPos]
@@ -190,25 +163,6 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 				tmpBat.Clean(proc.Mp())
 				return false, err
 			}
-
-			//if updateCtx.UniqueIndexDef != nil {
-			//	relIdx := 0
-			//	for num := range updateCtx.UniqueIndexDef.IndexNames {
-			//		if updateCtx.UniqueIndexDef.TableExists[num] {
-			//			rel := updateCtx.UniqueIndexTables[relIdx]
-			//			b, rowNum := util.BuildUniqueKeyBatch(tmpBat.Vecs, tmpBat.Attrs, updateCtx.UniqueIndexDef.Fields[num], proc)
-			//			if rowNum != 0 {
-			//				err = rel.Write(proc.Ctx, b)
-			//				if err != nil {
-			//					b.Clean(proc.Mp())
-			//					tmpBat.Clean(proc.Mp())
-			//					return false, err
-			//				}
-			//			}
-			//			b.Clean(proc.Mp())
-			//		}
-			//	}
-			//}
 
 			// fill cpkey column
 			if updateCtx.CPkeyColDef != nil {
@@ -573,24 +527,27 @@ func getIndexValue(idx int, v *vector.Vector, isNull bool) any {
 */
 
 // Update the index table rows, including delete -> insert
-func updateIndexTable(indexTableUpdateCtx *UpdateCtx, tmpBat *batch.Batch, initBat *batch.Batch, originTablePriKey string, proc *process.Process) error {
+func updateIndexTable(indexTableUpdateCtx *UpdateCtx, originTableBatch *batch.Batch, indexTableBatch *batch.Batch, originTablePriKey string, proc *process.Process) error {
 	offset := indexTableUpdateCtx.HideKeyIdx
 
 	deleteBat := &batch.Batch{}
-	deleteBat.Vecs = []*vector.Vector{initBat.GetVector(offset)}
+	deleteBat.Vecs = []*vector.Vector{indexTableBatch.GetVector(offset)}
 	deleteBat.SetZs(deleteBat.GetVector(0).Length(), proc.Mp())
 
+	defer deleteBat.Clean(proc.Mp())
+
 	// delete old rows
-	err := indexTableUpdateCtx.TableSource.Delete(proc.Ctx, deleteBat, indexTableUpdateCtx.HideKey)
+	batLen := batch.Length(deleteBat)
+	tmpBat, _ := FilterBatch(deleteBat, batLen, proc)
+	err := indexTableUpdateCtx.TableSource.Delete(proc.Ctx, tmpBat, indexTableUpdateCtx.HideKey)
 	if err != nil {
-		deleteBat.Clean(proc.Mp())
+		tmpBat.Clean(proc.Mp())
 		return err
 	}
-	deleteBat.Clean(proc.Mp())
+	tmpBat.Clean(proc.Mp())
 
 	// insert new rows
-	//insertBat, rowNum := util.BuildUniqueKeyBatch(tmpBat.Vecs, tmpBat.Attrs, indexTableUpdateCtx.OrderAttrs,originTablePriKey, proc)
-	insertBat, rowNum := util.BuildUniqueKeyBatch(tmpBat.Vecs, tmpBat.Attrs, nil, originTablePriKey, proc)
+	insertBat, rowNum := util.BuildUniqueKeyBatch(originTableBatch.Vecs, originTableBatch.Attrs, indexTableUpdateCtx.IndexParts, originTablePriKey, proc)
 	if rowNum != 0 {
 		err = indexTableUpdateCtx.TableSource.Write(proc.Ctx, insertBat)
 		if err != nil {
@@ -604,15 +561,15 @@ func updateIndexTable(indexTableUpdateCtx *UpdateCtx, tmpBat *batch.Batch, initB
 }
 
 // Get the primary key name of the table
-func getTablePriKeyName(tableDef *plan.TableDef) string {
-	for _, col := range tableDef.Cols {
+func GetTablePriKeyName(cols []*plan.ColDef, cPkeyCol *plan.ColDef) string {
+	for _, col := range cols {
 		if col.Primary {
 			return col.Name
 		}
 	}
 
-	if tableDef.CompositePkey != nil {
-		return tableDef.CompositePkey.Name
+	if cPkeyCol != nil {
+		return cPkeyCol.Name
 	}
 	return ""
 }

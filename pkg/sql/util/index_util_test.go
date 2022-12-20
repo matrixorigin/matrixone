@@ -108,11 +108,11 @@ func TestBuildUniqueKeyBatch(t *testing.T) {
 	for _, test := range tests {
 		if JudgeIsCompositeIndexColumn(test.f) {
 			vec, _ := multi.Serial(test.vecs, proc)
-			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f, "", test.proc)
+			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f.Parts, "", test.proc)
 			require.Equal(t, b.Attrs[0], test.f.Cols[0].Name)
 			require.Equal(t, vec.Col, b.Vecs[0].Col)
 		} else {
-			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f, "", test.proc)
+			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f.Parts, "", test.proc)
 			require.Equal(t, b.Attrs[0], test.f.Cols[0].Name)
 			require.Equal(t, test.vecs[0].Col, b.Vecs[0].Col)
 		}
@@ -171,10 +171,10 @@ func TestCompactUniqueKeyBatch(t *testing.T) {
 	for _, test := range tests {
 		nulls.Add(test.vecs[1].Nsp, 1)
 		if JudgeIsCompositeIndexColumn(test.f) {
-			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f, "", test.proc)
+			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f.Parts, "", test.proc)
 			require.Equal(t, b.Vecs[0].Length(), 2)
 		} else {
-			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f, "", test.proc)
+			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f.Parts, "", test.proc)
 			require.Equal(t, b.Vecs[0].Length(), 2)
 		}
 	}

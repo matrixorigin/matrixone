@@ -48,6 +48,7 @@ type UpdateCtx struct {
 	// for index table
 	UniqueIndexPos    []int
 	SecondaryIndexPos []int
+	IndexParts        []string
 }
 
 /*
