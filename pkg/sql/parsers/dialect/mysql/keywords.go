@@ -526,8 +526,10 @@ func init() {
 		"preceding":                PRECEDING,
 		"following":                FOLLOWING,
 		"groups":                   GROUPS,
-		"number":                   NUMBER,
 		"table_size":               TABLE_SIZE,
+		"table_number":             TABLE_NUMBER,
+		"table_values":             TABLE_VALUES,
+		"column_number":            COLUMN_NUMBER,
 		"returns":                  RETURNS,
 		"extension":                EXTENSION,
 	}

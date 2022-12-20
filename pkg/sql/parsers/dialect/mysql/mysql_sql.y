@@ -318,7 +318,7 @@ import (
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS
-%token <str> NUMBER TABLE_SIZE
+%token <str> TABLE_NUMBER TABLE_SIZE COLUMN_NUMBER TABLE_VALUES
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
@@ -2333,27 +2333,27 @@ show_locks_stmt:
     }
 
 show_table_num_stmt:
-    SHOW TABLE NUMBER from_or_in_opt db_name_opt
+    SHOW TABLE_NUMBER from_or_in_opt db_name_opt
     {
-      $$ = &tree.ShowTableNumber{DbName: $5}
+      $$ = &tree.ShowTableNumber{DbName: $4}
     }
 
 show_column_num_stmt:
-    SHOW COLUMN NUMBER table_column_name database_name_opt
+    SHOW COLUMN_NUMBER table_column_name database_name_opt
     {
-       $$ = &tree.ShowColumnNumber{Table: $4, DbName: $5}
+       $$ = &tree.ShowColumnNumber{Table: $3, DbName: $4}
     }
 
 show_table_size_stmt:
-    SHOW TABLE TABLE_SIZE table_column_name database_name_opt
+    SHOW TABLE_SIZE table_column_name database_name_opt
     {
-       $$ = &tree.ShowTableSize{Table: $4, DbName: $5}
+       $$ = &tree.ShowTableSize{Table: $3, DbName: $4}
     }
 
 show_table_values_stmt:
-   SHOW TABLE VALUES table_column_name database_name_opt
+   SHOW TABLE_VALUES table_column_name database_name_opt
     {
-       $$ = &tree.ShowTableValues{Table: $4, DbName: $5}
+       $$ = &tree.ShowTableValues{Table: $3, DbName: $4}
     }
 
 show_target_filter_stmt:
@@ -8067,8 +8067,10 @@ reserved_keyword:
 |   GROUPS
 |   NODE
 |   LOCKS
-|   NUMBER
+|   TABLE_NUMBER
 |   TABLE_SIZE
+|   COLUMN_NUMBER
+|   TABLE_VALUES
 |   RETURNS
 
 non_reserved_keyword:
