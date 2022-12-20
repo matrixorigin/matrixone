@@ -146,27 +146,26 @@ const (
 	ErrDNShardNotFound  uint16 = 20605
 	ErrShardNotReported uint16 = 20606
 	// Generic TAE error
-	ErrTAEError                     uint16 = 20607
-	ErrTAERead                      uint16 = 20608
-	ErrRpcError                     uint16 = 20609
-	ErrWaitTxn                      uint16 = 20610
-	ErrTxnNotFound                  uint16 = 20611
-	ErrTxnNotActive                 uint16 = 20612
-	ErrTAEWrite                     uint16 = 20613
-	ErrTAECommit                    uint16 = 20614
-	ErrTAERollback                  uint16 = 20615
-	ErrTAEPrepare                   uint16 = 20616
-	ErrTAEPossibleDuplicate         uint16 = 20617
-	ErrTxnRWConflict                uint16 = 20618
-	ErrTxnWWConflict                uint16 = 20619
-	ErrNotFound                     uint16 = 20620
-	ErrTxnInternal                  uint16 = 20621
-	ErrTxnReadConflict              uint16 = 20622
-	ErrPrimaryKeyDuplicated         uint16 = 20623
-	ErrAppendableSegmentNotFound    uint16 = 20624
-	ErrAppendableBlockNotFound      uint16 = 20625
-	ErrTAEDebug                     uint16 = 20626
-	ErrNonAppendableSegmentNotFound uint16 = 20627
+	ErrTAEError                  uint16 = 20607
+	ErrTAERead                   uint16 = 20608
+	ErrRpcError                  uint16 = 20609
+	ErrWaitTxn                   uint16 = 20610
+	ErrTxnNotFound               uint16 = 20611
+	ErrTxnNotActive              uint16 = 20612
+	ErrTAEWrite                  uint16 = 20613
+	ErrTAECommit                 uint16 = 20614
+	ErrTAERollback               uint16 = 20615
+	ErrTAEPrepare                uint16 = 20616
+	ErrTAEPossibleDuplicate      uint16 = 20617
+	ErrTxnRWConflict             uint16 = 20618
+	ErrTxnWWConflict             uint16 = 20619
+	ErrNotFound                  uint16 = 20620
+	ErrTxnInternal               uint16 = 20621
+	ErrTxnReadConflict           uint16 = 20622
+	ErrPrimaryKeyDuplicated      uint16 = 20623
+	ErrAppendableSegmentNotFound uint16 = 20624
+	ErrAppendableBlockNotFound   uint16 = 20625
+	ErrTAEDebug                  uint16 = 20626
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -265,33 +264,32 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrNoAvailableBackend: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no available backend"},
 
 	// Group 6: txn
-	ErrTxnClosed:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the transaction %s has been committed or aborted"},
-	ErrTxnWriteConflict:             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn write conflict %s"},
-	ErrMissingTxn:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "missing txn"},
-	ErrUnresolvedConflict:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unresolved conflict"},
-	ErrTxnError:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "transaction error: %s"},
-	ErrDNShardNotFound:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "dn shard uuid %s, id %d not found"},
-	ErrShardNotReported:             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "dn shard uuid %s, id %d not reported"},
-	ErrTAEError:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae error %s"},
-	ErrTAERead:                      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae read error"},
-	ErrRpcError:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc error"},
-	ErrWaitTxn:                      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn wait error"},
-	ErrTxnNotFound:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn not found"},
-	ErrTxnNotActive:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn not active, state %s"},
-	ErrTAEWrite:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae write error"},
-	ErrTAECommit:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae commit error %s"},
-	ErrTAERollback:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae rollback error %s"},
-	ErrTAEPrepare:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae prepare error %s"},
-	ErrTAEPossibleDuplicate:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae possible duplicate"},
-	ErrTxnRWConflict:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "r-w conflict"},
-	ErrTxnWWConflict:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "w-w conflict"},
-	ErrNotFound:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not found"},
-	ErrTxnInternal:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn internal error"},
-	ErrTxnReadConflict:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn read conflict %s"},
-	ErrPrimaryKeyDuplicated:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicated primary key %v"},
-	ErrAppendableSegmentNotFound:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable segment not found"},
-	ErrAppendableBlockNotFound:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable block not found"},
-	ErrNonAppendableSegmentNotFound: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "non-appendable segment not found"},
+	ErrTxnClosed:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the transaction %s has been committed or aborted"},
+	ErrTxnWriteConflict:          {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn write conflict %s"},
+	ErrMissingTxn:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "missing txn"},
+	ErrUnresolvedConflict:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unresolved conflict"},
+	ErrTxnError:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "transaction error: %s"},
+	ErrDNShardNotFound:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "dn shard uuid %s, id %d not found"},
+	ErrShardNotReported:          {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "dn shard uuid %s, id %d not reported"},
+	ErrTAEError:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae error %s"},
+	ErrTAERead:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae read error"},
+	ErrRpcError:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc error"},
+	ErrWaitTxn:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn wait error"},
+	ErrTxnNotFound:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn not found"},
+	ErrTxnNotActive:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn not active, state %s"},
+	ErrTAEWrite:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae write error"},
+	ErrTAECommit:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae commit error %s"},
+	ErrTAERollback:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae rollback error %s"},
+	ErrTAEPrepare:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae prepare error %s"},
+	ErrTAEPossibleDuplicate:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae possible duplicate"},
+	ErrTxnRWConflict:             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "r-w conflict"},
+	ErrTxnWWConflict:             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "w-w conflict"},
+	ErrNotFound:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not found"},
+	ErrTxnInternal:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn internal error"},
+	ErrTxnReadConflict:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn read conflict %s"},
+	ErrPrimaryKeyDuplicated:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicated primary key %v"},
+	ErrAppendableSegmentNotFound: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable segment not found"},
+	ErrAppendableBlockNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable block not found"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},

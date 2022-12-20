@@ -20,9 +20,8 @@ import (
 )
 
 var (
-	ErrAppendableBlockNotFound      = moerr.NewAppendableBlockNotFoundNoCtx()
-	ErrAppendableSegmentNotFound    = moerr.NewAppendableSegmentNotFoundNoCtx()
-	ErrNonAppendableSegmentNotFound = moerr.NewNonAppendableSegmentNotFoundNoCtx()
+	ErrAppendableBlockNotFound   = moerr.NewAppendableBlockNotFoundNoCtx()
+	ErrAppendableSegmentNotFound = moerr.NewAppendableSegmentNotFoundNoCtx()
 )
 
 type TableHandle interface {

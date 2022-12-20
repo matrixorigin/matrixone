@@ -103,8 +103,6 @@ const (
 	BlockMeta_CommitTs   = "committs"
 	BlockMeta_SegmentID  = "segment_id"
 
-	BlockMeta_MetaLoc_ON_FS = "meta_loc"
-
 	SystemCatalogName  = "def"
 	SystemPersistRel   = "p"
 	SystemTransientRel = "t"
@@ -185,8 +183,6 @@ const (
 	BLOCKMETA_DELTALOC_IDX   = 4
 	BLOCKMETA_COMMITTS_IDX   = 5
 	BLOCKMETA_SEGID_IDX      = 6
-
-	BLOCKMETA_METALOC_ON_FS_IDX = 0
 )
 
 type BlockInfo struct {
@@ -304,11 +300,6 @@ var (
 		BlockMeta_CommitTs,
 		BlockMeta_SegmentID,
 	}
-
-	MoTableMetaSchemaOnFS = []string{
-		BlockMeta_MetaLoc_ON_FS,
-	}
-
 	MoDatabaseTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),     // dat_id
 		types.New(types.T_varchar, 5000, 0, 0), // datname
@@ -381,6 +372,5 @@ var (
 	// used by memengine or tae
 	MoColumnsTableDefs = []engine.TableDef{}
 	// used by memengine or tae or cn
-	MoTableMetaDefs     = []engine.TableDef{}
-	MoTableMetaDefsOnFS = []engine.TableDef{}
+	MoTableMetaDefs = []engine.TableDef{}
 )

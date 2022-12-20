@@ -541,7 +541,8 @@ func (h *Handle) HandlePreCommitWrite(
 				for i, row := range rows {
 					if req.Type == db.EntryInsert {
 						//req.Blks[i] = row[catalog.BLOCKMETA_ID_ON_FS_IDX].(uint64)
-						req.MetaLocs[i] = string(row[catalog.BLOCKMETA_METALOC_ON_FS_IDX].([]byte))
+						//req.MetaLocs[i] = string(row[catalog.BLOCKMETA_METALOC_ON_FS_IDX].([]byte))
+						req.MetaLocs[i] = string(row[0].([]byte))
 					} else {
 						req.DeltaLocs[i] = string(row[0].([]byte))
 					}
