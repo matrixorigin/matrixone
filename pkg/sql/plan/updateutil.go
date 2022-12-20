@@ -429,8 +429,6 @@ func buildUpdateTableList(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblDefs 
 				info := &updateTableInfo{
 					objRef:             objRef,
 					tblDef:             tblDef,
-					useKey:             nil, // To be supplemented,TODO
-					colIndex:           -1,  // To be supplemented,TODO
 					updateCols:         updateCols,
 					updateExprs:        updateExprs,
 					isIndexTableUpdate: false,
@@ -467,8 +465,6 @@ func buildUpdateTableList(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblDefs 
 							info := &updateTableInfo{
 								objRef:             objRefs[i],
 								tblDef:             tblDefs[i],
-								useKey:             nil, // To be supplemented,TODO
-								colIndex:           -1,  // To be supplemented,TODO
 								updateCols:         updateCols,
 								updateExprs:        updateExprs,
 								isIndexTableUpdate: false,
@@ -508,8 +504,6 @@ func NewUpdateTableList() *UpdateTableList {
 type updateTableInfo struct {
 	objRef             *ObjectRef
 	tblDef             *TableDef
-	useKey             *ColDef // The column used when deletion(dml), currently, it is based on '__row_id' column
-	colIndex           int32
 	updateCols         []updateCol // The columns of the table that will be updated in the table
 	updateExprs        tree.Exprs  // The exec expression of the column which will be updated in the table
 	isIndexTableUpdate bool        // Identify whether the current table is an index table
