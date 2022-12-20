@@ -374,10 +374,6 @@ var (
 		types.New(types.T_uint64, 0, 0, 0),                    // segment_id
 	}
 
-	MoTableMetaTypesOnFS = []types.Type{
-		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0), // meta_loc
-	}
-
 	// used by memengine or tae
 	MoDatabaseTableDefs = []engine.TableDef{}
 	// used by memengine or tae
