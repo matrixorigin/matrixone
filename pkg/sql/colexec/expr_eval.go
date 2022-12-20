@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -55,7 +56,7 @@ var (
 	}
 )
 
-func getConstVec(proc *process.Process, expr *plan.Expr, length int) (*vector.Vector, error) {
+func getConstVec(proc *process.Process, expr *plan.Expr, length int, ctx context.Context) (*vector.Vector, error) {
 	var vec *vector.Vector
 	t := expr.Expr.(*plan.Expr_C)
 	if t.C.GetIsnull() {
@@ -115,7 +116,7 @@ func getConstVec(proc *process.Process, expr *plan.Expr, length int) (*vector.Ve
 			defaultVal := t.C.GetDefaultval()
 			vec = vector.NewConstFixed(constBType, length, defaultVal, proc.Mp())
 		default:
-			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", t.C.GetValue()))
+			return nil, moerr.NewNYI(ctx, fmt.Sprintf("const expression %v", t.C.GetValue()))
 		}
 	}
 	vec.SetIsBin(t.C.IsBin)
@@ -133,7 +134,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
-		return getConstVec(proc, expr, length)
+		return getConstVec(proc, expr, length, proc.Ctx)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.New(types.Type{
@@ -204,7 +205,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
-		return getConstVec(proc, expr, 1)
+		return getConstVec(proc, expr, 1, proc.Ctx)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.New(types.Type{
@@ -265,7 +266,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 	}
 }
 
-func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
+func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Expr, ctx context.Context) (*vector.Vector, error) {
 	var vec *vector.Vector
 
 	if len(bat.Zs) == 0 {
@@ -276,7 +277,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
-		return getConstVec(proc, expr, length)
+		return getConstVec(proc, expr, length, ctx)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.New(types.Type{
@@ -299,7 +300,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		}
 		vs := make([]*vector.Vector, len(t.F.Args))
 		for i := range vs {
-			v, err := EvalExprByZonemapBat(bat, proc, t.F.Args[i])
+			v, err := EvalExprByZonemapBat(bat, proc, t.F.Args[i], ctx)
 			if err != nil {
 				if proc != nil {
 					mp := make(map[*vector.Vector]uint8)
@@ -398,7 +399,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
-		return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported eval expr '%v'", t))
+		return nil, moerr.NewNYI(ctx, fmt.Sprintf("unsupported eval expr '%v'", t))
 	}
 }
 
@@ -407,7 +408,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
-		return getConstVec(proc, expr, 1)
+		return getConstVec(proc, expr, 1, proc.Ctx)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.New(types.Type{
