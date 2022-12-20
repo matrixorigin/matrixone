@@ -28,17 +28,23 @@ import (
 type Transaction struct {
 	State     *Atomic[TransactionState]
 	BeginTime Time
-	tables    map[int64]*transactionTable
+	tables    transactionTableMap
+}
+
+type transactionTableMap struct {
+	sync.Mutex
+	Map map[int64]*transactionTable
 }
 
 type transactionTable struct {
 	table interface {
 		sync.Locker
-		commit(tx *Transaction, state any, commitTime Time) (any, error)
+		commit(tx *Transaction, state any, oldState any, commitTime Time) (any, error)
 		rollback(oldState any)
 		abort(*Transaction) error
 	}
-	state atomic.Value
+	initState any
+	state     atomic.Value
 }
 
 // NewTransaction creates a new transaction using beginTime as snapshot time
@@ -48,7 +54,9 @@ func NewTransaction(
 	return &Transaction{
 		State:     NewAtomic(Active),
 		BeginTime: beginTime,
-		tables:    make(map[int64]*transactionTable),
+		tables: transactionTableMap{
+			Map: make(map[int64]*transactionTable),
+		},
 	}
 }
 
@@ -83,15 +91,17 @@ func (t *Transaction) Commit(commitTime Time) error {
 		return moerr.NewTxnNotActiveNoCtx(state.String())
 	}
 	committed := make(map[int64]any) // table id -> swapped state
-	for id, table := range t.tables {
+	t.tables.Lock()
+	defer t.tables.Unlock()
+	for id, table := range t.tables.Map {
 		table.table.Lock()
 		defer table.table.Unlock()
-		swapped, err := table.table.commit(t, table.state.Load(), commitTime)
+		swapped, err := table.table.commit(t, table.state.Load(), table.initState, commitTime)
 		if err != nil {
 
 			// rollback previous committed
 			for id, swapped := range committed {
-				table := t.tables[id]
+				table := t.tables.Map[id]
 				table.table.rollback(swapped)
 			}
 
@@ -104,16 +114,17 @@ func (t *Transaction) Commit(commitTime Time) error {
 }
 
 // must call with t being locked
-func (t *Table[K, V, R]) commit(tx *Transaction, state any, commitTime Time) (any, error) {
+func (t *Table[K, V, R]) commit(tx *Transaction, state any, oldState any, commitTime Time) (any, error) {
 
 	currentState := t.state.Load()
 	txState := state.(*tableState[K, V])
-	newState, logs, err := currentState.merge(txState)
-	if err != nil {
-		return nil, err
+	if !t.state.CompareAndSwap(oldState.(*tableState[K, V]), txState) {
+		newState, _, err := currentState.merge(txState)
+		if err != nil {
+			return nil, err
+		}
+		t.state.Store(newState)
 	}
-	newState.id = currentState.id + 1
-	t.state.Store(newState)
 	if !commitTime.IsEmpty() && len(t.history) > 0 {
 		last := t.history[len(t.history)-1]
 		if !commitTime.Greater(last.EndTime) {
@@ -123,7 +134,6 @@ func (t *Table[K, V, R]) commit(tx *Transaction, state any, commitTime Time) (an
 	t.history = append(t.history, &history[K, V]{
 		EndTime:  commitTime,
 		EndState: currentState,
-		NewLogs:  logs,
 	})
 
 	return currentState, nil
@@ -140,7 +150,9 @@ func (t *Table[K, V, R]) rollback(oldStateValue any) {
 
 // Abort aborts the transaction
 func (t *Transaction) Abort() error {
-	for _, table := range t.tables {
+	t.tables.Lock()
+	defer t.tables.Unlock()
+	for _, table := range t.tables.Map {
 		table.table.Lock()
 		defer table.table.Unlock()
 		if err := table.table.abort(t); err != nil {

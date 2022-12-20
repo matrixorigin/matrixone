@@ -2379,6 +2379,10 @@ handleFailed:
 	return err
 }
 
+func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) error {
+	return nil
+}
+
 // doRevokePrivilege accomplishes the RevokePrivilege statement
 func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivilege) error {
 	var err error
@@ -3331,6 +3335,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
+	case *tree.CreateFunction:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
 	case *tree.DropTable:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropTable, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -3345,6 +3353,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
 		}
+	case *tree.DropFunction:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
 	case *tree.Select, *tree.Do:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
@@ -3395,7 +3407,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-	case *tree.PrepareStmt, *tree.PrepareString, *tree.Deallocate:
+	case *tree.PrepareStmt, *tree.PrepareString, *tree.Deallocate, *tree.Reset:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.Execute:
@@ -5548,4 +5560,8 @@ handleFailed:
 		return rbErr
 	}
 	return err
+}
+
+func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) error {
+	return nil
 }

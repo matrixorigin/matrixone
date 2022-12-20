@@ -70,6 +70,7 @@ type Request interface {
 		DropDatabaseReq |
 		CreateRelationReq |
 		DropOrTruncateRelationReq |
+		UpdateConstraintReq |
 		WriteReq |
 		apipb.SyncLogTailReq
 }
@@ -78,8 +79,9 @@ type Response interface {
 	CreateDatabaseResp |
 		DropDatabaseResp |
 		CreateRelationResp |
-		DropOrTruncateRelationResp
-	WriteResp |
+		DropOrTruncateRelationResp |
+		UpdateConstraintResp |
+		WriteResp |
 		apipb.SyncLogTailResp
 }
 
@@ -132,6 +134,16 @@ type CreateRelationReq struct {
 	Type         RelationType
 	Defs         []engine.TableDef
 }
+
+type UpdateConstraintReq struct {
+	TableId      uint64
+	TableName    string
+	DatabaseId   uint64
+	DatabaseName string
+	Constraint   []byte
+}
+
+type UpdateConstraintResp struct{}
 
 type CreateRelationResp struct {
 	ID uint64

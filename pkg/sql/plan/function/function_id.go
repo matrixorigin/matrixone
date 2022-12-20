@@ -184,6 +184,7 @@ const (
 	SINH       //SINH
 	SPACE
 	SPLIT         // SPLIT
+	SPLIT_PART    // SPLIT_PART
 	STARCOUNT     // STARTCOUNT
 	STARTSWITH    // STARTSWITH
 	STDDEV_POP    // STDDEV_POP
@@ -250,6 +251,7 @@ const (
 	JSON_EXTRACT // JSON_EXTRACT
 	FORMAT       // FORMAT
 	SLEEP        // sleep for a while
+	INSTR
 
 	UUID
 	SERIAL
@@ -341,6 +343,7 @@ var functionIdRegister = map[string]int32{
 	"variance":              VAR_POP,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
 	"any_value":             ANY_VALUE,
+	"median":                MEDIAN,
 	// builtin
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// binary functions
@@ -458,6 +461,10 @@ var functionIdRegister = map[string]int32{
 	"field":                          FIELD,
 	"format":                         FORMAT,
 	"sleep":                          SLEEP,
+	"split_part":                     SPLIT_PART,
+	"instr":                          INSTR,
+	"curdate":                        CURRENT_DATE,
+	"current_date":                   CURRENT_DATE,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

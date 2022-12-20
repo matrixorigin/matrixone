@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,7 +31,7 @@ func initBuiltIns() {
 	var err error
 
 	for fid, fs := range builtins {
-		err = appendFunction(fid, fs)
+		err = appendFunction(context.Background(), fid, fs)
 		if err != nil {
 			panic(err)
 		}
@@ -181,11 +182,12 @@ var builtins = map[int]Functions{
 		},
 		Overloads: []Function{
 			{
-				Index:     0,
-				Volatile:  false,
-				Args:      []types.T{},
-				ReturnTyp: types.T_timestamp,
-				Fn:        multi.CurrentTimestamp,
+				Index:           0,
+				Volatile:        false,
+				RealTimeRelated: true,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_timestamp,
+				Fn:              multi.CurrentTimestamp,
 			},
 		},
 	},
@@ -2036,17 +2038,17 @@ var builtins = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Volatile:  true,
+				Volatile:  false,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_json,
-				Fn:        binary.JsonExtractByString,
+				Fn:        binary.JsonExtract,
 			},
 			{
 				Index:     1,
-				Volatile:  true,
+				Volatile:  false,
 				Args:      []types.T{types.T_json, types.T_varchar},
 				ReturnTyp: types.T_json,
-				Fn:        binary.JsonExtractByJson,
+				Fn:        binary.JsonExtract,
 			},
 		},
 	},
@@ -2696,6 +2698,49 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_uint8,
 				Volatile:  true,
 				Fn:        unary.Sleep[float64],
+			},
+		},
+	},
+	INSTR: {
+		Id:     INSTR,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_int64,
+				Volatile:  false,
+				Fn:        binary.Instr,
+			},
+		},
+	},
+	SPLIT_PART: {
+		Id:     SPLIT_PART,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_uint32},
+				ReturnTyp: types.T_varchar,
+				Volatile:  false,
+				Fn:        multi.SplitPart,
+			},
+		},
+	},
+	CURRENT_DATE: {
+		Id:     CURRENT_DATE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_date,
+				Volatile:        false,
+				RealTimeRelated: true,
+				Fn:              unary.CurrentDate,
 			},
 		},
 	},

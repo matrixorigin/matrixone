@@ -17,16 +17,14 @@ package moengine
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
@@ -52,8 +50,8 @@ type Txn interface {
 type Relation interface {
 	GetPrimaryKeys(context.Context) ([]*engine.Attribute, error)
 	GetHideKeys(context.Context) ([]*engine.Attribute, error)
-	GetSchema(ctx context.Context) *catalog.Schema
 
+	UpdateConstraintWithBin(context.Context, []byte) error
 	//Write just append data into txn's workspace, instead of applying data into state machine.
 	Write(context.Context, *batch.Batch) error
 

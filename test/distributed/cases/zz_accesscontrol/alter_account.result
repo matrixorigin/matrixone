@@ -1,0 +1,193 @@
+create account if not exists Abc ADMIN_NAME 'admin' IDENTIFIED BY '123456' comment 'comment test';
+alter account abc admin_name='admin'  IDENTIFIED BY '1WERDFT3YG';
+select user_name,authentication_string from mo_catalog.mo_user;
+user_name    authentication_string
+admin    1WERDFT3YG
+create database testdb;
+drop database testdb;
+alter account abc admin_name='admin'  IDENTIFIED BY 'yyyy_34lifel';
+select user_name,authentication_string from mo_catalog.mo_user;
+user_name    authentication_string
+admin    yyyy_34lifel
+alter account abc admin_name='admin'  IDENTIFIED BY 'abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff` admin_name `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffffdddddd';
+select user_name,authentication_string from mo_catalog.mo_user;
+user_name    authentication_string
+admin    abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff` admin_name `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffffdddddd
+show databases;
+Database
+mo_catalog
+system
+system_metrics
+information_schema
+mysql
+alter account abc admin_name='admin'  IDENTIFIED BY 'Ni7893';
+select user_name,authentication_string from mo_catalog.mo_user;
+user_name    authentication_string
+admin    Ni7893
+alter account abc admin_name='admin'  IDENTIFIED BY '_1234';
+select user_name,authentication_string from mo_catalog.mo_user;
+user_name    authentication_string
+admin    _1234
+alter account abc admin_name='admin'  IDENTIFIED BY 'nnnn@12.fef';
+select user_name,authentication_string from mo_catalog.mo_user;
+user_name    authentication_string
+admin    nnnn@12.fef
+alter account abc admin_name='admin'  IDENTIFIED BY '密码';
+select user_name,authentication_string from mo_catalog.mo_user;
+user_name    authentication_string
+admin    密码
+alter account abc admin_name='admin'  IDENTIFIED BY '123 456';
+select user_name,authentication_string from mo_catalog.mo_user;
+user_name    authentication_string
+admin    123 456
+alter account abc admin_name='admin'  IDENTIFIED BY 'test:aaa';
+select user_name,authentication_string from mo_catalog.mo_user;
+user_name    authentication_string
+admin    test:aaa
+drop account abc;
+create account if not exists test ADMIN_NAME '1WERDFT3YG' IDENTIFIED BY '123456';
+alter account test admin_name='1WERDFT3YG'  IDENTIFIED BY '';
+internal error: there is no user 1WERDFT3YG
+alter account not_exist_account ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+internal error: there is no account not_exist_account
+alter account if exists not_exist_account ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+alter account test ADMIN_NAME 'testaaa' IDENTIFIED BY '123456';
+internal error: there is no user testaaa
+alter account if exists test ADMIN_NAME 'testaaa' IDENTIFIED BY '123456';
+internal error: there is no user testaaa
+drop account test;
+create account if not exists test ADMIN_NAME 'admin' IDENTIFIED BY '123456' comment 'account comment';
+alter account test admin_name='admin'  IDENTIFIED BY '123456';
+select user_name,authentication_string from mo_catalog.mo_user;
+user_name    authentication_string
+admin    123456
+drop account test;
+create account if not exists alaccount ADMIN_NAME 'WERTY12ERT' IDENTIFIED BY '123456' comment 'account comment';
+create user 'al_user_1' identified by '123456';
+create role if not exists al_role;
+grant all on account * to al_role;
+grant al_role to al_user_1;
+create database al_db;
+alter account alaccount ADMIN_NAME 'WERTY12ERT' IDENTIFIED BY 'abc@123';
+select user_name,authentication_string from mo_catalog.mo_user where user_name='al_user_1';
+user_name    authentication_string
+al_user_1    123456
+select role_name,comments from mo_catalog.mo_role;
+role_name    comments
+accountadmin    
+public    
+al_role    
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+al_db
+mo_catalog
+drop database al_db;
+drop account alaccount;
+create account if not exists testcomment ADMIN_NAME 'test_user' IDENTIFIED BY 'Asd1235' comment 'account comment';
+alter account testcomment comment 'new account comment';
+select account_name,comments from mo_catalog.mo_account where account_name='testcomment';
+account_name    comments
+testcomment    new account comment
+show databases;
+Database
+system
+system_metrics
+information_schema
+mo_catalog
+mysql
+alter account testcomment comment '';
+select account_name,comments from mo_catalog.mo_account where account_name='testcomment';
+account_name    comments
+testcomment    
+alter account testcomment comment 'abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff';
+select account_name,comments from mo_catalog.mo_account where account_name='testcomment';
+account_name    comments
+testcomment    abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff
+alter account testcomment comment '周三下午18：00';
+select account_name,comments from mo_catalog.mo_account where account_name='testcomment';
+account_name    comments
+testcomment    周三下午18：00
+alter account if exists testcomment comment '177634853$%^&*!@()';
+select account_name,comments from mo_catalog.mo_account where account_name='testcomment';
+account_name    comments
+testcomment    177634853$%^&*!@()
+alter account if exists testcomment1 comment '177634853$%^&*!@()';
+alter account testcomment1 comment '177634853$%^&*!@()';
+internal error: there is no account testcomment1
+drop account testcomment;
+create account if not exists testsuspend ADMIN_NAME 'admin' IDENTIFIED BY '123456' comment 'account comment';
+select user_name, authentication_string from mo_catalog.mo_user;
+user_name    authentication_string
+admin    123456
+alter account testsuspend suspend;
+select account_name,status from mo_catalog.mo_account;
+account_name    status
+testsuspend    suspend
+sys    open
+alter account testsuspend OPEN;
+select account_name,status from mo_catalog.mo_account;
+account_name    status
+testsuspend    open
+sys    open
+alter account testsuspend suspend;
+select account_name,status from mo_catalog.mo_account;
+account_name    status
+testsuspend    suspend
+sys    open
+alter account testsuspend ADMIN_NAME 'admin' IDENTIFIED BY '1234567890';
+alter account testsuspend comment 'aaaaaaa';
+select account_name,status,comments from mo_catalog.mo_account where account_name='testsuspend';
+account_name    status    comments
+testsuspend    suspend    aaaaaaa
+drop account testsuspend;
+select account_name,status from mo_catalog.mo_account where account_name='testsuspend';
+account_name    status
+alter account testsuspend open;
+internal error: there is no account testsuspend
+create account if not exists testsuspend ADMIN_NAME 'user01' IDENTIFIED BY 'fffff' comment 'account comment';
+alter account testsuspend OPEN;
+select account_name,status from mo_catalog.mo_account where account_name='testsuspend';
+account_name    status
+testsuspend    open
+alter account testsuspend OPEN;
+select account_name,status from mo_catalog.mo_account where account_name='testsuspend';
+account_name    status
+testsuspend    open
+alter account testsuspend suspend;
+select account_name,status from mo_catalog.mo_account where account_name='testsuspend';
+account_name    status
+testsuspend    suspend
+alter account testsuspend suspend;
+select account_name,status from mo_catalog.mo_account where account_name='testsuspend';
+account_name    status
+testsuspend    suspend
+drop account testsuspend;
+select account_name,status from mo_catalog.mo_account where account_name='testsuspend';
+account_name    status
+create account if not exists test ADMIN_NAME 'adminuser' IDENTIFIED BY '123456' comment 'account comment';
+alter account test admin_name='adminuser'  IDENTIFIED BY '123456' comment 'new comment ' ;
+internal error: at most one option at a time
+alter account test admin_name='adminuser'  IDENTIFIED BY '123456' suspend comment 'new comment';
+internal error: at most one option at a time
+alter account test suspend comment 'new comment';
+internal error: at most one option at a time
+alter account test admin_name='adminuser';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 42 near ";";
+drop account test;
+drop user if exists al_user_2;
+create user 'al_user_2' identified by '123456';
+create role if not exists al_role2;
+grant all on account * to al_role2;
+grant al_role2 to al_user_2;
+create account if not exists test ADMIN_NAME '123ERTYU' IDENTIFIED BY '123ERTYU' comment 'account comment';
+alter account test admin_name='adminuser'  IDENTIFIED BY '123456';
+internal error: do not have privilege to execute the statement
+alter account test comment 'ccccccc';
+internal error: do not have privilege to execute the statement
+alter account test suspend;
+internal error: do not have privilege to execute the statement
+drop account test;

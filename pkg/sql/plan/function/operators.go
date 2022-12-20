@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,7 +30,7 @@ func initOperators() {
 	var err error
 
 	for fid, fs := range operators {
-		err = appendFunction(fid, fs)
+		err = appendFunction(context.Background(), fid, fs)
 		if err != nil {
 			panic(err)
 		}
@@ -1869,8 +1870,8 @@ var operators = map[int]Functions{
 			{
 				Index: 2,
 				Args: []types.T{
-					types.T_char,
-					types.T_char,
+					types.T_text,
+					types.T_text,
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.Like,

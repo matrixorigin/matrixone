@@ -16,113 +16,81 @@ package json_extract
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 var (
-	QueryByString func([][]byte, [][]byte, []*bytejson.ByteJson) ([]*bytejson.ByteJson, error)
-	QueryByJson   func([][]byte, [][]byte, []*bytejson.ByteJson) ([]*bytejson.ByteJson, error)
+	JsonExtract func([][]byte, [][]byte, []*nulls.Nulls, []*bytejson.ByteJson, *nulls.Nulls, func([]byte, *bytejson.Path) (*bytejson.ByteJson, error)) ([]*bytejson.ByteJson, error)
 )
 
 func init() {
-	QueryByString = byString
-	QueryByJson = byJson
+	JsonExtract = jsonExtract
 }
 
-func byJson(json, path [][]byte, result []*bytejson.ByteJson) ([]*bytejson.ByteJson, error) {
+func jsonExtract(json, path [][]byte, nsps []*nulls.Nulls, result []*bytejson.ByteJson, rnsp *nulls.Nulls, compute func([]byte, *bytejson.Path) (*bytejson.ByteJson, error)) ([]*bytejson.ByteJson, error) {
 	if len(path) == 1 {
 		pStar, err := types.ParseStringToPath(string(path[0]))
 		if err != nil {
 			return nil, err
 		}
 		for i := range json {
-			ret, err := byJsonOne(json[i], &pStar)
+			if nsps[0].Contains(uint64(i)) {
+				rnsp.Set(uint64(i))
+				continue
+			}
+			ret, err := compute(json[i], &pStar)
 			if err != nil {
 				return nil, err
 			}
-			result = append(result, ret)
+			if ret.IsNull() {
+				rnsp.Set(uint64(i))
+				continue
+			}
+			result[i] = ret
 		}
 		return result, nil
 	}
 	if len(json) == 1 {
 		for i := range path {
+			if nsps[1].Contains(uint64(i)) {
+				rnsp.Set(uint64(i))
+				continue
+			}
 			pStar, err := types.ParseStringToPath(string(path[i]))
 			if err != nil {
 				return nil, err
 			}
-			ret, err := byJsonOne(json[0], &pStar)
+			ret, err := compute(json[0], &pStar)
 			if err != nil {
 				return nil, err
 			}
-			result = append(result, ret)
+			if ret.IsNull() {
+				rnsp.Set(uint64(i))
+				continue
+			}
+			result[i] = ret
 		}
 		return result, nil
 	}
 	for i := range path {
+		if nsps[0].Contains(uint64(i)) || nsps[1].Contains(uint64(i)) {
+			rnsp.Set(uint64(i))
+			continue
+		}
 		pStar, err := types.ParseStringToPath(string(path[i]))
 		if err != nil {
 			return nil, err
 		}
-		ret, err := byJsonOne(json[i], &pStar)
+		ret, err := compute(json[i], &pStar)
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, ret)
+		if ret.IsNull() {
+			rnsp.Set(uint64(i))
+			continue
+		}
+		result[i] = ret
 	}
 	return result, nil
-}
-
-func byJsonOne(json []byte, path *bytejson.Path) (*bytejson.ByteJson, error) {
-	bj := types.DecodeJson(json)
-	return bj.Query(path), nil
-}
-
-func byString(json, path [][]byte, result []*bytejson.ByteJson) ([]*bytejson.ByteJson, error) {
-	if len(path) == 1 {
-		pStar, err := types.ParseStringToPath(string(path[0]))
-		if err != nil {
-			return nil, err
-		}
-		for i := range json {
-			ret, err := byStringOne(json[i], &pStar)
-			if err != nil {
-				return nil, err
-			}
-			result = append(result, ret)
-		}
-		return result, nil
-	}
-	if len(json) == 1 {
-		for i := range path {
-			pStar, err := types.ParseStringToPath(string(path[i]))
-			if err != nil {
-				return nil, err
-			}
-			ret, err := byStringOne(json[0], &pStar)
-			if err != nil {
-				return nil, err
-			}
-			result = append(result, ret)
-		}
-		return result, nil
-	}
-	for i := range path {
-		pStar, err := types.ParseStringToPath(string(path[i]))
-		if err != nil {
-			return nil, err
-		}
-		ret, err := byStringOne(json[i], &pStar)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, ret)
-	}
-	return result, nil
-}
-func byStringOne(json []byte, path *bytejson.Path) (*bytejson.ByteJson, error) {
-	bj, err := types.ParseSliceToByteJson(json)
-	if err != nil {
-		return nil, err
-	}
-	return bj.Query(path), nil
 }

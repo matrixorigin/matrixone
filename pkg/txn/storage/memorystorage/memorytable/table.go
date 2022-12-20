@@ -16,6 +16,7 @@ package memorytable
 
 import (
 	"database/sql"
+	"io"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -70,7 +71,9 @@ func (t *Table[K, V, R]) getTransactionTable(
 	err error,
 ) {
 	var ok bool
-	txTable, ok = tx.tables[t.id]
+	tx.tables.Lock()
+	defer tx.tables.Unlock()
+	txTable, ok = tx.tables.Map[t.id]
 	if !ok {
 
 		txTable = &transactionTable{
@@ -92,21 +95,24 @@ func (t *Table[K, V, R]) getTransactionTable(
 						return nil, moerr.NewInternalErrorNoCtx("transaction begin time too old")
 					}
 				}
-				state := t.history[i].EndState.cloneWithoutLogs()
-				txTable.state.Store(state)
+				state := t.history[i].EndState
+				txTable.state.Store(state.cloneWithoutLogs())
+				txTable.initState = state
 			} else {
 				// after all history
-				state := t.state.Load().cloneWithoutLogs()
-				txTable.state.Store(state)
+				state := t.state.Load()
+				txTable.state.Store(state.cloneWithoutLogs())
+				txTable.initState = state
 			}
 
 		} else {
 			// use latest
-			state := t.state.Load().cloneWithoutLogs()
-			txTable.state.Store(state)
+			state := t.state.Load()
+			txTable.state.Store(state.cloneWithoutLogs())
+			txTable.initState = state
 		}
 
-		tx.tables[t.id] = txTable
+		tx.tables.Map[t.id] = txTable
 	}
 	return
 }
@@ -238,4 +244,9 @@ func (t *Table[K, V, R]) Index(tx *Transaction, index Tuple) (entries []*IndexEn
 		entries = append(entries, entry)
 	}
 	return
+}
+
+func (t *Table[K, V, R]) Dump(w io.Writer) {
+	state := t.state.Load()
+	state.dump(w)
 }

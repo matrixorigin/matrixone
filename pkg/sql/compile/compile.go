@@ -110,6 +110,10 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return c.scope.CreateTable(c)
 	case DropTable:
 		return c.scope.DropTable(c)
+	case CreateIndex:
+		return c.scope.CreateIndex(c)
+	case DropIndex:
+		return c.scope.DropIndex(c)
 	case TruncateTable:
 		return c.scope.TruncateTable(c)
 	case Deletion:
@@ -723,7 +727,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns 
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
-			Arg: constructGroup(gn, n, i, len(rs), true),
+			Arg: constructGroup(c.ctx, gn, n, i, len(rs), true),
 		})
 	}
 	return rs
@@ -1007,7 +1011,7 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
-			Arg: constructGroup(n, ns[n.Children[0]], 0, 0, false),
+			Arg: constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false),
 		})
 	}
 	rs := c.newMergeScope(ss)
@@ -1041,7 +1045,7 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
-			Arg: constructGroup(n, ns[n.Children[0]], i, len(rs), true),
+			Arg: constructGroup(c.ctx, n, ns[n.Children[0]], i, len(rs), true),
 		})
 	}
 	return []*Scope{c.newMergeScope(append(rs, ss...))}

@@ -64,6 +64,9 @@ func (node *Update) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *Update) GetStatementType() string { return "Update" }
+func (node *Update) GetQueryType() string     { return QueryTypeDML }
+
 type UpdateExprs []*UpdateExpr
 
 func (node *UpdateExprs) Format(ctx *FmtCtx) {
@@ -173,6 +176,7 @@ type Load struct {
 	Local             bool
 	DuplicateHandling DuplicateKey
 	Table             *TableName
+	Accounts          IdentifierList
 	//Partition
 	Param *ExternParam
 }
@@ -242,6 +246,12 @@ func (node *Load) Format(ctx *FmtCtx) {
 	ctx.WriteString(" into table ")
 	node.Table.Format(ctx)
 
+	if node.Accounts != nil {
+		ctx.WriteString(" accounts(")
+		node.Accounts.Format(ctx)
+		ctx.WriteByte(')')
+	}
+
 	if node.Param.Tail.Fields != nil {
 		ctx.WriteByte(' ')
 		node.Param.Tail.Fields.Format(ctx)
@@ -271,6 +281,9 @@ func (node *Load) Format(ctx *FmtCtx) {
 		node.Param.Tail.Assignments.Format(ctx)
 	}
 }
+
+func (node *Load) GetStatementType() string { return "Load" }
+func (node *Load) GetQueryType() string     { return QueryTypeDML }
 
 func (node *Import) Format(ctx *FmtCtx) {
 	ctx.WriteString("import data")
@@ -326,6 +339,9 @@ func (node *Import) Format(ctx *FmtCtx) {
 		node.Param.Tail.Assignments.Format(ctx)
 	}
 }
+
+func (node *Import) GetStatementType() string { return "Import" }
+func (node *Import) GetQueryType() string     { return QueryTypeDML }
 
 type DuplicateKey interface{}
 

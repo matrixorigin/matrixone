@@ -58,9 +58,16 @@ func (rel *baseRelation) TableDefs(_ context.Context) ([]engine.TableDef, error)
 	return defs, nil
 }
 
-func (rel *baseRelation) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
-	// implement me
-	return nil
+func (rel *baseRelation) UpdateConstraint(_ context.Context, def *engine.ConstraintDef) error {
+	bin, err := def.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	return rel.handle.UpdateConstraint(bin)
+}
+
+func (rel *baseRelation) UpdateConstraintWithBin(_ context.Context, bin []byte) error {
+	return rel.handle.UpdateConstraint(bin)
 }
 
 func (rel *baseRelation) TableColumns(_ context.Context) ([]*engine.Attribute, error) {
@@ -79,8 +86,9 @@ func (rel *baseRelation) Stats(context.Context) (int32, int64, error) {
 	return 0, rel.handle.Rows(), nil
 }
 
-func (rel *baseRelation) GetSchema(_ context.Context) *catalog.Schema {
-	return rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+func (rel *baseRelation) Rows(c context.Context) (int64, error) {
+	_, rows, err := rel.Stats(c)
+	return rows, err
 }
 
 func (rel *baseRelation) GetPrimaryKeys(_ context.Context) ([]*engine.Attribute, error) {

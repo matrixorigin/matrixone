@@ -42,6 +42,7 @@ const (
 const (
 	INSERT = iota
 	DELETE
+	UPDATE
 )
 
 const (
@@ -142,8 +143,6 @@ type Transaction struct {
 
 	// use to cache table
 	tableMap *sync.Map
-	// use to update table constraint
-	updateTables []*table
 	// use to cache database
 	databaseMap *sync.Map
 
@@ -198,7 +197,6 @@ type tableMeta struct {
 }
 
 type table struct {
-	sync.Mutex
 	tableId    uint64
 	tableName  string
 	dnList     []int
@@ -208,17 +206,15 @@ type table struct {
 	insertExpr *plan.Expr
 	defs       []engine.TableDef
 	tableDef   *plan.TableDef
-	proc       *process.Process
 
-	primaryIdx    int // -1 means no primary key
-	clusterByIdx  int // -1 means no clusterBy key
-	viewdef       string
-	comment       string
-	partition     string
-	relKind       string
-	createSql     string
-	constraint    []byte
-	tmpConstraint []byte
+	primaryIdx   int // -1 means no primary key
+	clusterByIdx int // -1 means no clusterBy key
+	viewdef      string
+	comment      string
+	partition    string
+	relKind      string
+	createSql    string
+	constraint   []byte
 
 	updated bool
 	// use for skip rows

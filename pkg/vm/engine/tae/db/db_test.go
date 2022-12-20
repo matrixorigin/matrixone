@@ -33,6 +33,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -4543,4 +4544,85 @@ func TestAppendBat(t *testing.T) {
 		_ = p.Submit(run)
 	}
 	wg.Wait()
+}
+
+func TestUpdateCstr(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, -1)
+	schema.Name = "test"
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	schema.Constraint = []byte("start version")
+
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db", "")
+	db.CreateRelation(schema)
+	txn.Commit()
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	tbl, _ := db.GetRelationByName("test")
+	err := tbl.UpdateConstraint([]byte("version 1"))
+	assert.NoError(t, err)
+	err = txn.Commit()
+	assert.NoError(t, err)
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	tbl, _ = db.GetRelationByName("test")
+	err = tbl.UpdateConstraint([]byte("version 2"))
+	assert.NoError(t, err)
+	txn.Commit()
+
+	tots := func(ts types.TS) *timestamp.Timestamp {
+		return &timestamp.Timestamp{PhysicalTime: types.DecodeInt64(ts[4:12]), LogicalTime: types.DecodeUint32(ts[:4])}
+	}
+
+	resp, _ := logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+		CnHave: tots(types.BuildTS(0, 0)),
+		CnWant: tots(types.MaxTs()),
+		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
+	}, true)
+
+	bat, _ := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
+	cstrCol := containers.NewNonNullBatchWithSharedMemory(bat).GetVectorByName(pkgcatalog.SystemRelAttr_Constraint)
+	assert.Equal(t, 3, cstrCol.Length())
+	assert.Equal(t, []byte("start version"), cstrCol.Get(0).([]byte))
+	assert.Equal(t, []byte("version 1"), cstrCol.Get(1).([]byte))
+	assert.Equal(t, []byte("version 2"), cstrCol.Get(2).([]byte))
+
+	tae.restart()
+
+	resp, _ = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+		CnHave: tots(types.BuildTS(0, 0)),
+		CnWant: tots(types.MaxTs()),
+		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
+	}, true)
+
+	bat, _ = batch.ProtoBatchToBatch(resp.Commands[0].Bat)
+	cstrCol = containers.NewNonNullBatchWithSharedMemory(bat).GetVectorByName(pkgcatalog.SystemRelAttr_Constraint)
+	assert.Equal(t, 3, cstrCol.Length())
+	assert.Equal(t, []byte("start version"), cstrCol.Get(0).([]byte))
+	assert.Equal(t, []byte("version 1"), cstrCol.Get(1).([]byte))
+	assert.Equal(t, []byte("version 2"), cstrCol.Get(2).([]byte))
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	_, err = db.DropRelationByName("test")
+	assert.NoError(t, err)
+	txn.Commit()
+
+	resp, _ = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+		CnHave: tots(types.BuildTS(0, 0)),
+		CnWant: tots(types.MaxTs()),
+		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
+	}, true)
+
+	assert.Equal(t, 2, len(resp.Commands)) // create and drop
+	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
+	assert.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
 }

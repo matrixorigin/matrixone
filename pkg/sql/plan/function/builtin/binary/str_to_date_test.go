@@ -15,6 +15,7 @@
 package binary
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/smartystreets/goconvey/convey"
@@ -452,7 +453,7 @@ func Test_CoreStrToDate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			//ctx := make(map[string]int)
 			time := NewGeneralTime()
-			gotSuccess := CoreStrToDate(time, tt.date, tt.format)
+			gotSuccess := CoreStrToDate(context.TODO(), time, tt.date, tt.format)
 
 			require.Truef(t, gotSuccess, "%s failed input=%s format=%s", tt.name, tt.date, tt.format)
 			require.Equalf(t, tt.expect, *time, "%s failed input=%s format=%s", tt.name, tt.date, tt.format)
@@ -494,7 +495,7 @@ func Test_CoreStrToDateErr(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			//ctx := make(map[string]int)
 			time := NewGeneralTime()
-			gotSuccess := CoreStrToDate(time, tt.date, tt.format)
+			gotSuccess := CoreStrToDate(context.TODO(), time, tt.date, tt.format)
 			require.Falsef(t, gotSuccess, "%s failed input=%s format=%s", tt.name, tt.date, tt.format)
 		})
 	}
