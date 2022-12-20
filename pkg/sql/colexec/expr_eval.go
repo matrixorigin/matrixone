@@ -294,7 +294,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		return vec, nil
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
-		f, err := function.GetFunctionByID(proc.Ctx, overloadId)
+		f, err := function.GetFunctionByID(ctx, overloadId)
 		if err != nil {
 			return nil, err
 		}
