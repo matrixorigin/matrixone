@@ -17,8 +17,6 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"database/sql"
-	"errors"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -30,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -144,7 +143,7 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 
 	txID := uuid.NewString()
 
-	iter := memtable.NewBatchIter(bat)
+	iter := memorytable.NewBatchIter(bat)
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
@@ -183,6 +182,10 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 			},
 			indexes: indexes,
 		})
+		// the reason to ignore, see comments in Insert method
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -204,7 +207,7 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 
 	txID := uuid.NewString()
 
-	iter := memtable.NewBatchIter(bat)
+	iter := memorytable.NewBatchIter(bat)
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
@@ -233,7 +236,7 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 				return err
 			}
 			if len(entries) > 0 && needCheck {
-				return moerr.NewDuplicate()
+				return moerr.NewDuplicate(ctx)
 			}
 		}
 
@@ -277,20 +280,21 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			indexes = append(indexes, index)
 		}
 
-		_, err := p.data.Get(tx, rowID)
-		if errors.Is(err, sql.ErrNoRows) {
-			err = p.data.Upsert(tx, &DataRow{
-				rowID:   rowID,
-				value:   dataValue,
-				indexes: indexes,
-			})
-			if err != nil {
-				return err
-			}
-			if err := tx.Commit(t); err != nil {
-				return err
-			}
-		} else if err != nil {
+		err = p.data.Upsert(tx, &DataRow{
+			rowID:   rowID,
+			value:   dataValue,
+			indexes: indexes,
+		})
+		// if conflict comes up here,  probably the checkpoint from dn
+		// has duplicated history versions. As txn write conflict has been
+		// checked in dn, so it is safe to ignore this error
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := tx.Commit(t); err != nil {
 			return err
 		}
 	}
@@ -448,6 +452,38 @@ func (p *Partition) IterDeletedRowIDs(ctx context.Context, blockIDs []uint64, ts
 			}
 		}
 	}
+}
+
+func (p *Partition) Rows(
+	tx *memtable.Transaction,
+	deletes map[types.Rowid]uint8,
+	skipBlocks map[uint64]uint8) (int64, error) {
+	var rows int64 = 0
+	iter := p.data.NewIter(tx)
+	defer iter.Close()
+	for ok := iter.First(); ok; ok = iter.Next() {
+		dataKey, dataValue, err := iter.Read()
+		if err != nil {
+			return 0, err
+		}
+
+		if _, ok := deletes[types.Rowid(dataKey)]; ok {
+			continue
+		}
+
+		if dataValue.op == opDelete {
+			continue
+		}
+
+		if skipBlocks != nil {
+			if _, ok := skipBlocks[rowIDToBlockID(dataKey)]; ok {
+				continue
+			}
+		}
+		rows++
+	}
+
+	return rows, nil
 }
 
 func (p *Partition) NewReader(

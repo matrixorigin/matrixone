@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/fagongzi/goetty/v2"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,13 +35,13 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 	}
 
 	if opts.IsInternal != nil {
-		sess.IsInternal = *opts.IsInternal
+		sess.isInternal = *opts.IsInternal
 	}
 }
 
 type internalMiniExec interface {
 	doComQuery(requestCtx context.Context, sql string) error
-	PrepareSessionBeforeExecRequest(*Session)
+	SetSession(*Session)
 }
 
 type internalExecutor struct {
@@ -81,8 +82,8 @@ func (res *internalExecResult) ColumnCount() uint64 {
 	return res.resultSet.GetColumnCount()
 }
 
-func (res *internalExecResult) Column(i uint64) (name string, typ uint8, signed bool, err error) {
-	col, err := res.resultSet.GetColumn(i)
+func (res *internalExecResult) Column(ctx context.Context, i uint64) (name string, typ uint8, signed bool, err error) {
+	col, err := res.resultSet.GetColumn(ctx, i)
 	if err == nil {
 		name = col.Name()
 		typ = uint8(col.ColumnType())
@@ -95,23 +96,23 @@ func (res *internalExecResult) RowCount() uint64 {
 	return res.resultSet.GetRowCount()
 }
 
-func (res *internalExecResult) Row(i uint64) ([]interface{}, error) {
-	return res.resultSet.GetRow(i)
+func (res *internalExecResult) Row(ctx context.Context, i uint64) ([]interface{}, error) {
+	return res.resultSet.GetRow(ctx, i)
 }
 
-func (res *internalExecResult) Value(ridx uint64, cidx uint64) (interface{}, error) {
-	return res.resultSet.GetValue(ridx, cidx)
+func (res *internalExecResult) Value(ctx context.Context, ridx uint64, cidx uint64) (interface{}, error) {
+	return res.resultSet.GetValue(ctx, ridx, cidx)
 }
 
-func (res *internalExecResult) ValueByName(ridx uint64, col string) (interface{}, error) {
-	return res.resultSet.GetValueByName(ridx, col)
+func (res *internalExecResult) ValueByName(ctx context.Context, ridx uint64, col string) (interface{}, error) {
+	return res.resultSet.GetValueByName(ctx, ridx, col)
 }
 
-func (res *internalExecResult) StringValueByName(ridx uint64, col string) (string, error) {
-	if cidx, err := res.resultSet.columnName2Index(col); err != nil {
+func (res *internalExecResult) StringValueByName(ctx context.Context, ridx uint64, col string) (string, error) {
+	if cidx, err := res.resultSet.columnName2Index(ctx, col); err != nil {
 		return "", err
 	} else {
-		return res.resultSet.GetString(ridx, cidx)
+		return res.resultSet.GetString(ctx, ridx, cidx)
 	}
 }
 
@@ -120,7 +121,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	defer ie.Unlock()
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Dispose()
-	ie.executor.PrepareSessionBeforeExecRequest(sess)
+	ie.executor.SetSession(sess)
 	ie.proto.stashResult = false
 	return ie.executor.doComQuery(ctx, sql)
 }
@@ -130,7 +131,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	defer ie.Unlock()
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Dispose()
-	ie.executor.PrepareSessionBeforeExecRequest(sess)
+	ie.executor.SetSession(sess)
 	ie.proto.stashResult = true
 	err := ie.executor.doComQuery(ctx, sql)
 	res := ie.proto.swapOutResult()
@@ -180,6 +181,36 @@ type internalProtocol struct {
 	username    string
 }
 
+func (ip *internalProtocol) GetCapability() uint32 {
+	return DefaultCapability
+}
+
+func (ip *internalProtocol) IsTlsEstablished() bool {
+	return true
+}
+
+func (ip *internalProtocol) SetTlsEstablished() {
+}
+
+func (ip *internalProtocol) HandleHandshake(ctx context.Context, payload []byte) (bool, error) {
+	return false, nil
+}
+
+func (ip *internalProtocol) GetTcpConnection() goetty.IOSession {
+	return nil
+}
+
+func (ip *internalProtocol) GetConciseProfile() string {
+	return "internal protocol"
+}
+
+func (ip *internalProtocol) GetSequenceId() uint8 {
+	return 0
+}
+
+func (ip *internalProtocol) SetSequenceID(value uint8) {
+}
+
 func (ip *internalProtocol) makeProfile(profileTyp profileType) {
 
 }
@@ -192,11 +223,11 @@ func (ip *internalProtocol) IsEstablished() bool {
 	return true
 }
 
-func (ip *internalProtocol) ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
+func (ip *internalProtocol) ParseExecuteData(ctx context.Context, stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
 	return nil, nil, nil
 }
 
-func (ip *internalProtocol) SendPrepareResponse(stmt *PrepareStmt) error {
+func (ip *internalProtocol) SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
 	return nil
 }
 
@@ -287,7 +318,7 @@ func (ip *internalProtocol) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet
 }
 
 // SendColumnDefinitionPacket the server send the column definition to the client
-func (ip *internalProtocol) SendColumnDefinitionPacket(column Column, cmd int) error {
+func (ip *internalProtocol) SendColumnDefinitionPacket(ctx context.Context, column Column, cmd int) error {
 	return nil
 }
 
@@ -297,10 +328,10 @@ func (ip *internalProtocol) SendColumnCountPacket(count uint64) error {
 }
 
 // SendResponse sends a response to the client for the application request
-func (ip *internalProtocol) SendResponse(resp *Response) error {
+func (ip *internalProtocol) SendResponse(ctx context.Context, resp *Response) error {
 	ip.Lock()
 	defer ip.Unlock()
-	ip.PrepareBeforeProcessingResultSet()
+	ip.ResetStatistics()
 	if resp.category == ResultResponse {
 		if mer := resp.data.(*MysqlExecutionResult); mer != nil && mer.Mrs() != nil {
 			ip.sendRows(mer.Mrs(), mer.affectedRows)
@@ -328,7 +359,7 @@ func (ip *internalProtocol) sendEOFOrOkPacket(warnings uint16, status uint16) er
 	return nil
 }
 
-func (ip *internalProtocol) PrepareBeforeProcessingResultSet() {
+func (ip *internalProtocol) ResetStatistics() {
 	ip.result.affectedRows = 0
 	ip.result.dropped = 0
 	ip.result.err = nil

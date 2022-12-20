@@ -19,11 +19,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,11 +40,16 @@ type StatementInfo struct {
 	Account              string    `json:"account"`
 	User                 string    `json:"user"`
 	Host                 string    `json:"host"`
+	RoleId               uint32    `json:"role_id"`
 	Database             string    `json:"database"`
 	Statement            string    `json:"statement"`
 	StatementFingerprint string    `json:"statement_fingerprint"`
 	StatementTag         string    `json:"statement_tag"`
+	SqlSourceType        string    `json:"sql_source_type"`
 	RequestAt            time.Time `json:"request_at"` // see WithRequestAt
+
+	StatementType string `json:"statement_type"`
+	QueryType     string `json:"query_type"`
 
 	// after
 	Status     StatementInfoStatus `json:"status"`
@@ -54,11 +60,14 @@ type StatementInfo struct {
 	// RowsRead, BytesScan generated from ExecPlan
 	RowsRead  int64 `json:"rows_read"`  // see ExecPlan2Json
 	BytesScan int64 `json:"bytes_scan"` // see ExecPlan2Json
+	Cpu       int64 `json:"cpu"`        // see ExecPlan2Json
+	Memory    int64 `json:"memory"`     // see ExecPlan2Json
+	IO        int64 `json:"io"`         // see ExecPlan2Json
 	// SerializeExecPlan
 	SerializeExecPlan SerializeExecPlanFunc // see SetExecPlan, ExecPlan2Json
 
 	// flow ctrl
-	end bool
+	end bool // cooperate with mux
 	mux sync.Mutex
 	// mark reported
 	reported bool
@@ -89,9 +98,9 @@ func (s *StatementInfo) Free() {
 	}
 }
 
-func (s *StatementInfo) GetRow() *table.Row { return SingleStatementTable.GetRow() }
+func (s *StatementInfo) GetRow() *table.Row { return SingleStatementTable.GetRow(DefaultContext()) }
 
-func (s *StatementInfo) CsvFields(row *table.Row) []string {
+func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.exported = true
@@ -100,11 +109,13 @@ func (s *StatementInfo) CsvFields(row *table.Row) []string {
 	row.SetColumnVal(txnIDCol, uuid.UUID(s.TransactionID).String())
 	row.SetColumnVal(sesIDCol, uuid.UUID(s.SessionID).String())
 	row.SetColumnVal(accountCol, s.Account)
+	row.SetColumnVal(roleIdCol, fmt.Sprintf("%d", s.RoleId))
 	row.SetColumnVal(userCol, s.User)
 	row.SetColumnVal(hostCol, s.Host)
 	row.SetColumnVal(dbCol, s.Database)
 	row.SetColumnVal(stmtCol, s.Statement)
 	row.SetColumnVal(stmtTagCol, s.StatementTag)
+	row.SetColumnVal(sqlTypeCol, s.SqlSourceType)
 	row.SetColumnVal(stmtFgCol, s.StatementFingerprint)
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
@@ -121,9 +132,14 @@ func (s *StatementInfo) CsvFields(row *table.Row) []string {
 		row.SetColumnVal(errCodeCol, fmt.Sprintf("%d", errCode))
 		row.SetColumnVal(errorCol, fmt.Sprintf("%s", s.Error))
 	}
-	row.SetColumnVal(execPlanCol, s.ExecPlan2Json())
+	row.SetColumnVal(execPlanCol, s.ExecPlan2Json(ctx))
 	row.SetColumnVal(rowsReadCol, fmt.Sprintf("%d", s.RowsRead))
 	row.SetColumnVal(bytesScanCol, fmt.Sprintf("%d", s.BytesScan))
+	row.SetColumnVal(cpuCol, fmt.Sprintf("%d", s.Cpu))
+	row.SetColumnVal(memoryCol, fmt.Sprintf("%d", s.Memory))
+	row.SetColumnVal(ioCol, fmt.Sprintf("%d", s.IO))
+	row.SetColumnVal(stmtTypeCol, s.StatementType)
+	row.SetColumnVal(queryTypeCol, s.QueryType)
 
 	return row.ToStrings()
 }
@@ -132,7 +148,7 @@ func (s *StatementInfo) CsvFields(row *table.Row) []string {
 // and set RowsRead, BytesScan from ExecPlan
 //
 // please used in s.mux.Lock()
-func (s *StatementInfo) ExecPlan2Json() string {
+func (s *StatementInfo) ExecPlan2Json(ctx context.Context) string {
 	var jsonByte []byte
 	if s.SerializeExecPlan == nil {
 		// use defaultSerializeExecPlan
@@ -140,15 +156,15 @@ func (s *StatementInfo) ExecPlan2Json() string {
 			uuidStr := uuid.UUID(s.StatementID).String()
 			return fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr)
 		} else {
-			jsonByte, s.RowsRead, s.BytesScan = f(s.ExecPlan, uuid.UUID(s.StatementID))
+			jsonByte, s.RowsRead, s.BytesScan = f(ctx, s.ExecPlan, uuid.UUID(s.StatementID))
 		}
 	} else {
 		// use s.SerializeExecPlan
 		// get real ExecPlan json-str
-		jsonByte, s.RowsRead, s.BytesScan = s.SerializeExecPlan(s.ExecPlan, uuid.UUID(s.StatementID))
+		jsonByte, s.RowsRead, s.BytesScan = s.SerializeExecPlan(ctx, s.ExecPlan, uuid.UUID(s.StatementID))
 		if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
 			// get nil ExecPlan json-str
-			jsonByte, _, _ = s.SerializeExecPlan(nil, uuid.UUID(s.StatementID))
+			jsonByte, _, _ = s.SerializeExecPlan(ctx, nil, uuid.UUID(s.StatementID))
 		}
 	}
 	return string(jsonByte)
@@ -156,7 +172,7 @@ func (s *StatementInfo) ExecPlan2Json() string {
 
 var defaultSerializeExecPlan atomic.Value
 
-type SerializeExecPlanFunc func(plan any, uuid2 uuid.UUID) (jsonByte []byte, rows int64, bytes int64)
+type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, rows int64, bytes int64)
 
 func SetDefaultSerializeExecPlan(f SerializeExecPlanFunc) {
 	defaultSerializeExecPlan.Store(f)
@@ -197,11 +213,11 @@ var EndStatement = func(ctx context.Context, err error) {
 	}
 	s := StatementFromContext(ctx)
 	if s == nil {
-		panic(moerr.NewInternalError("no statement info in context"))
+		panic(moerr.NewInternalError(ctx, "no statement info in context"))
 	}
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	if !s.end {
+	if !s.end { // cooperate with s.mux
 		// do report
 		s.end = true
 		s.ResponseAt = time.Now()

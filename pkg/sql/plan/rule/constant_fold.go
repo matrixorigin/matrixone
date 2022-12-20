@@ -22,17 +22,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type ConstantFold struct {
-	bat *batch.Batch
+	bat        *batch.Batch
+	isPrepared bool
 }
 
-func NewConstantFold() *ConstantFold {
+func NewConstantFold(isPrepared bool) *ConstantFold {
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 	return &ConstantFold{
-		bat: bat,
+		bat:        bat,
+		isPrepared: isPrepared,
 	}
 }
 
@@ -45,50 +48,53 @@ func (r *ConstantFold) Match(n *plan.Node) bool {
 	return true
 }
 
-func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query) {
+func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process) {
 	if n.Limit != nil {
-		n.Limit = r.constantFold(n.Limit)
+		n.Limit = r.constantFold(n.Limit, proc)
 	}
 	if n.Offset != nil {
-		n.Offset = r.constantFold(n.Offset)
+		n.Offset = r.constantFold(n.Offset, proc)
 	}
 	if len(n.OnList) > 0 {
 		for i := range n.OnList {
-			n.OnList[i] = r.constantFold(n.OnList[i])
+			n.OnList[i] = r.constantFold(n.OnList[i], proc)
 		}
 	}
 	if len(n.FilterList) > 0 {
 		for i := range n.FilterList {
-			n.FilterList[i] = r.constantFold(n.FilterList[i])
+			n.FilterList[i] = r.constantFold(n.FilterList[i], proc)
 		}
 	}
 	if len(n.ProjectList) > 0 {
 		for i := range n.ProjectList {
-			n.ProjectList[i] = r.constantFold(n.ProjectList[i])
+			n.ProjectList[i] = r.constantFold(n.ProjectList[i], proc)
 		}
 	}
 }
 
-func (r *ConstantFold) constantFold(e *plan.Expr) *plan.Expr {
+func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.Expr {
 	ef, ok := e.Expr.(*plan.Expr_F)
 	if !ok {
 		return e
 	}
 	overloadID := ef.F.Func.GetObj()
-	f, err := function.GetFunctionByID(overloadID)
-	if err != nil {
+	f, exists := function.GetFunctionByIDWithoutError(overloadID)
+	if !exists {
 		return e
 	}
 	if f.Volatile { // function cannot be fold
 		return e
 	}
+	if f.RealTimeRelated && r.isPrepared {
+		return e
+	}
 	for i := range ef.F.Args {
-		ef.F.Args[i] = r.constantFold(ef.F.Args[i])
+		ef.F.Args[i] = r.constantFold(ef.F.Args[i], proc)
 	}
 	if !isConstant(e) {
 		return e
 	}
-	vec, err := colexec.EvalExpr(r.bat, nil, e)
+	vec, err := colexec.EvalExpr(r.bat, proc, e)
 	if err != nil {
 		return e
 	}
@@ -99,6 +105,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr) *plan.Expr {
 	ec := &plan.Expr_C{
 		C: c,
 	}
+	e.Typ = &plan.Type{Id: int32(vec.Typ.Oid), Precision: vec.Typ.Precision, Scale: vec.Typ.Scale, Width: vec.Typ.Width, Size: vec.Typ.Size}
 	e.Expr = ec
 	return e
 }
@@ -174,6 +181,12 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 				Sval: vec.GetString(0),
 			},
 		}
+	case types.T_timestamp:
+		return &plan.Const{
+			Value: &plan.Const_Timestampval{
+				Timestampval: int64(vector.MustTCols[types.Timestamp](vec)[0]),
+			},
+		}
 	default:
 		return nil
 	}
@@ -185,8 +198,8 @@ func isConstant(e *plan.Expr) bool {
 		return true
 	case *plan.Expr_F:
 		overloadID := ef.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadID)
-		if err != nil {
+		f, exists := function.GetFunctionByIDWithoutError(overloadID)
+		if !exists {
 			return false
 		}
 		if f.Volatile { // function cannot be fold

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -33,9 +34,8 @@ type windowBase struct {
 func (win *windowBase) IsView() bool                         { return true }
 func (win *windowBase) Update(i int, v any)                  { panic("cannot modify window") }
 func (win *windowBase) Delete(i int)                         { panic("cannot modify window") }
-func (win *windowBase) DeleteBatch(deletes *roaring.Bitmap)  { panic("cannot modify window") }
+func (win *windowBase) Compact(deletes *roaring.Bitmap)      { panic("cannot modify window") }
 func (win *windowBase) Append(v any)                         { panic("cannot modify window") }
-func (win *windowBase) Compact(*roaring.Bitmap)              { panic("cannot modify window") }
 func (win *windowBase) AppendMany(vs ...any)                 { panic("cannot modify window") }
 func (win *windowBase) AppendNoNulls(s any)                  { panic("cannot modify window") }
 func (win *windowBase) Extend(o Vector)                      { panic("cannot modify window") }
@@ -164,12 +164,11 @@ func (win *vectorWindow[T]) PPString(num int) string {
 	return s
 }
 func (win *vectorWindow[T]) Slice() any {
-	if win.ref.typ.IsVarlen() {
-		base := win.ref.Slice().(*Bytes)
-		return base.Window(win.offset, win.length)
-	} else {
-		return win.ref.Slice().([]T)[win.offset : win.offset+win.length]
-	}
+	return win.ref.fastSlice()[win.offset : win.offset+win.length]
+}
+func (win *vectorWindow[T]) SlicePtr() unsafe.Pointer {
+	slice := win.ref.fastSlice()[win.offset : win.offset+win.length]
+	return unsafe.Pointer(&slice[0])
 }
 func (win *vectorWindow[T]) Bytes() *Bytes {
 	bs := win.ref.Bytes()

@@ -129,16 +129,16 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	case *tree.PrepareStmt, *tree.PrepareString:
 		return buildPrepare(stmt, ctx)
 	case *tree.Do, *tree.Declare:
-		return nil, moerr.NewNotSupported(tree.String(stmt, dialect.MYSQL))
+		return nil, moerr.NewNotSupported(ctx.GetContext(), tree.String(stmt, dialect.MYSQL))
 	case *tree.ValuesStatement:
 		return buildValues(stmt, ctx)
 	default:
-		return nil, moerr.NewInternalError("statement: '%v'", tree.String(stmt, dialect.MYSQL))
+		return nil, moerr.NewInternalError(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
 }
 
 // GetExecType get executor will execute base AP or TP
-func GetExecTypeFromPlan(_ *Plan) ExecInfo {
+func GetExecTypeFromPlan(pn *Plan) ExecInfo {
 	defInfo := ExecInfo{
 		Typ:        ExecTypeAP,
 		WithGPU:    false,
@@ -146,10 +146,18 @@ func GetExecTypeFromPlan(_ *Plan) ExecInfo {
 		CnNumbers:  2,
 	}
 
-	// TODO : fill the function
+	tp := true
+	for _, node := range pn.GetQuery().GetNodes() {
+		stats := node.Stats
+		if stats == nil || stats.Outcnt >= 100 || stats.BlockNum >= 4 {
+			tp = false
+			break
+		}
+	}
+	if tp {
+		defInfo.Typ = ExecTypeTP
+	}
 
-	// empty function with default return
-	// just for test
 	return defInfo
 }
 

@@ -34,7 +34,7 @@ func NewOp(impl iops.IOpInternal, w iworker.IOpWorker) *Op {
 func (op *Op) Push() error {
 	r := op.Worker.SendOp(op)
 	if !r {
-		return moerr.NewInternalError("send op error")
+		return moerr.NewInternalErrorNoCtx("send op error")
 	}
 	return nil
 }

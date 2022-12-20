@@ -15,6 +15,7 @@
 package moerr
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -30,13 +31,13 @@ func pf2(a, b int) int {
 }
 
 func pf3() {
-	panic(NewInternalError(fmt.Sprintf("%s %s %s %d", "foo", "bar", "zoo", 2)))
+	panic(NewInternalError(context.TODO(), fmt.Sprintf("%s %s %s %d", "foo", "bar", "zoo", 2)))
 }
 
 func PanicF(i int) (err *Error) {
 	defer func() {
 		if e := recover(); e != nil {
-			err = ConvertPanicError(e)
+			err = ConvertPanicError(context.TODO(), e)
 		}
 	}()
 	switch i {
@@ -79,29 +80,29 @@ func TestNew_panic(t *testing.T) {
 			t.Logf("err: %+v", err)
 		}
 	}()
-	panic(NewNYI("foobarzoo"))
+	panic(NewNYI(context.TODO(), "foobarzoo"))
 }
 
 func TestNew_MyErrorCode(t *testing.T) {
-	err := NewDivByZero()
+	err := NewDivByZero(context.TODO())
 	require.Equal(t, ER_DIVISION_BY_ZERO, err.MySQLCode())
 
-	err = NewOutOfRange("int8", "1111")
+	err = NewOutOfRange(context.TODO(), "int8", "1111")
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
 }
 
 func TestIsMoErrCode(t *testing.T) {
-	err := NewDivByZero()
+	err := NewDivByZero(context.TODO())
 	require.True(t, IsMoErrCode(err, ErrDivByZero))
 	require.False(t, IsMoErrCode(err, ErrOOM))
 
-	err2 := NewInternalError("what is this")
+	err2 := NewInternalError(context.TODO(), "what is this")
 	require.False(t, IsMoErrCode(err2, ErrDivByZero))
 	require.False(t, IsMoErrCode(err2, ErrOOM))
 }
 
 func TestEncoding(t *testing.T) {
-	e := NewDivByZero()
+	e := NewDivByZero(context.TODO())
 	data, err := e.MarshalBinary()
 	require.Nil(t, err)
 	e2 := new(Error)

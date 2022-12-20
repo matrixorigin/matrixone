@@ -16,8 +16,9 @@ package trace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -51,6 +52,7 @@ var (
 	txnIDCol     = table.Column{Name: "transaction_id", Type: uuidColType, Default: "0", Comment: "txn uniq id"}
 	sesIDCol     = table.Column{Name: "session_id", Type: uuidColType, Default: "0", Comment: "session uniq id"}
 	accountCol   = table.Column{Name: "account", Type: stringType, Default: "", Comment: "account name"}
+	roleIdCol    = table.Column{Name: "role_id", Type: bigintUnsignedType, Default: "0", Comment: "role id"}
 	userCol      = table.Column{Name: "user", Type: stringType, Default: "", Comment: "user name"}
 	hostCol      = table.Column{Name: "host", Type: stringType, Default: "", Comment: "user client ip"}
 	dbCol        = table.Column{Name: "database", Type: stringType, Default: "", Comment: "what database current session stay in."}
@@ -67,6 +69,12 @@ var (
 	execPlanCol  = table.Column{Name: "exec_plan", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "statement execution plan"}
 	rowsReadCol  = table.Column{Name: "rows_read", Type: bigintUnsignedType, Default: "0", Comment: "rows read total"}
 	bytesScanCol = table.Column{Name: "bytes_scan", Type: bigintUnsignedType, Default: "0", Comment: "bytes scan total"}
+	cpuCol       = table.Column{Name: "cpu", Type: bigintUnsignedType, Default: "0", Comment: "cpu time, unit: ?"}
+	memoryCol    = table.Column{Name: "memory", Type: bigintUnsignedType, Default: "0", Comment: "memory cost byte"}
+	ioCol        = table.Column{Name: "io", Type: bigintUnsignedType, Default: "0", Comment: "io count"}
+	stmtTypeCol  = table.Column{Name: "statement_type", Type: "varchar(128)", Default: "", Comment: "statement type, val in [Insert, Delete, Update, Drop Table, Drop User, ...]"}
+	queryTypeCol = table.Column{Name: "query_type", Type: "varchar(128)", Default: "", Comment: "query type, val in [DQL, DDL, DML, DCL, TCL]"}
+	sqlTypeCol   = table.Column{Name: "sql_source_type", Type: "TEXT", Default: "", Comment: "sql statement source type"}
 
 	SingleStatementTable = &table.Table{
 		Account:  table.AccountAll,
@@ -94,6 +102,13 @@ var (
 			execPlanCol,
 			rowsReadCol,
 			bytesScanCol,
+			cpuCol,
+			memoryCol,
+			ioCol,
+			stmtTypeCol,
+			queryTypeCol,
+			roleIdCol,
+			sqlTypeCol,
 		},
 		PrimaryKeyColumn: []table.Column{stmtIDCol},
 		Engine:           table.ExternalTableEngine,
@@ -187,6 +202,9 @@ var (
 			timestampCol,
 			errCodeCol,
 			errorCol,
+			traceIDCol,
+			spanIDCol,
+			spanKindCol,
 			nodeUUIDCol,
 			nodeTypeCol,
 			stackCol,
@@ -231,7 +249,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(StatsDatabase).Internal(true).Finish())
 	mustExec := func(sql string) error {
 		if err := exec.Exec(ctx, sql, ie.NewOptsBuilder().Finish()); err != nil {
-			return moerr.NewInternalError("[Trace] init table error: %v, sql: %s", err, sql)
+			return moerr.NewInternalError(ctx, "[Trace] init table error: %v, sql: %s", err, sql)
 		}
 		return nil
 	}
@@ -247,12 +265,12 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	instant := time.Now()
 
 	for _, tbl := range tables {
-		if err := mustExec(tbl.ToCreateSql(true)); err != nil {
+		if err := mustExec(tbl.ToCreateSql(ctx, true)); err != nil {
 			return err
 		}
 	}
 	for _, v := range views {
-		if err := mustExec(v.ToCreateSql(true)); err != nil {
+		if err := mustExec(v.ToCreateSql(ctx, true)); err != nil {
 			return err
 		}
 	}
@@ -262,18 +280,18 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 }
 
 // GetSchemaForAccount return account's table, and view's schema
-func GetSchemaForAccount(account string) []string {
+func GetSchemaForAccount(ctx context.Context, account string) []string {
 	var sqls = make([]string, 0, 1)
 	for _, tbl := range tables {
 		if tbl.SupportUserAccess {
 			t := tbl.Clone()
 			t.Account = account
-			sqls = append(sqls, t.ToCreateSql(true))
+			sqls = append(sqls, t.ToCreateSql(ctx, true))
 		}
 	}
 	for _, v := range views {
 		if v.OriginTable.SupportUserAccess {
-			sqls = append(sqls, v.ToCreateSql(true))
+			sqls = append(sqls, v.ToCreateSql(ctx, true))
 		}
 
 	}
@@ -283,7 +301,7 @@ func GetSchemaForAccount(account string) []string {
 func init() {
 	for _, tbl := range tables {
 		if old := table.RegisterTableDefine(tbl); old != nil {
-			panic(moerr.NewInternalError("table already registered: %s", old.GetIdentify()))
+			panic(moerr.NewInternalError(context.Background(), "table already registered: %s", old.GetIdentify()))
 		}
 	}
 }

@@ -120,6 +120,13 @@ func (h *Handle) HandleCommit(
 					req,
 					&db.DropOrTruncateRelationResp{},
 				)
+			case db.UpdateConstraintReq:
+				err = h.HandleUpdateConstraint(
+					ctx,
+					meta,
+					req,
+					&db.UpdateConstraintResp{},
+				)
 			case db.WriteReq:
 				err = h.HandleWrite(
 					ctx,
@@ -128,7 +135,7 @@ func (h *Handle) HandleCommit(
 					&db.WriteResp{},
 				)
 			default:
-				panic(moerr.NewNYI("Pls implement me"))
+				panic(moerr.NewNYI(ctx, "Pls implement me"))
 			}
 			//Need to rollback the txn.
 			if err != nil {
@@ -228,6 +235,13 @@ func (h *Handle) HandlePrepare(
 					req,
 					&db.DropOrTruncateRelationResp{},
 				)
+			case db.UpdateConstraintReq:
+				err = h.HandleUpdateConstraint(
+					ctx,
+					meta,
+					req,
+					&db.UpdateConstraintResp{},
+				)
 			case db.WriteReq:
 				err = h.HandleWrite(
 					ctx,
@@ -236,7 +250,7 @@ func (h *Handle) HandlePrepare(
 					&db.WriteResp{},
 				)
 			default:
-				panic(moerr.NewNYI("Pls implement me"))
+				panic(moerr.NewNYI(ctx, "Pls implement me"))
 			}
 			//need to rollback the txn
 			if err != nil {
@@ -387,6 +401,20 @@ func (h *Handle) HandlePreCommitWrite(
 					return err
 				}
 			}
+		case []catalog.UpdateConstraint:
+			for _, cmd := range cmds {
+				req := db.UpdateConstraintReq{
+					TableName:    cmd.TableName,
+					TableId:      cmd.TableId,
+					DatabaseName: cmd.DatabaseName,
+					DatabaseId:   cmd.DatabaseId,
+					Constraint:   cmd.Constraint,
+				}
+				if err = h.CacheTxnRequest(ctx, meta, req,
+					new(db.UpdateConstraintResp)); err != nil {
+					return err
+				}
+			}
 		case []catalog.DropDatabase:
 			for _, cmd := range cmds {
 				req := db.DropDatabaseReq{
@@ -434,7 +462,7 @@ func (h *Handle) HandlePreCommitWrite(
 				return err
 			}
 		default:
-			panic(moerr.NewNYI(""))
+			panic(moerr.NewNYI(ctx, ""))
 		}
 	}
 	return nil
@@ -602,7 +630,7 @@ func (h *Handle) HandleWrite(
 		if req.FileName != "" {
 			//TODO::Precommit a block from S3
 			//tb.AppendBlock()
-			panic(moerr.NewNYI("Precommit a block is not implemented yet"))
+			panic(moerr.NewNYI(ctx, "Precommit a block is not implemented yet"))
 		}
 		//Add a batch into table
 		//TODO::add a parameter to Append for PreCommit-Append?
@@ -616,7 +644,36 @@ func (h *Handle) HandleWrite(
 	//Vecs[1]--> PrimaryKey
 	err = tb.DeleteByPhyAddrKeys(ctx, req.Batch.GetVector(0))
 	return
+}
 
+func (h *Handle) HandleUpdateConstraint(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req db.UpdateConstraintReq,
+	resp *db.UpdateConstraintResp) (err error) {
+	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+		types.TimestampToTS(meta.GetSnapshotTS()))
+	if err != nil {
+		return err
+	}
+
+	cstr := req.Constraint
+	req.Constraint = nil
+	logutil.Infof("[precommit] update cstr: %+v cstr %d bytes\n txn: %s\n", req, len(cstr), txn.String())
+
+	dbase, err := h.eng.GetDatabaseByID(ctx, req.DatabaseId, txn)
+	if err != nil {
+		return
+	}
+
+	tbl, err := dbase.GetRelationByID(ctx, req.TableId)
+	if err != nil {
+		return
+	}
+
+	tbl.UpdateConstraintWithBin(ctx, cstr)
+
+	return nil
 }
 
 func vec2Str[T any](vec []T, typ types.Type, originalLen int) string {

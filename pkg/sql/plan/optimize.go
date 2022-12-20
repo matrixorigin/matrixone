@@ -22,11 +22,15 @@ import (
 )
 
 var defaultRules = []Rule{}
+var prepareRules = []Rule{}
 
 func init() {
 	defaultRules = []Rule{
-		rule.NewConstantFold(),
+		rule.NewConstantFold(false),
 		// rule.NewPredicatePushdown(),
+	}
+	prepareRules = []Rule{
+		rule.NewConstantFold(true),
 	}
 }
 
@@ -34,6 +38,13 @@ func NewBaseOptimizer(ctx CompilerContext) *BaseOptimizer {
 	return &BaseOptimizer{
 		ctx:   ctx,
 		rules: defaultRules,
+	}
+}
+
+func NewPrepareOptimizer(ctx CompilerContext) *BaseOptimizer {
+	return &BaseOptimizer{
+		ctx:   ctx,
+		rules: prepareRules,
 	}
 }
 
@@ -48,7 +59,7 @@ func (opt *BaseOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
 	}
 	qry, ok := pn.Plan.(*plan.Plan_Query)
 	if !ok {
-		panic(moerr.NewInternalError(pn.String()))
+		panic(moerr.NewInternalError(opt.ctx.GetContext(), pn.String()))
 	}
 	opt.qry = qry.Query
 	return opt.optimize()
@@ -73,7 +84,7 @@ func (opt *BaseOptimizer) exploreNode(n *Node) {
 	}
 	for _, rule := range opt.rules {
 		if rule.Match(n) {
-			rule.Apply(n, opt.qry)
+			rule.Apply(n, opt.qry, opt.ctx.GetProcess())
 		}
 	}
 }

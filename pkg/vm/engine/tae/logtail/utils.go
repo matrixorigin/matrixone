@@ -582,18 +582,20 @@ func (collector *IncrementalCollector) VisitTable(entry *catalog.TableEntry) (er
 		}
 		tblNode := node.(*catalog.TableMVCCNode)
 		if !tblNode.HasDropCommitted() {
-			for _, syscol := range catalog.SystemColumnSchema.ColDefs {
-				txnimpl.FillColumnRow(
-					entry,
-					syscol.Name,
-					collector.data.bats[TBLColInsertIDX].GetVectorByName(syscol.Name),
-				)
-			}
-			rowidVec := collector.data.bats[TBLColInsertIDX].GetVectorByName(catalog.AttrRowID)
-			commitVec := collector.data.bats[TBLColInsertIDX].GetVectorByName(catalog.AttrCommitTs)
-			for _, usercol := range entry.GetSchema().ColDefs {
-				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))))
-				commitVec.Append(tblNode.GetEnd())
+			if !tblNode.IsUpdate { // update constraints won't affect mo_columns
+				for _, syscol := range catalog.SystemColumnSchema.ColDefs {
+					txnimpl.FillColumnRow(
+						entry,
+						syscol.Name,
+						collector.data.bats[TBLColInsertIDX].GetVectorByName(syscol.Name),
+					)
+				}
+				rowidVec := collector.data.bats[TBLColInsertIDX].GetVectorByName(catalog.AttrRowID)
+				commitVec := collector.data.bats[TBLColInsertIDX].GetVectorByName(catalog.AttrCommitTs)
+				for _, usercol := range entry.GetSchema().ColDefs {
+					rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))))
+					commitVec.Append(tblNode.GetEnd())
+				}
 			}
 
 			collector.data.bats[TBLInsertTxnIDX].GetVectorByName(
@@ -617,13 +619,15 @@ func (collector *IncrementalCollector) VisitTable(entry *catalog.TableEntry) (er
 			collector.data.bats[TBLDeleteTxnIDX].GetVectorByName(
 				SnapshotAttr_TID).Append(entry.GetID())
 
-			rowidVec := collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrRowID)
-			commitVec := collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrCommitTs)
-			for _, usercol := range entry.GetSchema().ColDefs {
-				rowidVec.Append(
-					bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))),
-				)
-				commitVec.Append(tblNode.GetEnd())
+			if !tblNode.IsUpdate {
+				rowidVec := collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrRowID)
+				commitVec := collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrCommitTs)
+				for _, usercol := range entry.GetSchema().ColDefs {
+					rowidVec.Append(
+						bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))),
+					)
+					commitVec.Append(tblNode.GetEnd())
+				}
 			}
 
 			catalogEntry2Batch(
@@ -699,7 +703,7 @@ func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err 
 				collector.data.bats[BLKDNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
 				collector.data.bats[BLKDNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd())
 				is_sorted := false
-				if !entry.IsAppendable() && entry.GetSchema().HasPK() {
+				if !entry.IsAppendable() && entry.GetSchema().HasSortKey() {
 					is_sorted = true
 				}
 				collector.data.bats[BLKDNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted)
@@ -730,7 +734,7 @@ func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err 
 				collector.data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
 				collector.data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd())
 				is_sorted := false
-				if !entry.IsAppendable() && entry.GetSchema().HasPK() {
+				if !entry.IsAppendable() && entry.GetSchema().HasSortKey() {
 					is_sorted = true
 				}
 				collector.data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted)
@@ -744,7 +748,7 @@ func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err 
 				collector.data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
 				collector.data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd())
 				is_sorted := false
-				if !entry.IsAppendable() && entry.GetSchema().HasPK() {
+				if !entry.IsAppendable() && entry.GetSchema().HasSortKey() {
 					is_sorted = true
 				}
 				collector.data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted)

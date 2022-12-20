@@ -109,6 +109,9 @@ func (node *CreateDatabase) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *CreateDatabase) GetStatementType() string { return "Create Database" }
+func (node *CreateDatabase) GetQueryType() string     { return QueryTypeDDL }
+
 func NewCreateDatabase(ine bool, name Identifier, opts []CreateOption) *CreateDatabase {
 	return &CreateDatabase{
 		IfNotExists:   ine,
@@ -119,12 +122,18 @@ func NewCreateDatabase(ine bool, name Identifier, opts []CreateOption) *CreateDa
 
 type CreateTable struct {
 	statementImpl
+	/*
+		it is impossible to be the temporary table, the cluster table,
+		the normal table and the external table at the same time.
+	*/
 	Temporary       bool
+	IsClusterTable  bool
 	IfNotExists     bool
 	Table           TableName
 	Defs            TableDefs
 	Options         []TableOption
 	PartitionOption *PartitionOption
+	ClusterByOption *ClusterByOption
 	Param           *ExternParam
 }
 
@@ -132,6 +141,9 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	ctx.WriteString("create")
 	if node.Temporary {
 		ctx.WriteString(" temporary")
+	}
+	if node.IsClusterTable {
+		ctx.WriteString(" cluster")
 	}
 	if node.Param != nil {
 		ctx.WriteString(" external")
@@ -238,6 +250,9 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		}
 	}
 }
+
+func (node *CreateTable) GetStatementType() string { return "Create Table" }
+func (node *CreateTable) GetQueryType() string     { return QueryTypeDDL }
 
 type TableDef interface {
 	NodeFormatter
@@ -1785,6 +1800,10 @@ func NewSubPartition(n Identifier, o []TableOption) *SubPartition {
 	}
 }
 
+type ClusterByOption struct {
+	ColumnList []*UnresolvedName
+}
+
 type PartitionOption struct {
 	PartBy     PartitionBy
 	SubPartBy  *PartitionBy
@@ -1886,6 +1905,9 @@ func (node *CreateIndex) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *CreateIndex) GetStatementType() string { return "Create Index" }
+func (node *CreateIndex) GetQueryType() string     { return QueryTypeDDL }
+
 func NewCreateIndex(n Identifier, t TableName, ife bool, it IndexCategory, k []*KeyPart, i *IndexOption, m []MiscOption) *CreateIndex {
 	return &CreateIndex{
 		Name:        n,
@@ -1952,6 +1974,9 @@ func (node *CreateRole) Format(ctx *FmtCtx) {
 		prefix = ", "
 	}
 }
+
+func (node *CreateRole) GetStatementType() string { return "Create Role" }
+func (node *CreateRole) GetQueryType() string     { return QueryTypeDCL }
 
 func NewCreateRole(ife bool, r []*Role) *CreateRole {
 	return &CreateRole{
@@ -2313,6 +2338,9 @@ func (node *CreateUser) Format(ctx *FmtCtx) {
 	node.CommentOrAttribute.Format(ctx)
 }
 
+func (node *CreateUser) GetStatementType() string { return "Create User" }
+func (node *CreateUser) GetQueryType() string     { return QueryTypeDCL }
+
 func NewCreateUser(ife bool, u []*User, r *Role, misc UserMiscOption) *CreateUser {
 	return &CreateUser{
 		IfNotExists: ife,
@@ -2343,6 +2371,9 @@ func (ca *CreateAccount) Format(ctx *FmtCtx) {
 	ca.StatusOption.Format(ctx)
 	ca.Comment.Format(ctx)
 }
+
+func (ca *CreateAccount) GetStatementType() string { return "Create Account" }
+func (ca *CreateAccount) GetQueryType() string     { return QueryTypeDCL }
 
 type AccountAuthOption struct {
 	Equal          string
@@ -2392,6 +2423,17 @@ const (
 	AccountStatusOpen AccountStatusOption = iota
 	AccountStatusSuspend
 )
+
+func (aso AccountStatusOption) String() string {
+	switch aso {
+	case AccountStatusOpen:
+		return "open"
+	case AccountStatusSuspend:
+		return "suspend"
+	default:
+		return "open"
+	}
+}
 
 type AccountStatus struct {
 	Exist  bool

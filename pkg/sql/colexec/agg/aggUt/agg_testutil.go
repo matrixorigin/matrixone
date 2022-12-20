@@ -52,7 +52,7 @@ func RunTest(t *testing.T, testCases []testCase) {
 	for _, c := range testCases {
 		// update some parameter
 		switch c.op {
-		case agg.AggregateAvg, agg.AggregateVariance, agg.AggregateStdDevPop:
+		case agg.AggregateAvg, agg.AggregateVariance, agg.AggregateStdDevPop, agg.AggregateMedian:
 			c.hasDecimalResult = true
 		default:
 			c.hasDecimalResult = false

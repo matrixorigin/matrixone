@@ -17,28 +17,25 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/generate_series"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -270,24 +267,16 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Cond:       t.Cond,
 			OnList:     t.OnList,
 		}
-	case vm.Unnest:
-		t := sourceIns.Arg.(*unnest.Argument)
-		res.Arg = &unnest.Argument{
-			Es: &unnest.Param{
-				Attrs:    t.Es.Attrs,
-				Cols:     t.Es.Cols,
-				ExprList: t.Es.ExprList,
-				ColName:  t.Es.ColName,
-			},
+	case vm.TableFunction:
+		t := sourceIns.Arg.(*table_function.Argument)
+		res.Arg = &table_function.Argument{
+			Name:   t.Name,
+			Args:   t.Args,
+			Rets:   t.Rets,
+			Attrs:  t.Attrs,
+			Params: t.Params,
 		}
-	case vm.GenerateSeries:
-		t := sourceIns.Arg.(*generate_series.Argument)
-		res.Arg = &generate_series.Argument{
-			Es: &generate_series.Param{
-				Attrs:    t.Es.Attrs,
-				ExprList: t.Es.ExprList,
-			},
-		}
+
 	case vm.HashBuild:
 		t := sourceIns.Arg.(*hashbuild.Argument)
 		res.Arg = &hashbuild.Argument{
@@ -366,25 +355,45 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			return nil, err
 		}
 
-		indexTables := make([]engine.Relation, 0)
-		for _, info := range n.DeleteTablesCtx[i].IndexInfos {
-			indexTable, err := dbSource.Relation(proc.Ctx, info.TableName)
-			if err != nil {
-				return nil, err
+		uniqueIndexTables := make([]engine.Relation, 0)
+		secondaryIndexTables := make([]engine.Relation, 0)
+		uDef := n.DeleteTablesCtx[i].UniqueIndexDef
+		sDef := n.DeleteTablesCtx[i].SecondaryIndexDef
+		if uDef != nil {
+			for i := range uDef.TableNames {
+				if uDef.TableExists[i] {
+					indexTable, err := dbSource.Relation(proc.Ctx, uDef.TableNames[i])
+					if err != nil {
+						return nil, err
+					}
+					uniqueIndexTables = append(uniqueIndexTables, indexTable)
+				}
 			}
-			indexTables = append(indexTables, indexTable)
+		}
+		if sDef != nil {
+			for i := range sDef.TableNames {
+				if sDef.TableExists[i] {
+					indexTable, err := dbSource.Relation(proc.Ctx, sDef.TableNames[i])
+					if err != nil {
+						return nil, err
+					}
+					secondaryIndexTables = append(secondaryIndexTables, indexTable)
+				}
+			}
 		}
 
 		ds[i] = &deletion.DeleteCtx{
-			TableSource:  relation,
-			TableName:    n.DeleteTablesCtx[i].TblName,
-			DbName:       n.DeleteTablesCtx[i].DbName,
-			UseDeleteKey: n.DeleteTablesCtx[i].UseDeleteKey,
-			CanTruncate:  n.DeleteTablesCtx[i].CanTruncate,
-			ColIndex:     n.DeleteTablesCtx[i].ColIndex,
-			IndexInfos:   n.DeleteTablesCtx[i].IndexInfos,
-			IndexTables:  indexTables,
-			IndexAttrs:   n.DeleteTablesCtx[i].IndexAttrs,
+			TableSource:          relation,
+			TableName:            n.DeleteTablesCtx[i].TblName,
+			DbName:               n.DeleteTablesCtx[i].DbName,
+			UseDeleteKey:         n.DeleteTablesCtx[i].UseDeleteKey,
+			CanTruncate:          n.DeleteTablesCtx[i].CanTruncate,
+			ColIndex:             n.DeleteTablesCtx[i].ColIndex,
+			UniqueIndexDef:       n.DeleteTablesCtx[i].UniqueIndexDef,
+			SecondaryIndexDef:    n.DeleteTablesCtx[i].SecondaryIndexDef,
+			UniqueIndexTables:    uniqueIndexTables,
+			SecondaryIndexTables: secondaryIndexTables,
+			IndexAttrs:           n.DeleteTablesCtx[i].IndexAttrs,
 		}
 	}
 
@@ -402,25 +411,44 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	if err != nil {
 		return nil, err
 	}
-	indexTables := make([]engine.Relation, 0)
-	for _, info := range n.TableDef.IndexInfos {
-		indexTable, err := db.Relation(proc.Ctx, info.TableName)
-		if err != nil {
-			return nil, err
+	uniqueIndexTables := make([]engine.Relation, 0)
+	secondaryIndexTables := make([]engine.Relation, 0)
+	uDef, sDef := buildIndexDefs(n.TableDef.Defs)
+	if uDef != nil {
+		for i := range uDef.TableNames {
+			if uDef.TableExists[i] {
+				indexTable, err := db.Relation(proc.Ctx, uDef.TableNames[i])
+				if err != nil {
+					return nil, err
+				}
+				uniqueIndexTables = append(uniqueIndexTables, indexTable)
+			}
 		}
-		indexTables = append(indexTables, indexTable)
+	}
+	if sDef != nil {
+		for i := range sDef.TableNames {
+			if sDef.TableExists[i] {
+				indexTable, err := db.Relation(proc.Ctx, sDef.TableNames[i])
+				if err != nil {
+					return nil, err
+				}
+				secondaryIndexTables = append(secondaryIndexTables, indexTable)
+			}
+		}
 	}
 	return &insert.Argument{
-		TargetTable:   relation,
-		TargetColDefs: n.TableDef.Cols,
-		Engine:        eg,
-		DB:            db,
-		TableID:       relation.GetTableID(proc.Ctx),
-		DBName:        n.ObjRef.SchemaName,
-		TableName:     n.TableDef.Name,
-		CPkeyColDef:   n.TableDef.CompositePkey,
-		IndexTables:   indexTables,
-		IndexInfos:    n.TableDef.IndexInfos,
+		TargetTable:          relation,
+		TargetColDefs:        n.TableDef.Cols,
+		Engine:               eg,
+		DB:                   db,
+		TableID:              relation.GetTableID(proc.Ctx),
+		DBName:               n.ObjRef.SchemaName,
+		TableName:            n.TableDef.Name,
+		CPkeyColDef:          n.TableDef.CompositePkey,
+		UniqueIndexTables:    uniqueIndexTables,
+		UniqueIndexDef:       uDef,
+		SecondaryIndexTables: secondaryIndexTables,
+		SecondaryIndexDef:    sDef,
 	}, nil
 }
 
@@ -455,28 +483,47 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 				break
 			}
 		}
-		indexTables := make([]engine.Relation, 0)
-		for _, info := range n.TableDefVec[k].IndexInfos {
-			indexTable, err := dbSource.Relation(proc.Ctx, info.TableName)
-			if err != nil {
-				return nil, err
+		uniqueIndexTables := make([]engine.Relation, 0)
+		secondaryIndexTables := make([]engine.Relation, 0)
+		uDef, sDef := buildIndexDefs(n.TableDefVec[k].Defs)
+		if uDef != nil {
+			for i := range uDef.TableNames {
+				if uDef.TableExists[i] {
+					indexTable, err := dbSource.Relation(proc.Ctx, uDef.TableNames[i])
+					if err != nil {
+						return nil, err
+					}
+					uniqueIndexTables = append(uniqueIndexTables, indexTable)
+				}
 			}
-			indexTables = append(indexTables, indexTable)
+		}
+		if sDef != nil {
+			for i := range sDef.TableNames {
+				if sDef.TableExists[i] {
+					indexTable, err := dbSource.Relation(proc.Ctx, sDef.TableNames[i])
+					if err != nil {
+						return nil, err
+					}
+					secondaryIndexTables = append(secondaryIndexTables, indexTable)
+				}
+			}
 		}
 
 		us[i] = &update.UpdateCtx{
-			PriKey:      updateCtx.PriKey,
-			PriKeyIdx:   updateCtx.PriKeyIdx,
-			HideKey:     updateCtx.HideKey,
-			HideKeyIdx:  updateCtx.HideKeyIdx,
-			UpdateAttrs: colNames,
-			OtherAttrs:  updateCtx.OtherAttrs,
-			OrderAttrs:  updateCtx.OrderAttrs,
-			TableSource: relation,
-			CPkeyColDef: updateCtx.CompositePkey,
-			IndexInfos:  n.TableDefVec[k].IndexInfos,
-			IndexTables: indexTables,
-			IndexAttrs:  updateCtx.IndexAttrs,
+			PriKey:               updateCtx.PriKey,
+			PriKeyIdx:            updateCtx.PriKeyIdx,
+			HideKey:              updateCtx.HideKey,
+			HideKeyIdx:           updateCtx.HideKeyIdx,
+			UpdateAttrs:          colNames,
+			OtherAttrs:           updateCtx.OtherAttrs,
+			OrderAttrs:           updateCtx.OrderAttrs,
+			TableSource:          relation,
+			CPkeyColDef:          updateCtx.CompositePkey,
+			UniqueIndexDef:       uDef,
+			SecondaryIndexDef:    sDef,
+			IndexAttrs:           updateCtx.IndexAttrs,
+			UniqueIndexTables:    uniqueIndexTables,
+			SecondaryIndexTables: secondaryIndexTables,
 		}
 	}
 	return &update.Argument{
@@ -513,31 +560,17 @@ func constructExternal(n *plan.Node, ctx context.Context, fileList []string) *ex
 		},
 	}
 }
-func constructUnnest(n *plan.Node, ctx context.Context) *unnest.Argument {
+func constructTableFunction(n *plan.Node, ctx context.Context, name string) *table_function.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
-	return &unnest.Argument{
-		Es: &unnest.Param{
-			Attrs:    attrs,
-			Cols:     n.TableDef.Cols,
-			ExprList: n.TblFuncExprList,
-			ColName:  string(n.TableDef.TblFunc.Param),
-		},
-	}
-}
-
-func constructGenerateSeries(n *plan.Node, ctx context.Context) *generate_series.Argument {
-	attrs := make([]string, len(n.TableDef.Cols))
-	for j, col := range n.TableDef.Cols {
-		attrs[j] = col.Name
-	}
-	return &generate_series.Argument{
-		Es: &generate_series.Param{
-			Attrs:    attrs,
-			ExprList: n.TblFuncExprList,
-		},
+	return &table_function.Argument{
+		Attrs:  attrs,
+		Rets:   n.TableDef.Cols,
+		Args:   n.TblFuncExprList,
+		Name:   name,
+		Params: n.TableDef.TblFunc.Param,
 	}
 }
 
@@ -551,23 +584,23 @@ func constructTop(n *plan.Node, topN int64) *top.Argument {
 func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &join.Argument{
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
 func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr)
+		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI("semi result '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -576,42 +609,42 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
 func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &left.Argument{
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
 func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *single.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &single.Argument{
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
 func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *product.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	return &product.Argument{Typs: typs, Result: result}
 }
@@ -619,9 +652,9 @@ func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *p
 func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr)
+		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI("anti result '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "anti result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -630,16 +663,16 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
 func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onList []*plan.Expr) *mark.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr)
+		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI("mark result '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "mark result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -648,7 +681,7 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onLis
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 		OnList:     onList,
 	}
 }
@@ -684,13 +717,13 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	}
 }
 
-func constructGroup(n, cn *plan.Node, ibucket, nbucket int, needEval bool) *group.Argument {
+func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool) *group.Argument {
 	aggs := make([]agg.Aggregate, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
 			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 			obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
-			fun, err := function.GetFunctionByID(obj)
+			fun, err := function.GetFunctionByID(ctx, obj)
 			if err != nil {
 				panic(err)
 			}
@@ -794,7 +827,7 @@ func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argume
 func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *loopjoin.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	return &loopjoin.Argument{
 		Typs:   typs,
@@ -806,9 +839,9 @@ func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *
 func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *loopsemi.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr)
+		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI("loop semi result '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "loop semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -822,7 +855,7 @@ func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *
 func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *loopleft.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	return &loopleft.Argument{
 		Typs:   typs,
@@ -834,7 +867,7 @@ func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *
 func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process) *loopsingle.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	return &loopsingle.Argument{
 		Result: result,
@@ -845,9 +878,9 @@ func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process)
 func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *loopanti.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr)
+		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI("loop anti result '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "loop anti result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -858,7 +891,7 @@ func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *
 	}
 }
 
-func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
+func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Argument {
 	switch in.Op {
 	case vm.Anti:
 		arg := in.Arg.(*anti.Argument)
@@ -940,33 +973,33 @@ func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
 		}
 
 	default:
-		panic(moerr.NewInternalError("unsupport join type '%v'", in.Op))
+		panic(moerr.NewInternalError(proc.Ctx, "unsupport join type '%v'", in.Op))
 	}
 }
 
-func constructJoinResult(expr *plan.Expr) (int32, int32) {
+func constructJoinResult(expr *plan.Expr, proc *process.Process) (int32, int32) {
 	e, ok := expr.Expr.(*plan.Expr_Col)
 	if !ok {
-		panic(moerr.NewNYI("join result '%s'", expr))
+		panic(moerr.NewNYI(proc.Ctx, "join result '%s'", expr))
 	}
 	return e.Col.RelPos, e.Col.ColPos
 }
 
-func constructJoinConditions(exprs []*plan.Expr) [][]*plan.Expr {
+func constructJoinConditions(exprs []*plan.Expr, proc *process.Process) [][]*plan.Expr {
 	conds := make([][]*plan.Expr, 2)
 	conds[0] = make([]*plan.Expr, len(exprs))
 	conds[1] = make([]*plan.Expr, len(exprs))
 	for i, expr := range exprs {
-		conds[0][i], conds[1][i] = constructJoinCondition(expr)
+		conds[0][i], conds[1][i] = constructJoinCondition(expr, proc)
 	}
 	return conds
 }
 
-func constructJoinCondition(expr *plan.Expr) (*plan.Expr, *plan.Expr) {
+func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr) {
 	if e, ok := expr.Expr.(*plan.Expr_C); ok { // constant bool
 		b, ok := e.C.Value.(*plan.Const_Bval)
 		if !ok {
-			panic(moerr.NewNYI("join condition '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
 		}
 		if b.Bval {
 			return expr, expr
@@ -982,7 +1015,7 @@ func constructJoinCondition(expr *plan.Expr) (*plan.Expr, *plan.Expr) {
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
 	if !ok || !supportedJoinCondition(e.F.Func.GetObj()) {
-		panic(moerr.NewNYI("join condition '%s'", expr))
+		panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
 	}
 	if exprRelPos(e.F.Args[0]) == 1 {
 		return e.F.Args[1], e.F.Args[0]
@@ -1089,4 +1122,18 @@ func exprRelPos(expr *plan.Expr) int32 {
 		}
 	}
 	return -1
+}
+
+func buildIndexDefs(defs []*plan.TableDef_DefType) (*plan.UniqueIndexDef, *plan.SecondaryIndexDef) {
+	var uIdxDef *plan.UniqueIndexDef = nil
+	var sIdxDef *plan.SecondaryIndexDef = nil
+	for _, def := range defs {
+		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+			uIdxDef = idxDef.UIdx
+		}
+		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
+			sIdxDef = idxDef.SIdx
+		}
+	}
+	return uIdxDef, sIdxDef
 }

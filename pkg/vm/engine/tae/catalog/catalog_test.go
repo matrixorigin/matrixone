@@ -33,34 +33,6 @@ const (
 	ModuleName = "TAECATALOG"
 )
 
-func TestCompoundPKSchema(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	schema := NewEmptySchema(t.Name())
-	err := schema.AppendPKCol("pk1", types.T_int32.ToType(), 1)
-	assert.NoError(t, err)
-	err = schema.AppendPKCol("pk0", types.T_int32.ToType(), 0)
-	assert.NoError(t, err)
-	err = schema.AppendPKCol("pk2", types.T_int32.ToType(), 2)
-	assert.NoError(t, err)
-	err = schema.Finalize(false)
-	assert.NoError(t, err)
-	assert.Equal(t, 3, schema.SortKey.Size())
-	assert.Equal(t, int8(0), schema.SortKey.GetDef(0).SortIdx)
-	assert.Equal(t, int8(1), schema.SortKey.GetDef(1).SortIdx)
-	assert.Equal(t, int8(2), schema.SortKey.GetDef(2).SortIdx)
-	assert.Equal(t, "pk0", schema.SortKey.GetDef(0).Name)
-	assert.Equal(t, "pk1", schema.SortKey.GetDef(1).Name)
-	assert.Equal(t, "pk2", schema.SortKey.GetDef(2).Name)
-
-	schema = NewEmptySchema(t.Name())
-	err = schema.AppendPKCol("pk1", types.T_int32.ToType(), 0)
-	assert.NoError(t, err)
-	err = schema.AppendPKCol("pk0", types.T_int32.ToType(), 0)
-	assert.NoError(t, err)
-	err = schema.Finalize(false)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
-}
-
 func TestCreateDB1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	catalog := MockCatalog(nil)

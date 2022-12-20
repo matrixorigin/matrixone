@@ -15,6 +15,7 @@
 package logutil
 
 import (
+	"context"
 	"github.com/lni/goutils/leaktest"
 	"regexp"
 	"testing"
@@ -170,7 +171,7 @@ func TestSetupMOLogger_panic(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			defer func() {
 				if err := recover(); err != nil {
-					require.Equal(t, moerr.NewInternalError("unsupported log format: %s", tt.args.conf.Format), err)
+					require.Equal(t, moerr.NewInternalError(context.TODO(), "unsupported log format: %s", tt.args.conf.Format), err)
 				} else {
 					t.Errorf("not receive panic")
 				}

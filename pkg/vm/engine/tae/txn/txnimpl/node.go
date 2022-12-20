@@ -343,8 +343,11 @@ func (n *insertNode) PrepareAppend(data *containers.Batch, offset uint32) uint32
 func (n *insertNode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
 	schema := n.table.entry.GetSchema()
 	if n.data == nil {
-		opts := new(containers.Options)
-		opts.Capacity = int(txnbase.MaxNodeRows)
+		opts := containers.Options{}
+		opts.Capacity = data.Length() - int(offset)
+		if opts.Capacity > int(txnbase.MaxNodeRows) {
+			opts.Capacity = int(txnbase.MaxNodeRows)
+		}
 		n.data = containers.BuildBatch(
 			schema.AllNames(),
 			schema.AllTypes(),
@@ -466,7 +469,11 @@ func (n *insertNode) PrintDeletes() string {
 }
 
 func (n *insertNode) Window(start, end uint32) (bat *containers.Batch, err error) {
-	bat = n.data.CloneWindow(int(start), int(end-start))
-	bat.Compact()
+	if n.data.HasDelete() {
+		bat = n.data.CloneWindow(int(start), int(end-start))
+		bat.Compact()
+	} else {
+		bat = n.data.Window(int(start), int(end-start))
+	}
 	return
 }

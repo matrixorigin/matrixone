@@ -15,6 +15,7 @@
 package mysql
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -26,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "show variables like 'sql_mode'",
-		output: "show variables like sql_mode",
+		input:  "load data infile 'data.txt' into table db.a accounts(a1, a2) fields terminated by '\t' escaped by '\t'",
+		output: "load data infile data.txt into table db.a accounts(a1, a2) fields terminated by \t escaped by \t",
 	}
 )
 
@@ -36,7 +37,7 @@ func TestDebug(t *testing.T) {
 	if debugSQL.output == "" {
 		debugSQL.output = debugSQL.input
 	}
-	ast, err := ParseOne(debugSQL.input)
+	ast, err := ParseOne(context.TODO(), debugSQL.input)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", debugSQL.input, err)
 		return
@@ -1725,15 +1726,104 @@ var (
 		{
 			input: `select count(a) over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1`,
 		},
+		{
+			input: "alter account if exists abc",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' open comment 'str'",
+		},
+		{
+			input: "alter account if exists abc open comment 'str'",
+		},
+		{
+			input: "alter account if exists abc comment 'str'",
+		},
+		{
+			input: "alter account if exists abc open",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' open",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' comment 'str'",
+		},
+		{
+			input: `create cluster table a (a int)`,
+		},
+		{
+			input: `insert into a accounts(acc1, acc2) values (1, 2), (1, 2)`,
+		},
+		{
+			input: `insert into a accounts(acc1, acc2) select a, b from a`,
+		},
+		{
+			input: `insert into a (a, b) accounts(acc1, acc2) values (1, 2), (1, 2)`,
+		},
+		{
+			input:  `insert into a () accounts(acc1, acc2) values (1, 2), (1, 2)`,
+			output: `insert into a accounts(acc1, acc2) values (1, 2), (1, 2)`,
+		},
+		{
+			input: `insert into a (a, b) accounts(acc1, acc2) select a, b from a`,
+		},
+		{
+			input:  `insert into a accounts(acc1, acc2) set a = b, b = b + 1`,
+			output: `insert into a (a, b) accounts(acc1, acc2) values (b, b + 1)`,
+		},
+		{
+			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A accounts (a1, a2) FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
+			output: "load data infile test/loadfile5 ignore into table t.a accounts(a1, a2) fields terminated by , (, , c, d, e, f)",
+		},
+		{
+			input:  "load data infile 'data.txt' into table db.a accounts(a1, a2) fields terminated by '\t' escaped by '\t'",
+			output: "load data infile data.txt into table db.a accounts(a1, a2) fields terminated by \t escaped by \t",
+		},
+		{
+			input:  `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
+			output: `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
+		},
+		{
+			input:  `create function twosum (x int, y int) returns int language sql as 'select $1 + $2'`,
+			output: `create function twosum (x int, y int) returns int language sql as 'select $1 + $2'`,
+		},
+		{
+			input:  `create function charat (x int) returns char language sql as 'select $1'`,
+			output: `create function charat (x int) returns char language sql as 'select $1'`,
+		},
+		{
+			input:  `create function charat (x int default 15) returns char language sql as 'select $1'`,
+			output: `create function charat (x int default 15) returns char language sql as 'select $1'`,
+		},
+		{
+			input:  `drop function helloworld ()`,
+			output: `drop function helloworld ()`,
+		},
+		{
+			input:  `drop function charat (int)`,
+			output: `drop function charat (int)`,
+		},
+		{
+			input:  `drop function twosum (int, int)`,
+			output: `drop function twosum (int, int)`,
+		},
+		{
+			input:  `create extension python as strutil file 'stringutils.whl'`,
+			output: `create extension python as strutil file stringutils.whl`,
+		},
+		{
+			input:  `load strutil`,
+			output: `load strutil`,
+		},
 	}
 )
 
 func TestValid(t *testing.T) {
+	ctx := context.TODO()
 	for _, tcase := range validSQL {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		ast, err := ParseOne(tcase.input)
+		ast, err := ParseOne(ctx, tcase.input)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -1760,11 +1850,12 @@ var (
 )
 
 func TestMulti(t *testing.T) {
+	ctx := context.TODO()
 	for _, tcase := range multiSQL {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		asts, err := Parse(tcase.input)
+		asts, err := Parse(ctx, tcase.input)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue

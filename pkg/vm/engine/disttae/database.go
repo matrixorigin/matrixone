@@ -72,7 +72,7 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	tbl.meta = meta
 	tbl.parts = parts
 	tbl.tableName = name
-	tbl.insertExpr = genInsertExpr(defs, len(parts))
+	tbl.insertExpr = genInsertExpr(ctx, defs, len(parts))
 	db.txn.tableMap.Store(key, tbl)
 	return tbl, nil
 }
@@ -164,6 +164,11 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 				tbl.viewdef = defVal.View
 			case *engine.PartitionDef:
 				tbl.partition = defVal.Partition
+			case *engine.ConstraintDef:
+				tbl.constraint, err = defVal.MarshalBinary()
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}

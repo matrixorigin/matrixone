@@ -27,7 +27,7 @@ func NewPredicatePushdown() *PredicatePushdown {
 }
 
 func (r *PredicatePushdown) Match(n *plan.Node) bool {
-	return n.NodeType != plan.Node_TABLE_SCAN && n.NodeType != plan.Node_EXTERNAL_SCAN && n.NodeType != plan.Node_TABLE_FUNCTION && len(n.FilterList) > 0
+	return n.NodeType != plan.Node_TABLE_SCAN && n.NodeType != plan.Node_EXTERNAL_SCAN && n.NodeType != plan.Node_FUNCTION_SCAN && len(n.FilterList) > 0
 }
 
 func (r *PredicatePushdown) Apply(n *plan.Node, qry *plan.Query) {
@@ -45,11 +45,11 @@ func (r *PredicatePushdown) pushdown(e *plan.Expr, n *plan.Node, qry *plan.Query
 		n.FilterList = append(n.FilterList, e)
 		return false
 	}
-	if n.NodeType == plan.Node_TABLE_SCAN || n.NodeType == plan.Node_AGG || n.NodeType == plan.Node_TABLE_FUNCTION {
+	if n.NodeType == plan.Node_TABLE_SCAN || n.NodeType == plan.Node_AGG || n.NodeType == plan.Node_FUNCTION_SCAN {
 		n.FilterList = append(n.FilterList, e)
 		return false
 	}
-	if len(n.Children) > 0 && (qry.Nodes[n.Children[0]].NodeType == plan.Node_JOIN || qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG || qry.Nodes[n.Children[0]].NodeType == plan.Node_TABLE_FUNCTION) {
+	if len(n.Children) > 0 && (qry.Nodes[n.Children[0]].NodeType == plan.Node_JOIN || qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG || qry.Nodes[n.Children[0]].NodeType == plan.Node_FUNCTION_SCAN) {
 		n.FilterList = append(n.FilterList, e)
 		return false
 	}
@@ -72,8 +72,8 @@ func (r *PredicatePushdown) newExpr(relPos int32, expr *plan.Expr, n *plan.Node,
 		return relPos, expr
 	case *plan.Expr_F:
 		overloadID := e.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadID)
-		if err != nil {
+		f, exists := function.GetFunctionByIDWithoutError(overloadID)
+		if !exists {
 			return relPos, nil
 		}
 		if f.TestFlag(plan.Function_AGG) {

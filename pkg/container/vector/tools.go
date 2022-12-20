@@ -392,14 +392,14 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 		}, func(t1, t2 types.Uuid) bool {
 			return t1.Le(t2)
 		})
-	case types.T_varchar, types.T_char:
+	case types.T_varchar, types.T_char, types.T_text:
 		return checkStrIntersect(v, vec, func(t1, t2 string) bool {
 			return strings.Compare(t1, t2) >= 0
 		}, func(t1, t2 string) bool {
 			return strings.Compare(t1, t2) <= 0
 		})
 	}
-	return false, moerr.NewInternalError("unsupport type to check intersect")
+	return false, moerr.NewInternalErrorNoCtx("unsupport type to check intersect")
 }
 
 func checkNumberIntersect[T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp](v1, v2 *Vector) (bool, error) {
@@ -453,19 +453,19 @@ func checkIntersect[T compT](cols1, cols2 []T, gtFun compFn[T], ltFun compFn[T])
 // funName must be ">,<,>=,<="
 func (v *Vector) CompareAndCheckAnyResultIsTrue(vec *Vector, funName string) (bool, error) {
 	if v.Typ.Oid != vec.Typ.Oid {
-		return false, moerr.NewInternalError("can not compare two vector because their type is not match")
+		return false, moerr.NewInternalErrorNoCtx("can not compare two vector because their type is not match")
 	}
 	if v.Length() != vec.Length() {
-		return false, moerr.NewInternalError("can not compare two vector because their length is not match")
+		return false, moerr.NewInternalErrorNoCtx("can not compare two vector because their length is not match")
 	}
 	if v.Length() == 0 {
-		return false, moerr.NewInternalError("can not compare two vector because their length is zero")
+		return false, moerr.NewInternalErrorNoCtx("can not compare two vector because their length is zero")
 	}
 
 	switch funName {
 	case ">", "<", ">=", "<=":
 	default:
-		return false, moerr.NewInternalError("unsupport compare function")
+		return false, moerr.NewInternalErrorNoCtx("unsupport compare function")
 	}
 
 	switch v.Typ.Oid {
@@ -574,10 +574,10 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(vec *Vector, funName string) (bo
 			}), nil
 		}
 	default:
-		return false, moerr.NewInternalError("unsupport compare type")
+		return false, moerr.NewInternalErrorNoCtx("unsupport compare type")
 	}
 
-	return false, moerr.NewInternalError("unsupport compare function")
+	return false, moerr.NewInternalErrorNoCtx("unsupport compare function")
 }
 
 type compT interface {
@@ -606,7 +606,7 @@ func compareNumber[T constraints.Integer | constraints.Float | types.Date | type
 			return t1 <= t2
 		}), nil
 	default:
-		return false, moerr.NewInternalError("unsupport compare function")
+		return false, moerr.NewInternalErrorNoCtx("unsupport compare function")
 	}
 }
 

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 type RoutineManager struct {
@@ -89,16 +90,16 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	exe.SetRoutineManager(rm)
 	exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
 
-	routine := NewRoutine(rm.getCtx(), pro, exe, pu)
-	routine.SetRoutineMgr(rm)
+	routine := NewRoutine(rm.getCtx(), pro, exe, pu.SV, rs)
 
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(routine.GetClientProtocol(), nil, pu, gSysVariables, true)
-	ses.SetRequestContext(routine.GetCancelRoutineCtx())
+	ses := NewSession(routine.getProtocol(), nil, pu, gSysVariables, true)
+	ses.SetRequestContext(routine.getCancelRoutineCtx())
 	ses.SetFromRealUser(true)
-	routine.SetSession(ses)
+	ses.setSkipCheckPrivilege(rm.GetSkipCheckUser())
+	routine.setSession(ses)
 	pro.SetSession(ses)
 
 	logDebugf(pro.GetConciseProfile(), "have done some preparation for the connection %s", rs.RemoteAddress())
@@ -107,7 +108,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	err := pro.writePackets(hsV10pkt)
 	if err != nil {
 		logError(pro.GetConciseProfile(), "failed to handshake with server, quiting routine...")
-		routine.Quit()
+		routine.killConnection(true)
 		return
 	}
 
@@ -129,31 +130,42 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	}
 	rm.mu.Unlock()
 
-	ses := rt.GetSession()
-	logDebugf(ses.GetConciseProfile(), "will close io session.")
 	if rt != nil {
-		rt.Quit()
+		ses := rt.getSession()
+		if ses != nil {
+			logDebugf(ses.GetConciseProfile(), "the io session was closed.")
+		}
+		rt.cleanup()
 	}
 }
 
 /*
-KILL statement
+kill a connection or query.
+if killConnection is true, the query will be canceled first, then the network will be closed.
+if killConnection is false, only the query will be canceled. the connection keeps intact.
 */
-func (rm *RoutineManager) killStatement(id uint64) error {
+func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatKill, id uint64, statementId string) error {
 	var rt *Routine = nil
 	rm.mu.Lock()
 	for _, value := range rm.clients {
-		if uint64(value.getConnID()) == id {
+		if uint64(value.getConnectionID()) == id {
 			rt = value
 			break
 		}
 	}
 	rm.mu.Unlock()
 
+	killMyself := idThatKill == id
 	if rt != nil {
-		logutil.Infof("will close the statement %d", id)
-		rt.notifyClose()
-		rt.notifyDone()
+		if killConnection {
+			logutil.Infof("kill connection %d", id)
+			rt.killConnection(killMyself)
+		} else {
+			logutil.Infof("kill query %s on the connection %d", statementId, id)
+			rt.killQuery(killMyself, statementId)
+		}
+	} else {
+		return moerr.NewInternalError(ctx, "Unknown connection id %d", id)
 	}
 	return nil
 }
@@ -169,22 +181,25 @@ func getConnectionInfo(rs goetty.IOSession) string {
 func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received uint64) error {
 	var err error
 	var isTlsHeader bool
+	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler")
+	defer span.End()
 	connectionInfo := getConnectionInfo(rs)
 	routine := rm.getRoutine(rs)
 	if routine == nil {
-		err = moerr.NewInternalError("routine does not exist")
+		err = moerr.NewInternalError(ctx, "routine does not exist")
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
 	}
-
-	protocol := routine.GetClientProtocol().(*MysqlProtocolImpl)
+	routine.setInProcessRequest(true)
+	defer routine.setInProcessRequest(false)
+	protocol := routine.getProtocol()
 	protoProfile := protocol.GetConciseProfile()
 	packet, ok := msg.(*Packet)
 
 	protocol.SetSequenceID(uint8(packet.SequenceID + 1))
 	var seq = protocol.GetSequenceId()
 	if !ok {
-		err = moerr.NewInternalError("message is not Packet")
+		err = moerr.NewInternalError(ctx, "message is not Packet")
 		logErrorf(protoProfile, "error:%v", err)
 		return err
 	}
@@ -200,7 +215,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 		packet, ok = msg.(*Packet)
 		if !ok {
-			err = moerr.NewInternalError("message is not Packet")
+			err = moerr.NewInternalError(ctx, "message is not Packet")
 			logErrorf(protoProfile, "error:%v", err)
 			return err
 		}
@@ -219,10 +234,10 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			di := MakeDebugInfo(payload,80,8)
 			logutil.Infof("RP[%v] Payload80[%v]",rs.RemoteAddr(),di)
 		*/
-		ses := protocol.GetSession()
+		ses := routine.getSession()
 		if protocol.GetCapability()&CLIENT_SSL != 0 && !protocol.IsTlsEstablished() {
 			logDebugf(protoProfile, "setup ssl")
-			isTlsHeader, err = protocol.handleHandshake(payload)
+			isTlsHeader, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
 				logErrorf(protoProfile, "error:%v", err)
 				return err
@@ -232,7 +247,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				// do upgradeTls
 				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
 				logDebugf(protoProfile, "get TLS conn ok")
-				newCtx, cancelFun := context.WithTimeout(ses.GetRequestContext(), 20*time.Second)
+				newCtx, cancelFun := context.WithTimeout(ctx, 20*time.Second)
 				if err = tlsConn.HandshakeContext(newCtx); err != nil {
 					logErrorf(protoProfile, "before cancel() error:%v", err)
 					cancelFun()
@@ -253,7 +268,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			}
 		} else {
 			logDebugf(protoProfile, "handleHandshake")
-			_, err = protocol.handleHandshake(payload)
+			_, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
 				logErrorf(protoProfile, "error:%v", err)
 				return err
@@ -268,15 +283,15 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		return nil
 	}
 
-	req := routine.GetClientProtocol().GetRequest(payload)
+	req := routine.getProtocol().GetRequest(payload)
 	req.seq = seq
-	ch := routine.GetRequestChannel()
-	chLen := len(ch)
-	capLen := cap(ch)
-	if chLen+1 > capLen {
-		logDebugf(protoProfile, "the request channel will block. length %d capacity %d", chLen, capLen)
+
+	//handle request
+	err = routine.handleRequest(req)
+	if err != nil {
+		logErrorf(protoProfile, "error:%v", err)
+		return err
 	}
-	ch <- req
 
 	return nil
 }
@@ -298,14 +313,14 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineM
 
 func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) error {
 	if len(SV.TlsCertFile) == 0 || len(SV.TlsKeyFile) == 0 {
-		return moerr.NewInternalError("init TLS config error : cert file or key file is empty")
+		return moerr.NewInternalError(rm.ctx, "init TLS config error : cert file or key file is empty")
 	}
 
 	var tlsCert tls.Certificate
 	var err error
 	tlsCert, err = tls.LoadX509KeyPair(SV.TlsCertFile, SV.TlsKeyFile)
 	if err != nil {
-		return moerr.NewInternalError("init TLS config error :load x509 failed")
+		return moerr.NewInternalError(rm.ctx, "init TLS config error :load x509 failed")
 	}
 
 	clientAuthPolicy := tls.NoClientCert
@@ -314,7 +329,7 @@ func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) error {
 		var caCert []byte
 		caCert, err = os.ReadFile(SV.TlsCaFile)
 		if err != nil {
-			return moerr.NewInternalError("init TLS config error :read TlsCaFile failed")
+			return moerr.NewInternalError(rm.ctx, "init TLS config error :read TlsCaFile failed")
 		}
 		certPool = x509.NewCertPool()
 		if certPool.AppendCertsFromPEM(caCert) {

@@ -16,6 +16,9 @@ package memorytable
 
 import (
 	"database/sql"
+	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -182,6 +185,30 @@ func TestTable(t *testing.T) {
 		v, err = table.Get(tx, row.key)
 		assert.Nil(t, err)
 		assert.Equal(t, 2, v)
+	})
+
+	t.Run("concurrent tx get no race", func(t *testing.T) {
+		table := NewTable[Int, int, TestRow]()
+		for i := 0; i < 1024; i++ {
+			tx := NewTransaction(Time{})
+			wg := new(sync.WaitGroup)
+			n := 3
+			var fail atomic.Bool
+			for i := 0; i < n; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_, err := table.Get(tx, Int(42))
+					if !errors.Is(err, sql.ErrNoRows) {
+						fail.Store(true)
+					}
+				}()
+			}
+			wg.Wait()
+			if fail.Load() {
+				t.Fatal()
+			}
+		}
 	})
 
 }

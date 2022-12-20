@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -107,7 +108,7 @@ func ParseTime(s string, precision int32) (Time, error) {
 		// it can be handled like Datetime
 		dt, err := ParseDatetime(s, precision)
 		if err != nil {
-			return -1, moerr.NewInvalidInput("invalid time value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 		}
 		return dt.ToTime(precision), nil
 	} else {
@@ -135,70 +136,70 @@ func ParseTime(s string, precision int32) (Time, error) {
 		// Because the max hour and int64 with solution
 		// msec can present is 2562047787
 		if l > 14 {
-			return -1, moerr.NewInvalidInput("invalid time value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 		}
 
 		parsingString := timeArr[0]
 		if l <= 2 {
 			// l <= 2: s/ss
 			if sec, err = strconv.ParseUint(parsingString[0:l], 10, 8); err != nil {
-				return -1, moerr.NewInvalidInput("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 			}
 		} else if l <= 4 {
 			// 2 < l <= 4: mss/mmss
 			// m is the length of minute part
 			minuLen := l - 2
 			if minute, err = strconv.ParseUint(parsingString[0:minuLen], 10, 8); err != nil {
-				return -1, moerr.NewInvalidInput("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 			}
 			if sec, err = strconv.ParseUint(parsingString[minuLen:l], 10, 8); err != nil {
-				return -1, moerr.NewInvalidInput("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 			}
 		} else {
 			// l > 4: hh...hhmmss
 			// hourLen is the length of hour part
 			hourLen := l - 4
 			if hour, err = strconv.ParseUint(parsingString[0:hourLen], 10, 64); err != nil {
-				return -1, moerr.NewInvalidInput("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 			}
 			if minute, err = strconv.ParseUint(parsingString[hourLen:hourLen+2], 10, 8); err != nil {
-				return -1, moerr.NewInvalidInput("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 			}
 			if sec, err = strconv.ParseUint(parsingString[hourLen+2:l], 10, 8); err != nil {
-				return -1, moerr.NewInvalidInput("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 			}
 		}
 	case 2: // h:mm / hh:mm / hh...hh:mm
 		if hour, err = strconv.ParseUint(timeArr[0], 10, 64); err != nil {
-			return -1, moerr.NewInvalidInput("invalid time value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 		}
 		if minute, err = strconv.ParseUint(timeArr[1], 10, 8); err != nil {
-			return -1, moerr.NewInvalidInput("invalid time value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 		}
 		sec = 0
 	case 3: // h:mm:ss / hh:mm:ss / hh...hh:mm:ss
 		if hour, err = strconv.ParseUint(timeArr[0], 10, 64); err != nil {
-			return -1, moerr.NewInvalidInput("invalid time value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 		}
 		if minute, err = strconv.ParseUint(timeArr[1], 10, 8); err != nil {
-			return -1, moerr.NewInvalidInput("invalid time value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 		}
 		if sec, err = strconv.ParseUint(timeArr[2], 10, 8); err != nil {
-			return -1, moerr.NewInvalidInput("invalid time value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 		}
 	default:
-		return -1, moerr.NewInvalidInput("invalid time value %s", s)
+		return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 	}
 
 	if !ValidTime(hour, minute, sec) {
-		return -1, moerr.NewInvalidInput("invalid time value %s", s)
+		return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 	}
 
 	// handle msec part
 	if len(strs) > 1 {
 		msec, carry, err = getMsec(strs[1], precision)
 		if err != nil {
-			return -1, moerr.NewInvalidInput("invalid time value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 		}
 	}
 
@@ -219,7 +220,7 @@ func ParseTime(s string, precision int32) (Time, error) {
 
 func ParseInt64ToTime(input int64, precision int32) (Time, error) {
 	if input < MinInputIntTime || input > MaxInputIntTime {
-		return -1, moerr.NewInvalidInput("invalid time value %d", input)
+		return -1, moerr.NewInvalidInputNoCtx("invalid time value %d", input)
 	}
 	s := strconv.FormatInt(input, 10)
 	return ParseTime(s, precision)
@@ -245,21 +246,21 @@ func (t Time) ToInt64() int64 {
 	return trans
 }
 
-func (t Time) ToDecimal64(width, precision int32) (Decimal64, error) {
+func (t Time) ToDecimal64(ctx context.Context, width, precision int32) (Decimal64, error) {
 	tToStr := t.NumericString(precision)
 	ret, err := ParseStringToDecimal64(tToStr, width, precision, false)
 	if err != nil {
-		return ret, moerr.NewInternalError("exsit time cant't cast to decimal64")
+		return ret, moerr.NewInternalError(ctx, "exsit time cant't cast to decimal64")
 	}
 
 	return ret, nil
 }
 
-func (t Time) ToDecimal128(width, precision int32) (Decimal128, error) {
+func (t Time) ToDecimal128(ctx context.Context, width, precision int32) (Decimal128, error) {
 	tToStr := t.NumericString(precision)
 	ret, err := ParseStringToDecimal128(tToStr, width, precision, false)
 	if err != nil {
-		return ret, moerr.NewInternalError("exsit time cant't cast to decimal128")
+		return ret, moerr.NewInternalError(ctx, "exsit time cant't cast to decimal128")
 	}
 
 	return ret, nil
@@ -356,7 +357,7 @@ func (t Time) AddInterval(nums int64, its IntervalType) (Time, bool) {
 	return newTime, true
 }
 
-func (t Time) ConvertToInterval(its string) (int64, error) {
+func (t Time) ConvertToInterval(ctx context.Context, its string) (int64, error) {
 	switch its {
 	case "microsecond":
 		return int64(t), nil
@@ -367,7 +368,7 @@ func (t Time) ConvertToInterval(its string) (int64, error) {
 	case "hour":
 		return int64(t) / (microSecsPerSec * secsPerHour), nil
 	}
-	return 0, moerr.NewInvalidInput("invalid time input")
+	return 0, moerr.NewInvalidInput(ctx, "invalid time input")
 }
 
 func (t Time) sec() int64 {

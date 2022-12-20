@@ -15,6 +15,7 @@
 package trace
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"time"
 	"unsafe"
@@ -60,9 +61,9 @@ func (m *MOZapLog) Free() {
 	m.Extra = ""
 }
 
-func (m *MOZapLog) GetRow() *table.Row { return logView.OriginTable.GetRow() }
+func (m *MOZapLog) GetRow() *table.Row { return logView.OriginTable.GetRow(DefaultContext()) }
 
-func (m *MOZapLog) CsvFields(row *table.Row) []string {
+func (m *MOZapLog) CsvFields(ctx context.Context, row *table.Row) []string {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, logView.Table)
 	row.SetColumnVal(traceIDCol, m.SpanContext.TraceID.String())

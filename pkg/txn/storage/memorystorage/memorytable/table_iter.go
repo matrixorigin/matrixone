@@ -14,16 +14,16 @@
 
 package memorytable
 
-import "github.com/tidwall/btree"
-
+// TableIter represents an iter over a table
 type TableIter[
 	K Ordered[K],
 	V any,
 ] struct {
 	tx   *Transaction
-	iter btree.GenericIter[*KVPair[K, V]]
+	iter RowsIter[K, V]
 }
 
+// NewIter creates a new iter
 func (t *Table[K, V, R]) NewIter(tx *Transaction) (*TableIter[K, V], error) {
 	txTable, err := t.getTransactionTable(tx)
 	if err != nil {
@@ -39,28 +39,36 @@ func (t *Table[K, V, R]) NewIter(tx *Transaction) (*TableIter[K, V], error) {
 
 var _ KVIter[Int, int] = new(TableIter[Int, int])
 
+// Read reads current key and value
 func (t *TableIter[K, V]) Read() (key K, value V, err error) {
-	pair := t.iter.Item()
+	var pair *KVPair[K, V]
+	pair, err = t.iter.Read()
+	if err != nil {
+		return
+	}
 	key = pair.Key
 	value = pair.Value
 	return
 }
 
+// Next moves the cursor to next entry
 func (t *TableIter[K, V]) Next() bool {
 	return t.iter.Next()
 }
 
+// First moves the cursor to first entry
 func (t *TableIter[K, V]) First() bool {
 	return t.iter.First()
 }
 
+// Seek moves the cursor to or before the key
 func (t *TableIter[K, V]) Seek(key K) bool {
 	return t.iter.Seek(&KVPair[K, V]{
 		Key: key,
 	})
 }
 
+// Close closes the iter
 func (t *TableIter[K, V]) Close() error {
-	t.iter.Release()
-	return nil
+	return t.iter.Close()
 }

@@ -155,7 +155,7 @@ var realNoExecPlanJsonResult = `{"code":200,"message":"NO ExecPlan Serialize fun
 var dummyNoExecPlanJsonResult = `{"code":200,"message":"no exec plan"}`
 var dummyNoExecPlanJsonResult2 = `{"func":"dummy2","code":200,"message":"no exec plan"}`
 
-var dummySerializeExecPlan = func(plan any, _ uuid.UUID) ([]byte, int64, int64) {
+var dummySerializeExecPlan = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, int64, int64) {
 	if plan == nil {
 		return []byte(dummyNoExecPlanJsonResult), 0, 0
 	}
@@ -166,7 +166,7 @@ var dummySerializeExecPlan = func(plan any, _ uuid.UUID) ([]byte, int64, int64) 
 	return json, 1, 1
 }
 
-var dummySerializeExecPlan2 = func(plan any, _ uuid.UUID) ([]byte, int64, int64) {
+var dummySerializeExecPlan2 = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, int64, int64) {
 	if plan == nil {
 		return []byte(dummyNoExecPlanJsonResult2), 0, 0
 	}
@@ -274,12 +274,14 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 			want: dummyNoExecPlanJsonResult2,
 		},
 	}
+
+	ctx := DefaultContext()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.args.setDefault()
 			s := &StatementInfo{}
 			s.SetExecPlan(tt.args.ExecPlan, tt.args.SerializeExecPlan)
-			got := s.ExecPlan2Json()
+			got := s.ExecPlan2Json(ctx)
 			assert.Equalf(t, tt.want, got, "ExecPlan2Json()")
 
 			mapper := new(map[string]any)

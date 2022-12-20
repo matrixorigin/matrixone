@@ -26,8 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
-var ErrRecordNotFound = moerr.NewInternalError("driver read cache: lsn not found")
-var ErrAllRecordsRead = moerr.NewInternalError("driver read cache: all records are read")
+var ErrRecordNotFound = moerr.NewInternalErrorNoCtx("driver read cache: lsn not found")
+var ErrAllRecordsRead = moerr.NewInternalErrorNoCtx("driver read cache: all records are read")
 
 type readCache struct {
 	lsns    []uint64
@@ -127,6 +127,9 @@ func (d *LogServiceDriver) resetReadCache() {
 
 func (d *LogServiceDriver) readSmallBatchFromLogService(lsn uint64) {
 	_, records := d.readFromLogService(lsn, int(d.config.ReadMaxSize))
+	if len(records) == 0 {
+		_, records = d.readFromLogService(lsn, MaxReadSize)
+	}
 	d.appendRecords(records, lsn, nil, 1)
 	if !d.IsReplaying() && len(d.lsns) > d.config.ReadCacheSize {
 		d.dropRecords()

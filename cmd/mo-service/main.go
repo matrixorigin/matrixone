@@ -18,6 +18,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/binary"
+	"errors"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
@@ -48,7 +50,7 @@ import (
 )
 
 var (
-	configFile = flag.String("cfg", "./mo.toml", "toml configuration used to start mo-service")
+	configFile = flag.String("cfg", "", "toml configuration used to start mo-service")
 	launchFile = flag.String("launch", "", "toml configuration used to launch mo cluster")
 	version    = flag.Bool("version", false, "print version information")
 )
@@ -89,6 +91,8 @@ func main() {
 		if err := startService(cfg, stopper); err != nil {
 			panic(err)
 		}
+	} else {
+		panic(errors.New("no configuration specified"))
 	}
 
 	waitSignalToStop(stopper)
@@ -115,7 +119,6 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 	if err := cfg.resolveGossipSeedAddresses(); err != nil {
 		return err
 	}
-
 	setupProcessLevelRuntime(cfg, stopper)
 
 	fs, err := cfg.createFileService(defines.LocalFileServiceName)
@@ -123,16 +126,21 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 		return err
 	}
 
-	if err = initTraceMetric(context.Background(), cfg, stopper, fs); err != nil {
+	st, err := cfg.getServiceType()
+	if err != nil {
 		return err
 	}
 
-	switch strings.ToUpper(cfg.ServiceType) {
-	case cnServiceType:
+	if err = initTraceMetric(context.Background(), st, cfg, stopper, fs); err != nil {
+		return err
+	}
+
+	switch st {
+	case metadata.ServiceType_CN:
 		return startCNService(cfg, stopper, fs)
-	case dnServiceType:
+	case metadata.ServiceType_DN:
 		return startDNService(cfg, stopper, fs)
-	case logServiceType:
+	case metadata.ServiceType_LOG:
 		return startLogService(cfg, stopper, fs)
 	default:
 		panic("unknown service type")
@@ -186,12 +194,16 @@ func startDNService(
 	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
+	r, err := getRuntime(metadata.ServiceType_DN, cfg, stopper)
+	if err != nil {
+		return err
+	}
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
 		c := cfg.getDNServiceConfig()
 		s, err := dnservice.NewService(
 			&c,
-			fileService,
-			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service").With(zap.String("uuid", cfg.DN.UUID))))
+			r,
+			fileService)
 		if err != nil {
 			panic(err)
 		}
@@ -235,40 +247,39 @@ func startLogService(
 	})
 }
 
-func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper, fs fileservice.FileService) error {
+func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, stopper *stopper.Stopper, fs fileservice.FileService) error {
 	var writerFactory export.FSWriterFactory
 	var err error
 	var UUID string
 	var initWG sync.WaitGroup
 	SV := cfg.getObservabilityConfig()
 
-	ServiceType := strings.ToUpper(cfg.ServiceType)
-	nodeRole := ServiceType
+	nodeRole := st.String()
 	if *launchFile != "" {
 		nodeRole = "ALL"
 	}
-	switch ServiceType {
-	case cnServiceType:
+	switch st {
+	case metadata.ServiceType_CN:
 		// validate node_uuid
 		var uuidErr error
 		var nodeUUID uuid.UUID
 		if nodeUUID, uuidErr = uuid.Parse(cfg.CN.UUID); uuidErr != nil {
 			nodeUUID = uuid.New()
 		}
-		if err := util.SetUUIDNodeID(nodeUUID[:]); err != nil {
-			return moerr.ConvertPanicError(err)
+		if err := util.SetUUIDNodeID(ctx, nodeUUID[:]); err != nil {
+			return moerr.ConvertPanicError(ctx, err)
 		}
 		UUID = nodeUUID.String()
-	case dnServiceType:
+	case metadata.ServiceType_DN:
 		UUID = cfg.DN.UUID
-	case logServiceType:
+	case metadata.ServiceType_LOG:
 		UUID = cfg.LogService.UUID
 	}
 	UUID = strings.ReplaceAll(UUID, " ", "_") // remove space in UUID for filename
 
 	if !SV.DisableTrace || !SV.DisableMetric {
 		writerFactory = export.GetFSWriterFactory(fs, UUID, nodeRole)
-		_ = table.SetPathBuilder(SV.PathBuilder)
+		_ = table.SetPathBuilder(ctx, SV.PathBuilder)
 	}
 	if !SV.DisableTrace {
 		initWG.Add(1)
@@ -278,7 +289,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 				trace.WithNode(UUID, nodeRole),
 				trace.EnableTracer(!SV.DisableTrace),
 				trace.WithBatchProcessMode(SV.BatchProcessor),
-				trace.WithBatchProcessor(export.NewMOCollector()),
+				trace.WithBatchProcessor(export.NewMOCollector(ctx)),
 				trace.WithFSWriterFactory(export.GetFSWriterFactory4Trace(fs, UUID, nodeRole)),
 				trace.WithExportInterval(SV.TraceExportInterval),
 				trace.WithLongQueryTime(SV.LongQueryTime),
@@ -291,8 +302,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 			<-ctx.Done()
 			// flush trace/log/error framework
 			if err = trace.Shutdown(trace.DefaultContext()); err != nil {
-				logutil.Error("Shutdown trace", logutil.ErrorField(err), logutil.NoReportFiled())
-				panic(err)
+				logutil.Warn("Shutdown trace", logutil.ErrorField(err), logutil.NoReportFiled())
 			}
 		})
 		initWG.Wait()
@@ -302,7 +312,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 			metric.WithExportInterval(SV.MetricExportInterval),
 			metric.WithMultiTable(SV.MetricMultiTable))
 	}
-	if err = export.InitMerge(SV.MergeCycle.Duration, SV.MergeMaxFileSize); err != nil {
+	if err = export.InitMerge(ctx, SV.MergeCycle.Duration, SV.MergeMaxFileSize); err != nil {
 		return err
 	}
 	return nil

@@ -18,17 +18,18 @@ import (
 	"context"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
-	"go.uber.org/zap"
 )
 
 // replica dn shard replica.
 type replica struct {
-	logger   *zap.Logger
+	rt       runtime.Runtime
+	logger   *log.MOLogger
 	shard    metadata.DNShard
 	service  service.TxnService
 	startedC chan struct{}
@@ -39,10 +40,11 @@ type replica struct {
 	}
 }
 
-func newReplica(shard metadata.DNShard, logger *zap.Logger) *replica {
+func newReplica(shard metadata.DNShard, rt runtime.Runtime) *replica {
 	return &replica{
+		rt:       rt,
 		shard:    shard,
-		logger:   logutil.Adjust(logger).With(util.TxnDNShardField(shard)),
+		logger:   rt.Logger().With(util.TxnDNShardField(shard)),
 		startedC: make(chan struct{}),
 	}
 }

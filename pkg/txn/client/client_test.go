@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -29,21 +31,20 @@ import (
 )
 
 func TestAdjustClient(t *testing.T) {
-	clock.SetupDefaultClock(clock.NewHLCClock(func() int64 { return 0 }, time.Millisecond))
-	defer clock.SetupDefaultClock(nil)
-
-	c := &txnClient{}
+	c := &txnClient{rt: runtime.DefaultRuntime()}
 	c.adjust()
 	assert.NotNil(t, c.generator)
-	assert.NotNil(t, c.logger)
 	assert.NotNil(t, c.generator)
-	assert.NotNil(t, c.clock)
+	assert.NotNil(t, c.rt)
 }
 
 func TestNewTxn(t *testing.T) {
-	c := NewTxnClient(newTestTxnSender(), WithClock(clock.NewHLCClock(func() int64 {
-		return 1
-	}, 0)))
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 {
+			return 1
+		}, 0)))
+	c := NewTxnClient(rt, newTestTxnSender())
 	tx, err := c.New()
 	assert.Nil(t, err)
 	txnMeta := tx.(*txnOperator).mu.txn

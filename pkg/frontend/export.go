@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -73,7 +74,7 @@ func initExportFileParam(ep *tree.ExportParam, mrs *MysqlResultSet) {
 	}
 }
 
-var openNewFile = func(ep *tree.ExportParam, mrs *MysqlResultSet) error {
+var openNewFile = func(ctx context.Context, ep *tree.ExportParam, mrs *MysqlResultSet) error {
 	lineSize := ep.LineSize
 	var err error
 	ep.CurFileSize = 0
@@ -94,7 +95,7 @@ var openNewFile = func(ep *tree.ExportParam, mrs *MysqlResultSet) error {
 		}
 		header += mrs.Columns[n-1].Name() + ep.Lines.TerminatedBy
 		if ep.MaxFileSize != 0 && uint64(len(header)) >= ep.MaxFileSize {
-			return moerr.NewInternalError("the header line size is over the maxFileSize")
+			return moerr.NewInternalError(ctx, "the header line size is over the maxFileSize")
 		}
 		if err := writeDataToCSVFile(ep, []byte(header)); err != nil {
 			return err
@@ -167,7 +168,7 @@ var Write = func(ep *tree.ExportParam, output []byte) (int, error) {
 func writeToCSVFile(oq *outputQueue, output []byte) error {
 	if oq.ep.MaxFileSize != 0 && oq.ep.CurFileSize+uint64(len(output)) > oq.ep.MaxFileSize {
 		if oq.ep.Rows == 0 {
-			return moerr.NewInternalError("the OneLine size is over the maxFileSize")
+			return moerr.NewInternalError(oq.ctx, "the OneLine size is over the maxFileSize")
 		}
 		oq.ep.FileCnt++
 		if err := Flush(oq.ep); err != nil {
@@ -191,7 +192,7 @@ func writeToCSVFile(oq *outputQueue, output []byte) error {
 		if err := Close(oq.ep); err != nil {
 			return err
 		}
-		if err := openNewFile(oq.ep, oq.mrs); err != nil {
+		if err := openNewFile(oq.ctx, oq.ep, oq.mrs); err != nil {
 			return err
 		}
 	}
@@ -243,15 +244,15 @@ func exportDataToCSVFile(oq *outputQueue) error {
 	closeby := oq.ep.Fields.EnclosedBy
 	flag := oq.ep.ColumnFlag
 	for i := uint64(0); i < oq.mrs.GetColumnCount(); i++ {
-		column, err := oq.mrs.GetColumn(i)
+		column, err := oq.mrs.GetColumn(oq.ctx, i)
 		if err != nil {
 			return err
 		}
 		mysqlColumn, ok := column.(*MysqlColumn)
 		if !ok {
-			return moerr.NewInternalError("sendColumn need MysqlColumn")
+			return moerr.NewInternalError(oq.ctx, "sendColumn need MysqlColumn")
 		}
-		if isNil, err := oq.mrs.ColumnIsNull(0, i); err != nil {
+		if isNil, err := oq.mrs.ColumnIsNull(oq.ctx, 0, i); err != nil {
 			return err
 		} else if isNil {
 			//NULL is output as \N
@@ -263,7 +264,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 
 		switch mysqlColumn.ColumnType() {
 		case defines.MYSQL_TYPE_DECIMAL:
-			value, err := oq.mrs.GetString(0, i)
+			value, err := oq.mrs.GetString(oq.ctx, 0, i)
 			if err != nil {
 				return err
 			}
@@ -271,7 +272,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				return err
 			}
 		case defines.MYSQL_TYPE_BOOL:
-			value, err := oq.mrs.GetString(0, i)
+			value, err := oq.mrs.GetString(oq.ctx, 0, i)
 			if err != nil {
 				return err
 			}
@@ -279,7 +280,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				return err
 			}
 		case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
-			value, err := oq.mrs.GetInt64(0, i)
+			value, err := oq.mrs.GetInt64(oq.ctx, 0, i)
 			if err != nil {
 				return err
 			}
@@ -303,7 +304,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				}
 			}
 		case defines.MYSQL_TYPE_FLOAT, defines.MYSQL_TYPE_DOUBLE:
-			value, err := oq.mrs.GetFloat64(0, i)
+			value, err := oq.mrs.GetFloat64(oq.ctx, 0, i)
 			if err != nil {
 				return err
 			}
@@ -313,7 +314,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 			}
 		case defines.MYSQL_TYPE_LONGLONG:
 			if uint32(mysqlColumn.Flag())&defines.UNSIGNED_FLAG != 0 {
-				if value, err := oq.mrs.GetUint64(0, i); err != nil {
+				if value, err := oq.mrs.GetUint64(oq.ctx, 0, i); err != nil {
 					return err
 				} else {
 					oq.resetLineStr()
@@ -323,7 +324,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 					}
 				}
 			} else {
-				if value, err := oq.mrs.GetInt64(0, i); err != nil {
+				if value, err := oq.mrs.GetInt64(oq.ctx, 0, i); err != nil {
 					return err
 				} else {
 					oq.resetLineStr()
@@ -334,7 +335,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				}
 			}
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
-			value, err := oq.mrs.GetValue(0, i)
+			value, err := oq.mrs.GetValue(oq.ctx, 0, i)
 			if err != nil {
 				return err
 			}
@@ -343,7 +344,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				return err
 			}
 		case defines.MYSQL_TYPE_DATE:
-			value, err := oq.mrs.GetValue(0, i)
+			value, err := oq.mrs.GetValue(oq.ctx, 0, i)
 			if err != nil {
 				return err
 			}
@@ -351,7 +352,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				return err
 			}
 		case defines.MYSQL_TYPE_TIME:
-			value, err := oq.mrs.GetValue(0, i)
+			value, err := oq.mrs.GetValue(oq.ctx, 0, i)
 			if err != nil {
 				return err
 			}
@@ -359,7 +360,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				return err
 			}
 		case defines.MYSQL_TYPE_DATETIME:
-			value, err := oq.mrs.GetValue(0, i)
+			value, err := oq.mrs.GetValue(oq.ctx, 0, i)
 			if err != nil {
 				return err
 			}
@@ -367,7 +368,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				return err
 			}
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			value, err := oq.mrs.GetString(0, i)
+			value, err := oq.mrs.GetString(oq.ctx, 0, i)
 			if err != nil {
 				return err
 			}
@@ -375,7 +376,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				return err
 			}
 		case defines.MYSQL_TYPE_JSON:
-			value, err := oq.mrs.GetValue(0, i)
+			value, err := oq.mrs.GetValue(oq.ctx, 0, i)
 			if err != nil {
 				return err
 			}
@@ -384,7 +385,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				return err
 			}
 		case defines.MYSQL_TYPE_UUID:
-			value, err := oq.mrs.GetString(0, i)
+			value, err := oq.mrs.GetString(oq.ctx, 0, i)
 			if err != nil {
 				return err
 			}
@@ -392,7 +393,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				return err
 			}
 		default:
-			return moerr.NewInternalError("unsupported column type %d ", mysqlColumn.ColumnType())
+			return moerr.NewInternalError(oq.ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
 		}
 	}
 	oq.ep.Rows++

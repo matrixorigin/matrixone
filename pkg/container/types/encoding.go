@@ -62,7 +62,7 @@ func DecodeSlice[T any](v []byte) []T {
 	sz := int(unsafe.Sizeof(t))
 
 	if len(v)%sz != 0 {
-		panic(moerr.NewInternalError("decode slice that is not a multiple of element size"))
+		panic(moerr.NewInternalErrorNoCtx("decode slice that is not a multiple of element size"))
 	}
 
 	if len(v) > 0 {
@@ -509,7 +509,7 @@ func WriteValues(w io.Writer, vals ...any) (n int64, err error) {
 			}
 			n += int64(nr)
 		default:
-			panic(moerr.NewInternalError("%T:%v not supported", v, v))
+			panic(moerr.NewInternalErrorNoCtx("%T:%v not supported", v, v))
 		}
 	}
 	return

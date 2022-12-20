@@ -21,12 +21,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
 )
 
 // WithSenderPayloadBufferSize set buffer size for copy payload data to socket.
@@ -64,15 +63,22 @@ func WithSenderMaxMessageSize(maxMessageSize int) SenderOption {
 	}
 }
 
+// WithSenderEnableCompress enable compress
+func WithSenderEnableCompress(enable bool) SenderOption {
+	return func(s *sender) {
+		s.options.enableCompress = enable
+	}
+}
+
 type sender struct {
-	logger *zap.Logger
-	clock  clock.Clock
+	rt     moruntime.Runtime
 	client morpc.RPCClient
 
 	options struct {
 		localDispatch         LocalDispatch
 		payloadCopyBufferSize int
 		maxMessageSize        int
+		enableCompress        bool
 		backendCreateOptions  []morpc.BackendOption
 		clientOptions         []morpc.ClientOption
 	}
@@ -86,22 +92,21 @@ type sender struct {
 
 // NewSenderWithConfig create a txn sender by config and options
 func NewSenderWithConfig(cfg Config,
-	clock clock.Clock,
-	logger *zap.Logger,
+	rt moruntime.Runtime,
 	options ...SenderOption) (TxnSender, error) {
 	cfg.adjust()
-	options = append(options, WithSenderBackendOptions(cfg.getBackendOptions(logger)...))
-	options = append(options, WithSenderClientOptions(cfg.getClientOptions(logger)...))
+	options = append(options, WithSenderBackendOptions(cfg.getBackendOptions(rt.Logger().RawLogger())...))
+	options = append(options, WithSenderClientOptions(cfg.getClientOptions(rt.Logger().RawLogger())...))
 	options = append(options, WithSenderMaxMessageSize(int(cfg.MaxMessageSize)))
-	return NewSender(clock, logger, options...)
+	options = append(options, WithSenderEnableCompress(cfg.EnableCompress))
+	return NewSender(rt, options...)
 }
 
 // NewSender create a txn sender
-func NewSender(clock clock.Clock,
-	logger *zap.Logger,
+func NewSender(
+	rt moruntime.Runtime,
 	options ...SenderOption) (TxnSender, error) {
-	logger = logutil.Adjust(logger)
-	s := &sender{logger: logger, clock: clock}
+	s := &sender{rt: rt}
 	for _, opt := range options {
 		opt(s)
 	}
@@ -127,11 +132,23 @@ func NewSender(clock clock.Clock,
 		},
 	}
 
-	codec := morpc.NewMessageCodec(func() morpc.Message { return s.acquireResponse() },
-		morpc.WithCodecIntegrationHLC(s.clock),
+	var codecOpts []morpc.CodecOption
+	codecOpts = append(codecOpts,
+		morpc.WithCodecIntegrationHLC(s.rt.Clock()),
 		morpc.WithCodecPayloadCopyBufferSize(s.options.payloadCopyBufferSize),
 		morpc.WithCodecEnableChecksum(),
 		morpc.WithCodecMaxBodySize(s.options.maxMessageSize))
+	if s.options.enableCompress {
+		mp, err := mpool.NewMPool("txn_rpc_sender", 0, mpool.NoFixed)
+		if err != nil {
+			return nil, err
+		}
+		codecOpts = append(codecOpts, morpc.WithCodecEnableCompress(mp))
+	}
+
+	codec := morpc.NewMessageCodec(
+		func() morpc.Message { return s.acquireResponse() },
+		codecOpts...)
 	bf := morpc.NewGoettyBasedBackendFactory(codec, s.options.backendCreateOptions...)
 	client, err := morpc.NewClient(bf, s.options.clientOptions...)
 	if err != nil {
@@ -146,9 +163,9 @@ func (s *sender) adjust() {
 		s.options.payloadCopyBufferSize = 16 * 1024
 	}
 	s.options.backendCreateOptions = append(s.options.backendCreateOptions,
-		morpc.WithBackendLogger(s.logger))
+		morpc.WithBackendLogger(s.rt.Logger().RawLogger()))
 
-	s.options.clientOptions = append(s.options.clientOptions, morpc.WithClientLogger(s.logger))
+	s.options.clientOptions = append(s.options.clientOptions, morpc.WithClientLogger(s.rt.Logger().RawLogger()))
 }
 
 func (s *sender) Close() error {
@@ -198,7 +215,7 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		}
 		v, ok := <-c
 		if !ok {
-			return nil, moerr.NewStreamClosed()
+			return nil, moerr.NewStreamClosedNoCtx()
 		}
 		resp := v.(*txn.TxnResponse)
 		sr.setResponse(resp, idx)
@@ -360,7 +377,7 @@ func (ls *localStream) start() {
 			response := v.responseFactory()
 			err := v.handleFunc(v.ctx, v.request.(*txn.TxnRequest), response)
 			if err != nil {
-				response.TxnError = txn.WrapError(moerr.NewRpcError(err.Error()), 0)
+				response.TxnError = txn.WrapError(moerr.NewRpcErrorNoCtx(err.Error()), 0)
 			}
 			out <- response
 		}

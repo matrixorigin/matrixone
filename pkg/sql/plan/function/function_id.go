@@ -94,6 +94,7 @@ const (
 	CEIL           // CEIL
 	CHR            // CHR
 	COALESCE       // COALESCE
+	FIELD          // FIELD
 	CONCAT_WS
 	CONTAINS          // CONTAINS
 	CORR              // CORR
@@ -183,6 +184,7 @@ const (
 	SINH       //SINH
 	SPACE
 	SPLIT         // SPLIT
+	SPLIT_PART    // SPLIT_PART
 	STARCOUNT     // STARTCOUNT
 	STARTSWITH    // STARTSWITH
 	STDDEV_POP    // STDDEV_POP
@@ -214,8 +216,9 @@ const (
 	INTERVAL  // INTERVAL
 	EXTRACT   // EXTRACT
 	OCT
-	SUBSTRING // SUBSTRING
-	WEEK      //WEEK
+	SUBSTRING       // SUBSTRING
+	SUBSTRING_INDEX //SUBSTRING_INDEX
+	WEEK            //WEEK
 	WEEKDAY
 	YEAR   // YEAR
 	HOUR   // HOUR
@@ -246,6 +249,9 @@ const (
 	TIMESTAMP    // TIMESTAMP
 	DATE_FORMAT  // DATE_FORMAT
 	JSON_EXTRACT // JSON_EXTRACT
+	FORMAT       // FORMAT
+	SLEEP        // sleep for a while
+	INSTR
 
 	UUID
 	SERIAL
@@ -337,6 +343,7 @@ var functionIdRegister = map[string]int32{
 	"variance":              VAR_POP,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
 	"any_value":             ANY_VALUE,
+	"median":                MEDIAN,
 	// builtin
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// binary functions
@@ -450,11 +457,19 @@ var functionIdRegister = map[string]int32{
 	"mo_disable_memory_usage_detail": MO_DISABLE_MEMORY_USAGE_DETAIL,
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
+	"substring_index":                SUBSTRING_INDEX,
+	"field":                          FIELD,
+	"format":                         FORMAT,
+	"sleep":                          SLEEP,
+	"split_part":                     SPLIT_PART,
+	"instr":                          INSTR,
+	"curdate":                        CURRENT_DATE,
+	"current_date":                   CURRENT_DATE,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
-	fid, err := fromNameToFunctionId(name)
-	if err != nil {
+	fid, exists := fromNameToFunctionIdWithoutError(name)
+	if !exists {
 		return false
 	}
 	fs := functionRegister[fid].Overloads
