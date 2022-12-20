@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"math"
 	"math/bits"
 	"strings"
@@ -1323,6 +1324,16 @@ const (
 	privilegeKindNone                         //does not need any privilege
 )
 
+type clusterTableOperationType int
+
+const (
+	clusterTableNone clusterTableOperationType = iota
+	clusterTableCreate
+	clusterTableSelect //read only
+	clusterTableModify //include insert,update,delete
+	clusterTableDrop
+)
+
 type privilege struct {
 	kind privilegeKind
 	//account: the privilege can be defined before constructing the plan.
@@ -1334,8 +1345,10 @@ type privilege struct {
 	special specialTag
 	//the statement writes the database or table directly like drop database and table
 	writeDatabaseAndTableDirectly bool
-	//if it creates the cluster table, the label createClusterTable will be true.
-	createClusterTable bool
+	//operate the cluster table
+	isClusterTable bool
+	//operation on cluster table,
+	clusterTableOperation clusterTableOperationType
 }
 
 func (p *privilege) objectType() objectType {
@@ -1355,11 +1368,13 @@ const (
 
 // privilegeItem is the item for in the compound entry
 type privilegeItem struct {
-	privilegeTyp PrivilegeType
-	role         *tree.Role
-	users        []*tree.User
-	dbName       string
-	tableName    string
+	privilegeTyp          PrivilegeType
+	role                  *tree.Role
+	users                 []*tree.User
+	dbName                string
+	tableName             string
+	isClusterTable        bool
+	clusterTableOperation clusterTableOperationType
 }
 
 // compoundEntry is the entry has multi privilege items
@@ -3261,7 +3276,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	objType := objectTypeAccount
 	var extraEntries []privilegeEntry
 	writeDatabaseAndTableDirectly := false
-	createClusterTable := false
+	var clusterTable bool
+	var clusterTableOperation clusterTableOperationType
 	dbName := ""
 	switch st := stmt.(type) {
 	case *tree.CreateAccount:
@@ -3277,14 +3293,14 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			typs = append(typs, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 			me1 := &compoundEntry{
 				items: []privilegeItem{
-					{PrivilegeTypeCreateUser, nil, nil, "", ""},
-					{PrivilegeTypeManageGrants, nil, nil, "", ""},
+					{privilegeTyp: PrivilegeTypeCreateUser},
+					{privilegeTyp: PrivilegeTypeManageGrants},
 				},
 			}
 			me2 := &compoundEntry{
 				items: []privilegeItem{
-					{PrivilegeTypeCreateUser, nil, nil, "", ""},
-					{PrivilegeTypeCanGrantRoleToOthersInCreateUser, st.Role, st.Users, "", ""},
+					{privilegeTyp: PrivilegeTypeCreateUser},
+					{privilegeTyp: PrivilegeTypeCanGrantRoleToOthersInCreateUser, role: st.Role, users: st.Users},
 				},
 			}
 
@@ -3353,7 +3369,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
-		createClusterTable = st.IsClusterTable
+		if st.IsClusterTable {
+			clusterTable = true
+			clusterTableOperation = clusterTableCreate
+		}
 		dbName = string(st.Table.SchemaName)
 	case *tree.CreateView:
 		objType = objectTypeDatabase
@@ -3469,14 +3488,23 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		entries[i].databaseName = dbName
 	}
 	entries = append(entries, extraEntries...)
-	return &privilege{kind, objType, entries, special, writeDatabaseAndTableDirectly, createClusterTable}
+	return &privilege{
+		kind:                          kind,
+		objType:                       objType,
+		entries:                       entries,
+		special:                       special,
+		writeDatabaseAndTableDirectly: writeDatabaseAndTableDirectly,
+		isClusterTable:                clusterTable,
+		clusterTableOperation:         clusterTableOperation}
 }
 
 // privilege will be done on the table
 type privilegeTips struct {
-	typ          PrivilegeType
-	databaseName string
-	tableName    string
+	typ                   PrivilegeType
+	databaseName          string
+	tableName             string
+	isClusterTable        bool
+	clusterTableOperation clusterTableOperationType
 }
 
 type privilegeTipsArray []privilegeTips
@@ -3496,74 +3524,114 @@ func (pota privilegeTipsArray) String() string {
 
 // extractPrivilegeTipsFromPlan extracts the privilege tips from the plan
 func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
-	//NOTE: the pots may be nil when the plan does operate any table.
-	var pots privilegeTipsArray
-	appendPot := func(pot privilegeTips) {
-		pots = append(pots, pot)
+	//NOTE: the pts may be nil when the plan does operate any table.
+	var pts privilegeTipsArray
+	appendPt := func(pt privilegeTips) {
+		pts = append(pts, pt)
 	}
 	if p.GetQuery() != nil { //select,insert select, update, delete
 		q := p.GetQuery()
 		lastNode := q.Nodes[len(q.Nodes)-1]
 		var t PrivilegeType
-
+		var clusterTable bool
+		var clusterTableOperation clusterTableOperationType
 		for _, node := range q.Nodes {
 			if node.NodeType == plan.Node_TABLE_SCAN {
 				switch lastNode.NodeType {
 				case plan.Node_UPDATE:
 					t = PrivilegeTypeUpdate
+					clusterTableOperation = clusterTableModify
 				case plan.Node_DELETE:
 					t = PrivilegeTypeDelete
+					clusterTableOperation = clusterTableModify
 				default:
 					t = PrivilegeTypeSelect
+					clusterTableOperation = clusterTableSelect
 				}
 				if node.ObjRef != nil {
-					appendPot(privilegeTips{
-						t,
-						node.ObjRef.GetSchemaName(),
-						node.ObjRef.GetObjName(),
+					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
+						clusterTable = true
+					} else {
+						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
+					}
+					appendPt(privilegeTips{
+						typ:                   t,
+						databaseName:          node.ObjRef.GetSchemaName(),
+						tableName:             node.ObjRef.GetObjName(),
+						isClusterTable:        clusterTable,
+						clusterTableOperation: clusterTableOperation,
 					})
 				}
 			} else if node.NodeType == plan.Node_INSERT { //insert select
 				if node.ObjRef != nil {
-					appendPot(privilegeTips{
-						PrivilegeTypeInsert,
-						node.ObjRef.GetSchemaName(),
-						node.ObjRef.GetObjName(),
+					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
+						clusterTable = true
+					} else {
+						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
+					}
+					appendPt(privilegeTips{
+						typ:                   PrivilegeTypeInsert,
+						databaseName:          node.ObjRef.GetSchemaName(),
+						tableName:             node.ObjRef.GetObjName(),
+						isClusterTable:        clusterTable,
+						clusterTableOperation: clusterTableModify,
 					})
 				}
 			} else if node.NodeType == plan.Node_DELETE {
 				if node.ObjRef != nil {
-					appendPot(privilegeTips{
-						PrivilegeTypeDelete,
-						node.ObjRef.GetSchemaName(),
-						node.ObjRef.GetObjName(),
+					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
+						clusterTable = true
+					} else {
+						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
+					}
+					appendPt(privilegeTips{
+						typ:                   PrivilegeTypeDelete,
+						databaseName:          node.ObjRef.GetSchemaName(),
+						tableName:             node.ObjRef.GetObjName(),
+						isClusterTable:        clusterTable,
+						clusterTableOperation: clusterTableModify,
 					})
 				}
 			}
 		}
 	} else if p.GetIns() != nil { //insert into values
 		ins := p.GetIns()
-		appendPot(privilegeTips{
-			PrivilegeTypeInsert,
-			ins.GetDbName(),
-			ins.GetTblName()})
+		appendPt(privilegeTips{
+			typ:                   PrivilegeTypeInsert,
+			databaseName:          ins.GetDbName(),
+			tableName:             ins.GetTblName(),
+			isClusterTable:        ins.GetIsClusterTable(),
+			clusterTableOperation: clusterTableModify,
+		})
 	} else if p.GetDdl() != nil {
-		truncateTable := p.GetDdl().GetTruncateTable()
-		if truncateTable != nil {
-			appendPot(privilegeTips{
-				typ:          PrivilegeTypeTruncate,
-				databaseName: truncateTable.GetDatabase(),
-				tableName:    truncateTable.GetTable(),
+		if p.GetDdl().GetTruncateTable() != nil {
+			truncateTable := p.GetDdl().GetTruncateTable()
+			appendPt(privilegeTips{
+				typ:                   PrivilegeTypeTruncate,
+				databaseName:          truncateTable.GetDatabase(),
+				tableName:             truncateTable.GetTable(),
+				isClusterTable:        truncateTable.GetIsClusterTable(),
+				clusterTableOperation: clusterTableModify,
+			})
+		} else if p.GetDdl().GetDropTable() != nil {
+			dropTable := p.GetDdl().GetDropTable()
+			appendPt(privilegeTips{
+				typ:                   PrivilegeTypeDropTable,
+				databaseName:          dropTable.GetDatabase(),
+				tableName:             dropTable.GetTable(),
+				isClusterTable:        dropTable.GetIsClusterTable(),
+				clusterTableOperation: clusterTableDrop,
 			})
 		}
 	}
-	return pots
+	return pts
 }
 
 // convertPrivilegeTipsToPrivilege constructs the privilege entries from the privilege tips from the plan
 func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 	//rewirte the privilege entries based on privilege tips
-	if priv.objectType() != objectTypeTable {
+	if priv.objectType() != objectTypeTable &&
+		priv.objectType() != objectTypeDatabase {
 		return
 	}
 
@@ -3581,9 +3649,11 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 	multiPrivs := make([]privilegeItem, 0, len(arr))
 	for _, tips := range arr {
 		multiPrivs = append(multiPrivs, privilegeItem{
-			privilegeTyp: tips.typ,
-			dbName:       tips.databaseName,
-			tableName:    tips.tableName,
+			privilegeTyp:          tips.typ,
+			dbName:                tips.databaseName,
+			tableName:             tips.tableName,
+			isClusterTable:        tips.isClusterTable,
+			clusterTableOperation: tips.clusterTableOperation,
 		})
 
 		dedup[pair{tips.databaseName, tips.tableName}] = 1
@@ -3700,11 +3770,101 @@ func getSqlForPrivilege2(ses *Session, roleId int64, entry privilegeEntry, pl pr
 	return getSqlForPrivilege(ses.GetRequestContext(), roleId, entry, pl)
 }
 
+// verifyAccountCanOperateClusterTable determines the account can operate
+// the cluster table
+func verifyAccountCanOperateClusterTable(account *TenantInfo,
+	dbName string,
+	clusterTableOperation clusterTableOperationType) bool {
+	if account.IsSysTenant() {
+		//sys account can do anything on the cluster table.
+		if dbName == moCatalog {
+			return true
+		}
+	} else {
+		//the general account can only read the cluster table
+		if dbName == moCatalog {
+			switch clusterTableOperation {
+			case clusterTableNone, clusterTableSelect:
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isRealUserModifiesMoCatalog determines if a real user outside MO is
+// modifying the tables in the mo_catalog
+func isRealUserModifiesMoCatalog(ses *Session, dbName string,
+	writeDBTableDirect bool,
+	isClusterTable bool,
+	clusterTableOperation clusterTableOperationType) bool {
+	if ses.GetFromRealUser() && writeDBTableDirect {
+		if len(dbName) == 0 {
+			dbName = ses.GetDatabaseName()
+		}
+		//check cluster table
+		if isClusterTable {
+			if verifyAccountCanOperateClusterTable(ses.GetTenantInfo(), dbName, clusterTableOperation) {
+				return false
+			}
+		}
+		if ok2 := isBannedDatabase(dbName); ok2 {
+			return ok2
+		}
+	}
+	return false
+}
+
+// verifyPrivilegeEntryInMultiPrivilegeLevels checks the privilege
+// with multi-privilege levels exists or not
+func verifyPrivilegeEntryInMultiPrivilegeLevels(
+	ctx context.Context,
+	bh BackgroundExec,
+	ses *Session,
+	cache *privilegeCache,
+	roleId int64,
+	entry privilegeEntry,
+	pls []privilegeLevelType) (bool, error) {
+	var erArray []ExecResult
+	var sql string
+	var yes bool
+	var err error
+	dbName := entry.databaseName
+	if len(dbName) == 0 {
+		dbName = ses.GetDatabaseName()
+	}
+	for _, pl := range pls {
+		yes = cache.has(entry.objType, pl, dbName, entry.tableName, entry.privilegeId)
+		if yes {
+			return true, nil
+		}
+		sql, err = getSqlForPrivilege2(ses, roleId, entry, pl)
+		if err != nil {
+			return false, err
+		}
+
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return false, err
+		}
+
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			return false, err
+		}
+
+		if execResultArrayHasData(erArray) {
+			cache.add(entry.objType, pl, dbName, entry.tableName, entry.privilegeId)
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // determineRoleSetHasPrivilegeSet decides the role set has at least one privilege of the privilege set.
 // The algorithm 2.
 func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses *Session, roleIds *btree.Set[int64], priv *privilege) (bool, error) {
-	var erArray []ExecResult
-	var sql string
 	var err error
 	var pls []privilegeLevelType
 
@@ -3717,57 +3877,6 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 
 	cache := ses.GetPrivilegeCache()
 
-	verifyPrivilegeEntryInMultiPrivilegeLevels := func(ses *Session, roleId int64, entry privilegeEntry, pls []privilegeLevelType) (bool, error) {
-		dbName := entry.databaseName
-		if len(dbName) == 0 {
-			dbName = ses.GetDatabaseName()
-		}
-		for _, pl := range pls {
-			yes = cache.has(entry.objType, pl, dbName, entry.tableName, entry.privilegeId)
-			if yes {
-				return true, nil
-			}
-			sql, err = getSqlForPrivilege2(ses, roleId, entry, pl)
-			if err != nil {
-				return false, err
-			}
-
-			bh.ClearExecResultSet()
-			err = bh.Exec(ctx, sql)
-			if err != nil {
-				return false, err
-			}
-
-			erArray, err = getResultSet(ctx, bh)
-			if err != nil {
-				return false, err
-			}
-
-			if execResultArrayHasData(erArray) {
-				cache.add(entry.objType, pl, dbName, entry.tableName, entry.privilegeId)
-				return true, nil
-			}
-		}
-		return false, nil
-	}
-
-	verifyRealUserOperatesCatalog := func(ses *Session, dbName string, writeDBTableDirect, createClusterTable bool) bool {
-		if ses.GetFromRealUser() && writeDBTableDirect {
-			if len(dbName) == 0 {
-				dbName = ses.GetDatabaseName()
-			}
-			//TODO: put it into another function with check the account id.
-			//sys account can create cluster table
-			if dbName == moCatalog && createClusterTable {
-				return false
-			}
-			if ok2 := isBannedDatabase(dbName); ok2 {
-				return ok2
-			}
-		}
-		return false
-	}
-
 	for _, roleId := range roleIds.Keys() {
 		for _, entry := range priv.entries {
 			if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
@@ -3776,12 +3885,15 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 					return false, err
 				}
 
-				yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ses, roleId, entry, pls)
+				yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, entry, pls)
 				if err != nil {
 					return false, err
 				}
-				//TODO: put it above
-				operateCatalog = verifyRealUserOperatesCatalog(ses, entry.databaseName, priv.writeDatabaseAndTableDirectly, priv.createClusterTable)
+				operateCatalog = isRealUserModifiesMoCatalog(ses,
+					entry.databaseName,
+					priv.writeDatabaseAndTableDirectly,
+					priv.isClusterTable,
+					priv.clusterTableOperation)
 				if operateCatalog {
 					yes = false
 				}
@@ -3828,12 +3940,15 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							}
 
 							//At least there is one success
-							yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ses, roleId, tempEntry, pls)
+							yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, tempEntry, pls)
 							if err != nil {
 								return false, err
 							}
-							//TODO: put it above
-							operateCatalog = verifyRealUserOperatesCatalog(ses, tempEntry.databaseName, priv.writeDatabaseAndTableDirectly, priv.createClusterTable)
+							operateCatalog = isRealUserModifiesMoCatalog(ses,
+								tempEntry.databaseName,
+								priv.writeDatabaseAndTableDirectly,
+								mi.isClusterTable,
+								mi.clusterTableOperation)
 							if operateCatalog {
 								yes = false
 							}
@@ -4288,13 +4403,27 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	//for Create User statement with default role.
 	//TODO:
 
+	//dropping the cluster table needs double check
+	//in the build plan
+	switch stmt.(type) {
+	case *tree.DropTable:
+		if !ok {
+			return true, nil
+		}
+	}
 	return ok, nil
 }
 
-// authenticateUserCanExecuteStatementWithObjectTypeTable decides the user has the privilege of executing the statement with object type table
-func authenticateUserCanExecuteStatementWithObjectTypeTable(ctx context.Context, ses *Session, stmt tree.Statement, p *plan2.Plan) (bool, error) {
+// authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable
+// decides the user has the privilege of executing the statement
+// with object type table from the plan
+func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx context.Context,
+	ses *Session,
+	stmt tree.Statement,
+	p *plan2.Plan) (bool, error) {
 	priv := determinePrivilegeSetOfStatement(stmt)
-	if priv.objectType() == objectTypeTable {
+	if priv.objectType() == objectTypeTable ||
+		priv.objectType() == objectTypeDatabase {
 		arr := extractPrivilegeTipsFromPlan(p)
 		if len(arr) == 0 {
 			return true, nil

@@ -3003,7 +3003,7 @@ func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Ses
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
-	yes, err := authenticateUserCanExecuteStatementWithObjectTypeTable(requestCtx, ses, stmt, p)
+	yes, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(requestCtx, ses, stmt, p)
 	if err != nil {
 		return err
 	}

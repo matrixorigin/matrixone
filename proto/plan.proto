@@ -842,6 +842,7 @@ message DropTable {
 	string database = 2;
 	string table 	= 3;
 	repeated string index_table_names = 4;
+	bool is_cluster_table = 5;//drop the cluster table
 }
 
 message CreateIndex {
@@ -865,6 +866,7 @@ message TruncateTable {
 	string database = 1;
 	string table = 2;
 	repeated string index_table_names = 3;
+	bool is_cluster_table = 4;//truncate the cluster table
 }
 
 message ShowVariables {

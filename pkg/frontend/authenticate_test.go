@@ -3514,7 +3514,7 @@ func Test_determineDML(t *testing.T) {
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 			defer bhStub.Reset()
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetRequestContext(), ses, a.stmt, a.p)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -3612,7 +3612,7 @@ func Test_determineDML(t *testing.T) {
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 			defer bhStub.Reset()
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetRequestContext(), ses, a.stmt, a.p)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -3702,7 +3702,7 @@ func Test_determineDML(t *testing.T) {
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 			defer bhStub.Reset()
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetRequestContext(), ses, a.stmt, a.p)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeFalse)
 		}

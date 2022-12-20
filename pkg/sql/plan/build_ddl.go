@@ -628,6 +628,10 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 		}
 
+		if tableDef.TableType == catalog.SystemClusterRel {
+			truncateTable.IsClusterTable = true
+		}
+
 		uDef, sDef := buildIndexDefs(tableDef.Defs)
 		truncateTable.IndexTableNames = make([]string, 0)
 		if uDef != nil {
@@ -685,6 +689,9 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		} else if isView {
 			// drop table if exists v0, v0 is view
 			dropTable.Table = ""
+		}
+		if tableDef.TableType == catalog.SystemClusterRel {
+			dropTable.IsClusterTable = true
 		}
 		uDef, sDef := buildIndexDefs(tableDef.Defs)
 		dropTable.IndexTableNames = make([]string, 0)
