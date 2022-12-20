@@ -1655,6 +1655,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		return nil, nil
 	}
 	ctx := tcc.GetSession().GetRequestContext()
+	tableId := table.GetTableID(ctx)
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
 		return nil, nil
@@ -1670,7 +1671,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(attr.Attr.Name)
 			col := &plan2.ColDef{
-				ColId: uint64(attr.Attr.ID),
+				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
 				Typ: &plan2.Type{
 					Id:          int32(attr.Attr.Type.Oid),
@@ -1790,6 +1791,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	}
 
 	tableDef := &plan2.TableDef{
+		TblId:         tableId,
 		Name:          tableName,
 		Cols:          cols,
 		Defs:          defs,
