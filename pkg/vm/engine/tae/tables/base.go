@@ -133,9 +133,6 @@ func (blk *baseBlock) TryUpgrade() (err error) {
 	if !blk.node.CompareAndSwap(node, nnode) {
 		nnode.Unref()
 	} else {
-		// unref may set data to nil, should be guarded
-		blk.Lock()
-		defer blk.Unlock()
 		node.Unref()
 	}
 	return
