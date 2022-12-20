@@ -318,7 +318,7 @@ import (
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS
-%token <str> NUMBER SIZE
+%token <str> NUMBER TABLE_SIZE
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
@@ -2345,7 +2345,7 @@ show_column_num_stmt:
     }
 
 show_table_size_stmt:
-    SHOW TABLE SIZE table_column_name database_name_opt
+    SHOW TABLE TABLE_SIZE table_column_name database_name_opt
     {
        $$ = &tree.ShowTableSize{Table: $4, DbName: $5}
     }
@@ -8068,7 +8068,7 @@ reserved_keyword:
 |   NODE
 |   LOCKS
 |   NUMBER
-|   SIZE
+|   TABLE_SIZE
 |   RETURNS
 
 non_reserved_keyword:

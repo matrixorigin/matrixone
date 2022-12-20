@@ -414,7 +414,7 @@ const SCHEMAS = 57736
 const NODE = 57737
 const LOCKS = 57738
 const NUMBER = 57739
-const SIZE = 57740
+const TABLE_SIZE = 57740
 const NAMES = 57741
 const GLOBAL = 57742
 const SESSION = 57743
@@ -938,7 +938,7 @@ var yyToknames = [...]string{
 	"NODE",
 	"LOCKS",
 	"NUMBER",
-	"SIZE",
+	"TABLE_SIZE",
 	"NAMES",
 	"GLOBAL",
 	"SESSION",

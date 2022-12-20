@@ -527,7 +527,7 @@ func init() {
 		"following":                FOLLOWING,
 		"groups":                   GROUPS,
 		"number":                   NUMBER,
-		"size":                     SIZE,
+		"table_size":               TABLE_SIZE,
 		"returns":                  RETURNS,
 		"extension":                EXTENSION,
 	}
