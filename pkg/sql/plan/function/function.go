@@ -141,6 +141,12 @@ type Function struct {
 
 	// Layout adapt to plan/function.go, used for `explain SQL`.
 	layout FuncExplainLayout
+
+	UseNewFramework     bool
+	AcceptScalarNull    bool
+	ResultMustNotScalar bool
+	ParameterMustScalar []bool
+	NewFn               func(parameters []*vector.Vector, result any, proc *process.Process, length int) error
 }
 
 func (f *Function) TestFlag(funcFlag plan.Function_FuncFlag) bool {

@@ -122,7 +122,7 @@ func getConstVec(proc *process.Process, expr *plan.Expr, length int) (*vector.Ve
 	return vec, nil
 }
 
-func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
+func OldEvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
 	var vec *vector.Vector
 
 	if len(bat.Zs) == 0 {
