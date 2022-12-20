@@ -204,7 +204,7 @@ func (task *compactBlockTask) Execute() (err error) {
 			var deltaLoc string
 			deltaLoc, err = blockio.EncodeMetaLocWithObject(
 				ablockTask.blocks[1].GetExtent(),
-				0,
+				uint32(deletes.Length()),
 				ablockTask.blocks)
 			if err != nil {
 				return
@@ -291,7 +291,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		var deltaLoc string
 		deltaLoc, err = blockio.EncodeMetaLocWithObject(
 			ioTask.blocks[1].GetExtent(),
-			0,
+			uint32(deletes.Length()),
 			ioTask.blocks)
 		if err != nil {
 			return
