@@ -20,6 +20,7 @@ import (
 
 type TpCode byte
 type subPathType byte
+type pathFlag byte
 
 type ByteJson struct {
 	Data []byte
@@ -47,6 +48,7 @@ type subPath struct {
 }
 type Path struct {
 	paths []subPath
+	flag  pathFlag
 }
 type pathGenerator struct {
 	pathStr string
@@ -75,15 +77,19 @@ const (
 	subPathKey
 	subPathRange
 )
+const (
+	pathFlagSingleStar pathFlag = iota + 1
+	pathFlagDoubleStar
+)
 
 const (
-	TpCodeObject TpCode = iota + 1
-	TpCodeArray
-	TpCodeLiteral
-	TpCodeInt64
-	TpCodeUint64
-	TpCodeFloat64
-	TpCodeString
+	TpCodeObject  TpCode = 0x01
+	TpCodeArray   TpCode = 0x03
+	TpCodeLiteral TpCode = 0x04
+	TpCodeInt64   TpCode = 0x09
+	TpCodeUint64  TpCode = 0x0a
+	TpCodeFloat64 TpCode = 0x0b
+	TpCodeString  TpCode = 0x0c
 )
 
 const (

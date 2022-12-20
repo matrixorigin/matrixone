@@ -24,6 +24,17 @@ import (
 
 func (p *Path) init(subs []subPath) {
 	p.paths = subs
+	for _, sub := range subs {
+		if sub.tp == subPathDoubleStar {
+			p.flag |= pathFlagDoubleStar
+		}
+		if sub.tp == subPathKey && sub.key == "*" {
+			p.flag |= pathFlagSingleStar
+		}
+		if sub.tp == subPathIdx && sub.idx.num == subPathIdxALL && sub.idx.tp == numberIndices {
+			p.flag |= pathFlagSingleStar
+		}
+	}
 }
 
 func (p *Path) empty() bool {
@@ -43,26 +54,13 @@ func (p *Path) String() string {
 	for _, sub := range p.paths {
 		switch sub.tp {
 		case subPathIdx:
-			switch sub.idx.tp {
-			case numberIndices:
-				s.WriteString("[")
-				if sub.idx.num == subPathIdxALL {
-					s.WriteString("*")
-				} else {
-					s.WriteString(strconv.Itoa(sub.idx.num))
-				}
-				s.WriteString("]")
-			case lastIndices:
-				s.WriteString("[")
-				s.WriteString(lastKey)
-				if sub.idx.num > 0 {
-					s.WriteString(" - ")
-					s.WriteString(strconv.Itoa(sub.idx.num))
-				}
-				s.WriteString("]")
-			default:
-				panic("invalid index type")
-			}
+			s.WriteString("[")
+			sub.idx.toString(&s)
+			s.WriteString("]")
+		case subPathRange:
+			s.WriteString("[")
+			sub.iRange.toString(&s)
+			s.WriteString("]")
 		case subPathKey:
 			s.WriteString(".")
 			//TODO check here is ok
@@ -72,6 +70,30 @@ func (p *Path) String() string {
 		}
 	}
 	return s.String()
+}
+
+func (pi subPathIndices) toString(s *strings.Builder) {
+	switch pi.tp {
+	case numberIndices:
+		if pi.num == subPathIdxALL {
+			s.WriteString("*")
+		} else {
+			s.WriteString(strconv.Itoa(pi.num))
+		}
+	case lastIndices:
+		s.WriteString(lastKey)
+		if pi.num > 0 {
+			s.WriteString(" - ")
+			s.WriteString(strconv.Itoa(pi.num))
+		}
+	default:
+		panic("invalid index type")
+	}
+}
+func (pe subPathRangeExpr) toString(s *strings.Builder) {
+	pe.start.toString(s)
+	s.WriteString(" to ")
+	pe.end.toString(s)
 }
 
 func newPathGenerator(path string) *pathGenerator {

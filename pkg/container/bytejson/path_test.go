@@ -80,10 +80,10 @@ func TestValid(t *testing.T) {
 		{"$[0to1]", false, 1},
 		{"$[0 to1", false, 1},
 		{"$[0to 1]", false, 1},
-		{"$[lastto0]",false,1},
-		{"$[last-1to1",false,1},
-		{"$[last -1to 1",false,1},
-		{"$[last -1t to0",false,1},
+		{"$[lastto0]", false, 1},
+		{"$[last-1to1", false, 1},
+		{"$[last -1to 1", false, 1},
+		{"$[last -1t to0", false, 1},
 	}
 	for _, kase := range kases {
 		v, err := ParseJsonPath(kase.path)
@@ -99,5 +99,29 @@ func TestValid(t *testing.T) {
 			}
 			require.NotNil(t, err)
 		}
+	}
+}
+func TestStar(t *testing.T) {
+	var kases = []struct {
+		path string
+		flag pathFlag
+	}{
+		{"$[*]", pathFlagSingleStar},
+		{"$[*].a", pathFlagSingleStar},
+		{`$[*]."a"`, pathFlagSingleStar},
+		{"$.a[*]", pathFlagSingleStar},
+		{"$.a[*].b", pathFlagSingleStar},
+		{`$.a[*]."b"`, pathFlagSingleStar},
+		{"$**.a", pathFlagDoubleStar},
+		{`$**.a[1]`, pathFlagDoubleStar},
+		{`$.a[1]`, 0},
+	}
+	for _, kase := range kases {
+		p, err := ParseJsonPath(kase.path)
+		if err != nil {
+			t.Errorf("%s is invalid, but no error", kase.path)
+		}
+		require.Nil(t, err)
+		require.Equal(t, kase.flag, p.flag)
 	}
 }
