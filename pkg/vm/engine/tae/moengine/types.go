@@ -17,6 +17,7 @@ package moengine
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -50,6 +51,7 @@ type Txn interface {
 type Relation interface {
 	GetPrimaryKeys(context.Context) ([]*engine.Attribute, error)
 	GetHideKeys(context.Context) ([]*engine.Attribute, error)
+	GetSchema(ctx context.Context) *catalog.Schema
 
 	UpdateConstraintWithBin(context.Context, []byte) error
 	//Write just append data into txn's workspace, instead of applying data into state machine.
