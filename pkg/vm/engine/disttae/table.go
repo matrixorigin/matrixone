@@ -21,12 +21,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
 
 var _ engine.Relation = new(table)
@@ -135,6 +137,53 @@ func (tbl *table) Rows(ctx context.Context) (int64, error) {
 		}
 	}
 	return rows, nil
+}
+
+func (tbl *table) MaxAndMinValues(ctx context.Context, expr *plan.Expr) ([][2]any, []uint8, error) {
+	_, columns, _ := getColumnsByExpr(expr, tbl.getTableDef())
+	dataLength := len(columns)
+	//dateType of each column for table
+	dataTypes := make([]uint8, dataLength)
+
+	//minimum --- maximum
+	tableVal := make([][2]any, dataLength)
+
+	if tbl.meta == nil {
+		return nil, nil, moerr.NewInvalidInputNoCtx("table meta is nil")
+	}
+
+	var init bool
+	for _, blks := range tbl.meta.blocks {
+		for _, blk := range blks {
+			blkVal, dateType, err := getZonemapDataFromMeta(ctx, columns, blk, tbl.getTableDef())
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if !init {
+				//init the tableVal
+				init = true
+
+				for i := range columns {
+					tableVal[i][0] = blkVal[i][0]
+					tableVal[i][1] = blkVal[i][1]
+				}
+
+				dataTypes = dateType
+			} else {
+				for i := range columns {
+					if compute.CompareGeneric(blkVal[i][0], tableVal[i][0], types.T(dataTypes[i]).ToType()) < 0 {
+						tableVal[i][0] = blkVal[i][0]
+					}
+
+					if compute.CompareGeneric(blkVal[i][1], tableVal[i][1], types.T(dataTypes[i]).ToType()) > 0 {
+						tableVal[i][1] = blkVal[i][1]
+					}
+				}
+			}
+		}
+	}
+	return tableVal, dataTypes, nil
 }
 
 func (tbl *table) Size(ctx context.Context, name string) (int64, error) {
