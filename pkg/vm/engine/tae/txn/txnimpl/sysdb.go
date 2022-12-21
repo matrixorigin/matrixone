@@ -18,7 +18,7 @@ import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
 
@@ -43,7 +43,7 @@ func init() {
 	sysSharedDBNames = make(map[string]bool)
 	sysSharedDBNames[pkgcatalog.MO_CATALOG] = true
 	sysSharedDBNames[metric.MetricDBConst] = true
-	sysSharedDBNames[trace.SystemDBConst] = true
+	sysSharedDBNames[motrace.SystemDBConst] = true
 }
 
 func isSysTable(name string) bool {

@@ -314,7 +314,9 @@ func (r *Row) Reset() {
 		r.Columns[idx] = ""
 	}
 	for idx, typ := range r.Table.Columns {
-		switch typ.ColType.Oid {
+		switch typ.ColType.ToType().Oid {
+		case types.T_int64:
+			r.RawColumns[idx] = int64(0)
 		case types.T_uint64:
 			r.RawColumns[idx] = uint64(0)
 		case types.T_float64:
@@ -326,7 +328,7 @@ func (r *Row) Reset() {
 		case types.T_datetime:
 			r.RawColumns[idx] = time.Time{}
 		default:
-			logutil.Errorf("the value type %v is not SUPPORT", typ.ColType.String())
+			logutil.Errorf("the value type %v is not SUPPORT", typ.ColType.ToType().String())
 			panic("the value type is not support now")
 		}
 	}

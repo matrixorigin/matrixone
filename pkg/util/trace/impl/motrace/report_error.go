@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package trace
+package motrace
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -62,7 +63,7 @@ func (h *MOErrorHolder) CsvFields(ctx context.Context, row *table.Row) []string 
 		row.SetColumnVal(errCodeCol, fmt.Sprintf("%d", moError.ErrorCode()))
 	}
 	if ct := errutil.GetContextTracer(h.Error); ct != nil && ct.Context() != nil {
-		span := SpanFromContext(ct.Context())
+		span := trace.SpanFromContext(ct.Context())
 		row.SetColumnVal(traceIDCol, span.SpanContext().TraceID.String())
 		row.SetColumnVal(spanIDCol, span.SpanContext().SpanID.String())
 		row.SetColumnVal(spanKindCol, span.SpanContext().Kind.String())

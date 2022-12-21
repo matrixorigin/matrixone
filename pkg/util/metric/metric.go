@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -169,7 +169,7 @@ func mustRegister(collector Collector) {
 }
 
 func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
-	initTables(ctx, ieFactory, trace.FileService)
+	initTables(ctx, ieFactory, motrace.FileService)
 	return nil
 }
 

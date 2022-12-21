@@ -7,8 +7,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/stretchr/testify/require"
 	"path"
+	"strings"
 	"testing"
 	"time"
 )
@@ -31,10 +33,11 @@ var dummyAllTypeTable = &table.Table{
 }
 
 func TestTAEWriter_WriteElems(t *testing.T) {
+	t.Logf("local timezone: %v", time.Local.String())
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.Nil(t, err)
 	ctx := context.TODO()
-	filepath := path.Join(t.TempDir(), "file.tae")
+	filepath := defines.ETLFileServiceName + ":" + path.Join(t.TempDir(), "file.tae")
 	configs := []fileservice.Config{{
 		Name:    defines.ETLFileServiceName,
 		Backend: "DISK",
@@ -57,17 +60,54 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	writer, err := NewTAEWriter(ctx, dummyAllTypeTable, mp, filepath, fs)
 	require.Nil(t, err)
 
-	lines := genLines()
+	cnt := 10240
+	lines := genLines(cnt)
 	for _, line := range lines {
 		err = writer.WriteElems(line)
 		require.Nil(t, err)
 	}
+	err = writer.Flush()
+	require.Nil(t, err)
 	// Done. write
+
+	folder := path.Dir(filepath)
+	files, err := fs.List(ctx, folder)
+	require.Nil(t, err)
+	require.Equal(t, 1, len(files))
+
+	file := files[0]
+	t.Logf("path: %s, size: %d", file.Name, file.Size)
+
+	r, err := NewTaeReader(dummyAllTypeTable, filepath, file.Size, fs)
+	require.Nil(t, err)
+	batchs, err := r.ReadAll(ctx, mp)
+	require.Nil(t, err)
+	require.Equal(t, (cnt+BatchSize)/BatchSize, len(batchs))
+
+	for batIDX, bat := range batchs {
+		for _, vec := range bat.Vecs {
+			rows, err := GetVectorArrayLen(context.TODO(), vec)
+			require.Nil(t, err)
+			t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.Typ.String())
+		}
+		rows := bat.Vecs[0].Length()
+		ctn := strings.Builder{}
+		for rowId := 0; rowId < rows; rowId++ {
+			for _, vec := range bat.Vecs {
+				val, err := ValToString(context.TODO(), vec, rowId)
+				require.Nil(t, err)
+				ctn.WriteString(val)
+				ctn.WriteString(",")
+			}
+			ctn.WriteRune('\n')
+		}
+		t.Logf("batch %d: \n%s", batIDX, ctn.String())
+	}
 }
 
-func genLines() (lines [][]any) {
-
-	for i := 0; i < 1024; i++ {
+func genLines(cnt int) (lines [][]any) {
+	lines = make([][]any, 0, cnt)
+	for i := 0; i < cnt; i++ {
 		row := dummyAllTypeTable.GetRow(context.TODO())
 		row.SetRawColumnVal(dummyStrColumn, fmt.Sprintf("str_val_%d", i))
 		row.SetRawColumnVal(dummyInt64Column, int64(i))
@@ -79,4 +119,8 @@ func genLines() (lines [][]any) {
 	}
 
 	return
+}
+
+func init() {
+	motrace.Init(context.TODO(), motrace.EnableTracer(true))
 }

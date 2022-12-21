@@ -50,6 +50,7 @@ func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filena
 		mp:        mp,
 		filename:  filename,
 		fs:        fs,
+		buffer:    make([][]any, 0, BatchSize),
 	}
 
 	for _, c := range tbl.Columns {
@@ -72,7 +73,7 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 		vec := vector.NewOriginal(typ)
 		vector.PreAlloc(vec, batchSize, batchSize, pool)
 		vec.SetOriginal(false)
-		batch.Vecs[i] = vector.New(typ)
+		batch.Vecs[i] = vec
 	}
 	return batch
 }
@@ -84,7 +85,6 @@ func (w *TAEWriter) WriteElems(line []any) error {
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -117,7 +117,7 @@ func (w *TAEWriter) WriteBatch() error {
 			return err
 		}
 	}
-	w.buffer = w.buffer[:]
+	w.buffer = w.buffer[:0]
 	return nil
 }
 
@@ -139,6 +139,16 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 		id := typ.Oid
 		vec := bat.Vecs[colIdx]
 		switch id {
+		case types.T_int64:
+			cols := vector.MustTCols[int64](vec)
+			switch t := field.(type) {
+			case int32:
+				cols[rowIdx] = (int64)(field.(int32))
+			case int64:
+				cols[rowIdx] = field.(int64)
+			default:
+				panic(moerr.NewInternalError(ctx, "not Support integer type %v", t))
+			}
 		case types.T_uint64:
 			cols := vector.MustTCols[uint64](vec)
 			switch t := field.(type) {
@@ -208,7 +218,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 				panic(moerr.NewInternalError(ctx, "not Support datetime type %v", t))
 			}
 		default:
-			return moerr.NewInternalError(ctx, "the value type %d is not support now", vec.Typ.Oid)
+			return moerr.NewInternalError(ctx, "the value type %s is not support now", vec.Typ)
 		}
 	}
 	return nil
@@ -232,7 +242,7 @@ func NewTaeReader(tbl *table.Table, filepath string, filesize int64, fs fileserv
 		fs:       fs,
 	}
 	for _, c := range tbl.Columns {
-		r.typs = append(r.typs, c.ColType)
+		r.typs = append(r.typs, c.ColType.ToType())
 	}
 	r.objectReader, err = objectio.NewObjectReader(r.filepath, r.fs)
 	if err != nil {
@@ -241,11 +251,11 @@ func NewTaeReader(tbl *table.Table, filepath string, filesize int64, fs fileserv
 	return r, nil
 }
 
-func (r *TAEReader) Read(ctx context.Context, pool *mpool.MPool) error {
+func (r *TAEReader) ReadAll(ctx context.Context, pool *mpool.MPool) ([]*batch.Batch, error) {
 	var err error
 	bs, err := r.objectReader.ReadAllMeta(context.Background(), r.filesize, pool)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	columnIdx := make([]uint16, len(r.typs))
 	for idx := range columnIdx {
@@ -254,7 +264,7 @@ func (r *TAEReader) Read(ctx context.Context, pool *mpool.MPool) error {
 	for _, bss := range bs {
 		ioVec, err := r.objectReader.Read(context.Background(), bss.GetExtent(), columnIdx, pool)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		batch := batch.NewWithSize(len(r.typs))
 		for idx, entry := range ioVec.Entries {
@@ -264,7 +274,61 @@ func (r *TAEReader) Read(ctx context.Context, pool *mpool.MPool) error {
 		r.batchs = append(r.batchs, batch)
 	}
 
-	return nil
+	return r.batchs, nil
+}
+
+func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
+	typ := vec.Typ
+	switch typ.Oid {
+	case types.T_int64:
+		cols := vector.MustTCols[int64](vec)
+		return len(cols), nil
+	case types.T_uint64:
+		cols := vector.MustTCols[uint64](vec)
+		return len(cols), nil
+	case types.T_float64:
+		cols := vector.MustTCols[float64](vec)
+		return len(cols), nil
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		cols := vector.MustTCols[types.Varlena](vec)
+		return len(cols), nil
+	case types.T_json:
+		cols := vector.MustTCols[types.Varlena](vec)
+		return len(cols), nil
+	case types.T_datetime:
+		cols := vector.MustTCols[types.Datetime](vec)
+		return len(cols), nil
+	default:
+		return 0, moerr.NewInternalError(ctx, "the value type %d is not support now", vec.Typ)
+	}
+}
+
+func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, error) {
+	typ := vec.Typ
+	switch typ.Oid {
+	case types.T_int64:
+		cols := vector.MustTCols[int64](vec)
+		return fmt.Sprintf("%d", cols[rowIdx]), nil
+	case types.T_uint64:
+		cols := vector.MustTCols[uint64](vec)
+		return fmt.Sprintf("%d", cols[rowIdx]), nil
+	case types.T_float64:
+		cols := vector.MustTCols[float64](vec)
+		return fmt.Sprintf("%f", cols[rowIdx]), nil
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		cols, area := vector.MustVarlenaRawData(vec)
+		return cols[rowIdx].GetString(area), nil
+	case types.T_json:
+		cols, area := vector.MustVarlenaRawData(vec)
+		val := cols[rowIdx].GetByteSlice(area)
+		bjson := types.DecodeJson(val)
+		return bjson.String(), nil
+	case types.T_datetime:
+		cols := vector.MustTCols[types.Datetime](vec)
+		return fmt.Sprintf("%s", Time2DatetimeString(cols[rowIdx].ConvertToGoTime(time.Local))), nil
+	default:
+		return "", moerr.NewInternalError(ctx, "the value type %d is not support now", vec.Typ)
+	}
 }
 
 const timestampFormatter = "2006-01-02 15:04:05.000000"
