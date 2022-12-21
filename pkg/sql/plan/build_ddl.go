@@ -421,14 +421,15 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 				OnUpdate:    getRefAction(refer.OnUpdate),
 				ForeignCols: make([]uint64, len(refer.KeyParts)),
 			}
-
+			createTable.FkCols = make([]*plan.CreateTable_FkColName, len(def.KeyParts))
 			for i, keyPart := range def.KeyParts {
 				getCol := false
 				colName := keyPart.ColName.String()
-				for idx, col := range createTable.TableDef.Cols {
+				for _, col := range createTable.TableDef.Cols {
 					if col.Name == colName {
-						//we set pos of column while creating. need to reset to ColId after created.
-						fkDef.Cols[i] = uint64(idx)
+						// need to reset to ColId after created.
+						fkDef.Cols[i] = 0
+						createTable.FkCols[i].Cols = append(createTable.FkCols[i].Cols, colName)
 						getCol = true
 						break
 					}
@@ -439,9 +440,13 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			}
 
 			fkTableName := string(refer.TableName.ObjectName)
+			fkDbName := string(refer.TableName.SchemaName)
+			if fkDbName == "" {
+				fkDbName = ctx.DefaultDatabase()
+			}
 			createTable.FkTables = append(createTable.FkTables, fkTableName)
 
-			_, tableRef := ctx.Resolve("", fkTableName)
+			_, tableRef := ctx.Resolve(fkDbName, fkTableName)
 			if tableRef == nil {
 				return moerr.NewNoSuchTable(ctx.GetContext(), ctx.DefaultDatabase(), fkTableName)
 			}
