@@ -22,14 +22,12 @@ SET @ui_max = 18446744073709551615;
 SET @si_min = -9223372036854775808;
 SET @si_max = 9223372036854775807;
 
--- @bvt:issue#4482
 PREPARE s1 FROM 'SELECT * FROM numbers WHERE ui=?';
 EXECUTE s1 USING @ui_min;
 EXECUTE s1 USING @ui_max;
 EXECUTE s1 USING @si_min;
 EXECUTE s1 USING @si_max;
 DEALLOCATE PREPARE s1;
--- @bvt:issue
 
 PREPARE s2 FROM 'SELECT * FROM numbers WHERE si=?';
 EXECUTE s2 USING @ui_min;
