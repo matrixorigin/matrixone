@@ -27,7 +27,7 @@ type Argument struct {
 	TableDefVec  []*plan.TableDef
 	Engine       engine.Engine
 	DB           []engine.Database
-	TableID      []string
+	TableID      []uint64
 	DBName       []string
 	TblName      []string
 }

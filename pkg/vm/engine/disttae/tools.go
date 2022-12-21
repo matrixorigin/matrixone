@@ -773,6 +773,7 @@ func getColumnsFromRows(rows [][]any) []column {
 func genTableDefOfColumn(col column) engine.TableDef {
 	var attr engine.Attribute
 
+	attr.ID = uint64(col.num)
 	attr.Name = col.name
 	attr.Alg = compress.Lz4
 	attr.Comment = col.comment
@@ -825,7 +826,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			}
 		}
 	}
-	num := 0
+	var num int32 = 0
 	cols := make([]column, 0, len(defs))
 	for _, def := range defs {
 		attrDef, ok := def.(*engine.AttributeDef)
@@ -845,7 +846,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			name:         attrDef.Attr.Name,
 			tableName:    tableName,
 			databaseName: databaseName,
-			num:          int32(num),
+			num:          num,
 			comment:      attrDef.Attr.Comment,
 		}
 		col.hasDef = 0
