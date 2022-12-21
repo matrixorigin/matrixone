@@ -80,15 +80,23 @@ func DisableLogErrorReport(disable bool) {
 
 // ReportError send to BatchProcessor
 func ReportError(ctx context.Context, err error, depth int) {
-	if !disableLogErrorReport.Load() {
-		msg := fmt.Sprintf("error: %v", err)
-		sc := SpanFromContext(ctx).SpanContext()
-		if sc.IsEmpty() {
-			logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg)
-		} else {
-			logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg, ContextField(ctx))
-		}
+	// context ctl
+	if errutil.NoReportFromContext(ctx) {
+		return
 	}
+	// global ctl
+	if disableLogErrorReport.Load() {
+		return
+	}
+	// log every time
+	msg := fmt.Sprintf("error: %v", err)
+	sc := SpanFromContext(ctx).SpanContext()
+	if sc.IsEmpty() {
+		logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg)
+	} else {
+		logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg, ContextField(ctx))
+	}
+	// record ctrl
 	if !GetTracerProvider().IsEnable() {
 		return
 	}

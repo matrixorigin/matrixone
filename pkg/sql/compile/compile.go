@@ -110,6 +110,10 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return c.scope.CreateTable(c)
 	case DropTable:
 		return c.scope.DropTable(c)
+	case CreateIndex:
+		return c.scope.CreateIndex(c)
+	case DropIndex:
+		return c.scope.DropIndex(c)
 	case TruncateTable:
 		return c.scope.TruncateTable(c)
 	case Deletion:
@@ -1250,7 +1254,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if err != nil {
 		return nil, err
 	}
-	ranges, err = rel.Ranges(c.ctx, colexec.RewriteFilterExprList(n.FilterList))
+	ranges, err = rel.Ranges(c.ctx, plan2.HandleFiltersForZM(n.FilterList, c.proc))
 	if err != nil {
 		return nil, err
 	}

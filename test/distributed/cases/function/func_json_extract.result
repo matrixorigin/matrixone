@@ -137,7 +137,38 @@ json_extract({"a":"a1","b":"b1"}, $.*)
 create view v1 as select json_extract('{"a":1}','$.a');
 desc v1;
 Field    Type    Null    Key    Default    Extra    Comment
-json_extract({"a":1}, $.a)    JSON    YES        NULL        
+json_extract({"a":1}, $.a)    JSON    YES        NULL
+select json_extract('{"a":1}',null);
+json_extract({"a":1}, null)
+null
+select json_extract(null,'$');
+json_extract(null, $)
+null
+select json_extract(null,null);
+json_extract(null, null)
+null
+select json_extract('{"a":1}',null) from json_table_1;
+json_extract({"a":1}, null)
+null
+null
+null
+null
+null
+null
+null
+null
+select json_extract(null,'$') from json_table_1;
+json_extract(null, $)
+null
+null
+null
+null
+null
+null
+null
+null
+
+json_extract({"a":1}, $.a)    JSON    YES        NULL
 select json_extract('[1,2,3]','$[last]');
 json_extract([1,2,3], $[last])
 3

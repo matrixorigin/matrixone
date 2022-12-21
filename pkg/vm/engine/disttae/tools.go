@@ -112,15 +112,41 @@ func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch,
 	return bat, nil
 }
 
-func genTableConstraintTuple(tbl *table, m *mpool.MPool) (*batch.Batch, error) {
-	bat := batch.NewWithSize(1)
+func genTableConstraintTuple(tblId, dbId uint64, tblName, dbName string, constraint []byte,
+	m *mpool.MPool) (*batch.Batch, error) {
+	bat := batch.NewWithSize(5)
+	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
 	bat.Attrs = append(bat.Attrs, catalog.SystemRelAttr_Constraint)
 	bat.SetZs(1, m)
 
-	bat.Vecs[0] = vector.New(catalog.MoTablesTypes[0]) // constraint
-	if err := bat.Vecs[0].Append(tbl.tmpConstraint, false, m); err != nil {
-		return nil, err
+	{
+		idx := catalog.MO_TABLES_REL_ID_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_id
+		if err := bat.Vecs[idx].Append(tblId, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_REL_NAME_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // relname
+		if err := bat.Vecs[idx].Append([]byte(tblName), false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_RELDATABASE_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // reldatabase
+		if err := bat.Vecs[idx].Append([]byte(dbName), false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_RELDATABASE_ID_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // reldatabase_id
+		if err := bat.Vecs[idx].Append(dbId, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_UPDATE_CONSTRAINT
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[catalog.MO_TABLES_CONSTRAINT]) // constraint
+		if err := bat.Vecs[idx].Append(constraint, false, m); err != nil {
+			return nil, err
+		}
 	}
+
 	return bat, nil
 }
 
@@ -677,6 +703,8 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 	typ := api.Entry_Insert
 	if e.typ == DELETE {
 		typ = api.Entry_Delete
+	} else if e.typ == UPDATE {
+		typ = api.Entry_Update
 	}
 	bat, err := toPBBatch(ebat)
 	if err != nil {
@@ -745,6 +773,7 @@ func getColumnsFromRows(rows [][]any) []column {
 func genTableDefOfColumn(col column) engine.TableDef {
 	var attr engine.Attribute
 
+	attr.ID = uint64(col.num)
 	attr.Name = col.name
 	attr.Alg = compress.Lz4
 	attr.Comment = col.comment
@@ -797,7 +826,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			}
 		}
 	}
-	num := 0
+	var num int32 = 0
 	cols := make([]column, 0, len(defs))
 	for _, def := range defs {
 		attrDef, ok := def.(*engine.AttributeDef)
@@ -817,7 +846,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			name:         attrDef.Attr.Name,
 			tableName:    tableName,
 			databaseName: databaseName,
-			num:          int32(num),
+			num:          num,
 			comment:      attrDef.Attr.Comment,
 		}
 		col.hasDef = 0

@@ -17,7 +17,6 @@ package memoryengine
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -72,7 +71,7 @@ func (d *Database) Truncate(ctx context.Context, relName string) error {
 	if err != nil {
 		return err
 	}
-	oldId, _ := strconv.ParseInt(rel.GetTableID(ctx), 10, 64)
+	oldId := rel.GetTableID(ctx)
 
 	_, err = DoTxnRequest[TruncateRelationResp](
 		ctx,
