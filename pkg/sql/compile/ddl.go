@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -143,13 +144,33 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	// need to append TableId to parent's TableDef.RefChildTbls
-	for _, fkTableName := range qry.GetFkTables() {
-		// append refChild to parent table's tableDef
-		fkRelation, err := dbSource.Relation(c.ctx, fkTables[i])
+	// tblId := newRelation.GetTableID(c.ctx) // todo ,  need pr merge
+	tblId := uint64(0)
+	for i, fkTableName := range qry.GetFkTables() {
+		fkDbName := qry.GetFkDbs()[i]
+		fkDbSource, err := c.e.Database(c.ctx, fkDbName, c.proc.TxnOperator)
 		if err != nil {
 			return err
 		}
-		fkTableDef, err := fkRelation.TableDefs(c.ctx)
+		fkRelation, err := fkDbSource.Relation(c.ctx, fkTableName)
+		if err != nil {
+			return err
+		}
+		var oldCt *engine.ConstraintDef
+		for _, def := range newTableDef {
+			if ct, ok := def.(*engine.ConstraintDef); ok {
+				oldCt = ct
+				break
+			}
+		}
+		newRefChildDef := &engine.RefChildTableDef{
+			Tables: []uint64{tblId},
+		}
+		newCt, err := makeNewCreateConstraint(oldCt, newRefChildDef)
+		if err != nil {
+			return err
+		}
+		err = fkRelation.UpdateConstraint(c.ctx, newCt)
 		if err != nil {
 			return err
 		}
@@ -311,6 +332,47 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 	// must fount dropName because of being checked in plan
 	for j, ct := range oldCt.Cts {
 		switch c := ct.(type) {
+		case *engine.ForeignKeyDef:
+			ok := false
+			var def *engine.ForeignKeyDef
+			for _, ct := range oldCt.Cts {
+				if def, ok = ct.(*engine.ForeignKeyDef); ok {
+					for idx, fkDef := range def.Fkeys {
+						if fkDef.Name == dropName {
+							def.Fkeys = append(def.Fkeys[:idx], def.Fkeys[idx+1:]...)
+							break
+						}
+					}
+					break
+				}
+			}
+			if !ok {
+				oldCt.Cts = append(oldCt.Cts, c)
+			}
+
+		case *engine.RefChildTableDef:
+			ok := false
+			var def *engine.RefChildTableDef
+			tmpTableId, err := strconv.ParseInt(dropName, 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			refTableId := uint64(tmpTableId)
+			for _, ct := range oldCt.Cts {
+				if def, ok = ct.(*engine.RefChildTableDef); ok {
+					for idx, refTable := range def.Tables {
+						if refTable == refTableId {
+							def.Tables = append(def.Tables[:idx], def.Tables[idx+1:]...)
+							break
+						}
+					}
+					break
+				}
+			}
+			if !ok {
+				oldCt.Cts = append(oldCt.Cts, c)
+			}
+
 		case *engine.UniqueIndexDef:
 			u := &plan.UniqueIndexDef{}
 			err := u.UnMarshalUniqueIndexDef(([]byte)(c.UniqueIndex))
@@ -350,6 +412,33 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 		}, nil
 	}
 	switch t := c.(type) {
+	case *engine.ForeignKeyDef:
+		ok := false
+		var def *engine.ForeignKeyDef
+		for _, ct := range oldCt.Cts {
+			if def, ok = ct.(*engine.ForeignKeyDef); ok {
+				// i don't see any clause to change FK. only add or drop. so
+				def.Fkeys = append(def.Fkeys, t.Fkeys...)
+				break
+			}
+		}
+		if !ok {
+			oldCt.Cts = append(oldCt.Cts, c)
+		}
+
+	case *engine.RefChildTableDef:
+		ok := false
+		var def *engine.RefChildTableDef
+		for _, ct := range oldCt.Cts {
+			if def, ok = ct.(*engine.RefChildTableDef); ok {
+				def.Tables = append(def.Tables, t.Tables...)
+				break
+			}
+		}
+		if !ok {
+			oldCt.Cts = append(oldCt.Cts, c)
+		}
+
 	case *engine.UniqueIndexDef:
 		d := &plan.UniqueIndexDef{}
 		err := d.UnMarshalUniqueIndexDef([]byte(t.UniqueIndex))

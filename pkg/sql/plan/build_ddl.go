@@ -444,6 +444,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			if fkDbName == "" {
 				fkDbName = ctx.DefaultDatabase()
 			}
+			createTable.FkDbs = append(createTable.FkDbs, fkDbName)
 			createTable.FkTables = append(createTable.FkTables, fkTableName)
 
 			_, tableRef := ctx.Resolve(fkDbName, fkTableName)
