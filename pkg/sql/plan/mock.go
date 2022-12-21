@@ -41,6 +41,10 @@ type MockCompilerContext struct {
 	ctx context.Context
 }
 
+func (m *MockCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
+	return []uint32{catalog.System_Account}, nil
+}
+
 func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 	vars := make(map[string]interface{})
 	vars["str_var"] = "str"

@@ -730,6 +730,8 @@ message InsertValues {
 	UniqueIndexDef unique_index_def = 8;
 	SecondaryIndexDef secondary_index_def = 9;
 	bool is_cluster_table = 10;//insert into a cluster table
+	repeated uint32 accountIDs = 11;//insert data into the cluster table for every account
+	int32 column_index_of_accountId = 12;//the column index of the account id in the cluster table
 }
 
 message column{

@@ -68,6 +68,8 @@ type CompilerContext interface {
 	Resolve(schemaName string, tableName string) (*ObjectRef, *TableDef)
 	// get the value of variable
 	ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	// get the list of the account id
+	ResolveAccountIds(accountNames []string) ([]uint32, error)
 	// get the definition of primary key
 	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
 	// get the definition of hide key

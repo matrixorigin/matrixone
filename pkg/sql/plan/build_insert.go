@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
@@ -60,19 +61,55 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert into view '%s'", tblName)
 	}
 
+	isClusterTable := util.TableIsClusterTable(tblRef.GetTableType())
+	var accountIds []uint32
+	var columnIndexOfAccountId int32 = -1
+	if isClusterTable {
+		if len(stmt.Accounts) != 0 {
+			accountNames := make([]string, len(stmt.Accounts))
+			for i, account := range stmt.Accounts {
+				accountNames[i] = string(account)
+			}
+			accountIds, err = ctx.ResolveAccountIds(accountNames)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			accountIds = []uint32{catalog.System_Account}
+		}
+		if len(accountIds) == 0 {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "need specify account for the cluster tables")
+		}
+	}
+
 	// build columns
 	colCount := len(tblRef.Cols)
 
-	hasExplicitCols := false
+	//syntaxHasColumnNames
+	//	true: there is at least one specified column name after the table name.
+	syntaxHasColumnNames := false
 	if stmt.Columns != nil {
-		hasExplicitCols = true
+		syntaxHasColumnNames = true
 	}
 
+	// columns designated in syntax or all columns in the table.
 	var explicitCols []*ColDef
 	if stmt.Columns == nil {
-		explicitCols = append(explicitCols, tblRef.Cols...)
+		if isClusterTable {
+			//filter out the account_id for the cluster table
+			for _, col := range tblRef.Cols {
+				if !isClusterTableAttribute(col.Name) {
+					explicitCols = append(explicitCols, col)
+				}
+			}
+		} else {
+			explicitCols = append(explicitCols, tblRef.Cols...)
+		}
 	} else {
 		for _, attr := range stmt.Columns {
+			if isClusterTable && isClusterTableAttribute(string(attr)) {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "do not specify the attribute %s for the cluster table", clusterTableAttributeName)
+			}
 			hasAttr := false
 			for _, col := range tblRef.Cols {
 				if string(attr) == col.Name {
@@ -89,10 +126,23 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	explicitCount := len(explicitCols)
 
 	orderAttrs := make([]string, 0, colCount)
-	for _, col := range tblRef.Cols {
+	for i, col := range tblRef.Cols {
 		orderAttrs = append(orderAttrs, col.Name)
+
+		if isClusterTable && isClusterTableAttribute(col.Name) {
+			if columnIndexOfAccountId >= 0 {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "there are two account_id in the cluster table")
+			} else {
+				columnIndexOfAccountId = int32(i)
+			}
+		}
 	}
 
+	if isClusterTable && columnIndexOfAccountId == -1 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "there is no account_id in the cluster table")
+	}
+
+	//the column definitions that does not be specified after the table name
 	var otherCols []*ColDef
 	if len(explicitCols) < colCount {
 		for _, c1 := range tblRef.Cols {
@@ -110,15 +160,21 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	}
 
 	rows := stmt.Rows.Select.(*tree.ValuesClause).Rows
+	//isAllDefault:
+	//	true: the values clause is empty
 	isAllDefault := false
 	if rows[0] == nil {
 		isAllDefault = true
 	}
 
-	if isAllDefault && hasExplicitCols {
-		return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert values does not match number of columns")
+	//example1:insert into a(a) values ();
+	//but it does not work at the case:
+	//insert into a(a) values (0),();
+	if isAllDefault && syntaxHasColumnNames {
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert values does not match the number of columns")
 	}
 
+	//the values clause transformed into the resolved expressions.
 	rowCount := len(rows)
 	columns := make([]*plan.Column, colCount)
 	for i := range columns {
@@ -128,7 +184,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	}
 
 	if isAllDefault {
-		// hasExplicitCols must be false
+		// syntaxHasColumnNames must be false
 		for _, row := range rows {
 			if row != nil {
 				return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert values does not match number of columns")
@@ -141,9 +197,20 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 				}
 				columns[j].Column = append(columns[j].Column, expr)
 			}
+			if isClusterTable {
+				idx := explicitCount
+				for _, col := range otherCols {
+					expr, err := getDefaultExpr(ctx.GetContext(), col)
+					if err != nil {
+						return nil, err
+					}
+					columns[idx].Column = append(columns[idx].Column, expr)
+					idx++
+				}
+			}
 		}
 	} else {
-		// hasExplicitCols maybe true or false
+		// syntaxHasColumnNames maybe true or false
 		binders := make([]*DefaultBinder, 0, len(explicitCols))
 		for _, col := range explicitCols {
 			binders = append(binders, NewDefaultBinder(ctx.GetContext(), nil, nil, col.Typ, nil))
@@ -193,16 +260,18 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	return &Plan{
 		Plan: &plan.Plan_Ins{
 			Ins: &plan.InsertValues{
-				DbName:            dbName,
-				TblName:           tblName,
-				ExplicitCols:      explicitCols,
-				OtherCols:         otherCols,
-				OrderAttrs:        orderAttrs,
-				Columns:           columns,
-				CompositePkey:     tblRef.CompositePkey,
-				UniqueIndexDef:    uDef,
-				SecondaryIndexDef: sDef,
-				IsClusterTable:    tblRef.GetTableType() == catalog.SystemClusterRel,
+				DbName:                 dbName,
+				TblName:                tblName,
+				ExplicitCols:           explicitCols,
+				OtherCols:              otherCols,
+				OrderAttrs:             orderAttrs,
+				Columns:                columns,
+				CompositePkey:          tblRef.CompositePkey,
+				UniqueIndexDef:         uDef,
+				SecondaryIndexDef:      sDef,
+				IsClusterTable:         tblRef.GetTableType() == catalog.SystemClusterRel,
+				AccountIDs:             accountIds,
+				ColumnIndexOfAccountId: columnIndexOfAccountId,
 			},
 		},
 	}, nil

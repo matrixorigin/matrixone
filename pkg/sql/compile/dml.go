@@ -15,7 +15,10 @@
 package compile
 
 import (
+	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -112,11 +115,16 @@ func (s *Scope) Update(c *Compile) (uint64, error) {
 func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	p := s.Plan.GetIns()
 
-	dbSource, err := c.e.Database(c.ctx, p.DbName, c.proc.TxnOperator)
+	ctx := c.ctx
+	if p.GetIsClusterTable() {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+
+	dbSource, err := c.e.Database(ctx, p.DbName, c.proc.TxnOperator)
 	if err != nil {
 		return 0, err
 	}
-	relation, err := dbSource.Relation(c.ctx, p.TblName)
+	relation, err := dbSource.Relation(ctx, p.TblName)
 	if err != nil {
 		return 0, err
 	}
@@ -128,7 +136,8 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		p.ExplicitCols = append(p.ExplicitCols, p.OtherCols...)
 	}
 
-	if err := fillBatch(bat, p, stmt.Rows.Select.(*tree.ValuesClause).Rows, c.proc); err != nil {
+	//TODO: for every account
+	if err := fillBatch(ctx, bat, p, stmt.Rows.Select.(*tree.ValuesClause).Rows, c.proc); err != nil {
 		return 0, err
 	}
 	/**
@@ -144,13 +153,14 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		// check for case 1 and case 2
 		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].Typ.AutoIncr) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].Typ.AutoIncr) {
 			if nulls.Any(bat.Vecs[i].Nsp) {
-				return 0, moerr.NewConstraintViolation(c.ctx, fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
+				return 0, moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
 			}
 		}
 	}
 	batch.Reorder(bat, p.OrderAttrs)
 
-	if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
+	//TODO: fix auto increment for the cluster table
+	if err = colexec.UpdateInsertValueBatch(c.e, ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
 		return 0, err
 	}
 	if p.CompositePkey != nil {
@@ -161,7 +171,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 				for _, name := range names {
 					if p.OrderAttrs[i] == name {
 						if nulls.Any(bat.Vecs[i].Nsp) {
-							return 0, moerr.NewConstraintViolation(c.ctx, fmt.Sprintf("Column '%s' cannot be null", p.OrderAttrs[i]))
+							return 0, moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", p.OrderAttrs[i]))
 						}
 					}
 				}
@@ -171,13 +181,13 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	if p.UniqueIndexDef != nil {
 		for i := range p.UniqueIndexDef.IndexNames {
 			if p.UniqueIndexDef.TableExists[i] {
-				indexRelation, err := dbSource.Relation(c.ctx, p.UniqueIndexDef.TableNames[i])
+				indexRelation, err := dbSource.Relation(ctx, p.UniqueIndexDef.TableNames[i])
 				if err != nil {
 					return 0, err
 				}
 				indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, p.UniqueIndexDef.Fields[i].Cols, c.proc)
 				if rowNum != 0 {
-					if err := indexRelation.Write(c.ctx, indexBatch); err != nil {
+					if err := indexRelation.Write(ctx, indexBatch); err != nil {
 						return 0, err
 					}
 				}
@@ -186,7 +196,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		}
 	}
 
-	if err := relation.Write(c.ctx, bat); err != nil {
+	if err := relation.Write(ctx, bat); err != nil {
 		return 0, err
 	}
 
@@ -194,7 +204,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 }
 
 // XXX: is this just fill batch with first vec.Col[0]?
-func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *process.Process) error {
+func fillBatch(ctx context.Context, bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *process.Process) error {
 	tmpBat := batch.NewWithSize(0)
 	tmpBat.Zs = []int64{1}
 
@@ -202,7 +212,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 		for j, expr := range p.Columns[i].Column {
 			vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 			if err != nil {
-				return y.MakeInsertError(proc.Ctx, v.Typ.Oid, p.ExplicitCols[i], rows, i, j, err)
+				return y.MakeInsertError(ctx, v.Typ.Oid, p.ExplicitCols[i], rows, i, j, err)
 			}
 			if vec.Size() == 0 {
 				vec = vec.ConstExpand(proc.Mp())

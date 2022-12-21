@@ -40,6 +40,10 @@ var (
 	}}
 )
 
+func isClusterTableAttribute(name string) bool {
+	return name == clusterTableAttributeName
+}
+
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
 	viewName := stmt.Name.ObjectName
 	createTable := &plan.CreateTable{
@@ -450,6 +454,18 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			Typ:     colType,
 			NotNull: true,
 			Default: &plan.Default{
+				Expr: &Expr{
+					Expr: &plan.Expr_C{
+						C: &Const{
+							Isnull: false,
+							Value:  &plan.Const_U32Val{U32Val: catalog.System_Account},
+						},
+					},
+					Typ: &plan.Type{
+						Id:          colType.Id,
+						NotNullable: true,
+					},
+				},
 				NullAbility: false,
 			},
 			Comment: "the account_id added by the mo",
