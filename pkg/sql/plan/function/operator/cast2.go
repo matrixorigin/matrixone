@@ -32,15 +32,236 @@ import (
 )
 
 // XXX need this one to make a pretty function register.
-//var SupportedTypeCast = map[types.T][]types.T{
-//	types.T_any: ,
-//}
+var supportedTypeCast = map[types.T][]types.T{
+	types.T_bool: {
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_int8: {
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_int16: {
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_int32: {
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_int64: {
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_uint8: {
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_uint16: {
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_uint32: {
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_uint64: {
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_float32: {
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_float64: {
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_date: {
+		types.T_date, types.T_datetime,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_datetime: {
+		types.T_date, types.T_datetime,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_timestamp: {
+		types.T_date, types.T_datetime,
+		types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_time: {
+		types.T_date, types.T_datetime,
+		types.T_time,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_decimal64, types.T_decimal128,
+	},
+
+	types.T_decimal64: {
+		types.T_float32, types.T_float64,
+		types.T_int64,
+		types.T_uint64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_time, types.T_timestamp,
+	},
+
+	types.T_decimal128: {
+		types.T_float32, types.T_float64,
+		types.T_int32, types.T_int64,
+		types.T_uint64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_time, types.T_timestamp,
+	},
+
+	types.T_char: {
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_bool,
+		types.T_json,
+		types.T_uuid,
+		types.T_date, types.T_datetime,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_varchar: {
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_bool,
+		types.T_json,
+		types.T_uuid,
+		types.T_date, types.T_datetime,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_blob: {
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_bool,
+		types.T_json,
+		types.T_uuid,
+		types.T_date, types.T_datetime,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_text: {
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_bool,
+		types.T_json,
+		types.T_uuid,
+		types.T_date, types.T_datetime,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_uuid: {
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+	},
+
+	types.T_TS: {
+		types.T_TS,
+	},
+
+	types.T_Rowid: {
+		types.T_Rowid,
+	},
+}
+
+func IfTypeCastSupported(sourceType, targetType types.T) bool {
+	supportList, ok := supportedTypeCast[sourceType]
+	if ok {
+		for _, t := range supportList {
+			if t == targetType {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func NewCast(parameters []*vector.Vector, result any, proc *process.Process, length int) error {
 	// Cast Parameter1 as Type Parameter2
 	fromType := parameters[0].GetType()
 	toType := parameters[1].GetType()
-
 	from := parameters[0]
 	switch fromType.Oid {
 	case types.T_bool:
@@ -2095,7 +2316,7 @@ func strToSigned[T constraints.Signed](
 				}
 				result = T(r)
 			} else {
-				s := *(*string)(unsafe.Pointer(&v))
+				s := convertByteSliceToString(v)
 				r, err := strconv.ParseInt(
 					strings.TrimSpace(s), 10, bitSize)
 				if err != nil {
@@ -2135,7 +2356,7 @@ func strToUnsigned[T constraints.Unsigned](
 			if isBinary {
 				val, tErr = strconv.ParseUint(hex.EncodeToString(v), 16, 64)
 			} else {
-				s := *(*string)(unsafe.Pointer(&v))
+				s := convertByteSliceToString(v)
 				val, tErr = strconv.ParseUint(strings.TrimSpace(s), 10, bitSize)
 			}
 			if tErr != nil {
@@ -2176,7 +2397,7 @@ func strToFloat[T constraints.Float](
 				r1, tErr = strconv.ParseUint(hex.EncodeToString(v), 16, 64)
 				result = T(r1)
 			} else {
-				s := *(*string)(unsafe.Pointer(&v))
+				s := convertByteSliceToString(v)
 				r2, tErr = strconv.ParseFloat(s, bitSize)
 				result = T(r2)
 			}
@@ -2210,7 +2431,7 @@ func strToDecimal64(
 				return err
 			}
 		} else {
-			s := *(*string)(unsafe.Pointer(&v))
+			s := convertByteSliceToString(v)
 			result, err := types.ParseStringToDecimal64(
 				s, totype.Width, totype.Scale, isb)
 			if err != nil {
@@ -2240,7 +2461,7 @@ func strToDecimal128(
 				return err
 			}
 		} else {
-			s := *(*string)(unsafe.Pointer(&v))
+			s := convertByteSliceToString(v)
 			result, err := types.ParseStringToDecimal128(
 				s, totype.Width, totype.Scale, isb)
 			if err != nil {
@@ -2266,7 +2487,7 @@ func strToBool(
 				return err
 			}
 		} else {
-			s := *(*string)(unsafe.Pointer(&v))
+			s := convertByteSliceToString(v)
 			val, err := types.ParseBool(s)
 			if err != nil {
 				return err
@@ -2292,7 +2513,7 @@ func strToUuid(
 				return err
 			}
 		} else {
-			s := *(*string)(unsafe.Pointer(&v))
+			s := convertByteSliceToString(v)
 			val, err := types.ParseUuid(s)
 			if err != nil {
 				return err
@@ -2317,7 +2538,7 @@ func strToJson(
 				return err
 			}
 		} else {
-			s := *(*string)(unsafe.Pointer(&v))
+			s := convertByteSliceToString(v)
 			json, err := types.ParseStringToByteJson(s)
 			if err != nil {
 				return err
@@ -2347,7 +2568,7 @@ func strToDate(
 				return err
 			}
 		} else {
-			s := *(*string)(unsafe.Pointer(&v))
+			s := convertByteSliceToString(v)
 			val, err := types.ParseDateCast(s)
 			if err != nil {
 				return err
@@ -2374,7 +2595,7 @@ func strToTime(
 				return err
 			}
 		} else {
-			s := *(*string)(unsafe.Pointer(&v))
+			s := convertByteSliceToString(v)
 			val, err := types.ParseTime(s, totype.Precision)
 			if err != nil {
 				return err
@@ -2401,7 +2622,7 @@ func strToDatetime(
 				return err
 			}
 		} else {
-			s := *(*string)(unsafe.Pointer(&v))
+			s := convertByteSliceToString(v)
 			val, err := types.ParseDatetime(s, totype.Precision)
 			if err != nil {
 				return err
@@ -2429,7 +2650,7 @@ func strToTimestamp(
 				return err
 			}
 		} else {
-			s := *(*string)(unsafe.Pointer(&v))
+			s := convertByteSliceToString(v)
 			val, err := types.ParseTimestamp(zone, s, totype.Precision)
 			if err != nil {
 				return err
@@ -2459,7 +2680,7 @@ func strToStr(
 				}
 			}
 			// check the length.
-			s := *(*string)(unsafe.Pointer(&v))
+			s := convertByteSliceToString(v)
 			if len(s) > destLen {
 				return moerr.NewInternalError(ctx, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
@@ -2851,4 +3072,10 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		}
 	}
 	return nil
+}
+
+// convertByteSliceToString is just a temp method.
+func convertByteSliceToString(v []byte) string {
+	// s := *(*string)(unsafe.Pointer(&v))
+	return string(v)
 }
