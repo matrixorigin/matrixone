@@ -44,3 +44,6 @@ insert into t2 values(1);
 create view vvvv as select a from t1 union all select a from t2;
 select * from vvvv;
 drop view vvvv;
+create view vn as select * from t1;
+alter view vn as select a from t1 union all select a from t2;
+drop view vn;
