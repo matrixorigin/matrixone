@@ -64,7 +64,6 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildReplace(stmt, ctx)
 	case *tree.Update:
 		return buildTableUpdate(stmt, ctx)
-		//return buildUpdate(stmt, ctx)
 	case *tree.Delete:
 		return buildDelete(stmt, ctx)
 	case *tree.BeginTransaction:
