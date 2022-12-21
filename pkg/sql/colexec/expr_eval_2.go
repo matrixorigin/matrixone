@@ -78,7 +78,14 @@ func evalFunction(proc *process.Process, f *function.Function, args []*vector.Ve
 	var resultWrapper vector.FunctionResultWrapper
 	var err error
 
-	rTyp := f.ReturnTyp.ToType()
+	var parameterTypes []types.Type
+	if f.FlexibleReturnType != nil {
+		parameterTypes = make([]types.Type, len(args))
+		for i := range args {
+			parameterTypes[i] = args[i].GetType()
+		}
+	}
+	rTyp, _ := f.ReturnType(parameterTypes)
 	numScalar := 0
 	// If any argument is `NULL`, return NULL.
 	// If all arguments are scalar, return scalar.
@@ -124,7 +131,7 @@ func newFunctionResultRelated(typ types.Type, proc *process.Process, isConst boo
 	}
 
 	// Pre allocate the memory
-	// XXX PreAllocType has BUG. It only shrink the cols.
+	// XXX PreAllocType has BUG. It only shrinks the cols.
 	//v = vector.PreAllocType(typ, 0, length, proc.Mp())
 	//vector.SetLength(v, 0)
 	switch typ.Oid {
