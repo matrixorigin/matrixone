@@ -15,11 +15,7 @@
 package plan
 
 import (
-	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -52,117 +48,117 @@ type updateCol struct {
 	colDef       *ColDef
 }
 
-func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
-	// build map between base table and alias table
-	tf := newTableInfo()
-	extractWithTable(stmt.With, tf, ctx)
-	for _, expr := range stmt.Tables {
-		if err := extractExprTable(expr, tf, ctx); err != nil {
-			return nil, err
-		}
-	}
-
-	// build reference
-	objRefs := make([]*ObjectRef, 0, len(tf.dbNames))
-	tblRefs := make([]*TableDef, 0, len(tf.tableNames))
-	for i := range tf.dbNames {
-		objRef, tblRef := ctx.Resolve(tf.dbNames[i], tf.tableNames[i])
-		if tblRef == nil {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot find update table: %s.%s", tf.dbNames[i], tf.tableNames[i])
-		}
-		if tblRef.TableType == catalog.SystemExternalRel {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "the external table is not support update operation")
-		} else if tblRef.TableType == catalog.SystemViewRel {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "view is not support update operation")
-		}
-		objRefs = append(objRefs, objRef)
-		tblRefs = append(tblRefs, tblRef)
-	}
-
-	// check and build update's columns
-	updateCols, err := buildUpdateColumns(stmt.Exprs, objRefs, tblRefs, tf.alias2BaseNameMap, ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// group update columns
-	updateColsArray, updateExprsArray := groupUpdateAttrs(updateCols, stmt.Exprs)
-
-	// build update ctx and projection
-	updateCtxs, useProjectExprs, err := buildCtxAndProjection(updateColsArray, updateExprsArray, tf.alias2BaseNameMap, tblRefs, ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// build the stmt of select and append select node
-	if len(stmt.OrderBy) > 0 && (stmt.Where == nil && stmt.Limit == nil) {
-		stmt.OrderBy = nil
-	}
-	selectStmt := &tree.Select{
-		Select: &tree.SelectClause{
-			Exprs: useProjectExprs,
-			From:  &tree.From{Tables: stmt.Tables},
-			Where: stmt.Where,
-		},
-		OrderBy: stmt.OrderBy,
-		Limit:   stmt.Limit,
-		With:    stmt.With,
-	}
-
-	// This line of code is used for debugging and later deletion
-	sql := tree.String(selectStmt, dialect.MYSQL)
-	fmt.Printf("%s \n", sql)
-
-	usePlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
-	if err != nil {
-		return nil, err
-	}
-	usePlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_UPDATE
-	qry := usePlan.Plan.(*plan.Plan_Query).Query
-
-	// rebuild projection for update cols to get right type and default value
-	lastNode := qry.Nodes[qry.Steps[len(qry.Steps)-1]]
-	for _, ct := range updateCtxs {
-		var idx = int(ct.HideKeyIdx) + 1
-
-		for _, col := range ct.UpdateCols {
-			if c := lastNode.ProjectList[idx].GetC(); c != nil {
-				if c.GetDefaultval() {
-					if lastNode.ProjectList[idx], err = getDefaultExpr(ctx.GetContext(), col); err != nil {
-						return nil, err
-					}
-					idx++
-					continue
-				}
-				if c.GetUpdateVal() {
-					lastNode.ProjectList[idx] = col.OnUpdate.Expr
-					idx++
-					continue
-				}
-			}
-			lastNode.ProjectList[idx], err = makePlan2CastExpr(ctx.GetContext(), lastNode.ProjectList[idx], col.Typ)
-			if err != nil {
-				return nil, err
-			}
-			idx++
-		}
-	}
-
-	// build update node
-	node := &Node{
-		NodeType:    plan.Node_UPDATE,
-		ObjRef:      nil,
-		TableDef:    nil,
-		TableDefVec: tblRefs,
-		Children:    []int32{qry.Steps[len(qry.Steps)-1]},
-		NodeId:      int32(len(qry.Nodes)),
-		UpdateCtxs:  updateCtxs,
-	}
-	qry.Nodes = append(qry.Nodes, node)
-	qry.Steps[len(qry.Steps)-1] = node.NodeId
-
-	return usePlan, nil
-}
+//func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
+//	// build map between base table and alias table
+//	tf := newTableInfo()
+//	extractWithTable(stmt.With, tf, ctx)
+//	for _, expr := range stmt.Tables {
+//		if err := extractExprTable(expr, tf, ctx); err != nil {
+//			return nil, err
+//		}
+//	}
+//
+//	// build reference
+//	objRefs := make([]*ObjectRef, 0, len(tf.dbNames))
+//	tblRefs := make([]*TableDef, 0, len(tf.tableNames))
+//	for i := range tf.dbNames {
+//		objRef, tblRef := ctx.Resolve(tf.dbNames[i], tf.tableNames[i])
+//		if tblRef == nil {
+//			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot find update table: %s.%s", tf.dbNames[i], tf.tableNames[i])
+//		}
+//		if tblRef.TableType == catalog.SystemExternalRel {
+//			return nil, moerr.NewInternalError(ctx.GetContext(), "the external table is not support update operation")
+//		} else if tblRef.TableType == catalog.SystemViewRel {
+//			return nil, moerr.NewInternalError(ctx.GetContext(), "view is not support update operation")
+//		}
+//		objRefs = append(objRefs, objRef)
+//		tblRefs = append(tblRefs, tblRef)
+//	}
+//
+//	// check and build update's columns
+//	updateCols, err := buildUpdateColumns(stmt.Exprs, objRefs, tblRefs, tf.alias2BaseNameMap, ctx)
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	// group update columns
+//	updateColsArray, updateExprsArray := groupUpdateAttrs(updateCols, stmt.Exprs)
+//
+//	// build update ctx and projection
+//	updateCtxs, useProjectExprs, err := buildCtxAndProjection(updateColsArray, updateExprsArray, tf.alias2BaseNameMap, tblRefs, ctx)
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	// build the stmt of select and append select node
+//	if len(stmt.OrderBy) > 0 && (stmt.Where == nil && stmt.Limit == nil) {
+//		stmt.OrderBy = nil
+//	}
+//	selectStmt := &tree.Select{
+//		Select: &tree.SelectClause{
+//			Exprs: useProjectExprs,
+//			From:  &tree.From{Tables: stmt.Tables},
+//			Where: stmt.Where,
+//		},
+//		OrderBy: stmt.OrderBy,
+//		Limit:   stmt.Limit,
+//		With:    stmt.With,
+//	}
+//
+//	// This line of code is used for debugging and later deletion
+//	sql := tree.String(selectStmt, dialect.MYSQL)
+//	fmt.Printf("%s \n", sql)
+//
+//	usePlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
+//	if err != nil {
+//		return nil, err
+//	}
+//	usePlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_UPDATE
+//	qry := usePlan.Plan.(*plan.Plan_Query).Query
+//
+//	// rebuild projection for update cols to get right type and default value
+//	lastNode := qry.Nodes[qry.Steps[len(qry.Steps)-1]]
+//	for _, ct := range updateCtxs {
+//		var idx = int(ct.HideKeyIdx) + 1
+//
+//		for _, col := range ct.UpdateCols {
+//			if c := lastNode.ProjectList[idx].GetC(); c != nil {
+//				if c.GetDefaultval() {
+//					if lastNode.ProjectList[idx], err = getDefaultExpr(ctx.GetContext(), col); err != nil {
+//						return nil, err
+//					}
+//					idx++
+//					continue
+//				}
+//				if c.GetUpdateVal() {
+//					lastNode.ProjectList[idx] = col.OnUpdate.Expr
+//					idx++
+//					continue
+//				}
+//			}
+//			lastNode.ProjectList[idx], err = makePlan2CastExpr(ctx.GetContext(), lastNode.ProjectList[idx], col.Typ)
+//			if err != nil {
+//				return nil, err
+//			}
+//			idx++
+//		}
+//	}
+//
+//	// build update node
+//	node := &Node{
+//		NodeType:    plan.Node_UPDATE,
+//		ObjRef:      nil,
+//		TableDef:    nil,
+//		TableDefVec: tblRefs,
+//		Children:    []int32{qry.Steps[len(qry.Steps)-1]},
+//		NodeId:      int32(len(qry.Nodes)),
+//		UpdateCtxs:  updateCtxs,
+//	}
+//	qry.Nodes = append(qry.Nodes, node)
+//	qry.Steps[len(qry.Steps)-1] = node.NodeId
+//
+//	return usePlan, nil
+//}
 
 func extractSelectTable(stmt tree.TableExpr, tblName, dbName *string, ctx CompilerContext) {
 	switch s := stmt.(type) {
@@ -230,121 +226,122 @@ func extractWithTable(with *tree.With, tf *tableInfo, ctx CompilerContext) {
 	}
 }
 
-func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tree.Exprs, baseNameMap map[string]string, tblRefs []*TableDef, ctx CompilerContext) ([]*plan.UpdateCtx, tree.SelectExprs, error) {
-	var useProjectExprs tree.SelectExprs
-	updateCtxs := make([]*plan.UpdateCtx, 0, len(updateColsArray))
-	var offset int32 = 0
+/*
+	func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tree.Exprs, baseNameMap map[string]string, tblRefs []*TableDef, ctx CompilerContext) ([]*plan.UpdateCtx, tree.SelectExprs, error) {
+		var useProjectExprs tree.SelectExprs
+		updateCtxs := make([]*plan.UpdateCtx, 0, len(updateColsArray))
+		var offset int32 = 0
 
-	for i, updateCols := range updateColsArray {
-		// use hide key to update if primary key will not be updated
-		hideKey := ctx.GetHideKeyDef(updateCols[0].dbName, updateCols[0].tblName).GetName()
-		if hideKey == "" {
-			return nil, nil, moerr.NewInternalError(ctx.GetContext(), "internal error: cannot find hide key")
-		}
-		e, _ := tree.NewUnresolvedName(ctx.GetContext(), updateCols[0].dbName, updateCols[0].aliasTblName, hideKey)
-		useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
-		hideKeyIdx := offset
-
-		// construct projection for list of update expr
-		for _, expr := range updateExprsArray[i] {
-			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: expr})
-		}
-
-		// construct other cols and table offset
-		var otherAttrs []string = nil
-		var k int
-
-		// get table reference index
-		for k = 0; k < len(tblRefs); k++ {
-			if updateCols[0].tblName == tblRefs[k].Name {
-				break
+		for i, updateCols := range updateColsArray {
+			// use hide key to update if primary key will not be updated
+			hideKey := ctx.GetHideKeyDef(updateCols[0].dbName, updateCols[0].tblName).GetName()
+			if hideKey == "" {
+				return nil, nil, moerr.NewInternalError(ctx.GetContext(), "internal error: cannot find hide key")
 			}
-		}
-		orderAttrs := make([]string, 0, len(tblRefs[k].Cols)-1)
+			e, _ := tree.NewUnresolvedName(ctx.GetContext(), updateCols[0].dbName, updateCols[0].aliasTblName, hideKey)
+			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+			hideKeyIdx := offset
 
-		// figure out other cols that will not be updated
-		var onUpdateCols []updateCol
-		for _, col := range tblRefs[k].Cols {
-			if col.Name == hideKey {
+			// construct projection for list of update expr
+			for _, expr := range updateExprsArray[i] {
+				useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: expr})
+			}
+
+			// construct other cols and table offset
+			var otherAttrs []string = nil
+			var k int
+
+			// get table reference index
+			for k = 0; k < len(tblRefs); k++ {
+				if updateCols[0].tblName == tblRefs[k].Name {
+					break
+				}
+			}
+			orderAttrs := make([]string, 0, len(tblRefs[k].Cols)-1)
+
+			// figure out other cols that will not be updated
+			var onUpdateCols []updateCol
+			for _, col := range tblRefs[k].Cols {
+				if col.Name == hideKey {
+					continue
+				}
+
+				orderAttrs = append(orderAttrs, col.Name)
+
+				isUpdateCol := false
+				for _, updateCol := range updateCols {
+					if updateCol.colDef.Name == col.Name {
+						isUpdateCol = true
+					}
+				}
+				if !isUpdateCol {
+					if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
+						onUpdateCols = append(onUpdateCols, updateCol{colDef: col})
+					} else {
+						otherAttrs = append(otherAttrs, col.Name)
+					}
+				}
+			}
+
+			offset += int32(len(orderAttrs)) + 1
+
+			ct := &plan.UpdateCtx{
+				DbName:        updateCols[0].dbName,
+				TblName:       updateCols[0].tblName,
+				HideKey:       hideKey,
+				HideKeyIdx:    hideKeyIdx,
+				OtherAttrs:    otherAttrs,
+				OrderAttrs:    orderAttrs,
+				CompositePkey: tblRefs[k].CompositePkey,
+			}
+			for _, u := range updateCols {
+				ct.UpdateCols = append(ct.UpdateCols, u.colDef)
+			}
+			for _, u := range onUpdateCols {
+				ct.UpdateCols = append(ct.UpdateCols, u.colDef)
+				useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: &tree.UpdateVal{}})
+			}
+			for _, o := range otherAttrs {
+				e, _ := tree.NewUnresolvedName(ctx.GetContext(), updateCols[0].aliasTblName, o)
+				useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+			}
+			updateCtxs = append(updateCtxs, ct)
+		}
+		return updateCtxs, useProjectExprs, nil
+	}
+
+	func groupUpdateAttrs(updateCols []updateCol, updateExprs tree.UpdateExprs) ([][]updateCol, []tree.Exprs) {
+		var updateColsArray [][]updateCol
+		var updateExprsArray []tree.Exprs
+
+		groupMap := make(map[string]int)
+		for i := 0; i < len(updateCols); i++ {
+			// check if it has dealt with same table name
+			if _, ok := groupMap[updateCols[i].tblName]; ok {
 				continue
 			}
+			groupMap[updateCols[i].tblName] = 1
 
-			orderAttrs = append(orderAttrs, col.Name)
+			var cols []updateCol
+			cols = append(cols, updateCols[i])
 
-			isUpdateCol := false
-			for _, updateCol := range updateCols {
-				if updateCol.colDef.Name == col.Name {
-					isUpdateCol = true
+			var exprs tree.Exprs
+			exprs = append(exprs, updateExprs[i].Expr)
+
+			// group same table name
+			for j := i + 1; j < len(updateCols); j++ {
+				if updateCols[j].tblName == updateCols[i].tblName {
+					cols = append(cols, updateCols[j])
+					exprs = append(exprs, updateExprs[j].Expr)
 				}
 			}
-			if !isUpdateCol {
-				if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
-					onUpdateCols = append(onUpdateCols, updateCol{colDef: col})
-				} else {
-					otherAttrs = append(otherAttrs, col.Name)
-				}
-			}
-		}
 
-		offset += int32(len(orderAttrs)) + 1
-
-		ct := &plan.UpdateCtx{
-			DbName:        updateCols[0].dbName,
-			TblName:       updateCols[0].tblName,
-			HideKey:       hideKey,
-			HideKeyIdx:    hideKeyIdx,
-			OtherAttrs:    otherAttrs,
-			OrderAttrs:    orderAttrs,
-			CompositePkey: tblRefs[k].CompositePkey,
+			updateColsArray = append(updateColsArray, cols)
+			updateExprsArray = append(updateExprsArray, exprs)
 		}
-		for _, u := range updateCols {
-			ct.UpdateCols = append(ct.UpdateCols, u.colDef)
-		}
-		for _, u := range onUpdateCols {
-			ct.UpdateCols = append(ct.UpdateCols, u.colDef)
-			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: &tree.UpdateVal{}})
-		}
-		for _, o := range otherAttrs {
-			e, _ := tree.NewUnresolvedName(ctx.GetContext(), updateCols[0].aliasTblName, o)
-			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
-		}
-		updateCtxs = append(updateCtxs, ct)
+		return updateColsArray, updateExprsArray
 	}
-	return updateCtxs, useProjectExprs, nil
-}
-
-func groupUpdateAttrs(updateCols []updateCol, updateExprs tree.UpdateExprs) ([][]updateCol, []tree.Exprs) {
-	var updateColsArray [][]updateCol
-	var updateExprsArray []tree.Exprs
-
-	groupMap := make(map[string]int)
-	for i := 0; i < len(updateCols); i++ {
-		// check if it has dealt with same table name
-		if _, ok := groupMap[updateCols[i].tblName]; ok {
-			continue
-		}
-		groupMap[updateCols[i].tblName] = 1
-
-		var cols []updateCol
-		cols = append(cols, updateCols[i])
-
-		var exprs tree.Exprs
-		exprs = append(exprs, updateExprs[i].Expr)
-
-		// group same table name
-		for j := i + 1; j < len(updateCols); j++ {
-			if updateCols[j].tblName == updateCols[i].tblName {
-				cols = append(cols, updateCols[j])
-				exprs = append(exprs, updateExprs[j].Expr)
-			}
-		}
-
-		updateColsArray = append(updateColsArray, cols)
-		updateExprsArray = append(updateExprsArray, exprs)
-	}
-	return updateColsArray, updateExprsArray
-}
-
+*/
 func extractExprTable(expr tree.TableExpr, tf *tableInfo, ctx CompilerContext) error {
 	switch t := expr.(type) {
 	case *tree.TableName:
@@ -396,6 +393,7 @@ func extractExprTable(expr tree.TableExpr, tf *tableInfo, ctx CompilerContext) e
 	return nil
 }
 
+/*
 func buildUpdateColumns(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblRefs []*TableDef, baseNameMap map[string]string, cctx CompilerContext) ([]updateCol, error) {
 	updateCols := make([]updateCol, 0, len(objRefs))
 	colCountMap := make(map[string]int)
@@ -487,6 +485,7 @@ func buildUpdateColumns(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblRefs []
 	}
 	return updateCols, nil
 }
+*/
 
 func isSameColumnType(t1 *Type, t2 *Type) bool {
 	if t1.Id != t2.Id {

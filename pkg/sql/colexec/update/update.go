@@ -17,6 +17,7 @@ package update
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"sync/atomic"
 
@@ -539,17 +540,21 @@ func updateIndexTable(indexTableUpdateCtx *UpdateCtx, originTableBatch *batch.Ba
 	// delete old rows
 	batLen := batch.Length(deleteBat)
 	tmpBat, _ := FilterBatch(deleteBat, batLen, proc)
-	err := indexTableUpdateCtx.TableSource.Delete(proc.Ctx, tmpBat, indexTableUpdateCtx.HideKey)
-	if err != nil {
-		tmpBat.Clean(proc.Mp())
-		return err
+	length := tmpBat.GetVector(0).Length()
+	if length > 0 {
+		tmpBat.SetZs(length, proc.Mp())
+		err := indexTableUpdateCtx.TableSource.Delete(proc.Ctx, tmpBat, indexTableUpdateCtx.HideKey)
+		if err != nil {
+			tmpBat.Clean(proc.Mp())
+			return err
+		}
 	}
 	tmpBat.Clean(proc.Mp())
 
 	// insert new rows
 	insertBat, rowNum := util.BuildUniqueKeyBatch(originTableBatch.Vecs, originTableBatch.Attrs, indexTableUpdateCtx.IndexParts, originTablePriKey, proc)
 	if rowNum != 0 {
-		err = indexTableUpdateCtx.TableSource.Write(proc.Ctx, insertBat)
+		err := indexTableUpdateCtx.TableSource.Write(proc.Ctx, insertBat)
 		if err != nil {
 			insertBat.Clean(proc.Mp())
 			return err
@@ -563,7 +568,7 @@ func updateIndexTable(indexTableUpdateCtx *UpdateCtx, originTableBatch *batch.Ba
 // Get the primary key name of the table
 func GetTablePriKeyName(cols []*plan.ColDef, cPkeyCol *plan.ColDef) string {
 	for _, col := range cols {
-		if col.Primary {
+		if col.Name != catalog.Row_ID && col.Primary {
 			return col.Name
 		}
 	}

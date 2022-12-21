@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
 
@@ -344,9 +345,10 @@ func judgeUnixTimestampReturnType(timestr string) types.T {
 // Get the primary key name of the table
 func GetTablePriKeyName(cols []*plan.ColDef, cPkeyCol *plan.ColDef) string {
 	for _, col := range cols {
-		if col.Primary {
+		if col.Name != catalog.Row_ID && col.Primary {
 			return col.Name
 		}
+
 	}
 
 	if cPkeyCol != nil {
