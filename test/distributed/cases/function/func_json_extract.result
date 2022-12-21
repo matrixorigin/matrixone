@@ -116,10 +116,10 @@ insert into t2 values ('$[0]'),('$.a');
 select json_extract(t1.a,t2.a) qqq,t1.a,t2.a from t2, t1;
 qqq    a    a
 {"a": 1}    {"a": 1}    $[0]
-1    [1, 2]    $[0]
-{"xa": 1}    {"xa": 1}    $[0]
 1    {"a": 1}    $.a
+1    [1, 2]    $[0]
 null    [1, 2]    $.a
+{"xa": 1}    {"xa": 1}    $[0]
 null    {"xa": 1}    $.a
 drop table if exists json_table_1;
 create table json_table_1 (j1 json);
@@ -167,8 +167,6 @@ null
 null
 null
 null
-
-json_extract({"a":1}, $.a)    JSON    YES        NULL
 select json_extract('[1,2,3]','$[last]');
 json_extract([1,2,3], $[last])
 3
