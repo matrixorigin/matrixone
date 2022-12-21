@@ -410,8 +410,10 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 				nameMap[name] = true
 				indexs = append(indexs, name)
 			}
+
 		case *tree.UniqueIndex:
 			indexInfos = append(indexInfos, def)
+
 		case *tree.ForeignKey:
 			refer := def.Refer
 			fkDef := &plan.ForeignKeyDef{
@@ -421,15 +423,20 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 				OnUpdate:    getRefAction(refer.OnUpdate),
 				ForeignCols: make([]uint64, len(refer.KeyParts)),
 			}
-			createTable.FkCols = make([]*plan.CreateTable_FkColName, len(def.KeyParts))
+
+			// get fk columns of create table
+			fkCols := &plan.CreateTable_FkColName{
+				Cols: make([]string, len(def.KeyParts)),
+			}
 			for i, keyPart := range def.KeyParts {
 				getCol := false
-				colName := keyPart.ColName.String()
+				colName := keyPart.ColName.Parts[0]
 				for _, col := range createTable.TableDef.Cols {
 					if col.Name == colName {
 						// need to reset to ColId after created.
+						// we don't known the ColId now, and we will use fkCols to get ColId after table created
 						fkDef.Cols[i] = 0
-						createTable.FkCols[i].Cols = append(createTable.FkCols[i].Cols, colName)
+						fkCols.Cols[i] = colName
 						getCol = true
 						break
 					}
@@ -438,7 +445,9 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 					return moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in the creating table '%v'", colName, createTable.TableDef.Name)
 				}
 			}
+			createTable.FkCols = append(createTable.FkCols, fkCols)
 
+			// get foreign table & their columns
 			fkTableName := string(refer.TableName.ObjectName)
 			fkDbName := string(refer.TableName.SchemaName)
 			if fkDbName == "" {
@@ -454,7 +463,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			fkDef.ForeignTbl = tableRef.TblId
 			for i, keyPart := range refer.KeyParts {
 				getCol := false
-				colName := keyPart.ColName.String()
+				colName := keyPart.ColName.Parts[0]
 				for _, col := range tableRef.Cols {
 					if col.Name == colName {
 						fkDef.ForeignCols[i] = col.ColId
@@ -467,6 +476,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 				}
 			}
 			createTable.TableDef.Fkeys = append(createTable.TableDef.Fkeys, fkDef)
+
 		case *tree.CheckIndex, *tree.FullTextIndex:
 			// unsupport in plan. will support in next version.
 			return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)

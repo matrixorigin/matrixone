@@ -95,84 +95,87 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
-	newRelation, err := dbSource.Relation(c.ctx, tblName)
-	if err != nil {
-		return err
-	}
+	fkDbs := qry.GetFkDbs()
+	if len(fkDbs) > 0 {
+		fkTables := qry.GetFkTables()
 
-	// need to reset Fkey.Cols
-	newTableDef, err := newRelation.TableDefs(c.ctx)
-	if err != nil {
-		return err
-	}
-	var oldCt *engine.ConstraintDef
-	var colNameToId = make(map[string]uint64)
-	for _, def := range newTableDef {
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			oldCt = ct
-			break
-		}
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			colNameToId[attr.Attr.Name] = 0 // todo need an pr merge
-		}
-	}
-	newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
-	for i, fkey := range qry.GetTableDef().Fkeys {
-		newDef := &plan.ForeignKeyDef{
-			Name:        fkey.Name,
-			Cols:        make([]uint64, len(fkey.Cols)),
-			ForeignTbl:  fkey.ForeignTbl,
-			ForeignCols: make([]uint64, len(fkey.ForeignCols)),
-			OnDelete:    fkey.OnDelete,
-			OnUpdate:    fkey.OnUpdate,
-		}
-		copy(newDef.ForeignCols, fkey.ForeignCols)
-		for idx, colName := range qry.GetFkCols()[i].Cols {
-			newDef.Cols[idx] = colNameToId[colName]
-		}
-		newFkeys[i] = newDef
-	}
-	newCt, err := makeNewCreateConstraint(oldCt, &engine.ForeignKeyDef{
-		Fkeys: newFkeys,
-	})
-	if err != nil {
-		return err
-	}
-	err = newRelation.UpdateConstraint(c.ctx, newCt)
-	if err != nil {
-		return err
-	}
-
-	// need to append TableId to parent's TableDef.RefChildTbls
-	// tblId := newRelation.GetTableID(c.ctx) // todo ,  need pr merge
-	tblId := uint64(0)
-	for i, fkTableName := range qry.GetFkTables() {
-		fkDbName := qry.GetFkDbs()[i]
-		fkDbSource, err := c.e.Database(c.ctx, fkDbName, c.proc.TxnOperator)
+		newRelation, err := dbSource.Relation(c.ctx, tblName)
 		if err != nil {
 			return err
 		}
-		fkRelation, err := fkDbSource.Relation(c.ctx, fkTableName)
+
+		// need to reset Fkey.Cols
+		newTableDef, err := newRelation.TableDefs(c.ctx)
 		if err != nil {
 			return err
 		}
-		var oldCt *engine.ConstraintDef
+		var colNameToId = make(map[string]uint64)
 		for _, def := range newTableDef {
-			if ct, ok := def.(*engine.ConstraintDef); ok {
-				oldCt = ct
-				break
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				colNameToId[attr.Attr.Name] = attr.Attr.ID
 			}
 		}
-		newRefChildDef := &engine.RefChildTableDef{
-			Tables: []uint64{tblId},
+		newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
+		for i, fkey := range qry.GetTableDef().Fkeys {
+			newDef := &plan.ForeignKeyDef{
+				Name:        fkey.Name,
+				Cols:        make([]uint64, len(fkey.Cols)),
+				ForeignTbl:  fkey.ForeignTbl,
+				ForeignCols: make([]uint64, len(fkey.ForeignCols)),
+				OnDelete:    fkey.OnDelete,
+				OnUpdate:    fkey.OnUpdate,
+			}
+			copy(newDef.ForeignCols, fkey.ForeignCols)
+			for idx, colName := range qry.GetFkCols()[i].Cols {
+				newDef.Cols[idx] = colNameToId[colName]
+			}
+			newFkeys[i] = newDef
 		}
-		newCt, err := makeNewCreateConstraint(oldCt, newRefChildDef)
+		newCt, err := makeNewCreateConstraint(nil, &engine.ForeignKeyDef{
+			Fkeys: newFkeys,
+		})
 		if err != nil {
 			return err
 		}
-		err = fkRelation.UpdateConstraint(c.ctx, newCt)
+		err = newRelation.UpdateConstraint(c.ctx, newCt)
 		if err != nil {
 			return err
+		}
+
+		// need to append TableId to parent's TableDef.RefChildTbls
+		tblId := newRelation.GetTableID(c.ctx)
+		for i, fkTableName := range fkTables {
+			fkDbName := fkDbs[i]
+			fkDbSource, err := c.e.Database(c.ctx, fkDbName, c.proc.TxnOperator)
+			if err != nil {
+				return err
+			}
+			fkRelation, err := fkDbSource.Relation(c.ctx, fkTableName)
+			if err != nil {
+				return err
+			}
+			fkTableDef, err := fkRelation.TableDefs(c.ctx)
+			if err != nil {
+				return err
+			}
+			var oldCt *engine.ConstraintDef
+			for _, def := range fkTableDef {
+				if ct, ok := def.(*engine.ConstraintDef); ok {
+					oldCt = ct
+					break
+				}
+			}
+			newRefChildDef := &engine.RefChildTableDef{
+				Tables: []uint64{tblId},
+			}
+			newCt, err := makeNewCreateConstraint(oldCt, newRefChildDef)
+			if err != nil {
+				return err
+			}
+			err = fkRelation.UpdateConstraint(c.ctx, newCt)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
