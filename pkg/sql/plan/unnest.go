@@ -26,8 +26,9 @@ var (
 		{
 			Name: "col",
 			Typ: &plan.Type{
-				Id:          int32(types.T_text),
+				Id:          int32(types.T_varchar),
 				NotNullable: false,
+				Width:       types.MaxVarcharLen,
 			},
 		},
 		{
@@ -41,15 +42,17 @@ var (
 		{
 			Name: "key",
 			Typ: &plan.Type{
-				Id:          int32(types.T_text),
+				Id:          int32(types.T_varchar),
 				NotNullable: false,
+				Width:       types.MaxVarcharLen,
 			},
 		},
 		{
 			Name: "path",
 			Typ: &plan.Type{
-				Id:          int32(types.T_text),
+				Id:          int32(types.T_varchar),
 				NotNullable: false,
+				Width:       types.MaxVarcharLen,
 			},
 		},
 		{

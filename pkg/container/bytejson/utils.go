@@ -376,26 +376,26 @@ func genIndexOrKey(pathStr string) ([]byte, []byte) {
 // for test
 func (r UnnestResult) String() string {
 	var buf bytes.Buffer
-	if val, ok := r["key"]; ok {
+	if val, ok := r["key"]; ok && val != nil {
 		buf.WriteString("key: ")
 		buf.WriteString(string(val) + ", ")
 	}
-	if val, ok := r["path"]; ok {
+	if val, ok := r["path"]; ok && val != nil {
 		buf.WriteString("path: ")
 		buf.WriteString(string(val) + ", ")
 	}
-	if val, ok := r["index"]; ok {
+	if val, ok := r["index"]; ok && val != nil {
 		buf.WriteString("index: ")
 		buf.WriteString(string(val) + ", ")
 	}
-	if val, ok := r["value"]; ok {
+	if val, ok := r["value"]; ok && val != nil {
 		buf.WriteString("value: ")
 		bj := ByteJson{}
 		bj.Unmarshal(val)
 		val, _ = bj.MarshalJSON()
 		buf.WriteString(string(val) + ", ")
 	}
-	if val, ok := r["this"]; ok {
+	if val, ok := r["this"]; ok && val != nil {
 		buf.WriteString("this: ")
 		bj := ByteJson{}
 		bj.Unmarshal(val)

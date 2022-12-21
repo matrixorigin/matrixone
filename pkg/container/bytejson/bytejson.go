@@ -458,25 +458,13 @@ func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool,
 }
 
 // Unnest returns a slice of UnnestResult, each UnnestResult contains filtered data, if param filters is nil, return all fields.
-func (bj ByteJson) Unnest(path *Path, outer, recursive bool, mode string, filters []string) ([]UnnestResult, error) {
+func (bj ByteJson) Unnest(path *Path, outer, recursive bool, mode string, filterMap map[string]struct{}) ([]UnnestResult, error) {
 	if !checkMode(mode) {
 		return nil, moerr.NewInvalidInputNoCtx("mode must be one of [object, array, both]")
 	}
 	out := make([]UnnestResult, 0, 1)
-	filterMap := genFilter(filters)
 	out, err := bj.unnest(out, path, outer, recursive, mode, filterMap)
 	return out, err
-}
-
-func genFilter(filters []string) map[string]struct{} {
-	if filters == nil {
-		return defaultFilterMap
-	}
-	filterMap := make(map[string]struct{}, len(filters))
-	for _, f := range filters {
-		filterMap[f] = struct{}{}
-	}
-	return filterMap
 }
 
 func genUnnestResult(res UnnestResult, index, key, path []byte, value, this *ByteJson, filterMap map[string]struct{}) UnnestResult {

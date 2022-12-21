@@ -44,16 +44,6 @@ type pathGenerator struct {
 	pos     int
 }
 
-var (
-	defaultFilterMap = map[string]struct{}{
-		"path":  {},
-		"key":   {},
-		"index": {},
-		"this":  {},
-		"val":   {},
-	}
-)
-
 type UnnestResult map[string][]byte
 
 const subPathIdxALL = -1
