@@ -449,6 +449,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			Alg:     plan.CompressType_Lz4,
 			Typ:     colType,
 			NotNull: true,
+			Default: &plan.Default{
+				NullAbility: false,
+			},
 			Comment: "the account_id added by the mo",
 		}
 		colMap[clusterTableAttributeName] = colDef
@@ -628,9 +631,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 		}
 
-		if tableDef.TableType == catalog.SystemClusterRel {
-			truncateTable.IsClusterTable = true
-		}
+		truncateTable.IsClusterTable = util.TableIsClusterTable(tableDef.GetTableType())
 
 		uDef, sDef := buildIndexDefs(tableDef.Defs)
 		truncateTable.IndexTableNames = make([]string, 0)
@@ -690,9 +691,9 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			// drop table if exists v0, v0 is view
 			dropTable.Table = ""
 		}
-		if tableDef.TableType == catalog.SystemClusterRel {
-			dropTable.IsClusterTable = true
-		}
+
+		dropTable.IsClusterTable = util.TableIsClusterTable(tableDef.GetTableType())
+
 		uDef, sDef := buildIndexDefs(tableDef.Defs)
 		dropTable.IndexTableNames = make([]string, 0)
 		if uDef != nil {

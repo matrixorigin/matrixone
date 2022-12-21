@@ -15,6 +15,7 @@
 package util
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"strings"
 )
@@ -46,4 +47,9 @@ func FindPrimaryKey(def *plan.TableDef) bool {
 		}
 	}
 	return false
+}
+
+// TableIsClusterTable check the table type is cluster table
+func TableIsClusterTable(tableType string) bool {
+	return tableType == catalog.SystemClusterRel
 }
