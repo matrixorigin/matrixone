@@ -15,27 +15,24 @@
 package plan
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"strings"
 )
 
 func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	if len(stmt.Tables) == 1 && stmt.TableRefs == nil {
-		return buildLeftJoinForSingleTableDelete(ctx, stmt)
+		return buildSingleTableDelete(ctx, stmt)
 	}
-	return buildLeftJoinForMultTableDelete(ctx, stmt)
+	return buildMultTableDelete(ctx, stmt)
 }
 
-// ---------------------------------------------------------------------
 // When the original table contains an index table of multi table deletion statement, build a multi table join query
 // execution plan to query the rowid of the original table and the index table respectively
 // link ref: https://dev.mysql.com/doc/refman/8.0/en/delete.html
-func buildLeftJoinForMultTableDelete(ctx CompilerContext, stmt *tree.Delete) (*Plan, error) {
+func buildMultTableDelete(ctx CompilerContext, stmt *tree.Delete) (*Plan, error) {
 	// build map between base table and alias table
 	tbinfo := &tableInfo{
 		alias2BaseNameMap: make(map[string]string),
@@ -136,10 +133,6 @@ func buildLeftJoinForMultTableDelete(ctx CompilerContext, stmt *tree.Delete) (*P
 		With:    stmt.With,
 	}
 
-	// This line of code is used for debugging and later deletion
-	sql := tree.String(selectStmt, dialect.MYSQL)
-	fmt.Printf("%s \n", sql)
-
 	// 6.build query sub plan corresponding to delete statement
 	subplan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
 	if err != nil {
@@ -178,7 +171,7 @@ func buildLeftJoinForMultTableDelete(ctx CompilerContext, stmt *tree.Delete) (*P
 // When the original table contains an index table of single table deletion statement, build a multi table join query
 // execution plan to query the rowid of the original table and the index table respectively
 // link ref: https://dev.mysql.com/doc/refman/8.0/en/delete.html
-func buildLeftJoinForSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (*Plan, error) {
+func buildSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (*Plan, error) {
 	tbinfo := &tableInfo{
 		alias2BaseNameMap: make(map[string]string),
 		baseName2AliasMap: make(map[string]string),
@@ -252,10 +245,6 @@ func buildLeftJoinForSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (
 		Limit:   stmt.Limit,
 		With:    stmt.With,
 	}
-
-	// This line of code is used for debugging and later deletion
-	sql := tree.String(selectStmt, dialect.MYSQL)
-	fmt.Printf("Rewritten SQL:\n %s \n", sql)
 
 	// 6.build query sub plan corresponding to delete statement
 	subplan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)

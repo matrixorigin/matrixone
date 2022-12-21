@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -137,6 +137,21 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			batch.Reorder(tmpBat, updateCtx.OrderAttrs)
 			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 
+			if err := colexec.UpdateInsertBatch(p.Engine, proc.Ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i], p.DBName[i], p.TblName[i]); err != nil {
+				tmpBat.Clean(proc.Mp())
+				return false, err
+			}
+
+			// fill cpkey column
+			if updateCtx.CPkeyColDef != nil {
+				err := util.FillCompositePKeyBatch(tmpBat, updateCtx.CPkeyColDef, proc)
+				if err != nil {
+					tmpBat.Clean(proc.Mp())
+					return false, err
+				}
+			}
+			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
+
 			if len(updateCtx.UniqueIndexPos) > 0 {
 				// get Primary key name of the original table
 				tableDef := p.TableDefVec[i]
@@ -160,30 +175,13 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			}
 			delBat.Clean(proc.Mp())
 
-			if err := colexec.UpdateInsertBatch(p.Engine, proc.Ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i], p.DBName[i], p.TblName[i]); err != nil {
-				tmpBat.Clean(proc.Mp())
-				return false, err
-			}
-
-			// fill cpkey column
-			if updateCtx.CPkeyColDef != nil {
-				err := util.FillCompositePKeyBatch(tmpBat, updateCtx.CPkeyColDef, proc)
-				if err != nil {
-					tmpBat.Clean(proc.Mp())
-					return false, err
-				}
-			}
-			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
-
 			err = updateCtx.TableSource.Write(proc.Ctx, tmpBat)
 			if err != nil {
 				tmpBat.Clean(proc.Mp())
 				return false, err
 			}
-
-			affectedRows += cnt
-
 			tmpBat.Clean(proc.Mp())
+			affectedRows += cnt
 		}
 	}
 

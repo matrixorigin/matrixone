@@ -162,10 +162,6 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		With:    stmt.With,
 	}
 
-	// This line of code is used for debugging and later deletion
-	sql := tree.String(selectStmt, dialect.MYSQL)
-	fmt.Printf("%s \n", sql)
-
 	usePlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
 	if err != nil {
 		return nil, err
