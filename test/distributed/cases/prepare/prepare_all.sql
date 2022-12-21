@@ -25,7 +25,7 @@ SET @si_max = 9223372036854775807;
 PREPARE s1 FROM 'SELECT * FROM numbers WHERE ui=?';
 EXECUTE s1 USING @ui_min;
 EXECUTE s1 USING @ui_max;
--- @bvt:issue#4482
+-- @bvt:issue#7278
 EXECUTE s1 USING @si_min;
 -- @bvt:issue
 EXECUTE s1 USING @si_max;
