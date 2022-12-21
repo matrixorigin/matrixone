@@ -423,7 +423,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 
 func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*update.Argument, error) {
 	updateCtxs := make([]*update.UpdateCtx, len(n.UpdateCtxs))
-	tableIDs := make([]string, len(n.UpdateCtxs))
+	tableIDs := make([]uint64, len(n.UpdateCtxs))
 	dbs := make([]engine.Database, len(n.UpdateCtxs))
 	dbNames := make([]string, len(n.UpdateCtxs))
 	tblNames := make([]string, len(n.UpdateCtxs))

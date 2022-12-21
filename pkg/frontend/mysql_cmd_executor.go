@@ -3380,6 +3380,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleDropUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.AlterView:
+			ses.InvalidatePrivilegeCache()
 		case *tree.AlterUser: //TODO
 			ses.InvalidatePrivilegeCache()
 		case *tree.CreateRole:

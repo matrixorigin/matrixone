@@ -318,6 +318,7 @@ import (
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS
+%token <str> TABLE_NUMBER TABLE_SIZE COLUMN_NUMBER TABLE_VALUES
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
@@ -375,8 +376,9 @@ import (
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
+%type <statement> show_table_num_stmt show_column_num_stmt show_table_size_stmt show_table_values_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> alter_account_stmt alter_user_stmt update_stmt use_stmt update_no_with_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt
@@ -2089,7 +2091,20 @@ analyze_stmt:
 alter_stmt:
     alter_user_stmt
 |   alter_account_stmt
+|   alter_view_stmt
 // |    alter_ddl_stmt
+
+alter_view_stmt:
+    ALTER temporary_opt view_recursive_opt VIEW exists_opt table_name column_list_opt AS select_stmt
+    {
+        $$ = &tree.AlterView{
+            Name: $6,
+            ColNames: $7,
+            AsSource: $9,
+            Temporary: $2,
+            IfExists: $5,
+        }
+    }
 
 alter_account_stmt:
     ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
@@ -2266,6 +2281,10 @@ show_stmt:
 |   show_function_status_stmt
 |   show_node_list_stmt
 |   show_locks_stmt
+|   show_table_num_stmt
+|   show_column_num_stmt
+|   show_table_size_stmt
+|   show_table_values_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -2324,6 +2343,30 @@ show_locks_stmt:
     SHOW LOCKS
     {
        $$ = &tree.ShowLocks{}
+    }
+
+show_table_num_stmt:
+    SHOW TABLE_NUMBER from_or_in_opt db_name_opt
+    {
+      $$ = &tree.ShowTableNumber{DbName: $4}
+    }
+
+show_column_num_stmt:
+    SHOW COLUMN_NUMBER table_column_name database_name_opt
+    {
+       $$ = &tree.ShowColumnNumber{Table: $3, DbName: $4}
+    }
+
+show_table_size_stmt:
+    SHOW TABLE_SIZE table_column_name database_name_opt
+    {
+       $$ = &tree.ShowTableSize{Table: $3, DbName: $4}
+    }
+
+show_table_values_stmt:
+   SHOW TABLE_VALUES table_column_name database_name_opt
+    {
+       $$ = &tree.ShowTableValues{Table: $3, DbName: $4}
     }
 
 show_target_filter_stmt:
@@ -4144,25 +4187,15 @@ func_return:
     }
 
 create_view_stmt:
-    CREATE temporary_opt view_recursive_opt VIEW table_name column_list_opt AS select_stmt
+    CREATE temporary_opt view_recursive_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt
     {
         $$ = &tree.CreateView{
-            Name: $5,
-            ColNames: $6,
-            AsSource: $8,
+            Name: $6,
+            ColNames: $7,
+            AsSource: $9,
             Temporary: $2,
-            IfNotExists: false,
+            IfNotExists: $5,
         }
-    }
-|    CREATE temporary_opt view_recursive_opt VIEW IF NOT EXISTS table_name column_list_opt AS select_stmt
-    {
-        $$ = &tree.CreateView{
-            Name: $8,
-            ColNames: $9,
-            AsSource: $11,
-            Temporary: $2,
-            IfNotExists: true,
-       }
     }
 
 view_recursive_opt:
@@ -8037,6 +8070,10 @@ reserved_keyword:
 |   GROUPS
 |   NODE
 |   LOCKS
+|   TABLE_NUMBER
+|   TABLE_SIZE
+|   COLUMN_NUMBER
+|   TABLE_VALUES
 |   RETURNS
 
 non_reserved_keyword:
