@@ -471,33 +471,33 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(ctx context.Context, vec *Vector
 
 	switch v.Typ.Oid {
 	case types.T_int8:
-		return compareNumber[int8](v, vec, funName, ctx)
+		return compareNumber[int8](ctx, v, vec, funName)
 	case types.T_int16:
-		return compareNumber[int16](v, vec, funName, ctx)
+		return compareNumber[int16](ctx, v, vec, funName)
 	case types.T_int32:
-		return compareNumber[int32](v, vec, funName, ctx)
+		return compareNumber[int32](ctx, v, vec, funName)
 	case types.T_int64:
-		return compareNumber[int64](v, vec, funName, ctx)
+		return compareNumber[int64](ctx, v, vec, funName)
 	case types.T_uint8:
-		return compareNumber[uint8](v, vec, funName, ctx)
+		return compareNumber[uint8](ctx, v, vec, funName)
 	case types.T_uint16:
-		return compareNumber[uint16](v, vec, funName, ctx)
+		return compareNumber[uint16](ctx, v, vec, funName)
 	case types.T_uint32:
-		return compareNumber[uint32](v, vec, funName, ctx)
+		return compareNumber[uint32](ctx, v, vec, funName)
 	case types.T_uint64:
-		return compareNumber[uint64](v, vec, funName, ctx)
+		return compareNumber[uint64](ctx, v, vec, funName)
 	case types.T_float32:
-		return compareNumber[float32](v, vec, funName, ctx)
+		return compareNumber[float32](ctx, v, vec, funName)
 	case types.T_float64:
-		return compareNumber[float64](v, vec, funName, ctx)
+		return compareNumber[float64](ctx, v, vec, funName)
 	case types.T_date:
-		return compareNumber[types.Date](v, vec, funName, ctx)
+		return compareNumber[types.Date](ctx, v, vec, funName)
 	case types.T_time:
-		return compareNumber[types.Time](v, vec, funName, ctx)
+		return compareNumber[types.Time](ctx, v, vec, funName)
 	case types.T_datetime:
-		return compareNumber[types.Datetime](v, vec, funName, ctx)
+		return compareNumber[types.Datetime](ctx, v, vec, funName)
 	case types.T_timestamp:
-		return compareNumber[types.Timestamp](v, vec, funName, ctx)
+		return compareNumber[types.Timestamp](ctx, v, vec, funName)
 	case types.T_decimal64:
 		switch funName {
 		case ">":
@@ -587,8 +587,11 @@ type compT interface {
 }
 
 type compFn[T compT] func(T, T) bool
+type numberType interface {
+	constraints.Integer | constraints.Float | types.Date | types.Time | types.Datetime | types.Timestamp
+}
 
-func compareNumber[T constraints.Integer | constraints.Float | types.Date | types.Time | types.Datetime | types.Timestamp](v1, v2 *Vector, fnName string, ctx context.Context) (bool, error) {
+func compareNumber[T numberType](ctx context.Context, v1, v2 *Vector, fnName string) (bool, error) {
 	switch fnName {
 	case ">":
 		return runCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 T) bool {

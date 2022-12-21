@@ -56,7 +56,7 @@ var (
 	}
 )
 
-func getConstVec(proc *process.Process, expr *plan.Expr, length int, ctx context.Context) (*vector.Vector, error) {
+func getConstVec(ctx context.Context, proc *process.Process, expr *plan.Expr, length int) (*vector.Vector, error) {
 	var vec *vector.Vector
 	t := expr.Expr.(*plan.Expr_C)
 	if t.C.GetIsnull() {
@@ -134,7 +134,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
-		return getConstVec(proc, expr, length, proc.Ctx)
+		return getConstVec(proc.Ctx, proc, expr, length)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.New(types.Type{
@@ -205,7 +205,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
-		return getConstVec(proc, expr, 1, proc.Ctx)
+		return getConstVec(proc.Ctx, proc, expr, 1)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.New(types.Type{
@@ -266,7 +266,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 	}
 }
 
-func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Expr, ctx context.Context) (*vector.Vector, error) {
+func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
 	var vec *vector.Vector
 
 	if len(bat.Zs) == 0 {
@@ -277,7 +277,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
-		return getConstVec(proc, expr, length, ctx)
+		return getConstVec(ctx, proc, expr, length)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.New(types.Type{
@@ -300,7 +300,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		}
 		vs := make([]*vector.Vector, len(t.F.Args))
 		for i := range vs {
-			v, err := EvalExprByZonemapBat(bat, proc, t.F.Args[i], ctx)
+			v, err := EvalExprByZonemapBat(ctx, bat, proc, t.F.Args[i])
 			if err != nil {
 				if proc != nil {
 					mp := make(map[*vector.Vector]uint8)
@@ -408,7 +408,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
-		return getConstVec(proc, expr, 1, proc.Ctx)
+		return getConstVec(proc.Ctx, proc, expr, 1)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.New(types.Type{

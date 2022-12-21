@@ -703,7 +703,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	if len(columns) == 0 {
 		bat := batch.NewWithSize(0)
 		defer bat.Clean(proc.Mp())
-		ifNeed, err := evalFilterExpr(expr, bat, proc, notReportErrCtx)
+		ifNeed, err := evalFilterExpr(notReportErrCtx, expr, bat, proc)
 		if err != nil {
 			return true
 		}
@@ -730,7 +730,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	}
 	bat.SetZs(buildVectors[0].Length(), proc.Mp())
 
-	ifNeed, err := evalFilterExpr(expr, bat, proc, notReportErrCtx)
+	ifNeed, err := evalFilterExpr(notReportErrCtx, expr, bat, proc)
 	if err != nil {
 		return true
 	}

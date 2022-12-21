@@ -214,7 +214,7 @@ func getZonemapDataFromMeta(ctx context.Context, columns []int, meta BlockMeta, 
 	return datas, dataTypes, nil
 }
 
-func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process, ctx context.Context) (bool, error) {
+func evalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
 	if len(bat.Vecs) == 0 { //that's constant expr
 		e, err := plan2.ConstantFold(bat, expr, proc)
 		if err != nil {
@@ -228,7 +228,7 @@ func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process, ct
 		}
 		return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
 	} else {
-		vec, err := colexec.EvalExprByZonemapBat(bat, proc, expr, ctx)
+		vec, err := colexec.EvalExprByZonemapBat(ctx, bat, proc, expr)
 		if err != nil {
 			return false, err
 		}
