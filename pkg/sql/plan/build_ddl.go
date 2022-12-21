@@ -868,3 +868,8 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		},
 	}, nil
 }
+
+func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
+	return nil, moerr.NewNotSupported(ctx.GetContext(), "statement '%v'", tree.String(stmt, dialect.MYSQL))
+	// TODO
+}
