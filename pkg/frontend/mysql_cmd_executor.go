@@ -1990,6 +1990,17 @@ func (mce *MysqlCmdExecutor) handleDropRole(ctx context.Context, dr *tree.DropRo
 	return doDropRole(ctx, mce.GetSession(), dr)
 }
 
+func (mce *MysqlCmdExecutor) handleCreateFunction(ctx context.Context, cf *tree.CreateFunction) error {
+	ses := mce.GetSession()
+	tenant := ses.GetTenantInfo()
+
+	return InitFunction(ctx, ses, tenant, cf)
+}
+
+func (mce *MysqlCmdExecutor) handleDropFunction(ctx context.Context, df *tree.DropFunction) error {
+	return doDropFunction(ctx, mce.GetSession(), df)
+}
+
 // handleGrantRole grants the role
 func (mce *MysqlCmdExecutor) handleGrantRole(ctx context.Context, gr *tree.GrantRole) error {
 	return doGrantRole(ctx, mce.GetSession(), gr)
@@ -3383,6 +3394,16 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleDropRole(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.CreateFunction:
+			selfHandle = true
+			if err = mce.handleCreateFunction(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.DropFunction:
+			selfHandle = true
+			if err = mce.handleDropFunction(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.Grant:
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
@@ -3704,6 +3725,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 			*tree.CreateView, *tree.DropView, *tree.Load, *tree.MoDump,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
+			*tree.CreateFunction, *tree.DropFunction,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,

@@ -51,6 +51,12 @@ import (
     loadParam *tree.ExternParam
     tailParam *tree.TailParameter
 
+    functionName *tree.FunctionName
+    funcArg tree.FunctionArg
+    funcArgs tree.FunctionArgs
+    funcArgDecl *tree.FunctionArgDecl
+    funcReturn *tree.ReturnType
+
     from *tree.From
     where *tree.Where
     groupBy tree.GroupBy
@@ -256,7 +262,7 @@ import (
 %token <str> LOW_PRIORITY HIGH_PRIORITY DELAYED
 
 // Create Table
-%token <str> CREATE ALTER DROP RENAME ANALYZE ADD
+%token <str> CREATE ALTER DROP RENAME ANALYZE ADD RETURNS
 %token <str> SCHEMA TABLE INDEX VIEW TO IGNORE IF PRIMARY COLUMN CONSTRAINT SPATIAL FULLTEXT FOREIGN KEY_BLOCK_SIZE
 %token <str> SHOW DESCRIBE EXPLAIN DATE ESCAPE REPAIR OPTIMIZE TRUNCATE
 %token <str> MAXVALUE PARTITION REORGANIZE LESS THAN PROCEDURE TRIGGER
@@ -268,6 +274,7 @@ import (
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS CLUSTER
 %token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL
 %token <str> PREPARE DEALLOCATE RESET
+%token <str> EXTENSION
 
 // MO table option
 %token <str> PROPERTIES
@@ -311,6 +318,7 @@ import (
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS
+%token <str> TABLE_NUMBER TABLE_SIZE COLUMN_NUMBER TABLE_VALUES
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
@@ -361,13 +369,14 @@ import (
 %type <statements> stmt_list
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
-%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt
+%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_function_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
-%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt
+%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
+%type <statement> show_table_num_stmt show_column_num_stmt show_table_size_stmt show_table_values_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> alter_account_stmt alter_user_stmt update_stmt use_stmt update_no_with_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
@@ -382,6 +391,7 @@ import (
 %type <statement> declare_stmt
 %type <statement> values_stmt
 %type <statement> mo_dump_stmt
+%type <statement> load_extension_stmt
 %type <statement> kill_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
@@ -404,6 +414,13 @@ import (
 %type <str> insert_column
 %type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_opt accounts_list
 %type <joinCond> join_condition join_condition_opt on_expression_opt
+
+%type <functionName> func_name
+%type <funcArgs> func_args_list_opt func_args_list
+%type <funcArg> func_arg
+%type <funcArgDecl> func_arg_decl
+%type <funcReturn> func_return
+%type <str> func_lang extension_lang extension_name
 
 %type <tableDefs> table_elem_list_opt table_elem_list
 %type <tableDef> table_elem constaint_def constraint_elem
@@ -636,6 +653,7 @@ stmt:
 |   grant_stmt
 |   load_data_stmt
 |   import_data_stmt
+|   load_extension_stmt
 |   do_stmt
 |   declare_stmt
 |   values_stmt
@@ -749,6 +767,14 @@ load_data_stmt:
             Accounts: $9,
         }
         $$.(*tree.Load).Param.Tail = $10
+    }
+
+load_extension_stmt:
+    LOAD extension_name
+    {
+        $$ = &tree.LoadExtension{
+            Name: tree.Identifier($2),
+        }
     }
 
 load_set_spec_opt:
@@ -2242,6 +2268,10 @@ show_stmt:
 |   show_function_status_stmt
 |   show_node_list_stmt
 |   show_locks_stmt
+|   show_table_num_stmt
+|   show_column_num_stmt
+|   show_table_size_stmt
+|   show_table_values_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -2300,6 +2330,30 @@ show_locks_stmt:
     SHOW LOCKS
     {
        $$ = &tree.ShowLocks{}
+    }
+
+show_table_num_stmt:
+    SHOW TABLE_NUMBER from_or_in_opt db_name_opt
+    {
+      $$ = &tree.ShowTableNumber{DbName: $4}
+    }
+
+show_column_num_stmt:
+    SHOW COLUMN_NUMBER table_column_name database_name_opt
+    {
+       $$ = &tree.ShowColumnNumber{Table: $3, DbName: $4}
+    }
+
+show_table_size_stmt:
+    SHOW TABLE_SIZE table_column_name database_name_opt
+    {
+       $$ = &tree.ShowTableSize{Table: $3, DbName: $4}
+    }
+
+show_table_values_stmt:
+   SHOW TABLE_VALUES table_column_name database_name_opt
+    {
+       $$ = &tree.ShowTableValues{Table: $3, DbName: $4}
     }
 
 show_target_filter_stmt:
@@ -2591,6 +2645,7 @@ drop_ddl_stmt:
 |   drop_role_stmt
 |   drop_user_stmt
 |   drop_account_stmt
+|   drop_function_stmt
 
 drop_account_stmt:
     DROP ACCOUNT exists_opt account_name
@@ -2670,6 +2725,15 @@ drop_prepare_stmt:
     DROP PREPARE stmt_name
     {
         $$ = tree.NewDeallocate(tree.Identifier($3), true)
+    }
+
+drop_function_stmt:
+    DROP FUNCTION func_name '(' func_args_list_opt ')'
+    {
+        $$ = &tree.DropFunction{
+            Name: $3,
+            Args: $5,
+        }
     }
 
 delete_stmt:
@@ -4017,6 +4081,97 @@ create_ddl_stmt:
 |   create_database_stmt
 |   create_index_stmt
 |    create_view_stmt
+|   create_function_stmt
+|   create_extension_stmt
+
+create_extension_stmt:
+    CREATE EXTENSION extension_lang AS extension_name FILE STRING
+    {
+        $$ = &tree.CreateExtension{
+            Language: $3,
+            Name: tree.Identifier($5),
+            Filename: tree.Identifier($7),
+        }
+    }
+
+extension_lang:
+    ident
+    {
+        $$ = $1
+    }
+
+extension_name:
+    ident
+    {
+        $$ = $1
+    }
+
+
+create_function_stmt:
+    CREATE FUNCTION func_name '(' func_args_list_opt ')' RETURNS func_return LANGUAGE func_lang AS STRING 
+    {
+        $$ = &tree.CreateFunction{
+            Name: $3,
+            Args: $5,
+            ReturnType: $8,
+            Language: $10,
+            Body: $12,
+        }
+    }
+
+func_name:
+    ident
+    {
+        $$ = tree.NewFuncName(tree.Identifier($1))
+    }
+
+func_args_list_opt:
+    {
+        $$ = tree.FunctionArgs(nil)
+    }
+|   func_args_list
+
+func_args_list:
+    func_arg
+    {
+        $$ = tree.FunctionArgs{$1}
+    }
+|   func_args_list ',' func_arg
+    {
+        $$ = append($1, $3)
+    }
+
+func_arg:
+    func_arg_decl
+    {
+        $$ = tree.FunctionArg($1)
+    }
+
+func_arg_decl:
+    column_type
+    {
+        $$ = tree.NewFunctionArgDecl(nil, $1, nil)
+    }
+|   column_name column_type
+    {
+        $$ = tree.NewFunctionArgDecl($1, $2, nil)
+    }
+|   column_name column_type DEFAULT literal
+    {
+        $$ = tree.NewFunctionArgDecl($1, $2, $4)
+    }
+
+func_lang:
+    ident
+    {
+        $$ = $1
+    }
+
+func_return:
+    column_type
+    {
+        $$ = tree.NewReturnType($1)
+    }
 
 create_view_stmt:
     CREATE temporary_opt view_recursive_opt VIEW table_name column_list_opt AS select_stmt
@@ -7912,6 +8067,11 @@ reserved_keyword:
 |   GROUPS
 |   NODE
 |   LOCKS
+|   TABLE_NUMBER
+|   TABLE_SIZE
+|   COLUMN_NUMBER
+|   TABLE_VALUES
+|   RETURNS
 
 non_reserved_keyword:
     ACCOUNT
@@ -8093,6 +8253,7 @@ non_reserved_keyword:
 |   HISTORY
 |   LOW_CARDINALITY
 |   S3OPTION
+|   EXTENSION
 
 func_not_keyword:
     DATE_ADD

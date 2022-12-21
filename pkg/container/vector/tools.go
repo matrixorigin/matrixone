@@ -393,7 +393,7 @@ func (v *Vector) CompareAndCheckIntersect(ctx context.Context, vec *Vector) (boo
 		}, func(t1, t2 types.Uuid) bool {
 			return t1.Le(t2)
 		})
-	case types.T_varchar, types.T_char:
+	case types.T_varchar, types.T_char, types.T_text:
 		return checkStrIntersect(v, vec, func(t1, t2 string) bool {
 			return strings.Compare(t1, t2) >= 0
 		}, func(t1, t2 string) bool {

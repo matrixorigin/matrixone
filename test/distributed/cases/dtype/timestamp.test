@@ -9,9 +9,6 @@ create table t1 (a timestamp(0) not null, primary key(a));
 insert into t1 values ('20200101000000'), ('2022-01-02'), ('2022-01-02 00:00:01'), ('2022-01-02 00:00:01.512345');
 select * from t1;
 select * from t1 where a='2022-01-02';
--- @bvt:issue#3739
-select * from t1 where a>20220102;
--- @bvt:issue
 -- @bvt:issue
 select * from t1 where a!='2022-01-02';
 update t1 set a=DATE_ADD(a ,INTERVAL 1 WEEK) where a>'20220102';
@@ -26,9 +23,6 @@ select * from t1;
 select * from t1 order by big limit 1,3;
 select * from t1 order by big limit 3 offset 1;
 
--- @bvt:issue#3739
-select min(big),max(big),max(big)-1 from t1 group by a;
--- @bvt:issue
 select big,count(big) from t1 group by big having count(big)>1 order by 2;
 drop table t1;
 create table t1 (id timestamp(6) not null default "2022-01-31 00:00:00.0000006", a int, primary key (a));
@@ -65,9 +59,6 @@ drop table if exists t1;
 drop table if exists t2;
 CREATE TABLE t_timestamp(id timestamp(6));
 INSERT INTO t_timestamp VALUES ('2020-01-01 23:59:59.999999'), ('2022-01-02 00:00:00');
--- @bvt:issue#3739
-SELECT id, id >= 20200102 FROM t_timestamp;
--- @bvt:issue
 SELECT id, id = 202020101 FROM t_timestamp;
 SELECT id, 20200101 = id FROM t_timestamp;
 SELECT * from t_timestamp WHERE id = 20200102;
@@ -79,11 +70,6 @@ SELECT * from t_timestamp WHERE id IN ('2020-01-01','2022-01-02');
 -- @bvt:issue#3271
 SELECT * from t_timestamp WHERE id IN (2.0200101e7,2.0200102e7 );
 -- @bvt:issue
--- @bvt:issue#3739
-SELECT * from t_timestamp WHERE id IN ('20220101', 20220102);
--- @bvt:issue#3739
-SELECT * from t_timestamp WHERE id IN ('2.0200101e7','2.0200102e7');
-SELECT * from t_timestamp WHERE id BETWEEN 20191231 AND 20200101;
 -- @bvt:issue#3271
 SELECT * from t_timestamp WHERE id BETWEEN 2.0200101e7 and 2.0200102e7;
 -- @bvt:issue
