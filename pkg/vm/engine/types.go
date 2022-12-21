@@ -198,7 +198,7 @@ func (c *ConstraintDef) MarshalBinary() (data []byte, err error) {
 			buf.Write([]byte(def.SecondaryIndex))
 
 		case *RefChildTableDef:
-			if err := binary.Write(buf, binary.BigEndian, UniqueIndex); err != nil {
+			if err := binary.Write(buf, binary.BigEndian, RefChildTable); err != nil {
 				return nil, err
 			}
 			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Tables))); err != nil {
@@ -277,6 +277,7 @@ func (c *ConstraintDef) UnmarshalBinary(data []byte) error {
 					return err
 				}
 				l += int(dataLength)
+				fKeys[i] = fKey
 			}
 			c.Cts = append(c.Cts, &ForeignKeyDef{fKeys})
 		}
