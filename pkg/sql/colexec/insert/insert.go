@@ -41,7 +41,7 @@ type Argument struct {
 	Affected             uint64
 	Engine               engine.Engine
 	DB                   engine.Database
-	TableID              string
+	TableID              uint64
 	CPkeyColDef          *plan.ColDef
 	DBName               string
 	TableName            string
