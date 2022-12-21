@@ -15,6 +15,7 @@
 package vector
 
 import (
+	"context"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -344,7 +345,7 @@ func (v *Vector) extend(rows int, m *mpool.MPool) error {
 }
 
 // CompareAndCheckIntersect  we use this method for eval expr by zonemap
-func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
+func (v *Vector) CompareAndCheckIntersect(ctx context.Context, vec *Vector) (bool, error) {
 	switch v.Typ.Oid {
 	case types.T_int8:
 		return checkNumberIntersect[int8](v, vec)
@@ -399,7 +400,7 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 			return strings.Compare(t1, t2) <= 0
 		})
 	}
-	return false, moerr.NewInternalErrorNoCtx("unsupport type to check intersect")
+	return false, moerr.NewInternalError(ctx, "unsupport type to check intersect")
 }
 
 func checkNumberIntersect[T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp](v1, v2 *Vector) (bool, error) {
@@ -451,52 +452,52 @@ func checkIntersect[T compT](cols1, cols2 []T, gtFun compFn[T], ltFun compFn[T])
 
 // CompareAndCheckAnyResultIsTrue  we use this method for eval expr by zonemap
 // funName must be ">,<,>=,<="
-func (v *Vector) CompareAndCheckAnyResultIsTrue(vec *Vector, funName string) (bool, error) {
+func (v *Vector) CompareAndCheckAnyResultIsTrue(ctx context.Context, vec *Vector, funName string) (bool, error) {
 	if v.Typ.Oid != vec.Typ.Oid {
-		return false, moerr.NewInternalErrorNoCtx("can not compare two vector because their type is not match")
+		return false, moerr.NewInternalError(ctx, "can not compare two vector because their type is not match")
 	}
 	if v.Length() != vec.Length() {
-		return false, moerr.NewInternalErrorNoCtx("can not compare two vector because their length is not match")
+		return false, moerr.NewInternalError(ctx, "can not compare two vector because their length is not match")
 	}
 	if v.Length() == 0 {
-		return false, moerr.NewInternalErrorNoCtx("can not compare two vector because their length is zero")
+		return false, moerr.NewInternalError(ctx, "can not compare two vector because their length is zero")
 	}
 
 	switch funName {
 	case ">", "<", ">=", "<=":
 	default:
-		return false, moerr.NewInternalErrorNoCtx("unsupport compare function")
+		return false, moerr.NewInternalError(ctx, "unsupport compare function")
 	}
 
 	switch v.Typ.Oid {
 	case types.T_int8:
-		return compareNumber[int8](v, vec, funName)
+		return compareNumber[int8](ctx, v, vec, funName)
 	case types.T_int16:
-		return compareNumber[int16](v, vec, funName)
+		return compareNumber[int16](ctx, v, vec, funName)
 	case types.T_int32:
-		return compareNumber[int32](v, vec, funName)
+		return compareNumber[int32](ctx, v, vec, funName)
 	case types.T_int64:
-		return compareNumber[int64](v, vec, funName)
+		return compareNumber[int64](ctx, v, vec, funName)
 	case types.T_uint8:
-		return compareNumber[uint8](v, vec, funName)
+		return compareNumber[uint8](ctx, v, vec, funName)
 	case types.T_uint16:
-		return compareNumber[uint16](v, vec, funName)
+		return compareNumber[uint16](ctx, v, vec, funName)
 	case types.T_uint32:
-		return compareNumber[uint32](v, vec, funName)
+		return compareNumber[uint32](ctx, v, vec, funName)
 	case types.T_uint64:
-		return compareNumber[uint64](v, vec, funName)
+		return compareNumber[uint64](ctx, v, vec, funName)
 	case types.T_float32:
-		return compareNumber[float32](v, vec, funName)
+		return compareNumber[float32](ctx, v, vec, funName)
 	case types.T_float64:
-		return compareNumber[float64](v, vec, funName)
+		return compareNumber[float64](ctx, v, vec, funName)
 	case types.T_date:
-		return compareNumber[types.Date](v, vec, funName)
+		return compareNumber[types.Date](ctx, v, vec, funName)
 	case types.T_time:
-		return compareNumber[types.Time](v, vec, funName)
+		return compareNumber[types.Time](ctx, v, vec, funName)
 	case types.T_datetime:
-		return compareNumber[types.Datetime](v, vec, funName)
+		return compareNumber[types.Datetime](ctx, v, vec, funName)
 	case types.T_timestamp:
-		return compareNumber[types.Timestamp](v, vec, funName)
+		return compareNumber[types.Timestamp](ctx, v, vec, funName)
 	case types.T_decimal64:
 		switch funName {
 		case ">":
@@ -574,10 +575,10 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(vec *Vector, funName string) (bo
 			}), nil
 		}
 	default:
-		return false, moerr.NewInternalErrorNoCtx("unsupport compare type")
+		return false, moerr.NewInternalError(ctx, "unsupport compare type")
 	}
 
-	return false, moerr.NewInternalErrorNoCtx("unsupport compare function")
+	return false, moerr.NewInternalError(ctx, "unsupport compare function")
 }
 
 type compT interface {
@@ -586,8 +587,11 @@ type compT interface {
 }
 
 type compFn[T compT] func(T, T) bool
+type numberType interface {
+	constraints.Integer | constraints.Float | types.Date | types.Time | types.Datetime | types.Timestamp
+}
 
-func compareNumber[T constraints.Integer | constraints.Float | types.Date | types.Time | types.Datetime | types.Timestamp](v1, v2 *Vector, fnName string) (bool, error) {
+func compareNumber[T numberType](ctx context.Context, v1, v2 *Vector, fnName string) (bool, error) {
 	switch fnName {
 	case ">":
 		return runCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 T) bool {
@@ -606,7 +610,7 @@ func compareNumber[T constraints.Integer | constraints.Float | types.Date | type
 			return t1 <= t2
 		}), nil
 	default:
-		return false, moerr.NewInternalErrorNoCtx("unsupport compare function")
+		return false, moerr.NewInternalError(ctx, "unsupport compare function")
 	}
 }
 

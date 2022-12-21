@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"math/rand"
-	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -431,8 +430,8 @@ func (tbl *table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 	return nil
 }
 
-func (tbl *table) GetTableID(ctx context.Context) string {
-	return strconv.FormatUint(tbl.tableId, 10)
+func (tbl *table) GetTableID(ctx context.Context) uint64 {
+	return tbl.tableId
 }
 
 func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
