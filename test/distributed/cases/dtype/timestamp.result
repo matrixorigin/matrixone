@@ -10,10 +10,6 @@ a
 select * from t1 where a='2022-01-02';
 a
 2022-01-02 00:00:00
-select * from t1 where a>20220102;
-a
-2022-01-02 00:00:01
-2022-01-02 00:00:02
 select * from t1 where a!='2022-01-02';
 a
 2020-01-01 00:00:00
@@ -45,9 +41,6 @@ a	big
 1	2022-01-01 00:00:01
 1	2022-01-02 00:00:00.000100000
 1	2022-01-03 00:00:00
-select min(big),max(big),max(big)-1 from t1 group by a;
-min(big)	max(big)	max(big)-1
-2022-01-01 00:00:00.0000	2022-01-03 00:00:00.0000	20220102999999.0000
 select big,count(big) from t1 group by big having count(big)>1 order by 2;
 big	count(big)
 drop table t1;
@@ -92,10 +85,6 @@ drop table if exists t1;
 drop table if exists t2;
 CREATE TABLE t_timestamp(id timestamp(6));
 INSERT INTO t_timestamp VALUES ('2020-01-01 23:59:59.999999'), ('2022-01-02 00:00:00');
-SELECT id, id >= 20200102 FROM t_timestamp;
-id	id >= 20200102
-2020-01-01 23:59:59.999999000	false
-2022-01-02 00:00:00	true
 SELECT id, id = 202020101 FROM t_timestamp;
 id	id = 202020101
 2020-01-01 23:59:59.999999000	false
@@ -114,13 +103,6 @@ SELECT * from t_timestamp WHERE id IN ('2020-01-01','2022-01-02');
 id
 2022-01-02 00:00:00
 SELECT * from t_timestamp WHERE id IN (2.0200101e7,2.0200102e7 );
-id
-SELECT * from t_timestamp WHERE id IN ('20220101', 20220102);
-id
-2022-01-02 00:00:00.000000
-SELECT * from t_timestamp WHERE id IN ('2.0200101e7','2.0200102e7');
-Can't cast '2.0200101e7' from VARCHAR type to TIMESTAMP type.
-SELECT * from t_timestamp WHERE id BETWEEN 20191231 AND 20200101;
 id
 SELECT * from t_timestamp WHERE id BETWEEN 2.0200101e7 and 2.0200102e7;
 id

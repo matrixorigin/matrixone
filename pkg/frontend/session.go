@@ -1655,6 +1655,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		return nil, nil
 	}
 	ctx := tcc.GetSession().GetRequestContext()
+	tableId := table.GetTableID(ctx)
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
 		return nil, nil
@@ -1665,11 +1666,13 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	var properties []*plan2.Property
 	var TableType, Createsql string
 	var CompositePkey *plan2.ColDef = nil
+	var viewSql *plan2.ViewDef
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(attr.Attr.Name)
 			col := &plan2.ColDef{
-				Name: attr.Attr.Name,
+				ColId: attr.Attr.ID,
+				Name:  attr.Attr.Name,
 				Typ: &plan2.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
@@ -1705,13 +1708,9 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				})
 			}
 		} else if viewDef, ok := def.(*engine.ViewDef); ok {
-			defs = append(defs, &plan2.TableDefType{
-				Def: &plan2.TableDef_DefType_View{
-					View: &plan2.ViewDef{
-						View: viewDef.View,
-					},
-				},
-			})
+			viewSql = &plan2.ViewDef{
+				View: viewDef.View,
+			}
 		} else if c, ok := def.(*engine.ConstraintDef); ok {
 			for _, ct := range c.Cts {
 				switch k := ct.(type) {
@@ -1792,12 +1791,14 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	}
 
 	tableDef := &plan2.TableDef{
+		TblId:         tableId,
 		Name:          tableName,
 		Cols:          cols,
 		Defs:          defs,
 		TableType:     TableType,
 		Createsql:     Createsql,
 		CompositePkey: CompositePkey,
+		ViewSql:       viewSql,
 	}
 	return obj, tableDef
 }

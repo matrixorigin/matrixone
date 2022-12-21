@@ -126,7 +126,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 	funcName := funcExpr.F.GetFunc().GetObjName()
 	funcDef := funcExpr.F.GetFunc()
 
-	funcProtoType, err := function.GetFunctionByID(funcDef.Obj & function.DistinctMask)
+	funcProtoType, err := function.GetFunctionByID(ctx, funcDef.Obj&function.DistinctMask)
 	if err != nil {
 		return result, moerr.NewInvalidInput(ctx, "invalid function or opreator '%s'", funcName)
 	}

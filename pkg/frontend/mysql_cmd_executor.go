@@ -543,7 +543,11 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 		if err != nil {
 			return err
 		}
-		_, row[3], err = r.Stats(ses.requestCtx)
+		_, err = r.Ranges(ses.requestCtx, nil)
+		if err != nil {
+			return err
+		}
+		row[3], err = r.Rows(ses.requestCtx)
 		if err != nil {
 			return err
 		}
@@ -1675,7 +1679,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		if err != nil {
 			return err
 		}
-		binder := plan2.NewDefaultBinder(nil, nil, &plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
+		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, &plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
 		planExpr, err := binder.BindExpr(sv.Where.Expr, 0, false)
 		if err != nil {
 			return err
@@ -1927,9 +1931,18 @@ func doDeallocate(ctx context.Context, ses *Session, st *tree.Deallocate) error 
 	return nil
 }
 
+func doReset(ctx context.Context, ses *Session, st *tree.Reset) error {
+	return nil
+}
+
 // handleDeallocate
 func (mce *MysqlCmdExecutor) handleDeallocate(ctx context.Context, st *tree.Deallocate) error {
 	return doDeallocate(ctx, mce.GetSession(), st)
+}
+
+// handleReset
+func (mce *MysqlCmdExecutor) handleReset(ctx context.Context, st *tree.Reset) error {
+	return doReset(ctx, mce.GetSession(), st)
 }
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
@@ -1975,6 +1988,17 @@ func (mce *MysqlCmdExecutor) handleCreateRole(ctx context.Context, cr *tree.Crea
 // handleDropRole drops the role
 func (mce *MysqlCmdExecutor) handleDropRole(ctx context.Context, dr *tree.DropRole) error {
 	return doDropRole(ctx, mce.GetSession(), dr)
+}
+
+func (mce *MysqlCmdExecutor) handleCreateFunction(ctx context.Context, cf *tree.CreateFunction) error {
+	ses := mce.GetSession()
+	tenant := ses.GetTenantInfo()
+
+	return InitFunction(ctx, ses, tenant, cf)
+}
+
+func (mce *MysqlCmdExecutor) handleDropFunction(ctx context.Context, df *tree.DropFunction) error {
+	return doDropFunction(ctx, mce.GetSession(), df)
 }
 
 // handleGrantRole grants the role
@@ -2230,11 +2254,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
 
 		// replace ? and @var with their values
-		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
+		resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
 		constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
 		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
-		err = vp.Visit()
+		err = vp.Visit(requestCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -2263,7 +2287,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// replace @var with their values
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
 		vp := plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{resetVarRule})
-		err = vp.Visit()
+		err = vp.Visit(requestCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -3267,6 +3291,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+		case *tree.Reset:
+			selfHandle = true
+			err = mce.handleReset(requestCtx, st)
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.SetVar:
 			selfHandle = true
 			err = mce.handleSetVar(requestCtx, st)
@@ -3362,6 +3392,16 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
 			if err = mce.handleDropRole(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.CreateFunction:
+			selfHandle = true
+			if err = mce.handleCreateFunction(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.DropFunction:
+			selfHandle = true
+			if err = mce.handleDropFunction(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.Grant:
@@ -3685,6 +3725,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 			*tree.CreateView, *tree.DropView, *tree.Load, *tree.MoDump,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
+			*tree.CreateFunction, *tree.DropFunction,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
@@ -3733,6 +3774,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				}
+			}
+
+		case *tree.Reset:
+			resp := mce.setResponse(i, len(cws), rspLen)
+			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
+				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
+				return retErr
 			}
 		}
 		logStatementStatus(requestCtx, ses, stmt, success, nil)
@@ -3951,6 +4000,20 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		}
 		return resp, nil
 
+	case COM_STMT_RESET:
+		data := req.GetData().([]byte)
+
+		//Payload of COM_STMT_RESET
+		stmtID := binary.LittleEndian.Uint32(data[0:4])
+		stmtName := getPrepareStmtName(stmtID)
+		sql = fmt.Sprintf("reset prepare %s", stmtName)
+		logInfo(ses.GetConciseProfile(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+		err = doComQuery(requestCtx, sql)
+		if err != nil {
+			resp = NewGeneralErrorResponse(COM_STMT_RESET, err)
+		}
+		return resp, nil
+
 	default:
 		resp = NewGeneralErrorResponse(req.GetCmd(), moerr.NewInternalError(requestCtx, "unsupported command. 0x%x", req.GetCmd()))
 	}
@@ -4037,7 +4100,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 			return false, err
 		}
 		return StatementCanBeExecutedInUncommittedTransaction(ses, preStmt.PrepareStmt)
-	case *tree.Deallocate:
+	case *tree.Deallocate, *tree.Reset:
 		return true, nil
 	case *tree.Use:
 		/*

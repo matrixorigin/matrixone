@@ -44,6 +44,7 @@ type Runner interface {
 	DebugUpdateOptions(opts ...Option)
 	GetAllCheckpoints() []*CheckpointEntry
 	CollectCheckpointsInRange(start, end types.TS) (ckpLoc string, lastEnd types.TS)
+	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
 }
 
 type DirtyCtx struct {

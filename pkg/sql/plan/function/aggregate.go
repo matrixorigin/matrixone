@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -25,7 +26,7 @@ func initAggregateFunction() {
 	var err error
 
 	for fid, fs := range aggregates {
-		err = appendFunction(fid, fs)
+		err = appendFunction(context.Background(), fid, fs)
 		if err != nil {
 			panic(err)
 		}

@@ -39,10 +39,6 @@ func compute(s1, s2 string, s3 uint32, rs []string, idx int, nsp *nulls.Nulls) {
 
 // SplitPart1 is the implementation of split_part(string, string, uint) when the 3rd arguments are not scalar.
 func SplitPart1(s1, s2 []string, s3 []uint32, nsps []*nulls.Nulls, rs []string, rnsp *nulls.Nulls) {
-	if nsps[0].Contains(0) || nsps[1].Contains(0) {
-		nulls.AddRange(rnsp, 0, uint64(len(rs)))
-		return
-	}
 	str, sep := s1[0], s2[0]
 	for i := 0; i < len(s3); i++ {
 		if nsps[2].Contains(uint64(i)) {
@@ -56,10 +52,6 @@ func SplitPart1(s1, s2 []string, s3 []uint32, nsps []*nulls.Nulls, rs []string, 
 
 // SplitPart2 is the implementation of split_part(string, string, uint) when the 2nd argument is not scalar.
 func SplitPart2(s1, s2 []string, s3 []uint32, nsps []*nulls.Nulls, rs []string, rnsp *nulls.Nulls) {
-	if nsps[0].Contains(0) || nsps[2].Contains(0) {
-		nulls.AddRange(rnsp, 0, uint64(len(rs)))
-		return
-	}
 	str, count := s1[0], s3[0]
 	for i := 0; i < len(s2); i++ {
 		if nsps[1].Contains(uint64(i)) {
@@ -73,10 +65,6 @@ func SplitPart2(s1, s2 []string, s3 []uint32, nsps []*nulls.Nulls, rs []string, 
 
 // SplitPart3 is the implementation of split_part(string, string, uint) when the 2nd and 3rd arguments are not scalar.
 func SplitPart3(s1, s2 []string, s3 []uint32, nsps []*nulls.Nulls, rs []string, rnsp *nulls.Nulls) {
-	if nsps[0].Contains(0) {
-		nulls.AddRange(rnsp, 0, uint64(len(rs)))
-		return
-	}
 	str := s1[0]
 	for i := 0; i < len(s2); i++ {
 		if nsps[1].Contains(uint64(i)) || nsps[2].Contains(uint64(i)) {
@@ -90,10 +78,6 @@ func SplitPart3(s1, s2 []string, s3 []uint32, nsps []*nulls.Nulls, rs []string, 
 
 // SplitPart4 is the implementation of split_part(string, string, uint) when the 1st arguments is not scalar.
 func SplitPart4(s1, s2 []string, s3 []uint32, nsps []*nulls.Nulls, rs []string, rnsp *nulls.Nulls) {
-	if nsps[1].Contains(0) || nsps[2].Contains(0) {
-		nulls.AddRange(rnsp, 0, uint64(len(rs)))
-		return
-	}
 	sep, count := s2[0], s3[0]
 	for i := 0; i < len(s1); i++ {
 		if nsps[0].Contains(uint64(i)) {
@@ -107,10 +91,6 @@ func SplitPart4(s1, s2 []string, s3 []uint32, nsps []*nulls.Nulls, rs []string, 
 
 // SplitPart5 is the implementation of split_part(string, string, uint) when the 1st and 3rd arguments are not scalar.
 func SplitPart5(s1, s2 []string, s3 []uint32, nsps []*nulls.Nulls, rs []string, rnsp *nulls.Nulls) {
-	if nsps[1].Contains(0) {
-		nulls.AddRange(rnsp, 0, uint64(len(rs)))
-		return
-	}
 	sep := s2[0]
 	for i := 0; i < len(s1); i++ {
 		if nsps[0].Contains(uint64(i)) || nsps[2].Contains(uint64(i)) {
@@ -124,10 +104,6 @@ func SplitPart5(s1, s2 []string, s3 []uint32, nsps []*nulls.Nulls, rs []string, 
 
 // SplitPart6 is the implementation of split_part(string, string, uint) when the 1st and 2nd arguments are not scalar.
 func SplitPart6(s1, s2 []string, s3 []uint32, nsps []*nulls.Nulls, rs []string, rnsp *nulls.Nulls) {
-	if nsps[2].Contains(0) {
-		nulls.AddRange(rnsp, 0, uint64(len(rs)))
-		return
-	}
 	count := s3[0]
 	for i := 0; i < len(s1); i++ {
 		if nsps[0].Contains(uint64(i)) || nsps[1].Contains(uint64(i)) {
