@@ -71,23 +71,12 @@ func evaluateExprF(bat *batch.Batch, expr *plan.Expr_F, proc *process.Process) (
 	return result, nil
 }
 
-func reuseMemory(result types.T, arguments []*vector.Vector) int {
-	// XXX Not Implement Now.
-	return -1
-}
-
 func evalFunction(proc *process.Process, f *function.Function, args []*vector.Vector, length int) (*vector.Vector, error) {
 	if !f.UseNewFramework {
 		return f.Fn(args, proc)
 	}
-
-	var v *vector.Vector
-	var resultWrapper any
+	var resultWrapper vector.FunctionResultWrapper
 	var err error
-	if reuseMemory(f.ReturnTyp, nil) != -1 {
-		// XXX we won't reuse the arguments' memory now.
-		panic("unexpected memory reuse for function. not implement it.")
-	}
 
 	rTyp := f.ReturnTyp.ToType()
 	numScalar := 0
@@ -107,19 +96,18 @@ func evalFunction(proc *process.Process, f *function.Function, args []*vector.Ve
 		}
 	}
 	if !f.ResultMustNotScalar && numScalar == len(args) {
-		v, resultWrapper = newFunctionResultRelated(rTyp, proc, true, length)
-		// XXX send first row to evaluate.
+		resultWrapper = newFunctionResultRelated(rTyp, proc, true, length)
+		// XXX only evaluate the first row.
 		err = f.NewFn(args, resultWrapper, proc, 1)
 	} else {
-		v, resultWrapper = newFunctionResultRelated(rTyp, proc, false, length)
-		// XXX watch that, string type only pre-alloc 24bytes for each row.
+		resultWrapper = newFunctionResultRelated(rTyp, proc, false, length)
 		err = f.NewFn(args, resultWrapper, proc, length)
 	}
 
-	return v, err
+	return resultWrapper.GetResultVector(), err
 }
 
-func newFunctionResultRelated(typ types.Type, proc *process.Process, isConst bool, length int) (*vector.Vector, any) {
+func newFunctionResultRelated(typ types.Type, proc *process.Process, isConst bool, length int) vector.FunctionResultWrapper {
 	var v *vector.Vector
 	if isConst {
 		v = vector.NewConst(typ, length)
@@ -130,9 +118,9 @@ func newFunctionResultRelated(typ types.Type, proc *process.Process, isConst boo
 	switch typ.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		// IF STRING type.
-		return v, vector.NewResultFunc[types.Varlena](v, proc.Mp())
+		return vector.NewResultFunc[types.Varlena](v, proc.Mp())
 	case types.T_json:
-		return v, vector.NewResultFunc[types.Varlena](v, proc.Mp())
+		return vector.NewResultFunc[types.Varlena](v, proc.Mp())
 	}
 
 	// Pre allocate the memory
@@ -141,45 +129,45 @@ func newFunctionResultRelated(typ types.Type, proc *process.Process, isConst boo
 	//vector.SetLength(v, 0)
 	switch typ.Oid {
 	case types.T_bool:
-		return v, vector.NewResultFunc[bool](v, proc.Mp())
+		return vector.NewResultFunc[bool](v, proc.Mp())
 	case types.T_int8:
-		return v, vector.NewResultFunc[int8](v, proc.Mp())
+		return vector.NewResultFunc[int8](v, proc.Mp())
 	case types.T_int16:
-		return v, vector.NewResultFunc[int16](v, proc.Mp())
+		return vector.NewResultFunc[int16](v, proc.Mp())
 	case types.T_int32:
-		return v, vector.NewResultFunc[int32](v, proc.Mp())
+		return vector.NewResultFunc[int32](v, proc.Mp())
 	case types.T_int64:
-		return v, vector.NewResultFunc[int64](v, proc.Mp())
+		return vector.NewResultFunc[int64](v, proc.Mp())
 	case types.T_uint8:
-		return v, vector.NewResultFunc[uint8](v, proc.Mp())
+		return vector.NewResultFunc[uint8](v, proc.Mp())
 	case types.T_uint16:
-		return v, vector.NewResultFunc[uint16](v, proc.Mp())
+		return vector.NewResultFunc[uint16](v, proc.Mp())
 	case types.T_uint32:
-		return v, vector.NewResultFunc[uint32](v, proc.Mp())
+		return vector.NewResultFunc[uint32](v, proc.Mp())
 	case types.T_uint64:
-		return v, vector.NewResultFunc[uint64](v, proc.Mp())
+		return vector.NewResultFunc[uint64](v, proc.Mp())
 	case types.T_float32:
-		return v, vector.NewResultFunc[float32](v, proc.Mp())
+		return vector.NewResultFunc[float32](v, proc.Mp())
 	case types.T_float64:
-		return v, vector.NewResultFunc[float64](v, proc.Mp())
+		return vector.NewResultFunc[float64](v, proc.Mp())
 	case types.T_date:
-		return v, vector.NewResultFunc[types.Date](v, proc.Mp())
+		return vector.NewResultFunc[types.Date](v, proc.Mp())
 	case types.T_datetime:
-		return v, vector.NewResultFunc[types.Datetime](v, proc.Mp())
+		return vector.NewResultFunc[types.Datetime](v, proc.Mp())
 	case types.T_time:
-		return v, vector.NewResultFunc[types.Time](v, proc.Mp())
+		return vector.NewResultFunc[types.Time](v, proc.Mp())
 	case types.T_timestamp:
-		return v, vector.NewResultFunc[types.Timestamp](v, proc.Mp())
+		return vector.NewResultFunc[types.Timestamp](v, proc.Mp())
 	case types.T_decimal64:
-		return v, vector.NewResultFunc[types.Decimal64](v, proc.Mp())
+		return vector.NewResultFunc[types.Decimal64](v, proc.Mp())
 	case types.T_decimal128:
-		return v, vector.NewResultFunc[types.Decimal128](v, proc.Mp())
+		return vector.NewResultFunc[types.Decimal128](v, proc.Mp())
 	case types.T_TS:
-		return v, vector.NewResultFunc[types.TS](v, proc.Mp())
+		return vector.NewResultFunc[types.TS](v, proc.Mp())
 	case types.T_Rowid:
-		return v, vector.NewResultFunc[types.Rowid](v, proc.Mp())
+		return vector.NewResultFunc[types.Rowid](v, proc.Mp())
 	case types.T_uuid:
-		return v, vector.NewResultFunc[types.Uuid](v, proc.Mp())
+		return vector.NewResultFunc[types.Uuid](v, proc.Mp())
 	}
 	panic(fmt.Sprintf("unexpected type %s for function result", typ))
 }

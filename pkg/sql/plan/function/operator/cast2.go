@@ -43,8 +43,6 @@ func NewCast(parameters []*vector.Vector, result any, proc *process.Process, len
 
 	from := parameters[0]
 	switch fromType.Oid {
-	case types.T_any:
-		// XXX Test And Do it at last.
 	case types.T_bool:
 		s := vector.GenerateFunctionFixedTypeParameter[bool](from)
 		return boolToOthers(proc.Ctx, &s, toType, result, length)
@@ -96,7 +94,7 @@ func NewCast(parameters []*vector.Vector, result any, proc *process.Process, len
 	case types.T_timestamp:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from)
 		return timestampToOthers(proc, &s, toType, result, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		s := vector.GenerateFunctionStrParameter(from)
 		return strTypeToOthers(proc, &s, toType, result, length)
 	case types.T_uuid:
@@ -119,7 +117,10 @@ func boolToOthers(ctx context.Context,
 	toType types.Type, result any, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+		rs := result.(*vector.FunctionResult[bool])
+		rs.SetFromParameter(source)
+		return nil
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		// string type.
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return boolToStr(source, rs, length)
@@ -163,7 +164,8 @@ func int8ToOthers(ctx context.Context,
 		return numericToBool[int8](source, rs, length)
 	case types.T_int8:
 		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[int8, int8](source, rs, length)
+		rs.SetFromParameter(source)
+		return nil
 	case types.T_int16:
 		rs := result.(*vector.FunctionResult[int16])
 		return numericToNumeric[int8, int16](source, rs, length)
@@ -197,7 +199,7 @@ func int8ToOthers(ctx context.Context,
 	case types.T_decimal128:
 		rs := result.(*vector.FunctionResult[types.Decimal128])
 		return signedToDecimal128[int8](source, rs, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		// string type.
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return signedToStr[int8](source, rs, length)
@@ -223,7 +225,8 @@ func int16ToOthers(ctx context.Context,
 		return numericToNumeric[int16, int8](source, rs, length)
 	case types.T_int16:
 		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[int16, int16](source, rs, length)
+		rs.SetFromParameter(source)
+		return nil
 	case types.T_int32:
 		rs := result.(*vector.FunctionResult[int32])
 		return numericToNumeric[int16, int32](source, rs, length)
@@ -254,7 +257,7 @@ func int16ToOthers(ctx context.Context,
 	case types.T_decimal128:
 		rs := result.(*vector.FunctionResult[types.Decimal128])
 		return signedToDecimal128[int16](source, rs, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		// string type.
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return signedToStr[int16](source, rs, length)
@@ -283,7 +286,8 @@ func int32ToOthers(ctx context.Context,
 		return numericToNumeric[int32, int16](source, rs, length)
 	case types.T_int32:
 		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[int32, int32](source, rs, length)
+		rs.SetFromParameter(source)
+		return nil
 	case types.T_int64:
 		rs := result.(*vector.FunctionResult[int64])
 		return numericToNumeric[int32, int64](source, rs, length)
@@ -311,7 +315,7 @@ func int32ToOthers(ctx context.Context,
 	case types.T_decimal128:
 		rs := result.(*vector.FunctionResult[types.Decimal128])
 		return signedToDecimal128[int32](source, rs, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		// string type.
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return signedToStr[int32](source, rs, length)
@@ -343,7 +347,8 @@ func int64ToOthers(ctx context.Context,
 		return numericToNumeric[int64, int32](source, rs, length)
 	case types.T_int64:
 		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[int64, int64](source, rs, length)
+		rs.SetFromParameter(source)
+		return nil
 	case types.T_uint8:
 		rs := result.(*vector.FunctionResult[uint8])
 		return numericToNumeric[int64, uint8](source, rs, length)
@@ -368,7 +373,7 @@ func int64ToOthers(ctx context.Context,
 	case types.T_decimal128:
 		rs := result.(*vector.FunctionResult[types.Decimal128])
 		return signedToDecimal128[int64](source, rs, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		// string type.
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return signedToStr[int64](source, rs, length)
@@ -403,7 +408,8 @@ func uint8ToOthers(ctx context.Context,
 		return numericToNumeric[uint8, int64](source, rs, length)
 	case types.T_uint8:
 		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[uint8, uint8](source, rs, length)
+		rs.SetFromParameter(source)
+		return nil
 	case types.T_uint16:
 		rs := result.(*vector.FunctionResult[uint16])
 		return numericToNumeric[uint8, uint16](source, rs, length)
@@ -425,7 +431,7 @@ func uint8ToOthers(ctx context.Context,
 	case types.T_decimal128:
 		rs := result.(*vector.FunctionResult[types.Decimal128])
 		return unsignedToDecimal128[uint8](source, rs, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return unsignedToStr[uint8](source, rs, length)
 	case types.T_time:
@@ -462,7 +468,8 @@ func uint16ToOthers(ctx context.Context,
 		return numericToNumeric[uint16, uint8](source, rs, length)
 	case types.T_uint16:
 		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[uint16, uint16](source, rs, length)
+		rs.SetFromParameter(source)
+		return nil
 	case types.T_uint32:
 		rs := result.(*vector.FunctionResult[uint32])
 		return numericToNumeric[uint16, uint32](source, rs, length)
@@ -481,7 +488,7 @@ func uint16ToOthers(ctx context.Context,
 	case types.T_decimal128:
 		rs := result.(*vector.FunctionResult[types.Decimal128])
 		return unsignedToDecimal128[uint16](source, rs, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return unsignedToStr[uint16](source, rs, length)
 	case types.T_time:
@@ -521,7 +528,8 @@ func uint32ToOthers(ctx context.Context,
 		return numericToNumeric[uint32, uint16](source, rs, length)
 	case types.T_uint32:
 		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[uint32, uint32](source, rs, length)
+		rs.SetFromParameter(source)
+		return nil
 	case types.T_uint64:
 		rs := result.(*vector.FunctionResult[uint64])
 		return numericToNumeric[uint32, uint64](source, rs, length)
@@ -537,7 +545,7 @@ func uint32ToOthers(ctx context.Context,
 	case types.T_decimal128:
 		rs := result.(*vector.FunctionResult[types.Decimal128])
 		return unsignedToDecimal128[uint32](source, rs, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return unsignedToStr[uint32](source, rs, length)
 	case types.T_time:
@@ -580,7 +588,8 @@ func uint64ToOthers(ctx context.Context,
 		return numericToNumeric[uint64, uint32](source, rs, length)
 	case types.T_uint64:
 		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[uint64, uint64](source, rs, length)
+		rs.SetFromParameter(source)
+		return nil
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
 		return numericToNumeric[uint64, float32](source, rs, length)
@@ -593,7 +602,7 @@ func uint64ToOthers(ctx context.Context,
 	case types.T_decimal128:
 		rs := result.(*vector.FunctionResult[types.Decimal128])
 		return unsignedToDecimal128[uint64](source, rs, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return unsignedToStr[uint64](source, rs, length)
 	case types.T_time:
@@ -639,7 +648,8 @@ func float32ToOthers(ctx context.Context,
 		return numericToNumeric[float32, uint64](source, rs, length)
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[float32, float32](source, rs, length)
+		rs.SetFromParameter(source)
+		return nil
 	case types.T_float64:
 		rs := result.(*vector.FunctionResult[float64])
 		return numericToNumeric[float32, float64](source, rs, length)
@@ -649,7 +659,7 @@ func float32ToOthers(ctx context.Context,
 	case types.T_decimal128:
 		rs := result.(*vector.FunctionResult[types.Decimal128])
 		return floatToDecimal128[float32](source, rs, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return floatToStr[float32](source, rs, length)
 	}
@@ -692,14 +702,15 @@ func float64ToOthers(ctx context.Context,
 		return numericToNumeric[float64, float32](source, rs, length)
 	case types.T_float64:
 		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[float64, float64](source, rs, length)
+		rs.SetFromParameter(source)
+		return nil
 	case types.T_decimal64:
 		rs := result.(*vector.FunctionResult[types.Decimal64])
 		return floatToDecimal64[float64](source, rs, length)
 	case types.T_decimal128:
 		rs := result.(*vector.FunctionResult[types.Decimal128])
 		return floatToDecimal128[float64](source, rs, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return floatToStr[float64](source, rs, length)
 	}
@@ -710,6 +721,10 @@ func dateToOthers(proc *process.Process,
 	source *vector.FunctionParameter[types.Date],
 	toType types.Type, result any, length int) error {
 	switch toType.Oid {
+	case types.T_date:
+		rs := result.(*vector.FunctionResult[types.Date])
+		rs.SetFromParameter(source)
+		return nil
 	case types.T_time:
 		rs := result.(*vector.FunctionResult[types.Time])
 		return dateToTime(source, rs, length)
@@ -723,7 +738,7 @@ func dateToOthers(proc *process.Process,
 	case types.T_datetime:
 		rs := result.(*vector.FunctionResult[types.Datetime])
 		return dateToDatetime(source, rs, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return dateToStr(source, rs, length)
 	}
@@ -744,10 +759,14 @@ func datetimeToOthers(proc *process.Process,
 	case types.T_date:
 		rs := result.(*vector.FunctionResult[types.Date])
 		return datetimeToDate(source, rs, length)
+	case types.T_datetime:
+		rs := result.(*vector.FunctionResult[types.Datetime])
+		rs.SetFromParameter(source)
+		return nil
 	case types.T_time:
 		rs := result.(*vector.FunctionResult[types.Time])
 		return datetimeToTime(source, rs, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return datetimeToStr(source, rs, length)
 	}
@@ -769,7 +788,11 @@ func timestampToOthers(proc *process.Process,
 	case types.T_datetime:
 		rs := result.(*vector.FunctionResult[types.Datetime])
 		return timestampToDatetime(proc.Ctx, source, rs, length, zone)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_timestamp:
+		rs := result.(*vector.FunctionResult[types.Timestamp])
+		rs.SetFromParameter(source)
+		return nil
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return timestampToStr(source, rs, length, zone)
 	}
@@ -786,7 +809,11 @@ func timeToOthers(ctx context.Context,
 	case types.T_datetime:
 		rs := result.(*vector.FunctionResult[types.Datetime])
 		return timeToDatetime(source, rs, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_time:
+		rs := result.(*vector.FunctionResult[types.Time])
+		rs.SetFromParameter(source)
+		return nil
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return timeToStr(source, rs, length)
 	case types.T_decimal64:
@@ -815,6 +842,10 @@ func decimal64ToOthers(ctx context.Context,
 	case types.T_uint64:
 		rs := result.(*vector.FunctionResult[uint64])
 		return decimal64ToUnsigned(ctx, source, rs, 64, length)
+	case types.T_decimal64:
+		rs := result.(*vector.FunctionResult[types.Decimal64])
+		rs.SetFromParameter(source)
+		return nil
 	case types.T_decimal128:
 		rs := result.(*vector.FunctionResult[types.Decimal128])
 		return decimal64ToDecimal128(source, rs, length)
@@ -824,7 +855,7 @@ func decimal64ToOthers(ctx context.Context,
 	case types.T_time:
 		rs := result.(*vector.FunctionResult[types.Time])
 		return decimal64ToTime(source, rs, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return decimal64ToStr(source, rs, length)
 	}
@@ -847,6 +878,10 @@ func decimal128ToOthers(ctx context.Context,
 	case types.T_decimal64:
 		rs := result.(*vector.FunctionResult[types.Decimal64])
 		return decimal128ToDecimal64(source, rs, length)
+	case types.T_decimal128:
+		rs := result.(*vector.FunctionResult[types.Decimal128])
+		rs.SetFromParameter(source)
+		return nil
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
 		return decimal128ToFloat[float32](ctx, source, rs, length, 32)
@@ -859,7 +894,7 @@ func decimal128ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := result.(*vector.FunctionResult[types.Timestamp])
 		return decimal128ToTimestamp(source, rs, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		rs := result.(*vector.FunctionResult[types.Varlena])
 		return decimal128ToStr(source, rs, length)
 	}
@@ -932,6 +967,9 @@ func strTypeToOthers(proc *process.Process,
 			zone = proc.SessionInfo.TimeZone
 		}
 		return strToTimestamp(source, rs, zone, length)
+	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
+		rs := result.(*vector.FunctionResult[types.Varlena])
+		return strToStr(proc.Ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", source.GetType(), toType))
 }
@@ -950,12 +988,22 @@ func uuidToOthers(ctx context.Context,
 func tsToOthers(ctx context.Context,
 	source *vector.FunctionParameter[types.TS],
 	toType types.Type, result any, length int) error {
+	if toType.Oid == types.T_TS {
+		rs := result.(*vector.FunctionResult[types.TS])
+		rs.SetFromParameter(source)
+		return nil
+	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from ts to %s", toType))
 }
 
 func rowidToOthers(ctx context.Context,
 	source *vector.FunctionParameter[types.Rowid],
 	toType types.Type, result any, length int) error {
+	if toType.Oid == types.T_Rowid {
+		rs := result.(*vector.FunctionResult[types.Rowid])
+		rs.SetFromParameter(source)
+		return nil
+	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from rowid to %s", toType))
 }
 
@@ -2387,6 +2435,49 @@ func strToTimestamp(
 				return err
 			}
 			if err = to.Append(val, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func strToStr(
+	ctx context.Context,
+	from *vector.FunctionParameter[types.Varlena],
+	to *vector.FunctionResult[types.Varlena], length int) error {
+	totype := to.GetType()
+	destLen := int(totype.Width)
+	var i uint64
+	var l = uint64(length)
+	if totype.Oid != types.T_text {
+		for i = 0; i < l; i++ {
+			v, null := from.GetStrValue(i)
+			if null {
+				if err := to.AppendStr(nil, true); err != nil {
+					return err
+				}
+			}
+			// check the length.
+			s := *(*string)(unsafe.Pointer(&v))
+			if len(s) > destLen {
+				return moerr.NewInternalError(ctx, fmt.Sprintf(
+					"Src length %v is larger than Dest length %v", len(s), destLen))
+			}
+			if err := to.AppendStr(v, false); err != nil {
+				return err
+			}
+		}
+	} else {
+		for i = 0; i < l; i++ {
+			v, null := from.GetStrValue(i)
+			if null {
+				if err := to.AppendStr(nil, true); err != nil {
+					return err
+				}
+			}
+			// check the length.
+			if err := to.AppendStr(v, false); err != nil {
 				return err
 			}
 		}

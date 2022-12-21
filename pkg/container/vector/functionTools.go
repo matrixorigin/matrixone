@@ -39,6 +39,10 @@ type FunctionParameter[T types.FixedSizeT] struct {
 	nullMap      *bitmap.Bitmap
 }
 
+type FunctionResultWrapper interface {
+	GetResultVector() *Vector
+}
+
 func NewResultFunc[T types.FixedSizeT](v *Vector, mp *mpool.MPool) *FunctionResult[T] {
 	return &FunctionResult[T]{
 		vec: v,
@@ -62,6 +66,10 @@ func (fr *FunctionResult[T]) SetFromParameter(fp *FunctionParameter[T]) {
 	// clean the old memory
 	fr.vec.Free(fr.mp)
 	fr.vec = fp.sourceVector
+}
+
+func (fr *FunctionResult[T]) GetResultVector() *Vector {
+	return fr.vec
 }
 
 func (fr *FunctionResult[T]) ConvertToParameter() FunctionParameter[T] {
