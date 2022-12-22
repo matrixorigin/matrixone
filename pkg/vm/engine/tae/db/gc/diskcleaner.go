@@ -36,16 +36,30 @@ const (
 	MessgeNormal
 )
 
+// diskCleaner is the main structure of gc operation,
+// and provides "JobFactory" to let tae notify itself
+// to perform a gc
 type diskCleaner struct {
-	fs        *objectio.ObjectFS
-	ckpClient checkpoint.Client
-	catalog   *catalog.Catalog
+	fs *objectio.ObjectFS
 
+	// ckpClient is used to get the instance of the specified checkpoint
+	ckpClient checkpoint.Client
+
+	// Parsing checkpoint needs to use catalog instance
+	catalog *catalog.Catalog
+
+	// maxConsumed is to mark which checkpoint the current diskCleaner has processed,
+	// through which you can get the next checkpoint to be processed
 	maxConsumed atomic.Pointer[checkpoint.CheckpointEntry]
-	inputs      struct {
+
+	// inputs is to record the currently valid GCTable
+	inputs struct {
 		sync.RWMutex
 		tables []*GCTable
 	}
+
+	// delTask is a worker that deletes s3‘s objects or local
+	// files, and only one worker will run
 	delTask *GCTask
 
 	processQueue sm.Queue
