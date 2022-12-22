@@ -138,8 +138,12 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		}
 	}
 
-	if isClusterTable && columnIndexOfAccountId == -1 {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "there is no account_id in the cluster table")
+	if isClusterTable {
+		if columnIndexOfAccountId == -1 {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "there is no account_id in the cluster table")
+		} else if columnIndexOfAccountId >= int32(colCount) {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "the index of the account_id in the cluster table is invalid")
+		}
 	}
 
 	//the column definitions that does not be specified after the table name

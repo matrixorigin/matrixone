@@ -136,10 +136,65 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		p.ExplicitCols = append(p.ExplicitCols, p.OtherCols...)
 	}
 
-	//TODO: for every account
-	if err := fillBatch(ctx, bat, p, stmt.Rows.Select.(*tree.ValuesClause).Rows, c.proc); err != nil {
+	insertRows := stmt.Rows.Select.(*tree.ValuesClause).Rows
+	if err = fillBatch(ctx, bat, p, insertRows, c.proc); err != nil {
 		return 0, err
 	}
+
+	if p.GetIsClusterTable() {
+		columns := p.GetColumns()
+		if p.GetColumnIndexOfAccountId() < 0 || p.GetColumnIndexOfAccountId() >= int32(len(columns)) {
+			return 0, moerr.NewInternalError(ctx, "the index of the account_id in the cluster table is invalid")
+		}
+		accountIdColumnDef := p.ExplicitCols[p.GetColumnIndexOfAccountId()]
+		accountIdRows := columns[p.GetColumnIndexOfAccountId()].GetColumn()
+		accountIdExpr := accountIdRows[0]
+		accountIdConst := accountIdExpr.GetC()
+		tmpBat := batch.NewWithSize(0)
+		tmpBat.Zs = []int64{1}
+		for _, accountId := range p.GetAccountIDs() {
+			//update accountId in the accountIdExpr
+			accountIdConst.Value = &plan.Const_U32Val{U32Val: accountId}
+			accountIdVec := bat.Vecs[p.GetColumnIndexOfAccountId()]
+			//clean vector before fill it
+			vector.Clean(accountIdVec, c.proc.Mp())
+			//the j th row
+			for j := 0; j < len(accountIdRows); j++ {
+				err = fillRow(ctx, tmpBat,
+					accountIdColumnDef,
+					insertRows,
+					int(p.GetColumnIndexOfAccountId()), j,
+					accountIdExpr,
+					accountIdVec,
+					c.proc)
+				if err != nil {
+					return 0, err
+				}
+			}
+
+			if err = writeBatch(ctx, dbSource, relation, c, p, bat); err != nil {
+				return 0, err
+			}
+		}
+		//the count of insert rows x the count of accounts
+		return uint64(len(p.Columns[0].Column)) * uint64(len(p.GetAccountIDs())), nil
+	} else {
+		if err = writeBatch(ctx, dbSource, relation, c, p, bat); err != nil {
+			return 0, err
+		}
+		return uint64(len(p.Columns[0].Column)), nil
+	}
+}
+
+// writeBatch saves the data into the storage
+// and updates the auto increment table, index table.
+func writeBatch(ctx context.Context,
+	dbSource engine.Database,
+	relation engine.Relation,
+	c *Compile,
+	p *plan.InsertValues,
+	bat *batch.Batch) error {
+	var err error
 	/**
 	Null value check:
 	There are two cases to validate for not null
@@ -153,16 +208,17 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		// check for case 1 and case 2
 		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].Typ.AutoIncr) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].Typ.AutoIncr) {
 			if nulls.Any(bat.Vecs[i].Nsp) {
-				return 0, moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
+				return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
 			}
 		}
 	}
 	batch.Reorder(bat, p.OrderAttrs)
 
-	//TODO: fix auto increment for the cluster table
+	//update the auto increment table
 	if err = colexec.UpdateInsertValueBatch(c.e, ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
-		return 0, err
+		return err
 	}
+	//complement composite primary key
 	if p.CompositePkey != nil {
 		err := util.FillCompositePKeyBatch(bat, p.CompositePkey, c.proc)
 		if err != nil {
@@ -171,24 +227,25 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 				for _, name := range names {
 					if p.OrderAttrs[i] == name {
 						if nulls.Any(bat.Vecs[i].Nsp) {
-							return 0, moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", p.OrderAttrs[i]))
+							return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", p.OrderAttrs[i]))
 						}
 					}
 				}
 			}
 		}
 	}
+	//update unique index table
 	if p.UniqueIndexDef != nil {
 		for i := range p.UniqueIndexDef.IndexNames {
 			if p.UniqueIndexDef.TableExists[i] {
 				indexRelation, err := dbSource.Relation(ctx, p.UniqueIndexDef.TableNames[i])
 				if err != nil {
-					return 0, err
+					return err
 				}
 				indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, p.UniqueIndexDef.Fields[i].Cols, c.proc)
 				if rowNum != 0 {
-					if err := indexRelation.Write(ctx, indexBatch); err != nil {
-						return 0, err
+					if err = indexRelation.Write(ctx, indexBatch); err != nil {
+						return err
 					}
 				}
 				indexBatch.Clean(c.proc.Mp())
@@ -196,11 +253,38 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		}
 	}
 
-	if err := relation.Write(ctx, bat); err != nil {
-		return 0, err
-	}
+	return relation.Write(ctx, bat)
+}
 
-	return uint64(len(p.Columns[0].Column)), nil
+/*
+fillRow evaluates the expression and put the result into the targetVec.
+tmpBat: store temporal vector
+colDef: the definition meta of the column
+rows: data rows of the insert
+colIdx,rowIdx: which column, which row
+expr: the expression to be evaluated at the position (colIdx,rowIdx)
+targetVec: the destination where the evaluated result of expr saved into
+*/
+func fillRow(ctx context.Context,
+	tmpBat *batch.Batch,
+	colDef *plan.ColDef,
+	rows []tree.Exprs, colIdx, rowIdx int,
+	expr *plan.Expr,
+	targetVec *vector.Vector,
+	proc *process.Process) error {
+	vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+	if err != nil {
+		return y.MakeInsertError(ctx, targetVec.Typ.Oid, colDef, rows, colIdx, rowIdx, err)
+	}
+	if vec.Size() == 0 {
+		vec = vec.ConstExpand(proc.Mp())
+	}
+	if err := vector.UnionOne(targetVec, vec, 0, proc.Mp()); err != nil {
+		vec.Free(proc.Mp())
+		return err
+	}
+	vec.Free(proc.Mp())
+	return err
 }
 
 // XXX: is this just fill batch with first vec.Col[0]?
@@ -208,20 +292,24 @@ func fillBatch(ctx context.Context, bat *batch.Batch, p *plan.InsertValues, rows
 	tmpBat := batch.NewWithSize(0)
 	tmpBat.Zs = []int64{1}
 
+	//the i th column
 	for i, v := range bat.Vecs {
+		//skip fill vector of the account_id in the cluster table here
+		if p.GetIsClusterTable() && int32(i) == p.GetColumnIndexOfAccountId() {
+			continue
+		}
+		//the j th row
 		for j, expr := range p.Columns[i].Column {
-			vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+			//evaluate the expr at position (i,j) and
+			//save into
+			err := fillRow(ctx, tmpBat, p.ExplicitCols[i],
+				rows, i, j,
+				expr,
+				v,
+				proc)
 			if err != nil {
-				return y.MakeInsertError(ctx, v.Typ.Oid, p.ExplicitCols[i], rows, i, j, err)
-			}
-			if vec.Size() == 0 {
-				vec = vec.ConstExpand(proc.Mp())
-			}
-			if err := vector.UnionOne(v, vec, 0, proc.Mp()); err != nil {
-				vec.Free(proc.Mp())
 				return err
 			}
-			vec.Free(proc.Mp())
 		}
 	}
 	bat.SetZs(len(rows), proc.Mp())
