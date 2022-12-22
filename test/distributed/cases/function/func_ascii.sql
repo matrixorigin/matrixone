@@ -1,0 +1,17 @@
+select ascii(0);
+select ascii(-1);
+select ascii(1);
+select ascii(2);
+select ascii(null);
+select ascii('a');
+select ascii('ab');
+select ascii('qaq');
+select ascii('啊咋');
+select ascii('1.2121');
+select ascii('1.2121a');
+select ascii('');
+select ascii(' ');
+create table t1 (c1 int);
+insert into t1 values (1), (2), (3),(null);
+select ascii(c1) from t1;
+select ascii(null) from t1;

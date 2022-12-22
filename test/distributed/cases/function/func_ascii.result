@@ -1,0 +1,53 @@
+select ascii(0);
+ascii(0)
+48
+select ascii(-1);
+ascii(-1)
+45
+select ascii(1);
+ascii(1)
+49
+select ascii(2);
+ascii(2)
+50
+select ascii(null);
+ascii(null)
+null
+select ascii('a');
+ascii(a)
+97
+select ascii('ab');
+ascii(ab)
+97
+select ascii('qaq');
+ascii(qaq)
+113
+select ascii('啊咋');
+ascii(啊咋)
+229
+select ascii('1.2121');
+ascii(1.2121)
+49
+select ascii('1.2121a');
+ascii(1.2121a)
+49
+select ascii('');
+ascii()
+0
+select ascii(' ');
+ascii( )
+32
+create table t1 (c1 int);
+insert into t1 values (1), (2), (3),(null);
+select ascii(c1) from t1;
+ascii(c1)
+49
+50
+51
+null
+select ascii(null) from t1;
+ascii(null)
+null
+null
+null
+null
