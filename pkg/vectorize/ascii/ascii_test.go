@@ -26,7 +26,7 @@ func TestIntBatch(t *testing.T) {
 	got := make([]uint8, len(xs))
 	nsp := nulls.NewWithSize(len(xs))
 	nsp.Set(10)
-	IntBatch(xs, got, nsp)
+	IntBatch(xs, 0, got, nsp)
 
 	require.Equal(t, want[:10], got[:10])
 	require.Equal(t, want[11:], got[11:])
@@ -38,19 +38,7 @@ func TestUintBatch(t *testing.T) {
 	got := make([]uint8, len(xs))
 	nsp := nulls.NewWithSize(len(xs))
 	nsp.Set(10)
-	UintBatch(xs, got, nsp)
-	require.Equal(t, want[:10], got[:10])
-	require.Equal(t, want[11:], got[11:])
-}
-
-func TestFloatBatch(t *testing.T) {
-	xs := []float64{0, 1, 9, 10, 99, 100, 999, 1000, 9999, 10000, -1, -9, -10, -99, 45654345678908765.123456789}
-	want := []uint8{'0', '1', '9', '1', '9', '1', '9', '1', '9', '1', '-', '-', '-', '-', '4'}
-	got := make([]uint8, len(xs))
-	nsp := nulls.NewWithSize(len(xs))
-	nsp.Set(10)
-	FloatBatch(xs, got, nsp)
-
+	UintBatch(xs, 0, got, nsp)
 	require.Equal(t, want[:10], got[:10])
 	require.Equal(t, want[11:], got[11:])
 }

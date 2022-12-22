@@ -47,19 +47,6 @@ func TestAsciiUint(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestAsciiFloat(t *testing.T) {
-	proc := testutil.NewProc()
-	v1 := testutil.MakeScalarFloat32(1, 1)
-	_, err := AsciiFloat[float32]([]*vector.Vector{v1}, proc)
-	require.NoError(t, err)
-	v1.Nsp.Set(0)
-	_, err = AsciiFloat[float32]([]*vector.Vector{v1}, proc)
-	require.NoError(t, err)
-	v1 = testutil.MakeFloat32Vector([]float32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, nil)
-	_, err = AsciiFloat[float32]([]*vector.Vector{v1}, proc)
-	require.NoError(t, err)
-}
-
 func TestAsciiString(t *testing.T) {
 	proc := testutil.NewProc()
 	v1 := testutil.MakeScalarVarchar("1", 1)
