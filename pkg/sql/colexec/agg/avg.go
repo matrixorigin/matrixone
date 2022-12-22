@@ -65,6 +65,9 @@ func (a *Avg[T]) Grows(cnt int) {
 
 func (a *Avg[T]) Eval(vs []float64) []float64 {
 	for i := range vs {
+		if a.Cnts[i] == 0 {
+			continue
+		}
 		vs[i] = vs[i] / float64(a.Cnts[i])
 	}
 	return vs
@@ -112,6 +115,9 @@ func (a *Decimal64Avg) Grows(cnt int) {
 
 func (a *Decimal64Avg) Eval(vs []types.Decimal128) []types.Decimal128 {
 	for i := range vs {
+		if a.Cnts[i] == 0 {
+			continue
+		}
 		vs[i] = vs[i].DivInt64(a.Cnts[i])
 	}
 	return vs
@@ -177,6 +183,9 @@ func (a *Decimal128Avg) Grows(cnt int) {
 
 func (a *Decimal128Avg) Eval(vs []types.Decimal128) []types.Decimal128 {
 	for i := range vs {
+		if a.Cnts[i] == 0 {
+			continue
+		}
 		vs[i] = vs[i].DivInt64(a.Cnts[i])
 	}
 	return vs
