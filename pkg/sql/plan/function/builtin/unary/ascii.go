@@ -21,6 +21,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var (
+	intStartMap = map[types.T]int{
+		types.T_int8:  3,
+		types.T_int16: 2,
+		types.T_int32: 1,
+		types.T_int64: 0,
+	}
+	uintStartMap = map[types.T]int{
+		types.T_uint8:  3,
+		types.T_uint16: 2,
+		types.T_uint32: 1,
+		types.T_uint64: 0,
+	}
+)
+
 func AsciiInt[T types.Ints](vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
 	vec := vecs[0]
 	resultType := types.T_uint8.ToType()
@@ -33,11 +48,12 @@ func AsciiInt[T types.Ints](vecs []*vector.Vector, proc *process.Process) (ret *
 		ret = proc.AllocScalarNullVector(resultType)
 		return
 	}
+	start := intStartMap[vec.Typ.Oid]
 	if vec.IsScalar() {
 		ret = proc.AllocScalarVector(resultType)
 		rs := vector.MustTCols[uint8](ret)
 		v := vector.MustTCols[T](vec)[0]
-		rs[0] = ascii.IntSingle(int64(v))
+		rs[0] = ascii.IntSingle(int64(v), start)
 		return
 	}
 	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.Nsp)
@@ -46,7 +62,7 @@ func AsciiInt[T types.Ints](vecs []*vector.Vector, proc *process.Process) (ret *
 	}
 	rs := vector.MustTCols[uint8](ret)
 	vs := vector.MustTCols[T](vec)
-	ascii.IntBatch(vs, rs, ret.Nsp)
+	ascii.IntBatch(vs, start, rs, ret.Nsp)
 	return
 }
 
@@ -62,11 +78,12 @@ func AsciiUint[T types.UInts](vecs []*vector.Vector, proc *process.Process) (ret
 		ret = proc.AllocScalarNullVector(resultType)
 		return
 	}
+	start := uintStartMap[vec.Typ.Oid]
 	if vec.IsScalar() {
 		ret = proc.AllocScalarVector(resultType)
 		rs := vector.MustTCols[uint8](ret)
 		v := vector.MustTCols[T](vec)[0]
-		rs[0] = ascii.UintSingle(uint64(v))
+		rs[0] = ascii.UintSingle(uint64(v), start)
 		return
 	}
 	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.Nsp)
@@ -75,36 +92,7 @@ func AsciiUint[T types.UInts](vecs []*vector.Vector, proc *process.Process) (ret
 	}
 	rs := vector.MustTCols[uint8](ret)
 	vs := vector.MustTCols[T](vec)
-	ascii.UintBatch(vs, rs, ret.Nsp)
-	return
-}
-
-func AsciiFloat[T types.Floats](vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
-	vec := vecs[0]
-	resultType := types.T_uint8.ToType()
-	defer func() {
-		if err != nil && ret != nil {
-			ret.Free(proc.Mp())
-		}
-	}()
-	if vec.IsScalarNull() {
-		ret = proc.AllocScalarNullVector(resultType)
-		return
-	}
-	if vec.IsScalar() {
-		ret = proc.AllocScalarVector(resultType)
-		rs := vector.MustTCols[uint8](ret)
-		v := vector.MustTCols[T](vec)[0]
-		rs[0] = ascii.FloatSingle(float64(v))
-		return
-	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.Nsp)
-	if err != nil {
-		return
-	}
-	rs := vector.MustTCols[uint8](ret)
-	vs := vector.MustTCols[T](vec)
-	ascii.FloatBatch(vs, rs, ret.Nsp)
+	ascii.UintBatch(vs, start, rs, ret.Nsp)
 	return
 }
 

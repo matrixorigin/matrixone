@@ -2815,18 +2815,6 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_uint8,
 				Fn:        unary.AsciiUint[uint64],
 			},
-			{
-				Index:     11,
-				Args:      []types.T{types.T_float32},
-				ReturnTyp: types.T_uint8,
-				Fn:        unary.AsciiFloat[float32],
-			},
-			{
-				Index:     12,
-				Args:      []types.T{types.T_float64},
-				ReturnTyp: types.T_uint8,
-				Fn:        unary.AsciiFloat[float64],
-			},
 		},
 	},
 }

@@ -26,21 +26,21 @@ var (
 	floats = []float64{1e256, 1e128, 1e64, 1e32, 1e16, 1e8, 1e4, 1e2, 1e1}
 )
 
-func IntBatch[T types.Ints](xs []T, rs []uint8, nsp *nulls.Nulls) {
+func IntBatch[T types.Ints](xs []T, start int, rs []uint8, nsp *nulls.Nulls) {
 	for i, x := range xs {
 		if nsp.Contains(uint64(i)) {
 			continue
 		}
-		rs[i] = IntSingle(int64(x))
+		rs[i] = IntSingle(int64(x), start)
 	}
 }
 
-func IntSingle[T types.Ints](val T) uint8 {
+func IntSingle[T types.Ints](val T, start int) uint8 {
 	if val < 0 {
 		return '-'
 	}
 	i64Val := int64(val)
-	for _, v := range ints {
+	for _, v := range ints[start:] {
 		if i64Val >= v {
 			i64Val /= v
 		}
@@ -48,18 +48,18 @@ func IntSingle[T types.Ints](val T) uint8 {
 	return uint8(i64Val) + '0'
 }
 
-func UintBatch[T types.UInts](xs []T, rs []uint8, nsp *nulls.Nulls) {
+func UintBatch[T types.UInts](xs []T, start int, rs []uint8, nsp *nulls.Nulls) {
 	for i, x := range xs {
 		if nsp.Contains(uint64(i)) {
 			continue
 		}
-		rs[i] = UintSingle(x)
+		rs[i] = UintSingle(x, start)
 	}
 }
 
-func UintSingle[T types.UInts](val T) uint8 {
+func UintSingle[T types.UInts](val T, start int) uint8 {
 	u64Val := uint64(val)
-	for _, v := range uints {
+	for _, v := range uints[start:] {
 		if u64Val >= v {
 			u64Val /= v
 		}
@@ -67,21 +67,21 @@ func UintSingle[T types.UInts](val T) uint8 {
 	return uint8(u64Val) + '0'
 }
 
-func FloatBatch[T types.Floats](xs []T, rs []uint8, nsp *nulls.Nulls) {
+func FloatBatch[T types.Floats](xs []T, start int, rs []uint8, nsp *nulls.Nulls) {
 	for i, x := range xs {
 		if nsp.Contains(uint64(i)) {
 			continue
 		}
-		rs[i] = FloatSingle(x)
+		rs[i] = FloatSingle(x, start)
 	}
 }
 
-func FloatSingle[T types.Floats](val T) uint8 {
+func FloatSingle[T types.Floats](val T, start int) uint8 {
 	if val < 0 {
 		return '-'
 	}
 	f64Val := float64(val)
-	for _, v := range floats {
+	for _, v := range floats[start:] {
 		if f64Val >= v {
 			f64Val /= v
 		}

@@ -950,7 +950,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		tp := types.T(args[0].Typ.Id)
 		switch {
-		case types.IsFloat(tp), types.IsString(tp), types.IsInteger(tp):
+		case types.IsString(tp), types.IsInteger(tp):
 		default:
 			targetTp := types.T_varchar.ToType()
 			args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetTp), false)
