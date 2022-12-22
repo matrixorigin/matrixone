@@ -155,3 +155,7 @@ func (rel *baseRelation) GetTableID(_ context.Context) string {
 func (rel *baseRelation) GetRelationID(_ context.Context) uint64 {
 	return rel.handle.ID()
 }
+
+func (rel *baseRelation) MaxAndMinValues(ctx context.Context, expr *plan.Expr) ([][2]any, []uint8, error) {
+	return nil, nil, nil
+}
