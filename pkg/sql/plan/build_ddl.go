@@ -431,11 +431,11 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			for i, keyPart := range def.KeyParts {
 				getCol := false
 				colName := keyPart.ColName.Parts[0]
-				for _, col := range createTable.TableDef.Cols {
+				for idx, col := range createTable.TableDef.Cols {
 					if col.Name == colName {
-						// need to reset to ColId after created.
-						// we don't known the ColId now, and we will use fkCols to get ColId after table created
-						fkDef.Cols[i] = 0
+						// for now ColumnId is equal ColumnIndex in creating
+						// if rule change, you need to reset to ColId after created.
+						fkDef.Cols[i] = uint64(idx)
 						fkCols.Cols[i] = colName
 						getCol = true
 						break
@@ -460,14 +460,38 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			if tableRef == nil {
 				return moerr.NewNoSuchTable(ctx.GetContext(), ctx.DefaultDatabase(), fkTableName)
 			}
+			// TODO check circular reference. need new interface CompilerContext.ResolveByTblId
+
 			fkDef.ForeignTbl = tableRef.TblId
+			columnNames := make(map[string]uint64)
+			uniqueColumn := make(map[uint64]bool)
+			for _, col := range tableRef.Cols {
+				columnNames[col.Name] = col.ColId
+				if col.Primary {
+					uniqueColumn[col.ColId] = true
+				}
+			}
+			/// now tableRef.Indices is empty, you can not test it
+			for _, index := range tableRef.Indices {
+				if index.Unique {
+					if len(index.Parts) == 1 {
+						if colId, ok := getColIdFromExpr(index.Parts[0]); ok {
+							uniqueColumn[colId] = true
+						}
+					}
+				}
+			}
 			for i, keyPart := range refer.KeyParts {
 				getCol := false
 				colName := keyPart.ColName.Parts[0]
 				for _, col := range tableRef.Cols {
 					if col.Name == colName {
-						fkDef.ForeignCols[i] = col.ColId
-						getCol = true
+						if _, ok := uniqueColumn[col.ColId]; ok {
+							fkDef.ForeignCols[i] = col.ColId
+							getCol = true
+						} else {
+							return moerr.NewInternalError(ctx.GetContext(), "reference column '%v' is not unique constraint(Unique index or Primary Key)", colName)
+						}
 						break
 					}
 				}
@@ -549,6 +573,22 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 		}
 	}
 	return nil
+}
+
+func getColIdFromExpr(e *plan.Expr) (uint64, bool) {
+	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_F:
+		for _, expr := range exprImpl.F.Args {
+			if colId, ok := getColIdFromExpr(expr); ok {
+				return colId, ok
+			}
+		}
+		return 0, false
+	case *plan.Expr_Col:
+		return uint64(exprImpl.Col.ColPos), true
+	default:
+		return 0, false
+	}
 }
 
 func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {

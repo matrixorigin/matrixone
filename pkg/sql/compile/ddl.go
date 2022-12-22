@@ -98,52 +98,52 @@ func (s *Scope) CreateTable(c *Compile) error {
 	fkDbs := qry.GetFkDbs()
 	if len(fkDbs) > 0 {
 		fkTables := qry.GetFkTables()
-
 		newRelation, err := dbSource.Relation(c.ctx, tblName)
 		if err != nil {
 			return err
 		}
+		tblId := newRelation.GetTableID(c.ctx)
 
-		// need to reset Fkey.Cols
-		newTableDef, err := newRelation.TableDefs(c.ctx)
-		if err != nil {
-			return err
-		}
-		var colNameToId = make(map[string]uint64)
-		for _, def := range newTableDef {
-			if attr, ok := def.(*engine.AttributeDef); ok {
-				colNameToId[attr.Attr.Name] = attr.Attr.ID
-			}
-		}
-		newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
-		for i, fkey := range qry.GetTableDef().Fkeys {
-			newDef := &plan.ForeignKeyDef{
-				Name:        fkey.Name,
-				Cols:        make([]uint64, len(fkey.Cols)),
-				ForeignTbl:  fkey.ForeignTbl,
-				ForeignCols: make([]uint64, len(fkey.ForeignCols)),
-				OnDelete:    fkey.OnDelete,
-				OnUpdate:    fkey.OnUpdate,
-			}
-			copy(newDef.ForeignCols, fkey.ForeignCols)
-			for idx, colName := range qry.GetFkCols()[i].Cols {
-				newDef.Cols[idx] = colNameToId[colName]
-			}
-			newFkeys[i] = newDef
-		}
-		newCt, err := makeNewCreateConstraint(nil, &engine.ForeignKeyDef{
-			Fkeys: newFkeys,
-		})
-		if err != nil {
-			return err
-		}
-		err = newRelation.UpdateConstraint(c.ctx, newCt)
-		if err != nil {
-			return err
-		}
+		// for now ColumnId is equal ColumnIndex, and we have a bug to UpdateConstraint after created immediately
+		// so i comment these codes. if you want to remove these code, let @ouyuanning known.
+		// newTableDef, err := newRelation.TableDefs(c.ctx)
+		// if err != nil {
+		// 	return err
+		// }
+		// var colNameToId = make(map[string]uint64)
+		// for _, def := range newTableDef {
+		// 	if attr, ok := def.(*engine.AttributeDef); ok {
+		// 		colNameToId[attr.Attr.Name] = attr.Attr.ID
+		// 	}
+		// }
+		// newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
+		// for i, fkey := range qry.GetTableDef().Fkeys {
+		// 	newDef := &plan.ForeignKeyDef{
+		// 		Name:        fkey.Name,
+		// 		Cols:        make([]uint64, len(fkey.Cols)),
+		// 		ForeignTbl:  fkey.ForeignTbl,
+		// 		ForeignCols: make([]uint64, len(fkey.ForeignCols)),
+		// 		OnDelete:    fkey.OnDelete,
+		// 		OnUpdate:    fkey.OnUpdate,
+		// 	}
+		// 	copy(newDef.ForeignCols, fkey.ForeignCols)
+		// 	for idx, colName := range qry.GetFkCols()[i].Cols {
+		// 		newDef.Cols[idx] = colNameToId[colName]
+		// 	}
+		// 	newFkeys[i] = newDef
+		// }
+		// newCt, err := makeNewCreateConstraint(nil, &engine.ForeignKeyDef{
+		// 	Fkeys: newFkeys,
+		// })
+		// if err != nil {
+		// 	return err
+		// }
+		// err = newRelation.UpdateConstraint(c.ctx, newCt)
+		// if err != nil {
+		// 	return err
+		// }
 
 		// need to append TableId to parent's TableDef.RefChildTbls
-		tblId := newRelation.GetTableID(c.ctx)
 		for i, fkTableName := range fkTables {
 			fkDbName := fkDbs[i]
 			fkDbSource, err := c.e.Database(c.ctx, fkDbName, c.proc.TxnOperator)

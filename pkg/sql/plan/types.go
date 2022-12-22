@@ -59,6 +59,7 @@ type UniqueIndexDef = plan.UniqueIndexDef
 type SecondaryIndexDef = plan.SecondaryIndexDef
 type OrderBySpec = plan.OrderBySpec
 type CreateTable_FkColName = plan.CreateTable_FkColName
+type ForeignKeyDef = plan.ForeignKeyDef
 
 type CompilerContext interface {
 	// Default database/schema in context
