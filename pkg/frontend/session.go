@@ -171,6 +171,8 @@ type Session struct {
 	skipAuth bool
 
 	sqlSourceType string
+
+	planCache *planCache
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
@@ -229,6 +231,8 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 			maxCnt: MoDefaultErrorCount,
 		},
 		cache: &privilegeCache{},
+
+		planCache: newPlanCache(100),
 	}
 	if flag {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
@@ -301,6 +305,24 @@ func (bgs *BackgroundSession) Close() {
 		bgs.Session.gSysVars = nil
 	}
 	bgs = nil
+}
+
+func (ses *Session) cachePlan(sql string, stmts []*tree.Statement, plans []*plan.Plan) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.planCache.cache(sql, stmts, plans)
+}
+
+func (ses *Session) getCachedPlan(sql string) *cachedPlan {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.planCache.get(sql)
+}
+
+func (ses *Session) isCached(sql string) bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.planCache.isCached(sql)
 }
 
 func (ses *Session) setSkipCheckPrivilege(b bool) {

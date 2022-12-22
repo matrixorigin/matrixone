@@ -2226,7 +2226,9 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
 	defer RecordStatementTxnID(requestCtx, cwft.ses)
-	cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+	if cwft.plan == nil {
+		cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -2442,6 +2444,15 @@ GetComputationWrapper gets the execs from the computation engine
 */
 var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cw []ComputationWrapper = nil
+	if cached := ses.getCachedPlan(sql); cached != nil {
+		for i, stmt := range cached.stmts {
+			tcw := InitTxnComputationWrapper(ses, *stmt, proc)
+			tcw.plan = cached.plans[i]
+			cw = append(cw, tcw)
+		}
+		return cw, nil
+	}
+
 	var stmts []tree.Statement = nil
 	var cmdFieldStmt *InternalCmdFieldList
 	var err error
@@ -3816,6 +3827,18 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		return err
 	handleNext:
 	} // end of for
+
+	if !ses.isCached(sql) {
+		plans := make([]*plan.Plan, len(cws))
+		stmts := make([]*tree.Statement, len(cws))
+		for i, cw := range cws {
+			if cwft, ok := cw.(*TxnComputationWrapper); ok {
+				plans[i] = cwft.plan
+				stmts[i] = &cwft.stmt
+			}
+		}
+		ses.cachePlan(sql, stmts, plans)
+	}
 
 	return nil
 }
