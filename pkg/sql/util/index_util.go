@@ -72,7 +72,8 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 	if len(b.Attrs) > 1 {
 		b.Attrs[1] = catalog.IndexTablePrimaryColName
 	}
-	bitMap := new(nulls.Nulls)
+	//bitMap := new(nulls.Nulls)
+	var bitMap *nulls.Nulls
 	if isCompoundIndex {
 		cIndexVecMap := make(map[string]*vector.Vector)
 		for num, attrName := range attrs {

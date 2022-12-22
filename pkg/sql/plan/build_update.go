@@ -55,7 +55,7 @@ type updateCol struct {
 // UpdateTableList: information list of tables to be updated
 type UpdateTableList struct {
 	updateTables []*updateTableInfo // table information list to be updated
-	selectList   tree.SelectExprs
+	//selectList   tree.SelectExprs
 }
 
 func NewUpdateTableList() *UpdateTableList {
