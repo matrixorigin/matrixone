@@ -672,6 +672,10 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols
 	}
 	for idx, attr := range attrs {
 		if val, ok := jsonMap[attr]; ok {
+			if val == nil {
+				res = append(res, NULL_FLAG)
+				continue
+			}
 			tp := cols[idx].Typ.Id
 			if tp != int32(types.T_json) {
 				res = append(res, fmt.Sprintf("%v", val))
@@ -711,6 +715,10 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo())
 	}
 	for idx, val := range jsonArray {
+		if val == nil {
+			res = append(res, NULL_FLAG)
+			continue
+		}
 		tp := cols[idx].Typ.Id
 		if tp != int32(types.T_json) {
 			res = append(res, fmt.Sprintf("%v", val))
