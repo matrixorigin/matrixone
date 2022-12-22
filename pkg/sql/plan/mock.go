@@ -270,14 +270,14 @@ func NewMockCompilerContext() *MockCompilerContext {
 	//+----------+--------------+------+------+---------+-------+--------------------------------+
 	//| Field    | Type         | Null | Key  | Default | Extra | Comment                        |
 	//+----------+--------------+------+------+---------+-------+--------------------------------+
-	//| empno    | INT UNSIGNED | YES  | UNI  | NULL    |       | 雇员编号                        |
-	//| ename    | VARCHAR(15)  | YES  | UNI  | NULL    |       | 雇员姓名                        |
-	//| job      | VARCHAR(10)  | YES  |      | NULL    |       | 雇员职位                        |
-	//| mgr      | INT UNSIGNED | YES  |      | NULL    |       | 雇员对应的领导的编号              |
-	//| hiredate | DATE         | YES  |      | NULL    |       | 雇员的雇佣日期                   |
-	//| sal      | DECIMAL(7,2) | YES  |      | NULL    |       | 雇员的基本工资                   |
-	//| comm     | DECIMAL(7,2) | YES  |      | NULL    |       | 奖金                           |
-	//| deptno   | INT UNSIGNED | YES  |      | NULL    |       | 所在部门                        |
+	//| empno    | INT UNSIGNED | YES  | UNI  | NULL    |       |                                |
+	//| ename    | VARCHAR(15)  | YES  | UNI  | NULL    |       |                                |
+	//| job      | VARCHAR(10)  | YES  |      | NULL    |       |                                |
+	//| mgr      | INT UNSIGNED | YES  |      | NULL    |       |                                |
+	//| hiredate | DATE         | YES  |      | NULL    |       |                                |
+	//| sal      | DECIMAL(7,2) | YES  |      | NULL    |       |                                |
+	//| comm     | DECIMAL(7,2) | YES  |      | NULL    |       |                                |
+	//| deptno   | INT UNSIGNED | YES  |      | NULL    |       |                                |
 	//+----------+--------------+------+------+---------+-------+--------------------------------+
 
 	indexTestSchema["emp"] = &Schema{
@@ -336,9 +336,9 @@ func NewMockCompilerContext() *MockCompilerContext {
 	//+--------+--------------+------+------+---------+-------+--------------------+
 	//| Field  | Type         | Null | Key  | Default | Extra | Comment            |
 	//+--------+--------------+------+------+---------+-------+--------------------+
-	//| deptno | INT UNSIGNED | YES  | UNI  | NULL    |       | 部门编号           |
-	//| dname  | VARCHAR(15)  | YES  |      | NULL    |       | 部门名称           |
-	//| loc    | VARCHAR(50)  | YES  |      | NULL    |       | 部门所在位置       |
+	//| deptno | INT UNSIGNED | YES  | UNI  | NULL    |       |                    |
+	//| dname  | VARCHAR(15)  | YES  |      | NULL    |       |                    |
+	//| loc    | VARCHAR(50)  | YES  |      | NULL    |       |                    |
 	//+--------+--------------+------+------+---------+-------+--------------------+
 	indexTestSchema["dept"] = &Schema{
 		cols: []col{

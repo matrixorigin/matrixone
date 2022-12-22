@@ -156,7 +156,7 @@ func TestCompactUniqueKeyBatch(t *testing.T) {
 			attrs: []string{"a", "b", "c"},
 			f: &plan.Field{
 				Parts: []string{
-					"a",
+					"b",
 				},
 				Cols: []*plan.ColDef{
 					{
@@ -172,10 +172,10 @@ func TestCompactUniqueKeyBatch(t *testing.T) {
 		nulls.Add(test.vecs[1].Nsp, 1)
 		if JudgeIsCompositeIndexColumn(test.f) {
 			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f.Parts, "", test.proc)
-			require.Equal(t, b.Vecs[0].Length(), 2)
+			require.Equal(t, 2, b.Vecs[0].Length())
 		} else {
 			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f.Parts, "", test.proc)
-			require.Equal(t, b.Vecs[0].Length(), 2)
+			require.Equal(t, 2, b.Vecs[0].Length())
 		}
 	}
 }
