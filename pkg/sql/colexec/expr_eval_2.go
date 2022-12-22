@@ -17,59 +17,11 @@ package colexec
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-// EvalExpr a new method to evaluate an expr.
-func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
-	batchLen := len(bat.Zs)
-	if batchLen == 0 {
-		return vector.NewConstNullWithData(types.Type{Oid: types.T(expr.Typ.GetId())}, 1, proc.Mp()), nil
-	}
-
-	e := expr.Expr
-	switch t := e.(type) {
-	case *plan.Expr_F:
-		return evaluateExprF(bat, t, proc)
-	default:
-		return OldEvalExpr(bat, proc, expr)
-	}
-}
-
-// evaluateExprF a new compute method for expr_f.
-func evaluateExprF(bat *batch.Batch, expr *plan.Expr_F, proc *process.Process) (*vector.Vector, error) {
-	var result *vector.Vector
-
-	fid := expr.F.GetFunc().GetObj()
-	f, err := function.GetFunctionByID(proc.Ctx, fid)
-	if err != nil {
-		return nil, err
-	}
-
-	args := make([]*vector.Vector, len(expr.F.Args))
-	for i := range args {
-		args[i], err = EvalExpr(bat, proc, expr.F.Args[i])
-		if err != nil {
-			break
-		}
-	}
-	if err != nil {
-		cleanVectorsExceptList(proc, args, bat.Vecs)
-		return nil, err
-	}
-
-	result, err = evalFunction(proc, f, args, len(bat.Zs))
-	cleanVectorsExceptList(proc, args, bat.Vecs)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
-}
 
 func evalFunction(proc *process.Process, f *function.Function, args []*vector.Vector, length int) (*vector.Vector, error) {
 	if !f.UseNewFramework {
