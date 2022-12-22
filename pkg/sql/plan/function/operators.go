@@ -2741,9 +2741,8 @@ var operators = map[int]Functions{
 		},
 		Overloads: []Function{
 			{
-				Index:            0,
-				UseNewFramework:  true,
-				AcceptScalarNull: false,
+				Index:           0,
+				UseNewFramework: true,
 				FlexibleReturnType: func(parameters []types.Type) types.Type {
 					return parameters[1]
 				},

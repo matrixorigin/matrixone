@@ -98,10 +98,8 @@ func evalFunction(proc *process.Process, f *function.Function, args []*vector.Ve
 					fmt.Sprintf("the %dth parameter of function can only be constant", i+1))
 			}
 		}
-		if !f.AcceptScalarNull && args[i].IsScalarNull() {
-			return vector.NewConstNull(rTyp, length), nil
-		}
 	}
+
 	if !f.ResultMustNotScalar && numScalar == len(args) {
 		resultWrapper = newFunctionResultRelated(rTyp, proc, true, length)
 		// XXX only evaluate the first row.

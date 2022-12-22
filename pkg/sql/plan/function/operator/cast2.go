@@ -33,6 +33,17 @@ import (
 
 // XXX need this one to make a pretty function register.
 var supportedTypeCast = map[types.T][]types.T{
+	types.T_any: {
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_date, types.T_datetime,
+		types.T_time, types.T_timestamp,
+	},
+
 	types.T_bool: {
 		types.T_bool,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -258,12 +269,14 @@ func IfTypeCastSupported(sourceType, targetType types.T) bool {
 	return false
 }
 
-func NewCast(parameters []*vector.Vector, result any, proc *process.Process, length int) error {
+func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	// Cast Parameter1 as Type Parameter2
 	fromType := parameters[0].GetType()
 	toType := parameters[1].GetType()
 	from := parameters[0]
 	switch fromType.Oid {
+	case types.T_any: // scalar null
+		return scalarNullToOthers(proc.Ctx, toType, result, length)
 	case types.T_bool:
 		s := vector.GenerateFunctionFixedTypeParameter[bool](from)
 		return boolToOthers(proc.Ctx, &s, toType, result, length)
@@ -333,9 +346,52 @@ func NewCast(parameters []*vector.Vector, result any, proc *process.Process, len
 		fmt.Sprintf("CAST does not support the source type '%s'", fromType))
 }
 
+func scalarNullToOthers(ctx context.Context,
+	totype types.Type, result vector.FunctionResultWrapper, length int) error {
+	switch totype.Oid {
+	case types.T_bool:
+		return appendNulls[bool](result, length)
+	case types.T_int8:
+		return appendNulls[int8](result, length)
+	case types.T_int16:
+		return appendNulls[int16](result, length)
+	case types.T_int32:
+		return appendNulls[int32](result, length)
+	case types.T_int64:
+		return appendNulls[int64](result, length)
+	case types.T_uint8:
+		return appendNulls[uint8](result, length)
+	case types.T_uint16:
+		return appendNulls[uint16](result, length)
+	case types.T_uint32:
+		return appendNulls[uint32](result, length)
+	case types.T_uint64:
+		return appendNulls[uint64](result, length)
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		return appendNulls[types.Varlena](result, length)
+	case types.T_float32:
+		return appendNulls[float32](result, length)
+	case types.T_float64:
+		return appendNulls[float64](result, length)
+	case types.T_decimal64:
+		return appendNulls[types.Decimal64](result, length)
+	case types.T_decimal128:
+		return appendNulls[types.Decimal128](result, length)
+	case types.T_date:
+		return appendNulls[types.Date](result, length)
+	case types.T_datetime:
+		return appendNulls[types.Datetime](result, length)
+	case types.T_time:
+		return appendNulls[types.Time](result, length)
+	case types.T_timestamp:
+		return appendNulls[types.Timestamp](result, length)
+	}
+	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from NULL to %s", totype))
+}
+
 func boolToOthers(ctx context.Context,
 	source *vector.FunctionParameter[bool],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := result.(*vector.FunctionResult[bool])
@@ -378,7 +434,7 @@ func boolToOthers(ctx context.Context,
 // uint and float are the same.
 func int8ToOthers(ctx context.Context,
 	source *vector.FunctionParameter[int8],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := result.(*vector.FunctionResult[bool])
@@ -436,7 +492,7 @@ func int8ToOthers(ctx context.Context,
 
 func int16ToOthers(ctx context.Context,
 	source *vector.FunctionParameter[int16],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := result.(*vector.FunctionResult[bool])
@@ -494,7 +550,7 @@ func int16ToOthers(ctx context.Context,
 
 func int32ToOthers(ctx context.Context,
 	source *vector.FunctionParameter[int32],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := result.(*vector.FunctionResult[bool])
@@ -552,7 +608,7 @@ func int32ToOthers(ctx context.Context,
 
 func int64ToOthers(ctx context.Context,
 	source *vector.FunctionParameter[int64],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := result.(*vector.FunctionResult[bool])
@@ -610,7 +666,7 @@ func int64ToOthers(ctx context.Context,
 
 func uint8ToOthers(ctx context.Context,
 	source *vector.FunctionParameter[uint8],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := result.(*vector.FunctionResult[bool])
@@ -667,7 +723,7 @@ func uint8ToOthers(ctx context.Context,
 
 func uint16ToOthers(ctx context.Context,
 	source *vector.FunctionParameter[uint16],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := result.(*vector.FunctionResult[bool])
@@ -724,7 +780,7 @@ func uint16ToOthers(ctx context.Context,
 
 func uint32ToOthers(ctx context.Context,
 	source *vector.FunctionParameter[uint32],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := result.(*vector.FunctionResult[bool])
@@ -781,7 +837,7 @@ func uint32ToOthers(ctx context.Context,
 
 func uint64ToOthers(ctx context.Context,
 	source *vector.FunctionParameter[uint64],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := result.(*vector.FunctionResult[bool])
@@ -838,7 +894,7 @@ func uint64ToOthers(ctx context.Context,
 
 func float32ToOthers(ctx context.Context,
 	source *vector.FunctionParameter[float32],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := result.(*vector.FunctionResult[bool])
@@ -889,7 +945,7 @@ func float32ToOthers(ctx context.Context,
 
 func float64ToOthers(ctx context.Context,
 	source *vector.FunctionParameter[float64],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := result.(*vector.FunctionResult[bool])
@@ -940,7 +996,7 @@ func float64ToOthers(ctx context.Context,
 
 func dateToOthers(proc *process.Process,
 	source *vector.FunctionParameter[types.Date],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_date:
 		rs := result.(*vector.FunctionResult[types.Date])
@@ -968,7 +1024,7 @@ func dateToOthers(proc *process.Process,
 
 func datetimeToOthers(proc *process.Process,
 	source *vector.FunctionParameter[types.Datetime],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_timestamp:
 		zone := time.Local
@@ -996,7 +1052,7 @@ func datetimeToOthers(proc *process.Process,
 
 func timestampToOthers(proc *process.Process,
 	source *vector.FunctionParameter[types.Timestamp],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	zone := time.Local
 	if proc != nil {
 		zone = proc.SessionInfo.TimeZone
@@ -1022,7 +1078,7 @@ func timestampToOthers(proc *process.Process,
 
 func timeToOthers(ctx context.Context,
 	source *vector.FunctionParameter[types.Time],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_date:
 		rs := result.(*vector.FunctionResult[types.Date])
@@ -1049,7 +1105,7 @@ func timeToOthers(ctx context.Context,
 
 func decimal64ToOthers(ctx context.Context,
 	source *vector.FunctionParameter[types.Decimal64],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
@@ -1085,7 +1141,7 @@ func decimal64ToOthers(ctx context.Context,
 
 func decimal128ToOthers(ctx context.Context,
 	source *vector.FunctionParameter[types.Decimal128],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_int32:
 		rs := result.(*vector.FunctionResult[int32])
@@ -1124,7 +1180,7 @@ func decimal128ToOthers(ctx context.Context,
 
 func strTypeToOthers(proc *process.Process,
 	source *vector.FunctionParameter[types.Varlena],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_int8:
@@ -1197,7 +1253,7 @@ func strTypeToOthers(proc *process.Process,
 
 func uuidToOthers(ctx context.Context,
 	source *vector.FunctionParameter[types.Uuid],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		rs := result.(*vector.FunctionResult[types.Varlena])
@@ -1208,7 +1264,7 @@ func uuidToOthers(ctx context.Context,
 
 func tsToOthers(ctx context.Context,
 	source *vector.FunctionParameter[types.TS],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	if toType.Oid == types.T_TS {
 		rs := result.(*vector.FunctionResult[types.TS])
 		rs.SetFromParameter(source)
@@ -1219,7 +1275,7 @@ func tsToOthers(ctx context.Context,
 
 func rowidToOthers(ctx context.Context,
 	source *vector.FunctionParameter[types.Rowid],
-	toType types.Type, result any, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	if toType.Oid == types.T_Rowid {
 		rs := result.(*vector.FunctionResult[types.Rowid])
 		rs.SetFromParameter(source)
@@ -3070,6 +3126,29 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func appendNulls[T types.FixedSizeT](result vector.FunctionResultWrapper, length int) error {
+	if r, ok := result.(*vector.FunctionResult[types.Varlena]); ok {
+		var i uint64
+		for i = 0; i < uint64(length); i++ {
+			if err := r.AppendStr(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if r, ok := result.(*vector.FunctionResult[T]); ok {
+		var t T
+		var i uint64
+		for i = 0; i < uint64(length); i++ {
+			if err := r.Append(t, true); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	return nil
 }

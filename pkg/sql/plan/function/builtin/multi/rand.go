@@ -20,16 +20,28 @@ import (
 	"math/rand"
 )
 
-func BuiltInRand(parameters []*vector.Vector, result any, _ *process.Process, length int) error {
-	var source rand.Source
+func BuiltInRand(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := result.(*vector.FunctionResult[float64])
 	// IF one parameter, use it as the seed.
 	if len(parameters) == 1 {
+		var i uint64
 		num := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
-		seed, _ := num.GetValue(0)
-		source = rand.NewSource(seed)
-		for i := 0; i < length; i++ {
-			err := rs.Append(generateFloat64(source), false)
+		seedMap := make(map[int64]rand.Source)
+		for i = 0; i < uint64(length); i++ {
+			seed, null := num.GetValue(i)
+			if null {
+				seed = 0
+			}
+			var f float64
+			if source, ok := seedMap[seed]; ok {
+				f = generateFloat64(source)
+				seedMap[seed] = source
+			} else {
+				source = rand.NewSource(seed)
+				f = generateFloat64(source)
+				seedMap[seed] = source
+			}
+			err := rs.Append(f, false)
 			if err != nil {
 				return err
 			}

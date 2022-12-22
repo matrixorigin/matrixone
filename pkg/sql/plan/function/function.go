@@ -143,12 +143,11 @@ type Function struct {
 	layout FuncExplainLayout
 
 	UseNewFramework     bool
-	AcceptScalarNull    bool
 	ResultMustNotScalar bool
 	ResultWillNotNull   bool
 	FlexibleReturnType  func(parameters []types.Type) types.Type
 	ParameterMustScalar []bool
-	NewFn               func(parameters []*vector.Vector, result any, proc *process.Process, length int) error
+	NewFn               func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error
 }
 
 func (f *Function) TestFlag(funcFlag plan.Function_FuncFlag) bool {
