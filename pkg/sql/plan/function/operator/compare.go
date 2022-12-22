@@ -123,10 +123,8 @@ func INGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vecto
 	retVec := allocateBoolVector(lenLeft, proc)
 	ret := retVec.Col.([]bool)
 	for i := 0; i < lenLeft; i++ {
-		if !leftVec.Nsp.Contains(uint64(i)) {
-			if _, ok := inMap[left[i]]; ok {
-				ret[i] = true
-			}
+		if _, ok := inMap[left[i]]; ok {
+			ret[i] = true
 		}
 	}
 	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
@@ -152,10 +150,8 @@ func INString(args []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	retVec := allocateBoolVector(lenLeft, proc)
 	ret := retVec.Col.([]bool)
 	for i := 0; i < lenLeft; i++ {
-		if !leftVec.Nsp.Contains(uint64(i)) {
-			if _, ok := inMap[left[i].GetString(area1)]; ok {
-				ret[i] = true
-			}
+		if _, ok := inMap[left[i].GetString(area1)]; ok {
+			ret[i] = true
 		}
 	}
 	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
@@ -183,10 +179,8 @@ func NotINGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*ve
 	retVec := allocateBoolVector(lenLeft, proc)
 	ret := retVec.Col.([]bool)
 	for i := 0; i < lenLeft; i++ {
-		if !leftVec.Nsp.Contains(uint64(i)) {
-			if _, ok := notInMap[left[i]]; !ok {
-				ret[i] = true
-			}
+		if _, ok := notInMap[left[i]]; !ok {
+			ret[i] = true
 		}
 	}
 	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
@@ -215,10 +209,8 @@ func NotINString(args []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	retVec := allocateBoolVector(lenLeft, proc)
 	ret := retVec.Col.([]bool)
 	for i := 0; i < lenLeft; i++ {
-		if !leftVec.Nsp.Contains(uint64(i)) {
-			if _, ok := inMap[left[i].GetString(area1)]; !ok {
-				ret[i] = true
-			}
+		if _, ok := inMap[left[i].GetString(area1)]; !ok {
+			ret[i] = true
 		}
 	}
 	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
