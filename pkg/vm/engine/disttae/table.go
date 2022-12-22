@@ -143,7 +143,8 @@ func (tbl *table) MaxAndMinValues(ctx context.Context, expr *plan.Expr) ([][2]an
 	_, columns, _ := getColumnsByExpr(expr, tbl.getTableDef())
 	dataLength := len(columns)
 	//dateType of each column for table
-	dataTypes := make([]uint8, dataLength)
+	tableTypes := make([]uint8, dataLength)
+	dataTypes := make([]types.Type, dataLength)
 
 	//minimum --- maximum
 	tableVal := make([][2]any, dataLength)
@@ -155,7 +156,7 @@ func (tbl *table) MaxAndMinValues(ctx context.Context, expr *plan.Expr) ([][2]an
 	var init bool
 	for _, blks := range tbl.meta.blocks {
 		for _, blk := range blks {
-			blkVal, dateType, err := getZonemapDataFromMeta(ctx, columns, blk, tbl.getTableDef())
+			blkVal, blkTypes, err := getZonemapDataFromMeta(ctx, columns, blk, tbl.getTableDef())
 			if err != nil {
 				return nil, nil, err
 			}
@@ -167,23 +168,24 @@ func (tbl *table) MaxAndMinValues(ctx context.Context, expr *plan.Expr) ([][2]an
 				for i := range columns {
 					tableVal[i][0] = blkVal[i][0]
 					tableVal[i][1] = blkVal[i][1]
+					dataTypes[i] = types.T(blkTypes[i]).ToType()
 				}
 
-				dataTypes = dateType
+				tableTypes = blkTypes
 			} else {
 				for i := range columns {
-					if compute.CompareGeneric(blkVal[i][0], tableVal[i][0], types.T(dataTypes[i]).ToType()) < 0 {
+					if compute.CompareGeneric(blkVal[i][0], tableVal[i][0], dataTypes[i]) < 0 {
 						tableVal[i][0] = blkVal[i][0]
 					}
 
-					if compute.CompareGeneric(blkVal[i][1], tableVal[i][1], types.T(dataTypes[i]).ToType()) > 0 {
+					if compute.CompareGeneric(blkVal[i][1], tableVal[i][1], dataTypes[i]) > 0 {
 						tableVal[i][1] = blkVal[i][1]
 					}
 				}
 			}
 		}
 	}
-	return tableVal, dataTypes, nil
+	return tableVal, tableTypes, nil
 }
 
 func (tbl *table) Size(ctx context.Context, name string) (int64, error) {
