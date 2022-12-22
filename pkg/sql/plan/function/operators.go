@@ -930,7 +930,7 @@ var operators = map[int]Functions{
 					types.T_tuple,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        nil,
+				Fn:        operator.INString,
 			},
 			{
 				Index: 13,
@@ -939,7 +939,7 @@ var operators = map[int]Functions{
 					types.T_tuple,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        nil,
+				Fn:        operator.INString,
 			},
 			{
 				Index: 14,
@@ -1002,7 +1002,7 @@ var operators = map[int]Functions{
 					types.T_tuple,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        nil,
+				Fn:        operator.INString,
 			},
 			{
 				Index: 21,
@@ -1137,7 +1137,7 @@ var operators = map[int]Functions{
 					types.T_tuple,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        nil,
+				Fn:        operator.NotINString,
 			},
 			{
 				Index: 13,
@@ -1146,7 +1146,7 @@ var operators = map[int]Functions{
 					types.T_tuple,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        nil,
+				Fn:        operator.NotINString,
 			},
 			{
 				Index: 14,
@@ -1209,7 +1209,7 @@ var operators = map[int]Functions{
 					types.T_tuple,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        nil,
+				Fn:        operator.NotINString,
 			},
 			{
 				Index: 21,

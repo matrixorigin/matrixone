@@ -181,7 +181,7 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 				Dval: vec.Col.([]float64)[0],
 			},
 		}
-	case types.T_varchar:
+	case types.T_varchar, types.T_char, types.T_text:
 		return &plan.Const{
 			Value: &plan.Const_Sval{
 				Sval: vec.GetString(0),

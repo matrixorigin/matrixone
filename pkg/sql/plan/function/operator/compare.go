@@ -129,6 +129,36 @@ func INGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vecto
 			}
 		}
 	}
+	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
+	return retVec, nil
+}
+
+func INString(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := args[0], args[1]
+	left, area1 := vector.MustVarlenaRawData(leftVec)
+	right, area2 := vector.MustVarlenaRawData(rightVec)
+
+	lenLeft := len(left)
+	lenRight := len(right)
+	if leftVec.IsScalar() {
+		lenLeft = 1
+	}
+	inMap := make(map[string]bool, lenRight)
+	for i := 0; i < lenRight; i++ {
+		if !rightVec.Nsp.Contains(uint64(i)) {
+			inMap[right[i].GetString(area2)] = true
+		}
+	}
+	retVec := allocateBoolVector(lenLeft, proc)
+	ret := retVec.Col.([]bool)
+	for i := 0; i < lenLeft; i++ {
+		if !leftVec.Nsp.Contains(uint64(i)) {
+			if _, ok := inMap[left[i].GetString(area1)]; ok {
+				ret[i] = true
+			}
+		}
+	}
+	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
 	return retVec, nil
 }
 
@@ -159,6 +189,39 @@ func NotINGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*ve
 			}
 		}
 	}
+	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
+	return retVec, nil
+}
+
+func NotINString(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := args[0], args[1]
+	left, area1 := vector.MustVarlenaRawData(leftVec)
+	right, area2 := vector.MustVarlenaRawData(rightVec)
+
+	lenLeft := len(left)
+	lenRight := len(right)
+	if leftVec.IsScalar() {
+		lenLeft = 1
+	}
+	inMap := make(map[string]bool, lenRight)
+	for i := 0; i < lenRight; i++ {
+		if !rightVec.Nsp.Contains(uint64(i)) {
+			inMap[right[i].GetString(area2)] = true
+		} else {
+			//not in null, return false
+			return vector.NewConstFixed(boolType, lenLeft, false, proc.Mp()), nil
+		}
+	}
+	retVec := allocateBoolVector(lenLeft, proc)
+	ret := retVec.Col.([]bool)
+	for i := 0; i < lenLeft; i++ {
+		if !leftVec.Nsp.Contains(uint64(i)) {
+			if _, ok := inMap[left[i].GetString(area1)]; !ok {
+				ret[i] = true
+			}
+		}
+	}
+	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
 	return retVec, nil
 }
 

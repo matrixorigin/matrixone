@@ -130,8 +130,7 @@ func getConstVecInList(ctx context.Context, proc *process.Process, exprs []*plan
 				veccol[i] = types.Timestamp(t.C.GetTimestampval())
 			case *plan.Const_Sval:
 				sval := t.C.GetSval()
-				veccol := vec.Col.([]string)
-				veccol[i] = sval
+				vector.SetStringAt(vec, i, sval, proc.Mp())
 			case *plan.Const_Defaultval:
 				defaultVal := t.C.GetDefaultval()
 				veccol := vec.Col.([]bool)
