@@ -105,6 +105,60 @@ func NeDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector,
 	return CompareOrdered(args, proc, compare.Decimal128VecNe)
 }
 
+// IN operator
+func INGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := args[0], args[1]
+	left, right := vector.MustTCols[T](leftVec), vector.MustTCols[T](rightVec)
+	lenLeft := len(left)
+	lenRight := len(right)
+	if leftVec.IsScalar() {
+		lenLeft = 1
+	}
+	inMap := make(map[T]bool, lenRight)
+	for i := 0; i < lenRight; i++ {
+		if !rightVec.Nsp.Contains(uint64(i)) {
+			inMap[right[i]] = true
+		}
+	}
+	retVec := allocateBoolVector(lenLeft, proc)
+	ret := retVec.Col.([]bool)
+	for i := 0; i < lenLeft; i++ {
+		if !leftVec.Nsp.Contains(uint64(i)) {
+			if _, ok := inMap[left[i]]; ok {
+				ret[i] = true
+			}
+		}
+	}
+	return retVec, nil
+}
+
+// NOT IN operator
+func NotINGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := args[0], args[1]
+	left, right := vector.MustTCols[T](leftVec), vector.MustTCols[T](rightVec)
+	lenLeft := len(left)
+	lenRight := len(right)
+	if leftVec.IsScalar() {
+		lenLeft = 1
+	}
+	inMap := make(map[T]bool, lenRight)
+	for i := 0; i < lenRight; i++ {
+		if !rightVec.Nsp.Contains(uint64(i)) {
+			inMap[right[i]] = true
+		}
+	}
+	retVec := allocateBoolVector(lenLeft, proc)
+	ret := retVec.Col.([]bool)
+	for i := 0; i < lenLeft; i++ {
+		if !leftVec.Nsp.Contains(uint64(i)) {
+			if _, ok := inMap[left[i]]; ok {
+				ret[i] = true
+			}
+		}
+	}
+	return retVec, nil
+}
+
 // Great than operator
 func GtGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return CompareOrdered(args, proc, compare.NumericGreatThan[T])

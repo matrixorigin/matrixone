@@ -493,18 +493,9 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.IN:
-		switch list := astExpr.Right.(type) {
+		switch astExpr.Right.(type) {
 		case *tree.Tuple:
-			var newExpr tree.Expr
-			for _, expr := range list.Exprs {
-				if newExpr == nil {
-					newExpr = tree.NewComparisonExpr(tree.EQUAL, astExpr.Left, expr)
-				} else {
-					equalExpr := tree.NewComparisonExpr(tree.EQUAL, astExpr.Left, expr)
-					newExpr = tree.NewOrExpr(newExpr, equalExpr)
-				}
-			}
-			return b.impl.BindExpr(newExpr, depth, false)
+			op = "in"
 
 		default:
 			leftArg, err := b.impl.BindExpr(astExpr.Left, depth, false)
@@ -542,18 +533,9 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 	case tree.NOT_IN:
-		switch list := astExpr.Right.(type) {
+		switch astExpr.Right.(type) {
 		case *tree.Tuple:
-			var new_expr tree.Expr
-			for _, expr := range list.Exprs {
-				if new_expr == nil {
-					new_expr = tree.NewComparisonExpr(tree.NOT_EQUAL, astExpr.Left, expr)
-				} else {
-					equal_expr := tree.NewComparisonExpr(tree.NOT_EQUAL, astExpr.Left, expr)
-					new_expr = tree.NewAndExpr(new_expr, equal_expr)
-				}
-			}
-			return b.impl.BindExpr(new_expr, depth, false)
+			op = "not_in"
 
 		default:
 			leftArg, err := b.impl.BindExpr(astExpr.Left, depth, false)
@@ -996,6 +978,18 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 					if err != nil {
 						return nil, err
 					}
+				}
+			}
+		}
+
+	case "in", "not_in":
+		//cast the list to left type
+		if rightList, ok := args[1].Expr.(*plan.Expr_List); ok {
+			lenList := len(rightList.List.List)
+			for i := 0; i < lenList; i++ {
+				rightList.List.List[i], err = appendCastBeforeExpr(ctx, rightList.List.List[i], args[0].Typ)
+				if err != nil {
+					return nil, err
 				}
 			}
 		}

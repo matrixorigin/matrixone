@@ -75,6 +75,12 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.Expr {
 	ef, ok := e.Expr.(*plan.Expr_F)
 	if !ok {
+		if el, ok := e.Expr.(*plan.Expr_List); ok {
+			lenList := len(el.List.List)
+			for i := 0; i < lenList; i++ {
+				el.List.List[i] = r.constantFold(el.List.List[i], proc)
+			}
+		}
 		return e
 	}
 	overloadID := ef.F.Func.GetObj()
