@@ -168,20 +168,20 @@ func TestMultiTableUpdate(t *testing.T) {
 	mock := NewMockOptimizer()
 
 	sqls := []string{
-		//1.-----------------ok
+		//1.-----------------
 		"update emp,dept set emp.sal = 4000, dept.loc = 'XXX' where emp.deptno = 20",
 		"update emp t1,dept t2 set t1.sal = 4000, t2.loc = 'XXX' where t1.deptno = 20",
 		"update emp t1,dept t2 set t1.ename = 'MEIXI', t2.loc = 'XXX' where t1.deptno = 20",
 		"update emp t1, dept t2 set t1.ename = 'MEIXI', t1.empno = 1234, t2.loc = 'XXX' where t1.deptno = 20",
 		"update emp,dept set emp.sal = 4000 where emp.deptno = 20",
 
-		//2.---------------- cross join-ok
+		//2.---------------- cross join
 		"update emp t1, dept t2 set t1.sal = 5000, t2.loc = 'YYY' where t1.deptno = t2.deptno",
 		"update emp t1, dept t2 set t1.empno = 5000, t1.ename = 'CLUO', t2.deptno = 50 where t1.deptno = t2.deptno",
 		"update emp t1, dept t2 set empno = 5000, loc = 'YYY' where t1.deptno = t2.deptno",
 		"update emp t1, dept t2 set t1.sal = 5000, loc = 'YYY' where t1.deptno = t2.deptno",
 
-		//3.--------------- inner join----ok
+		//3.--------------- inner join
 		"UPDATE emp t1 inner join dept t2 on t1.deptno = t2.deptno set t1.sal = t1.sal + 500",
 		"UPDATE emp t1 inner join dept t2 on t1.deptno = t2.deptno set t1.sal = t1.sal + 500, ename = 'CLUO'",
 		"UPDATE emp t1 inner join dept t2 on t1.deptno = t2.deptno set t1.sal = t1.sal + 500 where t2.dname = 'RESEARCH'",

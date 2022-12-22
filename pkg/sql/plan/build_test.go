@@ -41,8 +41,7 @@ func TestSingleSQL(t *testing.T) {
 	// 	t.Fatalf("%+v", err)
 	// }
 	// t.Logf("%+v", string(getJSON(stmts[0], t)))
-	//sql := "SELECT UNIX_TIMESTAMP('2000-01-01 12:00:00.159')"
-	sql := "DELETE FROM NATION x where x.N_REGIONKEY > 100"
+	sql := "SELECT UNIX_TIMESTAMP('2000-01-01 12:00:00.159')"
 
 	mock := NewMockOptimizer()
 	logicPlan, err := runOneStmt(mock, t, sql)
@@ -965,7 +964,6 @@ func runOneStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 
 func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJSON bool, toFile bool) {
 	for _, sql := range sqls {
-		t.Log(sql)
 		logicPlan, err := runOneStmt(opt, t, sql)
 		if err != nil {
 			t.Fatalf("%+v, sql=%v", err, sql)

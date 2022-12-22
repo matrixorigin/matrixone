@@ -261,8 +261,7 @@ func TestSystemVariableAndUserVariable(t *testing.T) {
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
-//---------------------------------------------index table begin--------------------------------------------------------
-
+// test index table
 func TestSingleTableDeleteSQL(t *testing.T) {
 	sqls := []string{
 		"explain verbose DELETE FROM emp where sal > 2000",
@@ -310,8 +309,6 @@ func TestMultiTableDeleteSQL(t *testing.T) {
 	mockOptimizer := plan.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
-
-//---------------------------------------------index table begin--------------------------------------------------------
 
 func runTestShouldPass(opt plan.Optimizer, t *testing.T, sqls []string) {
 	for _, sql := range sqls {

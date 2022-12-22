@@ -234,7 +234,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"n_name", types.T_varchar, false, 50, 0},
 		},
 	}
-	//-------------------------------------------------------------------------------------------------------------------
+
 	moSchema["mo_database"] = &Schema{
 		cols: []col{
 			{"datname", types.T_varchar, false, 50, 0},
