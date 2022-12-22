@@ -216,3 +216,23 @@ SHOW TRIGGERS;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 SHOW TRIGGERS like '*%';
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+use mo_catalog;
+show tables;
+tables_in_mo_catalog
+mo_database
+mo_tables
+mo_columns
+mo_user
+mo_account
+mo_role
+mo_user_grant
+mo_role_grant
+mo_role_privs
+show table_number from mo_catalog;
+mo_catalog    Number of tables in mo_catalog
+mo_catalog    9
+show column_number from mo_database;
+mo_database    Number of columns in mo_database
+mo_database    8
+show column_number from hdjshdj;
+no such table mo_catalog.hdjshdj
