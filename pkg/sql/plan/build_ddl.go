@@ -759,6 +759,9 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
 	_, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
+	if len(tableDef.RefChildTbls) > 0 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop table '%v' referenced by some foreign key constraint", dropTable.Table)
+	}
 	if tableDef == nil {
 		if !dropTable.IfExists {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
