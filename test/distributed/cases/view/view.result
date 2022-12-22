@@ -66,3 +66,7 @@ a
 1
 1
 drop view vvvv;
+create view vn as select * from t1;
+alter view vn as select a from t1 union all select a from t2;
+not supported: statement 'alter view vn as select a from t1 union all select a from t2'
+drop view vn;
