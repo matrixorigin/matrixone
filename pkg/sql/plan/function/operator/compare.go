@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/compare"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"unsafe"
 )
 
 type compareT interface {
@@ -191,7 +190,7 @@ func CompareValenaInline(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 	if v1.IsScalar() && v2.IsScalar() {
 		p1 := col1[0].UnsafePtr()
 		p2 := col2[0].UnsafePtr()
-		ret := *(*int64)(p1) == *(*int64)(p2) && *(*int64)(unsafe.Add(p1, 8)) == *(*int64)(unsafe.Add(p2, 8)) && *(*int64)(unsafe.Add(p1, 16)) == *(*int64)(unsafe.Add(p2, 16))
+		ret := *(*[3]int64)(p1) == *(*[3]int64)(p2)
 		return vector.NewConstFixed(boolType, 1, ret, proc.Mp()), nil
 	}
 
@@ -206,21 +205,21 @@ func CompareValenaInline(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		for i := 0; i < length; i++ {
 			p1 := col1[i].UnsafePtr()
 			p2 := col2[i].UnsafePtr()
-			veccol[i] = *(*int64)(p1) == *(*int64)(p2) && *(*int64)(unsafe.Add(p1, 8)) == *(*int64)(unsafe.Add(p2, 8)) && *(*int64)(unsafe.Add(p1, 16)) == *(*int64)(unsafe.Add(p2, 16))
+			veccol[i] = *(*[3]int64)(p1) == *(*[3]int64)(p2)
 		}
 		nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
 	} else if v1.IsScalar() {
 		p1 := col1[0].UnsafePtr()
 		for i := 0; i < length; i++ {
 			p2 := col2[i].UnsafePtr()
-			veccol[i] = *(*int64)(p1) == *(*int64)(p2) && *(*int64)(unsafe.Add(p1, 8)) == *(*int64)(unsafe.Add(p2, 8)) && *(*int64)(unsafe.Add(p1, 16)) == *(*int64)(unsafe.Add(p2, 16))
+			veccol[i] = *(*[3]int64)(p1) == *(*[3]int64)(p2)
 		}
 		nulls.Or(nil, v2.Nsp, vec.Nsp)
 	} else {
 		p2 := col2[0].UnsafePtr()
 		for i := 0; i < length; i++ {
 			p1 := col1[i].UnsafePtr()
-			veccol[i] = *(*int64)(p1) == *(*int64)(p2) && *(*int64)(unsafe.Add(p1, 8)) == *(*int64)(unsafe.Add(p2, 8)) && *(*int64)(unsafe.Add(p1, 16)) == *(*int64)(unsafe.Add(p2, 16))
+			veccol[i] = *(*[3]int64)(p1) == *(*[3]int64)(p2)
 		}
 		nulls.Or(v1.Nsp, nil, vec.Nsp)
 	}
