@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -297,6 +298,8 @@ const (
 	userStatusLock   = "lock"
 	userStatusUnlock = "unlock"
 
+	defaultPasswordEnv = "DEFAULT_PASSWORD"
+
 	rootID            = 0
 	rootHost          = "localhost"
 	rootName          = "root"
@@ -308,10 +311,10 @@ const (
 	rootOwnerRoleID   = moAdminRoleID
 	rootDefaultRoleID = moAdminRoleID
 
-	dumpID            = 1
-	dumpHost          = "localhost"
-	dumpName          = "dump"
-	dumpPassword      = "111"
+	dumpID   = 1
+	dumpHost = "localhost"
+	dumpName = "dump"
+	//dumpPassword      = "111"
 	dumpStatus        = userStatusUnlock
 	dumpExpiredTime   = "NULL"
 	dumpLoginType     = "PASSWORD"
@@ -3244,6 +3247,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeDropAccount)
 	case *tree.AlterAccount:
 		typs = append(typs, PrivilegeTypeAlterAccount)
+	case *tree.AlterView:
+		typs = append(typs, PrivilegeTypeAlterView)
 	case *tree.CreateUser:
 		if st.Role == nil {
 			typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
@@ -4804,8 +4809,13 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 
 	//step 3:add new user entry to the mo_user
 
-	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, rootPassword, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
-	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, dumpPassword, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
+	defaultPassword := rootPassword
+	if d := os.Getenv(defaultPasswordEnv); d != "" {
+		defaultPassword = d
+	}
+
+	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, defaultPassword, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
+	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, defaultPassword, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
 	addSqlIntoSet(initMoUser1)
 	addSqlIntoSet(initMoUser2)
 
