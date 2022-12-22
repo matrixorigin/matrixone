@@ -33,8 +33,7 @@ func (bj ByteJson) String() string {
 
 func (bj ByteJson) Unquote() (string, error) {
 	if bj.Type != TpCodeString {
-		ret, _ := bj.MarshalJSON()
-		return string(ret), nil
+		return bj.String(), nil
 	}
 	str := bj.GetString()
 	if len(str) < 2 || (str[0] != '"' || str[len(str)-1] != '"') {
