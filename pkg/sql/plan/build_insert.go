@@ -65,20 +65,9 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	var accountIds []uint32
 	var columnIndexOfAccountId int32 = -1
 	if isClusterTable {
-		if len(stmt.Accounts) != 0 {
-			accountNames := make([]string, len(stmt.Accounts))
-			for i, account := range stmt.Accounts {
-				accountNames[i] = string(account)
-			}
-			accountIds, err = ctx.ResolveAccountIds(accountNames)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			accountIds = []uint32{catalog.System_Account}
-		}
-		if len(accountIds) == 0 {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "need specify account for the cluster tables")
+		accountIds, err = getAccountIds(ctx, stmt.Accounts)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -96,7 +85,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	var explicitCols []*ColDef
 	if stmt.Columns == nil {
 		if isClusterTable {
-			//filter out the account_id for the cluster table
+			//filter out the column account_id of the cluster table
 			for _, col := range tblRef.Cols {
 				if !isClusterTableAttribute(col.Name) {
 					explicitCols = append(explicitCols, col)
@@ -107,6 +96,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		}
 	} else {
 		for _, attr := range stmt.Columns {
+			//user can not specify the column account_id of the cluster table in the syntax
 			if isClusterTable && isClusterTableAttribute(string(attr)) {
 				return nil, moerr.NewInvalidInput(ctx.GetContext(), "do not specify the attribute %s for the cluster table", clusterTableAttributeName)
 			}
@@ -319,9 +309,9 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		return nil, err
 	}
 	SetPlanLoadTag(pn)
-	cols := GetResultColumnsFromPlan(pn)
+	sourceColDefs := GetResultColumnsFromPlan(pn)
 	pn.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_INSERT
-	if len(stmt.Columns) != 0 && len(stmt.Columns) != len(cols) {
+	if len(stmt.Columns) != 0 && len(stmt.Columns) != len(sourceColDefs) {
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert statement column count does not match")
 	}
 
@@ -335,16 +325,60 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert into view")
 	}
 
-	valueCount := len(stmt.Columns)
-	if len(stmt.Columns) == 0 {
-		valueCount = len(tableDef.Cols)
+	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
+	var accountIds []uint32
+	var columnIndexOfAccountId int32 = -1
+	if isClusterTable {
+		accountIds, err = getAccountIds(ctx, stmt.Accounts)
+		if err != nil {
+			return nil, err
+		}
+		for i, col := range tableDef.GetCols() {
+			if isClusterTableAttribute(col.Name) {
+				if columnIndexOfAccountId >= 0 {
+					return nil, moerr.NewInternalError(ctx.GetContext(), "there are two account_id in the cluster table")
+				} else {
+					columnIndexOfAccountId = int32(i)
+				}
+			}
+		}
+
+		if columnIndexOfAccountId == -1 {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "there is no account_id in the cluster table")
+		} else if columnIndexOfAccountId >= int32(len(tableDef.GetCols())) {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "the index of the account_id in the cluster table is invalid")
+		}
 	}
-	if valueCount != len(cols) {
-		return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert statement column count does not match value count")
+
+	countOfTargetColumn := len(stmt.Columns)
+	if len(stmt.Columns) == 0 {
+		countOfTargetColumn = len(tableDef.Cols)
+		if isClusterTable {
+			//skip the column account_id of the cluster table
+			if countOfTargetColumn != len(sourceColDefs)+1 {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert statement column count does not match value count")
+			}
+		} else {
+			if countOfTargetColumn != len(sourceColDefs) {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert statement column count does not match value count")
+			}
+		}
+	} else {
+		if isClusterTable {
+			for _, attr := range stmt.Columns {
+				//user can not specify the column account_id of the cluster table in the syntax
+				if isClusterTableAttribute(string(attr)) {
+					return nil, moerr.NewInvalidInput(ctx.GetContext(), "do not specify the attribute %s for the cluster table", clusterTableAttributeName)
+				}
+			}
+		}
+		if countOfTargetColumn != len(sourceColDefs) {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert statement column count does not match value count")
+		}
 	}
 
 	// generate values expr
-	exprs, err := getInsertExprs(ctx, stmt, cols, tableDef)
+	exprs, err := getInsertExprs(ctx, stmt, sourceColDefs, tableDef, isClusterTable, columnIndexOfAccountId)
 	if err != nil {
 		return nil, err
 	}
@@ -358,24 +392,35 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	}
 	qry := pn.Plan.(*plan.Plan_Query).Query
 	n := &Node{
-		ObjRef:      objRef,
-		TableDef:    tableDef,
-		NodeType:    plan.Node_INSERT,
-		NodeId:      int32(len(qry.Nodes)),
-		Children:    []int32{qry.Steps[len(qry.Steps)-1]},
-		ProjectList: exprs,
+		ObjRef:                 objRef,
+		TableDef:               tableDef,
+		NodeType:               plan.Node_INSERT,
+		NodeId:                 int32(len(qry.Nodes)),
+		Children:               []int32{qry.Steps[len(qry.Steps)-1]},
+		ProjectList:            exprs,
+		IsClusterTable:         isClusterTable,
+		AccountIDs:             accountIds,
+		ColumnIndexOfAccountId: columnIndexOfAccountId,
 	}
 	appendQueryNode(qry, n)
 	qry.Steps[len(qry.Steps)-1] = n.NodeId
 	return pn, nil
 }
 
-func getInsertExprs(ctx CompilerContext, stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*Expr, error) {
+func getInsertExprs(ctx CompilerContext, stmt *tree.Insert, cols []*ColDef, tableDef *TableDef, isClusterTable bool, columnIndexOfAccountId int32) ([]*Expr, error) {
 	var exprs []*Expr
-
+	var err error
 	if len(stmt.Columns) == 0 {
-		exprs = make([]*Expr, len(cols))
+		exprs = make([]*Expr, len(tableDef.Cols))
 		for i := range exprs {
+			//the column account_id of the cluster table has the default expr
+			if isClusterTable && i == int(columnIndexOfAccountId) {
+				exprs[i], err = getDefaultExpr(ctx.GetContext(), tableDef.Cols[i])
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
 			exprs[i] = &plan.Expr{
 				Typ: cols[i].Typ,
 				Expr: &plan.Expr_Col{
@@ -402,6 +447,14 @@ func getInsertExprs(ctx CompilerContext, stmt *tree.Insert, cols []*ColDef, tabl
 			}
 		}
 		for i := range exprs {
+			//the column account_id of the cluster table has the default expr
+			if isClusterTable && i == int(columnIndexOfAccountId) {
+				exprs[i], err = getDefaultExpr(ctx.GetContext(), tableDef.Cols[i])
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
 			if ref, ok := targetMap[tableDef.Cols[i].GetName()]; ok {
 				exprs[i] = &plan.Expr{
 					Typ: cols[ref].Typ,
@@ -418,6 +471,7 @@ func getInsertExprs(ctx CompilerContext, stmt *tree.Insert, cols []*ColDef, tabl
 					return nil, err
 				}
 			}
+
 		}
 	}
 	return exprs, nil
@@ -458,4 +512,27 @@ func buildIndexDefs(defs []*plan.TableDef_DefType) (*UniqueIndexDef, *SecondaryI
 		}
 	}
 	return uIdxDef, sIdxDef
+}
+
+// getAccountIds transforms the account names into account ids.
+// if accounts is nil, return the id of the sys account.
+func getAccountIds(ctx CompilerContext, accounts tree.IdentifierList) ([]uint32, error) {
+	var accountIds []uint32
+	var err error
+	if len(accounts) != 0 {
+		accountNames := make([]string, len(accounts))
+		for i, account := range accounts {
+			accountNames[i] = string(account)
+		}
+		accountIds, err = ctx.ResolveAccountIds(accountNames)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		accountIds = []uint32{catalog.System_Account}
+	}
+	if len(accountIds) == 0 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "need specify account for the cluster tables")
+	}
+	return accountIds, err
 }

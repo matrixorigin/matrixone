@@ -143,19 +143,16 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 
 	if p.GetIsClusterTable() {
 		columns := p.GetColumns()
-		if p.GetColumnIndexOfAccountId() < 0 || p.GetColumnIndexOfAccountId() >= int32(len(columns)) {
-			return 0, moerr.NewInternalError(ctx, "the index of the account_id in the cluster table is invalid")
-		}
 		accountIdColumnDef := p.ExplicitCols[p.GetColumnIndexOfAccountId()]
 		accountIdRows := columns[p.GetColumnIndexOfAccountId()].GetColumn()
 		accountIdExpr := accountIdRows[0]
 		accountIdConst := accountIdExpr.GetC()
+		accountIdVec := bat.Vecs[p.GetColumnIndexOfAccountId()]
 		tmpBat := batch.NewWithSize(0)
 		tmpBat.Zs = []int64{1}
 		for _, accountId := range p.GetAccountIDs() {
 			//update accountId in the accountIdExpr
 			accountIdConst.Value = &plan.Const_U32Val{U32Val: accountId}
-			accountIdVec := bat.Vecs[p.GetColumnIndexOfAccountId()]
 			//clean vector before fill it
 			vector.Clean(accountIdVec, c.proc.Mp())
 			//the j th row

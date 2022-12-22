@@ -624,6 +624,10 @@ message Node {
     // The pipeline will determine the parallelism by traversing the plan 
     // when it is received. Then the build is built based on this information.
     int32   parallelism = 26;
+
+	bool is_cluster_table = 27;//insert into a cluster table
+	repeated uint32 accountIDs = 28;//insert data into the cluster table for every account
+	int32 column_index_of_accountId = 29;//the column index of the account id in the cluster table
 }
 
 message DeleteTableCtx {
