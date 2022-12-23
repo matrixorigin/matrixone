@@ -88,3 +88,14 @@ var (
 	endian = binary.LittleEndian
 	//jsonSubPathRe = regexp.MustCompile(`(\.\s*(([\$]*[a-zA-Z_][a-zA-Z0-9_]*)+|\*|"[^"\\]*(\\.[^"\\]*)*")|(\[\s*([0-9]+|\*)\s*\])|\*\*)`)
 )
+
+var (
+	escapedChars = map[byte]byte{
+		'"': '"',
+		'b': '\b',
+		'f': '\f',
+		'n': '\n',
+		'r': '\r',
+		't': '\t',
+	}
+)

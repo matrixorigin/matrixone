@@ -4776,7 +4776,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_json, types.T_char},
 				ReturnTyp: types.T_varchar,
 				Fn:        operator.Cast,
-				Volatile: false,
+				Volatile:  false,
 			},
 			{
 				Index:     337,

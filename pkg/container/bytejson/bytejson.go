@@ -47,21 +47,11 @@ func (bj ByteJson) Unquote() (string, error) {
 			continue
 		}
 		i++
-		switch str[i] {
-		case 'b':
-			sb.WriteByte('\b')
-		case 'f':
-			sb.WriteByte('\f')
-		case 'n':
-			sb.WriteByte('\n')
-		case 'r':
-			sb.WriteByte('\r')
-		case 't':
-			sb.WriteByte('\t')
-		case '"':
-			sb.WriteByte('"')
-		case 'u':
-			// transform unicode to utf8
+		if trans, ok := escapedChars[str[i]]; ok {
+			sb.WriteByte(trans)
+			continue
+		}
+		if str[i] == 'u' { // transform unicode to utf8
 			if i+4 > len(str) {
 				return "", moerr.NewInvalidInputNoCtx("invalid unicode")
 			}
@@ -73,9 +63,9 @@ func (bj ByteJson) Unquote() (string, error) {
 			}
 			sb.WriteString(text)
 			i += 4
-		default:
-			sb.WriteByte(str[i])
+			continue
 		}
+		sb.WriteByte(str[i])
 	}
 	return sb.String(), nil
 }
