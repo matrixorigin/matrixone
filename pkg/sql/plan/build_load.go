@@ -50,6 +50,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	node1 := &plan.Node{}
 	node1.NodeType = plan.Node_EXTERNAL_SCAN
 	node1.Stats = &plan.Stats{}
+	node1.ClusterTable = clusterTable
 
 	node2 := &plan.Node{}
 	node2.NodeType = plan.Node_PROJECT
@@ -178,6 +179,7 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 			if err != nil {
 				return err
 			}
+			node.ProjectList[i] = tmp
 			continue
 		}
 		if tableDef.Cols[i].Default.Expr == nil || tableDef.Cols[i].Default.NullAbility {
