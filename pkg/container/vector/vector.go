@@ -187,6 +187,10 @@ func GetPtrAt(v *Vector, idx int64) unsafe.Pointer {
 // Raw version, get from v.data.   Adopt python convention and
 // neg idx means counting from end, that is, -1 means last element.
 func (v *Vector) getRawValueAt(idx int64) []byte {
+	if v.IsScalar() && len(v.data) == 0 {
+		return v.encodeColToByteSlice()
+	}
+
 	tlen := int64(v.GetType().TypeSize())
 	dlen := int64(len(v.data))
 	if idx >= 0 {
@@ -1337,6 +1341,10 @@ func UnionMulti(v, w *Vector, sel int64, cnt int, m *mpool.MPool) (err error) {
 		return err
 	}
 
+	if w.IsScalar() {
+		sel = 0
+	}
+
 	if v.GetType().IsTuple() {
 		vs := v.Col.([][]interface{})
 		ws := w.Col.([][]interface{})
@@ -1344,27 +1352,29 @@ func UnionMulti(v, w *Vector, sel int64, cnt int, m *mpool.MPool) (err error) {
 			vs = append(vs, ws[sel])
 		}
 		v.Col = vs
-	} else if v.GetType().IsVarlen() {
-		tgt := MustTCols[types.Varlena](v)
-		bs := w.GetBytes(sel)
-		if v.GetType().Width != 0 && len(bs) > int(v.GetType().Width) {
-			return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
-		}
-		if v.GetType().Width == 0 && (v.GetType().Oid == types.T_varchar || v.GetType().Oid == types.T_char) {
-			if len(bs) > 0 {
-				return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), 0)
-			}
-		}
-		for i := 0; i < cnt; i++ {
-			tgt[curIdx], v.area, err = types.BuildVarlena(bs, v.area, m)
-			curIdx += 1
-		}
 	} else {
-		src := w.getRawValueAt(sel)
-		for i := 0; i < cnt; i++ {
-			tgt := v.getRawValueAt(int64(curIdx))
-			copy(tgt, src)
-			curIdx += 1
+		if v.GetType().IsVarlen() {
+			tgt := MustTCols[types.Varlena](v)
+			bs := w.GetBytes(sel)
+			if v.GetType().Width != 0 && len(bs) > int(v.GetType().Width) {
+				return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
+			}
+			if v.GetType().Width == 0 && (v.GetType().Oid == types.T_varchar || v.GetType().Oid == types.T_char) {
+				if len(bs) > 0 {
+					return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), 0)
+				}
+			}
+			for i := 0; i < cnt; i++ {
+				tgt[curIdx], v.area, err = types.BuildVarlena(bs, v.area, m)
+				curIdx += 1
+			}
+		} else {
+			src := w.getRawValueAt(sel)
+			for i := 0; i < cnt; i++ {
+				tgt := v.getRawValueAt(int64(curIdx))
+				copy(tgt, src)
+				curIdx += 1
+			}
 		}
 	}
 
