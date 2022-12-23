@@ -28,11 +28,13 @@ type StorageCfg struct {
 }
 
 type CheckpointCfg struct {
-	FlushInterval       time.Duration `toml:"flush-inerterval"`
-	MinCount            int64         `toml:"checkpoint-min-count"`
-	ScanInterval        time.Duration `toml:"scan-interval"`
-	IncrementalInterval time.Duration `toml:"checkpoint-incremental-interval"`
-	GlobalInterval      time.Duration `toml:"checkpoint-global-interval"`
+	FlushInterval             time.Duration `toml:"flush-inerterval"`
+	MinCount                  int64         `toml:"checkpoint-min-count"`
+	ScanInterval              time.Duration `toml:"scan-interval"`
+	IncrementalInterval       time.Duration `toml:"checkpoint-incremental-interval"`
+	GlobalMinCount            int64         `toml:"checkpoint-global-interval"`
+	ForceUpdateGlobalInterval bool
+	GlobalVersionInterval     time.Duration
 }
 
 type SchedulerCfg struct {
