@@ -205,24 +205,6 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 				{Typ: typ, Name: "Variable_name"},
 				{Typ: typ, Name: "Value"},
 			}
-		case plan.DataDefinition_SHOW_CREATEDATABASE:
-			typ := &plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: 1024,
-			}
-			return []*ColDef{
-				{Typ: typ, Name: "Database"},
-				{Typ: typ, Name: "Create Database"},
-			}
-		case plan.DataDefinition_SHOW_CREATETABLE:
-			typ := &plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: 1024,
-			}
-			return []*ColDef{
-				{Typ: typ, Name: "Table"},
-				{Typ: typ, Name: "Create Table"},
-			}
 		default:
 			// show statement(except show variables) will return a query
 			if logicPlan.Ddl.Query != nil {
