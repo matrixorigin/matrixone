@@ -260,7 +260,7 @@ func buildSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (*Plan, erro
 		delCtxs[i] = &plan.DeleteTableCtx{
 			DbName:             deleteTableList.delTables[i].objRefs.SchemaName,
 			TblName:            deleteTableList.delTables[i].tblDefs.Name,
-			UseDeleteKey:       catalog.Row_ID, // Confirm whether this field is useful
+			UseDeleteKey:       catalog.Row_ID,
 			CanTruncate:        false,
 			ColIndex:           deleteTableList.delTables[i].colIndex,
 			IsIndexTableDelete: deleteTableList.delTables[i].isIndexTableDelete,

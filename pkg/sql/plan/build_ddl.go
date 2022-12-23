@@ -353,6 +353,27 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				}
+
+				if _, ok := attr.(*tree.AttributeUnique); ok {
+					indexInfos = append(indexInfos, &tree.UniqueIndex{
+						KeyParts: []*tree.KeyPart{
+							{
+								ColName: def.Name,
+							},
+						},
+					})
+				}
+
+				if _, ok := attr.(*tree.AttributeUniqueKey); ok {
+					indexInfos = append(indexInfos, &tree.UniqueIndex{
+						KeyParts: []*tree.KeyPart{
+							{
+								ColName: def.Name,
+							},
+						},
+					})
+				}
+
 			}
 			if len(pks) > 0 {
 				if len(primaryKeys) > 0 {
