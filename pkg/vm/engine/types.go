@@ -252,7 +252,7 @@ type Relation interface {
 	TableColumns(ctx context.Context) ([]*Attribute, error)
 
 	//max and min values
-	MaxAndMinValues(ctx context.Context, expr *plan.Expr) ([][2]any, []uint8, error)
+	MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error)
 }
 
 type Reader interface {
