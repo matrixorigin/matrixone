@@ -332,6 +332,8 @@ func (n *Bitmap) Count() int {
 	}
 	if cnt > 0 {
 		n.emptyFlag = -1 //must be not empty
+	} else {
+		n.emptyFlag = 1 //must be empty
 	}
 	return cnt
 }
