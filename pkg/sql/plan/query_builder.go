@@ -1065,6 +1065,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	var clause *tree.SelectClause
+	var valuesClause *tree.ValuesClause
+	var nodeID int32
+	var err error
 	astOrderBy := stmt.OrderBy
 	astLimit := stmt.Limit
 
@@ -1100,43 +1103,111 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	case *tree.UnionClause:
 		return builder.buildUnion(selectClause, astOrderBy, astLimit, ctx, isRoot)
 	case *tree.ValuesClause:
-		return 0, moerr.NewNYI(builder.GetContext(), "'SELECT FROM VALUES'")
+		valuesClause = selectClause
 	default:
 		return 0, moerr.NewNYI(builder.GetContext(), "statement '%s'", tree.String(stmt, dialect.MYSQL))
 	}
 
-	// build FROM clause
-	nodeID, err := builder.buildFrom(clause.From.Tables, ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	ctx.binder = NewWhereBinder(builder, ctx)
-	// unfold stars and generate headings
+	var projectionBinder *ProjectionBinder
+	var havingList []*plan.Expr
 	var selectList tree.SelectExprs
-	for _, selectExpr := range clause.Exprs {
-		switch expr := selectExpr.Expr.(type) {
-		case tree.UnqualifiedStar:
-			cols, names, err := ctx.unfoldStar(builder.GetContext(), "")
-			if err != nil {
-				return 0, err
-			}
-			selectList = append(selectList, cols...)
-			ctx.headings = append(ctx.headings, names...)
+	var resultLen int
 
-		case *tree.UnresolvedName:
-			if expr.Star {
-				cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.Parts[0])
+	if clause == nil {
+		if len(valuesClause.Rows) == 0 {
+			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
+		}
+		colCount := len(valuesClause.Rows[0])
+		ctx.hasSingleRow = len(valuesClause.Rows) == 1
+		colsDatas := make([]*plan.ColData, colCount)
+		for i := 0; i < colCount; i++ {
+			ctx.headings = append(ctx.headings, fmt.Sprintf("column_%d", i))
+			// todo need check
+			// ctx.projects = append(ctx.projects, )
+		}
+		// todo need check
+
+		nodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_VALUE_SCAN,
+			RowsetData: &plan.RowsetData{
+				Schema: &plan.TableDef{},
+				Cols:   colsDatas,
+			},
+		}, ctx)
+	} else {
+		// build FROM clause
+		nodeID, err = builder.buildFrom(clause.From.Tables, ctx)
+		if err != nil {
+			return 0, err
+		}
+
+		ctx.binder = NewWhereBinder(builder, ctx)
+		// unfold stars and generate headings
+		for _, selectExpr := range clause.Exprs {
+			switch expr := selectExpr.Expr.(type) {
+			case tree.UnqualifiedStar:
+				cols, names, err := ctx.unfoldStar(builder.GetContext(), "")
 				if err != nil {
 					return 0, err
 				}
 				selectList = append(selectList, cols...)
 				ctx.headings = append(ctx.headings, names...)
-			} else {
+
+			case *tree.UnresolvedName:
+				if expr.Star {
+					cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.Parts[0])
+					if err != nil {
+						return 0, err
+					}
+					selectList = append(selectList, cols...)
+					ctx.headings = append(ctx.headings, names...)
+				} else {
+					if len(selectExpr.As) > 0 {
+						ctx.headings = append(ctx.headings, string(selectExpr.As))
+					} else {
+						ctx.headings = append(ctx.headings, expr.Parts[0])
+					}
+
+					newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
+					if err != nil {
+						return 0, err
+					}
+
+					selectList = append(selectList, tree.SelectExpr{
+						Expr: newExpr,
+						As:   selectExpr.As,
+					})
+				}
+			case *tree.NumVal:
+				if expr.ValType == tree.P_null {
+					expr.ValType = tree.P_nulltext
+				}
+
 				if len(selectExpr.As) > 0 {
 					ctx.headings = append(ctx.headings, string(selectExpr.As))
 				} else {
-					ctx.headings = append(ctx.headings, expr.Parts[0])
+					ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+				}
+				newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
+				if err != nil {
+					return 0, err
+				}
+				selectList = append(selectList, tree.SelectExpr{
+					Expr: newExpr,
+					As:   selectExpr.As,
+				})
+			default:
+				if len(selectExpr.As) > 0 {
+					ctx.headings = append(ctx.headings, string(selectExpr.As))
+				} else {
+					for {
+						if parenExpr, ok := expr.(*tree.ParenExpr); ok {
+							expr = parenExpr.Expr
+						} else {
+							break
+						}
+					}
+					ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
 				}
 
 				newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
@@ -1149,147 +1220,105 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					As:   selectExpr.As,
 				})
 			}
-		case *tree.NumVal:
-			if expr.ValType == tree.P_null {
-				expr.ValType = tree.P_nulltext
-			}
+		}
 
-			if len(selectExpr.As) > 0 {
-				ctx.headings = append(ctx.headings, string(selectExpr.As))
-			} else {
-				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
-			}
-			newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
+		if len(selectList) == 0 {
+			return 0, moerr.NewParseError(builder.GetContext(), "No tables used")
+		}
+
+		// rewrite right join to left join
+		builder.rewriteRightJoinToLeftJoin(nodeID)
+
+		if clause.Where != nil {
+			whereList, err := splitAndBindCondition(clause.Where.Expr, ctx)
 			if err != nil {
 				return 0, err
 			}
-			selectList = append(selectList, tree.SelectExpr{
-				Expr: newExpr,
-				As:   selectExpr.As,
-			})
-		default:
-			if len(selectExpr.As) > 0 {
-				ctx.headings = append(ctx.headings, string(selectExpr.As))
-			} else {
-				for {
-					if parenExpr, ok := expr.(*tree.ParenExpr); ok {
-						expr = parenExpr.Expr
-					} else {
-						break
-					}
+
+			var newFilterList []*plan.Expr
+			var expr *plan.Expr
+
+			for _, cond := range whereList {
+				nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx)
+				if err != nil {
+					return 0, err
 				}
-				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+
+				if expr != nil {
+					newFilterList = append(newFilterList, expr)
+				}
 			}
 
-			newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
-			if err != nil {
-				return 0, err
-			}
-
-			selectList = append(selectList, tree.SelectExpr{
-				Expr: newExpr,
-				As:   selectExpr.As,
-			})
-		}
-	}
-
-	if len(selectList) == 0 {
-		return 0, moerr.NewParseError(builder.GetContext(), "No tables used")
-	}
-
-	// rewrite right join to left join
-	builder.rewriteRightJoinToLeftJoin(nodeID)
-
-	if clause.Where != nil {
-		whereList, err := splitAndBindCondition(clause.Where.Expr, ctx)
-		if err != nil {
-			return 0, err
+			nodeID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{nodeID},
+				FilterList: newFilterList,
+			}, ctx)
 		}
 
-		var newFilterList []*plan.Expr
-		var expr *plan.Expr
+		ctx.groupTag = builder.genNewTag()
+		ctx.aggregateTag = builder.genNewTag()
+		ctx.projectTag = builder.genNewTag()
 
-		for _, cond := range whereList {
-			nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx)
-			if err != nil {
-				return 0, err
-			}
+		// bind GROUP BY clause
+		if clause.GroupBy != nil {
+			groupBinder := NewGroupBinder(builder, ctx)
+			for _, group := range clause.GroupBy {
+				group, err = ctx.qualifyColumnNames(group, nil, false)
+				if err != nil {
+					return 0, err
+				}
 
-			if expr != nil {
-				newFilterList = append(newFilterList, expr)
+				_, err = groupBinder.BindExpr(group, 0, true)
+				if err != nil {
+					return 0, err
+				}
 			}
 		}
 
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType:   plan.Node_FILTER,
-			Children:   []int32{nodeID},
-			FilterList: newFilterList,
-		}, ctx)
-	}
-
-	ctx.groupTag = builder.genNewTag()
-	ctx.aggregateTag = builder.genNewTag()
-	ctx.projectTag = builder.genNewTag()
-
-	// bind GROUP BY clause
-	if clause.GroupBy != nil {
-		groupBinder := NewGroupBinder(builder, ctx)
-		for _, group := range clause.GroupBy {
-			group, err = ctx.qualifyColumnNames(group, nil, false)
-			if err != nil {
-				return 0, err
-			}
-
-			_, err = groupBinder.BindExpr(group, 0, true)
+		// bind HAVING clause
+		havingBinder := NewHavingBinder(builder, ctx)
+		if clause.Having != nil {
+			ctx.binder = havingBinder
+			havingList, err = splitAndBindCondition(clause.Having.Expr, ctx)
 			if err != nil {
 				return 0, err
 			}
 		}
+
+		// bind SELECT clause (Projection List)
+		projectionBinder = NewProjectionBinder(builder, ctx, havingBinder)
+		ctx.binder = projectionBinder
+		for i, selectExpr := range selectList {
+			astExpr, err := ctx.qualifyColumnNames(selectExpr.Expr, nil, false)
+			if err != nil {
+				return 0, err
+			}
+
+			expr, err := projectionBinder.BindExpr(astExpr, 0, true)
+			if err != nil {
+				return 0, err
+			}
+
+			builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = tree.String(astExpr, dialect.MYSQL)
+
+			alias := string(selectExpr.As)
+			if len(alias) > 0 {
+				ctx.aliasMap[alias] = int32(len(ctx.projects))
+			}
+			ctx.projects = append(ctx.projects, expr)
+		}
+
+		resultLen = len(ctx.projects)
+		for i, proj := range ctx.projects {
+			exprStr := proj.String()
+			if _, ok := ctx.projectByExpr[exprStr]; !ok {
+				ctx.projectByExpr[exprStr] = int32(i)
+			}
+		}
+
+		ctx.isDistinct = clause.Distinct
 	}
-
-	// bind HAVING clause
-	var havingList []*plan.Expr
-	havingBinder := NewHavingBinder(builder, ctx)
-	if clause.Having != nil {
-		ctx.binder = havingBinder
-		havingList, err = splitAndBindCondition(clause.Having.Expr, ctx)
-		if err != nil {
-			return 0, err
-		}
-	}
-
-	// bind SELECT clause (Projection List)
-	projectionBinder := NewProjectionBinder(builder, ctx, havingBinder)
-	ctx.binder = projectionBinder
-	for i, selectExpr := range selectList {
-		astExpr, err := ctx.qualifyColumnNames(selectExpr.Expr, nil, false)
-		if err != nil {
-			return 0, err
-		}
-
-		expr, err := projectionBinder.BindExpr(astExpr, 0, true)
-		if err != nil {
-			return 0, err
-		}
-
-		builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = tree.String(astExpr, dialect.MYSQL)
-
-		alias := string(selectExpr.As)
-		if len(alias) > 0 {
-			ctx.aliasMap[alias] = int32(len(ctx.projects))
-		}
-		ctx.projects = append(ctx.projects, expr)
-	}
-
-	resultLen := len(ctx.projects)
-	for i, proj := range ctx.projects {
-		exprStr := proj.String()
-		if _, ok := ctx.projectByExpr[exprStr]; !ok {
-			ctx.projectByExpr[exprStr] = int32(i)
-		}
-	}
-
-	ctx.isDistinct = clause.Distinct
 
 	// bind ORDER BY clause
 	var orderBys []*plan.OrderBySpec
@@ -1435,7 +1464,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}, ctx)
 
 	// append DISTINCT node
-	if clause.Distinct {
+	if ctx.isDistinct {
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_DISTINCT,
 			Children: []int32{nodeID},
@@ -1720,6 +1749,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			return builder.buildTable(tbl.Left, ctx)
 		}
 		return builder.buildJoinTable(tbl, ctx)
+
 	case *tree.TableFunction:
 		return builder.buildTableFunction(tbl, ctx)
 
@@ -1814,7 +1844,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		projects := subCtx.projects
 
 		if len(alias.Cols) > len(headings) {
-			return moerr.NewSyntaxError(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(headings), len(alias.Cols))
+			return moerr.NewSyntaxError(builder.GetContext(), "11111 table %q has %d columns available but %d columns specified", alias.Alias, len(headings), len(alias.Cols))
 		}
 
 		table = subCtx.cteName
