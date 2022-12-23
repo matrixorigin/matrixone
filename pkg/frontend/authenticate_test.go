@@ -379,6 +379,39 @@ func Test_checkUserExistsOrNot(t *testing.T) {
 	})
 }
 
+func Test_initFunction(t *testing.T) {
+	convey.Convey("init function", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+
+		cu := &tree.CreateFunction{
+			Name:       tree.NewFuncName("testFunc"),
+			Args:       nil,
+			ReturnType: tree.NewReturnType("int"),
+			Body:       "",
+			Language:   "sql",
+		}
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+
+		ses := &Session{}
+		err := InitFunction(ctx, ses, tenant, cu)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
 func Test_initUser(t *testing.T) {
 	convey.Convey("init user", t, func() {
 		ctrl := gomock.NewController(t)
@@ -5449,6 +5482,27 @@ func Test_doRevokePrivilege(t *testing.T) {
 			err = doRevokePrivilege(ses.GetRequestContext(), ses, stmt)
 			convey.So(err, convey.ShouldBeNil)
 		}
+	})
+}
+
+func Test_doDropFunction(t *testing.T) {
+	convey.Convey("drop function", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+
+		cu := &tree.DropFunction{
+			Name: tree.NewFuncName("testFunc"),
+			Args: nil,
+		}
+
+		ses := &Session{}
+		err := doDropFunction(ctx, ses, cu)
+		convey.So(err, convey.ShouldBeNil)
 	})
 }
 

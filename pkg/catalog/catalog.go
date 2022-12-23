@@ -84,6 +84,8 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		}
 		if e.EntryType == api.Entry_Delete {
 			return genDropOrTruncateTables(GenRows(bat)), es[1:], nil
+		} else if e.EntryType == api.Entry_Update {
+			return genUpdateConstraint(GenRows(bat)), es[1:], nil
 		}
 		cmds := genCreateTables(GenRows(bat))
 		idx := 0
@@ -184,6 +186,18 @@ func genCreateTables(rows [][]any) []CreateTable {
 		cmds[i].Viewdef = string(row[MO_TABLES_VIEWDEF_IDX].([]byte))
 		cmds[i].Constraint = row[MO_TABLES_CONSTRAINT].([]byte)
 		cmds[i].RelKind = string(row[MO_TABLES_RELKIND_IDX].([]byte))
+	}
+	return cmds
+}
+
+func genUpdateConstraint(rows [][]any) []UpdateConstraint {
+	cmds := make([]UpdateConstraint, len(rows))
+	for i, row := range rows {
+		cmds[i].TableId = row[MO_TABLES_REL_ID_IDX].(uint64)
+		cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+		cmds[i].TableName = string(row[MO_TABLES_REL_NAME_IDX].([]byte))
+		cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
+		cmds[i].Constraint = row[MO_TABLES_UPDATE_CONSTRAINT].([]byte)
 	}
 	return cmds
 }
