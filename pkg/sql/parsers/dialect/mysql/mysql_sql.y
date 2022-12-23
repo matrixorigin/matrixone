@@ -3439,6 +3439,18 @@ select_with_parens:
     {
         $$ = &tree.ParenSelect{Select: &tree.Select{Select: $2}}
     }
+|   '(' values_stmt ')'
+    {
+        valuesStmt := $2.(*tree.ValuesStatement);
+        $$ = &tree.ParenSelect{Select: &tree.Select {
+            Select: &tree.ValuesClause {
+                Rows: valuesStmt.Rows,
+                RowWord: true,
+            },
+            OrderBy: valuesStmt.OrderBy,
+            Limit:   valuesStmt.Limit,
+        }}
+    }
 
 simple_select:
     simple_select_clause
