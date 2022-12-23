@@ -832,8 +832,12 @@ message CreateTable {
 }
 
 message AlterTable {
-	string table 		= 1;
-	TableDef table_def 	= 2;
+	bool if_exists		= 1;
+	string database 	= 2;
+	bool temporary		= 3;
+	string table		= 4;
+	TableDef table_def	= 5;
+	repeated TableDef index_tables = 6;
 }
 
 message DropTable {

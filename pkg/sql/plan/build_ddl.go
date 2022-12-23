@@ -869,7 +869,81 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
+// Get tabledef(col, viewsql, properties) for alterview.
 func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
-	return nil, moerr.NewNotSupported(ctx.GetContext(), "statement '%v'", tree.String(stmt, dialect.MYSQL))
-	// TODO
+	viewName := stmt.Name.ObjectName
+	alterTable := &plan.AlterTable{
+		IfExists:  stmt.IfExists,
+		Temporary: stmt.Temporary,
+		TableDef: &plan.TableDef{
+			Name: string(viewName),
+		},
+	}
+	// get database name
+	if len(stmt.Name.SchemaName) == 0 {
+		alterTable.Database = ""
+	} else {
+		alterTable.Database = string(stmt.Name.SchemaName)
+	}
+
+	// check view statement
+	stmtPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.AsSource)
+	if err != nil {
+		return nil, err
+	}
+
+	query := stmtPlan.GetQuery()
+	cols := make([]*plan.ColDef, len(query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList))
+	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
+		cols[idx] = &plan.ColDef{
+			Name: query.Headings[idx],
+			Alg:  plan.CompressType_Lz4,
+			Typ:  expr.Typ,
+			Default: &plan.Default{
+				NullAbility:  true,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+	}
+	alterTable.TableDef.Cols = cols
+
+	viewData, err := json.Marshal(ViewData{
+		Stmt:            ctx.GetRootSql(),
+		DefaultDatabase: ctx.DefaultDatabase(),
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	alterTable.TableDef.ViewSql = &plan.ViewDef{
+		View: string(viewData),
+	}
+
+	properties := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: catalog.SystemViewRel,
+		},
+	}
+
+	alterTable.TableDef.Defs = append(alterTable.TableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: properties,
+			},
+		},
+	})
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_ALTER_VIEW,
+				Definition: &plan.DataDefinition_AlterTable{
+					AlterTable: alterTable,
+				},
+			},
+		},
+	}, nil
 }
