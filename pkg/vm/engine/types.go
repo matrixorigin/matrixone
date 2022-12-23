@@ -45,6 +45,8 @@ type Attribute struct {
 	IsHidden bool
 	// IsRowId whether the attribute is rowid or not
 	IsRowId bool
+	// Column ID
+	ID uint64
 	// Name name of attribute
 	Name string
 	// Alg compression algorithm
@@ -242,7 +244,7 @@ type Relation interface {
 	// only ConstraintDef can be modified
 	UpdateConstraint(context.Context, *ConstraintDef) error
 
-	GetTableID(context.Context) string
+	GetTableID(context.Context) uint64
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
 	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]Reader, error)

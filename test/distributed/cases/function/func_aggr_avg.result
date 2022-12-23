@@ -30,21 +30,6 @@ avg(g)
 select avg(h) from t1;
 avg(h)
 14.31400000000000000000000
-select avg(i) from t1;
-avg(i)
-20120312.0000
-select avg(k) from t1;
-avg(k)
-20120312100312.0000
-select avg(l) from t1;
-avg(l)
-20120312130312.0000
-select avg(m) from t1;
-avg(m)
-0.0
-select avg(n) from t1;
-avg(n)
-0.0
 select avg(a) from t1 limit 1;
 avg(a)
 1.0000
@@ -69,21 +54,6 @@ avg(g)
 select avg(h) from t1 limit 1;
 avg(h)
 14.31400000000000000000000
-select avg(i) from t1 limit 1;
-avg(i)
-20120312.0000
-select avg(k) from t1 limit 1;
-avg(k)
-20120312100312.0000
-select avg(l) from t1 limit 1;
-avg(l)
-20120312130312.0000
-select avg(m) from t1 limit 1;
-avg(m)
-0.0
-select avg(n) from t1 limit 1;
-avg(n)
-0.0
 drop table t1;
 create table t1(a bigint);
 select avg(a) from t1;

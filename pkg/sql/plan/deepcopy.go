@@ -292,9 +292,16 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 			copy(indexDef.IndexNames, defImpl.UIdx.IndexNames)
 			copy(indexDef.TableNames, defImpl.UIdx.TableNames)
 			copy(indexDef.TableExists, defImpl.UIdx.TableExists)
-			for i := range indexDef.Fields {
-				copy(indexDef.Fields[i].Parts, defImpl.UIdx.Fields[i].Parts)
-				copy(indexDef.Fields[i].Cols, defImpl.UIdx.Fields[i].Cols)
+			for idx, oldField := range defImpl.UIdx.Fields {
+				newField := &plan.Field{
+					Parts: make([]string, len(oldField.Parts)),
+					Cols:  make([]*plan.ColDef, len(oldField.Cols)),
+				}
+				copy(newField.Parts, oldField.Parts)
+				for i, col := range oldField.Cols {
+					newField.Cols[i] = DeepCopyColDef(col)
+				}
+				indexDef.Fields[idx] = newField
 			}
 			newTable.Defs[idx] = &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_UIdx{

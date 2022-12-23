@@ -16,13 +16,10 @@ package frontend
 
 import (
 	"context"
-	"math"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -554,6 +551,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table.EXPECT().FilteredStats(gomock.Any(), gomock.Any()).Return(int32(100), int64(1000000), nil).AnyTimes()
 		table.EXPECT().Stats(gomock.Any()).Return(int32(100), int64(1000000), nil).AnyTimes()
 		table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 

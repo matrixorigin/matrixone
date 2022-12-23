@@ -40,11 +40,11 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 
-	var tableID string
 	var err error
 	var dbSource engine.Database
 	var rel engine.Relation
 	var isTemp bool
+	var tableID uint64
 
 	if arg.DeleteCtxs[0].CanTruncate {
 		dbSource, err = c.e.Database(c.ctx, arg.DeleteCtxs[0].DbName, c.proc.TxnOperator)
