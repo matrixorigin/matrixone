@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"io"
+	"time"
 )
 
 // FileService is a write-once file system
@@ -59,6 +60,10 @@ type IOVector struct {
 	// empty Entries is not allowed
 	// when writing, overlapping Entries is not allowed
 	Entries []IOEntry
+	// ExpireAt specifies the expire time of the file
+	// implementations may or may not delete the file after this time
+	// zero value means no expire
+	ExpireAt time.Time
 }
 
 type IOEntry struct {
