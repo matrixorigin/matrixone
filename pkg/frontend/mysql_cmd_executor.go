@@ -1796,16 +1796,13 @@ func doShowTableValues(ses *Session, stmt *tree.ShowTableValues, proc *process.P
 		return err
 	}
 
-	//Enforce flush
-	bh := ses.GetBackgroundExec(ses.GetRequestContext())
-	sql := fmt.Sprintf("select mo_ctl('dn', 'flush', '%s.%s');", dbName, tblName)
-	err = bh.Exec(ses.GetRequestContext(), sql)
+	_, err = table.Ranges(ctx, nil)
 	if err != nil {
 		return err
 	}
 
 	//Get table max and min value from zonemap
-	tableVal, tableTypes, err := table.MaxAndMinValues(ses.requestCtx)
+	tableVal, tableTypes, err := table.MaxAndMinValues(ctx)
 
 	//set return data
 	rows := make([][]interface{}, 0, len(tableVal))
