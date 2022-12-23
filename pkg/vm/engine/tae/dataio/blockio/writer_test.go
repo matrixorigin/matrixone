@@ -74,6 +74,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	_, err = writer.WriteBlockAndZoneMap(bat, idxs)
 	assert.Nil(t, err)
 	blocks, err := writer.Sync()
+	assert.Nil(t, err)
 	assert.Equal(t, 1, len(blocks))
 	fd := blocks[0]
 	col, err := fd.GetColumn(0)
