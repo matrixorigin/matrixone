@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
@@ -305,11 +306,66 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 	}
 }
 
-func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
-	if !d.Default.NullAbility && d.Default.Expr == nil && !d.Typ.AutoIncr {
-		return nil, moerr.NewInvalidInput(ctx, "invalid default value")
+// getAccountIds transforms the account names into account ids.
+// if accounts is nil, return the id of the sys account.
+func getAccountIds(ctx CompilerContext, accounts tree.IdentifierList) ([]uint32, error) {
+	var accountIds []uint32
+	var err error
+	if len(accounts) != 0 {
+		accountNames := make([]string, len(accounts))
+		for i, account := range accounts {
+			accountNames[i] = string(account)
+		}
+		accountIds, err = ctx.ResolveAccountIds(accountNames)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		accountIds = []uint32{catalog.System_Account}
 	}
-	// the auto_incr column does not have default expression
+	if len(accountIds) == 0 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "need specify account for the cluster tables")
+	}
+	return accountIds, err
+}
+
+func getAccountInfoOfClusterTable(ctx CompilerContext, accounts tree.IdentifierList, tableDef *TableDef, isClusterTable bool) (*plan.ClusterTable, error) {
+	var accountIds []uint32
+	var columnIndexOfAccountId int32 = -1
+	var err error
+	if isClusterTable {
+		accountIds, err = getAccountIds(ctx, accounts)
+		if err != nil {
+			return nil, err
+		}
+		for i, col := range tableDef.GetCols() {
+			if isClusterTableAttribute(col.Name) {
+				if columnIndexOfAccountId >= 0 {
+					return nil, moerr.NewInternalError(ctx.GetContext(), "there are two account_ids in the cluster table")
+				} else {
+					columnIndexOfAccountId = int32(i)
+				}
+			}
+		}
+
+		if columnIndexOfAccountId == -1 {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "there is no account_id in the cluster table")
+		} else if columnIndexOfAccountId >= int32(len(tableDef.GetCols())) {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "the index of the account_id in the cluster table is invalid")
+		}
+	} else {
+		if len(accounts) != 0 {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "can not specify the accounts for the non cluster table")
+		}
+	}
+	return &plan.ClusterTable{
+		IsClusterTable:         isClusterTable,
+		AccountIDs:             accountIds,
+		ColumnIndexOfAccountId: columnIndexOfAccountId,
+	}, nil
+}
+
+func getDefaultExprOfAutoIncrementColumn(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 	if d.GetTyp().GetAutoIncr() {
 		typ := types.T(d.GetTyp().GetId())
 		if !operator.IsInteger(typ) {
@@ -346,6 +402,17 @@ func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 				Id: d.GetTyp().GetId(),
 			},
 		}, nil
+	}
+	return nil, moerr.NewNotSupported(ctx, "do nothing here for the non auto_incr column ")
+}
+
+func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
+	if !d.Default.NullAbility && d.Default.Expr == nil && !d.Typ.AutoIncr {
+		return nil, moerr.NewInvalidInput(ctx, "invalid default value")
+	}
+	// the auto_incr column does not have default expression
+	if d.GetTyp().GetAutoIncr() {
+		return getDefaultExprOfAutoIncrementColumn(ctx, d)
 	}
 	if d.Default.Expr == nil {
 		return &Expr{

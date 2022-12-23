@@ -37,23 +37,21 @@ import (
 )
 
 type Argument struct {
-	Ts                     uint64
-	TargetTable            engine.Relation
-	TargetColDefs          []*plan.ColDef
-	Affected               uint64
-	Engine                 engine.Engine
-	DB                     engine.Database
-	TableID                string
-	CPkeyColDef            *plan.ColDef
-	DBName                 string
-	TableName              string
-	UniqueIndexTables      []engine.Relation
-	UniqueIndexDef         *plan.UniqueIndexDef
-	SecondaryIndexTables   []engine.Relation
-	SecondaryIndexDef      *plan.SecondaryIndexDef
-	IsClusterTable         bool
-	AccountIds             []uint32
-	ColumnIndexOfAccountId int
+	Ts                   uint64
+	TargetTable          engine.Relation
+	TargetColDefs        []*plan.ColDef
+	Affected             uint64
+	Engine               engine.Engine
+	DB                   engine.Database
+	TableID              string
+	CPkeyColDef          *plan.ColDef
+	DBName               string
+	TableName            string
+	UniqueIndexTables    []engine.Relation
+	UniqueIndexDef       *plan.UniqueIndexDef
+	SecondaryIndexTables []engine.Relation
+	SecondaryIndexDef    *plan.SecondaryIndexDef
+	ClusterTable         *plan.ClusterTable
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -204,7 +202,8 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		return false, nil
 	}
 	ctx := proc.Ctx
-	if n.IsClusterTable {
+	clusterTable := n.ClusterTable
+	if clusterTable.GetIsClusterTable() {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
 	defer bat.Clean(proc.Mp())
@@ -227,18 +226,18 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp())
 		}
 	}
-	if n.IsClusterTable {
-		accountIdColumnDef := n.TargetColDefs[n.ColumnIndexOfAccountId]
+	if clusterTable.GetIsClusterTable() {
+		accountIdColumnDef := n.TargetColDefs[clusterTable.GetColumnIndexOfAccountId()]
 		accountIdExpr := accountIdColumnDef.GetDefault().GetExpr()
 		accountIdConst := accountIdExpr.GetC()
 
 		vecLen := vector.Length(bat.Vecs[0])
 		tmpBat := batch.NewWithSize(0)
 		tmpBat.Zs = []int64{1}
-		for _, accountId := range n.AccountIds {
+		for _, accountId := range clusterTable.GetAccountIDs() {
 			//update accountId in the accountIdExpr
 			accountIdConst.Value = &plan.Const_U32Val{U32Val: accountId}
-			accountIdVec := bat.Vecs[n.ColumnIndexOfAccountId]
+			accountIdVec := bat.Vecs[clusterTable.GetColumnIndexOfAccountId()]
 			//clean vector before fill it
 			vector.Clean(accountIdVec, proc.Mp())
 			//the i th row

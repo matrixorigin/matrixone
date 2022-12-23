@@ -3600,7 +3600,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			typ:                   PrivilegeTypeInsert,
 			databaseName:          ins.GetDbName(),
 			tableName:             ins.GetTblName(),
-			isClusterTable:        ins.GetIsClusterTable(),
+			isClusterTable:        ins.GetClusterTable().GetIsClusterTable(),
 			clusterTableOperation: clusterTableModify,
 		})
 	} else if p.GetDdl() != nil {
@@ -3610,7 +3610,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 				typ:                   PrivilegeTypeTruncate,
 				databaseName:          truncateTable.GetDatabase(),
 				tableName:             truncateTable.GetTable(),
-				isClusterTable:        truncateTable.GetIsClusterTable(),
+				isClusterTable:        truncateTable.GetClusterTable().GetIsClusterTable(),
 				clusterTableOperation: clusterTableModify,
 			})
 		} else if p.GetDdl().GetDropTable() != nil {
@@ -3619,7 +3619,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 				typ:                   PrivilegeTypeDropTable,
 				databaseName:          dropTable.GetDatabase(),
 				tableName:             dropTable.GetTable(),
-				isClusterTable:        dropTable.GetIsClusterTable(),
+				isClusterTable:        dropTable.GetClusterTable().GetIsClusterTable(),
 				clusterTableOperation: clusterTableDrop,
 			})
 		}

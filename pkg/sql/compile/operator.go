@@ -405,7 +405,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 
 func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
 	ctx := proc.Ctx
-	if n.GetIsClusterTable() {
+	if n.GetClusterTable().GetIsClusterTable() {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
 	db, err := eg.Database(ctx, n.ObjRef.SchemaName, proc.TxnOperator)
@@ -442,21 +442,19 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		}
 	}
 	return &insert.Argument{
-		TargetTable:            relation,
-		TargetColDefs:          n.TableDef.Cols,
-		Engine:                 eg,
-		DB:                     db,
-		TableID:                relation.GetTableID(ctx),
-		DBName:                 n.ObjRef.SchemaName,
-		TableName:              n.TableDef.Name,
-		CPkeyColDef:            n.TableDef.CompositePkey,
-		UniqueIndexTables:      uniqueIndexTables,
-		UniqueIndexDef:         uDef,
-		SecondaryIndexTables:   secondaryIndexTables,
-		SecondaryIndexDef:      sDef,
-		IsClusterTable:         n.GetIsClusterTable(),
-		AccountIds:             n.GetAccountIDs(),
-		ColumnIndexOfAccountId: int(n.GetColumnIndexOfAccountId()),
+		TargetTable:          relation,
+		TargetColDefs:        n.TableDef.Cols,
+		Engine:               eg,
+		DB:                   db,
+		TableID:              relation.GetTableID(ctx),
+		DBName:               n.ObjRef.SchemaName,
+		TableName:            n.TableDef.Name,
+		CPkeyColDef:          n.TableDef.CompositePkey,
+		UniqueIndexTables:    uniqueIndexTables,
+		UniqueIndexDef:       uDef,
+		SecondaryIndexTables: secondaryIndexTables,
+		SecondaryIndexDef:    sDef,
+		ClusterTable:         n.GetClusterTable(),
 	}, nil
 }
 

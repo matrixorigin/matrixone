@@ -116,7 +116,8 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	p := s.Plan.GetIns()
 
 	ctx := c.ctx
-	if p.GetIsClusterTable() {
+	clusterTable := p.GetClusterTable()
+	if clusterTable.GetIsClusterTable() {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
 
@@ -141,16 +142,16 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		return 0, err
 	}
 
-	if p.GetIsClusterTable() {
+	if clusterTable.GetIsClusterTable() {
 		columns := p.GetColumns()
-		accountIdColumnDef := p.ExplicitCols[p.GetColumnIndexOfAccountId()]
-		accountIdRows := columns[p.GetColumnIndexOfAccountId()].GetColumn()
+		accountIdColumnDef := p.ExplicitCols[clusterTable.GetColumnIndexOfAccountId()]
+		accountIdRows := columns[clusterTable.GetColumnIndexOfAccountId()].GetColumn()
 		accountIdExpr := accountIdRows[0]
 		accountIdConst := accountIdExpr.GetC()
-		accountIdVec := bat.Vecs[p.GetColumnIndexOfAccountId()]
+		accountIdVec := bat.Vecs[clusterTable.GetColumnIndexOfAccountId()]
 		tmpBat := batch.NewWithSize(0)
 		tmpBat.Zs = []int64{1}
-		for _, accountId := range p.GetAccountIDs() {
+		for _, accountId := range clusterTable.GetAccountIDs() {
 			//update accountId in the accountIdExpr
 			accountIdConst.Value = &plan.Const_U32Val{U32Val: accountId}
 			//clean vector before fill it
@@ -160,7 +161,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 				err = fillRow(ctx, tmpBat,
 					accountIdColumnDef,
 					insertRows,
-					int(p.GetColumnIndexOfAccountId()), j,
+					int(clusterTable.GetColumnIndexOfAccountId()), j,
 					accountIdExpr,
 					accountIdVec,
 					c.proc)
@@ -174,7 +175,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 			}
 		}
 		//the count of insert rows x the count of accounts
-		return uint64(len(p.Columns[0].Column)) * uint64(len(p.GetAccountIDs())), nil
+		return uint64(len(p.Columns[0].Column)) * uint64(len(clusterTable.GetAccountIDs())), nil
 	} else {
 		if err = writeBatch(ctx, dbSource, relation, c, p, bat); err != nil {
 			return 0, err
@@ -289,10 +290,11 @@ func fillBatch(ctx context.Context, bat *batch.Batch, p *plan.InsertValues, rows
 	tmpBat := batch.NewWithSize(0)
 	tmpBat.Zs = []int64{1}
 
+	clusterTable := p.GetClusterTable()
 	//the i th column
 	for i, v := range bat.Vecs {
 		//skip fill vector of the account_id in the cluster table here
-		if p.GetIsClusterTable() && int32(i) == p.GetColumnIndexOfAccountId() {
+		if clusterTable.GetIsClusterTable() && int32(i) == clusterTable.GetColumnIndexOfAccountId() {
 			continue
 		}
 		//the j th row
