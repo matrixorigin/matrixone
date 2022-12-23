@@ -2228,10 +2228,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	defer RecordStatementTxnID(requestCtx, cwft.ses)
 	if cwft.plan == nil {
 		cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
-	} else {
-		if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil {
-			err = authenticateCanExecuteStatementAndPlan(requestCtx, cwft.ses, cwft.stmt, cwft.plan)
-		}
+	} else if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil {
+		err = authenticateCanExecuteStatementAndPlan(requestCtx, cwft.ses, cwft.stmt, cwft.plan)
 	}
 	if err != nil {
 		return nil, err
