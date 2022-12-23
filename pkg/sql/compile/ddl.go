@@ -61,7 +61,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 
 // Drop the old view, and create the new view.
 func (s *Scope) AlterView(c *Compile) error {
-	qry := s.Plan.GetDdl().GetAlterTable()
+	qry := s.Plan.GetDdl().GetAlterView()
 
 	dbName := c.db
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)

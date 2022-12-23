@@ -805,6 +805,7 @@ message DataDefinition {
 		DropIndex drop_index 			= 11;
 		TruncateTable truncate_table	= 12;
 		ShowVariables show_variables 	= 13;
+		AlterView alter_view			= 14;
 	}
 }
 
@@ -832,6 +833,11 @@ message CreateTable {
 }
 
 message AlterTable {
+	string table 		= 1;
+	TableDef table_def 	= 2;
+}
+
+message AlterView {
 	bool if_exists		= 1;
 	string database 	= 2;
 	bool temporary		= 3;
