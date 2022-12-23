@@ -77,7 +77,6 @@ cast(t2 as text)
 12:00:00
 select cast(t3 as text)from text_04;
 cast(t3 as text)
-465
 {"a": "1", "b": "2"}
 select cast(t4 as text)from text_04;
 cast(t4 as text)
