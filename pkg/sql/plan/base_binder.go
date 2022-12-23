@@ -983,13 +983,48 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 
 	case "in", "not_in":
-		//cast the list to left type
+		//if all the expr in the in list can safely cast to left type, we call it safe
+		var safe bool
 		if rightList, ok := args[1].Expr.(*plan.Expr_List); ok {
+			typLeft := makeTypeByPlan2Expr(args[0])
 			lenList := len(rightList.List.List)
+
 			for i := 0; i < lenList; i++ {
-				rightList.List.List[i], err = appendCastBeforeExpr(ctx, rightList.List.List[i], args[0].Typ)
-				if err != nil {
-					return nil, err
+				if constExpr, ok := rightList.List.List[i].Expr.(*plan.Expr_C); ok {
+					safe = checkNoNeedCast(makeTypeByPlan2Expr(rightList.List.List[i]), typLeft, constExpr)
+					if !safe {
+						break
+					}
+				} else {
+					break
+				}
+			}
+
+			if safe {
+				//if safe, try to cast the in list to left type
+				for i := 0; i < lenList; i++ {
+					rightList.List.List[i], err = appendCastBeforeExpr(ctx, rightList.List.List[i], args[0].Typ)
+					if err != nil {
+						return nil, err
+					}
+				}
+			} else {
+				//expand the in list to col=a or col=b or ......
+				if name == "in" {
+					newExpr, _ := bindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), DeepCopyExpr(rightList.List.List[0])})
+					for i := 1; i < lenList; i++ {
+						tmpExpr, _ := bindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), DeepCopyExpr(rightList.List.List[i])})
+						newExpr, _ = bindFuncExprImplByPlanExpr(ctx, "or", []*Expr{newExpr, tmpExpr})
+					}
+					return newExpr, nil
+				} else {
+					//expand the not in list to col!=a and col!=b and ......
+					newExpr, _ := bindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), DeepCopyExpr(rightList.List.List[0])})
+					for i := 1; i < lenList; i++ {
+						tmpExpr, _ := bindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), DeepCopyExpr(rightList.List.List[i])})
+						newExpr, _ = bindFuncExprImplByPlanExpr(ctx, "and", []*Expr{newExpr, tmpExpr})
+					}
+					return newExpr, nil
 				}
 			}
 		}
