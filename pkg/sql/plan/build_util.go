@@ -411,9 +411,9 @@ func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 		return nil, moerr.NewInvalidInput(ctx, "invalid default value")
 	}
 	// the auto_incr column does not have default expression
-	if d.GetTyp().GetAutoIncr() {
-		return getDefaultExprOfAutoIncrementColumn(ctx, d)
-	}
+	//if d.GetTyp().GetAutoIncr() {
+	//	return getDefaultExprOfAutoIncrementColumn(ctx, d)
+	//}
 	if d.Default.Expr == nil {
 		return &Expr{
 			Expr: &plan.Expr_C{

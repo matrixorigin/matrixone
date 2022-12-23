@@ -433,6 +433,59 @@ func (v *Vector) ConstExpand(m *mpool.MPool) *Vector {
 	return v
 }
 
+func (v *Vector) ConstExpandColAndNullsToFixedLength(m *mpool.MPool) *Vector {
+	if !v.isConst {
+		return v
+	}
+
+	switch v.Typ.Oid {
+	case types.T_bool:
+		expandVector[bool](v, 1, m)
+	case types.T_int8:
+		expandVector[int8](v, 1, m)
+	case types.T_int16:
+		expandVector[int16](v, 2, m)
+	case types.T_int32:
+		expandVector[int32](v, 4, m)
+	case types.T_int64:
+		expandVector[int64](v, 8, m)
+	case types.T_uint8:
+		expandVector[uint8](v, 1, m)
+	case types.T_uint16:
+		expandVector[uint16](v, 2, m)
+	case types.T_uint32:
+		expandVector[uint32](v, 4, m)
+	case types.T_uint64:
+		expandVector[uint64](v, 8, m)
+	case types.T_float32:
+		expandVector[float32](v, 4, m)
+	case types.T_float64:
+		expandVector[float64](v, 8, m)
+	case types.T_date:
+		expandVector[types.Date](v, 4, m)
+	case types.T_datetime:
+		expandVector[types.Datetime](v, 8, m)
+	case types.T_time:
+		expandVector[types.Time](v, 8, m)
+	case types.T_timestamp:
+		expandVector[types.Timestamp](v, 8, m)
+	case types.T_decimal64:
+		expandVector[types.Decimal64](v, 8, m)
+	case types.T_decimal128:
+		expandVector[types.Decimal128](v, 16, m)
+	case types.T_uuid:
+		expandVector[types.Uuid](v, 16, m)
+	case types.T_TS:
+		expandVector[types.TS](v, types.TxnTsSize, m)
+	case types.T_Rowid:
+		expandVector[types.Rowid](v, types.RowidSize, m)
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+		expandVector[types.Varlena](v, types.VarlenaSize, m)
+	}
+	v.isConst = false
+	return v
+}
+
 func (v *Vector) TryExpandNulls(n int) {
 	if v.Nsp == nil {
 		v.Nsp = &nulls.Nulls{Np: bitmap.New(0)}

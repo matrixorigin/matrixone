@@ -218,7 +218,6 @@ func getOneColRangeFromAutoIncrTable(ctx context.Context, param *AutoIncrParam, 
 
 func updateBatchImpl(ctx context.Context, ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []uint64) error {
 	pos := 0
-	vecLen := vector.Length(bat.Vecs[0])
 	for i, col := range ColDefs {
 		if !col.Typ.AutoIncr {
 			continue
@@ -227,9 +226,6 @@ func updateBatchImpl(ctx context.Context, ColDefs []*plan.ColDef, bat *batch.Bat
 		curNum := offset[pos]
 		stepNum := step[pos]
 		pos++
-		//set auto_increment column to NULL
-		vec.TryExpandNulls(vecLen)
-		nulls.AddRange(vec.GetNulls(), 0, uint64(vecLen))
 		switch vec.Typ.Oid {
 		case types.T_int8:
 			updateVector[int8](vec, uint64(bat.Length()), curNum, stepNum)

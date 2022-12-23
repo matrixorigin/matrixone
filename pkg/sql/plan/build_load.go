@@ -168,20 +168,20 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 		}
 	}
 	var tmp *plan.Expr
-	var err error
+	//var err error
 	for i := 0; i < len(tableDef.Cols); i++ {
 		if node.ProjectList[i] != nil {
 			continue
 		}
 
-		if tableDef.Cols[i].GetTyp().GetAutoIncr() {
-			tmp, err = getDefaultExprOfAutoIncrementColumn(ctx.GetContext(), tableDef.Cols[i])
-			if err != nil {
-				return err
-			}
-			node.ProjectList[i] = tmp
-			continue
-		}
+		//if tableDef.Cols[i].GetTyp().GetAutoIncr() {
+		//	tmp, err = getDefaultExprOfAutoIncrementColumn(ctx.GetContext(), tableDef.Cols[i])
+		//	if err != nil {
+		//		return err
+		//	}
+		//	node.ProjectList[i] = tmp
+		//	continue
+		//}
 		if tableDef.Cols[i].Default.Expr == nil || tableDef.Cols[i].Default.NullAbility {
 			tmp = makePlan2NullConstExprWithType()
 		} else {

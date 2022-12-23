@@ -151,7 +151,23 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		accountIdVec := bat.Vecs[clusterTable.GetColumnIndexOfAccountId()]
 		tmpBat := batch.NewWithSize(0)
 		tmpBat.Zs = []int64{1}
-		for _, accountId := range clusterTable.GetAccountIDs() {
+		//save auto_increment column if necessary
+		savedAutoIncrVectors := make([]*vector.Vector, 0)
+		defer func() {
+			for _, vec := range savedAutoIncrVectors {
+				vector.Clean(vec, c.proc.Mp())
+			}
+		}()
+		for i, colDef := range p.GetExplicitCols() {
+			if colDef.GetTyp().GetAutoIncr() {
+				vec2, err := vector.Dup(bat.Vecs[i], c.proc.Mp())
+				if err != nil {
+					return 0, err
+				}
+				savedAutoIncrVectors = append(savedAutoIncrVectors, vec2)
+			}
+		}
+		for idx, accountId := range clusterTable.GetAccountIDs() {
 			//update accountId in the accountIdExpr
 			accountIdConst.Value = &plan.Const_U32Val{U32Val: accountId}
 			//clean vector before fill it
@@ -167,6 +183,24 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 					c.proc)
 				if err != nil {
 					return 0, err
+				}
+			}
+
+			if idx != 0 { //refill the auto_increment column vector
+				j := 0
+				vecLen := vector.Length(bat.Vecs[0])
+				for colIdx, colDef := range p.GetExplicitCols() {
+					if colDef.GetTyp().GetAutoIncr() {
+						targetVec := bat.Vecs[colIdx]
+						vector.Clean(targetVec, c.proc.Mp())
+						for k := int64(0); k < int64(vecLen); k++ {
+							err = vector.UnionOne(targetVec, savedAutoIncrVectors[j], k, c.proc.Mp())
+							if err != nil {
+								return 0, err
+							}
+						}
+						j++
+					}
 				}
 			}
 

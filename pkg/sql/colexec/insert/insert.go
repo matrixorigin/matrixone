@@ -185,7 +185,6 @@ func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, ba
 		return false, err
 	}
 
-	n.Affected += uint64(len(bat.Zs))
 	if err = CommitTxn(n, proc.TxnOperator, ctx); err != nil {
 		return false, err
 	}
@@ -224,6 +223,9 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		for i := range bat.Vecs {
 			bat.Attrs[i] = n.TargetColDefs[i].GetName()
 			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp())
+			if bat.Vecs[i].IsScalarNull() && n.TargetColDefs[i].GetTyp().GetAutoIncr() {
+				bat.Vecs[i].ConstExpandColAndNullsToFixedLength(proc.Mp())
+			}
 		}
 	}
 	if clusterTable.GetIsClusterTable() {
@@ -234,7 +236,23 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		vecLen := vector.Length(bat.Vecs[0])
 		tmpBat := batch.NewWithSize(0)
 		tmpBat.Zs = []int64{1}
-		for _, accountId := range clusterTable.GetAccountIDs() {
+		//save auto_increment column if necessary
+		savedAutoIncrVectors := make([]*vector.Vector, 0)
+		defer func() {
+			for _, vec := range savedAutoIncrVectors {
+				vector.Clean(vec, proc.Mp())
+			}
+		}()
+		for i, colDef := range n.TargetColDefs {
+			if colDef.GetTyp().GetAutoIncr() {
+				vec2, err := vector.Dup(bat.Vecs[i], proc.Mp())
+				if err != nil {
+					return false, err
+				}
+				savedAutoIncrVectors = append(savedAutoIncrVectors, vec2)
+			}
+		}
+		for idx, accountId := range clusterTable.GetAccountIDs() {
 			//update accountId in the accountIdExpr
 			accountIdConst.Value = &plan.Const_U32Val{U32Val: accountId}
 			accountIdVec := bat.Vecs[clusterTable.GetColumnIndexOfAccountId()]
@@ -245,6 +263,22 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 				err := fillRow(tmpBat, accountIdExpr, accountIdVec, proc)
 				if err != nil {
 					return false, err
+				}
+			}
+			if idx != 0 { //refill the auto_increment column vector
+				j := 0
+				for colIdx, colDef := range n.TargetColDefs {
+					if colDef.GetTyp().GetAutoIncr() {
+						targetVec := bat.Vecs[colIdx]
+						vector.Clean(targetVec, proc.Mp())
+						for k := int64(0); k < int64(vecLen); k++ {
+							err := vector.UnionOne(targetVec, savedAutoIncrVectors[j], k, proc.Mp())
+							if err != nil {
+								return false, err
+							}
+						}
+						j++
+					}
 				}
 			}
 			b, err := writeBatch(ctx, n, proc, bat)
