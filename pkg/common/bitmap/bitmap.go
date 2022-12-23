@@ -66,7 +66,7 @@ func New(n int) *Bitmap {
 func (n *Bitmap) Clone() *Bitmap {
 	var ret Bitmap
 	ret.len = n.len
-	ret.empty = n.empty
+	ret.emptyFlag = n.emptyFlag
 	ret.data = make([]uint64, len(n.data))
 	copy(ret.data, n.data)
 	return &ret
@@ -152,7 +152,7 @@ func (itr *BitmapIterator) Next() uint64 {
 
 func (n *Bitmap) Clear() {
 	n.data = make([]uint64, (n.len-1)/64+1)
-	n.empty = 1
+	n.emptyFlag = 1
 }
 
 func (n *Bitmap) Len() int {
@@ -172,41 +172,39 @@ func (n *Bitmap) Ptr() *uint64 {
 
 // IsEmpty returns true if no bit in the Bitmap is set, otherwise it will return false.
 func (n *Bitmap) IsEmpty() bool {
-	if n.empty == 1 {
+	if n.emptyFlag == 1 {
 		return true
-	} else if n.empty == -1 {
+	} else if n.emptyFlag == -1 {
 		return false
 	}
 	for i := 0; i < len(n.data); i++ {
 		if n.data[i] != 0 {
-			n.empty = -1
+			n.emptyFlag = -1
 			return false
 		}
 	}
-	n.empty = 1
+	n.emptyFlag = 1
 	return true
 }
 
 func (n *Bitmap) Add(row uint64) {
 	n.data[row>>6] |= 1 << (row & 0x3F)
-	if n.empty != -1 {
-		n.empty = -1 //after add operation, must be not empty
-	}
+	n.emptyFlag = -1 //after add operation, must be not empty
+
 }
 
 func (n *Bitmap) AddMany(rows []uint64) {
 	for _, row := range rows {
 		n.data[row>>6] |= 1 << (row & 0x3F)
 	}
-	if n.empty != -1 {
-		n.empty = -1 //after add operation, must be not empty
-	}
+	n.emptyFlag = -1 //after add operation, must be not empty
+
 }
 
 func (n *Bitmap) Remove(row uint64) {
 	n.data[row>>6] &^= (uint64(1) << (row & 0x3F))
-	if n.empty == -1 {
-		n.empty = 0 //after remove operation, not sure
+	if n.emptyFlag == -1 {
+		n.emptyFlag = 0 //after remove operation, not sure
 	}
 }
 
@@ -233,9 +231,9 @@ func (n *Bitmap) AddRange(start, end uint64) {
 		n.data[k] = ^uint64(0)
 	}
 	n.data[j] |= (^uint64(0) >> (uint(-end) & 0x3F))
-	if n.empty != -1 {
-		n.empty = -1 //after addRange operation, must be not empty
-	}
+
+	n.emptyFlag = -1 //after addRange operation, must be not empty
+
 }
 
 func (n *Bitmap) RemoveRange(start, end uint64) {
@@ -255,8 +253,8 @@ func (n *Bitmap) RemoveRange(start, end uint64) {
 		n.data[k] = 0
 	}
 	n.data[j] &= ^(^uint64(0) >> (uint(-end) & 0x3F))
-	if n.empty == -1 {
-		n.empty = 0 //after removeRange operation, not sure
+	if n.emptyFlag == -1 {
+		n.emptyFlag = 0 //after removeRange operation, not sure
 	}
 }
 
@@ -278,8 +276,8 @@ func (n *Bitmap) Or(m *Bitmap) {
 	for i := 0; i < size; i++ {
 		n.data[i] |= m.data[i]
 	}
-	if n.empty == 1 {
-		n.empty = 0 //after or operation, not sure
+	if n.emptyFlag == 1 {
+		n.emptyFlag = 0 //after or operation, not sure
 	}
 }
 
@@ -292,8 +290,8 @@ func (n *Bitmap) And(m *Bitmap) {
 	for i := size; i < len(n.data); i++ {
 		n.data[i] = 0
 	}
-	if n.empty == -1 {
-		n.empty = 0 //after and operation, not sure
+	if n.emptyFlag == -1 {
+		n.emptyFlag = 0 //after and operation, not sure
 	}
 }
 
@@ -326,14 +324,14 @@ func (n *Bitmap) Filter(sels []int64) *Bitmap {
 
 func (n *Bitmap) Count() int {
 	var cnt int
-	if n.empty == 1 { //must be empty
+	if n.emptyFlag == 1 { //must be empty
 		return 0
 	}
 	for i := 0; i < len(n.data); i++ {
 		cnt += bits.OnesCount64(n.data[i])
 	}
 	if cnt > 0 {
-		n.empty = -1 //must be not empty
+		n.emptyFlag = -1 //must be not empty
 	}
 	return cnt
 }
@@ -353,7 +351,7 @@ func (n *Bitmap) Marshal() []byte {
 
 	u1 := uint64(n.len)
 	u2 := uint64(len(n.data) * 8)
-	buf.Write(types.EncodeInt32(&n.empty))
+	buf.Write(types.EncodeInt32(&n.emptyFlag))
 	buf.Write(types.EncodeUint64(&u1))
 	buf.Write(types.EncodeUint64(&u2))
 	buf.Write(types.EncodeSlice(n.data))
@@ -361,7 +359,7 @@ func (n *Bitmap) Marshal() []byte {
 }
 
 func (n *Bitmap) Unmarshal(data []byte) {
-	n.empty = types.DecodeInt32(data[:4])
+	n.emptyFlag = types.DecodeInt32(data[:4])
 	data = data[4:]
 	n.len = int64(types.DecodeUint64(data[:8]))
 	data = data[8:]
