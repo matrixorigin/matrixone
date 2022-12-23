@@ -1775,13 +1775,6 @@ func doShowTableValues(ses *Session, stmt *tree.ShowTableValues, proc *process.P
 		dbName = ses.GetDatabaseName()
 	}
 
-	//Enforce flush
-	bh := ses.GetBackgroundExec(ses.GetRequestContext())
-	err = bh.Exec(ses.GetRequestContext(), fmt.Sprintf("select mo_ctl('dn', 'flush', '%s.%s');", dbName, tblName))
-	if err != nil {
-		return err
-	}
-
 	//Get target table
 	ctx := ses.GetRequestContext()
 	tcc := ses.GetTxnCompileCtx()
@@ -1799,6 +1792,14 @@ func doShowTableValues(ses *Session, stmt *tree.ShowTableValues, proc *process.P
 	}
 
 	tableColumns, err := table.TableColumns(ctx)
+	if err != nil {
+		return err
+	}
+
+	//Enforce flush
+	bh := ses.GetBackgroundExec(ses.GetRequestContext())
+	sql := fmt.Sprintf("select mo_ctl('dn', 'flush', '%s.%s');", dbName, tblName)
+	err = bh.Exec(ses.GetRequestContext(), sql)
 	if err != nil {
 		return err
 	}

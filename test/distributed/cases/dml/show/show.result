@@ -236,3 +236,28 @@ mo_database    Number of columns in mo_database
 mo_database    8
 show column_number from hdjshdj;
 no such table mo_catalog.hdjshdj
+drop database if exists test01;
+create database test01;
+use test01;
+create table t (a int, b int);
+insert into t values(1,1), (2, 2), (3,3), (4,4), (5,5), (6,6), (7,7), (8,8), (9,9), (10, 10);
+select mo_ctl('dn', 'flush', 'test01.t');
+mo_ctl(dn, flush, test01.t)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select * from t;
+a    b
+1    1
+2    2
+3    3
+4    4
+5    5
+6    6
+7    7
+8    8
+9    9
+10    10
+show table_values from t;
+Column_name    Column_type    Maximum_value    Minimum_value
+a    INT    1    10
+b    INT    1    10
+drop table t;

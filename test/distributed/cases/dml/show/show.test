@@ -123,3 +123,13 @@ show tables;
 show table_number from mo_catalog;
 show column_number from mo_database;
 show column_number from hdjshdj;
+
+drop database if exists test01;
+create database test01;
+use test01;
+create table t (a int, b int);
+insert into t values(1,1), (2, 2), (3,3), (4,4), (5,5), (6,6), (7,7), (8,8), (9,9), (10, 10);
+select mo_ctl('dn', 'flush', 'test01.t');
+select * from t;
+show table_values from t;
+drop table t;
