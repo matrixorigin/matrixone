@@ -259,7 +259,16 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	}
 }
 
-func fillRow(tmpBat *batch.Batch, expr *plan.Expr, targetVec *vector.Vector, proc *process.Process) error {
+/*
+fillRow evaluates the expression and put the result into the targetVec.
+tmpBat: store temporal vector
+expr: the expression to be evaluated at the position (colIdx,rowIdx)
+targetVec: the destination where the evaluated result of expr saved into
+*/
+func fillRow(tmpBat *batch.Batch,
+	expr *plan.Expr,
+	targetVec *vector.Vector,
+	proc *process.Process) error {
 	vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 	if err != nil {
 		return err
@@ -275,6 +284,8 @@ func fillRow(tmpBat *batch.Batch, expr *plan.Expr, targetVec *vector.Vector, pro
 	return err
 }
 
+// writeBatch saves the batch into the storage
+// and updates the auto increment table, index table.
 func writeBatch(ctx context.Context,
 	n *Argument,
 	proc *process.Process,
