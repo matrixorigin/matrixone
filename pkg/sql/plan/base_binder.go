@@ -996,6 +996,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 						break
 					}
 				} else {
+					safe = false
 					break
 				}
 			}
