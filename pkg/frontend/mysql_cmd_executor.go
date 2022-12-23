@@ -257,6 +257,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		StatementType:        getStatementType(statement).GetStatementType(),
 		QueryType:            getStatementType(statement).GetQueryType(),
 	}
+	ses.tStmt = stm
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
 	}
@@ -573,6 +574,20 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 	return nil
 }
 
+func openSaveQueryResult(ses *Session) bool {
+	if strings.ToLower(ses.GetParameterUnit().SV.SaveQueryResult) == "on" {
+		return true
+	}
+	val, err := ses.GetGlobalVar("save_query_result")
+	if err != nil {
+		return false
+	}
+	if v, _ := val.(uint64); v > 0 {
+		return true
+	}
+	return false
+}
+
 /*
 extract the data from the pipeline.
 obj: routine obj
@@ -585,6 +600,12 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
 	if bat == nil {
 		return nil
+	}
+
+	if openSaveQueryResult(ses) {
+		if err := saveQueryResult(ses, bat); err != nil {
+			return err
+		}
 	}
 
 	enableProfile := ses.GetParameterUnit().SV.EnableProfileGetDataFromPipeline

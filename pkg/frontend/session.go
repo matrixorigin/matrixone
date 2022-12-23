@@ -173,6 +173,8 @@ type Session struct {
 	sqlSourceType string
 
 	isBackgroundSession bool
+
+	tStmt *trace.StatementInfo
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
