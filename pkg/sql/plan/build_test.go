@@ -511,13 +511,13 @@ func TestJoinTableSqlBuilder(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 
 	// should error
-	// sqls = []string{
-	// 	"SELECT N_NAME,N_REGIONKEY FROM NATION join REGION on NATION.N_REGIONKEY = REGION.NotExistColumn",                    //column not exist
-	// 	"SELECT N_NAME, R_REGIONKEY FROM NATION join REGION using(R_REGIONKEY)",                                              //column not exist
-	// 	"SELECT N_NAME,N_REGIONKEY FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE aaaaa.N_REGIONKEY > 0", //table alias not exist
-	// 	"select *", //No table used
-	// }
-	// runTestShouldError(mock, t, sqls)
+	sqls = []string{
+		"SELECT N_NAME,N_REGIONKEY FROM NATION join REGION on NATION.N_REGIONKEY = REGION.NotExistColumn",                    //column not exist
+		"SELECT N_NAME, R_REGIONKEY FROM NATION join REGION using(R_REGIONKEY)",                                              //column not exist
+		"SELECT N_NAME,N_REGIONKEY FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE aaaaa.N_REGIONKEY > 0", //table alias not exist
+		"select *", //No table used
+	}
+	runTestShouldError(mock, t, sqls)
 }
 
 // test derived table plan building
@@ -620,16 +620,16 @@ func TestInsert(t *testing.T) {
 
 	// should error
 	sqls = []string{
-		//"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), ('NAME2', 22, 'COMMENT2')",                                // doesn't match value count
-		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 'NAME1'), (2, 22, 'NAME2')",                     // doesn't match value count
-		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",             // column not exist
-		//"INSERT NATION333 (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2, 'NAME1'), (2, 22, 'NAME2')",           // table not exist
-		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 'should int32', 'NAME1'), (2, 22, 'NAME2')", // column type not match
-		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2.22, 'NAME1'), (2, 22, 'NAME2')",           // column type not match
-		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2, 'NAME1'), (2, 22, 'NAME2')",              // function expr not support now
-		"INSERT INTO region SELECT * FROM NATION2",                                            // column length not match
-		"INSERT INTO region SELECT 1, 2, 3, 4, 5, 6 FROM NATION2",                             // column length not match
-		"INSERT NATION333 (N_NATIONKEY, N_REGIONKEY, N_NAME2222) SELECT 1, 2, 3 FROM NATION2", // table not exist
+		"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), ('NAME2', 22, 'COMMENT2')",                                // doesn't match value count
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 'NAME1'), (2, 22, 'NAME2')",                     // doesn't match value count
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",             // column not exist
+		"INSERT NATION333 (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2, 'NAME1'), (2, 22, 'NAME2')",           // table not exist
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 'should int32', 'NAME1'), (2, 22, 'NAME2')", // column type not match
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2.22, 'NAME1'), (2, 22, 'NAME2')",           // column type not match
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2, 'NAME1'), (2, 22, 'NAME2')",              // function expr not support now
+		"INSERT INTO region SELECT * FROM NATION2",                                                                   // column length not match
+		"INSERT INTO region SELECT 1, 2, 3, 4, 5, 6 FROM NATION2",                                                    // column length not match
+		"INSERT NATION333 (N_NATIONKEY, N_REGIONKEY, N_NAME2222) SELECT 1, 2, 3 FROM NATION2",                        // table not exist
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -777,19 +777,16 @@ func TestDdl(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 
 	// should error
-	// sqls = []string{
-	// 	"create database tpch",  //we mock database tpch。 so tpch is exist
-	// 	"drop database db_name", //we mock database tpch。 so tpch is exist
-	// 	"create table nation (t bool(20), b int, c char(20), d varchar(20))",             //table exists in tpch
-	// 	"create table nation (b int primary key, c char(20) primary key, d varchar(20))", //Multiple primary key
-	// 	"drop table tbl_name",           //table not exists in tpch
-	// 	"drop table tpch.tbl_not_exist", //database not exists
-	// 	"drop table db_not_exist.tbl",   //table not exists
-
-	// 	"create index idx1 using bsi on a(a)", //unsupport now
-	// 	"drop index idx1 on tbl",              //unsupport now
-	// }
-	// runTestShouldError(mock, t, sqls)
+	sqls = []string{
+		// "create database tpch",  // check in pipeline now
+		// "drop database db_name", // check in pipeline now
+		// "create table nation (t bool(20), b int, c char(20), d varchar(20))",             // check in pipeline now
+		"create table nation (b int primary key, c char(20) primary key, d varchar(20))", //Multiple primary key
+		"drop table tbl_name",           //table not exists in tpch
+		"drop table tpch.tbl_not_exist", //database not exists
+		"drop table db_not_exist.tbl",   //table not exists
+	}
+	runTestShouldError(mock, t, sqls)
 }
 
 func TestShow(t *testing.T) {
