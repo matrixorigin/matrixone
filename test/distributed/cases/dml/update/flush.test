@@ -1,0 +1,30 @@
+drop database if exists db1;
+
+-- @bvt:issue#7274
+create database db1;
+use db1;
+drop table if exists t;
+create table t (a int);
+insert into t values (1), (2), (3), (4), (5);
+select mo_ctl('dn', 'flush', 'db1.t');
+select * from t;
+delete from t where a in (1, 2, 3);
+begin;
+select mo_ctl('dn', 'flush', 'db1.t');
+select * from t;
+commit;
+
+
+drop table if exists t;
+create table t (a int);
+insert into t values (1), (2), (3), (4), (5);
+delete from t where a = 2;
+insert into t values (6);
+delete from t where a = 3;
+begin;
+select mo_ctl('dn', 'flush', 'db1.t');
+select * from t;
+commit;
+-- @bvt:issue
+
+drop database if exists db1;
