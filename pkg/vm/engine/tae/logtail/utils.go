@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"fmt"
+	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -137,6 +138,23 @@ func IncrementalCheckpointDataFactory(start, end types.TS) func(c *catalog.Catal
 	}
 }
 
+func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration) func(c *catalog.Catalog) (*CheckpointData, error) {
+	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
+		collector := NewGlobalCollector(end, versionInterval)
+		defer collector.Close()
+		err = c.RecurLoop(collector)
+		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+			err = nil
+		}
+		collector.data.prepareMeta()
+		if err != nil {
+			return
+		}
+		data = collector.OrphanData()
+		return
+	}
+}
+
 type CheckpointMeta struct {
 	blkInsertOffset *common.ClosedInterval
 	blkDeleteOffset *common.ClosedInterval
@@ -161,19 +179,47 @@ func NewCheckpointData() *CheckpointData {
 	return data
 }
 
-type IncrementalCollector struct {
+type BaseCollector struct {
 	*catalog.LoopProcessor
 	start, end types.TS
 
 	data *CheckpointData
 }
 
+type IncrementalCollector struct {
+	*BaseCollector
+}
+
 func NewIncrementalCollector(start, end types.TS) *IncrementalCollector {
 	collector := &IncrementalCollector{
-		LoopProcessor: new(catalog.LoopProcessor),
-		start:         start,
-		end:           end,
-		data:          NewCheckpointData(),
+		BaseCollector: &BaseCollector{
+			LoopProcessor: new(catalog.LoopProcessor),
+			data:          NewCheckpointData(),
+			start:         start,
+			end:           end,
+		},
+	}
+	collector.DatabaseFn = collector.VisitDB
+	collector.TableFn = collector.VisitTable
+	collector.SegmentFn = collector.VisitSeg
+	collector.BlockFn = collector.VisitBlk
+	return collector
+}
+
+type GlobalCollector struct {
+	*BaseCollector
+	versionThershold types.TS
+}
+
+func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalCollector {
+	versionThresholdTS := types.BuildTS(end.Physical()-versionInterval.Nanoseconds(), end.Logical())
+	collector := &GlobalCollector{
+		BaseCollector: &BaseCollector{
+			LoopProcessor: new(catalog.LoopProcessor),
+			data:          NewCheckpointData(),
+			end:           end,
+		},
+		versionThershold: versionThresholdTS,
 	}
 	collector.DatabaseFn = collector.VisitDB
 	collector.TableFn = collector.VisitTable
@@ -534,7 +580,7 @@ func (data *CheckpointData) GetDNBlkBatchs() (
 		data.bats[BLKDNMetaDeleteTxnIDX]
 }
 
-func (collector *IncrementalCollector) VisitDB(entry *catalog.DBEntry) error {
+func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 	if shouldIgnoreDBInLogtail(entry.ID) {
 		return nil
 	}
@@ -568,8 +614,19 @@ func (collector *IncrementalCollector) VisitDB(entry *catalog.DBEntry) error {
 	}
 	return nil
 }
+func (collector *GlobalCollector) isEntryDeletedBeforeThreshold(entry catalog.BaseEntry) bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.DeleteBefore(collector.versionThershold)
+}
+func (collector *GlobalCollector) VisitDB(entry *catalog.DBEntry) error {
+	if collector.isEntryDeletedBeforeThreshold(entry.DBBaseEntry) {
+		return nil
+	}
+	return collector.BaseCollector.VisitDB(entry)
+}
 
-func (collector *IncrementalCollector) VisitTable(entry *catalog.TableEntry) (err error) {
+func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error) {
 	if shouldIgnoreTblInLogtail(entry.ID) {
 		return nil
 	}
@@ -643,7 +700,17 @@ func (collector *IncrementalCollector) VisitTable(entry *catalog.TableEntry) (er
 	return nil
 }
 
-func (collector *IncrementalCollector) VisitSeg(entry *catalog.SegmentEntry) (err error) {
+func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
+	if collector.isEntryDeletedBeforeThreshold(entry.TableBaseEntry) {
+		return nil
+	}
+	if collector.isEntryDeletedBeforeThreshold(entry.GetDB().DBBaseEntry) {
+		return nil
+	}
+	return collector.BaseCollector.VisitTable(entry)
+}
+
+func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error) {
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
 	entry.RUnlock()
@@ -672,7 +739,21 @@ func (collector *IncrementalCollector) VisitSeg(entry *catalog.SegmentEntry) (er
 	}
 	return nil
 }
-func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err error) {
+
+func (collector *GlobalCollector) VisitSeg(entry *catalog.SegmentEntry) error {
+	if collector.isEntryDeletedBeforeThreshold(entry.MetaBaseEntry) {
+		return nil
+	}
+	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().TableBaseEntry) {
+		return nil
+	}
+	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().GetDB().DBBaseEntry) {
+		return nil
+	}
+	return collector.BaseCollector.VisitSeg(entry)
+}
+
+func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) {
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
 	entry.RUnlock()
@@ -770,13 +851,29 @@ func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err 
 	return nil
 }
 
-func (collector *IncrementalCollector) OrphanData() *CheckpointData {
+func (collector *GlobalCollector) VisitBlk(entry *catalog.BlockEntry) error {
+	if collector.isEntryDeletedBeforeThreshold(entry.MetaBaseEntry) {
+		return nil
+	}
+	if collector.isEntryDeletedBeforeThreshold(entry.GetSegment().MetaBaseEntry) {
+		return nil
+	}
+	if collector.isEntryDeletedBeforeThreshold(entry.GetSegment().GetTable().TableBaseEntry) {
+		return nil
+	}
+	if collector.isEntryDeletedBeforeThreshold(entry.GetSegment().GetTable().GetDB().DBBaseEntry) {
+		return nil
+	}
+	return collector.BaseCollector.VisitBlk(entry)
+}
+
+func (collector *BaseCollector) OrphanData() *CheckpointData {
 	data := collector.data
 	collector.data = nil
 	return data
 }
 
-func (collector *IncrementalCollector) Close() {
+func (collector *BaseCollector) Close() {
 	if collector.data != nil {
 		collector.data.Close()
 	}
