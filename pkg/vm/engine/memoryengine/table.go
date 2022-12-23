@@ -16,7 +16,6 @@ package memoryengine
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
@@ -360,6 +359,6 @@ func (t *Table) GetHideKeys(ctx context.Context) (attrs []*engine.Attribute, err
 	return resp.Attrs, nil
 }
 
-func (t *Table) GetTableID(ctx context.Context) string {
-	return fmt.Sprintf("%d", t.id)
+func (t *Table) GetTableID(ctx context.Context) uint64 {
+	return uint64(t.id)
 }

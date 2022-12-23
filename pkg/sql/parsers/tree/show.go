@@ -551,3 +551,109 @@ func (node *ShowLocks) Format(ctx *FmtCtx) {
 func NewShowLocks() *ShowLocks {
 	return &ShowLocks{}
 }
+
+// show table number
+type ShowTableNumber struct {
+	showImpl
+	DbName string
+}
+
+func (node *ShowTableNumber) Format(ctx *FmtCtx) {
+	ctx.WriteString("show table number")
+	if node.DbName != "" {
+		ctx.WriteString(" from ")
+		ctx.WriteString(node.DbName)
+	}
+}
+func (node *ShowTableNumber) GetStatementType() string { return "Show Table Number" }
+func (node *ShowTableNumber) GetQueryType() string     { return QueryTypeDQL }
+
+func NewShowTableNumber(dbname string) *ShowTableNumber {
+	return &ShowTableNumber{
+		DbName: dbname,
+	}
+}
+
+// show column number
+type ShowColumnNumber struct {
+	showImpl
+	Table  *UnresolvedObjectName
+	DbName string
+}
+
+func (node *ShowColumnNumber) Format(ctx *FmtCtx) {
+	ctx.WriteString("show column number")
+	if node.Table != nil {
+		ctx.WriteString(" from ")
+		node.Table.Format(ctx)
+	}
+	if node.DbName != "" {
+		ctx.WriteString(" from ")
+		ctx.WriteString(node.DbName)
+	}
+}
+func (node *ShowColumnNumber) GetStatementType() string { return "Show Column Number" }
+func (node *ShowColumnNumber) GetQueryType() string     { return QueryTypeDQL }
+
+func NewShowColumnNumber(table *UnresolvedObjectName, dbname string) *ShowColumnNumber {
+	return &ShowColumnNumber{
+		Table:  table,
+		DbName: dbname,
+	}
+}
+
+// show table size
+type ShowTableSize struct {
+	showImpl
+	Table  *UnresolvedObjectName
+	DbName string
+}
+
+func (node *ShowTableSize) Format(ctx *FmtCtx) {
+	ctx.WriteString("show table size")
+	if node.Table != nil {
+		ctx.WriteString(" from ")
+		node.Table.Format(ctx)
+	}
+	if node.DbName != "" {
+		ctx.WriteString(" from ")
+		ctx.WriteString(node.DbName)
+	}
+}
+func (node *ShowTableSize) GetStatementType() string { return "Show Table Size" }
+func (node *ShowTableSize) GetQueryType() string     { return QueryTypeDQL }
+
+func NewShowTableSize(table *UnresolvedObjectName, dbname string) *ShowTableSize {
+	return &ShowTableSize{
+		Table:  table,
+		DbName: dbname,
+	}
+}
+
+// show table values
+type ShowTableValues struct {
+	showImpl
+	Table  *UnresolvedObjectName
+	DbName string
+}
+
+func (node *ShowTableValues) Format(ctx *FmtCtx) {
+	ctx.WriteString("show table values")
+	if node.Table != nil {
+		ctx.WriteString(" from ")
+		node.Table.Format(ctx)
+	}
+	if node.DbName != "" {
+		ctx.WriteString(" from ")
+		ctx.WriteString(node.DbName)
+	}
+}
+func (node *ShowTableValues) GetStatementType() string { return "Show Table Values" }
+func (node *ShowTableValues) GetQueryType() string     { return QueryTypeDQL }
+
+func NewShowTableValues(table *UnresolvedObjectName, dbname string) *ShowTableValues {
+	return &ShowTableValues{
+		Table:  table,
+		DbName: dbname,
+	}
+}
