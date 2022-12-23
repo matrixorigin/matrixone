@@ -339,6 +339,10 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 	if err != nil {
 		return err
 	}
+	var expire *time.Time
+	if !vector.ExpireAt.IsZero() {
+		expire = &vector.ExpireAt
+	}
 	_, err = s.client.PutObject(
 		ctx,
 		&s3.PutObjectInput{
@@ -346,6 +350,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 			Key:           ptrTo(key),
 			Body:          bytes.NewReader(content),
 			ContentLength: size,
+			Expires:       expire,
 		},
 	)
 	if err != nil {
