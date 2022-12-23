@@ -1145,10 +1145,10 @@ func decimal128ToOthers(ctx context.Context,
 	switch toType.Oid {
 	case types.T_int32:
 		rs := result.(*vector.FunctionResult[int32])
-		return decimal128ToInteger[int32](ctx, source, rs, 32, length)
+		return decimal128ToSigned[int32](ctx, source, rs, 32, length)
 	case types.T_int64:
 		rs := result.(*vector.FunctionResult[int64])
-		return decimal128ToInteger[int64](ctx, source, rs, 64, length)
+		return decimal128ToSigned[int64](ctx, source, rs, 64, length)
 	case types.T_uint64:
 		rs := result.(*vector.FunctionResult[uint64])
 		return decimal128ToUnsigned[uint64](ctx, source, rs, 64, length)
@@ -2018,7 +2018,7 @@ func decimal64ToInt64(
 	return nil
 }
 
-func decimal128ToInteger[T constraints.Integer](
+func decimal128ToSigned[T constraints.Signed](
 	ctx context.Context,
 	from *vector.FunctionParameter[types.Decimal128],
 	to *vector.FunctionResult[T], bitSize int, length int) error {
@@ -2061,6 +2061,7 @@ func decimal64ToUnsigned[T constraints.Unsigned](
 			}
 		} else {
 			xStr := v.ToStringWithScale(fromType.Scale)
+			xStr = strings.Split(xStr, ".")[0]
 			result, err := strconv.ParseUint(xStr, 10, bitSize)
 			if err != nil {
 				return moerr.NewOutOfRange(ctx,
@@ -2091,6 +2092,7 @@ func decimal128ToUnsigned[T constraints.Unsigned](
 			}
 		} else {
 			xStr := v.ToStringWithScale(fromType.Scale)
+			xStr = strings.Split(xStr, ".")[0]
 			result, err := strconv.ParseUint(xStr, 10, bitSize)
 			if err != nil {
 				return moerr.NewOutOfRange(ctx,

@@ -134,12 +134,12 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		return getConstVec(proc, expr, length)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.New(types.Type{
+		return vector.NewConst(types.Type{
 			Oid:       types.T(t.T.Typ.GetId()),
 			Width:     t.T.Typ.GetWidth(),
 			Scale:     t.T.Typ.GetScale(),
 			Precision: t.T.Typ.GetPrecision(),
-		}), nil
+		}, len(bat.Zs)), nil
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
 		if vec.IsScalarNull() {
@@ -168,7 +168,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		}
 
 		result, err = evalFunction(proc, f, functionParameters, len(bat.Zs))
-		cleanVectorsExceptList(proc, functionParameters, bat.Vecs)
+		cleanVectorsExceptList(proc, functionParameters, append(bat.Vecs, result))
 		if err != nil {
 			return nil, err
 		}
@@ -186,12 +186,12 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 		return getConstVec(proc, expr, 1)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.New(types.Type{
+		return vector.NewConst(types.Type{
 			Oid:       types.T(t.T.Typ.GetId()),
 			Width:     t.T.Typ.GetWidth(),
 			Scale:     t.T.Typ.GetScale(),
 			Precision: t.T.Typ.GetPrecision(),
-		}), nil
+		}, len(s.Zs)), nil
 	case *plan.Expr_Col:
 		if t.Col.RelPos == 0 {
 			return r.Vecs[t.Col.ColPos].ToConst(rRow, proc.Mp()), nil
@@ -219,7 +219,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 		}
 
 		result, err = evalFunction(proc, f, functionParameters, len(s.Zs))
-		cleanVectorsExceptList(proc, functionParameters, append(r.Vecs, s.Vecs...))
+		cleanVectorsExceptList(proc, functionParameters, append(append(r.Vecs, s.Vecs...), result))
 		if err != nil {
 			return nil, err
 		}
@@ -242,12 +242,12 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		return getConstVec(proc, expr, length)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.New(types.Type{
+		return vector.NewConst(types.Type{
 			Oid:       types.T(t.T.Typ.GetId()),
 			Width:     t.T.Typ.GetWidth(),
 			Scale:     t.T.Typ.GetScale(),
 			Precision: t.T.Typ.GetPrecision(),
-		}), nil
+		}, len(bat.Zs)), nil
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
 		if vec.IsScalarNull() {
@@ -334,7 +334,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		}
 
 		result, err = evalFunction(proc, f, functionParameters, len(bat.Zs))
-		cleanVectorsExceptList(proc, functionParameters, bat.Vecs)
+		cleanVectorsExceptList(proc, functionParameters, append(bat.Vecs, result))
 		if err != nil {
 			return nil, err
 		}
@@ -352,12 +352,12 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 		return getConstVec(proc, expr, 1)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.New(types.Type{
+		return vector.NewConst(types.Type{
 			Oid:       types.T(t.T.Typ.GetId()),
 			Width:     t.T.Typ.GetWidth(),
 			Scale:     t.T.Typ.GetScale(),
 			Precision: t.T.Typ.GetPrecision(),
-		}), nil
+		}, 1), nil
 	case *plan.Expr_Col:
 		if t.Col.RelPos == 0 {
 			return r.Vecs[t.Col.ColPos].ToConst(rRow, proc.Mp()), nil
@@ -385,7 +385,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 		}
 
 		result, err = evalFunction(proc, f, functionParameters, 1)
-		cleanVectorsExceptList(proc, functionParameters, append(r.Vecs, s.Vecs...))
+		cleanVectorsExceptList(proc, functionParameters, append(append(r.Vecs, s.Vecs...), result))
 		if err != nil {
 			return nil, err
 		}
