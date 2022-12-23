@@ -69,6 +69,10 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		if err != nil {
 			return nil, err
 		}
+	} else {
+		if len(stmt.Accounts) != 0 {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "can not specify the accounts for the non cluster table")
+		}
 	}
 
 	// build columns
@@ -121,7 +125,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 
 		if isClusterTable && isClusterTableAttribute(col.Name) {
 			if columnIndexOfAccountId >= 0 {
-				return nil, moerr.NewInternalError(ctx.GetContext(), "there are two account_id in the cluster table")
+				return nil, moerr.NewInternalError(ctx.GetContext(), "there are two account_ids in the cluster table")
 			} else {
 				columnIndexOfAccountId = int32(i)
 			}
@@ -336,7 +340,7 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		for i, col := range tableDef.GetCols() {
 			if isClusterTableAttribute(col.Name) {
 				if columnIndexOfAccountId >= 0 {
-					return nil, moerr.NewInternalError(ctx.GetContext(), "there are two account_id in the cluster table")
+					return nil, moerr.NewInternalError(ctx.GetContext(), "there are two account_ids in the cluster table")
 				} else {
 					columnIndexOfAccountId = int32(i)
 				}
@@ -347,6 +351,10 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 			return nil, moerr.NewInternalError(ctx.GetContext(), "there is no account_id in the cluster table")
 		} else if columnIndexOfAccountId >= int32(len(tableDef.GetCols())) {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "the index of the account_id in the cluster table is invalid")
+		}
+	} else {
+		if len(stmt.Accounts) != 0 {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "can not specify the accounts for the non cluster table")
 		}
 	}
 

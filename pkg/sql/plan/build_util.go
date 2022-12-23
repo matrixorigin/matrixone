@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
 
@@ -307,6 +308,44 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 	if !d.Default.NullAbility && d.Default.Expr == nil && !d.Typ.AutoIncr {
 		return nil, moerr.NewInvalidInput(ctx, "invalid default value")
+	}
+	// the auto_incr column does not have default expression
+	if d.GetTyp().GetAutoIncr() {
+		typ := types.T(d.GetTyp().GetId())
+		if !operator.IsInteger(typ) {
+			return nil, moerr.NewNotSupported(ctx, "the auto_incr column is only support integer type now")
+		}
+
+		//if the Const.Isnull = true, the batch will not be updated by the auto_increment
+		constValueExpr := &plan.Const{}
+		switch typ {
+		case types.T_int8:
+			constValueExpr.Value = &plan.Const_I8Val{I8Val: 0}
+		case types.T_int16:
+			constValueExpr.Value = &plan.Const_I16Val{I16Val: 0}
+		case types.T_int32:
+			constValueExpr.Value = &plan.Const_I32Val{I32Val: 0}
+		case types.T_int64:
+			constValueExpr.Value = &plan.Const_I64Val{I64Val: 0}
+		case types.T_uint8:
+			constValueExpr.Value = &plan.Const_U8Val{U8Val: 0}
+		case types.T_uint16:
+			constValueExpr.Value = &plan.Const_U16Val{U16Val: 0}
+		case types.T_uint32:
+			constValueExpr.Value = &plan.Const_U32Val{U32Val: 0}
+		case types.T_uint64:
+			constValueExpr.Value = &plan.Const_U64Val{U64Val: 0}
+		default:
+			return nil, moerr.NewNotSupported(ctx, "the auto_incr column is only support integer type now")
+		}
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: constValueExpr,
+			},
+			Typ: &plan.Type{
+				Id: d.GetTyp().GetId(),
+			},
+		}, nil
 	}
 	if d.Default.Expr == nil {
 		return &Expr{
