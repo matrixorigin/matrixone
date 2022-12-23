@@ -138,13 +138,17 @@ func (tbl *table) Rows(ctx context.Context) (int64, error) {
 	return rows, nil
 }
 
-func (tbl *table) MaxAndMinValues(ctx context.Context, expr *plan.Expr) ([][2]any, []uint8, error) {
-	_, columns, _ := getColumnsByExpr(expr, tbl.getTableDef())
-	dataLength := len(columns)
+func (tbl *table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
+	cols := tbl.getTableDef().GetCols()
+	dataLength := len(cols) - 1
 	//dateType of each column for table
 	tableTypes := make([]uint8, dataLength)
 	dataTypes := make([]types.Type, dataLength)
 
+	columns := make([]int, dataLength)
+	for i := 0; i < dataLength; i++ {
+		columns[i] = i
+	}
 	//minimum --- maximum
 	tableVal := make([][2]any, dataLength)
 

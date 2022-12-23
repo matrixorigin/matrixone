@@ -363,6 +363,6 @@ func (t *Table) GetTableID(ctx context.Context) uint64 {
 	return uint64(t.id)
 }
 
-func (t *Table) MaxAndMinValues(ctx context.Context, expr *plan.Expr) ([][2]any, []uint8, error) {
+func (t *Table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
 	return nil, nil, nil
 }

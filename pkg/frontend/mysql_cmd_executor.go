@@ -1739,6 +1739,109 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *p
 	return err
 }
 
+func doShowTableValues(ses *Session, stmt *tree.ShowTableValues, proc *process.Process) error {
+	var err error = nil
+
+	//Set return columns
+	col1 := new(MysqlColumn)
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col1.SetName("Column_name")
+
+	col2 := new(MysqlColumn)
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col2.SetName("Column_type")
+
+	col3 := new(MysqlColumn)
+	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col3.SetName("Maximum_value")
+
+	col4 := new(MysqlColumn)
+	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col4.SetName("Minimum_value")
+
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
+
+	//Get table name and database name
+	tblName := string(stmt.Table.ToTableName().ObjectName)
+	if strings.HasPrefix(tblName, "%!%") { //skip hidden table
+		return moerr.NewInvalidInput(ses.requestCtx, "invalid input table name '%s'", tblName)
+	}
+	dbName := stmt.Table.GetDBName()
+	if dbName == "" {
+		dbName = ses.GetDatabaseName()
+	}
+
+	//Enforce flush
+	bh := ses.GetBackgroundExec(ses.GetRequestContext())
+	err = bh.Exec(ses.GetRequestContext(), fmt.Sprintf("select mo_ctl('dn', 'flush', '%s.%s');", dbName, tblName))
+	if err != nil {
+		return err
+	}
+
+	//Get target table
+	ctx := ses.GetRequestContext()
+	tcc := ses.GetTxnCompileCtx()
+	txn, err := tcc.GetTxnHandler().GetTxn()
+	if err != nil {
+		return err
+	}
+	db, err := tcc.GetTxnHandler().GetStorage().Database(ctx, dbName, txn)
+	if err != nil {
+		return err
+	}
+	table, err := db.Relation(ctx, tblName)
+	if err != nil {
+		return err
+	}
+
+	tableColumns, err := table.TableColumns(ctx)
+	if err != nil {
+		return err
+	}
+
+	//Get table max and min value from zonemap
+	tableVal, tableTypes, err := table.MaxAndMinValues(ses.requestCtx)
+
+	//set return data
+	rows := make([][]interface{}, 0, len(tableVal))
+	for i := range tableVal {
+		row := make([]interface{}, 4)
+		row[0] = tableColumns[i].Name
+		row[1] = types.T(tableTypes[i]).String()
+		row[2] = tableVal[i][0]
+		row[3] = tableVal[i][1]
+
+		rows = append(rows, row)
+	}
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return err
+}
+
+// handleShowTableValues
+func (mce *MysqlCmdExecutor) handleShowTableValues(stmt *tree.ShowTableValues, proc *process.Process) error {
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err := doShowTableValues(ses, stmt, proc)
+	if err != nil {
+		return err
+	}
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
+		return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
 func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error) {
 	bat := batch.New(true, []string{"Variable_name", "Value"})
 	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
@@ -3315,6 +3418,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+		case *tree.ShowTableValues:
+			selfHandle = true
+			err = mce.handleShowTableValues(st, proc)
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.AnalyzeStmt:
 			selfHandle = true
 			if err = mce.handleAnalyzeStmt(requestCtx, st); err != nil {
@@ -3490,7 +3599,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants,
 			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation,
-			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues:
+			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber:
 			columns, err = cw.GetColumns()
 			if err != nil {
 				logErrorf(ses.GetConciseProfile(), "GetColumns from Computation handler failed. error: %v", err)

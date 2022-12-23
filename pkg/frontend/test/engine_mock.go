@@ -439,7 +439,7 @@ func (m *MockRelation) Write(arg0 context.Context, arg1 *batch.Batch) error {
 	return ret0
 }
 
-func (rel *MockRelation) MaxAndMinValues(ctx context.Context, expr *plan.Expr) ([][2]any, []uint8, error) {
+func (rel *MockRelation) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
 	return nil, nil, nil
 }
 
