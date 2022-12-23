@@ -543,8 +543,6 @@ func GetTablePriKeyName(cols []*plan.ColDef, cPkeyCol *plan.ColDef) string {
 	return ""
 }
 
-// NotNullCheck(tmpBat, p.TableDefVec[i], proc)
-
 // Table data not null column check
 func batchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx context.Context) error {
 	for j := range tmpBat.Vecs {
@@ -552,7 +550,6 @@ func batchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx con
 		if (tableDef.Cols[j].Primary && !tableDef.Cols[j].Typ.AutoIncr) ||
 			(tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility) {
 			if nulls.Any(tmpBat.Vecs[j].Nsp) {
-				//tmpBat.Clean(proc.Mp())
 				return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
 			}
 		}
@@ -568,8 +565,6 @@ func comPrimaryKeyDataNullCheck(tmpBat *batch.Batch, cPkeyColDef *plan.ColDef, c
 			for i := range tmpBat.Vecs {
 				if tmpBat.Attrs[i] == name {
 					if nulls.Any(tmpBat.Vecs[i].Nsp) {
-						//tmpBat.Clean(proc.Mp())
-						//return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", updateCtx.OrderAttrs[i]))
 						return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", name))
 					}
 				}
