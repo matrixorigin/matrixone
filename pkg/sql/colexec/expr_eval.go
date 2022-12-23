@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -55,7 +56,7 @@ var (
 	}
 )
 
-func getConstVec(proc *process.Process, expr *plan.Expr, length int) (*vector.Vector, error) {
+func getConstVec(ctx context.Context, proc *process.Process, expr *plan.Expr, length int) (*vector.Vector, error) {
 	var vec *vector.Vector
 	t := expr.Expr.(*plan.Expr_C)
 	if t.C.GetIsnull() {
@@ -115,7 +116,7 @@ func getConstVec(proc *process.Process, expr *plan.Expr, length int) (*vector.Ve
 			defaultVal := t.C.GetDefaultval()
 			vec = vector.NewConstFixed(constBType, length, defaultVal, proc.Mp())
 		default:
-			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", t.C.GetValue()))
+			return nil, moerr.NewNYI(ctx, fmt.Sprintf("const expression %v", t.C.GetValue()))
 		}
 	}
 	vec.SetIsBin(t.C.IsBin)
@@ -131,7 +132,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
-		return getConstVec(proc, expr, length)
+		return getConstVec(proc.Ctx, proc, expr, length)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.NewConst(types.Type{
@@ -183,7 +184,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
-		return getConstVec(proc, expr, 1)
+		return getConstVec(proc.Ctx, proc, expr, 1)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.NewConst(types.Type{
@@ -230,7 +231,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 	}
 }
 
-func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
+func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
 	if len(bat.Zs) == 0 {
 		return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, 1), nil
 	}
@@ -239,7 +240,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
-		return getConstVec(proc, expr, length)
+		return getConstVec(ctx, proc, expr, length)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.NewConst(types.Type{
@@ -265,7 +266,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 
 		functionParameters := make([]*vector.Vector, len(t.F.Args))
 		for i := range functionParameters {
-			functionParameters[i], err = EvalExprByZonemapBat(bat, proc, t.F.Args[i])
+			functionParameters[i], err = EvalExprByZonemapBat(ctx, bat, proc, t.F.Args[i])
 			if err != nil {
 				break
 			}
@@ -287,19 +288,19 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		switch t.F.Func.ObjName {
 		case ">":
 			// if someone in left > someone in right, that will be true
-			return compareAndReturn(functionParameters[0].CompareAndCheckAnyResultIsTrue(functionParameters[1], ">"))
+			return compareAndReturn(functionParameters[0].CompareAndCheckAnyResultIsTrue(ctx, functionParameters[1], ">"))
 		case "<":
 			// if someone in left < someone in right, that will be true
-			return compareAndReturn(functionParameters[0].CompareAndCheckAnyResultIsTrue(functionParameters[1], "<"))
+			return compareAndReturn(functionParameters[0].CompareAndCheckAnyResultIsTrue(ctx, functionParameters[1], "<"))
 		case "=":
 			// if left intersect right, that will be true
-			return compareAndReturn(functionParameters[0].CompareAndCheckIntersect(functionParameters[1]))
+			return compareAndReturn(functionParameters[0].CompareAndCheckIntersect(ctx, functionParameters[1]))
 		case ">=":
 			// if someone in left >= someone in right, that will be true
-			return compareAndReturn(functionParameters[0].CompareAndCheckAnyResultIsTrue(functionParameters[1], ">="))
+			return compareAndReturn(functionParameters[0].CompareAndCheckAnyResultIsTrue(ctx, functionParameters[1], ">="))
 		case "<=":
 			// if someone in left <= someone in right, that will be true
-			return compareAndReturn(functionParameters[0].CompareAndCheckAnyResultIsTrue(functionParameters[1], "<="))
+			return compareAndReturn(functionParameters[0].CompareAndCheckAnyResultIsTrue(ctx, functionParameters[1], "<="))
 		case "and":
 			// if left has one true and right has one true, that will be true
 			cols1 := vector.MustTCols[bool](functionParameters[0])
@@ -341,7 +342,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		return result, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
-		return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported eval expr '%v'", t))
+		return nil, moerr.NewNYI(ctx, fmt.Sprintf("unsupported eval expr '%v'", t))
 	}
 }
 
@@ -349,7 +350,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
-		return getConstVec(proc, expr, 1)
+		return getConstVec(proc.Ctx, proc, expr, 1)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.NewConst(types.Type{

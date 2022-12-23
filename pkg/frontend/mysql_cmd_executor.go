@@ -3380,6 +3380,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleDropUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.AlterView:
+			ses.InvalidatePrivilegeCache()
 		case *tree.AlterUser: //TODO
 			ses.InvalidatePrivilegeCache()
 		case *tree.CreateRole:
@@ -3488,7 +3490,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants,
 			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation,
-			*tree.ExplainFor, *tree.ExplainStmt:
+			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues:
 			columns, err = cw.GetColumns()
 			if err != nil {
 				logErrorf(ses.GetConciseProfile(), "GetColumns from Computation handler failed. error: %v", err)

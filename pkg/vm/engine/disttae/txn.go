@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -696,11 +697,13 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	if expr == nil {
 		return true
 	}
+	notReportErrCtx := errutil.ContextWithNoReport(ctx, true)
+
 	// if expr match no columns, just eval expr
 	if len(columns) == 0 {
 		bat := batch.NewWithSize(0)
 		defer bat.Clean(proc.Mp())
-		ifNeed, err := evalFilterExpr(expr, bat, proc)
+		ifNeed, err := evalFilterExpr(notReportErrCtx, expr, bat, proc)
 		if err != nil {
 			return true
 		}
@@ -727,7 +730,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	}
 	bat.SetZs(buildVectors[0].Length(), proc.Mp())
 
-	ifNeed, err := evalFilterExpr(expr, bat, proc)
+	ifNeed, err := evalFilterExpr(notReportErrCtx, expr, bat, proc)
 	if err != nil {
 		return true
 	}
