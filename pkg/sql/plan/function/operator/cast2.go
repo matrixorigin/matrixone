@@ -270,80 +270,90 @@ func IfTypeCastSupported(sourceType, targetType types.T) bool {
 }
 
 func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	var err error
 	// Cast Parameter1 as Type Parameter2
 	fromType := parameters[0].GetType()
 	toType := parameters[1].GetType()
 	from := parameters[0]
 	switch fromType.Oid {
 	case types.T_any: // scalar null
-		return scalarNullToOthers(proc.Ctx, toType, result, length)
+		err = scalarNullToOthers(proc.Ctx, toType, result, length)
 	case types.T_bool:
 		s := vector.GenerateFunctionFixedTypeParameter[bool](from)
-		return boolToOthers(proc.Ctx, &s, toType, result, length)
+		err = boolToOthers(proc.Ctx, &s, toType, result, length)
 	case types.T_int8:
 		s := vector.GenerateFunctionFixedTypeParameter[int8](from)
-		return int8ToOthers(proc.Ctx, &s, toType, result, length)
+		err = int8ToOthers(proc.Ctx, &s, toType, result, length)
 	case types.T_int16:
 		s := vector.GenerateFunctionFixedTypeParameter[int16](from)
-		return int16ToOthers(proc.Ctx, &s, toType, result, length)
+		err = int16ToOthers(proc.Ctx, &s, toType, result, length)
 	case types.T_int32:
 		s := vector.GenerateFunctionFixedTypeParameter[int32](from)
-		return int32ToOthers(proc.Ctx, &s, toType, result, length)
+		err = int32ToOthers(proc.Ctx, &s, toType, result, length)
 	case types.T_int64:
 		s := vector.GenerateFunctionFixedTypeParameter[int64](from)
-		return int64ToOthers(proc.Ctx, &s, toType, result, length)
+		err = int64ToOthers(proc.Ctx, &s, toType, result, length)
 	case types.T_uint8:
 		s := vector.GenerateFunctionFixedTypeParameter[uint8](from)
-		return uint8ToOthers(proc.Ctx, &s, toType, result, length)
+		err = uint8ToOthers(proc.Ctx, &s, toType, result, length)
 	case types.T_uint16:
 		s := vector.GenerateFunctionFixedTypeParameter[uint16](from)
-		return uint16ToOthers(proc.Ctx, &s, toType, result, length)
+		err = uint16ToOthers(proc.Ctx, &s, toType, result, length)
 	case types.T_uint32:
 		s := vector.GenerateFunctionFixedTypeParameter[uint32](from)
-		return uint32ToOthers(proc.Ctx, &s, toType, result, length)
+		err = uint32ToOthers(proc.Ctx, &s, toType, result, length)
 	case types.T_uint64:
 		s := vector.GenerateFunctionFixedTypeParameter[uint64](from)
-		return uint64ToOthers(proc.Ctx, &s, toType, result, length)
+		err = uint64ToOthers(proc.Ctx, &s, toType, result, length)
 	case types.T_float32:
 		s := vector.GenerateFunctionFixedTypeParameter[float32](from)
-		return float32ToOthers(proc.Ctx, &s, toType, result, length)
+		err = float32ToOthers(proc.Ctx, &s, toType, result, length)
 	case types.T_float64:
 		s := vector.GenerateFunctionFixedTypeParameter[float64](from)
-		return float64ToOthers(proc.Ctx, &s, toType, result, length)
+		err = float64ToOthers(proc.Ctx, &s, toType, result, length)
 	case types.T_decimal64:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from)
-		return decimal64ToOthers(proc.Ctx, &s, toType, result, length)
+		err = decimal64ToOthers(proc.Ctx, &s, toType, result, length)
 	case types.T_decimal128:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
-		return decimal128ToOthers(proc.Ctx, &s, toType, result, length)
+		err = decimal128ToOthers(proc.Ctx, &s, toType, result, length)
 	case types.T_date:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Date](from)
-		return dateToOthers(proc, &s, toType, result, length)
+		err = dateToOthers(proc, &s, toType, result, length)
 	case types.T_datetime:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Datetime](from)
-		return datetimeToOthers(proc, &s, toType, result, length)
+		err = datetimeToOthers(proc, &s, toType, result, length)
 	case types.T_time:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Time](from)
-		return timeToOthers(proc.Ctx, &s, toType, result, length)
+		err = timeToOthers(proc.Ctx, &s, toType, result, length)
 	case types.T_timestamp:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from)
-		return timestampToOthers(proc, &s, toType, result, length)
+		err = timestampToOthers(proc, &s, toType, result, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		s := vector.GenerateFunctionStrParameter(from)
-		return strTypeToOthers(proc, &s, toType, result, length)
+		err = strTypeToOthers(proc, &s, toType, result, length)
 	case types.T_uuid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Uuid](from)
-		return uuidToOthers(proc.Ctx, &s, toType, result, length)
+		err = uuidToOthers(proc.Ctx, &s, toType, result, length)
 	case types.T_TS:
 		s := vector.GenerateFunctionFixedTypeParameter[types.TS](from)
-		return tsToOthers(proc.Ctx, &s, toType, result, length)
+		err = tsToOthers(proc.Ctx, &s, toType, result, length)
 	case types.T_Rowid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Rowid](from)
-		return rowidToOthers(proc.Ctx, &s, toType, result, length)
+		err = rowidToOthers(proc.Ctx, &s, toType, result, length)
+	default:
+		return moerr.NewInternalError(proc.Ctx,
+			fmt.Sprintf("CAST does not support the source type '%s'", fromType))
 	}
+	// XXX we set the code here to adapt to BVT case and more requirement for a kind error information.
+	if err != nil {
+		err = rewriteErrorMessage(err)
+	}
+	return nil
+}
 
-	return moerr.NewInternalError(proc.Ctx,
-		fmt.Sprintf("CAST does not support the source type '%s'", fromType))
+func rewriteErrorMessage(source error) error {
+	return source
 }
 
 func scalarNullToOthers(ctx context.Context,
@@ -901,28 +911,28 @@ func float32ToOthers(ctx context.Context,
 		return numericToBool[float32](source, rs, length)
 	case types.T_int8:
 		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[float32, int8](source, rs, length)
+		return floatToInteger[float32, int8](source, rs, length)
 	case types.T_int16:
 		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[float32, int16](source, rs, length)
+		return floatToInteger[float32, int16](source, rs, length)
 	case types.T_int32:
 		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[float32, int32](source, rs, length)
+		return floatToInteger[float32, int32](source, rs, length)
 	case types.T_int64:
 		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[float32, int64](source, rs, length)
+		return floatToInteger[float32, int64](source, rs, length)
 	case types.T_uint8:
 		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[float32, uint8](source, rs, length)
+		return floatToInteger[float32, uint8](source, rs, length)
 	case types.T_uint16:
 		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[float32, uint16](source, rs, length)
+		return floatToInteger[float32, uint16](source, rs, length)
 	case types.T_uint32:
 		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[float32, uint32](source, rs, length)
+		return floatToInteger[float32, uint32](source, rs, length)
 	case types.T_uint64:
 		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[float32, uint64](source, rs, length)
+		return floatToInteger[float32, uint64](source, rs, length)
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
 		rs.SetFromParameter(source)
@@ -952,28 +962,28 @@ func float64ToOthers(ctx context.Context,
 		return numericToBool[float64](source, rs, length)
 	case types.T_int8:
 		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[float64, int8](source, rs, length)
+		return floatToInteger[float64, int8](source, rs, length)
 	case types.T_int16:
 		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[float64, int16](source, rs, length)
+		return floatToInteger[float64, int16](source, rs, length)
 	case types.T_int32:
 		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[float64, int32](source, rs, length)
+		return floatToInteger[float64, int32](source, rs, length)
 	case types.T_int64:
 		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[float64, int64](source, rs, length)
+		return floatToInteger[float64, int64](source, rs, length)
 	case types.T_uint8:
 		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[float64, uint8](source, rs, length)
+		return floatToInteger[float64, uint8](source, rs, length)
 	case types.T_uint16:
 		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[float64, uint16](source, rs, length)
+		return floatToInteger[float64, uint16](source, rs, length)
 	case types.T_uint32:
 		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[float64, uint32](source, rs, length)
+		return floatToInteger[float64, uint32](source, rs, length)
 	case types.T_uint64:
 		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[float64, uint64](source, rs, length)
+		return floatToInteger[float64, uint64](source, rs, length)
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
 		return numericToNumeric[float64, float32](source, rs, length)
@@ -1284,6 +1294,7 @@ func rowidToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from rowid to %s", toType))
 }
 
+// XXX do not use it to cast float to integer, please use floatToInteger
 func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](from *vector.FunctionParameter[T1], to *vector.FunctionResult[T2], length int) error {
 	var i uint64
 	var dftValue T2
@@ -1299,6 +1310,31 @@ func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](from *vect
 			}
 		} else {
 			if err := to.Append(T2(v), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// XXX do not use it to cast float to integer, please use floatToInteger
+func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
+	from *vector.FunctionParameter[T1], to *vector.FunctionResult[T2],
+	length int) error {
+	var i uint64
+	var dftValue T2
+	times := uint64(length)
+	if err := overflowForNumericToNumeric[T1, T2](from.UnSafeGetAllValue()); err != nil {
+		return err
+	}
+	for i = 0; i < times; i++ {
+		v, isnull := from.GetValue(i)
+		if isnull {
+			if err := to.Append(dftValue, true); err != nil {
+				return err
+			}
+		} else {
+			if err := to.Append(T2(math.Round(float64(v))), false); err != nil {
 				return err
 			}
 		}
@@ -2357,7 +2393,7 @@ func strToSigned[T constraints.Signed](
 	var result T
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
-		if null || len(v) == 0 {
+		if null {
 			if err := to.Append(0, true); err != nil {
 				return err
 			}
@@ -2379,7 +2415,7 @@ func strToSigned[T constraints.Signed](
 					strings.TrimSpace(s), 10, bitSize)
 				if err != nil {
 					if strings.Contains(err.Error(), "value out of range") {
-						return moerr.NewOutOfRange(ctx, "int", "value '%v'", s)
+						return moerr.NewOutOfRange(ctx, "int", "value '%s'", s)
 					}
 					return moerr.NewInvalidArg(ctx, "cast to int", s)
 				}
@@ -2406,7 +2442,7 @@ func strToUnsigned[T constraints.Unsigned](
 	var tErr error
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
-		if null || len(v) == 0 {
+		if null {
 			if err := to.Append(0, true); err != nil {
 				return err
 			}
@@ -2419,7 +2455,7 @@ func strToUnsigned[T constraints.Unsigned](
 			}
 			if tErr != nil {
 				if strings.Contains(tErr.Error(), "value out of range") {
-					return moerr.NewOutOfRange(ctx, "uint", "value '%v'", v)
+					return moerr.NewOutOfRange(ctx, "uint", "value '%s'", v)
 				}
 				return moerr.NewInvalidArg(ctx, "cast to uint", v)
 			}
@@ -2446,7 +2482,7 @@ func strToFloat[T constraints.Float](
 	var r2 float64
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
-		if null || len(v) == 0 {
+		if null {
 			if err := to.Append(0, true); err != nil {
 				return err
 			}
@@ -2461,7 +2497,7 @@ func strToFloat[T constraints.Float](
 			}
 			if tErr != nil {
 				if strings.Contains(tErr.Error(), "value out of range") {
-					return moerr.NewOutOfRange(ctx, "float", "value '%v'", v)
+					return moerr.NewOutOfRange(ctx, "float", "value '%s'", v)
 				}
 				return moerr.NewInvalidArg(ctx, "cast to float", v)
 			}
@@ -2729,13 +2765,14 @@ func strToStr(
 	destLen := int(totype.Width)
 	var i uint64
 	var l = uint64(length)
-	if totype.Oid != types.T_text {
+	if totype.Oid != types.T_text && destLen != 0 {
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
 			if null {
 				if err := to.AppendStr(nil, true); err != nil {
 					return err
 				}
+				continue
 			}
 			// check the length.
 			s := convertByteSliceToString(v)
@@ -2754,6 +2791,7 @@ func strToStr(
 				if err := to.AppendStr(nil, true); err != nil {
 					return err
 				}
+				continue
 			}
 			// check the length.
 			if err := to.AppendStr(v, false); err != nil {

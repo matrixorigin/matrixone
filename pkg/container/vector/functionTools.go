@@ -29,7 +29,6 @@ type FunctionParameter[T types.FixedSizeT] struct {
 	typ          types.Type
 	sourceVector *Vector
 	isScalar     bool
-	isBinary     bool
 	values       []T
 	strValues    []types.Varlena
 	area         []byte
@@ -64,7 +63,9 @@ func (fr *FunctionResult[T]) GetType() types.Type {
 
 func (fr *FunctionResult[T]) SetFromParameter(fp *FunctionParameter[T]) {
 	// clean the old memory
-	fr.vec.Free(fr.mp)
+	if fr.vec != fp.sourceVector {
+		fr.vec.Free(fr.mp)
+	}
 	fr.vec = fp.sourceVector
 }
 
@@ -92,7 +93,7 @@ func (fp *FunctionParameter[T]) GetValue(idx uint64) (value T, isNull bool) {
 }
 
 func (fp *FunctionParameter[T]) IsBin() bool {
-	return fp.isBinary
+	return fp.sourceVector.GetIsBin()
 }
 
 func (fp *FunctionParameter[T]) UnSafeGetAllValue() []T {
@@ -131,7 +132,6 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeT](v *Vector) FunctionP
 		typ:          v.GetType(),
 		sourceVector: v,
 		isScalar:     v.IsScalar(),
-		isBinary:     v.GetIsBin(),
 		values:       cols,
 		containsNull: containsNull,
 		nullMap:      nullMap,
