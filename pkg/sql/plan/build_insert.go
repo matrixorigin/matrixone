@@ -62,6 +62,9 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	}
 
 	isClusterTable := util.TableIsClusterTable(tblRef.GetTableType())
+	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert data into the cluster table")
+	}
 	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tblRef, isClusterTable)
 	if err != nil {
 		return nil, err
@@ -304,6 +307,9 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	}
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
+	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert data into the cluster table")
+	}
 	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, isClusterTable)
 	if err != nil {
 		return nil, err

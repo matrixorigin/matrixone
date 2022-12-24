@@ -651,6 +651,11 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
 		}
 
+		//non-sys account can not truncate the cluster table
+		if truncateTable.GetClusterTable().GetIsClusterTable() && ctx.GetAccountId() != catalog.System_Account {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can truncate the cluster table")
+		}
+
 		uDef, sDef := buildIndexDefs(tableDef.Defs)
 		truncateTable.IndexTableNames = make([]string, 0)
 		if uDef != nil {
@@ -712,6 +717,11 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 
 		dropTable.ClusterTable = &plan.ClusterTable{
 			IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
+		}
+
+		//non-sys account can not drop the cluster table
+		if dropTable.GetClusterTable().GetIsClusterTable() && ctx.GetAccountId() != catalog.System_Account {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
 		}
 
 		uDef, sDef := buildIndexDefs(tableDef.Defs)

@@ -41,6 +41,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	}
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
+	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can load data into the cluster table")
+	}
 	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, isClusterTable)
 	if err != nil {
 		return nil, err
