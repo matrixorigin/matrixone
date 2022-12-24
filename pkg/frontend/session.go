@@ -325,6 +325,12 @@ func (ses *Session) isCached(sql string) bool {
 	return ses.planCache.isCached(sql)
 }
 
+func (ses *Session) cleanCache() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.planCache.clean()
+}
+
 func (ses *Session) setSkipCheckPrivilege(b bool) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()

@@ -66,3 +66,8 @@ func (pc *planCache) isCached(sql string) bool {
 	_, isCached := pc.cachePool[sql]
 	return isCached
 }
+
+func (pc *planCache) clean() {
+	pc.lruList = list.New()
+	pc.cachePool = make(map[string]*list.Element)
+}

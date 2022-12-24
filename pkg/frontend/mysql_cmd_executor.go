@@ -3835,6 +3835,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		stmts := make([]*tree.Statement, len(cws))
 		for i, cw := range cws {
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
+				if cwft.stmt.GetQueryType() == tree.QueryTypeDDL {
+					ses.cleanCache()
+					return nil
+				}
 				plans[i] = cwft.plan
 				stmts[i] = &cwft.stmt
 			}
