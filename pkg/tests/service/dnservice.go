@@ -172,7 +172,7 @@ func buildDNConfig(
 	cfg.Ckp.FlushInterval.Duration = time.Second * 100000
 	cfg.Ckp.ScanInterval.Duration = time.Second * 100000
 	cfg.Ckp.IncrementalInterval.Duration = time.Second * 100000
-	cfg.Ckp.GlobalInterval.Duration = time.Second * 100000
+	cfg.Ckp.GlobalMinCount = 10000
 
 	// We need the filled version of configuration.
 	// It's necessary when building dnservice.Option.
