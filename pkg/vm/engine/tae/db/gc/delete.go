@@ -23,15 +23,21 @@ import (
 
 type GCTask struct {
 	sync.RWMutex
+	// objects is list of files that can be GC
 	objects []string
-	state   CleanerState
+
+	// The status of GCTask, only one delete task can be running
+	state CleanerState
+
+	cleaner *diskCleaner
 	fs      *objectio.ObjectFS
 }
 
-func NewGCTask(fs *objectio.ObjectFS) *GCTask {
+func NewGCTask(fs *objectio.ObjectFS, cleaner *diskCleaner) *GCTask {
 	return &GCTask{
-		state: Idle,
-		fs:    fs,
+		state:   Idle,
+		fs:      fs,
+		cleaner: cleaner,
 	}
 }
 
@@ -61,6 +67,7 @@ func (g *GCTask) ExecDelete(names []string) error {
 		g.state = Idle
 		return err
 	}
+	g.cleaner.updateOutputs(g.objects)
 	g.resetObjects()
 	g.state = Idle
 	return nil

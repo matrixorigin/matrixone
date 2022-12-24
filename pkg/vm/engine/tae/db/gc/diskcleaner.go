@@ -58,6 +58,10 @@ type diskCleaner struct {
 		tables []*GCTable
 	}
 
+	outputs struct {
+		sync.RWMutex
+		files []string
+	}
 	// delTask is a worker that deletes s3‘s objects or local
 	// files, and only one worker will run
 	delTask *GCTask
@@ -78,7 +82,7 @@ func NewDiskCleaner(
 		ckpClient: ckpClient,
 		catalog:   catalog,
 	}
-	cleaner.delTask = NewGCTask(fs)
+	cleaner.delTask = NewGCTask(fs, cleaner)
 	cleaner.processQueue = sm.NewSafeQueue(10000, 1000, cleaner.process)
 	return cleaner
 }
@@ -87,6 +91,7 @@ func (cleaner *diskCleaner) JobFactory(ctx context.Context) (err error) {
 	return cleaner.tryClean(ctx)
 }
 
+// Replay is an interface provided for testing
 func (cleaner *diskCleaner) Replay() {
 	cleaner.tryReplay()
 }
@@ -225,10 +230,12 @@ func (cleaner *diskCleaner) createNewInput(
 		input.UpdateTable(data)
 		logutil.Infof("input %v", input.String())
 	}
+	files := cleaner.GetOutputs()
 	_, err = input.SaveTable(
 		ckps[0].GetStart(),
 		ckps[len(ckps)-1].GetEnd(),
 		cleaner.fs,
+		files,
 	)
 	return
 }
@@ -270,6 +277,12 @@ func (cleaner *diskCleaner) updateInputs(input *GCTable) {
 	cleaner.inputs.tables = append(cleaner.inputs.tables, input)
 }
 
+func (cleaner *diskCleaner) updateOutputs(files []string) {
+	cleaner.outputs.Lock()
+	defer cleaner.outputs.Unlock()
+	cleaner.outputs.files = append(cleaner.outputs.files, files...)
+}
+
 func (cleaner *diskCleaner) GetMaxConsumed() *checkpoint.CheckpointEntry {
 	return cleaner.maxConsumed.Load()
 }
@@ -278,6 +291,12 @@ func (cleaner *diskCleaner) GetInputs() *GCTable {
 	cleaner.inputs.RLock()
 	defer cleaner.inputs.RUnlock()
 	return cleaner.inputs.tables[0]
+}
+
+func (cleaner *diskCleaner) GetOutputs() []string {
+	cleaner.outputs.RLock()
+	defer cleaner.outputs.RUnlock()
+	return cleaner.outputs.files
 }
 
 func (cleaner *diskCleaner) Start() {

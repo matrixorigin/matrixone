@@ -31,6 +31,7 @@ const (
 	DeleteBlock
 	DropTable
 	DropDB
+	DeleteFile
 )
 
 const (
@@ -76,5 +77,12 @@ var (
 	}
 	DropDBSchemaTypes = []types.Type{
 		types.New(types.T_uint32, 0, 0, 0),
+	}
+
+	DeleteFileSchemaAtt = []string{
+		GCAttrObjectName,
+	}
+	DeleteFileSchemaTypes = []types.Type{
+		types.New(types.T_varchar, 5000, 0, 0),
 	}
 )
