@@ -58,6 +58,7 @@ type diskCleaner struct {
 		tables []*GCTable
 	}
 
+	// outputs is a list of files that have been deleted
 	outputs struct {
 		sync.RWMutex
 		files []string
@@ -228,15 +229,18 @@ func (cleaner *diskCleaner) createNewInput(
 		}
 		defer data.Close()
 		input.UpdateTable(data)
-		logutil.Infof("input %v", input.String())
 	}
-	files := cleaner.GetOutputs()
+	files := cleaner.GetAndClearOutputs()
 	_, err = input.SaveTable(
 		ckps[0].GetStart(),
 		ckps[len(ckps)-1].GetEnd(),
 		cleaner.fs,
 		files,
 	)
+	if err != nil {
+		return
+	}
+
 	return
 }
 
@@ -248,6 +252,8 @@ func (cleaner *diskCleaner) tryGC() {
 	if len(gc) == 0 {
 		return
 	}
+	// Delete files after softGC
+	// TODO:Requires Physical Removal Policy
 	go cleaner.delTask.ExecDelete(gc)
 }
 
@@ -293,10 +299,13 @@ func (cleaner *diskCleaner) GetInputs() *GCTable {
 	return cleaner.inputs.tables[0]
 }
 
-func (cleaner *diskCleaner) GetOutputs() []string {
+func (cleaner *diskCleaner) GetAndClearOutputs() []string {
 	cleaner.outputs.RLock()
 	defer cleaner.outputs.RUnlock()
-	return cleaner.outputs.files
+	files := cleaner.outputs.files
+	//Empty the array, in order to store the next file list
+	cleaner.outputs.files = make([]string, 0)
+	return files
 }
 
 func (cleaner *diskCleaner) Start() {

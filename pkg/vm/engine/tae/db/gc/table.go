@@ -30,6 +30,7 @@ import (
 	"sync"
 )
 
+// GCTable is a data structure in memory after consuming checkpoint
 type GCTable struct {
 	sync.Mutex
 	dbs map[uint32]*dropDB
@@ -64,6 +65,7 @@ func (t *GCTable) deleteBlock(id common.ID, name string) {
 	t.dbs[id.PartID] = db
 }
 
+// Merge can merge two GCTables
 func (t *GCTable) Merge(GCTable *GCTable) {
 	for did, entry := range GCTable.dbs {
 		db := t.dbs[did]
@@ -78,6 +80,7 @@ func (t *GCTable) Merge(GCTable *GCTable) {
 	}
 }
 
+// SoftGC is to remove objectentry that can be deleted from GCTable
 func (t *GCTable) SoftGC() []string {
 	gc := make([]string, 0)
 	for id, db := range t.dbs {
@@ -244,6 +247,7 @@ func (t *GCTable) closeBatch(bs []*containers.Batch) {
 	}
 }
 
+// collectData collects data from memory that can be written to s3
 func (t *GCTable) collectData(files []string) []*containers.Batch {
 	bats := t.makeBatchWithGCTable()
 	for i, attr := range BlockSchemaAttr {
@@ -326,6 +330,7 @@ func (t *GCTable) replayData(ctx context.Context,
 	return nil
 }
 
+// SaveTable is to write data to s3
 func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []string) ([]objectio.BlockObject, error) {
 	bats := t.collectData(files)
 	defer t.closeBatch(bats)
@@ -341,6 +346,7 @@ func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []
 	return blocks, err
 }
 
+// ReadTable reads an s3 file and replays a GCTable in memory
 func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS) error {
 	reader, err := objectio.NewObjectReader(name, fs.Service)
 	if err != nil {
@@ -377,6 +383,7 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	return nil
 }
 
+// For test
 func (t *GCTable) Compare(table *GCTable) bool {
 	if len(t.dbs) != len(table.dbs) {
 		return false
