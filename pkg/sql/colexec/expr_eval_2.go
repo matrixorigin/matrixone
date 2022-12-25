@@ -25,7 +25,13 @@ import (
 
 func evalFunction(proc *process.Process, f *function.Function, args []*vector.Vector, length int) (*vector.Vector, error) {
 	if !f.UseNewFramework {
-		return f.Fn(args, proc)
+		v, err := f.Fn(args, proc)
+		if err != nil {
+			return nil, err
+		}
+		vector.SetLength(v, length)
+		v.FillDefaultValue()
+		return v, nil
 	}
 	var resultWrapper vector.FunctionResultWrapper
 	var err error
