@@ -2117,12 +2117,13 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var err error
-	var sql, db string
+	var sql, db, table string
 	var erArray []ExecResult
 
 	var deleteCtx context.Context
 	var accountId int64
 	var hasAccount = true
+	clusterTables := make(map[string]int)
 
 	da.Name, err = normalizeName(ctx, da.Name)
 	if err != nil {
@@ -2165,11 +2166,6 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		hasAccount = false
 	}
 
-	err = bh.Exec(ctx, "commit;")
-	if err != nil {
-		goto handleFailed
-	}
-
 	//drop tables of the tenant
 	if hasAccount {
 		//NOTE!!!: single DDL drop statement per single transaction
@@ -2184,7 +2180,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		for _, sql = range getSqlForDropAccount() {
 			err = bh.Exec(deleteCtx, sql)
 			if err != nil {
-				return err
+				goto handleFailed
 			}
 		}
 
@@ -2194,18 +2190,18 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		bh.ClearExecResultSet()
 		err = bh.Exec(deleteCtx, dbSql)
 		if err != nil {
-			return err
+			goto handleFailed
 		}
 
 		erArray, err = getResultSet(ctx, bh)
 		if err != nil {
-			return err
+			goto handleFailed
 		}
 
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 			db, err = erArray[0].GetString(ctx, i, 0)
 			if err != nil {
-				return err
+				goto handleFailed
 			}
 			databases[db] = 0
 		}
@@ -2234,7 +2230,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		for _, sql = range sqlsForDropDatabases {
 			err = bh.Exec(deleteCtx, sql)
 			if err != nil {
-				return err
+				goto handleFailed
 			}
 		}
 	}
@@ -2242,6 +2238,48 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	//step 1 : delete the account in the mo_account of the sys account
 	sql = getSqlForDeleteAccountFromMoAccount(da.Name)
 	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	//step 2: get all cluster table in the mo_catalog
+
+	sql = "show tables from mo_catalog;"
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+		table, err = erArray[0].GetString(ctx, i, 0)
+		if err != nil {
+			goto handleFailed
+		}
+		if isClusterTable("mo_catalog", table) {
+			clusterTables[table] = 0
+		}
+	}
+
+	//step3 : delete all data of the account in the cluster table
+	for clusterTable, _ := range clusterTables {
+		sql = fmt.Sprintf("delete from mo_catalog.`%s` where account_id = %d;", clusterTable, accountId)
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			goto handleFailed
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
 	return err
 
 handleFailed:

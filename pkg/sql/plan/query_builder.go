@@ -1119,7 +1119,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	for _, selectExpr := range clause.Exprs {
 		switch expr := selectExpr.Expr.(type) {
 		case tree.UnqualifiedStar:
-			cols, names, err := ctx.unfoldStar(builder.GetContext(), "")
+			cols, names, err := ctx.unfoldStar(builder.GetContext(), "", builder.compCtx.GetAccountId() == catalog.System_Account)
 			if err != nil {
 				return 0, err
 			}
@@ -1128,7 +1128,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		case *tree.UnresolvedName:
 			if expr.Star {
-				cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.Parts[0])
+				cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.Parts[0], builder.compCtx.GetAccountId() == catalog.System_Account)
 				if err != nil {
 					return 0, err
 				}
@@ -1836,7 +1836,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, cols, types)
+		binding = NewBinding(tag, nodeID, table, cols, types, util.TableIsClusterTable(node.TableDef.TableType))
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
@@ -1874,7 +1874,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, cols, types)
+		binding = NewBinding(tag, nodeID, table, cols, types, false)
 	}
 
 	ctx.bindings = append(ctx.bindings, binding)

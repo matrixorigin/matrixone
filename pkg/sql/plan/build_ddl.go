@@ -17,7 +17,6 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -29,20 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
-
-var (
-	clusterTableAttributeName = "account_id"
-	clusterTableAttributeType = &tree.T{InternalType: tree.InternalType{
-		Family:   tree.IntFamily,
-		Width:    32,
-		Oid:      uint32(defines.MYSQL_TYPE_LONG),
-		Unsigned: true,
-	}}
-)
-
-func isClusterTableAttribute(name string) bool {
-	return name == clusterTableAttributeName
-}
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
 	viewName := stmt.Name.ObjectName
@@ -441,15 +426,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	//add cluster table attribute
 	if stmt.IsClusterTable {
-		if _, ok := colMap[clusterTableAttributeName]; ok {
+		if _, ok := colMap[util.GetClusterTableAttributeName()]; ok {
 			return moerr.NewInvalidInput(ctx.GetContext(), "the attribute account_id in the cluster table can not be defined directly by the user")
 		}
-		colType, err := getTypeFromAst(ctx.GetContext(), clusterTableAttributeType)
+		colType, err := getTypeFromAst(ctx.GetContext(), util.GetClusterTableAttributeType())
 		if err != nil {
 			return err
 		}
 		colDef := &ColDef{
-			Name:    clusterTableAttributeName,
+			Name:    util.GetClusterTableAttributeName(),
 			Alg:     plan.CompressType_Lz4,
 			Typ:     colType,
 			NotNull: true,
@@ -470,7 +455,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			},
 			Comment: "the account_id added by the mo",
 		}
-		colMap[clusterTableAttributeName] = colDef
+		colMap[util.GetClusterTableAttributeName()] = colDef
 		createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 	}
 

@@ -171,6 +171,8 @@ type Session struct {
 	skipAuth bool
 
 	sqlSourceType string
+
+	isBackgroundSession bool
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
@@ -277,6 +279,7 @@ func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.Param
 	}
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(ctx)
 	ses.SetRequestContext(cancelBackgroundCtx)
+	ses.SetBackgroundSession(true)
 	backSes := &BackgroundSession{
 		Session: ses,
 		cancel:  cancelBackgroundFunc,
@@ -301,6 +304,18 @@ func (bgs *BackgroundSession) Close() {
 		bgs.Session.gSysVars = nil
 	}
 	bgs = nil
+}
+
+func (ses *Session) SetBackgroundSession(b bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.isBackgroundSession = b
+}
+
+func (ses *Session) IsBackgroundSession() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.isBackgroundSession
 }
 
 func (ses *Session) setSkipCheckPrivilege(b bool) {
@@ -1613,7 +1628,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (con
 	account := ses.GetTenantInfo()
 	if isClusterTable(dbName, tableName) {
 		//if it is the cluster table in the general account, switch into the sys account
-		if account.GetTenantID() != sysAccountID {
+		if account != nil && account.GetTenantID() != sysAccountID {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 		}
 	}

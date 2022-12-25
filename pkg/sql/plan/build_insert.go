@@ -86,7 +86,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		if isClusterTable {
 			//filter out the column account_id of the cluster table
 			for _, col := range tblRef.Cols {
-				if !isClusterTableAttribute(col.Name) {
+				if !util.IsClusterTableAttribute(col.Name) {
 					explicitCols = append(explicitCols, col)
 				}
 			}
@@ -96,8 +96,8 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	} else {
 		for _, attr := range stmt.Columns {
 			//user can not specify the column account_id of the cluster table in the syntax
-			if isClusterTable && isClusterTableAttribute(string(attr)) {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "do not specify the attribute %s for the cluster table", clusterTableAttributeName)
+			if isClusterTable && util.IsClusterTableAttribute(string(attr)) {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "do not specify the attribute %s for the cluster table", util.GetClusterTableAttributeName())
 			}
 			hasAttr := false
 			for _, col := range tblRef.Cols {
@@ -332,8 +332,8 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		if isClusterTable {
 			for _, attr := range stmt.Columns {
 				//user can not specify the column account_id of the cluster table in the syntax
-				if isClusterTableAttribute(string(attr)) {
-					return nil, moerr.NewInvalidInput(ctx.GetContext(), "do not specify the attribute %s for the cluster table", clusterTableAttributeName)
+				if util.IsClusterTableAttribute(string(attr)) {
+					return nil, moerr.NewInvalidInput(ctx.GetContext(), "do not specify the attribute %s for the cluster table", util.GetClusterTableAttributeName())
 				}
 			}
 		}

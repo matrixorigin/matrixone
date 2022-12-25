@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
 
@@ -339,7 +340,7 @@ func getAccountInfoOfClusterTable(ctx CompilerContext, accounts tree.IdentifierL
 			return nil, err
 		}
 		for i, col := range tableDef.GetCols() {
-			if isClusterTableAttribute(col.Name) {
+			if util.IsClusterTableAttribute(col.Name) {
 				if columnIndexOfAccountId >= 0 {
 					return nil, moerr.NewInternalError(ctx.GetContext(), "there are two account_ids in the cluster table")
 				} else {
