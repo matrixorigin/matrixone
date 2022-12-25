@@ -66,7 +66,9 @@ func evalFunction(proc *process.Process, f *function.Function, args []*vector.Ve
 		resultWrapper = newFunctionResultRelated(rTyp, proc, false, length)
 		err = f.NewFn(args, resultWrapper, proc, length)
 	}
-
+	if err != nil {
+		resultWrapper.Free()
+	}
 	return resultWrapper.GetResultVector(), err
 }
 

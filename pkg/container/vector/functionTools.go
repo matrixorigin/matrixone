@@ -40,6 +40,7 @@ type FunctionParameter[T types.FixedSizeT] struct {
 
 type FunctionResultWrapper interface {
 	GetResultVector() *Vector
+	Free()
 }
 
 func NewResultFunc[T types.FixedSizeT](v *Vector, mp *mpool.MPool) *FunctionResult[T] {
@@ -64,7 +65,7 @@ func (fr *FunctionResult[T]) GetType() types.Type {
 func (fr *FunctionResult[T]) SetFromParameter(fp *FunctionParameter[T]) {
 	// clean the old memory
 	if fr.vec != fp.sourceVector {
-		fr.vec.Free(fr.mp)
+		fr.Free()
 	}
 	fr.vec = fp.sourceVector
 }
@@ -79,6 +80,11 @@ func (fr *FunctionResult[T]) ConvertToParameter() FunctionParameter[T] {
 
 func (fr *FunctionResult[T]) ConvertToStrParameter() FunctionParameter[types.Varlena] {
 	return GenerateFunctionStrParameter(fr.vec)
+}
+
+func (fr *FunctionResult[T]) Free() {
+	fr.vec.Free(fr.mp)
+	fr.vec = nil
 }
 
 func (fp *FunctionParameter[T]) GetSourceVector() *Vector {

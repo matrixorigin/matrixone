@@ -170,6 +170,8 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_time: {
 		types.T_date, types.T_datetime,
 		types.T_time,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_decimal64, types.T_decimal128,
 	},
@@ -1082,6 +1084,30 @@ func timeToOthers(ctx context.Context,
 	source *vector.FunctionParameter[types.Time],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
+	case types.T_int8:
+		rs := result.(*vector.FunctionResult[int8])
+		return timeToInteger[int8](ctx, source, rs, length)
+	case types.T_int16:
+		rs := result.(*vector.FunctionResult[int16])
+		return timeToInteger[int16](ctx, source, rs, length)
+	case types.T_int32:
+		rs := result.(*vector.FunctionResult[int32])
+		return timeToInteger[int32](ctx, source, rs, length)
+	case types.T_int64:
+		rs := result.(*vector.FunctionResult[int64])
+		return timeToInteger[int64](ctx, source, rs, length)
+	case types.T_uint8:
+		rs := result.(*vector.FunctionResult[uint8])
+		return timeToInteger[uint8](ctx, source, rs, length)
+	case types.T_uint16:
+		rs := result.(*vector.FunctionResult[uint16])
+		return timeToInteger[uint16](ctx, source, rs, length)
+	case types.T_uint32:
+		rs := result.(*vector.FunctionResult[uint32])
+		return timeToInteger[uint32](ctx, source, rs, length)
+	case types.T_uint64:
+		rs := result.(*vector.FunctionResult[uint64])
+		return timeToInteger[uint64](ctx, source, rs, length)
 	case types.T_date:
 		rs := result.(*vector.FunctionResult[types.Date])
 		return timeToDate(source, rs, length)
@@ -1348,12 +1374,6 @@ func numericToBool[T constraints.Integer | constraints.Float](
 			return err
 		}
 	}
-	return nil
-}
-
-func timeToNumeric[T constraints.Integer | constraints.Float](
-	from *vector.FunctionParameter[types.Time],
-	to *vector.FunctionResult[T], length int) error {
 	return nil
 }
 
@@ -1861,6 +1881,33 @@ func timestampToDate(
 				return err
 			}
 			if err = to.Append(result[0].ToDate(), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func timeToInteger[T constraints.Integer](
+	ctx context.Context,
+	from *vector.FunctionParameter[types.Time],
+	to *vector.FunctionResult[T], length int) error {
+	var i uint64
+	l := uint64(length)
+	var dft T
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else {
+			r := v.ToInt64()
+			// XXX we may need an elegant method to do overflow check.
+			if err := overflowForNumericToNumeric[int64, T](ctx, []int64{r}); err != nil {
+				return err
+			}
+			if err := to.Append(T(r), false); err != nil {
 				return err
 			}
 		}
