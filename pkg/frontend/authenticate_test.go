@@ -6245,6 +6245,21 @@ func Test_doAlterAccount(t *testing.T) {
 	})
 }
 
+func newMrsForShowTables(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col2 := &MysqlColumn{}
+	col2.SetName("table")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col2)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func Test_doDropAccount(t *testing.T) {
 	convey.Convey("drop account", t, func() {
 		ctrl := gomock.NewController(t)
@@ -6283,6 +6298,8 @@ func Test_doDropAccount(t *testing.T) {
 		sql = "show databases;"
 		bh.sql2result[sql] = newMrsForSqlForShowDatabases([][]interface{}{})
 
+		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+
 		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
@@ -6318,6 +6335,8 @@ func Test_doDropAccount(t *testing.T) {
 		for _, sql = range getSqlForDropAccount() {
 			bh.sql2result[sql] = nil
 		}
+
+		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
 		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
