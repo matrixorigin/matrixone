@@ -17,6 +17,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"math/rand"
 	"reflect"
 	"sync"
@@ -4545,6 +4546,189 @@ func TestAppendBat(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestGCWithCheckpoint(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 21)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+	now := time.Now()
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(time.Since(now))
+	t.Logf("Checkpointed: %d", tae.Scheduler.GetCheckpointedLSN())
+	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
+	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
+	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager.Start()
+	defer manager.Stop()
+	err := manager.JobFactory(context.Background())
+	assert.Nil(t, err)
+	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	num := len(entries)
+	assert.Greater(t, num, 0)
+	testutils.WaitExpect(5000, func() bool {
+		if manager.GetMaxConsumed() == nil {
+			return false
+		}
+		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
+	})
+	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
+	manager2 := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2.Start()
+	defer manager2.Stop()
+	manager2.Replay()
+	testutils.WaitExpect(5000, func() bool {
+		if manager2.GetMaxConsumed() == nil {
+			return false
+		}
+		return entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd())
+	})
+	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd()))
+	tables1 := manager.GetInputs()
+	tables2 := manager2.GetInputs()
+	assert.True(t, tables1.Compare(tables2))
+}
+
+func TestGCDropDB(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 210)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err := txn.DropDatabase(defaultTestDB)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetDeleteAt())
+	now := time.Now()
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(time.Since(now))
+	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager.Start()
+	defer manager.Stop()
+	err = manager.JobFactory(context.Background())
+	assert.Nil(t, err)
+	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	num := len(entries)
+	assert.Greater(t, num, 0)
+	testutils.WaitExpect(5000, func() bool {
+		if manager.GetMaxConsumed() == nil {
+			return false
+		}
+		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
+	})
+	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
+	manager2 := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2.Start()
+	defer manager2.Stop()
+	manager2.Replay()
+	testutils.WaitExpect(5000, func() bool {
+		if manager2.GetMaxConsumed() == nil {
+			return false
+		}
+		return entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd())
+	})
+	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd()))
+	tables1 := manager.GetInputs()
+	tables2 := manager2.GetInputs()
+	assert.True(t, tables1.Compare(tables2))
+	tae.restart()
+}
+
+func TestGCDropTable(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 210)
+	defer bat.Close()
+	schema2 := catalog.MockSchemaAll(3, 1)
+	schema2.BlockMaxRows = 10
+	schema2.SegmentMaxBlocks = 2
+	bat2 := catalog.MockBatch(schema2, 210)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+	txn, _ := tae.StartTxn(nil)
+	db, err := txn.GetDatabase(defaultTestDB)
+	assert.Nil(t, err)
+	rel, _ := db.CreateRelation(schema2)
+	rel.Append(bat2)
+	assert.Nil(t, txn.Commit())
+
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase(defaultTestDB)
+	assert.Nil(t, err)
+	_, err = db.DropRelationByName(schema2.Name)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	now := time.Now()
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetDeleteAt())
+	t.Log(time.Since(now))
+	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager.Start()
+	defer manager.Stop()
+	err = manager.JobFactory(context.Background())
+	assert.Nil(t, err)
+	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	num := len(entries)
+	assert.Greater(t, num, 0)
+	testutils.WaitExpect(10000, func() bool {
+		if manager.GetMaxConsumed() == nil {
+			return false
+		}
+		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
+	})
+	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
+	manager2 := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2.Start()
+	defer manager2.Stop()
+	manager2.Replay()
+	testutils.WaitExpect(5000, func() bool {
+		if manager2.GetMaxConsumed() == nil {
+			return false
+		}
+		return entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd())
+	})
+	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd()))
+	tables1 := manager.GetInputs()
+	tables2 := manager2.GetInputs()
+	assert.True(t, tables1.Compare(tables2))
+	tae.restart()
+}
+
 func TestUpdateCstr(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
