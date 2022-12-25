@@ -53,3 +53,7 @@ func NewObjectFS(service fileservice.FileService, dir string) *ObjectFS {
 func (o *ObjectFS) ListDir(dir string) ([]fileservice.DirEntry, error) {
 	return o.Service.List(context.Background(), dir)
 }
+
+func (o *ObjectFS) Delete(fileName string) error {
+	return o.Service.Delete(context.Background(), fileName)
+}

@@ -2052,6 +2052,20 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	JSON_QUOTE: {
+		Id:     JSON_QUOTE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  false,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_json,
+				Fn:        unary.JsonQuote,
+			},
+		},
+	},
 
 	ENABLE_FAULT_INJECTION: {
 		Id:     ENABLE_FAULT_INJECTION,

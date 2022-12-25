@@ -193,7 +193,8 @@ func (c *CompilerContext) getTableAttrs(dbName string, tableName string) (attrs 
 
 func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 	return &plan.ColDef{
-		Name: attr.Name,
+		ColId: uint64(attr.ID),
+		Name:  attr.Name,
 		Typ: &plan.Type{
 			Id:          int32(attr.Type.Oid),
 			NotNullable: attr.Default != nil && !(attr.Default.NullAbility),

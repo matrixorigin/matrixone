@@ -92,7 +92,12 @@ func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp,
 	}
 	ids := make([]uint64, len(blocks))
 	for i := range blocks {
-		ids[i] = blocks[i].Info.BlockID
+		// if cn can see a appendable block, this block must contain all updates
+		// in cache, no need to do merge read, BlockRead will filter out
+		// invisible and deleted rows with respect to the timestamp
+		if !blocks[i].Info.EntryState {
+			ids[i] = blocks[i].Info.BlockID
+		}
 	}
 	p.IterDeletedRowIDs(ctx, ids, ts, func(rowID RowID) bool {
 		id, offset := catalog.DecodeRowid(types.Rowid(rowID))

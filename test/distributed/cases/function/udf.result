@@ -1,0 +1,8 @@
+create function helloworld () returns int language sql as 'select id from test_table limit 1';
+create function twosum (x int, y int) returns int language sql as 'select $1 + $2' ;
+create function twosum (x float, y float) returns float language sql as 'select $1 + $2' ;
+create function twosum (x int) returns int language sql as 'select $1 + 10' ;
+drop function helloWorld ();
+drop function twosum (int, int);
+drop function twosum (int);
+drop function twosum (float, float);
