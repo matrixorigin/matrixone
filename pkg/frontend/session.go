@@ -1906,7 +1906,6 @@ handleFailed:
 }
 
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
-	ctx := tcc.GetSession().GetRequestContext()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
@@ -1942,7 +1941,6 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 }
 
 func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
-	ctx := tcc.GetSession().GetRequestContext()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
