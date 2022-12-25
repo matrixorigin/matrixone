@@ -2038,17 +2038,31 @@ var builtins = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Volatile:  true,
+				Volatile:  false,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_json,
-				Fn:        binary.JsonExtractByString,
+				Fn:        binary.JsonExtract,
 			},
 			{
 				Index:     1,
-				Volatile:  true,
+				Volatile:  false,
 				Args:      []types.T{types.T_json, types.T_varchar},
 				ReturnTyp: types.T_json,
-				Fn:        binary.JsonExtractByJson,
+				Fn:        binary.JsonExtract,
+			},
+		},
+	},
+	JSON_QUOTE: {
+		Id:     JSON_QUOTE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  false,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_json,
+				Fn:        unary.JsonQuote,
 			},
 		},
 	},
@@ -2698,6 +2712,20 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_uint8,
 				Volatile:  true,
 				Fn:        unary.Sleep[float64],
+			},
+		},
+	},
+	INSTR: {
+		Id:     INSTR,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_int64,
+				Volatile:  false,
+				Fn:        binary.Instr,
 			},
 		},
 	},

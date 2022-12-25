@@ -43,7 +43,7 @@ type diskCleaner struct {
 	fs *objectio.ObjectFS
 
 	// ckpClient is used to get the instance of the specified checkpoint
-	ckpClient checkpoint.Client
+	ckpClient checkpoint.RunnerReader
 
 	// Parsing checkpoint needs to use catalog instance
 	catalog *catalog.Catalog
@@ -75,7 +75,7 @@ type diskCleaner struct {
 
 func NewDiskCleaner(
 	fs *objectio.ObjectFS,
-	ckpClient checkpoint.Client,
+	ckpClient checkpoint.RunnerReader,
 	catalog *catalog.Catalog,
 ) *diskCleaner {
 	cleaner := &diskCleaner{
@@ -160,7 +160,7 @@ func (cleaner *diskCleaner) replay() error {
 			return err
 		}
 	}
-	ckp := checkpoint.NewCheckpointEntry(types.TS{}, maxConsumed)
+	ckp := checkpoint.NewCheckpointEntry(types.TS{}, maxConsumed, checkpoint.ET_Incremental)
 	cleaner.updateMaxConsumed(ckp)
 	return nil
 }

@@ -249,8 +249,10 @@ const (
 	TIMESTAMP    // TIMESTAMP
 	DATE_FORMAT  // DATE_FORMAT
 	JSON_EXTRACT // JSON_EXTRACT
+	JSON_QUOTE   // JSON_QUOTE
 	FORMAT       // FORMAT
 	SLEEP        // sleep for a while
+	INSTR
 
 	UUID
 	SERIAL
@@ -431,6 +433,7 @@ var functionIdRegister = map[string]int32{
 	"version":                        VERSION,
 	"collation":                      COLLATION,
 	"json_extract":                   JSON_EXTRACT,
+	"json_quote":                     JSON_QUOTE,
 	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
 	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
 	"add_fault_point":                ADD_FAULT_POINT,
@@ -461,6 +464,7 @@ var functionIdRegister = map[string]int32{
 	"format":                         FORMAT,
 	"sleep":                          SLEEP,
 	"split_part":                     SPLIT_PART,
+	"instr":                          INSTR,
 	"curdate":                        CURRENT_DATE,
 	"current_date":                   CURRENT_DATE,
 }

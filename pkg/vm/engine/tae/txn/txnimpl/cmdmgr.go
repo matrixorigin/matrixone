@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -63,6 +64,8 @@ func (mgr *commandManager) ApplyTxnRecord(tid string, txn txnif.AsyncTxn) (logEn
 	if buf, err = mgr.cmd.Marshal(); err != nil {
 		return
 	}
+	// logutil.Info("", common.OperationField("suxi-replay-cmd"),
+	// common.OperandField(mgr.cmd.Desc()))
 	logEntry = entry.GetBase()
 	logEntry.SetType(ETTxnRecord)
 	if err = logEntry.SetPayload(buf); err != nil {
