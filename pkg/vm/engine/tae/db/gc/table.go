@@ -185,7 +185,7 @@ func (t *GCTable) rebuildTable(bats []*containers.Batch) {
 		sid := bats[CreateBlock].GetVectorByName(GCAttrSegmentId).Get(i).(uint64)
 		blkID := bats[CreateBlock].GetVectorByName(GCAttrBlockId).Get(i).(uint64)
 		name := string(bats[CreateBlock].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
-		if files[name] == true {
+		if files[name] {
 			continue
 		}
 		id := common.ID{
@@ -202,7 +202,7 @@ func (t *GCTable) rebuildTable(bats []*containers.Batch) {
 		sid := bats[DeleteBlock].GetVectorByName(GCAttrSegmentId).Get(i).(uint64)
 		blkID := bats[DeleteBlock].GetVectorByName(GCAttrBlockId).Get(i).(uint64)
 		name := string(bats[DeleteBlock].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
-		if files[name] == true {
+		if files[name] {
 			continue
 		}
 		id := common.ID{
