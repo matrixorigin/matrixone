@@ -2267,7 +2267,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	}
 
 	//step3 : delete all data of the account in the cluster table
-	for clusterTable, _ := range clusterTables {
+	for clusterTable := range clusterTables {
 		sql = fmt.Sprintf("delete from mo_catalog.`%s` where account_id = %d;", clusterTable, accountId)
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
