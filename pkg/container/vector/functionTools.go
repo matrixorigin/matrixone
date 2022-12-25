@@ -81,6 +81,10 @@ func (fr *FunctionResult[T]) ConvertToStrParameter() FunctionParameter[types.Var
 	return GenerateFunctionStrParameter(fr.vec)
 }
 
+func (fp *FunctionParameter[T]) GetSourceVector() *Vector {
+	return fp.sourceVector
+}
+
 // GetValue return the nth value and if it's null or not.
 func (fp *FunctionParameter[T]) GetValue(idx uint64) (value T, isNull bool) {
 	if fp.isScalar {

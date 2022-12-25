@@ -342,18 +342,10 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		s := vector.GenerateFunctionFixedTypeParameter[types.Rowid](from)
 		err = rowidToOthers(proc.Ctx, &s, toType, result, length)
 	default:
-		return moerr.NewInternalError(proc.Ctx,
-			fmt.Sprintf("CAST does not support the source type '%s'", fromType))
+		// XXX we set the function here to adapt to the BVT cases.
+		err = formatCastError(proc.Ctx, from, toType, "")
 	}
-	// XXX we set the code here to adapt to BVT case and more requirement for a kind error information.
-	if err != nil {
-		err = rewriteErrorMessage(err)
-	}
-	return nil
-}
-
-func rewriteErrorMessage(source error) error {
-	return source
+	return err
 }
 
 func scalarNullToOthers(ctx context.Context,
@@ -455,31 +447,31 @@ func int8ToOthers(ctx context.Context,
 		return nil
 	case types.T_int16:
 		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[int8, int16](source, rs, length)
+		return numericToNumeric[int8, int16](ctx, source, rs, length)
 	case types.T_int32:
 		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[int8, int32](source, rs, length)
+		return numericToNumeric[int8, int32](ctx, source, rs, length)
 	case types.T_int64:
 		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[int8, int64](source, rs, length)
+		return numericToNumeric[int8, int64](ctx, source, rs, length)
 	case types.T_uint8:
 		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[int8, uint8](source, rs, length)
+		return numericToNumeric[int8, uint8](ctx, source, rs, length)
 	case types.T_uint16:
 		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[int8, uint16](source, rs, length)
+		return numericToNumeric[int8, uint16](ctx, source, rs, length)
 	case types.T_uint32:
 		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[int8, uint32](source, rs, length)
+		return numericToNumeric[int8, uint32](ctx, source, rs, length)
 	case types.T_uint64:
 		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[int8, uint64](source, rs, length)
+		return numericToNumeric[int8, uint64](ctx, source, rs, length)
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[int8, float32](source, rs, length)
+		return numericToNumeric[int8, float32](ctx, source, rs, length)
 	case types.T_float64:
 		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[int8, float64](source, rs, length)
+		return numericToNumeric[int8, float64](ctx, source, rs, length)
 	case types.T_decimal64:
 		rs := result.(*vector.FunctionResult[types.Decimal64])
 		return signedToDecimal64[int8](source, rs, length)
@@ -509,35 +501,35 @@ func int16ToOthers(ctx context.Context,
 		return numericToBool[int16](source, rs, length)
 	case types.T_int8:
 		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[int16, int8](source, rs, length)
+		return numericToNumeric[int16, int8](ctx, source, rs, length)
 	case types.T_int16:
 		rs := result.(*vector.FunctionResult[int16])
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_int32:
 		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[int16, int32](source, rs, length)
+		return numericToNumeric[int16, int32](ctx, source, rs, length)
 	case types.T_int64:
 		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[int16, int64](source, rs, length)
+		return numericToNumeric[int16, int64](ctx, source, rs, length)
 	case types.T_uint8:
 		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[int16, uint8](source, rs, length)
+		return numericToNumeric[int16, uint8](ctx, source, rs, length)
 	case types.T_uint16:
 		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[int16, uint16](source, rs, length)
+		return numericToNumeric[int16, uint16](ctx, source, rs, length)
 	case types.T_uint32:
 		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[int16, uint32](source, rs, length)
+		return numericToNumeric[int16, uint32](ctx, source, rs, length)
 	case types.T_uint64:
 		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[int16, uint64](source, rs, length)
+		return numericToNumeric[int16, uint64](ctx, source, rs, length)
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[int16, float32](source, rs, length)
+		return numericToNumeric[int16, float32](ctx, source, rs, length)
 	case types.T_float64:
 		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[int16, float64](source, rs, length)
+		return numericToNumeric[int16, float64](ctx, source, rs, length)
 	case types.T_decimal64:
 		rs := result.(*vector.FunctionResult[types.Decimal64])
 		return signedToDecimal64[int16](source, rs, length)
@@ -567,35 +559,35 @@ func int32ToOthers(ctx context.Context,
 		return numericToBool[int32](source, rs, length)
 	case types.T_int8:
 		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[int32, int8](source, rs, length)
+		return numericToNumeric[int32, int8](ctx, source, rs, length)
 	case types.T_int16:
 		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[int32, int16](source, rs, length)
+		return numericToNumeric[int32, int16](ctx, source, rs, length)
 	case types.T_int32:
 		rs := result.(*vector.FunctionResult[int32])
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_int64:
 		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[int32, int64](source, rs, length)
+		return numericToNumeric[int32, int64](ctx, source, rs, length)
 	case types.T_uint8:
 		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[int32, uint8](source, rs, length)
+		return numericToNumeric[int32, uint8](ctx, source, rs, length)
 	case types.T_uint16:
 		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[int32, uint16](source, rs, length)
+		return numericToNumeric[int32, uint16](ctx, source, rs, length)
 	case types.T_uint32:
 		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[int32, uint32](source, rs, length)
+		return numericToNumeric[int32, uint32](ctx, source, rs, length)
 	case types.T_uint64:
 		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[int32, uint64](source, rs, length)
+		return numericToNumeric[int32, uint64](ctx, source, rs, length)
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[int32, float32](source, rs, length)
+		return numericToNumeric[int32, float32](ctx, source, rs, length)
 	case types.T_float64:
 		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[int32, float64](source, rs, length)
+		return numericToNumeric[int32, float64](ctx, source, rs, length)
 	case types.T_decimal64:
 		rs := result.(*vector.FunctionResult[types.Decimal64])
 		return signedToDecimal64[int32](source, rs, length)
@@ -625,35 +617,35 @@ func int64ToOthers(ctx context.Context,
 		return numericToBool[int64](source, rs, length)
 	case types.T_int8:
 		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[int64, int8](source, rs, length)
+		return numericToNumeric[int64, int8](ctx, source, rs, length)
 	case types.T_int16:
 		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[int64, int16](source, rs, length)
+		return numericToNumeric[int64, int16](ctx, source, rs, length)
 	case types.T_int32:
 		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[int64, int32](source, rs, length)
+		return numericToNumeric[int64, int32](ctx, source, rs, length)
 	case types.T_int64:
 		rs := result.(*vector.FunctionResult[int64])
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_uint8:
 		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[int64, uint8](source, rs, length)
+		return numericToNumeric[int64, uint8](ctx, source, rs, length)
 	case types.T_uint16:
 		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[int64, uint16](source, rs, length)
+		return numericToNumeric[int64, uint16](ctx, source, rs, length)
 	case types.T_uint32:
 		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[int64, uint32](source, rs, length)
+		return numericToNumeric[int64, uint32](ctx, source, rs, length)
 	case types.T_uint64:
 		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[int64, uint64](source, rs, length)
+		return numericToNumeric[int64, uint64](ctx, source, rs, length)
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[int64, float32](source, rs, length)
+		return numericToNumeric[int64, float32](ctx, source, rs, length)
 	case types.T_float64:
 		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[int64, float64](source, rs, length)
+		return numericToNumeric[int64, float64](ctx, source, rs, length)
 	case types.T_decimal64:
 		rs := result.(*vector.FunctionResult[types.Decimal64])
 		return signedToDecimal64[int64](source, rs, length)
@@ -683,35 +675,35 @@ func uint8ToOthers(ctx context.Context,
 		return numericToBool[uint8](source, rs, length)
 	case types.T_int8:
 		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[uint8, int8](source, rs, length)
+		return numericToNumeric[uint8, int8](ctx, source, rs, length)
 	case types.T_int16:
 		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[uint8, int16](source, rs, length)
+		return numericToNumeric[uint8, int16](ctx, source, rs, length)
 	case types.T_int32:
 		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[uint8, int32](source, rs, length)
+		return numericToNumeric[uint8, int32](ctx, source, rs, length)
 	case types.T_int64:
 		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[uint8, int64](source, rs, length)
+		return numericToNumeric[uint8, int64](ctx, source, rs, length)
 	case types.T_uint8:
 		rs := result.(*vector.FunctionResult[uint8])
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_uint16:
 		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[uint8, uint16](source, rs, length)
+		return numericToNumeric[uint8, uint16](ctx, source, rs, length)
 	case types.T_uint32:
 		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[uint8, uint32](source, rs, length)
+		return numericToNumeric[uint8, uint32](ctx, source, rs, length)
 	case types.T_uint64:
 		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[uint8, uint64](source, rs, length)
+		return numericToNumeric[uint8, uint64](ctx, source, rs, length)
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[uint8, float32](source, rs, length)
+		return numericToNumeric[uint8, float32](ctx, source, rs, length)
 	case types.T_float64:
 		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[uint8, float64](source, rs, length)
+		return numericToNumeric[uint8, float64](ctx, source, rs, length)
 	case types.T_decimal64:
 		rs := result.(*vector.FunctionResult[types.Decimal64])
 		return unsignedToDecimal64[uint8](source, rs, length)
@@ -740,35 +732,35 @@ func uint16ToOthers(ctx context.Context,
 		return numericToBool[uint16](source, rs, length)
 	case types.T_int8:
 		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[uint16, int8](source, rs, length)
+		return numericToNumeric[uint16, int8](ctx, source, rs, length)
 	case types.T_int16:
 		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[uint16, int16](source, rs, length)
+		return numericToNumeric[uint16, int16](ctx, source, rs, length)
 	case types.T_int32:
 		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[uint16, int32](source, rs, length)
+		return numericToNumeric[uint16, int32](ctx, source, rs, length)
 	case types.T_int64:
 		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[uint16, int64](source, rs, length)
+		return numericToNumeric[uint16, int64](ctx, source, rs, length)
 	case types.T_uint8:
 		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[uint16, uint8](source, rs, length)
+		return numericToNumeric[uint16, uint8](ctx, source, rs, length)
 	case types.T_uint16:
 		rs := result.(*vector.FunctionResult[uint16])
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_uint32:
 		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[uint16, uint32](source, rs, length)
+		return numericToNumeric[uint16, uint32](ctx, source, rs, length)
 	case types.T_uint64:
 		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[uint16, uint64](source, rs, length)
+		return numericToNumeric[uint16, uint64](ctx, source, rs, length)
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[uint16, float32](source, rs, length)
+		return numericToNumeric[uint16, float32](ctx, source, rs, length)
 	case types.T_float64:
 		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[uint16, float64](source, rs, length)
+		return numericToNumeric[uint16, float64](ctx, source, rs, length)
 	case types.T_decimal64:
 		rs := result.(*vector.FunctionResult[types.Decimal64])
 		return unsignedToDecimal64[uint16](source, rs, length)
@@ -797,35 +789,35 @@ func uint32ToOthers(ctx context.Context,
 		return numericToBool[uint32](source, rs, length)
 	case types.T_int8:
 		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[uint32, int8](source, rs, length)
+		return numericToNumeric[uint32, int8](ctx, source, rs, length)
 	case types.T_int16:
 		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[uint32, int16](source, rs, length)
+		return numericToNumeric[uint32, int16](ctx, source, rs, length)
 	case types.T_int32:
 		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[uint32, int32](source, rs, length)
+		return numericToNumeric[uint32, int32](ctx, source, rs, length)
 	case types.T_int64:
 		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[uint32, int64](source, rs, length)
+		return numericToNumeric[uint32, int64](ctx, source, rs, length)
 	case types.T_uint8:
 		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[uint32, uint8](source, rs, length)
+		return numericToNumeric[uint32, uint8](ctx, source, rs, length)
 	case types.T_uint16:
 		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[uint32, uint16](source, rs, length)
+		return numericToNumeric[uint32, uint16](ctx, source, rs, length)
 	case types.T_uint32:
 		rs := result.(*vector.FunctionResult[uint32])
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_uint64:
 		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[uint32, uint64](source, rs, length)
+		return numericToNumeric[uint32, uint64](ctx, source, rs, length)
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[uint32, float32](source, rs, length)
+		return numericToNumeric[uint32, float32](ctx, source, rs, length)
 	case types.T_float64:
 		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[uint32, float64](source, rs, length)
+		return numericToNumeric[uint32, float64](ctx, source, rs, length)
 	case types.T_decimal64:
 		rs := result.(*vector.FunctionResult[types.Decimal64])
 		return unsignedToDecimal64[uint32](source, rs, length)
@@ -854,35 +846,35 @@ func uint64ToOthers(ctx context.Context,
 		return numericToBool[uint64](source, rs, length)
 	case types.T_int8:
 		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[uint64, int8](source, rs, length)
+		return numericToNumeric[uint64, int8](ctx, source, rs, length)
 	case types.T_int16:
 		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[uint64, int16](source, rs, length)
+		return numericToNumeric[uint64, int16](ctx, source, rs, length)
 	case types.T_int32:
 		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[uint64, int32](source, rs, length)
+		return numericToNumeric[uint64, int32](ctx, source, rs, length)
 	case types.T_int64:
 		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[uint64, int64](source, rs, length)
+		return numericToNumeric[uint64, int64](ctx, source, rs, length)
 	case types.T_uint8:
 		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[uint64, uint8](source, rs, length)
+		return numericToNumeric[uint64, uint8](ctx, source, rs, length)
 	case types.T_uint16:
 		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[uint64, uint16](source, rs, length)
+		return numericToNumeric[uint64, uint16](ctx, source, rs, length)
 	case types.T_uint32:
 		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[uint64, uint32](source, rs, length)
+		return numericToNumeric[uint64, uint32](ctx, source, rs, length)
 	case types.T_uint64:
 		rs := result.(*vector.FunctionResult[uint64])
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[uint64, float32](source, rs, length)
+		return numericToNumeric[uint64, float32](ctx, source, rs, length)
 	case types.T_float64:
 		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[uint64, float64](source, rs, length)
+		return numericToNumeric[uint64, float64](ctx, source, rs, length)
 	case types.T_decimal64:
 		rs := result.(*vector.FunctionResult[types.Decimal64])
 		return unsignedToDecimal64[uint64](source, rs, length)
@@ -911,35 +903,35 @@ func float32ToOthers(ctx context.Context,
 		return numericToBool[float32](source, rs, length)
 	case types.T_int8:
 		rs := result.(*vector.FunctionResult[int8])
-		return floatToInteger[float32, int8](source, rs, length)
+		return floatToInteger[float32, int8](ctx, source, rs, length)
 	case types.T_int16:
 		rs := result.(*vector.FunctionResult[int16])
-		return floatToInteger[float32, int16](source, rs, length)
+		return floatToInteger[float32, int16](ctx, source, rs, length)
 	case types.T_int32:
 		rs := result.(*vector.FunctionResult[int32])
-		return floatToInteger[float32, int32](source, rs, length)
+		return floatToInteger[float32, int32](ctx, source, rs, length)
 	case types.T_int64:
 		rs := result.(*vector.FunctionResult[int64])
-		return floatToInteger[float32, int64](source, rs, length)
+		return floatToInteger[float32, int64](ctx, source, rs, length)
 	case types.T_uint8:
 		rs := result.(*vector.FunctionResult[uint8])
-		return floatToInteger[float32, uint8](source, rs, length)
+		return floatToInteger[float32, uint8](ctx, source, rs, length)
 	case types.T_uint16:
 		rs := result.(*vector.FunctionResult[uint16])
-		return floatToInteger[float32, uint16](source, rs, length)
+		return floatToInteger[float32, uint16](ctx, source, rs, length)
 	case types.T_uint32:
 		rs := result.(*vector.FunctionResult[uint32])
-		return floatToInteger[float32, uint32](source, rs, length)
+		return floatToInteger[float32, uint32](ctx, source, rs, length)
 	case types.T_uint64:
 		rs := result.(*vector.FunctionResult[uint64])
-		return floatToInteger[float32, uint64](source, rs, length)
+		return floatToInteger[float32, uint64](ctx, source, rs, length)
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_float64:
 		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[float32, float64](source, rs, length)
+		return numericToNumeric[float32, float64](ctx, source, rs, length)
 	case types.T_decimal64:
 		rs := result.(*vector.FunctionResult[types.Decimal64])
 		return floatToDecimal64[float32](source, rs, length)
@@ -962,31 +954,31 @@ func float64ToOthers(ctx context.Context,
 		return numericToBool[float64](source, rs, length)
 	case types.T_int8:
 		rs := result.(*vector.FunctionResult[int8])
-		return floatToInteger[float64, int8](source, rs, length)
+		return floatToInteger[float64, int8](ctx, source, rs, length)
 	case types.T_int16:
 		rs := result.(*vector.FunctionResult[int16])
-		return floatToInteger[float64, int16](source, rs, length)
+		return floatToInteger[float64, int16](ctx, source, rs, length)
 	case types.T_int32:
 		rs := result.(*vector.FunctionResult[int32])
-		return floatToInteger[float64, int32](source, rs, length)
+		return floatToInteger[float64, int32](ctx, source, rs, length)
 	case types.T_int64:
 		rs := result.(*vector.FunctionResult[int64])
-		return floatToInteger[float64, int64](source, rs, length)
+		return floatToInteger[float64, int64](ctx, source, rs, length)
 	case types.T_uint8:
 		rs := result.(*vector.FunctionResult[uint8])
-		return floatToInteger[float64, uint8](source, rs, length)
+		return floatToInteger[float64, uint8](ctx, source, rs, length)
 	case types.T_uint16:
 		rs := result.(*vector.FunctionResult[uint16])
-		return floatToInteger[float64, uint16](source, rs, length)
+		return floatToInteger[float64, uint16](ctx, source, rs, length)
 	case types.T_uint32:
 		rs := result.(*vector.FunctionResult[uint32])
-		return floatToInteger[float64, uint32](source, rs, length)
+		return floatToInteger[float64, uint32](ctx, source, rs, length)
 	case types.T_uint64:
 		rs := result.(*vector.FunctionResult[uint64])
-		return floatToInteger[float64, uint64](source, rs, length)
+		return floatToInteger[float64, uint64](ctx, source, rs, length)
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[float64, float32](source, rs, length)
+		return numericToNumeric[float64, float32](ctx, source, rs, length)
 	case types.T_float64:
 		rs := result.(*vector.FunctionResult[float64])
 		rs.SetFromParameter(source)
@@ -1164,7 +1156,7 @@ func decimal128ToOthers(ctx context.Context,
 		return decimal128ToUnsigned[uint64](ctx, source, rs, 64, length)
 	case types.T_decimal64:
 		rs := result.(*vector.FunctionResult[types.Decimal64])
-		return decimal128ToDecimal64(source, rs, length)
+		return decimal128ToDecimal64(ctx, source, rs, length)
 	case types.T_decimal128:
 		rs := result.(*vector.FunctionResult[types.Decimal128])
 		rs.SetFromParameter(source)
@@ -1295,11 +1287,13 @@ func rowidToOthers(ctx context.Context,
 }
 
 // XXX do not use it to cast float to integer, please use floatToInteger
-func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](from *vector.FunctionParameter[T1], to *vector.FunctionResult[T2], length int) error {
+func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](
+	ctx context.Context,
+	from *vector.FunctionParameter[T1], to *vector.FunctionResult[T2], length int) error {
 	var i uint64
 	var dftValue T2
 	times := uint64(length)
-	if err := overflowForNumericToNumeric[T1, T2](from.UnSafeGetAllValue()); err != nil {
+	if err := overflowForNumericToNumeric[T1, T2](ctx, from.UnSafeGetAllValue()); err != nil {
 		return err
 	}
 	for i = 0; i < times; i++ {
@@ -1319,12 +1313,13 @@ func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](from *vect
 
 // XXX do not use it to cast float to integer, please use floatToInteger
 func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
+	ctx context.Context,
 	from *vector.FunctionParameter[T1], to *vector.FunctionResult[T2],
 	length int) error {
 	var i uint64
 	var dftValue T2
 	times := uint64(length)
-	if err := overflowForNumericToNumeric[T1, T2](from.UnSafeGetAllValue()); err != nil {
+	if err := overflowForNumericToNumeric[T1, T2](ctx, from.UnSafeGetAllValue()); err != nil {
 		return err
 	}
 	for i = 0; i < times; i++ {
@@ -2315,6 +2310,7 @@ func decimal64ToDecimal128(
 // the scale of decimal128 is guaranteed to be less than 18
 // this cast function is too slow, and therefore only temporary, rewrite needed
 func decimal128ToDecimal64(
+	ctx context.Context,
 	from *vector.FunctionParameter[types.Decimal128],
 	to *vector.FunctionResult[types.Decimal64], length int) error {
 	var i, l uint64 = 0, uint64(length)
@@ -2329,7 +2325,8 @@ func decimal128ToDecimal64(
 		} else {
 			result, err := v.ToDecimal64(totype.Width, totype.Scale)
 			if err != nil {
-				return err
+				// XXX so ...
+				return moerr.NewOutOfRange(ctx, "dec64", "value '%v'", v)
 			}
 			if err = to.Append(result, false); err != nil {
 				return err
@@ -2447,17 +2444,21 @@ func strToUnsigned[T constraints.Unsigned](
 				return err
 			}
 		} else {
+			var res *string
 			if isBinary {
-				val, tErr = strconv.ParseUint(hex.EncodeToString(v), 16, 64)
+				s := hex.EncodeToString(v)
+				res = &s
+				val, tErr = strconv.ParseUint(s, 16, 64)
 			} else {
 				s := convertByteSliceToString(v)
+				res = &s
 				val, tErr = strconv.ParseUint(strings.TrimSpace(s), 10, bitSize)
 			}
 			if tErr != nil {
 				if strings.Contains(tErr.Error(), "value out of range") {
-					return moerr.NewOutOfRange(ctx, "uint", "value '%s'", v)
+					return moerr.NewOutOfRange(ctx, "uint", "value '%s'", *res)
 				}
-				return moerr.NewInvalidArg(ctx, "cast to uint", v)
+				return moerr.NewInvalidArg(ctx, "cast to uint", *res)
 			}
 			if err := to.Append(T(val), false); err != nil {
 				return err
@@ -2488,19 +2489,24 @@ func strToFloat[T constraints.Float](
 			}
 		} else {
 			if isBinary {
-				r1, tErr = strconv.ParseUint(hex.EncodeToString(v), 16, 64)
+				s := hex.EncodeToString(v)
+				r1, tErr = strconv.ParseUint(s, 16, 64)
+				if tErr != nil {
+					if strings.Contains(tErr.Error(), "value out of range") {
+						return moerr.NewOutOfRange(ctx, "float", "value '%s'", s)
+					}
+					return moerr.NewInvalidArg(ctx, "cast to float", s)
+				}
 				result = T(r1)
 			} else {
 				s := convertByteSliceToString(v)
 				r2, tErr = strconv.ParseFloat(s, bitSize)
+				if tErr != nil {
+					return tErr
+				}
 				result = T(r2)
 			}
-			if tErr != nil {
-				if strings.Contains(tErr.Error(), "value out of range") {
-					return moerr.NewOutOfRange(ctx, "float", "value '%s'", v)
-				}
-				return moerr.NewInvalidArg(ctx, "cast to float", v)
-			}
+
 			if err := to.Append(result, false); err != nil {
 				return err
 			}
@@ -2777,7 +2783,7 @@ func strToStr(
 			// check the length.
 			s := convertByteSliceToString(v)
 			if len(s) > destLen {
-				return moerr.NewInternalError(ctx, fmt.Sprintf(
+				return formatCastError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}
 			if err := to.AppendStr(v, false); err != nil {
@@ -2823,7 +2829,7 @@ func uuidToStr(
 	return nil
 }
 
-func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float](xs []T1) error {
+func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float](ctx context.Context, xs []T1) error {
 	if len(xs) == 0 {
 		return nil
 	}
@@ -2838,7 +2844,7 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *uint8, *uint16, *uint32, *uint64:
 			for _, x := range xs {
 				if x < 0 {
-					return moerr.NewOutOfRangeNoCtx("uint", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint", "value '%v'", x)
 				}
 			}
 		}
@@ -2848,19 +2854,19 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for _, x := range nxs {
 				if x < math.MinInt8 || x > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range nxs {
 				if x < 0 || x > math.MaxUint8 {
-					return moerr.NewOutOfRangeNoCtx("uint8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16, *uint32, *uint64:
 			for _, x := range nxs {
 				if x < 0 {
-					return moerr.NewOutOfRangeNoCtx("uint", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint", "value '%v'", x)
 				}
 			}
 		}
@@ -2870,31 +2876,31 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for _, x := range nxs {
 				if x < math.MinInt8 || x > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range nxs {
 				if x < math.MinInt16 || x > math.MaxInt16 {
-					return moerr.NewOutOfRangeNoCtx("int16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range nxs {
 				if x < 0 || x > math.MaxUint8 {
-					return moerr.NewOutOfRangeNoCtx("uint8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range nxs {
 				if x < 0 || x > math.MaxUint16 {
-					return moerr.NewOutOfRangeNoCtx("uint16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32, *uint64:
 			for _, x := range nxs {
 				if x < 0 {
-					return moerr.NewOutOfRangeNoCtx("uint", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint", "value '%v'", x)
 				}
 			}
 		}
@@ -2904,43 +2910,44 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for _, x := range nxs {
 				if x < math.MinInt8 || x > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range nxs {
 				if x < math.MinInt16 || x > math.MaxInt16 {
-					return moerr.NewOutOfRangeNoCtx("int16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for _, x := range nxs {
 				if x < math.MinInt32 || x > math.MaxInt32 {
-					return moerr.NewOutOfRangeNoCtx("int32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range nxs {
 				if x < 0 || x > math.MaxUint8 {
-					return moerr.NewOutOfRangeNoCtx("uint8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range nxs {
 				if x < 0 || x > math.MaxUint16 {
-					return moerr.NewOutOfRangeNoCtx("uint16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for _, x := range nxs {
 				if x < 0 || x > math.MaxUint32 {
-					return moerr.NewOutOfRangeNoCtx("uint32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
 			for _, x := range nxs {
 				if x < 0 {
-					return moerr.NewOutOfRangeNoCtx("uint64", "value '%v'", x)
+					// XXX for adapt to bvt, but i don't know why we hide the wrong value here.
+					return moerr.NewOutOfRange(ctx, "uint64", "")
 				}
 			}
 		}
@@ -2950,7 +2957,7 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for _, x := range nxs {
 				if x > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		}
@@ -2960,19 +2967,19 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for _, x := range nxs {
 				if x > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range nxs {
 				if x > math.MaxInt16 {
-					return moerr.NewOutOfRangeNoCtx("int16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range nxs {
 				if x > math.MaxUint8 {
-					return moerr.NewOutOfRangeNoCtx("uint8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		}
@@ -2982,31 +2989,31 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for _, x := range nxs {
 				if x > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range nxs {
 				if x > math.MaxInt16 {
-					return moerr.NewOutOfRangeNoCtx("int16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for _, x := range nxs {
 				if x > math.MaxInt32 {
-					return moerr.NewOutOfRangeNoCtx("int32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range nxs {
 				if x > math.MaxUint8 {
-					return moerr.NewOutOfRangeNoCtx("uint8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range nxs {
 				if x > math.MaxUint16 {
-					return moerr.NewOutOfRangeNoCtx("uint16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		}
@@ -3016,43 +3023,43 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for _, x := range nxs {
 				if x > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range nxs {
 				if x > math.MaxInt16 {
-					return moerr.NewOutOfRangeNoCtx("int16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for _, x := range nxs {
 				if x > math.MaxInt32 {
-					return moerr.NewOutOfRangeNoCtx("int32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:
 			for _, x := range nxs {
 				if x > math.MaxInt64 {
-					return moerr.NewOutOfRangeNoCtx("int64", "value '%v'", x)
+					return moerr.NewOutOfRangeNoCtx("int64", "")
 				}
 			}
 		case *uint8:
 			for _, x := range nxs {
 				if x > math.MaxUint8 {
-					return moerr.NewOutOfRangeNoCtx("uint8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range nxs {
 				if x > math.MaxUint16 {
-					return moerr.NewOutOfRangeNoCtx("uint16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for _, x := range nxs {
 				if x > math.MaxUint32 {
-					return moerr.NewOutOfRangeNoCtx("uint32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		}
@@ -3062,49 +3069,49 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for _, x := range nxs {
 				if math.Round(float64(x)) > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range nxs {
 				if math.Round(float64(x)) > math.MaxInt16 {
-					return moerr.NewOutOfRangeNoCtx("int16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for _, x := range nxs {
 				if math.Round(float64(x)) > math.MaxInt32 {
-					return moerr.NewOutOfRangeNoCtx("int32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:
 			for _, x := range nxs {
 				if math.Round(float64(x)) > math.MaxInt64 {
-					return moerr.NewOutOfRangeNoCtx("int64", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range nxs {
 				if math.Round(float64(x)) > math.MaxUint8 {
-					return moerr.NewOutOfRangeNoCtx("uint8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range nxs {
 				if math.Round(float64(x)) > math.MaxUint16 {
-					return moerr.NewOutOfRangeNoCtx("uint16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for _, x := range nxs {
 				if math.Round(float64(x)) > math.MaxUint32 {
-					return moerr.NewOutOfRangeNoCtx("uint32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
 			for _, x := range nxs {
 				if math.Round(float64(x)) > math.MaxUint64 {
-					return moerr.NewOutOfRangeNoCtx("uint64", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", x)
 				}
 			}
 		}
@@ -3114,55 +3121,55 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for _, x := range nxs {
 				if math.Round(x) > math.MaxInt8 {
-					return moerr.NewOutOfRangeNoCtx("int8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range nxs {
 				if math.Round(x) > math.MaxInt16 {
-					return moerr.NewOutOfRangeNoCtx("int16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for _, x := range nxs {
 				if math.Round(x) > math.MaxInt32 {
-					return moerr.NewOutOfRangeNoCtx("int32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:
 			for _, x := range nxs {
 				if math.Round(x) > math.MaxInt64 || math.Round(x) < math.MinInt64 {
-					return moerr.NewOutOfRangeNoCtx("int64", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range nxs {
 				if math.Round(x) > math.MaxUint8 {
-					return moerr.NewOutOfRangeNoCtx("uint8", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range nxs {
 				if math.Round(x) > math.MaxUint16 {
-					return moerr.NewOutOfRangeNoCtx("uint16", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for _, x := range nxs {
 				if math.Round(x) > math.MaxUint32 {
-					return moerr.NewOutOfRangeNoCtx("uint32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
 			for _, x := range nxs {
 				if math.Round(x) > math.MaxUint64 {
-					return moerr.NewOutOfRangeNoCtx("uint64", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", x)
 				}
 			}
 		case *float32:
 			for _, x := range nxs {
 				if x > math.MaxFloat32 {
-					return moerr.NewOutOfRangeNoCtx("float32", "value '%v'", x)
+					return moerr.NewOutOfRange(ctx, "float32", "value '%v'", x)
 				}
 			}
 		}
