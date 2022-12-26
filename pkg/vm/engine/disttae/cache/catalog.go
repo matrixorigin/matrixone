@@ -207,6 +207,7 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 	createSqls := vector.MustStrCols(bat.GetVector(catalog.MO_TABLES_REL_CREATESQL_IDX + MO_OFF))
 	viewDefs := vector.MustStrCols(bat.GetVector(catalog.MO_TABLES_VIEWDEF_IDX + MO_OFF))
 	paritions := vector.MustStrCols(bat.GetVector(catalog.MO_TABLES_PARTITIONED_IDX + MO_OFF))
+	constraints := vector.MustBytesCols(bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF))
 	for i, account := range accounts {
 		item := new(TableItem)
 		item.Id = ids[i]
@@ -216,6 +217,7 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		item.Ts = timestamps[i].ToTimestamp()
 		item.Kind = kinds[i]
 		item.ViewDef = viewDefs[i]
+		item.Constraint = constraints[i]
 		item.Comment = comments[i]
 		item.Partition = paritions[i]
 		item.CreateSql = createSqls[i]
