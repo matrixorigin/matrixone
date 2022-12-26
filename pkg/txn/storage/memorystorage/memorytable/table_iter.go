@@ -20,7 +20,7 @@ type TableIter[
 	V any,
 ] struct {
 	tx   *Transaction
-	iter RowsIter[K, V]
+	iter KVIter[K, V]
 }
 
 // NewIter creates a new iter
@@ -32,16 +32,14 @@ func (t *Table[K, V, R]) NewIter(tx *Transaction) (*TableIter[K, V], error) {
 	state := txTable.state.Load().(*tableState[K, V])
 	ret := &TableIter[K, V]{
 		tx:   tx,
-		iter: state.rows.Copy().Iter(),
+		iter: state.kv.Copy().Iter(),
 	}
 	return ret, nil
 }
 
-var _ KVIter[Int, int] = new(TableIter[Int, int])
-
 // Read reads current key and value
 func (t *TableIter[K, V]) Read() (key K, value V, err error) {
-	var pair *KVPair[K, V]
+	var pair KVPair[K, V]
 	pair, err = t.iter.Read()
 	if err != nil {
 		return
@@ -63,7 +61,7 @@ func (t *TableIter[K, V]) First() bool {
 
 // Seek moves the cursor to or before the key
 func (t *TableIter[K, V]) Seek(key K) bool {
-	return t.iter.Seek(&KVPair[K, V]{
+	return t.iter.Seek(KVPair[K, V]{
 		Key: key,
 	})
 }

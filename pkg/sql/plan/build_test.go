@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
@@ -446,7 +447,7 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"execute stmt1 using @str_var, @@global.int_var",
 		"deallocate prepare stmt1",
 		"drop prepare stmt1",
-		"select count(n_name) from nation",
+		"select count(n_name) from nation limit 10",
 		"select l_shipdate + interval '1' day from lineitem",
 		"select interval '1' day + l_shipdate  from lineitem",
 		"select interval '1' day + cast('2022-02-02 00:00:00' as datetime)",
@@ -455,7 +456,13 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"delete nation, nation2 from nation join nation2 on nation.n_name = nation2.n_name",
 		"select true is unknown",
 		"select null is not unknown",
-		"select 1 as c limit abs(-2)",
+		"select 1 as c,  1/2, abs(-2)",
+
+		"select date('2022-01-01'), adddate(time'00:00:00', interval 1 day), subdate(time'00:00:00', interval 1 week), '2007-01-01' + interval 1 month, '2007-01-01' -  interval 1 hour",
+		"select 2222332222222223333333333333333333, 0x616263,-10, bit_and(2), bit_or(2), bit_xor(10.1), 'aaa' like '%a',str_to_date('04/31/2004', '%m/%d/%Y'),unix_timestamp(from_unixtime(2147483647))",
+		"select max(n_nationkey) over  (partition by N_REGIONKEY) from nation",
+		"select * from generate_series(1, 5) g",
+		"select * from nation where n_name like ? or n_nationkey > 10 order by 2 limit '10'",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -475,7 +482,7 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_REGIONKEY", //test distinct with order by
 		//"select 18446744073709551500",                             //over int64
 		//"select 0xffffffffffffffff",                               //over int64
-
+		"values row(1, 2)",
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -499,6 +506,7 @@ func TestJoinTableSqlBuilder(t *testing.T) {
 		"SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE a.N_REGIONKEY > 0",
 		"SELECT N_NAME, R_REGIONKEY FROM NATION2 join REGION using(R_REGIONKEY)",
 		"select nation.n_name from nation join nation2 on nation.n_name !='a' join region on nation.n_regionkey = region.r_regionkey",
+		"select * from nation, nation2, region",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -543,6 +551,8 @@ func TestUnionSqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer()
 	// should pass
 	sqls := []string{
+		"(select 1) union (select 1)",
+		"(((select n_nationkey from nation order by n_nationkey))) union (((select n_nationkey from nation order by n_nationkey)))",
 		"select 1 union select 2",
 		"select 1 union (select 2 union select 3)",
 		"(select 1 union select 2) union select 3 intersect select 4 order by 1",
@@ -604,21 +614,22 @@ func TestInsert(t *testing.T) {
 		"INSERT INTO NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
 		"INSERT INTO NATION (N_NATIONKEY, N_REGIONKEY, N_NAME, N_COMMENT) VALUES (1, 21, 'NAME1','comment1'), (2, 22, 'NAME2', 'comment2')",
 		"INSERT INTO NATION SELECT * FROM NATION2",
+		"insert into nation select * from nation2",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
 	// should error
 	sqls = []string{
-		//"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), ('NAME2', 22, 'COMMENT2')",                                // doesn't match value count
-		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 'NAME1'), (2, 22, 'NAME2')",                     // doesn't match value count
-		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",             // column not exist
-		//"INSERT NATION333 (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2, 'NAME1'), (2, 22, 'NAME2')",           // table not exist
-		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 'should int32', 'NAME1'), (2, 22, 'NAME2')", // column type not match
-		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2.22, 'NAME1'), (2, 22, 'NAME2')",           // column type not match
-		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2, 'NAME1'), (2, 22, 'NAME2')",              // function expr not support now
-		"INSERT INTO region SELECT * FROM NATION2",                                            // column length not match
-		"INSERT INTO region SELECT 1, 2, 3, 4, 5, 6 FROM NATION2",                             // column length not match
-		"INSERT NATION333 (N_NATIONKEY, N_REGIONKEY, N_NAME2222) SELECT 1, 2, 3 FROM NATION2", // table not exist
+		"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), ('NAME2', 22, 'COMMENT2')",                                // doesn't match value count
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 'NAME1'), (2, 22, 'NAME2')",                     // doesn't match value count
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",             // column not exist
+		"INSERT NATION333 (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2, 'NAME1'), (2, 22, 'NAME2')",           // table not exist
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 'should int32', 'NAME1'), (2, 22, 'NAME2')", // column type not match
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2.22, 'NAME1'), (2, 22, 'NAME2')",           // column type not match
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2, 'NAME1'), (2, 22, 'NAME2')",              // function expr not support now
+		"INSERT INTO region SELECT * FROM NATION2",                                                                   // column length not match
+		"INSERT INTO region SELECT 1, 2, 3, 4, 5, 6 FROM NATION2",                                                    // column length not match
+		"INSERT NATION333 (N_NATIONKEY, N_REGIONKEY, N_NAME2222) SELECT 1, 2, 3 FROM NATION2",                        // table not exist
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -636,10 +647,8 @@ func TestUpdate(t *testing.T) {
 
 	// should error
 	sqls = []string{
-		"UPDATE NATION SET N_NAME2 ='U1', N_REGIONKEY=2", // column not exist
-		// "UPDATE NATION2222 SET N_NAME ='U1', N_REGIONKEY=2", // table not exist
-		// "UPDATE NATION SET N_NAME = 2, N_REGIONKEY=2",       // column type not match
-		// "UPDATE NATION SET N_NAME = 'U1', N_REGIONKEY=2.2",  // column type not match
+		"UPDATE NATION SET N_NAME2 ='U1', N_REGIONKEY=2",    // column not exist
+		"UPDATE NATION2222 SET N_NAME ='U1', N_REGIONKEY=2", // table not exist
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -648,16 +657,17 @@ func TestDelete(t *testing.T) {
 	mock := NewMockOptimizer()
 	// should pass
 	sqls := []string{
-		//"DELETE FROM NATION",
-		//"DELETE FROM NATION WHERE N_NATIONKEY > 10",
-		//"DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
+		"DELETE FROM NATION",
+		"DELETE FROM NATION WHERE N_NATIONKEY > 10",
+		"DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
+		"delete nation from nation left join nation2 on nation.n_nationkey = nation2.n_nationkey",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
 	// should error
 	sqls = []string{
-		//"DELETE FROM NATION2222",                     // table not exist
-		//"DELETE FROM NATION WHERE N_NATIONKEY2 > 10", // column not found
+		"DELETE FROM NATION2222",                     // table not exist
+		"DELETE FROM NATION WHERE N_NATIONKEY2 > 10", // column not found
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -689,6 +699,7 @@ func TestSubQuery(t *testing.T) {
 			where
 				l_partkey = p_partkey
 		);`, //tpch q17
+		"select * from nation where n_regionkey in (select r_regionkey from region) and n_nationkey not in (1,2) and n_nationkey = some (select n_nationkey from nation2)",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -760,23 +771,22 @@ func TestDdl(t *testing.T) {
 		"truncate tpch.nation",
 		"truncate table nation",
 		"truncate table tpch.nation",
+		"create unique index idx_name on nation(n_regionkey)",
+		"drop index idx1 on test_idx",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
 	// should error
-	//sqls = []string{
-	//	"create database tpch",  //we mock database tpch。 so tpch is exist
-	//	"drop database db_name", //we mock database tpch。 so tpch is exist
-	//	"create table nation (t bool(20), b int, c char(20), d varchar(20))",             //table exists in tpch
-	//	"create table nation (b int primary key, c char(20) primary key, d varchar(20))", //Multiple primary key
-	//	"drop table tbl_name",           //table not exists in tpch
-	//	"drop table tpch.tbl_not_exist", //database not exists
-	//	"drop table db_not_exist.tbl",   //table not exists
-	//
-	//	"create index idx1 using bsi on a(a)", //unsupport now
-	//	"drop index idx1 on tbl",              //unsupport now
-	//}
-	//runTestShouldError(mock, t, sqls)
+	sqls = []string{
+		// "create database tpch",  // check in pipeline now
+		// "drop database db_name", // check in pipeline now
+		// "create table nation (t bool(20), b int, c char(20), d varchar(20))",             // check in pipeline now
+		"create table nation (b int primary key, c char(20) primary key, d varchar(20))", //Multiple primary key
+		"drop table tbl_name",           //table not exists in tpch
+		"drop table tpch.tbl_not_exist", //database not exists
+		"drop table db_not_exist.tbl",   //table not exists
+	}
+	runTestShouldError(mock, t, sqls)
 }
 
 func TestShow(t *testing.T) {
@@ -800,6 +810,12 @@ func TestShow(t *testing.T) {
 		"show columns from nation where `Field` like '%ff' or `Type` = 1 or `Null` = 0",
 		"show create view v1",
 		"show create table v1",
+		"show table_number",
+		"show table_number from tpch",
+		"show column_number from nation",
+		"show config",
+		"show index from tpch.nation",
+		// "show grants",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -815,30 +831,11 @@ func TestShow(t *testing.T) {
 		"show columns from nation_ddddd",                       //table not exist
 		"show columns from nation_ddddd from tpch",             //table not exist
 		"show columns from nation where `Field22` like '%ff'",  //column not exist
+		"show index from tpch.dddd",
+		"show table_number from tpch222",
+		"show column_number from nation222",
 	}
 	runTestShouldError(mock, t, sqls)
-}
-
-func TestDeepCopy(t *testing.T) {
-	mock := NewMockOptimizer()
-	getPlan := func(sql string) *plan.Plan {
-		logicPlan, err := runOneStmt(mock, t, sql)
-		if err != nil {
-			t.Fatalf("sql %s build plan error:%+v", sql, err)
-		}
-		return logicPlan
-	}
-	sqls := []string{
-		"select * from nation where n_name like 'aa' limit 20",
-	}
-
-	for _, sql := range sqls {
-		pl := getPlan(sql)
-		newPl := DeepCopyPlan(pl)
-		if newPl == nil {
-			t.Fatalf("deep copy error")
-		}
-	}
 }
 
 func TestResultColumns(t *testing.T) {
@@ -917,6 +914,43 @@ func TestBuildUnnest(t *testing.T) {
 	runTestShouldError(mock, t, errSqls)
 }
 
+func TestVisitRule(t *testing.T) {
+	sql := "select * from nation where n_nationkey > ? or n_nationkey=@int_var or abs(-1) > 1"
+	mock := NewMockOptimizer()
+	ctx := context.TODO()
+	plan, err := runOneStmt(mock, t, sql)
+	if err != nil {
+		t.Fatalf("should not error, sql=%s", sql)
+	}
+	getParamRule := NewGetParamRule()
+	vp := NewVisitPlan(plan, []VisitPlanRule{getParamRule})
+	err = vp.Visit(context.TODO())
+	if err != nil {
+		t.Fatalf("should not error, sql=%s", sql)
+	}
+	getParamRule.SetParamOrder()
+	args := getParamRule.params
+
+	resetParamOrderRule := NewResetParamOrderRule(args)
+	vp = NewVisitPlan(plan, []VisitPlanRule{resetParamOrderRule})
+	err = vp.Visit(ctx)
+	if err != nil {
+		t.Fatalf("should not error, sql=%s", sql)
+	}
+
+	params := []*Expr{
+		makePlan2Int64ConstExprWithType(10),
+	}
+	resetParamRule := NewResetParamRefRule(ctx, params)
+	resetVarRule := NewResetVarRefRule(&mock.ctxt)
+	constantFoldRule := NewConstantFoldRule(&mock.ctxt)
+	vp = NewVisitPlan(plan, []VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
+	err = vp.Visit(ctx)
+	if err != nil {
+		t.Fatalf("should not error, sql=%s", sql)
+	}
+}
+
 func getJSON(v any, t *testing.T) []byte {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -928,6 +962,16 @@ func getJSON(v any, t *testing.T) []byte {
 		t.Logf("%+v", v)
 	}
 	return out.Bytes()
+}
+
+func testDeepCopy(logicPlan *Plan) {
+	switch logicPlan.Plan.(type) {
+	case *plan.Plan_Query:
+		_ = DeepCopyPlan(logicPlan)
+	case *plan.Plan_Ddl:
+		_ = DeepCopyPlan(logicPlan)
+	case *plan.Plan_Dcl:
+	}
 }
 
 func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
@@ -968,6 +1012,7 @@ func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJSON boo
 		if err != nil {
 			t.Fatalf("%+v, sql=%v", err, sql)
 		}
+		testDeepCopy(logicPlan)
 		if printJSON {
 			outPutPlan(logicPlan, toFile, t)
 		}
