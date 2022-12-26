@@ -1691,6 +1691,8 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	var TableType, Createsql string
 	var CompositePkey *plan2.ColDef = nil
 	var viewSql *plan2.ViewDef
+	var foreignKeys []*plan2.ForeignKeyDef
+	var refChildTbls []uint64
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(attr.Attr.Name)
@@ -1760,6 +1762,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 							SIdx: s,
 						},
 					})
+				case *engine.ForeignKeyDef:
+					foreignKeys = k.Fkeys
+				case *engine.RefChildTableDef:
+					refChildTbls = k.Tables
 				}
 			}
 		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
@@ -1823,6 +1829,8 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		Createsql:     Createsql,
 		CompositePkey: CompositePkey,
 		ViewSql:       viewSql,
+		Fkeys:         foreignKeys,
+		RefChildTbls:  refChildTbls,
 	}
 	return obj, tableDef
 }

@@ -17,9 +17,10 @@ package vector
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
 	"reflect"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 

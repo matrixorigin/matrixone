@@ -16,6 +16,8 @@ package compile
 
 import (
 	"context"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -92,6 +94,91 @@ func (s *Scope) CreateTable(c *Compile) error {
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
+
+	fkDbs := qry.GetFkDbs()
+	if len(fkDbs) > 0 {
+		fkTables := qry.GetFkTables()
+		newRelation, err := dbSource.Relation(c.ctx, tblName)
+		if err != nil {
+			return err
+		}
+		tblId := newRelation.GetTableID(c.ctx)
+
+		// for now ColumnId is equal ColumnIndex, and we have a bug to UpdateConstraint after created immediately
+		// so i comment these codes. if you want to remove these code, let @ouyuanning known.
+		// newTableDef, err := newRelation.TableDefs(c.ctx)
+		// if err != nil {
+		// 	return err
+		// }
+		// var colNameToId = make(map[string]uint64)
+		// for _, def := range newTableDef {
+		// 	if attr, ok := def.(*engine.AttributeDef); ok {
+		// 		colNameToId[attr.Attr.Name] = attr.Attr.ID
+		// 	}
+		// }
+		// newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
+		// for i, fkey := range qry.GetTableDef().Fkeys {
+		// 	newDef := &plan.ForeignKeyDef{
+		// 		Name:        fkey.Name,
+		// 		Cols:        make([]uint64, len(fkey.Cols)),
+		// 		ForeignTbl:  fkey.ForeignTbl,
+		// 		ForeignCols: make([]uint64, len(fkey.ForeignCols)),
+		// 		OnDelete:    fkey.OnDelete,
+		// 		OnUpdate:    fkey.OnUpdate,
+		// 	}
+		// 	copy(newDef.ForeignCols, fkey.ForeignCols)
+		// 	for idx, colName := range qry.GetFkCols()[i].Cols {
+		// 		newDef.Cols[idx] = colNameToId[colName]
+		// 	}
+		// 	newFkeys[i] = newDef
+		// }
+		// newCt, err := makeNewCreateConstraint(nil, &engine.ForeignKeyDef{
+		// 	Fkeys: newFkeys,
+		// })
+		// if err != nil {
+		// 	return err
+		// }
+		// err = newRelation.UpdateConstraint(c.ctx, newCt)
+		// if err != nil {
+		// 	return err
+		// }
+
+		// need to append TableId to parent's TableDef.RefChildTbls
+		for i, fkTableName := range fkTables {
+			fkDbName := fkDbs[i]
+			fkDbSource, err := c.e.Database(c.ctx, fkDbName, c.proc.TxnOperator)
+			if err != nil {
+				return err
+			}
+			fkRelation, err := fkDbSource.Relation(c.ctx, fkTableName)
+			if err != nil {
+				return err
+			}
+			fkTableDef, err := fkRelation.TableDefs(c.ctx)
+			if err != nil {
+				return err
+			}
+			var oldCt *engine.ConstraintDef
+			for _, def := range fkTableDef {
+				if ct, ok := def.(*engine.ConstraintDef); ok {
+					oldCt = ct
+					break
+				}
+			}
+			newRefChildDef := &engine.RefChildTableDef{
+				Tables: []uint64{tblId},
+			}
+			newCt, err := makeNewCreateConstraint(oldCt, newRefChildDef)
+			if err != nil {
+				return err
+			}
+			err = fkRelation.UpdateConstraint(c.ctx, newCt)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	// build index table
 	for _, def := range qry.IndexTables {
 		planCols = def.GetCols()
@@ -248,6 +335,47 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 	// must fount dropName because of being checked in plan
 	for j, ct := range oldCt.Cts {
 		switch c := ct.(type) {
+		case *engine.ForeignKeyDef:
+			ok := false
+			var def *engine.ForeignKeyDef
+			for _, ct := range oldCt.Cts {
+				if def, ok = ct.(*engine.ForeignKeyDef); ok {
+					for idx, fkDef := range def.Fkeys {
+						if fkDef.Name == dropName {
+							def.Fkeys = append(def.Fkeys[:idx], def.Fkeys[idx+1:]...)
+							break
+						}
+					}
+					break
+				}
+			}
+			if !ok {
+				oldCt.Cts = append(oldCt.Cts, c)
+			}
+
+		case *engine.RefChildTableDef:
+			ok := false
+			var def *engine.RefChildTableDef
+			tmpTableId, err := strconv.ParseInt(dropName, 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			refTableId := uint64(tmpTableId)
+			for _, ct := range oldCt.Cts {
+				if def, ok = ct.(*engine.RefChildTableDef); ok {
+					for idx, refTable := range def.Tables {
+						if refTable == refTableId {
+							def.Tables = append(def.Tables[:idx], def.Tables[idx+1:]...)
+							break
+						}
+					}
+					break
+				}
+			}
+			if !ok {
+				oldCt.Cts = append(oldCt.Cts, c)
+			}
+
 		case *engine.UniqueIndexDef:
 			u := &plan.UniqueIndexDef{}
 			err := u.UnMarshalUniqueIndexDef(([]byte)(c.UniqueIndex))
@@ -287,6 +415,33 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 		}, nil
 	}
 	switch t := c.(type) {
+	case *engine.ForeignKeyDef:
+		ok := false
+		var def *engine.ForeignKeyDef
+		for _, ct := range oldCt.Cts {
+			if def, ok = ct.(*engine.ForeignKeyDef); ok {
+				// i don't see any clause to change FK. only add or drop. so
+				def.Fkeys = append(def.Fkeys, t.Fkeys...)
+				break
+			}
+		}
+		if !ok {
+			oldCt.Cts = append(oldCt.Cts, c)
+		}
+
+	case *engine.RefChildTableDef:
+		ok := false
+		var def *engine.RefChildTableDef
+		for _, ct := range oldCt.Cts {
+			if def, ok = ct.(*engine.RefChildTableDef); ok {
+				def.Tables = append(def.Tables, t.Tables...)
+				break
+			}
+		}
+		if !ok {
+			oldCt.Cts = append(oldCt.Cts, c)
+		}
+
 	case *engine.UniqueIndexDef:
 		d := &plan.UniqueIndexDef{}
 		err := d.UnMarshalUniqueIndexDef([]byte(t.UniqueIndex))
@@ -446,6 +601,18 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 	if tableDef.ViewSql != nil {
 		exeDefs = append(exeDefs, &engine.ViewDef{
 			View: tableDef.ViewSql.View,
+		})
+	}
+
+	if len(tableDef.Fkeys) > 0 {
+		c.Cts = append(c.Cts, &engine.ForeignKeyDef{
+			Fkeys: tableDef.Fkeys,
+		})
+	}
+
+	if len(tableDef.RefChildTbls) > 0 {
+		c.Cts = append(c.Cts, &engine.RefChildTableDef{
+			Tables: tableDef.RefChildTbls,
 		})
 	}
 
