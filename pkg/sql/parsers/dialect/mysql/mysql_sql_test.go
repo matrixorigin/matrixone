@@ -207,7 +207,7 @@ var (
 	}, {
 		input:  "select binary('Geeksforgeeks')",
 		output: "select cast((Geeksforgeeks) as binary)",
-	},{
+	}, {
 		input:  "show schemas where 1",
 		output: "show databases where 1",
 	}, {
