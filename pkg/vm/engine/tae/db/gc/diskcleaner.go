@@ -270,6 +270,7 @@ func (cleaner *DiskCleaner) softGC() []string {
 	gc := mergeTable.SoftGC()
 	cleaner.inputs.tables = make([]*GCTable, 0)
 	cleaner.inputs.tables = append(cleaner.inputs.tables, mergeTable)
+	logutil.Infof("SoftGC is %v, merge table: %v", gc, mergeTable.String())
 	return gc
 }
 
