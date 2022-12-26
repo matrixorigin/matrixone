@@ -144,6 +144,7 @@ const (
 	LIKE_ALL // LIKE_ALL
 	LIKE_ANY // LIKE_ANY
 	LN       // LN
+	NOT_IN   // NOT_IN
 	LOG      // LOG
 	LOWER    // LOWER
 	LPAD     // LPAD
@@ -296,6 +297,7 @@ var functionIdRegister = map[string]int32{
 	"like":         LIKE,
 	"between":      BETWEEN,
 	"in":           IN,
+	"not_in":       NOT_IN,
 	"exists":       EXISTS,
 	"+":            PLUS,
 	"-":            MINUS,

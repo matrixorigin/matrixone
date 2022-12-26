@@ -105,6 +105,118 @@ func NeDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector,
 	return CompareOrdered(args, proc, compare.Decimal128VecNe)
 }
 
+// IN operator
+func INGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := args[0], args[1]
+	left, right := vector.MustTCols[T](leftVec), vector.MustTCols[T](rightVec)
+	lenLeft := len(left)
+	lenRight := len(right)
+	if leftVec.IsScalar() {
+		lenLeft = 1
+	}
+	inMap := make(map[T]bool, lenRight)
+	for i := 0; i < lenRight; i++ {
+		if !rightVec.Nsp.Contains(uint64(i)) {
+			inMap[right[i]] = true
+		}
+	}
+	retVec := allocateBoolVector(lenLeft, proc)
+	ret := retVec.Col.([]bool)
+	for i := 0; i < lenLeft; i++ {
+		if _, ok := inMap[left[i]]; ok {
+			ret[i] = true
+		}
+	}
+	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
+	return retVec, nil
+}
+
+func INString(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := args[0], args[1]
+	left, area1 := vector.MustVarlenaRawData(leftVec)
+	right, area2 := vector.MustVarlenaRawData(rightVec)
+
+	lenLeft := len(left)
+	lenRight := len(right)
+	if leftVec.IsScalar() {
+		lenLeft = 1
+	}
+	inMap := make(map[string]bool, lenRight)
+	for i := 0; i < lenRight; i++ {
+		if !rightVec.Nsp.Contains(uint64(i)) {
+			inMap[right[i].GetString(area2)] = true
+		}
+	}
+	retVec := allocateBoolVector(lenLeft, proc)
+	ret := retVec.Col.([]bool)
+	for i := 0; i < lenLeft; i++ {
+		if _, ok := inMap[left[i].GetString(area1)]; ok {
+			ret[i] = true
+		}
+	}
+	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
+	return retVec, nil
+}
+
+// NOT IN operator
+func NotINGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := args[0], args[1]
+	left, right := vector.MustTCols[T](leftVec), vector.MustTCols[T](rightVec)
+	lenLeft := len(left)
+	lenRight := len(right)
+	if leftVec.IsScalar() {
+		lenLeft = 1
+	}
+	notInMap := make(map[T]bool, lenRight)
+	for i := 0; i < lenRight; i++ {
+		if !rightVec.Nsp.Contains(uint64(i)) {
+			notInMap[right[i]] = true
+		} else {
+			//not in null, return false
+			return vector.NewConstFixed(boolType, lenLeft, false, proc.Mp()), nil
+		}
+	}
+	retVec := allocateBoolVector(lenLeft, proc)
+	ret := retVec.Col.([]bool)
+	for i := 0; i < lenLeft; i++ {
+		if _, ok := notInMap[left[i]]; !ok {
+			ret[i] = true
+		}
+	}
+	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
+	return retVec, nil
+}
+
+func NotINString(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := args[0], args[1]
+	left, area1 := vector.MustVarlenaRawData(leftVec)
+	right, area2 := vector.MustVarlenaRawData(rightVec)
+
+	lenLeft := len(left)
+	lenRight := len(right)
+	if leftVec.IsScalar() {
+		lenLeft = 1
+	}
+	inMap := make(map[string]bool, lenRight)
+	for i := 0; i < lenRight; i++ {
+		if !rightVec.Nsp.Contains(uint64(i)) {
+			inMap[right[i].GetString(area2)] = true
+		} else {
+			//not in null, return false
+			return vector.NewConstFixed(boolType, lenLeft, false, proc.Mp()), nil
+		}
+	}
+	retVec := allocateBoolVector(lenLeft, proc)
+	ret := retVec.Col.([]bool)
+	for i := 0; i < lenLeft; i++ {
+		if _, ok := inMap[left[i].GetString(area1)]; !ok {
+			ret[i] = true
+		}
+	}
+	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
+	return retVec, nil
+}
+
 // Great than operator
 func GtGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return CompareOrdered(args, proc, compare.NumericGreatThan[T])
