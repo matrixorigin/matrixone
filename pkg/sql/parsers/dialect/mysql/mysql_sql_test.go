@@ -392,7 +392,7 @@ var (
 		input: "select cast(variance(ff) as decimal(10, 3)) from t2",
 	}, {
 		input:  "SELECT GROUP_CONCAT(DISTINCT 2) from t1",
-		output: "select group_concat(distinct 2) from t1",
+		output: "select group_concat(distinct 2, ,) from t1",
 	}, {
 		input: "select variance(2) from t1",
 	}, {
