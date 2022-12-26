@@ -90,6 +90,10 @@ func (rel *baseRelation) Rows(c context.Context) (int64, error) {
 	return rows, err
 }
 
+func (rel *baseRelation) GetSchema(_ context.Context) *catalog.Schema {
+	return rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+}
+
 func (rel *baseRelation) GetPrimaryKeys(_ context.Context) ([]*engine.Attribute, error) {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	if !schema.HasPK() {
