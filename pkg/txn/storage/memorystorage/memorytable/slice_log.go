@@ -20,72 +20,67 @@ import (
 	"encoding/gob"
 	"errors"
 	"io"
-
-	"github.com/tidwall/btree"
 )
 
-type BTreeLog[
+type SliceLog[
+	K Ordered[K],
+	V any,
+] []*logEntry[K, V]
+
+func NewSliceLog[
+	K Ordered[K],
+	V any,
+]() *SliceLog[K, V] {
+	return new(SliceLog[K, V])
+}
+
+var _ Log[Int, int] = new(SliceLog[Int, int])
+
+func (s *SliceLog[K, V]) Set(entry *logEntry[K, V]) {
+	*s = append(*s, entry)
+}
+
+type sliceLogIter[
 	K Ordered[K],
 	V any,
 ] struct {
-	log *btree.BTreeG[*logEntry[K, V]]
+	log   *SliceLog[K, V]
+	index int
 }
 
-func NewBTreeLog[
-	K Ordered[K],
-	V any,
-]() *BTreeLog[K, V] {
-	return &BTreeLog[K, V]{
-		log: btree.NewBTreeG(compareLogEntry[K, V]),
+func (s *SliceLog[K, V]) Iter() LogIter[K, V] {
+	return &sliceLogIter[K, V]{
+		log:   s,
+		index: 0,
 	}
 }
 
-var _ Log[Int, int] = new(BTreeLog[Int, int])
-
-func (b *BTreeLog[K, V]) Set(entry *logEntry[K, V]) {
-	b.log.Set(entry)
-}
-
-type btreeLogIter[
-	K Ordered[K],
-	V any,
-] struct {
-	iter btree.GenericIter[*logEntry[K, V]]
-}
-
-func (b *BTreeLog[K, V]) Iter() LogIter[K, V] {
-	iter := b.log.Iter()
-	return &btreeLogIter[K, V]{
-		iter: iter,
-	}
-}
-
-func (b *btreeLogIter[K, V]) Close() error {
-	b.iter.Release()
+func (s *sliceLogIter[K, V]) Close() error {
 	return nil
 }
 
-func (b *btreeLogIter[K, V]) First() bool {
-	return b.iter.First()
+func (s *sliceLogIter[K, V]) First() bool {
+	s.index = 0
+	return s.index < len(*s.log)
 }
 
-func (b *btreeLogIter[K, V]) Next() bool {
-	return b.iter.Next()
+func (s *sliceLogIter[K, V]) Next() bool {
+	s.index++
+	return s.index < len(*s.log)
 }
 
-func (b *btreeLogIter[K, V]) Read() (*logEntry[K, V], error) {
-	return b.iter.Item(), nil
+func (s *sliceLogIter[K, V]) Read() (*logEntry[K, V], error) {
+	return (*s.log)[s.index], nil
 }
 
-var _ encoding.BinaryMarshaler = new(BTreeLog[Int, int])
+var _ encoding.BinaryMarshaler = new(SliceLog[Int, int])
 
-func (b *BTreeLog[K, V]) MarshalBinary() ([]byte, error) {
-	gobRegister(b)
+func (s *SliceLog[K, V]) MarshalBinary() ([]byte, error) {
+	gobRegister(s)
 	buf := new(bytes.Buffer)
 	encoder := gob.NewEncoder(buf)
-	iter := b.log.Copy().Iter()
-	for ok := iter.First(); ok; ok = iter.Next() {
-		entry := iter.Item()
+	slice := *s
+	for _, entry := range slice {
 		if err := encoder.Encode(entry); err != nil {
 			return nil, err
 		}
@@ -95,13 +90,10 @@ func (b *BTreeLog[K, V]) MarshalBinary() ([]byte, error) {
 
 var _ encoding.BinaryUnmarshaler = new(BTreeLog[Int, int])
 
-func (b *BTreeLog[K, V]) UnmarshalBinary(data []byte) error {
-	gobRegister(b)
-	log := b.log
-	if log == nil {
-		log = btree.NewBTreeG(compareLogEntry[K, V])
-	}
+func (s *SliceLog[K, V]) UnmarshalBinary(data []byte) error {
+	gobRegister(s)
 	decoder := gob.NewDecoder(bytes.NewReader(data))
+	var slice []*logEntry[K, V]
 	for {
 		var entry *logEntry[K, V]
 		err := decoder.Decode(&entry)
@@ -111,8 +103,8 @@ func (b *BTreeLog[K, V]) UnmarshalBinary(data []byte) error {
 			}
 			return err
 		}
-		log.Set(entry)
+		slice = append(slice, entry)
 	}
-	b.log = log
+	*s = slice
 	return nil
 }
