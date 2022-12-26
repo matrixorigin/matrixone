@@ -794,9 +794,6 @@ func containsParamRef(expr *plan.Expr) bool {
 
 // handle the filter list for zonemap. rewrite and constFold
 func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
-	if proc == nil {
-		return nil
-	}
 	var newExprList []*plan.Expr
 	for _, expr := range exprList {
 		if !containsParamRef(expr) {
@@ -804,6 +801,9 @@ func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) *plan.Expr
 		}
 	}
 	e := colexec.RewriteFilterExprList(newExprList)
+	if proc == nil {
+		return e
+	}
 	if e != nil {
 		bat := batch.NewWithSize(0)
 		bat.Zs = []int64{1}
