@@ -852,6 +852,14 @@ func PreAlloc(v *Vector, rows, cap int, m *mpool.MPool) {
 	v.setupColFromData(0, rows)
 }
 
+func PreAllocEmpty(t types.Type, rows, cap int, m *mpool.MPool) *Vector {
+	vec := New(t)
+	PreAlloc(vec, rows, cap, m)
+	vec.data = vec.data[:0]
+	vec.setupColFromData(0, 0)
+	return vec
+}
+
 func PreAllocType(t types.Type, rows, cap int, m *mpool.MPool) *Vector {
 	vec := New(t)
 	PreAlloc(vec, rows, cap, m)

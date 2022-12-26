@@ -100,9 +100,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	preAllocLen := 8192
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.PreAllocType(bat.Vecs[rp.Pos].Typ, 0, preAllocLen, proc.Mp())
+			rbat.Vecs[i] = vector.PreAllocEmpty(bat.Vecs[rp.Pos].Typ, 0, preAllocLen, proc.Mp())
 		} else {
-			rbat.Vecs[i] = vector.PreAllocType(ctr.bat.Vecs[rp.Pos].Typ, 0, preAllocLen, proc.Mp())
+			rbat.Vecs[i] = vector.PreAllocEmpty(ctr.bat.Vecs[rp.Pos].Typ, 0, preAllocLen, proc.Mp())
 		}
 	}
 
