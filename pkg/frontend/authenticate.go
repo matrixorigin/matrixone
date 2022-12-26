@@ -4431,37 +4431,6 @@ func getRoleSetThatRoleGrantedToWGO(ctx context.Context, bh BackgroundExec, role
 	return rset, err
 }
 
-// checkPrivilegeOfDropClusterTable verifies the sys account can drop the cluster table
-func checkPrivilegeOfDropClusterTable(ctx context.Context, ses *Session, stmt tree.Statement) (ret bool, err error) {
-	var p *plan.Plan
-	ses2 := NewBackgroundSession(ctx, ses.GetMemPool(), ses.GetParameterUnit(), gSysVariables)
-	ses2.MakeProfile()
-	defer ses2.Close()
-	p, err = plan2.BuildPlan(ses2.GetTxnCompileCtx(), stmt)
-	if err != nil {
-		goto handleFailed
-	}
-	if p.GetDdl() != nil && p.GetDdl().GetDropTable() != nil {
-		dropTable := p.GetDdl().GetDropTable()
-		if isClusterTable(dropTable.GetDatabase(), dropTable.GetTable()) &&
-			dropTable.GetClusterTable().GetIsClusterTable() {
-			ret = true
-			err = nil
-		}
-	}
-	err = ses2.TxnCommit()
-	if err != nil {
-		logErrorf(ses2.GetConciseProfile(), "background session commit txn failed.", err)
-	}
-	return ret, err
-handleFailed:
-	err = ses2.TxnRollback()
-	if err != nil {
-		logErrorf(ses2.GetConciseProfile(), "background session rollback txn failed.", err)
-	}
-	return false, err
-}
-
 // authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase decides the user has the privilege of executing the statement with object type account
 func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx context.Context, ses *Session, stmt tree.Statement) (bool, error) {
 	var err error
