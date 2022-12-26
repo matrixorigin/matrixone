@@ -727,7 +727,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns 
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
-			Arg: constructGroup(c.ctx, gn, n, i, len(rs), true),
+			Arg: constructGroup(c.ctx, gn, n, i, len(rs), true, c.proc),
 		})
 	}
 	return rs
@@ -1011,7 +1011,7 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
-			Arg: constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false),
+			Arg: constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, c.proc),
 		})
 	}
 	rs := c.newMergeScope(ss)
@@ -1045,7 +1045,7 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
-			Arg: constructGroup(c.ctx, n, ns[n.Children[0]], i, len(rs), true),
+			Arg: constructGroup(c.ctx, n, ns[n.Children[0]], i, len(rs), true, c.proc),
 		})
 	}
 	return []*Scope{c.newMergeScope(append(rs, ss...))}

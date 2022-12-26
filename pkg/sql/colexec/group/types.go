@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -49,19 +50,25 @@ type container struct {
 	aggVecs   []evalVector
 	groupVecs []evalVector
 
+	// multiVecs are used for group_concat,
+	// cause that group_concat can have many cols like group(a,b,c)
+	// in this cases, len(multiVecs[0]) will be 3
+	multiVecs [][]evalVector
+
 	vecs []*vector.Vector
 
 	bat *batch.Batch
 }
 
 type Argument struct {
-	ctr      *container
-	NeedEval bool // need to projection the aggregate column
-	Ibucket  uint64
-	Nbucket  uint64
-	Exprs    []*plan.Expr // group Expressions
-	Types    []types.Type
-	Aggs     []agg.Aggregate // aggregations
+	ctr       *container
+	NeedEval  bool // need to projection the aggregate column
+	Ibucket   uint64
+	Nbucket   uint64
+	Exprs     []*plan.Expr // group Expressions
+	Types     []types.Type
+	Aggs      []agg.Aggregate         // aggregations
+	MultiAggs []group_concat.Argument // multiAggs, for now it's group_concat
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -73,6 +80,20 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		ctr.cleanAggVectors(mp)
 		ctr.cleanGroupVectors(mp)
 	}
+}
+
+func (ctr *container) ToInputType(idx int) (t []types.Type) {
+	for i := range ctr.multiVecs[idx] {
+		t = append(t, ctr.multiVecs[idx][i].vec.Typ)
+	}
+	return
+}
+
+func (ctr *container) ToVecotrs(idx int) (vecs []*vector.Vector) {
+	for i := range ctr.multiVecs[idx] {
+		vecs = append(vecs, ctr.multiVecs[idx][i].vec)
+	}
+	return
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
@@ -87,6 +108,17 @@ func (ctr *container) cleanAggVectors(mp *mpool.MPool) {
 		if ctr.aggVecs[i].needFree && ctr.aggVecs[i].vec != nil {
 			ctr.aggVecs[i].vec.Free(mp)
 			ctr.aggVecs[i].vec = nil
+		}
+	}
+}
+
+func (ctr *container) cleanMultiAggVecs(mp *mpool.MPool) {
+	for i := range ctr.multiVecs {
+		for j := range ctr.multiVecs[i] {
+			if ctr.multiVecs[i][j].needFree && ctr.multiVecs[i][j].vec != nil {
+				ctr.multiVecs[i][j].vec.Free(mp)
+				ctr.multiVecs[i][j].vec = nil
+			}
 		}
 	}
 }

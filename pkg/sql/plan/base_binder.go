@@ -493,18 +493,9 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.IN:
-		switch list := astExpr.Right.(type) {
+		switch astExpr.Right.(type) {
 		case *tree.Tuple:
-			var newExpr tree.Expr
-			for _, expr := range list.Exprs {
-				if newExpr == nil {
-					newExpr = tree.NewComparisonExpr(tree.EQUAL, astExpr.Left, expr)
-				} else {
-					equalExpr := tree.NewComparisonExpr(tree.EQUAL, astExpr.Left, expr)
-					newExpr = tree.NewOrExpr(newExpr, equalExpr)
-				}
-			}
-			return b.impl.BindExpr(newExpr, depth, false)
+			op = "in"
 
 		default:
 			leftArg, err := b.impl.BindExpr(astExpr.Left, depth, false)
@@ -542,18 +533,9 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 	case tree.NOT_IN:
-		switch list := astExpr.Right.(type) {
+		switch astExpr.Right.(type) {
 		case *tree.Tuple:
-			var new_expr tree.Expr
-			for _, expr := range list.Exprs {
-				if new_expr == nil {
-					new_expr = tree.NewComparisonExpr(tree.NOT_EQUAL, astExpr.Left, expr)
-				} else {
-					equal_expr := tree.NewComparisonExpr(tree.NOT_EQUAL, astExpr.Left, expr)
-					new_expr = tree.NewAndExpr(new_expr, equal_expr)
-				}
-			}
-			return b.impl.BindExpr(new_expr, depth, false)
+			op = "not_in"
 
 		default:
 			leftArg, err := b.impl.BindExpr(astExpr.Left, depth, false)
@@ -996,6 +978,54 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 					if err != nil {
 						return nil, err
 					}
+				}
+			}
+		}
+
+	case "in", "not_in":
+		//if all the expr in the in list can safely cast to left type, we call it safe
+		var safe bool
+		if rightList, ok := args[1].Expr.(*plan.Expr_List); ok {
+			typLeft := makeTypeByPlan2Expr(args[0])
+			lenList := len(rightList.List.List)
+
+			for i := 0; i < lenList; i++ {
+				if constExpr, ok := rightList.List.List[i].Expr.(*plan.Expr_C); ok {
+					safe = checkNoNeedCast(makeTypeByPlan2Expr(rightList.List.List[i]), typLeft, constExpr)
+					if !safe {
+						break
+					}
+				} else {
+					safe = false
+					break
+				}
+			}
+
+			if safe {
+				//if safe, try to cast the in list to left type
+				for i := 0; i < lenList; i++ {
+					rightList.List.List[i], err = appendCastBeforeExpr(ctx, rightList.List.List[i], args[0].Typ)
+					if err != nil {
+						return nil, err
+					}
+				}
+			} else {
+				//expand the in list to col=a or col=b or ......
+				if name == "in" {
+					newExpr, _ := bindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), DeepCopyExpr(rightList.List.List[0])})
+					for i := 1; i < lenList; i++ {
+						tmpExpr, _ := bindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), DeepCopyExpr(rightList.List.List[i])})
+						newExpr, _ = bindFuncExprImplByPlanExpr(ctx, "or", []*Expr{newExpr, tmpExpr})
+					}
+					return newExpr, nil
+				} else {
+					//expand the not in list to col!=a and col!=b and ......
+					newExpr, _ := bindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), DeepCopyExpr(rightList.List.List[0])})
+					for i := 1; i < lenList; i++ {
+						tmpExpr, _ := bindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), DeepCopyExpr(rightList.List.List[i])})
+						newExpr, _ = bindFuncExprImplByPlanExpr(ctx, "and", []*Expr{newExpr, tmpExpr})
+					}
+					return newExpr, nil
 				}
 			}
 		}
