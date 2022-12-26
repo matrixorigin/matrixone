@@ -5931,6 +5931,18 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
+|   BINARY '(' expression ')'
+    {
+        locale := ""
+        $$ = tree.NewCastExpr($3, &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.StringFamily,
+                FamilyString: "BINARY",
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        })
+    }
 |   CONVERT '(' expression ',' mysql_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
@@ -6713,14 +6725,6 @@ function_call_keyword:
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: $3,
-        }
-    }
-|   BINARY simple_expr %prec UNARY
-    {
-        name := tree.SetUnresolvedName("binary")
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{$2},
         }
     }
 |   TIMESTAMP STRING
