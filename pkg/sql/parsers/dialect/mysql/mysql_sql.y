@@ -544,7 +544,7 @@ import (
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt distinct_opt temporary_opt
 %type <item> pwd_expire clear_pwd_opt
-%type <str> name_confict distinct_keyword
+%type <str> name_confict distinct_keyword separator_opt
 %type <insert> insert_data
 %type <replace> replace_data
 %type <rowsExprs> values_list
@@ -6223,6 +6223,15 @@ window_partition_by_opt:
         $$ = $1
     }
 
+separator_opt:
+    {
+        $$ = ","
+    }
+|   SEPARATOR STRING
+    {
+       $$ = $2
+    }
+
 window_spec_opt:
     {
         $$ = nil
@@ -6237,7 +6246,18 @@ window_spec_opt:
     }
 
 function_call_aggregate:
-    AVG '(' func_type_opt expression  ')' window_spec_opt
+    GROUP_CONCAT '(' func_type_opt expression_list separator_opt ')' window_spec_opt
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: append($4,tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)),
+            Type: $3,
+            WindowSpec: $7,
+            AggType: 2,
+        }
+    }
+|   AVG '(' func_type_opt expression  ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
@@ -6452,15 +6472,6 @@ function_call_generic:
         }
     }
 |    VARIANCE '(' func_type_opt expression ')'
-    {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{$4},
-            Type: $3,
-        }
-    }
-|    GROUP_CONCAT '(' func_type_opt expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
