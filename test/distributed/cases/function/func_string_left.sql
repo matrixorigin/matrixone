@@ -3,8 +3,6 @@
 -- @test function LEFT
 -- @label:bvt
 
-
-
 select left('abcde', 3) from dual;
 select left('abcde', 0) from dual;
 select left('abcde', 10) from dual;
@@ -66,7 +64,7 @@ INSERT INTO t VALUES (1, '2020-01-01', '2020-01-01 12:12:12', '2020-02-02 06:06:
 INSERT INTO t VALUES (2, '2021-11-11', '2021-01-11 23:23:23', '2021-12-12 16:16:16.843');
 
 -- @case
-SELECT LEFT(dd1, MONTH(dd1)), LEFT(dd2, DAY(dd2)) FROM t;
+
 SELECT left(dd1, length(dd2)) FROM t;
 SELECT left(dd1, TAN(45) + 6) FROM t;
 SELECT left(dd1,cos(10) + 1) FROM t;
