@@ -486,7 +486,7 @@ func int8ToOthers(ctx context.Context,
 		return signedToStr[int8](source, rs, length)
 	case types.T_time:
 		rs := result.(*vector.FunctionResult[types.Time])
-		return integerToTime[int8](source, rs, length)
+		return integerToTime[int8](ctx, source, rs, length)
 	case types.T_timestamp:
 		rs := result.(*vector.FunctionResult[types.Timestamp])
 		return integerToTimestamp[int8](source, rs, length)
@@ -544,7 +544,7 @@ func int16ToOthers(ctx context.Context,
 		return signedToStr[int16](source, rs, length)
 	case types.T_time:
 		rs := result.(*vector.FunctionResult[types.Time])
-		return integerToTime[int16](source, rs, length)
+		return integerToTime[int16](ctx, source, rs, length)
 	case types.T_timestamp:
 		rs := result.(*vector.FunctionResult[types.Timestamp])
 		return integerToTimestamp[int16](source, rs, length)
@@ -602,7 +602,7 @@ func int32ToOthers(ctx context.Context,
 		return signedToStr[int32](source, rs, length)
 	case types.T_time:
 		rs := result.(*vector.FunctionResult[types.Time])
-		return integerToTime[int32](source, rs, length)
+		return integerToTime[int32](ctx, source, rs, length)
 	case types.T_timestamp:
 		rs := result.(*vector.FunctionResult[types.Timestamp])
 		return integerToTimestamp[int32](source, rs, length)
@@ -660,7 +660,7 @@ func int64ToOthers(ctx context.Context,
 		return signedToStr[int64](source, rs, length)
 	case types.T_time:
 		rs := result.(*vector.FunctionResult[types.Time])
-		return integerToTime[int64](source, rs, length)
+		return integerToTime[int64](ctx, source, rs, length)
 	case types.T_timestamp:
 		rs := result.(*vector.FunctionResult[types.Timestamp])
 		return integerToTimestamp[int64](source, rs, length)
@@ -717,7 +717,7 @@ func uint8ToOthers(ctx context.Context,
 		return unsignedToStr[uint8](source, rs, length)
 	case types.T_time:
 		rs := result.(*vector.FunctionResult[types.Time])
-		return integerToTime[uint8](source, rs, length)
+		return integerToTime[uint8](ctx, source, rs, length)
 	case types.T_timestamp:
 		rs := result.(*vector.FunctionResult[types.Timestamp])
 		return integerToTimestamp[uint8](source, rs, length)
@@ -774,7 +774,7 @@ func uint16ToOthers(ctx context.Context,
 		return unsignedToStr[uint16](source, rs, length)
 	case types.T_time:
 		rs := result.(*vector.FunctionResult[types.Time])
-		return integerToTime[uint16](source, rs, length)
+		return integerToTime[uint16](ctx, source, rs, length)
 	case types.T_timestamp:
 		rs := result.(*vector.FunctionResult[types.Timestamp])
 		return integerToTimestamp[uint16](source, rs, length)
@@ -831,7 +831,7 @@ func uint32ToOthers(ctx context.Context,
 		return unsignedToStr[uint32](source, rs, length)
 	case types.T_time:
 		rs := result.(*vector.FunctionResult[types.Time])
-		return integerToTime[uint32](source, rs, length)
+		return integerToTime[uint32](ctx, source, rs, length)
 	case types.T_timestamp:
 		rs := result.(*vector.FunctionResult[types.Timestamp])
 		return integerToTimestamp[uint32](source, rs, length)
@@ -888,7 +888,7 @@ func uint64ToOthers(ctx context.Context,
 		return unsignedToStr[uint64](source, rs, length)
 	case types.T_time:
 		rs := result.(*vector.FunctionResult[types.Time])
-		return integerToTime[uint64](source, rs, length)
+		return integerToTime[uint64](ctx, source, rs, length)
 	case types.T_timestamp:
 		rs := result.(*vector.FunctionResult[types.Timestamp])
 		return integerToTimestamp[uint64](source, rs, length)
@@ -1042,6 +1042,8 @@ func datetimeToOthers(proc *process.Process,
 		return datetimeToDate(source, rs, length)
 	case types.T_datetime:
 		rs := result.(*vector.FunctionResult[types.Datetime])
+		v := source.GetSourceVector()
+		v.Typ = toType
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_time:
@@ -1071,6 +1073,8 @@ func timestampToOthers(proc *process.Process,
 		return timestampToDatetime(proc.Ctx, source, rs, length, zone)
 	case types.T_timestamp:
 		rs := result.(*vector.FunctionResult[types.Timestamp])
+		v := source.GetSourceVector()
+		v.Typ = toType
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
@@ -1116,6 +1120,8 @@ func timeToOthers(ctx context.Context,
 		return timeToDatetime(source, rs, length)
 	case types.T_time:
 		rs := result.(*vector.FunctionResult[types.Time])
+		v := source.GetSourceVector()
+		v.Typ = toType
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
@@ -1149,8 +1155,7 @@ func decimal64ToOthers(ctx context.Context,
 		return decimal64ToUnsigned(ctx, source, rs, 64, length)
 	case types.T_decimal64:
 		rs := result.(*vector.FunctionResult[types.Decimal64])
-		rs.SetFromParameter(source)
-		return nil
+		return decimal64ToDecimal64(source, rs, length)
 	case types.T_decimal128:
 		rs := result.(*vector.FunctionResult[types.Decimal128])
 		return decimal64ToDecimal128(source, rs, length)
@@ -1185,8 +1190,7 @@ func decimal128ToOthers(ctx context.Context,
 		return decimal128ToDecimal64(ctx, source, rs, length)
 	case types.T_decimal128:
 		rs := result.(*vector.FunctionResult[types.Decimal128])
-		rs.SetFromParameter(source)
-		return nil
+		return decimal128ToDecimal128(source, rs, length)
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
 		return decimal128ToFloat[float32](ctx, source, rs, length, 32)
@@ -1668,6 +1672,7 @@ func integerToTimestamp[T constraints.Integer](
 }
 
 func integerToTime[T constraints.Integer](
+	ctx context.Context,
 	from *vector.FunctionParameter[T],
 	to *vector.FunctionResult[types.Time], length int) error {
 	var i, l uint64 = 0, uint64(length)
@@ -1676,11 +1681,14 @@ func integerToTime[T constraints.Integer](
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		vI64 := int64(v)
-		if null || (v < 0 && vI64 < types.MinInputIntTime) || uint64(v) > types.MaxInputIntTime {
+		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err
 			}
 		} else {
+			if vI64 < types.MinInputIntTime || vI64 > types.MaxInputIntTime {
+				return moerr.NewOutOfRange(ctx, "time", "value %d", v)
+			}
 			result, err := types.ParseInt64ToTime(vI64, toType.Precision)
 			if err != nil {
 				return err
@@ -1957,7 +1965,7 @@ func datetimeToStr(
 	from *vector.FunctionParameter[types.Datetime],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	var i, l uint64 = 0, uint64(length)
-	totype := to.GetType()
+	fromType := from.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1965,7 +1973,7 @@ func datetimeToStr(
 				return err
 			}
 		} else {
-			if err := to.AppendStr([]byte(v.String2(totype.Precision)), false); err != nil {
+			if err := to.AppendStr([]byte(v.String2(fromType.Precision)), false); err != nil {
 				return err
 			}
 		}
@@ -1978,7 +1986,7 @@ func timestampToStr(
 	to *vector.FunctionResult[types.Varlena], length int,
 	zone *time.Location) error {
 	var i, l uint64 = 0, uint64(length)
-	totype := to.GetType()
+	fromType := from.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1986,7 +1994,7 @@ func timestampToStr(
 				return err
 			}
 		} else {
-			if err := to.AppendStr([]byte(v.String2(zone, totype.Precision)), false); err != nil {
+			if err := to.AppendStr([]byte(v.String2(zone, fromType.Precision)), false); err != nil {
 				return err
 			}
 		}
@@ -1998,7 +2006,7 @@ func timeToStr(
 	from *vector.FunctionParameter[types.Time],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	var i, l uint64 = 0, uint64(length)
-	totype := to.GetType()
+	fromType := from.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -2006,7 +2014,7 @@ func timeToStr(
 				return err
 			}
 		} else {
-			if err := to.AppendStr([]byte(v.String2(totype.Precision)), false); err != nil {
+			if err := to.AppendStr([]byte(v.String2(fromType.Precision)), false); err != nil {
 				return err
 			}
 		}
@@ -2020,6 +2028,7 @@ func timeToDecimal64(
 	to *vector.FunctionResult[types.Decimal64], length int) error {
 	var i, l uint64 = 0, uint64(length)
 	var dft types.Decimal64
+	fromType := from.GetType()
 	totype := to.GetType()
 	for ; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -2028,7 +2037,7 @@ func timeToDecimal64(
 				return err
 			}
 		} else {
-			result, err := v.ToDecimal64(ctx, totype.Width, totype.Precision)
+			result, err := v.ToDecimal64(ctx, totype.Width, fromType.Precision)
 			if err != nil {
 				return err
 			}
@@ -2046,6 +2055,7 @@ func timeToDecimal128(
 	to *vector.FunctionResult[types.Decimal128], length int) error {
 	var i, l uint64 = 0, uint64(length)
 	var dft types.Decimal128
+	fromType := from.GetType()
 	totype := to.GetType()
 	for ; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -2054,7 +2064,7 @@ func timeToDecimal128(
 				return err
 			}
 		} else {
-			result, err := v.ToDecimal128(ctx, totype.Width, totype.Precision)
+			result, err := v.ToDecimal128(ctx, totype.Width, fromType.Precision)
 			if err != nil {
 				return err
 			}
@@ -2179,6 +2189,58 @@ func decimal128ToUnsigned[T constraints.Unsigned](
 			}
 			err = to.Append(T(result), false)
 			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decimal64ToDecimal64(
+	from *vector.FunctionParameter[types.Decimal64],
+	to *vector.FunctionResult[types.Decimal64], length int) error {
+	fromtype := from.GetType()
+	totype := to.GetType()
+	var i uint64
+	for i = 0; i < uint64(length); i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(v, true); err != nil {
+				return err
+			}
+		} else {
+			d := v.ToStringWithScale(fromtype.Scale)
+			r, err := types.Decimal64_FromStringWithScale(d, totype.Width, totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(r, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decimal128ToDecimal128(
+	from *vector.FunctionParameter[types.Decimal128],
+	to *vector.FunctionResult[types.Decimal128], length int) error {
+	fromtype := from.GetType()
+	totype := to.GetType()
+	var i uint64
+	for i = 0; i < uint64(length); i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(v, true); err != nil {
+				return err
+			}
+		} else {
+			d := v.ToStringWithScale(fromtype.Scale)
+			r, err := types.Decimal128_FromStringWithScale(d, totype.Width, totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(r, false); err != nil {
 				return err
 			}
 		}
@@ -2710,7 +2772,7 @@ func strToDate(
 	var dft types.Date
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
-		if null {
+		if null || len(v) == 0 {
 			if err := to.Append(dft, true); err != nil {
 				return err
 			}
@@ -2737,7 +2799,7 @@ func strToTime(
 	totype := to.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
-		if null {
+		if null || len(v) == 0 {
 			if err := to.Append(dft, true); err != nil {
 				return err
 			}
@@ -2764,7 +2826,7 @@ func strToDatetime(
 	totype := to.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
-		if null {
+		if null || len(v) == 0 {
 			if err := to.Append(dft, true); err != nil {
 				return err
 			}
@@ -2792,7 +2854,7 @@ func strToTimestamp(
 	totype := to.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
-		if null {
+		if null || len(v) == 0 {
 			if err := to.Append(dft, true); err != nil {
 				return err
 			}
@@ -3128,7 +3190,6 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int32:
 			for _, x := range nxs {
 				if math.Round(float64(x)) > math.MaxInt32 {
-					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:
