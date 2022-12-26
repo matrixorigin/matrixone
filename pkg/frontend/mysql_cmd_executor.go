@@ -3835,7 +3835,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		stmts := make([]*tree.Statement, len(cws))
 		for i, cw := range cws {
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL {
+				if cwft.stmt.GetQueryType() != tree.QueryTypeDQL {
 					ses.cleanCache()
 					return nil
 				}
