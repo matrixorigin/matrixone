@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1114,15 +1115,33 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var resultLen int
 
 	if clause == nil {
+		rowCount := len(valuesClause.Rows)
 		if len(valuesClause.Rows) == 0 {
 			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
 		}
 		colCount := len(valuesClause.Rows[0])
 		ctx.hasSingleRow = len(valuesClause.Rows) == 1
-		colsDatas := make([]*plan.ColData, colCount)
+		proc := builder.compCtx.GetProcess()
+		emptyBatch := batch.NewWithSize(0)
+		emptyBatch.Zs = []int64{1}
+		projectionBinder := NewProjectionBinder(builder, ctx, nil)
+		rowSetData := &plan.RowsetData{
+			Schema: &plan.TableDef{},
+			Cols:   make([]*plan.ColData, colCount),
+		}
 		for i := 0; i < colCount; i++ {
 			ctx.headings = append(ctx.headings, fmt.Sprintf("column_%d", i))
-			// todo need check
+			rowSetData.Cols[i] = make([]*plan.Expr, rowCount)
+			for j := 0; j < rowCount; j++ {
+				planExpr, err := projectionBinder.BindExpr(valuesClause.Rows[j][i], 0, true)
+				if err != nil {
+					return 0, err
+				}
+				colExpr, err := ConstantFold(emptyBatch, planExpr, proc)
+				if err != nil {
+					return 0, err
+				}
+			}
 			// ctx.projects = append(ctx.projects, )
 		}
 		// todo need check
