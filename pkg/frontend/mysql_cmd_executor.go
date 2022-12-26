@@ -2226,7 +2226,8 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
 	defer RecordStatementTxnID(requestCtx, cwft.ses)
-	if cwft.plan == nil {
+	cacheHit := cwft.plan != nil
+	if !cacheHit {
 		cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 	} else if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil {
 		err = authenticateCanExecuteStatementAndPlan(requestCtx, cwft.ses, cwft.stmt, cwft.plan)
@@ -2298,13 +2299,13 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	}
 
 	txnHandler := cwft.ses.GetTxnHandler()
-	if cwft.plan.GetQuery().GetLoadTag() {
-		cwft.proc.TxnOperator = txnHandler.GetTxnOnly()
-	} else if cwft.plan.NeedImplicitTxn() {
+	if cwft.plan.NeedImplicitTxn() || cacheHit {
 		cwft.proc.TxnOperator, err = txnHandler.GetTxn()
 		if err != nil {
 			return nil, err
 		}
+	} else if cwft.plan.GetQuery().GetLoadTag() {
+		cwft.proc.TxnOperator = txnHandler.GetTxnOnly()
 	}
 	addr := ""
 	if len(cwft.ses.GetParameterUnit().ClusterNodes) > 0 {
