@@ -1,0 +1,156 @@
+2022/12/26 21:26:23.746302 +0800 INFO logutil/internal.go:37 MO logger init, level=info, log file=
+2022/12/26 21:26:23.747869 +0800 INFO trace/trace.go:127 init GlobalBatchProcessor
+2022/12/26 21:26:23.748021 +0800 INFO export/batch_processor.go:260 MOCollector Start
+2022/12/26 21:26:23.748101 +0800 INFO trace/trace.go:132 init trace span processor
+2022/12/26 21:26:23.748113 +0800 INFO trace/trace.go:97 trace with LongQueryTime: 0s
+2022/12/26 21:26:23.748327 +0800 INFO metric/metric.go:130 metric with ExportInterval: 15s
+2022/12/26 21:26:23.748357 +0800 INFO mo-service/config.go:204 hakeeper client cfg: { [127.0.0.1:32001] 0 false}
+2022/12/26 21:26:23.748491 +0800 INFO dragonboat v4@v4.0.0-20221116064434-34611fc96385/nodehost.go:2221 go version: go1.19.4, darwin/arm64
+2022/12/26 21:26:23.748581 +0800 INFO dragonboat v4@v4.0.0-20221116064434-34611fc96385/nodehost.go:2223 dragonboat version: 4.0.0 (Dev)
+2022/12/26 21:26:23.748593 +0800 WARN config config/config.go:534 mutual TLS disabled, communication is insecure
+2022/12/26 21:26:23.748652 +0800 INFO config config/config.go:656 using default EngineConfig
+2022/12/26 21:26:23.748712 +0800 INFO dragonboat v4@v4.0.0-20221116064434-34611fc96385/nodehost.go:349 DeploymentID set to 1
+2022/12/26 21:26:23.882972 +0800 INFO dragonboat v4@v4.0.0-20221116064434-34611fc96385/nodehost.go:1759 logdb memory limit: 48 MBytes
+2022/12/26 21:26:23.902092 +0800 INFO dragonboat v4@v4.0.0-20221116064434-34611fc96385/nodehost.go:358 NodeHost ID: 7c4dccb4-4d3c-41f8-b482-5251dc7a41bf
+2022/12/26 21:26:23.902207 +0800 INFO dragonboat v4@v4.0.0-20221116064434-34611fc96385/nodehost.go:1806 AddressByNodeHostID: true, use gossip based node registry
+2022/12/26 21:26:23.902322 +0800 INFO registry registry/gossip.go:297 gossip probe interval set to 5s
+2022/12/26 21:26:23.902438 +0800 INFO registry registry/gossip.go:307 gossip bind address 127.0.0.1 port 32002
+2022/12/26 21:26:23.902468 +0800 INFO registry registry/gossip.go:315 gossip advertise address 127.0.0.1 port 32002
+2022/12/26 21:26:23.904914 +0800 INFO dragonboat v4@v4.0.0-20221116064434-34611fc96385/nodehost.go:366 filesystem error injection mode enabled: false
+2022/12/26 21:26:23.905464 +0800 INFO transport transport/transport.go:238 transport type: go-tcp-transport
+2022/12/26 21:26:23.905666 +0800 INFO dragonboat v4@v4.0.0-20221116064434-34611fc96385/nodehost.go:2010 transport type: go-tcp-transport
+2022/12/26 21:26:23.905691 +0800 INFO dragonboat v4@v4.0.0-20221116064434-34611fc96385/nodehost.go:2011 logdb type: Tan
+2022/12/26 21:26:23.905710 +0800 INFO dragonboat v4@v4.0.0-20221116064434-34611fc96385/nodehost.go:2012 nodehost address: 127.0.0.1:32000
+2022/12/26 21:26:23.905729 +0800 INFO log-service logservice/store.go:151 HAKeeper Timeout Configs {"uuid": "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf", "LogStoreTimeout": 300000000000, "DNStoreTimeout": 10000000000, "CNStoreTimeout": 30000000000}
+2022/12/26 21:26:23.905898 +0800 INFO log-service logservice/store.go:171 logservice truncation worker started {"uuid": "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"}
+2022/12/26 21:26:23.906238 +0800 INFO log-service logservice/service.go:171 logservice heartbeat worker started {"uuid": "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"}
+2022/12/26 21:26:23.906273 +0800 INFO mo-service/main.go:237 bootstrapping hakeeper...
+2022/12/26 21:26:23.916932 +0800 INFO hakeeper-client-backend morpc/backend.go:654 start connect to remote {"remote": "127.0.0.1:32001", "backend-id": "c65bbf62-54de-4dc8-9286-6cb4c4ac9828"}
+2022/12/26 21:26:23.925408 +0800 INFO hakeeper-client-backend morpc/backend.go:658 connect to remote succeed {"remote": "127.0.0.1:32001", "backend-id": "c65bbf62-54de-4dc8-9286-6cb4c4ac9828"}
+2022/12/26 21:26:23.925895 +0800 INFO hakeeper-client-backend morpc/backend.go:455 read loop started {"remote": "127.0.0.1:32001", "backend-id": "c65bbf62-54de-4dc8-9286-6cb4c4ac9828"}
+2022/12/26 21:26:23.925903 +0800 INFO rpc-client[hakeeper-client([connectToHAKeeper])] morpc/client.go:328 gc inactive backends task started
+2022/12/26 21:26:23.925882 +0800 INFO hakeeper-client-backend morpc/backend.go:360 write loop started {"remote": "127.0.0.1:32001", "backend-id": "c65bbf62-54de-4dc8-9286-6cb4c4ac9828"}
+2022/12/26 21:26:23.926465 +0800 INFO logservice/hakeeper_client.go:382 isHAKeeper: false, err: <nil>
+2022/12/26 21:26:23.944005 +0800 ERROR hakeeper-client-backend morpc/backend.go:472 read from backend failed {"remote": "127.0.0.1:32001", "backend-id": "c65bbf62-54de-4dc8-9286-6cb4c4ac9828", "error": "read tcp4 127.0.0.1:59897->127.0.0.1:32001: use of closed network connection"}
+2022/12/26 21:26:23.944113 +0800 ERROR hakeeper-client-backend morpc/backend.go:477 read loop stopped {"remote": "127.0.0.1:32001", "backend-id": "c65bbf62-54de-4dc8-9286-6cb4c4ac9828"}
+2022/12/26 21:26:23.949777 +0800 ERROR hakeeper-client-backend v2@v2.0.3-0.20221212132037-abf2d4c05484/session.go:496 close conneciton failed {"remote": "127.0.0.1:32001", "backend-id": "c65bbf62-54de-4dc8-9286-6cb4c4ac9828", "session-id": 0, "error": "close tcp4 127.0.0.1:59897->127.0.0.1:32001: use of closed network connection"}
+2022/12/26 21:26:23.962825 +0800 INFO hakeeper-client-backend morpc/backend.go:364 write loop stopped {"remote": "127.0.0.1:32001", "backend-id": "c65bbf62-54de-4dc8-9286-6cb4c4ac9828"}
+2022/12/26 21:26:23.966024 +0800 ERROR rpc-client[hakeeper-client([connectToHAKeeper])] morpc/client.go:334 gc inactive backends task stopped
+2022/12/26 21:26:23.982780 +0800 ERROR logservice/hakeeper_client.go:394 error: cannot locate ha keeper
+github.com/matrixorigin/matrixone/pkg/logservice.connectToHAKeeper
+	/Users/shenjiangwei/Work/local/tae/matrixone/pkg/logservice/hakeeper_client.go:394
+github.com/matrixorigin/matrixone/pkg/logservice.newHAKeeperClient
+	/Users/shenjiangwei/Work/local/tae/matrixone/pkg/logservice/hakeeper_client.go:314
+github.com/matrixorigin/matrixone/pkg/logservice.newManagedHAKeeperClient
+	/Users/shenjiangwei/Work/local/tae/matrixone/pkg/logservice/hakeeper_client.go:111
+github.com/matrixorigin/matrixone/pkg/logservice.NewCNHAKeeperClient
+	/Users/shenjiangwei/Work/local/tae/matrixone/pkg/logservice/hakeeper_client.go:84
+main.waitHAKeeperReady
+	/Users/shenjiangwei/Work/local/tae/matrixone/cmd/mo-service/launch.go:136
+main.waitClusterCondition
+	/Users/shenjiangwei/Work/local/tae/matrixone/cmd/mo-service/launch.go:197
+main.startDNService
+	/Users/shenjiangwei/Work/local/tae/matrixone/cmd/mo-service/main.go:194
+main.startService
+	/Users/shenjiangwei/Work/local/tae/matrixone/cmd/mo-service/main.go:142
+main.startDNServiceCluster
+	/Users/shenjiangwei/Work/local/tae/matrixone/cmd/mo-service/launch.go:89
+main.startCluster
+	/Users/shenjiangwei/Work/local/tae/matrixone/cmd/mo-service/launch.go:48
+main.main
+	/Users/shenjiangwei/Work/local/tae/matrixone/cmd/mo-service/main.go:83
+runtime.main
+	/usr/local/go/src/runtime/proc.go:250
+2022/12/26 21:26:23.983066 +0800 INFO mo-service/launch.go:139 hakeeper not ready, retry
+2022/12/26 21:26:24.002273 +0800 INFO tan tan/open.go:55 /Users/shenjiangwei/Work/local/tae/matrixone/mo-data/logservice-data/7c4dccb4-4d3c-41f8-b482-5251dc7a41bf/shenjiangweis-MacBook-Pro.local/00000000000000000001/tandb/node-0-131072 creating a new tan db
+2022/12/26 21:26:24.061193 +0800 INFO tan tan/open.go:76 /Users/shenjiangwei/Work/local/tae/matrixone/mo-data/logservice-data/7c4dccb4-4d3c-41f8-b482-5251dc7a41bf/shenjiangweis-MacBook-Pro.local/00000000000000000001/tandb/node-0-131072 on disk files [MANIFEST-000001 CURRENT]
+2022/12/26 21:26:24.061378 +0800 INFO tan tan/open.go:132 /Users/shenjiangwei/Work/local/tae/matrixone/mo-data/logservice-data/7c4dccb4-4d3c-41f8-b482-5251dc7a41bf/shenjiangweis-MacBook-Pro.local/00000000000000000001/tandb/node-0-131072 logFiles to rebuild: map[]
+2022/12/26 21:26:24.061430 +0800 INFO tan tan/open.go:133 /Users/shenjiangwei/Work/local/tae/matrixone/mo-data/logservice-data/7c4dccb4-4d3c-41f8-b482-5251dc7a41bf/shenjiangweis-MacBook-Pro.local/00000000000000000001/tandb/node-0-131072 indexFiles: []
+2022/12/26 21:26:24.099024 +0800 INFO dragonboat v4@v4.0.0-20221116064434-34611fc96385/node.go:668 [00000:31072] replaying raft logs
+2022/12/26 21:26:24.099146 +0800 INFO raft raft/peer.go:68 [00000:31072] created, initial: true, new: true
+2022/12/26 21:26:24.099316 +0800 INFO raft raft/raft.go:266 [00000:31072] raft log rate limit enabled: false, 0
+2022/12/26 21:26:24.099419 +0800 INFO raft raft/raft.go:962 [f:1,l:0,t:0,c:0,a:0] [00000:31072] t0 became follower
+2022/12/26 21:26:24.099521 +0800 INFO raft raft/raft.go:962 [f:1,l:0,t:0,c:0,a:0] [00000:31072] t1 became follower
+2022/12/26 21:26:24.099546 +0800 INFO raft raft/peer.go:410 [f:1,l:0,t:0,c:0,a:0] [00000:31072] t1 added bootstrap ConfigChangeAddNode, 131072, 7c4dccb4-4d3c-41f8-b482-5251dc7a41bf
+2022/12/26 21:26:24.099849 +0800 INFO rsm rsm/statemachine.go:281 [00000:31072] no snapshot available during launch
+2022/12/26 21:26:24.100098 +0800 INFO dragonboat v4@v4.0.0-20221116064434-34611fc96385/node.go:1552 [00000:31072] initialized using <00000:31072:0>
+2022/12/26 21:26:24.100393 +0800 INFO dragonboat v4@v4.0.0-20221116064434-34611fc96385/node.go:1436 [00000:31072] initial index set to 0
+2022/12/26 21:26:24.137059 +0800 INFO rsm rsm/membership.go:301 [00000:31072] applied ADD ccid 0 (1), n31072 (7c4dccb4-4d3c-41f8-b482-5251dc7a41bf)
+2022/12/26 21:26:24.153989 +0800 INFO log-service logservice/store.go:223 HAKeeper ticker started {"uuid": "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"}
+2022/12/26 21:26:24.154585 +0800 INFO log-service logservice/store.go:652 Hakeeper interval configs {"uuid": "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf", "HAKeeperTickInterval": 100000000, "HAKeeperCheckInterval": 3000000000}
+2022/12/26 21:26:24.173161 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:24.274434 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:24.375330 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:24.476770 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:24.578324 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:24.679728 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:24.781296 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:24.882664 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:24.906725 +0800 INFO hakeeper-client-backend morpc/backend.go:654 start connect to remote {"remote": "127.0.0.1:32001", "backend-id": "12e6004d-7d09-4e95-a3b7-6e7466fb7149"}
+2022/12/26 21:26:24.907102 +0800 INFO hakeeper-client-backend morpc/backend.go:658 connect to remote succeed {"remote": "127.0.0.1:32001", "backend-id": "12e6004d-7d09-4e95-a3b7-6e7466fb7149"}
+2022/12/26 21:26:24.907210 +0800 INFO rpc-client[log-heartbeat] morpc/client.go:328 gc inactive backends task started
+2022/12/26 21:26:24.907212 +0800 INFO hakeeper-client-backend morpc/backend.go:455 read loop started {"remote": "127.0.0.1:32001", "backend-id": "12e6004d-7d09-4e95-a3b7-6e7466fb7149"}
+2022/12/26 21:26:24.907208 +0800 INFO hakeeper-client-backend morpc/backend.go:360 write loop started {"remote": "127.0.0.1:32001", "backend-id": "12e6004d-7d09-4e95-a3b7-6e7466fb7149"}
+2022/12/26 21:26:24.907505 +0800 INFO logservice/hakeeper_client.go:382 isHAKeeper: true, err: <nil>
+2022/12/26 21:26:24.907777 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:24.984031 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:24.984339 +0800 INFO hakeeper-client-backend morpc/backend.go:654 start connect to remote {"remote": "127.0.0.1:32001", "backend-id": "ae99e719-e4df-4e13-aa3d-ca7c7df2678c"}
+2022/12/26 21:26:24.985020 +0800 INFO hakeeper-client-backend morpc/backend.go:658 connect to remote succeed {"remote": "127.0.0.1:32001", "backend-id": "ae99e719-e4df-4e13-aa3d-ca7c7df2678c"}
+2022/12/26 21:26:24.985276 +0800 INFO hakeeper-client-backend morpc/backend.go:455 read loop started {"remote": "127.0.0.1:32001", "backend-id": "ae99e719-e4df-4e13-aa3d-ca7c7df2678c"}
+2022/12/26 21:26:24.985299 +0800 INFO rpc-client[hakeeper-client([connectToHAKeeper])] morpc/client.go:328 gc inactive backends task started
+2022/12/26 21:26:24.985329 +0800 INFO hakeeper-client-backend morpc/backend.go:360 write loop started {"remote": "127.0.0.1:32001", "backend-id": "ae99e719-e4df-4e13-aa3d-ca7c7df2678c"}
+2022/12/26 21:26:24.985791 +0800 INFO logservice/hakeeper_client.go:382 isHAKeeper: true, err: <nil>
+2022/12/26 21:26:24.986169 +0800 WARN raft raft/raft.go:2139 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped ReadIndex, no leader
+2022/12/26 21:26:25.008361 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.085409 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.086451 +0800 WARN raft raft/raft.go:2139 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped ReadIndex, no leader
+2022/12/26 21:26:25.108832 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.186692 +0800 WARN raft raft/raft.go:2139 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped ReadIndex, no leader
+2022/12/26 21:26:25.186899 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.210297 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.288219 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.288424 +0800 WARN raft raft/raft.go:2139 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped ReadIndex, no leader
+2022/12/26 21:26:25.311132 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.389784 +0800 WARN raft raft/raft.go:2139 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped ReadIndex, no leader
+2022/12/26 21:26:25.389975 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.412453 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.491067 +0800 WARN raft raft/raft.go:2139 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped ReadIndex, no leader
+2022/12/26 21:26:25.491281 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.513006 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.592379 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.592680 +0800 WARN raft raft/raft.go:2139 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped ReadIndex, no leader
+2022/12/26 21:26:25.614315 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.693903 +0800 WARN raft raft/raft.go:2139 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped ReadIndex, no leader
+2022/12/26 21:26:25.694108 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.715660 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.795335 +0800 WARN raft raft/raft.go:2139 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped ReadIndex, no leader
+2022/12/26 21:26:25.795553 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.817027 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.896792 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.897230 +0800 WARN raft raft/raft.go:2139 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped ReadIndex, no leader
+2022/12/26 21:26:25.918589 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:25.998483 +0800 WARN raft raft/raft.go:2139 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped ReadIndex, no leader
+2022/12/26 21:26:25.998468 +0800 ERROR log-service logservice/store_hakeeper_check.go:87 failed to propose initial cluster info {"uuid": "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf", "error": "timeout", "errorVerbose": "timeout\n(1) attached stack trace\n  -- stack trace:\n  | github.com/lni/dragonboat/v4.init\n  | \t/Users/shenjiangwei/go/pkg/mod/github.com/matrixorigin/dragonboat/v4@v4.0.0-20221116064434-34611fc96385/request.go:75\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6329\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.main\n  | \t/usr/local/go/src/runtime/proc.go:233\n  | runtime.goexit\n  | \t/usr/local/go/src/runtime/asm_arm64.s:1172\nWraps: (2) timeout\nError types: (1) *withstack.withStack (2) *errutil.leafError"}
+2022/12/26 21:26:25.999110 +0800 ERROR log-service logservice/service_bootstrap.go:55 failed to set initial cluster info {"uuid": "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf", "error": "timeout", "errorVerbose": "timeout\n(1) attached stack trace\n  -- stack trace:\n  | github.com/lni/dragonboat/v4.init\n  | \t/Users/shenjiangwei/go/pkg/mod/github.com/matrixorigin/dragonboat/v4@v4.0.0-20221116064434-34611fc96385/request.go:75\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6329\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.doInit\n  | \t/usr/local/go/src/runtime/proc.go:6306\n  | runtime.main\n  | \t/usr/local/go/src/runtime/proc.go:233\n  | runtime.goexit\n  | \t/usr/local/go/src/runtime/asm_arm64.s:1172\nWraps: (2) timeout\nError types: (1) *withstack.withStack (2) *errutil.leafError"}
+2022/12/26 21:26:26.020069 +0800 WARN raft raft/raft.go:2108 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped proposal, no leader
+2022/12/26 21:26:26.099813 +0800 WARN raft raft/raft.go:2139 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 dropped ReadIndex, no leader
+2022/12/26 21:26:26.106228 +0800 WARN raft raft/raft.go:1010 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 became PreVote candidate
+2022/12/26 21:26:26.106398 +0800 WARN raft raft/raft.go:1127 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t1 received RequestPreVoteResp from n31072
+2022/12/26 21:26:26.106421 +0800 WARN raft raft/raft.go:1028 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t2 became candidate
+2022/12/26 21:26:26.106436 +0800 WARN raft raft/raft.go:1127 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t2 received RequestVoteResp from n31072
+2022/12/26 21:26:26.106449 +0800 INFO raft raft/raft.go:1040 [f:1,l:1,t:1,c:1,a:1] [00000:31072] t2 became leader
+2022/12/26 21:26:26.201413 +0800 INFO mo-service/launch.go:157 hakeeper not ready, retry
+2022/12/26 21:26:27.017703 +0800 INFO hakeeper hakeeper/rsm.go:442 initial cluster set, HAKeeper is in BOOTSTRAPPING state
+2022/12/26 21:26:27.019246 +0800 INFO log-service logservice/service_bootstrap.go:62 initial cluster info set {"uuid": "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"}
+2022/12/26 21:26:27.036221 +0800 ERROR task/task_scheduler.go:71 error: internal error: failed to get task service {"span": {"trace_id": "1e30306e-d103-12c9-c434-2a137116e95b", "span_id": "14a7a1f874e95145"}}
+github.com/matrixorigin/matrixone/pkg/hakeeper/task.(*scheduler).Create
+	/Users/shenjiangwei/Work/local/tae/matrixone/pkg/hakeeper/task/task_scheduler.go:71
+github.com/matrixorigin/matrixone/pkg/logservice.(*Service).createInitTasks
+	/Users/shenjiangwei/Work/local/tae/matrixone/pkg/logservice/service_bootstrap.go:80
+github.com/matrixorigin/matrixone/pkg/logservice.(*Service).BootstrapHAKeeper
+	/Users/shenjiangwei/Work/local/tae/matrixone/pkg/logservice/service_bootstrap.go:71
+main.startLogService.func1
+	/Users/shenjiangwei/Work/local/tae/matrixone/cmd/mo-service/main.go:238
+github.com/matrixorigin/matrixone/pkg/common/stopper.(*Stopper).doRunCancelableTask.func1
+	/Users/shenjiangwei/Work/local/tae/matrixone/pkg/common/stopper/stopper.go:259
+2022/12/26 21:26:27.036270 +0800 ERROR log-service logservice/service_bootstrap.go:84 failed to create init tasks {"uuid": "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf", "error": "internal error: failed to get task service"}
