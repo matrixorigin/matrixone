@@ -29,22 +29,26 @@ const (
 	ST_Finished
 )
 
+type EntryType int8
+
+const (
+	ET_Global EntryType = iota
+	ET_Incremental
+)
+
 type Runner interface {
+	TestRunner
+	RunnerReader
 	Start()
 	Stop()
 	EnqueueWait(any) error
 	Replay(catalog.DataFactory) (types.TS, error)
-	MaxLSN() uint64
 
 	MockCheckpoint(end types.TS)
 	FlushTable(dbID, tableID uint64, ts types.TS) error
 
 	// for test, delete in next phase
-	TestCheckpoint(entry *CheckpointEntry)
 	DebugUpdateOptions(opts ...Option)
-	GetAllCheckpoints() []*CheckpointEntry
-	CollectCheckpointsInRange(start, end types.TS) (ckpLoc string, lastEnd types.TS)
-	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
 }
 
 type DirtyCtx struct {
@@ -81,6 +85,7 @@ const (
 	CheckpointAttr_StartTS      = "start_ts"
 	CheckpointAttr_EndTS        = "end_ts"
 	CheckpointAttr_MetaLocation = "meta_location"
+	CheckpointAttr_EntryType    = "entry_type"
 )
 
 var (
@@ -92,11 +97,13 @@ var (
 		CheckpointAttr_StartTS,
 		CheckpointAttr_EndTS,
 		CheckpointAttr_MetaLocation,
+		CheckpointAttr_EntryType,
 	}
 	CheckpointSchemaTypes = []types.Type{
 		types.New(types.T_TS, 0, 0, 0),
 		types.New(types.T_TS, 0, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0),
+		types.New(types.T_bool, 0, 0, 0), // true for incremental
 	}
 )
 

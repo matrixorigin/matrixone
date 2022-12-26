@@ -18,7 +18,10 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -88,7 +91,15 @@ func (e *testEngine) checkRowsByScan(exp int, applyDelete bool) {
 	checkAllColRowsByScan(e.t, rel, exp, applyDelete)
 	assert.NoError(e.t, txn.Commit())
 }
-
+func (e *testEngine) dropRelation(t *testing.T) {
+	txn, err := e.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.GetDatabase(defaultTestDB)
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(e.schema.Name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+}
 func (e *testEngine) getRelation() (txn txnif.AsyncTxn, rel handle.Relation) {
 	return getRelation(e.t, e.tenantID, e.DB, defaultTestDB, e.schema.Name)
 }
@@ -184,7 +195,50 @@ func (e *testEngine) truncate() {
 	assert.NoError(e.t, err)
 	assert.NoError(e.t, txn.Commit())
 }
+func (e *testEngine) globalCheckpoint(
+	endTs types.TS,
+	versionInterval time.Duration,
+	enableAndCleanBGCheckpoint bool,
+) error {
+	if enableAndCleanBGCheckpoint {
+		e.DB.BGCheckpointRunner.DisableCheckpoint()
+		defer e.DB.BGCheckpointRunner.EnableCheckpoint()
+		e.DB.BGCheckpointRunner.CleanPenddingCheckpoint()
+	}
+	err := e.DB.BGCheckpointRunner.ForceGlobalCheckpoint(endTs, versionInterval)
+	assert.NoError(e.t, err)
+	return nil
+}
 
+func (e *testEngine) incrementalCheckpoint(
+	end types.TS,
+	enableAndCleanBGCheckpoint bool,
+	waitFlush bool,
+	truncate bool,
+) error {
+	if enableAndCleanBGCheckpoint {
+		e.DB.BGCheckpointRunner.DisableCheckpoint()
+		defer e.DB.BGCheckpointRunner.EnableCheckpoint()
+		e.DB.BGCheckpointRunner.CleanPenddingCheckpoint()
+	}
+	if waitFlush {
+		testutils.WaitExpect(4000, func() bool {
+			flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end, false)
+			return flushed
+		})
+		flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end, true)
+		assert.True(e.t, flushed)
+	}
+	err := e.DB.BGCheckpointRunner.ForceIncrementalCheckpoint(end)
+	assert.NoError(e.t, err)
+	if truncate {
+		lsn := e.DB.BGCheckpointRunner.MaxLSNInRange(end)
+		entry, err := e.DB.Wal.RangeCheckpoint(1, lsn)
+		assert.NoError(e.t, err)
+		assert.NoError(e.t, entry.WaitDone())
+	}
+	return nil
+}
 func initDB(t *testing.T, opts *options.Options) *DB {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	db, _ := Open(dir, opts)
@@ -352,6 +406,10 @@ func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 func forEachColumnView(rel handle.Relation, colIdx int, fn func(view *model.ColumnView) error) {
 	forEachBlock(rel, func(blk handle.Block) (err error) {
 		view, err := blk.GetColumnDataById(colIdx, nil)
+		if view == nil {
+			logutil.Warnf("blk %v", blk.String())
+			return
+		}
 		if err != nil {
 			return
 		}
