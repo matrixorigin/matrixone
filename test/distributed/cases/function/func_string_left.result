@@ -127,10 +127,6 @@ DROP TABLE IF EXISTS t;
 CREATE TABLE t(id INT,dd1 DATE, dd2 DATETIME,  dd3 TIMESTAMP, PRIMARY KEY (id));
 INSERT INTO t VALUES (1, '2020-01-01', '2020-01-01 12:12:12', '2020-02-02 06:06:06.163');
 INSERT INTO t VALUES (2, '2021-11-11', '2021-01-11 23:23:23', '2021-12-12 16:16:16.843');
-SELECT LEFT(dd1, MONTH(dd1)), LEFT(dd2, DAY(dd2)) FROM t;
-left(dd1, month(dd1))    left(dd2, day(dd2))
-2    2
-2021-11-11    2021-01-11
 SELECT left(dd1, length(dd2)) FROM t;
 left(dd1, length(dd2))
 2020-01-01
