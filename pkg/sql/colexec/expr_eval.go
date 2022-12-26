@@ -56,6 +56,94 @@ var (
 	}
 )
 
+func getConstVecInList(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
+	lenList := len(exprs)
+	vec, err := proc.AllocVectorOfRows(types.T(exprs[0].Typ.Id).ToType(), int64(lenList), nil)
+	if err != nil {
+		panic(moerr.NewOOM(proc.Ctx))
+	}
+	for i := 0; i < lenList; i++ {
+		expr := exprs[i]
+		t := expr.Expr.(*plan.Expr_C)
+		if t.C.GetIsnull() {
+			vec.Nsp.Set(uint64(i))
+		} else {
+			switch t.C.GetValue().(type) {
+			case *plan.Const_Bval:
+				veccol := vec.Col.([]bool)
+				veccol[i] = t.C.GetBval()
+			case *plan.Const_I8Val:
+				veccol := vec.Col.([]int8)
+				veccol[i] = int8(t.C.GetI8Val())
+			case *plan.Const_I16Val:
+				veccol := vec.Col.([]int16)
+				veccol[i] = int16(t.C.GetI16Val())
+			case *plan.Const_I32Val:
+				veccol := vec.Col.([]int32)
+				veccol[i] = t.C.GetI32Val()
+			case *plan.Const_I64Val:
+				veccol := vec.Col.([]int64)
+				veccol[i] = t.C.GetI64Val()
+			case *plan.Const_U8Val:
+				veccol := vec.Col.([]uint8)
+				veccol[i] = uint8(t.C.GetU8Val())
+			case *plan.Const_U16Val:
+				veccol := vec.Col.([]uint16)
+				veccol[i] = uint16(t.C.GetU16Val())
+			case *plan.Const_U32Val:
+				veccol := vec.Col.([]uint32)
+				veccol[i] = t.C.GetU32Val()
+			case *plan.Const_U64Val:
+				veccol := vec.Col.([]uint64)
+				veccol[i] = t.C.GetU64Val()
+			case *plan.Const_Fval:
+				veccol := vec.Col.([]float32)
+				veccol[i] = t.C.GetFval()
+			case *plan.Const_Dval:
+				veccol := vec.Col.([]float64)
+				veccol[i] = t.C.GetDval()
+			case *plan.Const_Dateval:
+				veccol := vec.Col.([]types.Date)
+				veccol[i] = types.Date(t.C.GetDateval())
+			case *plan.Const_Timeval:
+				veccol := vec.Col.([]types.Time)
+				veccol[i] = types.Time(t.C.GetTimeval())
+			case *plan.Const_Datetimeval:
+				veccol := vec.Col.([]types.Datetime)
+				veccol[i] = types.Datetime(t.C.GetDatetimeval())
+			case *plan.Const_Decimal64Val:
+				cd64 := t.C.GetDecimal64Val()
+				d64 := types.Decimal64FromInt64Raw(cd64.A)
+				veccol := vec.Col.([]types.Decimal64)
+				veccol[i] = d64
+			case *plan.Const_Decimal128Val:
+				cd128 := t.C.GetDecimal128Val()
+				d128 := types.Decimal128FromInt64Raw(cd128.A, cd128.B)
+				veccol := vec.Col.([]types.Decimal128)
+				veccol[i] = d128
+			case *plan.Const_Timestampval:
+				pre := expr.Typ.Precision
+				if pre < 0 || pre > 6 {
+					return nil, moerr.NewInternalError(proc.Ctx, "invalid timestamp precision")
+				}
+				veccol := vec.Col.([]types.Timestamp)
+				veccol[i] = types.Timestamp(t.C.GetTimestampval())
+			case *plan.Const_Sval:
+				sval := t.C.GetSval()
+				vector.SetStringAt(vec, i, sval, proc.Mp())
+			case *plan.Const_Defaultval:
+				defaultVal := t.C.GetDefaultval()
+				veccol := vec.Col.([]bool)
+				veccol[i] = defaultVal
+			default:
+				return nil, moerr.NewNYI(ctx, fmt.Sprintf("const expression %v", t.C.GetValue()))
+			}
+			vec.SetIsBin(t.C.IsBin)
+		}
+	}
+	return vec, nil
+}
+
 func getConstVec(ctx context.Context, proc *process.Process, expr *plan.Expr, length int) (*vector.Vector, error) {
 	var vec *vector.Vector
 	t := expr.Expr.(*plan.Expr_C)
@@ -149,6 +237,8 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			vec.Typ = types.T(expr.Typ.GetId()).ToType()
 		}
 		return vec, nil
+	case *plan.Expr_List:
+		return getConstVecInList(proc.Ctx, proc, t.List.List)
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
 		f, err := function.GetFunctionByID(proc.Ctx, overloadId)
@@ -195,7 +285,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		vec.FillDefaultValue()
 		return vec, nil
 	default:
-		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
+		// *plan.Expr_Corr, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
 		return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported eval expr '%v'", t))
 	}
 }
@@ -219,6 +309,8 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 			return r.Vecs[t.Col.ColPos].ToConst(rRow, proc.Mp()), nil
 		}
 		return s.Vecs[t.Col.ColPos], nil
+	case *plan.Expr_List:
+		return getConstVecInList(proc.Ctx, proc, t.List.List)
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
 		f, err := function.GetFunctionByID(proc.Ctx, overloadId)
@@ -398,7 +490,7 @@ func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.P
 		vec.FillDefaultValue()
 		return vec, nil
 	default:
-		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
+		// *plan.Expr_Corr,  *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
 		return nil, moerr.NewNYI(ctx, fmt.Sprintf("unsupported eval expr '%v'", t))
 	}
 }

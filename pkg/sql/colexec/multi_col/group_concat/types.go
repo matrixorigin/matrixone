@@ -4,26 +4,28 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//	http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+package group_concat
 
-package memorytable
+import (
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+)
 
-// Iter represents a generic iterator
-type Iter[T any] interface {
-	First() bool
-	Next() bool
-	Read() (T, error)
-	Close() error
-}
-
-// SeekIter represents a generic seekable iterator
-type SeekIter[T any] interface {
-	Iter[T]
-	Seek(T) bool
+// for example:
+// group_concat(distinct a,b order by a seporator '|')
+// dist: true
+// groupExpr: a,b
+// orderByExpr: a
+// separator: "|"
+type Argument struct {
+	Dist        bool
+	GroupExpr   []*plan.Expr // group Expressions
+	OrderByExpr []*plan.Expr // orderby Expressions, for now we don't care about it
+	Separator   string
 }
