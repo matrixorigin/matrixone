@@ -118,6 +118,14 @@ func NewMockCompilerContext() *MockCompilerContext {
 		pks:    []int{0},
 		outcnt: 25,
 	}
+	tpchSchema["test_idx"] = &Schema{
+		cols: []col{
+			{"n_nationkey", types.T_int32, false, 0, 0},
+			{"n_name", types.T_varchar, false, 25, 0},
+		},
+		pks:    []int{0},
+		outcnt: 25,
+	}
 	tpchSchema["region"] = &Schema{
 		cols: []col{
 			{"r_regionkey", types.T_int32, false, 0, 0},
@@ -251,6 +259,22 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"att_default", types.T_varchar, false, 1024, 0},
 			{"att_comment", types.T_varchar, false, 1024, 0},
 			{"account_id", types.T_uint32, false, 0, 0},
+			{"att_is_hidden", types.T_bool, false, 0, 0},
+		},
+	}
+	moSchema["mo_user"] = &Schema{
+		cols: []col{
+			{"user_id", types.T_int32, false, 50, 0},
+			{"user_host", types.T_varchar, false, 100, 0},
+			{"user_name", types.T_varchar, false, 300, 0},
+			{"authentication_string", types.T_varchar, false, 100, 0},
+			{"status", types.T_varchar, false, 100, 0},
+			{"created_time", types.T_timestamp, false, 0, 0},
+			{"expired_time", types.T_timestamp, false, 0, 0},
+			{"login_type", types.T_varchar, false, 100, 0},
+			{"creator", types.T_int32, false, 50, 0},
+			{"owner", types.T_int32, false, 50, 0},
+			{"default_role", types.T_int32, false, 50, 0},
 		},
 	}
 
@@ -264,8 +288,9 @@ func NewMockCompilerContext() *MockCompilerContext {
 		for tableName, table := range schema {
 			colDefs := make([]*ColDef, 0, len(table.cols))
 
-			for _, col := range table.cols {
+			for idx, col := range table.cols {
 				colDefs = append(colDefs, &ColDef{
+					ColId: uint64(idx),
 					Typ: &plan.Type{
 						Id:          int32(col.Id),
 						NotNullable: !col.Nullable,
@@ -290,9 +315,48 @@ func NewMockCompilerContext() *MockCompilerContext {
 			}
 
 			tableDef := &TableDef{
-				Name: tableName,
-				Cols: colDefs,
+				TableType: catalog.SystemOrdinaryRel,
+				TblId:     uint64(tableIdx),
+				Name:      tableName,
+				Cols:      colDefs,
 			}
+
+			if tableName != "v1" {
+				properties := []*plan.Property{
+					{
+						Key:   catalog.SystemRelAttr_Kind,
+						Value: catalog.SystemOrdinaryRel,
+					},
+					{
+						Key:   catalog.SystemRelAttr_Comment,
+						Value: tableName,
+					},
+				}
+				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+					Def: &plan.TableDef_DefType_Properties{
+						Properties: &plan.PropertiesDef{
+							Properties: properties,
+						},
+					},
+				})
+			}
+
+			if tableName == "test_idx" {
+				testField := &plan.Field{
+					Parts: []string{"n_nationkey"},
+				}
+				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+					Def: &plan.TableDef_DefType_UIdx{
+						UIdx: &plan.UniqueIndexDef{
+							IndexNames:  []string{"idx1"},
+							TableNames:  []string{"nation"},
+							Fields:      []*plan.Field{testField},
+							TableExists: []bool{false},
+						},
+					},
+				})
+			}
+
 			if tableName == "v1" {
 				tableDef.TableType = catalog.SystemViewRel
 				viewData, _ := json.Marshal(ViewData{

@@ -14,20 +14,19 @@
 
 package memorytable
 
-type Rows[
-	K Ordered[K],
-	V any,
-] interface {
-	Copy() Rows[K, V]
-	Get(*KVPair[K, V]) (*KVPair[K, V], bool)
-	Set(*KVPair[K, V]) (*KVPair[K, V], bool)
-	Delete(*KVPair[K, V])
-	Iter() RowsIter[K, V]
-}
+import (
+	"encoding/gob"
+	"reflect"
+	"sync"
+)
 
-type RowsIter[
-	K Ordered[K],
-	V any,
-] interface {
-	SeekIter[*KVPair[K, V]]
+var gobRegistered sync.Map
+
+func gobRegister(v any) {
+	t := reflect.TypeOf(v)
+	if _, ok := gobRegistered.Load(t); ok {
+		return
+	}
+	gob.Register(v)
+	gobRegistered.Store(t, struct{}{})
 }

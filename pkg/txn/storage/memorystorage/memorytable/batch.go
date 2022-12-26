@@ -43,7 +43,7 @@ func (t *Table[K, V, R]) NewBatch(tx *Transaction) (*Batch[K, V, R], error) {
 	return &Batch[K, V, R]{
 		txTable:   txTable,
 		initState: initState,
-		state:     initState.cloneWithLogs(),
+		state:     initState.clone(),
 	}, nil
 }
 
@@ -69,19 +69,20 @@ func (b *Batch[K, V, R]) Insert(row R) (err error) {
 	}()
 
 	key := row.Key()
-	pair := &KVPair[K, V]{
+	pair := KVPair[K, V]{
 		Key: key,
 	}
 
-	_, ok := b.state.rows.Get(pair)
+	_, ok := b.state.kv.Get(pair)
 	if ok {
 		return moerr.NewDuplicateNoCtx()
 	}
 
+	pair.KVValue = new(KVValue[K, V])
 	pair.ID = atomic.AddInt64(&nextKVPairID, 1)
 	pair.Value = row.Value()
 	pair.Indexes = row.Indexes()
-	b.state.setPair(pair, nil)
+	b.state.setPair(pair, KVPair[K, V]{})
 
 	return nil
 }
@@ -98,15 +99,16 @@ func (b *Batch[K, V, R]) Update(row R) (err error) {
 	}()
 
 	key := row.Key()
-	pair := &KVPair[K, V]{
+	pair := KVPair[K, V]{
 		Key: key,
 	}
 
-	oldPair, ok := b.state.rows.Get(pair)
+	oldPair, ok := b.state.kv.Get(pair)
 	if !ok {
 		return sql.ErrNoRows
 	}
 
+	pair.KVValue = new(KVValue[K, V])
 	pair.ID = atomic.AddInt64(&nextKVPairID, 1)
 	pair.Value = row.Value()
 	pair.Indexes = row.Indexes()
@@ -126,11 +128,11 @@ func (b *Batch[K, V, R]) Delete(key K) (err error) {
 		}
 	}()
 
-	pivot := &KVPair[K, V]{
+	pivot := KVPair[K, V]{
 		Key: key,
 	}
 
-	oldPair, ok := b.state.rows.Get(pivot)
+	oldPair, ok := b.state.kv.Get(pivot)
 	if !ok {
 		return sql.ErrNoRows
 	}
@@ -152,13 +154,14 @@ func (b *Batch[K, V, R]) Upsert(row R) (err error) {
 	}()
 
 	key := row.Key()
-	pair := &KVPair[K, V]{
+	pair := KVPair[K, V]{
 		Key: key,
 	}
 
-	oldPair, ok := b.state.rows.Get(pair)
+	oldPair, ok := b.state.kv.Get(pair)
 	if !ok {
 		// insert
+		pair.KVValue = new(KVValue[K, V])
 		pair.ID = atomic.AddInt64(&nextKVPairID, 1)
 		pair.Value = row.Value()
 		pair.Indexes = row.Indexes()
@@ -167,6 +170,7 @@ func (b *Batch[K, V, R]) Upsert(row R) (err error) {
 	}
 
 	// update
+	pair.KVValue = new(KVValue[K, V])
 	pair.ID = atomic.AddInt64(&nextKVPairID, 1)
 	pair.Value = row.Value()
 	pair.Indexes = row.Indexes()
@@ -186,10 +190,10 @@ func (b *Batch[K, V, R]) Get(key K) (value V, err error) {
 		}
 	}()
 
-	pair := &KVPair[K, V]{
+	pair := KVPair[K, V]{
 		Key: key,
 	}
-	pair, ok := b.state.rows.Get(pair)
+	pair, ok := b.state.kv.Get(pair)
 	if !ok {
 		err = sql.ErrNoRows
 		return
