@@ -440,7 +440,7 @@ func TestCreateSegment(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
-	_, err = rel.CreateNonAppendableSegment()
+	_, err = rel.CreateNonAppendableSegment(false)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 

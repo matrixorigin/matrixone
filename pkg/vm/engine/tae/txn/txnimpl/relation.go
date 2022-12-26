@@ -162,6 +162,21 @@ func (h *txnRelation) Append(data *containers.Batch) error {
 	return h.Txn.GetStore().Append(h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
 }
 
+func (h *txnRelation) AddBlksWithMetaLoc(
+	pkVecs []containers.Vector,
+	file string,
+	metaLocs []string,
+	flag int32) error {
+	return h.Txn.GetStore().AddBlksWithMetaLoc(
+		h.table.entry.GetDB().ID,
+		h.table.entry.GetID(),
+		pkVecs,
+		file,
+		metaLocs,
+		flag,
+	)
+}
+
 func (h *txnRelation) GetSegment(id uint64) (seg handle.Segment, err error) {
 	fp := h.table.entry.AsCommonID()
 	fp.SegmentID = id
@@ -172,8 +187,8 @@ func (h *txnRelation) CreateSegment(is1PC bool) (seg handle.Segment, err error) 
 	return h.Txn.GetStore().CreateSegment(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
 }
 
-func (h *txnRelation) CreateNonAppendableSegment() (seg handle.Segment, err error) {
-	return h.Txn.GetStore().CreateNonAppendableSegment(h.table.entry.GetDB().ID, h.table.entry.GetID())
+func (h *txnRelation) CreateNonAppendableSegment(is1PC bool) (seg handle.Segment, err error) {
+	return h.Txn.GetStore().CreateNonAppendableSegment(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
 }
 
 func (h *txnRelation) SoftDeleteSegment(id uint64) (err error) {

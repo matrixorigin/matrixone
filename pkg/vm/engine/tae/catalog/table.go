@@ -39,9 +39,10 @@ func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], ts t
 
 type TableEntry struct {
 	*TableBaseEntry
-	db        *DBEntry
-	schema    *Schema
-	entries   map[uint64]*common.GenericDLNode[*SegmentEntry]
+	db      *DBEntry
+	schema  *Schema
+	entries map[uint64]*common.GenericDLNode[*SegmentEntry]
+	//link.head and link.tail is nil when create tableEntry object.
 	link      *common.GenericSortedDList[*SegmentEntry]
 	tableData data.Table
 	rows      atomic.Uint64
@@ -267,6 +268,20 @@ func (entry *TableEntry) LastAppendableSegmemt() (seg *SegmentEntry) {
 		itSeg := it.Get().GetPayload()
 		dropped := itSeg.HasDropCommitted()
 		if itSeg.IsAppendable() && !dropped {
+			seg = itSeg
+			break
+		}
+		it.Next()
+	}
+	return seg
+}
+
+func (entry *TableEntry) LastNonAppendableSegmemt() (seg *SegmentEntry) {
+	it := entry.MakeSegmentIt(false)
+	for it.Valid() {
+		itSeg := it.Get().GetPayload()
+		dropped := itSeg.HasDropCommitted()
+		if !itSeg.IsAppendable() && !dropped {
 			seg = itSeg
 			break
 		}
