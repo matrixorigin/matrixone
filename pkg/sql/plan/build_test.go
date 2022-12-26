@@ -43,7 +43,8 @@ func TestSingleSQL(t *testing.T) {
 	// }
 	// t.Logf("%+v", string(getJSON(stmts[0], t)))
 	// sql := "SELECT UNIX_TIMESTAMP('2000-01-01 12:00:00.159')"
-	sql := "select * from (values row(1,1), row(2,2)) a(c1,c2);"
+	sql := "select * from (values row(1,1), row(2,2), row(3,3)) a(c1,c2);"
+	// sql := "select * from (select 1, 2) a(c1,c2);"
 
 	mock := NewMockOptimizer()
 	logicPlan, err := runOneStmt(mock, t, sql)

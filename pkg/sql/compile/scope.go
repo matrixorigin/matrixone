@@ -15,6 +15,8 @@
 package compile
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -462,7 +464,7 @@ func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRe
 
 		// IF const run.
 		if srcScope.DataSource.Bat != nil {
-			newScope.DataSource.Bat = constructValueScanBatch()
+			newScope.DataSource.Bat, _ = constructValueScanBatch(context.TODO(), nil, nil)
 		}
 	}
 

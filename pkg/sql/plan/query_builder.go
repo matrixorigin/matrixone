@@ -645,10 +645,44 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 	case plan.Node_VALUE_SCAN:
 		// VALUE_SCAN always have one column now
-		node.ProjectList = append(node.ProjectList, &plan.Expr{
-			Typ:  &plan.Type{Id: int32(types.T_int64)},
-			Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_I64Val{I64Val: 0}}},
-		})
+		if node.TableDef == nil { // like select 1,2
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ:  &plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_I64Val{I64Val: 0}}},
+			})
+		} else {
+			internalRemapping := &ColRefRemapping{
+				globalToLocal: make(map[[2]int32][2]int32),
+			}
+
+			tag := node.BindingTags[0]
+			for i := range node.TableDef.Cols {
+				globalRef := [2]int32{tag, int32(i)}
+				if colRefCnt[globalRef] == 0 {
+					continue
+				}
+				internalRemapping.addColRef(globalRef)
+			}
+
+			for i, col := range node.TableDef.Cols {
+				if colRefCnt[internalRemapping.localToGlobal[i]] == 0 {
+					continue
+				}
+
+				remapping.addColRef(internalRemapping.localToGlobal[i])
+
+				node.ProjectList = append(node.ProjectList, &plan.Expr{
+					Typ: col.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: int32(i),
+							Name:   col.Name,
+						},
+					},
+				})
+			}
+		}
 
 	default:
 		return nil, moerr.NewInternalError(builder.GetContext(), "unsupport node type")
@@ -698,7 +732,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			if sltClause, ok := sltStmt.Select.(*tree.SelectClause); ok {
 				sltClause.Distinct = true
 				return builder.buildSelect(sltStmt, ctx, isRoot)
-			} else {
+			} else if _, ok := sltStmt.Select.(*tree.ValuesClause); ok {
 				// rewrite sltStmt to select distinct * from (sltStmt) a
 				tmpSltStmt := &tree.Select{
 					Select: &tree.SelectClause{
@@ -1113,6 +1147,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var havingList []*plan.Expr
 	var selectList tree.SelectExprs
 	var resultLen int
+	var havingBinder *HavingBinder
 
 	if clause == nil {
 		rowCount := len(valuesClause.Rows)
@@ -1120,20 +1155,23 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
 		}
 		colCount := len(valuesClause.Rows[0])
-		ctx.hasSingleRow = len(valuesClause.Rows) == 1
+		ctx.hasSingleRow = rowCount == 1
 		proc := builder.compCtx.GetProcess()
 		emptyBatch := batch.NewWithSize(0)
 		emptyBatch.Zs = []int64{1}
-		projectionBinder := NewProjectionBinder(builder, ctx, nil)
 		rowSetData := &plan.RowsetData{
-			Schema: &plan.TableDef{},
-			Cols:   make([]*plan.ColData, colCount),
+			Cols: make([]*plan.ColData, colCount),
 		}
+		tableDef := &plan.TableDef{
+			TblId: 0,
+			Name:  "",
+			Cols:  make([]*plan.ColDef, colCount),
+		}
+		ctx.binder = NewWhereBinder(builder, ctx)
 		for i := 0; i < colCount; i++ {
-			ctx.headings = append(ctx.headings, fmt.Sprintf("column_%d", i))
-			rowSetData.Cols[i] = make([]*plan.Expr, rowCount)
+			rows := make([]*plan.Expr, rowCount)
 			for j := 0; j < rowCount; j++ {
-				planExpr, err := projectionBinder.BindExpr(valuesClause.Rows[j][i], 0, true)
+				planExpr, err := ctx.binder.BindExpr(valuesClause.Rows[j][i], 0, true)
 				if err != nil {
 					return 0, err
 				}
@@ -1141,18 +1179,47 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				if err != nil {
 					return 0, err
 				}
-			}
-			// ctx.projects = append(ctx.projects, )
-		}
-		// todo need check
+				rows[j] = colExpr
 
+				if j == 0 {
+					colName := fmt.Sprintf("column_%d", i) // like MySQL
+					selectList = append(selectList, tree.SelectExpr{
+						Expr: &tree.UnresolvedName{
+							NumParts: 1,
+							Star:     false,
+							Parts:    [4]string{colName, "", "", ""},
+						},
+						As: tree.UnrestrictedIdentifier(colName),
+					})
+					ctx.headings = append(ctx.headings, colName)
+					tableDef.Cols[i] = &plan.ColDef{
+						ColId: 0,
+						Name:  colName,
+						Typ:   colExpr.Typ,
+					}
+				} else {
+					if !isSameColumnType(tableDef.Cols[i].Typ, colExpr.Typ) {
+						return 0, moerr.NewInternalError(builder.GetContext(), "col of values should have the same type")
+					}
+				}
+			}
+			rowSetData.Cols[i] = &plan.ColData{
+				Data: rows,
+			}
+		}
 		nodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_VALUE_SCAN,
-			RowsetData: &plan.RowsetData{
-				Schema: &plan.TableDef{},
-				Cols:   colsDatas,
-			},
+			NodeType:    plan.Node_VALUE_SCAN,
+			RowsetData:  rowSetData,
+			TableDef:    tableDef,
+			BindingTags: []int32{builder.genNewTag()},
 		}, ctx)
+
+		err = builder.addBinding(nodeID, tree.AliasClause{
+			Alias: "_ValueScan",
+		}, ctx)
+		if err != nil {
+			return 0, err
+		}
 	} else {
 		// build FROM clause
 		nodeID, err = builder.buildFrom(clause.From.Tables, ctx)
@@ -1296,7 +1363,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 
 		// bind HAVING clause
-		havingBinder := NewHavingBinder(builder, ctx)
+		havingBinder = NewHavingBinder(builder, ctx)
 		if clause.Having != nil {
 			ctx.binder = havingBinder
 			havingList, err = splitAndBindCondition(clause.Having.Expr, ctx)
@@ -1305,38 +1372,38 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 		}
 
-		// bind SELECT clause (Projection List)
-		projectionBinder = NewProjectionBinder(builder, ctx, havingBinder)
-		ctx.binder = projectionBinder
-		for i, selectExpr := range selectList {
-			astExpr, err := ctx.qualifyColumnNames(selectExpr.Expr, nil, false)
-			if err != nil {
-				return 0, err
-			}
-
-			expr, err := projectionBinder.BindExpr(astExpr, 0, true)
-			if err != nil {
-				return 0, err
-			}
-
-			builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = tree.String(astExpr, dialect.MYSQL)
-
-			alias := string(selectExpr.As)
-			if len(alias) > 0 {
-				ctx.aliasMap[alias] = int32(len(ctx.projects))
-			}
-			ctx.projects = append(ctx.projects, expr)
-		}
-
-		resultLen = len(ctx.projects)
-		for i, proj := range ctx.projects {
-			exprStr := proj.String()
-			if _, ok := ctx.projectByExpr[exprStr]; !ok {
-				ctx.projectByExpr[exprStr] = int32(i)
-			}
-		}
-
 		ctx.isDistinct = clause.Distinct
+	}
+
+	// bind SELECT clause (Projection List)
+	projectionBinder = NewProjectionBinder(builder, ctx, havingBinder)
+	ctx.binder = projectionBinder
+	for i, selectExpr := range selectList {
+		astExpr, err := ctx.qualifyColumnNames(selectExpr.Expr, nil, false)
+		if err != nil {
+			return 0, err
+		}
+
+		expr, err := projectionBinder.BindExpr(astExpr, 0, true)
+		if err != nil {
+			return 0, err
+		}
+
+		builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = tree.String(astExpr, dialect.MYSQL)
+
+		alias := string(selectExpr.As)
+		if len(alias) > 0 {
+			ctx.aliasMap[alias] = int32(len(ctx.projects))
+		}
+		ctx.projects = append(ctx.projects, expr)
+	}
+
+	resultLen = len(ctx.projects)
+	for i, proj := range ctx.projects {
+		exprStr := proj.String()
+		if _, ok := ctx.projectByExpr[exprStr]; !ok {
+			ctx.projectByExpr[exprStr] = int32(i)
+		}
 	}
 
 	// bind ORDER BY clause
@@ -1811,16 +1878,15 @@ func (builder *QueryBuilder) genNewTag() int32 {
 func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ctx *BindContext) error {
 	node := builder.qry.Nodes[nodeID]
 
-	if node.NodeType == plan.Node_VALUE_SCAN {
-		return nil
-	}
-
 	var cols []string
 	var types []*plan.Type
 	var binding *Binding
 	var table string
 
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN {
+	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN || node.NodeType == plan.Node_VALUE_SCAN {
+		if node.NodeType == plan.Node_VALUE_SCAN && node.TableDef == nil {
+			return nil
+		}
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return moerr.NewSyntaxError(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
 		}
