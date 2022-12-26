@@ -1740,7 +1740,7 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *p
 }
 
 func doShowTableValues(ses *Session, stmt *tree.ShowTableValues, proc *process.Process) error {
-	var err error = nil
+	var err error
 
 	//Set return columns
 	col1 := new(MysqlColumn)
