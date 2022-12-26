@@ -4461,12 +4461,12 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 
 	//dropping the cluster table needs double check
 	//in the build plan
-	switch stmt.(type) {
-	case *tree.DropTable:
-		if !ok {
-			return true, nil
-		}
-	}
+	//switch stmt.(type) {
+	//case *tree.DropTable:
+	//	if !ok {
+	//		return true, nil
+	//	}
+	//}
 	return ok, nil
 }
 
@@ -4478,8 +4478,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 	stmt tree.Statement,
 	p *plan2.Plan) (bool, error) {
 	priv := determinePrivilegeSetOfStatement(stmt)
-	if priv.objectType() == objectTypeTable ||
-		priv.objectType() == objectTypeDatabase {
+	if priv.objectType() == objectTypeTable {
 		arr := extractPrivilegeTipsFromPlan(p)
 		if len(arr) == 0 {
 			return true, nil
