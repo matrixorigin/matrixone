@@ -5919,10 +5919,10 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-|   BINARY simple_expr %prec UNARY
+|   BINARY '(' expression ')'
     {
         locale := ""
-        $$ = tree.NewCastExpr($2, &tree.T{
+        $$ = tree.NewCastExpr($3, &tree.T{
             InternalType: tree.InternalType{
                 Family: tree.StringFamily,
                 FamilyString: "BINARY",
