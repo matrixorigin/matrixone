@@ -4431,6 +4431,37 @@ func getRoleSetThatRoleGrantedToWGO(ctx context.Context, bh BackgroundExec, role
 	return rset, err
 }
 
+// checkPrivilegeOfDropClusterTable verifies the sys account can drop the cluster table
+func checkPrivilegeOfDropClusterTable(ctx context.Context, ses *Session, stmt tree.Statement) (ret bool, err error) {
+	var p *plan.Plan
+	ses2 := NewBackgroundSession(ctx, ses.GetMemPool(), ses.GetParameterUnit(), gSysVariables)
+	ses2.MakeProfile()
+	defer ses2.Close()
+	p, err = plan2.BuildPlan(ses2.GetTxnCompileCtx(), stmt)
+	if err != nil {
+		goto handleFailed
+	}
+	if p.GetDdl() != nil && p.GetDdl().GetDropTable() != nil {
+		dropTable := p.GetDdl().GetDropTable()
+		if isClusterTable(dropTable.GetDatabase(), dropTable.GetTable()) &&
+			dropTable.GetClusterTable().GetIsClusterTable() {
+			ret = true
+			err = nil
+		}
+	}
+	err = ses2.TxnCommit()
+	if err != nil {
+		logErrorf(ses2.GetConciseProfile(), "background session commit txn failed.", err)
+	}
+	return ret, err
+handleFailed:
+	err = ses2.TxnRollback()
+	if err != nil {
+		logErrorf(ses2.GetConciseProfile(), "background session rollback txn failed.", err)
+	}
+	return false, err
+}
+
 // authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase decides the user has the privilege of executing the statement with object type account
 func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx context.Context, ses *Session, stmt tree.Statement) (bool, error) {
 	var err error
@@ -4442,6 +4473,14 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	ok, err = determineUserHasPrivilegeSet(ctx, ses, priv, stmt)
 	if err != nil {
 		return false, err
+	}
+
+	//double check privilege of drop table
+	if !ok && ses.GetFromRealUser() && ses.GetTenantInfo() != nil && ses.GetTenantInfo().IsSysTenant() {
+		switch stmt.(type) {
+		case *tree.DropTable:
+			return checkPrivilegeOfDropClusterTable(ctx, ses, stmt)
+		}
 	}
 
 	//for GrantRole statement, check with_grant_option
@@ -4459,16 +4498,6 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	//for Create User statement with default role.
 	//TODO:
 
-	//dropping the cluster table needs double check
-	//in the build plan
-	if ses.GetFromRealUser() && ses.GetTenantInfo() != nil && ses.GetTenantInfo().IsSysTenant() {
-		switch stmt.(type) {
-		case *tree.DropTable:
-			if !ok {
-				return true, nil
-			}
-		}
-	}
 	return ok, nil
 }
 
@@ -4491,16 +4520,6 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 			return false, err
 		}
 		return ok, nil
-	} else if priv.objectType() == objectTypeDatabase {
-		if p.GetDdl() != nil && p.GetDdl().GetDropTable() != nil {
-			dropTable := p.GetDdl().GetDropTable()
-			if ses.GetFromRealUser() && ses.GetTenantInfo() != nil && ses.GetTenantInfo().IsSysTenant() {
-				if isClusterTable(dropTable.GetDatabase(), dropTable.GetTable()) &&
-					dropTable.GetClusterTable().GetIsClusterTable() {
-					return true, nil
-				}
-			}
-		}
 	}
 	return true, nil
 }
