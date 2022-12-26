@@ -138,10 +138,13 @@ true	false
 true	true
 false	false
 select a,b from t1 where a not in (0,2);
-invalid input: cannot cast 2 to boolean
+a    b
+true    false
+true    true
 select distinct t.a from (select * from t1) t where a not in (2) order by t.a asc;
 a
 false
+true
 select a and b from t1 where exists (select a from t1 where a is null) order by a desc;
 a and b
 false

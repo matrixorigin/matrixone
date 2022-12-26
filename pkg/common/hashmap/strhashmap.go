@@ -127,6 +127,8 @@ func (m *StrHashMap) InsertValue(val any) (bool, error) {
 		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
 	case types.Uuid:
 		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
+	case string:
+		m.keys[0] = append(m.keys[0], []byte(v)...)
 	}
 	if l := len(m.keys[0]); l < 16 {
 		m.keys[0] = append(m.keys[0], hashtable.StrKeyPadding[l:]...)

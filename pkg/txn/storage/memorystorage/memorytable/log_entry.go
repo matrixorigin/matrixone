@@ -20,10 +20,10 @@ type logEntry[
 	K Ordered[K],
 	V any,
 ] struct {
-	serial  int64
-	key     K
-	pair    *KVPair[K, V]
-	oldPair *KVPair[K, V]
+	Serial  int64
+	Key     K
+	Pair    KVPair[K, V]
+	OldPair KVPair[K, V]
 }
 
 var nextLogSerial = int64(1 << 48)
@@ -32,20 +32,20 @@ func compareLogEntry[
 	K Ordered[K],
 	V any,
 ](a, b *logEntry[K, V]) bool {
-	if a.key.Less(b.key) {
+	if a.Key.Less(b.Key) {
 		return true
 	}
-	if b.key.Less(a.key) {
+	if b.Key.Less(a.Key) {
 		return false
 	}
-	return a.serial < b.serial
+	return a.Serial < b.Serial
 }
 
 func (l *logEntry[K, V]) String() string {
 	return fmt.Sprintf(
 		"log: serial %v, pair %v, old pair %v",
-		l.serial,
-		l.pair,
-		l.oldPair,
+		l.Serial,
+		l.Pair,
+		l.OldPair,
 	)
 }
