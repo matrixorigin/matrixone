@@ -4477,9 +4477,13 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 
 	//double check privilege of drop table
 	if !ok && ses.GetFromRealUser() && ses.GetTenantInfo() != nil && ses.GetTenantInfo().IsSysTenant() {
-		switch stmt.(type) {
+		switch dropTable := stmt.(type) {
 		case *tree.DropTable:
-			return checkPrivilegeOfDropClusterTable(ctx, ses, stmt)
+			dbName := string(dropTable.Names[0].SchemaName)
+			if len(dbName) == 0 {
+				dbName = ses.GetDatabaseName()
+			}
+			return isClusterTable(dbName, string(dropTable.Names[0].ObjectName)), nil
 		}
 	}
 
