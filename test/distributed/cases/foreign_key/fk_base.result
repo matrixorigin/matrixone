@@ -1,0 +1,12 @@
+create table f1(a int primary key, b int);
+create table c1 (a int, b int, foreign key f_a(a) references f1(c));
+internal error: column 'c' no exists in table 'f1'
+create table c1 (a int, b int, foreign key f_a(a) references f1(b));
+internal error: reference column 'b' is not unique constraint(Unique index or Primary Key)
+create table c1 (a int, b int, foreign key f_a(a) references f1(a));
+select * from f1;
+a	b
+select * from c1;
+a	b
+drop table f1;
+internal error: can not drop table 'f1' referenced by some foreign key constraint

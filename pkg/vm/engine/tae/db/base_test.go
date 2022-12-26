@@ -205,6 +205,14 @@ func (e *testEngine) globalCheckpoint(
 		defer e.DB.BGCheckpointRunner.EnableCheckpoint()
 		e.DB.BGCheckpointRunner.CleanPenddingCheckpoint()
 	}
+	if e.DB.BGCheckpointRunner.GetPenddingIncrementalCount() == 0 {
+		testutils.WaitExpect(4000, func() bool {
+			flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, endTs, false)
+			return flushed
+		})
+		flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, endTs, true)
+		assert.True(e.t, flushed)
+	}
 	err := e.DB.BGCheckpointRunner.ForceGlobalCheckpoint(endTs, versionInterval)
 	assert.NoError(e.t, err)
 	return nil
