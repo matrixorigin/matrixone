@@ -99,9 +99,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].Typ)
+			rbat.Vecs[i] = vector.PreAllocType(bat.Vecs[rp.Pos].Typ, 8192, 8192, proc.Mp())
 		} else {
-			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].Typ)
+			rbat.Vecs[i] = vector.PreAllocType(ctr.bat.Vecs[rp.Pos].Typ, 8192, 8192, proc.Mp())
 		}
 	}
 
