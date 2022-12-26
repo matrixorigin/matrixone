@@ -4461,12 +4461,14 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 
 	//dropping the cluster table needs double check
 	//in the build plan
-	//switch stmt.(type) {
-	//case *tree.DropTable:
-	//	if !ok {
-	//		return true, nil
-	//	}
-	//}
+	if ses.GetFromRealUser() && ses.GetTenantInfo() != nil && ses.GetTenantInfo().IsSysTenant() {
+		switch stmt.(type) {
+		case *tree.DropTable:
+			if !ok {
+				return true, nil
+			}
+		}
+	}
 	return ok, nil
 }
 
@@ -4489,6 +4491,16 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 			return false, err
 		}
 		return ok, nil
+	} else if priv.objectType() == objectTypeDatabase {
+		if p.GetDdl() != nil && p.GetDdl().GetDropTable() != nil {
+			dropTable := p.GetDdl().GetDropTable()
+			if ses.GetFromRealUser() && ses.GetTenantInfo() != nil && ses.GetTenantInfo().IsSysTenant() {
+				if isClusterTable(dropTable.GetDatabase(), dropTable.GetTable()) &&
+					dropTable.GetClusterTable().GetIsClusterTable() {
+					return true, nil
+				}
+			}
+		}
 	}
 	return true, nil
 }
