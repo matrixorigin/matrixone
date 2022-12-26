@@ -97,42 +97,42 @@ func (h *Handle) HandleCommit(
 	if ok {
 		for _, e := range txnCtx.req {
 			switch req := e.(type) {
-			case db.CreateDatabaseReq:
+			case *db.CreateDatabaseReq:
 				err = h.HandleCreateDatabase(
 					ctx,
 					meta,
 					req,
 					&db.CreateDatabaseResp{},
 				)
-			case db.CreateRelationReq:
+			case *db.CreateRelationReq:
 				err = h.HandleCreateRelation(
 					ctx,
 					meta,
 					req,
 					&db.CreateRelationResp{},
 				)
-			case db.DropDatabaseReq:
+			case *db.DropDatabaseReq:
 				err = h.HandleDropDatabase(
 					ctx,
 					meta,
 					req,
 					&db.DropDatabaseResp{},
 				)
-			case db.DropOrTruncateRelationReq:
+			case *db.DropOrTruncateRelationReq:
 				err = h.HandleDropOrTruncateRelation(
 					ctx,
 					meta,
 					req,
 					&db.DropOrTruncateRelationResp{},
 				)
-			case db.UpdateConstraintReq:
+			case *db.UpdateConstraintReq:
 				err = h.HandleUpdateConstraint(
 					ctx,
 					meta,
 					req,
 					&db.UpdateConstraintResp{},
 				)
-			case db.WriteReq:
+			case *db.WriteReq:
 				err = h.HandleWrite(
 					ctx,
 					meta,
@@ -212,42 +212,42 @@ func (h *Handle) HandlePrepare(
 		//handle pre-commit write for 2PC
 		for _, e := range txnCtx.req {
 			switch req := e.(type) {
-			case db.CreateDatabaseReq:
+			case *db.CreateDatabaseReq:
 				err = h.HandleCreateDatabase(
 					ctx,
 					meta,
 					req,
 					&db.CreateDatabaseResp{},
 				)
-			case db.CreateRelationReq:
+			case *db.CreateRelationReq:
 				err = h.HandleCreateRelation(
 					ctx,
 					meta,
 					req,
 					&db.CreateRelationResp{},
 				)
-			case db.DropDatabaseReq:
+			case *db.DropDatabaseReq:
 				err = h.HandleDropDatabase(
 					ctx,
 					meta,
 					req,
 					&db.DropDatabaseResp{},
 				)
-			case db.DropOrTruncateRelationReq:
+			case *db.DropOrTruncateRelationReq:
 				err = h.HandleDropOrTruncateRelation(
 					ctx,
 					meta,
 					req,
 					&db.DropOrTruncateRelationResp{},
 				)
-			case db.UpdateConstraintReq:
+			case *db.UpdateConstraintReq:
 				err = h.HandleUpdateConstraint(
 					ctx,
 					meta,
 					req,
 					&db.UpdateConstraintResp{},
 				)
-			case db.WriteReq:
+			case *db.WriteReq:
 				err = h.HandleWrite(
 					ctx,
 					meta,
@@ -422,9 +422,9 @@ func (h *Handle) EvaluateTxnRequest(
 	txnCtx := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
 	for _, e := range txnCtx.req {
-		if r, ok := e.(db.WriteReq); ok {
+		if r, ok := e.(*db.WriteReq); ok {
 			if r.FileName != "" && r.Type == db.EntryInsert {
-				return h.loadPksFromFS(ctx, meta, &r)
+				return h.loadPksFromFS(ctx, meta, r)
 			}
 		}
 	}
@@ -467,7 +467,7 @@ func (h *Handle) HandlePreCommitWrite(
 		switch cmds := e.(type) {
 		case []catalog.CreateDatabase:
 			for _, cmd := range cmds {
-				req := db.CreateDatabaseReq{
+				req := &db.CreateDatabaseReq{
 					Name:       cmd.Name,
 					CreateSql:  cmd.CreateSql,
 					DatabaseId: cmd.DatabaseId,
@@ -484,7 +484,7 @@ func (h *Handle) HandlePreCommitWrite(
 			}
 		case []catalog.CreateTable:
 			for _, cmd := range cmds {
-				req := db.CreateRelationReq{
+				req := &db.CreateRelationReq{
 					AccessInfo: db.AccessInfo{
 						UserID:    cmd.Creator,
 						RoleID:    cmd.Owner,
@@ -503,7 +503,7 @@ func (h *Handle) HandlePreCommitWrite(
 			}
 		case []catalog.UpdateConstraint:
 			for _, cmd := range cmds {
-				req := db.UpdateConstraintReq{
+				req := &db.UpdateConstraintReq{
 					TableName:    cmd.TableName,
 					TableId:      cmd.TableId,
 					DatabaseName: cmd.DatabaseName,
@@ -517,7 +517,7 @@ func (h *Handle) HandlePreCommitWrite(
 			}
 		case []catalog.DropDatabase:
 			for _, cmd := range cmds {
-				req := db.DropDatabaseReq{
+				req := &db.DropDatabaseReq{
 					Name: cmd.Name,
 					ID:   cmd.Id,
 				}
@@ -528,7 +528,7 @@ func (h *Handle) HandlePreCommitWrite(
 			}
 		case []catalog.DropOrTruncateTable:
 			for _, cmd := range cmds {
-				req := db.DropOrTruncateRelationReq{
+				req := &db.DropOrTruncateRelationReq{
 					IsDrop:       cmd.IsDrop,
 					Name:         cmd.Name,
 					ID:           cmd.Id,
@@ -548,7 +548,7 @@ func (h *Handle) HandlePreCommitWrite(
 			if err != nil {
 				panic(err)
 			}
-			req := db.WriteReq{
+			req := &db.WriteReq{
 				Type:       db.EntryType(pe.EntryType),
 				DatabaseId: pe.GetDatabaseId(),
 				TableID:    pe.GetTableId(),
@@ -560,19 +560,14 @@ func (h *Handle) HandlePreCommitWrite(
 			}
 			if req.FileName != "" {
 				rows := catalog.GenRows(req.Batch)
-				if req.Type == db.EntryInsert {
-					//req.Blks = make([]uint64, len(rows))
-					req.MetaLocs = make([]string, len(rows))
-				} else {
-					req.DeltaLocs = make([]string, len(rows))
-				}
-				for i, row := range rows {
+				for _, row := range rows {
 					if req.Type == db.EntryInsert {
 						//req.Blks[i] = row[catalog.BLOCKMETA_ID_ON_FS_IDX].(uint64)
 						//req.MetaLocs[i] = string(row[catalog.BLOCKMETA_METALOC_ON_FS_IDX].([]byte))
-						req.MetaLocs[i] = string(row[0].([]byte))
+						req.MetaLocs = append(req.MetaLocs, string(row[0].([]byte)))
 					} else {
-						req.DeltaLocs[i] = string(row[0].([]byte))
+						//req.DeltaLocs[i] = string(row[0].([]byte))
+						req.DeltaLocs = append(req.DeltaLocs, string(row[0].([]byte)))
 					}
 				}
 			}
@@ -593,7 +588,7 @@ func (h *Handle) HandlePreCommitWrite(
 func (h *Handle) HandleCreateDatabase(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req db.CreateDatabaseReq,
+	req *db.CreateDatabaseReq,
 	resp *db.CreateDatabaseResp) (err error) {
 	_, span := trace.Start(ctx, "HandleCreateDatabase")
 	defer span.End()
@@ -623,7 +618,7 @@ func (h *Handle) HandleCreateDatabase(
 func (h *Handle) HandleDropDatabase(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req db.DropDatabaseReq,
+	req *db.DropDatabaseReq,
 	resp *db.DropDatabaseResp) (err error) {
 
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
@@ -647,7 +642,7 @@ func (h *Handle) HandleDropDatabase(
 func (h *Handle) HandleCreateRelation(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req db.CreateRelationReq,
+	req *db.CreateRelationReq,
 	resp *db.CreateRelationResp) (err error) {
 
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
@@ -681,7 +676,7 @@ func (h *Handle) HandleCreateRelation(
 func (h *Handle) HandleDropOrTruncateRelation(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req db.DropOrTruncateRelationReq,
+	req *db.DropOrTruncateRelationReq,
 	resp *db.DropOrTruncateRelationResp) (err error) {
 
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
@@ -715,7 +710,7 @@ func (h *Handle) HandleDropOrTruncateRelation(
 func (h *Handle) HandleWrite(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req db.WriteReq,
+	req *db.WriteReq,
 	resp *db.WriteResp) (err error) {
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
@@ -774,7 +769,7 @@ func (h *Handle) HandleWrite(
 func (h *Handle) HandleUpdateConstraint(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req db.UpdateConstraintReq,
+	req *db.UpdateConstraintReq,
 	resp *db.UpdateConstraintResp) (err error) {
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
