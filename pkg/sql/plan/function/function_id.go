@@ -192,7 +192,8 @@ const (
 	STDDEV_SAMPLE // STDDEV_SAMPLE
 	SUBSTR        // SUBSTR
 	SUM           // SUM
-	TAN           // TAN
+	GROUP_CONCAT
+	TAN // TAN
 	TO_DATE
 	STR_TO_DATE
 	TO_INTERVAL // TO_INTERVAL
@@ -335,6 +336,7 @@ var functionIdRegister = map[string]int32{
 	"max":                   MAX,
 	"min":                   MIN,
 	"sum":                   SUM,
+	"group_concat":          GROUP_CONCAT,
 	"avg":                   AVG,
 	"count":                 COUNT,
 	"starcount":             STARCOUNT,
