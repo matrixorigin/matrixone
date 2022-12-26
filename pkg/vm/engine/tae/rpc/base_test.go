@@ -17,6 +17,9 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,8 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"testing"
-	"time"
 )
 
 const ModuleName = "TAEHANDLE"
@@ -695,7 +696,7 @@ func genCreateTableTuple(
 		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
 			return nil, err
 		}
-		idx = catalog.MO_TABLES_CONSTRAINT
+		idx = catalog.MO_TABLES_CONSTRAINT_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // constraint
 		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
 			return nil, err
