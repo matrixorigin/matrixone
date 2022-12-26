@@ -732,7 +732,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			if sltClause, ok := sltStmt.Select.(*tree.SelectClause); ok {
 				sltClause.Distinct = true
 				return builder.buildSelect(sltStmt, ctx, isRoot)
-			} else if _, ok := sltStmt.Select.(*tree.ValuesClause); ok {
+			} else {
 				// rewrite sltStmt to select distinct * from (sltStmt) a
 				tmpSltStmt := &tree.Select{
 					Select: &tree.SelectClause{
