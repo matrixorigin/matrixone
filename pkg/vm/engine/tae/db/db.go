@@ -15,6 +15,7 @@
 package db
 
 import (
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"io"
 	"runtime"
 	"sync/atomic"
@@ -66,6 +67,7 @@ type DB struct {
 
 	BGScanner          wb.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
+	DiskCleaner        *gc2.DiskCleaner
 
 	Fs *objectio.ObjectFS
 

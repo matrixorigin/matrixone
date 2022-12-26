@@ -36,10 +36,10 @@ const (
 	MessgeNormal
 )
 
-// diskCleaner is the main structure of gc operation,
+// DiskCleaner is the main structure of gc operation,
 // and provides "JobFactory" to let tae notify itself
 // to perform a gc
-type diskCleaner struct {
+type DiskCleaner struct {
 	fs *objectio.ObjectFS
 
 	// ckpClient is used to get the instance of the specified checkpoint
@@ -48,7 +48,7 @@ type diskCleaner struct {
 	// Parsing checkpoint needs to use catalog instance
 	catalog *catalog.Catalog
 
-	// maxConsumed is to mark which checkpoint the current diskCleaner has processed,
+	// maxConsumed is to mark which checkpoint the current DiskCleaner has processed,
 	// through which you can get the next checkpoint to be processed
 	maxConsumed atomic.Pointer[checkpoint.CheckpointEntry]
 
@@ -77,8 +77,8 @@ func NewDiskCleaner(
 	fs *objectio.ObjectFS,
 	ckpClient checkpoint.RunnerReader,
 	catalog *catalog.Catalog,
-) *diskCleaner {
-	cleaner := &diskCleaner{
+) *DiskCleaner {
+	cleaner := &DiskCleaner{
 		fs:        fs,
 		ckpClient: ckpClient,
 		catalog:   catalog,
@@ -88,27 +88,27 @@ func NewDiskCleaner(
 	return cleaner
 }
 
-func (cleaner *diskCleaner) JobFactory(ctx context.Context) (err error) {
+func (cleaner *DiskCleaner) JobFactory(ctx context.Context) (err error) {
 	return cleaner.tryClean(ctx)
 }
 
 // Replay is an interface provided for testing
-func (cleaner *diskCleaner) Replay() {
+func (cleaner *DiskCleaner) Replay() {
 	cleaner.tryReplay()
 }
 
-func (cleaner *diskCleaner) tryReplay() {
+func (cleaner *DiskCleaner) tryReplay() {
 	if _, err := cleaner.processQueue.Enqueue(MessgeReplay); err != nil {
 		panic(err)
 	}
 }
 
-func (cleaner *diskCleaner) tryClean(ctx context.Context) (err error) {
+func (cleaner *DiskCleaner) tryClean(ctx context.Context) (err error) {
 	_, err = cleaner.processQueue.Enqueue(MessgeNormal)
 	return
 }
 
-func (cleaner *diskCleaner) replay() error {
+func (cleaner *DiskCleaner) replay() error {
 	dirs, err := cleaner.fs.ListDir(GCMetaDir)
 	if err != nil {
 		return err
@@ -165,7 +165,7 @@ func (cleaner *diskCleaner) replay() error {
 	return nil
 }
 
-func (cleaner *diskCleaner) process(items ...any) {
+func (cleaner *DiskCleaner) process(items ...any) {
 	if items[0].(int) == MessgeReplay {
 		err := cleaner.replay()
 		if err != nil {
@@ -205,7 +205,7 @@ func (cleaner *diskCleaner) process(items ...any) {
 
 }
 
-func (cleaner *diskCleaner) collectCkpData(
+func (cleaner *DiskCleaner) collectCkpData(
 	ckp *checkpoint.CheckpointEntry,
 ) (data *logtail.CheckpointData, err error) {
 	factory := logtail.IncrementalCheckpointDataFactory(
@@ -216,7 +216,7 @@ func (cleaner *diskCleaner) collectCkpData(
 	return
 }
 
-func (cleaner *diskCleaner) createNewInput(
+func (cleaner *DiskCleaner) createNewInput(
 	ckps []*checkpoint.CheckpointEntry) (input *GCTable, err error) {
 	input = NewGCTable()
 	var data *logtail.CheckpointData
@@ -244,7 +244,7 @@ func (cleaner *diskCleaner) createNewInput(
 	return
 }
 
-func (cleaner *diskCleaner) tryGC() {
+func (cleaner *DiskCleaner) tryGC() {
 	if cleaner.delTask.GetState() == Running {
 		return
 	}
@@ -257,7 +257,7 @@ func (cleaner *diskCleaner) tryGC() {
 	go cleaner.delTask.ExecDelete(gc)
 }
 
-func (cleaner *diskCleaner) softGC() []string {
+func (cleaner *DiskCleaner) softGC() []string {
 	cleaner.inputs.Lock()
 	defer cleaner.inputs.Unlock()
 	if len(cleaner.inputs.tables) == 0 {
@@ -273,33 +273,33 @@ func (cleaner *diskCleaner) softGC() []string {
 	return gc
 }
 
-func (cleaner *diskCleaner) updateMaxConsumed(e *checkpoint.CheckpointEntry) {
+func (cleaner *DiskCleaner) updateMaxConsumed(e *checkpoint.CheckpointEntry) {
 	cleaner.maxConsumed.Store(e)
 }
 
-func (cleaner *diskCleaner) updateInputs(input *GCTable) {
+func (cleaner *DiskCleaner) updateInputs(input *GCTable) {
 	cleaner.inputs.Lock()
 	defer cleaner.inputs.Unlock()
 	cleaner.inputs.tables = append(cleaner.inputs.tables, input)
 }
 
-func (cleaner *diskCleaner) updateOutputs(files []string) {
+func (cleaner *DiskCleaner) updateOutputs(files []string) {
 	cleaner.outputs.Lock()
 	defer cleaner.outputs.Unlock()
 	cleaner.outputs.files = append(cleaner.outputs.files, files...)
 }
 
-func (cleaner *diskCleaner) GetMaxConsumed() *checkpoint.CheckpointEntry {
+func (cleaner *DiskCleaner) GetMaxConsumed() *checkpoint.CheckpointEntry {
 	return cleaner.maxConsumed.Load()
 }
 
-func (cleaner *diskCleaner) GetInputs() *GCTable {
+func (cleaner *DiskCleaner) GetInputs() *GCTable {
 	cleaner.inputs.RLock()
 	defer cleaner.inputs.RUnlock()
 	return cleaner.inputs.tables[0]
 }
 
-func (cleaner *diskCleaner) GetAndClearOutputs() []string {
+func (cleaner *DiskCleaner) GetAndClearOutputs() []string {
 	cleaner.outputs.RLock()
 	defer cleaner.outputs.RUnlock()
 	files := cleaner.outputs.files
@@ -308,14 +308,14 @@ func (cleaner *diskCleaner) GetAndClearOutputs() []string {
 	return files
 }
 
-func (cleaner *diskCleaner) Start() {
+func (cleaner *DiskCleaner) Start() {
 	cleaner.onceStart.Do(func() {
 		cleaner.processQueue.Start()
 		cleaner.tryReplay()
 	})
 }
 
-func (cleaner *diskCleaner) Stop() {
+func (cleaner *DiskCleaner) Stop() {
 	cleaner.onceStop.Do(func() {
 		cleaner.processQueue.Stop()
 	})

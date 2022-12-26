@@ -75,7 +75,7 @@ func newBatch(mp *mpool.MPool) *batch.Batch {
 func MockEntry(
 	mid common.ID,
 	count int,
-	manger *diskCleaner,
+	manger *DiskCleaner,
 	t *testing.T,
 	mp *mpool.MPool,
 	service fileservice.FileService,
