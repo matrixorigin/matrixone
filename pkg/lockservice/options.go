@@ -14,9 +14,9 @@
 
 package lockservice
 
-// WithRowsMode set rows mode, the default mode is Row.
-func (opts LockOptions) WithRowsMode(rowsMode RowMode) LockOptions {
-	opts.rowsMode = rowsMode
+// WithGranularity set rows granularity, the default granularity is Row.
+func (opts LockOptions) WithGranularity(granularity Granularity) LockOptions {
+	opts.granularity = granularity
 	return opts
 }
 

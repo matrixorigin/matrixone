@@ -18,20 +18,20 @@ import (
 	"context"
 )
 
-// RowMode row mode
-type RowMode int
+// Granularity row granularity, single row or row range
+type Granularity int
 
-var (
-	// Row rows mode
-	Row = RowMode(0)
-	// Range range mode
-	Range = RowMode(1)
+const (
+	// Row single row
+	Row = Granularity(0)
+	// RowRange row range mode
+	RowRange = Granularity(1)
 )
 
-// LockMode the id of a lock, which uniquely describes a lock and can be used to unlock
+// LockMode exclusive or shared lock
 type LockMode int
 
-var (
+const (
 	// Exclusive mode
 	Exclusive = LockMode(0)
 	// Shared mode
@@ -41,7 +41,7 @@ var (
 // WaitPolicy waiting strategy if lock conflicts are encountered when locking.
 type WaitPolicy int
 
-var (
+const (
 	// Wait waiting for conflicting locks to be released
 	Wait = WaitPolicy(0)
 	// FastFail return fail if lock conflicts are encountered
@@ -78,7 +78,7 @@ type LockStorage interface {
 // Lock, a set of background goroutines are notified to start a deadlock detection for all
 // transactions in the Lock's wait queue.
 type LockService interface {
-	// Lock lock rows(rows or range determined by the RowMode in options) a table. Lockservice
+	// Lock lock rows(row or row range determined by the Granularity in options) a table. Lockservice
 	// has no requirement for the format of rows, but requires all rows of a table on a lockservice
 	// to be sortable.
 	//
@@ -94,7 +94,7 @@ type LockService interface {
 
 // LockOptions options for lock
 type LockOptions struct {
-	rowsMode RowMode
-	mode     LockMode
-	policy   WaitPolicy
+	granularity Granularity
+	mode        LockMode
+	policy      WaitPolicy
 }
