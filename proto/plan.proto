@@ -490,15 +490,16 @@ message WindowSpec {
 message UpdateCtx {
 	string db_name = 1;
 	string tbl_name = 2;
-	string pri_key = 3;
-	int32 pri_key_idx = 4;
-	string hide_key = 5;
-	int32 hide_key_idx = 6;
-	repeated ColDef update_cols = 7;
-	repeated string other_attrs = 8;
-	repeated string order_attrs = 9;
-	ColDef composite_pkey = 10;
-	repeated string index_attrs = 11;
+	string hide_key = 3;
+	int32 hide_key_idx = 4;
+	repeated ColDef update_cols = 5;
+	repeated string other_attrs = 6;
+	repeated string order_attrs = 7;
+	ColDef composite_pkey = 8;
+	bool is_index_table_update = 9;
+	repeated int32 uniqueIndexPos = 10;
+	repeated int32	secondaryIndexPos = 11;
+	repeated string indexParts = 12;
 }
 
 message AnalyzeInfo {
@@ -634,9 +635,7 @@ message DeleteTableCtx {
 	string use_delete_key = 3;
 	bool can_truncate = 4;
 	int32 col_index = 5;
-	UniqueIndexDef unique_index_def = 6;
-	SecondaryIndexDef secondary_index_def = 7;
-	repeated string index_attrs = 8;
+	bool is_index_table_delete = 6;
 }
 
 message Query {
@@ -858,7 +857,8 @@ message DropTable {
 message CreateIndex {
 	string database = 1;
 	string table = 2;
-	CreateTable index = 3;
+	string	origin_table_primary_key = 3;
+	CreateTable index = 4;
 }
 
 message AlterIndex {

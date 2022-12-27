@@ -270,7 +270,8 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, t.UIdx.Fields[0].Parts, t.UIdx.Fields[0].Cols, c.proc)
+
+		indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, t.UIdx.Fields[0].Parts, t.UIdx.Fields[0].Parts, qry.OriginTablePrimaryKey, c.proc)
 		indexR, err := d.Relation(c.ctx, t.UIdx.TableNames[0])
 		if err != nil {
 			return err

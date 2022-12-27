@@ -16,12 +16,9 @@ package deletion
 
 import (
 	"bytes"
-	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -74,25 +71,10 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		}
 
 		tmpBat.Clean(proc.Mp())
-		if p.DeleteCtxs[i].UniqueIndexDef != nil {
-			idx := 0
-			for num := range p.DeleteCtxs[i].UniqueIndexDef.IndexNames {
-				if p.DeleteCtxs[i].UniqueIndexDef.TableExists[num] {
-					rel := p.DeleteCtxs[i].UniqueIndexTables[idx]
-					oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[filterColIndex+1:filterColIndex+1+int32(len(p.DeleteCtxs[i].IndexAttrs))], p.DeleteCtxs[i].IndexAttrs, p.DeleteCtxs[i].UniqueIndexDef.Fields[num].Cols, proc)
-					if rowNum != 0 {
-						err := rel.Delete(proc.Ctx, oldBatch, p.DeleteCtxs[i].UniqueIndexDef.Fields[num].Cols[0].Name)
-						if err != nil {
-							return false, err
-						}
-					}
-					oldBatch.Clean(proc.Mp())
-					idx++
-				}
-			}
+		if !p.DeleteCtxs[i].IsIndexTableDelete {
+			atomic.AddUint64(&p.AffectedRows, affectedRows)
 		}
 	}
-	atomic.AddUint64(&p.AffectedRows, affectedRows)
 
 	return false, nil
 }
