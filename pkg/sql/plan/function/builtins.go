@@ -2758,32 +2758,4 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
-	RANDOM: {
-		Id:     RANDOM,
-		Flag:   plan.Function_STRICT,
-		Layout: STANDARD_FUNCTION,
-		Overloads: []Function{
-			{
-				Index:               0,
-				Volatile:            true,
-				Args:                []types.T{types.T_int64},
-				ReturnTyp:           types.T_float64,
-				UseNewFramework:     true,
-				ResultMustNotScalar: true,
-				ResultWillNotNull:   true,
-				ParameterMustScalar: []bool{true},
-				NewFn:               multi.BuiltInRand,
-			},
-			{
-				Index:               1,
-				Volatile:            true,
-				Args:                nil,
-				ReturnTyp:           types.T_float64,
-				UseNewFramework:     true,
-				ResultMustNotScalar: true,
-				ResultWillNotNull:   true,
-				NewFn:               multi.BuiltInRand,
-			},
-		},
-	},
 }
