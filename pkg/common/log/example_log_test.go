@@ -16,8 +16,6 @@ package log_test
 
 import (
 	"context"
-	"github.com/lni/goutils/leaktest"
-	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
