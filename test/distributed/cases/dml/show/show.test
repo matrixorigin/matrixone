@@ -128,7 +128,6 @@ create database test;
 use test;
 create table t(a int, b int);
 insert into t values(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6);
-select * from t;
 show table_values from t;
 drop table t;
 drop database test;
