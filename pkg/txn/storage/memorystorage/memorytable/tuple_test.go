@@ -14,20 +14,27 @@
 
 package memorytable
 
-type KV[
-	K Ordered[K],
-	V any,
-] interface {
-	Copy() KV[K, V]
-	Get(KVPair[K, V]) (KVPair[K, V], bool)
-	Set(KVPair[K, V]) (KVPair[K, V], bool)
-	Delete(KVPair[K, V])
-	Iter() KVIter[K, V]
+import (
+	"bytes"
+	"testing"
+)
+
+func BenchmarkTupleLess(b *testing.B) {
+	x := Tuple{Int(1)}
+	y := Tuple{Int(2)}
+	for i := 0; i < b.N; i++ {
+		if y.Less(x) {
+			b.Fatal()
+		}
+	}
 }
 
-type KVIter[
-	K Ordered[K],
-	V any,
-] interface {
-	SeekIter[KVPair[K, V]]
+func BenchmarkBytesCompare(b *testing.B) {
+	x := []byte{1}
+	y := []byte{2}
+	for i := 0; i < b.N; i++ {
+		if bytes.Compare(x, y) >= 0 {
+			b.Fatal()
+		}
+	}
 }

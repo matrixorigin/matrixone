@@ -35,10 +35,6 @@ type KVValue[
 	Indexes []Tuple
 }
 
-func (k KVPair[K, V]) Valid() bool {
-	return k.KVValue != nil
-}
-
 var nextKVPairID = int64(1 << 32)
 
 func compareKVPair[

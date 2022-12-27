@@ -56,9 +56,8 @@ func NewTable[
 		id: atomic.AddInt64(&nextTableID, 1),
 	}
 	state := &tableState[K, V]{
-		kv:    NewBTreeKV[K, V](),
-		log:   NewSliceLog[K, V](),
-		index: NewBTreeIndex[K, V](),
+		tree: NewBTree[K, V](),
+		log:  NewSliceLog[K, V](),
 	}
 	ret.state.Store(state)
 	return ret
@@ -70,50 +69,62 @@ func (t *Table[K, V, R]) getTransactionTable(
 	txTable *transactionTable,
 	err error,
 ) {
-	var ok bool
 	tx.tables.Lock()
-	defer tx.tables.Unlock()
+	var ok bool
 	txTable, ok = tx.tables.Map[t.id]
 	if !ok {
+		return t.getTransactionTableSlow(tx)
+	}
+	tx.tables.Unlock()
+	return
+}
 
-		txTable = &transactionTable{
-			table: t,
-		}
+func (t *Table[K, V, R]) getTransactionTableSlow(
+	tx *Transaction,
+) (
+	txTable *transactionTable,
+	err error,
+) {
+	defer tx.tables.Unlock()
 
-		t.Lock()
-		defer t.Unlock()
-		if !tx.BeginTime.IsEmpty() && len(t.history) > 0 {
-			// get from history
-			i := sort.Search(len(t.history), func(i int) bool {
-				t := t.history[i]
-				return tx.BeginTime.Equal(t.EndTime) || tx.BeginTime.Less(t.EndTime)
-			})
-			if i < len(t.history) {
-				if i == 0 {
-					if tx.BeginTime.Less(t.history[0].EndTime) {
-						// too old
-						return nil, moerr.NewInternalErrorNoCtx("transaction begin time too old")
-					}
+	txTable = &transactionTable{
+		table: t,
+	}
+
+	t.Lock()
+	defer t.Unlock()
+	if !tx.BeginTime.IsEmpty() && len(t.history) > 0 {
+		// get from history
+		i := sort.Search(len(t.history), func(i int) bool {
+			t := t.history[i]
+			return tx.BeginTime.Equal(t.EndTime) || tx.BeginTime.Less(t.EndTime)
+		})
+		if i < len(t.history) {
+			if i == 0 {
+				if tx.BeginTime.Less(t.history[0].EndTime) {
+					// too old
+					return nil, moerr.NewInternalErrorNoCtx("transaction begin time too old")
 				}
-				state := t.history[i].EndState
-				txTable.state.Store(state.clone())
-				txTable.initState = state
-			} else {
-				// after all history
-				state := t.state.Load()
-				txTable.state.Store(state.clone())
-				txTable.initState = state
 			}
-
+			state := t.history[i].EndState
+			txTable.state.Store(state.clone())
+			txTable.initState = state
 		} else {
-			// use latest
+			// after all history
 			state := t.state.Load()
 			txTable.state.Store(state.clone())
 			txTable.initState = state
 		}
 
-		tx.tables.Map[t.id] = txTable
+	} else {
+		// use latest
+		state := t.state.Load()
+		txTable.state.Store(state.clone())
+		txTable.initState = state
 	}
+
+	tx.tables.Map[t.id] = txTable
+
 	return
 }
 
@@ -202,26 +213,28 @@ func (t *Table[K, V, R]) Get(
 		return
 	}
 	state := txTable.state.Load().(*tableState[K, V])
-	pair := KVPair[K, V]{
-		Key: key,
+	node := TreeNode[K, V]{
+		KVPair: &KVPair[K, V]{
+			Key: key,
+		},
 	}
-	pair, ok := state.kv.Get(pair)
+	node, ok := state.tree.Get(node)
 	if !ok {
 		err = sql.ErrNoRows
 		return
 	}
-	value = pair.Value
+	value = node.KVPair.Value
 	return
 }
 
 // NewIndexIter creates new index iter
-func (t *Table[K, V, R]) NewIndexIter(tx *Transaction, min Tuple, max Tuple) (IndexIter[K, V], error) {
+func (t *Table[K, V, R]) NewIndexIter(tx *Transaction, min Tuple, max Tuple) (Iter[*IndexEntry[K, V]], error) {
 	txTable, err := t.getTransactionTable(tx)
 	if err != nil {
 		return nil, err
 	}
 	state := txTable.state.Load().(*tableState[K, V])
-	iter := state.index.Copy().Iter()
+	iter := state.tree.Copy().Iter()
 	return NewBoundedIndexIter(iter, min, max), nil
 }
 
