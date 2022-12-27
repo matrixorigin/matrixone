@@ -825,7 +825,10 @@ func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) *plan.Expr
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 	for _, expr := range exprList {
-		expr, _ = ConstantFold(bat, DeepCopyExpr(expr), proc)
+		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(expr), proc)
+		if tmpexpr != nil {
+			expr = tmpexpr
+		}
 		if !containsParamRef(expr) && CheckExprIsMonotonic(proc.Ctx, expr) {
 			newExprList = append(newExprList, expr)
 		}
