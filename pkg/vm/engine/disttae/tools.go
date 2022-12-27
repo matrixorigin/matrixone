@@ -1071,7 +1071,7 @@ func genModifedBlocks(ctx context.Context, deletes map[uint64][]int, orgs, modfs
 		blockMap[modfs[i].Info.BlockID] = true
 	}
 
-	exprMono := checkExprIsMonotonic(ctx, expr)
+	exprMono := plantool.CheckExprIsMonotonic(ctx, expr)
 	columnMap, columns, maxCol := getColumnsByExpr(expr, tableDef)
 	for i, blk := range orgs {
 		if !inBlockMap(blk, blockMap) {
