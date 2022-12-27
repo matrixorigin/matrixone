@@ -15,6 +15,9 @@
 package memorytable
 
 import (
+	"bytes"
+	"encoding"
+	"encoding/gob"
 	"fmt"
 	"io"
 	"sync/atomic"
@@ -27,25 +30,17 @@ type tableState[
 	K Ordered[K],
 	V any,
 ] struct {
-	rows  Rows[K, V]
+	kv    KV[K, V]
 	log   Log[K, V]
 	index Index[K, V]
 }
 
-func (t *tableState[K, V]) cloneWithLogs() *tableState[K, V] {
+func (t *tableState[K, V]) clone() *tableState[K, V] {
 	ret := &tableState[K, V]{
-		rows:  t.rows.Copy(),
-		log:   t.log.Copy(),
+		kv:    t.kv.Copy(),
 		index: t.index.Copy(),
-	}
-	return ret
-}
-
-func (t *tableState[K, V]) cloneWithoutLogs() *tableState[K, V] {
-	ret := &tableState[K, V]{
-		rows:  t.rows.Copy(),
-		log:   NewBTreeLog[K, V](),
-		index: t.index.Copy(),
+		// log is not copied
+		log: NewSliceLog[K, V](),
 	}
 	return ret
 }
@@ -59,10 +54,10 @@ func (t *tableState[K, V]) merge(
 	error,
 ) {
 
-	t = t.cloneWithoutLogs()
+	t = t.clone()
 	var logs []*logEntry[K, V]
 
-	iter := from.log.Copy().Iter()
+	iter := from.log.Iter()
 	defer iter.Close()
 
 	for ok := iter.First(); ok; ok = iter.Next() {
@@ -72,39 +67,39 @@ func (t *tableState[K, V]) merge(
 			return nil, nil, err
 		}
 		logs = append(logs, log)
-		key := log.key
+		key := log.Key
 
-		pivot := &KVPair[K, V]{
+		pivot := KVPair[K, V]{
 			Key: key,
 		}
-		oldPair, _ := t.rows.Get(pivot)
+		oldPair, _ := t.kv.Get(pivot)
 
-		if log.pair != nil && log.oldPair != nil {
+		if log.Pair.Valid() && log.OldPair.Valid() {
 			// update
-			if oldPair == nil {
+			if !oldPair.Valid() {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
-			if oldPair.ID != log.oldPair.ID {
+			if oldPair.ID != log.OldPair.ID {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
-			t.setPair(log.pair, oldPair)
+			t.setPair(log.Pair, oldPair)
 
-		} else if log.pair == nil {
+		} else if !log.Pair.Valid() {
 			// delete
-			if oldPair == nil {
+			if !oldPair.Valid() {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
-			if oldPair.ID != log.oldPair.ID {
+			if oldPair.ID != log.OldPair.ID {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
 			t.unsetPair(pivot, oldPair)
 
-		} else if log.pair != nil && log.oldPair == nil {
+		} else if log.Pair.Valid() && !log.OldPair.Valid() {
 			// insert
-			if oldPair != nil {
+			if oldPair.Valid() {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
-			t.setPair(log.pair, oldPair)
+			t.setPair(log.Pair, oldPair)
 		}
 
 	}
@@ -114,7 +109,7 @@ func (t *tableState[K, V]) merge(
 
 func (s *tableState[K, V]) dump(w io.Writer) {
 	{
-		iter := s.rows.Copy().Iter()
+		iter := s.kv.Copy().Iter()
 		for ok := iter.First(); ok; ok = iter.Next() {
 			row, err := iter.Read()
 			if err != nil {
@@ -134,7 +129,7 @@ func (s *tableState[K, V]) dump(w io.Writer) {
 		}
 	}
 	{
-		iter := s.log.Copy().Iter()
+		iter := s.log.Iter()
 		for ok := iter.First(); ok; ok = iter.Next() {
 			log, err := iter.Read()
 			if err != nil {
@@ -150,9 +145,9 @@ func init() {
 }
 
 // setPair set a key-value pair
-func (s *tableState[K, V]) setPair(pair *KVPair[K, V], oldPair *KVPair[K, V]) {
+func (s *tableState[K, V]) setPair(pair KVPair[K, V], oldPair KVPair[K, V]) {
 
-	if oldPair != nil {
+	if oldPair.Valid() {
 		// remove indexes
 		for _, index := range oldPair.Indexes {
 			s.index.Delete(&IndexEntry[K, V]{
@@ -162,9 +157,9 @@ func (s *tableState[K, V]) setPair(pair *KVPair[K, V], oldPair *KVPair[K, V]) {
 		}
 	}
 
-	if pair != nil {
+	if pair.Valid() {
 		// set row
-		s.rows.Set(pair)
+		s.kv.Set(pair)
 
 		// add indexes
 		for _, index := range pair.Indexes {
@@ -177,10 +172,10 @@ func (s *tableState[K, V]) setPair(pair *KVPair[K, V], oldPair *KVPair[K, V]) {
 
 		// add log
 		log := &logEntry[K, V]{
-			key:     pair.Key,
-			serial:  atomic.AddInt64(&nextLogSerial, 1),
-			pair:    pair,
-			oldPair: oldPair,
+			Key:     pair.Key,
+			Serial:  atomic.AddInt64(&nextLogSerial, 1),
+			Pair:    pair,
+			OldPair: oldPair,
 		}
 		s.log.Set(log)
 
@@ -189,9 +184,9 @@ func (s *tableState[K, V]) setPair(pair *KVPair[K, V], oldPair *KVPair[K, V]) {
 }
 
 // unsetPair unsets a key-value pair
-func (s *tableState[K, V]) unsetPair(pivot *KVPair[K, V], oldPair *KVPair[K, V]) {
+func (s *tableState[K, V]) unsetPair(pivot KVPair[K, V], oldPair KVPair[K, V]) {
 
-	if oldPair != nil {
+	if oldPair.Valid() {
 		// remove indexes
 		for _, index := range oldPair.Indexes {
 			s.index.Delete(&IndexEntry[K, V]{
@@ -202,13 +197,52 @@ func (s *tableState[K, V]) unsetPair(pivot *KVPair[K, V], oldPair *KVPair[K, V])
 	}
 
 	// delete row
-	s.rows.Delete(pivot)
+	s.kv.Delete(pivot)
 
 	// add log
 	s.log.Set(&logEntry[K, V]{
-		key:     pivot.Key,
-		serial:  atomic.AddInt64(&nextLogSerial, 1),
-		oldPair: oldPair,
+		Key:     pivot.Key,
+		Serial:  atomic.AddInt64(&nextLogSerial, 1),
+		OldPair: oldPair,
 	})
 
+}
+
+type encodingTableState[
+	K Ordered[K],
+	V any,
+] struct {
+	KV    KV[K, V]
+	Log   Log[K, V]
+	Index Index[K, V]
+}
+
+var _ encoding.BinaryMarshaler = new(tableState[Int, int])
+
+func (t *tableState[K, V]) MarshalBinary() ([]byte, error) {
+	gobRegister(t.kv)
+	gobRegister(t.log)
+	gobRegister(t.index)
+	buf := new(bytes.Buffer)
+	if err := gob.NewEncoder(buf).Encode(encodingTableState[K, V]{
+		KV:    t.kv,
+		Log:   t.log,
+		Index: t.index,
+	}); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+var _ encoding.BinaryUnmarshaler = new(tableState[Int, int])
+
+func (t *tableState[K, V]) UnmarshalBinary(data []byte) error {
+	var e encodingTableState[K, V]
+	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&e); err != nil {
+		return err
+	}
+	t.kv = e.KV
+	t.log = e.Log
+	t.index = e.Index
+	return nil
 }

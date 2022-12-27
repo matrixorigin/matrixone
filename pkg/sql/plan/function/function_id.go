@@ -144,6 +144,7 @@ const (
 	LIKE_ALL // LIKE_ALL
 	LIKE_ANY // LIKE_ANY
 	LN       // LN
+	NOT_IN   // NOT_IN
 	LOG      // LOG
 	LOWER    // LOWER
 	LPAD     // LPAD
@@ -191,7 +192,8 @@ const (
 	STDDEV_SAMPLE // STDDEV_SAMPLE
 	SUBSTR        // SUBSTR
 	SUM           // SUM
-	TAN           // TAN
+	GROUP_CONCAT
+	TAN // TAN
 	TO_DATE
 	STR_TO_DATE
 	TO_INTERVAL // TO_INTERVAL
@@ -249,6 +251,7 @@ const (
 	TIMESTAMP    // TIMESTAMP
 	DATE_FORMAT  // DATE_FORMAT
 	JSON_EXTRACT // JSON_EXTRACT
+	JSON_QUOTE   // JSON_QUOTE
 	JSON_UNQUOTE // JSON_UNQUOTE
 	FORMAT       // FORMAT
 	SLEEP        // sleep for a while
@@ -296,6 +299,7 @@ var functionIdRegister = map[string]int32{
 	"like":         LIKE,
 	"between":      BETWEEN,
 	"in":           IN,
+	"not_in":       NOT_IN,
 	"exists":       EXISTS,
 	"+":            PLUS,
 	"-":            MINUS,
@@ -333,6 +337,7 @@ var functionIdRegister = map[string]int32{
 	"max":                   MAX,
 	"min":                   MIN,
 	"sum":                   SUM,
+	"group_concat":          GROUP_CONCAT,
 	"avg":                   AVG,
 	"count":                 COUNT,
 	"starcount":             STARCOUNT,
@@ -433,6 +438,7 @@ var functionIdRegister = map[string]int32{
 	"version":                        VERSION,
 	"collation":                      COLLATION,
 	"json_extract":                   JSON_EXTRACT,
+	"json_quote":                     JSON_QUOTE,
 	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
 	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
 	"add_fault_point":                ADD_FAULT_POINT,

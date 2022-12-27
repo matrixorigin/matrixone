@@ -1519,44 +1519,45 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 	if len(stmt) == 1 {
 		return builder.buildTable(stmt[0], ctx)
 	}
+	return 0, moerr.NewInternalError(ctx.binder.GetContext(), "stmt's length should be zero")
+	// for now, stmt'length always be zero. if someday that change in parser, you should uncomment these codes
+	// leftCtx := NewBindContext(builder, ctx)
+	// leftChildID, err := builder.buildTable(stmt[0], leftCtx)
+	// if err != nil {
+	// 	return 0, err
+	// }
 
-	leftCtx := NewBindContext(builder, ctx)
-	leftChildID, err := builder.buildTable(stmt[0], leftCtx)
-	if err != nil {
-		return 0, err
-	}
+	// for i := 1; i < len(stmt); i++ {
+	// 	rightCtx := NewBindContext(builder, ctx)
+	// 	rightChildID, err := builder.buildTable(stmt[i], rightCtx)
+	// 	if err != nil {
+	// 		return 0, err
+	// 	}
 
-	for i := 1; i < len(stmt); i++ {
-		rightCtx := NewBindContext(builder, ctx)
-		rightChildID, err := builder.buildTable(stmt[i], rightCtx)
-		if err != nil {
-			return 0, err
-		}
+	// 	leftChildID = builder.appendNode(&plan.Node{
+	// 		NodeType: plan.Node_JOIN,
+	// 		Children: []int32{leftChildID, rightChildID},
+	// 		JoinType: plan.Node_INNER,
+	// 	}, nil)
 
-		leftChildID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{leftChildID, rightChildID},
-			JoinType: plan.Node_INNER,
-		}, nil)
+	// 	if i == len(stmt)-1 {
+	// 		builder.ctxByNode[leftChildID] = ctx
+	// 		err = ctx.mergeContexts(leftCtx, rightCtx)
+	// 		if err != nil {
+	// 			return 0, err
+	// 		}
+	// 	} else {
+	// 		newCtx := NewBindContext(builder, ctx)
+	// 		builder.ctxByNode[leftChildID] = newCtx
+	// 		err = newCtx.mergeContexts(leftCtx, rightCtx)
+	// 		if err != nil {
+	// 			return 0, err
+	// 		}
+	// 		leftCtx = newCtx
+	// 	}
+	// }
 
-		if i == len(stmt)-1 {
-			builder.ctxByNode[leftChildID] = ctx
-			err = ctx.mergeContexts(leftCtx, rightCtx)
-			if err != nil {
-				return 0, err
-			}
-		} else {
-			newCtx := NewBindContext(builder, ctx)
-			builder.ctxByNode[leftChildID] = newCtx
-			err = newCtx.mergeContexts(leftCtx, rightCtx)
-			if err != nil {
-				return 0, err
-			}
-			leftCtx = newCtx
-		}
-	}
-
-	return leftChildID, err
+	// return leftChildID, err
 }
 
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (nodeID int32, err error) {
