@@ -42,18 +42,34 @@ func GetModuleLogger(logger *MOLogger, module Module) *MOLogger {
 // With creates a child logger and adds structured context to it. Fields added
 // to the child don't affect the parent, and vice versa.
 func (l *MOLogger) With(fields ...zap.Field) *MOLogger {
-	return &MOLogger{
-		logger: l.logger.With(fields...),
-		ctx:    l.ctx,
-	}
+	return newMOLogger(l.logger.With(fields...), l.ctx)
 }
 
 // Named adds a new path segment to the logger's name. Segments are joined by
 // periods. By default, Loggers are unnamed.
 func (l *MOLogger) Named(name string) *MOLogger {
+	return newMOLogger(l.logger.Named(name), l.ctx)
+}
+
+func (l *MOLogger) WithContext(ctx context.Context) *MOLogger {
+	if ctx == nil || ctx == context.TODO() || ctx == context.Background() {
+		panic("nil, context.TODO() and context.Background() are not supported")
+	}
+	if sc := trace.SpanFromContext(ctx).SpanContext(); trace.GetTracerProvider().IsEnable() && sc.IsEmpty() {
+		panic("context with empty SpanContext are not supported")
+	}
+	return newMOLogger(l.logger, ctx)
+}
+
+func newMOLogger(logger *zap.Logger, ctx context.Context) *MOLogger {
 	return &MOLogger{
-		logger: l.logger.Named(name),
-		ctx:    l.ctx,
+		logger: logger,
+		ctx:    ctx,
+		m: map[int]*zap.Logger{
+			1: logger.WithOptions(zap.AddCallerSkip(1)),
+			2: logger.WithOptions(zap.AddCallerSkip(2)),
+			3: logger.WithOptions(zap.AddCallerSkip(3)),
+		},
 	}
 }
 
@@ -69,42 +85,42 @@ func (l *MOLogger) RawLogger() *zap.Logger {
 
 // Info shortcuts to print info log
 func (l *MOLogger) Info(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.InfoLevel), fields...)
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
 }
 
 // InfoAction shortcuts to print info action log
 func (l *MOLogger) InfoAction(msg string, fields ...zap.Field) func() {
-	return l.LogAction(msg, DefaultLogOptions().WithLevel(zap.InfoLevel), fields...)
+	return l.LogAction(msg, DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
 }
 
 // Debug shortcuts to  print debug log
 func (l *MOLogger) Debug(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.DebugLevel), fields...)
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
 }
 
 // InfoDebugAction shortcuts to print debug action log
 func (l *MOLogger) InfoDebugAction(msg string, fields ...zap.Field) func() {
-	return l.LogAction(msg, DefaultLogOptions().WithLevel(zap.DebugLevel), fields...)
+	return l.LogAction(msg, DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
 }
 
 // Error shortcuts to  print error log
 func (l *MOLogger) Error(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.ErrorLevel), fields...)
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
 }
 
 // Warn shortcuts to  print warn log
 func (l *MOLogger) Warn(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.WarnLevel), fields...)
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.WarnLevel).AddCallerSkip(1), fields...)
 }
 
 // Panic shortcuts to  print panic log
 func (l *MOLogger) Panic(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.PanicLevel), fields...)
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.PanicLevel).AddCallerSkip(1), fields...)
 }
 
 // Fatal shortcuts to print fatal log
 func (l *MOLogger) Fatal(msg string, fields ...zap.Field) bool {
-	return l.Log(msg, DefaultLogOptions().WithLevel(zap.FatalLevel), fields...)
+	return l.Log(msg, DefaultLogOptions().WithLevel(zap.FatalLevel).AddCallerSkip(1), fields...)
 }
 
 // Log is the entry point for mo log printing. Return true to indicate that the log
@@ -120,12 +136,20 @@ func (l *MOLogger) Log(msg string, opts LogOptions, fields ...zap.Field) bool {
 		}
 	}
 
-	if ce := l.logger.Check(opts.level, msg); ce != nil {
+	if opts.ctx == nil {
+		opts.ctx = l.ctx
+	}
+
+	logger, has := l.m[opts.callerSkip+1]
+	if !has {
+		logger = l.logger
+	}
+	if ce := logger.Check(opts.level, msg); ce != nil {
 		if len(opts.fields) > 0 {
 			fields = append(fields, opts.fields...)
 		}
-		if l.ctx != nil {
-			fields = append(fields, trace.ContextField(l.ctx))
+		if opts.ctx != nil {
+			fields = append(fields, trace.ContextField(opts.ctx))
 		}
 
 		ce.Write(fields...)
@@ -147,7 +171,7 @@ func (l *MOLogger) Log(msg string, opts LogOptions, fields ...zap.Field) bool {
 // logs appear in pairs, can also be used to check whether a function has been executed.
 func (l *MOLogger) LogAction(action string, opts LogOptions, fields ...zap.Field) func() {
 	startAt := time.Now()
-	if !l.Log(action, opts, fields...) {
+	if !l.Log(action, opts.AddCallerSkip(1), fields...) {
 		return nothing
 	}
 	return func() {
@@ -169,10 +193,10 @@ func wrapWithContext(logger *zap.Logger, ctx context.Context) *MOLogger {
 		panic("TODO and Background are not supported")
 	}
 
-	return &MOLogger{
-		logger: logger,
-		ctx:    ctx,
-	}
+	return newMOLogger(
+		logger.WithOptions(zap.AddStacktrace(zap.ErrorLevel)),
+		ctx,
+	)
 }
 
 func nothing() {}
@@ -190,6 +214,9 @@ func (opts LogOptions) WithContext(ctx context.Context) LogOptions {
 	if ctx == context.TODO() || ctx == context.Background() {
 		panic("TODO and Background contexts are not supported")
 	}
+	if sc := trace.SpanFromContext(ctx).SpanContext(); trace.GetTracerProvider().IsEnable() && sc.IsEmpty() {
+		panic("context with empty SpanContext are not supported")
+	}
 
 	opts.ctx = ctx
 	return opts
@@ -204,6 +231,12 @@ func (opts LogOptions) WithLevel(level zapcore.Level) LogOptions {
 // WithSample sample print the log, using log counts as sampling frequency. First time must output.
 func (opts LogOptions) WithSample(sampleType SampleType) LogOptions {
 	opts.sampleType = sampleType
+	return opts
+}
+
+// AddCallerSkip help to show the logger real caller, by skip n call stack
+func (opts LogOptions) AddCallerSkip(n int) LogOptions {
+	opts.callerSkip += n
 	return opts
 }
 

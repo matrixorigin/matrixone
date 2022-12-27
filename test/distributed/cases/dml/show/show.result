@@ -236,3 +236,12 @@ mo_database    Number of columns in mo_database
 mo_database    8
 show column_number from hdjshdj;
 no such table mo_catalog.hdjshdj
+drop database if exists test01;
+create database test01;
+use test01;
+create table t(a int, b int);
+insert into t values(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6);
+show table_values from t;
+max(a)    min(a)    max(b)    min(b)
+6    1    6    1
+drop table t;
