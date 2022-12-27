@@ -222,9 +222,9 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		// scalar vector's extension
 		for i := range bat.Vecs {
 			bat.Attrs[i] = n.TargetColDefs[i].GetName()
-			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp())
+			bat.Vecs[i] = bat.Vecs[i].ConstExpand(false, proc.Mp())
 			if bat.Vecs[i].IsScalarNull() && n.TargetColDefs[i].GetTyp().GetAutoIncr() {
-				bat.Vecs[i].ConstExpandColAndNullsToFixedLength(proc.Mp())
+				bat.Vecs[i].ConstExpand(true, proc.Mp())
 			}
 		}
 	}
@@ -307,7 +307,7 @@ func fillRow(tmpBat *batch.Batch,
 		return err
 	}
 	if vec.Size() == 0 {
-		vec = vec.ConstExpand(proc.Mp())
+		vec = vec.ConstExpand(false, proc.Mp())
 	}
 	if err := vector.UnionOne(targetVec, vec, 0, proc.Mp()); err != nil {
 		vec.Free(proc.Mp())
