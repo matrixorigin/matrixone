@@ -378,7 +378,7 @@ import (
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_size_stmt show_table_values_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> alter_account_stmt alter_user_stmt update_stmt use_stmt update_no_with_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt
@@ -544,7 +544,7 @@ import (
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt distinct_opt temporary_opt
 %type <item> pwd_expire clear_pwd_opt
-%type <str> name_confict distinct_keyword
+%type <str> name_confict distinct_keyword separator_opt
 %type <insert> insert_data
 %type <replace> replace_data
 %type <rowsExprs> values_list
@@ -2091,7 +2091,20 @@ analyze_stmt:
 alter_stmt:
     alter_user_stmt
 |   alter_account_stmt
+|   alter_view_stmt
 // |    alter_ddl_stmt
+
+alter_view_stmt:
+    ALTER temporary_opt view_recursive_opt VIEW exists_opt table_name column_list_opt AS select_stmt
+    {
+        $$ = &tree.AlterView{
+            Name: $6,
+            ColNames: $7,
+            AsSource: $9,
+            Temporary: $2,
+            IfExists: $5,
+        }
+    }
 
 alter_account_stmt:
     ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
@@ -4174,25 +4187,15 @@ func_return:
     }
 
 create_view_stmt:
-    CREATE temporary_opt view_recursive_opt VIEW table_name column_list_opt AS select_stmt
+    CREATE temporary_opt view_recursive_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt
     {
         $$ = &tree.CreateView{
-            Name: $5,
-            ColNames: $6,
-            AsSource: $8,
+            Name: $6,
+            ColNames: $7,
+            AsSource: $9,
             Temporary: $2,
-            IfNotExists: false,
+            IfNotExists: $5,
         }
-    }
-|    CREATE temporary_opt view_recursive_opt VIEW IF NOT EXISTS table_name column_list_opt AS select_stmt
-    {
-        $$ = &tree.CreateView{
-            Name: $8,
-            ColNames: $9,
-            AsSource: $11,
-            Temporary: $2,
-            IfNotExists: true,
-       }
     }
 
 view_recursive_opt:
@@ -5916,6 +5919,18 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
+|   BINARY '(' expression ')'
+    {
+        locale := ""
+        $$ = tree.NewCastExpr($3, &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.StringFamily,
+                FamilyString: "BINARY",
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        })
+    }
 |   CONVERT '(' expression ',' mysql_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
@@ -6220,6 +6235,15 @@ window_partition_by_opt:
         $$ = $1
     }
 
+separator_opt:
+    {
+        $$ = ","
+    }
+|   SEPARATOR STRING
+    {
+       $$ = $2
+    }
+
 window_spec_opt:
     {
         $$ = nil
@@ -6234,7 +6258,18 @@ window_spec_opt:
     }
 
 function_call_aggregate:
-    AVG '(' func_type_opt expression  ')' window_spec_opt
+    GROUP_CONCAT '(' func_type_opt expression_list separator_opt ')' window_spec_opt
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: append($4,tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)),
+            Type: $3,
+            WindowSpec: $7,
+            AggType: 2,
+        }
+    }
+|   AVG '(' func_type_opt expression  ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
@@ -6449,15 +6484,6 @@ function_call_generic:
         }
     }
 |    VARIANCE '(' func_type_opt expression ')'
-    {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{$4},
-            Type: $3,
-        }
-    }
-|    GROUP_CONCAT '(' func_type_opt expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
@@ -6687,14 +6713,6 @@ function_call_keyword:
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: $3,
-        }
-    }
-|   BINARY simple_expr %prec UNARY
-    {
-        name := tree.SetUnresolvedName("binary")
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{$2},
         }
     }
 |   TIMESTAMP STRING

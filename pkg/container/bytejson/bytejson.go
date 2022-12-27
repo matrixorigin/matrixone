@@ -216,7 +216,7 @@ func (bj ByteJson) getObjectVal(i int) ByteJson {
 func (bj ByteJson) getValEntry(off int) ByteJson {
 	tpCode := bj.Data[off]
 	valOff := endian.Uint32(bj.Data[off+valTypeSize:])
-	switch tpCode {
+	switch TpCode(tpCode) {
 	case TpCodeLiteral:
 		return ByteJson{Type: TpCodeLiteral, Data: bj.Data[off+valTypeSize : off+valTypeSize+1]}
 	case TpCodeUint64, TpCodeInt64, TpCodeFloat64:
@@ -252,36 +252,7 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 		return cur
 	}
 	sub, nPath := path.step()
-	if sub.tp == subPathIdx && bj.Type == TpCodeObject && sub.idx == 0 {
-		cur = bj.query(cur, &nPath)
-		return cur
-	}
-	if sub.tp == subPathIdx && bj.Type == TpCodeArray {
-		cnt := bj.GetElemCnt()
-		if sub.idx < subPathIdxALL || sub.idx >= cnt { // idx is out of range
-			tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
-			cur = append(cur, tmp)
-			return cur
-		}
-		if sub.idx == subPathIdxALL {
-			for i := 0; i < cnt; i++ {
-				cur = bj.getArrayElem(i).query(cur, &nPath)
-			}
-		} else {
-			cur = bj.getArrayElem(sub.idx).query(cur, &nPath)
-		}
-	}
-	if sub.tp == subPathKey && bj.Type == TpCodeObject {
-		cnt := bj.GetElemCnt()
-		if sub.key == "*" {
-			for i := 0; i < cnt; i++ {
-				cur = bj.getObjectVal(i).query(cur, &nPath)
-			}
-		} else {
-			tmp := bj.queryValByKey(string2Slice(sub.key))
-			cur = tmp.query(cur, &nPath)
-		}
-	}
+
 	if sub.tp == subPathDoubleStar {
 		cur = bj.query(cur, &nPath)
 		if bj.Type == TpCodeObject {
@@ -293,6 +264,68 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 			cnt := bj.GetElemCnt()
 			for i := 0; i < cnt; i++ {
 				cur = bj.getArrayElem(i).query(cur, path) // take care here, the argument is path,not nPath
+			}
+		}
+		return cur
+	}
+
+	if bj.Type == TpCodeObject {
+		switch sub.tp {
+		case subPathIdx:
+			start, _, _ := sub.idx.genIndex(1)
+			if start == 0 {
+				cur = bj.query(cur, &nPath)
+			}
+		case subPathRange:
+			se := sub.iRange.genRange(bj.GetElemCnt())
+			if se[0] == 0 {
+				cur = bj.query(cur, &nPath)
+			}
+		case subPathKey:
+			cnt := bj.GetElemCnt()
+			if sub.key == "*" {
+				for i := 0; i < cnt; i++ {
+					cur = bj.getObjectVal(i).query(cur, &nPath)
+				}
+			} else {
+				tmp := bj.queryValByKey(string2Slice(sub.key))
+				cur = tmp.query(cur, &nPath)
+			}
+		}
+		return cur
+	}
+
+	//if sub.tp == subPathIdx && bj.Type == TpCodeObject && sub.idx.tp == numberIndices && sub.idx.num == 0 {
+	//	cur = bj.query(cur, &nPath)
+	//	return cur
+	//} // TODO fix last and range
+
+	if bj.Type == TpCodeArray {
+		cnt := bj.GetElemCnt()
+		switch sub.tp {
+		case subPathIdx:
+			idx, _, last := sub.idx.genIndex(cnt)
+			if last && idx < 0 {
+				tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+				cur = append(cur, tmp)
+				return cur
+			}
+			if idx == subPathIdxALL {
+				for i := 0; i < cnt; i++ {
+					cur = bj.getArrayElem(i).query(cur, &nPath)
+				}
+			} else {
+				cur = bj.getArrayElem(idx).query(cur, &nPath)
+			}
+		case subPathRange:
+			se := sub.iRange.genRange(cnt)
+			if se[0] == subPathIdxErr {
+				tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+				cur = append(cur, tmp)
+				return cur
+			}
+			for i := se[0]; i <= se[1]; i++ {
+				cur = bj.getArrayElem(i).query(cur, &nPath)
 			}
 		}
 	}
@@ -331,38 +364,6 @@ func (bj ByteJson) queryWithSubPath(keys []string, vals []ByteJson, path *Path, 
 		return keys, vals
 	}
 	sub, nPath := path.step()
-	if sub.tp == subPathIdx && bj.Type == TpCodeArray {
-		cnt := bj.GetElemCnt()
-		if sub.idx < subPathIdxALL || sub.idx >= cnt { // idx is out of range
-			tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
-			newPathStr := fmt.Sprintf("%s[%d]", pathStr, sub.idx)
-			keys = append(keys, newPathStr)
-			vals = append(vals, tmp)
-			return keys, vals
-		}
-		if sub.idx == subPathIdxALL {
-			for i := 0; i < cnt; i++ {
-				newPathStr := fmt.Sprintf("%s[%d]", pathStr, i)
-				keys, vals = bj.getArrayElem(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
-			}
-		} else {
-			newPathStr := fmt.Sprintf("%s[%d]", pathStr, sub.idx)
-			keys, vals = bj.getArrayElem(sub.idx).queryWithSubPath(keys, vals, &nPath, newPathStr)
-		}
-	}
-	if sub.tp == subPathKey && bj.Type == TpCodeObject {
-		cnt := bj.GetElemCnt()
-		if sub.key == "*" {
-			for i := 0; i < cnt; i++ {
-				newPathStr := fmt.Sprintf("%s.%s", pathStr, bj.getObjectKey(i))
-				keys, vals = bj.getObjectVal(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
-			}
-		} else {
-			tmp := bj.queryValByKey(string2Slice(sub.key))
-			newPathStr := fmt.Sprintf("%s.%s", pathStr, sub.key)
-			keys, vals = tmp.queryWithSubPath(keys, vals, &nPath, newPathStr)
-		}
-	}
 	if sub.tp == subPathDoubleStar {
 		keys, vals = bj.queryWithSubPath(keys, vals, &nPath, pathStr)
 		if bj.Type == TpCodeObject {
@@ -376,6 +377,71 @@ func (bj ByteJson) queryWithSubPath(keys []string, vals []ByteJson, path *Path, 
 			for i := 0; i < cnt; i++ {
 				newPathStr := fmt.Sprintf("%s[%d]", pathStr, i)
 				keys, vals = bj.getArrayElem(i).queryWithSubPath(keys, vals, path, newPathStr) // take care here, the argument is path,not nPath
+			}
+		}
+		return keys, vals
+	}
+	if bj.Type == TpCodeObject {
+		cnt := bj.GetElemCnt()
+		switch sub.tp {
+		case subPathIdx:
+			start, _, _ := sub.idx.genIndex(1)
+			if start == 0 {
+				newPathStr := fmt.Sprintf("%s[%d]", pathStr, start)
+				keys, vals = bj.queryWithSubPath(keys, vals, &nPath, newPathStr)
+			}
+		case subPathRange:
+			se := sub.iRange.genRange(cnt)
+			if se[0] == 0 {
+				newPathStr := fmt.Sprintf("%s[%d]", pathStr, se[0])
+				keys, vals = bj.queryWithSubPath(keys, vals, &nPath, newPathStr)
+			}
+		case subPathKey:
+			if sub.key == "*" {
+				for i := 0; i < cnt; i++ {
+					newPathStr := fmt.Sprintf("%s.%s", pathStr, bj.getObjectKey(i))
+					keys, vals = bj.getObjectVal(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
+				}
+			} else {
+				tmp := bj.queryValByKey(string2Slice(sub.key))
+				newPathStr := fmt.Sprintf("%s.%s", pathStr, sub.key)
+				keys, vals = tmp.queryWithSubPath(keys, vals, &nPath, newPathStr)
+			}
+		}
+	}
+	if bj.Type == TpCodeArray {
+		cnt := bj.GetElemCnt()
+		switch sub.tp {
+		case subPathIdx:
+			idx, _, last := sub.idx.genIndex(cnt)
+			if last && idx < 0 {
+				tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+				newPathStr := fmt.Sprintf("%s[%d]", pathStr, sub.idx.num)
+				keys = append(keys, newPathStr)
+				vals = append(vals, tmp)
+				return keys, vals
+			}
+			if idx == subPathIdxALL {
+				for i := 0; i < cnt; i++ {
+					newPathStr := fmt.Sprintf("%s[%d]", pathStr, i)
+					keys, vals = bj.getArrayElem(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
+				}
+			} else {
+				newPathStr := fmt.Sprintf("%s[%d]", pathStr, idx)
+				keys, vals = bj.getArrayElem(idx).queryWithSubPath(keys, vals, &nPath, newPathStr)
+			}
+		case subPathRange:
+			se := sub.iRange.genRange(cnt)
+			if se[0] == subPathIdxErr {
+				tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+				newPathStr := fmt.Sprintf("%s[%d to %d]", pathStr, sub.iRange.start.num, sub.iRange.end.num)
+				keys = append(keys, newPathStr)
+				vals = append(vals, tmp)
+				return keys, vals
+			}
+			for i := se[0]; i <= se[1]; i++ {
+				newPathStr := fmt.Sprintf("%s[%d]", pathStr, i)
+				keys, vals = bj.getArrayElem(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
 			}
 		}
 	}

@@ -824,11 +824,19 @@ message DropDatabase {
 }
 
 message CreateTable {
+	message FkColName {
+		repeated string cols = 1;
+	}
 	bool if_not_exists 	= 1;
 	bool temporary 		= 2;
 	string database 	= 3;
 	TableDef table_def 	= 4;
 	repeated TableDef index_tables = 5;
+	// we need the db/table name of foreign key when create table. but we don't need it in ForeignKeyDef
+	repeated string fk_dbs = 6;
+	repeated string fk_tables = 7;
+	// we need column name when create table, but not in ForeignKeyDef
+	repeated FkColName fk_cols = 8;
 }
 
 message AlterTable {

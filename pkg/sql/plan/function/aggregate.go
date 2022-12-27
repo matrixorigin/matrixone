@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -35,6 +36,23 @@ func initAggregateFunction() {
 
 // aggregates contains the aggregate function indexed by function id.
 var aggregates = map[int]Functions{
+	// we register group_concat here, but we won't implement it
+	// in agg skeleton
+	GROUP_CONCAT: {
+		Id:     GROUP_CONCAT,
+		Flag:   plan.Function_AGG,
+		Layout: STANDARD_FUNCTION,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			return 0, nil
+		},
+		Overloads: []Function{
+			{
+				Index:         0,
+				ReturnTyp:     types.T_text,
+				AggregateInfo: agg.AggregateGroupConcat,
+			},
+		},
+	},
 	MAX: {
 		Id:          MAX,
 		Flag:        plan.Function_AGG,
