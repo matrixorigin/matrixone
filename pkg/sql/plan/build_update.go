@@ -64,6 +64,9 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		}
 		objRefs = append(objRefs, objRef)
 		tblRefs = append(tblRefs, tblRef)
+		if util.TableIsClusterTable(tblRef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can update the cluster table %s", tblRef.GetName())
+		}
 	}
 
 	// check and build update's columns

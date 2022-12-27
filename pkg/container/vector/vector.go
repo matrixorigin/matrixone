@@ -380,11 +380,17 @@ func (v *Vector) ToConst(row int, mp *mpool.MPool) *Vector {
 	return nil
 }
 
-func (v *Vector) ConstExpand(m *mpool.MPool) *Vector {
+/*
+ConstExpand
+expandCols:
+- true: extend the field Col of the vector that is scalar null
+- false: same as before
+*/
+func (v *Vector) ConstExpand(expandCols bool, m *mpool.MPool) *Vector {
 	if !v.isConst {
 		return v
 	}
-	if v.IsScalarNull() {
+	if !expandCols && v.IsScalarNull() {
 		vlen := uint64(v.ScalarLength())
 		nulls.AddRange(v.Nsp, 0, vlen)
 		return v
