@@ -164,30 +164,3 @@ func ExampleLogOptions_WithContext() {
 	// 2022/12/17 16:37:22.995817 +0800 INFO cn-service log/example_log_test.go:162 this is an info log 1, with Context in LogOptions. {"uuid": "cn0", "span": {"trace_id": "9f0907c7-7fa6-bb7c-2a25-384f52e03cd5", "span_id": "068f75a50921c85f"}}
 	// 2022/12/17 16:37:22.995820 +0800 INFO cn-service log/example_log_test.go:163 this is an info log 2, without Context. {"uuid": "cn0"}
 }
-
-func TestExample(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	trace.Init(context.Background(), trace.EnableTracer(true))
-	logutil.SetupMOLogger(&logutil.LogConfig{Level: "debug", Format: "console"})
-	ExampleGetServiceLogger()
-	ExampleGetModuleLogger()
-	ExampleMOLogger_Info()
-	ExampleMOLogger_Debug()
-	ExampleMOLogger_Error()
-	ExampleMOLogger_Warn()
-	panicF := func() {
-		defer func() {
-			err := recover()
-			t.Logf("catch panic: %s", err)
-		}()
-		ExampleMOLogger_Panic()
-	}
-	panicF()
-	// ExampleMOLogger_Fatal()
-	ExampleMOLogger_Log()
-	ExampleMOLogger_LogAction()
-	ExampleLogOptions_WithProcess()
-	ExampleLogOptions_WithSample()
-	ExampleMOLogger_WithContext()
-	ExampleLogOptions_WithContext()
-}
