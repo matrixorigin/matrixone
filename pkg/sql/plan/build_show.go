@@ -377,6 +377,36 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
+
+func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Plan, error) {
+	dbName := stmt.Table.GetDBName()
+	if dbName == "" {
+		dbName = ctx.DefaultDatabase()
+	} else if !ctx.DatabaseExists(dbName) {
+		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
+	}
+
+	tblName := string(stmt.Table.ToTableName().ObjectName)
+	_, tableDef := ctx.Resolve(dbName, tblName)
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+
+	ddlType := plan.DataDefinition_SHOW_TARGET
+
+	sql := "SELECT"
+	tableCols := tableDef.Cols
+	for i := range tableCols {
+		sql += " max(%s), min(%s),"
+		colName := tableCols[i].Name
+		sql = fmt.Sprintf(sql, colName, colName)
+	}
+	sql = sql[:len(sql)-1]
+	sql += "FROM %s"
+	sql = fmt.Sprintf(sql, tblName)
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
 func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")

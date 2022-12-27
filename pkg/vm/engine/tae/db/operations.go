@@ -16,6 +16,7 @@ package db
 
 import (
 	"encoding/gob"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -168,14 +169,24 @@ const (
 )
 
 type WriteReq struct {
-	Type         EntryType
-	DatabaseId   uint64
-	TableID      uint64
+	Type       EntryType
+	DatabaseId uint64
+	TableID    uint64
+	//transient segment id.
+	//SegID        uint64
 	DatabaseName string
 	TableName    string
-	FileName     string
-	BlockID      uint64
 	Batch        *batch.Batch
+	//S3 object file name
+	FileName string
+	//Blks     []uint64
+	MetaLocs []string
+	//for delete on S3
+	DeltaLocs []string
+	//tasks for loading primary keys or deleted row ids
+	Jobs []*tasks.Job
+	//loaded sorted primary keys or deleted row ids.
+	JobRes []*tasks.JobResult
 }
 
 type WriteResp struct {

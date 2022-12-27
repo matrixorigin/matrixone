@@ -56,8 +56,8 @@ func NewTable[
 		id: atomic.AddInt64(&nextTableID, 1),
 	}
 	state := &tableState[K, V]{
-		rows:  NewBTreeRows[K, V](),
-		log:   NewBTreeLog[K, V](),
+		kv:    NewBTreeKV[K, V](),
+		log:   NewSliceLog[K, V](),
 		index: NewBTreeIndex[K, V](),
 	}
 	ret.state.Store(state)
@@ -96,19 +96,19 @@ func (t *Table[K, V, R]) getTransactionTable(
 					}
 				}
 				state := t.history[i].EndState
-				txTable.state.Store(state.cloneWithoutLogs())
+				txTable.state.Store(state.clone())
 				txTable.initState = state
 			} else {
 				// after all history
 				state := t.state.Load()
-				txTable.state.Store(state.cloneWithoutLogs())
+				txTable.state.Store(state.clone())
 				txTable.initState = state
 			}
 
 		} else {
 			// use latest
 			state := t.state.Load()
-			txTable.state.Store(state.cloneWithoutLogs())
+			txTable.state.Store(state.clone())
 			txTable.initState = state
 		}
 
@@ -202,10 +202,10 @@ func (t *Table[K, V, R]) Get(
 		return
 	}
 	state := txTable.state.Load().(*tableState[K, V])
-	pair := &KVPair[K, V]{
+	pair := KVPair[K, V]{
 		Key: key,
 	}
-	pair, ok := state.rows.Get(pair)
+	pair, ok := state.kv.Get(pair)
 	if !ok {
 		err = sql.ErrNoRows
 		return

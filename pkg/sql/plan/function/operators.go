@@ -818,6 +818,420 @@ var operators = map[int]Functions{
 		},
 	},
 
+	IN: {
+		Id:          IN,
+		Flag:        plan.Function_STRICT,
+		Layout:      IN_PREDICATE,
+		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
+		Overloads: []Function{
+			{
+				Index: 0,
+				Args: []types.T{
+					types.T_uint8,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INGeneral[uint8],
+			},
+			{
+				Index: 1,
+				Args: []types.T{
+					types.T_uint16,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INGeneral[uint16],
+			},
+			{
+				Index: 2,
+				Args: []types.T{
+					types.T_uint32,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INGeneral[uint32],
+			},
+			{
+				Index: 3,
+				Args: []types.T{
+					types.T_uint64,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INGeneral[uint64],
+			},
+			{
+				Index: 4,
+				Args: []types.T{
+					types.T_int8,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INGeneral[int8],
+			},
+			{
+				Index: 5,
+				Args: []types.T{
+					types.T_int16,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INGeneral[int16],
+			},
+			{
+				Index: 6,
+				Args: []types.T{
+					types.T_int32,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INGeneral[int32],
+			},
+			{
+				Index: 7,
+				Args: []types.T{
+					types.T_int64,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INGeneral[int64],
+			},
+			{
+				Index: 8,
+				Args: []types.T{
+					types.T_float32,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INGeneral[float32],
+			},
+			{
+				Index: 9,
+				Args: []types.T{
+					types.T_float64,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INGeneral[float64],
+			},
+			{
+				Index: 10,
+				Args: []types.T{
+					types.T_decimal64,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        nil,
+			},
+			{
+				Index: 11,
+				Args: []types.T{
+					types.T_decimal128,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        nil,
+			},
+			{
+				Index: 12,
+				Args: []types.T{
+					types.T_varchar,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INString,
+			},
+			{
+				Index: 13,
+				Args: []types.T{
+					types.T_char,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INString,
+			},
+			{
+				Index: 14,
+				Args: []types.T{
+					types.T_date,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INGeneral[types.Date],
+			},
+			{
+				Index: 15,
+				Args: []types.T{
+					types.T_datetime,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INGeneral[types.Datetime],
+			},
+			{
+				Index: 16,
+				Args: []types.T{
+					types.T_bool,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INGeneral[bool],
+			},
+			{
+				Index: 17,
+				Args: []types.T{
+					types.T_timestamp,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INGeneral[types.Timestamp],
+			},
+			{
+				Index: 18,
+				Args: []types.T{
+					types.T_blob,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        nil,
+			},
+			{
+				Index: 19,
+				Args: []types.T{
+					types.T_uuid,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        nil,
+			},
+			{
+				Index: 20,
+				Args: []types.T{
+					types.T_text,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INString,
+			},
+			{
+				Index: 21,
+				Args: []types.T{
+					types.T_time,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INGeneral[types.Time],
+			},
+		},
+	},
+
+	NOT_IN: {
+		Id:          NOT_IN,
+		Flag:        plan.Function_STRICT,
+		Layout:      IN_PREDICATE,
+		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
+		Overloads: []Function{
+			{
+				Index: 0,
+				Args: []types.T{
+					types.T_uint8,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINGeneral[uint8],
+			},
+			{
+				Index: 1,
+				Args: []types.T{
+					types.T_uint16,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINGeneral[uint16],
+			},
+			{
+				Index: 2,
+				Args: []types.T{
+					types.T_uint32,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINGeneral[uint32],
+			},
+			{
+				Index: 3,
+				Args: []types.T{
+					types.T_uint64,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINGeneral[uint64],
+			},
+			{
+				Index: 4,
+				Args: []types.T{
+					types.T_int8,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINGeneral[int8],
+			},
+			{
+				Index: 5,
+				Args: []types.T{
+					types.T_int16,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINGeneral[int16],
+			},
+			{
+				Index: 6,
+				Args: []types.T{
+					types.T_int32,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINGeneral[int32],
+			},
+			{
+				Index: 7,
+				Args: []types.T{
+					types.T_int64,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINGeneral[int64],
+			},
+			{
+				Index: 8,
+				Args: []types.T{
+					types.T_float32,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINGeneral[float32],
+			},
+			{
+				Index: 9,
+				Args: []types.T{
+					types.T_float64,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINGeneral[float64],
+			},
+			{
+				Index: 10,
+				Args: []types.T{
+					types.T_decimal64,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        nil,
+			},
+			{
+				Index: 11,
+				Args: []types.T{
+					types.T_decimal128,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        nil,
+			},
+			{
+				Index: 12,
+				Args: []types.T{
+					types.T_varchar,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINString,
+			},
+			{
+				Index: 13,
+				Args: []types.T{
+					types.T_char,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINString,
+			},
+			{
+				Index: 14,
+				Args: []types.T{
+					types.T_date,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINGeneral[types.Date],
+			},
+			{
+				Index: 15,
+				Args: []types.T{
+					types.T_datetime,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINGeneral[types.Datetime],
+			},
+			{
+				Index: 16,
+				Args: []types.T{
+					types.T_bool,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINGeneral[bool],
+			},
+			{
+				Index: 17,
+				Args: []types.T{
+					types.T_timestamp,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINGeneral[types.Timestamp],
+			},
+			{
+				Index: 18,
+				Args: []types.T{
+					types.T_blob,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        nil,
+			},
+			{
+				Index: 19,
+				Args: []types.T{
+					types.T_uuid,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        nil,
+			},
+			{
+				Index: 20,
+				Args: []types.T{
+					types.T_text,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINString,
+			},
+			{
+				Index: 21,
+				Args: []types.T{
+					types.T_time,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINGeneral[types.Time],
+			},
+		},
+	},
+
 	GREAT_THAN: {
 		Id:          GREAT_THAN,
 		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
@@ -2001,24 +2415,6 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        nil,
-			},
-		},
-	},
-
-	IN: {
-		Id:     IN,
-		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
-		Layout: IN_PREDICATE,
-		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
-			if len(inputs) == 2 && inputs[1] == types.T_tuple {
-				return 0, nil
-			}
-			return wrongFunctionParameters, nil
-		},
-		Overloads: []Function{
-			{
-				Index:     0,
-				ReturnTyp: types.T_bool,
 			},
 		},
 	},
