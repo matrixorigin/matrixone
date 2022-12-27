@@ -375,7 +375,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 
 		functionParameters := make([]*vector.Vector, len(t.F.Args))
 		for i := range functionParameters {
-			functionParameters[i], err = JoinFilterEvalExpr(r, s, rRow, proc, t.F.Args[i])
+			functionParameters[i], err = JoinFilterEvalExprInBucket(r, s, rRow, sRow, proc, t.F.Args[i])
 			if err != nil {
 				break
 			}

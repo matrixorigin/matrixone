@@ -2565,9 +2565,9 @@ func strToUnsigned[T constraints.Unsigned](
 			}
 			if tErr != nil {
 				if strings.Contains(tErr.Error(), "value out of range") {
-					return moerr.NewOutOfRange(ctx, "uint", "value '%s'", *res)
+					return moerr.NewOutOfRange(ctx, fmt.Sprintf("uint%d", bitSize), "value '%s'", *res)
 				}
-				return moerr.NewInvalidArg(ctx, "cast to uint", *res)
+				return moerr.NewInvalidArg(ctx, fmt.Sprintf("cast to uint%d", bitSize), *res)
 			}
 			if err := to.Append(T(val), false); err != nil {
 				return err

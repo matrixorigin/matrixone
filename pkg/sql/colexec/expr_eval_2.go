@@ -25,7 +25,7 @@ import (
 
 func evalFunction(proc *process.Process, f *function.Function, args []*vector.Vector, length int) (*vector.Vector, error) {
 	if !f.UseNewFramework {
-		v, err := f.Fn(args, proc)
+		v, err := f.VecFn(args, proc)
 		if err != nil {
 			return nil, err
 		}
