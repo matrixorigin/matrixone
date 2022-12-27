@@ -129,6 +129,7 @@ type scopeContext struct {
 type anaylze struct {
 	// curr is the current index of plan
 	curr      int
+	isFirst   bool
 	qry       *plan.Query
 	analInfos []*process.AnalyzeInfo
 }

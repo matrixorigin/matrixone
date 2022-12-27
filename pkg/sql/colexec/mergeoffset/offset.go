@@ -36,6 +36,7 @@ func Prepare(_ *process.Process, arg interface{}) error {
 func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 	ap := arg.(*Argument)
 	anal := proc.GetAnalyze(idx)
+	anal.Start()
 	defer anal.Stop()
 
 	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
