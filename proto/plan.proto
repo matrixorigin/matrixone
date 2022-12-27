@@ -624,6 +624,8 @@ message Node {
     // The pipeline will determine the parallelism by traversing the plan 
     // when it is received. Then the build is built based on this information.
     int32   parallelism = 26;
+
+	ClusterTable cluster_table = 27;
 }
 
 message DeleteTableCtx {
@@ -729,6 +731,7 @@ message InsertValues {
 	ColDef composite_pkey = 7;
 	UniqueIndexDef unique_index_def = 8;
 	SecondaryIndexDef secondary_index_def = 9;
+	ClusterTable cluster_table = 10;
 }
 
 message column{
@@ -849,6 +852,7 @@ message DropTable {
 	string database = 2;
 	string table 	= 3;
 	repeated string index_table_names = 4;
+	ClusterTable cluster_table = 5;
 }
 
 message CreateIndex {
@@ -872,6 +876,13 @@ message TruncateTable {
 	string database = 1;
 	string table = 2;
 	repeated string index_table_names = 3;
+	ClusterTable cluster_table = 4;
+}
+
+message ClusterTable{
+	bool is_cluster_table = 1;//insert into a cluster table
+	repeated uint32 accountIDs = 2;//insert data into the cluster table for every account
+	int32 column_index_of_accountId = 3;//the column index of the account id in the cluster table
 }
 
 message ShowVariables {

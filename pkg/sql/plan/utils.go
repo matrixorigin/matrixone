@@ -828,6 +828,9 @@ func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) *plan.Expr
 		}
 	}
 	e := colexec.RewriteFilterExprList(newExprList)
+	if proc == nil {
+		return e
+	}
 	if e != nil {
 		bat := batch.NewWithSize(0)
 		bat.Zs = []int64{1}

@@ -3018,7 +3018,7 @@ func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Ses
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
-	yes, err := authenticateUserCanExecuteStatementWithObjectTypeTable(requestCtx, ses, stmt, p)
+	yes, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(requestCtx, ses, stmt, p)
 	if err != nil {
 		return err
 	}
@@ -4111,6 +4111,9 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 				USE ROLE role;
 		*/
 		return !st.IsUseRole(), nil
+	case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView:
+		//background transaction can execute the DROPxxx in one transaction
+		return ses.IsBackgroundSession(), nil
 	}
 
 	return false, nil

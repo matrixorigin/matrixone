@@ -60,6 +60,7 @@ type SecondaryIndexDef = plan.SecondaryIndexDef
 type OrderBySpec = plan.OrderBySpec
 type CreateTable_FkColName = plan.CreateTable_FkColName
 type ForeignKeyDef = plan.ForeignKeyDef
+type ClusterTable = plan.ClusterTable
 
 type CompilerContext interface {
 	// Default database/schema in context
@@ -70,6 +71,8 @@ type CompilerContext interface {
 	Resolve(schemaName string, tableName string) (*ObjectRef, *TableDef)
 	// get the value of variable
 	ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	// get the list of the account id
+	ResolveAccountIds(accountNames []string) ([]uint32, error)
 	// get the definition of primary key
 	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
 	// get the definition of hide key
@@ -273,13 +276,14 @@ const (
 )
 
 type Binding struct {
-	tag         int32
-	nodeId      int32
-	table       string
-	cols        []string
-	types       []*plan.Type
-	refCnts     []uint
-	colIdByName map[string]int32
+	tag            int32
+	nodeId         int32
+	table          string
+	cols           []string
+	types          []*plan.Type
+	refCnts        []uint
+	colIdByName    map[string]int32
+	isClusterTable bool
 }
 
 const (

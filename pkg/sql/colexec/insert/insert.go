@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -49,6 +51,7 @@ type Argument struct {
 	UniqueIndexDef       *plan.UniqueIndexDef
 	SecondaryIndexTables []engine.Relation
 	SecondaryIndexDef    *plan.SecondaryIndexDef
+	ClusterTable         *plan.ClusterTable
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -63,7 +66,6 @@ func Prepare(_ *process.Process, _ any) error {
 }
 
 func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) error {
-	defer bat.Clean(proc.Mp())
 	// XXX The original logic was buggy and I had to temporarily circumvent it
 	if bat.Length() == 0 {
 		bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
@@ -183,7 +185,6 @@ func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, ba
 		return false, err
 	}
 
-	n.Affected += uint64(len(bat.Zs))
 	if err = CommitTxn(n, proc.TxnOperator, ctx); err != nil {
 		return false, err
 	}
@@ -199,13 +200,18 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
+	ctx := proc.Ctx
+	clusterTable := n.ClusterTable
+	if clusterTable.GetIsClusterTable() {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
 	defer bat.Clean(proc.Mp())
 	{
 		for i := range bat.Vecs {
 			// Not-null check, for more information, please refer to the comments in func InsertValues
 			if (n.TargetColDefs[i].Primary && !n.TargetColDefs[i].Typ.AutoIncr) || (n.TargetColDefs[i].Default != nil && !n.TargetColDefs[i].Default.NullAbility && !n.TargetColDefs[i].Typ.AutoIncr) {
 				if nulls.Any(bat.Vecs[i].Nsp) {
-					return false, moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
+					return false, moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 				}
 			}
 		}
@@ -216,10 +222,108 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		// scalar vector's extension
 		for i := range bat.Vecs {
 			bat.Attrs[i] = n.TargetColDefs[i].GetName()
-			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp())
+			bat.Vecs[i] = bat.Vecs[i].ConstExpand(false, proc.Mp())
+			if bat.Vecs[i].IsScalarNull() && n.TargetColDefs[i].GetTyp().GetAutoIncr() {
+				bat.Vecs[i].ConstExpand(true, proc.Mp())
+			}
 		}
 	}
-	if err := colexec.UpdateInsertBatch(n.Engine, proc.Ctx, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
+	if clusterTable.GetIsClusterTable() {
+		accountIdColumnDef := n.TargetColDefs[clusterTable.GetColumnIndexOfAccountId()]
+		accountIdExpr := accountIdColumnDef.GetDefault().GetExpr()
+		accountIdConst := accountIdExpr.GetC()
+
+		vecLen := vector.Length(bat.Vecs[0])
+		tmpBat := batch.NewWithSize(0)
+		tmpBat.Zs = []int64{1}
+		//save auto_increment column if necessary
+		savedAutoIncrVectors := make([]*vector.Vector, 0)
+		defer func() {
+			for _, vec := range savedAutoIncrVectors {
+				vector.Clean(vec, proc.Mp())
+			}
+		}()
+		for i, colDef := range n.TargetColDefs {
+			if colDef.GetTyp().GetAutoIncr() {
+				vec2, err := vector.Dup(bat.Vecs[i], proc.Mp())
+				if err != nil {
+					return false, err
+				}
+				savedAutoIncrVectors = append(savedAutoIncrVectors, vec2)
+			}
+		}
+		for idx, accountId := range clusterTable.GetAccountIDs() {
+			//update accountId in the accountIdExpr
+			accountIdConst.Value = &plan.Const_U32Val{U32Val: accountId}
+			accountIdVec := bat.Vecs[clusterTable.GetColumnIndexOfAccountId()]
+			//clean vector before fill it
+			vector.Clean(accountIdVec, proc.Mp())
+			//the i th row
+			for i := 0; i < vecLen; i++ {
+				err := fillRow(tmpBat, accountIdExpr, accountIdVec, proc)
+				if err != nil {
+					return false, err
+				}
+			}
+			if idx != 0 { //refill the auto_increment column vector
+				j := 0
+				for colIdx, colDef := range n.TargetColDefs {
+					if colDef.GetTyp().GetAutoIncr() {
+						targetVec := bat.Vecs[colIdx]
+						vector.Clean(targetVec, proc.Mp())
+						for k := int64(0); k < int64(vecLen); k++ {
+							err := vector.UnionOne(targetVec, savedAutoIncrVectors[j], k, proc.Mp())
+							if err != nil {
+								return false, err
+							}
+						}
+						j++
+					}
+				}
+			}
+			b, err := writeBatch(ctx, n, proc, bat)
+			if err != nil {
+				return b, err
+			}
+		}
+		return false, nil
+	} else {
+		return writeBatch(ctx, n, proc, bat)
+	}
+}
+
+/*
+fillRow evaluates the expression and put the result into the targetVec.
+tmpBat: store temporal vector
+expr: the expression to be evaluated at the position (colIdx,rowIdx)
+targetVec: the destination where the evaluated result of expr saved into
+*/
+func fillRow(tmpBat *batch.Batch,
+	expr *plan.Expr,
+	targetVec *vector.Vector,
+	proc *process.Process) error {
+	vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+	if err != nil {
+		return err
+	}
+	if vec.Size() == 0 {
+		vec = vec.ConstExpand(false, proc.Mp())
+	}
+	if err := vector.UnionOne(targetVec, vec, 0, proc.Mp()); err != nil {
+		vec.Free(proc.Mp())
+		return err
+	}
+	vec.Free(proc.Mp())
+	return err
+}
+
+// writeBatch saves the batch into the storage
+// and updates the auto increment table, index table.
+func writeBatch(ctx context.Context,
+	n *Argument,
+	proc *process.Process,
+	bat *batch.Batch) (bool, error) {
+	if err := colexec.UpdateInsertBatch(n.Engine, ctx, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
 		return false, err
 	}
 	if n.CPkeyColDef != nil {
@@ -230,7 +334,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 				for i := range bat.Vecs {
 					if n.TargetColDefs[i].Name == name {
 						if nulls.Any(bat.Vecs[i].Nsp) {
-							return false, moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
+							return false, moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 						}
 					}
 				}
@@ -243,7 +347,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		bat.Vecs[i] = vector.CheckInsertVector(bat.Vecs[i], proc.Mp())
 	}
 	if !proc.LoadTag {
-		return false, handleWrite(n, proc, proc.Ctx, bat)
+		return false, handleWrite(n, proc, ctx, bat)
 	}
-	return handleLoadWrite(n, proc, proc.Ctx, bat)
+	return handleLoadWrite(n, proc, ctx, bat)
 }

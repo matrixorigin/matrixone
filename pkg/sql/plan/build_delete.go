@@ -71,6 +71,9 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 	} else if tableDef.TableType == catalog.SystemViewRel {
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from view")
 	}
+	if util.TableIsClusterTable(tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can delete the cluster table %s", tableDef.GetName())
+	}
 
 	// optimize to truncate,
 	if stmt.Where == nil && stmt.Limit == nil {
@@ -187,6 +190,9 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from external table")
 		} else if tblDefs[i].TableType == catalog.SystemViewRel {
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from view")
+		}
+		if util.TableIsClusterTable(tblDefs[i].GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can delete the cluster table %s", tblDefs[i].GetName())
 		}
 	}
 	originMap := tf.baseNameMap

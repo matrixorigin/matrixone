@@ -539,8 +539,15 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 			}
 			plh.simdCsvLineArray[rowIdx] = Line
 		}
-		if len(Line) < getRealAttrCnt(param.Attrs) {
-			return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo())
+		if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
+			//the column account_id of the cluster table do need to be filled here
+			if len(Line)+1 < getRealAttrCnt(param.Attrs) {
+				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo())
+			}
+		} else {
+			if len(Line) < getRealAttrCnt(param.Attrs) {
+				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo())
+			}
 		}
 		err = getOneRowData(bat, Line, rowIdx, param, proc.Mp())
 		if err != nil {
@@ -773,6 +780,10 @@ func getStrFromLine(Line []string, colIdx int, param *ExternalParam) string {
 
 func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
 	for colIdx := range param.Attrs {
+		//for cluster table, the column account_id need not be filled here
+		if param.ClusterTable.GetIsClusterTable() && int(param.ClusterTable.GetColumnIndexOfAccountId()) == colIdx {
+			continue
+		}
 		field := getStrFromLine(Line, colIdx, param)
 		id := types.T(param.Cols[colIdx].Typ.Id)
 		if id != types.T_char && id != types.T_varchar {
