@@ -417,7 +417,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -2,
-						ColPos: int32(idx),
+						ColPos: int32(idx) + int32(len(node.GroupBy)),
 						Name:   builder.nameByColRef[globalRef],
 					},
 				},
@@ -448,7 +448,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: -2,
-							ColPos: 0,
+							ColPos: int32(len(node.GroupBy)),
 							Name:   builder.nameByColRef[globalRef],
 						},
 					},
