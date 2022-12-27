@@ -78,6 +78,7 @@ var (
 type MOLogger struct {
 	logger *zap.Logger
 	ctx    context.Context
+	m      map[int]*zap.Logger
 }
 
 // LogOptions log options
@@ -86,6 +87,7 @@ type LogOptions struct {
 	level      zapcore.Level
 	fields     []zap.Field
 	sampleType SampleType
+	callerSkip int
 }
 
 // logFilter used to filter the print log, returns false to abort this print

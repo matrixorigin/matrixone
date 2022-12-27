@@ -211,7 +211,7 @@ func addValEntry(buf []byte, bufStart, entryStart int, in interface{}) ([]byte, 
 	case TpCodeLiteral:
 		lit := buf[valStart]
 		buf = buf[:valStart]
-		buf[entryStart] = TpCodeLiteral
+		buf[entryStart] = byte(TpCodeLiteral)
 		buf[entryStart+1] = lit
 		return buf, nil
 	}
@@ -293,7 +293,7 @@ func isIdentifier(s string) bool {
 }
 
 func ParseJsonPath(path string) (p Path, err error) {
-	pg := NewPathGenerator(path)
+	pg := newPathGenerator(path)
 	pg.trimSpace()
 	if !pg.hasNext() || pg.next() != '$' {
 		err = moerr.NewInvalidInputNoCtx("invalid json path '%s'", path)
@@ -362,39 +362,45 @@ func checkMode(mode string) bool {
 	return false
 }
 
-func genIndexOrKey(pathStr string) (string, string) {
+func genIndexOrKey(pathStr string) ([]byte, []byte) {
 	if pathStr[len(pathStr)-1] == ']' {
 		// find last '['
 		idx := strings.LastIndex(pathStr, "[")
-		return pathStr[idx : len(pathStr)-1], ""
+		return string2Slice(pathStr[idx : len(pathStr)-1]), nil
 	}
 	// find last '.'
 	idx := strings.LastIndex(pathStr, ".")
-	return "", pathStr[idx+1:]
+	return nil, string2Slice(pathStr[idx+1:])
 }
 
 // for test
 func (r UnnestResult) String() string {
 	var buf bytes.Buffer
-	if val, ok := r["key"]; ok {
+	if val, ok := r["key"]; ok && val != nil {
 		buf.WriteString("key: ")
-		buf.WriteString(val + ", ")
+		buf.WriteString(string(val) + ", ")
 	}
-	if val, ok := r["path"]; ok {
+	if val, ok := r["path"]; ok && val != nil {
 		buf.WriteString("path: ")
-		buf.WriteString(val + ", ")
+		buf.WriteString(string(val) + ", ")
 	}
-	if val, ok := r["index"]; ok {
+	if val, ok := r["index"]; ok && val != nil {
 		buf.WriteString("index: ")
-		buf.WriteString(val + ", ")
+		buf.WriteString(string(val) + ", ")
 	}
-	if val, ok := r["value"]; ok {
+	if val, ok := r["value"]; ok && val != nil {
 		buf.WriteString("value: ")
-		buf.WriteString(val + ", ")
+		bj := ByteJson{}
+		bj.Unmarshal(val)
+		val, _ = bj.MarshalJSON()
+		buf.WriteString(string(val) + ", ")
 	}
-	if val, ok := r["this"]; ok {
+	if val, ok := r["this"]; ok && val != nil {
 		buf.WriteString("this: ")
-		buf.WriteString(val)
+		bj := ByteJson{}
+		bj.Unmarshal(val)
+		val, _ = bj.MarshalJSON()
+		buf.WriteString(string(val))
 	}
 	return buf.String()
 }

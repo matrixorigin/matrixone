@@ -168,7 +168,7 @@ func TestCheckExprIsMonotonic(t *testing.T) {
 
 	t.Run("test checkExprIsMonotonic", func(t *testing.T) {
 		for i, testCase := range testCases {
-			isMonotonic := checkExprIsMonotonic(context.TODO(), testCase.expr)
+			isMonotonic := plan2.CheckExprIsMonotonic(context.TODO(), testCase.expr)
 			if isMonotonic != testCase.result {
 				t.Fatalf("checkExprIsMonotonic testExprs[%d] is different with expected", i)
 			}
