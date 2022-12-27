@@ -245,6 +245,9 @@ func (e *testEngine) incrementalCheckpoint(
 		entry, err := e.DB.Wal.RangeCheckpoint(1, lsn)
 		assert.NoError(e.t, err)
 		assert.NoError(e.t, entry.WaitDone())
+		testutils.WaitExpect(1000, func() bool {
+			return e.Scheduler.GetPenddingLSNCnt() == 0
+		})
 	}
 	return nil
 }

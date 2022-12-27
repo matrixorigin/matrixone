@@ -874,6 +874,9 @@ func TestReplay5(t *testing.T) {
 	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
 	assert.NoError(t, err)
 	assert.NoError(t, entry.WaitDone())
+	testutils.WaitExpect(1000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
 	printCheckpointStats(t, tae)
 	assert.Equal(t, tae.Wal.GetCurrSeqNum(), tae.Wal.GetCheckpointed())
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))

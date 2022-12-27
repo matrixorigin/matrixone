@@ -846,13 +846,13 @@ func TestCompactABlk(t *testing.T) {
 	}
 	err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
-	testutils.WaitExpect(1000, func() bool {
-		return tae.Scheduler.GetPenddingLSNCnt() == 0
-	})
 	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
 	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
 	assert.NoError(t, err)
 	assert.NoError(t, entry.WaitDone())
+	testutils.WaitExpect(1000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
