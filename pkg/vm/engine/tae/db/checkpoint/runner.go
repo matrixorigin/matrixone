@@ -295,6 +295,7 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 		logutil.Errorf("Do checkpoint %s: %v", entry.String(), err)
 		return
 	}
+	entry.SetState(ST_Finished)
 	if err = r.saveCheckpoint(entry.start, entry.end); err != nil {
 		logutil.Errorf("Save checkpoint %s: %v", entry.String(), err)
 		return
@@ -309,7 +310,6 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 		panic(err)
 	}
 
-	entry.SetState(ST_Finished)
 	logutil.Infof("%s is done, takes %s, truncate %d", entry.String(), time.Since(now), lsn)
 
 	r.postCheckpointQueue.Enqueue(entry)
@@ -322,13 +322,13 @@ func (r *runner) MockCheckpoint(end types.TS) {
 	if err = r.doIncrementalCheckpoint(entry); err != nil {
 		panic(err)
 	}
-	if err = r.saveCheckpoint(entry.start, entry.end); err != nil {
-		panic(err)
-	}
 	r.storage.Lock()
 	r.storage.entries.Set(entry)
 	r.storage.Unlock()
 	entry.SetState(ST_Finished)
+	if err = r.saveCheckpoint(entry.start, entry.end); err != nil {
+		panic(err)
+	}
 	lsn := r.source.GetMaxLSN(entry.start, entry.end)
 	e, err := r.wal.RangeCheckpoint(1, lsn)
 	if err != nil {
@@ -435,6 +435,7 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 	location := blockio.EncodeMetalocFromMetas(filename, blks)
 	entry.SetLocation(location)
 	r.tryAddNewGlobalCheckpointEntry(entry)
+	entry.SetState(ST_Finished)
 	return
 }
 
