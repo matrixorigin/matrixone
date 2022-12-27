@@ -526,6 +526,7 @@ func buildShowFunctionStatus(stmt *tree.ShowFunctionStatus, ctx CompilerContext)
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 	ddlType := plan.DataDefinition_SHOW_TARGET
+	//To do
 	sql := "select 1 where 0"
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
@@ -597,10 +598,12 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 
 // TODO: Improve SQL. Currently, Lack of the mata of grants
 func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) {
+
 	ddlType := plan.DataDefinition_SHOW_TARGET
 	if stmt.ShowGrantType == tree.GrantForRole {
 		role_name := stmt.Roles[0].UserName
-		sql := fmt.Sprintf("select role_name, obj_type, privilege_name, privilege_level FROM  %s.mo_role_privs WHERE role_name = '%s'", MO_CATALOG_DB_NAME, role_name)
+		sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\")  as `Grants for %s` from  mo_catalog.mo_role_privs as p where p.role_name = '%s';"
+		sql = fmt.Sprintf(sql, role_name, role_name, role_name)
 		return returnByRewriteSQL(ctx, sql, ddlType)
 	} else {
 		if stmt.Hostname == "" {
