@@ -34,6 +34,7 @@ import (
 const (
 	MessgeReplay = iota
 	MessgeNormal
+	MessgaCompare
 )
 
 // DiskCleaner is the main structure of gc operation,
@@ -91,6 +92,12 @@ func NewDiskCleaner(
 func (cleaner *DiskCleaner) JobFactory(ctx context.Context) (err error) {
 	logutil.Infof("JobFactory is start")
 	return cleaner.tryClean(ctx)
+}
+
+func (cleaner *DiskCleaner) JobFCompare(ctx context.Context) (err error) {
+	logutil.Infof("JobFCompare is start")
+	_, err = cleaner.processQueue.Enqueue(MessgaCompare)
+	return err
 }
 
 // Replay is an interface provided for testing
@@ -185,6 +192,8 @@ func (cleaner *DiskCleaner) process(items ...any) {
 		ts = maxConsumed.GetEnd()
 	}
 
+	debugCandidates := cleaner.ckpClient.GetAllIncrementalCheckpoints()
+
 	candidates := cleaner.ckpClient.ICKPSeekLT(ts, 10)
 
 	if len(candidates) == 0 {
@@ -203,6 +212,34 @@ func (cleaner *DiskCleaner) process(items ...any) {
 
 	// TODO:
 	cleaner.tryGC()
+
+	for _, item := range items {
+		if item.(int) == MessgaCompare {
+			//var debugTable *GCTable
+			start1 := debugCandidates[len(debugCandidates)-1].GetStart()
+			start2 := candidates[len(candidates)-1].GetStart()
+			if !start1.Equal(start2) {
+				logutil.Infof("start1:%v not equal start2:%v", start1.ToString(), start2.ToString())
+				return
+			}
+			debugTable, err := cleaner.createDebugInput(debugCandidates)
+			if err != nil {
+				logutil.Errorf("processing clean %s: %v", debugCandidates[0].String(), err)
+				// TODO
+				return
+			}
+			debugTable.SoftGC()
+			cleaner.inputs.RLock()
+			defer cleaner.inputs.RUnlock()
+			if !cleaner.inputs.tables[0].Compare(debugTable) {
+				logutil.Infof("Compare is fail table len:%d", len(cleaner.inputs.tables))
+				logutil.Infof("inputs :%v", cleaner.inputs.tables[0].String())
+				logutil.Infof("debugTable :%v", debugTable.String())
+			} else {
+				logutil.Infof("Compare is End: %v", start1.ToString())
+			}
+		}
+	}
 
 }
 
@@ -240,6 +277,24 @@ func (cleaner *DiskCleaner) createNewInput(
 	)
 	if err != nil {
 		return
+	}
+
+	return
+}
+
+func (cleaner *DiskCleaner) createDebugInput(
+	ckps []*checkpoint.CheckpointEntry) (input *GCTable, err error) {
+	input = NewGCTable()
+	var data *logtail.CheckpointData
+	for _, candidate := range ckps {
+		data, err = cleaner.collectCkpData(candidate)
+		if err != nil {
+			logutil.Errorf("processing clean %s: %v", candidate.String(), err)
+			// TODO
+			return
+		}
+		defer data.Close()
+		input.UpdateTable(data)
 	}
 
 	return
