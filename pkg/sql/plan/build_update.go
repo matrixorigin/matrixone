@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"strings"
 )
 
@@ -100,6 +101,9 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		}
 		objRefs = append(objRefs, objRef)
 		tblRefs = append(tblRefs, tblRef)
+		if util.TableIsClusterTable(tblRef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can update the cluster table %s", tblRef.GetName())
+		}
 	}
 	//1. get the updated list information of the original table
 	updateTableList, err := buildUpdateTableList(stmt.Exprs, objRefs, tblRefs, tbinfo, ctx)

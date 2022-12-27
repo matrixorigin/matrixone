@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"strings"
 )
 
@@ -68,6 +69,9 @@ func buildMultTableDelete(ctx CompilerContext, stmt *tree.Delete) (*Plan, error)
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from external table")
 		} else if tableDefs[i].TableType == catalog.SystemViewRel {
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from view")
+		}
+		if util.TableIsClusterTable(tableDefs[i].GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can delete the cluster table %s", tableDefs[i].GetName())
 		}
 	}
 
@@ -189,6 +193,9 @@ func buildSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (*Plan, erro
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from external table")
 	} else if tableDef.TableType == catalog.SystemViewRel {
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from view")
+	}
+	if util.TableIsClusterTable(tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can delete the cluster table %s", tableDef.GetName())
 	}
 
 	// optimize to truncate,
