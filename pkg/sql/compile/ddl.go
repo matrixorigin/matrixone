@@ -16,10 +16,7 @@ package compile
 
 import (
 	"context"
-<<<<<<< HEAD
-=======
 	"strconv"
->>>>>>> f6727195e74eea52d2b4fbac53621087c8f6e382
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
