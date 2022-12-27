@@ -172,6 +172,15 @@ func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
 	return bs
 }
 
+func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
+	bat := NewBatch()
+	for i, attr := range b.Attrs {
+		v := NewVectorWithSharedMemory(b.Vecs[i], false)
+		bat.AddVector(attr, v)
+	}
+	return bat
+}
+
 func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	vec := MakeVector(v.Typ, nullable)
 	var bs *Bytes

@@ -33,6 +33,7 @@ import (
 
 const MO_CATALOG_DB_NAME = "mo_catalog"
 const MO_DEFUALT_HOSTNAME = "localhost"
+const INFORMATION_SCHEMA = "information_schema"
 
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	ctx CompilerContext) (*Plan, error) {
@@ -336,6 +337,46 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Plan, error) {
+	dbName := stmt.DbName
+	if stmt.DbName == "" {
+		dbName = ctx.DefaultDatabase()
+	} else if !ctx.DatabaseExists(dbName) {
+		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
+	}
+
+	if dbName == "" {
+		return nil, moerr.NewNoDB(ctx.GetContext())
+	}
+
+	ddlType := plan.DataDefinition_SHOW_TABLES
+
+	sql := "SELECT '%s', count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'"
+	sql = fmt.Sprintf(sql, dbName, dbName, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_cpkey_unique_0_%")
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*Plan, error) {
+	dbName := stmt.Table.GetDBName()
+	if dbName == "" {
+		dbName = ctx.DefaultDatabase()
+	} else if !ctx.DatabaseExists(dbName) {
+		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
+	}
+
+	tblName := string(stmt.Table.ToTableName().ObjectName)
+	_, tableDef := ctx.Resolve(dbName, tblName)
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+
+	ddlType := plan.DataDefinition_SHOW_COLUMNS
+	sql := "SELECT '%s', count(attname) `Number of columns in %s` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+	sql = fmt.Sprintf(sql, tblName, tblName, MO_CATALOG_DB_NAME, dbName, tblName)
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
 func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
@@ -424,9 +465,44 @@ func buildShowTarget(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error) 
 	switch stmt.Type {
 	case tree.ShowCharset:
 		sql = "select '' as `Charset`, '' as `Description`, '' as `Default collation`, '' as `Maxlen` where 0"
+	case tree.ShowTriggers:
+		return buildShowTriggers(stmt, ctx)
 	default:
 		sql = "select 1 where 0"
 	}
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowTriggers(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error) {
+	if stmt.Like != nil && stmt.Where != nil {
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
+	}
+
+	dbName := stmt.DbName
+	if stmt.DbName == "" {
+		dbName = ctx.DefaultDatabase()
+		stmt.DbName = dbName
+		if dbName == "" {
+			return nil, moerr.NewNoDB(ctx.GetContext())
+		}
+	} else if !ctx.DatabaseExists(dbName) {
+		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
+	}
+
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := fmt.Sprintf("SELECT trigger_name as `Trigger`, event_manipulation as `Event`, event_object_table as `Table`, action_statement as `Statement`, action_timing as `Timing`, created as `Created`, sql_mode, definer as `Definer`, character_set_client, collation_connection, database_collation as `Database Collation` FROM %s.TRIGGERS ", INFORMATION_SCHEMA)
+
+	if stmt.Where != nil {
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+	}
+
+	if stmt.Like != nil {
+		// append filter [AND ma.attname like stmt.Like] to WHERE clause
+		likeExpr := stmt.Like
+		likeExpr.Left = tree.SetUnresolvedName("event_object_table")
+		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+	}
+
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 

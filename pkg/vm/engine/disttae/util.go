@@ -46,30 +46,6 @@ const (
 	MAX_RANGE_SIZE int64  = 200
 )
 
-func checkExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			isMonotonic := checkExprIsMonotonic(ctx, arg)
-			if !isMonotonic {
-				return false
-			}
-		}
-
-		isMonotonic, _ := function.GetFunctionIsMonotonicById(ctx, exprImpl.F.Func.GetObj())
-		if !isMonotonic {
-			return false
-		}
-
-		return true
-	default:
-		return true
-	}
-}
-
 func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
 	if expr == nil {
 		return
@@ -214,7 +190,7 @@ func getZonemapDataFromMeta(ctx context.Context, columns []int, meta BlockMeta, 
 	return datas, dataTypes, nil
 }
 
-func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
+func evalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
 	if len(bat.Vecs) == 0 { //that's constant expr
 		e, err := plan2.ConstantFold(bat, expr, proc)
 		if err != nil {
@@ -226,14 +202,14 @@ func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process) (b
 				return bVal.Bval, nil
 			}
 		}
-		return false, moerr.NewInternalError(proc.Ctx, "cannot eval filter expr")
+		return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
 	} else {
-		vec, err := colexec.EvalExprByZonemapBat(bat, proc, expr)
+		vec, err := colexec.EvalExprByZonemapBat(ctx, bat, proc, expr)
 		if err != nil {
 			return false, err
 		}
 		if vec.Typ.Oid != types.T_bool {
-			return false, moerr.NewInternalError(proc.Ctx, "cannot eval filter expr")
+			return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
 		}
 		cols := vector.MustTCols[bool](vec)
 		for _, isNeed := range cols {

@@ -65,7 +65,7 @@ func bootstrap(ctx context.Context) (context.Context, error) {
 		trace.EnableTracer(true),
 		// config[traceBatchProcessor], distributed node should use "FileService" in system_vars_config.toml
 		// "FileService" is not implement yet
-		trace.WithBatchProcessMode("InternalExecutor"),
+		trace.WithBatchProcessMode("FileService"),
 		// WithFSWriterFactory for config[traceBatchProcessor] = "FileService"
 		trace.WithFSWriterFactory(dummyFSWriterFactory),
 		// WithSQLExecutor for config[traceBatchProcessor] = "InternalExecutor"
@@ -124,7 +124,7 @@ func logUsage(ctx context.Context) {
 	// (removed)
 
 	// case4: 3rd lib like dragonboat, could use logutil.DragonboatFactory, like
-	logger.SetLoggerFactory(logutil.DragonboatFactory)
+	//logger.SetLoggerFactory(logutil.DragonboatFactory)
 	plog := logger.GetLogger("dragonboat.logger")
 	plog.Infof("log with DragonboatFactory, now: %s", time.Now())
 }
@@ -210,6 +210,10 @@ func mixUsage(ctx context.Context) {
 
 	err := childFunc(newCtx)
 	trace.ReportError(newCtx, errutil.Wrapf(err, "extra %s", "message"), 0)
+	logutil.Warnf("ReportError with NoReport: '%v'", err)
+	noReportCtx := errutil.ContextWithNoReport(newCtx, true)
+	trace.ReportError(noReportCtx, err, 0)
+	logutil.Warnf("ReportError with NoReport, Done.")
 
 }
 

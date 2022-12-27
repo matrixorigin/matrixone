@@ -135,9 +135,9 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 	return s
 }
 
-func (h *txnRelation) Close() error   { return nil }
-func (h *txnRelation) GetMeta() any   { return h.table.entry }
-func (h *txnRelation) GetSchema() any { return h.table.entry.GetSchema() }
+func (h *txnRelation) Close() error { return nil }
+func (h *txnRelation) GetMeta() any { return h.table.entry }
+func (h *txnRelation) Schema() any  { return h.table.entry.GetSchema() }
 
 func (h *txnRelation) Rows() int64 {
 	if h.table.entry.GetDB().IsSystemDB() && h.table.entry.IsVirtual() {
@@ -162,6 +162,21 @@ func (h *txnRelation) Append(data *containers.Batch) error {
 	return h.Txn.GetStore().Append(h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
 }
 
+func (h *txnRelation) AddBlksWithMetaLoc(
+	pkVecs []containers.Vector,
+	file string,
+	metaLocs []string,
+	flag int32) error {
+	return h.Txn.GetStore().AddBlksWithMetaLoc(
+		h.table.entry.GetDB().ID,
+		h.table.entry.GetID(),
+		pkVecs,
+		file,
+		metaLocs,
+		flag,
+	)
+}
+
 func (h *txnRelation) GetSegment(id uint64) (seg handle.Segment, err error) {
 	fp := h.table.entry.AsCommonID()
 	fp.SegmentID = id
@@ -172,8 +187,8 @@ func (h *txnRelation) CreateSegment(is1PC bool) (seg handle.Segment, err error) 
 	return h.Txn.GetStore().CreateSegment(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
 }
 
-func (h *txnRelation) CreateNonAppendableSegment() (seg handle.Segment, err error) {
-	return h.Txn.GetStore().CreateNonAppendableSegment(h.table.entry.GetDB().ID, h.table.entry.GetID())
+func (h *txnRelation) CreateNonAppendableSegment(is1PC bool) (seg handle.Segment, err error) {
+	return h.Txn.GetStore().CreateNonAppendableSegment(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
 }
 
 func (h *txnRelation) SoftDeleteSegment(id uint64) (err error) {
@@ -292,4 +307,8 @@ func (h *txnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (er
 
 func (h *txnRelation) GetDB() (handle.Database, error) {
 	return h.Txn.GetStore().GetDatabase(h.GetMeta().(*catalog.TableEntry).GetDB().GetName())
+}
+
+func (h *txnRelation) UpdateConstraint(cstr []byte) (err error) {
+	return h.table.UpdateConstraint(cstr)
 }
