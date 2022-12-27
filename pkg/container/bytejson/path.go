@@ -31,36 +31,36 @@ func (p *Path) init(subs []subPath) {
 		if sub.tp == subPathKey && sub.key == "*" {
 			p.flag |= pathFlagSingleStar
 		}
-		if sub.tp == subPathIdx && sub.idx == subPathIdxALL {
+		if sub.tp == subPathIdx && sub.idx.num == subPathIdxALL && sub.idx.tp == numberIndices {
 			p.flag |= pathFlagSingleStar
 		}
 	}
 }
 
-func (p Path) empty() bool {
+func (p *Path) empty() bool {
 	return len(p.paths) == 0
 }
 
-func (p Path) step() (sub subPath, newP Path) {
+func (p *Path) step() (sub subPath, newP Path) {
 	sub = p.paths[0]
 	newP.init(p.paths[1:])
 	return
 }
 
-func (p Path) String() string {
+func (p *Path) String() string {
 	var s strings.Builder
 
 	s.WriteString("$")
 	for _, sub := range p.paths {
 		switch sub.tp {
 		case subPathIdx:
-			if sub.idx == subPathIdxALL {
-				s.WriteString("[*]")
-			} else {
-				s.WriteString("[")
-				s.WriteString(strconv.Itoa(sub.idx))
-				s.WriteString("]")
-			}
+			s.WriteString("[")
+			sub.idx.toString(&s)
+			s.WriteString("]")
+		case subPathRange:
+			s.WriteString("[")
+			sub.iRange.toString(&s)
+			s.WriteString("]")
 		case subPathKey:
 			s.WriteString(".")
 			//TODO check here is ok
@@ -72,7 +72,31 @@ func (p Path) String() string {
 	return s.String()
 }
 
-func NewPathGenerator(path string) *pathGenerator {
+func (pi subPathIndices) toString(s *strings.Builder) {
+	switch pi.tp {
+	case numberIndices:
+		if pi.num == subPathIdxALL {
+			s.WriteString("*")
+		} else {
+			s.WriteString(strconv.Itoa(pi.num))
+		}
+	case lastIndices:
+		s.WriteString(lastKey)
+		if pi.num > 0 {
+			s.WriteString(" - ")
+			s.WriteString(strconv.Itoa(pi.num))
+		}
+	default:
+		panic("invalid index type")
+	}
+}
+func (pe subPathRangeExpr) toString(s *strings.Builder) {
+	pe.start.toString(s)
+	s.WriteString(" to ")
+	pe.end.toString(s)
+}
+
+func newPathGenerator(path string) *pathGenerator {
 	return &pathGenerator{
 		pathStr: path,
 		pos:     0,
@@ -87,7 +111,7 @@ func (pg *pathGenerator) trimSpace() {
 	}
 }
 
-func (pg pathGenerator) hasNext() bool {
+func (pg *pathGenerator) hasNext() bool {
 	return pg.pos < len(pg.pathStr)
 }
 
@@ -96,8 +120,17 @@ func (pg *pathGenerator) next() byte {
 	pg.pos++
 	return ret
 }
-func (pg pathGenerator) front() byte {
+func (pg *pathGenerator) front() byte {
 	return pg.pathStr[pg.pos]
+}
+func (pg *pathGenerator) tryNext(inc int) string {
+	if pg.pos+inc > len(pg.pathStr) {
+		return ""
+	}
+	return pg.pathStr[pg.pos : pg.pos+inc]
+}
+func (pg *pathGenerator) skip(inc int) {
+	pg.pos += inc
 }
 
 func (pg *pathGenerator) nextUtil(f func(byte) bool) (string, bool) {
@@ -126,6 +159,52 @@ func (pg *pathGenerator) generateDoubleStar(legs []subPath) ([]subPath, bool) {
 	})
 	return legs, true
 }
+
+func (pg *pathGenerator) tryIndices(rs *subPathIndices) bool {
+	rs.num = 0
+	if pg.tryNext(lastKeyLen) == lastKey {
+		rs.tp = lastIndices
+		pg.skip(lastKeyLen)
+		pg.trimSpace()
+		if !pg.hasNext() {
+			return false
+		}
+		if pg.front() == '-' {
+			pg.next()
+			pg.trimSpace()
+			if !pg.hasNext() {
+				return false
+			}
+			if idx, ok := pg.tryNumberIndex(); ok {
+				rs.num = idx
+				return true
+			}
+			return false
+		}
+		return true
+	}
+	if idx, ok := pg.tryNumberIndex(); ok {
+		rs.tp = numberIndices
+		rs.num = idx
+		return true
+	}
+	return false
+}
+
+func (pg *pathGenerator) tryNumberIndex() (int, bool) {
+	str, isEnd := pg.nextUtil(func(b byte) bool { // now only support non-negative integer
+		return b >= '0' && b <= '9'
+	})
+	if isEnd {
+		return 0, false
+	}
+	index, err := strconv.Atoi(str)
+	if err != nil || index > math.MaxUint32 {
+		return 0, false
+	}
+	return index, true
+}
+
 func (pg *pathGenerator) generateIndex(legs []subPath) ([]subPath, bool) {
 	pg.next()
 	pg.trimSpace()
@@ -135,25 +214,61 @@ func (pg *pathGenerator) generateIndex(legs []subPath) ([]subPath, bool) {
 	if pg.front() == '*' {
 		pg.next()
 		legs = append(legs, subPath{
-			tp:  subPathIdx,
-			idx: subPathIdxALL,
+			tp: subPathIdx,
+			idx: &subPathIndices{
+				tp:  numberIndices,
+				num: subPathIdxALL,
+			},
 		})
-	} else {
-		str, isEnd := pg.nextUtil(func(b byte) bool { // now only support non-negative integer
-			return b >= '0' && b <= '9'
-		})
-		if isEnd {
+		pg.trimSpace()
+		if !pg.hasNext() || pg.next() != ']' {
 			return nil, false
 		}
-		index, err := strconv.Atoi(str)
-		if err != nil || index > math.MaxUint32 {
+		return legs, true
+	}
+	i1 := &subPathIndices{}
+	ok := pg.tryIndices(i1)
+	if !ok {
+		return nil, false
+	}
+	if !pg.hasNext() {
+		return nil, false
+	}
+	pg.trimSpace()
+	if pg.tryNext(toKeyLen) == toKey {
+		if pg.pathStr[pg.pos-1] != ' ' {
+			return nil, false
+		}
+		pg.skip(toKeyLen)
+		if !pg.hasNext() {
+			return nil, false
+		}
+		if pg.front() != ' ' {
+			return nil, false
+		}
+		pg.trimSpace()
+		i2 := &subPathIndices{}
+		ok = pg.tryIndices(i2)
+		if !ok {
+			return nil, false
+		}
+		if i1.tp == lastIndices && i2.tp == lastIndices && i1.num < i2.num {
 			return nil, false
 		}
 		legs = append(legs, subPath{
+			tp: subPathRange,
+			iRange: &subPathRangeExpr{
+				start: i1,
+				end:   i2,
+			},
+		})
+	} else {
+		legs = append(legs, subPath{
 			tp:  subPathIdx,
-			idx: index,
+			idx: i1,
 		})
 	}
+
 	pg.trimSpace()
 	if !pg.hasNext() || pg.next() != ']' {
 		return nil, false
@@ -213,4 +328,33 @@ func (pg *pathGenerator) generateKey(legs []subPath) ([]subPath, bool) {
 		})
 	}
 	return legs, true
+}
+
+// genIndex returns originVal,modifiedVal,ok
+func (pi subPathIndices) genIndex(cnt int) (int, int, bool) {
+	switch pi.tp {
+	case numberIndices:
+		if pi.num >= cnt {
+			return pi.num, cnt - 1, false
+		}
+		return pi.num, pi.num, false
+	case lastIndices:
+		idx := cnt - pi.num - 1
+		if idx < 0 {
+			return idx, 0, true
+		}
+		return idx, idx, true
+	}
+	return subPathIdxErr, subPathIdxErr, false
+}
+
+func (pe subPathRangeExpr) genRange(cnt int) (ret [2]int) {
+	orig1, mdf1, _ := pe.start.genIndex(cnt)
+	orig2, mdf2, _ := pe.end.genIndex(cnt)
+	if orig1 > orig2 {
+		ret[0], ret[1] = subPathIdxErr, subPathIdxErr
+		return
+	}
+	ret[0], ret[1] = mdf1, mdf2
+	return
 }

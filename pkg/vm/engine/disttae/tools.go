@@ -141,7 +141,7 @@ func genTableConstraintTuple(tblId, dbId uint64, tblName, dbName string, constra
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_UPDATE_CONSTRAINT
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[catalog.MO_TABLES_CONSTRAINT]) // constraint
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[catalog.MO_TABLES_CONSTRAINT_IDX]) // constraint
 		if err := bat.Vecs[idx].Append(constraint, false, m); err != nil {
 			return nil, err
 		}
@@ -227,7 +227,7 @@ func genCreateTableTuple(tbl *table, sql string, accountId, userId, roleId uint3
 		if err := bat.Vecs[idx].Append([]byte(tbl.viewdef), false, m); err != nil {
 			return nil, err
 		}
-		idx = catalog.MO_TABLES_CONSTRAINT
+		idx = catalog.MO_TABLES_CONSTRAINT_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // constraint
 		if err := bat.Vecs[idx].Append(tbl.constraint, false, m); err != nil {
 			return nil, err
@@ -773,6 +773,7 @@ func getColumnsFromRows(rows [][]any) []column {
 func genTableDefOfColumn(col column) engine.TableDef {
 	var attr engine.Attribute
 
+	attr.ID = uint64(col.num)
 	attr.Name = col.name
 	attr.Alg = compress.Lz4
 	attr.Comment = col.comment
@@ -825,7 +826,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			}
 		}
 	}
-	num := 0
+	var num int32 = 0
 	cols := make([]column, 0, len(defs))
 	for _, def := range defs {
 		attrDef, ok := def.(*engine.AttributeDef)
@@ -845,7 +846,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			name:         attrDef.Attr.Name,
 			tableName:    tableName,
 			databaseName: databaseName,
-			num:          int32(num),
+			num:          num,
 			comment:      attrDef.Attr.Comment,
 		}
 		col.hasDef = 0
@@ -1070,7 +1071,7 @@ func genModifedBlocks(ctx context.Context, deletes map[uint64][]int, orgs, modfs
 		blockMap[modfs[i].Info.BlockID] = true
 	}
 
-	exprMono := checkExprIsMonotonic(ctx, expr)
+	exprMono := plantool.CheckExprIsMonotonic(ctx, expr)
 	columnMap, columns, maxCol := getColumnsByExpr(expr, tableDef)
 	for i, blk := range orgs {
 		if !inBlockMap(blk, blockMap) {

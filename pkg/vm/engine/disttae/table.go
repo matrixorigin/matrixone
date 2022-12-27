@@ -16,8 +16,8 @@ package disttae
 
 import (
 	"context"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"math/rand"
-	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -47,7 +47,7 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 	var blockNum, totalBlockCnt int
 	var outcnt int64
 
-	exprMono := checkExprIsMonotonic(ctx, expr)
+	exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
 	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
 
 	for _, blockmetas := range tbl.meta.blocks {
@@ -208,7 +208,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	}
 	tbl.meta.modifedBlocks = make([][]ModifyBlockMeta, len(tbl.meta.blocks))
 
-	exprMono := checkExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
+	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
 	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range dnList {
 		blks, deletes := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
@@ -431,8 +431,8 @@ func (tbl *table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 	return nil
 }
 
-func (tbl *table) GetTableID(ctx context.Context) string {
-	return strconv.FormatUint(tbl.tableId, 10)
+func (tbl *table) GetTableID(ctx context.Context) uint64 {
+	return tbl.tableId
 }
 
 func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {

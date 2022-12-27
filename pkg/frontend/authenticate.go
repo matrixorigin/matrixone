@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -297,6 +298,8 @@ const (
 	userStatusLock   = "lock"
 	userStatusUnlock = "unlock"
 
+	defaultPasswordEnv = "DEFAULT_PASSWORD"
+
 	rootID            = 0
 	rootHost          = "localhost"
 	rootName          = "root"
@@ -308,10 +311,10 @@ const (
 	rootOwnerRoleID   = moAdminRoleID
 	rootDefaultRoleID = moAdminRoleID
 
-	dumpID            = 1
-	dumpHost          = "localhost"
-	dumpName          = "dump"
-	dumpPassword      = "111"
+	dumpID   = 1
+	dumpHost = "localhost"
+	dumpName = "dump"
+	//dumpPassword      = "111"
 	dumpStatus        = userStatusUnlock
 	dumpExpiredTime   = "NULL"
 	dumpLoginType     = "PASSWORD"
@@ -2379,6 +2382,10 @@ handleFailed:
 	return err
 }
 
+func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) error {
+	return nil
+}
+
 // doRevokePrivilege accomplishes the RevokePrivilege statement
 func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivilege) error {
 	var err error
@@ -3240,6 +3247,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeDropAccount)
 	case *tree.AlterAccount:
 		typs = append(typs, PrivilegeTypeAlterAccount)
+	case *tree.AlterView:
+		typs = append(typs, PrivilegeTypeAlterView)
 	case *tree.CreateUser:
 		if st.Role == nil {
 			typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
@@ -3331,6 +3340,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
+	case *tree.CreateFunction:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
 	case *tree.DropTable:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropTable, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -3345,6 +3358,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
 		}
+	case *tree.DropFunction:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
 	case *tree.Select, *tree.Do:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
@@ -3383,7 +3400,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
-		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex:
+		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
+		*tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
@@ -4791,8 +4809,13 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 
 	//step 3:add new user entry to the mo_user
 
-	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, rootPassword, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
-	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, dumpPassword, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
+	defaultPassword := rootPassword
+	if d := os.Getenv(defaultPasswordEnv); d != "" {
+		defaultPassword = d
+	}
+
+	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, defaultPassword, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
+	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, defaultPassword, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
 	addSqlIntoSet(initMoUser1)
 	addSqlIntoSet(initMoUser2)
 
@@ -5548,4 +5571,8 @@ handleFailed:
 		return rbErr
 	}
 	return err
+}
+
+func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) error {
+	return nil
 }

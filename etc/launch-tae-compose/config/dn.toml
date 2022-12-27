@@ -52,4 +52,4 @@ flush-interval = "60s"
 min-count = 100
 scan-interval = "5s"
 incremental-interval = "180s"
-global-interval = "100000s"
+global-min-count = 60

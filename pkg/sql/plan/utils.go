@@ -761,7 +761,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil {
-			node.Stats = builder.compCtx.Stats(node.ObjRef, handleFiltersForStats(node.FilterList, builder.compCtx.GetProcess()))
+			node.Stats = builder.compCtx.Stats(node.ObjRef, HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess()))
 		}
 
 	default:
@@ -792,10 +792,38 @@ func containsParamRef(expr *plan.Expr) bool {
 	return ret
 }
 
-func handleFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
+func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			isMonotonic := CheckExprIsMonotonic(ctx, arg)
+			if !isMonotonic {
+				return false
+			}
+		}
+
+		isMonotonic, _ := function.GetFunctionIsMonotonicById(ctx, exprImpl.F.Func.GetObj())
+		if !isMonotonic {
+			return false
+		}
+
+		return true
+	default:
+		return true
+	}
+}
+
+// handle the filter list for zonemap. rewrite and constFold
+func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
+	if proc == nil || proc.Ctx == nil {
+		return nil
+	}
 	var newExprList []*plan.Expr
 	for _, expr := range exprList {
-		if !containsParamRef(expr) {
+		if !containsParamRef(expr) && CheckExprIsMonotonic(proc.Ctx, expr) {
 			newExprList = append(newExprList, expr)
 		}
 	}
@@ -916,7 +944,7 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 				Dval: vec.Col.([]float64)[0],
 			},
 		}
-	case types.T_varchar:
+	case types.T_varchar, types.T_char, types.T_text:
 		return &plan.Const{
 			Value: &plan.Const_Sval{
 				Sval: vec.GetString(0),

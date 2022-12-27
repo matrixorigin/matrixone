@@ -16,7 +16,6 @@ package moengine
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -91,6 +90,10 @@ func (rel *baseRelation) Rows(c context.Context) (int64, error) {
 	return rows, err
 }
 
+func (rel *baseRelation) GetSchema(_ context.Context) *catalog.Schema {
+	return rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+}
+
 func (rel *baseRelation) GetPrimaryKeys(_ context.Context) ([]*engine.Attribute, error) {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	if !schema.HasPK() {
@@ -148,8 +151,8 @@ func (rel *baseRelation) NewReader(_ context.Context, num int, _ *plan.Expr, _ [
 	return rds, nil
 }
 
-func (rel *baseRelation) GetTableID(_ context.Context) string {
-	return fmt.Sprintf("%d", rel.handle.ID())
+func (rel *baseRelation) GetTableID(_ context.Context) uint64 {
+	return rel.handle.ID()
 }
 
 func (rel *baseRelation) GetRelationID(_ context.Context) uint64 {
