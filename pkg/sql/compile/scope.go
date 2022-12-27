@@ -319,9 +319,10 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 					Op: vm.Group,
 					Arg: &group.Argument{
-						Aggs:  arg.Aggs,
-						Exprs: arg.Exprs,
-						Types: arg.Types,
+						Aggs:      arg.Aggs,
+						Exprs:     arg.Exprs,
+						Types:     arg.Types,
+						MultiAggs: arg.MultiAggs,
 					},
 				})
 			}

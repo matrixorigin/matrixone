@@ -122,7 +122,12 @@ func NewCreateDatabase(ine bool, name Identifier, opts []CreateOption) *CreateDa
 
 type CreateTable struct {
 	statementImpl
+	/*
+		it is impossible to be the temporary table, the cluster table,
+		the normal table and the external table at the same time.
+	*/
 	Temporary       bool
+	IsClusterTable  bool
 	IfNotExists     bool
 	Table           TableName
 	Defs            TableDefs
@@ -136,6 +141,9 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	ctx.WriteString("create")
 	if node.Temporary {
 		ctx.WriteString(" temporary")
+	}
+	if node.IsClusterTable {
+		ctx.WriteString(" cluster")
 	}
 	if node.Param != nil {
 		ctx.WriteString(" external")

@@ -198,6 +198,7 @@ message Entry {
     enum EntryType {
         Insert = 0;
         Delete = 1;
+        Update = 2;
     }
     EntryType entry_type = 1;
     uint64    table_id = 2;

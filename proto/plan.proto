@@ -824,11 +824,19 @@ message DropDatabase {
 }
 
 message CreateTable {
+	message FkColName {
+		repeated string cols = 1;
+	}
 	bool if_not_exists 	= 1;
 	bool temporary 		= 2;
 	string database 	= 3;
 	TableDef table_def 	= 4;
 	repeated TableDef index_tables = 5;
+	// we need the db/table name of foreign key when create table. but we don't need it in ForeignKeyDef
+	repeated string fk_dbs = 6;
+	repeated string fk_tables = 7;
+	// we need column name when create table, but not in ForeignKeyDef
+	repeated FkColName fk_cols = 8;
 }
 
 message AlterTable {
@@ -844,8 +852,9 @@ message DropTable {
 }
 
 message CreateIndex {
-	bool if_not_exists 	= 1;
-	string index 		= 2;
+	string database = 1;
+	string table = 2;
+	CreateTable index = 3;
 }
 
 message AlterIndex {
@@ -853,8 +862,10 @@ message AlterIndex {
 }
 
 message DropIndex {
-	bool if_exists 	= 1;
-	string index 	= 2;
+	string database = 1;
+	string table = 2;
+	string index_name = 3;
+	string index_table_name = 4;
 }
 
 message TruncateTable {

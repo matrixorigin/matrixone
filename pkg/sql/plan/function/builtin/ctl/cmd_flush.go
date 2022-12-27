@@ -57,18 +57,14 @@ func handleFlush() handleFunc {
 				return nil, err
 			}
 			dId := database.GetDatabaseId(proc.Ctx)
-			tId := rel.GetTableID(proc.Ctx)
+			tableId := rel.GetTableID(proc.Ctx)
 			dbId, err := strconv.Atoi(dId)
-			if err != nil {
-				return nil, err
-			}
-			tableId, err := strconv.Atoi(tId)
 			if err != nil {
 				return nil, err
 			}
 			payload, err := types.Encode(db.FlushTable{
 				DatabaseID: uint64(dbId),
-				TableID:    uint64(tableId),
+				TableID:    tableId,
 				AccessInfo: db.AccessInfo{
 					AccountID: proc.SessionInfo.AccountId,
 					UserID:    proc.SessionInfo.UserId,

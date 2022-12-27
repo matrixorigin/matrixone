@@ -1655,6 +1655,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		return nil, nil
 	}
 	ctx := tcc.GetSession().GetRequestContext()
+	tableId := table.GetTableID(ctx)
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
 		return nil, nil
@@ -1666,11 +1667,14 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	var TableType, Createsql string
 	var CompositePkey *plan2.ColDef = nil
 	var viewSql *plan2.ViewDef
+	var foreignKeys []*plan2.ForeignKeyDef
+	var refChildTbls []uint64
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(attr.Attr.Name)
 			col := &plan2.ColDef{
-				Name: attr.Attr.Name,
+				ColId: attr.Attr.ID,
+				Name:  attr.Attr.Name,
 				Typ: &plan2.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
@@ -1734,6 +1738,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 							SIdx: s,
 						},
 					})
+				case *engine.ForeignKeyDef:
+					foreignKeys = k.Fkeys
+				case *engine.RefChildTableDef:
+					refChildTbls = k.Tables
 				}
 			}
 		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
@@ -1789,6 +1797,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	}
 
 	tableDef := &plan2.TableDef{
+		TblId:         tableId,
 		Name:          tableName,
 		Cols:          cols,
 		Defs:          defs,
@@ -1796,6 +1805,8 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		Createsql:     Createsql,
 		CompositePkey: CompositePkey,
 		ViewSql:       viewSql,
+		Fkeys:         foreignKeys,
+		RefChildTbls:  refChildTbls,
 	}
 	return obj, tableDef
 }

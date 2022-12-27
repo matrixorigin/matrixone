@@ -360,17 +360,16 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	return
 }
 
-func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
+func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint64) (next int) {
 	nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
 	tidVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelID)
-	tid := tidVec.Get(offset).(uint64)
 	for {
 		if offset >= nameVec.Length() {
 			break
 		}
 		name := string(nameVec.Get(offset).([]byte))
 		id := tidVec.Get(offset).(uint64)
-		if name != s.Name || id != tid {
+		if name != s.Name || targetTid != id {
 			break
 		}
 		def := new(ColDef)
@@ -598,10 +597,6 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 		if err = s.AppendColDef(phyAddrDef); err != nil {
 			return
 		}
-	}
-	if len(s.ColDefs) == 0 {
-		err = moerr.NewConstraintViolationNoCtx("empty column defs")
-		return
 	}
 
 	// sortColIdx is sort key index list. as of now, sort key is pk
