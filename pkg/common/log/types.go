@@ -78,6 +78,7 @@ var (
 type MOLogger struct {
 	logger *zap.Logger
 	ctx    context.Context
+	m      map[int]*zap.Logger
 }
 
 // LogOptions log options

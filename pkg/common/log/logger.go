@@ -42,19 +42,13 @@ func GetModuleLogger(logger *MOLogger, module Module) *MOLogger {
 // With creates a child logger and adds structured context to it. Fields added
 // to the child don't affect the parent, and vice versa.
 func (l *MOLogger) With(fields ...zap.Field) *MOLogger {
-	return &MOLogger{
-		logger: l.logger.With(fields...),
-		ctx:    l.ctx,
-	}
+	return newMOLogger(l.logger.With(fields...), l.ctx)
 }
 
 // Named adds a new path segment to the logger's name. Segments are joined by
 // periods. By default, Loggers are unnamed.
 func (l *MOLogger) Named(name string) *MOLogger {
-	return &MOLogger{
-		logger: l.logger.Named(name),
-		ctx:    l.ctx,
-	}
+	return newMOLogger(l.logger.Named(name), l.ctx)
 }
 
 func (l *MOLogger) WithContext(ctx context.Context) *MOLogger {
@@ -64,9 +58,18 @@ func (l *MOLogger) WithContext(ctx context.Context) *MOLogger {
 	if sc := trace.SpanFromContext(ctx).SpanContext(); trace.GetTracerProvider().IsEnable() && sc.IsEmpty() {
 		panic("context with empty SpanContext are not supported")
 	}
+	return newMOLogger(l.logger, ctx)
+}
+
+func newMOLogger(logger *zap.Logger, ctx context.Context) *MOLogger {
 	return &MOLogger{
-		logger: l.logger,
+		logger: logger,
 		ctx:    ctx,
+		m: map[int]*zap.Logger{
+			1: logger.WithOptions(zap.AddCallerSkip(1)),
+			2: logger.WithOptions(zap.AddCallerSkip(2)),
+			3: logger.WithOptions(zap.AddCallerSkip(3)),
+		},
 	}
 }
 
@@ -137,7 +140,10 @@ func (l *MOLogger) Log(msg string, opts LogOptions, fields ...zap.Field) bool {
 		opts.ctx = l.ctx
 	}
 
-	logger := l.logger.WithOptions(zap.AddCallerSkip(opts.callerSkip + 1))
+	logger, has := l.m[opts.callerSkip+1]
+	if !has {
+		logger = l.logger
+	}
 	if ce := logger.Check(opts.level, msg); ce != nil {
 		if len(opts.fields) > 0 {
 			fields = append(fields, opts.fields...)
@@ -187,10 +193,10 @@ func wrapWithContext(logger *zap.Logger, ctx context.Context) *MOLogger {
 		panic("TODO and Background are not supported")
 	}
 
-	return &MOLogger{
-		logger: logger.WithOptions(zap.AddStacktrace(zap.ErrorLevel)),
-		ctx:    ctx,
-	}
+	return newMOLogger(
+		logger.WithOptions(zap.AddStacktrace(zap.ErrorLevel)),
+		ctx,
+	)
 }
 
 func nothing() {}
