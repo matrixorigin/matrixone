@@ -121,7 +121,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	// set tableDef
-	err := buildTableDefs(stmt.Defs, ctx, createTable)
+	err := buildTableDefs(stmt, ctx, createTable)
 	if err != nil {
 		return nil, err
 	}
@@ -209,10 +209,14 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 				},
 			}})
 	} else {
+		kind := catalog.SystemOrdinaryRel
+		if stmt.IsClusterTable {
+			kind = catalog.SystemClusterRel
+		}
 		properties := []*plan.Property{
 			{
 				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.SystemOrdinaryRel,
+				Value: kind,
 			},
 			{
 				Key:   catalog.SystemRelAttr_CreateSQL,
@@ -306,12 +310,12 @@ func buildPartitionByClause(partitionBinder *PartitionBinder, stmt *tree.CreateT
 	return err
 }
 
-func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.CreateTable) error {
+func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable) error {
 	var primaryKeys []string
 	var indexs []string
 	colMap := make(map[string]*ColDef)
 	indexInfos := make([]*tree.UniqueIndex, 0)
-	for _, item := range defs {
+	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
 			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
@@ -507,6 +511,41 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 		default:
 			return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
 		}
+	}
+
+	//add cluster table attribute
+	if stmt.IsClusterTable {
+		if _, ok := colMap[util.GetClusterTableAttributeName()]; ok {
+			return moerr.NewInvalidInput(ctx.GetContext(), "the attribute account_id in the cluster table can not be defined directly by the user")
+		}
+		colType, err := getTypeFromAst(ctx.GetContext(), util.GetClusterTableAttributeType())
+		if err != nil {
+			return err
+		}
+		colDef := &ColDef{
+			Name:    util.GetClusterTableAttributeName(),
+			Alg:     plan.CompressType_Lz4,
+			Typ:     colType,
+			NotNull: true,
+			Default: &plan.Default{
+				Expr: &Expr{
+					Expr: &plan.Expr_C{
+						C: &Const{
+							Isnull: false,
+							Value:  &plan.Const_U32Val{U32Val: catalog.System_Account},
+						},
+					},
+					Typ: &plan.Type{
+						Id:          colType.Id,
+						NotNullable: true,
+					},
+				},
+				NullAbility: false,
+			},
+			Comment: "the account_id added by the mo",
+		}
+		colMap[util.GetClusterTableAttributeName()] = colDef
+		createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 	}
 
 	pkeyName := ""
@@ -715,6 +754,15 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 		}
 
+		truncateTable.ClusterTable = &plan.ClusterTable{
+			IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
+		}
+
+		//non-sys account can not truncate the cluster table
+		if truncateTable.GetClusterTable().GetIsClusterTable() && ctx.GetAccountId() != catalog.System_Account {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can truncate the cluster table")
+		}
+
 		uDef, sDef := buildIndexDefs(tableDef.Defs)
 		truncateTable.IndexTableNames = make([]string, 0)
 		if uDef != nil {
@@ -777,6 +825,16 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			// drop table if exists v0, v0 is view
 			dropTable.Table = ""
 		}
+
+		dropTable.ClusterTable = &plan.ClusterTable{
+			IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
+		}
+
+		//non-sys account can not drop the cluster table
+		if dropTable.GetClusterTable().GetIsClusterTable() && ctx.GetAccountId() != catalog.System_Account {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
+		}
+
 		uDef, sDef := buildIndexDefs(tableDef.Defs)
 		dropTable.IndexTableNames = make([]string, 0)
 		if uDef != nil {

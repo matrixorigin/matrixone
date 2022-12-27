@@ -18,12 +18,12 @@ JSON binary format is a binary format for storing JSON data.
  JSON doc ::= type value
     type ::=
         0x01 |       // object
-        0x02 |       // array
-        0x03 |       // literal (true/false/null)
-        0x04 |       // int64
-        0x05 |       // uint64
-        0x06 |       // float64
-        0x07 |       // string
+        0x03 |       // array
+        0x04 |       // literal (true/false/null)
+        0x09 |       // int64
+        0x0a |       // uint64
+        0x0b |       // float64
+        0x0c |       // string
 
     value ::=
         object  |
@@ -170,13 +170,19 @@ JSON Path is a path expression that can be used to access a value in a JSON docu
      scope[(pathLeg)*]
 
  pathLeg:
-     member | arrayLocation | doubleAsterisk
+     member | arrayLocation | arrayRange | doubleAsterisk
 
  member:
      period ( keyName | asterisk )
 
  arrayLocation:
      leftBracket ( nonNegativeInteger | asterisk ) rightBracket
+ 
+ arrayRange:
+     leftBracket (nonNegativeInteger| lastExpression) colon (nonNegativeInteger| lastExpression) rightBracket
+     
+ lastExpression:
+     lastToken substract nonNegativeInteger
 
  keyName:
      ESIdentifier | doubleQuotedString
@@ -195,6 +201,15 @@ JSON Path is a path expression that can be used to access a value in a JSON docu
 
  rightBracket:
      ']'
+     
+ colon:
+     'to'
+     
+ lastToken:
+     'last'
+     
+ substract:
+     '-'
  ```
 
 *In MatrixOne, the scope of the path is always the document being operated on, represented as $. You can use '$' as a
@@ -220,6 +235,12 @@ $.store.* -> represents all values of the store object
 $.store.book[0] -> represents the first book element in the store object
 $**.a -> represents values of the document keys which ends with 'a', such as 'a', 'b.a', 'c.b.a', etc.
 $.a**.b -> represents values of the document keys which starts with 'a' and ends with 'b', such as 'a.b', 'a.x.b', 'a.x.y.b', etc.
+$[last] -> represents the last element of the array document
+$[last-1] -> represents the second last element of the array document
+$[0 to 2] -> represents the first three elements of the array document
+$[0 to last-1] -> represents all elements of the array document except the last one
+$[0 to last-2] -> represents all elements of the array document except the last two
+$[last - 5 to last] -> represents the last five elements of the array document
 ```
 
 ## **JSON EXTREACT**
@@ -311,7 +332,8 @@ from t;
 | 1                    |
 +----------------------+
 
-insert into t values ('{"a":5,"b":6,"c":7}');
+insert into t
+values ('{"a":5,"b":6,"c":7}');
 select json_extract(a, '$.a')
 from t;
 +----------------------+

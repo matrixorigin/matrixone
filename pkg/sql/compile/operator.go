@@ -17,8 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -404,11 +405,15 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 }
 
 func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
-	db, err := eg.Database(proc.Ctx, n.ObjRef.SchemaName, proc.TxnOperator)
+	ctx := proc.Ctx
+	if n.GetClusterTable().GetIsClusterTable() {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+	db, err := eg.Database(ctx, n.ObjRef.SchemaName, proc.TxnOperator)
 	if err != nil {
 		return nil, err
 	}
-	relation, err := db.Relation(proc.Ctx, n.TableDef.Name)
+	relation, err := db.Relation(ctx, n.TableDef.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -418,7 +423,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	if uDef != nil {
 		for i := range uDef.TableNames {
 			if uDef.TableExists[i] {
-				indexTable, err := db.Relation(proc.Ctx, uDef.TableNames[i])
+				indexTable, err := db.Relation(ctx, uDef.TableNames[i])
 				if err != nil {
 					return nil, err
 				}
@@ -429,7 +434,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	if sDef != nil {
 		for i := range sDef.TableNames {
 			if sDef.TableExists[i] {
-				indexTable, err := db.Relation(proc.Ctx, sDef.TableNames[i])
+				indexTable, err := db.Relation(ctx, sDef.TableNames[i])
 				if err != nil {
 					return nil, err
 				}
@@ -442,7 +447,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		TargetColDefs:        n.TableDef.Cols,
 		Engine:               eg,
 		DB:                   db,
-		TableID:              relation.GetTableID(proc.Ctx),
+		TableID:              relation.GetTableID(ctx),
 		DBName:               n.ObjRef.SchemaName,
 		TableName:            n.TableDef.Name,
 		CPkeyColDef:          n.TableDef.CompositePkey,
@@ -450,6 +455,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		UniqueIndexDef:       uDef,
 		SecondaryIndexTables: secondaryIndexTables,
 		SecondaryIndexDef:    sDef,
+		ClusterTable:         n.GetClusterTable(),
 	}, nil
 }
 
@@ -558,6 +564,7 @@ func constructExternal(n *plan.Node, ctx context.Context, fileList []string) *ex
 			Ctx:           ctx,
 			FileList:      fileList,
 			Fileparam:     new(external.ExternalFileparam),
+			ClusterTable:  n.GetClusterTable(),
 		},
 	}
 }

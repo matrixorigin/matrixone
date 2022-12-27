@@ -792,15 +792,45 @@ func containsParamRef(expr *plan.Expr) bool {
 	return ret
 }
 
+func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			isMonotonic := CheckExprIsMonotonic(ctx, arg)
+			if !isMonotonic {
+				return false
+			}
+		}
+
+		isMonotonic, _ := function.GetFunctionIsMonotonicById(ctx, exprImpl.F.Func.GetObj())
+		if !isMonotonic {
+			return false
+		}
+
+		return true
+	default:
+		return true
+	}
+}
+
 // handle the filter list for zonemap. rewrite and constFold
 func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
+	if proc == nil || proc.Ctx == nil {
+		return nil
+	}
 	var newExprList []*plan.Expr
 	for _, expr := range exprList {
-		if !containsParamRef(expr) {
+		if !containsParamRef(expr) && CheckExprIsMonotonic(proc.Ctx, expr) {
 			newExprList = append(newExprList, expr)
 		}
 	}
 	e := colexec.RewriteFilterExprList(newExprList)
+	if proc == nil {
+		return e
+	}
 	if e != nil {
 		bat := batch.NewWithSize(0)
 		bat.Zs = []int64{1}

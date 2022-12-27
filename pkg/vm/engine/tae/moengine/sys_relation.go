@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -57,6 +58,16 @@ func isSysRelationId(id uint64) bool {
 }
 
 func (s *sysRelation) Write(_ context.Context, _ *batch.Batch) error {
+	return ErrReadOnly
+}
+
+func (s *sysRelation) AddBlksWithMetaLoc(
+	_ context.Context,
+	_ []containers.Vector,
+	_ string,
+	_ []string,
+	_ int32,
+) error {
 	return ErrReadOnly
 }
 
