@@ -241,6 +241,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 
 func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	rs := c.newMergeScope(ss)
+	updateScopesLastFlag([]*Scope{rs})
 	switch qry.StmtType {
 	case plan.Query_DELETE:
 		rs.Magic = Deletion
@@ -292,6 +293,8 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 
 func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	rs := c.newMergeScope(ss)
+	updateScopesLastFlag([]*Scope{rs})
+	c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 	switch qry.StmtType {
 	case plan.Query_DELETE:
 		rs.Magic = Deletion
@@ -1440,11 +1443,17 @@ func dupType(typ *plan.Type) types.Type {
 // Update the specific scopes's instruction to true
 // then update the current idx
 func (c *Compile) SetAnalyzeCurrent(updateScopes []*Scope, nextId int) {
-	for _, s := range updateScopes {
-		last := len(s.Instructions) - 1
-		s.Instructions[last].IsLast = true
+	if updateScopes != nil {
+		updateScopesLastFlag(updateScopes)
 	}
 
 	c.anal.curr = nextId
 	c.anal.isFirst = true
+}
+
+func updateScopesLastFlag(updateScopes []*Scope) {
+	for _, s := range updateScopes {
+		last := len(s.Instructions) - 1
+		s.Instructions[last].IsLast = true
+	}
 }
