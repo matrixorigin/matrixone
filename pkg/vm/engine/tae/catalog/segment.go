@@ -40,6 +40,7 @@ type SegmentEntry struct {
 	*MetaBaseEntry
 	table   *TableEntry
 	entries map[uint64]*common.GenericDLNode[*BlockEntry]
+	//link.head and tail is nil when new a segmentEntry object.
 	link    *common.GenericSortedDList[*BlockEntry]
 	state   EntryState
 	segData data.Segment
@@ -206,6 +207,21 @@ func (entry *SegmentEntry) GetAppendableBlockCnt() int {
 	}
 	return cnt
 }
+
+// GetNonAppendableBlockCnt Non-appendable segment only can contain non-appendable blocks;
+// Appendable segment can contain both of appendable blocks and non-appendable blocks
+func (entry *SegmentEntry) GetNonAppendableBlockCnt() int {
+	cnt := 0
+	it := entry.MakeBlockIt(true)
+	for it.Valid() {
+		if !it.Get().GetPayload().IsAppendable() {
+			cnt++
+		}
+		it.Next()
+	}
+	return cnt
+}
+
 func (entry *SegmentEntry) GetAppendableBlock() (blk *BlockEntry) {
 	it := entry.MakeBlockIt(false)
 	for it.Valid() {
@@ -236,6 +252,19 @@ func (entry *SegmentEntry) CreateBlock(txn txnif.AsyncTxn, state EntryState, dat
 	entry.Lock()
 	defer entry.Unlock()
 	created = NewBlockEntry(entry, txn, state, dataFactory)
+	entry.AddEntryLocked(created)
+	return
+}
+
+func (entry *SegmentEntry) CreateBlockWithMeta(
+	txn txnif.AsyncTxn,
+	state EntryState,
+	dataFactory BlockDataFactory,
+	metaLoc string,
+	deltaLoc string) (created *BlockEntry, err error) {
+	entry.Lock()
+	defer entry.Unlock()
+	created = NewBlockEntryWithMeta(entry, txn, state, dataFactory, metaLoc, deltaLoc)
 	entry.AddEntryLocked(created)
 	return
 }

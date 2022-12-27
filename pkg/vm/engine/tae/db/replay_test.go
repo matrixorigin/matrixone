@@ -72,7 +72,8 @@ func TestReplayCatalog1(t *testing.T) {
 			}
 			assert.Nil(t, txn.Commit())
 			if forceCkp || rand.Intn(100) > 80 {
-				tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+				err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+				assert.NoError(t, err)
 			}
 		}
 	}
@@ -170,7 +171,8 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 	tae.Close()
 
 	tae2, err := Open(tae.Dir, nil)
@@ -458,7 +460,8 @@ func TestReplay2(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	tae2.BGCheckpointRunner.MockCheckpoint(tae2.TxnMgr.StatMaxCommitTS())
+	err = tae2.BGCheckpointRunner.ForceIncrementalCheckpoint(tae2.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 
 	txn, err = tae2.StartTxn(nil)
 	assert.Nil(t, err)
@@ -568,7 +571,8 @@ func TestReplay3(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	txn, _ = tae.getRelation()
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 }
 
@@ -813,7 +817,8 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[:4]), false)
 	assert.NoError(t, txn.Commit())
@@ -832,7 +837,8 @@ func TestReplay5(t *testing.T) {
 	}
 	assert.NoError(t, txn.Commit())
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	printCheckpointStats(t, tae)
@@ -862,9 +868,14 @@ func TestReplay5(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	assert.NoError(t, txn.Commit())
 
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
-	testutils.WaitExpect(3000, func() bool {
-		return tae.Wal.GetCheckpointed() == tae.Wal.GetCurrSeqNum()
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
+	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
+	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
+	assert.NoError(t, err)
+	assert.NoError(t, entry.WaitDone())
+	testutils.WaitExpect(1000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	printCheckpointStats(t, tae)
 	assert.Equal(t, tae.Wal.GetCurrSeqNum(), tae.Wal.GetCheckpointed())
@@ -914,7 +925,8 @@ func TestReplay6(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
 	mergeBlocks(t, 0, tae, defaultTestDB, schema, false)
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 
 	_ = tae.Close()
 	tae, err = Open(tae.Dir, opts)
@@ -1283,7 +1295,8 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -1295,7 +1308,8 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	tae.restart()

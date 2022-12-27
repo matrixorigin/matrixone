@@ -46,30 +46,6 @@ const (
 	MAX_RANGE_SIZE int64  = 200
 )
 
-func checkExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			isMonotonic := checkExprIsMonotonic(ctx, arg)
-			if !isMonotonic {
-				return false
-			}
-		}
-
-		isMonotonic, _ := function.GetFunctionIsMonotonicById(ctx, exprImpl.F.Func.GetObj())
-		if !isMonotonic {
-			return false
-		}
-
-		return true
-	default:
-		return true
-	}
-}
-
 func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
 	if expr == nil {
 		return

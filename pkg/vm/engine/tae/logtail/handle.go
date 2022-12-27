@@ -528,7 +528,6 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			return err
 		}
 
-		blockID := uint64(0)
 		tableName := b.tname
 		if metaChange {
 			tableName = fmt.Sprintf("_%d_meta", b.tid)
@@ -546,7 +545,6 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			TableName:    tableName,
 			DatabaseId:   b.did,
 			DatabaseName: b.dname,
-			BlockId:      blockID,
 			Bat:          bat,
 		}
 		entries = append(entries, entry)
