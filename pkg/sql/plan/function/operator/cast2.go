@@ -2520,6 +2520,8 @@ func strToSigned[T constraints.Signed](
 				r, err := strconv.ParseInt(
 					strings.TrimSpace(s), 10, bitSize)
 				if err != nil {
+					// XXX I'm not sure if we should return the int8 / int16 / int64 info. or
+					// just return the int. the old code just return the int. too much bvt result needs to update.
 					if strings.Contains(err.Error(), "value out of range") {
 						return moerr.NewOutOfRange(ctx, "int", "value '%s'", s)
 					}
