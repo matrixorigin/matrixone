@@ -346,7 +346,6 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 		return cur
 	}
 
-
 	if bj.Type == TpCodeArray {
 		cnt := bj.GetElemCnt()
 		switch sub.tp {
