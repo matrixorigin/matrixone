@@ -36,18 +36,17 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
 type UpdateCtx struct {
-	PriKey               string
-	PriKeyIdx            int32 // delete if -1
-	HideKey              string
-	HideKeyIdx           int32
-	UpdateAttrs          []string
-	OtherAttrs           []string
-	IndexAttrs           []string
-	OrderAttrs           []string
-	TableSource          engine.Relation
-	CPkeyColDef          *plan.ColDef
-	UniqueIndexTables    []engine.Relation
-	SecondaryIndexTables []engine.Relation
-	UniqueIndexDef       *plan.UniqueIndexDef
-	SecondaryIndexDef    *plan.SecondaryIndexDef
+	HideKey     string
+	HideKeyIdx  int32
+	UpdateAttrs []string
+	OtherAttrs  []string
+	OrderAttrs  []string
+	TableSource engine.Relation
+	// for not index table
+	CPkeyColDef        *plan.ColDef
+	IsIndexTableUpdate bool
+	// for index table
+	UniqueIndexPos    []int
+	SecondaryIndexPos []int
+	IndexParts        []string
 }

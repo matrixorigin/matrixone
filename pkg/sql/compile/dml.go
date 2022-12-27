@@ -42,50 +42,51 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 
-	var tableID uint64
+	// If the first table (original table) in the deletion context can be truncated,
+	// subsequent index tables also need to be truncated
 	if arg.DeleteCtxs[0].CanTruncate {
-		dbSource, err := c.e.Database(c.ctx, arg.DeleteCtxs[0].DbName, c.proc.TxnOperator)
-		if err != nil {
-			return 0, err
-		}
-
-		var rel engine.Relation
-		if rel, err = dbSource.Relation(c.ctx, arg.DeleteCtxs[0].TableName); err != nil {
-			return 0, err
-		}
-		_, err = rel.Ranges(c.ctx, nil)
-		if err != nil {
-			return 0, err
-		}
-		affectRows, err := rel.Rows(s.Proc.Ctx)
-		if err != nil {
-			return 0, err
-		}
-
-		tableID = rel.GetTableID(c.ctx)
-
-		if arg.DeleteCtxs[0].UniqueIndexDef != nil {
-			for i := range arg.DeleteCtxs[0].UniqueIndexDef.TableNames {
-				if arg.DeleteCtxs[0].UniqueIndexDef.TableExists[i] {
-					err = dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].UniqueIndexDef.TableNames[i])
-					if err != nil {
-						return 0, err
-					}
+		var affectRows int64
+		for _, deleteCtx := range arg.DeleteCtxs {
+			if deleteCtx.CanTruncate {
+				dbSource, err := c.e.Database(c.ctx, deleteCtx.DbName, c.proc.TxnOperator)
+				if err != nil {
+					return 0, err
 				}
+
+				var rel engine.Relation
+				if rel, err = dbSource.Relation(c.ctx, deleteCtx.TableName); err != nil {
+					return 0, err
+				}
+				_, err = rel.Ranges(c.ctx, nil)
+				if err != nil {
+					return 0, err
+				}
+				affectRow, err := rel.Rows(s.Proc.Ctx)
+				if err != nil {
+					return 0, err
+				}
+
+				tableID := rel.GetTableID(c.ctx)
+
+				err = dbSource.Truncate(c.ctx, deleteCtx.TableName)
+				if err != nil {
+					return 0, err
+				}
+
+				err = colexec.MoveAutoIncrCol(c.e, c.ctx, deleteCtx.TableName, dbSource, c.proc, tableID, deleteCtx.DbName)
+				if err != nil {
+					return 0, err
+				}
+
+				if deleteCtx.IsIndexTableDelete {
+					continue
+				} else {
+					affectRows += affectRow
+				}
+
 			}
 		}
-
-		err = dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].TableName)
-		if err != nil {
-			return 0, err
-		}
-
-		err = colexec.MoveAutoIncrCol(c.e, c.ctx, arg.DeleteCtxs[0].TableName, dbSource, c.proc, tableID, arg.DeleteCtxs[0].DbName)
-		if err != nil {
-			return 0, err
-		}
-
-		return uint64(affectRows), err
+		return uint64(affectRows), nil
 	}
 
 	if err := s.MergeRun(c); err != nil {
@@ -268,13 +269,14 @@ func writeBatch(ctx context.Context,
 	}
 	//update unique index table
 	if p.UniqueIndexDef != nil {
+		primaryKeyName := update.GetTablePriKeyName(p.ExplicitCols, p.CompositePkey)
 		for i := range p.UniqueIndexDef.IndexNames {
 			if p.UniqueIndexDef.TableExists[i] {
 				indexRelation, err := dbSource.Relation(ctx, p.UniqueIndexDef.TableNames[i])
 				if err != nil {
 					return err
 				}
-				indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, p.UniqueIndexDef.Fields[i].Cols, c.proc)
+				indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, p.UniqueIndexDef.Fields[i].Parts, primaryKeyName, c.proc)
 				if rowNum != 0 {
 					if err = indexRelation.Write(ctx, indexBatch); err != nil {
 						return err

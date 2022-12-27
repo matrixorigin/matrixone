@@ -104,8 +104,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		newNode.UpdateCtxs[i] = &plan.UpdateCtx{
 			DbName:        updateCtx.DbName,
 			TblName:       updateCtx.TblName,
-			PriKey:        updateCtx.PriKey,
-			PriKeyIdx:     updateCtx.PriKeyIdx,
 			HideKey:       updateCtx.HideKey,
 			HideKeyIdx:    updateCtx.HideKeyIdx,
 			UpdateCols:    make([]*ColDef, len(updateCtx.UpdateCols)),

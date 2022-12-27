@@ -401,3 +401,18 @@ func judgeUnixTimestampReturnType(timestr string) types.T {
 		return types.T_decimal128
 	}
 }
+
+// Get the primary key name of the table
+func GetTablePriKeyName(cols []*plan.ColDef, cPkeyCol *plan.ColDef) string {
+	for _, col := range cols {
+		if col.Name != catalog.Row_ID && col.Primary {
+			return col.Name
+		}
+
+	}
+
+	if cPkeyCol != nil {
+		return cPkeyCol.Name
+	}
+	return ""
+}

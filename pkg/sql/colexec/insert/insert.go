@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -73,10 +74,11 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 	// notice the number of the index def not equal to the number of the index table
 	// in some special cases, we don't create index table.
 	if n.UniqueIndexDef != nil {
+		primaryKeyName := update.GetTablePriKeyName(n.TargetColDefs, n.CPkeyColDef)
 		idx := 0
 		for i := range n.UniqueIndexDef.TableNames {
 			if n.UniqueIndexDef.TableExists[i] {
-				b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, n.UniqueIndexDef.Fields[i].Cols, proc)
+				b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, n.UniqueIndexDef.Fields[i].Parts, primaryKeyName, proc)
 				if rowNum != 0 {
 					err := n.UniqueIndexTables[idx].Write(ctx, b)
 					if err != nil {

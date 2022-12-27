@@ -16,7 +16,11 @@ package update
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -64,151 +67,90 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	}
 	defer bat.Clean(proc.Mp())
 
-	// do null check
-	for i, updateCtx := range p.UpdateCtxs {
-		tmpBat := &batch.Batch{}
-		idx := updateCtx.HideKeyIdx
-		tmpBat.Vecs = bat.Vecs[int(idx) : int(idx)+len(updateCtx.OrderAttrs)+1]
-		// need to de duplicate
-		tmpBat, _ = FilterBatch(tmpBat, batLen, proc)
-		if tmpBat == nil {
-			panic(any("internal error when filter Batch"))
-		}
-		tmpBat.Vecs = tmpBat.Vecs[1:]
-		tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.UpdateAttrs...)
-		tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.OtherAttrs...)
-		batch.Reorder(tmpBat, updateCtx.OrderAttrs)
-
-		for j := range tmpBat.Vecs {
-			// Not-null check, for more information, please refer to the comments in func InsertValues
-			if (p.TableDefVec[i].Cols[j].Primary && !p.TableDefVec[i].Cols[j].Typ.AutoIncr) || (p.TableDefVec[i].Cols[j].Default != nil && !p.TableDefVec[i].Cols[j].Default.NullAbility) {
-				if nulls.Any(tmpBat.Vecs[j].Nsp) {
-					tmpBat.Clean(proc.Mp())
-					return false, moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
-				}
-			}
-		}
-
-		if updateCtx.CPkeyColDef != nil {
-			names := util.SplitCompositePrimaryKeyColumnName(updateCtx.CPkeyColDef.Name)
-			for _, name := range names {
-				for i := range tmpBat.Vecs {
-					if tmpBat.Attrs[i] == name {
-						if nulls.Any(tmpBat.Vecs[i].Nsp) {
-							tmpBat.Clean(proc.Mp())
-							return false, moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", updateCtx.OrderAttrs[i]))
-						}
-					}
-				}
-			}
-		}
-
-		tmpBat.Clean(proc.Mp())
-	}
-
 	// write data
 	for i, updateCtx := range p.UpdateCtxs {
-		tmpBat := &batch.Batch{}
-		idx := updateCtx.HideKeyIdx
-		tmpBat.Vecs = bat.Vecs[int(idx) : int(idx)+len(updateCtx.OrderAttrs)+1]
-		// need to de duplicate
-		var cnt uint64
-		tmpBat, cnt = FilterBatch(tmpBat, batLen, proc)
-		if tmpBat == nil {
-			panic(any("internal error when filter Batch"))
-		}
-
-		delBat := &batch.Batch{}
-		delBat.Vecs = []*vector.Vector{tmpBat.GetVector(0)}
-		delBat.SetZs(delBat.GetVector(0).Length(), proc.Mp())
-
-		tmpBat.Vecs = tmpBat.Vecs[1:]
-		tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.UpdateAttrs...)
-		tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.OtherAttrs...)
-		batch.Reorder(tmpBat, updateCtx.OrderAttrs)
-		tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
-
-		// in update, we can get a batch[b(update), b(old)]
-		// we should use old b as delete info
-		if updateCtx.UniqueIndexDef != nil {
-			relIdx := 0
-			for num := range updateCtx.UniqueIndexDef.IndexNames {
-				if updateCtx.UniqueIndexDef.TableExists[num] {
-					rel := updateCtx.UniqueIndexTables[relIdx]
-					var attrs []string = nil
-					attrs = append(attrs, updateCtx.UpdateAttrs...)
-					attrs = append(attrs, updateCtx.OtherAttrs...)
-					attrs = append(attrs, updateCtx.IndexAttrs...)
-					oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[int(idx)+1:], attrs, updateCtx.UniqueIndexDef.Fields[num].Cols, proc)
-					if rowNum != 0 {
-						err := rel.Delete(proc.Ctx, oldBatch, updateCtx.UniqueIndexDef.Fields[num].Cols[0].Name)
-						if err != nil {
-							delBat.Clean(proc.Mp())
-							tmpBat.Clean(proc.Mp())
-							oldBatch.Clean(proc.Mp())
-							return false, err
-						}
-					}
-					oldBatch.Clean(proc.Mp())
-					relIdx++
-				}
+		if updateCtx.IsIndexTableUpdate {
+			continue
+		} else {
+			tmpBat := &batch.Batch{}
+			offset := updateCtx.HideKeyIdx
+			tmpBat.Vecs = bat.Vecs[int(offset) : int(offset)+len(updateCtx.OrderAttrs)+1]
+			// need to de duplicate
+			var cnt uint64
+			tmpBat, cnt = FilterBatch(tmpBat, batLen, proc)
+			if tmpBat == nil {
+				panic(any("internal error when filter Batch"))
 			}
-		}
 
-		// delete old rows
-		err := updateCtx.TableSource.Delete(proc.Ctx, delBat, updateCtx.HideKey)
-		if err != nil {
-			delBat.Clean(proc.Mp())
-			tmpBat.Clean(proc.Mp())
-			return false, err
-		}
-		delBat.Clean(proc.Mp())
+			delBat := &batch.Batch{}
+			delBat.Vecs = []*vector.Vector{tmpBat.GetVector(0)}
+			delBat.SetZs(delBat.GetVector(0).Length(), proc.Mp())
 
-		if err := colexec.UpdateInsertBatch(p.Engine, proc.Ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i], p.DBName[i], p.TblName[i]); err != nil {
-			tmpBat.Clean(proc.Mp())
-			return false, err
-		}
+			tmpBat.Vecs = tmpBat.Vecs[1:]
+			tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.UpdateAttrs...)
+			tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.OtherAttrs...)
+			batch.Reorder(tmpBat, updateCtx.OrderAttrs)
+			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 
-		if updateCtx.UniqueIndexDef != nil {
-			relIdx := 0
-			for num := range updateCtx.UniqueIndexDef.IndexNames {
-				if updateCtx.UniqueIndexDef.TableExists[num] {
-					rel := updateCtx.UniqueIndexTables[relIdx]
-					b, rowNum := util.BuildUniqueKeyBatch(tmpBat.Vecs, tmpBat.Attrs, updateCtx.UniqueIndexDef.Fields[num].Cols, proc)
-					if rowNum != 0 {
-						err = rel.Write(proc.Ctx, b)
-						if err != nil {
-							b.Clean(proc.Mp())
-							tmpBat.Clean(proc.Mp())
-							return false, err
-						}
-					}
-					b.Clean(proc.Mp())
-				}
-			}
-		}
-
-		//fill cpkey column
-		if updateCtx.CPkeyColDef != nil {
-			err := util.FillCompositePKeyBatch(tmpBat, updateCtx.CPkeyColDef, proc)
+			err := batchDataNotNullCheck(tmpBat, p.TableDefVec[i], proc.Ctx)
 			if err != nil {
 				tmpBat.Clean(proc.Mp())
 				return false, err
 			}
-		}
-		tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 
-		err = updateCtx.TableSource.Write(proc.Ctx, tmpBat)
-		if err != nil {
+			err = comPrimaryKeyDataNullCheck(tmpBat, updateCtx.CPkeyColDef, proc.Ctx)
+			if err != nil {
+				tmpBat.Clean(proc.Mp())
+				return false, err
+			}
+
+			if err := colexec.UpdateInsertBatch(p.Engine, proc.Ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i], p.DBName[i], p.TblName[i]); err != nil {
+				tmpBat.Clean(proc.Mp())
+				return false, err
+			}
+
+			// fill cpkey column
+			if updateCtx.CPkeyColDef != nil {
+				err := util.FillCompositePKeyBatch(tmpBat, updateCtx.CPkeyColDef, proc)
+				if err != nil {
+					tmpBat.Clean(proc.Mp())
+					return false, err
+				}
+			}
+			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
+
+			if len(updateCtx.UniqueIndexPos) > 0 {
+				// get Primary key name of the original table
+				tableDef := p.TableDefVec[i]
+				oriPriKeyName := GetTablePriKeyName(tableDef.Cols, tableDef.CompositePkey)
+				// Update the index table records
+				for _, indexPos := range updateCtx.UniqueIndexPos {
+					indexTableUpdateCtx := p.UpdateCtxs[indexPos]
+					err := updateIndexTable(indexTableUpdateCtx, tmpBat, bat, oriPriKeyName, proc)
+					if err != nil {
+						return false, err
+					}
+				}
+			}
+
+			// delete old rows
+			err = updateCtx.TableSource.Delete(proc.Ctx, delBat, updateCtx.HideKey)
+			if err != nil {
+				delBat.Clean(proc.Mp())
+				tmpBat.Clean(proc.Mp())
+				return false, err
+			}
+			delBat.Clean(proc.Mp())
+
+			err = updateCtx.TableSource.Write(proc.Ctx, tmpBat)
+			if err != nil {
+				tmpBat.Clean(proc.Mp())
+				return false, err
+			}
 			tmpBat.Clean(proc.Mp())
-			return false, err
+			affectedRows += cnt
 		}
-
-		affectedRows += cnt
-
-		tmpBat.Clean(proc.Mp())
 	}
-
 	atomic.AddUint64(&p.AffectedRows, affectedRows)
 	return false, nil
 }
@@ -548,3 +490,86 @@ func getIndexValue(idx int, v *vector.Vector, isNull bool) any {
 	}
 }
 */
+
+// Update the index table rows, including delete -> insert
+func updateIndexTable(indexTableUpdateCtx *UpdateCtx, originTableBatch *batch.Batch, indexTableBatch *batch.Batch, originTablePriKey string, proc *process.Process) error {
+	offset := indexTableUpdateCtx.HideKeyIdx
+
+	deleteBat := &batch.Batch{}
+	deleteBat.Vecs = []*vector.Vector{indexTableBatch.GetVector(offset)}
+	deleteBat.SetZs(deleteBat.GetVector(0).Length(), proc.Mp())
+
+	defer deleteBat.Clean(proc.Mp())
+
+	// delete old rows
+	batLen := batch.Length(deleteBat)
+	tmpBat, _ := FilterBatch(deleteBat, batLen, proc)
+	length := tmpBat.GetVector(0).Length()
+	if length > 0 {
+		tmpBat.SetZs(length, proc.Mp())
+		err := indexTableUpdateCtx.TableSource.Delete(proc.Ctx, tmpBat, indexTableUpdateCtx.HideKey)
+		if err != nil {
+			tmpBat.Clean(proc.Mp())
+			return err
+		}
+	}
+	tmpBat.Clean(proc.Mp())
+
+	// insert new rows
+	insertBat, rowNum := util.BuildUniqueKeyBatch(originTableBatch.Vecs, originTableBatch.Attrs, indexTableUpdateCtx.IndexParts, originTablePriKey, proc)
+	if rowNum != 0 {
+		err := indexTableUpdateCtx.TableSource.Write(proc.Ctx, insertBat)
+		if err != nil {
+			insertBat.Clean(proc.Mp())
+			return err
+		}
+	}
+	insertBat.Clean(proc.Mp())
+
+	return nil
+}
+
+// Get the primary key name of the table
+func GetTablePriKeyName(cols []*plan.ColDef, cPkeyCol *plan.ColDef) string {
+	for _, col := range cols {
+		if col.Name != catalog.Row_ID && col.Primary {
+			return col.Name
+		}
+	}
+
+	if cPkeyCol != nil {
+		return cPkeyCol.Name
+	}
+	return ""
+}
+
+// Table data not null column check
+func batchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx context.Context) error {
+	for j := range tmpBat.Vecs {
+		// Not-null check, for more information, please refer to the comments in func InsertValues
+		if (tableDef.Cols[j].Primary && !tableDef.Cols[j].Typ.AutoIncr) ||
+			(tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility) {
+			if nulls.Any(tmpBat.Vecs[j].Nsp) {
+				return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
+			}
+		}
+	}
+	return nil
+}
+
+// Composite primary key data null value check
+func comPrimaryKeyDataNullCheck(tmpBat *batch.Batch, cPkeyColDef *plan.ColDef, ctx context.Context) error {
+	if cPkeyColDef != nil {
+		names := util.SplitCompositePrimaryKeyColumnName(cPkeyColDef.Name)
+		for _, name := range names {
+			for i := range tmpBat.Vecs {
+				if tmpBat.Attrs[i] == name {
+					if nulls.Any(tmpBat.Vecs[i].Nsp) {
+						return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", name))
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
