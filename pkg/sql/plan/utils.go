@@ -822,22 +822,16 @@ func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) *plan.Expr
 		return nil
 	}
 	var newExprList []*plan.Expr
-	for _, expr := range exprList {
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	for i, _ := range exprList {
+		expr, _ := ConstantFold(bat, DeepCopyExpr(exprList[i]), proc)
 		if !containsParamRef(expr) && CheckExprIsMonotonic(proc.Ctx, expr) {
 			newExprList = append(newExprList, expr)
 		}
 	}
 	e := colexec.RewriteFilterExprList(newExprList)
-	if proc == nil {
-		return e
-	}
-	if e != nil {
-		bat := batch.NewWithSize(0)
-		bat.Zs = []int64{1}
-		filter, _ := ConstantFold(bat, DeepCopyExpr(e), proc)
-		return filter
-	}
-	return nil
+	return e
 }
 
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
