@@ -574,20 +574,6 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 	return nil
 }
 
-func openSaveQueryResult(ses *Session) bool {
-	if strings.ToLower(ses.GetParameterUnit().SV.SaveQueryResult) == "on" {
-		return true
-	}
-	val, err := ses.GetGlobalVar("save_query_result")
-	if err != nil {
-		return false
-	}
-	if v, _ := val.(uint64); v > 0 {
-		return true
-	}
-	return false
-}
-
 /*
 extract the data from the pipeline.
 obj: routine obj
@@ -3171,10 +3157,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		LastInsertID:  ses.GetLastInsertID(),
 	}
 	if ses.GetTenantInfo() != nil {
+		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
 		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 	} else {
+		proc.SessionInfo.Account = sysAccountName
 		proc.SessionInfo.AccountId = sysAccountID
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
@@ -3903,10 +3891,12 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 	}
 
 	if ses.GetTenantInfo() != nil {
+		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
 		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 	} else {
+		proc.SessionInfo.Account = sysAccountName
 		proc.SessionInfo.AccountId = sysAccountID
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID

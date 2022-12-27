@@ -17,61 +17,33 @@ package frontend
 import (
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"strings"
 )
 
-const QueryResultPath = "s3:/query_result/%s_%s.blk"
-const QueryResultMetaPath = "s3:/query_result_meta/%s_%s.blk"
-
-type Meta struct {
-	QueryId    [16]byte
-	Statement  string
-	AccountId  uint32
-	RoleId     uint32
-	ResultPath string
-	CreateTime types.Timestamp
-	ResultSize float64
-	Columns    string
-}
-
-var MetaColTypes = []types.Type{
-	types.New(types.T_uuid, 0, 0, 0),      // query_id
-	types.New(types.T_text, 0, 0, 0),      // statement
-	types.New(types.T_uint32, 0, 0, 0),    // account_id
-	types.New(types.T_uint32, 0, 0, 0),    // role_id
-	types.New(types.T_text, 0, 0, 0),      // result_path
-	types.New(types.T_timestamp, 0, 0, 0), // create_time
-	types.New(types.T_float64, 0, 0, 0),   // result_size
-	types.New(types.T_text, 0, 0, 0),      // columns
-}
-
-var MetaColNames = []string{
-	"query_id",
-	"statement",
-	"account_id",
-	"role_id",
-	"result_path",
-	"create_time",
-	"result_size",
-	"columns",
-}
-
-func buildQueryResultPath(accountName, statementId string) string {
-	return fmt.Sprintf(QueryResultPath, accountName, statementId)
-}
-
-func buildQueryResultMetaPath(accountName, statementId string) string {
-	return fmt.Sprintf(QueryResultMetaPath, accountName, statementId)
+func openSaveQueryResult(ses *Session) bool {
+	if strings.ToLower(ses.GetParameterUnit().SV.SaveQueryResult) == "on" {
+		return true
+	}
+	val, err := ses.GetGlobalVar("save_query_result")
+	if err != nil {
+		return false
+	}
+	if v, _ := val.(uint64); v > 0 {
+		return true
+	}
+	return false
 }
 
 func saveQueryResult(ses *Session, bat *batch.Batch) error {
 	fs := ses.GetParameterUnit().FileService
 	// write query result
-	path := buildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String())
+	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String())
 	writer, err := objectio.NewObjectWriter(path, fs)
 	if err != nil {
 		return err
@@ -89,21 +61,21 @@ func saveQueryResult(ses *Session, bat *batch.Batch) error {
 	for _, attr := range bat.Attrs {
 		cols += fmt.Sprintf("`%s`", attr)
 	}
-	m := &Meta{
+	m := &catalog.Meta{
 		QueryId:    ses.tStmt.StatementID,
 		Statement:  ses.tStmt.Statement,
 		AccountId:  ses.GetTenantInfo().GetTenantID(),
 		RoleId:     ses.tStmt.RoleId,
 		ResultPath: path,
 		CreateTime: types.CurrentTimestamp(),
-		ResultSize: 100,
+		ResultSize: 100, // TODO: implement
 		Columns:    cols,
 	}
 	metaBat, err := buildQueryResultMetaBatch(m, ses.mp)
 	if err != nil {
 		return err
 	}
-	metaPath := buildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String())
+	metaPath := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String())
 	metaWriter, err := objectio.NewObjectWriter(metaPath, fs)
 	if err != nil {
 		return err
@@ -119,35 +91,35 @@ func saveQueryResult(ses *Session, bat *batch.Batch) error {
 	return nil
 }
 
-func buildQueryResultMetaBatch(m *Meta, mp *mpool.MPool) (*batch.Batch, error) {
+func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, error) {
 	var err error
-	bat := batch.NewWithSize(len(MetaColTypes))
-	bat.SetAttributes(MetaColNames)
-	for i, t := range MetaColTypes {
+	bat := batch.NewWithSize(len(catalog.MetaColTypes))
+	bat.SetAttributes(catalog.MetaColNames)
+	for i, t := range catalog.MetaColTypes {
 		bat.Vecs[i] = vector.New(t)
 	}
-	if err = bat.Vecs[0].Append(types.Uuid(m.QueryId), false, mp); err != nil {
+	if err = bat.Vecs[catalog.QUERY_ID_IDX].Append(types.Uuid(m.QueryId), false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[1].Append([]byte(m.Statement), false, mp); err != nil {
+	if err = bat.Vecs[catalog.STATEMENT_IDX].Append([]byte(m.Statement), false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[2].Append(m.AccountId, false, mp); err != nil {
+	if err = bat.Vecs[catalog.ACCOUNT_ID_IDX].Append(m.AccountId, false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[3].Append(m.RoleId, false, mp); err != nil {
+	if err = bat.Vecs[catalog.ROLE_ID_IDX].Append(m.RoleId, false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[4].Append([]byte(m.ResultPath), false, mp); err != nil {
+	if err = bat.Vecs[catalog.RESULT_PATH_IDX].Append([]byte(m.ResultPath), false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[5].Append(m.CreateTime, false, mp); err != nil {
+	if err = bat.Vecs[catalog.CREATE_TIME_IDX].Append(m.CreateTime, false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[6].Append(m.ResultSize, false, mp); err != nil {
+	if err = bat.Vecs[catalog.RESULT_SIZE_IDX].Append(m.ResultSize, false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[7].Append([]byte(m.Columns), false, mp); err != nil {
+	if err = bat.Vecs[catalog.COLUMNS_IDX].Append([]byte(m.Columns), false, mp); err != nil {
 		return nil, err
 	}
 	return bat, nil

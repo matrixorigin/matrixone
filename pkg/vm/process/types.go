@@ -74,6 +74,7 @@ type Limitation struct {
 
 // SessionInfo session information
 type SessionInfo struct {
+	Account       string
 	User          string
 	Host          string
 	Role          string
