@@ -55,7 +55,7 @@ type pathGenerator struct {
 	pos     int
 }
 
-type UnnestResult map[string]string
+type UnnestResult map[string][]byte
 
 const (
 	numberIndices byte = iota + 1

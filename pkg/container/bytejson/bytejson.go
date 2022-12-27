@@ -448,15 +448,11 @@ func (bj ByteJson) queryWithSubPath(keys []string, vals []ByteJson, path *Path, 
 	return keys, vals
 }
 
-func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, mode string, pathStr string, this *ByteJson, filters []string) []UnnestResult {
+func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, mode string, pathStr string, this *ByteJson, filterMap map[string]struct{}) []UnnestResult {
 	if !bj.canUnnest() {
 		index, key := genIndexOrKey(pathStr)
 		tmp := UnnestResult{}
-		maybePut(tmp, "path", pathStr, filters)
-		maybePut(tmp, "value", bj.String(), filters)
-		maybePut(tmp, "index", index, filters)
-		maybePut(tmp, "key", key, filters)
-		maybePut(tmp, "this", this.String(), filters)
+		genUnnestResult(tmp, index, key, string2Slice(pathStr), &bj, this, filterMap)
 		out = append(out, tmp)
 		return out
 	}
@@ -467,13 +463,10 @@ func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, m
 			val := bj.getObjectVal(i)
 			newPathStr := fmt.Sprintf("%s.%s", pathStr, key)
 			tmp := UnnestResult{}
-			maybePut(tmp, "path", newPathStr, filters)
-			maybePut(tmp, "value", val.String(), filters)
-			maybePut(tmp, "key", string(key), filters)
-			maybePut(tmp, "this", this.String(), filters)
+			genUnnestResult(tmp, nil, key, string2Slice(newPathStr), &val, this, filterMap)
 			out = append(out, tmp)
 			if val.canUnnest() && recursive {
-				out = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val, filters)
+				out = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val, filterMap)
 			}
 		}
 	}
@@ -483,20 +476,17 @@ func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, m
 			val := bj.getArrayElem(i)
 			newPathStr := fmt.Sprintf("%s[%d]", pathStr, i)
 			tmp := UnnestResult{}
-			maybePut(tmp, "path", newPathStr, filters)
-			maybePut(tmp, "value", val.String(), filters)
-			maybePut(tmp, "index", strconv.Itoa(i), filters)
-			maybePut(tmp, "this", this.String(), filters)
+			genUnnestResult(tmp, string2Slice(strconv.Itoa(i)), nil, string2Slice(newPathStr), &val, this, filterMap)
 			out = append(out, tmp)
 			if val.canUnnest() && recursive {
-				out = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val, filters)
+				out = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val, filterMap)
 			}
 		}
 	}
 	return out
 }
 
-func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool, mode string, filters []string) ([]UnnestResult, error) {
+func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool, mode string, filterMap map[string]struct{}) ([]UnnestResult, error) {
 
 	keys := make([]string, 0, 1)
 	vals := make([]ByteJson, 0, 1)
@@ -506,39 +496,60 @@ func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool,
 	}
 	for i := 0; i < len(keys); i++ {
 		if vals[i].canUnnest() {
-			out = vals[i].unnestWithParams(out, outer, recursive, mode, keys[i], &vals[i], filters)
+			out = vals[i].unnestWithParams(out, outer, recursive, mode, keys[i], &vals[i], filterMap)
 		}
 	}
 	if len(out) == 0 && outer {
 		for i := 0; i < len(keys); i++ {
 			tmp := UnnestResult{}
-			maybePut(tmp, "path", keys[i], filters)
-			maybePut(tmp, "this", vals[i].String(), filters)
 			out = append(out, tmp)
 		}
+		if _, ok := filterMap["path"]; ok {
+			for i := 0; i < len(keys); i++ {
+				out[i]["path"] = string2Slice(keys[i])
+			}
+		}
+		if _, ok := filterMap["this"]; ok {
+			for i := 0; i < len(vals); i++ {
+				dt, err := vals[i].Marshal()
+				if err != nil {
+					return nil, err
+				}
+				out[i]["this"] = dt
+			}
+		}
+
 	}
 	return out, nil
 }
 
 // Unnest returns a slice of UnnestResult, each UnnestResult contains filtered data, if param filters is nil, return all fields.
-func (bj ByteJson) Unnest(path *Path, outer, recursive bool, mode string, filters []string) ([]UnnestResult, error) {
+func (bj ByteJson) Unnest(path *Path, outer, recursive bool, mode string, filterMap map[string]struct{}) ([]UnnestResult, error) {
 	if !checkMode(mode) {
 		return nil, moerr.NewInvalidInputNoCtx("mode must be one of [object, array, both]")
 	}
 	out := make([]UnnestResult, 0, 1)
-	out, err := bj.unnest(out, path, outer, recursive, mode, filters)
+	out, err := bj.unnest(out, path, outer, recursive, mode, filterMap)
 	return out, err
 }
 
-func maybePut(out UnnestResult, key, value string, filters []string) {
-	if filters == nil {
-		out[key] = value
-		return
+func genUnnestResult(res UnnestResult, index, key, path []byte, value, this *ByteJson, filterMap map[string]struct{}) UnnestResult {
+	if _, ok := filterMap["index"]; ok {
+		res["index"] = index
 	}
-	for _, filter := range filters {
-		if filter == key {
-			out[key] = value
-			return
-		}
+	if _, ok := filterMap["key"]; ok {
+		res["key"] = key
 	}
+	if _, ok := filterMap["path"]; ok {
+		res["path"] = path
+	}
+	if _, ok := filterMap["value"]; ok {
+		dt, _ := value.Marshal()
+		res["value"] = dt
+	}
+	if _, ok := filterMap["this"]; ok {
+		dt, _ := this.Marshal()
+		res["this"] = dt
+	}
+	return res
 }
