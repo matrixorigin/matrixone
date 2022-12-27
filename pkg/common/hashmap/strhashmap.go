@@ -89,9 +89,6 @@ func (m *StrHashMap) Cardinality() uint64 {
 // never handle null
 func (m *StrHashMap) InsertValue(val any) (bool, error) {
 	defer func() { m.keys[0] = m.keys[0][:0] }()
-	if m.hasNull {
-		m.keys[0] = append(m.keys[0], byte(0))
-	}
 	switch v := val.(type) {
 	case uint8:
 		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
@@ -160,9 +157,9 @@ func (m *StrHashMap) Insert(vecs []*vector.Vector, row int) (bool, error) {
 func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	for _, vec := range vecs {
 		if vec.GetType().IsFixedLen() {
-			fillGroupStr(m, vec, count, vec.GetType().TypeSize(), start, 0)
+			fillGroupStr(m, vec, count, vec.GetType().TypeSize(), start, 0, len(vecs))
 		} else {
-			fillStringGroupStr(m, vec, count, start)
+			fillStringGroupStr(m, vec, count, start, len(vecs))
 		}
 	}
 	for i := 0; i < count; i++ {
@@ -172,15 +169,29 @@ func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	}
 }
 
-func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int) {
+// A NULL C
+// 01A101C 9 bytes
+// for non-NULL value, give 3 bytes, the first byte is always 0, the last two bytes are the length
+// of this value,and then append the true bytes of the value
+// for NULL value, just only one byte, give one byte(1)
+// these are the rules of multi-cols
+// for one col, just give the value bytes
+func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int, lenCols int) {
 	area := vec.GetArea()
 	vs := vector.MustTCols[types.Varlena](vec)
 	if !vec.GetNulls().Any() {
 		for i := 0; i < n; i++ {
-			if m.hasNull {
-				m.keys[i] = append(m.keys[i], byte(0))
+			bytes := vs[i+start].GetByteSlice(area)
+			if lenCols > 1 {
+				// for "a"，"bc" and "ab","c", we need to distinct
+				// this is not null value
+				m.keys[i] = append(m.keys[i], 0)
+				// give the length
+				length := uint16(len(bytes))
+				m.keys[i] = append(m.keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
 			}
-			m.keys[i] = append(m.keys[i], vs[i+start].GetByteSlice(area)...)
+			// append the ture value bytes
+			m.keys[i] = append(m.keys[i], bytes...)
 		}
 	} else {
 		nsp := vec.GetNulls()
@@ -190,21 +201,40 @@ func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int) {
 				if hasNull {
 					m.keys[i] = append(m.keys[i], byte(1))
 				} else {
-					m.keys[i] = append(m.keys[i], byte(0))
-					m.keys[i] = append(m.keys[i], vs[i+start].GetByteSlice(area)...)
+					bytes := vs[i+start].GetByteSlice(area)
+					if lenCols > 1 {
+						// for "a"，"bc" and "ab","c", we need to distinct
+						// this is not null value
+						m.keys[i] = append(m.keys[i], 0)
+						// give the length
+						length := uint16(len(bytes))
+						m.keys[i] = append(m.keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+					}
+					// append the ture value bytes
+					m.keys[i] = append(m.keys[i], bytes...)
 				}
 			} else {
 				if hasNull {
 					m.zValues[i] = 0
 					continue
 				}
-				m.keys[i] = append(m.keys[i], vs[i+start].GetByteSlice(area)...)
+				bytes := vs[i+start].GetByteSlice(area)
+				if lenCols > 1 {
+					// for "a"，"bc" and "ab","c", we need to distinct
+					// this is not null value
+					m.keys[i] = append(m.keys[i], 0)
+					// give the length
+					length := uint16(len(bytes))
+					m.keys[i] = append(m.keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+				}
+				// append the ture value bytes
+				m.keys[i] = append(m.keys[i], bytes...)
 			}
 		}
 	}
 }
 
-func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, scale int32) {
+func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, scale int32, lenCols int) {
 	var data []byte
 	if !vec.IsConst() {
 		data = unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), (n+start)*sz)
@@ -218,10 +248,17 @@ func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, s
 	}
 	if !vec.GetNulls().Any() {
 		for i := 0; i < n; i++ {
-			if m.hasNull {
-				m.keys[i] = append(m.keys[i], byte(0))
+			bytes := data[(i+start)*sz : (i+start+1)*sz]
+			if lenCols > 1 {
+				// for "a"，"bc" and "ab","c", we need to distinct
+				// this is not null value
+				m.keys[i] = append(m.keys[i], 0)
+				// give the length
+				length := uint16(len(bytes))
+				m.keys[i] = append(m.keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
 			}
-			m.keys[i] = append(m.keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
+			// append the ture value bytes
+			m.keys[i] = append(m.keys[i], bytes...)
 		}
 	} else {
 		nsp := vec.GetNulls()
@@ -231,15 +268,34 @@ func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, s
 				if isNull {
 					m.keys[i] = append(m.keys[i], byte(1))
 				} else {
-					m.keys[i] = append(m.keys[i], byte(0))
-					m.keys[i] = append(m.keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
+					bytes := data[(i+start)*sz : (i+start+1)*sz]
+					if lenCols > 1 {
+						// for "a"，"bc" and "ab","c", we need to distinct
+						// this is not null value
+						m.keys[i] = append(m.keys[i], 0)
+						// give the length
+						length := uint16(len(bytes))
+						m.keys[i] = append(m.keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+					}
+					// append the ture value bytes
+					m.keys[i] = append(m.keys[i], bytes...)
 				}
 			} else {
 				if isNull {
 					m.zValues[i] = 0
 					continue
 				}
-				m.keys[i] = append(m.keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
+				bytes := data[(i+start)*sz : (i+start+1)*sz]
+				if lenCols > 1 {
+					// for "a"，"bc" and "ab","c", we need to distinct
+					// this is not null value
+					m.keys[i] = append(m.keys[i], 0)
+					// give the length
+					length := uint16(len(bytes))
+					m.keys[i] = append(m.keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+				}
+				// append the ture value bytes
+				m.keys[i] = append(m.keys[i], bytes...)
 			}
 		}
 	}
