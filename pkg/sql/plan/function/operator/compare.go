@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/compare"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"unsafe"
 )
 
 type compareT interface {
@@ -104,6 +103,118 @@ func NeDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, 
 
 func NeDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return CompareOrdered(args, proc, compare.Decimal128VecNe)
+}
+
+// IN operator
+func INGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := args[0], args[1]
+	left, right := vector.MustTCols[T](leftVec), vector.MustTCols[T](rightVec)
+	lenLeft := len(left)
+	lenRight := len(right)
+	if leftVec.IsScalar() {
+		lenLeft = 1
+	}
+	inMap := make(map[T]bool, lenRight)
+	for i := 0; i < lenRight; i++ {
+		if !rightVec.Nsp.Contains(uint64(i)) {
+			inMap[right[i]] = true
+		}
+	}
+	retVec := allocateBoolVector(lenLeft, proc)
+	ret := retVec.Col.([]bool)
+	for i := 0; i < lenLeft; i++ {
+		if _, ok := inMap[left[i]]; ok {
+			ret[i] = true
+		}
+	}
+	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
+	return retVec, nil
+}
+
+func INString(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := args[0], args[1]
+	left, area1 := vector.MustVarlenaRawData(leftVec)
+	right, area2 := vector.MustVarlenaRawData(rightVec)
+
+	lenLeft := len(left)
+	lenRight := len(right)
+	if leftVec.IsScalar() {
+		lenLeft = 1
+	}
+	inMap := make(map[string]bool, lenRight)
+	for i := 0; i < lenRight; i++ {
+		if !rightVec.Nsp.Contains(uint64(i)) {
+			inMap[right[i].GetString(area2)] = true
+		}
+	}
+	retVec := allocateBoolVector(lenLeft, proc)
+	ret := retVec.Col.([]bool)
+	for i := 0; i < lenLeft; i++ {
+		if _, ok := inMap[left[i].GetString(area1)]; ok {
+			ret[i] = true
+		}
+	}
+	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
+	return retVec, nil
+}
+
+// NOT IN operator
+func NotINGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := args[0], args[1]
+	left, right := vector.MustTCols[T](leftVec), vector.MustTCols[T](rightVec)
+	lenLeft := len(left)
+	lenRight := len(right)
+	if leftVec.IsScalar() {
+		lenLeft = 1
+	}
+	notInMap := make(map[T]bool, lenRight)
+	for i := 0; i < lenRight; i++ {
+		if !rightVec.Nsp.Contains(uint64(i)) {
+			notInMap[right[i]] = true
+		} else {
+			//not in null, return false
+			return vector.NewConstFixed(boolType, lenLeft, false, proc.Mp()), nil
+		}
+	}
+	retVec := allocateBoolVector(lenLeft, proc)
+	ret := retVec.Col.([]bool)
+	for i := 0; i < lenLeft; i++ {
+		if _, ok := notInMap[left[i]]; !ok {
+			ret[i] = true
+		}
+	}
+	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
+	return retVec, nil
+}
+
+func NotINString(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := args[0], args[1]
+	left, area1 := vector.MustVarlenaRawData(leftVec)
+	right, area2 := vector.MustVarlenaRawData(rightVec)
+
+	lenLeft := len(left)
+	lenRight := len(right)
+	if leftVec.IsScalar() {
+		lenLeft = 1
+	}
+	inMap := make(map[string]bool, lenRight)
+	for i := 0; i < lenRight; i++ {
+		if !rightVec.Nsp.Contains(uint64(i)) {
+			inMap[right[i].GetString(area2)] = true
+		} else {
+			//not in null, return false
+			return vector.NewConstFixed(boolType, lenLeft, false, proc.Mp()), nil
+		}
+	}
+	retVec := allocateBoolVector(lenLeft, proc)
+	ret := retVec.Col.([]bool)
+	for i := 0; i < lenLeft; i++ {
+		if _, ok := inMap[left[i].GetString(area1)]; !ok {
+			ret[i] = true
+		}
+	}
+	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
+	return retVec, nil
 }
 
 // Great than operator
@@ -191,7 +302,7 @@ func CompareValenaInline(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 	if v1.IsScalar() && v2.IsScalar() {
 		p1 := col1[0].UnsafePtr()
 		p2 := col2[0].UnsafePtr()
-		ret := *(*int64)(p1) == *(*int64)(p2) && *(*int64)(unsafe.Add(p1, 8)) == *(*int64)(unsafe.Add(p2, 8)) && *(*int64)(unsafe.Add(p1, 16)) == *(*int64)(unsafe.Add(p2, 16))
+		ret := *(*[3]int64)(p1) == *(*[3]int64)(p2)
 		return vector.NewConstFixed(boolType, 1, ret, proc.Mp()), nil
 	}
 
@@ -206,21 +317,21 @@ func CompareValenaInline(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		for i := 0; i < length; i++ {
 			p1 := col1[i].UnsafePtr()
 			p2 := col2[i].UnsafePtr()
-			veccol[i] = *(*int64)(p1) == *(*int64)(p2) && *(*int64)(unsafe.Add(p1, 8)) == *(*int64)(unsafe.Add(p2, 8)) && *(*int64)(unsafe.Add(p1, 16)) == *(*int64)(unsafe.Add(p2, 16))
+			veccol[i] = *(*[3]int64)(p1) == *(*[3]int64)(p2)
 		}
 		nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
 	} else if v1.IsScalar() {
 		p1 := col1[0].UnsafePtr()
 		for i := 0; i < length; i++ {
 			p2 := col2[i].UnsafePtr()
-			veccol[i] = *(*int64)(p1) == *(*int64)(p2) && *(*int64)(unsafe.Add(p1, 8)) == *(*int64)(unsafe.Add(p2, 8)) && *(*int64)(unsafe.Add(p1, 16)) == *(*int64)(unsafe.Add(p2, 16))
+			veccol[i] = *(*[3]int64)(p1) == *(*[3]int64)(p2)
 		}
 		nulls.Or(nil, v2.Nsp, vec.Nsp)
 	} else {
 		p2 := col2[0].UnsafePtr()
 		for i := 0; i < length; i++ {
 			p1 := col1[i].UnsafePtr()
-			veccol[i] = *(*int64)(p1) == *(*int64)(p2) && *(*int64)(unsafe.Add(p1, 8)) == *(*int64)(unsafe.Add(p2, 8)) && *(*int64)(unsafe.Add(p1, 16)) == *(*int64)(unsafe.Add(p2, 16))
+			veccol[i] = *(*[3]int64)(p1) == *(*[3]int64)(p2)
 		}
 		nulls.Or(v1.Nsp, nil, vec.Nsp)
 	}

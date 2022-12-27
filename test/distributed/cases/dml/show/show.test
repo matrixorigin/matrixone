@@ -117,3 +117,9 @@ show create table t1;
 
 SHOW TRIGGERS;
 SHOW TRIGGERS like '*%';
+
+use mo_catalog;
+show tables;
+show table_number from mo_catalog;
+show column_number from mo_database;
+show column_number from hdjshdj;

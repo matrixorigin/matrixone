@@ -38,7 +38,7 @@ var (
 	defaultFlushInterval       = time.Second * 60
 	defaultScanInterval        = time.Second * 5
 	defaultIncrementalInterval = time.Minute
-	defaultGlobalInterval      = time.Minute * 60
+	defaultGlobalMinCount      = int64(60)
 	defaultMinCount            = int64(100)
 	defaultLogBackend          = string(options.LogstoreLogservice)
 
@@ -84,7 +84,7 @@ type Config struct {
 		ScanInterval        toml.Duration `toml:"scan-interval"`
 		MinCount            int64         `toml:"min-count"`
 		IncrementalInterval toml.Duration `toml:"incremental-interval"`
-		GlobalInterval      toml.Duration `toml:"global-interval"`
+		GlobalMinCount      int64         `toml:"global-min-count"`
 	}
 
 	// Txn transactions configuration
@@ -157,8 +157,8 @@ func (c *Config) Validate() error {
 	if c.Ckp.IncrementalInterval.Duration == 0 {
 		c.Ckp.IncrementalInterval.Duration = defaultIncrementalInterval
 	}
-	if c.Ckp.GlobalInterval.Duration == 0 {
-		c.Ckp.GlobalInterval.Duration = defaultGlobalInterval
+	if c.Ckp.GlobalMinCount == 0 {
+		c.Ckp.GlobalMinCount = defaultGlobalMinCount
 	}
 	return nil
 }

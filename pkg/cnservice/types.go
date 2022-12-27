@@ -81,7 +81,7 @@ type Config struct {
 		MinCount            int64                `toml:"min-count"`
 		ScanInterval        toml.Duration        `toml:"scan-interval"`
 		IncrementalInterval toml.Duration        `toml:"incremental-interval"`
-		GlobalInterval      toml.Duration        `toml:"global-interval"`
+		GlobalMinCount      int64                `toml:"global-min-count"`
 	}
 
 	// parameters for cn-server related buffer.

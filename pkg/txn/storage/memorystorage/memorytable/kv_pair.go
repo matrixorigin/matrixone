@@ -22,10 +22,21 @@ type KVPair[
 	V any,
 ] struct {
 	Key K
+	*KVValue[K, V]
+}
 
+// KVValue represents the value of a KVPair
+type KVValue[
+	K Ordered[K],
+	V any,
+] struct {
 	ID      int64
 	Value   V
 	Indexes []Tuple
+}
+
+func (k KVPair[K, V]) Valid() bool {
+	return k.KVValue != nil
 }
 
 var nextKVPairID = int64(1 << 32)
@@ -33,11 +44,14 @@ var nextKVPairID = int64(1 << 32)
 func compareKVPair[
 	K Ordered[K],
 	V any,
-](a, b *KVPair[K, V]) bool {
+](a, b KVPair[K, V]) bool {
 	return a.Key.Less(b.Key)
 }
 
 // String returns text form of KVPair
 func (k *KVPair[K, V]) String() string {
-	return fmt.Sprintf("kv pair, id %v, key %v, value %v", k.ID, k.Key, k.Value)
+	if k.KVValue != nil {
+		return fmt.Sprintf("kv pair, key %v, value %v", k.Key, k.KVValue)
+	}
+	return fmt.Sprintf("kv pair, key %v", k.Key)
 }
