@@ -92,6 +92,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 
 	// XXX PrintScope has a none-trivial amount of logging
 	// PrintScope(nil, []*Scope{c.scope})
+	fmt.Printf(DebugShowScopes([]*Scope{c.scope}))
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -1045,9 +1046,10 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
 		ss[i].appendInstruction(vm.Instruction{
-			Op:  vm.Group,
-			Idx: c.anal.curr,
-			Arg: constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, c.proc),
+			Op:      vm.Group,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, c.proc),
 		})
 	}
 	c.anal.isFirst = false
@@ -1142,6 +1144,7 @@ func (c *Compile) newScopeList(childrenCount int, rows int) []*Scope {
 
 func (c *Compile) newScopeListWithNode(mcpu, childrenCount int) []*Scope {
 	ss := make([]*Scope, mcpu)
+	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		ss[i] = new(Scope)
 		ss[i].Magic = Remote
@@ -1149,7 +1152,7 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int) []*Scope {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op:      vm.Merge,
 			Idx:     c.anal.curr,
-			IsFirst: c.anal.isFirst,
+			IsFirst: currentFirstFlag,
 			Arg:     &merge.Argument{},
 		})
 	}
@@ -1225,8 +1228,10 @@ func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 		Magic: Merge,
 	}
 	rs.appendInstruction(vm.Instruction{
-		Op:  vm.Merge,
-		Arg: &merge.Argument{},
+		Op:      vm.Merge,
+		Idx:     s.Instructions[0].Idx,
+		IsFirst: s.Instructions[0].IsFirst,
+		Arg:     &merge.Argument{},
 	})
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
@@ -1243,9 +1248,10 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 		Magic: Merge,
 	}
 	rs.appendInstruction(vm.Instruction{
-		Op:  vm.HashBuild,
-		Idx: s.Instructions[0].Idx,
-		Arg: constructHashBuild(s.Instructions[0], c.proc),
+		Op:      vm.HashBuild,
+		Idx:     s.Instructions[0].Idx,
+		IsFirst: s.Instructions[0].IsFirst,
+		Arg:     constructHashBuild(s.Instructions[0], c.proc),
 	})
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
@@ -1295,6 +1301,10 @@ func (c *Compile) fillAnalyzeInfo() {
 		c.anal.qry.Nodes[i].AnalyzeInfo.OutputSize = atomic.LoadInt64(&anal.OutputSize)
 		c.anal.qry.Nodes[i].AnalyzeInfo.TimeConsumed = atomic.LoadInt64(&anal.TimeConsumed)
 		c.anal.qry.Nodes[i].AnalyzeInfo.MemorySize = atomic.LoadInt64(&anal.MemorySize)
+		c.anal.qry.Nodes[i].AnalyzeInfo.WaitTimeConsumed = atomic.LoadInt64(&anal.WaitTimeConsumed)
+		c.anal.qry.Nodes[i].AnalyzeInfo.DiskIO = atomic.LoadInt64(&anal.DiskIO)
+		c.anal.qry.Nodes[i].AnalyzeInfo.S3IO = atomic.LoadInt64(&anal.S3IO)
+		c.anal.qry.Nodes[i].AnalyzeInfo.NetworkIO = atomic.LoadInt64(&anal.NetworkIO)
 	}
 }
 

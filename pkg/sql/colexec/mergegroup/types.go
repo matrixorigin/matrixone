@@ -15,6 +15,8 @@
 package mergegroup
 
 import (
+	"reflect"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -43,6 +45,11 @@ type container struct {
 	strHashMap *hashmap.StrHashMap
 
 	bat *batch.Batch
+
+	// aliveMergeReceiver is a count for no-close receiver
+	aliveMergeReceiver int
+	// receiverListener is a structure to listen all the merge receiver.
+	receiverListener []reflect.SelectCase
 }
 
 type Argument struct {

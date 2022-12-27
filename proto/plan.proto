@@ -17,7 +17,7 @@
 syntax = "proto3";
 package plan;
 
-import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "protobuf/gogoproto/gogo.proto";
 
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/plan";
 option (gogoproto.sizer_all) = false;
@@ -508,6 +508,10 @@ message AnalyzeInfo {
     int64 output_size = 4;
     int64 time_consumed = 5;
     int64 memory_size = 6;
+    int64 wait_time_consumed = 7;
+    int64 diskIO = 8;
+    int64 s3IO = 9;
+    int64 networkIO = 10;
 }
 
 message Node {

@@ -165,7 +165,14 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 		id := instruction.Op
 		name, ok := debugInstructionNames[id]
 		if ok {
-			str := name
+			prefix := fmt.Sprintf("[%d]", instruction.Idx)
+			str := prefix + name
+			if instruction.IsFirst {
+				str += "(first)"
+			}
+			if instruction.IsLast {
+				str += "(last)"
+			}
 			if id == vm.Connector {
 				var receiver = "unknown"
 				arg := instruction.Arg.(*connector.Argument)

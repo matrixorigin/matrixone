@@ -17,8 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
@@ -1114,6 +1115,10 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 		target.analInfos[i].InputSize += n.InputSize
 		target.analInfos[i].MemorySize += n.MemorySize
 		target.analInfos[i].TimeConsumed += n.TimeConsumed
+		target.analInfos[i].WaitTimeConsumed += n.WaitTimeConsumed
+		target.analInfos[i].DiskIO += n.DiskIO
+		target.analInfos[i].S3IO += n.S3IO
+		target.analInfos[i].NetworkIO += n.NetworkIO
 	}
 }
 
@@ -1235,12 +1240,16 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 
 func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 	return &plan.AnalyzeInfo{
-		InputRows:    info.InputRows,
-		OutputRows:   info.OutputRows,
-		InputSize:    info.InputSize,
-		OutputSize:   info.OutputSize,
-		TimeConsumed: info.TimeConsumed,
-		MemorySize:   info.MemorySize,
+		InputRows:        info.InputRows,
+		OutputRows:       info.OutputRows,
+		InputSize:        info.InputSize,
+		OutputSize:       info.OutputSize,
+		TimeConsumed:     info.TimeConsumed,
+		MemorySize:       info.MemorySize,
+		WaitTimeConsumed: info.WaitTimeConsumed,
+		DiskIO:           info.DiskIO,
+		S3IO:             info.S3IO,
+		NetworkIO:        info.NetworkIO,
 	}
 }
 

@@ -17,6 +17,7 @@ package merge
 import (
 	"bytes"
 	"reflect"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -54,10 +55,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			return true, nil
 		}
 
+		start := time.Now()
 		chosen, value, ok := reflect.Select(ctr.receiverListener)
 		if !ok {
 			return false, moerr.NewInternalError(proc.Ctx, "pipeline closed unexpectedly")
 		}
+		anal.WaitStop(start)
 
 		pointer := value.UnsafePointer()
 		bat := (*batch.Batch)(pointer)
