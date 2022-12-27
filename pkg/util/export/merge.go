@@ -419,7 +419,7 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(s.content) != cnt {
+		if len(s.content) != BatchReadRows {
 			err := moerr.NewInternalError(s.ctx, "read %s file %d rows, but only cache %d rows", s.path, cnt, len(s.content))
 			if panicWhileRead.Load() {
 				panic(err)
@@ -431,6 +431,7 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 			s.reader = nil
 			s.raw.Close()
 			s.raw = nil
+			s.logger.Error("ContentReader.readerClose", logutil.PathField(s.path))
 		}
 		s.idx = 0
 		s.length = cnt
@@ -439,6 +440,14 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 	if s.idx < s.length {
 		idx := s.idx
 		s.idx++
+		if s.content == nil || len(s.content) == 0 {
+			s.logger.Error("ContentReader.read",
+				logutil.PathField(s.path),
+				zap.Bool("nil", s.content == nil),
+				zap.Int("cached", len(s.content)),
+				zap.Int("idx", idx),
+			)
+		}
 		return s.content[idx], nil
 	}
 	return nil, nil
