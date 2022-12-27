@@ -108,7 +108,8 @@ func (e *testEngine) getRelationWithTxn(txn txnif.AsyncTxn) (rel handle.Relation
 }
 
 func (e *testEngine) checkpointCatalog() {
-	e.DB.BGCheckpointRunner.MockCheckpoint(e.DB.TxnMgr.StatMaxCommitTS())
+	err := e.DB.BGCheckpointRunner.ForceIncrementalCheckpoint(e.DB.TxnMgr.StatMaxCommitTS())
+	assert.NoError(e.t, err)
 }
 
 func (e *testEngine) compactBlocks(skipConflict bool) {
@@ -205,6 +206,14 @@ func (e *testEngine) globalCheckpoint(
 		defer e.DB.BGCheckpointRunner.EnableCheckpoint()
 		e.DB.BGCheckpointRunner.CleanPenddingCheckpoint()
 	}
+	if e.DB.BGCheckpointRunner.GetPenddingIncrementalCount() == 0 {
+		testutils.WaitExpect(4000, func() bool {
+			flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, endTs, false)
+			return flushed
+		})
+		flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, endTs, true)
+		assert.True(e.t, flushed)
+	}
 	err := e.DB.BGCheckpointRunner.ForceGlobalCheckpoint(endTs, versionInterval)
 	assert.NoError(e.t, err)
 	return nil
@@ -236,6 +245,9 @@ func (e *testEngine) incrementalCheckpoint(
 		entry, err := e.DB.Wal.RangeCheckpoint(1, lsn)
 		assert.NoError(e.t, err)
 		assert.NoError(e.t, entry.WaitDone())
+		testutils.WaitExpect(1000, func() bool {
+			return e.Scheduler.GetPenddingLSNCnt() == 0
+		})
 	}
 	return nil
 }

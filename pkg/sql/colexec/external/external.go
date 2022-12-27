@@ -25,6 +25,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"io"
 	"math"
 	"path"
@@ -532,7 +533,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
 		Line = plh.simdCsvLineArray[rowIdx]
 		if param.extern.Format == tree.JSONLINE {
-			Line, err = transJson2Lines(proc.Ctx, Line[0], param.Attrs, param.extern.JsonData)
+			Line, err = transJson2Lines(proc.Ctx, Line[0], param.Attrs, param.Cols, param.extern.JsonData)
 			if err != nil {
 				return nil, err
 			}
@@ -642,24 +643,26 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 	return bat, nil
 }
 
-func transJson2Lines(ctx context.Context, str string, attrs []string, jsonData string) ([]string, error) {
+func transJson2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, jsonData string) ([]string, error) {
 	switch jsonData {
 	case tree.OBJECT:
-		return transJsonObject2Lines(ctx, str, attrs)
+		return transJsonObject2Lines(ctx, str, attrs, cols)
 	case tree.ARRAY:
-		return transJsonArray2Lines(ctx, str, attrs)
+		return transJsonArray2Lines(ctx, str, attrs, cols)
 	default:
 		return nil, moerr.NewNotSupported(ctx, "the jsonline format '%s' is not support now", jsonData)
 	}
 }
 
-func transJsonObject2Lines(ctx context.Context, str string, attrs []string) ([]string, error) {
+func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef) ([]string, error) {
 	var (
 		err error
 		res = make([]string, 0, len(attrs))
 	)
 	var jsonMap map[string]interface{}
-	err = json.Unmarshal([]byte(str), &jsonMap)
+	var decoder = json.NewDecoder(bytes.NewReader([]byte(str)))
+	decoder.UseNumber()
+	err = decoder.Decode(&jsonMap)
 	if err != nil {
 		logutil.Errorf("json unmarshal err:%v", err)
 		return nil, err
@@ -667,9 +670,27 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string) ([]s
 	if len(jsonMap) < len(attrs) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo())
 	}
-	for _, attr := range attrs {
+	for idx, attr := range attrs {
 		if val, ok := jsonMap[attr]; ok {
-			res = append(res, fmt.Sprintf("%v", val))
+			if val == nil {
+				res = append(res, NULL_FLAG)
+				continue
+			}
+			tp := cols[idx].Typ.Id
+			if tp != int32(types.T_json) {
+				res = append(res, fmt.Sprintf("%v", val))
+				continue
+			}
+			var bj bytejson.ByteJson
+			err = bj.UnmarshalObject(val)
+			if err != nil {
+				return nil, err
+			}
+			dt, err := bj.Marshal()
+			if err != nil {
+				return nil, err
+			}
+			res = append(res, string(dt))
 		} else {
 			return nil, moerr.NewInvalidInput(ctx, "the attr %s is not in json", attr)
 		}
@@ -677,13 +698,15 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string) ([]s
 	return res, nil
 }
 
-func transJsonArray2Lines(ctx context.Context, str string, attrs []string) ([]string, error) {
+func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef) ([]string, error) {
 	var (
 		err error
 		res = make([]string, 0, len(attrs))
 	)
 	var jsonArray []interface{}
-	err = json.Unmarshal([]byte(str), &jsonArray)
+	var decoder = json.NewDecoder(bytes.NewReader([]byte(str)))
+	decoder.UseNumber()
+	err = decoder.Decode(&jsonArray)
 	if err != nil {
 		logutil.Errorf("json unmarshal err:%v", err)
 		return nil, err
@@ -691,8 +714,26 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string) ([]st
 	if len(jsonArray) < len(attrs) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo())
 	}
-	for idx := range attrs {
-		res = append(res, fmt.Sprintf("%v", jsonArray[idx]))
+	for idx, val := range jsonArray {
+		if val == nil {
+			res = append(res, NULL_FLAG)
+			continue
+		}
+		tp := cols[idx].Typ.Id
+		if tp != int32(types.T_json) {
+			res = append(res, fmt.Sprintf("%v", val))
+			continue
+		}
+		var bj bytejson.ByteJson
+		err = bj.UnmarshalObject(val)
+		if err != nil {
+			return nil, err
+		}
+		dt, err := bj.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		res = append(res, string(dt))
 	}
 	return res, nil
 }
@@ -983,15 +1024,24 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				byteJson, err := types.ParseStringToByteJson(field)
-				if err != nil {
-					logutil.Errorf("parse field[%v] err:%v", field, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not json type for column %d", field, colIdx)
-				}
-				jsonBytes, err := types.EncodeJson(byteJson)
-				if err != nil {
-					logutil.Errorf("encode json[%v] err:%v", field, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not json type for column %d", field, colIdx)
+				var (
+					byteJson  bytejson.ByteJson
+					err       error
+					jsonBytes []byte
+				)
+				if param.extern.Format == tree.CSV {
+					byteJson, err = types.ParseStringToByteJson(field)
+					if err != nil {
+						logutil.Errorf("parse field[%v] err:%v", field, err)
+						return moerr.NewInternalError(param.Ctx, "the input value '%v' is not json type for column %d", field, colIdx)
+					}
+					jsonBytes, err = types.EncodeJson(byteJson)
+					if err != nil {
+						logutil.Errorf("encode json[%v] err:%v", field, err)
+						return moerr.NewInternalError(param.Ctx, "the input value '%v' is not json type for column %d", field, colIdx)
+					}
+				} else { //jsonline
+					jsonBytes = []byte(field)
 				}
 				err = vector.SetBytesAt(vec, rowIdx, jsonBytes, mp)
 				if err != nil {
