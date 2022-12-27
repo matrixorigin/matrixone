@@ -294,7 +294,7 @@ func (t *GCTable) collectData(files []string) []*containers.Batch {
 	}
 
 	for _, name := range files {
-		bats[DeleteFile].GetVectorByName(GCAttrObjectName).Append(name)
+		bats[DeleteFile].GetVectorByName(GCAttrObjectName).Append([]byte(name))
 	}
 	return bats
 }
