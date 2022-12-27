@@ -672,36 +672,33 @@ func (DataControl_DclType) EnumDescriptor() ([]byte, []int) {
 type DataDefinition_DdlType int32
 
 const (
-	DataDefinition_CREATE_DATABASE      DataDefinition_DdlType = 0
-	DataDefinition_ALTER_DATABASE       DataDefinition_DdlType = 1
-	DataDefinition_DROP_DATABASE        DataDefinition_DdlType = 2
-	DataDefinition_CREATE_TABLE         DataDefinition_DdlType = 3
-	DataDefinition_ALTER_TABLE          DataDefinition_DdlType = 4
-	DataDefinition_DROP_TABLE           DataDefinition_DdlType = 5
-	DataDefinition_CREATE_INDEX         DataDefinition_DdlType = 6
-	DataDefinition_ALTER_INDEX          DataDefinition_DdlType = 7
-	DataDefinition_DROP_INDEX           DataDefinition_DdlType = 8
-	DataDefinition_TRUNCATE_TABLE       DataDefinition_DdlType = 9
-	DataDefinition_CREATE_VIEW          DataDefinition_DdlType = 10
-	DataDefinition_ALTER_VIEW           DataDefinition_DdlType = 11
-	DataDefinition_DROP_VIEW            DataDefinition_DdlType = 12
-	DataDefinition_SHOW_CREATEDATABASE  DataDefinition_DdlType = 13
-	DataDefinition_SHOW_CREATETABLE     DataDefinition_DdlType = 14
-	DataDefinition_SHOW_DATABASES       DataDefinition_DdlType = 15
-	DataDefinition_SHOW_TABLES          DataDefinition_DdlType = 16
-	DataDefinition_SHOW_COLUMNS         DataDefinition_DdlType = 17
-	DataDefinition_SHOW_INDEX           DataDefinition_DdlType = 18
-	DataDefinition_SHOW_VARIABLES       DataDefinition_DdlType = 19
-	DataDefinition_SHOW_WARNINGS        DataDefinition_DdlType = 20
-	DataDefinition_SHOW_ERRORS          DataDefinition_DdlType = 21
-	DataDefinition_SHOW_STATUS          DataDefinition_DdlType = 22
-	DataDefinition_SHOW_PROCESSLIST     DataDefinition_DdlType = 23
-	DataDefinition_SHOW_TABLE_STATUS    DataDefinition_DdlType = 24
-	DataDefinition_SHOW_TARGET          DataDefinition_DdlType = 25
-	DataDefinition_SHOW_COLLATION       DataDefinition_DdlType = 26
-	DataDefinition_SHOW_LOCKS           DataDefinition_DdlType = 27
-	DataDefinition_SHOW_NODE_LIST       DataDefinition_DdlType = 28
-	DataDefinition_SHOW_FUNCTION_STATUS DataDefinition_DdlType = 29
+	DataDefinition_CREATE_DATABASE     DataDefinition_DdlType = 0
+	DataDefinition_ALTER_DATABASE      DataDefinition_DdlType = 1
+	DataDefinition_DROP_DATABASE       DataDefinition_DdlType = 2
+	DataDefinition_CREATE_TABLE        DataDefinition_DdlType = 3
+	DataDefinition_ALTER_TABLE         DataDefinition_DdlType = 4
+	DataDefinition_DROP_TABLE          DataDefinition_DdlType = 5
+	DataDefinition_CREATE_INDEX        DataDefinition_DdlType = 6
+	DataDefinition_ALTER_INDEX         DataDefinition_DdlType = 7
+	DataDefinition_DROP_INDEX          DataDefinition_DdlType = 8
+	DataDefinition_TRUNCATE_TABLE      DataDefinition_DdlType = 9
+	DataDefinition_CREATE_VIEW         DataDefinition_DdlType = 10
+	DataDefinition_ALTER_VIEW          DataDefinition_DdlType = 11
+	DataDefinition_DROP_VIEW           DataDefinition_DdlType = 12
+	DataDefinition_SHOW_CREATEDATABASE DataDefinition_DdlType = 13
+	DataDefinition_SHOW_CREATETABLE    DataDefinition_DdlType = 14
+	DataDefinition_SHOW_DATABASES      DataDefinition_DdlType = 15
+	DataDefinition_SHOW_TABLES         DataDefinition_DdlType = 16
+	DataDefinition_SHOW_COLUMNS        DataDefinition_DdlType = 17
+	DataDefinition_SHOW_INDEX          DataDefinition_DdlType = 18
+	DataDefinition_SHOW_VARIABLES      DataDefinition_DdlType = 19
+	DataDefinition_SHOW_WARNINGS       DataDefinition_DdlType = 20
+	DataDefinition_SHOW_ERRORS         DataDefinition_DdlType = 21
+	DataDefinition_SHOW_STATUS         DataDefinition_DdlType = 22
+	DataDefinition_SHOW_PROCESSLIST    DataDefinition_DdlType = 23
+	DataDefinition_SHOW_TABLE_STATUS   DataDefinition_DdlType = 24
+	DataDefinition_SHOW_TARGET         DataDefinition_DdlType = 25
+	DataDefinition_SHOW_COLLATION      DataDefinition_DdlType = 26
 )
 
 var DataDefinition_DdlType_name = map[int32]string{
@@ -732,42 +729,36 @@ var DataDefinition_DdlType_name = map[int32]string{
 	24: "SHOW_TABLE_STATUS",
 	25: "SHOW_TARGET",
 	26: "SHOW_COLLATION",
-	27: "SHOW_LOCKS",
-	28: "SHOW_NODE_LIST",
-	29: "SHOW_FUNCTION_STATUS",
 }
 
 var DataDefinition_DdlType_value = map[string]int32{
-	"CREATE_DATABASE":      0,
-	"ALTER_DATABASE":       1,
-	"DROP_DATABASE":        2,
-	"CREATE_TABLE":         3,
-	"ALTER_TABLE":          4,
-	"DROP_TABLE":           5,
-	"CREATE_INDEX":         6,
-	"ALTER_INDEX":          7,
-	"DROP_INDEX":           8,
-	"TRUNCATE_TABLE":       9,
-	"CREATE_VIEW":          10,
-	"ALTER_VIEW":           11,
-	"DROP_VIEW":            12,
-	"SHOW_CREATEDATABASE":  13,
-	"SHOW_CREATETABLE":     14,
-	"SHOW_DATABASES":       15,
-	"SHOW_TABLES":          16,
-	"SHOW_COLUMNS":         17,
-	"SHOW_INDEX":           18,
-	"SHOW_VARIABLES":       19,
-	"SHOW_WARNINGS":        20,
-	"SHOW_ERRORS":          21,
-	"SHOW_STATUS":          22,
-	"SHOW_PROCESSLIST":     23,
-	"SHOW_TABLE_STATUS":    24,
-	"SHOW_TARGET":          25,
-	"SHOW_COLLATION":       26,
-	"SHOW_LOCKS":           27,
-	"SHOW_NODE_LIST":       28,
-	"SHOW_FUNCTION_STATUS": 29,
+	"CREATE_DATABASE":     0,
+	"ALTER_DATABASE":      1,
+	"DROP_DATABASE":       2,
+	"CREATE_TABLE":        3,
+	"ALTER_TABLE":         4,
+	"DROP_TABLE":          5,
+	"CREATE_INDEX":        6,
+	"ALTER_INDEX":         7,
+	"DROP_INDEX":          8,
+	"TRUNCATE_TABLE":      9,
+	"CREATE_VIEW":         10,
+	"ALTER_VIEW":          11,
+	"DROP_VIEW":           12,
+	"SHOW_CREATEDATABASE": 13,
+	"SHOW_CREATETABLE":    14,
+	"SHOW_DATABASES":      15,
+	"SHOW_TABLES":         16,
+	"SHOW_COLUMNS":        17,
+	"SHOW_INDEX":          18,
+	"SHOW_VARIABLES":      19,
+	"SHOW_WARNINGS":       20,
+	"SHOW_ERRORS":         21,
+	"SHOW_STATUS":         22,
+	"SHOW_PROCESSLIST":    23,
+	"SHOW_TABLE_STATUS":   24,
+	"SHOW_TARGET":         25,
+	"SHOW_COLLATION":      26,
 }
 
 func (x DataDefinition_DdlType) String() string {

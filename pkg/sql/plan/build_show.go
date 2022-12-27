@@ -378,35 +378,6 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
-func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Plan, error) { 
-	dbName := stmt.Table.GetDBName()
-	if dbName == "" {
-		dbName = ctx.DefaultDatabase()
-	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
-	}
-
-	tblName := string(stmt.Table.ToTableName().ObjectName)
-	_, tableDef := ctx.Resolve(dbName, tblName)
-	if tableDef == nil {
-		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
-	}
-
-	ddlType := plan.DataDefinition_SHOW_TARGET
-
-	sql := "SELECT"
-	tableCols := tableDef.Cols
-	for i := range tableCols {
-		sql += " max(%s'), min('%s'),"
-		colName := tableCols[i].Name
-		sql = fmt.Sprintf(sql, colName, colName)
-	}
-	sql = sql[:len(sql) - 1]
-	sql += "FROM %s"
-	sql = fmt.Sprintf(sql, tblName)
-
-	return returnByRewriteSQL(ctx, sql, ddlType)
-}
 func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
@@ -504,13 +475,13 @@ func buildShowTarget(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error) 
 }
 
 func buildShowLocks(stmt *tree.ShowLocks, ctx CompilerContext) (*Plan, error) {
-	ddlType := plan.DataDefinition_SHOW_LOCKS
+	ddlType := plan.DataDefinition_SHOW_TARGET
 	sql := "select 1 where 0"
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
 func buildShowNodeList(stmt *tree.ShowNodeList, ctx CompilerContext) (*Plan, error) {
-	ddlType := plan.DataDefinition_SHOW_NODE_LIST
+	ddlType := plan.DataDefinition_SHOW_TARGET
 	sql := "select 1 where 0"
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
@@ -519,22 +490,8 @@ func buildShowFunctionStatus(stmt *tree.ShowFunctionStatus, ctx CompilerContext)
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
-	ddlType := plan.DataDefinition_SHOW_FUNCTION_STATUS
-
-	//sql := fmt.Sprintf("SELECT * from %s.mo_user_defined_function ", MO_CATALOG_DB_NAME)
+	ddlType := plan.DataDefinition_SHOW_TARGET
 	sql := "select 1 where 0"
-
-	// if stmt.Where != nil {
-	// 	return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
-	// }
-
-	// if stmt.Like != nil {
-	// 	// append filter [AND ma.attname like stmt.Like] to WHERE clause
-	// 	likeExpr := stmt.Like
-	// 	likeExpr.Left = tree.SetUnresolvedName("name")
-	// 	return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
-	// }
-
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
@@ -606,16 +563,21 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 // TODO: Improve SQL. Currently, Lack of the mata of grants
 func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
-	if stmt.Hostname == "" {
-		stmt.Hostname = MO_DEFUALT_HOSTNAME
+	if stmt.ShowGrantType == tree.GrantForRole {
+		role_name := stmt.Roles[0].UserName
+		sql := fmt.Sprintf("select role_name, obj_type, privilege_name, privilege_level FROM  %s.mo_role_privs WHERE role_name = '%s'", MO_CATALOG_DB_NAME, role_name)
+		return returnByRewriteSQL(ctx, sql, ddlType)
+	} else {
+		if stmt.Hostname == "" {
+			stmt.Hostname = MO_DEFUALT_HOSTNAME
+		}
+		if stmt.Username == "" {
+			stmt.Username = ctx.GetUserName()
+		}
+		sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\", \"@\", \"`%s`\")  as `Grants for %s@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
+		sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Username, stmt.Hostname)
+		return returnByRewriteSQL(ctx, sql, ddlType)
 	}
-	if stmt.Username == "" {
-		stmt.Username = ctx.GetUserName()
-	}
-	sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\", \"@\", \"`%s`\")  as `Grants for %s@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
-	sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Username, stmt.Hostname)
-
-	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
 func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, error) {
