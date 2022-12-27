@@ -3176,9 +3176,17 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var err2 error
 	var columns []interface{}
 	var mrs *MysqlResultSet
+	canCache := true
 
 	singleStatement := len(cws) == 1
 	for i, cw := range cws {
+		if cwft, ok := cw.(*TxnComputationWrapper); ok {
+			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL {
+				canCache = false
+				ses.cleanCache()
+			}
+		}
+
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sql, singleStatement)
@@ -3831,15 +3839,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	handleNext:
 	} // end of for
 
-	if !ses.isCached(sql) {
+	if canCache && !ses.isCached(sql) {
 		plans := make([]*plan.Plan, len(cws))
 		stmts := make([]*tree.Statement, len(cws))
 		for i, cw := range cws {
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL {
-					ses.cleanCache()
-					return nil
-				}
 				plans[i] = cwft.plan
 				stmts[i] = &cwft.stmt
 			}
