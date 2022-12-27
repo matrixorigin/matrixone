@@ -34,7 +34,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	ap := arg.(*Argument)
 	bat := proc.InputBatch()
 	if bat == nil {

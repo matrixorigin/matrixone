@@ -44,7 +44,7 @@ func Prepare(_ *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(idx)
@@ -53,7 +53,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 
 	// get batch from merge receivers and do merge sort.
 	// save the sort result in ctr.bat.
-	if err := ctr.build(ap, proc, anal); err != nil {
+	if err := ctr.build(ap, proc, anal, isFirst); err != nil {
 		ap.Free(proc, true)
 		return false, err
 	}
@@ -66,7 +66,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 		ctr.bat.ExpandNulls()
 	}
-	anal.Output(ctr.bat)
+	anal.Output(ctr.bat, isLast)
 	proc.SetInputBatch(ctr.bat)
 	ctr.bat = nil
 
@@ -75,7 +75,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	return true, nil
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	for {
 		if len(proc.Reg.MergeReceivers) == 0 {
 			break
@@ -93,7 +93,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				continue
 			}
 			bat.ExpandNulls()
-			anal.Input(bat)
+			anal.Input(bat, isFirst)
 			anal.Alloc(int64(bat.Size()))
 			ctr.n = len(bat.Vecs)
 			ctr.poses = ctr.poses[:0]

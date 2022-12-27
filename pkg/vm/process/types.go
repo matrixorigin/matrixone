@@ -30,8 +30,8 @@ type Analyze interface {
 	Stop()
 	Start()
 	Alloc(int64)
-	Input(*batch.Batch)
-	Output(*batch.Batch)
+	Input(*batch.Batch, bool)
+	Output(*batch.Batch, bool)
 }
 
 // WaitRegister channel

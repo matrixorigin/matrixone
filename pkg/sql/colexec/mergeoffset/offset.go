@@ -33,7 +33,7 @@ func Prepare(_ *process.Process, arg interface{}) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast bool) (bool, error) {
 	ap := arg.(*Argument)
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
@@ -51,9 +51,9 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 			i--
 			continue
 		}
-		anal.Input(bat)
+		anal.Input(bat, isFirst)
 		if ap.ctr.seen > ap.Offset {
-			anal.Output(bat)
+			anal.Output(bat, isLast)
 			proc.SetInputBatch(bat)
 			return false, nil
 		}
@@ -64,7 +64,7 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 			ap.ctr.seen += uint64(length)
 			bat.Shrink(sels)
 			proc.Mp().PutSels(sels)
-			anal.Output(bat)
+			anal.Output(bat, isLast)
 			proc.SetInputBatch(bat)
 			return false, nil
 		}

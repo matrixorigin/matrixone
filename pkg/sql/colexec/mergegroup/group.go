@@ -35,7 +35,7 @@ func Prepare(_ *process.Process, arg interface{}) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast bool) (bool, error) {
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(idx)
@@ -44,7 +44,7 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if err := ctr.build(proc, anal, isFirst); err != nil {
 				return false, err
 			}
 			ctr.state = Eval
@@ -65,7 +65,7 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 						ctr.bat.Zs[i] = 1
 					}
 				}
-				anal.Output(ctr.bat)
+				anal.Output(ctr.bat, isLast)
 				ctr.bat.ExpandNulls()
 			}
 			ctr.state = End
@@ -78,7 +78,7 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 	}
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+func (ctr *container) build(proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var err error
 	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
 		bat, ok := <-proc.Reg.MergeReceivers[i].Ch
@@ -89,7 +89,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 			i--
 			continue
 		}
-		anal.Input(bat)
+		anal.Input(bat, isFirst)
 		if err = ctr.process(bat, proc); err != nil {
 			bat.Clean(proc.Mp())
 			return err

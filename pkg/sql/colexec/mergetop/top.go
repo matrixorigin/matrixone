@@ -51,7 +51,7 @@ func Prepare(_ *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -64,7 +64,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		return true, nil
 	}
 
-	if err := ctr.build(ap, proc, anal); err != nil {
+	if err := ctr.build(ap, proc, anal, isFirst); err != nil {
 		ap.Free(proc, true)
 		return false, err
 	}
@@ -74,12 +74,12 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	err := ctr.eval(ap.Limit, proc, anal)
+	err := ctr.eval(ap.Limit, proc, anal, isLast)
 	ap.Free(proc, err != nil)
 	return err == nil, err
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	for {
 		if len(proc.Reg.MergeReceivers) == 0 {
 			break
@@ -96,7 +96,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				i--
 				continue
 			}
-			anal.Input(bat)
+			anal.Input(bat, isFirst)
 			ctr.n = len(bat.Vecs)
 			ctr.poses = ctr.poses[:0]
 			for _, f := range ap.Fs {
@@ -197,7 +197,7 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 	return nil
 }
 
-func (ctr *container) eval(limit int64, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) eval(limit int64, proc *process.Process, anal process.Analyze, isLast bool) error {
 	if int64(len(ctr.sels)) < limit {
 		ctr.sort()
 	}
@@ -216,7 +216,7 @@ func (ctr *container) eval(limit int64, proc *process.Process, anal process.Anal
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 	ctr.bat.ExpandNulls()
-	anal.Output(ctr.bat)
+	anal.Output(ctr.bat, isLast)
 	proc.SetInputBatch(ctr.bat)
 	ctr.bat = nil
 	return nil

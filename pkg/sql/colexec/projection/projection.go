@@ -38,7 +38,7 @@ func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -51,7 +51,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	if bat.Length() == 0 {
 		return false, nil
 	}
-	anal.Input(bat)
+	anal.Input(bat, isFirst)
 	ap := arg.(*Argument)
 	rbat := batch.NewWithSize(len(ap.Es))
 	for i, e := range ap.Es {
@@ -74,7 +74,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	rbat.Zs = bat.Zs
 	bat.Zs = nil
 	bat.Clean(proc.Mp())
-	anal.Output(rbat)
+	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return false, nil
 }

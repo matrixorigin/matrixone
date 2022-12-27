@@ -70,7 +70,7 @@ func Prepare(_ *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	var end bool
 	var err error
 	ap := arg.(*Argument)
@@ -79,9 +79,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	defer anal.Stop()
 
 	if len(ap.Exprs) == 0 {
-		end, err = ap.ctr.process(ap, proc, anal)
+		end, err = ap.ctr.process(ap, proc, anal, isFirst, isLast)
 	} else {
-		end, err = ap.ctr.processWithGroup(ap, proc, anal)
+		end, err = ap.ctr.processWithGroup(ap, proc, anal, isFirst, isLast)
 	}
 	if err != nil {
 		ap.Free(proc, true)
@@ -92,7 +92,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	return end, err
 }
 
-func (ctr *container) process(ap *Argument, proc *process.Process, anal process.Analyze) (bool, error) {
+func (ctr *container) process(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
 		// if the result vectors are empty, process again. because the result of Agg can't be empty but 0 or NULL.
@@ -102,13 +102,13 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 				b.Vecs[i] = vector.New(ap.Types[i])
 			}
 			proc.SetInputBatch(b)
-			if _, err := ctr.process(ap, proc, anal); err != nil {
+			if _, err := ctr.process(ap, proc, anal, isFirst, isLast); err != nil {
 				return false, err
 			}
 		}
 		if ctr.bat != nil {
 			ctr.bat.ExpandNulls()
-			anal.Output(ctr.bat)
+			anal.Output(ctr.bat, isLast)
 			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil
 			return true, nil
@@ -120,7 +120,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 	if len(bat.Vecs) == 0 {
 		return false, nil
 	}
-	anal.Input(bat)
+	anal.Input(bat, isFirst)
 	proc.SetInputBatch(&batch.Batch{})
 	if len(ctr.aggVecs) == 0 {
 		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
@@ -175,7 +175,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 	return false, nil
 }
 
-func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal process.Analyze) (bool, error) {
+func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	var err error
 
 	bat := proc.InputBatch()
@@ -196,7 +196,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 				}
 			}
 			ctr.bat.ExpandNulls()
-			anal.Output(ctr.bat)
+			anal.Output(ctr.bat, isLast)
 			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil
 			return true, nil
@@ -208,7 +208,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		return false, nil
 	}
 	defer bat.Clean(proc.Mp())
-	anal.Input(bat)
+	anal.Input(bat, isFirst)
 	proc.SetInputBatch(&batch.Batch{})
 	if len(ctr.aggVecs) == 0 {
 		ctr.aggVecs = make([]evalVector, len(ap.Aggs))

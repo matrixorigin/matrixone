@@ -25,7 +25,6 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"io"
 	"math"
 	"path"
@@ -33,6 +32,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -106,11 +107,11 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
-	anal.Input(nil)
+	anal.Input(nil, isFirst)
 	param := arg.(*Argument).Es
 	if param.Fileparam.End {
 		proc.SetInputBatch(nil)
@@ -130,7 +131,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		return false, err
 	}
 	proc.SetInputBatch(bat)
-	anal.Output(bat)
+	anal.Output(bat, isLast)
 	anal.Alloc(int64(bat.Size()))
 	return false, nil
 }

@@ -34,7 +34,7 @@ func Prepare(_ *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	ap := arg.(*Argument)
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
@@ -52,7 +52,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			i--
 			continue
 		}
-		anal.Input(bat)
+		anal.Input(bat, isFirst)
 		if ap.ctr.seen >= ap.Limit {
 			bat.Clean(proc.Mp())
 			continue
@@ -60,14 +60,14 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		newSeen := ap.ctr.seen + uint64(bat.Length())
 		if newSeen < ap.Limit {
 			ap.ctr.seen = newSeen
-			anal.Output(bat)
+			anal.Output(bat, isLast)
 			proc.SetInputBatch(bat)
 			return false, nil
 		} else {
 			num := int(newSeen - ap.Limit)
 			batch.SetLength(bat, bat.Length()-num)
 			ap.ctr.seen = newSeen
-			anal.Output(bat)
+			anal.Output(bat, isLast)
 			proc.SetInputBatch(bat)
 			return false, nil
 		}
