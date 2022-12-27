@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/matrixorigin/simdcsv"
+	"go.uber.org/zap"
 )
 
 const LoggerNameETLMerge = "ETLMerge"
@@ -419,7 +420,11 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 			return nil, err
 		}
 		if len(s.content) != cnt {
-			return nil, moerr.NewInternalError(s.ctx, "read %s file %d rows, but only cache %d rows", s.path, cnt, len(s.content))
+			err := moerr.NewInternalError(s.ctx, "read %s file %d rows, but only cache %d rows", s.path, cnt, len(s.content))
+			if panicWhileRead.Load() {
+				panic(err)
+			}
+			return nil, err
 		}
 		if cnt < BatchReadRows {
 			//s.reader.Close() // DO NOT call, because it is a forever loop with empty op.
@@ -429,7 +434,7 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 		}
 		s.idx = 0
 		s.length = cnt
-		s.logger.Debug(fmt.Sprintf("read %s file %d rows", s.path, cnt))
+		s.logger.Debug("ContentReader.read", logutil.PathField(s.path), zap.Int("rows", cnt))
 	}
 	if s.idx < s.length {
 		idx := s.idx
@@ -746,6 +751,11 @@ func InitCronExpr(ctx context.Context, duration time.Duration) error {
 }
 
 var maxFileSize atomic.Int64
+var panicWhileRead atomic.Bool
+
+func SetPanicWhileRead(p bool) {
+	panicWhileRead.Store(p)
+}
 
 func InitMerge(ctx context.Context, mergeCycle time.Duration, filesize int) error {
 	var err error
@@ -756,5 +766,10 @@ func InitMerge(ctx context.Context, mergeCycle time.Duration, filesize int) erro
 		}
 	}
 	maxFileSize.Store(int64(filesize * mpool.MB))
+	// SetPanicWhileRead
 	return nil
+}
+
+func init() {
+	SetPanicWhileRead(true)
 }
