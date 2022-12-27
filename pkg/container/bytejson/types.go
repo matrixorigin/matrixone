@@ -111,3 +111,7 @@ const (
 var (
 	endian = binary.LittleEndian
 )
+
+var (
+	Null = ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+)
