@@ -211,7 +211,7 @@ func addValEntry(buf []byte, bufStart, entryStart int, in interface{}) ([]byte, 
 	case TpCodeLiteral:
 		lit := buf[valStart]
 		buf = buf[:valStart]
-		buf[entryStart] = TpCodeLiteral
+		buf[entryStart] = byte(TpCodeLiteral)
 		buf[entryStart+1] = lit
 		return buf, nil
 	}
@@ -293,7 +293,7 @@ func isIdentifier(s string) bool {
 }
 
 func ParseJsonPath(path string) (p Path, err error) {
-	pg := NewPathGenerator(path)
+	pg := newPathGenerator(path)
 	pg.trimSpace()
 	if !pg.hasNext() || pg.next() != '$' {
 		err = moerr.NewInvalidInputNoCtx("invalid json path '%s'", path)

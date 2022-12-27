@@ -30,10 +30,21 @@ type kv struct {
 	key string
 	val interface{}
 }
+
+type subPathIndices struct {
+	tp  byte
+	num int
+}
+type subPathRangeExpr struct {
+	start *subPathIndices
+	end   *subPathIndices
+}
+
 type subPath struct {
-	idx int
-	key string
-	tp  subPathType
+	key    string
+	idx    *subPathIndices
+	iRange *subPathRangeExpr
+	tp     subPathType
 }
 type Path struct {
 	paths []subPath
@@ -46,26 +57,39 @@ type pathGenerator struct {
 
 type UnnestResult map[string]string
 
-const subPathIdxALL = -1
-
 const (
-	subPathDoubleStar = 0x01
-	subPathIdx        = 0x02
-	subPathKey        = 0x03
-)
-const (
-	pathFlagSingleStar = 0x01
-	pathFlagDoubleStar = 0x02
+	numberIndices byte = iota + 1
+	lastIndices
+	lastKey    = "last"
+	lastKeyLen = 4
+	toKey      = "to"
+	toKeyLen   = 2
 )
 
 const (
-	TpCodeObject  = 0x01
-	TpCodeArray   = 0x02
-	TpCodeLiteral = 0x03
-	TpCodeInt64   = 0x04
-	TpCodeUint64  = 0x05
-	TpCodeFloat64 = 0x06
-	TpCodeString  = 0x07
+	subPathIdxALL = -1
+	subPathIdxErr = -2
+)
+
+const (
+	subPathDoubleStar subPathType = iota + 1
+	subPathIdx
+	subPathKey
+	subPathRange
+)
+const (
+	pathFlagSingleStar pathFlag = iota + 1
+	pathFlagDoubleStar
+)
+
+const (
+	TpCodeObject  TpCode = 0x01
+	TpCodeArray   TpCode = 0x03
+	TpCodeLiteral TpCode = 0x04
+	TpCodeInt64   TpCode = 0x09
+	TpCodeUint64  TpCode = 0x0a
+	TpCodeFloat64 TpCode = 0x0b
+	TpCodeString  TpCode = 0x0c
 )
 
 const (
@@ -79,12 +103,11 @@ const (
 )
 
 const (
-	LiteralNull  byte = 0x00
-	LiteralTrue  byte = 0x01
-	LiteralFalse byte = 0x02
+	LiteralNull byte = iota + 1
+	LiteralTrue
+	LiteralFalse
 )
 
 var (
 	endian = binary.LittleEndian
-	//jsonSubPathRe = regexp.MustCompile(`(\.\s*(([\$]*[a-zA-Z_][a-zA-Z0-9_]*)+|\*|"[^"\\]*(\\.[^"\\]*)*")|(\[\s*([0-9]+|\*)\s*\])|\*\*)`)
 )
