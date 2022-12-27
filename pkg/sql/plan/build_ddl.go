@@ -121,7 +121,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	// set tableDef
-	err := buildTableDefs(stmt.Defs, ctx, createTable)
+	err := buildTableDefs(stmt, ctx, createTable)
 	if err != nil {
 		return nil, err
 	}
@@ -209,10 +209,14 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 				},
 			}})
 	} else {
+		kind := catalog.SystemOrdinaryRel
+		if stmt.IsClusterTable {
+			kind = catalog.SystemClusterRel
+		}
 		properties := []*plan.Property{
 			{
 				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.SystemOrdinaryRel,
+				Value: kind,
 			},
 			{
 				Key:   catalog.SystemRelAttr_CreateSQL,
@@ -306,12 +310,12 @@ func buildPartitionByClause(partitionBinder *PartitionBinder, stmt *tree.CreateT
 	return err
 }
 
-func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.CreateTable) error {
+func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable) error {
 	var primaryKeys []string
 	var indexs []string
 	colMap := make(map[string]*ColDef)
 	indexInfos := make([]*tree.UniqueIndex, 0)
-	for _, item := range defs {
+	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
 			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
@@ -353,6 +357,27 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				}
+
+				if _, ok := attr.(*tree.AttributeUnique); ok {
+					indexInfos = append(indexInfos, &tree.UniqueIndex{
+						KeyParts: []*tree.KeyPart{
+							{
+								ColName: def.Name,
+							},
+						},
+					})
+				}
+
+				if _, ok := attr.(*tree.AttributeUniqueKey); ok {
+					indexInfos = append(indexInfos, &tree.UniqueIndex{
+						KeyParts: []*tree.KeyPart{
+							{
+								ColName: def.Name,
+							},
+						},
+					})
+				}
+
 			}
 			if len(pks) > 0 {
 				if len(primaryKeys) > 0 {
@@ -509,6 +534,41 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 		}
 	}
 
+	//add cluster table attribute
+	if stmt.IsClusterTable {
+		if _, ok := colMap[util.GetClusterTableAttributeName()]; ok {
+			return moerr.NewInvalidInput(ctx.GetContext(), "the attribute account_id in the cluster table can not be defined directly by the user")
+		}
+		colType, err := getTypeFromAst(ctx.GetContext(), util.GetClusterTableAttributeType())
+		if err != nil {
+			return err
+		}
+		colDef := &ColDef{
+			Name:    util.GetClusterTableAttributeName(),
+			Alg:     plan.CompressType_Lz4,
+			Typ:     colType,
+			NotNull: true,
+			Default: &plan.Default{
+				Expr: &Expr{
+					Expr: &plan.Expr_C{
+						C: &Const{
+							Isnull: false,
+							Value:  &plan.Const_U32Val{U32Val: catalog.System_Account},
+						},
+					},
+					Typ: &plan.Type{
+						Id:          colType.Id,
+						NotNullable: true,
+					},
+				},
+				NullAbility: false,
+			},
+			Comment: "the account_id added by the mo",
+		}
+		colMap[util.GetClusterTableAttributeName()] = colDef
+		createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
+	}
+
 	pkeyName := ""
 	if len(primaryKeys) > 0 {
 		for _, primaryKey := range primaryKeys {
@@ -527,7 +587,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			})
 		} else {
 			pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
-			createTable.TableDef.Cols = append(createTable.TableDef.Cols, &ColDef{
+			colDef := &ColDef{
 				Name: pkeyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
@@ -540,7 +600,9 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 					Expr:         nil,
 					OriginString: "",
 				},
-			})
+			}
+			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
+			colMap[pkeyName] = colDef
 			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Pk{
 					Pk: &plan.PrimaryKeyDef{
@@ -636,13 +698,14 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 
 		var keyName string
 		if len(indexInfo.KeyParts) == 1 {
-			keyName = field.Parts[0]
+			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
-					Id:   colMap[keyName].Typ.Id,
-					Size: colMap[keyName].Typ.Size,
+					Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
+					Size:  colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Size,
+					Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,
@@ -660,7 +723,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			})
 			field.Cols = append(field.Cols, colDef)
 		} else {
-			keyName = util.BuildCompositePrimaryKeyColumnName(field.Parts)
+			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
@@ -683,6 +746,20 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 					},
 				},
 			})
+			field.Cols = append(field.Cols, colDef)
+		}
+		if pkeyName != "" {
+			colDef := &ColDef{
+				Name: catalog.IndexTablePrimaryColName,
+				Alg:  plan.CompressType_Lz4,
+				Typ:  colMap[pkeyName].Typ,
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			}
+			tableDef.Cols = append(tableDef.Cols, colDef)
 			field.Cols = append(field.Cols, colDef)
 		}
 		def.IndexNames = append(def.IndexNames, indexInfo.Name)
@@ -713,6 +790,15 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 	} else {
 		if tableDef.ViewSql != nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
+		}
+
+		truncateTable.ClusterTable = &plan.ClusterTable{
+			IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
+		}
+
+		//non-sys account can not truncate the cluster table
+		if truncateTable.GetClusterTable().GetIsClusterTable() && ctx.GetAccountId() != catalog.System_Account {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can truncate the cluster table")
 		}
 
 		uDef, sDef := buildIndexDefs(tableDef.Defs)
@@ -777,6 +863,16 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			// drop table if exists v0, v0 is view
 			dropTable.Table = ""
 		}
+
+		dropTable.ClusterTable = &plan.ClusterTable{
+			IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
+		}
+
+		//non-sys account can not drop the cluster table
+		if dropTable.GetClusterTable().GetIsClusterTable() && ctx.GetAccountId() != catalog.System_Account {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
+		}
+
 		uDef, sDef := buildIndexDefs(tableDef.Defs)
 		dropTable.IndexTableNames = make([]string, 0)
 		if uDef != nil {
@@ -934,6 +1030,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	createIndex.Index = index
 	createIndex.Table = tableName
+
+	oriPriKeyName := GetTablePriKeyName(tableDef.Cols, tableDef.CompositePkey)
+	createIndex.OriginTablePrimaryKey = oriPriKeyName
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{

@@ -277,7 +277,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
+		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
 			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
@@ -298,7 +298,7 @@ func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, conds []*plan.Exp
 func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
+		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
 			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}

@@ -1,0 +1,217 @@
+drop database if exists db1;
+create database db1;
+use db1;
+drop table if exists t1;
+create table t1(a int, b int, c int, unique key(a));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(5, 5, 5);
+insert into t1 values(null, 7, 7);
+update t1 set a = 6 where a = 1;
+insert into t1 values(1, 1, 1);
+update t1 set a = 7 where a is null;
+insert into t1 values(7, 7, 7);
+Duplicate entry '7' for key '__mo_index_idx_col'
+update t1 set a = null where a = 7;
+insert into t1 values(7, 7, 7);
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+5    5    5
+6    1    1
+1    1    1
+null    7    7
+7    7    7
+drop table if exists t1;
+create table t1(a int, b int, c int, unique key(a, b));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(5, 5, 5);
+insert into t1 values(null, 7, 7);
+update t1 set a = 6 where a = 1;
+insert into t1 values(1, 1, 1);
+update t1 set a = 7 where a is null;
+insert into t1 values(7, 7, 7);
+Duplicate entry '3a15073a1507' for key '__mo_index_idx_col'
+update t1 set a = null where a = 7;
+insert into t1 values(7, 7, 7);
+insert into t1 values(null, 8, 8);
+update t1 set a = 8, b = null where b = 8;
+insert into t1 values(8, 8, 8);
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+5    5    5
+6    1    1
+1    1    1
+null    7    7
+7    7    7
+8    null    8
+8    8    8
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int, b int, c int, unique key(a, b));
+create table t2(a int, b int, c int, unique key(a));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(5, 5, 5);
+insert into t1 values(null, 7, 7);
+insert into t2 values(1, 1, 1);
+insert into t2 values(2, 2, 2);
+insert into t2 values(3, 3, 3);
+insert into t2 values(4, 4, 4);
+insert into t2 values(5, 5, 5);
+insert into t2 values(null, 7, 7);
+update t1, t2 set t1.a = 6, t2.a = 6 where t1.a = 1 and t1.a = t2.a;
+insert into t1 values(1, 1, 1);
+insert into t2 values(1, 1, 1);
+update t1, t2 set t1.a = 7, t2.a = 7 where t1.a is null and t2.a is null;
+insert into t1 values(7, 7, 7);
+Duplicate entry '3a15073a1507' for key '__mo_index_idx_col'
+insert into t2 values(7, 7, 7);
+Duplicate entry '7' for key '__mo_index_idx_col'
+update t1, t2 set t1.a = null, t2.a = null where t1.a = 7 and t1.a = t2.a;
+insert into t1 values(7, 7, 7);
+insert into t1 values(null, 8, 8);
+insert into t2 values(7, 7, 7);
+insert into t2 values(null, 8, 8);
+update t1, t2 set t1.a = 8, t1.b = null, t2.a = 8, t2.b = null where t1.b = 8 and t1.b = t2.b;
+insert into t1 values(8, 8, 8);
+insert into t2 values(8, 8, 8);
+Duplicate entry '8' for key '__mo_index_idx_col'
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+5    5    5
+6    1    1
+1    1    1
+null    7    7
+7    7    7
+8    null    8
+8    8    8
+select * from t2;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+5    5    5
+6    1    1
+1    1    1
+null    7    7
+7    7    7
+8    null    8
+drop table if exists t1;
+create table t1(a int, b int, c int, unique key(a), primary key(c));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(5, 5, 5);
+insert into t1 values(null, 7, 7);
+update t1 set a = 6 where a = 1;
+update t1 set a = 7 where a is null;
+insert into t1 values(7, 7, 8);
+Duplicate entry '7' for key '__mo_index_idx_col'
+update t1 set a = null where a = 7;
+insert into t1 values(7, 7, 9);
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+5    5    5
+6    1    1
+null    7    7
+7    7    9
+drop table if exists t1;
+create table t1(a int, b int, c int, unique key(a, b), primary key(b, c));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(5, 5, 5);
+insert into t1 values(null, 7, 7);
+update t1 set a = 6 where a = 1;
+update t1 set a = 7 where a is null;
+insert into t1 values(7, 7, 8);
+Duplicate entry '3a15073a1507' for key '__mo_index_idx_col'
+update t1 set a = null where a = 7;
+insert into t1 values(7, 7, 9);
+insert into t1 values(null, 8, 10);
+update t1 set a = 8, b = null where b = 8;
+constraint violation: Column 'b' cannot be null
+insert into t1 values(8, 8, 11);
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+5    5    5
+6    1    1
+null    7    7
+7    7    9
+null    8    10
+8    8    11
+drop table if exists t1;
+create table t1(a int unique, b int, c int);
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(5, 5, 5);
+insert into t1 values(null, 7, 7);
+update t1 set a = 6 where a = 1;
+insert into t1 values(1, 1, 1);
+update t1 set a = 7 where a is null;
+insert into t1 values(7, 7, 7);
+Duplicate entry '7' for key '__mo_index_idx_col'
+update t1 set a = null where a = 7;
+insert into t1 values(7, 7, 7);
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+5    5    5
+6    1    1
+1    1    1
+null    7    7
+7    7    7
+drop table if exists t1;
+create table t1(a int unique key, b int, c int);
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(5, 5, 5);
+insert into t1 values(null, 7, 7);
+update t1 set a = 6 where a = 1;
+insert into t1 values(1, 1, 1);
+update t1 set a = 7 where a is null;
+insert into t1 values(7, 7, 7);
+Duplicate entry '7' for key '__mo_index_idx_col'
+update t1 set a = null where a = 7;
+insert into t1 values(7, 7, 7);
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+5    5    5
+6    1    1
+1    1    1
+null    7    7
+7    7    7
+drop table t1;
