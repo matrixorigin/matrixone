@@ -184,7 +184,7 @@ func genCreateTables(rows [][]any) []CreateTable {
 		cmds[i].Comment = string(row[MO_TABLES_REL_COMMENT_IDX].([]byte))
 		cmds[i].Partition = string(row[MO_TABLES_PARTITIONED_IDX].([]byte))
 		cmds[i].Viewdef = string(row[MO_TABLES_VIEWDEF_IDX].([]byte))
-		cmds[i].Constraint = row[MO_TABLES_CONSTRAINT].([]byte)
+		cmds[i].Constraint = row[MO_TABLES_CONSTRAINT_IDX].([]byte)
 		cmds[i].RelKind = string(row[MO_TABLES_RELKIND_IDX].([]byte))
 	}
 	return cmds
