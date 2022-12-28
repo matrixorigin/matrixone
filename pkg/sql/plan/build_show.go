@@ -316,12 +316,13 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	ddlType := plan.DataDefinition_SHOW_TABLES
 	var tableType string
 	if stmt.Full {
-		tableType = ", case relkind when 'v' then 'VIEW' else 'BASE TABLE' end as Table_type"
+		tableType = fmt.Sprintf(", case relkind when 'v' then 'VIEW' when '%s' then 'CLUSTER TABLE' else 'BASE TABLE' end as Table_type", catalog.SystemClusterRel)
 	}
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
-	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
+	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
+	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
 	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
-		dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_cpkey_unique_0_%", accountClause)
+		dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%", accountClause)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -337,6 +338,76 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Plan, error) {
+	dbName := stmt.DbName
+	if stmt.DbName == "" {
+		dbName = ctx.DefaultDatabase()
+	} else if !ctx.DatabaseExists(dbName) {
+		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
+	}
+
+	if dbName == "" {
+		return nil, moerr.NewNoDB(ctx.GetContext())
+	}
+
+	ddlType := plan.DataDefinition_SHOW_TABLES
+
+	sql := "SELECT '%s', count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'"
+	sql = fmt.Sprintf(sql, dbName, dbName, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_cpkey_unique_0_%")
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*Plan, error) {
+	dbName := stmt.Table.GetDBName()
+	if dbName == "" {
+		dbName = ctx.DefaultDatabase()
+	} else if !ctx.DatabaseExists(dbName) {
+		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
+	}
+
+	tblName := string(stmt.Table.ToTableName().ObjectName)
+	_, tableDef := ctx.Resolve(dbName, tblName)
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+
+	ddlType := plan.DataDefinition_SHOW_COLUMNS
+	sql := "SELECT '%s', count(attname) `Number of columns in %s` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+	sql = fmt.Sprintf(sql, tblName, tblName, MO_CATALOG_DB_NAME, dbName, tblName)
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Plan, error) {
+	dbName := stmt.Table.GetDBName()
+	if dbName == "" {
+		dbName = ctx.DefaultDatabase()
+	} else if !ctx.DatabaseExists(dbName) {
+		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
+	}
+
+	tblName := string(stmt.Table.ToTableName().ObjectName)
+	_, tableDef := ctx.Resolve(dbName, tblName)
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+
+	ddlType := plan.DataDefinition_SHOW_TARGET
+
+	sql := "SELECT"
+	tableCols := tableDef.Cols
+	for i := range tableCols {
+		sql += " max(%s), min(%s),"
+		colName := tableCols[i].Name
+		sql = fmt.Sprintf(sql, colName, colName)
+	}
+	sql = sql[:len(sql)-1]
+	sql += "FROM %s"
+	sql = fmt.Sprintf(sql, tblName)
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
 func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
@@ -358,7 +429,11 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
 	mustShowTable := "att_relname = 'mo_database' or att_relname = 'mo_tables' or att_relname = 'mo_columns'"
-	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
+	clusterTable := ""
+	if util.TableIsClusterTable(tableDef.GetTableType()) {
+		clusterTable = fmt.Sprintf(" or att_relname = '%s'", tblName)
+	}
+	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
 	sql := "SELECT attname `Field`, atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
 	if stmt.Full {
 		sql = "SELECT attname `Field`, atttyp `Type`, null `Collation`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"

@@ -417,6 +417,13 @@ func TestUnnest(t *testing.T) {
 			valid: true,
 		},
 	}
+	filterMap := map[string]struct{}{
+		"index": {},
+		"this":  {},
+		"value": {},
+		"path":  {},
+		"key":   {},
+	}
 	for _, kase := range kases {
 		bj, err := ParseFromString(kase.jsonStr)
 		require.Nil(t, err)
@@ -425,7 +432,7 @@ func TestUnnest(t *testing.T) {
 			path, err = ParseJsonPath(kase.pathStr)
 			require.Nil(t, err)
 		}
-		out, err := bj.Unnest(&path, kase.outer, kase.recursive, kase.mode, nil)
+		out, err := bj.Unnest(&path, kase.outer, kase.recursive, kase.mode, filterMap)
 		if !kase.valid {
 			require.NotNil(t, err)
 			continue

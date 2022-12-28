@@ -153,4 +153,6 @@ alter account test admin_name='adminuser'  IDENTIFIED BY '123456';
 alter account test comment 'ccccccc';
 alter account test suspend;
 -- @session
+drop role if exists al_role2;
+drop user if exists al_user_2;
 drop account test;

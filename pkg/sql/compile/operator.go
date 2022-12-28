@@ -18,7 +18,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -34,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
@@ -296,6 +299,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 				Name2ColIndex: t.Es.Name2ColIndex,
 				CreateSql:     t.Es.CreateSql,
 				FileList:      t.Es.FileList,
+				Filter:        t.Es.Filter,
 				Fileparam: &external.ExternalFileparam{
 					End:       t.Es.Fileparam.End,
 					FileCnt:   t.Es.Fileparam.FileCnt,
@@ -355,45 +359,14 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			return nil, err
 		}
 
-		uniqueIndexTables := make([]engine.Relation, 0)
-		secondaryIndexTables := make([]engine.Relation, 0)
-		uDef := n.DeleteTablesCtx[i].UniqueIndexDef
-		sDef := n.DeleteTablesCtx[i].SecondaryIndexDef
-		if uDef != nil {
-			for i := range uDef.TableNames {
-				if uDef.TableExists[i] {
-					indexTable, err := dbSource.Relation(proc.Ctx, uDef.TableNames[i])
-					if err != nil {
-						return nil, err
-					}
-					uniqueIndexTables = append(uniqueIndexTables, indexTable)
-				}
-			}
-		}
-		if sDef != nil {
-			for i := range sDef.TableNames {
-				if sDef.TableExists[i] {
-					indexTable, err := dbSource.Relation(proc.Ctx, sDef.TableNames[i])
-					if err != nil {
-						return nil, err
-					}
-					secondaryIndexTables = append(secondaryIndexTables, indexTable)
-				}
-			}
-		}
-
 		ds[i] = &deletion.DeleteCtx{
-			TableSource:          relation,
-			TableName:            n.DeleteTablesCtx[i].TblName,
-			DbName:               n.DeleteTablesCtx[i].DbName,
-			UseDeleteKey:         n.DeleteTablesCtx[i].UseDeleteKey,
-			CanTruncate:          n.DeleteTablesCtx[i].CanTruncate,
-			ColIndex:             n.DeleteTablesCtx[i].ColIndex,
-			UniqueIndexDef:       n.DeleteTablesCtx[i].UniqueIndexDef,
-			SecondaryIndexDef:    n.DeleteTablesCtx[i].SecondaryIndexDef,
-			UniqueIndexTables:    uniqueIndexTables,
-			SecondaryIndexTables: secondaryIndexTables,
-			IndexAttrs:           n.DeleteTablesCtx[i].IndexAttrs,
+			TableSource:        relation,
+			TableName:          n.DeleteTablesCtx[i].TblName,
+			DbName:             n.DeleteTablesCtx[i].DbName,
+			UseDeleteKey:       n.DeleteTablesCtx[i].UseDeleteKey,
+			CanTruncate:        n.DeleteTablesCtx[i].CanTruncate,
+			ColIndex:           n.DeleteTablesCtx[i].ColIndex,
+			IsIndexTableDelete: n.DeleteTablesCtx[i].IsIndexTableDelete,
 		}
 	}
 
@@ -403,11 +376,15 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 }
 
 func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
-	db, err := eg.Database(proc.Ctx, n.ObjRef.SchemaName, proc.TxnOperator)
+	ctx := proc.Ctx
+	if n.GetClusterTable().GetIsClusterTable() {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+	db, err := eg.Database(ctx, n.ObjRef.SchemaName, proc.TxnOperator)
 	if err != nil {
 		return nil, err
 	}
-	relation, err := db.Relation(proc.Ctx, n.TableDef.Name)
+	relation, err := db.Relation(ctx, n.TableDef.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +394,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	if uDef != nil {
 		for i := range uDef.TableNames {
 			if uDef.TableExists[i] {
-				indexTable, err := db.Relation(proc.Ctx, uDef.TableNames[i])
+				indexTable, err := db.Relation(ctx, uDef.TableNames[i])
 				if err != nil {
 					return nil, err
 				}
@@ -428,7 +405,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	if sDef != nil {
 		for i := range sDef.TableNames {
 			if sDef.TableExists[i] {
-				indexTable, err := db.Relation(proc.Ctx, sDef.TableNames[i])
+				indexTable, err := db.Relation(ctx, sDef.TableNames[i])
 				if err != nil {
 					return nil, err
 				}
@@ -441,7 +418,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		TargetColDefs:        n.TableDef.Cols,
 		Engine:               eg,
 		DB:                   db,
-		TableID:              relation.GetTableID(proc.Ctx),
+		TableID:              relation.GetTableID(ctx),
 		DBName:               n.ObjRef.SchemaName,
 		TableName:            n.TableDef.Name,
 		CPkeyColDef:          n.TableDef.CompositePkey,
@@ -449,90 +426,71 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		UniqueIndexDef:       uDef,
 		SecondaryIndexTables: secondaryIndexTables,
 		SecondaryIndexDef:    sDef,
+		ClusterTable:         n.GetClusterTable(),
 	}, nil
 }
 
 func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*update.Argument, error) {
-	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
-	tableID := make([]string, len(n.UpdateCtxs))
-	db := make([]engine.Database, len(n.UpdateCtxs))
-	dbName := make([]string, len(n.UpdateCtxs))
-	tblName := make([]string, len(n.UpdateCtxs))
+	updateCtxs := make([]*update.UpdateCtx, len(n.UpdateCtxs))
+	tableIDs := make([]uint64, len(n.UpdateCtxs))
+	dbs := make([]engine.Database, len(n.UpdateCtxs))
+	dbNames := make([]string, len(n.UpdateCtxs))
+	tblNames := make([]string, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {
 		dbSource, err := eg.Database(proc.Ctx, updateCtx.DbName, proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
-		db[i] = dbSource
+		dbs[i] = dbSource
+
 		relation, err := dbSource.Relation(proc.Ctx, updateCtx.TblName)
 		if err != nil {
 			return nil, err
 		}
+		tableIDs[i] = relation.GetTableID(proc.Ctx)
 
-		tableID[i] = relation.GetTableID(proc.Ctx)
-		dbName[i] = updateCtx.DbName
-		tblName[i] = updateCtx.TblName
 		colNames := make([]string, 0, len(updateCtx.UpdateCols))
 		for _, col := range updateCtx.UpdateCols {
 			colNames = append(colNames, col.Name)
 		}
 
-		var k int
-		for k = 0; k < len(n.TableDefVec); k++ {
-			if updateCtx.TblName == n.TableDefVec[k].Name {
-				break
-			}
+		updateCtxs[i] = &update.UpdateCtx{
+			HideKey:            updateCtx.HideKey,
+			HideKeyIdx:         updateCtx.HideKeyIdx,
+			UpdateAttrs:        colNames,
+			OtherAttrs:         updateCtx.OtherAttrs,
+			OrderAttrs:         updateCtx.OrderAttrs,
+			TableSource:        relation,
+			CPkeyColDef:        updateCtx.CompositePkey,
+			IsIndexTableUpdate: updateCtx.IsIndexTableUpdate,
+			IndexParts:         updateCtx.IndexParts,
 		}
-		uniqueIndexTables := make([]engine.Relation, 0)
-		secondaryIndexTables := make([]engine.Relation, 0)
-		uDef, sDef := buildIndexDefs(n.TableDefVec[k].Defs)
-		if uDef != nil {
-			for i := range uDef.TableNames {
-				if uDef.TableExists[i] {
-					indexTable, err := dbSource.Relation(proc.Ctx, uDef.TableNames[i])
-					if err != nil {
-						return nil, err
-					}
-					uniqueIndexTables = append(uniqueIndexTables, indexTable)
+
+		if !updateCtx.IsIndexTableUpdate {
+			if len(updateCtx.UniqueIndexPos) > 0 {
+				for _, pos := range updateCtx.UniqueIndexPos {
+					updateCtxs[i].UniqueIndexPos = append(updateCtxs[i].UniqueIndexPos, int(pos))
 				}
 			}
-		}
-		if sDef != nil {
-			for i := range sDef.TableNames {
-				if sDef.TableExists[i] {
-					indexTable, err := dbSource.Relation(proc.Ctx, sDef.TableNames[i])
-					if err != nil {
-						return nil, err
-					}
-					secondaryIndexTables = append(secondaryIndexTables, indexTable)
+
+			if len(updateCtx.SecondaryIndexPos) > 0 {
+				for _, pos := range updateCtx.SecondaryIndexPos {
+					updateCtxs[i].SecondaryIndexPos = append(updateCtxs[i].SecondaryIndexPos, int(pos))
 				}
 			}
 		}
 
-		us[i] = &update.UpdateCtx{
-			PriKey:               updateCtx.PriKey,
-			PriKeyIdx:            updateCtx.PriKeyIdx,
-			HideKey:              updateCtx.HideKey,
-			HideKeyIdx:           updateCtx.HideKeyIdx,
-			UpdateAttrs:          colNames,
-			OtherAttrs:           updateCtx.OtherAttrs,
-			OrderAttrs:           updateCtx.OrderAttrs,
-			TableSource:          relation,
-			CPkeyColDef:          updateCtx.CompositePkey,
-			UniqueIndexDef:       uDef,
-			SecondaryIndexDef:    sDef,
-			IndexAttrs:           updateCtx.IndexAttrs,
-			UniqueIndexTables:    uniqueIndexTables,
-			SecondaryIndexTables: secondaryIndexTables,
-		}
+		dbNames[i] = updateCtx.DbName
+		tblNames[i] = updateCtx.TblName
 	}
+
 	return &update.Argument{
-		UpdateCtxs:  us,
+		UpdateCtxs:  updateCtxs,
 		Engine:      eg,
-		DB:          db,
-		TableID:     tableID,
-		DBName:      dbName,
-		TblName:     tblName,
+		DB:          dbs,
+		TableID:     tableIDs,
+		DBName:      dbNames,
+		TblName:     tblNames,
 		TableDefVec: n.TableDefVec,
 	}, nil
 }
@@ -560,6 +518,7 @@ func constructExternal(n *plan.Node, ctx context.Context, fileList []string) *ex
 			Filter: &external.FilterParam{
 				FilterExpr: colexec.RewriteFilterExprList(n.FilterList),
 			},
+			ClusterTable: n.GetClusterTable(),
 		},
 	}
 }
@@ -720,23 +679,42 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	}
 }
 
-func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool) *group.Argument {
+func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, proc *process.Process) *group.Argument {
+	var lenAggs, lenMultiAggs int
 	aggs := make([]agg.Aggregate, len(n.AggList))
-	for i, expr := range n.AggList {
+	// multiaggs: is not like the normal agg funcs which have only one arg exclude 'distinct'
+	// for now, we have group_concat
+	multiaggs := make([]group_concat.Argument, len(n.AggList))
+	for _, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
 			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
+			if len(f.F.Args) > 1 {
+				// vec is separator
+				vec, _ := colexec.EvalExpr(constBat, proc, f.F.Args[len(f.F.Args)-1])
+				sepa := vec.GetString(0)
+				multiaggs[lenMultiAggs] = group_concat.Argument{
+					Dist:      distinct,
+					GroupExpr: f.F.Args[:len(f.F.Args)-1],
+					Separator: sepa,
+				}
+				lenMultiAggs++
+				continue
+			}
 			obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 			fun, err := function.GetFunctionByID(ctx, obj)
 			if err != nil {
 				panic(err)
 			}
-			aggs[i] = agg.Aggregate{
+			aggs[lenAggs] = agg.Aggregate{
 				E:    f.F.Args[0],
 				Dist: distinct,
 				Op:   fun.AggregateInfo,
 			}
+			lenAggs++
 		}
 	}
+	aggs = aggs[:lenAggs]
+	multiaggs = multiaggs[:lenMultiAggs]
 	typs := make([]types.Type, len(cn.ProjectList))
 	for i, e := range cn.ProjectList {
 		typs[i].Oid = types.T(e.Typ.Id)
@@ -746,12 +724,13 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 		typs[i].Precision = e.Typ.Precision
 	}
 	return &group.Argument{
-		Aggs:     aggs,
-		Types:    typs,
-		NeedEval: needEval,
-		Exprs:    n.GroupBy,
-		Ibucket:  uint64(ibucket),
-		Nbucket:  uint64(nbucket),
+		Aggs:      aggs,
+		MultiAggs: multiaggs,
+		Types:     typs,
+		NeedEval:  needEval,
+		Exprs:     n.GroupBy,
+		Ibucket:   uint64(ibucket),
+		Nbucket:   uint64(nbucket),
 	}
 }
 

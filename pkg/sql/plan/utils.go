@@ -17,10 +17,12 @@ package plan
 import (
 	"context"
 	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -761,7 +763,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil {
-			node.Stats = builder.compCtx.Stats(node.ObjRef, handleFiltersForStats(node.FilterList, builder.compCtx.GetProcess()))
+			node.Stats = builder.compCtx.Stats(node.ObjRef, HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess()))
 		}
 
 	default:
@@ -792,21 +794,144 @@ func containsParamRef(expr *plan.Expr) bool {
 	return ret
 }
 
-func handleFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
+func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
+	if expr == nil {
+		return
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			getColumnMapByExpr(arg, tableDef, columnMap)
+		}
+
+	case *plan.Expr_Col:
+		idx := exprImpl.Col.ColPos
+		colName := exprImpl.Col.Name
+		dotIdx := strings.Index(colName, ".")
+		colName = colName[dotIdx+1:]
+		colIdx := tableDef.Name2ColIndex[colName]
+		(*columnMap)[int(idx)] = int(colIdx)
+	}
+}
+
+func GetColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) (map[int]int, []int, int) {
+	columnMap := make(map[int]int)
+	// key = expr's ColPos,  value = tableDef's ColPos
+	getColumnMapByExpr(expr, tableDef, &columnMap)
+
+	maxCol := 0
+	useColumn := len(columnMap)
+	columns := make([]int, useColumn)
+	i := 0
+	for k, v := range columnMap {
+		if k > maxCol {
+			maxCol = k
+		}
+		columns[i] = v //tableDef's ColPos
+		i = i + 1
+	}
+	return columnMap, columns, maxCol
+}
+
+func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
+	if len(bat.Vecs) == 0 { //that's constant expr
+		e, err := ConstantFold(bat, expr, proc)
+		if err != nil {
+			return false, err
+		}
+
+		if cExpr, ok := e.Expr.(*plan.Expr_C); ok {
+			if bVal, bOk := cExpr.C.Value.(*plan.Const_Bval); bOk {
+				return bVal.Bval, nil
+			}
+		}
+		return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
+	} else {
+		vec, err := colexec.EvalExprByZonemapBat(ctx, bat, proc, expr)
+		if err != nil {
+			return false, err
+		}
+		if vec.Typ.Oid != types.T_bool {
+			return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
+		}
+		cols := vector.MustTCols[bool](vec)
+		for _, isNeed := range cols {
+			if isNeed {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+}
+
+func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vector.Vector, mp *mpool.MPool) {
+	for i := 0; i < len(datas[depth]); i++ {
+		tmpResult[depth] = datas[depth][i]
+		if depth != len(datas)-1 {
+			exchangeVectors(datas, depth+1, tmpResult, result, mp)
+		} else {
+			for j, val := range tmpResult {
+				(*result)[j].Append(val, false, mp)
+			}
+		}
+	}
+}
+
+func BuildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*vector.Vector {
+	vectors := make([]*vector.Vector, len(dataTypes))
+	for i, typ := range dataTypes {
+		vectors[i] = vector.New(types.T(typ).ToType())
+	}
+
+	tmpResult := make([]any, len(datas))
+	exchangeVectors(datas, 0, tmpResult, &vectors, mp)
+
+	return vectors
+}
+
+func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			isMonotonic := CheckExprIsMonotonic(ctx, arg)
+			if !isMonotonic {
+				return false
+			}
+		}
+
+		isMonotonic, _ := function.GetFunctionIsMonotonicById(ctx, exprImpl.F.Func.GetObj())
+		if !isMonotonic {
+			return false
+		}
+
+		return true
+	default:
+		return true
+	}
+}
+
+// handle the filter list for zonemap. rewrite and constFold
+func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
+	if proc == nil || proc.Ctx == nil {
+		return nil
+	}
 	var newExprList []*plan.Expr
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
 	for _, expr := range exprList {
-		if !containsParamRef(expr) {
+		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(expr), proc)
+		if tmpexpr != nil {
+			expr = tmpexpr
+		}
+		if !containsParamRef(expr) && CheckExprIsMonotonic(proc.Ctx, expr) {
 			newExprList = append(newExprList, expr)
 		}
 	}
 	e := colexec.RewriteFilterExprList(newExprList)
-	if e != nil {
-		bat := batch.NewWithSize(0)
-		bat.Zs = []int64{1}
-		filter, _ := ConstantFold(bat, DeepCopyExpr(e), proc)
-		return filter
-	}
-	return nil
+	return e
 }
 
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
@@ -916,7 +1041,7 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 				Dval: vec.Col.([]float64)[0],
 			},
 		}
-	case types.T_varchar:
+	case types.T_varchar, types.T_char, types.T_text:
 		return &plan.Const{
 			Value: &plan.Const_Sval{
 				Sval: vec.GetString(0),

@@ -137,7 +137,7 @@ json_extract({"a":"a1","b":"b1"}, $.*)
 create view v1 as select json_extract('{"a":1}','$.a');
 desc v1;
 Field    Type    Null    Key    Default    Extra    Comment
-json_extract({"a":1}, $.a)    JSON    YES        NULL        
+json_extract({"a":1}, $.a)    JSON    YES        NULL
 select json_extract('{"a":1}',null);
 json_extract({"a":1}, null)
 null
@@ -166,4 +166,38 @@ null
 null
 null
 null
+null
+select json_extract('[1,2,3]','$[last]');
+json_extract([1,2,3], $[last])
+3
+select json_extract('[1,2,3]','$[last-1]');
+json_extract([1,2,3], $[last-1])
+2
+select json_extract('[1,2,3]','$[last-2]');
+json_extract([1,2,3], $[last-2])
+1
+select json_extract('[1,2,3]','$[last-3]');
+json_extract([1,2,3], $[last-3])
+null
+select json_extract('[1,2,3]','$[0 to 2]');
+json_extract([1,2,3], $[0 to 2])
+[1, 2, 3]
+select json_extract('[1,2,3]','$[0 to last]');
+json_extract([1,2,3], $[0 to last])
+[1, 2, 3]
+select json_extract('[1,2,3]','$[0 to last-1]');
+json_extract([1,2,3], $[0 to last-1])
+[1, 2]
+select json_extract('[1,2,3]','$[last-2 to last]');
+json_extract([1,2,3], $[last-2 to last])
+[1, 2, 3]
+select json_extract('[1,2,3]','$[last-1 to last-2]');
+invalid input: invalid json path '$[last-1 to last-2]'
+select json_extract('[1,2,3]','$[last-8 to last-2]');
+json_extract([1,2,3], $[last-8 to last-2])
+1
+select json_extract('[1,2,3]','$[last-2 to last-8]');
+invalid input: invalid json path '$[last-2 to last-8]'
+select json_extract('[1,2,3]','$[0 to last-8]');
+json_extract([1,2,3], $[0 to last-8])
 null

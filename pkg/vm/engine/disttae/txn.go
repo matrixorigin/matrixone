@@ -31,9 +31,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -87,7 +89,7 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	tbl.comment = string(row[catalog.MO_TABLES_REL_COMMENT_IDX].([]byte))
 	tbl.partition = string(row[catalog.MO_TABLES_PARTITIONED_IDX].([]byte))
 	tbl.createSql = string(row[catalog.MO_TABLES_REL_CREATESQL_IDX].([]byte))
-	tbl.constraint = row[catalog.MO_TABLES_CONSTRAINT].([]byte)
+	tbl.constraint = row[catalog.MO_TABLES_CONSTRAINT_IDX].([]byte)
 	/*
 		rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 			txn.dnStores[:1], catalog.MoColumnsTableDefs, catalog.MoColumnsSchema,
@@ -696,11 +698,13 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	if expr == nil {
 		return true
 	}
+	notReportErrCtx := errutil.ContextWithNoReport(ctx, true)
+
 	// if expr match no columns, just eval expr
 	if len(columns) == 0 {
 		bat := batch.NewWithSize(0)
 		defer bat.Clean(proc.Mp())
-		ifNeed, err := evalFilterExpr(expr, bat, proc)
+		ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
 		if err != nil {
 			return true
 		}
@@ -714,7 +718,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	}
 
 	// use all min/max data to build []vectors.
-	buildVectors := buildVectorsByData(datas, dataTypes, proc.Mp())
+	buildVectors := plan2.BuildVectorsByData(datas, dataTypes, proc.Mp())
 	bat := batch.NewWithSize(maxCol + 1)
 	defer bat.Clean(proc.Mp())
 	for k, v := range columnMap {
@@ -727,7 +731,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	}
 	bat.SetZs(buildVectors[0].Length(), proc.Mp())
 
-	ifNeed, err := evalFilterExpr(expr, bat, proc)
+	ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
 	if err != nil {
 		return true
 	}

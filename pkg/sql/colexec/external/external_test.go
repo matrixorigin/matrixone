@@ -64,6 +64,7 @@ func newTestCase(all bool, format, jsondata string) externalTestCase {
 			Es: &ExternalParam{
 				Ctx:       ctx,
 				Fileparam: &ExternalFileparam{},
+				Filter:    &FilterParam{},
 			},
 		},
 		cancel:   cancel,

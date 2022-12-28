@@ -36,7 +36,6 @@ type ExternalParam struct {
 	Attrs         []string
 	Cols          []*plan.ColDef
 	Name2ColIndex map[string]int32
-	File2Size     map[string]int64
 	CreateSql     string
 	Ctx           context.Context
 	plh           *ParseLineHandler
@@ -46,11 +45,12 @@ type ExternalParam struct {
 	// tag indicate the fileScan is finished
 	Fileparam    *ExternalFileparam
 	Zoneparam    *ZonemapFileparam
+	Filter       *FilterParam
 	FileList     []string
 	reader       io.ReadCloser
 	maxBatchSize uint64
-	Filter       *FilterParam
 	tableDef     *plan.TableDef
+	ClusterTable *plan.ClusterTable
 }
 
 type ExternalFileparam struct {
@@ -66,11 +66,13 @@ type ZonemapFileparam struct {
 }
 
 type FilterParam struct {
-	FilterExpr *plan.Expr
-	columnMap  map[int]int
-	columns    []uint16
-	maxCol     int
-	exprMono   bool
+	maxCol       int
+	exprMono     bool
+	columns      []uint16
+	columnMap    map[int]int
+	File2Size    map[string]int64
+	FilterExpr   *plan.Expr
+	objectReader objectio.Reader
 }
 
 type Argument struct {

@@ -18,6 +18,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"runtime"
 	"sync/atomic"
 
@@ -624,16 +627,19 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 	{
 		var err error
 		var cols []*plan.ColDef
-
-		db, err := c.e.Database(c.ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+		ctx := c.ctx
+		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		}
+		db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
 			panic(err)
 		}
-		rel, err := db.Relation(c.ctx, n.TableDef.Name)
+		rel, err := db.Relation(ctx, n.TableDef.Name)
 		if err != nil {
 			panic(err)
 		}
-		defs, err := rel.TableDefs(c.ctx)
+		defs, err := rel.TableDefs(ctx)
 		if err != nil {
 			panic(err)
 		}
@@ -665,6 +671,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			Cols:          cols,
 			Name2ColIndex: name2index,
 			Name:          n.TableDef.Name,
+			TableType:     n.TableDef.GetTableType(),
 		}
 	}
 	s = &Scope{
@@ -727,7 +734,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns 
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
-			Arg: constructGroup(c.ctx, gn, n, i, len(rs), true),
+			Arg: constructGroup(c.ctx, gn, n, i, len(rs), true, c.proc),
 		})
 	}
 	return rs
@@ -1011,7 +1018,7 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
-			Arg: constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false),
+			Arg: constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, c.proc),
 		})
 	}
 	rs := c.newMergeScope(ss)
@@ -1045,7 +1052,7 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
-			Arg: constructGroup(c.ctx, n, ns[n.Children[0]], i, len(rs), true),
+			Arg: constructGroup(c.ctx, n, ns[n.Children[0]], i, len(rs), true, c.proc),
 		})
 	}
 	return []*Scope{c.newMergeScope(append(rs, ss...))}
@@ -1245,16 +1252,20 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	var err error
 	var ranges [][]byte
 	var nodes engine.Nodes
+	ctx := c.ctx
+	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
 
-	db, err := c.e.Database(c.ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+	db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
 		return nil, err
 	}
-	rel, err := db.Relation(c.ctx, n.TableDef.Name)
+	rel, err := db.Relation(ctx, n.TableDef.Name)
 	if err != nil {
 		return nil, err
 	}
-	ranges, err = rel.Ranges(c.ctx, colexec.RewriteFilterExprList(n.FilterList))
+	ranges, err = rel.Ranges(ctx, plan2.HandleFiltersForZM(n.FilterList, c.proc))
 	if err != nil {
 		return nil, err
 	}

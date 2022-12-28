@@ -24,7 +24,6 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -35,6 +34,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -43,14 +45,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/simdcsv"
 	"github.com/pierrec/lz4"
@@ -107,18 +109,18 @@ func Prepare(proc *process.Process, arg any) error {
 	}
 	param.Fileparam.FileCnt = len(param.FileList)
 	param.Ctx = proc.Ctx
-	param.File2Size = make(map[string]int64)
 	param.Zoneparam = &ZonemapFileparam{}
 	param.tableDef = &plan.TableDef{
 		Name2ColIndex: param.Name2ColIndex,
 	}
 	var columns []int
-	param.Filter.columnMap, columns, param.Filter.maxCol = disttae.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
+	param.Filter.columnMap, columns, param.Filter.maxCol = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
 	param.Filter.columns = make([]uint16, len(columns))
 	for i := 0; i < len(columns); i++ {
 		param.Filter.columns[i] = uint16(columns[i])
 	}
-	param.Filter.exprMono = disttae.CheckExprIsMonotonic(proc.Ctx, param.Filter.FilterExpr)
+	param.Filter.exprMono = plan2.CheckExprIsMonotonic(proc.Ctx, param.Filter.FilterExpr)
+	param.Filter.File2Size = make(map[string]int64)
 	return nil
 }
 
@@ -147,7 +149,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	}
 	proc.SetInputBatch(bat)
 	anal.Output(bat)
-	anal.Alloc(int64(bat.Size()))
+	if bat != nil {
+		anal.Alloc(int64(bat.Size()))
+	}
 	return false, nil
 }
 
@@ -374,7 +378,12 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 
 func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 	filePath := strings.TrimSpace(param.Filepath)
-	filePath = path.Clean("/" + filePath)
+	if strings.HasPrefix(filePath, "etl:") {
+		filePath = path.Clean(filePath)
+	} else {
+		filePath = path.Clean("/" + filePath)
+	}
+
 	sep := "/"
 	pathDir := strings.Split(filePath, sep)
 	l := list.New()
@@ -497,11 +506,15 @@ func getUnCompressReader(param *tree.ExternParam, r io.ReadCloser) (io.ReadClose
 	}
 }
 
+func makeType(Cols []*plan.ColDef, index int) types.Type {
+	return types.New(types.T(Cols[index].Typ.Id), Cols[index].Typ.Width, Cols[index].Typ.Scale, Cols[index].Typ.Precision)
+}
+
 func makeBatch(param *ExternalParam, batchSize int, mp *mpool.MPool) *batch.Batch {
 	batchData := batch.New(true, param.Attrs)
 	//alloc space for vector
 	for i := 0; i < len(param.Attrs); i++ {
-		typ := types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision)
+		typ := makeType(param.Cols, i)
 		vec := vector.NewOriginal(typ)
 		vector.PreAlloc(vec, batchSize, batchSize, mp)
 		vec.SetOriginal(false)
@@ -549,14 +562,21 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
 		Line = plh.simdCsvLineArray[rowIdx]
 		if param.extern.Format == tree.JSONLINE {
-			Line, err = transJson2Lines(proc.Ctx, Line[0], param.Attrs, param.extern.JsonData)
+			Line, err = transJson2Lines(proc.Ctx, Line[0], param.Attrs, param.Cols, param.extern.JsonData)
 			if err != nil {
 				return nil, err
 			}
 			plh.simdCsvLineArray[rowIdx] = Line
 		}
-		if len(Line) < getRealAttrCnt(param.Attrs) {
-			return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo())
+		if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
+			//the column account_id of the cluster table do need to be filled here
+			if len(Line)+1 < getRealAttrCnt(param.Attrs) {
+				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo())
+			}
+		} else {
+			if len(Line) < getRealAttrCnt(param.Attrs) {
+				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo())
+			}
 		}
 		err = getOneRowData(bat, Line, rowIdx, param, proc.Mp())
 		if err != nil {
@@ -658,23 +678,11 @@ func ScanCsvFile(param *ExternalParam, proc *process.Process) (*batch.Batch, err
 	return bat, nil
 }
 
-func getFileService(param *ExternalParam, dir string) (fileservice.FileService, error) {
-	c := fileservice.Config{
-		Name:    defines.LocalFileServiceName,
-		Backend: "DISK",
-		DataDir: dir,
-	}
-	if param.extern.ScanType == tree.S3 {
-		c.Name = defines.S3FileServiceName
-		c.Backend = "S3"
-	} else if strings.HasPrefix(param.extern.Filepath, "etl:") {
-		c.Name = defines.ETLFileServiceName
-		c.Backend = "DISK-ETL"
-	}
-	return fileservice.NewFileService(c)
-}
-
 func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, objectReader objectio.Reader) (*batch.Batch, error) {
+	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
+		return nil, nil
+	}
+
 	rows := 0
 	bat := makeBatch(param, 0, proc.Mp())
 	idxs := make([]uint16, len(param.Attrs))
@@ -689,7 +697,7 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 	for i := 0; i < len(param.Attrs); i++ {
 		var vecTmp *vector.Vector
 		if catalog.ContainExternalHidenCol(param.Attrs[i]) {
-			vecTmp = vector.New(types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision))
+			vecTmp = vector.New(makeType(param.Cols, i))
 			vector.PreAlloc(vecTmp, rows, rows, proc.GetMPool())
 			for j := 0; j < rows; j++ {
 				err := vector.SetStringAt(vecTmp, j, param.extern.Filepath, proc.GetMPool())
@@ -723,14 +731,67 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 		bat.Zs[k] = 1
 	}
 	param.Zoneparam.offset++
-
 	return bat, nil
 }
 
 func needRead(param *ExternalParam, proc *process.Process, objectReader objectio.Reader) bool {
-	indexes, err := objectReader.ReadIndex(context.Background(), param.Zoneparam.bs[param.Zoneparam.offset].GetExtent(), param.Filter.columns, objectio.ZoneMapType, proc.GetMPool())
-	fmt.Println("wangjian sqlG is", indexes[0].(*objectio.ZoneMap), err)
-	return true
+	indexes, err := objectReader.ReadIndex(context.Background(), param.Zoneparam.bs[param.Zoneparam.offset].GetExtent(),
+		param.Filter.columns, objectio.ZoneMapType, proc.GetMPool())
+	if err != nil {
+		return true
+	}
+
+	notReportErrCtx := errutil.ContextWithNoReport(proc.Ctx, true)
+	// if expr match no columns, just eval expr
+	if len(param.Filter.columns) == 0 {
+		bat := batch.NewWithSize(0)
+		defer bat.Clean(proc.Mp())
+		ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, param.Filter.FilterExpr, bat, proc)
+		if err != nil {
+			return true
+		}
+		return ifNeed
+	}
+
+	dataLength := len(param.Filter.columns)
+	datas := make([][2]any, dataLength)
+	dataTypes := make([]uint8, dataLength)
+	for i := 0; i < dataLength; i++ {
+		idx := param.Filter.columns[i]
+		dataTypes[i] = uint8(param.Cols[idx].Typ.Id)
+		typ := types.T(dataTypes[i]).ToType()
+
+		zm := index.NewZoneMap(typ)
+		err = zm.Unmarshal(indexes[i].(*objectio.ZoneMap).GetData())
+		if err != nil {
+			return true
+		}
+		min := zm.GetMin()
+		max := zm.GetMax()
+		if min == nil || max == nil {
+			return true
+		}
+		datas[i] = [2]any{min, max}
+	}
+	// use all min/max data to build []vectors.
+	buildVectors := plan2.BuildVectorsByData(datas, dataTypes, proc.Mp())
+	bat := batch.NewWithSize(param.Filter.maxCol + 1)
+	defer bat.Clean(proc.Mp())
+	for k, v := range param.Filter.columnMap {
+		for i, realIdx := range param.Filter.columns {
+			if int(realIdx) == v {
+				bat.SetVector(int32(k), buildVectors[i])
+				break
+			}
+		}
+	}
+	bat.SetZs(buildVectors[0].Length(), proc.Mp())
+
+	ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, param.Filter.FilterExpr, bat, proc)
+	if err != nil {
+		return true
+	}
+	return ifNeed
 }
 
 func getZonemapBatch(param *ExternalParam, proc *process.Process, size int64, objectReader objectio.Reader) (*batch.Batch, error) {
@@ -742,52 +803,57 @@ func getZonemapBatch(param *ExternalParam, proc *process.Process, size int64, ob
 			return nil, err
 		}
 	}
-	fmt.Println("wangjian sqlD is", param.Zoneparam.offset, len(param.Zoneparam.bs))
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
 		return nil, nil
 	}
 
-	needRead(param, proc, objectReader)
-
-	bat, err := getBatchFromZonemapFile(param, proc, objectReader)
-	if err != nil {
-		return nil, err
+	if param.Filter.exprMono {
+		for !needRead(param, proc, objectReader) {
+			param.Zoneparam.offset++
+		}
+		return getBatchFromZonemapFile(param, proc, objectReader)
+	} else {
+		return getBatchFromZonemapFile(param, proc, objectReader)
 	}
-
-	return bat, nil
 }
 
 func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
-	dir, file := filepath.Split(param.extern.Filepath)
-	service, err := getFileService(param, dir)
-	if err != nil {
-		return nil, err
-	}
-	_, ok := param.File2Size[param.extern.Filepath]
-	if !ok {
-		fs := objectio.NewObjectFS(service, dir)
-		dirs, err := fs.ListDir("")
+	if param.Filter.objectReader == nil {
+		dir, _ := filepath.Split(param.extern.Filepath)
+		service, _, err := GetForETLWithType(param.extern, param.extern.Filepath)
 		if err != nil {
 			return nil, err
 		}
-		for i := 0; i < len(dirs); i++ {
-			param.File2Size[dir+dirs[i].Name] = dirs[i].Size
+
+		_, ok := param.Filter.File2Size[param.extern.Filepath]
+		if !ok {
+			fs := objectio.NewObjectFS(service, dir)
+			dirs, err := fs.ListDir(dir)
+			if err != nil {
+				return nil, err
+			}
+			for i := 0; i < len(dirs); i++ {
+				param.Filter.File2Size[dir+dirs[i].Name] = dirs[i].Size
+			}
+		}
+
+		param.Filter.objectReader, err = objectio.NewObjectReader(param.extern.Filepath, service)
+		if err != nil {
+			return nil, err
 		}
 	}
-	size, ok := param.File2Size[param.extern.Filepath]
+
+	size, ok := param.Filter.File2Size[param.extern.Filepath]
 	if !ok {
-		return nil, errors.New("wangjian")
+		return nil, moerr.NewInternalErrorNoCtx("can' t find the filepath %s", param.extern.Filepath)
 	}
-	objectReader, err := objectio.NewObjectReader(file, service)
-	if err != nil {
-		return nil, err
-	}
-	bat, err := getZonemapBatch(param, proc, size, objectReader)
+	bat, err := getZonemapBatch(param, proc, size, param.Filter.objectReader)
 	if err != nil {
 		return nil, err
 	}
 
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
+		param.Filter.objectReader = nil
 		param.Zoneparam.bs = nil
 		param.plh = nil
 		param.Fileparam.FileFin++
@@ -807,24 +873,26 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 	}
 }
 
-func transJson2Lines(ctx context.Context, str string, attrs []string, jsonData string) ([]string, error) {
+func transJson2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, jsonData string) ([]string, error) {
 	switch jsonData {
 	case tree.OBJECT:
-		return transJsonObject2Lines(ctx, str, attrs)
+		return transJsonObject2Lines(ctx, str, attrs, cols)
 	case tree.ARRAY:
-		return transJsonArray2Lines(ctx, str, attrs)
+		return transJsonArray2Lines(ctx, str, attrs, cols)
 	default:
 		return nil, moerr.NewNotSupported(ctx, "the jsonline format '%s' is not support now", jsonData)
 	}
 }
 
-func transJsonObject2Lines(ctx context.Context, str string, attrs []string) ([]string, error) {
+func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef) ([]string, error) {
 	var (
 		err error
 		res = make([]string, 0, len(attrs))
 	)
 	var jsonMap map[string]interface{}
-	err = json.Unmarshal([]byte(str), &jsonMap)
+	var decoder = json.NewDecoder(bytes.NewReader([]byte(str)))
+	decoder.UseNumber()
+	err = decoder.Decode(&jsonMap)
 	if err != nil {
 		logutil.Errorf("json unmarshal err:%v", err)
 		return nil, err
@@ -832,9 +900,27 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string) ([]s
 	if len(jsonMap) < len(attrs) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo())
 	}
-	for _, attr := range attrs {
+	for idx, attr := range attrs {
 		if val, ok := jsonMap[attr]; ok {
-			res = append(res, fmt.Sprintf("%v", val))
+			if val == nil {
+				res = append(res, NULL_FLAG)
+				continue
+			}
+			tp := cols[idx].Typ.Id
+			if tp != int32(types.T_json) {
+				res = append(res, fmt.Sprintf("%v", val))
+				continue
+			}
+			var bj bytejson.ByteJson
+			err = bj.UnmarshalObject(val)
+			if err != nil {
+				return nil, err
+			}
+			dt, err := bj.Marshal()
+			if err != nil {
+				return nil, err
+			}
+			res = append(res, string(dt))
 		} else {
 			return nil, moerr.NewInvalidInput(ctx, "the attr %s is not in json", attr)
 		}
@@ -842,13 +928,15 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string) ([]s
 	return res, nil
 }
 
-func transJsonArray2Lines(ctx context.Context, str string, attrs []string) ([]string, error) {
+func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef) ([]string, error) {
 	var (
 		err error
 		res = make([]string, 0, len(attrs))
 	)
 	var jsonArray []interface{}
-	err = json.Unmarshal([]byte(str), &jsonArray)
+	var decoder = json.NewDecoder(bytes.NewReader([]byte(str)))
+	decoder.UseNumber()
+	err = decoder.Decode(&jsonArray)
 	if err != nil {
 		logutil.Errorf("json unmarshal err:%v", err)
 		return nil, err
@@ -856,8 +944,26 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string) ([]st
 	if len(jsonArray) < len(attrs) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo())
 	}
-	for idx := range attrs {
-		res = append(res, fmt.Sprintf("%v", jsonArray[idx]))
+	for idx, val := range jsonArray {
+		if val == nil {
+			res = append(res, NULL_FLAG)
+			continue
+		}
+		tp := cols[idx].Typ.Id
+		if tp != int32(types.T_json) {
+			res = append(res, fmt.Sprintf("%v", val))
+			continue
+		}
+		var bj bytejson.ByteJson
+		err = bj.UnmarshalObject(val)
+		if err != nil {
+			return nil, err
+		}
+		dt, err := bj.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		res = append(res, string(dt))
 	}
 	return res, nil
 }
@@ -897,6 +1003,10 @@ func getStrFromLine(Line []string, colIdx int, param *ExternalParam) string {
 
 func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
 	for colIdx := range param.Attrs {
+		//for cluster table, the column account_id need not be filled here
+		if param.ClusterTable.GetIsClusterTable() && int(param.ClusterTable.GetColumnIndexOfAccountId()) == colIdx {
+			continue
+		}
 		field := getStrFromLine(Line, colIdx, param)
 		id := types.T(param.Cols[colIdx].Typ.Id)
 		if id != types.T_char && id != types.T_varchar {
@@ -1148,15 +1258,24 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				byteJson, err := types.ParseStringToByteJson(field)
-				if err != nil {
-					logutil.Errorf("parse field[%v] err:%v", field, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not json type for column %d", field, colIdx)
-				}
-				jsonBytes, err := types.EncodeJson(byteJson)
-				if err != nil {
-					logutil.Errorf("encode json[%v] err:%v", field, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not json type for column %d", field, colIdx)
+				var (
+					byteJson  bytejson.ByteJson
+					err       error
+					jsonBytes []byte
+				)
+				if param.extern.Format == tree.CSV {
+					byteJson, err = types.ParseStringToByteJson(field)
+					if err != nil {
+						logutil.Errorf("parse field[%v] err:%v", field, err)
+						return moerr.NewInternalError(param.Ctx, "the input value '%v' is not json type for column %d", field, colIdx)
+					}
+					jsonBytes, err = types.EncodeJson(byteJson)
+					if err != nil {
+						logutil.Errorf("encode json[%v] err:%v", field, err)
+						return moerr.NewInternalError(param.Ctx, "the input value '%v' is not json type for column %d", field, colIdx)
+					}
+				} else { //jsonline
+					jsonBytes = []byte(field)
 				}
 				err = vector.SetBytesAt(vec, rowIdx, jsonBytes, mp)
 				if err != nil {

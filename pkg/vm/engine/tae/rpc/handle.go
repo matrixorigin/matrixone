@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"os"
 	"sync"
 	"syscall"
@@ -51,6 +54,7 @@ type Handle struct {
 		//map txn id to txnContext.
 		txnCtxs map[string]*txnContext
 	}
+	jobScheduler tasks.JobScheduler
 }
 
 type txnContext struct {
@@ -75,7 +79,8 @@ func NewTAEHandle(path string, opt *options.Options) *Handle {
 	}
 
 	h := &Handle{
-		eng: moengine.NewEngine(tae),
+		eng:          moengine.NewEngine(tae),
+		jobScheduler: tasks.NewParallelJobScheduler(10),
 	}
 	h.mu.txnCtxs = make(map[string]*txnContext)
 	return h
@@ -92,42 +97,42 @@ func (h *Handle) HandleCommit(
 	if ok {
 		for _, e := range txnCtx.req {
 			switch req := e.(type) {
-			case db.CreateDatabaseReq:
+			case *db.CreateDatabaseReq:
 				err = h.HandleCreateDatabase(
 					ctx,
 					meta,
 					req,
 					&db.CreateDatabaseResp{},
 				)
-			case db.CreateRelationReq:
+			case *db.CreateRelationReq:
 				err = h.HandleCreateRelation(
 					ctx,
 					meta,
 					req,
 					&db.CreateRelationResp{},
 				)
-			case db.DropDatabaseReq:
+			case *db.DropDatabaseReq:
 				err = h.HandleDropDatabase(
 					ctx,
 					meta,
 					req,
 					&db.DropDatabaseResp{},
 				)
-			case db.DropOrTruncateRelationReq:
+			case *db.DropOrTruncateRelationReq:
 				err = h.HandleDropOrTruncateRelation(
 					ctx,
 					meta,
 					req,
 					&db.DropOrTruncateRelationResp{},
 				)
-			case db.UpdateConstraintReq:
+			case *db.UpdateConstraintReq:
 				err = h.HandleUpdateConstraint(
 					ctx,
 					meta,
 					req,
 					&db.UpdateConstraintResp{},
 				)
-			case db.WriteReq:
+			case *db.WriteReq:
 				err = h.HandleWrite(
 					ctx,
 					meta,
@@ -137,7 +142,7 @@ func (h *Handle) HandleCommit(
 			default:
 				panic(moerr.NewNYI(ctx, "Pls implement me"))
 			}
-			//Need to rollback the txn.
+			//Need to roll back the txn.
 			if err != nil {
 				txn, _ = h.eng.GetTxnByID(meta.GetID())
 				txn.Rollback()
@@ -207,42 +212,42 @@ func (h *Handle) HandlePrepare(
 		//handle pre-commit write for 2PC
 		for _, e := range txnCtx.req {
 			switch req := e.(type) {
-			case db.CreateDatabaseReq:
+			case *db.CreateDatabaseReq:
 				err = h.HandleCreateDatabase(
 					ctx,
 					meta,
 					req,
 					&db.CreateDatabaseResp{},
 				)
-			case db.CreateRelationReq:
+			case *db.CreateRelationReq:
 				err = h.HandleCreateRelation(
 					ctx,
 					meta,
 					req,
 					&db.CreateRelationResp{},
 				)
-			case db.DropDatabaseReq:
+			case *db.DropDatabaseReq:
 				err = h.HandleDropDatabase(
 					ctx,
 					meta,
 					req,
 					&db.DropDatabaseResp{},
 				)
-			case db.DropOrTruncateRelationReq:
+			case *db.DropOrTruncateRelationReq:
 				err = h.HandleDropOrTruncateRelation(
 					ctx,
 					meta,
 					req,
 					&db.DropOrTruncateRelationResp{},
 				)
-			case db.UpdateConstraintReq:
+			case *db.UpdateConstraintReq:
 				err = h.HandleUpdateConstraint(
 					ctx,
 					meta,
 					req,
 					&db.UpdateConstraintResp{},
 				)
-			case db.WriteReq:
+			case *db.WriteReq:
 				err = h.HandleWrite(
 					ctx,
 					meta,
@@ -283,16 +288,21 @@ func (h *Handle) HandleStartRecovery(
 	ctx context.Context,
 	ch chan txn.TxnMeta) {
 	//panic(moerr.NewNYI("HandleStartRecovery is not implemented yet"))
-	//TODO:: 1.  Get the 2PC transactions which be in prepared or committing state from txn engine's recovery.
+	//TODO:: 1.  Get the 2PC transactions which be in prepared or
+	//           committing state from txn engine's recovery.
 	//       2.  Feed these transaction into ch.
 	close(ch)
 }
 
 func (h *Handle) HandleClose(ctx context.Context) (err error) {
+	//FIXME::should wait txn request's job done?
+	h.jobScheduler.Stop()
 	return h.eng.Close()
 }
 
 func (h *Handle) HandleDestroy(ctx context.Context) (err error) {
+	//FIXME::should wait txn request's job done?
+	h.jobScheduler.Stop()
 	return h.eng.Destroy()
 }
 
@@ -302,7 +312,12 @@ func (h *Handle) HandleGetLogTail(
 	req apipb.SyncLogTailReq,
 	resp *apipb.SyncLogTailResp) (err error) {
 	tae := h.eng.GetTAE(context.Background())
-	res, err := logtail.HandleSyncLogTailReq(tae.BGCheckpointRunner, tae.LogtailMgr, tae.Catalog, req, true)
+	res, err := logtail.HandleSyncLogTailReq(
+		tae.BGCheckpointRunner,
+		tae.LogtailMgr,
+		tae.Catalog,
+		req,
+		true)
 	if err != nil {
 		return err
 	}
@@ -330,6 +345,92 @@ func (h *Handle) HandleFlushTable(
 	return err
 }
 
+func (h *Handle) loadPksFromFS(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.WriteReq,
+) (err error) {
+	txn, err := h.eng.GetOrCreateTxnWithMeta(
+		nil,
+		meta.GetID(),
+		types.TimestampToTS(meta.GetSnapshotTS()))
+	if err != nil {
+		return err
+	}
+	dbase, err := h.eng.GetDatabaseByID(ctx, req.DatabaseId, txn)
+	if err != nil {
+		return err
+	}
+	tb, err := dbase.GetRelationByID(ctx, req.TableID)
+	if err != nil {
+		return err
+	}
+	schema := tb.GetSchema(ctx)
+	if !schema.HasPK() {
+		return
+	}
+	//start job for loading primary keys of blocks
+	req.Jobs = make([]*tasks.Job, len(req.MetaLocs))
+	req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
+	for i := range req.MetaLocs {
+		req.Jobs[i] = tasks.NewJob(
+			fmt.Sprintf("load-primaykey-%s", req.MetaLocs[i]),
+			ctx,
+			func(ctx context.Context) (jobR *tasks.JobResult) {
+				jobR = &tasks.JobResult{}
+				reader, err := blockio.NewReader(ctx, h.eng.GetTAE(ctx).Fs, req.MetaLocs[i])
+				if err != nil {
+					jobR.Err = err
+					return
+				}
+				meta, err := reader.ReadMeta(nil)
+				if err != nil {
+					jobR.Err = err
+					return
+				}
+				bat, err := reader.LoadBlkColumnsByMetaAndIdx(
+					[]types.Type{schema.GetSingleSortKey().Type},
+					[]string{schema.GetSingleSortKey().Name},
+					[]bool{false},
+					meta,
+					schema.GetSingleSortKeyIdx(),
+				)
+				if err != nil {
+					jobR.Err = err
+					return
+				}
+				jobR.Res = bat.Vecs[0]
+				return
+			},
+		)
+		if err = h.jobScheduler.Schedule(req.Jobs[i]); err != nil {
+			return err
+		}
+	}
+	return
+}
+
+// EvaluateTxnRequest only evaluate the request ,do not change the state machine of TxnEngine.
+func (h *Handle) EvaluateTxnRequest(
+	ctx context.Context,
+	meta txn.TxnMeta,
+) (err error) {
+	//TODO::1. load primary keys from S3/FS
+	//      2. load deleted batch of row ids from S3/FS,
+	//         and decode row id into segment id + block id + offset.
+	h.mu.RLock()
+	txnCtx := h.mu.txnCtxs[string(meta.GetID())]
+	h.mu.RUnlock()
+	for _, e := range txnCtx.req {
+		if r, ok := e.(*db.WriteReq); ok {
+			if r.FileName != "" && r.Type == db.EntryInsert {
+				return h.loadPksFromFS(ctx, meta, r)
+			}
+		}
+	}
+	return
+}
+
 func (h *Handle) CacheTxnRequest(
 	ctx context.Context,
 	meta txn.TxnMeta,
@@ -349,7 +450,6 @@ func (h *Handle) CacheTxnRequest(
 	return nil
 }
 
-// HandlePreCommitWrite only cache the req.
 func (h *Handle) HandlePreCommitWrite(
 	ctx context.Context,
 	meta txn.TxnMeta,
@@ -367,7 +467,7 @@ func (h *Handle) HandlePreCommitWrite(
 		switch cmds := e.(type) {
 		case []catalog.CreateDatabase:
 			for _, cmd := range cmds {
-				req := db.CreateDatabaseReq{
+				req := &db.CreateDatabaseReq{
 					Name:       cmd.Name,
 					CreateSql:  cmd.CreateSql,
 					DatabaseId: cmd.DatabaseId,
@@ -384,7 +484,7 @@ func (h *Handle) HandlePreCommitWrite(
 			}
 		case []catalog.CreateTable:
 			for _, cmd := range cmds {
-				req := db.CreateRelationReq{
+				req := &db.CreateRelationReq{
 					AccessInfo: db.AccessInfo{
 						UserID:    cmd.Creator,
 						RoleID:    cmd.Owner,
@@ -403,7 +503,7 @@ func (h *Handle) HandlePreCommitWrite(
 			}
 		case []catalog.UpdateConstraint:
 			for _, cmd := range cmds {
-				req := db.UpdateConstraintReq{
+				req := &db.UpdateConstraintReq{
 					TableName:    cmd.TableName,
 					TableId:      cmd.TableId,
 					DatabaseName: cmd.DatabaseName,
@@ -417,7 +517,7 @@ func (h *Handle) HandlePreCommitWrite(
 			}
 		case []catalog.DropDatabase:
 			for _, cmd := range cmds {
-				req := db.DropDatabaseReq{
+				req := &db.DropDatabaseReq{
 					Name: cmd.Name,
 					ID:   cmd.Id,
 				}
@@ -428,7 +528,7 @@ func (h *Handle) HandlePreCommitWrite(
 			}
 		case []catalog.DropOrTruncateTable:
 			for _, cmd := range cmds {
-				req := db.DropOrTruncateRelationReq{
+				req := &db.DropOrTruncateRelationReq{
 					IsDrop:       cmd.IsDrop,
 					Name:         cmd.Name,
 					ID:           cmd.Id,
@@ -448,15 +548,29 @@ func (h *Handle) HandlePreCommitWrite(
 			if err != nil {
 				panic(err)
 			}
-			req := db.WriteReq{
-				Type:         db.EntryType(pe.EntryType),
-				DatabaseId:   pe.GetDatabaseId(),
-				TableID:      pe.GetTableId(),
+			req := &db.WriteReq{
+				Type:       db.EntryType(pe.EntryType),
+				DatabaseId: pe.GetDatabaseId(),
+				TableID:    pe.GetTableId(),
+				//SegID:        pe.GetSegmentId(),
 				DatabaseName: pe.GetDatabaseName(),
 				TableName:    pe.GetTableName(),
+				FileName:     pe.GetFileName(),
 				Batch:        moBat,
 			}
-
+			if req.FileName != "" {
+				rows := catalog.GenRows(req.Batch)
+				for _, row := range rows {
+					if req.Type == db.EntryInsert {
+						//req.Blks[i] = row[catalog.BLOCKMETA_ID_ON_FS_IDX].(uint64)
+						//req.MetaLocs[i] = string(row[catalog.BLOCKMETA_METALOC_ON_FS_IDX].([]byte))
+						req.MetaLocs = append(req.MetaLocs, string(row[0].([]byte)))
+					} else {
+						//req.DeltaLocs[i] = string(row[0].([]byte))
+						req.DeltaLocs = append(req.DeltaLocs, string(row[0].([]byte)))
+					}
+				}
+			}
 			if err = h.CacheTxnRequest(ctx, meta, req,
 				new(db.WriteResp)); err != nil {
 				return err
@@ -465,8 +579,8 @@ func (h *Handle) HandlePreCommitWrite(
 			panic(moerr.NewNYI(ctx, ""))
 		}
 	}
-	return nil
-
+	//evaluate all the txn requests asynchronously.
+	return h.EvaluateTxnRequest(ctx, meta)
 }
 
 //Handle DDL commands.
@@ -474,7 +588,7 @@ func (h *Handle) HandlePreCommitWrite(
 func (h *Handle) HandleCreateDatabase(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req db.CreateDatabaseReq,
+	req *db.CreateDatabaseReq,
 	resp *db.CreateDatabaseResp) (err error) {
 	_, span := trace.Start(ctx, "HandleCreateDatabase")
 	defer span.End()
@@ -504,7 +618,7 @@ func (h *Handle) HandleCreateDatabase(
 func (h *Handle) HandleDropDatabase(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req db.DropDatabaseReq,
+	req *db.DropDatabaseReq,
 	resp *db.DropDatabaseResp) (err error) {
 
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
@@ -528,7 +642,7 @@ func (h *Handle) HandleDropDatabase(
 func (h *Handle) HandleCreateRelation(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req db.CreateRelationReq,
+	req *db.CreateRelationReq,
 	resp *db.CreateRelationResp) (err error) {
 
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
@@ -562,7 +676,7 @@ func (h *Handle) HandleCreateRelation(
 func (h *Handle) HandleDropOrTruncateRelation(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req db.DropOrTruncateRelationReq,
+	req *db.DropOrTruncateRelationReq,
 	resp *db.DropOrTruncateRelationResp) (err error) {
 
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
@@ -596,13 +710,12 @@ func (h *Handle) HandleDropOrTruncateRelation(
 func (h *Handle) HandleWrite(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req db.WriteReq,
+	req *db.WriteReq,
 	resp *db.WriteResp) (err error) {
-
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
-		return err
+		return
 	}
 
 	logutil.Infof("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",
@@ -626,20 +739,27 @@ func (h *Handle) HandleWrite(
 	}
 
 	if req.Type == db.EntryInsert {
-		//Append a block had been bulk-loaded into S3
+		//Add blocks which had been bulk-loaded into S3 into table.
 		if req.FileName != "" {
-			//TODO::Precommit a block from S3
-			//tb.AppendBlock()
-			panic(moerr.NewNYI(ctx, "Precommit a block is not implemented yet"))
+			//wait loading primary key done.
+			var pkVecs []containers.Vector
+			for i, job := range req.Jobs {
+				req.JobRes[i] = job.WaitDone()
+				if req.JobRes[i].Err != nil {
+					return req.JobRes[i].Err
+				}
+				pkVecs = append(pkVecs, req.JobRes[i].Res.(containers.Vector))
+			}
+			err = tb.AddBlksWithMetaLoc(ctx, pkVecs, req.FileName, req.MetaLocs, 0)
+			return
 		}
-		//Add a batch into table
-		//TODO::add a parameter to Append for PreCommit-Append?
+		//Appends a batch of data into table.
+		//TODO::Add a parameter for Write method to represent pre-commit write append?
 		err = tb.Write(ctx, req.Batch)
 		return
 	}
 
-	//TODO:: handle delete rows of block had been bulk-loaded into S3.
-
+	//TODO::Handle deleted row ids on S3/FS
 	//Vecs[0]--> rowid
 	//Vecs[1]--> PrimaryKey
 	err = tb.DeleteByPhyAddrKeys(ctx, req.Batch.GetVector(0))
@@ -649,7 +769,7 @@ func (h *Handle) HandleWrite(
 func (h *Handle) HandleUpdateConstraint(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req db.UpdateConstraintReq,
+	req *db.UpdateConstraintReq,
 	resp *db.UpdateConstraintResp) (err error) {
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))

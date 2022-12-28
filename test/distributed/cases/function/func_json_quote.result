@@ -1,0 +1,32 @@
+select json_quote('a');
+json_quote(a)
+"a"
+select json_quote('a"');
+json_quote(a")
+"a\""
+select json_quote('a"b');
+json_quote(a"b)
+"a\"b"
+select json_quote(null);
+json_quote(null)
+null
+create table t1 (a varchar(10));
+insert into t1 values ('a'), ('a"'), ('a"b'), (null);
+select json_quote(a) from t1;
+json_quote(a)
+"a"
+"a\""
+"a\"b"
+null
+select json_quote('xax') from t1;
+json_quote(xax)
+"xax"
+"xax"
+"xax"
+"xax"
+select json_quote(null) from t1;
+json_quote(null)
+null
+null
+null
+null

@@ -56,6 +56,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		UpdateCtxs:      make([]*plan.UpdateCtx, len(node.UpdateCtxs)),
 		TableDefVec:     make([]*plan.TableDef, len(node.TableDefVec)),
 		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
+		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
 	}
 
 	copy(newNode.Children, node.Children)
@@ -103,8 +104,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		newNode.UpdateCtxs[i] = &plan.UpdateCtx{
 			DbName:        updateCtx.DbName,
 			TblName:       updateCtx.TblName,
-			PriKey:        updateCtx.PriKey,
-			PriKeyIdx:     updateCtx.PriKeyIdx,
 			HideKey:       updateCtx.HideKey,
 			HideKeyIdx:    updateCtx.HideKeyIdx,
 			UpdateCols:    make([]*ColDef, len(updateCtx.UpdateCols)),
@@ -292,9 +291,16 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 			copy(indexDef.IndexNames, defImpl.UIdx.IndexNames)
 			copy(indexDef.TableNames, defImpl.UIdx.TableNames)
 			copy(indexDef.TableExists, defImpl.UIdx.TableExists)
-			for i := range indexDef.Fields {
-				copy(indexDef.Fields[i].Parts, defImpl.UIdx.Fields[i].Parts)
-				copy(indexDef.Fields[i].Cols, defImpl.UIdx.Fields[i].Cols)
+			for idx, oldField := range defImpl.UIdx.Fields {
+				newField := &plan.Field{
+					Parts: make([]string, len(oldField.Parts)),
+					Cols:  make([]*plan.ColDef, len(oldField.Cols)),
+				}
+				copy(newField.Parts, oldField.Parts)
+				for i, col := range oldField.Cols {
+					newField.Cols[i] = DeepCopyColDef(col)
+				}
+				indexDef.Fields[idx] = newField
 			}
 			newTable.Defs[idx] = &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_UIdx{
@@ -423,6 +429,7 @@ func DeepCopyInsertValues(insert *plan.InsertValues) *plan.InsertValues {
 		Columns:       make([]*plan.Column, len(insert.Columns)),
 		OrderAttrs:    make([]string, len(insert.OrderAttrs)),
 		CompositePkey: DeepCopyColDef(insert.CompositePkey),
+		ClusterTable:  DeepCopyClusterTable(insert.GetClusterTable()),
 	}
 
 	for idx, col := range insert.ExplicitCols {
@@ -527,9 +534,10 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	case *plan.DataDefinition_DropTable:
 		newDf.Definition = &plan.DataDefinition_DropTable{
 			DropTable: &plan.DropTable{
-				IfExists: df.DropTable.IfExists,
-				Database: df.DropTable.Database,
-				Table:    df.DropTable.Table,
+				IfExists:     df.DropTable.IfExists,
+				Database:     df.DropTable.Database,
+				Table:        df.DropTable.Table,
+				ClusterTable: DeepCopyClusterTable(df.DropTable.GetClusterTable()),
 			},
 		}
 
@@ -566,7 +574,8 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	case *plan.DataDefinition_TruncateTable:
 		newDf.Definition = &plan.DataDefinition_TruncateTable{
 			TruncateTable: &plan.TruncateTable{
-				Table: df.TruncateTable.Table,
+				Table:        df.TruncateTable.Table,
+				ClusterTable: DeepCopyClusterTable(df.TruncateTable.GetClusterTable()),
 			},
 		}
 
@@ -738,4 +747,19 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	}
 
 	return newExpr
+}
+
+func DeepCopyClusterTable(cluster *plan.ClusterTable) *plan.ClusterTable {
+	if cluster == nil {
+		return nil
+	}
+
+	accountIds := make([]uint32, len(cluster.GetAccountIDs()))
+	copy(accountIds, cluster.GetAccountIDs())
+	newClusterTable := &plan.ClusterTable{
+		IsClusterTable:         cluster.GetIsClusterTable(),
+		AccountIDs:             accountIds,
+		ColumnIndexOfAccountId: cluster.GetColumnIndexOfAccountId(),
+	}
+	return newClusterTable
 }
