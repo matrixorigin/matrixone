@@ -15,13 +15,27 @@
 package env
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	v11 "go.opentelemetry.io/proto/otlp/common/v1"
+	v1 "go.opentelemetry.io/proto/otlp/resource/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"time"
 )
 
-type Metric struct {
-	Name      string
-	Timestamp time.Time
-	Value     float64
-	Labels    map[string]any
-	SeriesId  string
+type Span struct {
+	TraceId      string
+	SpanId       string
+	ParentSpanId string
+	Kind         string
+	Name         string
+	StartTime    time.Time
+	EndTime      time.Time
+	Duration     uint64
+	Resource     *v1.Resource
+	Links        []tracepb.Span_Link
+	Attributes   []*v11.KeyValue
+}
+
+func TransaferSpan(data *tracepb.TracesData) []table.Row {
+	panic("not implement")
 }
