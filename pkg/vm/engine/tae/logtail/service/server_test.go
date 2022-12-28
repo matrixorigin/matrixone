@@ -31,23 +31,23 @@ func TestTableID(t *testing.T) {
 
 	cases := []testCase{
 		{
-			ta:       newTable(1, 1, 1),
-			tb:       newTable(1, 1, 1),
+			ta:       mockTable(1, 1, 1),
+			tb:       mockTable(1, 1, 1),
 			evaluate: require.Equal,
 		},
 		{
-			ta:       newTable(1, 1, 1),
-			tb:       newTable(2, 1, 1),
+			ta:       mockTable(1, 1, 1),
+			tb:       mockTable(2, 1, 1),
 			evaluate: require.NotEqual,
 		},
 		{
-			ta:       newTable(1, 1, 1),
-			tb:       newTable(1, 2, 1),
+			ta:       mockTable(1, 1, 1),
+			tb:       mockTable(1, 2, 1),
 			evaluate: require.NotEqual,
 		},
 		{
-			ta:       newTable(1, 1, 1),
-			tb:       newTable(1, 1, 2),
+			ta:       mockTable(1, 1, 1),
+			tb:       mockTable(1, 1, 2),
 			evaluate: require.NotEqual,
 		},
 	}
@@ -59,7 +59,7 @@ func TestTableID(t *testing.T) {
 	}
 }
 
-func newTable(dbID, tbID, ptID uint64) api.TableID {
+func mockTable(dbID, tbID, ptID uint64) api.TableID {
 	return api.TableID{
 		DbId:        dbID,
 		TbId:        tbID,
@@ -67,7 +67,7 @@ func newTable(dbID, tbID, ptID uint64) api.TableID {
 	}
 }
 
-func newTimestamp(physical int64, logical uint32) timestamp.Timestamp {
+func mockTimestamp(physical int64, logical uint32) timestamp.Timestamp {
 	return timestamp.Timestamp{
 		PhysicalTime: physical,
 		LogicalTime:  logical,

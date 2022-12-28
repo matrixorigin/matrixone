@@ -21,9 +21,9 @@ import (
 )
 
 func TestWaterliner(t *testing.T) {
-	table := newTable(1, 2, 3)
+	table := mockTable(1, 2, 3)
 	id := TableID(table.String())
-	want := newTimestamp(100, 101)
+	want := mockTimestamp(100, 101)
 	waterline := want.Next()
 
 	w := NewWaterliner()
@@ -68,8 +68,8 @@ func TestWaterliner(t *testing.T) {
 }
 
 func TestTableInfo(t *testing.T) {
-	table := newTable(1, 2, 3)
-	ts := newTimestamp(10, 11)
+	table := mockTable(1, 2, 3)
+	ts := mockTimestamp(10, 11)
 	id := TableID(table.String())
 
 	info := newTableInfo(id, table, ts)

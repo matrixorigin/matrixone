@@ -226,22 +226,23 @@ func (HAKeeperUpdateType) EnumDescriptor() ([]byte, []int) {
 }
 
 // HAKeeperState state transition diagram
-//               HAKeeperCreated
-//                     │
-//                     │ cluster init info set
-//                     ▼
-//           HAKeeperBootstrapping
-//                     │
-//                     │ init schedule commands received
-//                     ▼
-//     HAKeeperBootstrapCommandsReceived
-//                     │
-//                     │
-//         ┌───────────┴───────────┐
-//         │ time out              │ bootstrap successfully
-//         ▼                       ▼
-// HAKeeperBootstrapFailed     HAKeeperRunning
 //
+//	          HAKeeperCreated
+//	                │
+//	                │ cluster init info set
+//	                ▼
+//	      HAKeeperBootstrapping
+//	                │
+//	                │ init schedule commands received
+//	                ▼
+//	HAKeeperBootstrapCommandsReceived
+//	                │
+//	                │
+//	    ┌───────────┴───────────┐
+//	    │ time out              │ bootstrap successfully
+//	    ▼                       ▼
+//
+// HAKeeperBootstrapFailed     HAKeeperRunning
 type HAKeeperState int32
 
 const (
@@ -277,15 +278,16 @@ func (HAKeeperState) EnumDescriptor() ([]byte, []int) {
 }
 
 // TaskSchedulerState state transition diagram
-//         TaskSchedulerCreated
-//                  │
-//                  │  setTaskTableUser()
-//                  ▼
-//         TaskSchedulerStarted
-//                 │ ▲
-//                 │ │
-//                 ▼ │
-//          TaskSchedulerStopped
+//
+//	TaskSchedulerCreated
+//	         │
+//	         │  setTaskTableUser()
+//	         ▼
+//	TaskSchedulerStarted
+//	        │ ▲
+//	        │ │
+//	        ▼ │
+//	 TaskSchedulerStopped
 type TaskSchedulerState int32
 
 const (

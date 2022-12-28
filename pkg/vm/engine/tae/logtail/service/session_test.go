@@ -68,7 +68,7 @@ func TestSessionError(t *testing.T) {
 	notifier := mockSessionErrorNotifier(logger)
 	cs := mockBrokenSession()
 
-	tableA := newTable(1, 2, 3)
+	tableA := mockTable(1, 2, 3)
 	ss := NewSession(ctx, logger, pooler, notifier, cs)
 
 	/* ---- 1. send subscription response ---- */
@@ -101,9 +101,9 @@ func TestSession(t *testing.T) {
 	cs := mockNormalClientSession(logger)
 
 	// constructs tables
-	tableA := newTable(1, 2, 3)
+	tableA := mockTable(1, 2, 3)
 	idA := TableID(tableA.String())
-	tableB := newTable(1, 4, 3)
+	tableB := mockTable(1, 4, 3)
 	idB := TableID(tableB.String())
 
 	ss := NewSession(ctx, logger, pooler, notifier, cs)
