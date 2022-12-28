@@ -112,6 +112,8 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return c.scope.DropDatabase(c)
 	case CreateTable:
 		return c.scope.CreateTable(c)
+	case AlterView:
+		return c.scope.AlterView(c)
 	case DropTable:
 		return c.scope.DropTable(c)
 	case CreateIndex:
@@ -174,6 +176,11 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 		case plan.DataDefinition_CREATE_TABLE:
 			return &Scope{
 				Magic: CreateTable,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_ALTER_VIEW:
+			return &Scope{
+				Magic: AlterView,
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_TABLE:
