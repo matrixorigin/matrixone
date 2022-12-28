@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"os"
 	"reflect"
@@ -419,12 +420,24 @@ const (
 /*
 handle show columns from table in plan2 and tae
 */
-func handleShowColumns(ses *Session) error {
+func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 	data := ses.GetData()
 	mrs := ses.GetMysqlResultSet()
+	dbName := stmt.Table.GetDBName()
+	if len(dbName) == 0 {
+		dbName = ses.GetDatabaseName()
+	}
+	tableName := string(stmt.Table.ToTableName().ObjectName)
 	for _, d := range data {
 		colName := string(d[0].([]byte))
 		if colName == catalog.Row_ID {
+			continue
+		}
+		//the non-sys account skips the column account_id of the cluster table
+		if util.IsClusterTableAttribute(colName) &&
+			isClusterTable(dbName, tableName) &&
+			ses.GetTenantInfo() != nil &&
+			!ses.GetTenantInfo().IsSysTenant() {
 			continue
 		}
 
@@ -3564,7 +3577,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 			switch ses.GetShowStmtType() {
 			case ShowColumns:
-				if err = handleShowColumns(ses); err != nil {
+				if err = handleShowColumns(ses, statement.(*tree.ShowColumns)); err != nil {
 					goto handleFailed
 				}
 			case ShowTableStatus:
