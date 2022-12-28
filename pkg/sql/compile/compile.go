@@ -1214,7 +1214,7 @@ func (c *Compile) NumCPU() int {
 }
 
 func (c *Compile) generateCPUNumber(num, blocks int) int {
-	if blocks < num {
+	if blocks < num && blocks > 0 {
 		return blocks
 	}
 	return num
