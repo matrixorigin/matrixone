@@ -1388,7 +1388,8 @@ func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
 func numericToBool[T constraints.Integer | constraints.Float](
 	from *vector.FunctionParameter[T],
 	to *vector.FunctionResult[bool], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		err := to.Append(v != 0, null)
@@ -1402,7 +1403,8 @@ func numericToBool[T constraints.Integer | constraints.Float](
 func boolToStr(
 	from *vector.FunctionParameter[bool],
 	to *vector.FunctionResult[types.Varlena], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1427,7 +1429,8 @@ func boolToStr(
 func boolToInteger[T constraints.Integer](
 	from *vector.FunctionParameter[bool],
 	to *vector.FunctionResult[T], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	var dft T
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -1453,7 +1456,8 @@ func boolToInteger[T constraints.Integer](
 func signedToDecimal64[T1 constraints.Signed](
 	from *vector.FunctionParameter[T1],
 	to *vector.FunctionResult[types.Decimal64], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	var dft types.Decimal64
 	toType := to.GetType()
 
@@ -1479,7 +1483,8 @@ func signedToDecimal64[T1 constraints.Signed](
 func signedToDecimal128[T1 constraints.Signed](
 	from *vector.FunctionParameter[T1],
 	to *vector.FunctionResult[types.Decimal128], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	var dft types.Decimal128
 	toType := to.GetType()
 
@@ -1505,7 +1510,8 @@ func signedToDecimal128[T1 constraints.Signed](
 func unsignedToDecimal64[T1 constraints.Unsigned](
 	from *vector.FunctionParameter[T1],
 	to *vector.FunctionResult[types.Decimal64], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	var dft types.Decimal64
 	toType := to.GetType()
 
@@ -1531,7 +1537,8 @@ func unsignedToDecimal64[T1 constraints.Unsigned](
 func unsignedToDecimal128[T1 constraints.Unsigned](
 	from *vector.FunctionParameter[T1],
 	to *vector.FunctionResult[types.Decimal128], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	var dft types.Decimal128
 	toType := to.GetType()
 
@@ -1557,7 +1564,8 @@ func unsignedToDecimal128[T1 constraints.Unsigned](
 func floatToDecimal64[T constraints.Float](
 	from *vector.FunctionParameter[T],
 	to *vector.FunctionResult[types.Decimal64], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	var dft types.Decimal64
 	toType := to.GetType()
 
@@ -1583,7 +1591,8 @@ func floatToDecimal64[T constraints.Float](
 func floatToDecimal128[T constraints.Float](
 	from *vector.FunctionParameter[T],
 	to *vector.FunctionResult[types.Decimal128], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	var dft types.Decimal128
 	toType := to.GetType()
 
@@ -1609,7 +1618,8 @@ func floatToDecimal128[T constraints.Float](
 func signedToStr[T constraints.Integer](
 	from *vector.FunctionParameter[T],
 	to *vector.FunctionResult[types.Varlena], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1629,7 +1639,8 @@ func signedToStr[T constraints.Integer](
 func unsignedToStr[T constraints.Unsigned](
 	from *vector.FunctionParameter[T],
 	to *vector.FunctionResult[types.Varlena], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1649,7 +1660,8 @@ func unsignedToStr[T constraints.Unsigned](
 func floatToStr[T constraints.Float](
 	from *vector.FunctionParameter[T],
 	to *vector.FunctionResult[types.Varlena], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	bitSize := int(unsafe.Sizeof(T(0)) * 8)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -1670,7 +1682,8 @@ func floatToStr[T constraints.Float](
 func integerToTimestamp[T constraints.Integer](
 	from *vector.FunctionParameter[T],
 	to *vector.FunctionResult[types.Timestamp], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	var dft types.Timestamp
 	// XXX what is the 32536771199
 	for i = 0; i < l; i++ {
@@ -1693,7 +1706,8 @@ func integerToTime[T constraints.Integer](
 	ctx context.Context,
 	from *vector.FunctionParameter[T],
 	to *vector.FunctionResult[types.Time], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	var dft types.Time
 	toType := to.GetType()
 	for i = 0; i < l; i++ {
@@ -1722,7 +1736,8 @@ func integerToTime[T constraints.Integer](
 func dateToTime(
 	from *vector.FunctionParameter[types.Date],
 	to *vector.FunctionResult[types.Time], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1741,7 +1756,8 @@ func dateToTime(
 func datetimeToTime(
 	from *vector.FunctionParameter[types.Datetime],
 	to *vector.FunctionResult[types.Time], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	totype := to.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -1762,7 +1778,8 @@ func dateToTimestamp(
 	from *vector.FunctionParameter[types.Date],
 	to *vector.FunctionResult[types.Timestamp], length int,
 	zone *time.Location) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1782,7 +1799,8 @@ func datetimeToTimestamp(
 	from *vector.FunctionParameter[types.Datetime],
 	to *vector.FunctionResult[types.Timestamp], length int,
 	zone *time.Location) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1801,7 +1819,8 @@ func datetimeToTimestamp(
 func dateToDatetime(
 	from *vector.FunctionParameter[types.Date],
 	to *vector.FunctionResult[types.Datetime], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1822,7 +1841,8 @@ func timestampToDatetime(
 	from *vector.FunctionParameter[types.Timestamp],
 	to *vector.FunctionResult[types.Datetime], length int,
 	zone *time.Location) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	tempR := make([]types.Datetime, 1)
 	tempT := make([]types.Timestamp, 1)
 	for i = 0; i < l; i++ {
@@ -1848,7 +1868,8 @@ func timestampToDatetime(
 func timeToDatetime(
 	from *vector.FunctionParameter[types.Time],
 	to *vector.FunctionResult[types.Datetime], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	totype := to.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -1868,7 +1889,8 @@ func timeToDatetime(
 func datetimeToDate(
 	from *vector.FunctionParameter[types.Datetime],
 	to *vector.FunctionResult[types.Date], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1889,7 +1911,8 @@ func timestampToDate(
 	from *vector.FunctionParameter[types.Timestamp],
 	to *vector.FunctionResult[types.Date], length int,
 	zone *time.Location) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	tempR := make([]types.Datetime, 1)
 	tempT := make([]types.Timestamp, 1)
 	for i = 0; i < l; i++ {
@@ -1944,7 +1967,8 @@ func timeToInteger[T constraints.Integer](
 func timeToDate(
 	from *vector.FunctionParameter[types.Time],
 	to *vector.FunctionResult[types.Date], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1963,7 +1987,8 @@ func timeToDate(
 func dateToStr(
 	from *vector.FunctionParameter[types.Date],
 	to *vector.FunctionResult[types.Varlena], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1982,7 +2007,8 @@ func dateToStr(
 func datetimeToStr(
 	from *vector.FunctionParameter[types.Datetime],
 	to *vector.FunctionResult[types.Varlena], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	fromType := from.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -2003,7 +2029,8 @@ func timestampToStr(
 	from *vector.FunctionParameter[types.Timestamp],
 	to *vector.FunctionResult[types.Varlena], length int,
 	zone *time.Location) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	fromType := from.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -2023,7 +2050,8 @@ func timestampToStr(
 func timeToStr(
 	from *vector.FunctionParameter[types.Time],
 	to *vector.FunctionResult[types.Varlena], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	fromType := from.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -2044,7 +2072,8 @@ func timeToDecimal64(
 	ctx context.Context,
 	from *vector.FunctionParameter[types.Time],
 	to *vector.FunctionResult[types.Decimal64], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	var dft types.Decimal64
 	fromType := from.GetType()
 	totype := to.GetType()
@@ -2071,7 +2100,8 @@ func timeToDecimal128(
 	ctx context.Context,
 	from *vector.FunctionParameter[types.Time],
 	to *vector.FunctionResult[types.Decimal128], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	var dft types.Decimal128
 	fromType := from.GetType()
 	totype := to.GetType()
@@ -2098,7 +2128,8 @@ func decimal64ToInt64(
 	ctx context.Context,
 	from *vector.FunctionParameter[types.Decimal64],
 	to *vector.FunctionResult[int64], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	fromTyp := from.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -2128,7 +2159,8 @@ func decimal128ToSigned[T constraints.Signed](
 	ctx context.Context,
 	from *vector.FunctionParameter[types.Decimal128],
 	to *vector.FunctionResult[T], bitSize int, length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -2157,7 +2189,8 @@ func decimal64ToUnsigned[T constraints.Unsigned](
 	from *vector.FunctionParameter[types.Decimal64],
 	to *vector.FunctionResult[T], bitSize int,
 	length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	fromType := from.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -2188,7 +2221,8 @@ func decimal128ToUnsigned[T constraints.Unsigned](
 	from *vector.FunctionParameter[types.Decimal128],
 	to *vector.FunctionResult[T], bitSize int,
 	length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	fromType := from.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -2269,7 +2303,8 @@ func decimal128ToDecimal128(
 func decimal64ToTime(
 	from *vector.FunctionParameter[types.Decimal64],
 	to *vector.FunctionResult[types.Time], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	totype := to.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -2293,7 +2328,8 @@ func decimal64ToTime(
 func decimal128ToTime(
 	from *vector.FunctionParameter[types.Decimal128],
 	to *vector.FunctionResult[types.Time], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	totype := to.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -2317,7 +2353,8 @@ func decimal128ToTime(
 func decimal64ToTimestamp(
 	from *vector.FunctionParameter[types.Decimal64],
 	to *vector.FunctionResult[types.Timestamp], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -2337,7 +2374,8 @@ func decimal64ToTimestamp(
 func decimal128ToTimestamp(
 	from *vector.FunctionParameter[types.Decimal128],
 	to *vector.FunctionResult[types.Timestamp], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -2359,7 +2397,8 @@ func decimal64ToFloat[T constraints.Float](
 	from *vector.FunctionParameter[types.Decimal64],
 	to *vector.FunctionResult[T], length int, bitSize int) error {
 	// IF float32, then bitSize should be 32. IF float64, then 64
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	fromType := from.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -2386,7 +2425,8 @@ func decimal128ToFloat[T constraints.Float](
 	from *vector.FunctionParameter[types.Decimal128],
 	to *vector.FunctionResult[T], length int, bitSize int) error {
 	// IF float32, then bitSize should be 32. IF float64, then 64
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	fromType := from.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -2411,7 +2451,8 @@ func decimal128ToFloat[T constraints.Float](
 func decimal64ToDecimal128(
 	from *vector.FunctionParameter[types.Decimal64],
 	to *vector.FunctionResult[types.Decimal128], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	var dft types.Decimal128
 	totype := to.GetType()
 	{
@@ -2444,7 +2485,8 @@ func decimal128ToDecimal64(
 	ctx context.Context,
 	from *vector.FunctionParameter[types.Decimal128],
 	to *vector.FunctionResult[types.Decimal64], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	var dft types.Decimal64
 	totype := to.GetType()
 	for i = 0; i < l; i++ {
@@ -2470,7 +2512,8 @@ func decimal128ToDecimal64(
 func decimal64ToStr(
 	from *vector.FunctionParameter[types.Decimal64],
 	to *vector.FunctionResult[types.Varlena], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	fromType := from.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -2491,7 +2534,8 @@ func decimal64ToStr(
 func decimal128ToStr(
 	from *vector.FunctionParameter[types.Decimal128],
 	to *vector.FunctionResult[types.Varlena], length int) error {
-	var i, l uint64 = 0, uint64(length)
+	var i uint64
+	l := uint64(length)
 	fromType := from.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -3238,6 +3282,7 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int32:
 			for _, x := range nxs {
 				if math.Round(float64(x)) > math.MaxInt32 {
+					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:

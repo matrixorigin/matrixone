@@ -131,7 +131,7 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeT](v *Vector) FunctionP
 	var containsNull = false
 	var nullMap *bitmap.Bitmap
 	cols := MustTCols[T](v)
-	if v.IsScalarNull() && (cols == nil || len(cols) == 0) {
+	if v.IsScalarNull() && len(cols) == 0 {
 		cols = make([]T, 1)
 	}
 	if v.Nsp != nil && v.Nsp.Np != nil && v.Nsp.Np.Len() > 0 {
@@ -153,7 +153,7 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameter[types.Varlena] {
 	var nullMap *bitmap.Bitmap
 	cols := MustTCols[types.Varlena](v)
 	area := v.area
-	if v.IsScalarNull() && (cols == nil || len(cols) == 0) {
+	if v.IsScalarNull() && len(cols) == 0 {
 		cols = make([]types.Varlena, 1)
 		area = make([]byte, 0)
 	}
