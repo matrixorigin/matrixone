@@ -131,3 +131,16 @@ create table t(a int, b int);
 insert into t values(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6);
 show table_values from t;
 drop table t;
+
+show node list;
+show locks;
+
+create role role1;
+grant all on table *.* to role1;
+grant create table, drop table on database *.* to role1;
+create user user1 identified by 'pass1';
+grant role1 to user1;
+show grants for 'user1'@'localhost';
+show grants for ROLE role1;
+drop user user1;
+drop role role1;

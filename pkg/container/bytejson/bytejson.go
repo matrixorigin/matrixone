@@ -18,15 +18,56 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"sort"
 	"strconv"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func (bj ByteJson) String() string {
 	ret, _ := bj.MarshalJSON()
 	return string(ret)
+}
+
+func (bj ByteJson) Unquote() (string, error) {
+	if bj.Type != TpCodeString {
+		return bj.String(), nil
+	}
+	str := bj.GetString()
+	if len(str) < 2 || (str[0] != '"' || str[len(str)-1] != '"') {
+		return string(str), nil
+	}
+	str = str[1 : len(str)-1]
+	var sb strings.Builder
+	for i := 0; i < len(str); i++ {
+		if str[i] != '\\' {
+			sb.WriteByte(str[i])
+			continue
+		}
+		i++
+		if trans, ok := escapedChars[str[i]]; ok {
+			sb.WriteByte(trans)
+			continue
+		}
+		if str[i] == 'u' { // transform unicode to utf8
+			if i+4 > len(str) {
+				return "", moerr.NewInvalidInputNoCtx("invalid unicode")
+			}
+			unicodeStr := string(str[i-1 : i+5])
+			content := strings.Replace(strconv.Quote(unicodeStr), `\\u`, `\u`, -1)
+			text, err := strconv.Unquote(content)
+			if err != nil {
+				return "", moerr.NewInvalidInputNoCtx("invalid unicode")
+			}
+			sb.WriteString(text)
+			i += 4
+			continue
+		}
+		sb.WriteByte(str[i])
+	}
+	return sb.String(), nil
 }
 
 // MarshalJSON transform bytejson to []byte,for visible
@@ -304,11 +345,6 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 		}
 		return cur
 	}
-
-	//if sub.tp == subPathIdx && bj.Type == TpCodeObject && sub.idx.tp == numberIndices && sub.idx.num == 0 {
-	//	cur = bj.query(cur, &nPath)
-	//	return cur
-	//} // TODO fix last and range
 
 	if bj.Type == TpCodeArray {
 		cnt := bj.GetElemCnt()

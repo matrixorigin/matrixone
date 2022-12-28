@@ -1,4 +1,4 @@
-create table table01(a TINYINT primary key, b SMALLINT SIGNED, c INT UNSIGNED,d BIGINT not null , e FLOAT unique,f DOUBLE, g CHAR(10), h VARCHAR(20));
+create table table01(a TINYINT primary key, b SMALLINT SIGNED, c INT UNSIGNED,d BIGINT not null , e FLOAT,f DOUBLE, g CHAR(10), h VARCHAR(20));
 create table table15 (a varchar(5) default 'abcde');
 create temporary table table05 ( a int, b char(10));
 create table table06 (a int primary key, b varchar(10));

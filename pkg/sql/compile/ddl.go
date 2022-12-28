@@ -60,6 +60,49 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	return c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
 }
 
+// Drop the old view, and create the new view.
+func (s *Scope) AlterView(c *Compile) error {
+	qry := s.Plan.GetDdl().GetAlterView()
+
+	dbName := c.db
+	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		if qry.GetIfExists() {
+			return nil
+		}
+		return err
+	}
+	tblName := qry.GetTableDef().GetName()
+	if _, err = dbSource.Relation(c.ctx, tblName); err != nil {
+		if qry.GetIfExists() {
+			return nil
+		}
+		return err
+	}
+
+	// Drop view table.
+	if err := dbSource.Delete(c.ctx, tblName); err != nil {
+		return err
+	}
+
+	// Create view table.
+	// convert the plan's cols to the execution's cols
+	planCols := qry.GetTableDef().GetCols()
+	exeCols := planColsToExeCols(planCols)
+
+	// convert the plan's defs to the execution's defs
+	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
+	if err != nil {
+		return err
+	}
+
+	// if _, err := dbSource.Relation(c.ctx, tblName); err == nil {
+	//  	 return moerr.NewTableAlreadyExists(c.ctx, tblName)
+	// }
+
+	return dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...))
+}
+
 func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
@@ -270,7 +313,8 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, t.UIdx.Fields[0].Parts, t.UIdx.Fields[0].Cols, c.proc)
+
+		indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, t.UIdx.Fields[0].Parts, t.UIdx.Fields[0].Parts, qry.OriginTablePrimaryKey, c.proc)
 		indexR, err := d.Relation(c.ctx, t.UIdx.TableNames[0])
 		if err != nil {
 			return err
