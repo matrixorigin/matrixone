@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -323,7 +322,6 @@ func updateAutoIncrTable(ctx context.Context, param *AutoIncrParam, curNum uint6
 	}
 	bat, _ := GetDeleteBatch(rel, param.ctx, name, mp)
 	if bat == nil {
-		os.Exit(0)
 		return moerr.NewInternalError(ctx, "the deleted batch is nil")
 	}
 	bat.SetZs(bat.GetVector(0).Length(), mp)
