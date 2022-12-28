@@ -602,8 +602,8 @@ func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) 
 	ddlType := plan.DataDefinition_SHOW_TARGET
 	if stmt.ShowGrantType == tree.GrantForRole {
 		role_name := stmt.Roles[0].UserName
-		sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\")  as `Grants for %s` from  mo_catalog.mo_role_privs as p where p.role_name = '%s';"
-		sql = fmt.Sprintf(sql, role_name, role_name, role_name)
+		sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\")  as `Grants for %s` from  %s.mo_role_privs as p where p.role_name = '%s';"
+		sql = fmt.Sprintf(sql, role_name, role_name, MO_CATALOG_DB_NAME, role_name)
 		return returnByRewriteSQL(ctx, sql, ddlType)
 	} else {
 		if stmt.Hostname == "" {
