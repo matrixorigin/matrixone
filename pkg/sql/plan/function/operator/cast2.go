@@ -246,6 +246,10 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 	},
 
+	types.T_json: {
+		types.T_char, types.T_varchar, types.T_text,
+	},
+
 	types.T_uuid: {
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 	},
@@ -343,6 +347,9 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_Rowid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Rowid](from)
 		err = rowidToOthers(proc.Ctx, &s, toType, result, length)
+	case types.T_json:
+		s := vector.GenerateFunctionStrParameter(from)
+		err = jsonToOthers(proc.Ctx, &s, toType, result, length)
 	default:
 		// XXX we set the function here to adapt to the BVT cases.
 		err = formatCastError(proc.Ctx, from, toType, "")
@@ -1314,6 +1321,17 @@ func rowidToOthers(ctx context.Context,
 		return nil
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from rowid to %s", toType))
+}
+
+func jsonToOthers(ctx context.Context,
+	source *vector.FunctionParameter[types.Varlena],
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	switch toType.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		rs := result.(*vector.FunctionResult[types.Varlena])
+		return jsonToStr(source, rs, length)
+	}
+	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from json to %s", toType))
 }
 
 // XXX do not use it to cast float to integer, please use floatToInteger
@@ -2937,6 +2955,30 @@ func uuidToStr(
 		} else {
 			result := v.ToString()
 			if err := to.AppendStr([]byte(result), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func jsonToStr(
+	from *vector.FunctionParameter[types.Varlena],
+	to *vector.FunctionResult[types.Varlena], length int) error {
+	var i uint64
+	for i = 0; i < uint64(length); i++ {
+		v, null := from.GetStrValue(i)
+		if null {
+			if err := to.AppendStr(nil, true); err != nil {
+				return err
+			}
+		} else {
+			bj := types.DecodeJson(v)
+			val, err := bj.MarshalJSON()
+			if err != nil {
+				return err
+			}
+			if err = to.AppendStr(val, false); err != nil {
 				return err
 			}
 		}
