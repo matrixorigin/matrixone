@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"go/constant"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1117,7 +1119,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	for _, selectExpr := range clause.Exprs {
 		switch expr := selectExpr.Expr.(type) {
 		case tree.UnqualifiedStar:
-			cols, names, err := ctx.unfoldStar(builder.GetContext(), "")
+			cols, names, err := ctx.unfoldStar(builder.GetContext(), "", builder.compCtx.GetAccountId() == catalog.System_Account)
 			if err != nil {
 				return 0, err
 			}
@@ -1126,7 +1128,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		case *tree.UnresolvedName:
 			if expr.Star {
-				cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.Parts[0])
+				cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.Parts[0], builder.compCtx.GetAccountId() == catalog.System_Account)
 				if err != nil {
 					return 0, err
 				}
@@ -1519,44 +1521,45 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 	if len(stmt) == 1 {
 		return builder.buildTable(stmt[0], ctx)
 	}
+	return 0, moerr.NewInternalError(ctx.binder.GetContext(), "stmt's length should be zero")
+	// for now, stmt'length always be zero. if someday that change in parser, you should uncomment these codes
+	// leftCtx := NewBindContext(builder, ctx)
+	// leftChildID, err := builder.buildTable(stmt[0], leftCtx)
+	// if err != nil {
+	// 	return 0, err
+	// }
 
-	leftCtx := NewBindContext(builder, ctx)
-	leftChildID, err := builder.buildTable(stmt[0], leftCtx)
-	if err != nil {
-		return 0, err
-	}
+	// for i := 1; i < len(stmt); i++ {
+	// 	rightCtx := NewBindContext(builder, ctx)
+	// 	rightChildID, err := builder.buildTable(stmt[i], rightCtx)
+	// 	if err != nil {
+	// 		return 0, err
+	// 	}
 
-	for i := 1; i < len(stmt); i++ {
-		rightCtx := NewBindContext(builder, ctx)
-		rightChildID, err := builder.buildTable(stmt[i], rightCtx)
-		if err != nil {
-			return 0, err
-		}
+	// 	leftChildID = builder.appendNode(&plan.Node{
+	// 		NodeType: plan.Node_JOIN,
+	// 		Children: []int32{leftChildID, rightChildID},
+	// 		JoinType: plan.Node_INNER,
+	// 	}, nil)
 
-		leftChildID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{leftChildID, rightChildID},
-			JoinType: plan.Node_INNER,
-		}, nil)
+	// 	if i == len(stmt)-1 {
+	// 		builder.ctxByNode[leftChildID] = ctx
+	// 		err = ctx.mergeContexts(leftCtx, rightCtx)
+	// 		if err != nil {
+	// 			return 0, err
+	// 		}
+	// 	} else {
+	// 		newCtx := NewBindContext(builder, ctx)
+	// 		builder.ctxByNode[leftChildID] = newCtx
+	// 		err = newCtx.mergeContexts(leftCtx, rightCtx)
+	// 		if err != nil {
+	// 			return 0, err
+	// 		}
+	// 		leftCtx = newCtx
+	// 	}
+	// }
 
-		if i == len(stmt)-1 {
-			builder.ctxByNode[leftChildID] = ctx
-			err = ctx.mergeContexts(leftCtx, rightCtx)
-			if err != nil {
-				return 0, err
-			}
-		} else {
-			newCtx := NewBindContext(builder, ctx)
-			builder.ctxByNode[leftChildID] = newCtx
-			err = newCtx.mergeContexts(leftCtx, rightCtx)
-			if err != nil {
-				return 0, err
-			}
-			leftCtx = newCtx
-		}
-	}
-
-	return leftChildID, err
+	// return leftChildID, err
 }
 
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (nodeID int32, err error) {
@@ -1740,6 +1743,35 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 		err = builder.addBinding(nodeID, tbl.As, ctx)
 
+		tableDef := builder.qry.Nodes[nodeID].GetTableDef()
+		//if it is the non-sys account and reads the cluster table,
+		//we add an account_id filter to make sure that the non-sys account
+		//can only read its own data.
+		if tableDef != nil &&
+			builder.compCtx.GetAccountId() != catalog.System_Account &&
+			util.TableIsClusterTable(tableDef.GetTableType()) {
+			var accountFilterExprs []*plan.Expr
+			ctx.binder = NewWhereBinder(builder, ctx)
+			left := &tree.UnresolvedName{
+				NumParts: 1,
+				Parts:    tree.NameParts{},
+			}
+			left.Parts[0] = "account_id"
+			right := tree.NewNumVal(constant.MakeUint64(uint64(builder.compCtx.GetAccountId())), "", false)
+			right.ValType = tree.P_uint64
+			//account_id = the accountId of the non-sys account
+			accountFilter := &tree.ComparisonExpr{
+				Op:    tree.EQUAL,
+				Left:  left,
+				Right: right,
+			}
+			accountFilterExprs, err = splitAndBindCondition(accountFilter, ctx)
+			if err != nil {
+				return 0, err
+			}
+			builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+		}
+
 		return
 
 	case *tree.StatementSource:
@@ -1805,7 +1837,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, cols, types)
+		binding = NewBinding(tag, nodeID, table, cols, types, util.TableIsClusterTable(node.TableDef.TableType))
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
@@ -1843,7 +1875,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, cols, types)
+		binding = NewBinding(tag, nodeID, table, cols, types, false)
 	}
 
 	ctx.bindings = append(ctx.bindings, binding)

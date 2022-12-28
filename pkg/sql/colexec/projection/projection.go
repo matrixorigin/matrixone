@@ -56,7 +56,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	rbat := batch.NewWithSize(len(ap.Es))
 	for i, e := range ap.Es {
 		vec, err := colexec.EvalExpr(bat, proc, e)
-		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
+		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
 			bat.Clean(proc.Mp())
 			rbat.Clean(proc.Mp())
 			return false, err

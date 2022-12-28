@@ -216,3 +216,13 @@ a	col	seq	key	path	index	value	this
 select * from t2,unnest(substring(t2.a,1,7)) u;
 a	col	seq	key	path	index	value	this
 {"a":1}.	substring(t2.a, 1, 7)	0	a	$.a	null	1	{"a": 1}
+create view v3 as (select * from unnest(substring('{"a":1}...',1,7), '$') u);
+desc v3;
+Field    Type    Null    Key    Default    Extra    Comment
+col    VARCHAR(65535)    YES        NULL
+index    INT    YES        NULL
+key    VARCHAR(65535)    YES        NULL
+path    VARCHAR(65535)    YES        NULL
+seq    INT    YES        NULL
+this    JSON    YES        NULL
+value    JSON    YES        NULL

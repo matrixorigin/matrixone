@@ -53,28 +53,31 @@ func (db *TxnDatabase) Relations() (rels []handle.Relation)                     
 func (db *TxnDatabase) MakeRelationIt() (it handle.RelationIt)                          { return }
 func (db *TxnDatabase) GetMeta() any                                                    { return nil }
 
-func (rel *TxnRelation) SimplePPString(_ common.PPLevel) string                      { return "" }
-func (rel *TxnRelation) String() string                                              { return "" }
-func (rel *TxnRelation) Close() error                                                { return nil }
-func (rel *TxnRelation) ID() uint64                                                  { return 0 }
-func (rel *TxnRelation) Rows() int64                                                 { return 0 }
-func (rel *TxnRelation) Size(attr string) int64                                      { return 0 }
-func (rel *TxnRelation) GetCardinality(attr string) int64                            { return 0 }
-func (rel *TxnRelation) Schema() any                                                 { return nil }
-func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt                             { return nil }
-func (rel *TxnRelation) MakeBlockIt() handle.BlockIt                                 { return nil }
-func (rel *TxnRelation) BatchDedup(col containers.Vector) error                      { return nil }
-func (rel *TxnRelation) Append(data *containers.Batch) error                         { return nil }
-func (rel *TxnRelation) GetMeta() any                                                { return nil }
-func (rel *TxnRelation) GetSegment(id uint64) (seg handle.Segment, err error)        { return }
-func (rel *TxnRelation) SoftDeleteSegment(id uint64) (err error)                     { return }
-func (rel *TxnRelation) CreateSegment(bool) (seg handle.Segment, err error)          { return }
-func (rel *TxnRelation) CreateNonAppendableSegment() (seg handle.Segment, err error) { return }
-func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, err error)      { return }
-func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, err error)            { return }
-func (rel *TxnRelation) Update(*common.ID, uint32, uint16, any) (err error)          { return }
-func (rel *TxnRelation) DeleteByPhyAddrKey(any) (err error)                          { return }
-func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector) (err error)           { return }
+func (rel *TxnRelation) SimplePPString(_ common.PPLevel) string { return "" }
+func (rel *TxnRelation) String() string                         { return "" }
+func (rel *TxnRelation) Close() error                           { return nil }
+func (rel *TxnRelation) ID() uint64                             { return 0 }
+func (rel *TxnRelation) Rows() int64                            { return 0 }
+func (rel *TxnRelation) Size(attr string) int64                 { return 0 }
+func (rel *TxnRelation) GetCardinality(attr string) int64       { return 0 }
+func (rel *TxnRelation) Schema() any                            { return nil }
+func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt        { return nil }
+func (rel *TxnRelation) MakeBlockIt() handle.BlockIt            { return nil }
+func (rel *TxnRelation) BatchDedup(col containers.Vector) error { return nil }
+func (rel *TxnRelation) Append(data *containers.Batch) error    { return nil }
+func (rel *TxnRelation) AddBlksWithMetaLoc([]containers.Vector, string, []string, int32) error {
+	return nil
+}
+func (rel *TxnRelation) GetMeta() any                                                    { return nil }
+func (rel *TxnRelation) GetSegment(id uint64) (seg handle.Segment, err error)            { return }
+func (rel *TxnRelation) SoftDeleteSegment(id uint64) (err error)                         { return }
+func (rel *TxnRelation) CreateSegment(bool) (seg handle.Segment, err error)              { return }
+func (rel *TxnRelation) CreateNonAppendableSegment(bool) (seg handle.Segment, err error) { return }
+func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, err error)          { return }
+func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, err error)                { return }
+func (rel *TxnRelation) Update(*common.ID, uint32, uint16, any) (err error)              { return }
+func (rel *TxnRelation) DeleteByPhyAddrKey(any) (err error)                              { return }
+func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector) (err error)               { return }
 func (rel *TxnRelation) RangeDelete(*common.ID, uint32, uint32, handle.DeleteType) (err error) {
 	return
 }

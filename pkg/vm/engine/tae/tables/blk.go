@@ -113,6 +113,9 @@ func (blk *block) GetColumnDataByIds(
 		false)
 }
 
+// GetColumnDataById Get the snapshot at txn's start timestamp of column data.
+// Notice that for non-appendable block, if it is visible to txn,
+// then all the block data pointed by meta location also be visible to txn;
 func (blk *block) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	colIdx int,
@@ -139,6 +142,7 @@ func (blk *block) BatchDedup(
 	}()
 	ts := txn.GetStartTS()
 	if precommit {
+		//ts is assigned to maximum value of TS.
 		ts = txn.GetPrepareTS()
 	}
 	node := blk.PinNode()
