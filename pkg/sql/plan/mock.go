@@ -76,6 +76,14 @@ type col struct {
 	Precision int32
 }
 
+type index struct {
+	indexName  string
+	tableName  string
+	parts      []string
+	cols       []col
+	tableExist bool
+}
+
 // NewEmptyCompilerContext for test create/drop statement
 func NewEmptyCompilerContext() *MockCompilerContext {
 	return &MockCompilerContext{
@@ -88,6 +96,7 @@ func NewEmptyCompilerContext() *MockCompilerContext {
 type Schema struct {
 	cols   []col
 	pks    []int
+	idxs   []index
 	outcnt float64
 }
 
@@ -96,10 +105,12 @@ const SF float64 = 1
 func NewMockCompilerContext() *MockCompilerContext {
 	tpchSchema := make(map[string]*Schema)
 	moSchema := make(map[string]*Schema)
+	indexTestSchema := make(map[string]*Schema)
 
 	schemas := map[string]map[string]*Schema{
 		"tpch":       tpchSchema,
 		"mo_catalog": moSchema,
+		"index_test": indexTestSchema,
 	}
 
 	tpchSchema["nation"] = &Schema{
@@ -282,6 +293,158 @@ func NewMockCompilerContext() *MockCompilerContext {
 		},
 	}
 
+	//---------------------------------------------index test schema---------------------------------------------------------
+
+	//+----------+--------------+------+------+---------+-------+--------------------------------+
+	//| Field    | Type         | Null | Key  | Default | Extra | Comment                        |
+	//+----------+--------------+------+------+---------+-------+--------------------------------+
+	//| empno    | INT UNSIGNED | YES  | UNI  | NULL    |       |                                |
+	//| ename    | VARCHAR(15)  | YES  | UNI  | NULL    |       |                                |
+	//| job      | VARCHAR(10)  | YES  |      | NULL    |       |                                |
+	//| mgr      | INT UNSIGNED | YES  |      | NULL    |       |                                |
+	//| hiredate | DATE         | YES  |      | NULL    |       |                                |
+	//| sal      | DECIMAL(7,2) | YES  |      | NULL    |       |                                |
+	//| comm     | DECIMAL(7,2) | YES  |      | NULL    |       |                                |
+	//| deptno   | INT UNSIGNED | YES  |      | NULL    |       |                                |
+	//+----------+--------------+------+------+---------+-------+--------------------------------+
+
+	indexTestSchema["emp"] = &Schema{
+		cols: []col{
+			{"empno", types.T_uint32, true, 32, 0},
+			{"ename", types.T_varchar, true, 15, 0},
+			{"job", types.T_varchar, true, 10, 0},
+			{"mgr", types.T_uint32, true, 32, 0},
+			{"hiredate", types.T_date, true, 0, 0},
+			{"sal", types.T_decimal64, true, 7, 0},
+			{"comm", types.T_decimal64, true, 7, 0},
+			{"deptno", types.T_uint32, true, 32, 0},
+			{"__mo_rowid", types.T_Rowid, true, 0, 0},
+		},
+		idxs: []index{
+			{
+				indexName: "",
+				tableName: "__mo_index_unique__412f4fad-77ba-11ed-b347-000c29847904",
+				parts:     []string{"empno"},
+				cols: []col{
+					{"__mo_index_idx_col", types.T_uint32, true, 0, 0},
+				},
+				tableExist: true,
+			},
+			{
+				indexName: "",
+				tableName: "__mo_index_unique__412f5063-77ba-11ed-b347-000c29847904",
+				parts:     []string{"ename"},
+				cols: []col{
+					{"__mo_index_idx_col", types.T_varchar, true, 0, 0},
+				},
+				tableExist: true,
+			},
+		},
+		outcnt: 14,
+	}
+
+	indexTestSchema["__mo_index_unique__412f4fad-77ba-11ed-b347-000c29847904"] = &Schema{
+		cols: []col{
+			{"__mo_index_idx_col", types.T_uint32, true, 32, 0},
+			{"__mo_rowid", types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 13,
+	}
+
+	indexTestSchema["__mo_index_unique__412f5063-77ba-11ed-b347-000c29847904"] = &Schema{
+		cols: []col{
+			{"__mo_index_idx_col", types.T_varchar, true, 15, 0},
+			{"__mo_rowid", types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 13,
+	}
+
+	//+--------+--------------+------+------+---------+-------+--------------------+
+	//| Field  | Type         | Null | Key  | Default | Extra | Comment            |
+	//+--------+--------------+------+------+---------+-------+--------------------+
+	//| deptno | INT UNSIGNED | YES  | UNI  | NULL    |       |                    |
+	//| dname  | VARCHAR(15)  | YES  |      | NULL    |       |                    |
+	//| loc    | VARCHAR(50)  | YES  |      | NULL    |       |                    |
+	//+--------+--------------+------+------+---------+-------+--------------------+
+	indexTestSchema["dept"] = &Schema{
+		cols: []col{
+			{"deptno", types.T_uint32, true, 32, 0},
+			{"dname", types.T_varchar, true, 15, 0},
+			{"loc", types.T_varchar, true, 50, 0},
+			{"__mo_rowid", types.T_Rowid, true, 0, 0},
+		},
+		idxs: []index{
+			{
+				indexName: "",
+				tableName: "__mo_index_unique__8e3246dd-7a19-11ed-ba7d-000c29847904",
+				parts:     []string{"deptno"},
+				cols: []col{
+					{"__mo_index_idx_col", types.T_uint32, true, 0, 0},
+				},
+				tableExist: true,
+			},
+		},
+		outcnt: 4,
+	}
+
+	indexTestSchema["__mo_index_unique__8e3246dd-7a19-11ed-ba7d-000c29847904"] = &Schema{
+		cols: []col{
+			{"__mo_index_idx_col", types.T_uint32, true, 0, 0},
+			{"__mo_rowid", types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	//+----------+--------------+------+-----+---------+-------+
+	//| Field    | Type         | Null | Key | Default | Extra |
+	//+----------+--------------+------+-----+---------+-------+
+	//| empno    | int unsigned | YES  | MUL | NULL    |       |
+	//| ename    | varchar(15)  | YES  |     | NULL    |       |
+	//| job      | varchar(10)  | YES  |     | NULL    |       |
+	//| mgr      | int unsigned | YES  |     | NULL    |       |
+	//| hiredate | date         | YES  |     | NULL    |       |
+	//| sal      | decimal(7,2) | YES  |     | NULL    |       |
+	//| comm     | decimal(7,2) | YES  |     | NULL    |       |
+	//| deptno   | int unsigned | YES  |     | NULL    |       |
+	//+----------+--------------+------+-----+---------+-------+
+	indexTestSchema["employees"] = &Schema{
+		cols: []col{
+			{"empno", types.T_uint32, true, 32, 0},
+			{"ename", types.T_varchar, true, 15, 0},
+			{"job", types.T_varchar, true, 10, 0},
+			{"mgr", types.T_uint32, true, 32, 0},
+			{"hiredate", types.T_date, true, 0, 0},
+			{"sal", types.T_decimal64, true, 7, 0},
+			{"comm", types.T_decimal64, true, 7, 0},
+			{"deptno", types.T_uint32, true, 32, 0},
+			{"__mo_rowid", types.T_Rowid, true, 0, 0},
+		},
+		idxs: []index{
+			{
+				indexName: "",
+				tableName: "__mo_index_unique__6380d30e-79f8-11ed-9c02-000c29847904",
+				parts:     []string{"empno", "ename"},
+				cols: []col{
+					{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
+				},
+				tableExist: true,
+			},
+		},
+		outcnt: 14,
+	}
+
+	indexTestSchema["__mo_index_unique__6380d30e-79f8-11ed-9c02-000c29847904"] = &Schema{
+		cols: []col{
+			{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
+			{"__mo_rowid", types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 12,
+	}
+
 	objects := make(map[string]*ObjectRef)
 	tables := make(map[string]*TableDef)
 	stats := make(map[string]*Stats)
@@ -323,6 +486,51 @@ func NewMockCompilerContext() *MockCompilerContext {
 				TblId:     uint64(tableIdx),
 				Name:      tableName,
 				Cols:      colDefs,
+			}
+
+			if table.idxs != nil {
+				unidef := &plan.UniqueIndexDef{
+					IndexNames:  make([]string, 0),
+					TableNames:  make([]string, 0),
+					Fields:      make([]*plan.Field, 0),
+					TableExists: make([]bool, 0),
+				}
+
+				for _, idx := range table.idxs {
+					field := &plan.Field{
+						Parts: idx.parts,
+						Cols:  make([]*ColDef, 0),
+					}
+
+					for _, col := range idx.cols {
+						field.Cols = append(field.Cols, &ColDef{
+							Alg: plan.CompressType_Lz4,
+							Typ: &plan.Type{
+								Id:          int32(col.Id),
+								NotNullable: !col.Nullable,
+								Width:       col.Width,
+								Precision:   col.Precision,
+							},
+							Name:  col.Name,
+							Pkidx: 1,
+							Default: &plan.Default{
+								NullAbility:  false,
+								Expr:         nil,
+								OriginString: "",
+							},
+						})
+					}
+					unidef.IndexNames = append(unidef.IndexNames, idx.indexName)
+					unidef.TableNames = append(unidef.TableNames, idx.tableName)
+					unidef.Fields = append(unidef.Fields, field)
+					unidef.TableExists = append(unidef.TableExists, true)
+				}
+
+				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+					Def: &plan.TableDef_DefType_UIdx{
+						UIdx: unidef,
+					},
+				})
 			}
 
 			if tableName != "v1" {
@@ -384,6 +592,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 					},
 				})
 			}
+
 			tables[tableName] = tableDef
 			tableIdx++
 
@@ -437,7 +646,7 @@ func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) 
 }
 
 func (m *MockCompilerContext) GetHideKeyDef(dbName string, tableName string) *ColDef {
-	return m.tables[tableName].Cols[0]
+	return m.tables[tableName].Cols[len(m.tables[tableName].Cols)-1]
 }
 
 func (m *MockCompilerContext) Stats(obj *ObjectRef, e *Expr) *Stats {
