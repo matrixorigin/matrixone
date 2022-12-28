@@ -157,6 +157,7 @@ func (db *DB) Close() error {
 	db.TxnMgr.Stop()
 	db.Wal.Close()
 	db.Opts.Catalog.Close()
+	db.DiskCleaner.Stop()
 	db.TransferTable.Close()
 	return db.DBLocker.Close()
 }
