@@ -42,7 +42,9 @@ func TestSingleSQL(t *testing.T) {
 	// 	t.Fatalf("%+v", err)
 	// }
 	// t.Logf("%+v", string(getJSON(stmts[0], t)))
-	sql := "SELECT UNIX_TIMESTAMP('2000-01-01 12:00:00.159')"
+	// sql := "SELECT UNIX_TIMESTAMP('2000-01-01 12:00:00.159')"
+	sql := "select * from (values row(1,1), row(2,2), row(3,3)) a(c1,c2);"
+	// sql := "select -1"
 
 	mock := NewMockOptimizer()
 	logicPlan, err := runOneStmt(mock, t, sql)
@@ -463,6 +465,9 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"select max(n_nationkey) over  (partition by N_REGIONKEY) from nation",
 		"select * from generate_series(1, 5) g",
 		"select * from nation where n_name like ? or n_nationkey > 10 order by 2 limit '10'",
+
+		"values row(1,1), row(2,2), row(3,3) order by column_0 limit 2",
+		"select * from (values row(1,1), row(2,2), row(3,3)) a (c1, c2)",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -482,7 +487,6 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_REGIONKEY", //test distinct with order by
 		//"select 18446744073709551500",                             //over int64
 		//"select 0xffffffffffffffff",                               //over int64
-		"values row(1, 2)",
 	}
 	runTestShouldError(mock, t, sqls)
 }
