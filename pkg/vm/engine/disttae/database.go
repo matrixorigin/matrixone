@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strconv"
 	"strings"
 
@@ -57,6 +58,9 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	}
 	tbl, defs, err := db.txn.getTableInfo(ctx, db.databaseId, name)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
+		}
 		return nil, err
 	}
 	tbl.defs = defs
