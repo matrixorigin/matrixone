@@ -1213,11 +1213,17 @@ func (c *Compile) NumCPU() int {
 	return runtime.NumCPU()
 }
 
-func (c *Compile) generateCPUNumber(num, blocks int) int {
-	if blocks < num && blocks > 0 {
+func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
+	if blocks < cpunum {
+		if blocks == 0 {
+			return 1
+		}
 		return blocks
 	}
-	return num
+	if cpunum == 0 {
+		return 1
+	}
+	return cpunum
 }
 
 func (c *Compile) initAnalyze(qry *plan.Query) {
