@@ -728,6 +728,9 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_json {
 		return CastStringToJson(lv, rv, proc)
 	}
+	if lv.Typ.Oid == types.T_json && isString(rv.Typ.Oid) {
+		return CastJsonToString(lv, rv, proc)
+	}
 
 	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_uuid {
 		return CastStringToUuid(lv, rv, proc)
@@ -2528,6 +2531,37 @@ func CastStringToJson(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 			return nil, err
 		}
 		val, err := types.EncodeJson(json)
+		if err != nil {
+			return nil, err
+		}
+		col[i] = val
+	}
+	return vector.NewWithBytes(rv.Typ, col, lv.Nsp, proc.Mp()), nil
+}
+
+func CastJsonToString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	vs := vector.MustBytesCols(lv)
+	if lv.IsScalar() {
+		if lv.IsScalarNull() {
+			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
+		}
+
+		bj := types.DecodeJson(vs[0])
+		val, err := bj.MarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		return vector.NewConstBytes(rv.Typ, lv.Length(), val, proc.Mp()), nil
+	}
+
+	col := make([][]byte, len(vs))
+	for i, v := range vs {
+		if nulls.Contains(lv.Nsp, uint64(i)) {
+			continue
+		}
+
+		bj := types.DecodeJson(v)
+		val, err := bj.MarshalJSON()
 		if err != nil {
 			return nil, err
 		}
