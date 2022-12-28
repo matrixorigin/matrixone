@@ -48,3 +48,14 @@ Table    Create Table
 test02    CREATE TABLE `test02` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL\n) CLUSTER BY `b`
 drop table test01;
 drop table test02;
+drop table if exists t1;
+create table t1(a int, b int, unique key(a), unique key(a, b));
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY`a`(`a`),\nUNIQUE KEY`a_2`(`a`,`b`)\n)
+drop table if exists t1;
+create table t1(a int unique, b int unique key, unique key(a));
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY`a`(`a`),\nUNIQUE KEY`b`(`b`),\nUNIQUE KEY`a_2`(`a`)\n)
+drop table t1;
