@@ -450,19 +450,11 @@ message Stats {
 }
 
 message ColData {
-	int32 row_count			= 1;
-	int32 null_count		= 2;
-	repeated bool nulls = 3;
-	repeated int32 i32	= 4;
-	repeated int64 i64	= 5;
-	repeated float f32	= 6;
-	repeated double f64	= 7;
-	repeated string s	= 8;
+	repeated Expr data = 1;
 }
 
 message RowsetData {
-	TableDef schema	= 1;
-	repeated ColData cols		= 2;
+	repeated ColData cols	= 1;
 }
 
 message OrderBySpec {
@@ -807,6 +799,7 @@ message DataDefinition {
 		DropIndex drop_index 			= 11;
 		TruncateTable truncate_table	= 12;
 		ShowVariables show_variables 	= 13;
+		AlterView alter_view			= 14;
 	}
 }
 
@@ -844,6 +837,15 @@ message CreateTable {
 message AlterTable {
 	string table 		= 1;
 	TableDef table_def 	= 2;
+}
+
+message AlterView {
+	bool if_exists		= 1;
+	string database 	= 2;
+	bool temporary		= 3;
+	string table		= 4;
+	TableDef table_def	= 5;
+	repeated TableDef index_tables = 6;
 }
 
 message DropTable {

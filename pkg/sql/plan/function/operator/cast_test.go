@@ -4961,6 +4961,57 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 
 }
 
+func TestCastJsonToString(t *testing.T) {
+	procs := testutil.NewProc()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantValues interface{}
+		wantScalar bool
+	}{
+		{
+			name:       "Test01",
+			vecs:       makeJsonVectors(`"1"`, true, types.T_varchar),
+			proc:       procs,
+			wantValues: []string{`"1"`},
+			wantScalar: true,
+		},
+		{
+			name:       "Test02",
+			vecs:       makeJsonVectors(`{"a": "b"}`, false, types.T_varchar),
+			proc:       procs,
+			wantValues: []string{`{"a": "b"}`},
+			wantScalar: false,
+		},
+		{
+			name:       "Test03",
+			vecs:       makeJsonVectors(`1`, true, types.T_varchar),
+			proc:       procs,
+			wantValues: []string{`1`},
+			wantScalar: true,
+		},
+		{
+			name:       "Test04",
+			vecs:       makeJsonVectors(`null`, false, types.T_varchar),
+			proc:       procs,
+			wantValues: []string{`null`},
+			wantScalar: false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			castRes, err := Cast(c.vecs, c.proc)
+			require.NoError(t, err)
+			got := vector.MustStrCols(castRes)
+			require.Equal(t, c.wantValues, got)
+			require.Equal(t, types.T_varchar, castRes.Typ.Oid)
+			require.Equal(t, c.wantScalar, castRes.IsScalar())
+		})
+	}
+}
+
 func makeTypeVector(t types.T) *vector.Vector {
 	return vector.New(t.ToType())
 }
@@ -5106,5 +5157,14 @@ func makeStringVector(src string, t types.T, isConst bool) *vector.Vector {
 		return vector.NewConstString(t.ToType(), 1, src, testutil.TestUtilMp)
 	} else {
 		return vector.NewWithStrings(t.ToType(), []string{src}, nil, testutil.TestUtilMp)
+	}
+}
+func makeJsonVectors(src string, isConst bool, t types.T) []*vector.Vector {
+	dt, _ := types.ParseStringToByteJson(src)
+	r, _ := dt.Marshal()
+	if isConst {
+		return []*vector.Vector{vector.NewConstBytes(types.T_json.ToType(), 1, r, testutil.TestUtilMp), makeTypeVector(t)}
+	} else {
+		return []*vector.Vector{vector.NewWithBytes(types.T_json.ToType(), [][]byte{r}, nil, testutil.TestUtilMp), makeTypeVector(t)}
 	}
 }
