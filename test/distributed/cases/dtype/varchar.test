@@ -185,3 +185,7 @@ drop table t1;
 create table t1 (a varchar(10) primary key, b varchar(32));
 insert into t1 values ('abc','apple'), ('ab','apple');
 select * from t1;
+drop table t1;
+create table t1 (a varchar(10));
+insert into t1 values("");
+select * from t1 where a=1;
