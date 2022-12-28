@@ -311,7 +311,6 @@ func buildUpdateProject(updateTableList *UpdateTableList, tbinfo *tableInfo, ctx
 		offset += int32(len(orderAttrs)) + 1
 		uDef, _ := buildIndexDefs(updateTableinfo.tblDef.Defs)
 		if uDef != nil {
-			//idxUpdateCtxs, idxTableDefs, exprs, err := buildIndexTableUpdateCtx(updateTableinfo, uDef, &offset, ctx)
 			idxUpdateCtxs, idxTableDefs, exprs, err := buildIndexTableUpdateCtx(updateTableinfo, uDef, &offset, ctx)
 			if err != nil {
 				return nil, nil, nil, err
@@ -391,7 +390,6 @@ func checkIndexTableNeedUpdate(field *plan.Field, updateTabInfo *updateTableInfo
 		names = util.SplitCompositePrimaryKeyColumnName(updateTabInfo.tblDef.CompositePkey.Name)
 	}
 
-	//func checkIndexTableNeedUpdate(field *plan.Field, updateCols []updateCol) bool {
 	for _, updateCol := range updateTabInfo.updateCols {
 		for _, part := range field.Parts {
 			if strings.EqualFold(updateCol.colDef.Name, part) || updateCol.colDef.Primary {
