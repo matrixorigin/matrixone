@@ -2396,6 +2396,10 @@ func decimal64ToDecimal128(
 	var i, l uint64 = 0, uint64(length)
 	var dft types.Decimal128
 	totype := to.GetType()
+	{
+		v := to.GetResultVector()
+		v.Typ.Scale = from.GetType().Scale
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
