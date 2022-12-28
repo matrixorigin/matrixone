@@ -1791,8 +1791,18 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					return 0, err
 				}
 				viewStmt, ok := originStmts[0].(*tree.CreateView)
+
+				// No createview stmt, check alterview stmt.
 				if !ok {
-					return 0, moerr.NewParseError(builder.GetContext(), "can not get view statement")
+					alterstmt, ok := originStmts[0].(*tree.AlterView)
+					viewStmt = &tree.CreateView{}
+					if !ok {
+						return 0, moerr.NewParseError(builder.GetContext(), "can not get view statement")
+					}
+					viewStmt.Name = alterstmt.Name
+					viewStmt.ColNames = alterstmt.ColNames
+					viewStmt.AsSource = alterstmt.AsSource
+					viewStmt.Temporary = alterstmt.Temporary
 				}
 
 				viewName := viewStmt.Name.ObjectName
