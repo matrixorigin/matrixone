@@ -1215,12 +1215,12 @@ func (c *Compile) NumCPU() int {
 
 func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 	if blocks < cpunum {
-		if blocks == 0 {
+		if blocks <= 0 {
 			return 1
 		}
 		return blocks
 	}
-	if cpunum == 0 {
+	if cpunum <= 0 {
 		return 1
 	}
 	return cpunum
