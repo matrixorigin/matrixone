@@ -3331,8 +3331,6 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeDropAccount)
 	case *tree.AlterAccount:
 		typs = append(typs, PrivilegeTypeAlterAccount)
-	case *tree.AlterView:
-		typs = append(typs, PrivilegeTypeAlterView)
 	case *tree.CreateUser:
 		if st.Role == nil {
 			typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
@@ -3424,6 +3422,13 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.CreateView:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		if st.Name != nil {
+			dbName = string(st.Name.SchemaName)
+		}
+	case *tree.AlterView:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeAlterView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
