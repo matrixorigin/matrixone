@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -120,6 +121,17 @@ func consumeEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 				}
 			}
 			return db.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat, false)
+		}
+		switch e.TableId {
+		case catalog.MO_TABLES_ID:
+			bat, _ := batch.ProtoBatchToBatch(e.Bat)
+			tbl.db.txn.catalog.InsertTable(bat)
+		case catalog.MO_DATABASE_ID:
+			bat, _ := batch.ProtoBatchToBatch(e.Bat)
+			tbl.db.txn.catalog.InsertDatabase(bat)
+		case catalog.MO_COLUMNS_ID:
+			bat, _ := batch.ProtoBatchToBatch(e.Bat)
+			tbl.db.txn.catalog.InsertColumns(bat)
 		}
 		if primaryIdx >= 0 {
 			return mvcc.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat, false)

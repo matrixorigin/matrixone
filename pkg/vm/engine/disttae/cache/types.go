@@ -76,16 +76,16 @@ type DatabaseItem struct {
 
 type TableItem struct {
 	// table key
-	AccountId  uint32
 	DatabaseId uint64
 	Name       string
 	Ts         timestamp.Timestamp
 
 	// table value
-	Id       uint64
-	TableDef *plan.TableDef
-	Defs     []engine.TableDef
-	Rowid    types.Rowid
+	Id        uint64
+	AccountId uint32
+	TableDef  *plan.TableDef
+	Defs      []engine.TableDef
+	Rowid     types.Rowid
 
 	// table def
 	Kind       string
@@ -97,6 +97,8 @@ type TableItem struct {
 
 	// primary index
 	PrimaryIdx int
+	// clusterBy key
+	ClusterByIdx int
 
 	// Mark if it is a delete
 	deleted bool
@@ -123,6 +125,7 @@ type column struct {
 	isAutoIncrement int8
 	hasUpdate       int8
 	updateExpr      []byte
+	isClusterBy     int8
 }
 
 type columns []column
@@ -135,21 +138,30 @@ func databaseItemLess(a, b *DatabaseItem) bool {
 	if a.AccountId < b.AccountId {
 		return true
 	}
+	if a.AccountId > b.AccountId {
+		return false
+	}
 	if a.Name < b.Name {
 		return true
+	}
+	if a.Name > b.Name {
+		return false
 	}
 	return a.Ts.Greater(b.Ts)
 }
 
 func tableItemLess(a, b *TableItem) bool {
-	if a.AccountId < b.AccountId {
-		return true
-	}
 	if a.DatabaseId < b.DatabaseId {
 		return true
 	}
+	if a.DatabaseId > b.DatabaseId {
+		return false
+	}
 	if a.Name < b.Name {
 		return true
+	}
+	if a.Name > b.Name {
+		return false
 	}
 	return a.Ts.Greater(b.Ts)
 }

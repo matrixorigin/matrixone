@@ -37,6 +37,7 @@ type Node struct {
 	Id   string   `json:"id"`
 	Addr string   `json:"address"`
 	Data [][]byte `json:"payload"`
+	Rel  Relation // local relation
 }
 
 // Attribute is a column

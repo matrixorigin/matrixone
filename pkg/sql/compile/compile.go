@@ -1262,6 +1262,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
 			nodes[i] = engine.Node{
+				Rel:  rel,
 				Id:   node.Id,
 				Addr: node.Addr,
 				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.Cost)),
@@ -1271,9 +1272,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	}
 	if len(ranges[0]) == 0 {
 		if c.info.Typ == plan2.ExecTypeTP {
-			nodes = append(nodes, engine.Node{Mcpu: 1})
+			nodes = append(nodes, engine.Node{
+				Rel:  rel,
+				Mcpu: 1,
+			})
 		} else {
 			nodes = append(nodes, engine.Node{
+				Rel:  rel,
 				Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.Cost)),
 			})
 		}
@@ -1287,6 +1292,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		j := i / step
 		if i+step >= len(ranges) {
 			nodes = append(nodes, engine.Node{
+				Rel:  rel,
 				Id:   c.cnList[j].Id,
 				Addr: c.cnList[j].Addr,
 				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.Cost)),
@@ -1294,6 +1300,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			})
 		} else {
 			nodes = append(nodes, engine.Node{
+				Rel:  rel,
 				Id:   c.cnList[j].Id,
 				Addr: c.cnList[j].Addr,
 				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.Cost)),
