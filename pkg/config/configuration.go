@@ -177,9 +177,6 @@ type FrontendParameters struct {
 	//process.Limitation.PartitionRows. default: 10 << 32 = 42949672960
 	ProcessLimitationPartitionRows int64 `toml:"processLimitationPartitionRows"`
 
-	//record the time elapsed of executing sql request
-	DisableRecordTimeElapsedOfSqlRequest bool `toml:"DisableRecordTimeElapsedOfSqlRequest"`
-
 	//the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID
 	StorePath string `toml:"storePath"`
 

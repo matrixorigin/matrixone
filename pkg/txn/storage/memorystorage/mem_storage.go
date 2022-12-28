@@ -22,12 +22,11 @@ import (
 
 func NewMemoryStorage(
 	mheap *mpool.MPool,
-	defaultIsolationPolicy IsolationPolicy,
 	clock clock.Clock,
 	idGenerator memoryengine.IDGenerator,
 ) (*Storage, error) {
 
-	memHandler := NewMemHandler(mheap, defaultIsolationPolicy, clock, idGenerator)
+	memHandler := NewMemHandler(mheap, clock, idGenerator)
 	catalogHandler, err := NewCatalogHandler(memHandler)
 	if err != nil {
 		return nil, err

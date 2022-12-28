@@ -66,17 +66,15 @@ var (
 		{
 			Name: "value",
 			Typ: &plan.Type{
-				Id:          int32(types.T_varchar),
+				Id:          int32(types.T_json),
 				NotNullable: false,
-				Width:       types.MaxVarcharLen,
 			},
 		},
 		{
 			Name: "this",
 			Typ: &plan.Type{
-				Id:          int32(types.T_varchar),
+				Id:          int32(types.T_json),
 				NotNullable: false,
-				Width:       types.MaxVarcharLen,
 			},
 		},
 	}
@@ -113,7 +111,7 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 	colName := findColName(tbl.Func)
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
-		Cost:     &plan.Cost{},
+		Stats:    &plan.Stats{},
 		TableDef: &plan.TableDef{
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),

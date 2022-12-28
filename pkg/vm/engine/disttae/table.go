@@ -16,9 +16,10 @@ package disttae
 
 import (
 	"context"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"math/rand"
-	"strconv"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,32 +31,103 @@ import (
 
 var _ engine.Relation = new(table)
 
-func (tbl *table) FilteredRows(ctx context.Context, expr *plan.Expr) (float64, error) {
+func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, int64, error) {
 	switch tbl.tableId {
-	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
-		return float64(100), nil
+	case catalog.MO_DATABASE_ID:
+		return 1, 1000, nil
+	case catalog.MO_TABLES_ID:
+		return 10, 10000, nil
+	case catalog.MO_COLUMNS_ID:
+		return 10, 10000, nil
 	}
 
 	if expr == nil {
-		r, err := tbl.Rows(ctx)
-		return float64(r), err
+		return tbl.Stats(ctx)
 	}
-	var card float64
+	var blockNum, totalBlockCnt int
+	var outcnt int64
+
+	exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
+	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
+
 	for _, blockmetas := range tbl.meta.blocks {
+		totalBlockCnt += len(blockmetas)
 		for _, blk := range blockmetas {
-			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
-				card += float64(blockRows(blk))
+			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
+				outcnt += blockRows(blk)
+				blockNum++
 			}
 		}
 	}
-	return card, nil
+	// before first execution, no metadata.
+	if totalBlockCnt == 0 {
+		return 100, 1000000, nil
+	}
+	return int32(blockNum), outcnt, nil
+}
+
+func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
+	var rows int64
+	var totalBlockCnt int
+	for _, blks := range tbl.meta.blocks {
+		totalBlockCnt += len(blks)
+		for _, blk := range blks {
+			rows += blockRows(blk)
+		}
+	}
+	// before first execution, no metadata.
+	if totalBlockCnt == 0 {
+		return 100, 1000000, nil
+	}
+	return int32(totalBlockCnt), rows, nil
 }
 
 func (tbl *table) Rows(ctx context.Context) (int64, error) {
 	var rows int64
+	writes := make([]Entry, 0, len(tbl.db.txn.writes))
+	tbl.db.txn.Lock()
+	for i := range tbl.db.txn.writes {
+		for _, entry := range tbl.db.txn.writes[i] {
+			if entry.databaseId == tbl.db.databaseId &&
+				entry.tableId == tbl.tableId {
+				writes = append(writes, entry)
+			}
+		}
+	}
+	tbl.db.txn.Unlock()
+
+	deletes := make(map[types.Rowid]uint8)
+	for _, entry := range writes {
+		if entry.typ == INSERT {
+			rows = rows + int64(entry.bat.Length())
+		} else {
+			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					deletes[v] = 0
+				}
+			}
+		}
+	}
+
+	t := memtable.Time{
+		Timestamp: tbl.db.txn.meta.SnapshotTS,
+	}
+	tx := memtable.NewTransaction(
+		uuid.NewString(),
+		t,
+		memtable.SnapshotIsolation,
+	)
+	for _, partition := range tbl.parts {
+		pRows, err := partition.Rows(tx, deletes, tbl.skipBlocks)
+		if err != nil {
+			return 0, err
+		}
+		rows = rows + pRows
+	}
 
 	if tbl.meta == nil {
-		return 0, nil
+		return rows, nil
 	}
 	for _, blks := range tbl.meta.blocks {
 		for _, blk := range blks {
@@ -97,7 +169,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			}
 		}
 	}
-	dnList := needSyncDnStores(expr, tbl.tableDef, priKeys, tbl.db.txn.dnStores)
+	dnList := needSyncDnStores(ctx, expr, tbl.tableDef, priKeys, tbl.db.txn.dnStores, tbl.db.txn.proc)
 	switch {
 	case tbl.tableId == catalog.MO_DATABASE_ID:
 		tbl.dnList = []int{0}
@@ -135,17 +207,20 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 		return ranges, nil
 	}
 	tbl.meta.modifedBlocks = make([][]ModifyBlockMeta, len(tbl.meta.blocks))
+
+	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
+	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range dnList {
 		blks, deletes := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
 			tbl.meta.blocks[i], writes)
 		for _, blk := range blks {
 			tbl.skipBlocks[blk.Info.BlockID] = 0
-			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
+			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
 				ranges = append(ranges, blockMarshal(blk))
 			}
 		}
 		tbl.meta.modifedBlocks[i] = genModifedBlocks(ctx, deletes,
-			tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.proc)
+			tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.db.txn.proc)
 	}
 	return ranges, nil
 }
@@ -208,6 +283,14 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 		viewDef.View = tbl.viewdef
 		defs = append(defs, viewDef)
 	}
+	if len(tbl.constraint) > 0 {
+		c := &engine.ConstraintDef{}
+		err := c.UnmarshalBinary(tbl.constraint)
+		if err != nil {
+			return nil, err
+		}
+		defs = append(defs, c)
+	}
 	for i, def := range tbl.defs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			if attr.Attr.Name != catalog.Row_ID {
@@ -232,8 +315,20 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
 }
 
-func (tbl *table) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
-	// implement me
+func (tbl *table) UpdateConstraint(ctx context.Context, c *engine.ConstraintDef) error {
+	ct, err := c.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	bat, err := genTableConstraintTuple(tbl.tableId, tbl.db.databaseId, tbl.tableName, tbl.db.databaseName, ct, tbl.db.txn.proc.Mp())
+	if err != nil {
+		return err
+	}
+	if err = tbl.db.txn.WriteBatch(UPDATE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0], -1); err != nil {
+		return err
+	}
+	tbl.constraint = ct
 	return nil
 }
 
@@ -336,8 +431,8 @@ func (tbl *table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 	return nil
 }
 
-func (tbl *table) GetTableID(ctx context.Context) string {
-	return strconv.FormatUint(tbl.tableId, 10)
+func (tbl *table) GetTableID(ctx context.Context) uint64 {
+	return tbl.tableId
 }
 
 func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {

@@ -1,0 +1,11 @@
+select sleep();
+select sleep(1);
+select sleep(1.5);
+select sleep(null);
+select sleep(-1);
+select sleep(-1.5);
+
+create table t1 (a int,b int);
+insert into t1 values (1,1),(1,null);
+select sleep(a) from t1;
+select sleep(b) from t1;

@@ -14,7 +14,7 @@ require (
 	github.com/axiomhq/hyperloglog v0.0.0-20220105174342-98591331716a
 	github.com/cespare/xxhash/v2 v2.1.2
 	github.com/docker/go-units v0.4.0
-	github.com/fagongzi/goetty/v2 v2.0.3-0.20221121133015-81355a910e4a
+	github.com/fagongzi/goetty/v2 v2.0.3-0.20221212132037-abf2d4c05484
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/gogo/protobuf v1.3.2
@@ -127,7 +127,7 @@ require (
 // see https://github.com/hashicorp/memberlist/pull/273 for progress
 replace github.com/hashicorp/memberlist => github.com/matrixorigin/memberlist v0.4.1-0.20221125074841-7595e1626d36
 
-replace github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20221116064434-34611fc96385
+replace github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20221226075848-d266f8c2420c
 
 replace github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376 => github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376
 

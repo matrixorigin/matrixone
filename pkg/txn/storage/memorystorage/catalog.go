@@ -19,7 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
@@ -103,16 +103,15 @@ func (d *DatabaseRow) AttrByName(handler *MemHandler, tx *Transaction, name stri
 }
 
 type RelationRow struct {
-	ID                ID
-	DatabaseID        ID
-	Name              []byte
-	Type              memoryengine.RelationType
-	Comments          []byte
-	Properties        map[string]string
-	PartitionDef      []byte
-	ViewDef           []byte
-	UniqueIndexDef    []byte
-	SecondaryIndexDef []byte
+	ID           ID
+	DatabaseID   ID
+	Name         []byte
+	Type         memoryengine.RelationType
+	Comments     []byte
+	Properties   map[string]string
+	PartitionDef []byte
+	ViewDef      []byte
+	Constraint   []byte
 }
 
 func (r *RelationRow) Key() ID {
@@ -191,6 +190,8 @@ func (r *RelationRow) AttrByName(handler *MemHandler, tx *Transaction, name stri
 		ret.Value = r.ID.ToRowID()
 	case catalog.SystemRelAttr_ViewDef:
 		ret.Value = []byte(r.ViewDef)
+	case catalog.SystemRelAttr_Constraint:
+		ret.Value = r.Constraint
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
@@ -358,7 +359,7 @@ func verifyAttr(
 		if value == nil {
 			panic(fmt.Sprintf("%s should not be nil", attrName))
 		}
-		if !memtable.TypeMatch(value, types[i].Oid) {
+		if !memorytable.TypeMatch(value, types[i].Oid) {
 			panic(fmt.Sprintf("%s should be %v typed", name, types[i]))
 		}
 	}

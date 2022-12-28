@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "show variables like 'sql_mode'",
-		output: "show variables like sql_mode",
+		input:  "load data infile 'data.txt' into table db.a accounts(a1, a2) fields terminated by '\t' escaped by '\t'",
+		output: "load data infile data.txt into table db.a accounts(a1, a2) fields terminated by \t escaped by \t",
 	}
 )
 
@@ -81,7 +81,7 @@ var (
 		output: "select id, name, view_type, attribute, attribute_filed, size, created_at, updated_at from view_warehouse limit 10 offset 0",
 	}, {
 		input:  "select algo_alarm_record.* from algo_alarm_record inner join (SELECT id FROM algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) WHERE first_id = 0 AND created_at >= '2022-09-18 00:00:00' AND created_at <= '2022-10-18 00:00:00' and algo_id not in (9808,9809) order by id desc limit 0,10 ) e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc;",
-		output: "select algo_alarm_record* from algo_alarm_record inner join (select id from algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) where first_id = 0 and created_at >= 2022-09-18 00:00:00 and created_at <= 2022-10-18 00:00:00 and algo_id not in (9808, 9809) order by id desc limit 10 offset 0) as e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc",
+		output: "select algo_alarm_record.* from algo_alarm_record inner join (select id from algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) where first_id = 0 and created_at >= 2022-09-18 00:00:00 and created_at <= 2022-10-18 00:00:00 and algo_id not in (9808, 9809) order by id desc limit 10 offset 0) as e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc",
 	}, {
 		input: "select a from t1 use index(b)",
 	}, {
@@ -90,6 +90,9 @@ var (
 	}, {
 		input:  "CREATE  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
 		output: "create view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
+	}, {
+		input:  "ALTER  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
+		output: "alter view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
 	}, {
 		input: "select time from t1 as value",
 	}, {
@@ -201,6 +204,9 @@ var (
 	}, {
 		input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
 		output: "select cast(2022-01-01 01:23:34 as varchar)",
+	}, {
+		input:  "select binary('Geeksforgeeks')",
+		output: "select cast(Geeksforgeeks as binary)",
 	}, {
 		input:  "show schemas where 1",
 		output: "show databases where 1",
@@ -389,7 +395,7 @@ var (
 		input: "select cast(variance(ff) as decimal(10, 3)) from t2",
 	}, {
 		input:  "SELECT GROUP_CONCAT(DISTINCT 2) from t1",
-		output: "select group_concat(distinct 2) from t1",
+		output: "select group_concat(distinct 2, ,) from t1",
 	}, {
 		input: "select variance(2) from t1",
 	}, {
@@ -462,10 +468,18 @@ var (
 		input:  "CREATE VIEW v AS SELECT * FROM t WHERE t.id = f(t.name);",
 		output: "create view v as select * from t where t.id = f(t.name)",
 	}, {
+		input:  "ALTER VIEW v AS SELECT * FROM t WHERE t.id = f(t.name);",
+		output: "alter view v as select * from t where t.id = f(t.name)",
+	}, {
 		input:  "CREATE VIEW v AS SELECT qty, price, qty*price AS value FROM t;",
 		output: "create view v as select qty, price, qty * price as value from t",
 	}, {
+		input:  "ALTER VIEW v AS SELECT qty, price, qty*price AS value FROM t;",
+		output: "alter view v as select qty, price, qty * price as value from t",
+	}, {
 		input: "create view v_today (today) as select current_day from t",
+	}, {
+		input: "alter view v_today (today) as select current_day from t",
 	}, {
 		input: "explain (analyze true,verbose false) select * from emp",
 	}, {
@@ -1725,6 +1739,100 @@ var (
 		},
 		{
 			input: `select count(a) over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1`,
+		},
+		{
+			input: "alter account if exists abc",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' open comment 'str'",
+		},
+		{
+			input: "alter account if exists abc open comment 'str'",
+		},
+		{
+			input: "alter account if exists abc comment 'str'",
+		},
+		{
+			input: "alter account if exists abc open",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' open",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' comment 'str'",
+		},
+		{
+			input: `create cluster table a (a int)`,
+		},
+		{
+			input: `insert into a accounts(acc1, acc2) values (1, 2), (1, 2)`,
+		},
+		{
+			input: `insert into a accounts(acc1, acc2) select a, b from a`,
+		},
+		{
+			input: `insert into a (a, b) accounts(acc1, acc2) values (1, 2), (1, 2)`,
+		},
+		{
+			input:  `insert into a () accounts(acc1, acc2) values (1, 2), (1, 2)`,
+			output: `insert into a accounts(acc1, acc2) values (1, 2), (1, 2)`,
+		},
+		{
+			input: `insert into a (a, b) accounts(acc1, acc2) select a, b from a`,
+		},
+		{
+			input:  `insert into a accounts(acc1, acc2) set a = b, b = b + 1`,
+			output: `insert into a (a, b) accounts(acc1, acc2) values (b, b + 1)`,
+		},
+		{
+			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A accounts (a1, a2) FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
+			output: "load data infile test/loadfile5 ignore into table t.a accounts(a1, a2) fields terminated by , (, , c, d, e, f)",
+		},
+		{
+			input:  "load data infile 'data.txt' into table db.a accounts(a1, a2) fields terminated by '\t' escaped by '\t'",
+			output: "load data infile data.txt into table db.a accounts(a1, a2) fields terminated by \t escaped by \t",
+		},
+		{
+			input:  `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
+			output: `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
+		},
+		{
+			input:  `create function twosum (x int, y int) returns int language sql as 'select $1 + $2'`,
+			output: `create function twosum (x int, y int) returns int language sql as 'select $1 + $2'`,
+		},
+		{
+			input:  `create function charat (x int) returns char language sql as 'select $1'`,
+			output: `create function charat (x int) returns char language sql as 'select $1'`,
+		},
+		{
+			input:  `create function charat (x int default 15) returns char language sql as 'select $1'`,
+			output: `create function charat (x int default 15) returns char language sql as 'select $1'`,
+		},
+		{
+			input:  `drop function helloworld ()`,
+			output: `drop function helloworld ()`,
+		},
+		{
+			input:  `drop function charat (int)`,
+			output: `drop function charat (int)`,
+		},
+		{
+			input:  `drop function twosum (int, int)`,
+			output: `drop function twosum (int, int)`,
+		},
+		{
+			input:  `create extension python as strutil file 'stringutils.whl'`,
+			output: `create extension python as strutil file stringutils.whl`,
+		},
+		{
+			input:  `load strutil`,
+			output: `load strutil`,
+		},
+		{
+			input: `select * from (values row(1, 2), row(3, 3)) as a`,
+		},
+		{
+			input: `select t1.* from (values row(1, 1), row(3, 3)) as a(c1, c2) inner join t1 on a.c1 = t1.b`,
 		},
 	}
 )

@@ -16,9 +16,10 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
@@ -174,7 +175,7 @@ func TestSession_TxnBegin(t *testing.T) {
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-
+		ioses.EXPECT().Ref().AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -232,7 +233,7 @@ func TestVariables(t *testing.T) {
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-
+		ioses.EXPECT().Ref().AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -330,26 +331,26 @@ func TestVariables(t *testing.T) {
 		//same session global
 		_, err = ses.GetGlobalVar(v)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 		_, err = ses.GetTxnCompileCtx().ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 
 		//exist session global
 		_, err = existSes.GetGlobalVar(v)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 		_, err = existSes.GetTxnCompileCtx().ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 
 		//new session after session global
 		_, err = newSesAfterSession.GetGlobalVar(v)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 		_, err = newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 	}
 
 	convey.Convey("scope global", t, func() {
@@ -509,7 +510,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-
+		ioses.EXPECT().Ref().AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -546,9 +547,10 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetHideKeys(gomock.Any()).Return(nil, nil).AnyTimes()
-		table.EXPECT().FilteredRows(gomock.Any(), gomock.Any()).Return(float64(1000000), nil).AnyTimes()
-		table.EXPECT().Rows(gomock.Any()).Return(int64(1000000), nil).AnyTimes()
+		table.EXPECT().FilteredStats(gomock.Any(), gomock.Any()).Return(int32(100), int64(1000000), nil).AnyTimes()
+		table.EXPECT().Stats(gomock.Any()).Return(int32(100), int64(1000000), nil).AnyTimes()
 		table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 
@@ -564,7 +566,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		convey.So(defDBName, convey.ShouldEqual, "")
 		convey.So(tcc.DatabaseExists("abc"), convey.ShouldBeTrue)
 
-		_, err := tcc.getRelation("abc", "t1")
+		_, _, err := tcc.getRelation("abc", "t1")
 		convey.So(err, convey.ShouldBeNil)
 
 		object, tableRef := tcc.Resolve("abc", "t1")
@@ -577,7 +579,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		hkd := tcc.GetHideKeyDef("abc", "t1")
 		convey.So(hkd, convey.ShouldBeNil)
 
-		cost := tcc.Cost(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Expr{})
-		convey.So(cost, convey.ShouldNotBeNil)
+		stats := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Expr{})
+		convey.So(stats, convey.ShouldNotBeNil)
 	})
 }

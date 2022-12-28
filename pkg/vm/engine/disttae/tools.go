@@ -112,6 +112,44 @@ func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch,
 	return bat, nil
 }
 
+func genTableConstraintTuple(tblId, dbId uint64, tblName, dbName string, constraint []byte,
+	m *mpool.MPool) (*batch.Batch, error) {
+	bat := batch.NewWithSize(5)
+	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
+	bat.Attrs = append(bat.Attrs, catalog.SystemRelAttr_Constraint)
+	bat.SetZs(1, m)
+
+	{
+		idx := catalog.MO_TABLES_REL_ID_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_id
+		if err := bat.Vecs[idx].Append(tblId, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_REL_NAME_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // relname
+		if err := bat.Vecs[idx].Append([]byte(tblName), false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_RELDATABASE_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // reldatabase
+		if err := bat.Vecs[idx].Append([]byte(dbName), false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_RELDATABASE_ID_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // reldatabase_id
+		if err := bat.Vecs[idx].Append(dbId, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_UPDATE_CONSTRAINT
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[catalog.MO_TABLES_CONSTRAINT_IDX]) // constraint
+		if err := bat.Vecs[idx].Append(constraint, false, m); err != nil {
+			return nil, err
+		}
+	}
+
+	return bat, nil
+}
+
 func genCreateTableTuple(tbl *table, sql string, accountId, userId, roleId uint32, name string,
 	tableId uint64, databaseId uint64, databaseName string,
 	comment string, m *mpool.MPool) (*batch.Batch, error) {
@@ -189,7 +227,11 @@ func genCreateTableTuple(tbl *table, sql string, accountId, userId, roleId uint3
 		if err := bat.Vecs[idx].Append([]byte(tbl.viewdef), false, m); err != nil {
 			return nil, err
 		}
-
+		idx = catalog.MO_TABLES_CONSTRAINT_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // constraint
+		if err := bat.Vecs[idx].Append(tbl.constraint, false, m); err != nil {
+			return nil, err
+		}
 	}
 	return bat, nil
 }
@@ -383,7 +425,7 @@ func genDropColumnsTuple(name string) *batch.Batch {
 
 // genDatabaseIdExpr generate an expression to find database info
 // by database name and accountId
-func genDatabaseIdExpr(accountId uint32, name string) *plan.Expr {
+func genDatabaseIdExpr(ctx context.Context, accountId uint32, name string) *plan.Expr {
 	var left, right *plan.Expr
 
 	{
@@ -392,7 +434,7 @@ func genDatabaseIdExpr(accountId uint32, name string) *plan.Expr {
 		args = append(args, newColumnExpr(MO_DATABASE_ID_NAME_IDX, types.T_varchar,
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX]))
 		args = append(args, newStringConstVal(name))
-		left = plantool.MakeExpr("=", args)
+		left = plantool.MakeExpr(ctx, "=", args)
 	}
 	{
 		var args []*plan.Expr
@@ -400,25 +442,25 @@ func genDatabaseIdExpr(accountId uint32, name string) *plan.Expr {
 		args = append(args, newColumnExpr(MO_DATABASE_ID_ACCOUNT_IDX, types.T_uint32,
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX]))
 		args = append(args, newIntConstVal(accountId))
-		right = plantool.MakeExpr("=", args)
+		right = plantool.MakeExpr(ctx, "=", args)
 	}
-	return plantool.MakeExpr("and", []*plan.Expr{left, right})
+	return plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
 }
 
 // genDatabaseIdExpr generate an expression to find database list
 // by accountId
-func genDatabaseListExpr(accountId uint32) *plan.Expr {
+func genDatabaseListExpr(ctx context.Context, accountId uint32) *plan.Expr {
 	var args []*plan.Expr
 
 	args = append(args, newColumnExpr(MO_DATABASE_LIST_ACCOUNT_IDX, types.T_uint32,
 		catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX]))
 	args = append(args, newIntConstVal(accountId))
-	return plantool.MakeExpr("=", args)
+	return plantool.MakeExpr(ctx, "=", args)
 }
 
 // genTableInfoExpr generate an expression to find table info
 // by database id and table name and accountId
-func genTableInfoExpr(accountId uint32, databaseId uint64, name string) *plan.Expr {
+func genTableInfoExpr(ctx context.Context, accountId uint32, databaseId uint64, name string) *plan.Expr {
 	var left, right *plan.Expr
 
 	{
@@ -427,7 +469,7 @@ func genTableInfoExpr(accountId uint32, databaseId uint64, name string) *plan.Ex
 		args = append(args, newColumnExpr(catalog.MO_TABLES_REL_NAME_IDX, types.T_varchar,
 			catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX]))
 		args = append(args, newStringConstVal(name))
-		left = plantool.MakeExpr("=", args)
+		left = plantool.MakeExpr(ctx, "=", args)
 	}
 	{
 		var args []*plan.Expr
@@ -435,8 +477,8 @@ func genTableInfoExpr(accountId uint32, databaseId uint64, name string) *plan.Ex
 		args = append(args, newColumnExpr(catalog.MO_TABLES_RELDATABASE_ID_IDX, types.T_uint64,
 			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX]))
 		args = append(args, newIntConstVal(databaseId))
-		right = plantool.MakeExpr("=", args)
-		left = plantool.MakeExpr("and", []*plan.Expr{left, right})
+		right = plantool.MakeExpr(ctx, "=", args)
+		left = plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
 	}
 	{
 		var args []*plan.Expr
@@ -444,14 +486,14 @@ func genTableInfoExpr(accountId uint32, databaseId uint64, name string) *plan.Ex
 		args = append(args, newColumnExpr(catalog.MO_TABLES_ACCOUNT_ID_IDX, types.T_uint32,
 			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX]))
 		args = append(args, newIntConstVal(accountId))
-		right = plantool.MakeExpr("=", args)
+		right = plantool.MakeExpr(ctx, "=", args)
 	}
-	return plantool.MakeExpr("and", []*plan.Expr{left, right})
+	return plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
 }
 
 // genTableIdExpr generate an expression to find table info
 // by database id and table name and accountId
-func genTableIdExpr(accountId uint32, databaseId uint64, name string) *plan.Expr {
+func genTableIdExpr(ctx context.Context, accountId uint32, databaseId uint64, name string) *plan.Expr {
 	var left, right *plan.Expr
 
 	{
@@ -460,7 +502,7 @@ func genTableIdExpr(accountId uint32, databaseId uint64, name string) *plan.Expr
 		args = append(args, newColumnExpr(MO_TABLE_ID_NAME_IDX, types.T_varchar,
 			catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX]))
 		args = append(args, newStringConstVal(name))
-		left = plantool.MakeExpr("=", args)
+		left = plantool.MakeExpr(ctx, "=", args)
 	}
 	{
 		var args []*plan.Expr
@@ -468,8 +510,8 @@ func genTableIdExpr(accountId uint32, databaseId uint64, name string) *plan.Expr
 		args = append(args, newColumnExpr(MO_TABLE_ID_DATABASE_ID_IDX, types.T_uint64,
 			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX]))
 		args = append(args, newIntConstVal(databaseId))
-		right = plantool.MakeExpr("=", args)
-		left = plantool.MakeExpr("and", []*plan.Expr{left, right})
+		right = plantool.MakeExpr(ctx, "=", args)
+		left = plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
 	}
 	{
 		var args []*plan.Expr
@@ -477,14 +519,14 @@ func genTableIdExpr(accountId uint32, databaseId uint64, name string) *plan.Expr
 		args = append(args, newColumnExpr(MO_TABLE_ID_ACCOUNT_IDX, types.T_uint32,
 			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX]))
 		args = append(args, newIntConstVal(accountId))
-		right = plantool.MakeExpr("=", args)
+		right = plantool.MakeExpr(ctx, "=", args)
 	}
-	return plantool.MakeExpr("and", []*plan.Expr{left, right})
+	return plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
 }
 
 // genTableListExpr generate an expression to find table list
 // by database id and accountId
-func genTableListExpr(accountId uint32, databaseId uint64) *plan.Expr {
+func genTableListExpr(ctx context.Context, accountId uint32, databaseId uint64) *plan.Expr {
 	var left, right *plan.Expr
 
 	{
@@ -493,7 +535,7 @@ func genTableListExpr(accountId uint32, databaseId uint64) *plan.Expr {
 		args = append(args, newColumnExpr(MO_TABLE_LIST_DATABASE_ID_IDX, types.T_uint64,
 			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX]))
 		args = append(args, newIntConstVal(databaseId))
-		left = plantool.MakeExpr("=", args)
+		left = plantool.MakeExpr(ctx, "=", args)
 	}
 	{
 		var args []*plan.Expr
@@ -501,23 +543,23 @@ func genTableListExpr(accountId uint32, databaseId uint64) *plan.Expr {
 		args = append(args, newColumnExpr(MO_TABLE_LIST_ACCOUNT_IDX, types.T_uint32,
 			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX]))
 		args = append(args, newIntConstVal(accountId))
-		right = plantool.MakeExpr("=", args)
+		right = plantool.MakeExpr(ctx, "=", args)
 	}
-	return plantool.MakeExpr("and", []*plan.Expr{left, right})
+	return plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
 }
 
 // genColumnInfoExpr generate an expression to find column info list
 // by database id and table id and accountId
-func genColumnInfoExpr(accountId uint32, databaseId, tableId uint64) *plan.Expr {
+func genColumnInfoExpr(ctx context.Context, accountId uint32, databaseId, tableId uint64) *plan.Expr {
 	var left, right *plan.Expr
 
 	{
 		var args []*plan.Expr
 
-		args = append(args, newColumnExpr(catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX, types.T_varchar,
+		args = append(args, newColumnExpr(catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX, types.T_uint64,
 			catalog.MoColumnsSchema[catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX]))
 		args = append(args, newIntConstVal(databaseId))
-		left = plantool.MakeExpr("=", args)
+		left = plantool.MakeExpr(ctx, "=", args)
 	}
 	{
 		var args []*plan.Expr
@@ -525,8 +567,8 @@ func genColumnInfoExpr(accountId uint32, databaseId, tableId uint64) *plan.Expr 
 		args = append(args, newColumnExpr(catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX, types.T_uint64,
 			catalog.MoTablesSchema[catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX]))
 		args = append(args, newIntConstVal(tableId))
-		right = plantool.MakeExpr("=", args)
-		left = plantool.MakeExpr("and", []*plan.Expr{left, right})
+		right = plantool.MakeExpr(ctx, "=", args)
+		left = plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
 	}
 	{
 		var args []*plan.Expr
@@ -534,13 +576,13 @@ func genColumnInfoExpr(accountId uint32, databaseId, tableId uint64) *plan.Expr 
 		args = append(args, newColumnExpr(catalog.MO_COLUMNS_ACCOUNT_ID_IDX, types.T_uint32,
 			catalog.MoTablesSchema[catalog.MO_COLUMNS_ACCOUNT_ID_IDX]))
 		args = append(args, newIntConstVal(accountId))
-		right = plantool.MakeExpr("=", args)
+		right = plantool.MakeExpr(ctx, "=", args)
 	}
-	return plantool.MakeExpr("and", []*plan.Expr{left, right})
+	return plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
 }
 
 // genInsertExpr used to generate an expression to partition table data
-func genInsertExpr(defs []engine.TableDef, dnNum int) *plan.Expr {
+func genInsertExpr(ctx context.Context, defs []engine.TableDef, dnNum int) *plan.Expr {
 	var args []*plan.Expr
 
 	i := 0
@@ -555,7 +597,7 @@ func genInsertExpr(defs []engine.TableDef, dnNum int) *plan.Expr {
 	if len(args) == 0 {
 		return nil
 	}
-	return plantool.MakeExpr("hash_value", args)
+	return plantool.MakeExpr(ctx, "hash_value", args)
 }
 
 func newIntConstVal(v any) *plan.Expr {
@@ -661,6 +703,8 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 	typ := api.Entry_Insert
 	if e.typ == DELETE {
 		typ = api.Entry_Delete
+	} else if e.typ == UPDATE {
+		typ = api.Entry_Update
 	}
 	bat, err := toPBBatch(ebat)
 	if err != nil {
@@ -729,6 +773,7 @@ func getColumnsFromRows(rows [][]any) []column {
 func genTableDefOfColumn(col column) engine.TableDef {
 	var attr engine.Attribute
 
+	attr.ID = uint64(col.num)
 	attr.Name = col.name
 	attr.Alg = compress.Lz4
 	attr.Comment = col.comment
@@ -781,7 +826,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			}
 		}
 	}
-	num := 0
+	var num int32 = 0
 	cols := make([]column, 0, len(defs))
 	for _, def := range defs {
 		attrDef, ok := def.(*engine.AttributeDef)
@@ -801,7 +846,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			name:         attrDef.Attr.Name,
 			tableName:    tableName,
 			databaseName: databaseName,
-			num:          int32(num),
+			num:          num,
 			comment:      attrDef.Attr.Comment,
 		}
 		col.hasDef = 0
@@ -1011,21 +1056,26 @@ func genBlockMetas(
 	return metas, nil
 }
 
-func inBlockList(blk BlockMeta, blks []BlockMeta) bool {
-	for i := range blks {
-		if blk.Eq(blks[i]) {
-			return true
-		}
-	}
-	return false
+func inBlockMap(blk BlockMeta, blockMap map[uint64]bool) bool {
+	_, ok := blockMap[blk.Info.BlockID]
+	return ok
 }
 
 func genModifedBlocks(ctx context.Context, deletes map[uint64][]int, orgs, modfs []BlockMeta,
 	expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) []ModifyBlockMeta {
 	blks := make([]ModifyBlockMeta, 0, len(orgs)-len(modfs))
+
+	lenblks := len(modfs)
+	blockMap := make(map[uint64]bool, lenblks)
+	for i := 0; i < lenblks; i++ {
+		blockMap[modfs[i].Info.BlockID] = true
+	}
+
+	exprMono := plantool.CheckExprIsMonotonic(ctx, expr)
+	columnMap, columns, maxCol := getColumnsByExpr(expr, tableDef)
 	for i, blk := range orgs {
-		if !inBlockList(blk, modfs) {
-			if needRead(ctx, expr, blk, tableDef, proc) {
+		if !inBlockMap(blk, blockMap) {
+			if !exprMono || needRead(ctx, expr, blk, tableDef, columnMap, columns, maxCol, proc) {
 				blks = append(blks, ModifyBlockMeta{
 					meta:    orgs[i],
 					deletes: deletes[orgs[i].Info.BlockID],

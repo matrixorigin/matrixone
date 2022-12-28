@@ -17,6 +17,9 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,9 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"testing"
-	"time"
 )
 
 const ModuleName = "TAEHANDLE"
@@ -152,7 +154,8 @@ func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
 	}
 
 	mh.Handle = &Handle{
-		eng: moengine.NewEngine(tae),
+		eng:          moengine.NewEngine(tae),
+		jobScheduler: tasks.NewParallelJobScheduler(5),
 	}
 	mh.Handle.mu.txnCtxs = make(map[string]*txnContext)
 	return mh
@@ -203,10 +206,8 @@ type Entry struct {
 	databaseId   uint64
 	tableName    string
 	databaseName string
-	// blockName for s3 file
+	//object name for s3 file
 	fileName string
-	// blockId for s3 file
-	blockId uint64
 	// update or delete tuples
 	bat *batch.Batch
 }
@@ -695,6 +696,11 @@ func genCreateTableTuple(
 		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_TABLES_CONSTRAINT_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // constraint
+		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
+			return nil, err
+		}
 
 	}
 	return bat, nil
@@ -717,7 +723,6 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		TableName:    e.tableName,
 		DatabaseName: e.databaseName,
 		FileName:     e.fileName,
-		BlockId:      e.blockId,
 	}, nil
 }
 

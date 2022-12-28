@@ -23,7 +23,15 @@ const (
 	Row_ID               = "__mo_rowid"
 	PrefixPriColName     = "__mo_cpkey_"
 	PrefixIndexTableName = "__mo_index_"
+	// IndexTable has two column at most, the first is idx col, the second is origin table primary col
+	IndexTableIndexColName   = "__mo_index_idx_col"
+	IndexTablePrimaryColName = "__mo_index_pri_col"
+	ExternalFilePath         = "__mo_filepath"
 )
+
+func ContainExternalHidenCol(col string) bool {
+	return col == ExternalFilePath
+}
 
 const (
 	Meta_Length = 6
@@ -65,6 +73,7 @@ const (
 	SystemRelAttr_AccID       = "account_id"
 	SystemRelAttr_Partition   = "partitioned"
 	SystemRelAttr_ViewDef     = "viewdef"
+	SystemRelAttr_Constraint  = "constraint"
 
 	SystemColAttr_UniqName        = "att_uniq_name"
 	SystemColAttr_AccID           = "account_id"
@@ -107,6 +116,9 @@ const (
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
 	SystemExternalRel     = "e"
+	//the cluster table created by the sys account
+	//and read only by the general account
+	SystemClusterRel = "cluster"
 
 	SystemColPKConstraint = "p"
 	SystemColNoConstraint = "n"
@@ -118,6 +130,11 @@ const (
 	MO_DATABASE_ID = 1
 	MO_TABLES_ID   = 2
 	MO_COLUMNS_ID  = 3
+)
+
+// index use to update constraint
+const (
+	MO_TABLES_UPDATE_CONSTRAINT = 4
 )
 
 // column's index in catalog table
@@ -145,6 +162,7 @@ const (
 	MO_TABLES_ACCOUNT_ID_IDX     = 11
 	MO_TABLES_PARTITIONED_IDX    = 12
 	MO_TABLES_VIEWDEF_IDX        = 13
+	MO_TABLES_CONSTRAINT_IDX     = 14
 
 	MO_COLUMNS_ATT_UNIQ_NAME_IDX         = 0
 	MO_COLUMNS_ACCOUNT_ID_IDX            = 1
@@ -219,7 +237,16 @@ type CreateTable struct {
 	Partition    string
 	RelKind      string
 	Viewdef      string
+	Constraint   []byte
 	Defs         []engine.TableDef
+}
+
+type UpdateConstraint struct {
+	DatabaseId   uint64
+	TableId      uint64
+	TableName    string
+	DatabaseName string
+	Constraint   []byte
 }
 
 type DropOrTruncateTable struct {
@@ -257,6 +284,7 @@ var (
 		SystemRelAttr_AccID,
 		SystemRelAttr_Partition,
 		SystemRelAttr_ViewDef,
+		SystemRelAttr_Constraint,
 	}
 	MoColumnsSchema = []string{
 		SystemColAttr_UniqName,
@@ -309,13 +337,14 @@ var (
 		types.New(types.T_varchar, 5000, 0, 0), // relpersistence
 		types.New(types.T_varchar, 5000, 0, 0), // relkind
 		types.New(types.T_varchar, 5000, 0, 0), // rel_comment
-		types.New(types.T_varchar, 5000, 0, 0), // rel_createsql
+		types.New(types.T_text, 0, 0, 0),       // rel_createsql
 		types.New(types.T_timestamp, 0, 0, 0),  // created_time
 		types.New(types.T_uint32, 0, 0, 0),     // creator
 		types.New(types.T_uint32, 0, 0, 0),     // owner
 		types.New(types.T_uint32, 0, 0, 0),     // account_id
 		types.New(types.T_blob, 0, 0, 0),       // partition
 		types.New(types.T_blob, 0, 0, 0),       // viewdef
+		types.New(types.T_varchar, 5000, 0, 0), // constraint
 	}
 	MoColumnsTypes = []types.Type{
 		types.New(types.T_varchar, 256, 0, 0),  // att_uniq_name

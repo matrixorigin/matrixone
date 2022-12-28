@@ -18,11 +18,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
@@ -164,6 +167,12 @@ type Session struct {
 	flag bool
 
 	lastInsertID uint64
+
+	skipAuth bool
+
+	sqlSourceType string
+
+	isBackgroundSession bool
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
@@ -270,6 +279,7 @@ func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.Param
 	}
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(ctx)
 	ses.SetRequestContext(cancelBackgroundCtx)
+	ses.SetBackgroundSession(true)
 	backSes := &BackgroundSession{
 		Session: ses,
 		cancel:  cancelBackgroundFunc,
@@ -294,6 +304,30 @@ func (bgs *BackgroundSession) Close() {
 		bgs.Session.gSysVars = nil
 	}
 	bgs = nil
+}
+
+func (ses *Session) SetBackgroundSession(b bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.isBackgroundSession = b
+}
+
+func (ses *Session) IsBackgroundSession() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.isBackgroundSession
+}
+
+func (ses *Session) setSkipCheckPrivilege(b bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.skipAuth = b
+}
+
+func (ses *Session) skipCheckPrivilege() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.skipAuth
 }
 
 func (ses *Session) makeProfile(profileTyp profileType) {
@@ -637,7 +671,7 @@ func (ses *Session) GetGlobalSysVars() *GlobalSystemVariables {
 // SetGlobalVar sets the value of system variable in global.
 // used by SET GLOBAL
 func (ses *Session) SetGlobalVar(name string, value interface{}) error {
-	return ses.GetGlobalSysVars().SetGlobalSysVar(name, value)
+	return ses.GetGlobalSysVars().SetGlobalSysVar(ses.GetRequestContext(), name, value)
 }
 
 // GetGlobalVar gets this value of the system variable in global
@@ -646,11 +680,11 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 	if def, val, ok := gSysVars.GetGlobalSysVar(name); ok {
 		if def.GetScope() == ScopeSession {
 			//empty
-			return nil, errorSystemVariableSessionEmpty
+			return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableSessionEmpty())
 		}
 		return val, nil
 	}
-	return nil, errorSystemVariableDoesNotExist
+	return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
 }
 
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
@@ -664,15 +698,16 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 	gSysVars := ses.GetGlobalSysVars()
 	if def, _, ok := gSysVars.GetGlobalSysVar(name); ok {
 		if def.GetScope() == ScopeGlobal {
-			return errorSystemVariableIsGlobal
+			return moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableIsGlobal())
 		}
 		//scope session & both
 		if !def.GetDynamic() {
-			return errorSystemVariableIsReadOnly
+			return moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableIsReadOnly())
 		}
 
 		cv, err := def.GetType().Convert(value)
 		if err != nil {
+			errutil.ReportError(ses.GetRequestContext(), err)
 			return err
 		}
 
@@ -682,7 +717,7 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 			return def.UpdateSessVar(ses, ses.GetSysVars(), def.GetName(), cv)
 		}
 	} else {
-		return errorSystemVariableDoesNotExist
+		return moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
 	}
 	return nil
 }
@@ -697,7 +732,7 @@ func (ses *Session) GetSessionVar(name string) (interface{}, error) {
 		}
 		return ses.GetSysVar(ciname), nil
 	} else {
-		return nil, errorSystemVariableDoesNotExist
+		return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
 	}
 }
 
@@ -1073,13 +1108,13 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	var rsset []ExecResult
 	var tenantID int64
 	var userID int64
-	var pwd string
+	var pwd, accountStatus string
 	var pwdBytes []byte
 	var isSpecial bool
 	var specialAccount *TenantInfo
 
 	//Get tenant info
-	tenant, err = GetTenantInfo(userInput)
+	tenant, err = GetTenantInfo(ses.GetRequestContext(), userInput)
 	if err != nil {
 		return nil, err
 	}
@@ -1111,12 +1146,23 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 	if !execResultArrayHasData(rsset) {
-		return nil, moerr.NewInternalError(ses.GetRequestContext(), "there is no tenant %s", tenant.GetTenant())
+		return nil, moerr.NewInternalError(sysTenantCtx, "there is no tenant %s", tenant.GetTenant())
 	}
 
-	tenantID, err = rsset[0].GetInt64(0, 0)
+	//account id
+	tenantID, err = rsset[0].GetInt64(sysTenantCtx, 0, 0)
 	if err != nil {
 		return nil, err
+	}
+
+	//account status
+	accountStatus, err = rsset[0].GetString(sysTenantCtx, 0, 2)
+	if err != nil {
+		return nil, err
+	}
+
+	if strings.ToLower(accountStatus) == tree.AccountStatusSuspend.String() {
+		return nil, moerr.NewInternalError(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
 	}
 
 	tenant.SetTenantID(uint32(tenantID))
@@ -1133,22 +1179,22 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 	if !execResultArrayHasData(rsset) {
-		return nil, moerr.NewInternalError(ses.GetRequestContext(), "there is no user %s", tenant.GetUser())
+		return nil, moerr.NewInternalError(tenantCtx, "there is no user %s", tenant.GetUser())
 	}
 
-	userID, err = rsset[0].GetInt64(0, 0)
+	userID, err = rsset[0].GetInt64(tenantCtx, 0, 0)
 	if err != nil {
 		return nil, err
 	}
 
-	pwd, err = rsset[0].GetString(0, 1)
+	pwd, err = rsset[0].GetString(tenantCtx, 0, 1)
 	if err != nil {
 		return nil, err
 	}
 
 	//the default_role in the mo_user table.
 	//the default_role is always valid. public or other valid role.
-	defaultRoleID, err = rsset[0].GetInt64(0, 2)
+	defaultRoleID, err = rsset[0].GetInt64(tenantCtx, 0, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -1177,7 +1223,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		}
 
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError(ses.GetRequestContext(), "there is no role %s", tenant.GetDefaultRole())
+			return nil, moerr.NewInternalError(tenantCtx, "there is no role %s", tenant.GetDefaultRole())
 		}
 
 		logDebugf(sessionProfile, "check granted role of user %s.", tenant)
@@ -1188,11 +1234,11 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 			return nil, err
 		}
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError(ses.GetRequestContext(), "the role %s has not been granted to the user %s",
+			return nil, moerr.NewInternalError(tenantCtx, "the role %s has not been granted to the user %s",
 				tenant.GetDefaultRole(), tenant.GetUser())
 		}
 
-		defaultRoleID, err = rsset[0].GetInt64(0, 0)
+		defaultRoleID, err = rsset[0].GetInt64(tenantCtx, 0, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -1206,10 +1252,10 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 			return nil, err
 		}
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError(ses.GetRequestContext(), "get the default role of the user %s failed", tenant.GetUser())
+			return nil, moerr.NewInternalError(tenantCtx, "get the default role of the user %s failed", tenant.GetUser())
 		}
 
-		defaultRole, err = rsset[0].GetString(0, 0)
+		defaultRole, err = rsset[0].GetString(tenantCtx, 0, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -1570,38 +1616,47 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	return true
 }
 
-func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (engine.Relation, error) {
+// getRelation returns the context (maybe updated) and the relation
+func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (context.Context, engine.Relation, error) {
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	ses := tcc.GetSession()
 	ctx := ses.GetRequestContext()
+	account := ses.GetTenantInfo()
+	if isClusterTable(dbName, tableName) {
+		//if it is the cluster table in the general account, switch into the sys account
+		if account != nil && account.GetTenantID() != sysAccountID {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+		}
+	}
+
 	txn, err := tcc.GetTxnHandler().GetTxn()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	//open database
 	db, err := tcc.GetTxnHandler().GetStorage().Database(ctx, dbName, txn)
 	if err != nil {
 		logErrorf(ses.GetConciseProfile(), "get database %v error %v", dbName, err)
-		return nil, err
+		return nil, nil, err
 	}
 
 	tableNames, err := db.Relations(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	logDebugf(ses.GetConciseProfile(), "dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
 	table, err := db.Relation(ctx, tableName)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return table, nil
+	return ctx, table, nil
 }
 
 func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, error) {
@@ -1619,11 +1674,12 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if err != nil {
 		return nil, nil
 	}
-	table, err := tcc.getRelation(dbName, tableName)
+	ctx, table, err := tcc.getRelation(dbName, tableName)
 	if err != nil {
 		return nil, nil
 	}
-	ctx := tcc.GetSession().GetRequestContext()
+
+	tableId := table.GetTableID(ctx)
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
 		return nil, nil
@@ -1634,11 +1690,15 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	var properties []*plan2.Property
 	var TableType, Createsql string
 	var CompositePkey *plan2.ColDef = nil
+	var viewSql *plan2.ViewDef
+	var foreignKeys []*plan2.ForeignKeyDef
+	var refChildTbls []uint64
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(attr.Attr.Name)
 			col := &plan2.ColDef{
-				Name: attr.Attr.Name,
+				ColId: attr.Attr.ID,
+				Name:  attr.Attr.Name,
 				Typ: &plan2.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
@@ -1674,13 +1734,40 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				})
 			}
 		} else if viewDef, ok := def.(*engine.ViewDef); ok {
-			defs = append(defs, &plan2.TableDefType{
-				Def: &plan2.TableDef_DefType_View{
-					View: &plan2.ViewDef{
-						View: viewDef.View,
-					},
-				},
-			})
+			viewSql = &plan2.ViewDef{
+				View: viewDef.View,
+			}
+		} else if c, ok := def.(*engine.ConstraintDef); ok {
+			for _, ct := range c.Cts {
+				switch k := ct.(type) {
+				case *engine.UniqueIndexDef:
+					u := &plan.UniqueIndexDef{}
+					err = u.UnMarshalUniqueIndexDef(([]byte)(k.UniqueIndex))
+					if err != nil {
+						return nil, nil
+					}
+					defs = append(defs, &plan.TableDef_DefType{
+						Def: &plan.TableDef_DefType_UIdx{
+							UIdx: u,
+						},
+					})
+				case *engine.SecondaryIndexDef:
+					s := &plan.SecondaryIndexDef{}
+					err = s.UnMarshalSecondaryIndexDef(([]byte)(k.SecondaryIndex))
+					if err != nil {
+						return nil, nil
+					}
+					defs = append(defs, &plan.TableDef_DefType{
+						Def: &plan.TableDef_DefType_SIdx{
+							SIdx: s,
+						},
+					})
+				case *engine.ForeignKeyDef:
+					foreignKeys = k.Fkeys
+				case *engine.RefChildTableDef:
+					refChildTbls = k.Tables
+				}
+			}
 		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
 			properties = append(properties, &plan2.Property{
 				Key:   catalog.SystemRelAttr_Comment,
@@ -1695,28 +1782,6 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 			defs = append(defs, &plan2.TableDefType{
 				Def: &plan2.TableDef_DefType_Partition{
 					Partition: p,
-				},
-			})
-		} else if indexDef, ok := def.(*engine.UniqueIndexDef); ok {
-			u := &plan.UniqueIndexDef{}
-			err = u.UnMarshalUniqueIndexDef(([]byte)(indexDef.UniqueIndex))
-			if err != nil {
-				return nil, nil
-			}
-			defs = append(defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_UIdx{
-					UIdx: u,
-				},
-			})
-		} else if indexDef, ok := def.(*engine.SecondaryIndexDef); ok {
-			s := &plan.SecondaryIndexDef{}
-			err = s.UnMarshalSecondaryIndexDef(([]byte)(indexDef.SecondaryIndex))
-			if err != nil {
-				return nil, nil
-			}
-			defs = append(defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_SIdx{
-					SIdx: s,
 				},
 			})
 		}
@@ -1756,12 +1821,16 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	}
 
 	tableDef := &plan2.TableDef{
+		TblId:         tableId,
 		Name:          tableName,
 		Cols:          cols,
 		Defs:          defs,
 		TableType:     TableType,
 		Createsql:     Createsql,
 		CompositePkey: CompositePkey,
+		ViewSql:       viewSql,
+		Fkeys:         foreignKeys,
+		RefChildTbls:  refChildTbls,
 	}
 	return obj, tableDef
 }
@@ -1779,13 +1848,77 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 	}
 }
 
+func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
+	var err error
+	var sql string
+	var accountIds []uint32
+	var erArray []ExecResult
+	var targetAccountId uint64
+	if len(accountNames) == 0 {
+		return []uint32{}, nil
+	}
+
+	dedup := make(map[string]int8)
+	for _, name := range accountNames {
+		dedup[name] = 1
+	}
+
+	ses := tcc.GetSession()
+	ctx := ses.GetRequestContext()
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	for name := range dedup {
+		sql = getSqlForCheckTenant(name)
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			goto handleFailed
+		}
+
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			goto handleFailed
+		}
+
+		if execResultArrayHasData(erArray) {
+			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+				targetAccountId, err = erArray[0].GetUint64(ctx, i, 0)
+				if err != nil {
+					goto handleFailed
+				}
+			}
+			accountIds = append(accountIds, uint32(targetAccountId))
+		} else {
+			return nil, moerr.NewInternalError(ctx, "there is no account %s", name)
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return accountIds, err
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return nil, rbErr
+	}
+	return nil, err
+}
+
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
-	ctx := tcc.GetSession().GetRequestContext()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
 	}
-	relation, err := tcc.getRelation(dbName, tableName)
+	ctx, relation, err := tcc.getRelation(dbName, tableName)
 	if err != nil {
 		return nil
 	}
@@ -1816,12 +1949,11 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 }
 
 func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
-	ctx := tcc.GetSession().GetRequestContext()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
 	}
-	relation, err := tcc.getRelation(dbName, tableName)
+	ctx, relation, err := tcc.getRelation(dbName, tableName)
 	if err != nil {
 		return nil
 	}
@@ -1860,27 +1992,29 @@ func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
 	}
 }
 
-func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) (cost *plan2.Cost) {
-	cost = new(plan2.Cost)
+func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats *plan2.Stats) {
+	stats = new(plan2.Stats)
 	dbName := obj.GetSchemaName()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return
 	}
 	tableName := obj.GetObjName()
-	table, err := tcc.getRelation(dbName, tableName)
+	ctx, table, err := tcc.getRelation(dbName, tableName)
 	if err != nil {
 		return
 	}
 	if e != nil {
-		cols, _ := table.TableColumns(tcc.GetSession().GetRequestContext())
+		cols, _ := table.TableColumns(ctx)
 		fixColumnName(cols, e)
 	}
-	rows, err := table.FilteredRows(tcc.GetSession().GetRequestContext(), e)
+	blockNum, rows, err := table.FilteredStats(ctx, e)
 	if err != nil {
 		return
 	}
-	cost.Card = float64(rows) * plan2.DeduceSelectivity(e)
+	stats.Cost = float64(rows)
+	stats.Outcnt = stats.Cost * plan2.DeduceSelectivity(e)
+	stats.BlockNum = blockNum
 	return
 }
 
@@ -1984,7 +2118,7 @@ func (bh *BackgroundHandler) Close() {
 }
 
 func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
-	bh.mce.PrepareSessionBeforeExecRequest(bh.ses.Session)
+	bh.mce.SetSession(bh.ses.Session)
 	if ctx == nil {
 		ctx = bh.ses.GetRequestContext()
 	}

@@ -56,6 +56,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		UpdateCtxs:      make([]*plan.UpdateCtx, len(node.UpdateCtxs)),
 		TableDefVec:     make([]*plan.TableDef, len(node.TableDefVec)),
 		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
+		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
 	}
 
 	copy(newNode.Children, node.Children)
@@ -103,8 +104,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		newNode.UpdateCtxs[i] = &plan.UpdateCtx{
 			DbName:        updateCtx.DbName,
 			TblName:       updateCtx.TblName,
-			PriKey:        updateCtx.PriKey,
-			PriKeyIdx:     updateCtx.PriKeyIdx,
 			HideKey:       updateCtx.HideKey,
 			HideKeyIdx:    updateCtx.HideKeyIdx,
 			UpdateCols:    make([]*ColDef, len(updateCtx.UpdateCols)),
@@ -123,13 +122,13 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		newNode.TableDefVec[i] = DeepCopyTableDef(tbl)
 	}
 
-	if node.Cost != nil {
-		newNode.Cost = &plan.Cost{
-			Card:    node.Cost.Card,
-			Rowsize: node.Cost.Rowsize,
-			Ndv:     node.Cost.Ndv,
-			Start:   node.Cost.Start,
-			Total:   node.Cost.Total,
+	if node.Stats != nil {
+		newNode.Stats = &plan.Stats{
+			BlockNum:    node.Stats.BlockNum,
+			Rowsize:     node.Stats.Rowsize,
+			HashmapSize: node.Stats.HashmapSize,
+			Cost:        node.Stats.Cost,
+			Outcnt:      node.Stats.Outcnt,
 		}
 	}
 
@@ -172,10 +171,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 
 		for idx, col := range node.RowsetData.Cols {
 			newNode.RowsetData.Cols[idx] = DeepCopyColData(col)
-		}
-
-		if node.RowsetData.Schema != nil {
-			newNode.RowsetData.Schema = DeepCopyTableDef(node.RowsetData.Schema)
 		}
 	}
 	for idx, expr := range node.TblFuncExprList {
@@ -263,13 +258,14 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		copy(newTable.TblFunc.Param, table.TblFunc.Param)
 	}
 
-	// FIX ME: don't support now
-	// for idx, def := range table.Defs {
-	// 	newTable.Cols[idx] = &plan.TableDef_DefType{}
-	// }
-
 	if table.CompositePkey != nil {
 		newTable.CompositePkey = DeepCopyColDef(table.CompositePkey)
+	}
+
+	if table.ViewSql != nil {
+		newTable.ViewSql = &plan.ViewDef{
+			View: table.ViewSql.View,
+		}
 	}
 
 	for idx, def := range table.Defs {
@@ -291,9 +287,16 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 			copy(indexDef.IndexNames, defImpl.UIdx.IndexNames)
 			copy(indexDef.TableNames, defImpl.UIdx.TableNames)
 			copy(indexDef.TableExists, defImpl.UIdx.TableExists)
-			for i := range indexDef.Fields {
-				copy(indexDef.Fields[i].Parts, defImpl.UIdx.Fields[i].Parts)
-				copy(indexDef.Fields[i].Cols, defImpl.UIdx.Fields[i].Cols)
+			for idx, oldField := range defImpl.UIdx.Fields {
+				newField := &plan.Field{
+					Parts: make([]string, len(oldField.Parts)),
+					Cols:  make([]*plan.ColDef, len(oldField.Cols)),
+				}
+				copy(newField.Parts, oldField.Parts)
+				for i, col := range oldField.Cols {
+					newField.Cols[i] = DeepCopyColDef(col)
+				}
+				indexDef.Fields[idx] = newField
 			}
 			newTable.Defs[idx] = &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_UIdx{
@@ -314,14 +317,6 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 			newTable.Defs[idx] = &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_SIdx{
 					SIdx: indexDef,
-				},
-			}
-		case *plan.TableDef_DefType_View:
-			newTable.Defs[idx] = &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_View{
-					View: &plan.ViewDef{
-						View: defImpl.View.GetView(),
-					},
 				},
 			}
 		case *plan.TableDef_DefType_Properties:
@@ -385,21 +380,11 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 
 func DeepCopyColData(col *plan.ColData) *plan.ColData {
 	newCol := &plan.ColData{
-		RowCount:  col.RowCount,
-		NullCount: col.NullCount,
-		Nulls:     make([]bool, len(col.Nulls)),
-		I32:       make([]int32, len(col.I32)),
-		I64:       make([]int64, len(col.I64)),
-		F32:       make([]float32, len(col.F32)),
-		F64:       make([]float64, len(col.F64)),
-		S:         make([]string, len(col.S)),
+		Data: make([]*plan.Expr, len(col.Data)),
 	}
-	copy(newCol.Nulls, col.Nulls)
-	copy(newCol.I32, col.I32)
-	copy(newCol.I64, col.I64)
-	copy(newCol.F32, col.F32)
-	copy(newCol.F64, col.F64)
-	copy(newCol.S, col.S)
+	for i, e := range col.Data {
+		newCol.Data[i] = DeepCopyExpr(e)
+	}
 
 	return newCol
 }
@@ -430,6 +415,7 @@ func DeepCopyInsertValues(insert *plan.InsertValues) *plan.InsertValues {
 		Columns:       make([]*plan.Column, len(insert.Columns)),
 		OrderAttrs:    make([]string, len(insert.OrderAttrs)),
 		CompositePkey: DeepCopyColDef(insert.CompositePkey),
+		ClusterTable:  DeepCopyClusterTable(insert.GetClusterTable()),
 	}
 
 	for idx, col := range insert.ExplicitCols {
@@ -534,17 +520,24 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	case *plan.DataDefinition_DropTable:
 		newDf.Definition = &plan.DataDefinition_DropTable{
 			DropTable: &plan.DropTable{
-				IfExists: df.DropTable.IfExists,
-				Database: df.DropTable.Database,
-				Table:    df.DropTable.Table,
+				IfExists:     df.DropTable.IfExists,
+				Database:     df.DropTable.Database,
+				Table:        df.DropTable.Table,
+				ClusterTable: DeepCopyClusterTable(df.DropTable.GetClusterTable()),
 			},
 		}
 
 	case *plan.DataDefinition_CreateIndex:
 		newDf.Definition = &plan.DataDefinition_CreateIndex{
 			CreateIndex: &plan.CreateIndex{
-				IfNotExists: df.CreateIndex.IfNotExists,
-				Index:       df.CreateIndex.Index,
+				Database: df.CreateIndex.Database,
+				Table:    df.CreateIndex.Table,
+				Index: &plan.CreateTable{
+					IfNotExists: df.CreateIndex.Index.IfNotExists,
+					Temporary:   df.CreateIndex.Index.Temporary,
+					Database:    df.CreateIndex.Index.Database,
+					TableDef:    DeepCopyTableDef(df.CreateIndex.Index.TableDef),
+				},
 			},
 		}
 
@@ -558,15 +551,17 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	case *plan.DataDefinition_DropIndex:
 		newDf.Definition = &plan.DataDefinition_DropIndex{
 			DropIndex: &plan.DropIndex{
-				IfExists: df.DropIndex.IfExists,
-				Index:    df.DropIndex.Index,
+				Database:  df.DropIndex.Database,
+				Table:     df.DropIndex.Table,
+				IndexName: df.DropIndex.IndexName,
 			},
 		}
 
 	case *plan.DataDefinition_TruncateTable:
 		newDf.Definition = &plan.DataDefinition_TruncateTable{
 			TruncateTable: &plan.TruncateTable{
-				Table: df.TruncateTable.Table,
+				Table:        df.TruncateTable.Table,
+				ClusterTable: DeepCopyClusterTable(df.TruncateTable.GetClusterTable()),
 			},
 		}
 
@@ -738,4 +733,19 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	}
 
 	return newExpr
+}
+
+func DeepCopyClusterTable(cluster *plan.ClusterTable) *plan.ClusterTable {
+	if cluster == nil {
+		return nil
+	}
+
+	accountIds := make([]uint32, len(cluster.GetAccountIDs()))
+	copy(accountIds, cluster.GetAccountIDs())
+	newClusterTable := &plan.ClusterTable{
+		IsClusterTable:         cluster.GetIsClusterTable(),
+		AccountIDs:             accountIds,
+		ColumnIndexOfAccountId: cluster.GetColumnIndexOfAccountId(),
+	}
+	return newClusterTable
 }

@@ -29,3 +29,6 @@ func (node *TruncateTable) Format(ctx *FmtCtx) {
 	ctx.WriteByte(' ')
 	node.Name.Format(ctx)
 }
+
+func (node *TruncateTable) GetStatementType() string { return "Truncate" }
+func (node *TruncateTable) GetQueryType() string     { return QueryTypeDCL }

@@ -65,6 +65,9 @@ func (node *Delete) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *Delete) GetStatementType() string { return "Delete" }
+func (node *Delete) GetQueryType() string     { return QueryTypeDML }
+
 func NewDelete(ts TableExprs, w *Where, o OrderBy, l *Limit) *Delete {
 	return &Delete{
 		Tables:  ts,

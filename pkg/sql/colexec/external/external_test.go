@@ -174,8 +174,8 @@ func Test_Call(t *testing.T) {
 
 			param.Fileparam.End = false
 			end, err = Call(1, tcs.proc, tcs.arg)
-			convey.So(err, convey.ShouldNotBeNil)
-			convey.So(end, convey.ShouldBeFalse)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(end, convey.ShouldBeTrue)
 
 			param.Fileparam.End = true
 			end, err = Call(1, tcs.proc, tcs.arg)
@@ -268,7 +268,7 @@ func Test_makeBatch(t *testing.T) {
 		plh := &ParseLineHandler{
 			batchSize: 1,
 		}
-		_ = makeBatch(param, plh, testutil.TestUtilMp)
+		_ = makeBatch(param, plh.batchSize, testutil.TestUtilMp)
 	})
 }
 

@@ -46,28 +46,10 @@ const (
 	MAX_RANGE_SIZE int64  = 200
 )
 
-func checkExprIsMonotonic(expr *plan.Expr) bool {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			isMonotonic := checkExprIsMonotonic(arg)
-			if !isMonotonic {
-				return false
-			}
-		}
-
-		isMonotonic, _ := function.GetFunctionIsMonotonicById(exprImpl.F.Func.GetObj())
-		if !isMonotonic {
-			return false
-		}
-
-		return true
-	default:
-		return true
-	}
-}
-
 func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
+	if expr == nil {
+		return
+	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
@@ -84,10 +66,23 @@ func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map
 	}
 }
 
-func getColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) map[int]int {
+func getColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) (map[int]int, []int, int) {
 	columnMap := make(map[int]int)
+	// key = expr's ColPos,  value = tableDef's ColPos
 	getColumnMapByExpr(expr, tableDef, &columnMap)
-	return columnMap
+
+	maxCol := 0
+	useColumn := len(columnMap)
+	columns := make([]int, useColumn)
+	i := 0
+	for k, v := range columnMap {
+		if k > maxCol {
+			maxCol = k
+		}
+		columns[i] = v //tableDef's ColPos
+		i = i + 1
+	}
+	return columnMap, columns, maxCol
 }
 
 func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, objectio.IndexData, error) {
@@ -195,7 +190,7 @@ func getZonemapDataFromMeta(ctx context.Context, columns []int, meta BlockMeta, 
 	return datas, dataTypes, nil
 }
 
-func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
+func evalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
 	if len(bat.Vecs) == 0 { //that's constant expr
 		e, err := plan2.ConstantFold(bat, expr, proc)
 		if err != nil {
@@ -207,14 +202,14 @@ func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process) (b
 				return bVal.Bval, nil
 			}
 		}
-		return false, moerr.NewInternalError(proc.Ctx, "cannot eval filter expr")
+		return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
 	} else {
-		vec, err := colexec.EvalExprByZonemapBat(bat, proc, expr)
+		vec, err := colexec.EvalExprByZonemapBat(ctx, bat, proc, expr)
 		if err != nil {
 			return false, err
 		}
 		if vec.Typ.Oid != types.T_bool {
-			return false, moerr.NewInternalError(proc.Ctx, "cannot eval filter expr")
+			return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
 		}
 		cols := vector.MustTCols[bool](vec)
 		for _, isNeed := range cols {
@@ -260,10 +255,10 @@ func getNewBlockName(accountId uint32) (string, error) {
 	return fmt.Sprintf("%d_%s.blk", accountId, uuid.ToString()), nil
 }
 
-func getConstantExprHashValue(constExpr *plan.Expr) (bool, uint64) {
+func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *process.Process) (bool, uint64) {
 	args := []*plan.Expr{constExpr}
 	argTypes := []types.Type{types.T(constExpr.Typ.Id).ToType()}
-	funId, returnType, _, _ := function.GetFunctionByName(HASH_VALUE_FUN, argTypes)
+	funId, returnType, _, _ := function.GetFunctionByName(ctx, HASH_VALUE_FUN, argTypes)
 	funExpr := &plan.Expr{
 		Typ: plan2.MakePlan2Type(&returnType),
 		Expr: &plan.Expr_F{
@@ -279,7 +274,7 @@ func getConstantExprHashValue(constExpr *plan.Expr) (bool, uint64) {
 
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	ret, err := colexec.EvalExpr(bat, nil, funExpr)
+	ret, err := colexec.EvalExpr(bat, proc, funExpr)
 	if err != nil {
 		return false, 0
 	}
@@ -384,12 +379,12 @@ func getPkValueByExpr(expr *plan.Expr, pkName string, oid types.T) (bool, any) {
 // only support function :["and", "="]
 // support eg: pk="a",  pk="a" and noPk > 200
 // unsupport eg: pk>"a", pk=otherFun("a"),  pk="a" or noPk > 200,
-func computeRangeByNonIntPk(expr *plan.Expr, pkName string) (bool, uint64) {
+func computeRangeByNonIntPk(ctx context.Context, expr *plan.Expr, pkName string, proc *process.Process) (bool, uint64) {
 	canCompute, valExpr := getPkExpr(expr, pkName)
 	if !canCompute {
 		return canCompute, 0
 	}
-	ok, pkHashValue := getConstantExprHashValue(valExpr)
+	ok, pkHashValue := getConstantExprHashValue(ctx, valExpr, proc)
 	if !ok {
 		return false, 0
 	}

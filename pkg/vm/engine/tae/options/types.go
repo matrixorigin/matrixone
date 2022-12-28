@@ -40,12 +40,13 @@ const (
 	DefaultCheckpointFlushInterval      = time.Minute
 	DefaultCheckpointMinCount           = int64(100)
 	DefaultCheckpointIncremetalInterval = time.Minute
-	DefaultCheckpointGlobalInterval     = time.Minute * 60
+	DefaultCheckpointGlobalMinCount     = 10
+	DefaultGlobalVersionInterval        = time.Hour
 
 	DefaultIOWorkers    = int(8)
 	DefaultAsyncWorkers = int(16)
 
-	DefaultLogtailTxnPageSize = 1024
+	DefaultLogtailTxnPageSize = 100
 
 	DefaultLogstoreType = LogstoreBatchStore
 )

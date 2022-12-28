@@ -16,8 +16,9 @@ package plan
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -36,7 +37,7 @@ type TableDef = plan.TableDef
 type ColDef = plan.ColDef
 type ObjectRef = plan.ObjectRef
 type ColRef = plan.ColRef
-type Cost = plan.Cost
+type Stats = plan.Stats
 type Const = plan.Const
 type MaxValue = plan.MaxValue
 type Expr = plan.Expr
@@ -48,7 +49,6 @@ type Type = plan.Type
 type Plan_Query = plan.Plan_Query
 type Property = plan.Property
 type TableDef_DefType_Properties = plan.TableDef_DefType_Properties
-type TableDef_DefType_View = plan.TableDef_DefType_View
 type TableDef_DefType_Partition = plan.TableDef_DefType_Partition
 type PropertiesDef = plan.PropertiesDef
 type ViewDef = plan.ViewDef
@@ -58,6 +58,9 @@ type TableDef_DefType_SIdx = plan.TableDef_DefType_SIdx
 type UniqueIndexDef = plan.UniqueIndexDef
 type SecondaryIndexDef = plan.SecondaryIndexDef
 type OrderBySpec = plan.OrderBySpec
+type CreateTable_FkColName = plan.CreateTable_FkColName
+type ForeignKeyDef = plan.ForeignKeyDef
+type ClusterTable = plan.ClusterTable
 
 type CompilerContext interface {
 	// Default database/schema in context
@@ -68,12 +71,14 @@ type CompilerContext interface {
 	Resolve(schemaName string, tableName string) (*ObjectRef, *TableDef)
 	// get the value of variable
 	ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	// get the list of the account id
+	ResolveAccountIds(accountNames []string) ([]uint32, error)
 	// get the definition of primary key
 	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
 	// get the definition of hide key
 	GetHideKeyDef(dbName string, tableName string) *ColDef
-	// get estimated cost by table & expr
-	Cost(obj *ObjectRef, e *Expr) *Cost
+	// get estimated stats by table & expr
+	Stats(obj *ObjectRef, e *Expr) *Stats
 	// get origin sql string of the root
 	GetRootSql() string
 	// get username of current session
@@ -205,9 +210,11 @@ type Binder interface {
 	BindAggFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
 	BindWinFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
 	BindSubquery(*tree.Subquery, bool) (*plan.Expr, error)
+	GetContext() context.Context
 }
 
 type baseBinder struct {
+	sysCtx    context.Context
 	builder   *QueryBuilder
 	ctx       *BindContext
 	impl      Binder
@@ -269,13 +276,14 @@ const (
 )
 
 type Binding struct {
-	tag         int32
-	nodeId      int32
-	table       string
-	cols        []string
-	types       []*plan.Type
-	refCnts     []uint
-	colIdByName map[string]int32
+	tag            int32
+	nodeId         int32
+	table          string
+	cols           []string
+	types          []*plan.Type
+	refCnts        []uint
+	colIdByName    map[string]int32
+	isClusterTable bool
 }
 
 const (

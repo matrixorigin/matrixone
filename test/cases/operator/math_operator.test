@@ -1,4 +1,0 @@
-select cast('2020-02-01' as date) + NULL;
-select 1 + NULL;
-select NULL + 1;
-select NULL + cast('2020-02-01 00:00:00' as datetime);

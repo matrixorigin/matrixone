@@ -22,10 +22,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// Serial have a similar function named SerialWithCompacted in the index_util
+// Serial func is used by users, the function make true when input vec have ten
+// rows, the output vec is ten rows, when the vectors have null value, the output
+// vec will set the row null
+// for example:
+// input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
+// result vec is [serial(1, 2, 3), serial(1, 2, 3), null]
 func Serial(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	for _, v := range vectors {
 		if v.IsScalar() {
-			return nil, moerr.NewConstraintViolationNoCtx("serial function don't support constant value")
+			return nil, moerr.NewConstraintViolation(proc.Ctx, "serial function don't support constant value")
 		}
 	}
 	return SerialWithSomeCols(vectors, proc)
@@ -34,9 +41,8 @@ func Serial(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	length := vector.Length(vectors[0])
 	vct := types.T_varchar.ToType()
-	nsp := new(nulls.Nulls)
 	val := make([][]byte, 0, length)
-	ps := types.NewPackerArray(length)
+	ps := types.NewPackerArray(length, proc.Mp())
 	bitMap := new(nulls.Nulls)
 
 	for _, v := range vectors {
@@ -207,12 +213,13 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 	}
 
 	for i := range ps {
-		if !nulls.Contains(bitMap, uint64(i)) {
-			val = append(val, ps[i].GetBuf())
-		}
+		val = append(val, ps[i].GetBuf())
 	}
 
-	vec := vector.NewWithBytes(vct, val, nsp, proc.Mp())
+	vec := vector.NewWithBytes(vct, val, bitMap, proc.Mp())
 
+	for _, p := range ps {
+		p.FreeMem()
+	}
 	return vec, nil
 }

@@ -48,6 +48,27 @@ func TestEncodeAndDecode(t *testing.T) {
 	assert.NotNil(t, v.(RPCMessage).cancel)
 }
 
+func TestEncodeAndDecodeWithStream(t *testing.T) {
+	codec := newTestCodec()
+	buf := buf.NewByteBuf(1)
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
+	defer cancel()
+
+	msg := RPCMessage{Ctx: ctx, Message: newTestMessage(1), stream: true, streamSequence: 1}
+	err := codec.Encode(msg, buf, nil)
+	assert.NoError(t, err)
+
+	v, ok, err := codec.Decode(buf)
+	assert.True(t, ok)
+	assert.Equal(t, msg.Message, v.(RPCMessage).Message)
+	assert.True(t, v.(RPCMessage).stream)
+	assert.Equal(t, uint32(1), v.(RPCMessage).streamSequence)
+	assert.NoError(t, err)
+	assert.NotNil(t, v.(RPCMessage).Ctx)
+	assert.NotNil(t, v.(RPCMessage).cancel)
+}
+
 func TestEncodeAndDecodeWithChecksum(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
 	defer cancel()

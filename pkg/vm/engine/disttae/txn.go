@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -46,7 +47,7 @@ func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]
 			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
 			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
 		},
-		genTableListExpr(getAccountId(ctx), databaseId))
+		genTableListExpr(ctx, getAccountId(ctx), databaseId))
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +64,7 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	key := genTableIndexKey(name, databaseId, accountId)
 	rows, err := txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, "",
 		txn.dnStores[:1], catalog.MoTablesSchema, key,
-		genTableInfoExpr(accountId, databaseId, name))
+		genTableInfoExpr(ctx, accountId, databaseId, name))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -87,6 +88,7 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	tbl.comment = string(row[catalog.MO_TABLES_REL_COMMENT_IDX].([]byte))
 	tbl.partition = string(row[catalog.MO_TABLES_PARTITIONED_IDX].([]byte))
 	tbl.createSql = string(row[catalog.MO_TABLES_REL_CREATESQL_IDX].([]byte))
+	tbl.constraint = row[catalog.MO_TABLES_CONSTRAINT_IDX].([]byte)
 	/*
 		rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 			txn.dnStores[:1], catalog.MoColumnsTableDefs, catalog.MoColumnsSchema,
@@ -97,7 +99,7 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	*/
 	rows, err = txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, "",
 		txn.dnStores[:1], catalog.MoColumnsSchema, genColumnIndexKey(tbl.tableId),
-		genColumnInfoExpr(accountId, databaseId, tbl.tableId))
+		genColumnInfoExpr(ctx, accountId, databaseId, tbl.tableId))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -127,7 +129,7 @@ func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
 			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
 		},
-		genTableIdExpr(accountId, databaseId, name))
+		genTableIdExpr(ctx, accountId, databaseId, name))
 	if err != nil {
 		return 0, err
 	}
@@ -141,7 +143,7 @@ func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
 		},
-		genDatabaseListExpr(getAccountId(ctx)))
+		genDatabaseListExpr(ctx, getAccountId(ctx)))
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +162,7 @@ func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64,
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
-		}, key, genDatabaseIdExpr(accountId, name))
+		}, key, genDatabaseIdExpr(ctx, accountId, name))
 	if err != nil {
 		return 0, err
 	}
@@ -690,39 +692,22 @@ func (h *transactionHeap) Pop() any {
 }
 
 // needRead determine if a block needs to be read
-func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc *process.Process) bool {
+func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, columnMap map[int]int, columns []int, maxCol int, proc *process.Process) bool {
 	var err error
 	if expr == nil {
 		return true
 	}
-
-	// key = expr's ColPos,  value = tableDef's ColPos
-	columnMap := getColumnsByExpr(expr, tableDef)
+	notReportErrCtx := errutil.ContextWithNoReport(ctx, true)
 
 	// if expr match no columns, just eval expr
-	if len(columnMap) == 0 {
+	if len(columns) == 0 {
 		bat := batch.NewWithSize(0)
-		ifNeed, err := evalFilterExpr(expr, bat, proc)
+		defer bat.Clean(proc.Mp())
+		ifNeed, err := evalFilterExpr(notReportErrCtx, expr, bat, proc)
 		if err != nil {
 			return true
 		}
-		bat.Clean(proc.Mp())
 		return ifNeed
-	}
-	if !checkExprIsMonotonic(expr) {
-		return true
-	}
-
-	maxCol := 0
-	useColumn := len(columnMap)
-	columns := make([]int, useColumn)
-	i := 0
-	for k, v := range columnMap {
-		if k > maxCol {
-			maxCol = k
-		}
-		columns[i] = v //tableDef's ColPos
-		i = i + 1
 	}
 
 	// get min max data from Meta
@@ -734,6 +719,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	// use all min/max data to build []vectors.
 	buildVectors := buildVectorsByData(datas, dataTypes, proc.Mp())
 	bat := batch.NewWithSize(maxCol + 1)
+	defer bat.Clean(proc.Mp())
 	for k, v := range columnMap {
 		for i, realIdx := range columns {
 			if realIdx == v {
@@ -744,13 +730,10 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	}
 	bat.SetZs(buildVectors[0].Length(), proc.Mp())
 
-	ifNeed, err := evalFilterExpr(expr, bat, proc)
+	ifNeed, err := evalFilterExpr(notReportErrCtx, expr, bat, proc)
 	if err != nil {
-		bat.Clean(proc.Mp())
 		return true
 	}
-	bat.Clean(proc.Mp())
-
 	return ifNeed
 
 }
@@ -813,8 +796,8 @@ func blockWrite(ctx context.Context, bat *batch.Batch, fs fileservice.FileServic
 	return writer.WriteEnd(ctx)
 }
 
-func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
-	priKeys []*engine.Attribute, dnStores []DNStore) []int {
+func needSyncDnStores(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef,
+	priKeys []*engine.Attribute, dnStores []DNStore, proc *process.Process) []int {
 	var pk *engine.Attribute
 
 	fullList := func() []int {
@@ -853,7 +836,7 @@ func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
 		}
 		return getListByItems(dnStores, intPkRange.items)
 	}
-	canComputeRange, hashVal := computeRangeByNonIntPk(expr, pk.Name)
+	canComputeRange, hashVal := computeRangeByNonIntPk(ctx, expr, pk.Name, proc)
 	if !canComputeRange {
 		return fullList()
 	}

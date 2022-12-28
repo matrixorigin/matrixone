@@ -129,7 +129,7 @@ func HandleSyncLogTailReq(
 			return newResp, err
 		}
 	}
-	return visitor.BuildResp()
+	return
 }
 
 type RespBuilder interface {
@@ -220,6 +220,9 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 		}
 		tblNode := node.(*catalog.TableMVCCNode)
 		if b.scope == ScopeColumns {
+			if tblNode.IsUpdate {
+				continue // update constraints won't affect mo_columns
+			}
 			var dstBatch *containers.Batch
 			if !tblNode.HasDropCommitted() {
 				dstBatch = b.insBatch
@@ -310,12 +313,12 @@ func catalogEntry2Batch[T *catalog.DBEntry | *catalog.TableEntry](
 	dstBatch *containers.Batch,
 	e T,
 	schema *catalog.Schema,
-	fillDataRow func(e T, attr string, col containers.Vector),
+	fillDataRow func(e T, attr string, col containers.Vector, ts types.TS),
 	rowid types.Rowid,
 	commitTs types.TS,
 ) {
 	for _, col := range schema.ColDefs {
-		fillDataRow(e, col.Name, dstBatch.GetVectorByName(col.Name))
+		fillDataRow(e, col.Name, dstBatch.GetVectorByName(col.Name), commitTs)
 	}
 	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid)
 	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs)
@@ -461,7 +464,7 @@ func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode 
 		e.AsCommonID().String(), e.IsAppendable(),
 		metaNode.CreatedAt.ToString(), metaNode.DeletedAt.ToString(), metaNode.MetaLoc, metaNode.DeltaLoc)
 	is_sorted := false
-	if !e.IsAppendable() && e.GetSchema().HasPK() {
+	if !e.IsAppendable() && e.GetSchema().HasSortKey() {
 		is_sorted = true
 	}
 	insBatch := b.blkMetaInsBatch
@@ -525,7 +528,6 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			return err
 		}
 
-		blockID := uint64(0)
 		tableName := b.tname
 		if metaChange {
 			tableName = fmt.Sprintf("_%d_meta", b.tid)
@@ -543,7 +545,6 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			TableName:    tableName,
 			DatabaseId:   b.did,
 			DatabaseName: b.dname,
-			BlockId:      blockID,
 			Bat:          bat,
 		}
 		entries = append(entries, entry)
@@ -610,7 +611,7 @@ func LoadCheckpointEntries(
 				return
 			}
 			data := NewCheckpointData()
-			if err = data.ReadFrom(reader, jobScheduler, common.DefaultAllocator); err != nil {
+			if err = data.ReadFrom(reader, nil, common.DefaultAllocator); err != nil {
 				result.Err = err
 				return
 			}

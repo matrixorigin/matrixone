@@ -26,14 +26,16 @@ import (
 )
 
 type ConstantFold struct {
-	bat *batch.Batch
+	bat        *batch.Batch
+	isPrepared bool
 }
 
-func NewConstantFold() *ConstantFold {
+func NewConstantFold(isPrepared bool) *ConstantFold {
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 	return &ConstantFold{
-		bat: bat,
+		bat:        bat,
+		isPrepared: isPrepared,
 	}
 }
 
@@ -73,6 +75,12 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.Expr {
 	ef, ok := e.Expr.(*plan.Expr_F)
 	if !ok {
+		if el, ok := e.Expr.(*plan.Expr_List); ok {
+			lenList := len(el.List.List)
+			for i := 0; i < lenList; i++ {
+				el.List.List[i] = r.constantFold(el.List.List[i], proc)
+			}
+		}
 		return e
 	}
 	overloadID := ef.F.Func.GetObj()
@@ -81,6 +89,9 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 		return e
 	}
 	if f.Volatile { // function cannot be fold
+		return e
+	}
+	if f.RealTimeRelated && r.isPrepared {
 		return e
 	}
 	for i := range ef.F.Args {
@@ -100,6 +111,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	ec := &plan.Expr_C{
 		C: c,
 	}
+	e.Typ = &plan.Type{Id: int32(vec.Typ.Oid), Precision: vec.Typ.Precision, Scale: vec.Typ.Scale, Width: vec.Typ.Width, Size: vec.Typ.Size}
 	e.Expr = ec
 	return e
 }
@@ -169,10 +181,16 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 				Dval: vec.Col.([]float64)[0],
 			},
 		}
-	case types.T_varchar:
+	case types.T_varchar, types.T_char, types.T_text:
 		return &plan.Const{
 			Value: &plan.Const_Sval{
 				Sval: vec.GetString(0),
+			},
+		}
+	case types.T_timestamp:
+		return &plan.Const{
+			Value: &plan.Const_Timestampval{
+				Timestampval: int64(vector.MustTCols[types.Timestamp](vec)[0]),
 			},
 		}
 	default:

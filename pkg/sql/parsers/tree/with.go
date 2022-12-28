@@ -32,6 +32,8 @@ func (node *With) Format(ctx *FmtCtx) {
 		prefix = ", "
 	}
 }
+func (node *With) GetStatementType() string { return "With" }
+func (node *With) GetQueryType() string     { return QueryTypeDML }
 
 type CTE struct {
 	Name *AliasClause

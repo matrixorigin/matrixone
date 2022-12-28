@@ -144,6 +144,7 @@ const (
 	LIKE_ALL // LIKE_ALL
 	LIKE_ANY // LIKE_ANY
 	LN       // LN
+	NOT_IN   // NOT_IN
 	LOG      // LOG
 	LOWER    // LOWER
 	LPAD     // LPAD
@@ -184,13 +185,15 @@ const (
 	SINH       //SINH
 	SPACE
 	SPLIT         // SPLIT
+	SPLIT_PART    // SPLIT_PART
 	STARCOUNT     // STARTCOUNT
 	STARTSWITH    // STARTSWITH
 	STDDEV_POP    // STDDEV_POP
 	STDDEV_SAMPLE // STDDEV_SAMPLE
 	SUBSTR        // SUBSTR
 	SUM           // SUM
-	TAN           // TAN
+	GROUP_CONCAT
+	TAN // TAN
 	TO_DATE
 	STR_TO_DATE
 	TO_INTERVAL // TO_INTERVAL
@@ -248,7 +251,11 @@ const (
 	TIMESTAMP    // TIMESTAMP
 	DATE_FORMAT  // DATE_FORMAT
 	JSON_EXTRACT // JSON_EXTRACT
+	JSON_QUOTE   // JSON_QUOTE
+	JSON_UNQUOTE // JSON_UNQUOTE
 	FORMAT       // FORMAT
+	SLEEP        // sleep for a while
+	INSTR
 
 	UUID
 	SERIAL
@@ -292,6 +299,7 @@ var functionIdRegister = map[string]int32{
 	"like":         LIKE,
 	"between":      BETWEEN,
 	"in":           IN,
+	"not_in":       NOT_IN,
 	"exists":       EXISTS,
 	"+":            PLUS,
 	"-":            MINUS,
@@ -329,6 +337,7 @@ var functionIdRegister = map[string]int32{
 	"max":                   MAX,
 	"min":                   MIN,
 	"sum":                   SUM,
+	"group_concat":          GROUP_CONCAT,
 	"avg":                   AVG,
 	"count":                 COUNT,
 	"starcount":             STARCOUNT,
@@ -340,6 +349,7 @@ var functionIdRegister = map[string]int32{
 	"variance":              VAR_POP,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
 	"any_value":             ANY_VALUE,
+	"median":                MEDIAN,
 	// builtin
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// binary functions
@@ -428,6 +438,7 @@ var functionIdRegister = map[string]int32{
 	"version":                        VERSION,
 	"collation":                      COLLATION,
 	"json_extract":                   JSON_EXTRACT,
+	"json_quote":                     JSON_QUOTE,
 	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
 	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
 	"add_fault_point":                ADD_FAULT_POINT,
@@ -456,6 +467,13 @@ var functionIdRegister = map[string]int32{
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
 	"format":                         FORMAT,
+	"sleep":                          SLEEP,
+	"split_part":                     SPLIT_PART,
+	"instr":                          INSTR,
+	"curdate":                        CURRENT_DATE,
+	"current_date":                   CURRENT_DATE,
+	"json_unquote":                   JSON_UNQUOTE,
+	"ascii":                          ASCII,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

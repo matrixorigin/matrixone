@@ -117,7 +117,6 @@ func (s *store) newMemTxnStorage(
 	}
 	return memorystorage.NewMemoryStorage(
 		mp,
-		memorystorage.SnapshotIsolation,
 		s.rt.Clock(),
 		memoryengine.NewHakeeperIDGenerator(hakeeper),
 	)
@@ -133,7 +132,7 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		ScanInterval:        s.cfg.Ckp.ScanInterval.Duration,
 		FlushInterval:       s.cfg.Ckp.FlushInterval.Duration,
 		IncrementalInterval: s.cfg.Ckp.IncrementalInterval.Duration,
-		GlobalInterval:      s.cfg.Ckp.GlobalInterval.Duration,
+		GlobalMinCount:      s.cfg.Ckp.GlobalMinCount,
 	}
 
 	// use s3 as main fs
