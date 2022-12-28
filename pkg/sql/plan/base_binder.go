@@ -926,6 +926,20 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if len(args) > 1 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args size", len(args))
 		}
+	case "ascii":
+		if len(args) != 1 {
+			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
+		}
+		tp := types.T(args[0].Typ.Id)
+		switch {
+		case types.IsString(tp), types.IsInteger(tp):
+		default:
+			targetTp := types.T_varchar.ToType()
+			args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetTp), false)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	// get args(exprs) & types
