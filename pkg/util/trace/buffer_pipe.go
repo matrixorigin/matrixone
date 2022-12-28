@@ -110,8 +110,8 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 			return
 		}
 		if _, err := req.writer.WriteString(req.content); err != nil {
-			logutil.Error(fmt.Sprintf("[Trace] faield to write csv: %s", req.content), logutil.NoReportFiled())
-			logutil.Error(fmt.Sprintf("[Trace] faield to write. err: %v", err), logutil.NoReportFiled())
+			logutil.Error(fmt.Sprintf("[Trace] failed to write csv: %s", req.content), logutil.NoReportFiled())
+			logutil.Error(fmt.Sprintf("[Trace] failed to write. err: %v", err), logutil.NoReportFiled())
 		}
 	}
 
