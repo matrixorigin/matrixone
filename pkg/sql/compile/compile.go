@@ -18,11 +18,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"runtime"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -745,7 +746,7 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns []*plan.Node) []*Scope {
 	ss = append(ss, children...)
-	rs := c.newScopeList(1, int(n.Stats.Cost))
+	rs := c.newScopeList(1, int(n.Stats.BlockNum))
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
 	copy(gn.GroupBy, n.ProjectList)
@@ -769,7 +770,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns 
 }
 
 func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	rs := c.newJoinScopeListWithBucket(c.newScopeList(2, int(n.Stats.Cost)), ss, children)
+	rs := c.newJoinScopeListWithBucket(c.newScopeList(2, int(n.Stats.BlockNum)), ss, children)
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
@@ -1059,7 +1060,7 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 }
 
 func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
-	rs := c.newScopeList(validScopeCount(ss), int(n.Stats.Cost))
+	rs := c.newScopeList(validScopeCount(ss), int(n.Stats.BlockNum))
 	j := 0
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
@@ -1121,11 +1122,11 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	return rs
 }
 
-func (c *Compile) newScopeList(childrenCount int, rows int) []*Scope {
+func (c *Compile) newScopeList(childrenCount int, blocks int) []*Scope {
 	var ss []*Scope
 
 	for _, n := range c.cnList {
-		ss = append(ss, c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, rows), childrenCount)...)
+		ss = append(ss, c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount)...)
 	}
 	return ss
 }
@@ -1240,14 +1241,17 @@ func (c *Compile) NumCPU() int {
 	return runtime.NumCPU()
 }
 
-func (c *Compile) generateCPUNumber(num, rows int) int {
-	for n := rows / num; num > 0 && n < Single_Core_Rows; num = num - 1 {
-		continue
+func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
+	if blocks < cpunum {
+		if blocks <= 0 {
+			return 1
+		}
+		return blocks
 	}
-	if num == 0 {
-		num++
+	if cpunum <= 0 {
+		return 1
 	}
-	return num
+	return cpunum
 }
 
 func (c *Compile) initAnalyze(qry *plan.Query) {
@@ -1303,7 +1307,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			nodes[i] = engine.Node{
 				Id:   node.Id,
 				Addr: node.Addr,
-				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.Cost)),
+				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
 			}
 		}
 		return nodes, nil
@@ -1313,7 +1317,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			nodes = append(nodes, engine.Node{Mcpu: 1})
 		} else {
 			nodes = append(nodes, engine.Node{
-				Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.Cost)),
+				Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
 			})
 		}
 		ranges = ranges[1:]
@@ -1328,14 +1332,14 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			nodes = append(nodes, engine.Node{
 				Id:   c.cnList[j].Id,
 				Addr: c.cnList[j].Addr,
-				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.Cost)),
+				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
 				Data: ranges[i:],
 			})
 		} else {
 			nodes = append(nodes, engine.Node{
 				Id:   c.cnList[j].Id,
 				Addr: c.cnList[j].Addr,
-				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.Cost)),
+				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
 				Data: ranges[i : i+step],
 			})
 		}
