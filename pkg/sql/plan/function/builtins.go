@@ -2758,4 +2758,77 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	ASCII: {
+		Id:     ASCII,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiString,
+			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_char},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiString,
+			},
+			{
+				Index:     2,
+				Args:      []types.T{types.T_text},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiString,
+			},
+			{
+				Index:     3,
+				Args:      []types.T{types.T_int8},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiInt[int8],
+			},
+			{
+				Index:     4,
+				Args:      []types.T{types.T_int16},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiInt[int16],
+			},
+			{
+				Index:     5,
+				Args:      []types.T{types.T_int32},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiInt[int32],
+			},
+			{
+				Index:     6,
+				Args:      []types.T{types.T_int64},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiInt[int64],
+			},
+			{
+				Index:     7,
+				Args:      []types.T{types.T_uint8},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiUint[uint8],
+			},
+			{
+				Index:     8,
+				Args:      []types.T{types.T_uint16},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiUint[uint16],
+			},
+			{
+				Index:     9,
+				Args:      []types.T{types.T_uint32},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiUint[uint32],
+			},
+			{
+				Index:     10,
+				Args:      []types.T{types.T_uint64},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiUint[uint64],
+			},
+		},
+	},
 }
