@@ -473,6 +473,7 @@ var functionIdRegister = map[string]int32{
 	"curdate":                        CURRENT_DATE,
 	"current_date":                   CURRENT_DATE,
 	"json_unquote":                   JSON_UNQUOTE,
+	"ascii":                          ASCII,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

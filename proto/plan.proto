@@ -490,15 +490,16 @@ message WindowSpec {
 message UpdateCtx {
 	string db_name = 1;
 	string tbl_name = 2;
-	string pri_key = 3;
-	int32 pri_key_idx = 4;
-	string hide_key = 5;
-	int32 hide_key_idx = 6;
-	repeated ColDef update_cols = 7;
-	repeated string other_attrs = 8;
-	repeated string order_attrs = 9;
-	ColDef composite_pkey = 10;
-	repeated string index_attrs = 11;
+	string hide_key = 3;
+	int32 hide_key_idx = 4;
+	repeated ColDef update_cols = 5;
+	repeated string other_attrs = 6;
+	repeated string order_attrs = 7;
+	ColDef composite_pkey = 8;
+	bool is_index_table_update = 9;
+	repeated int32 uniqueIndexPos = 10;
+	repeated int32	secondaryIndexPos = 11;
+	repeated string indexParts = 12;
 }
 
 message AnalyzeInfo {
@@ -624,6 +625,8 @@ message Node {
     // The pipeline will determine the parallelism by traversing the plan 
     // when it is received. Then the build is built based on this information.
     int32   parallelism = 26;
+
+	ClusterTable cluster_table = 27;
 }
 
 message DeleteTableCtx {
@@ -632,9 +635,7 @@ message DeleteTableCtx {
 	string use_delete_key = 3;
 	bool can_truncate = 4;
 	int32 col_index = 5;
-	UniqueIndexDef unique_index_def = 6;
-	SecondaryIndexDef secondary_index_def = 7;
-	repeated string index_attrs = 8;
+	bool is_index_table_delete = 6;
 }
 
 message Query {
@@ -729,6 +730,7 @@ message InsertValues {
 	ColDef composite_pkey = 7;
 	UniqueIndexDef unique_index_def = 8;
 	SecondaryIndexDef secondary_index_def = 9;
+	ClusterTable cluster_table = 10;
 }
 
 message column{
@@ -849,12 +851,14 @@ message DropTable {
 	string database = 2;
 	string table 	= 3;
 	repeated string index_table_names = 4;
+	ClusterTable cluster_table = 5;
 }
 
 message CreateIndex {
 	string database = 1;
 	string table = 2;
-	CreateTable index = 3;
+	string	origin_table_primary_key = 3;
+	CreateTable index = 4;
 }
 
 message AlterIndex {
@@ -872,6 +876,13 @@ message TruncateTable {
 	string database = 1;
 	string table = 2;
 	repeated string index_table_names = 3;
+	ClusterTable cluster_table = 4;
+}
+
+message ClusterTable{
+	bool is_cluster_table = 1;//insert into a cluster table
+	repeated uint32 accountIDs = 2;//insert data into the cluster table for every account
+	int32 column_index_of_accountId = 3;//the column index of the account id in the cluster table
 }
 
 message ShowVariables {
