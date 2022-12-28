@@ -51,6 +51,7 @@ type SegmentWriter interface {
 
 	CreateBlock(bool) (Block, error)
 	CreateNonAppendableBlock() (Block, error)
+	CreateNonAppendableBlockWithMeta(string, string) (Block, error)
 
 	SoftDeleteBlock(id uint64) (err error)
 }
