@@ -5176,6 +5176,27 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_time,
 				Fn:        operator.Cast,
 			},
+			{
+				Index:     336,
+				Args:      []types.T{types.T_json, types.T_char},
+				ReturnTyp: types.T_varchar,
+				Fn:        operator.Cast,
+				Volatile:  false,
+			},
+			{
+				Index:     337,
+				Args:      []types.T{types.T_json, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        operator.Cast,
+				Volatile:  false,
+			},
+			{
+				Index:     338,
+				Args:      []types.T{types.T_json, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+				Volatile:  false,
+			},
 		},
 	},
 

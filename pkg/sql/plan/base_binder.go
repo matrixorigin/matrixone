@@ -885,6 +885,20 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if args[1].Typ.Id == int32(types.T_any) {
 			args[1].Typ.Id = int32(types.T_varchar)
 		}
+		if args[0].Typ.Id == int32(types.T_json) {
+			targetTp := types.T_varchar.ToType()
+			args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetTp), false)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if args[1].Typ.Id == int32(types.T_json) {
+			targetTp := types.T_varchar.ToType()
+			args[1], err = appendCastBeforeExpr(ctx, args[1], makePlan2Type(&targetTp), false)
+			if err != nil {
+				return nil, err
+			}
+		}
 	case "timediff":
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
