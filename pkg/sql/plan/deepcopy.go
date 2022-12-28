@@ -172,10 +172,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		for idx, col := range node.RowsetData.Cols {
 			newNode.RowsetData.Cols[idx] = DeepCopyColData(col)
 		}
-
-		if node.RowsetData.Schema != nil {
-			newNode.RowsetData.Schema = DeepCopyTableDef(node.RowsetData.Schema)
-		}
 	}
 	for idx, expr := range node.TblFuncExprList {
 		node.TblFuncExprList[idx] = DeepCopyExpr(expr)
@@ -384,21 +380,11 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 
 func DeepCopyColData(col *plan.ColData) *plan.ColData {
 	newCol := &plan.ColData{
-		RowCount:  col.RowCount,
-		NullCount: col.NullCount,
-		Nulls:     make([]bool, len(col.Nulls)),
-		I32:       make([]int32, len(col.I32)),
-		I64:       make([]int64, len(col.I64)),
-		F32:       make([]float32, len(col.F32)),
-		F64:       make([]float64, len(col.F64)),
-		S:         make([]string, len(col.S)),
+		Data: make([]*plan.Expr, len(col.Data)),
 	}
-	copy(newCol.Nulls, col.Nulls)
-	copy(newCol.I32, col.I32)
-	copy(newCol.I64, col.I64)
-	copy(newCol.F32, col.F32)
-	copy(newCol.F64, col.F64)
-	copy(newCol.S, col.S)
+	for i, e := range col.Data {
+		newCol.Data[i] = DeepCopyExpr(e)
+	}
 
 	return newCol
 }

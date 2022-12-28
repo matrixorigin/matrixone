@@ -331,7 +331,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			var comment string
 			var auto_incr bool
 			for _, attr := range def.Attributes {
-				if _, ok := attr.(*tree.AttributePrimaryKey); ok {
+				switch attribute := attr.(type) {
+				case *tree.AttributePrimaryKey:
 					if colType.GetId() == int32(types.T_blob) {
 						return moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
 					}
@@ -342,23 +343,17 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", def.Name.Parts[0]))
 					}
 					pks = append(pks, def.Name.Parts[0])
-				}
-
-				if attrComment, ok := attr.(*tree.AttributeComment); ok {
-					comment = attrComment.CMT.String()
+				case *tree.AttributeComment:
+					comment = attribute.CMT.String()
 					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
 						return moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", def.Name.Parts[0])
 					}
-				}
-
-				if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
+				case *tree.AttributeAutoIncrement:
 					auto_incr = true
 					if !operator.IsInteger(types.T(colType.GetId())) {
 						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
-				}
-
-				if _, ok := attr.(*tree.AttributeUnique); ok {
+				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
 					indexInfos = append(indexInfos, &tree.UniqueIndex{
 						KeyParts: []*tree.KeyPart{
 							{
@@ -367,17 +362,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						},
 					})
 				}
-
-				if _, ok := attr.(*tree.AttributeUniqueKey); ok {
-					indexInfos = append(indexInfos, &tree.UniqueIndex{
-						KeyParts: []*tree.KeyPart{
-							{
-								ColName: def.Name,
-							},
-						},
-					})
-				}
-
 			}
 			if len(pks) > 0 {
 				if len(primaryKeys) > 0 {
