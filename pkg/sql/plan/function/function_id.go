@@ -471,6 +471,7 @@ var functionIdRegister = map[string]int32{
 	"instr":                          INSTR,
 	"curdate":                        CURRENT_DATE,
 	"current_date":                   CURRENT_DATE,
+	"ascii":                          ASCII,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
