@@ -3825,6 +3825,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			update error message in Case1,Case3,Case4.
 		*/
 		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
+			ses.cleanCache()
 			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
 		logError(ses.GetConciseProfile(), err.Error())
