@@ -16,9 +16,10 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
@@ -549,6 +550,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table.EXPECT().FilteredStats(gomock.Any(), gomock.Any()).Return(int32(100), int64(1000000), nil).AnyTimes()
 		table.EXPECT().Stats(gomock.Any()).Return(int32(100), int64(1000000), nil).AnyTimes()
 		table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 
@@ -564,7 +566,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		convey.So(defDBName, convey.ShouldEqual, "")
 		convey.So(tcc.DatabaseExists("abc"), convey.ShouldBeTrue)
 
-		_, err := tcc.getRelation("abc", "t1")
+		_, _, err := tcc.getRelation("abc", "t1")
 		convey.So(err, convey.ShouldBeNil)
 
 		object, tableRef := tcc.Resolve("abc", "t1")

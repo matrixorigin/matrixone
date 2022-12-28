@@ -29,7 +29,7 @@ const (
 	MaxCharLen        = 255
 )
 
-func (v *Varlena) unsafePtr() unsafe.Pointer {
+func (v *Varlena) UnsafePtr() unsafe.Pointer {
 	return unsafe.Pointer(&v[0])
 }
 
@@ -40,7 +40,7 @@ func (v *Varlena) ByteSlice() []byte {
 }
 
 func (v *Varlena) U32Slice() []uint32 {
-	ptr := (*uint32)(v.unsafePtr())
+	ptr := (*uint32)(v.UnsafePtr())
 	return unsafe.Slice(ptr, 6)
 }
 

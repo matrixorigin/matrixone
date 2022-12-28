@@ -16,7 +16,6 @@ package operator
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,13 +38,13 @@ func handleScalarNull(v1, v2 *vector.Vector, proc *process.Process) (*vector.Vec
 	} else if v2.IsScalarNull() {
 		return proc.AllocConstNullVector(boolType, vector.Length(v1)), nil
 	}
-	panic(moerr.NewInternalErrorNoCtx("handleScalarNull failed."))
+	panic(moerr.NewInternalError(proc.Ctx, "handleScalarNull failed."))
 }
 
 func allocateBoolVector(length int, proc *process.Process) *vector.Vector {
 	vec, err := proc.AllocVectorOfRows(boolType, int64(length), nil)
 	if err != nil {
-		panic(moerr.NewOOMNoCtx())
+		panic(moerr.NewOOM(proc.Ctx))
 	}
 	return vec
 }
@@ -104,6 +103,118 @@ func NeDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, 
 
 func NeDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return CompareOrdered(args, proc, compare.Decimal128VecNe)
+}
+
+// IN operator
+func INGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := args[0], args[1]
+	left, right := vector.MustTCols[T](leftVec), vector.MustTCols[T](rightVec)
+	lenLeft := len(left)
+	lenRight := len(right)
+	if leftVec.IsScalar() {
+		lenLeft = 1
+	}
+	inMap := make(map[T]bool, lenRight)
+	for i := 0; i < lenRight; i++ {
+		if !rightVec.Nsp.Contains(uint64(i)) {
+			inMap[right[i]] = true
+		}
+	}
+	retVec := allocateBoolVector(lenLeft, proc)
+	ret := retVec.Col.([]bool)
+	for i := 0; i < lenLeft; i++ {
+		if _, ok := inMap[left[i]]; ok {
+			ret[i] = true
+		}
+	}
+	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
+	return retVec, nil
+}
+
+func INString(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := args[0], args[1]
+	left, area1 := vector.MustVarlenaRawData(leftVec)
+	right, area2 := vector.MustVarlenaRawData(rightVec)
+
+	lenLeft := len(left)
+	lenRight := len(right)
+	if leftVec.IsScalar() {
+		lenLeft = 1
+	}
+	inMap := make(map[string]bool, lenRight)
+	for i := 0; i < lenRight; i++ {
+		if !rightVec.Nsp.Contains(uint64(i)) {
+			inMap[right[i].GetString(area2)] = true
+		}
+	}
+	retVec := allocateBoolVector(lenLeft, proc)
+	ret := retVec.Col.([]bool)
+	for i := 0; i < lenLeft; i++ {
+		if _, ok := inMap[left[i].GetString(area1)]; ok {
+			ret[i] = true
+		}
+	}
+	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
+	return retVec, nil
+}
+
+// NOT IN operator
+func NotINGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := args[0], args[1]
+	left, right := vector.MustTCols[T](leftVec), vector.MustTCols[T](rightVec)
+	lenLeft := len(left)
+	lenRight := len(right)
+	if leftVec.IsScalar() {
+		lenLeft = 1
+	}
+	notInMap := make(map[T]bool, lenRight)
+	for i := 0; i < lenRight; i++ {
+		if !rightVec.Nsp.Contains(uint64(i)) {
+			notInMap[right[i]] = true
+		} else {
+			//not in null, return false
+			return vector.NewConstFixed(boolType, lenLeft, false, proc.Mp()), nil
+		}
+	}
+	retVec := allocateBoolVector(lenLeft, proc)
+	ret := retVec.Col.([]bool)
+	for i := 0; i < lenLeft; i++ {
+		if _, ok := notInMap[left[i]]; !ok {
+			ret[i] = true
+		}
+	}
+	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
+	return retVec, nil
+}
+
+func NotINString(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := args[0], args[1]
+	left, area1 := vector.MustVarlenaRawData(leftVec)
+	right, area2 := vector.MustVarlenaRawData(rightVec)
+
+	lenLeft := len(left)
+	lenRight := len(right)
+	if leftVec.IsScalar() {
+		lenLeft = 1
+	}
+	inMap := make(map[string]bool, lenRight)
+	for i := 0; i < lenRight; i++ {
+		if !rightVec.Nsp.Contains(uint64(i)) {
+			inMap[right[i].GetString(area2)] = true
+		} else {
+			//not in null, return false
+			return vector.NewConstFixed(boolType, lenLeft, false, proc.Mp()), nil
+		}
+	}
+	retVec := allocateBoolVector(lenLeft, proc)
+	ret := retVec.Col.([]bool)
+	for i := 0; i < lenLeft; i++ {
+		if _, ok := inMap[left[i].GetString(area1)]; !ok {
+			ret[i] = true
+		}
+	}
+	nulls.Or(leftVec.Nsp, nil, retVec.Nsp)
+	return retVec, nil
 }
 
 // Great than operator
@@ -178,6 +289,53 @@ func CompareBytesGt(v1, v2 []byte, s1, s2 int32) bool {
 }
 func CompareBytesNe(v1, v2 []byte, s1, s2 int32) bool {
 	return !bytes.Equal(v1, v2)
+}
+
+func CompareValenaInline(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	v1, v2 := vs[0], vs[1]
+	if v1.IsScalarNull() || v2.IsScalarNull() {
+		return handleScalarNull(v1, v2, proc)
+	}
+	col1, _ := vector.MustVarlenaRawData(v1)
+	col2, _ := vector.MustVarlenaRawData(v2)
+
+	if v1.IsScalar() && v2.IsScalar() {
+		p1 := col1[0].UnsafePtr()
+		p2 := col2[0].UnsafePtr()
+		ret := *(*[3]int64)(p1) == *(*[3]int64)(p2)
+		return vector.NewConstFixed(boolType, 1, ret, proc.Mp()), nil
+	}
+
+	length := vector.Length(v1)
+	if length < vector.Length(v2) {
+		length = vector.Length(v2)
+	}
+	vec := allocateBoolVector(length, proc)
+	veccol := vec.Col.([]bool)
+
+	if !v1.IsScalar() && !v2.IsScalar() {
+		for i := 0; i < length; i++ {
+			p1 := col1[i].UnsafePtr()
+			p2 := col2[i].UnsafePtr()
+			veccol[i] = *(*[3]int64)(p1) == *(*[3]int64)(p2)
+		}
+		nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
+	} else if v1.IsScalar() {
+		p1 := col1[0].UnsafePtr()
+		for i := 0; i < length; i++ {
+			p2 := col2[i].UnsafePtr()
+			veccol[i] = *(*[3]int64)(p1) == *(*[3]int64)(p2)
+		}
+		nulls.Or(nil, v2.Nsp, vec.Nsp)
+	} else {
+		p2 := col2[0].UnsafePtr()
+		for i := 0; i < length; i++ {
+			p1 := col1[i].UnsafePtr()
+			veccol[i] = *(*[3]int64)(p1) == *(*[3]int64)(p2)
+		}
+		nulls.Or(v1.Nsp, nil, vec.Nsp)
+	}
+	return vec, nil
 }
 
 func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) (*vector.Vector, error) {
@@ -258,6 +416,9 @@ func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) 
 }
 
 func EqString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if vs[0].GetArea() == nil && vs[1].GetArea() == nil {
+		return CompareValenaInline(vs, proc)
+	}
 	return CompareString(vs, CompareBytesEq, proc)
 }
 

@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"os"
 	"reflect"
@@ -419,12 +420,24 @@ const (
 /*
 handle show columns from table in plan2 and tae
 */
-func handleShowColumns(ses *Session) error {
+func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 	data := ses.GetData()
 	mrs := ses.GetMysqlResultSet()
+	dbName := stmt.Table.GetDBName()
+	if len(dbName) == 0 {
+		dbName = ses.GetDatabaseName()
+	}
+	tableName := string(stmt.Table.ToTableName().ObjectName)
 	for _, d := range data {
 		colName := string(d[0].([]byte))
 		if colName == catalog.Row_ID {
+			continue
+		}
+		//the non-sys account skips the column account_id of the cluster table
+		if util.IsClusterTableAttribute(colName) &&
+			isClusterTable(dbName, tableName) &&
+			ses.GetTenantInfo() != nil &&
+			!ses.GetTenantInfo().IsSysTenant() {
 			continue
 		}
 
@@ -543,7 +556,11 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 		if err != nil {
 			return err
 		}
-		_, row[3], err = r.Stats(ses.requestCtx)
+		_, err = r.Ranges(ses.requestCtx, nil)
+		if err != nil {
+			return err
+		}
+		row[3], err = r.Rows(ses.requestCtx)
 		if err != nil {
 			return err
 		}
@@ -1675,7 +1692,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		if err != nil {
 			return err
 		}
-		binder := plan2.NewDefaultBinder(nil, nil, &plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
+		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, &plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
 		planExpr, err := binder.BindExpr(sv.Where.Expr, 0, false)
 		if err != nil {
 			return err
@@ -1927,9 +1944,18 @@ func doDeallocate(ctx context.Context, ses *Session, st *tree.Deallocate) error 
 	return nil
 }
 
+func doReset(ctx context.Context, ses *Session, st *tree.Reset) error {
+	return nil
+}
+
 // handleDeallocate
 func (mce *MysqlCmdExecutor) handleDeallocate(ctx context.Context, st *tree.Deallocate) error {
 	return doDeallocate(ctx, mce.GetSession(), st)
+}
+
+// handleReset
+func (mce *MysqlCmdExecutor) handleReset(ctx context.Context, st *tree.Reset) error {
+	return doReset(ctx, mce.GetSession(), st)
 }
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
@@ -1975,6 +2001,17 @@ func (mce *MysqlCmdExecutor) handleCreateRole(ctx context.Context, cr *tree.Crea
 // handleDropRole drops the role
 func (mce *MysqlCmdExecutor) handleDropRole(ctx context.Context, dr *tree.DropRole) error {
 	return doDropRole(ctx, mce.GetSession(), dr)
+}
+
+func (mce *MysqlCmdExecutor) handleCreateFunction(ctx context.Context, cf *tree.CreateFunction) error {
+	ses := mce.GetSession()
+	tenant := ses.GetTenantInfo()
+
+	return InitFunction(ctx, ses, tenant, cf)
+}
+
+func (mce *MysqlCmdExecutor) handleDropFunction(ctx context.Context, df *tree.DropFunction) error {
+	return doDropFunction(ctx, mce.GetSession(), df)
 }
 
 // handleGrantRole grants the role
@@ -2189,6 +2226,7 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 		setColLength(c, col.Typ.Width)
 		setCharacter(c)
 		c.SetDecimal(uint8(col.Typ.Scale))
+		convertMysqlTextTypeToBlobType(c)
 		columns[i] = c
 	}
 	return columns, err
@@ -2229,11 +2267,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
 
 		// replace ? and @var with their values
-		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
+		resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
 		constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
 		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
-		err = vp.Visit()
+		err = vp.Visit(requestCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -2262,7 +2300,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// replace @var with their values
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
 		vp := plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{resetVarRule})
-		err = vp.Visit()
+		err = vp.Visit(requestCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -2383,7 +2421,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 		return ret, err
 	}
 	switch stmt := stmt.(type) {
-	case *tree.Select, *tree.ParenSelect,
+	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
 		*tree.Update, *tree.Delete, *tree.Insert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable,
@@ -2446,6 +2484,13 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 	//PART 1: the statements with the result set
 	case *tree.Select:
 		ret = (&SelectExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			sel: st,
+		})
+	case *tree.ValuesStatement:
+		ret = (&ValuesStmtExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
@@ -2822,6 +2867,13 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 			},
 			cv: st,
 		})
+	case *tree.AlterView:
+		ret = (&AlterViewExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			av: st,
+		})
 	case *tree.DropView:
 		ret = (&DropViewExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
@@ -2993,7 +3045,7 @@ func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Ses
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
-	yes, err := authenticateUserCanExecuteStatementWithObjectTypeTable(requestCtx, ses, stmt, p)
+	yes, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(requestCtx, ses, stmt, p)
 	if err != nil {
 		return err
 	}
@@ -3266,6 +3318,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+		case *tree.Reset:
+			selfHandle = true
+			err = mce.handleReset(requestCtx, st)
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.SetVar:
 			selfHandle = true
 			err = mce.handleSetVar(requestCtx, st)
@@ -3349,6 +3407,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleDropUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.AlterView:
+			ses.InvalidatePrivilegeCache()
 		case *tree.AlterUser: //TODO
 			ses.InvalidatePrivilegeCache()
 		case *tree.CreateRole:
@@ -3361,6 +3421,16 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
 			if err = mce.handleDropRole(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.CreateFunction:
+			selfHandle = true
+			if err = mce.handleCreateFunction(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.DropFunction:
+			selfHandle = true
+			if err = mce.handleDropFunction(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.Grant:
@@ -3446,8 +3516,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Select,
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants,
-			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation,
-			*tree.ExplainFor, *tree.ExplainStmt:
+			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
+			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionStatus:
 			columns, err = cw.GetColumns()
 			if err != nil {
 				logErrorf(ses.GetConciseProfile(), "GetColumns from Computation handler failed. error: %v", err)
@@ -3507,7 +3577,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 			switch ses.GetShowStmtType() {
 			case ShowColumns:
-				if err = handleShowColumns(ses); err != nil {
+				if err = handleShowColumns(ses, statement.(*tree.ShowColumns)); err != nil {
 					goto handleFailed
 				}
 			case ShowTableStatus:
@@ -3547,6 +3617,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex,
 			*tree.CreateView, *tree.DropView,
+			*tree.AlterView,
 			*tree.Insert, *tree.Update,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 			*tree.SetVar,
@@ -3682,8 +3753,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		switch stmt.(type) {
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
-			*tree.CreateView, *tree.DropView, *tree.Load, *tree.MoDump,
+			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.Load, *tree.MoDump,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
+			*tree.CreateFunction, *tree.DropFunction,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
@@ -3732,6 +3804,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				}
+			}
+
+		case *tree.Reset:
+			resp := mce.setResponse(i, len(cws), rspLen)
+			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
+				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
+				return retErr
 			}
 		}
 		logStatementStatus(requestCtx, ses, stmt, success, nil)
@@ -3950,6 +4030,20 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		}
 		return resp, nil
 
+	case COM_STMT_RESET:
+		data := req.GetData().([]byte)
+
+		//Payload of COM_STMT_RESET
+		stmtID := binary.LittleEndian.Uint32(data[0:4])
+		stmtName := getPrepareStmtName(stmtID)
+		sql = fmt.Sprintf("reset prepare %s", stmtName)
+		logInfo(ses.GetConciseProfile(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+		err = doComQuery(requestCtx, sql)
+		if err != nil {
+			resp = NewGeneralErrorResponse(COM_STMT_RESET, err)
+		}
+		return resp, nil
+
 	default:
 		resp = NewGeneralErrorResponse(req.GetCmd(), moerr.NewInternalError(requestCtx, "unsupported command. 0x%x", req.GetCmd()))
 	}
@@ -4005,10 +4099,10 @@ StatementCanBeExecutedInUncommittedTransaction checks the statement can be execu
 func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Statement) (bool, error) {
 	switch st := stmt.(type) {
 	//ddl statement
-	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView:
+	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView, *tree.AlterView:
 		return true, nil
 		//dml statement
-	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump:
+	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.ValuesStatement:
 		return true, nil
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
@@ -4036,7 +4130,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 			return false, err
 		}
 		return StatementCanBeExecutedInUncommittedTransaction(ses, preStmt.PrepareStmt)
-	case *tree.Deallocate:
+	case *tree.Deallocate, *tree.Reset:
 		return true, nil
 	case *tree.Use:
 		/*
@@ -4045,6 +4139,9 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 				USE ROLE role;
 		*/
 		return !st.IsUseRole(), nil
+	case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView:
+		//background transaction can execute the DROPxxx in one transaction
+		return ses.IsBackgroundSession(), nil
 	}
 
 	return false, nil
@@ -4054,7 +4151,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.CreateTable, *tree.DropTable,
-		*tree.CreateView, *tree.DropView,
+		*tree.CreateView, *tree.DropView, *tree.AlterView,
 		*tree.CreateDatabase, *tree.DropDatabase,
 		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable:
 		return true
@@ -4174,14 +4271,22 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_decimal128:
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
-	case types.T_blob, types.T_text:
+	case types.T_blob:
 		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	case types.T_text:
+		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
 	case types.T_uuid:
 		col.SetColumnType(defines.MYSQL_TYPE_UUID)
 	default:
 		return moerr.NewInternalError(ctx, "RunWhileSend : unsupported type %d", engineType)
 	}
 	return nil
+}
+
+func convertMysqlTextTypeToBlobType(col *MysqlColumn) {
+	if col.ColumnType() == defines.MYSQL_TYPE_TEXT {
+		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	}
 }
 
 // build plan json when marhal plan error

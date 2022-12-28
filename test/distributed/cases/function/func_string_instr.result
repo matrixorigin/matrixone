@@ -1,0 +1,109 @@
+select instr('aaa','a');
+instr(aaa, a)
+1
+select instr('aaa','ax');
+instr(aaa, ax)
+0
+select instr('aaa','aa');
+instr(aaa, aa)
+1
+select instr('aaa',1);
+instr(aaa, 1)
+0
+select instr('aaa','b');
+instr(aaa, b)
+0
+select instr(null,'a');
+instr(null, a)
+null
+select instr(1,null);
+instr(1, null)
+null
+select instr(null,null);
+instr(null, null)
+null
+select instr(null,'a');
+instr(null, a)
+null
+select instr('','啊');
+instr(, 啊)
+0
+select instr('','a');
+instr(, a)
+0
+select instr('',' ');
+instr(,  )
+0
+select instr('','');
+instr(, )
+1
+select instr('啊','');
+instr(啊, )
+1
+select instr('啊',' ');
+instr(啊,  )
+0
+select instr('啊','啊');
+instr(啊, 啊)
+1
+select instr('x啊','啊');
+instr(x啊, 啊)
+2
+select instr('x啊啦啦啦啦啦的','啦');
+instr(x啊啦啦啦啦啦的, 啦)
+3
+select instr('x啊啦啦啦啦啦的q','的');
+instr(x啊啦啦啦啦啦的q, 的)
+8
+select instr('x啊啦啦啦啦啦的q','q');
+instr(x啊啦啦啦啦啦的q, q)
+9
+create table t1(a varchar,b varchar);
+insert into t1 values('axa','x'),('abababa','qq'),('qwer','er');
+select instr(a,b) from t1;
+instr(a, b)
+2
+0
+3
+select instr(a,null) from t1;
+instr(a, null)
+null
+null
+null
+select instr(null,b) from t1;
+instr(null, b)
+null
+null
+null
+select instr('axa','x') from t1;
+instr(axa, x)
+2
+2
+2
+select instr(a,'qw') from t1;
+instr(a, qw)
+0
+0
+1
+select instr('qwer',b) from t1;
+instr(qwer, b)
+0
+0
+3
+insert into t1 values('','啊'),('','a'),('',' '),('',''),('啊',''),('啊',' '),('啊','啊'),('x啊','啊'),('x啊啦啦啦啦啦的','啦'),('x啊啦啦啦啦啦的q','的'),('x啊啦啦啦啦啦的q','q');
+select instr(a,b) from t1;
+instr(a, b)
+2
+0
+3
+0
+0
+0
+1
+1
+0
+1
+2
+3
+8
+9

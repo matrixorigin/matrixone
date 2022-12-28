@@ -379,6 +379,39 @@ func Test_checkUserExistsOrNot(t *testing.T) {
 	})
 }
 
+func Test_initFunction(t *testing.T) {
+	convey.Convey("init function", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+
+		cu := &tree.CreateFunction{
+			Name:       tree.NewFuncName("testFunc"),
+			Args:       nil,
+			ReturnType: tree.NewReturnType("int"),
+			Body:       "",
+			Language:   "sql",
+		}
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+
+		ses := &Session{}
+		err := InitFunction(ctx, ses, tenant, cu)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
 func Test_initUser(t *testing.T) {
 	convey.Convey("init user", t, func() {
 		ctrl := gomock.NewController(t)
@@ -3514,7 +3547,7 @@ func Test_determineDML(t *testing.T) {
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 			defer bhStub.Reset()
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetRequestContext(), ses, a.stmt, a.p)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -3612,7 +3645,7 @@ func Test_determineDML(t *testing.T) {
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 			defer bhStub.Reset()
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetRequestContext(), ses, a.stmt, a.p)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -3702,7 +3735,7 @@ func Test_determineDML(t *testing.T) {
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 			defer bhStub.Reset()
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetRequestContext(), ses, a.stmt, a.p)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeFalse)
 		}
@@ -5452,6 +5485,27 @@ func Test_doRevokePrivilege(t *testing.T) {
 	})
 }
 
+func Test_doDropFunction(t *testing.T) {
+	convey.Convey("drop function", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+
+		cu := &tree.DropFunction{
+			Name: tree.NewFuncName("testFunc"),
+			Args: nil,
+		}
+
+		ses := &Session{}
+		err := doDropFunction(ctx, ses, cu)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
 func Test_doDropRole(t *testing.T) {
 	convey.Convey("drop role succ", t, func() {
 		ctrl := gomock.NewController(t)
@@ -6191,6 +6245,21 @@ func Test_doAlterAccount(t *testing.T) {
 	})
 }
 
+func newMrsForShowTables(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col2 := &MysqlColumn{}
+	col2.SetName("table")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col2)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func Test_doDropAccount(t *testing.T) {
 	convey.Convey("drop account", t, func() {
 		ctrl := gomock.NewController(t)
@@ -6229,6 +6298,8 @@ func Test_doDropAccount(t *testing.T) {
 		sql = "show databases;"
 		bh.sql2result[sql] = newMrsForSqlForShowDatabases([][]interface{}{})
 
+		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+
 		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
@@ -6264,6 +6335,8 @@ func Test_doDropAccount(t *testing.T) {
 		for _, sql = range getSqlForDropAccount() {
 			bh.sql2result[sql] = nil
 		}
+
+		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
 		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)

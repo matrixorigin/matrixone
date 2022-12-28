@@ -75,6 +75,12 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.Expr {
 	ef, ok := e.Expr.(*plan.Expr_F)
 	if !ok {
+		if el, ok := e.Expr.(*plan.Expr_List); ok {
+			lenList := len(el.List.List)
+			for i := 0; i < lenList; i++ {
+				el.List.List[i] = r.constantFold(el.List.List[i], proc)
+			}
+		}
 		return e
 	}
 	overloadID := ef.F.Func.GetObj()
@@ -175,7 +181,7 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 				Dval: vec.Col.([]float64)[0],
 			},
 		}
-	case types.T_varchar:
+	case types.T_varchar, types.T_char, types.T_text:
 		return &plan.Const{
 			Value: &plan.Const_Sval{
 				Sval: vec.GetString(0),

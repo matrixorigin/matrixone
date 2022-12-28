@@ -16,6 +16,7 @@ package memoryengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -45,6 +46,10 @@ func (e *Engine) NewCompilerContext(
 }
 
 var _ plan.CompilerContext = new(CompilerContext)
+
+func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
+	return []uint32{catalog.System_Account}, nil
+}
 
 func (*CompilerContext) Stats(obj *plan.ObjectRef, e *plan.Expr) *plan.Stats {
 	return &plan.Stats{}
@@ -188,7 +193,8 @@ func (c *CompilerContext) getTableAttrs(dbName string, tableName string) (attrs 
 
 func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 	return &plan.ColDef{
-		Name: attr.Name,
+		ColId: uint64(attr.ID),
+		Name:  attr.Name,
 		Typ: &plan.Type{
 			Id:          int32(attr.Type.Oid),
 			NotNullable: attr.Default != nil && !(attr.Default.NullAbility),

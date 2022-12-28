@@ -14,7 +14,10 @@
 
 package plan
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
 
 type VisitPlanRule interface {
 	MatchNode(*Node) bool
@@ -37,9 +40,9 @@ func NewVisitPlan(pl *Plan, rules []VisitPlanRule) *VisitPlan {
 	}
 }
 
-func (vq *VisitPlan) visitNode(qry *Query, node *Node, idx int32) error {
+func (vq *VisitPlan) visitNode(ctx context.Context, qry *Query, node *Node, idx int32) error {
 	for i := range node.Children {
-		if err := vq.visitNode(qry, qry.Nodes[node.Children[i]], node.Children[i]); err != nil {
+		if err := vq.visitNode(ctx, qry, qry.Nodes[node.Children[i]], node.Children[i]); err != nil {
 			return err
 		}
 	}
@@ -51,7 +54,7 @@ func (vq *VisitPlan) visitNode(qry *Query, node *Node, idx int32) error {
 				return err
 			}
 		} else if rule.IsApplyExpr() {
-			err := vq.exploreNode(rule, node, idx)
+			err := vq.exploreNode(ctx, rule, node, idx)
 			if err != nil {
 				return err
 			}
@@ -61,7 +64,7 @@ func (vq *VisitPlan) visitNode(qry *Query, node *Node, idx int32) error {
 	return nil
 }
 
-func (vq *VisitPlan) exploreNode(rule VisitPlanRule, node *Node, idx int32) error {
+func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *Node, idx int32) error {
 	var err error
 	if node.Limit != nil {
 		node.Limit, err = rule.ApplyExpr(node.Limit)
@@ -102,7 +105,7 @@ func (vq *VisitPlan) exploreNode(rule VisitPlanRule, node *Node, idx int32) erro
 				oldType := DeepCopyTyp(node.ProjectList[i].Typ)
 				node.ProjectList[i], err = rule.ApplyExpr(node.ProjectList[i])
 				if node.ProjectList[i].Typ.Id != oldType.Id {
-					node.ProjectList[i], err = makePlan2CastExpr(node.ProjectList[i], oldType)
+					node.ProjectList[i], err = makePlan2CastExpr(ctx, node.ProjectList[i], oldType)
 				}
 			} else {
 				node.ProjectList[i], err = rule.ApplyExpr(node.ProjectList[i])
@@ -119,7 +122,7 @@ func (vq *VisitPlan) exploreNode(rule VisitPlanRule, node *Node, idx int32) erro
 	return nil
 }
 
-func (vq *VisitPlan) Visit() error {
+func (vq *VisitPlan) Visit(ctx context.Context) error {
 	switch pl := vq.plan.Plan.(type) {
 	case *Plan_Query:
 		qry := pl.Query
@@ -130,7 +133,7 @@ func (vq *VisitPlan) Visit() error {
 		}
 
 		for _, step := range qry.Steps {
-			err := vq.visitNode(qry, qry.Nodes[step], step)
+			err := vq.visitNode(ctx, qry, qry.Nodes[step], step)
 			if err != nil {
 				return err
 			}

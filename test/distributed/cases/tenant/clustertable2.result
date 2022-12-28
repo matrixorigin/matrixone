@@ -1,0 +1,93 @@
+drop database if exists db1;
+create database db1;
+create table db1.b(b int);
+insert into db1.b values (0),(1),(2),(3);
+drop account if exists account_test;
+create account account_test admin_name = 'root' identified by '111' open comment 'account_test';
+use mo_catalog;
+drop table if exists a;
+create cluster table a(a int);
+insert into a accounts(sys,account_test) values(0),(1),(2),(3);
+select a from a;
+a
+0
+1
+2
+3
+0
+1
+2
+3
+use mo_catalog;
+select * from a;
+a
+0
+1
+2
+3
+delete from a;
+use mo_catalog;
+select * from a;
+a
+insert into a accounts(sys,account_test) select b from db1.b;
+select a from a;
+a
+0
+1
+2
+3
+0
+1
+2
+3
+use mo_catalog;
+select * from a;
+a
+0
+1
+2
+3
+delete from a;
+load data infile '$resources/load_data/cluster_table1.csv' into table a accounts(sys,account_test) (a);
+select a from a;
+a
+0
+0
+0
+0
+0
+0
+0
+0
+use mo_catalog;
+select * from a;
+a
+0
+0
+0
+0
+delete from a;
+insert into a(account_id) values (0),(1),(2),(3);
+invalid input: do not specify the attribute account_id for the cluster table
+insert into a(account_id) select b from db1.b;
+invalid input: do not specify the attribute account_id for the cluster table
+load data infile '$resources/load_data/cluster_table1.csv' into table a (account_id);
+invalid input: do not specify the attribute account_id for the cluster table
+use mo_catalog;
+select * from a;
+a
+delete from a;
+truncate table a;
+use mo_catalog;
+delete from a;
+internal error: only the sys account can delete the cluster table a
+drop table a;
+internal error: do not have privilege to execute the statement
+truncate table a;
+internal error: only the sys account can truncate the cluster table
+drop account if exists account_test;
+select a from a;
+a
+drop table if exists a;
+drop account if exists account_test;
+drop database if exists db1;

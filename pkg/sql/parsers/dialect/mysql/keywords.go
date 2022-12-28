@@ -20,6 +20,7 @@ func init() {
 	keywords = map[string]int{
 		"accessible":               UNUSED,
 		"account":                  ACCOUNT,
+		"accounts":                 ACCOUNTS,
 		"add":                      ADD,
 		"action":                   ACTION,
 		"against":                  AGAINST,
@@ -460,6 +461,7 @@ func init() {
 		"date_sub":                 DATE_SUB,
 		"extract":                  EXTRACT,
 		"max":                      MAX,
+		"median":                   MEDIAN,
 		"mid":                      MID,
 		"now":                      NOW,
 		"position":                 POSITION,
@@ -503,6 +505,7 @@ func init() {
 		"second_microsecond":       SECOND_MICROSECOND,
 		"prepare":                  PREPARE,
 		"deallocate":               DEALLOCATE,
+		"reset":                    RESET,
 		"intersect":                INTERSECT,
 		"minus":                    MINUS,
 		"admin_name":               ADMIN_NAME,
@@ -523,5 +526,11 @@ func init() {
 		"preceding":                PRECEDING,
 		"following":                FOLLOWING,
 		"groups":                   GROUPS,
+		"table_size":               TABLE_SIZE,
+		"table_number":             TABLE_NUMBER,
+		"table_values":             TABLE_VALUES,
+		"column_number":            COLUMN_NUMBER,
+		"returns":                  RETURNS,
+		"extension":                EXTENSION,
 	}
 }
