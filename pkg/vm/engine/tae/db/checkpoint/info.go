@@ -35,6 +35,9 @@ func (r *runner) collectCheckpointMetadata() *containers.Batch {
 	bat := makeRespBatchFromSchema(CheckpointSchema)
 	entries := r.GetAllIncrementalCheckpoints()
 	for _, entry := range entries {
+		if !entry.IsFinished() {
+			continue
+		}
 		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start)
 		bat.GetVectorByName(CheckpointAttr_EndTS).Append(entry.end)
 		bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(entry.GetLocation()))
@@ -42,6 +45,9 @@ func (r *runner) collectCheckpointMetadata() *containers.Batch {
 	}
 	entries = r.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
+		if !entry.IsFinished() {
+			continue
+		}
 		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start)
 		bat.GetVectorByName(CheckpointAttr_EndTS).Append(entry.end)
 		bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(entry.GetLocation()))

@@ -46,6 +46,7 @@ type ExternalParam struct {
 	FileList     []string
 	reader       io.ReadCloser
 	maxBatchSize uint64
+	ClusterTable *plan.ClusterTable
 }
 
 type ExternalFileparam struct {
