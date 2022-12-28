@@ -4,6 +4,9 @@ MYZ FGH MYZ
 select replace(".*.*.*",".*","1");
 replace(".*.*.*","1")
 111
+select replace("11","","1");
+replace("11","","1")
+11
 drop table if exists t1;
 
 create table t1(a varchar,b varchar);

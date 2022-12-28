@@ -40,8 +40,12 @@ func Replace(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		return nil, err
 	}
 
-	sg := []string{strings.ReplaceAll(firstValues[0], secondValues[0], thirdValues[0])}
-	vector.AppendString(resultVector, sg, proc.Mp())
+	if secondValues[0] == "" {
+		vector.AppendString(resultVector, firstValues, proc.Mp())
+	} else {
+		sg := []string{strings.ReplaceAll(firstValues[0], secondValues[0], thirdValues[0])}
+		vector.AppendString(resultVector, sg, proc.Mp())
+	}
 
 	return resultVector, nil
 }
