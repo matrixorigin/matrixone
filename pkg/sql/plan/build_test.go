@@ -817,6 +817,7 @@ func TestShow(t *testing.T) {
 		"show index from tpch.nation",
 		"show locks",
 		"show node list",
+		"show grants for ROLE role1",
 		// "show grants",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
@@ -836,7 +837,6 @@ func TestShow(t *testing.T) {
 		"show index from tpch.dddd",
 		"show table_number from tpch222",
 		"show column_number from nation222",
-		"show grants for ROLE role1",
 	}
 	runTestShouldError(mock, t, sqls)
 }
