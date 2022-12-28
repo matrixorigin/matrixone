@@ -372,6 +372,27 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				}
+
+				if _, ok := attr.(*tree.AttributeUnique); ok {
+					indexInfos = append(indexInfos, &tree.UniqueIndex{
+						KeyParts: []*tree.KeyPart{
+							{
+								ColName: def.Name,
+							},
+						},
+					})
+				}
+
+				if _, ok := attr.(*tree.AttributeUniqueKey); ok {
+					indexInfos = append(indexInfos, &tree.UniqueIndex{
+						KeyParts: []*tree.KeyPart{
+							{
+								ColName: def.Name,
+							},
+						},
+					})
+				}
+
 			}
 			if len(pks) > 0 {
 				if len(primaryKeys) > 0 {
@@ -581,7 +602,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			})
 		} else {
 			pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
-			createTable.TableDef.Cols = append(createTable.TableDef.Cols, &ColDef{
+			colDef := &ColDef{
 				Name: pkeyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
@@ -594,7 +615,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					Expr:         nil,
 					OriginString: "",
 				},
-			})
+			}
+			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
+			colMap[pkeyName] = colDef
 			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Pk{
 					Pk: &plan.PrimaryKeyDef{
@@ -690,13 +713,14 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 
 		var keyName string
 		if len(indexInfo.KeyParts) == 1 {
-			keyName = field.Parts[0]
+			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
-					Id:   colMap[keyName].Typ.Id,
-					Size: colMap[keyName].Typ.Size,
+					Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
+					Size:  colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Size,
+					Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,
@@ -714,7 +738,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			})
 			field.Cols = append(field.Cols, colDef)
 		} else {
-			keyName = util.BuildCompositePrimaryKeyColumnName(field.Parts)
+			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
@@ -737,6 +761,20 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 					},
 				},
 			})
+			field.Cols = append(field.Cols, colDef)
+		}
+		if pkeyName != "" {
+			colDef := &ColDef{
+				Name: catalog.IndexTablePrimaryColName,
+				Alg:  plan.CompressType_Lz4,
+				Typ:  colMap[pkeyName].Typ,
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			}
+			tableDef.Cols = append(tableDef.Cols, colDef)
 			field.Cols = append(field.Cols, colDef)
 		}
 		def.IndexNames = append(def.IndexNames, indexInfo.Name)
@@ -1007,6 +1045,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	createIndex.Index = index
 	createIndex.Table = tableName
+
+	oriPriKeyName := GetTablePriKeyName(tableDef.Cols, tableDef.CompositePkey)
+	createIndex.OriginTablePrimaryKey = oriPriKeyName
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
