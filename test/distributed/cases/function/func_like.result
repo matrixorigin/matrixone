@@ -68,3 +68,24 @@ str1    str2
 select * from t1 where str1 like "\%%";
 str1    str2
 %str1%    %str2%
+select json_extract('{"a":1}', '$.a') like '1' as result;
+result
+true
+select json_extract('{"a":1}', '$.a') like 1 as result;
+result
+true
+select json_extract('{"a":"1"}', '$.a') like '1' as result;
+result
+false
+select json_extract('{"a":"1"}', '$.a') like 1 as result;
+result
+false
+select json_extract('{"a":"1"}', '$.a') like '%1%' as result;
+result
+true
+select json_unquote(json_extract('{"a":"1"}', '$.a')) like '1' as result;
+result
+true
+select json_unquote(json_extract('{"a":"1"}', '$.a')) like 1 as result;
+result
+true
