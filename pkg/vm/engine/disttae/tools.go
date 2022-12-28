@@ -556,7 +556,7 @@ func genColumnInfoExpr(ctx context.Context, accountId uint32, databaseId, tableI
 	{
 		var args []*plan.Expr
 
-		args = append(args, newColumnExpr(catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX, types.T_varchar,
+		args = append(args, newColumnExpr(catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX, types.T_uint64,
 			catalog.MoColumnsSchema[catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX]))
 		args = append(args, newIntConstVal(databaseId))
 		left = plantool.MakeExpr(ctx, "=", args)
