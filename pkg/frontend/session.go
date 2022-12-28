@@ -178,9 +178,13 @@ type Session struct {
 
 	skipAuth bool
 
-	sqlSourceType    string
-	InitTempEngine   bool
+	sqlSourceType string
+
+	InitTempEngine bool
+
 	tempTablestorage *memorystorage.Storage
+
+	isBackgroundSession bool
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
@@ -287,6 +291,7 @@ func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.Param
 	}
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(ctx)
 	ses.SetRequestContext(cancelBackgroundCtx)
+	ses.SetBackgroundSession(true)
 	backSes := &BackgroundSession{
 		Session: ses,
 		cancel:  cancelBackgroundFunc,
@@ -311,6 +316,18 @@ func (bgs *BackgroundSession) Close() {
 		bgs.Session.gSysVars = nil
 	}
 	bgs = nil
+}
+
+func (ses *Session) SetBackgroundSession(b bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.isBackgroundSession = b
+}
+
+func (ses *Session) IsBackgroundSession() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.isBackgroundSession
 }
 
 func (ses *Session) setSkipCheckPrivilege(b bool) {
@@ -1688,29 +1705,38 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	return true
 }
 
-func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (engine.Relation, error) {
+// getRelation returns the context (maybe updated) and the relation
+func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (context.Context, engine.Relation, error) {
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	ses := tcc.GetSession()
 	ctx := ses.GetRequestContext()
+	account := ses.GetTenantInfo()
+	if isClusterTable(dbName, tableName) {
+		//if it is the cluster table in the general account, switch into the sys account
+		if account != nil && account.GetTenantID() != sysAccountID {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+		}
+	}
+
 	txn, err := tcc.GetTxnHandler().GetTxn()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	//open database
 	db, err := tcc.GetTxnHandler().GetStorage().Database(ctx, dbName, txn)
 	if err != nil {
 		logErrorf(ses.GetConciseProfile(), "get database %v error %v", dbName, err)
-		return nil, err
+		return nil, nil, err
 	}
 
 	tableNames, err := db.Relations(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	logDebugf(ses.GetConciseProfile(), "dbName %v tableNames %v", dbName, tableNames)
 
@@ -1720,12 +1746,12 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 		tmpTable, e := tcc.getTmpRelation(ctx, engine.GetTempTableName(dbName, tableName))
 		if e != nil {
 			logutil.Errorf("get table %v error %v", tableName, err)
-			return nil, err
+			return nil, nil, err
 		} else {
 			table = tmpTable
 		}
 	}
-	return table, nil
+	return ctx, table, nil
 }
 
 func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName string) (engine.Relation, error) {
@@ -1758,11 +1784,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if err != nil {
 		return nil, nil
 	}
-	table, err := tcc.getRelation(dbName, tableName)
+	ctx, table, err := tcc.getRelation(dbName, tableName)
 	if err != nil {
 		return nil, nil
 	}
-	ctx := tcc.GetSession().GetRequestContext()
+
 	tableId := table.GetTableID(ctx)
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
@@ -1775,6 +1801,8 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	var TableType, Createsql string
 	var CompositePkey *plan2.ColDef = nil
 	var viewSql *plan2.ViewDef
+	var foreignKeys []*plan2.ForeignKeyDef
+	var refChildTbls []uint64
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(attr.Attr.Name)
@@ -1844,6 +1872,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 							SIdx: s,
 						},
 					})
+				case *engine.ForeignKeyDef:
+					foreignKeys = k.Fkeys
+				case *engine.RefChildTableDef:
+					refChildTbls = k.Tables
 				}
 			}
 		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
@@ -1907,6 +1939,8 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		Createsql:     Createsql,
 		CompositePkey: CompositePkey,
 		ViewSql:       viewSql,
+		Fkeys:         foreignKeys,
+		RefChildTbls:  refChildTbls,
 	}
 	return obj, tableDef
 }
@@ -1924,13 +1958,77 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 	}
 }
 
+func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
+	var err error
+	var sql string
+	var accountIds []uint32
+	var erArray []ExecResult
+	var targetAccountId uint64
+	if len(accountNames) == 0 {
+		return []uint32{}, nil
+	}
+
+	dedup := make(map[string]int8)
+	for _, name := range accountNames {
+		dedup[name] = 1
+	}
+
+	ses := tcc.GetSession()
+	ctx := ses.GetRequestContext()
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	for name := range dedup {
+		sql = getSqlForCheckTenant(name)
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			goto handleFailed
+		}
+
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			goto handleFailed
+		}
+
+		if execResultArrayHasData(erArray) {
+			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+				targetAccountId, err = erArray[0].GetUint64(ctx, i, 0)
+				if err != nil {
+					goto handleFailed
+				}
+			}
+			accountIds = append(accountIds, uint32(targetAccountId))
+		} else {
+			return nil, moerr.NewInternalError(ctx, "there is no account %s", name)
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return accountIds, err
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return nil, rbErr
+	}
+	return nil, err
+}
+
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
-	ctx := tcc.GetSession().GetRequestContext()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
 	}
-	relation, err := tcc.getRelation(dbName, tableName)
+	ctx, relation, err := tcc.getRelation(dbName, tableName)
 	if err != nil {
 		return nil
 	}
@@ -1961,12 +2059,11 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 }
 
 func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
-	ctx := tcc.GetSession().GetRequestContext()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
 	}
-	relation, err := tcc.getRelation(dbName, tableName)
+	ctx, relation, err := tcc.getRelation(dbName, tableName)
 	if err != nil {
 		return nil
 	}
@@ -2013,15 +2110,15 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats
 		return
 	}
 	tableName := obj.GetObjName()
-	table, err := tcc.getRelation(dbName, tableName)
+	ctx, table, err := tcc.getRelation(dbName, tableName)
 	if err != nil {
 		return
 	}
 	if e != nil {
-		cols, _ := table.TableColumns(tcc.GetSession().GetRequestContext())
+		cols, _ := table.TableColumns(ctx)
 		fixColumnName(cols, e)
 	}
-	blockNum, rows, err := table.FilteredStats(tcc.GetSession().GetRequestContext(), e)
+	blockNum, rows, err := table.FilteredStats(ctx, e)
 	if err != nil {
 		return
 	}

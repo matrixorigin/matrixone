@@ -15,6 +15,9 @@
 package compile
 
 import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -32,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
@@ -150,8 +154,11 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	mcpu := s.NodeInfo.Mcpu
 	if remote {
 		var err error
-
-		rds, err = c.e.NewBlockReader(c.ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
+		ctx := c.ctx
+		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		}
+		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
 			s.NodeInfo.Data, s.DataSource.TableDef)
 		if err != nil {
 			return err
@@ -161,11 +168,15 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		var db engine.Database
 		var rel engine.Relation
 
-		db, err = c.e.Database(c.ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
+		ctx := c.ctx
+		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		}
+		db, err = c.e.Database(ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
 		if err != nil {
 			return err
 		}
-		rel, err = db.Relation(c.ctx, s.DataSource.RelationName)
+		rel, err = db.Relation(ctx, s.DataSource.RelationName)
 		if err != nil {
 			var e error // avoid contamination of error messages
 			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
@@ -177,7 +188,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				return err
 			}
 		}
-		if rds, err = rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
+		if rds, err = rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
 		}
 	}
@@ -330,9 +341,10 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 					Op: vm.Group,
 					Arg: &group.Argument{
-						Aggs:  arg.Aggs,
-						Exprs: arg.Exprs,
-						Types: arg.Types,
+						Aggs:      arg.Aggs,
+						Exprs:     arg.Exprs,
+						Types:     arg.Types,
+						MultiAggs: arg.MultiAggs,
 					},
 				})
 			}
@@ -472,7 +484,7 @@ func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRe
 
 		// IF const run.
 		if srcScope.DataSource.Bat != nil {
-			newScope.DataSource.Bat = constructValueScanBatch()
+			newScope.DataSource.Bat, _ = constructValueScanBatch(context.TODO(), nil, nil)
 		}
 	}
 

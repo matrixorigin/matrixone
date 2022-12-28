@@ -23,7 +23,10 @@ const (
 	Row_ID               = "__mo_rowid"
 	PrefixPriColName     = "__mo_cpkey_"
 	PrefixIndexTableName = "__mo_index_"
-	ExternalFilePath     = "__mo_filepath"
+	// IndexTable has two column at most, the first is idx col, the second is origin table primary col
+	IndexTableIndexColName   = "__mo_index_idx_col"
+	IndexTablePrimaryColName = "__mo_index_pri_col"
+	ExternalFilePath         = "__mo_filepath"
 )
 
 func ContainExternalHidenCol(col string) bool {
@@ -113,6 +116,9 @@ const (
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
 	SystemExternalRel     = "e"
+	//the cluster table created by the sys account
+	//and read only by the general account
+	SystemClusterRel = "cluster"
 
 	SystemColPKConstraint = "p"
 	SystemColNoConstraint = "n"
@@ -156,7 +162,7 @@ const (
 	MO_TABLES_ACCOUNT_ID_IDX     = 11
 	MO_TABLES_PARTITIONED_IDX    = 12
 	MO_TABLES_VIEWDEF_IDX        = 13
-	MO_TABLES_CONSTRAINT         = 14
+	MO_TABLES_CONSTRAINT_IDX     = 14
 
 	MO_COLUMNS_ATT_UNIQ_NAME_IDX         = 0
 	MO_COLUMNS_ACCOUNT_ID_IDX            = 1
