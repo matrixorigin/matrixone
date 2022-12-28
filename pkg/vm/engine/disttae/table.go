@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"math/rand"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -369,12 +368,6 @@ func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) 
 }
 
 func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
-	{
-		fmt.Printf("++++write: %v\n", bat.Attrs)
-		for i, vec := range bat.Vecs {
-			fmt.Printf("\t[%v] = %v\n", i, vec)
-		}
-	}
 	if tbl.insertExpr == nil {
 		ibat := batch.New(true, bat.Attrs)
 		for j := range bat.Vecs {
