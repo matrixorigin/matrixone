@@ -37,7 +37,6 @@ import (
 const (
 	MessgeReplay = iota
 	MessgeNormal
-	MessgaCompare
 )
 
 // DiskCleaner is the main structure of gc operation,
@@ -67,9 +66,9 @@ type DiskCleaner struct {
 		sync.RWMutex
 		files []string
 	}
-	// delTask is a worker that deletes s3‘s objects or local
+	// delWorker is a worker that deletes s3‘s objects or local
 	// files, and only one worker will run
-	delTask *GCTask
+	delWorker *GCWorker
 
 	options struct {
 		tryGCInterval time.Duration
@@ -95,7 +94,7 @@ func NewDiskCleaner(
 	for _, opt := range opts {
 		opt(cleaner)
 	}
-	cleaner.delTask = NewGCTask(fs, cleaner)
+	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.processQueue = sm.NewSafeQueue(10000, 1000, cleaner.process)
 	return cleaner
 }
@@ -103,12 +102,6 @@ func NewDiskCleaner(
 func (cleaner *DiskCleaner) JobFactory(ctx context.Context) (err error) {
 	logutil.Info("JobFactory is start")
 	return cleaner.tryClean(ctx)
-}
-
-func (cleaner *DiskCleaner) JobFCompare(ctx context.Context) (err error) {
-	logutil.Info("JobFCompare is start")
-	_, err = cleaner.processQueue.Enqueue(MessgaCompare)
-	return err
 }
 
 // Replay is an interface provided for testing
@@ -297,7 +290,7 @@ func (cleaner *DiskCleaner) createDebugInput(
 }
 
 func (cleaner *DiskCleaner) tryGC() {
-	if cleaner.delTask.GetState() == Running {
+	if cleaner.delWorker.GetState() == Running {
 		return
 	}
 	gc := cleaner.softGC()
@@ -306,7 +299,7 @@ func (cleaner *DiskCleaner) tryGC() {
 	}
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
-	go cleaner.delTask.ExecDelete(gc)
+	go cleaner.delWorker.ExecDelete(gc)
 }
 
 func (cleaner *DiskCleaner) softGC() []string {

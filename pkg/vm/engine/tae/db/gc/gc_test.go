@@ -150,7 +150,7 @@ func TestGCTable_Merge(t *testing.T) {
 	gc := manger.softGC()
 	assert.Equal(t, 2, len(gc))
 
-	task := NewGCTask(fs, manger)
+	task := NewGCWorker(fs, manger)
 	err = task.ExecDelete(gc)
 	assert.Nil(t, err)
 }
@@ -182,7 +182,7 @@ func TestGCDropTable(t *testing.T) {
 	gc := manger.softGC()
 	assert.Equal(t, 9, len(gc))
 
-	task := NewGCTask(fs, manger)
+	task := NewGCWorker(fs, manger)
 	err = task.ExecDelete(gc)
 	assert.Nil(t, err)
 }
