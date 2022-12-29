@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -225,4 +226,24 @@ func (e *txnEngine) Close() (err error) {
 
 func (e *txnEngine) Destroy() (err error) {
 	panic(moerr.NewNYINoCtx("Pls implement me!"))
+}
+
+func (e *txnEngine) ForceCheckpoint(ctx context.Context, ts types.TS) error {
+	e.impl.BGCheckpointRunner.DisableCheckpoint()
+	defer e.impl.BGCheckpointRunner.EnableCheckpoint()
+	e.impl.BGCheckpointRunner.CleanPenddingCheckpoint()
+	err := common.WaitUtil(func() bool {
+		flushed := e.impl.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, ts, false)
+		return flushed
+	}, ctx)
+	if err != nil {
+		return err
+	}
+	err = e.impl.BGCheckpointRunner.ForceIncrementalCheckpoint(ts)
+	if err != nil {
+		return err
+	}
+	lsn := e.impl.BGCheckpointRunner.MaxLSNInRange(ts)
+	_, err = e.impl.Wal.RangeCheckpoint(1, lsn)
+	return err
 }

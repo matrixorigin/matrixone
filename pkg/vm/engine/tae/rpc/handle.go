@@ -345,6 +345,23 @@ func (h *Handle) HandleFlushTable(
 	return err
 }
 
+func (h *Handle) HandleForceCheckpoint(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	_ db.FlushTable,
+	resp *apipb.SyncLogTailResp) (err error) {
+
+	// We use current TS instead of transaction ts.
+	// Here, the point of this handle function is to trigger a flush
+	// via mo_ctl.  We mimic the behaviour of a real background flush
+	// currTs := types.TimestampToTS(meta.GetSnapshotTS())
+	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+
+	err = h.eng.ForceCheckpoint(ctx,
+		currTs)
+	return err
+}
+
 func (h *Handle) loadPksFromFS(
 	ctx context.Context,
 	meta txn.TxnMeta,
