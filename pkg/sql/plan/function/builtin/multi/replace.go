@@ -15,10 +15,9 @@
 package multi
 
 import (
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/regular"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -31,6 +30,15 @@ func Replace(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	thirdValues := vector.MustStrCols(thirdVector)
 	resultType := types.T_varchar.ToType()
 
+	//maxLen
+	maxLen := vector.Length(vectors[0])
+	for i := range vectors {
+		val := vector.Length(vectors[i])
+		if val > maxLen {
+			maxLen = val
+		}
+	}
+
 	if firstVector.IsScalarNull() || secondVector.IsScalarNull() || thirdVector.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
@@ -39,12 +47,9 @@ func Replace(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	if err != nil {
 		return nil, err
 	}
-
-	if secondValues[0] == "" {
-		vector.AppendString(resultVector, firstValues, proc.Mp())
-	} else {
-		sg := []string{strings.ReplaceAll(firstValues[0], secondValues[0], thirdValues[0])}
-		vector.AppendString(resultVector, sg, proc.Mp())
+	err = regular.ReplaceWithArrays(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, thirdVector.Nsp, resultVector, proc, maxLen)
+	if err != nil {
+		return nil, err
 	}
 
 	return resultVector, nil

@@ -1,4 +1,3 @@
-
 select replace("XYZ FGH XYZ","X","M");
 
 select replace(".*.*.*",".*","1");
