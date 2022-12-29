@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
@@ -33,13 +34,18 @@ import (
 )
 
 const (
-	LogtailServiceRPCName = "logtail-rpc"
+	LogtailServiceRPCName = "logtail-push-rpc"
+
+	KiB = 1024
 )
 
-// Timestamp determines current timestamp.
-type Timestamp interface {
-	// Now returns current timestamp.
-	Now() timestamp.Timestamp
+// Clocker returns current timestamp.
+//
+// It's mainly a restrictive interface.
+type Clocker interface {
+	// Now returns the current timestamp and the upper bound of the current time
+	// caused by clock offset.
+	Now() (timestamp.Timestamp, timestamp.Timestamp)
 }
 
 // LogtailFetcher provides logtail for the specified table.
@@ -66,6 +72,13 @@ func WithServerLogger(logger *zap.Logger) ServerOption {
 func WithServerMaxMessageSize(maxMessageSize int) ServerOption {
 	return func(s *LogtailServer) {
 		s.options.maxMessageSize = maxMessageSize
+	}
+}
+
+// WithServerPayloadCopyBufferSize sets payload copy buffer size
+func WithServerPayloadCopyBufferSize(size int) ServerOption {
+	return func(s *LogtailServer) {
+		s.options.payloadCopyBufferSize = size
 	}
 }
 
@@ -117,10 +130,11 @@ type LogtailServer struct {
 	}
 
 	options struct {
-		logger          *zap.Logger
-		maxMessageSize  int
-		enableChecksum  bool
-		collectInterval time.Duration
+		logger                *zap.Logger
+		maxMessageSize        int
+		payloadCopyBufferSize int
+		enableChecksum        bool
+		collectInterval       time.Duration
 	}
 
 	ssmgr      *SessionManager
@@ -130,18 +144,19 @@ type LogtailServer struct {
 	pubChan chan publishment
 	subChan chan subscription
 
-	fetcher   LogtailFetcher
-	timestamp Timestamp
+	fetcher LogtailFetcher
+	clock   Clocker
 
 	rpc morpc.RPCServer
 
 	rootCtx    context.Context
 	cancelFunc context.CancelFunc
+	stopper    *stopper.Stopper
 }
 
-// NewLogtailServer initializes a api server.
+// NewLogtailServer initializes a server for logtail push model.
 func NewLogtailServer(
-	address string, fetcher LogtailFetcher, timestamp Timestamp, opts ...ServerOption,
+	address string, fetcher LogtailFetcher, clock Clocker, opts ...ServerOption,
 ) (morpc.RPCServer, error) {
 	s := &LogtailServer{
 		ssmgr:      NewSessionManager(),
@@ -150,7 +165,7 @@ func NewLogtailServer(
 		pubChan:    make(chan publishment),
 		subChan:    make(chan subscription, 10),
 		fetcher:    fetcher,
-		timestamp:  timestamp,
+		clock:      clock,
 	}
 
 	s.pool.requests = &sync.Pool{
@@ -165,7 +180,8 @@ func NewLogtailServer(
 	}
 
 	// default configuration
-	s.options.maxMessageSize = 16 * 1024
+	s.options.maxMessageSize = 1024 * KiB
+	s.options.payloadCopyBufferSize = 1024 * KiB
 	s.options.logger = logutil.GetGlobalLogger().
 		Named(LogtailServiceRPCName).
 		With(zap.String("uuid", uuid.NewString()))
@@ -177,9 +193,9 @@ func NewLogtailServer(
 	}
 
 	codec := morpc.NewMessageCodec(s.acquireRequest,
-		morpc.WithCodecPayloadCopyBufferSize(s.options.maxMessageSize),
+		morpc.WithCodecPayloadCopyBufferSize(s.options.payloadCopyBufferSize),
 		morpc.WithCodecEnableChecksum(),
-		morpc.WithCodecMaxBodySize(1024*1024),
+		morpc.WithCodecMaxBodySize(s.options.maxMessageSize),
 	)
 
 	rpc, err := morpc.NewRPCServer(LogtailServiceRPCName, address, codec,
@@ -200,6 +216,9 @@ func NewLogtailServer(
 	ctx, cancel := context.WithCancel(context.Background())
 	s.rootCtx = ctx
 	s.cancelFunc = cancel
+	s.stopper = stopper.NewStopper(
+		LogtailServiceRPCName, stopper.WithLogger(s.options.logger),
+	)
 
 	return rpc, nil
 }
@@ -323,13 +342,13 @@ func (s *LogtailServer) NotifySessionError(
 }
 
 // sessionErrorHandler handles morpc stream writing error.
-func (s *LogtailServer) sessionErrorHandler() {
+func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 	logger := s.options.logger
 
 	for {
 		select {
-		case <-s.rootCtx.Done():
-			logger.Error("stop session error handler", zap.Error(s.rootCtx.Err()))
+		case <-ctx.Done():
+			logger.Error("stop session error handler", zap.Error(ctx.Err()))
 			return
 
 		case e, ok := <-s.errChan:
@@ -349,13 +368,12 @@ func (s *LogtailServer) sessionErrorHandler() {
 }
 
 // logtailSender sends total or additional logtail.
-func (s *LogtailServer) logtailSender() {
+func (s *LogtailServer) logtailSender(ctx context.Context) {
 	logger := s.options.logger
-
 	for {
 		select {
-		case <-s.rootCtx.Done():
-			logger.Error("stop subscription handler", zap.Error(s.rootCtx.Err()))
+		case <-ctx.Done():
+			logger.Error("stop subscription handler", zap.Error(ctx.Err()))
 			return
 
 		case sub, ok := <-s.subChan:
@@ -404,7 +422,7 @@ func (s *LogtailServer) logtailSender() {
 			// publish all subscribed tables via session manager
 			for _, session := range s.ssmgr.ListSession() {
 				qualified := session.FilterLogtail(pub.tails...)
-				if err := session.SendUpdateResponse(s.rootCtx, qualified...); err != nil {
+				if err := session.SendUpdateResponse(ctx, qualified...); err != nil {
 					logger.Error("fail to publish additional logtail", zap.Error(err))
 					continue
 				}
@@ -417,7 +435,7 @@ func (s *LogtailServer) logtailSender() {
 }
 
 // collector collects logtail by interval.
-func (s *LogtailServer) collector() {
+func (s *LogtailServer) collector(ctx context.Context) {
 	logger := s.options.logger
 
 	ticker := time.NewTicker(s.options.collectInterval)
@@ -425,8 +443,8 @@ func (s *LogtailServer) collector() {
 
 	for {
 		select {
-		case <-s.rootCtx.Done():
-			logger.Error("stop logtail collector", zap.Error(s.rootCtx.Err()))
+		case <-ctx.Done():
+			logger.Error("stop logtail collector", zap.Error(ctx.Err()))
 			return
 
 		case <-ticker.C:
@@ -434,11 +452,11 @@ func (s *LogtailServer) collector() {
 			tables := s.subscribed.ListTable()
 
 			// take current timestamp
-			want := s.timestamp.Now()
+			want, _ := s.clock.Now()
 
 			tails := make([]tableLogtail, 0, len(tables))
 			for _, t := range tables {
-				tail, err := s.fetcher.FetchLogtail(s.rootCtx, &t.table, &t.waterline, &want)
+				tail, err := s.fetcher.FetchLogtail(ctx, &t.table, &t.waterline, &want)
 				if err != nil {
 					logger.Error("fail to fetch logtail", zap.Error(err), zap.Any("table", t.table))
 					continue
@@ -453,13 +471,28 @@ func (s *LogtailServer) collector() {
 // Close closes api server.
 func (s *LogtailServer) Close() error {
 	s.cancelFunc()
+	s.stopper.Stop()
 	return s.rpc.Close()
 }
 
 // Start starts logtail publishment service.
 func (s *LogtailServer) Start() error {
-	go s.sessionErrorHandler()
-	go s.logtailSender()
-	go s.collector()
+	logger := s.options.logger
+
+	if err := s.stopper.RunNamedTask("session error handler", s.sessionErrorHandler); err != nil {
+		logger.Error("fail to start session error handler", zap.Error(err))
+		return err
+	}
+
+	if err := s.stopper.RunNamedTask("logtail sender", s.logtailSender); err != nil {
+		logger.Error("fail to start logtail sender", zap.Error(err))
+		return err
+	}
+
+	if err := s.stopper.RunNamedTask("logtail collector", s.collector); err != nil {
+		logger.Error("fail to start logtail collector", zap.Error(err))
+		return err
+	}
+
 	return s.rpc.Start()
 }

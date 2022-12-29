@@ -111,7 +111,7 @@ func (c *LogtailClient) Unsubscribe(
 // 3. response for additional logtail: *LogtailResponse.GetUpdateResponse() != nil
 func (c *LogtailClient) Receive() (*LogtailResponse, error) {
 	message, ok := <-c.recvChan
-	if !ok {
+	if !ok || message == nil {
 		return nil, moerr.NewStreamClosedNoCtx()
 	}
 	return message.(*LogtailResponse), nil
