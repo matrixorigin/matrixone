@@ -279,6 +279,7 @@ func writeBatch(ctx context.Context,
 				}
 				indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, p.UniqueIndexDef.Fields[i].Parts, primaryKeyName, c.proc)
 				if rowNum != 0 {
+					indexBatch.SetZs(rowNum, c.proc.Mp())
 					if err = indexRelation.Write(ctx, indexBatch); err != nil {
 						return err
 					}

@@ -452,6 +452,7 @@ func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRe
 		PreScopes:    make([]*Scope, len(srcScope.PreScopes)),
 		Instructions: make([]vm.Instruction, len(srcScope.Instructions)),
 		NodeInfo: engine.Node{
+			Rel:  srcScope.NodeInfo.Rel,
 			Mcpu: srcScope.NodeInfo.Mcpu,
 			Id:   srcScope.NodeInfo.Id,
 			Addr: srcScope.NodeInfo.Addr,

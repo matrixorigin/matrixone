@@ -76,6 +76,7 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 		comment:      key.Comment,
 		partition:    key.Partition,
 		createSql:    key.CreateSql,
+		constraint:   key.Constraint,
 	}, nil
 }
 

@@ -84,18 +84,21 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) {
 
 func (cc *CatalogCache) Tables(databaseId uint64,
 	ts timestamp.Timestamp) []string {
-	var name string
 	var rs []string
 
 	key := &TableItem{
 		DatabaseId: databaseId,
 	}
+	mp := make(map[string]uint8)
 	cc.tables.data.Ascend(key, func(item *TableItem) bool {
+		if item.DatabaseId != databaseId {
+			return false
+		}
 		if item.Ts.Greater(ts) {
 			return true
 		}
-		if item.Name != name {
-			name = item.Name
+		if _, ok := mp[item.Name]; !ok {
+			mp[item.Name] = 0
 			if !item.deleted {
 				rs = append(rs, item.Name)
 			}
@@ -106,12 +109,12 @@ func (cc *CatalogCache) Tables(databaseId uint64,
 }
 
 func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []string {
-	var name string
 	var rs []string
 
 	key := &DatabaseItem{
 		AccountId: accountId,
 	}
+	mp := make(map[string]uint8)
 	cc.databases.data.Ascend(key, func(item *DatabaseItem) bool {
 		if item.AccountId != accountId {
 			return false
@@ -119,8 +122,8 @@ func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []st
 		if item.Ts.Greater(ts) {
 			return true
 		}
-		if item.Name != name {
-			name = item.Name
+		if _, ok := mp[item.Name]; !ok {
+			mp[item.Name] = 0
 			if !item.deleted {
 				rs = append(rs, item.Name)
 			}

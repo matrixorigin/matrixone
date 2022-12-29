@@ -215,6 +215,11 @@ func TestTableInsert(t *testing.T) {
 		}
 	}
 	cc.DeleteTable(bat)
+	{ // set the query time
+		for i := range timestamps {
+			timestamps[i] = types.BuildTS(timestamps[i].Physical()+10, timestamps[i].Logical())
+		}
+	}
 	// test delete
 	for i, account := range accounts {
 		key.Name = names[i]
