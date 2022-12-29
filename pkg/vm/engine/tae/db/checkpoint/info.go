@@ -86,10 +86,6 @@ func (r *runner) MaxCheckpoint() *CheckpointEntry {
 	r.storage.RLock()
 	defer r.storage.RUnlock()
 	entry, _ := r.storage.entries.Max()
-	global, _ := r.storage.globals.Max()
-	if entry == nil || (global != nil && global.end.Equal(entry.end)) {
-		return global
-	}
 	return entry
 }
 
@@ -129,6 +125,9 @@ func (r *runner) GetPenddingIncrementalCount() int {
 	for i := len(entries) - 1; i >= 0; i-- {
 		if global != nil && entries[i].end.LessEq(global.end) {
 			break
+		}
+		if !entries[i].IsFinished() {
+			continue
 		}
 		count++
 	}
