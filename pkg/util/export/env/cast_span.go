@@ -15,11 +15,14 @@
 package env
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	v11 "go.opentelemetry.io/proto/otlp/common/v1"
 	v1 "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+	"sync"
 	"time"
+	"unsafe"
 )
 
 type Span struct {
@@ -36,6 +39,48 @@ type Span struct {
 	Attributes   []*v11.KeyValue
 }
 
-func TransferSpan(data *tracepb.TracesData) []table.Row {
-	panic("not implement")
+var spanPool = &sync.Pool{New: func() any {
+	return &Span{}
+}}
+
+func NewSpan() *Span {
+	return spanPool.Get().(*Span)
+}
+
+func (*Span) GetName() string {
+	return SpansTable.GetIdentify()
+}
+
+func (*Span) GetRow() *table.Row {
+	return SpansTable.GetRow(context.Background())
+}
+
+func (s *Span) CsvFields(ctx context.Context, row *table.Row) []string {
+	row.Reset()
+	row.SetColumnVal(SpansTraceIDCol, s.TraceId)
+	row.SetColumnVal(SpansSpanIDCol, s.SpanId)
+	row.SetColumnVal(SpansParentTraceIDCol, s.ParentSpanId)
+
+	return row.ToStrings()
+}
+
+func (s *Span) Size() int64 {
+	return int64(unsafe.Sizeof(s)) + int64(
+		len(s.TraceId)+len(s.SpanId)+len(s.ParentSpanId)+len(s.Kind)+len(s.Name),
+	)
+}
+
+func (s *Span) Free() {
+	s.TraceId = ""
+	s.SpanId = ""
+	s.ParentSpanId = ""
+	s.Kind = ""
+	s.Name = ""
+	s.StartTime = time.Time{}
+	s.EndTime = time.Time{}
+	s.Duration = 0
+	s.Resource = nil
+	s.Links = nil
+	s.Attributes = nil
+	spanPool.Put(s)
 }
