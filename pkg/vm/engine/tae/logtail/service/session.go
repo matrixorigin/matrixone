@@ -234,8 +234,8 @@ func (ss *Session) FilterLogtail(tails ...tableLogtail) []*logtail.TableLogtail 
 }
 
 // Publish publishes additional logtail.
-func (ss *Session) Publish(tails ...tableLogtail) error {
-	sendCtx, cancel := context.WithTimeout(context.Background(), ss.timeout)
+func (ss *Session) Publish(ctx context.Context, tails ...tableLogtail) error {
+	sendCtx, cancel := context.WithTimeout(ctx, ss.timeout)
 	defer cancel()
 
 	qualified := ss.FilterLogtail(tails...)

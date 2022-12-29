@@ -189,6 +189,7 @@ func TestSession(t *testing.T) {
 
 	/* ---- 9. publish update response ---- */
 	err = ss.Publish(
+		context.Background(),
 		mockTableLogtail(tableA),
 		mockTableLogtail(tableB),
 	)

@@ -425,7 +425,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 			// publish all subscribed tables via session manager
 			for _, session := range s.ssmgr.ListSession() {
-				if err := session.Publish(pub.tails...); err != nil {
+				if err := session.Publish(ctx, pub.tails...); err != nil {
 					logger.Error("fail to publish additional logtail", zap.Error(err))
 					continue
 				}
