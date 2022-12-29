@@ -172,14 +172,14 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			}),
 		gc.WithCronJob(
 			"clean-checkpoint",
-			opts.CheckpointCfg.IncrementalInterval*3+opts.CheckpointCfg.FlushInterval,
+			opts.CheckpointCfg.IncrementalInterval*4,
 			func(ctx context.Context) (err error) {
 				db.DiskCleaner.JobFactory(ctx)
 				return
 			}),
 		gc.WithCronJob(
 			"clean-compare",
-			opts.CheckpointCfg.IncrementalInterval*6+opts.CheckpointCfg.FlushInterval,
+			opts.CheckpointCfg.IncrementalInterval*8+opts.CheckpointCfg.FlushInterval,
 			func(ctx context.Context) (err error) {
 				db.DiskCleaner.JobFCompare(ctx)
 				return

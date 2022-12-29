@@ -17,6 +17,7 @@ package gc
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"sync"
@@ -90,12 +91,12 @@ func NewDiskCleaner(
 }
 
 func (cleaner *DiskCleaner) JobFactory(ctx context.Context) (err error) {
-	logutil.Infof("JobFactory is start")
+	logutil.Info("JobFactory is start")
 	return cleaner.tryClean(ctx)
 }
 
 func (cleaner *DiskCleaner) JobFCompare(ctx context.Context) (err error) {
-	logutil.Infof("JobFCompare is start")
+	logutil.Info("JobFCompare is start")
 	_, err = cleaner.processQueue.Enqueue(MessgaCompare)
 	return err
 }
@@ -215,11 +216,12 @@ func (cleaner *DiskCleaner) process(items ...any) {
 
 	for _, item := range items {
 		if item.(int) == MessgaCompare {
-			//var debugTable *GCTable
+			// Only work at the same checkpoint can be Compare
 			start1 := debugCandidates[len(debugCandidates)-1].GetStart()
 			start2 := candidates[len(candidates)-1].GetStart()
 			if !start1.Equal(start2) {
-				logutil.Infof("start1:%v not equal start2:%v", start1.ToString(), start2.ToString())
+				logutil.Info("[DiskCleaner]", common.OperationField("Compare not equal"),
+					common.OperandField(start1.ToString()), common.OperandField(start2.ToString()))
 				return
 			}
 			debugTable, err := cleaner.createDebugInput(debugCandidates)
@@ -232,12 +234,14 @@ func (cleaner *DiskCleaner) process(items ...any) {
 			cleaner.inputs.RLock()
 			defer cleaner.inputs.RUnlock()
 			if !cleaner.inputs.tables[0].Compare(debugTable) {
-				logutil.Infof("Compare is fail table len:%d", len(cleaner.inputs.tables))
-				logutil.Infof("inputs :%v", cleaner.inputs.tables[0].String())
-				logutil.Infof("debugTable :%v", debugTable.String())
+				logutil.Errorf("Compare is failed. table len:%d", len(cleaner.inputs.tables))
+				logutil.Errorf("inputs :%v", cleaner.inputs.tables[0].String())
+				logutil.Errorf("debugTable :%v", debugTable.String())
 			} else {
-				logutil.Infof("Compare is End: %v", start1.ToString())
+				logutil.Info("[DiskCleaner]", common.OperationField("Compare is End"),
+					common.OperandField(start1.ToString()))
 			}
+			return
 		}
 	}
 
@@ -326,7 +330,7 @@ func (cleaner *DiskCleaner) softGC() []string {
 	gc := mergeTable.SoftGC()
 	cleaner.inputs.tables = make([]*GCTable, 0)
 	cleaner.inputs.tables = append(cleaner.inputs.tables, mergeTable)
-	logutil.Infof("SoftGC is %v, merge table: %v", gc, mergeTable.String())
+	//logutil.Infof("SoftGC is %v, merge table: %v", gc, mergeTable.String())
 	return gc
 }
 
