@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -38,16 +39,17 @@ func TestSessionManger(t *testing.T) {
 	logger := logutil.GetGlobalLogger().Named(LogtailServiceRPCName)
 	pooler := mockResponsePooler()
 	notifier := mockSessionErrorNotifier(logger)
+	timeout := 5 * time.Second
 
 	/* ---- 1. register sessioin A ---- */
 	csA := mockNormalClientSession(logger)
-	sessionA := sm.GetSession(ctx, logger, pooler, notifier, csA)
+	sessionA := sm.GetSession(ctx, logger, timeout, pooler, notifier, csA)
 	require.NotNil(t, sessionA)
 	require.Equal(t, 1, len(sm.ListSession()))
 
 	/* ---- 2. register sessioin B ---- */
 	csB := mockNormalClientSession(logger)
-	sessionB := sm.GetSession(ctx, logger, pooler, notifier, csB)
+	sessionB := sm.GetSession(ctx, logger, timeout, pooler, notifier, csB)
 	require.NotNil(t, sessionB)
 	require.Equal(t, 2, len(sm.ListSession()))
 
@@ -67,9 +69,10 @@ func TestSessionError(t *testing.T) {
 	pooler := mockResponsePooler()
 	notifier := mockSessionErrorNotifier(logger)
 	cs := mockBrokenSession()
+	timeout := 5 * time.Second
 
 	tableA := mockTable(1, 2, 3)
-	ss := NewSession(ctx, logger, pooler, notifier, cs)
+	ss := NewSession(ctx, logger, timeout, pooler, notifier, cs)
 
 	/* ---- 1. send subscription response ---- */
 	err := ss.SendSubscriptionResponse(
@@ -99,6 +102,7 @@ func TestSession(t *testing.T) {
 	pooler := mockResponsePooler()
 	notifier := mockSessionErrorNotifier(logger)
 	cs := mockNormalClientSession(logger)
+	timeout := 5 * time.Second
 
 	// constructs tables
 	tableA := mockTable(1, 2, 3)
@@ -106,7 +110,7 @@ func TestSession(t *testing.T) {
 	tableB := mockTable(1, 4, 3)
 	idB := TableID(tableB.String())
 
-	ss := NewSession(ctx, logger, pooler, notifier, cs)
+	ss := NewSession(ctx, logger, timeout, pooler, notifier, cs)
 	defer ss.Drop()
 
 	// no table resigered now
@@ -180,6 +184,13 @@ func TestSession(t *testing.T) {
 		context.Background(),
 		mockLogtail(tableA),
 		mockLogtail(tableB),
+	)
+	require.NoError(t, err)
+
+	/* ---- 9. publish update response ---- */
+	err = ss.Publish(
+		mockTableLogtail(tableA),
+		mockTableLogtail(tableB),
 	)
 	require.NoError(t, err)
 }

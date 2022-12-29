@@ -81,10 +81,16 @@ func WithServerEnableChecksum(enable bool) ServerOption {
 	}
 }
 
-// WithCollectInterval sets logtail collection interval.
-func WithCollectInterval(interval time.Duration) ServerOption {
+// WithServerCollectInterval sets logtail collection interval.
+func WithServerCollectInterval(interval time.Duration) ServerOption {
 	return func(s *LogtailServer) {
 		s.options.collectInterval = interval
+	}
+}
+
+func WithServerSendTimeout(timeout time.Duration) ServerOption {
+	return func(s *LogtailServer) {
+		s.options.sendTimeout = timeout
 	}
 }
 
@@ -127,6 +133,7 @@ type LogtailServer struct {
 		payloadCopyBufferSize int
 		enableChecksum        bool
 		collectInterval       time.Duration
+		sendTimeout           time.Duration
 	}
 
 	ssmgr      *SessionManager
@@ -179,6 +186,7 @@ func NewLogtailServer(
 		With(zap.String("uuid", uuid.NewString()))
 	s.options.enableChecksum = true
 	s.options.collectInterval = 50 * time.Millisecond
+	s.options.sendTimeout = 5 * time.Second
 
 	for _, opt := range opts {
 		opt(s)
@@ -275,7 +283,9 @@ func (s *LogtailServer) onMessage(
 func (s *LogtailServer) onSubscription(
 	sendCtx context.Context, cs morpc.ClientSession, req *logtail.SubscribeRequest,
 ) error {
-	session := s.ssmgr.GetSession(s.rootCtx, s.options.logger, s, s, cs)
+	session := s.ssmgr.GetSession(
+		s.rootCtx, s.options.logger, s.options.sendTimeout, s, s, cs,
+	)
 
 	tableID := TableID(req.Table.String())
 	duplicated := session.Register(tableID, *req.Table)
@@ -307,7 +317,9 @@ func (s *LogtailServer) onSubscription(
 func (s *LogtailServer) onUnsubscription(
 	sendCtx context.Context, cs morpc.ClientSession, req *logtail.UnsubscribeRequest,
 ) error {
-	session := s.ssmgr.GetSession(s.rootCtx, s.options.logger, s, s, cs)
+	session := s.ssmgr.GetSession(
+		s.rootCtx, s.options.logger, s.options.sendTimeout, s, s, cs,
+	)
 
 	tableID := TableID(req.Table.String())
 	state := session.Unregister(tableID)
@@ -413,8 +425,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 			// publish all subscribed tables via session manager
 			for _, session := range s.ssmgr.ListSession() {
-				qualified := session.FilterLogtail(pub.tails...)
-				if err := session.SendUpdateResponse(ctx, qualified...); err != nil {
+				if err := session.Publish(pub.tails...); err != nil {
 					logger.Error("fail to publish additional logtail", zap.Error(err))
 					continue
 				}
@@ -455,6 +466,7 @@ func (s *LogtailServer) collector(ctx context.Context) {
 				}
 				tails = append(tails, tableLogtail{id: t.id, tail: tail})
 			}
+
 			s.pubChan <- publishment{want: want, tails: tails}
 		}
 	}

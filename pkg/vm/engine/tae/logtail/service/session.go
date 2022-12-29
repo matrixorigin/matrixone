@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -49,6 +50,7 @@ func NewSessionManager() *SessionManager {
 func (sm *SessionManager) GetSession(
 	rootCtx context.Context,
 	logger *zap.Logger,
+	timeout time.Duration,
 	pooler ResponsePooler,
 	notifier SessionErrorNotifier,
 	cs morpc.ClientSession,
@@ -57,7 +59,9 @@ func (sm *SessionManager) GetSession(
 	defer sm.Unlock()
 
 	if _, ok := sm.clients[cs]; !ok {
-		sm.clients[cs] = NewSession(rootCtx, logger, pooler, notifier, cs)
+		sm.clients[cs] = NewSession(
+			rootCtx, logger, timeout, pooler, notifier, cs,
+		)
 	}
 	return sm.clients[cs]
 }
@@ -94,6 +98,7 @@ type Session struct {
 	wg         sync.WaitGroup
 
 	logger   *zap.Logger
+	timeout  time.Duration
 	pooler   ResponsePooler
 	notifier SessionErrorNotifier
 
@@ -117,6 +122,7 @@ type ResponsePooler interface {
 func NewSession(
 	rootCtx context.Context,
 	logger *zap.Logger,
+	timeout time.Duration,
 	pooler ResponsePooler,
 	notifier SessionErrorNotifier,
 	cs morpc.ClientSession,
@@ -126,6 +132,7 @@ func NewSession(
 		sessionCtx: ctx,
 		cancelFunc: cancel,
 		logger:     logger,
+		timeout:    timeout,
 		pooler:     pooler,
 		notifier:   notifier,
 		cs:         cs,
@@ -224,6 +231,15 @@ func (ss *Session) FilterLogtail(tails ...tableLogtail) []*logtail.TableLogtail 
 		}
 	}
 	return qualified
+}
+
+// Publish publishes additional logtail.
+func (ss *Session) Publish(tails ...tableLogtail) error {
+	sendCtx, cancel := context.WithTimeout(context.Background(), ss.timeout)
+	defer cancel()
+
+	qualified := ss.FilterLogtail(tails...)
+	return ss.SendUpdateResponse(sendCtx, qualified...)
 }
 
 // TransitionState marks table as subscribed.
