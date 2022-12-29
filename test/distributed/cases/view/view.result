@@ -70,3 +70,11 @@ create view vn as select * from t1;
 alter view vn as select a from t1 union all select a from t2;
 not supported: statement 'alter view vn as select a from t1 union all select a from t2'
 drop view vn;
+drop table if exists t1;
+create table t1( a int primary key, b varchar(15) );
+insert into t1 values(1, 'aaaa'),(2, 'bbbbbb'),(3, 'cccccccc');
+create view v1 as select (case when a>1 then 'NO' else 'YES' end) as IS_NULLABLE from t1;
+desc v1;
+Field    Type    Null    Key    Default    Extra    Comment
+is_nullable    VARCHAR(3)    YES        NULL
+drop view v1;
