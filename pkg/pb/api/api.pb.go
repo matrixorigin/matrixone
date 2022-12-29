@@ -730,7 +730,7 @@ func (m *CatalogCkp) GetBat() *Batch {
 	return nil
 }
 
-//metadata checkpoint:
+// metadata checkpoint:
 // Batch is a batch of block metadata for a table,
 // one row of Batch represents a block meta data.
 // TODO::
