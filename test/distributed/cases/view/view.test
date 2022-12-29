@@ -44,6 +44,15 @@ insert into t2 values(1);
 create view vvvv as select a from t1 union all select a from t2;
 select * from vvvv;
 drop view vvvv;
-create view vn as select * from t1;
-alter view vn as select a from t1 union all select a from t2;
-drop view vn;
+
+drop table if exists t1;
+create table t1 (a int);
+insert into t1 values(1),(2),(3),(4);
+create view v5 as select * from t1;
+select * from v5;
+alter view v5 as select * from t1 where a=1;
+select * from v5;
+alter view v5 as select * from t1 where a > 2;
+select * from v5;
+alter view if exists v6 as select * from t1;
+drop view v5;

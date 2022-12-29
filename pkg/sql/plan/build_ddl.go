@@ -29,25 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
-	viewName := stmt.Name.ObjectName
-	createTable := &plan.CreateTable{
-		IfNotExists: stmt.IfNotExists,
-		Temporary:   stmt.Temporary,
-		TableDef: &TableDef{
-			Name: string(viewName),
-		},
-	}
-
-	// get database name
-	if len(stmt.Name.SchemaName) == 0 {
-		createTable.Database = ""
-	} else {
-		createTable.Database = string(stmt.Name.SchemaName)
-	}
+func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
+	var tableDef plan.TableDef
 
 	// check view statement
-	stmtPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.AsSource)
+	stmtPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +52,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 			},
 		}
 	}
-	createTable.TableDef.Cols = cols
+	tableDef.Cols = cols
 
 	viewData, err := json.Marshal(ViewData{
 		Stmt:            ctx.GetRootSql(),
@@ -75,7 +61,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	if err != nil {
 		return nil, err
 	}
-	createTable.TableDef.ViewSql = &plan.ViewDef{
+	tableDef.ViewSql = &plan.ViewDef{
 		View: string(viewData),
 	}
 	properties := []*plan.Property{
@@ -84,13 +70,42 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 			Value: catalog.SystemViewRel,
 		},
 	}
-	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 		Def: &plan.TableDef_DefType_Properties{
 			Properties: &plan.PropertiesDef{
 				Properties: properties,
 			},
 		},
 	})
+
+	return &tableDef, nil
+}
+
+func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
+	viewName := stmt.Name.ObjectName
+	createTable := &plan.CreateTable{
+		IfNotExists: stmt.IfNotExists,
+		Temporary:   stmt.Temporary,
+		TableDef: &TableDef{
+			Name: string(viewName),
+		},
+	}
+
+	// get database name
+	if len(stmt.Name.SchemaName) == 0 {
+		createTable.Database = ""
+	} else {
+		createTable.Database = string(stmt.Name.SchemaName)
+	}
+
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
+	if err != nil {
+		return nil, err
+	}
+
+	createTable.TableDef.Cols = tableDef.Cols
+	createTable.TableDef.ViewSql = tableDef.ViewSql
+	createTable.TableDef.Defs = tableDef.Defs
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -331,7 +346,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			var comment string
 			var auto_incr bool
 			for _, attr := range def.Attributes {
-				if _, ok := attr.(*tree.AttributePrimaryKey); ok {
+				switch attribute := attr.(type) {
+				case *tree.AttributePrimaryKey:
 					if colType.GetId() == int32(types.T_blob) {
 						return moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
 					}
@@ -342,23 +358,17 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", def.Name.Parts[0]))
 					}
 					pks = append(pks, def.Name.Parts[0])
-				}
-
-				if attrComment, ok := attr.(*tree.AttributeComment); ok {
-					comment = attrComment.CMT.String()
+				case *tree.AttributeComment:
+					comment = attribute.CMT.String()
 					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
 						return moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", def.Name.Parts[0])
 					}
-				}
-
-				if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
+				case *tree.AttributeAutoIncrement:
 					auto_incr = true
 					if !operator.IsInteger(types.T(colType.GetId())) {
 						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
-				}
-
-				if _, ok := attr.(*tree.AttributeUnique); ok {
+				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
 					indexInfos = append(indexInfos, &tree.UniqueIndex{
 						KeyParts: []*tree.KeyPart{
 							{
@@ -367,17 +377,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						},
 					})
 				}
-
-				if _, ok := attr.(*tree.AttributeUniqueKey); ok {
-					indexInfos = append(indexInfos, &tree.UniqueIndex{
-						KeyParts: []*tree.KeyPart{
-							{
-								ColName: def.Name,
-							},
-						},
-					})
-				}
-
 			}
 			if len(pks) > 0 {
 				if len(primaryKeys) > 0 {
@@ -1094,7 +1093,40 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
+// Get tabledef(col, viewsql, properties) for alterview.
 func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
-	return nil, moerr.NewNotSupported(ctx.GetContext(), "statement '%v'", tree.String(stmt, dialect.MYSQL))
-	// TODO
+	viewName := stmt.Name.ObjectName
+	alterView := &plan.AlterView{
+		IfExists:  stmt.IfExists,
+		Temporary: stmt.Temporary,
+		TableDef: &plan.TableDef{
+			Name: string(viewName),
+		},
+	}
+	// get database name
+	if len(stmt.Name.SchemaName) == 0 {
+		alterView.Database = ""
+	} else {
+		alterView.Database = string(stmt.Name.SchemaName)
+	}
+
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
+	if err != nil {
+		return nil, err
+	}
+
+	alterView.TableDef.Cols = tableDef.Cols
+	alterView.TableDef.ViewSql = tableDef.ViewSql
+	alterView.TableDef.Defs = tableDef.Defs
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_ALTER_VIEW,
+				Definition: &plan.DataDefinition_AlterView{
+					AlterView: alterView,
+				},
+			},
+		},
+	}, nil
 }
