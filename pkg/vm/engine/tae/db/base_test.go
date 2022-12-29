@@ -261,11 +261,7 @@ func initDB(t *testing.T, opts *options.Options) *DB {
 			min := db.TxnMgr.MinTSForTest()
 			checkpoint := item.(*checkpoint2.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
-			if checkpoint.GetStart().GreaterEq(min) {
-				//logutil.Infof("checkpoint.GetStart().GreaterEq failed: %v - %v", min.ToString(), checkpoint.GetStart().ToString())
-				return false
-			}
-			return true
+			return !checkpoint.GetEnd().GreaterEq(min)
 		})
 	return db
 }

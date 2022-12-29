@@ -166,11 +166,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.DiskCleaner.AddChecker(
 		func(item any) bool {
 			checkpoint := item.(*checkpoint.CheckpointEntry)
-			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(opts.CheckpointCfg.FlushInterval*4), 0)
-			if checkpoint.GetEnd().GreaterEq(ts) {
-				return false
-			}
-			return true
+			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(opts.GCCfg.GCTTL), 0)
+			return !checkpoint.GetEnd().GreaterEq(ts)
 		})
 	// Init gc manager at last
 	// TODO: clean-try-gc requires configuration parameters
@@ -184,8 +181,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			}),
 
 		gc.WithCronJob(
-			"clean-try-gc",
-			opts.CheckpointCfg.FlushInterval*3,
+			"disk-gc",
+			opts.GCCfg.ScanGCInterval,
 			func(ctx context.Context) (err error) {
 				db.DiskCleaner.JobFactory(ctx)
 				return
