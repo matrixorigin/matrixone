@@ -16,6 +16,7 @@ package env
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"time"
 )
 
 const AccountUnset = "unset"
@@ -190,4 +191,10 @@ var SpansTable = &table.Table{
 	// SupportUserAccess
 	SupportUserAccess:  false,
 	SupportConstAccess: true,
+}
+
+const timestampFormatter = "2006-01-02 15:04:05.000000"
+
+func Time2DatetimeString(t time.Time) string {
+	return t.Format(timestampFormatter)
 }
