@@ -88,10 +88,17 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	rowCount := 0
 	var pkDefs []string
 	var cbDef string
+	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
 
 	for _, col := range tableDef.Cols {
 		colName := col.Name
 		if colName == catalog.Row_ID {
+			continue
+		}
+		//the non-sys account skips the column account_id of the cluster table
+		if util.IsClusterTableAttribute(colName) &&
+			isClusterTable &&
+			ctx.GetAccountId() != catalog.System_Account {
 			continue
 		}
 		nullOrNot := "NOT NULL"
@@ -155,6 +162,27 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			createStr += ",\n"
 		}
 		createStr += pkStr
+	}
+
+	uIndexDef, _ := buildIndexDefs(tableDef.Defs)
+	if uIndexDef != nil {
+		for i, name := range uIndexDef.IndexNames {
+			uIStr := "UNIQUE KEY"
+			uIStr += fmt.Sprintf("`%s`(", name)
+			for num, part := range uIndexDef.Fields[i].Parts {
+				if num == len(uIndexDef.Fields[i].Parts)-1 {
+					uIStr += fmt.Sprintf("`%s`", part)
+				} else {
+					uIStr += fmt.Sprintf("`%s`,", part)
+				}
+			}
+			uIStr += ")"
+			if rowCount != 0 {
+				createStr += ",\n"
+			}
+			createStr += uIStr
+		}
+
 	}
 
 	if rowCount != 0 {
