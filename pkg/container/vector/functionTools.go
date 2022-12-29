@@ -15,6 +15,7 @@
 package vector
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -170,4 +171,69 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameter[types.Varlena] {
 		containsNull: containsNull,
 		nullMap:      nullMap,
 	}
+}
+
+func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool, isConst bool, length int) FunctionResultWrapper {
+	var v *Vector
+	if isConst {
+		v = NewConst(typ, length)
+	} else {
+		v = New(typ)
+	}
+
+	switch typ.Oid {
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		// IF STRING type.
+		return NewResultFunc[types.Varlena](v, mp)
+	case types.T_json:
+		return NewResultFunc[types.Varlena](v, mp)
+	}
+
+	// Pre allocate the memory
+	// XXX PreAllocType has BUG. It only shrinks the cols.
+	//v = PreAllocType(typ, 0, length, mp)
+	//SetLength(v, 0)
+	switch typ.Oid {
+	case types.T_bool:
+		return NewResultFunc[bool](v, mp)
+	case types.T_int8:
+		return NewResultFunc[int8](v, mp)
+	case types.T_int16:
+		return NewResultFunc[int16](v, mp)
+	case types.T_int32:
+		return NewResultFunc[int32](v, mp)
+	case types.T_int64:
+		return NewResultFunc[int64](v, mp)
+	case types.T_uint8:
+		return NewResultFunc[uint8](v, mp)
+	case types.T_uint16:
+		return NewResultFunc[uint16](v, mp)
+	case types.T_uint32:
+		return NewResultFunc[uint32](v, mp)
+	case types.T_uint64:
+		return NewResultFunc[uint64](v, mp)
+	case types.T_float32:
+		return NewResultFunc[float32](v, mp)
+	case types.T_float64:
+		return NewResultFunc[float64](v, mp)
+	case types.T_date:
+		return NewResultFunc[types.Date](v, mp)
+	case types.T_datetime:
+		return NewResultFunc[types.Datetime](v, mp)
+	case types.T_time:
+		return NewResultFunc[types.Time](v, mp)
+	case types.T_timestamp:
+		return NewResultFunc[types.Timestamp](v, mp)
+	case types.T_decimal64:
+		return NewResultFunc[types.Decimal64](v, mp)
+	case types.T_decimal128:
+		return NewResultFunc[types.Decimal128](v, mp)
+	case types.T_TS:
+		return NewResultFunc[types.TS](v, mp)
+	case types.T_Rowid:
+		return NewResultFunc[types.Rowid](v, mp)
+	case types.T_uuid:
+		return NewResultFunc[types.Uuid](v, mp)
+	}
+	panic(fmt.Sprintf("unexpected type %s for function result", typ))
 }

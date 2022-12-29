@@ -489,6 +489,74 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 	}
 }
 
+func evalFunction(proc *process.Process, f *function.Function, args []*vector.Vector, length int) (*vector.Vector, error) {
+	if !f.UseNewFramework {
+		v, err := f.VecFn(args, proc)
+		if err != nil {
+			return nil, err
+		}
+		vector.SetLength(v, length)
+		v.FillDefaultValue()
+		return v, nil
+	}
+	var resultWrapper vector.FunctionResultWrapper
+	var err error
+
+	var parameterTypes []types.Type
+	if f.FlexibleReturnType != nil {
+		parameterTypes = make([]types.Type, len(args))
+		for i := range args {
+			parameterTypes[i] = args[i].GetType()
+		}
+	}
+	rTyp, _ := f.ReturnType(parameterTypes)
+	numScalar := 0
+	// If any argument is `NULL`, return NULL.
+	// If all arguments are scalar, return scalar.
+	for i := range args {
+		if args[i].IsScalar() {
+			numScalar++
+		} else {
+			if len(f.ParameterMustScalar) > i && f.ParameterMustScalar[i] {
+				return nil, moerr.NewInternalError(proc.Ctx,
+					fmt.Sprintf("the %dth parameter of function can only be constant", i+1))
+			}
+		}
+	}
+
+	if !f.ResultMustNotScalar && numScalar == len(args) {
+		resultWrapper = vector.NewFunctionResultWrapper(rTyp, proc.Mp(), true, length)
+		// XXX only evaluate the first row.
+		err = f.NewFn(args, resultWrapper, proc, 1)
+	} else {
+		resultWrapper = vector.NewFunctionResultWrapper(rTyp, proc.Mp(), false, length)
+		err = f.NewFn(args, resultWrapper, proc, length)
+	}
+	if err != nil {
+		resultWrapper.Free()
+	}
+	return resultWrapper.GetResultVector(), err
+}
+
+func cleanVectorsExceptList(proc *process.Process, vs []*vector.Vector, excepts []*vector.Vector) {
+	mp := proc.Mp()
+	for i := range vs {
+		if vs[i] == nil {
+			continue
+		}
+		needClean := true
+		for j := range excepts {
+			if excepts[j] == vs[i] {
+				needClean = false
+				break
+			}
+		}
+		if needClean {
+			vs[i].Free(mp)
+		}
+	}
+}
+
 // RewriteFilterExprList will convert an expression list to be an AndExpr
 func RewriteFilterExprList(list []*plan.Expr) *plan.Expr {
 	l := len(list)
