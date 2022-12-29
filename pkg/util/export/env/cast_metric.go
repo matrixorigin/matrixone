@@ -18,12 +18,14 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
-	"fmt"
+	"encoding/json"
 	"sync"
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+
 	"github.com/prometheus/common/model"
 )
 
@@ -56,14 +58,18 @@ func (m *Metric) CsvFields(ctx context.Context, row *table.Row) []string {
 	row.SetColumnVal(MetricNameColumn, m.Name)
 	row.SetColumnVal(MetricTimestampColumn, Time2DatetimeString(m.Timestamp))
 	row.SetFloat64(MetricValueColumn.Name, m.Value)
-	labels := fmt.Sprintf("%s", m.Labels)
-	row.SetColumnVal(MetricLabelsColumn, labels)
-	// calculate md5
-	hash := md5.New()
-	if _, err := hash.Write([]byte(m.Name)); err != nil {
+
+	labels, err := json.Marshal(&m.Labels)
+	if err != nil {
 		panic(err)
 	}
-	if _, err := hash.Write([]byte(labels)); err != nil {
+	row.SetColumnVal(MetricLabelsColumn, string(labels))
+	// calculate md5
+	hash := md5.New()
+	if _, err := hash.Write(export.String2Bytes(m.Name)); err != nil {
+		panic(err)
+	}
+	if _, err := hash.Write(labels); err != nil {
 		panic(err)
 	}
 	hashed := hash.Sum(nil)
