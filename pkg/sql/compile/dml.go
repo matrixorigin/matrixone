@@ -139,6 +139,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	var err error
 	var dbSource engine.Database
 	var relation engine.Relation
+	var isTemp bool
 	p := s.Plan.GetIns()
 
 	ctx := c.ctx
@@ -161,8 +162,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		if e != nil {
 			return 0, err
 		}
-		p.TblName = engine.GetTempTableName(p.DbName, p.TblName)
-		p.DbName = defines.TEMPORARY_DBNAME
+		isTemp = true
 	}
 
 	bat := makeInsertBatch(p)
@@ -239,14 +239,14 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 				}
 			}
 
-			if err = writeBatch(ctx, dbSource, relation, c, p, bat); err != nil {
+			if err = writeBatch(ctx, dbSource, relation, c, p, bat, isTemp); err != nil {
 				return 0, err
 			}
 		}
 		//the count of insert rows x the count of accounts
 		return uint64(len(p.Columns[0].Column)) * uint64(len(clusterTable.GetAccountIDs())), nil
 	} else {
-		if err = writeBatch(ctx, dbSource, relation, c, p, bat); err != nil {
+		if err = writeBatch(ctx, dbSource, relation, c, p, bat, isTemp); err != nil {
 			return 0, err
 		}
 		return uint64(len(p.Columns[0].Column)), nil
@@ -260,8 +260,11 @@ func writeBatch(ctx context.Context,
 	relation engine.Relation,
 	c *Compile,
 	p *plan.InsertValues,
-	bat *batch.Batch) error {
+	bat *batch.Batch,
+	isTemp bool) error {
 	var err error
+	var oldDbName string
+
 	/**
 	Null value check:
 	There are two cases to validate for not null
@@ -281,10 +284,17 @@ func writeBatch(ctx context.Context,
 	}
 	batch.Reorder(bat, p.OrderAttrs)
 
+	if isTemp {
+		oldDbName = p.DbName
+		p.TblName = engine.GetTempTableName(p.DbName, p.TblName)
+		p.DbName = defines.TEMPORARY_DBNAME
+	}
+
 	//update the auto increment table
 	if err = colexec.UpdateInsertValueBatch(c.e, ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
 		return err
 	}
+
 	//complement composite primary key
 	if p.CompositePkey != nil {
 		err := util.FillCompositePKeyBatch(bat, p.CompositePkey, c.proc)
@@ -301,12 +311,18 @@ func writeBatch(ctx context.Context,
 			}
 		}
 	}
+
 	//update unique index table
 	if p.UniqueIndexDef != nil {
 		primaryKeyName := update.GetTablePriKeyName(p.ExplicitCols, p.CompositePkey)
 		for i := range p.UniqueIndexDef.IndexNames {
+			var indexRelation engine.Relation
 			if p.UniqueIndexDef.TableExists[i] {
-				indexRelation, err := dbSource.Relation(ctx, p.UniqueIndexDef.TableNames[i])
+				if isTemp {
+					indexRelation, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, p.UniqueIndexDef.TableNames[i]))
+				} else {
+					indexRelation, err = dbSource.Relation(ctx, p.UniqueIndexDef.TableNames[i])
+				}
 				if err != nil {
 					return err
 				}

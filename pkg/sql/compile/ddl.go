@@ -138,7 +138,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
 	tmpDBSource, err := c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
 	if err == nil {
-
 		if _, err := tmpDBSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName)); err == nil {
 			if qry.GetIfNotExists() {
 				return nil
