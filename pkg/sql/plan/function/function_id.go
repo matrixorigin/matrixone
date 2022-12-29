@@ -252,6 +252,7 @@ const (
 	DATE_FORMAT  // DATE_FORMAT
 	JSON_EXTRACT // JSON_EXTRACT
 	JSON_QUOTE   // JSON_QUOTE
+	JSON_UNQUOTE // JSON_UNQUOTE
 	FORMAT       // FORMAT
 	SLEEP        // sleep for a while
 	INSTR
@@ -471,6 +472,7 @@ var functionIdRegister = map[string]int32{
 	"instr":                          INSTR,
 	"curdate":                        CURRENT_DATE,
 	"current_date":                   CURRENT_DATE,
+	"json_unquote":                   JSON_UNQUOTE,
 	"ascii":                          ASCII,
 }
 

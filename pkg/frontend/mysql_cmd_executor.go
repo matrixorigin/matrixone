@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"os"
 	"reflect"
@@ -419,12 +420,24 @@ const (
 /*
 handle show columns from table in plan2 and tae
 */
-func handleShowColumns(ses *Session) error {
+func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 	data := ses.GetData()
 	mrs := ses.GetMysqlResultSet()
+	dbName := stmt.Table.GetDBName()
+	if len(dbName) == 0 {
+		dbName = ses.GetDatabaseName()
+	}
+	tableName := string(stmt.Table.ToTableName().ObjectName)
 	for _, d := range data {
 		colName := string(d[0].([]byte))
 		if colName == catalog.Row_ID {
+			continue
+		}
+		//the non-sys account skips the column account_id of the cluster table
+		if util.IsClusterTableAttribute(colName) &&
+			isClusterTable(dbName, tableName) &&
+			ses.GetTenantInfo() != nil &&
+			!ses.GetTenantInfo().IsSysTenant() {
 			continue
 		}
 
@@ -2408,7 +2421,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 		return ret, err
 	}
 	switch stmt := stmt.(type) {
-	case *tree.Select, *tree.ParenSelect,
+	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
 		*tree.Update, *tree.Delete, *tree.Insert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable,
@@ -2471,6 +2484,13 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 	//PART 1: the statements with the result set
 	case *tree.Select:
 		ret = (&SelectExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			sel: st,
+		})
+	case *tree.ValuesStatement:
+		ret = (&ValuesStmtExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
@@ -2846,6 +2866,13 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 				base,
 			},
 			cv: st,
+		})
+	case *tree.AlterView:
+		ret = (&AlterViewExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			av: st,
 		})
 	case *tree.DropView:
 		ret = (&DropViewExecutor{
@@ -3489,8 +3516,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Select,
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants,
-			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation,
-			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues:
+			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
+			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionStatus:
 			columns, err = cw.GetColumns()
 			if err != nil {
 				logErrorf(ses.GetConciseProfile(), "GetColumns from Computation handler failed. error: %v", err)
@@ -3550,7 +3577,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 			switch ses.GetShowStmtType() {
 			case ShowColumns:
-				if err = handleShowColumns(ses); err != nil {
+				if err = handleShowColumns(ses, statement.(*tree.ShowColumns)); err != nil {
 					goto handleFailed
 				}
 			case ShowTableStatus:
@@ -3590,6 +3617,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex,
 			*tree.CreateView, *tree.DropView,
+			*tree.AlterView,
 			*tree.Insert, *tree.Update,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 			*tree.SetVar,
@@ -3725,7 +3753,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		switch stmt.(type) {
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
-			*tree.CreateView, *tree.DropView, *tree.Load, *tree.MoDump,
+			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.Load, *tree.MoDump,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
 			*tree.CreateFunction, *tree.DropFunction,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
@@ -4071,10 +4099,10 @@ StatementCanBeExecutedInUncommittedTransaction checks the statement can be execu
 func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Statement) (bool, error) {
 	switch st := stmt.(type) {
 	//ddl statement
-	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView:
+	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView, *tree.AlterView:
 		return true, nil
 		//dml statement
-	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump:
+	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.ValuesStatement:
 		return true, nil
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
@@ -4123,7 +4151,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.CreateTable, *tree.DropTable,
-		*tree.CreateView, *tree.DropView,
+		*tree.CreateView, *tree.DropView, *tree.AlterView,
 		*tree.CreateDatabase, *tree.DropDatabase,
 		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable:
 		return true

@@ -16,6 +16,7 @@ package tree
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -72,7 +73,7 @@ func (node *UnresolvedName) Format(ctx *FmtCtx) {
 			ctx.WriteByte('.')
 		}
 	}
-	if node.Star && node.NumParts > 1 {
+	if node.Star && node.NumParts > 0 {
 		ctx.WriteString(".*")
 	} else if node.Star {
 		ctx.WriteByte('*')
