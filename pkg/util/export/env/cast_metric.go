@@ -19,12 +19,12 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
+	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/prometheus/common/model"
-	"github.com/prometheus/prometheus/model/timestamp"
-	"github.com/prometheus/prometheus/prompb"
 )
 
 type Metric struct {
@@ -33,6 +33,14 @@ type Metric struct {
 	Value     float64
 	Labels    model.Metric
 	SeriesId  string
+}
+
+var pool = &sync.Pool{New: func() any {
+	return &Metric{}
+}}
+
+func NewMetric() *Metric {
+	return pool.Get().(*Metric)
 }
 
 func (m *Metric) GetName() string {
@@ -64,47 +72,17 @@ func (m *Metric) CsvFields(ctx context.Context, row *table.Row) []string {
 	return row.ToStrings()
 }
 
-func TransferMetrics(data []prompb.TimeSeries) []Metric {
-	if len(data) == 0 {
-		return nil
-	}
-	arr := make([]Metric, 0, len(data)*len(data[0].Samples))
-	for _, ts := range data {
-		metric := Metric{}
-		m := make(model.Metric, len(ts.Labels))
-		for _, l := range ts.Labels {
-			if l.Name == model.MetricNameLabel {
-				metric.Name = l.Value
-				continue
-			}
-			m[model.LabelName(l.Name)] = model.LabelValue(l.Value)
-		}
+func (m *Metric) Size() int64 {
+	return int64(unsafe.Sizeof(m)) + int64(
+		len(m.Name)+len(m.SeriesId),
+	)
+}
 
-		for _, s := range ts.Samples {
-			mm := metric
-			mm.Value = s.Value
-			mm.Timestamp = timestamp.Time(s.Timestamp)
-			mm.Labels = m
-			arr = append(arr, mm)
-		}
-
-		for _, e := range ts.Exemplars {
-			metric = Metric{}
-			m := make(model.Metric, len(e.Labels))
-			for _, l := range e.Labels {
-				if l.Name == model.MetricNameLabel {
-					metric.Name = l.Value
-					continue
-				}
-				m[model.LabelName(l.Name)] = model.LabelValue(l.Value)
-			}
-			metric.Value = e.Value
-			metric.Timestamp = timestamp.Time(e.Timestamp)
-			metric.Labels = m
-			arr = append(arr, metric)
-		}
-
-		ts.Histograms = nil // not support
-	}
-	return arr
+func (m *Metric) Free() {
+	m.Name = ""
+	m.Timestamp = time.Time{}
+	m.Value = 0.0
+	m.Labels = nil
+	m.SeriesId = ""
+	pool.Put(m)
 }
