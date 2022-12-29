@@ -135,7 +135,13 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 			find = true
 			tbl.Id = item.Id
 			tbl.Defs = item.Defs
+			tbl.Kind = item.Kind
+			tbl.Comment = item.Comment
+			tbl.ViewDef = item.ViewDef
 			tbl.TableDef = item.TableDef
+			tbl.Constraint = item.Constraint
+			tbl.Partition = item.Partition
+			tbl.CreateSql = item.CreateSql
 			tbl.PrimaryIdx = item.PrimaryIdx
 			tbl.ClusterByIdx = item.ClusterByIdx
 		}
