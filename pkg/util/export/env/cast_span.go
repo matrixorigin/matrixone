@@ -120,7 +120,6 @@ func trsfStatus(s *tracepb.Status) string {
 	} else {
 		return string(bytes[:])
 	}
-	return
 }
 
 func trsfSpanLink(links []*tracepb.Span_Link) string {
