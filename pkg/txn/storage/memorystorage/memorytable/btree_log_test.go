@@ -22,7 +22,7 @@ func TestBTreeLogEncoding(t *testing.T) {
 		log.Set(&logEntry[Int, int]{
 			Serial: int64(i),
 			Key:    Int(i),
-			Pair: KVPair[Int, int]{
+			Pair: &KVPair[Int, int]{
 				Key: Int(i),
 				KVValue: &KVValue[Int, int]{
 					Value: i,
