@@ -1791,8 +1791,18 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					return 0, err
 				}
 				viewStmt, ok := originStmts[0].(*tree.CreateView)
+
+				// No createview stmt, check alterview stmt.
 				if !ok {
-					return 0, moerr.NewParseError(builder.GetContext(), "can not get view statement")
+					alterstmt, ok := originStmts[0].(*tree.AlterView)
+					viewStmt = &tree.CreateView{}
+					if !ok {
+						return 0, moerr.NewParseError(builder.GetContext(), "can not get view statement")
+					}
+					viewStmt.Name = alterstmt.Name
+					viewStmt.ColNames = alterstmt.ColNames
+					viewStmt.AsSource = alterstmt.AsSource
+					viewStmt.Temporary = alterstmt.Temporary
 				}
 
 				viewName := viewStmt.Name.ObjectName
@@ -1873,7 +1883,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 				NumParts: 1,
 				Parts:    tree.NameParts{},
 			}
-			left.Parts[0] = "account_id"
+			left.Parts[0] = util.GetClusterTableAttributeName()
 			right := tree.NewNumVal(constant.MakeUint64(uint64(builder.compCtx.GetAccountId())), "", false)
 			right.ValType = tree.P_uint64
 			//account_id = the accountId of the non-sys account

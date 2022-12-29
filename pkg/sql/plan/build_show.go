@@ -88,10 +88,17 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	rowCount := 0
 	var pkDefs []string
 	var cbDef string
+	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
 
 	for _, col := range tableDef.Cols {
 		colName := col.Name
 		if colName == catalog.Row_ID {
+			continue
+		}
+		//the non-sys account skips the column account_id of the cluster table
+		if util.IsClusterTableAttribute(colName) &&
+			isClusterTable &&
+			ctx.GetAccountId() != catalog.System_Account {
 			continue
 		}
 		nullOrNot := "NOT NULL"
@@ -408,6 +415,7 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
+
 func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
@@ -508,6 +516,28 @@ func buildShowTarget(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error) 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowLocks(stmt *tree.ShowLocks, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := "select 1 where 0"
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowNodeList(stmt *tree.ShowNodeList, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := "select 1 where 0"
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowFunctionStatus(stmt *tree.ShowFunctionStatus, ctx CompilerContext) (*Plan, error) {
+	if stmt.Like != nil && stmt.Where != nil {
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
+	}
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	//To do
+	sql := "select 1 where 0"
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
 func buildShowTriggers(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
@@ -575,17 +605,24 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 
 // TODO: Improve SQL. Currently, Lack of the mata of grants
 func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) {
-	ddlType := plan.DataDefinition_SHOW_TARGET
-	if stmt.Hostname == "" {
-		stmt.Hostname = MO_DEFUALT_HOSTNAME
-	}
-	if stmt.Username == "" {
-		stmt.Username = ctx.GetUserName()
-	}
-	sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\", \"@\", \"`%s`\")  as `Grants for %s@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
-	sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Username, stmt.Hostname)
 
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	if stmt.ShowGrantType == tree.GrantForRole {
+		role_name := stmt.Roles[0].UserName
+		sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\")  as `Grants for %s` from  %s.mo_role_privs as p where p.role_name = '%s';"
+		sql = fmt.Sprintf(sql, role_name, role_name, MO_CATALOG_DB_NAME, role_name)
+		return returnByRewriteSQL(ctx, sql, ddlType)
+	} else {
+		if stmt.Hostname == "" {
+			stmt.Hostname = MO_DEFUALT_HOSTNAME
+		}
+		if stmt.Username == "" {
+			stmt.Username = ctx.GetUserName()
+		}
+		sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\", \"@\", \"`%s`\")  as `Grants for %s@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
+		sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Username, stmt.Hostname)
+		return returnByRewriteSQL(ctx, sql, ddlType)
+	}
 }
 
 func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, error) {

@@ -313,6 +313,9 @@ func (gc *GroupConcat) Merge(agg2 agg.Agg[any], groupIndex1 int64, groupIndex2 i
 		rows := strings.Split(gc2.inserts[groupIndex2], gc2.arg.Separator)
 		ress := strings.Split(gc2.res[groupIndex2], gc2.arg.Separator)
 		for i, row := range rows {
+			if len(row) == 0 {
+				continue
+			}
 			flag, err := gc.maps[groupIndex1].InsertValue(row)
 			if err != nil {
 				return err
