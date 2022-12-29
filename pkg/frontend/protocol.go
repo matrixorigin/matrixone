@@ -39,6 +39,8 @@ const (
 	EoFResponse
 	// ResultResponse result message
 	ResultResponse
+	// LocalInfileRequest local infile message
+	LocalInfileRequest
 )
 
 type Request struct {
@@ -112,6 +114,10 @@ func NewOkResponse(affectedRows, lastInsertId uint64, warnings, status uint16, c
 	}
 
 	return resp
+}
+
+func NewLocalInfileRequest(filename string) *Response {
+	return NewResponse(LocalInfileRequest, 0, 0, filename)
 }
 
 func (resp *Response) GetData() interface{} {
@@ -429,6 +435,9 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 			return mp.sendOKPacket(mer.AffectedRows(), mer.InsertID(), uint16(resp.status), mer.Warnings(), "")
 		}
 		return mp.sendResultSet(ctx, mer.Mrs(), resp.cmd, mer.Warnings(), uint16(resp.status))
+	case LocalInfileRequest:
+		s, _ := resp.data.(string)
+		return mp.sendLocalInfileRequest(s)
 	default:
 		return moerr.NewInternalError(ctx, "unsupported response:%d ", resp.category)
 	}
