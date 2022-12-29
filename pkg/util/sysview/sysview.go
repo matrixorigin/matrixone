@@ -296,7 +296,7 @@ var (
 			");",
 
 		"CREATE VIEW IF NOT EXISTS TABLES AS " +
-			"SELECT '' AS TABLE_CATALOG," +
+			"SELECT 'def' AS TABLE_CATALOG," +
 			"reldatabase AS TABLE_SCHEMA," +
 			"relname AS TABLE_NAME," +
 			"'' AS TABLE_TYPE," +
