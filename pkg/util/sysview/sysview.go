@@ -170,7 +170,7 @@ var (
 			"attname AS COLUMN_NAME," +
 			"attnum AS ORDINAL_POSITION," +
 			"mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT," +
-			"(case when attnotnull=0 then 'NO' else 'YES' end) as IS_NULLABLE," +
+			"(case when attnotnull != 0 then 'YES' else 'NO' end) as IS_NULLABLE," +
 			"mo_show_visible_bin(atttyp,2) as DATA_TYPE," +
 			"att_length as CHARACTER_MAXIMUM_LENGTH," +
 			"att_length as CHARACTER_OCTET_LENGTH," +
@@ -294,8 +294,9 @@ var (
 			"COLLATION_CONNECTION varchar(64)," +
 			"DATABASE_COLLATION varchar(64)" +
 			");",
+
 		"CREATE VIEW IF NOT EXISTS TABLES AS " +
-			"SELECT '' AS TABLE_CATALOG," +
+			"SELECT 'def' AS TABLE_CATALOG," +
 			"reldatabase AS TABLE_SCHEMA," +
 			"relname AS TABLE_NAME," +
 			"'' AS TABLE_TYPE," +
@@ -310,13 +311,38 @@ var (
 			"0 AS DATA_FREE," +
 			"0 AS `AUTO_INCREMENT`," +
 			"created_time AS CREATE_TIME," +
-			"'' AS UPDATE_TIME," +
-			"'' AS CHECK_TIME," +
+			"created_time AS UPDATE_TIME," +
+			"created_time AS CHECK_TIME," +
 			"'' AS TABLE_COLLATION," +
 			"0 AS CHECKSUM," +
 			"'' AS CREATE_OPTIONS," +
 			"rel_comment AS TABLE_COMMENT " +
 			"FROM mo_catalog.mo_tables;",
+
+		//"CREATE TABLE TABLES(" +
+		//	"TABLE_CATALOG varchar(64)," +
+		//	"TABLE_SCHEMA varchar(64)," +
+		//	"TABLE_NAME varchar(64)," +
+		//	"TABLE_TYPE varchar(50)," +
+		//	"ENGINE varchar(64), " +
+		//	"VERSION int," +
+		//	"ROW_FORMAT varchar(50)," +
+		//	"TABLE_ROWS bigint unsigned," +
+		//	"AVG_ROW_LENGTH bigint unsigned," +
+		//	"DATA_LENGTH bigint unsigned," +
+		//	"MAX_DATA_LENGTH bigint unsigned," +
+		//	"INDEX_LENGTH bigint unsigned," +
+		//	"DATA_FREE bigint unsigned," +
+		//	"`AUTO_INCREMENT` bigint unsigned," +
+		//	"CREATE_TIME timestamp," +
+		//	"UPDATE_TIME datetime," +
+		//	"CHECK_TIME datetime," +
+		//	"TABLE_COLLATION varchar(64)," +
+		//	"CHECKSUM bigint," +
+		//	"CREATE_OPTIONS varchar(256)," +
+		//	"TABLE_COMMENT text" +
+		//	");",
+
 		"CREATE TABLE IF NOT EXISTS ENGINES (" +
 			"ENGINE varchar(64)," +
 			"SUPPORT varchar(8)," +
