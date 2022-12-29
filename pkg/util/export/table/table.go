@@ -86,6 +86,8 @@ type Table struct {
 	TableOptions TableOptions
 	// SupportUserAccess default false. if true, user account can access.
 	SupportUserAccess bool
+	// SupportConstAccess default false. if true, use Table.Account
+	SupportConstAccess bool
 }
 
 func (tbl *Table) Clone() *Table {
@@ -271,6 +273,9 @@ func (r *Row) Reset() {
 func (r *Row) GetAccount() string {
 	if r.Table.PathBuilder.SupportAccountStrategy() && r.AccountIdx >= 0 {
 		return r.Columns[r.AccountIdx]
+	}
+	if r.Table.SupportConstAccess && len(r.Table.Account) > 0 {
+		return r.Table.Account
 	}
 	return "sys"
 }

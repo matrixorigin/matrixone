@@ -188,5 +188,6 @@ var SpansTable = &table.Table{
 	PathBuilder:      table.NewAccountDatePathBuilder(),
 	AccountColumn:    nil,
 	// SupportUserAccess
-	SupportUserAccess: true,
+	SupportUserAccess:  false,
+	SupportConstAccess: true,
 }
