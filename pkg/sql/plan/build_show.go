@@ -164,6 +164,27 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		createStr += pkStr
 	}
 
+	uIndexDef, _ := buildIndexDefs(tableDef.Defs)
+	if uIndexDef != nil {
+		for i, name := range uIndexDef.IndexNames {
+			uIStr := "UNIQUE KEY"
+			uIStr += fmt.Sprintf("`%s`(", name)
+			for num, part := range uIndexDef.Fields[i].Parts {
+				if num == len(uIndexDef.Fields[i].Parts)-1 {
+					uIStr += fmt.Sprintf("`%s`", part)
+				} else {
+					uIStr += fmt.Sprintf("`%s`,", part)
+				}
+			}
+			uIStr += ")"
+			if rowCount != 0 {
+				createStr += ",\n"
+			}
+			createStr += uIStr
+		}
+
+	}
+
 	if rowCount != 0 {
 		createStr += "\n"
 	}
