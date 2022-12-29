@@ -14,42 +14,47 @@
 
 package memorytable
 
-import "testing"
+import (
+	"testing"
+)
 
-func TestBTreeIndexEncoding(t *testing.T) {
-	index := NewBTreeIndex[Int, int]()
+func TestBTreeKVEncoding(t *testing.T) {
+	kv := NewBTree[Int, int]()
 	for i := 0; i < 10; i++ {
-		index.Set(&IndexEntry[Int, int]{
-			Index: Tuple{
-				Int(i),
+		kv.Set(TreeNode[Int, int]{
+			KVPair: &KVPair[Int, int]{
+				Key: Int(i),
+				KVValue: &KVValue[Int, int]{
+					Value: i,
+				},
 			},
-			Key: Int(i),
 		})
 	}
-	data, err := index.MarshalBinary()
+	data, err := kv.MarshalBinary()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	index2 := new(BTreeIndex[Int, int])
-	if err := index2.UnmarshalBinary(data); err != nil {
+	kv2 := new(BTree[Int, int])
+	if err := kv2.UnmarshalBinary(data); err != nil {
 		t.Fatal(err)
 	}
 
-	m := make(map[Int]Int)
-	iter := index.Iter()
+	m := make(map[Int]int)
+	iter := kv2.Iter()
 	for ok := iter.First(); ok; ok = iter.Next() {
-		entry, err := iter.Read()
+		node, err := iter.Read()
 		if err != nil {
 			t.Fatal()
 		}
-		m[entry.Index[0].(Int)] = entry.Key
+		pair := node.KVPair
+		m[pair.Key] = pair.Value
 	}
 	if len(m) != 10 {
 		t.Fatal()
 	}
 	for i := 0; i < 10; i++ {
-		if m[Int(i)] != Int(i) {
+		if m[Int(i)] != i {
 			t.Fatal()
 		}
 	}
