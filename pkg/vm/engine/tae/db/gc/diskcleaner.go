@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -69,6 +70,10 @@ type DiskCleaner struct {
 	// files, and only one worker will run
 	delTask *GCTask
 
+	options struct {
+		tryGCInterval time.Duration
+	}
+
 	processQueue sm.Queue
 
 	onceStart sync.Once
@@ -79,11 +84,15 @@ func NewDiskCleaner(
 	fs *objectio.ObjectFS,
 	ckpClient checkpoint.RunnerReader,
 	catalog *catalog.Catalog,
+	opts ...Option,
 ) *DiskCleaner {
 	cleaner := &DiskCleaner{
 		fs:        fs,
 		ckpClient: ckpClient,
 		catalog:   catalog,
+	}
+	for _, opt := range opts {
+		opt(cleaner)
 	}
 	cleaner.delTask = NewGCTask(fs, cleaner)
 	cleaner.processQueue = sm.NewSafeQueue(10000, 1000, cleaner.process)
@@ -195,12 +204,23 @@ func (cleaner *DiskCleaner) process(items ...any) {
 
 	debugCandidates := cleaner.ckpClient.GetAllIncrementalCheckpoints()
 
-	candidates := cleaner.ckpClient.ICKPSeekLT(ts, 10)
+	checkpoints := cleaner.ckpClient.ICKPSeekLT(ts, 10)
+
+	if len(checkpoints) == 0 {
+		return
+	}
+	candidates := make([]*checkpoint.CheckpointEntry, 0)
+	compareTS := cleaner.getCompareTS()
+	for _, ckp := range checkpoints {
+		if ckp.GetEnd().Less(compareTS) {
+			break
+		}
+		candidates = append(candidates, ckp)
+	}
 
 	if len(candidates) == 0 {
 		return
 	}
-
 	var input *GCTable
 	var err error
 	if input, err = cleaner.createNewInput(candidates); err != nil {
@@ -245,6 +265,11 @@ func (cleaner *DiskCleaner) process(items ...any) {
 		}
 	}
 
+}
+
+func (cleaner *DiskCleaner) getCompareTS() types.TS {
+	ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(cleaner.options.tryGCInterval), 0)
+	return ts
 }
 
 func (cleaner *DiskCleaner) collectCkpData(

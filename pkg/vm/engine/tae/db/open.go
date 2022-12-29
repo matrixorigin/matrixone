@@ -159,7 +159,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		opts.CheckpointCfg.ScanInterval,
 		scanner)
 	db.BGScanner.Start()
-	db.DiskCleaner = gc2.NewDiskCleaner(db.Fs, db.BGCheckpointRunner, db.Catalog)
+	db.DiskCleaner = gc2.NewDiskCleaner(db.Fs, db.BGCheckpointRunner, db.Catalog,
+		gc2.WithTryGCInterval(opts.CheckpointCfg.IncrementalInterval*20))
 	db.DiskCleaner.Start()
 	// Init gc manager at last
 	db.GCManager = gc.NewManager(
