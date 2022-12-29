@@ -30,15 +30,13 @@ type tableState[
 	K Ordered[K],
 	V any,
 ] struct {
-	kv    KV[K, V]
-	log   Log[K, V]
-	index Index[K, V]
+	tree Tree[K, V]
+	log  Log[K, V]
 }
 
 func (t *tableState[K, V]) clone() *tableState[K, V] {
 	ret := &tableState[K, V]{
-		kv:    t.kv.Copy(),
-		index: t.index.Copy(),
+		tree: t.tree.Copy(),
 		// log is not copied
 		log: NewSliceLog[K, V](),
 	}
@@ -69,37 +67,40 @@ func (t *tableState[K, V]) merge(
 		logs = append(logs, log)
 		key := log.Key
 
-		pivot := KVPair[K, V]{
-			Key: key,
+		pivot := TreeNode[K, V]{
+			KVPair: &KVPair[K, V]{
+				Key: key,
+			},
 		}
-		oldPair, _ := t.kv.Get(pivot)
+		oldNode, _ := t.tree.Get(pivot)
+		oldPair := oldNode.KVPair
 
-		if log.Pair.Valid() && log.OldPair.Valid() {
+		if log.Pair != nil && log.OldPair != nil {
 			// update
-			if !oldPair.Valid() {
+			if oldPair == nil {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
 			if oldPair.ID != log.OldPair.ID {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
-			t.setPair(log.Pair, oldPair)
+			t.setPair(log.Pair, oldNode.KVPair)
 
-		} else if !log.Pair.Valid() {
+		} else if log.Pair == nil {
 			// delete
-			if !oldPair.Valid() {
+			if oldPair == nil {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
 			if oldPair.ID != log.OldPair.ID {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
-			t.unsetPair(pivot, oldPair)
+			t.unsetPair(*pivot.KVPair, oldNode.KVPair)
 
-		} else if log.Pair.Valid() && !log.OldPair.Valid() {
+		} else if log.Pair != nil && log.OldPair == nil {
 			// insert
-			if oldPair.Valid() {
+			if oldPair != nil {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
-			t.setPair(log.Pair, oldPair)
+			t.setPair(log.Pair, oldNode.KVPair)
 		}
 
 	}
@@ -109,23 +110,17 @@ func (t *tableState[K, V]) merge(
 
 func (s *tableState[K, V]) dump(w io.Writer) {
 	{
-		iter := s.kv.Copy().Iter()
+		iter := s.tree.Copy().Iter()
 		for ok := iter.First(); ok; ok = iter.Next() {
-			row, err := iter.Read()
+			node, err := iter.Read()
 			if err != nil {
 				panic(err)
 			}
-			fmt.Fprintf(w, "\trow %+v\n", row)
-		}
-	}
-	{
-		iter := s.index.Copy().Iter()
-		for ok := iter.First(); ok; ok = iter.Next() {
-			entry, err := iter.Read()
-			if err != nil {
-				panic(err)
+			if node.KVPair != nil {
+				fmt.Fprintf(w, "\trow %+v\n", node.KVPair)
+			} else if node.IndexEntry != nil {
+				fmt.Fprintf(w, "\tindex %+v\n", node.IndexEntry)
 			}
-			fmt.Fprintf(w, "\tindex %+v\n", entry)
 		}
 	}
 	{
@@ -145,21 +140,25 @@ func init() {
 }
 
 // setPair set a key-value pair
-func (s *tableState[K, V]) setPair(pair KVPair[K, V], oldPair KVPair[K, V]) {
+func (s *tableState[K, V]) setPair(pair *KVPair[K, V], oldPair *KVPair[K, V]) {
 
-	if oldPair.Valid() {
+	if oldPair != nil {
 		// remove indexes
 		for _, index := range oldPair.Indexes {
-			s.index.Delete(&IndexEntry[K, V]{
-				Index: index,
-				Key:   oldPair.Key,
+			s.tree.Delete(TreeNode[K, V]{
+				IndexEntry: &IndexEntry[K, V]{
+					Index: index,
+					Key:   oldPair.Key,
+				},
 			})
 		}
 	}
 
-	if pair.Valid() {
+	if pair != nil {
 		// set row
-		s.kv.Set(pair)
+		s.tree.Set(TreeNode[K, V]{
+			KVPair: pair,
+		})
 
 		// add indexes
 		for _, index := range pair.Indexes {
@@ -167,7 +166,9 @@ func (s *tableState[K, V]) setPair(pair KVPair[K, V], oldPair KVPair[K, V]) {
 				Index: index,
 				Key:   pair.Key,
 			}
-			s.index.Set(entry)
+			s.tree.Set(TreeNode[K, V]{
+				IndexEntry: entry,
+			})
 		}
 
 		// add log
@@ -184,20 +185,24 @@ func (s *tableState[K, V]) setPair(pair KVPair[K, V], oldPair KVPair[K, V]) {
 }
 
 // unsetPair unsets a key-value pair
-func (s *tableState[K, V]) unsetPair(pivot KVPair[K, V], oldPair KVPair[K, V]) {
+func (s *tableState[K, V]) unsetPair(pivot KVPair[K, V], oldPair *KVPair[K, V]) {
 
-	if oldPair.Valid() {
+	if oldPair != nil {
 		// remove indexes
 		for _, index := range oldPair.Indexes {
-			s.index.Delete(&IndexEntry[K, V]{
-				Index: index,
-				Key:   oldPair.Key,
+			s.tree.Delete(TreeNode[K, V]{
+				IndexEntry: &IndexEntry[K, V]{
+					Index: index,
+					Key:   oldPair.Key,
+				},
 			})
 		}
 	}
 
 	// delete row
-	s.kv.Delete(pivot)
+	s.tree.Delete(TreeNode[K, V]{
+		KVPair: &pivot,
+	})
 
 	// add log
 	s.log.Set(&logEntry[K, V]{
@@ -212,22 +217,19 @@ type encodingTableState[
 	K Ordered[K],
 	V any,
 ] struct {
-	KV    KV[K, V]
-	Log   Log[K, V]
-	Index Index[K, V]
+	Tree Tree[K, V]
+	Log  Log[K, V]
 }
 
 var _ encoding.BinaryMarshaler = new(tableState[Int, int])
 
 func (t *tableState[K, V]) MarshalBinary() ([]byte, error) {
-	gobRegister(t.kv)
+	gobRegister(t.tree)
 	gobRegister(t.log)
-	gobRegister(t.index)
 	buf := new(bytes.Buffer)
 	if err := gob.NewEncoder(buf).Encode(encodingTableState[K, V]{
-		KV:    t.kv,
-		Log:   t.log,
-		Index: t.index,
+		Log:  t.log,
+		Tree: t.tree,
 	}); err != nil {
 		return nil, err
 	}
@@ -241,8 +243,7 @@ func (t *tableState[K, V]) UnmarshalBinary(data []byte) error {
 	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&e); err != nil {
 		return err
 	}
-	t.kv = e.KV
+	t.tree = e.Tree
 	t.log = e.Log
-	t.index = e.Index
 	return nil
 }
