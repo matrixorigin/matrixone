@@ -4555,7 +4555,7 @@ func TestAppendBat(t *testing.T) {
 
 func TestGCWithCheckpoint(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	opts := config.WithQuickScanAndCKPOpts(nil)
+	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
 
@@ -4608,7 +4608,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 
 func TestGCDropDB(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	opts := config.WithQuickScanAndCKPOpts(nil)
+	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, 1)
@@ -4665,7 +4665,7 @@ func TestGCDropDB(t *testing.T) {
 
 func TestGCDropTable(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	opts := config.WithQuickScanAndCKPOpts(nil)
+	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, 1)

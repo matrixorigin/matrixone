@@ -123,6 +123,25 @@ func WithQuickScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	return opts
 }
 
+func WithQuickScanAndCKPAndGCOpts(in *options.Options) (opts *options.Options) {
+	if in == nil {
+		opts = new(options.Options)
+	} else {
+		opts = in
+	}
+	opts.CheckpointCfg = new(options.CheckpointCfg)
+	opts.CheckpointCfg.ScanInterval = time.Millisecond * 10
+	opts.CheckpointCfg.FlushInterval = time.Millisecond * 10
+	opts.CheckpointCfg.MinCount = 1
+	opts.CheckpointCfg.IncrementalInterval = time.Millisecond * 20
+	opts.CheckpointCfg.GlobalMinCount = 1
+
+	opts.GCCfg = new(options.GCCfg)
+	opts.GCCfg.ScanGCInterval = time.Millisecond * 10
+	opts.GCCfg.GCTTL = time.Millisecond * 1
+	return opts
+}
+
 func WithOpts(in *options.Options, factor float64) (opts *options.Options) {
 	if in == nil {
 		opts = new(options.Options)
