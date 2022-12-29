@@ -37,12 +37,12 @@ type Metric struct {
 	SeriesId  string
 }
 
-var pool = &sync.Pool{New: func() any {
+var metricPool = &sync.Pool{New: func() any {
 	return &Metric{}
 }}
 
 func NewMetric() *Metric {
-	return pool.Get().(*Metric)
+	return metricPool.Get().(*Metric)
 }
 
 func (m *Metric) GetName() string {
@@ -90,5 +90,5 @@ func (m *Metric) Free() {
 	m.Value = 0.0
 	m.Labels = nil
 	m.SeriesId = ""
-	pool.Put(m)
+	metricPool.Put(m)
 }

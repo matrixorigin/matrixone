@@ -36,6 +36,6 @@ type Span struct {
 	Attributes   []*v11.KeyValue
 }
 
-func TransaferSpan(data *tracepb.TracesData) []table.Row {
+func TransferSpan(data *tracepb.TracesData) []table.Row {
 	panic("not implement")
 }

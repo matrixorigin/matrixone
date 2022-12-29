@@ -133,11 +133,8 @@ var (
 	LogsLevelCol       = StringColumn("level", "log level, enum: debug, info, warn, error, panic, fatal")
 	LogsCallerCol      = StringColumn("caller", "log caller, like: package/file.go:123")
 	LogsMessageCol     = TextColumn("message", "log message content")
-	LogsExtraCol       = JsonColumn("extra", "log dynamic fields")
 	LogsStackCol       = StringColumn("stack", "log caller stack info")
 	LogsLabelsCol      = JsonColumn(`labels`, `key-value json mark labels`)
-	LogsResourceCol    = JsonColumn(`resource`, `key-value json`)
-	LogsAttributesCol  = JsonColumn(`attributes`, `key-value json`)
 )
 
 var LogsTable = &table.Table{
@@ -147,8 +144,8 @@ var LogsTable = &table.Table{
 	Columns: []table.Column{
 		LogsTraceIDCol, LogsSpanIDCol,
 		LogsTimestampCol, LogsCollectTimeCol,
-		LogsLoggerNameCol, LogsLevelCol, LogsCallerCol, LogsMessageCol, LogsExtraCol, LogsStackCol,
-		LogsLabelsCol, LogsResourceCol, LogsAttributesCol,
+		LogsLoggerNameCol, LogsLevelCol, LogsCallerCol, LogsMessageCol, LogsStackCol,
+		LogsLabelsCol,
 	},
 	PrimaryKeyColumn: []table.Column{},
 	Engine:           table.ExternalTableEngine,
