@@ -14,7 +14,9 @@
 
 package options
 
-import "time"
+import (
+	"time"
+)
 
 type CacheCfg struct {
 	IndexCapacity  uint64 `toml:"index-cache-size"`
@@ -35,6 +37,8 @@ type CheckpointCfg struct {
 	GlobalMinCount            int64         `toml:"checkpoint-global-interval"`
 	ForceUpdateGlobalInterval bool
 	GlobalVersionInterval     time.Duration
+	SoftGCInterval            time.Duration
+	DeleteGCInterval          time.Duration
 }
 
 type SchedulerCfg struct {

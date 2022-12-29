@@ -371,7 +371,7 @@ func (cleaner *DiskCleaner) CheckGC() error {
 	}
 	for i, ckp := range debugCandidates {
 		if ckp.GetStart().Equal(maxConsumed.GetStart()) {
-			debugCandidates = debugCandidates[:i]
+			debugCandidates = debugCandidates[:i+1]
 			break
 		}
 	}

@@ -42,6 +42,9 @@ var (
 	defaultMinCount            = int64(100)
 	defaultLogBackend          = string(options.LogstoreLogservice)
 
+	defaultDeleteGCInterval = time.Minute * 60
+	defaultSoftGCInterval   = time.Minute * 30
+
 	storageDir     = "storage"
 	defaultDataDir = "./mo-data"
 )
@@ -85,6 +88,8 @@ type Config struct {
 		MinCount            int64         `toml:"min-count"`
 		IncrementalInterval toml.Duration `toml:"incremental-interval"`
 		GlobalMinCount      int64         `toml:"global-min-count"`
+		SoftGCInterval      toml.Duration `toml:"soft-interval"`
+		DeleteGCInterval    toml.Duration `toml:"delete-interval"`
 	}
 
 	// Txn transactions configuration
@@ -159,6 +164,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Ckp.GlobalMinCount == 0 {
 		c.Ckp.GlobalMinCount = defaultGlobalMinCount
+	}
+	if c.Ckp.SoftGCInterval.Duration == 0 {
+		c.Ckp.SoftGCInterval.Duration = defaultSoftGCInterval
+	}
+	if c.Ckp.DeleteGCInterval.Duration == 0 {
+		c.Ckp.DeleteGCInterval.Duration = defaultDeleteGCInterval
 	}
 	return nil
 }

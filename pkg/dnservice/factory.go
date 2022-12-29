@@ -133,6 +133,8 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		FlushInterval:       s.cfg.Ckp.FlushInterval.Duration,
 		IncrementalInterval: s.cfg.Ckp.IncrementalInterval.Duration,
 		GlobalMinCount:      s.cfg.Ckp.GlobalMinCount,
+		SoftGCInterval:      s.cfg.Ckp.SoftGCInterval.Duration,
+		DeleteGCInterval:    s.cfg.Ckp.DeleteGCInterval.Duration,
 	}
 
 	// use s3 as main fs

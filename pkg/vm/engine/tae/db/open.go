@@ -160,7 +160,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		scanner)
 	db.BGScanner.Start()
 	db.DiskCleaner = gc2.NewDiskCleaner(db.Fs, db.BGCheckpointRunner, db.Catalog,
-		gc2.WithTryGCInterval(opts.CheckpointCfg.IncrementalInterval*20))
+		gc2.WithTryGCInterval(opts.CheckpointCfg.DeleteGCInterval))
 	db.DiskCleaner.Start()
 	// Init gc manager at last
 	db.GCManager = gc.NewManager(
@@ -173,7 +173,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			}),
 		gc.WithCronJob(
 			"clean-checkpoint",
-			opts.CheckpointCfg.IncrementalInterval*4,
+			opts.CheckpointCfg.SoftGCInterval,
 			func(ctx context.Context) (err error) {
 				db.DiskCleaner.JobFactory(ctx)
 				return
