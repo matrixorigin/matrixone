@@ -51,12 +51,14 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 	exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
 	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
 
-	for _, blockmetas := range tbl.meta.blocks {
-		totalBlockCnt += len(blockmetas)
-		for _, blk := range blockmetas {
-			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
-				outcnt += blockRows(blk)
-				blockNum++
+	if tbl.meta != nil {
+		for _, blockmetas := range tbl.meta.blocks {
+			totalBlockCnt += len(blockmetas)
+			for _, blk := range blockmetas {
+				if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
+					outcnt += blockRows(blk)
+					blockNum++
+				}
 			}
 		}
 	}
@@ -70,10 +72,13 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
 	var rows int64
 	var totalBlockCnt int
-	for _, blks := range tbl.meta.blocks {
-		totalBlockCnt += len(blks)
-		for _, blk := range blks {
-			rows += blockRows(blk)
+
+	if tbl.meta != nil {
+		for _, blks := range tbl.meta.blocks {
+			totalBlockCnt += len(blks)
+			for _, blk := range blks {
+				rows += blockRows(blk)
+			}
 		}
 	}
 	// before first execution, no metadata.
@@ -130,9 +135,11 @@ func (tbl *table) Rows(ctx context.Context) (int64, error) {
 	if tbl.meta == nil {
 		return rows, nil
 	}
-	for _, blks := range tbl.meta.blocks {
-		for _, blk := range blks {
-			rows += blockRows(blk)
+	if tbl.meta != nil {
+		for _, blks := range tbl.meta.blocks {
+			for _, blk := range blks {
+				rows += blockRows(blk)
+			}
 		}
 	}
 	return rows, nil

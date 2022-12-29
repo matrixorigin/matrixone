@@ -76,16 +76,16 @@ type DatabaseItem struct {
 
 type TableItem struct {
 	// table key
+	AccountId  uint32
 	DatabaseId uint64
 	Name       string
 	Ts         timestamp.Timestamp
 
 	// table value
-	Id        uint64
-	AccountId uint32
-	TableDef  *plan.TableDef
-	Defs      []engine.TableDef
-	Rowid     types.Rowid
+	Id       uint64
+	TableDef *plan.TableDef
+	Defs     []engine.TableDef
+	Rowid    types.Rowid
 
 	// table def
 	Kind       string
@@ -151,6 +151,12 @@ func databaseItemLess(a, b *DatabaseItem) bool {
 }
 
 func tableItemLess(a, b *TableItem) bool {
+	if a.AccountId < b.AccountId {
+		return true
+	}
+	if a.AccountId > b.AccountId {
+		return false
+	}
 	if a.DatabaseId < b.DatabaseId {
 		return true
 	}

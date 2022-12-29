@@ -77,8 +77,6 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	sql := getSql(ctx)
 	accountId, userId, roleId := getAccessInfo(ctx)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // TODO
-	defer cancel()
 	databaseId, err := txn.allocateID(ctx)
 	if err != nil {
 		return err
@@ -111,6 +109,16 @@ func (e *Engine) Database(ctx context.Context, name string,
 	}
 	if v, ok := txn.databaseMap.Load(genDatabaseKey(ctx, name)); ok {
 		return v.(*database), nil
+	}
+	if name == catalog.MO_CATALOG {
+		db := &database{
+			txn:          txn,
+			db:           e.db,
+			fs:           e.fs,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: name,
+		}
+		return db, nil
 	}
 	key := &cache.DatabaseItem{
 		Name:      name,

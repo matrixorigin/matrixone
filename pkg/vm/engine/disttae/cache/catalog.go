@@ -82,7 +82,7 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) {
 	}
 }
 
-func (cc *CatalogCache) Tables(databaseId uint64,
+func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 	ts timestamp.Timestamp) []string {
 	var rs []string
 
@@ -91,6 +91,9 @@ func (cc *CatalogCache) Tables(databaseId uint64,
 	}
 	mp := make(map[string]uint8)
 	cc.tables.data.Ascend(key, func(item *TableItem) bool {
+		if item.AccountId != accountId {
+			return false
+		}
 		if item.DatabaseId != databaseId {
 			return false
 		}
@@ -138,16 +141,17 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 	var ts timestamp.Timestamp
 
 	cc.tables.data.Ascend(tbl, func(item *TableItem) bool {
-		if item.deleted && item.DatabaseId == tbl.DatabaseId &&
-			item.Name == tbl.Name {
+		if item.deleted && item.AccountId == tbl.AccountId &&
+			item.DatabaseId == tbl.DatabaseId && item.Name == tbl.Name {
 			if !ts.IsEmpty() {
 				return false
 			}
 			ts = item.Ts
 			return true
 		}
-		if !item.deleted && item.DatabaseId == tbl.DatabaseId &&
-			item.Name == tbl.Name && (ts.IsEmpty() || ts.Equal(item.Ts)) {
+		if !item.deleted && item.AccountId == tbl.AccountId &&
+			item.DatabaseId == tbl.DatabaseId && item.Name == tbl.Name &&
+			(ts.IsEmpty() || ts.Equal(item.Ts)) {
 			find = true
 			tbl.Id = item.Id
 			tbl.Defs = item.Defs
@@ -358,9 +362,11 @@ func genTableDefOfColumn(col column) engine.TableDef {
 	var attr engine.Attribute
 
 	attr.Name = col.name
+	attr.ID = uint64(col.num)
 	attr.Alg = compress.Lz4
 	attr.Comment = col.comment
 	attr.IsHidden = col.isHidden == 1
+	attr.ClusterBy = col.isClusterBy == 1
 	attr.AutoIncrement = col.isAutoIncrement == 1
 	if err := types.Decode(col.typ, &attr.Type); err != nil {
 		panic(err)

@@ -81,6 +81,7 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 			if n.UniqueIndexDef.TableExists[i] {
 				b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, n.UniqueIndexDef.Fields[i].Parts, primaryKeyName, proc)
 				if rowNum != 0 {
+					b.SetZs(rowNum, proc.Mp())
 					err := n.UniqueIndexTables[idx].Write(ctx, b)
 					if err != nil {
 						return err

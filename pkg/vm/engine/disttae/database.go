@@ -37,7 +37,7 @@ func (db *database) Relations(ctx context.Context) ([]string, error) {
 		}
 		return true
 	})
-	rels = append(rels, db.txn.catalog.Tables(db.databaseId,
+	rels = append(rels, db.txn.catalog.Tables(getAccountId(ctx), db.databaseId,
 		db.txn.meta.SnapshotTS)...)
 	return rels, nil
 }
@@ -45,6 +45,22 @@ func (db *database) Relations(ctx context.Context) ([]string, error) {
 func (db *database) Relation(ctx context.Context, name string) (engine.Relation, error) {
 	if v, ok := db.txn.tableMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
 		return v.(*table), nil
+	}
+	if name == catalog.MO_DATABASE {
+		id := uint64(catalog.MO_DATABASE_ID)
+		defs := catalog.MoDatabaseTableDefs
+		return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+	}
+	if name == catalog.MO_TABLES {
+		id := uint64(catalog.MO_TABLES_ID)
+		defs := catalog.MoTablesTableDefs
+		return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+	}
+	if name == catalog.MO_COLUMNS {
+		id := uint64(catalog.MO_COLUMNS_ID)
+		defs := catalog.MoColumnsTableDefs
+		return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+
 	}
 	key := &cache.TableItem{
 		Name:       name,
@@ -125,6 +141,7 @@ func (db *database) Truncate(ctx context.Context, name string) (uint64, error) {
 		key := &cache.TableItem{
 			Name:       name,
 			DatabaseId: db.databaseId,
+			AccountId:  getAccountId(ctx),
 			Ts:         db.txn.meta.SnapshotTS,
 		}
 		if ok := db.txn.catalog.GetTable(key); !ok {
@@ -223,7 +240,31 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 	tbl.defs = defs
 	tbl.tableName = name
 	tbl.tableId = tableId
+	tbl.parts = db.txn.db.getPartitions(db.databaseId, tableId)
 	tbl.getTableDef()
 	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return nil
+}
+
+func (db *database) openSysTable(key tableKey, id uint64, name string,
+	defs []engine.TableDef) engine.Relation {
+	parts := db.txn.db.getPartitions(db.databaseId, id)
+	tbl := &table{
+		db:         db,
+		tableId:    id,
+		tableName:  name,
+		defs:       defs,
+		parts:      parts,
+		primaryIdx: -1,
+	}
+	// find primary idx
+	for i, def := range defs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			if attr.Attr.Primary {
+				tbl.primaryIdx = i
+				break
+			}
+		}
+	}
+	return tbl
 }
