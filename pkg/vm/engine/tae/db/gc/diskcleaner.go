@@ -18,20 +18,18 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"sync"
-	"sync/atomic"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -70,8 +68,9 @@ type DiskCleaner struct {
 	// files, and only one worker will run
 	delWorker *GCWorker
 
-	options struct {
-		gcInterval time.Duration
+	checker struct {
+		sync.RWMutex
+		extras []func(item any) bool
 	}
 
 	processQueue sm.Queue
@@ -84,15 +83,11 @@ func NewDiskCleaner(
 	fs *objectio.ObjectFS,
 	ckpClient checkpoint.RunnerReader,
 	catalog *catalog.Catalog,
-	opts ...Option,
 ) *DiskCleaner {
 	cleaner := &DiskCleaner{
 		fs:        fs,
 		ckpClient: ckpClient,
 		catalog:   catalog,
-	}
-	for _, opt := range opts {
-		opt(cleaner)
 	}
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.processQueue = sm.NewSafeQueue(10000, 1000, cleaner.process)
@@ -202,9 +197,8 @@ func (cleaner *DiskCleaner) process(items ...any) {
 		return
 	}
 	candidates := make([]*checkpoint.CheckpointEntry, 0)
-	compareTS := cleaner.getCompareTS()
 	for _, ckp := range checkpoints {
-		if ckp.GetEnd().GreaterEq(compareTS) {
+		if !cleaner.checkExtras(ckp) {
 			break
 		}
 		candidates = append(candidates, ckp)
@@ -227,9 +221,21 @@ func (cleaner *DiskCleaner) process(items ...any) {
 	cleaner.tryGC()
 }
 
-func (cleaner *DiskCleaner) getCompareTS() types.TS {
-	ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(cleaner.options.gcInterval), 0)
-	return ts
+func (cleaner *DiskCleaner) checkExtras(item any) bool {
+	cleaner.checker.RLock()
+	defer cleaner.checker.RUnlock()
+	for _, checker := range cleaner.checker.extras {
+		if !checker(item) {
+			return false
+		}
+	}
+	return true
+}
+
+func (cleaner *DiskCleaner) AddChecker(checker func(item any) bool) {
+	cleaner.checker.Lock()
+	defer cleaner.checker.Unlock()
+	cleaner.checker.extras = append(cleaner.checker.extras, checker)
 }
 
 func (cleaner *DiskCleaner) collectCkpData(

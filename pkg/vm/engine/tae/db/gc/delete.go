@@ -68,6 +68,7 @@ func (g *GCWorker) ExecDelete(names []string) error {
 		return err
 	}
 	g.cleaner.updateOutputs(g.objects)
+	//logutil.Infof("ExecDelete: %v", g.objects)
 	g.resetObjects()
 	g.state = Idle
 	return nil
