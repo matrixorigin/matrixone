@@ -4582,7 +4582,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	num := len(entries)
 	assert.Greater(t, num, 0)
-	testutils.WaitExpect(5000, func() bool {
+	testutils.WaitExpect(10000, func() bool {
 		if manager.GetMaxConsumed() == nil {
 			return false
 		}
@@ -4593,7 +4593,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 	manager2.Start()
 	defer manager2.Stop()
 	manager2.Replay()
-	testutils.WaitExpect(5000, func() bool {
+	testutils.WaitExpect(10000, func() bool {
 		if manager2.GetMaxConsumed() == nil {
 			return false
 		}

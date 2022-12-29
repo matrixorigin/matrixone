@@ -202,8 +202,6 @@ func (cleaner *DiskCleaner) process(items ...any) {
 		ts = maxConsumed.GetEnd()
 	}
 
-	debugCandidates := cleaner.ckpClient.GetAllIncrementalCheckpoints()
-
 	checkpoints := cleaner.ckpClient.ICKPSeekLT(ts, 10)
 
 	if len(checkpoints) == 0 {
@@ -212,7 +210,7 @@ func (cleaner *DiskCleaner) process(items ...any) {
 	candidates := make([]*checkpoint.CheckpointEntry, 0)
 	compareTS := cleaner.getCompareTS()
 	for _, ckp := range checkpoints {
-		if ckp.GetEnd().Less(compareTS) {
+		if ckp.GetEnd().GreaterEq(compareTS) {
 			break
 		}
 		candidates = append(candidates, ckp)
@@ -233,38 +231,6 @@ func (cleaner *DiskCleaner) process(items ...any) {
 
 	// TODO:
 	cleaner.tryGC()
-
-	for _, item := range items {
-		if item.(int) == MessgaCompare {
-			// Only work at the same checkpoint can be Compare
-			start1 := debugCandidates[len(debugCandidates)-1].GetStart()
-			start2 := candidates[len(candidates)-1].GetStart()
-			if !start1.Equal(start2) {
-				logutil.Info("[DiskCleaner]", common.OperationField("Compare not equal"),
-					common.OperandField(start1.ToString()), common.OperandField(start2.ToString()))
-				return
-			}
-			debugTable, err := cleaner.createDebugInput(debugCandidates)
-			if err != nil {
-				logutil.Errorf("processing clean %s: %v", debugCandidates[0].String(), err)
-				// TODO
-				return
-			}
-			debugTable.SoftGC()
-			cleaner.inputs.RLock()
-			defer cleaner.inputs.RUnlock()
-			if !cleaner.inputs.tables[0].Compare(debugTable) {
-				logutil.Errorf("Compare is failed. table len:%d", len(cleaner.inputs.tables))
-				logutil.Errorf("inputs :%v", cleaner.inputs.tables[0].String())
-				logutil.Errorf("debugTable :%v", debugTable.String())
-			} else {
-				logutil.Info("[DiskCleaner]", common.OperationField("Compare is End"),
-					common.OperandField(start1.ToString()))
-			}
-			return
-		}
-	}
-
 }
 
 func (cleaner *DiskCleaner) getCompareTS() types.TS {
@@ -392,6 +358,43 @@ func (cleaner *DiskCleaner) GetAndClearOutputs() []string {
 	//Empty the array, in order to store the next file list
 	cleaner.outputs.files = make([]string, 0)
 	return files
+}
+
+func (cleaner *DiskCleaner) CheckGC() bool {
+	debugCandidates := cleaner.ckpClient.GetAllIncrementalCheckpoints()
+	cleaner.inputs.RLock()
+	defer cleaner.inputs.RUnlock()
+	maxConsumed := cleaner.GetMaxConsumed()
+	for i, ckp := range debugCandidates {
+		if ckp.GetStart().Equal(maxConsumed.GetStart()) {
+			debugCandidates = debugCandidates[:i]
+			break
+		}
+	}
+	start1 := debugCandidates[len(debugCandidates)-1].GetStart()
+	start2 := maxConsumed.GetStart()
+	if !start1.Equal(start2) {
+		logutil.Info("[DiskCleaner]", common.OperationField("Compare not equal"),
+			common.OperandField(start1.ToString()), common.OperandField(start2.ToString()))
+		return false
+	}
+	debugTable, err := cleaner.createDebugInput(debugCandidates)
+	if err != nil {
+		logutil.Errorf("processing clean %s: %v", debugCandidates[0].String(), err)
+		// TODO
+		return false
+	}
+	debugTable.SoftGC()
+	if !cleaner.inputs.tables[0].Compare(debugTable) {
+		logutil.Errorf("Compare is failed. table len:%d", len(cleaner.inputs.tables))
+		logutil.Errorf("inputs :%v", cleaner.inputs.tables[0].String())
+		logutil.Errorf("debugTable :%v", debugTable.String())
+		return false
+	} else {
+		logutil.Info("[DiskCleaner]", common.OperationField("Compare is End"),
+			common.OperandField(start1.ToString()))
+	}
+	return true
 }
 
 func (cleaner *DiskCleaner) Start() {
