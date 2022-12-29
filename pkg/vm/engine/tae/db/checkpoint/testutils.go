@@ -56,6 +56,18 @@ func (r *runner) CleanPenddingCheckpoint() {
 	if prev.IsRunning() {
 		logutil.Warnf("Delete a running checkpoint entry")
 	}
+	prev = r.MaxGlobalCheckpoint()
+	if prev == nil {
+		return
+	}
+	if !prev.IsFinished() {
+		r.storage.Lock()
+		r.storage.entries.Delete(prev)
+		r.storage.Unlock()
+	}
+	if prev.IsRunning() {
+		logutil.Warnf("Delete a running checkpoint entry")
+	}
 }
 
 func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error {
@@ -64,6 +76,8 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Durati
 		if err != nil {
 			return err
 		}
+	} else {
+		end = r.MaxCheckpoint().GetEnd()
 	}
 	r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
 		force:    true,
