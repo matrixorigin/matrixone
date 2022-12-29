@@ -162,7 +162,7 @@ func BtSliceNullAndConst(xs []string, expr []byte, ns *nulls.Nulls, rs []bool) (
 		return nil, err
 	}
 	for i, s := range xs {
-		rs[i] = isNotNull(ns, uint64(i)) && reg.Match([]byte(s))
+		rs[i] = isNotNull(ns, uint64(i)) && reg.MatchString(s)
 	}
 	return rs, nil
 }
