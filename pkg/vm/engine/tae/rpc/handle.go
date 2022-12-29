@@ -344,6 +344,15 @@ func (h *Handle) HandleFlushTable(
 		currTs)
 	return err
 }
+func (h *Handle) HandleCheckGC(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req db.CheckGC,
+	resp *apipb.SyncLogTailResp) error {
+
+	tae := h.eng.GetTAE(ctx)
+	return tae.DiskCleaner.CheckGC()
+}
 
 func (h *Handle) loadPksFromFS(
 	ctx context.Context,

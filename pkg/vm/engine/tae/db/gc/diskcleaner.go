@@ -17,6 +17,7 @@ package gc
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -360,11 +361,14 @@ func (cleaner *DiskCleaner) GetAndClearOutputs() []string {
 	return files
 }
 
-func (cleaner *DiskCleaner) CheckGC() bool {
+func (cleaner *DiskCleaner) CheckGC() error {
 	debugCandidates := cleaner.ckpClient.GetAllIncrementalCheckpoints()
 	cleaner.inputs.RLock()
 	defer cleaner.inputs.RUnlock()
 	maxConsumed := cleaner.GetMaxConsumed()
+	if maxConsumed == nil {
+		return moerr.NewInternalErrorNoCtx("GC has not yet run")
+	}
 	for i, ckp := range debugCandidates {
 		if ckp.GetStart().Equal(maxConsumed.GetStart()) {
 			debugCandidates = debugCandidates[:i]
@@ -376,25 +380,25 @@ func (cleaner *DiskCleaner) CheckGC() bool {
 	if !start1.Equal(start2) {
 		logutil.Info("[DiskCleaner]", common.OperationField("Compare not equal"),
 			common.OperandField(start1.ToString()), common.OperandField(start2.ToString()))
-		return false
+		return moerr.NewInternalErrorNoCtx("TS Compare not equal")
 	}
 	debugTable, err := cleaner.createDebugInput(debugCandidates)
 	if err != nil {
 		logutil.Errorf("processing clean %s: %v", debugCandidates[0].String(), err)
 		// TODO
-		return false
+		return moerr.NewInternalErrorNoCtx("processing clean %s: %v", debugCandidates[0].String(), err)
 	}
 	debugTable.SoftGC()
 	if !cleaner.inputs.tables[0].Compare(debugTable) {
 		logutil.Errorf("Compare is failed. table len:%d", len(cleaner.inputs.tables))
 		logutil.Errorf("inputs :%v", cleaner.inputs.tables[0].String())
 		logutil.Errorf("debugTable :%v", debugTable.String())
-		return false
+		return moerr.NewInternalErrorNoCtx("Compare is failed")
 	} else {
 		logutil.Info("[DiskCleaner]", common.OperationField("Compare is End"),
 			common.OperandField(start1.ToString()))
 	}
-	return true
+	return nil
 }
 
 func (cleaner *DiskCleaner) Start() {

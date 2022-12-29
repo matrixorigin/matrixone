@@ -178,13 +178,6 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 				db.DiskCleaner.JobFactory(ctx)
 				return
 			}),
-		gc.WithCronJob(
-			"clean-compare",
-			opts.CheckpointCfg.IncrementalInterval*8+opts.CheckpointCfg.FlushInterval,
-			func(ctx context.Context) (err error) {
-				db.DiskCleaner.JobFCompare(ctx)
-				return
-			}),
 	)
 
 	db.GCManager.Start()

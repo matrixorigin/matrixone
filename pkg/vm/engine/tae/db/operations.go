@@ -112,6 +112,10 @@ type FlushTable struct {
 	TableID    uint64
 }
 
+type CheckGC struct {
+	AccessInfo AccessInfo
+}
+
 type CreateDatabaseResp struct {
 	ID uint64
 }
