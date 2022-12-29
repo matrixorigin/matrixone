@@ -24,39 +24,39 @@ import (
 	"github.com/tidwall/btree"
 )
 
-type BTreeKV[
+type BTree[
 	K Ordered[K],
 	V any,
 ] struct {
-	rows *btree.BTreeG[KVPair[K, V]]
+	rows *btree.BTreeG[TreeNode[K, V]]
 }
 
-func NewBTreeKV[
+func NewBTree[
 	K Ordered[K],
 	V any,
-]() *BTreeKV[K, V] {
-	return &BTreeKV[K, V]{
-		rows: btree.NewBTreeG(compareKVPair[K, V]),
+]() *BTree[K, V] {
+	return &BTree[K, V]{
+		rows: btree.NewBTreeG(compareTreeNode[K, V]),
 	}
 }
 
-var _ KV[Int, int] = new(BTreeKV[Int, int])
+var _ Tree[Int, int] = new(BTree[Int, int])
 
-func (b *BTreeKV[K, V]) Copy() KV[K, V] {
-	return &BTreeKV[K, V]{
+func (b *BTree[K, V]) Copy() Tree[K, V] {
+	return &BTree[K, V]{
 		rows: b.rows.Copy(),
 	}
 }
 
-func (b *BTreeKV[K, V]) Get(pivot KVPair[K, V]) (KVPair[K, V], bool) {
+func (b *BTree[K, V]) Get(pivot TreeNode[K, V]) (TreeNode[K, V], bool) {
 	return b.rows.Get(pivot)
 }
 
-func (b *BTreeKV[K, V]) Set(pair KVPair[K, V]) (KVPair[K, V], bool) {
+func (b *BTree[K, V]) Set(pair TreeNode[K, V]) (TreeNode[K, V], bool) {
 	return b.rows.Set(pair)
 }
 
-func (b *BTreeKV[K, V]) Delete(pivot KVPair[K, V]) {
+func (b *BTree[K, V]) Delete(pivot TreeNode[K, V]) {
 	b.rows.Delete(pivot)
 }
 
@@ -64,10 +64,10 @@ type btreeKVIter[
 	K Ordered[K],
 	V any,
 ] struct {
-	iter btree.GenericIter[KVPair[K, V]]
+	iter btree.GenericIter[TreeNode[K, V]]
 }
 
-func (b *BTreeKV[K, V]) Iter() KVIter[K, V] {
+func (b *BTree[K, V]) Iter() TreeIter[K, V] {
 	iter := b.rows.Iter()
 	return &btreeKVIter[K, V]{
 		iter: iter,
@@ -87,17 +87,17 @@ func (b *btreeKVIter[K, V]) Next() bool {
 	return b.iter.Next()
 }
 
-func (b *btreeKVIter[K, V]) Read() (KVPair[K, V], error) {
+func (b *btreeKVIter[K, V]) Read() (TreeNode[K, V], error) {
 	return b.iter.Item(), nil
 }
 
-func (b *btreeKVIter[K, V]) Seek(pivot KVPair[K, V]) bool {
+func (b *btreeKVIter[K, V]) Seek(pivot TreeNode[K, V]) bool {
 	return b.iter.Seek(pivot)
 }
 
-var _ encoding.BinaryMarshaler = new(BTreeKV[Int, int])
+var _ encoding.BinaryMarshaler = new(BTree[Int, int])
 
-func (b *BTreeKV[K, V]) MarshalBinary() ([]byte, error) {
+func (b *BTree[K, V]) MarshalBinary() ([]byte, error) {
 	gobRegister(b)
 	buf := new(bytes.Buffer)
 	encoder := gob.NewEncoder(buf)
@@ -112,25 +112,25 @@ func (b *BTreeKV[K, V]) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-var _ encoding.BinaryUnmarshaler = new(BTreeKV[Int, int])
+var _ encoding.BinaryUnmarshaler = new(BTree[Int, int])
 
-func (b *BTreeKV[K, V]) UnmarshalBinary(data []byte) error {
+func (b *BTree[K, V]) UnmarshalBinary(data []byte) error {
 	gobRegister(b)
 	rows := b.rows
 	if rows == nil {
-		rows = btree.NewBTreeG(compareKVPair[K, V])
+		rows = btree.NewBTreeG(compareTreeNode[K, V])
 	}
 	decoder := gob.NewDecoder(bytes.NewReader(data))
 	for {
-		var pair KVPair[K, V]
-		err := decoder.Decode(&pair)
+		var node TreeNode[K, V]
+		err := decoder.Decode(&node)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
 			return err
 		}
-		rows.Set(pair)
+		rows.Set(node)
 	}
 	b.rows = rows
 	return nil

@@ -1883,7 +1883,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 				NumParts: 1,
 				Parts:    tree.NameParts{},
 			}
-			left.Parts[0] = "account_id"
+			left.Parts[0] = util.GetClusterTableAttributeName()
 			right := tree.NewNumVal(constant.MakeUint64(uint64(builder.compCtx.GetAccountId())), "", false)
 			right.ValType = tree.P_uint64
 			//account_id = the accountId of the non-sys account
