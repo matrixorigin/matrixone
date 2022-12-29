@@ -63,7 +63,6 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	var opts []BufferOption
 	var f genBatchFunc = genCsvData
 	logutil.Debugf("NewItemBuffer name: %s", name)
-	ctx := DefaultContext()
 	switch name {
 	case MOStatementType, SingleStatementTable.GetName():
 	case MOErrorType:
@@ -71,7 +70,7 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	case MOLogType:
 	case MORawLogType:
 	default:
-		panic(moerr.NewInternalError(ctx, "unknown type %s", name))
+		logutil.Warnf("batchCSVHandler handle new type: %s", name)
 	}
 	opts = append(opts, BufferWithGenBatchFunc(f), BufferWithType(name))
 	opts = append(opts, t.defaultOpts...)
