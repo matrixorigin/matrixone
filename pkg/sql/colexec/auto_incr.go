@@ -498,7 +498,7 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, rel engine.Relatio
 }
 
 // for delete table operation, move old col as new col in mo_increment_columns table
-func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, oldTableID uint64, dbName string) error {
+func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, oldTableID, newId uint64, dbName string) error {
 	var err error
 	newRel, err := db.Relation(ctx, tblName)
 	if err != nil {
@@ -518,7 +518,7 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 		return err
 	}
 
-	newName := fmt.Sprintf("%d_", newRel.GetTableID(ctx))
+	newName := fmt.Sprintf("%d_", newId)
 	for _, def := range defs {
 		switch d := def.(type) {
 		case *engine.AttributeDef:
@@ -554,7 +554,7 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 }
 
 // for truncate table operation, reset col in mo_increment_columns table
-func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, tableID uint64, dbName string) error {
+func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, tableID, newId uint64, dbName string) error {
 	rel, err := db.Relation(ctx, tblName)
 	if err != nil {
 		return err
@@ -572,8 +572,7 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 	if err != nil {
 		return err
 	}
-
-	name := fmt.Sprintf("%d_", rel.GetTableID(ctx))
+	name := fmt.Sprintf("%d_", newId)
 	for _, def := range defs {
 		switch d := def.(type) {
 		case *engine.AttributeDef:

@@ -109,16 +109,17 @@ func (db *database) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-func (db *database) Truncate(ctx context.Context, name string) error {
+func (db *database) Truncate(ctx context.Context, name string) (uint64, error) {
 	var oldId uint64
 
 	newId, err := db.txn.allocateID(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	key := genTableKey(ctx, name, db.databaseId)
 	if v, ok := db.txn.tableMap.Load(key); ok {
 		oldId = v.(*table).tableId
+		v.(*table).tableId = newId
 	} else {
 		key := &cache.TableItem{
 			Name:       name,
@@ -126,22 +127,22 @@ func (db *database) Truncate(ctx context.Context, name string) error {
 			Ts:         db.txn.meta.SnapshotTS,
 		}
 		if ok := db.txn.catalog.GetTable(key); !ok {
-			return moerr.GetOkExpectedEOB()
+			return 0, moerr.GetOkExpectedEOB()
 		}
 		oldId = key.Id
 	}
 	bat, err := genTruncateTableTuple(newId, db.databaseId,
 		genMetaTableName(oldId)+name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for i := range db.txn.dnStores {
 		if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[i], -1); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	return nil
+	return newId, nil
 }
 
 func (db *database) GetDatabaseId(ctx context.Context) string {
