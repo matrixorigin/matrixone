@@ -29,11 +29,11 @@ type GCTask struct {
 	// The status of GCTask, only one delete task can be running
 	state CleanerState
 
-	cleaner *diskCleaner
+	cleaner *DiskCleaner
 	fs      *objectio.ObjectFS
 }
 
-func NewGCTask(fs *objectio.ObjectFS, cleaner *diskCleaner) *GCTask {
+func NewGCTask(fs *objectio.ObjectFS, cleaner *DiskCleaner) *GCTask {
 	return &GCTask{
 		state:   Idle,
 		fs:      fs,

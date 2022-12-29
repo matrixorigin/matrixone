@@ -16,6 +16,7 @@ package db
 
 import (
 	"context"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"path"
 	"sync/atomic"
 	"time"
@@ -158,7 +159,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		opts.CheckpointCfg.ScanInterval,
 		scanner)
 	db.BGScanner.Start()
-
+	db.DiskCleaner = gc2.NewDiskCleaner(db.Fs, db.BGCheckpointRunner, db.Catalog)
+	db.DiskCleaner.Start()
 	// Init gc manager at last
 	db.GCManager = gc.NewManager(
 		gc.WithCronJob(
@@ -166,6 +168,20 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			opts.CheckpointCfg.FlushInterval,
 			func(_ context.Context) (err error) {
 				db.TransferTable.RunTTL(time.Now())
+				return
+			}),
+		gc.WithCronJob(
+			"clean-checkpoint",
+			opts.CheckpointCfg.IncrementalInterval*4,
+			func(ctx context.Context) (err error) {
+				db.DiskCleaner.JobFactory(ctx)
+				return
+			}),
+		gc.WithCronJob(
+			"clean-compare",
+			opts.CheckpointCfg.IncrementalInterval*8+opts.CheckpointCfg.FlushInterval,
+			func(ctx context.Context) (err error) {
+				db.DiskCleaner.JobFCompare(ctx)
 				return
 			}),
 	)
