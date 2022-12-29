@@ -25,7 +25,19 @@ CREATE TABLE t1 (d1 datetime);
 INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL),
 ('2007-07-19 08:34:00'), (NULL), ('2007-07-19 08:36:00');
 SELECT cast(date(d1) as signed) FROM t1;
-invalid argument operator cast, bad value [DATE BIGINT]
+cast(date(d1) as signed)
+13713
+null
+13713
+null
+13713
+SELECT d1 % 7 FROM t1;
+d1 % 7
+3
+null
+5
+null
+6
 drop table t1;
 CREATE TABLE t1 (d1 datetime);
 INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL),
