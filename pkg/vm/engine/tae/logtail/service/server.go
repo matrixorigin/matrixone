@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -38,15 +39,6 @@ const (
 
 	KiB = 1024
 )
-
-// Clocker returns current timestamp.
-//
-// It's mainly a restrictive interface.
-type Clocker interface {
-	// Now returns the current timestamp and the upper bound of the current time
-	// caused by clock offset.
-	Now() (timestamp.Timestamp, timestamp.Timestamp)
-}
 
 // LogtailFetcher provides logtail for the specified table.
 type LogtailFetcher interface {
@@ -145,7 +137,7 @@ type LogtailServer struct {
 	subChan chan subscription
 
 	fetcher LogtailFetcher
-	clock   Clocker
+	clock   clock.Clock
 
 	rpc morpc.RPCServer
 
@@ -156,7 +148,7 @@ type LogtailServer struct {
 
 // NewLogtailServer initializes a server for logtail push model.
 func NewLogtailServer(
-	address string, fetcher LogtailFetcher, clock Clocker, opts ...ServerOption,
+	address string, fetcher LogtailFetcher, clock clock.Clock, opts ...ServerOption,
 ) (morpc.RPCServer, error) {
 	s := &LogtailServer{
 		ssmgr:      NewSessionManager(),
