@@ -18,7 +18,6 @@ type Log[
 	K Ordered[K],
 	V any,
 ] interface {
-	Copy() Log[K, V]
 	Iter() LogIter[K, V]
 	Set(*logEntry[K, V])
 }

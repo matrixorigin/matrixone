@@ -440,7 +440,7 @@ func TestCreateSegment(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
-	_, err = rel.CreateNonAppendableSegment()
+	_, err = rel.CreateNonAppendableSegment(false)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
@@ -844,7 +844,12 @@ func TestCompactABlk(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit())
 	}
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
+	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
+	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
+	assert.NoError(t, err)
+	assert.NoError(t, entry.WaitDone())
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})

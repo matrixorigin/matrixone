@@ -200,3 +200,11 @@ insert into t2 values(1);
 select * from (t1 join t2 on t1.a = t2.a);
 a    a   
 1    1
+drop table if exists tt;
+drop table if exists tt2;
+create table tt(a text,b text,c int);
+create table tt2(a text,b text,c int);
+insert into tt values("a","bc",1);
+insert into tt2 values("ab","c",2);
+select * from tt as t11 join tt2 as t12 on t11.a = t12.a and t11.b = t12.b;
+a    b    c    a    b    c
