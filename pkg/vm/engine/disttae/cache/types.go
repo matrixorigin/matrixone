@@ -163,6 +163,9 @@ func tableItemLess(a, b *TableItem) bool {
 	if a.Name > b.Name {
 		return false
 	}
+	if a.Ts.Equal(b.Ts) {
+		return a.deleted
+	}
 	return a.Ts.Greater(b.Ts)
 }
 

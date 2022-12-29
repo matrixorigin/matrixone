@@ -96,7 +96,9 @@ func (cc *CatalogCache) Tables(databaseId uint64,
 		}
 		if item.Name != name {
 			name = item.Name
-			rs = append(rs, item.Name)
+			if !item.deleted {
+				rs = append(rs, item.Name)
+			}
 		}
 		return true
 	})
@@ -119,7 +121,9 @@ func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []st
 		}
 		if item.Name != name {
 			name = item.Name
-			rs = append(rs, item.Name)
+			if !item.deleted {
+				rs = append(rs, item.Name)
+			}
 		}
 		return true
 	})
@@ -128,10 +132,19 @@ func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []st
 
 func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 	var find bool
+	var ts timestamp.Timestamp
 
 	cc.tables.data.Ascend(tbl, func(item *TableItem) bool {
-		if !item.deleted && item.DatabaseId == tbl.DatabaseId &&
+		if item.deleted && item.DatabaseId == tbl.DatabaseId &&
 			item.Name == tbl.Name {
+			if !ts.IsEmpty() {
+				return false
+			}
+			ts = item.Ts
+			return true
+		}
+		if !item.deleted && item.DatabaseId == tbl.DatabaseId &&
+			item.Name == tbl.Name && (ts.IsEmpty() || ts.Equal(item.Ts)) {
 			find = true
 			tbl.Id = item.Id
 			tbl.Defs = item.Defs

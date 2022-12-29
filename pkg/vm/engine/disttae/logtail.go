@@ -141,6 +141,14 @@ func consumeEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	if isMetaTable(e.TableName) {
 		return db.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)
 	}
+	switch e.TableId {
+	case catalog.MO_TABLES_ID:
+		bat, _ := batch.ProtoBatchToBatch(e.Bat)
+		tbl.db.txn.catalog.DeleteTable(bat)
+	case catalog.MO_DATABASE_ID:
+		bat, _ := batch.ProtoBatchToBatch(e.Bat)
+		tbl.db.txn.catalog.DeleteDatabase(bat)
+	}
 	return mvcc.Delete(ctx, e.Bat)
 }
 
