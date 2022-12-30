@@ -235,3 +235,7 @@ true
 drop table if exists t1;
 create table t1 (a varchar(50));
 insert into t1 values("这是一个字节数超过五十的字符串，但是utf8没有超过");
+drop table if exists t1;
+create table t1 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key num_phone(col2),key num_id(col4));
+insert into t1 values (67834,'13456789872',20.23,'4090'),(56473,'13456789872',100.00,'5678');
+Duplicate entry '13456789872' for key '__mo_index_idx_col'
