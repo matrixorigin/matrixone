@@ -65,17 +65,7 @@ func (g *GCWorker) ExecDelete(names []string) error {
 	}
 	g.Unlock()
 
-	checkerNum := 0
-	var err error
-	// For Test UT
-	g.cleaner.checker.Lock()
-	checkerNum = len(g.cleaner.checker.extras)
-	g.cleaner.checker.Unlock()
-	if checkerNum == 1 {
-		// It takes a long time to delete files in ut, so only the accuracy
-		// is verified, and there is no need to delete files
-		err = g.fs.DelFiles(context.Background(), g.objects)
-	}
+	err := g.fs.DelFiles(context.Background(), g.objects)
 	g.Lock()
 	defer g.Unlock()
 	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
