@@ -324,7 +324,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 
 func (s *server) closeClientSession(cs *clientSession) {
 	s.sessions.Delete(cs.conn.ID())
-	if err := cs.close(); err != nil {
+	if err := cs.Close(); err != nil {
 		s.logger.Error("close client session failed",
 			zap.Error(err))
 	}
@@ -377,7 +377,7 @@ func newClientSession(conn goetty.IOSession) *clientSession {
 	}
 }
 
-func (cs *clientSession) close() error {
+func (cs *clientSession) Close() error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	if cs.mu.closed {

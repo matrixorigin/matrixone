@@ -138,6 +138,8 @@ type QueryBuilder struct {
 	nameByColRef map[[2]int32]string
 
 	nextTag int32
+
+	mysqlCompatible bool
 }
 
 type CTERef struct {
