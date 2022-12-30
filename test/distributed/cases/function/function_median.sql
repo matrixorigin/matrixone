@@ -1,0 +1,116 @@
+-- @suit
+-- @case
+-- @test function LEFT
+-- @label:bvt
+
+-- median()函数是求中位数的函数。
+
+SELECT median(1);
+SELECT median(0);
+SELECT median(2424.1);
+SELECT median(54150.4841612);
+SELECT median(-328);
+SELECT median(-6372.2);
+SELECT median(NULL);
+SELECT median(ABS(-99));
+SELECT median(COS(0) + 2);
+
+
+-- 异常输入
+SELECT median(1,2,3);
+SELECT median(fekwelwfew);
+SELECT median(3hewh32ioj);
+SELECT median("ejwjlvd23232r43f");
+SELECT median("4");
+
+
+-- @suite
+-- @setup
+DROP TABLE IF EXISTS test;
+CREATE TABLE test(id int, d1 tinyint, d2 smallint unsigned, d3 bigint);
+INSERT INTO test VALUES(1, -128, 65534, 5554584122);
+INSERT INTO test VALUES(2, 0, 68, -7855122);
+INSERT INTO test VALUES(3, 45, 0, 67432648932);
+INSERT INTO test VALUES(4, 45, 5789, 0);
+INSERT INTO test VALUES(5, NULL, 3782, NULL);
+
+-- 异常插入
+-- tinyint超出插入范围
+INSERT INTO test VALUES(6, -129, 65534, 5554584122);
+
+-- smallint unsigned超出插入范围
+INSERT INTO test VALUES(7, -123, 89555, 5554584122);
+
+-- bigint超出插入范围
+INSERT INTO test VALUES(8, -62, 33, 9223372036854775808);
+
+-- int超出插入范围
+INSERT INTO test VALUES(2147483648, -62, 33, 9223372036854775808);
+
+
+-- median
+SELECT median(d2) from test;
+SELECT median(d1),median(d2),median(d3),median(id) from test;
+SELECT median(d1) + median(d2) as dd from test where id = 2;
+SELECT median(d3) FROM test WHERE id BETWEEN 1 AND 4;
+SELECT median(d1),median(d2),median(d3) from test GROUP by d1;
+SELECT median(d1) FROM test WHERE id = ABS(-1) + TAN(45);
+
+
+-- @suite
+-- @setup
+DROP TABLE IF EXISTS test;
+CREATE TABLE test(id int PRIMARY KEY, d1 FLOAT, d2 DOUBLE NOT NULL);
+
+INSERT INTO test VALUES(1, 645545.11, 65534.5554584122);
+INSERT INTO test VALUES(2, NULL, 638239.1);
+INSERT INTO test VALUES(3, -32783, -56323298.8327382);
+INSERT INTO test VALUES(4, 0, 389283920.1);
+INSERT INTO test VALUES(5, 382, 0);
+
+
+-- 异常插入
+-- DOUBLE超出插入范围
+INSERT INTO test VALUES(6, 0, -1.8976931348623157E+308);
+
+-- FLOAT超出插入范围
+INSERT INTO test VALUES(7, 4.402823466351E+38, 5554584122);
+
+-- d2为空
+INSERT INTO test VALUES(8, -55845.0, NULL);
+
+SELECT median(d1), median(d2) from test;
+SELECT median(d2) from test group by d2;
+SELECT median(d2) from test WHERE id BETWEEN 2 AND 4;
+-- 嵌套查询
+SELECT median(d1) from test WHERE id = (SELECT id from test where d2 = 65534.5554584122);
+
+
+-- @suite
+-- @setup
+DROP TABLE IF EXISTS test;
+DROP TABLE IF EXISTS test1;
+
+CREATE TABLE test(id int, ch smallint NOT NULL, ma bigint unsigned NOT NULL, en FLOAT, ph double,
+                  PRIMARY KEY(id));
+INSERT INTO test VALUES(1, 88, 99999, -99.98, 88.99);
+INSERT INTO test VALUES(2, 65, 744515, 0, 78.789);
+INSERT INTO test VALUES(3, 76, 21, 893293.1, NULL);
+INSERT INTO test VALUES(4, -367, 3298, NULL, 0);
+INSERT INTO test VALUES(5, 674, 432, 8767687.0, 0.1);
+
+CREATE TABLE test1(id int, name VARCHAR(10), ch smallint, ma bigint, en FLOAT not NULL,
+                   PRIMARY KEY(id));
+INSERT INTO test1 VALUES(1, 'Alice', 327, 45451, 3232.1);
+INSERT INTO test1 VALUES(2, 'Bob', 3728, -8889, 899);
+INSERT INTO test1 VALUES(3, 'Grace', 0, NULL, 0.1);
+INSERT INTO test1 VALUES(4, 'Vicky', 88, 99, 88888.0);
+INSERT INTO test1 VALUES(5, 'John', 10, 23211, -78);
+
+
+-- @case
+-- @join and function test
+SELECT median(test1.ch) from test, test1 where test.id = test1.id;
+SELECT median(test.ma) AS a, median(test1.ma) AS b from test join test1 ON test.ph = test1.en;
+SELECT median(test.ch),median(test.en) from test WHERE id % 2 =1;
+SELECT median(test1.ch) from test1 WHERE left(name,2) = 'Al';
