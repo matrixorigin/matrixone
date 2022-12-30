@@ -957,6 +957,13 @@ load_lines:
             TerminatedBy: $3,
         }
     }
+|   LINES lines_terminated_opt starting_opt
+    {
+        $$ = &tree.Lines{
+            StartingBy: $3,
+            TerminatedBy: $2,
+        }
+    }
 
 starting_opt:
     {
@@ -5927,7 +5934,7 @@ simple_expr:
         $2.Exists = true
         $$ = $2
     }
-|    CASE expression_opt when_clause_list else_opt END
+|   CASE expression_opt when_clause_list else_opt END
     {
         $$ = &tree.CaseExpr{
             Expr: $2,
@@ -6495,7 +6502,7 @@ function_call_generic:
             Exprs: tree.Exprs{timeUinit, $5},
         }
     }
-|    func_not_keyword '(' expression_list_opt ')'
+|   func_not_keyword '(' expression_list_opt ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
@@ -6503,7 +6510,7 @@ function_call_generic:
             Exprs: $3,
         }
     }
-|    VARIANCE '(' func_type_opt expression ')'
+|   VARIANCE '(' func_type_opt expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
@@ -6512,7 +6519,7 @@ function_call_generic:
             Type: $3,
         }
     }
-|    TRIM '(' expression ')'
+|   TRIM '(' expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
@@ -6520,7 +6527,7 @@ function_call_generic:
             Exprs: tree.Exprs{$3},
         }
     }
-|    TRIM '(' expression FROM expression ')'
+|   TRIM '(' expression FROM expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
@@ -6528,7 +6535,7 @@ function_call_generic:
             Exprs: tree.Exprs{$3},
         }
     }
-|    TRIM '(' trim_direction FROM expression ')'
+|   TRIM '(' trim_direction FROM expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
@@ -6537,7 +6544,7 @@ function_call_generic:
             Exprs: tree.Exprs{arg1, $5},
         }
     }
-|    TRIM '(' trim_direction expression FROM expression ')'
+|   TRIM '(' trim_direction expression FROM expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
@@ -6879,7 +6886,7 @@ expression:
     {
         $$ = tree.NewOrExpr($1, $3)
     }
-|    expression PIPE_CONCAT expression %prec PIPE_CONCAT
+|   expression PIPE_CONCAT expression %prec PIPE_CONCAT
     {
         name := tree.SetUnresolvedName(strings.ToLower("concat"))
         $$ = &tree.FuncExpr{
@@ -6913,7 +6920,7 @@ boolean_primary:
     {
         $$ = tree.NewIsNotNullExpr($1)
     }
-|    boolean_primary IS UNKNOWN %prec IS
+|   boolean_primary IS UNKNOWN %prec IS
     {
         $$ = tree.NewIsUnknownExpr($1)
     }
@@ -6921,7 +6928,7 @@ boolean_primary:
     {
         $$ = tree.NewIsNotUnknownExpr($1)
     }
-|    boolean_primary IS TRUE %prec IS
+|   boolean_primary IS TRUE %prec IS
     {
         $$ = tree.NewIsTrueExpr($1)
     }
@@ -6929,7 +6936,7 @@ boolean_primary:
     {
         $$ = tree.NewIsNotTrueExpr($1)
     }
-|    boolean_primary IS FALSE %prec IS
+|   boolean_primary IS FALSE %prec IS
     {
         $$ = tree.NewIsFalseExpr($1)
     }

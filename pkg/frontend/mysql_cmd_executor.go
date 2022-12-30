@@ -20,7 +20,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"os"
 	"reflect"
@@ -30,6 +29,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
@@ -3845,6 +3846,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	handleNext:
 	} // end of for
 
+	if proc.Elapse != nil {
+		logInfo("wangjian sql1", "wangjian sql2")
+		//fmt.Println("wangjian sql4 is", proc.Elapse.ScanTime, proc.Elapse.InsertTime)
+	}
 	return nil
 }
 

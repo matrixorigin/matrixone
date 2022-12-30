@@ -583,6 +583,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		}
 	}
 
+	c.proc.Elapse = &process.ElapseInfo{}
 	param.FileService = c.proc.FileService
 	param.Ctx = c.ctx
 	fileList, err := external.ReadDir(param)

@@ -25,7 +25,6 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"io"
 	"math"
 	"path"
@@ -33,6 +32,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -107,9 +108,14 @@ func Prepare(proc *process.Process, arg any) error {
 }
 
 func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	t1 := time.Now()
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
-	defer anal.Stop()
+	defer func(){
+		anal.Stop()
+		t2 := time.Since(t1)
+		proc.Elapse.ScanTime.Add(int64(t2.Microseconds()))
+	}()
 	anal.Input(nil)
 	param := arg.(*Argument).Es
 	if param.Fileparam.End {

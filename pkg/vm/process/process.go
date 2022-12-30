@@ -54,6 +54,7 @@ func New(
 func NewWithAnalyze(p *Process, ctx context.Context, regNumber int, anals []*AnalyzeInfo) *Process {
 	proc := NewFromProc(p, ctx, regNumber)
 	proc.AnalInfos = make([]*AnalyzeInfo, len(anals))
+	proc.Elapse = p.Elapse
 	copy(proc.AnalInfos, anals)
 	return proc
 }
