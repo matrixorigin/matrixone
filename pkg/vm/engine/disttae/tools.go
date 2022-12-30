@@ -18,14 +18,12 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"sort"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -38,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plantool "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -425,6 +422,7 @@ func genDropColumnsTuple(name string) *batch.Batch {
 
 // genDatabaseIdExpr generate an expression to find database info
 // by database name and accountId
+/*
 func genDatabaseIdExpr(ctx context.Context, accountId uint32, name string) *plan.Expr {
 	var left, right *plan.Expr
 
@@ -446,7 +444,9 @@ func genDatabaseIdExpr(ctx context.Context, accountId uint32, name string) *plan
 	}
 	return plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
 }
+*/
 
+/*
 // genDatabaseIdExpr generate an expression to find database list
 // by accountId
 func genDatabaseListExpr(ctx context.Context, accountId uint32) *plan.Expr {
@@ -599,7 +599,9 @@ func genInsertExpr(ctx context.Context, defs []engine.TableDef, dnNum int) *plan
 	}
 	return plantool.MakeExpr(ctx, "hash_value", args)
 }
+*/
 
+/*
 func newIntConstVal(v any) *plan.Expr {
 	var val int64
 
@@ -638,6 +640,7 @@ func newColumnExpr(pos int, oid types.T, name string) *plan.Expr {
 		},
 	}
 }
+*/
 
 func genWriteReqs(writes [][]Entry) ([]txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
@@ -744,6 +747,7 @@ func getTableComment(defs []engine.TableDef) string {
 	return ""
 }
 
+/*
 func genTableDefOfComment(comment string) engine.TableDef {
 	return &engine.CommentDef{
 		Comment: comment,
@@ -802,6 +806,7 @@ func genTableDefOfColumn(col column) engine.TableDef {
 	}
 	return &engine.AttributeDef{Attr: attr}
 }
+*/
 
 func genColumns(accountId uint32, tableName, databaseName string,
 	tableId, databaseId uint64, defs []engine.TableDef) ([]column, error) {
@@ -1191,6 +1196,7 @@ func genRow(val *DataValue, cols []string) []any {
 	return row
 }
 
+/*
 func genDatabaseIndexKey(databaseName string, accountId uint32) memtable.Tuple {
 	return memtable.Tuple{
 		index_Database,
@@ -1215,6 +1221,7 @@ func genColumnIndexKey(id uint64) memtable.Tuple {
 		memtable.ToOrdered(id),
 	}
 }
+*/
 
 func transferIval[T int32 | int64](v T, oid types.T) (bool, any) {
 	switch oid {

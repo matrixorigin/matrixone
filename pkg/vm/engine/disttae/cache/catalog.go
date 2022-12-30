@@ -84,23 +84,27 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) {
 
 func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 	ts timestamp.Timestamp) []string {
-	var name string
 	var rs []string
 
 	key := &TableItem{
-		AccountId:  accountId,
 		DatabaseId: databaseId,
 	}
+	mp := make(map[string]uint8)
 	cc.tables.data.Ascend(key, func(item *TableItem) bool {
 		if item.AccountId != accountId {
+			return false
+		}
+		if item.DatabaseId != databaseId {
 			return false
 		}
 		if item.Ts.Greater(ts) {
 			return true
 		}
-		if item.Name != name {
-			name = item.Name
-			rs = append(rs, item.Name)
+		if _, ok := mp[item.Name]; !ok {
+			mp[item.Name] = 0
+			if !item.deleted {
+				rs = append(rs, item.Name)
+			}
 		}
 		return true
 	})
@@ -108,12 +112,12 @@ func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 }
 
 func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []string {
-	var name string
 	var rs []string
 
 	key := &DatabaseItem{
 		AccountId: accountId,
 	}
+	mp := make(map[string]uint8)
 	cc.databases.data.Ascend(key, func(item *DatabaseItem) bool {
 		if item.AccountId != accountId {
 			return false
@@ -121,9 +125,11 @@ func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []st
 		if item.Ts.Greater(ts) {
 			return true
 		}
-		if item.Name != name {
-			name = item.Name
-			rs = append(rs, item.Name)
+		if _, ok := mp[item.Name]; !ok {
+			mp[item.Name] = 0
+			if !item.deleted {
+				rs = append(rs, item.Name)
+			}
 		}
 		return true
 	})
@@ -132,13 +138,32 @@ func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []st
 
 func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 	var find bool
+	var ts timestamp.Timestamp
 
 	cc.tables.data.Ascend(tbl, func(item *TableItem) bool {
-		if !item.deleted {
+		if item.deleted && item.AccountId == tbl.AccountId &&
+			item.DatabaseId == tbl.DatabaseId && item.Name == tbl.Name {
+			if !ts.IsEmpty() {
+				return false
+			}
+			ts = item.Ts
+			return true
+		}
+		if !item.deleted && item.AccountId == tbl.AccountId &&
+			item.DatabaseId == tbl.DatabaseId && item.Name == tbl.Name &&
+			(ts.IsEmpty() || ts.Equal(item.Ts)) {
 			find = true
 			tbl.Id = item.Id
 			tbl.Defs = item.Defs
+			tbl.Kind = item.Kind
+			tbl.Comment = item.Comment
+			tbl.ViewDef = item.ViewDef
 			tbl.TableDef = item.TableDef
+			tbl.Constraint = item.Constraint
+			tbl.Partition = item.Partition
+			tbl.CreateSql = item.CreateSql
+			tbl.PrimaryIdx = item.PrimaryIdx
+			tbl.ClusterByIdx = item.ClusterByIdx
 		}
 		return false
 	})
@@ -149,7 +174,8 @@ func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
 	var find bool
 
 	cc.databases.data.Ascend(db, func(item *DatabaseItem) bool {
-		if !item.deleted {
+		if !item.deleted && item.AccountId == db.AccountId &&
+			item.Name == db.Name {
 			find = true
 			db.Id = item.Id
 		}
@@ -221,6 +247,8 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		item.Comment = comments[i]
 		item.Partition = paritions[i]
 		item.CreateSql = createSqls[i]
+		item.PrimaryIdx = -1
+		item.ClusterByIdx = -1
 		copy(item.Rowid[:], rowids[i][:])
 		cc.tables.data.Set(item)
 		cc.tables.rowidIndex.Set(item)
@@ -249,6 +277,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 	hasUpdates := vector.MustTCols[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_HAS_UPDATE_IDX + MO_OFF))
 	updateExprs := vector.MustBytesCols(bat.GetVector(catalog.MO_COLUMNS_ATT_UPDATE_IDX + MO_OFF))
 	nums := vector.MustTCols[int32](bat.GetVector(catalog.MO_COLUMNS_ATTNUM_IDX + MO_OFF))
+	clusters := vector.MustTCols[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_CLUSTERBY + MO_OFF))
 	for i, account := range accounts {
 		key.AccountId = account
 		key.Name = tableNames[i]
@@ -270,6 +299,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 				hasDef:          hasDefs[i],
 				hasUpdate:       hasUpdates[i],
 				constraintType:  constraintTypes[i],
+				isClusterBy:     clusters[i],
 			}
 			col.typ = append(col.typ, typs[i]...)
 			col.updateExpr = append(col.updateExpr, updateExprs[i]...)
@@ -293,6 +323,9 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 		for i, col := range cols {
 			if col.constraintType == catalog.SystemColPKConstraint {
 				item.PrimaryIdx = i
+			}
+			if col.isClusterBy == 1 {
+				item.ClusterByIdx = i
 			}
 			defs = append(defs, genTableDefOfColumn(col))
 		}
@@ -329,9 +362,11 @@ func genTableDefOfColumn(col column) engine.TableDef {
 	var attr engine.Attribute
 
 	attr.Name = col.name
+	attr.ID = uint64(col.num)
 	attr.Alg = compress.Lz4
 	attr.Comment = col.comment
 	attr.IsHidden = col.isHidden == 1
+	attr.ClusterBy = col.isClusterBy == 1
 	attr.AutoIncrement = col.isAutoIncrement == 1
 	if err := types.Decode(col.typ, &attr.Type); err != nil {
 		panic(err)
