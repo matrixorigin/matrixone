@@ -124,7 +124,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			err.Error())
 	}
 	if fc.expected.wantErr {
-		return false, fmt.Sprintf("expected to run failed, but run succeed with no error")
+		return false, "expected to run failed, but run succeed with no error"
 	}
 	v := fc.result.GetResultVector()
 	// check the length

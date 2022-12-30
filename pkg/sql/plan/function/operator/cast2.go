@@ -150,18 +150,21 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_date: {
+		types.T_int32, types.T_int64,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 	},
 
 	types.T_datetime: {
+		types.T_int32, types.T_int64,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 	},
 
 	types.T_timestamp: {
+		types.T_int32, types.T_int64,
 		types.T_date, types.T_datetime,
 		types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
@@ -1009,6 +1012,12 @@ func dateToOthers(proc *process.Process,
 	source *vector.FunctionParameter[types.Date],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
+	case types.T_int32:
+		rs := result.(*vector.FunctionResult[int32])
+		return dateToSigned[int32](source, rs, length)
+	case types.T_int64:
+		rs := result.(*vector.FunctionResult[int64])
+		return dateToSigned[int64](source, rs, length)
 	case types.T_date:
 		rs := result.(*vector.FunctionResult[types.Date])
 		rs.SetFromParameter(source)
@@ -1037,6 +1046,12 @@ func datetimeToOthers(proc *process.Process,
 	source *vector.FunctionParameter[types.Datetime],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
+	case types.T_int32:
+		rs := result.(*vector.FunctionResult[int32])
+		return datetimeToInt32(proc.Ctx, source, rs, length)
+	case types.T_int64:
+		rs := result.(*vector.FunctionResult[int64])
+		return datetimeToInt64(source, rs, length)
 	case types.T_timestamp:
 		zone := time.Local
 		if proc != nil {
@@ -1072,6 +1087,12 @@ func timestampToOthers(proc *process.Process,
 	}
 
 	switch toType.Oid {
+	case types.T_int32:
+		rs := result.(*vector.FunctionResult[int32])
+		return timestampToInt32(proc.Ctx, source, rs, length)
+	case types.T_int64:
+		rs := result.(*vector.FunctionResult[int64])
+		return timestampToInt64(source, rs, length)
 	case types.T_date:
 		rs := result.(*vector.FunctionResult[types.Date])
 		return timestampToDate(proc.Ctx, source, rs, length, zone)
@@ -1733,6 +1754,26 @@ func integerToTime[T constraints.Integer](
 	return nil
 }
 
+func dateToSigned[T int32 | int64](
+	from *vector.FunctionParameter[types.Date],
+	to *vector.FunctionResult[T], length int) error {
+	var i uint64
+	for i = 0; i < uint64(length); i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			val := v.DaysSinceUnixEpoch()
+			if err := to.Append(T(val), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func dateToTime(
 	from *vector.FunctionParameter[types.Date],
 	to *vector.FunctionResult[types.Time], length int) error {
@@ -1788,6 +1829,52 @@ func dateToTimestamp(
 			}
 		} else {
 			if err := to.Append(v.ToTimestamp(zone), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func datetimeToInt32(
+	ctx context.Context,
+	from *vector.FunctionParameter[types.Datetime],
+	to *vector.FunctionResult[int32], length int) error {
+	var i uint64
+	l := uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			val := v.SecsSinceUnixEpoch()
+			if val < math.MinInt32 || val > math.MaxInt32 {
+				return moerr.NewOutOfRange(ctx, "int32", "value '%v'", val)
+			}
+			if err := to.Append(int32(val), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func datetimeToInt64(
+	from *vector.FunctionParameter[types.Datetime],
+	to *vector.FunctionResult[int64], length int) error {
+	var i uint64
+	l := uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			val := v.SecsSinceUnixEpoch()
+			if err := to.Append(val, false); err != nil {
 				return err
 			}
 		}
@@ -1899,6 +1986,50 @@ func datetimeToDate(
 			}
 		} else {
 			if err := to.Append(v.ToDate(), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func timestampToInt32(
+	ctx context.Context,
+	from *vector.FunctionParameter[types.Timestamp],
+	to *vector.FunctionResult[int32], length int) error {
+	var i uint64
+	for i = 0; i < uint64(length); i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			val := v.Unix()
+			if val < math.MinInt32 || val > math.MaxInt32 {
+				return moerr.NewOutOfRange(ctx, "int32", "value '%v'", val)
+			}
+			if err := to.Append(int32(val), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func timestampToInt64(
+	from *vector.FunctionParameter[types.Timestamp],
+	to *vector.FunctionResult[int64], length int) error {
+	var i uint64
+	for i = 0; i < uint64(length); i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			val := v.Unix()
+			if err := to.Append(val, false); err != nil {
 				return err
 			}
 		}
