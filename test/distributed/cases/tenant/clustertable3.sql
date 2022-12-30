@@ -23,6 +23,7 @@ select * from a;
 update a set `account_name` = "cde" where id = 1;
 update a set `account_name` = "cde" where id = 1;
 update a set `name` = "xxx" where `account_name` = "cde";
+update a set `id` = 3 where `id` = 1;
 delete from a where `id` = 1;
 
 -- check it in the non-sys account
