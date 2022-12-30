@@ -4867,11 +4867,11 @@ func TestAppendAndGC(t *testing.T) {
 	defer db.Close()
 
 	schema1 := catalog.MockSchemaAll(13, 2)
-	schema1.BlockMaxRows = 20
+	schema1.BlockMaxRows = 10
 	schema1.SegmentMaxBlocks = 2
 
 	schema2 := catalog.MockSchemaAll(13, 2)
-	schema2.BlockMaxRows = 20
+	schema2.BlockMaxRows = 10
 	schema2.SegmentMaxBlocks = 2
 	{
 		txn, _ := db.StartTxn(nil)
@@ -4883,7 +4883,7 @@ func TestAppendAndGC(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
-	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*3-1))
+	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*20-1))
 	defer bat.Close()
 	bats := bat.Split(bat.Length())
 
@@ -4891,36 +4891,16 @@ func TestAppendAndGC(t *testing.T) {
 	assert.Nil(t, err)
 	defer pool.Release()
 	var wg sync.WaitGroup
-	doSearch := func(name string) func() {
-		return func() {
-			defer wg.Done()
-			txn, rel := getDefaultRelation(t, db, name)
-			it := rel.MakeBlockIt()
-			for it.Valid() {
-				blk := it.GetBlock()
-				view, err := blk.GetColumnDataById(schema1.GetSingleSortKeyIdx(), nil)
-				assert.Nil(t, err)
-				view.Close()
-				it.Next()
-			}
-			err := txn.Commit()
-			assert.NoError(t, err)
-		}
-	}
 
 	for _, data := range bats {
-		wg.Add(4)
-		err := pool.Submit(doSearch(schema1.Name))
-		assert.Nil(t, err)
-		err = pool.Submit(doSearch(schema2.Name))
-		assert.Nil(t, err)
+		wg.Add(2)
 		err = pool.Submit(appendClosure(t, data, schema1.Name, db, &wg))
 		assert.Nil(t, err)
 		err = pool.Submit(appendClosure(t, data, schema2.Name, db, &wg))
 		assert.Nil(t, err)
 	}
 	wg.Wait()
-	testutils.WaitExpect(8000, func() bool {
+	testutils.WaitExpect(10000, func() bool {
 		return db.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	assert.Equal(t, uint64(0), db.Scheduler.GetPenddingLSNCnt())
