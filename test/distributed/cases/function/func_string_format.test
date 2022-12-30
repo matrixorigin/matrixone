@@ -1,3 +1,9 @@
+-- @suit
+-- @case
+-- @test function format()
+-- @label:bvt
+
+
 SELECT FORMAT(12332.123456, 4);
 SELECT FORMAT(12332.1,4);
 SELECT FORMAT(12332.2,0);
@@ -78,5 +84,139 @@ insert into test values("12332.1","4", "de_CH");
 insert into test values("12332.2","0", "de_CH");
 insert into test values("19999999.999999999","de_CH");
 drop table test;
+
+
+-- @suite
+-- @setup
+DROP TABLE IF EXISTS t;
+CREATE TABLE t(id INT, d1 tinyint, d2 smallint unsigned, d3 int, d4 bigint unsigned, PRIMARY KEY (id));
+-- tinyint支持正负
+INSERT INTO t VALUES(1, -3, 46382, 46787698, 454987456415);
+-- 支持空值插入
+INSERT INTO t VALUES(2, 126, NULL, 743482 , 938256415);
+INSERT INTO t VALUES(3, 21, 37821, 3782, 0);
+INSERT INTO t VALUES(4, 0, 0, 0, 0);
+
+
+-- 异常：数值超过所表示范围
+INSERT INTO t VALUES(5, 128, 3892, 743482 , 938256415);
+INSERT INTO t VALUES(6, 22, 3, 4, 184467440737095516152);
+
+
+-- @case
+-- @ integer test
+SELECT format(d1, id) from t;
+SELECT format(d1, id, NULL) from t;
+SELECT format(d1, id, "en_US") from t;
+SELECT format(d1, id, "ar_SA") from t;
+SELECT format(d1, id, "be_BY") from t;
+SELECT format(d1, id, "bg_BG") from t;
+
+-- 过滤、嵌套、数学运算
+SELECT * FROM t WHERE format(d1,0) = 126;
+SELECT id FROM (SELECT * FROM t WHERE format(d1,0) = 126) as a;
+SELECT format(d1, id) FROM t WHERE d3 % 2 = 0;
+SELECT format(d3, 4) FROM t WHERE ABS(d3) > 1000;
+
+-- @bvt:issue#7536
+SELECT ABS(format(d3,0)) from t;
+SELECT CEIL(format(d2, 4)) FROM t;
+
+
+-- @suite
+-- @setup
+DROP TABLE IF EXISTS t;
+CREATE TABLE t(id INT, d1 FLOAT, d2 DOUBLE NOT NULL);
+
+-- float类型、double类型
+INSERT INTO t VALUES(1, 1.2, 47832.434);
+INSERT INTO t VALUES(2, -3283.33, 73.32);
+INSERT INTO t VALUES(3, NULL, 32789.33);
+INSERT INTO t VALUES(4, 0, -38902093.4324);
+
+INSERT INTO t VALUES(5, 323232.0, 0);
+INSERT INTO t VALUES(6, 323, 37827329.43432);
+
+
+-- 异常插入，数据超出表示范围或者参数出错
+INSERT INTO t VALUES(6, -1.8976931348623157E+308, 0);
+INSERT INTO t VALUES(7, 328739232, NULL);
+INSERT INTO t VALUES(8, 7382,3923404.2132421);
+
+
+-- @bvt:issue#7536
+SELECT format(d2, id) from t;
+SELECT format(d2, id, NULL) from t;
+SELECT format(d2, id, "en_US") from t;
+SELECT format(d2,0)FROM t;
+SELECT format(d1, id) FROM t WHERE d3 % 2 = 0;
+SELECT format(d2, 4) FROM t WHERE ABS(d2) > 1000;
+
+
+-- @suite
+-- @setup
+DROP TABLE IF EXISTS test;
+
+CREATE table test(a varchar(100), b varchar(100));
+INSERT INTO test VALUES("-0.12334","2");
+INSERT INTO test VALUES("12332.123456", "4");
+INSERT INTO test VALUES("12332.1","4");
+INSERT INTO test VALUES("12332.2","0");
+INSERT INTO test VALUES("19999999.999999999",NULL);
+
+
+SELECT FORMAT(a, b) from test;
+SELECT FORMAT(a, b, null) from test;
+SELECT FORMAT(a, b, "en_US") from test;
+SELECT FORMAT(a, b, "ar_SA") from test;
+SELECT FORMAT(a, b, "be_BY") from test;
+SELECT FORMAT(a, b, "bg_BG") from test;
+SELECT FORMAT(a, b, "de_CH") from test;
+DROP table test;
+
+
+-- @suite
+-- @setup
+DROP TABLE IF EXISTS test;
+
+CREATE TABLE test(a varchar(100), b varchar(100), c varchar(20));
+INSERT INTO test VALUES("-.12334.2","2", "en_US");
+INSERT INTO test VALUES("12332.123456", "4", "en_US");
+INSERT INTO test VALUES("12332.1","4", "en_US");
+INSERT INTO test VALUES("12332.2","0", "en_US");
+
+SELECT format(a, 4) from test;
+SELECT format(a, 2),format(b, 3) FROM test WHERE b > 0;
+SELECT a,b,c FROM test WHERE format(b,0) = 4;
+
+-- @bvt:issue#7536
+SELECT ABS(format(b,5)) FROM test;
+SELECT FLOOR(format(c,3)) FROM test;
+
+
+-- @suite
+-- @setup
+DROP TABLE if exists t;
+DROP TABLE if exists t1;
+DROP TABLE if exists t2;
+CREATE TABLE t1(
+                   c1 int,
+                   c2 bigint,
+                   primary key (c1)
+);
+create TABLE t2(
+                   i int,
+                   b bigint,
+                   primary key (i)
+);
+
+-- join
+INSERT INTO t1 values ('111', '222'), ('000', '111'), ('-111', null);
+INSERT INTO t2 values (111, 999999), (0,0000000), (-1, null), (11111, 1);
+SELECT c1, format(c1,1), i, format(i,1) from t1 inner join t2 on t1.c1 = t2.i order by c1 desc;
+SELECT format(c2, 5) FROM t1 join t2 ON t1.c1 = t2.i;
+
+
+
 
 
