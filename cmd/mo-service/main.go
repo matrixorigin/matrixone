@@ -53,11 +53,13 @@ var (
 	configFile = flag.String("cfg", "", "toml configuration used to start mo-service")
 	launchFile = flag.String("launch", "", "toml configuration used to launch mo cluster")
 	version    = flag.Bool("version", false, "print version information")
+	daemon     = flag.Bool("daemon", false, "run mo-service in daemon mode")
 )
 
 func main() {
 	flag.Parse()
 	maybePrintVersion()
+	maybeRunInDaemonMode()
 
 	if *cpuProfilePathFlag != "" {
 		stop := startCPUProfile()
@@ -316,4 +318,24 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 		return err
 	}
 	return nil
+}
+
+func maybeRunInDaemonMode() {
+	if _, isChild := os.LookupEnv("daemon"); *daemon && !isChild {
+		childENV := []string{"daemon=true"}
+		pwd, err := os.Getwd()
+		if err != nil {
+			panic(err)
+		}
+		childPID, _ := syscall.ForkExec(os.Args[0], os.Args, &syscall.ProcAttr{
+			Dir: pwd,
+			Env: append(os.Environ(), childENV...),
+			Sys: &syscall.SysProcAttr{
+				Setsid: true,
+			},
+			Files: []uintptr{0, 1, 2}, // print message to the same pty
+		})
+		fmt.Printf("mo-service is running in daemon mode, child process %d\n", childPID)
+		os.Exit(0)
+	}
 }
