@@ -193,3 +193,16 @@ insert into test values("12332.2","0", "de_CH");
 insert into test values("19999999.999999999","de_CH");
 invalid input: insert values does not match the number of columns
 drop table test;
+
+create table t(id int, d1 float, d2 double not null);
+insert into t values(4, 0, -38902093.4324);
+insert into t values(5, 323, 37827329.43432);
+insert into t values(8, 7382,3923404.2132421);
+insert into t values(5, 2, 10000000);
+select format(d2, id) from t;
+format(d2, id)
+10,000,000.00000
+-38,902,093.4324
+37,827,329.43432
+3,923,404.21324210
+drop table t;
