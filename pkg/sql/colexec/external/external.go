@@ -623,7 +623,7 @@ func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 		rune(param.extern.Tail.Fields.Terminated[0]),
 		'#',
 		true,
-		true)
+		false)
 
 	return plh, nil
 }
@@ -997,7 +997,14 @@ func getStrFromLine(Line []string, colIdx int, param *ExternalParam) string {
 	if catalog.ContainExternalHidenCol(param.Attrs[colIdx]) {
 		return param.extern.Filepath
 	} else {
-		return Line[param.Name2ColIndex[param.Attrs[colIdx]]]
+		str := Line[param.Name2ColIndex[param.Attrs[colIdx]]]
+		if param.extern.Tail.Fields.EnclosedBy != 0 {
+			tmp := strings.TrimSpace(str)
+			if len(tmp) >= 2 && tmp[0] == param.extern.Tail.Fields.EnclosedBy && tmp[len(tmp)-1] == param.extern.Tail.Fields.EnclosedBy {
+				return tmp[1 : len(tmp)-1]
+			}
+		}
+		return str
 	}
 }
 
@@ -1009,7 +1016,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		}
 		field := getStrFromLine(Line, colIdx, param)
 		id := types.T(param.Cols[colIdx].Typ.Id)
-		if id != types.T_char && id != types.T_varchar {
+		if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob && id != types.T_text {
 			field = strings.TrimSpace(field)
 		}
 		vec := bat.Vecs[colIdx]
