@@ -17,6 +17,7 @@ package gc
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 )
@@ -41,10 +42,14 @@ func NewGCWorker(fs *objectio.ObjectFS, cleaner *DiskCleaner) *GCWorker {
 	}
 }
 
-func (g *GCWorker) GetState() CleanerState {
-	g.RLock()
-	defer g.RUnlock()
-	return g.state
+func (g *GCWorker) Start() bool {
+	g.Lock()
+	defer g.Unlock()
+	if g.state == Running {
+		return false
+	}
+	g.state = Running
+	return true
 }
 
 func (g *GCWorker) resetObjects() {
@@ -53,12 +58,13 @@ func (g *GCWorker) resetObjects() {
 
 func (g *GCWorker) ExecDelete(names []string) error {
 	g.Lock()
-	g.state = Running
 	g.objects = append(g.objects, names...)
-	g.Unlock()
 	if len(g.objects) == 0 {
+		g.state = Idle
+		g.Unlock()
 		return nil
 	}
+	g.Unlock()
 
 	err := g.fs.DelFiles(context.Background(), g.objects)
 	g.Lock()
@@ -68,7 +74,7 @@ func (g *GCWorker) ExecDelete(names []string) error {
 		return err
 	}
 	g.cleaner.updateOutputs(g.objects)
-	//logutil.Infof("ExecDelete: %v", g.objects)
+	logutil.Infof("ExecDelete: %v", g.objects)
 	g.resetObjects()
 	g.state = Idle
 	return nil

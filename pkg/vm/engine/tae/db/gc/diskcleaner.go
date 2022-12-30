@@ -296,13 +296,10 @@ func (cleaner *DiskCleaner) createDebugInput(
 }
 
 func (cleaner *DiskCleaner) tryGC() {
-	if cleaner.delWorker.GetState() == Running {
+	if !cleaner.delWorker.Start() {
 		return
 	}
 	gc := cleaner.softGC()
-	if len(gc) == 0 {
-		return
-	}
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
 	go cleaner.delWorker.ExecDelete(gc)
@@ -387,9 +384,18 @@ func (cleaner *DiskCleaner) CheckGC() error {
 		// TODO
 		return moerr.NewInternalErrorNoCtx("processing clean %s: %v", debugCandidates[0].String(), err)
 	}
-	debugTable.SoftGC()
-	if !cleaner.inputs.tables[0].Compare(debugTable) {
-		logutil.Errorf("Compare is failed. table len:%d", len(cleaner.inputs.tables))
+	str := debugTable.SoftGC()
+	var mergeTable *GCTable
+	if len(cleaner.inputs.tables) > 1 {
+		mergeTable = NewGCTable()
+		for _, table := range cleaner.inputs.tables {
+			mergeTable.Merge(table)
+		}
+		mergeTable.SoftGC()
+	} else {
+		mergeTable = cleaner.inputs.tables[0]
+	}
+	if !mergeTable.Compare(debugTable) {
 		logutil.Errorf("inputs :%v", cleaner.inputs.tables[0].String())
 		logutil.Errorf("debugTable :%v", debugTable.String())
 		return moerr.NewInternalErrorNoCtx("Compare is failed")

@@ -4558,6 +4558,9 @@ func TestGCWithCheckpoint(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
+	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager.Start()
+	defer manager.Stop()
 
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 10
@@ -4575,9 +4578,6 @@ func TestGCWithCheckpoint(t *testing.T) {
 	t.Logf("Checkpointed: %d", tae.Scheduler.GetCheckpointedLSN())
 	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
-	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
-	manager.Start()
-	defer manager.Stop()
 	err := manager.JobFactory(context.Background())
 	assert.Nil(t, err)
 	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
@@ -4611,6 +4611,9 @@ func TestGCDropDB(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
+	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager.Start()
+	defer manager.Stop()
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -4631,9 +4634,6 @@ func TestGCDropDB(t *testing.T) {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	t.Log(time.Since(now))
-	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
-	manager.Start()
-	defer manager.Stop()
 	err = manager.JobFactory(context.Background())
 	assert.Nil(t, err)
 	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
@@ -4668,6 +4668,9 @@ func TestGCDropTable(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
+	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager.Start()
+	defer manager.Stop()
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -4703,9 +4706,6 @@ func TestGCDropTable(t *testing.T) {
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
 	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetDeleteAt())
 	t.Log(time.Since(now))
-	manager := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
-	manager.Start()
-	defer manager.Stop()
 	err = manager.JobFactory(context.Background())
 	assert.Nil(t, err)
 	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
@@ -4853,6 +4853,79 @@ func TestGlobalCheckpoint1(t *testing.T) {
 		assert.NoError(t, entry.GCEntry(tae.Fs))
 		assert.NoError(t, entry.GCMetadata(tae.Fs))
 	}
+}
+
+func TestAppendAndGC(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := new(options.Options)
+	opts.CacheCfg = new(options.CacheCfg)
+	opts.CacheCfg.InsertCapacity = common.M * 5
+	opts.CacheCfg.TxnCapacity = common.M
+	opts = config.WithQuickScanAndCKPOpts(opts)
+	db := initDB(t, opts)
+	defer db.Close()
+
+	schema1 := catalog.MockSchemaAll(13, 2)
+	schema1.BlockMaxRows = 20
+	schema1.SegmentMaxBlocks = 2
+
+	schema2 := catalog.MockSchemaAll(13, 2)
+	schema2.BlockMaxRows = 20
+	schema2.SegmentMaxBlocks = 2
+	{
+		txn, _ := db.StartTxn(nil)
+		database, err := txn.CreateDatabase("db", "")
+		assert.Nil(t, err)
+		_, err = database.CreateRelation(schema1)
+		assert.Nil(t, err)
+		_, err = database.CreateRelation(schema2)
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*3-1))
+	defer bat.Close()
+	bats := bat.Split(bat.Length())
+
+	pool, err := ants.NewPool(20)
+	assert.Nil(t, err)
+	defer pool.Release()
+	var wg sync.WaitGroup
+	doSearch := func(name string) func() {
+		return func() {
+			defer wg.Done()
+			txn, rel := getDefaultRelation(t, db, name)
+			it := rel.MakeBlockIt()
+			for it.Valid() {
+				blk := it.GetBlock()
+				view, err := blk.GetColumnDataById(schema1.GetSingleSortKeyIdx(), nil)
+				assert.Nil(t, err)
+				view.Close()
+				it.Next()
+			}
+			err := txn.Commit()
+			assert.NoError(t, err)
+		}
+	}
+
+	for _, data := range bats {
+		wg.Add(4)
+		err := pool.Submit(doSearch(schema1.Name))
+		assert.Nil(t, err)
+		err = pool.Submit(doSearch(schema2.Name))
+		assert.Nil(t, err)
+		err = pool.Submit(appendClosure(t, data, schema1.Name, db, &wg))
+		assert.Nil(t, err)
+		err = pool.Submit(appendClosure(t, data, schema2.Name, db, &wg))
+		assert.Nil(t, err)
+	}
+	wg.Wait()
+	testutils.WaitExpect(8000, func() bool {
+		return db.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	assert.Equal(t, uint64(0), db.Scheduler.GetPenddingLSNCnt())
+	err = db.DiskCleaner.CheckGC()
+	assert.Nil(t, err)
 }
 
 func TestGlobalCheckpoint2(t *testing.T) {
