@@ -23,6 +23,6 @@ use mo_catalog;
 select * from a;
 id    name    account_name
 0    abc    acc1
-3    xxx    cde
+3    xxx    qwe
 drop table if exists a;
 drop account if exists acc1;
