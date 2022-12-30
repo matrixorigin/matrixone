@@ -24,6 +24,7 @@ update a set `account_name` = "cde" where id = 1;
 update a set `account_name` = "cde" where id = 1;
 update a set `name` = "xxx" where `account_name` = "cde";
 update a set `id` = 3 where `id` = 1;
+update a set `id` = 3, `account_name`='qwe' where `id` = 3;
 delete from a where `id` = 1;
 
 -- check it in the non-sys account
