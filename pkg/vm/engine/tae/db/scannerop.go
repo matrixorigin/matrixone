@@ -15,7 +15,6 @@
 package db
 
 import (
-	"bytes"
 	"container/heap"
 	"fmt"
 	"sort"
@@ -46,6 +45,7 @@ const (
 	constHeapCapacity      = 300
 )
 
+// min heap item
 type mItem struct {
 	row   int
 	entry *catalog.BlockEntry
@@ -82,7 +82,8 @@ func (is *itemSet) Clear() {
 	*is = old[:0]
 }
 
-// found out blocks to be merged via maintaining a min heap
+// mergedBlkBuilder founds out blocks to be merged via maintaining a min heap holding
+// up to default 300 items.
 type mergedBlkBuilder struct {
 	blocks itemSet
 	cap    int
@@ -99,6 +100,7 @@ func (h *mergedBlkBuilder) push(item *mItem) {
 	}
 }
 
+// copy out the items in the heap
 func (h *mergedBlkBuilder) finish() []*catalog.BlockEntry {
 	ret := make([]*catalog.BlockEntry, h.blocks.Len())
 	for i, item := range h.blocks {
@@ -107,7 +109,8 @@ func (h *mergedBlkBuilder) finish() []*catalog.BlockEntry {
 	return ret
 }
 
-// if a segment has no any non-dropped block, it can be deleted. except the
+// deletableSegBuilder founds deletable segemnts of a table.
+// if a segment has no any non-dropped blocks, it can be deleted. except the
 // segment has the max segment id, appender may creates block in it.
 type deletableSegBuilder struct {
 	segHasNonDropBlk bool
@@ -125,6 +128,8 @@ func (d *deletableSegBuilder) resetForNewSeg() {
 	d.segHasNonDropBlk = false
 }
 
+// call this when a non dropped block was found when iterating blocks of a segment,
+// which make the builder skip this segment
 func (d *deletableSegBuilder) hintNonDropBlock() {
 	d.segHasNonDropBlk = true
 }
@@ -139,6 +144,7 @@ func (d *deletableSegBuilder) push(entry *catalog.SegmentEntry) {
 	}
 }
 
+// copy out segment entries expect the one with max segment id.
 func (d *deletableSegBuilder) finish() []*catalog.SegmentEntry {
 	sort.Slice(d.candidates, func(i, j int) bool { return d.candidates[i].ID < d.candidates[j].ID })
 	if last := len(d.candidates) - 1; last >= 0 && d.candidates[last].ID == d.maxSegId {
@@ -157,11 +163,19 @@ type stat struct {
 	lastTotalRow int
 }
 
+func (st *stat) String() string {
+	return fmt.Sprintf("row%d[%s]", st.lastTotalRow, st.ttl)
+}
+
 // mergeLimiter consider update rate and time to decide to merge or not.
 type mergeLimiter struct {
 	stats map[uint64]*stat
 }
 
+// merge immediately if it has enough rows, skip if:
+// 1. has only a few rows or blocks
+// 2. is actively updating, which means total rows changes obviously compared with last time
+// in other cases, wait some time to merge
 func (ml *mergeLimiter) canMerge(tid uint64, totalRow int, blks int) bool {
 	if totalRow > constMergeRightNow {
 		logutil.Infof("Mergeblocks %d merge right now: %d rows %d blks", tid, totalRow, blks)
@@ -196,9 +210,10 @@ func (ml *mergeLimiter) ttl(totalRow int) time.Time {
 			(float32(constMergeRightNow) - float32(totalRow))))
 }
 
+// prune old stat entry
 func (ml *mergeLimiter) pruneStale() {
 	staleIds := make([]uint64, 0)
-	t := time.Now().Add(-3 * time.Minute)
+	t := time.Now().Add(-10 * time.Minute)
 	for id, st := range ml.stats {
 		if st.ttl.Before(t) {
 			staleIds = append(staleIds, id)
@@ -210,14 +225,7 @@ func (ml *mergeLimiter) pruneStale() {
 }
 
 func (ml *mergeLimiter) String() string {
-	s := &bytes.Buffer{}
-	s.WriteString("{")
-	for id, st := range ml.stats {
-		s.WriteString(fmt.Sprintf("%d: %d @ %s", id, st.lastTotalRow, st.ttl))
-		s.WriteString("\n")
-	}
-	s.WriteString("}\n")
-	return s.String()
+	return fmt.Sprintf("%v", ml.stats)
 }
 
 type MergeTaskBuilder struct {
@@ -280,7 +288,11 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 	}
 
 	_, err := s.db.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
-	logutil.Infof("[Mergeblocks] Scheduled | State=%v | Scopes=%v,%s", err, segIds, common.BlockIDArraryString(scopes))
+	if err != nil {
+		logutil.Infof("[Mergeblocks] Scheduled errinfo=%v", err)
+	} else {
+		logutil.Infof("[Mergeblocks] Scheduled | State=%v | Scopes=%v,%s", err, segIds, common.BlockIDArraryString(scopes))
+	}
 }
 
 func (s *MergeTaskBuilder) resetForTable(tid uint64) {
@@ -291,11 +303,13 @@ func (s *MergeTaskBuilder) resetForTable(tid uint64) {
 }
 
 func (s *MergeTaskBuilder) PreExecute() error {
-	if s.runCnt++; s.runCnt >= 128 {
+	// clean stale stats for every 10min (default)
+	if s.runCnt++; s.runCnt >= 120 {
 		s.runCnt = 0
 		s.limiter.pruneStale()
 	}
 
+	// print stats for every 50s (default)
 	if s.runCnt%10 == 0 {
 		logutil.Infof("Mergeblocks stats: %s", s.limiter.String())
 	}
