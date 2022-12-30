@@ -1,0 +1,22 @@
+select replace("XYZ FGH XYZ","X","M");
+replace("XYZ FGH XYZ","X","M")
+MYZ FGH MYZ
+select replace(".*.*.*",".*","1");
+replace(".*.*.*","1")
+111
+select replace("11","","1");
+replace("11","","1")
+11
+drop table if exists t1;
+
+create table t1(a varchar,b varchar);
+insert into t1 values("testtest","case case");
+select a,replace(b,"case","11") from t1;
+a   replace(b,"case","11")
+testtest    11 11
+select replace(a,"test","22") from t1;
+replace(a,"test","22")
+2222
+select replace(a,"test",22),replace(b,"case","11") from t1;
+replace(a,"test","22")  replace(b,"case","11")
+2222    11 11

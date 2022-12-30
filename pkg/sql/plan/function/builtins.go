@@ -2350,6 +2350,19 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	REPLACE: {
+		Id:     REPLACE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.Replace,
+			},
+		},
+	},
 	REGEXP_REPLACE: {
 		Id:     REGEXP_REPLACE,
 		Flag:   plan.Function_STRICT,
