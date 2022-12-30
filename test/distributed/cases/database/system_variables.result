@@ -143,7 +143,7 @@ table_name    VARCHAR(256)    YES        NULL
 column_name    VARCHAR(256)    YES        NULL
 ordinal_position    INT    YES        NULL
 column_default    VARCHAR(65535)    YES        NULL
-is_nullable    VARCHAR(2)    YES        NULL
+is_nullable    VARCHAR(3)    YES        NULL
 data_type    VARCHAR(65535)    YES        NULL
 character_maximum_length    INT    YES        NULL
 character_octet_length    INT    YES        NULL
