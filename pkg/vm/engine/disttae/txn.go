@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
@@ -703,7 +704,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	if len(columns) == 0 {
 		bat := batch.NewWithSize(0)
 		defer bat.Clean(proc.Mp())
-		ifNeed, err := evalFilterExpr(notReportErrCtx, expr, bat, proc)
+		ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
 		if err != nil {
 			return true
 		}
@@ -717,7 +718,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	}
 
 	// use all min/max data to build []vectors.
-	buildVectors := buildVectorsByData(datas, dataTypes, proc.Mp())
+	buildVectors := plan2.BuildVectorsByData(datas, dataTypes, proc.Mp())
 	bat := batch.NewWithSize(maxCol + 1)
 	defer bat.Clean(proc.Mp())
 	for k, v := range columnMap {
@@ -730,7 +731,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	}
 	bat.SetZs(buildVectors[0].Length(), proc.Mp())
 
-	ifNeed, err := evalFilterExpr(notReportErrCtx, expr, bat, proc)
+	ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
 	if err != nil {
 		return true
 	}
