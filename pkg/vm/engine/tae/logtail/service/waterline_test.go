@@ -28,19 +28,23 @@ func TestWaterliner(t *testing.T) {
 
 	w := NewWaterliner()
 	// table not registered
-	require.Equal(t, want, w.Waterline(id, want))
+	_, ok := w.Waterline(id)
+	require.False(t, ok)
 
 	/* ---- 1. register table with waterline ---- */
 	w.Register(id, table, waterline)
-	// table registerd, take the registered waterline, ignore want
-	require.Equal(t, waterline, w.Waterline(id, want))
+	line, ok := w.Waterline(id)
+	require.True(t, ok)
+	require.Equal(t, waterline, line)
 	// only one table subcribed
 	require.Equal(t, 1, len(w.ListTable()))
 
 	/* ---- 2. register table repeatedly ---- */
 	w.Register(id, table, want)
 	// table registerd, waterline not updated
-	require.Equal(t, waterline, w.Waterline(id, want))
+	line, ok = w.Waterline(id)
+	require.True(t, ok)
+	require.Equal(t, waterline, line)
 	// there's only one table subcribed
 	require.Equal(t, 1, len(w.ListTable()))
 
@@ -59,7 +63,9 @@ func TestWaterliner(t *testing.T) {
 	newWaterline := waterline.Next()
 	w.AdvanceWaterline(newWaterline)
 	// check the promoted waterline
-	require.Equal(t, newWaterline, w.Waterline(id, want))
+	line, ok = w.Waterline(id)
+	require.True(t, ok)
+	require.Equal(t, newWaterline, line)
 
 	/* ---- 6. unregister non-exist table ---- */
 	w.Unregister("non-exist")

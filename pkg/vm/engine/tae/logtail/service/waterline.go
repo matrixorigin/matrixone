@@ -79,18 +79,16 @@ func (w *Waterliner) ListTable() []tableInfo {
 
 // Waterline returns waterline for subscribed table.
 //
-// If table subscribed already, we would ignore want.
-// If table not subscribed before, we would take want as waterline.
-func (w *Waterliner) Waterline(
-	id TableID, want timestamp.Timestamp,
-) timestamp.Timestamp {
+// If table not subscribed before, we would take current timestamp as waterline.
+// if table subscribed, just take the last waterline.
+func (w *Waterliner) Waterline(id TableID) (timestamp.Timestamp, bool) {
 	w.RLock()
 	defer w.RUnlock()
 
 	if info, ok := w.tables[id]; ok {
-		return info.waterline
+		return info.waterline, true
 	}
-	return want
+	return timestamp.Timestamp{}, false
 }
 
 // Advance updates waterline.

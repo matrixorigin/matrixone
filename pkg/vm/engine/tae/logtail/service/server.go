@@ -388,8 +388,11 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 			logger.Debug("start to handle subscription", zap.Any("table", sub.req.Table))
 
-			// if table subscribed already, we would ignore sub.req.CnWant.
-			want := s.subscribed.Waterline(sub.tableID, *sub.req.CnWant)
+			// evaluate waterline for the table
+			want, exist := s.subscribed.Waterline(sub.tableID)
+			if !exist {
+				want, _ = s.clock.Now()
+			}
 
 			// fetch logtail
 			tail, err := s.fetcher.FetchLogtail(sub.sendCtx, sub.req.Table, nil, &want)

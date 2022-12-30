@@ -27,8 +27,7 @@ option (gogoproto.protosizer_all) = true;
 
 // subscribe table request
 message SubscribeRequest {
-    timestamp.Timestamp cn_want = 1;
-    api.TableID table           = 2;
+    api.TableID table = 1;
 }
 
 // unsubscribe table request

@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 type ClientOption func(*LogtailClient)
@@ -74,15 +73,14 @@ func (c *LogtailClient) Close() error {
 
 // Subscribe subscribes table.
 func (c *LogtailClient) Subscribe(
-	ctx context.Context, table api.TableID, want timestamp.Timestamp,
+	ctx context.Context, table api.TableID,
 ) error {
 	c.limiter.Take()
 
 	request := &LogtailRequest{}
 	request.Request = &logtail.LogtailRequest_SubscribeTable{
 		SubscribeTable: &logtail.SubscribeRequest{
-			Table:  &table,
-			CnWant: &want,
+			Table: &table,
 		},
 	}
 	return c.stream.Send(ctx, request)
