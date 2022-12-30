@@ -15,6 +15,7 @@
 package checkers
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/dnservice"
@@ -22,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/syshealth"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"go.uber.org/zap"
 )
@@ -36,8 +36,7 @@ type Coordinator struct {
 	teardown    bool
 	teardownOps []*operator.Operator
 
-	cfg    hakeeper.Config
-	logger *zap.Logger
+	cfg hakeeper.Config
 }
 
 func NewCoordinator(cfg hakeeper.Config) *Coordinator {
@@ -45,7 +44,6 @@ func NewCoordinator(cfg hakeeper.Config) *Coordinator {
 	return &Coordinator{
 		OperatorController: operator.NewController(),
 		cfg:                cfg,
-		logger:             logutil.GetGlobalLogger().Named("hakeeper"),
 	}
 }
 
@@ -56,10 +54,17 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState) []pb.
 	cluster := state.ClusterInfo
 	currentTick := state.Tick
 	user := state.TaskTableUser
+	runtime.ProcessLevelRuntime().Logger().Debug("hakeeper checker state",
+		zap.Any("cluster information", cluster),
+		zap.Any("log state", logState),
+		zap.Any("dn state", dnState),
+		zap.Any("cn state", cnState),
+		zap.Uint64("current tick", currentTick),
+	)
 
 	defer func() {
 		if !c.teardown {
-			c.logger.Info("MO is working.")
+			runtime.ProcessLevelRuntime().Logger().Debug("MO is working.")
 		}
 	}()
 
@@ -82,7 +87,7 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState) []pb.
 
 	operators := make([]*operator.Operator, 0)
 	operators = append(operators, logservice.Check(alloc, c.cfg, cluster, logState, executing, user, currentTick)...)
-	operators = append(operators, dnservice.Check(alloc, c.cfg, cluster, dnState, user, currentTick, c.logger)...)
+	operators = append(operators, dnservice.Check(alloc, c.cfg, cluster, dnState, user, currentTick)...)
 	operators = append(operators, cnservice.Check(c.cfg, cnState, user, currentTick)...)
 
 	return c.OperatorController.Dispatch(operators, logState, dnState, cnState)

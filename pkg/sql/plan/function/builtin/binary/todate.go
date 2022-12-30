@@ -28,32 +28,34 @@ import (
 var usage = ""
 
 func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if !vectors[1].IsScalar() {
-		return nil, moerr.NewInvalidArg("the second parameter of function to_date", "not constant")
+	if !vectors[1].IsConst() {
+		return nil, moerr.NewInvalidArgNoCtx("the second parameter of function to_date", "not constant")
 	}
 	inputBytes0 := vector.MustStrCols(vectors[0])
 	inputBytes1 := vector.MustStrCols(vectors[1])
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
-	if vectors[0].IsScalar() && vectors[1].IsScalar() {
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
+	if vectors[0].IsConst() && vectors[1].IsConst() {
 		results := make([]string, 1)
 		format := inputBytes1[0]
-		inputNsp := vectors[0].Nsp
+		inputNsp := vectors[0].GetNulls()
 		result, resultNsp, err := ToDateInputBytes(inputBytes0, format, inputNsp, results)
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.NewConstString(resultType, 1, result[0], proc.Mp())
-		nulls.Set(resultVector.Nsp, resultNsp)
+		resultVector := vector.New(vector.CONSTANT, resultType)
+		vector.AppendString(resultVector, result[0], result[0] == "", proc.Mp())
+		nulls.Set(resultVector.GetNulls(), resultNsp)
 		return resultVector, nil
 	} else {
 		results := make([]string, len(inputBytes0))
 		format := inputBytes1[0]
-		inputNsp := vectors[0].Nsp
-		results, resultNsp, err := ToDateInputBytes(inputBytes0, format, inputNsp, results)
+		inputNsp := vectors[0].GetNulls()
+		results, _, err := ToDateInputBytes(inputBytes0, format, inputNsp, results)
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.NewWithStrings(resultType, results, resultNsp, proc.Mp())
+		resultVector := vector.New(vector.FLAT, resultType)
+		vector.AppendStringList(resultVector, results, nil, proc.Mp())
 		return resultVector, nil
 	}
 }
@@ -78,14 +80,14 @@ func ToDateInputBytes(inputs []string, format string, inputNsp *nulls.Nulls, res
 		if val, ok := otherFormats[format]; ok {
 			t, err := time.Parse(val, inputs[i])
 			if err != nil {
-				return nil, nil, moerr.NewInvalidArg("date format", format)
+				return nil, nil, moerr.NewInvalidArgNoCtx("date format", format)
 			}
 			result[i] = t.Format("2006-01-02") // this is our output format
 		} else {
 			//  XXX the only diff from if branch is error message.  Is this really correct?
 			t, err := time.Parse(val, inputs[i])
 			if err != nil {
-				return nil, nil, moerr.NewInvalidArg("date format", format)
+				return nil, nil, moerr.NewInvalidArgNoCtx("date format", format)
 			}
 			result[i] = t.Format("2006-01-02") // this is our output format
 		}

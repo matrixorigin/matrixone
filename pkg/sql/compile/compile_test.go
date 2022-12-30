@@ -23,6 +23,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
@@ -36,6 +37,7 @@ type compileTestCase struct {
 	sql  string
 	pn   *plan.Plan
 	e    engine.Engine
+	stmt tree.Statement
 	proc *process.Process
 }
 
@@ -57,8 +59,11 @@ func init() {
 		newTestCase("select * from R left join S on R.uid = S.uid", new(testing.T)),
 		newTestCase("select * from R right join S on R.uid = S.uid", new(testing.T)),
 		newTestCase("select * from R join S on R.uid > S.uid", new(testing.T)),
+		newTestCase("select * from R limit 10", new(testing.T)),
+		newTestCase("insert into R values('1', '2', '3')", new(testing.T)),
 		newTestCase("insert into R select * from R", new(testing.T)),
-		newTestCase(`select * from unnest('{"a":1}') as f`, new(testing.T)),
+		newTestCase("select count(*) from R group by uid", new(testing.T)),
+		newTestCase("select count(distinct uid) from R", new(testing.T)),
 	}
 }
 
@@ -75,25 +80,27 @@ func TestCompile(t *testing.T) {
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
-
 	for _, tc := range tcs {
 		tc.proc.TxnClient = txnClient
-		c := New("test", tc.sql, "", context.TODO(), tc.e, tc.proc, nil)
-		err := c.Compile(tc.pn, nil, testPrint)
+		c := New("", "test", tc.sql, "", context.TODO(), tc.e, tc.proc, tc.stmt)
+		err := c.Compile(ctx, tc.pn, nil, testPrint)
 		require.NoError(t, err)
 		c.GetAffectedRows()
 		err = c.Run(0)
 		require.NoError(t, err)
+		// Enable memory check
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func TestCompileWithFaults(t *testing.T) {
 	// Enable this line to trigger the Hung.
 	// fault.Enable()
-	fault.AddFaultPoint("panic_in_batch_append", ":::", "panic", 0, "")
+	var ctx = context.Background()
+	fault.AddFaultPoint(ctx, "panic_in_batch_append", ":::", "panic", 0, "")
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
-	c := New("test", tc.sql, "", context.TODO(), tc.e, tc.proc, nil)
-	err := c.Compile(tc.pn, nil, testPrint)
+	c := New("", "test", tc.sql, "", context.TODO(), tc.e, tc.proc, nil)
+	err := c.Compile(ctx, tc.pn, nil, testPrint)
 	require.NoError(t, err)
 	c.GetAffectedRows()
 	err = c.Run(0)
@@ -103,19 +110,15 @@ func TestCompileWithFaults(t *testing.T) {
 func newTestCase(sql string, t *testing.T) compileTestCase {
 	proc := testutil.NewProcess()
 	e, _, compilerCtx := testengine.New(context.Background())
-	opt := plan2.NewBaseOptimizer(compilerCtx)
-	stmts, err := mysql.Parse(sql)
+	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql)
 	require.NoError(t, err)
-	qry, err := opt.Optimize(stmts[0])
+	pn, err := plan2.BuildPlan(compilerCtx, stmts[0])
 	require.NoError(t, err)
 	return compileTestCase{
 		e:    e,
 		sql:  sql,
 		proc: proc,
-		pn: &plan.Plan{
-			Plan: &plan.Plan_Query{
-				Query: qry,
-			},
-		},
+		pn:   pn,
+		stmt: stmts[0],
 	}
 }

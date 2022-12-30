@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -40,7 +41,7 @@ import (
 )
 
 var (
-	ErrClosed = moerr.NewInternalError("tae: closed")
+	ErrClosed = moerr.NewInternalErrorNoCtx("tae: closed")
 )
 
 type DB struct {
@@ -52,8 +53,10 @@ type DB struct {
 	MTBufMgr  base.INodeManager
 	TxnBufMgr base.INodeManager
 
-	TxnMgr     *txnbase.TxnManager
-	LogtailMgr *logtail.LogtailMgr
+	TxnMgr        *txnbase.TxnManager
+	TransferTable *model.HashPageTable
+
+	LogtailMgr *logtail.Manager
 	Wal        wal.Driver
 
 	Scheduler tasks.TaskScheduler
@@ -88,7 +91,7 @@ func (db *DB) GetTxnByCtx(txnOperator client.TxnOperator) (txn txnif.AsyncTxn, e
 	txnID := txnOperator.Txn().ID
 	txn = db.TxnMgr.GetTxnByCtx(txnID)
 	if txn == nil {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 	}
 	return
 }
@@ -103,7 +106,7 @@ func (db *DB) GetOrCreateTxnWithMeta(
 func (db *DB) GetTxn(id string) (txn txnif.AsyncTxn, err error) {
 	txn = db.TxnMgr.GetTxn(id)
 	if txn == nil {
-		err = moerr.NewTxnNotFound()
+		err = moerr.NewTxnNotFoundNoCtx()
 	}
 	return
 }
@@ -148,5 +151,6 @@ func (db *DB) Close() error {
 	db.TxnMgr.Stop()
 	db.Wal.Close()
 	db.Opts.Catalog.Close()
+	db.TransferTable.Close()
 	return db.DBLocker.Close()
 }

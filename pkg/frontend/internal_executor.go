@@ -34,7 +34,7 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 	}
 
 	if opts.IsInternal != nil {
-		sess.IsInternal = *opts.IsInternal
+		sess.isInternal = *opts.IsInternal
 	}
 }
 
@@ -81,7 +81,7 @@ func (res *internalExecResult) ColumnCount() uint64 {
 	return res.resultSet.GetColumnCount()
 }
 
-func (res *internalExecResult) Column(i uint64) (name string, typ uint8, signed bool, err error) {
+func (res *internalExecResult) Column(ctx context.Context, i uint64) (name string, typ uint8, signed bool, err error) {
 	col, err := res.resultSet.GetColumn(i)
 	if err == nil {
 		name = col.Name()
@@ -95,19 +95,19 @@ func (res *internalExecResult) RowCount() uint64 {
 	return res.resultSet.GetRowCount()
 }
 
-func (res *internalExecResult) Row(i uint64) ([]interface{}, error) {
+func (res *internalExecResult) Row(ctx context.Context, i uint64) ([]interface{}, error) {
 	return res.resultSet.GetRow(i)
 }
 
-func (res *internalExecResult) Value(ridx uint64, cidx uint64) (interface{}, error) {
+func (res *internalExecResult) Value(ctx context.Context, ridx uint64, cidx uint64) (interface{}, error) {
 	return res.resultSet.GetValue(ridx, cidx)
 }
 
-func (res *internalExecResult) ValueByName(ridx uint64, col string) (interface{}, error) {
+func (res *internalExecResult) ValueByName(ctx context.Context, ridx uint64, col string) (interface{}, error) {
 	return res.resultSet.GetValueByName(ridx, col)
 }
 
-func (res *internalExecResult) StringValueByName(ridx uint64, col string) (string, error) {
+func (res *internalExecResult) StringValueByName(ctx context.Context, ridx uint64, col string) (string, error) {
 	if cidx, err := res.resultSet.columnName2Index(col); err != nil {
 		return "", err
 	} else {
@@ -153,7 +153,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		logutil.Fatalf("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
 	}
-	sess := NewSession(ie.proto, mp, ie.pu, gSysVariables)
+	sess := NewSession(ie.proto, mp, ie.pu, gSysVariables, true)
 	sess.SetRequestContext(ctx)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)
@@ -180,15 +180,23 @@ type internalProtocol struct {
 	username    string
 }
 
+func (ip *internalProtocol) makeProfile(profileTyp profileType) {
+
+}
+
+func (ip *internalProtocol) getProfile(profileTyp profileType) string {
+	return ""
+}
+
 func (ip *internalProtocol) IsEstablished() bool {
 	return true
 }
 
-func (ip *internalProtocol) ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
+func (ip *internalProtocol) ParseExecuteData(ctx context.Context, stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
 	return nil, nil, nil
 }
 
-func (ip *internalProtocol) SendPrepareResponse(stmt *PrepareStmt) error {
+func (ip *internalProtocol) SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
 	return nil
 }
 
@@ -204,7 +212,7 @@ func (ip *internalProtocol) ConnectionID() uint32 {
 }
 
 // Peer gets the address [Host:Port] of the client
-func (ip *internalProtocol) Peer() (string, string) {
+func (ip *internalProtocol) Peer() (string, string, string, string) {
 	panic("not impl")
 }
 
@@ -279,7 +287,7 @@ func (ip *internalProtocol) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet
 }
 
 // SendColumnDefinitionPacket the server send the column definition to the client
-func (ip *internalProtocol) SendColumnDefinitionPacket(column Column, cmd int) error {
+func (ip *internalProtocol) SendColumnDefinitionPacket(ctx context.Context, column Column, cmd int) error {
 	return nil
 }
 
@@ -289,7 +297,7 @@ func (ip *internalProtocol) SendColumnCountPacket(count uint64) error {
 }
 
 // SendResponse sends a response to the client for the application request
-func (ip *internalProtocol) SendResponse(resp *Response) error {
+func (ip *internalProtocol) SendResponse(ctx context.Context, resp *Response) error {
 	ip.Lock()
 	defer ip.Unlock()
 	ip.PrepareBeforeProcessingResultSet()

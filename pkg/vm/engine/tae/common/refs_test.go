@@ -17,10 +17,12 @@ package common
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRefs(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	helper := RefHelper{
 		OnZeroCB: func() {
 

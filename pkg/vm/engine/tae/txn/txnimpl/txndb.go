@@ -104,7 +104,7 @@ func (db *txnDB) BatchDedup(id uint64, pk containers.Vector) (err error) {
 		return err
 	}
 	if table.IsDeleted() {
-		return moerr.NewNotFound()
+		return moerr.NewNotFoundNoCtx()
 	}
 
 	return table.DoBatchDedup(pk)
@@ -116,9 +116,20 @@ func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
 		return err
 	}
 	if table.IsDeleted() {
-		return moerr.NewNotFound()
+		return moerr.NewNotFoundNoCtx()
 	}
 	return table.Append(bat)
+}
+
+func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {
+	changed, nid, nrow, err := table.TransferDeleteIntent(id, row)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return table.RangeDelete(id, row, row, dt)
+	}
+	return table.RangeDelete(nid, nrow, nrow, dt)
 }
 
 func (db *txnDB) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
@@ -127,9 +138,18 @@ func (db *txnDB) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteT
 		return err
 	}
 	if table.IsDeleted() {
-		return moerr.NewNotFound()
+		return moerr.NewNotFoundNoCtx()
 	}
 	return table.RangeDelete(id, start, end, dt)
+	// if start == end {
+	// 	return db.DeleteOne(table, id, start, dt)
+	// }
+	// for i := start; i <= end; i++ {
+	// 	if err = db.DeleteOne(table, id, i, dt); err != nil {
+	// 		return
+	// 	}
+	// }
+	// return
 }
 
 func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
@@ -138,7 +158,7 @@ func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, 
 		return
 	}
 	if table.IsDeleted() {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	return table.GetByFilter(filter)
@@ -150,7 +170,7 @@ func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, err 
 		return
 	}
 	if table.IsDeleted() {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	return table.GetValue(id, row, colIdx)
@@ -441,6 +461,11 @@ func (db *txnDB) PrePrepare() (err error) {
 				return
 			}
 			delete(db.tables, table.GetID())
+		}
+	}
+	for _, table := range db.tables {
+		if err = table.PrePreareTransfer(); err != nil {
+			return
 		}
 	}
 	for _, table := range db.tables {

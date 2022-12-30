@@ -17,6 +17,7 @@ package logservicedriver
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -25,8 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
-var ErrRecordNotFound = moerr.NewInternalError("driver read cache: lsn not found")
-var ErrAllRecordsRead = moerr.NewInternalError("driver read cache: all records are read")
+var ErrRecordNotFound = moerr.NewInternalErrorNoCtx("driver read cache: lsn not found")
+var ErrAllRecordsRead = moerr.NewInternalErrorNoCtx("driver read cache: all records are read")
 
 type readCache struct {
 	lsns    []uint64
@@ -89,7 +90,7 @@ func (d *LogServiceDriver) appendRecords(records []logservice.LogRecord, firstls
 		lsn := firstlsn + uint64(i)
 		cnt++
 		if maxsize != 0 {
-			if cnt >= d.config.ClientPoolMaxSize {
+			if cnt > maxsize {
 				break
 			}
 		}
@@ -117,10 +118,17 @@ func (d *LogServiceDriver) dropRecords() {
 func (d *LogServiceDriver) dropRecordByLsn(lsn uint64) {
 	delete(d.records, lsn)
 }
+
+func (d *LogServiceDriver) resetReadCache() {
+	for lsn := range d.records {
+		delete(d.records, lsn)
+	}
+}
+
 func (d *LogServiceDriver) readSmallBatchFromLogService(lsn uint64) {
 	_, records := d.readFromLogService(lsn, int(d.config.ReadMaxSize))
-	d.appendRecords(records, lsn, nil, d.config.ReadCacheSize)
-	if len(d.lsns) > d.config.ReadCacheSize {
+	d.appendRecords(records, lsn, nil, 1)
+	if !d.IsReplaying() && len(d.lsns) > d.config.ReadCacheSize {
 		d.dropRecords()
 	}
 }
@@ -144,14 +152,15 @@ func (d *LogServiceDriver) readFromLogService(lsn uint64, size int) (nextLsn uin
 	if err != nil {
 		panic(err)
 	}
+	t0 := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
-	records, nextLsn, err = client.c.Read(ctx, lsn, d.config.ReadMaxSize)
+	records, nextLsn, err = client.c.Read(ctx, lsn, uint64(size))
 	cancel()
 	if err != nil {
 		err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
 			logutil.Infof("LogService Driver: retry read err is %v", err)
 			ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
-			records, nextLsn, err = client.c.Read(ctx, lsn, d.config.ReadMaxSize)
+			records, nextLsn, err = client.c.Read(ctx, lsn, uint64(size))
 			cancel()
 			return err == nil
 		})
@@ -159,5 +168,6 @@ func (d *LogServiceDriver) readFromLogService(lsn uint64, size int) (nextLsn uin
 			panic(err)
 		}
 	}
+	d.readDuration += time.Since(t0)
 	return
 }

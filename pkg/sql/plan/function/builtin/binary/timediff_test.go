@@ -82,27 +82,15 @@ func TestTimeDiffInTime(t *testing.T) {
 		},
 		{
 			name: "TEST09",
-			vecs: makeTimeVectors("-838:59:59", "838:59:59", procs.Mp()),
+			vecs: makeTimeVectors("-2562047787:59:59", "-2562047787:59:59", procs.Mp()),
 			proc: testutil.NewProc(),
-			want: makeResultVector("-838:59:59", procs),
+			want: makeResultVector("00:00:00", procs),
 		},
 		{
 			name: "TEST10",
-			vecs: makeTimeVectors("-838:59:59", "-838:59:59", procs.Mp()),
+			vecs: makeTimeVectors("2562047787:59:59", "2562047787:59:59", procs.Mp()),
 			proc: testutil.NewProc(),
 			want: makeResultVector("00:00:00", procs),
-		},
-		{
-			name: "TEST11",
-			vecs: makeTimeVectors("838:59:59", "838:59:59", procs.Mp()),
-			proc: testutil.NewProc(),
-			want: makeResultVector("00:00:00", procs),
-		},
-		{
-			name: "TEST12",
-			vecs: makeTimeVectors("838:59:59", "-838:59:59", procs.Mp()),
-			proc: testutil.NewProc(),
-			want: makeResultVector("838:59:59", procs),
 		},
 	}
 
@@ -112,7 +100,7 @@ func TestTimeDiffInTime(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, diff)
+			require.Equal(t, c.want.GetRawData(), diff.GetRawData())
 		})
 	}
 }
@@ -140,25 +128,25 @@ func TestTimeDiffInDateTime(t *testing.T) {
 			name: "TEST03",
 			vecs: makeDateTimeVectors("2012-12-12 22:22:22", "2000-12-12 11:11:11", procs.Mp()),
 			proc: testutil.NewProc(),
-			want: makeResultVector("838:59:59", procs),
+			want: makeResultVector("105203:11:11", procs),
 		},
 		{
 			name: "TEST04",
 			vecs: makeDateTimeVectors("2000-12-12 11:11:11", "2012-12-12 22:22:22", procs.Mp()),
 			proc: testutil.NewProc(),
-			want: makeResultVector("-838:59:59", procs),
+			want: makeResultVector("-105203:11:11", procs),
 		},
 		{
 			name: "TEST05",
 			vecs: makeDateTimeVectors("2012-12-12 22:22:22", "2012-10-10 11:11:11", procs.Mp()),
 			proc: testutil.NewProc(),
-			want: makeResultVector("838:59:59", procs),
+			want: makeResultVector("1523:11:11", procs),
 		},
 		{
 			name: "TEST06",
 			vecs: makeDateTimeVectors("2012-10-10 11:11:11", "2012-12-12 22:22:22", procs.Mp()),
 			proc: testutil.NewProc(),
-			want: makeResultVector("-838:59:59", procs),
+			want: makeResultVector("-1523:11:11", procs),
 		},
 		{
 			name: "TEST07",
@@ -186,7 +174,7 @@ func TestTimeDiffInDateTime(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, diff)
+			require.Equal(t, c.want.GetRawData(), diff.GetRawData())
 		})
 	}
 }
@@ -197,8 +185,10 @@ func makeDateTimeVectors(firstStr, secondStr string, mp *mpool.MPool) []*vector.
 	firstDate, _ := types.ParseDatetime(firstStr, 0)
 	secondDate, _ := types.ParseDatetime(secondStr, 0)
 
-	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, firstDate, mp)
-	vec[1] = vector.NewConstFixed(types.T_datetime.ToType(), 1, secondDate, mp)
+	vec[0] = vector.New(vector.CONSTANT, types.T_datetime.ToType())
+	vector.Append(vec[0], firstDate, false, mp)
+	vec[1] = vector.New(vector.CONSTANT, types.T_datetime.ToType())
+	vector.Append(vec[1], secondDate, false, mp)
 	return vec
 }
 
@@ -208,15 +198,18 @@ func makeTimeVectors(firstStr, secondStr string, mp *mpool.MPool) []*vector.Vect
 	firstDate, _ := types.ParseTime(firstStr, 0)
 	secondDate, _ := types.ParseTime(secondStr, 0)
 
-	vec[0] = vector.NewConstFixed(types.T_time.ToType(), 1, firstDate, mp)
-	vec[1] = vector.NewConstFixed(types.T_time.ToType(), 1, secondDate, mp)
+	vec[0] = vector.New(vector.CONSTANT, types.T_time.ToType())
+	vector.Append(vec[0], firstDate, false, mp)
+	vec[1] = vector.New(vector.CONSTANT, types.T_time.ToType())
+	vector.Append(vec[1], secondDate, false, mp)
 	return vec
 }
 
 func makeResultVector(res string, proc *process.Process) *vector.Vector {
-	resultVector, _ := proc.AllocVectorOfRows(types.T_varchar.ToType(), 0, nil)
-	result := make([]string, 1)
-	result[0] = res
-	vector.AppendString(resultVector, result, proc.Mp())
-	return resultVector
+
+	resData, _ := types.ParseTime(res, 0)
+	vec := vector.New(vector.CONSTANT, types.T_time.ToType())
+	vector.Append(vec, resData, false, proc.Mp())
+	return vec
+
 }

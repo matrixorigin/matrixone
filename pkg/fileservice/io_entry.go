@@ -76,12 +76,12 @@ func (i *ioEntriesReader) Read(buf []byte) (n int, err error) {
 				return
 			}
 			if int64(bytesRead) != numBytes {
-				err = moerr.NewSizeNotMatch("")
+				err = moerr.NewSizeNotMatchNoCtx("")
 				return
 			}
 		} else {
 			if int64(len(entry.Data)) != entry.Size {
-				err = moerr.NewSizeNotMatch("")
+				err = moerr.NewSizeNotMatchNoCtx("")
 				return
 			}
 			copy(buf, entry.Data[:numBytes])
@@ -106,7 +106,7 @@ func (e *IOEntry) setObjectFromData() error {
 	if len(e.Data) == 0 {
 		return nil
 	}
-	obj, size, err := e.ToObject(bytes.NewReader(e.Data))
+	obj, size, err := e.ToObject(bytes.NewReader(e.Data), e.Data)
 	if err != nil {
 		return err
 	}

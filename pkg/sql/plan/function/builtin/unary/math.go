@@ -32,8 +32,8 @@ func math1(vs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vecto
 	//	1.1 if it's not a null value
 	//  1.2 if it's a null value
 	//2 common scene
-	if origVec.IsScalar() {
-		if origVec.IsScalarNull() {
+	if origVec.IsConst() {
+		if origVec.IsConstNull() {
 			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
 		} else {
 			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
@@ -45,7 +45,7 @@ func math1(vs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vecto
 			return resultVector, nil
 		}
 	} else {
-		vecLen := int64(vector.Length(origVec))
+		vecLen := int64(origVec.Length())
 		resultVector, err := proc.AllocVectorOfRows(types.T_float64.ToType(), vecLen, origVec.Nsp)
 		if err != nil {
 			return nil, err
@@ -91,22 +91,22 @@ func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if len(vs) == 1 {
 		return math1(vs, proc, momath.Ln)
 	}
-	if vs[0].IsScalarNull() {
-		return vector.NewConstNull(vs[0].Typ, vs[1].Length()), nil
+	if vs[0].IsConstNull() {
+		return vector.NewConstNull(vs[0].GetType(), vs[1].Length()), nil
 	}
-	vals := vs[0].Col.([]float64)
+	vals := vector.MustTCols[float64](vs[0])
 	for i := range vals {
 		if vals[i] == float64(1) {
-			return nil, moerr.NewInvalidArg("log base", 1)
+			return nil, moerr.NewInvalidArgNoCtx("log base", 1)
 		}
 	}
 	v1, err := math1([]*vector.Vector{vs[0]}, proc, momath.Ln)
 	if err != nil {
-		return nil, moerr.NewInvalidArg("log input", "<= 0")
+		return nil, moerr.NewInvalidArgNoCtx("log input", "<= 0")
 	}
 	v2, err := math1([]*vector.Vector{vs[1]}, proc, momath.Ln)
 	if err != nil {
-		return nil, moerr.NewInvalidArg("log input", "<= 0")
+		return nil, moerr.NewInvalidArgNoCtx("log input", "<= 0")
 	}
 	return operator.DivFloat[float64]([]*vector.Vector{v2, v1}, proc)
 }

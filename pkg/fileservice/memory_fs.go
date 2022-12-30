@@ -101,7 +101,7 @@ func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
 	}
 	_, ok := m.tree.Get(pivot)
 	if ok {
-		return moerr.NewFileAlreadyExists(path.File)
+		return moerr.NewFileAlreadyExistsNoCtx(path.File)
 	}
 
 	return m.write(ctx, vector)
@@ -150,7 +150,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 	}
 
 	if len(vector.Entries) == 0 {
-		return moerr.NewEmptyVector()
+		return moerr.NewEmptyVectorNoCtx()
 	}
 
 	m.RLock()
@@ -162,7 +162,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 
 	fsEntry, ok := m.tree.Get(pivot)
 	if !ok {
-		return moerr.NewFileNotFound(path.File)
+		return moerr.NewFileNotFoundNoCtx(path.File)
 	}
 
 	for i, entry := range vector.Entries {
@@ -171,13 +171,13 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 		}
 
 		if entry.Size == 0 {
-			return moerr.NewEmptyRange(path.File)
+			return moerr.NewEmptyRangeNoCtx(path.File)
 		}
 		if entry.Size < 0 {
 			entry.Size = int64(len(fsEntry.Data)) - entry.Offset
 		}
 		if entry.Size > int64(len(fsEntry.Data)) {
-			return moerr.NewUnexpectedEOF(path.File)
+			return moerr.NewUnexpectedEOFNoCtx(path.File)
 		}
 		data := fsEntry.Data[entry.Offset : entry.Offset+entry.Size]
 

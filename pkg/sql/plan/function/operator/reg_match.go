@@ -37,43 +37,43 @@ func generalRegMatch(vectors []*vector.Vector, proc *process.Process, isReg bool
 	resultType := types.T_bool.ToType()
 	leftValues, rightValues := vector.MustStrCols(left), vector.MustStrCols(right)
 	switch {
-	case left.IsScalar() && right.IsScalar():
-		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
+	case left.IsConst() && right.IsConst():
+		if left.IsConstNull() || right.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := vector.MustTCols[bool](resultVector)
 		err := RegMatchWithAllConst(leftValues, rightValues, resultValues, isReg)
 		if err != nil {
-			return nil, moerr.NewInvalidInput("The Regular Expression have invalid parameter")
+			return nil, moerr.NewInvalidInputNoCtx("The Regular Expression have invalid parameter")
 		}
 		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
-		if left.ConstVectorIsNull() {
+	case left.IsConst() && !right.IsConst():
+		if left.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.GetNulls())
 		if err != nil {
 			return nil, err
 		}
 		resultValues := vector.MustTCols[bool](resultVector)
 		err = RegMatchWithLeftConst(leftValues, rightValues, resultValues, isReg)
 		if err != nil {
-			return nil, moerr.NewInvalidInput("The Regular Expression have invalid parameter")
+			return nil, moerr.NewInvalidInputNoCtx("The Regular Expression have invalid parameter")
 		}
 		return resultVector, nil
-	case !left.IsScalar() && right.IsScalar():
-		if right.ConstVectorIsNull() {
+	case !left.IsConst() && right.IsConst():
+		if right.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.GetNulls())
 		if err != nil {
 			return nil, err
 		}
 		resultValues := vector.MustTCols[bool](resultVector)
 		err = RegMatchWithRightConst(leftValues, rightValues, resultValues, isReg)
 		if err != nil {
-			return nil, moerr.NewInvalidInput("The Regular Expression have invalid parameter")
+			return nil, moerr.NewInvalidInputNoCtx("The Regular Expression have invalid parameter")
 		}
 		return resultVector, nil
 	}
@@ -82,10 +82,10 @@ func generalRegMatch(vectors []*vector.Vector, proc *process.Process, isReg bool
 		return nil, err
 	}
 	resultValues := vector.MustTCols[bool](resultVector)
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
+	nulls.Or(left.GetNulls(), right.GetNulls(), resultVector.GetNulls())
 	err = RegMatchWithALL(leftValues, rightValues, resultValues, isReg)
 	if err != nil {
-		return nil, moerr.NewInvalidInput("The Regular Expression have invalid parameter")
+		return nil, moerr.NewInvalidInputNoCtx("The Regular Expression have invalid parameter")
 	}
 	return resultVector, nil
 }

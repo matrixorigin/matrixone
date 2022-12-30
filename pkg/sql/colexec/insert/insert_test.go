@@ -105,7 +105,7 @@ func TestInsertOperator(t *testing.T) {
 		// check vector
 		require.Equal(t, len(batch1.Vecs), len(result.Vecs))
 		for i, vec := range result.Vecs {
-			require.Equal(t, len(batch1.Zs), vector.Length(vec), fmt.Sprintf("column number: %d", i))
+			require.Equal(t, len(batch1.Zs), vec.Length(), fmt.Sprintf("column number: %d", i))
 		}
 	}
 

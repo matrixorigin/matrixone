@@ -341,16 +341,16 @@
 	cubeMaxEntriesBytes = 314572800
 
 #default is false. With true. Server will support tls
-enableTls = false
+#enableTls = false
 
 #default is ''. Path of file that contains list of trusted SSL CAs for client
-tlsCaFile = "test/ca.pem"
+#tlsCaFile = "test/ca.pem"
 
 #default is ''. Path of file that contains X509 certificate in PEM format for client
-tlsCertFile = "test/server-cert2.pem"
+#tlsCertFile = "test/server-cert2.pem"
 
 #default is ''. Path of file that contains X509 key in PEM format for client
-tlsKeyFile = "test/server-key2.pem"
+#tlsKeyFile = "test/server-key2.pem"
 
 # Cluster Configs
 pre-allocated-group-num = 20

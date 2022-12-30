@@ -46,10 +46,10 @@ func dec128PtrToC(p *types.Decimal128) *C.int64_t {
 
 func GetScalarFlag(xs, ys, rs *vector.Vector) int {
 	flag := 0
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		flag |= RIGHT_IS_SCALAR
 	}
 	return flag
@@ -59,9 +59,9 @@ func NumericEqual[T constraints.Integer | constraints.Float | bool](xs, ys, rs *
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Numeric_VecEq(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]), C.uint64_t(len(rt)),
-		(*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(int32(xs.Typ.Oid)))
+		(*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(int32(xs.GetType().Oid)))
 	if rc != 0 {
-		return moerr.NewInvalidArg("numeric equal", "")
+		return moerr.NewInvalidArgNoCtx("numeric equal", "")
 	}
 	return nil
 }
@@ -70,9 +70,9 @@ func NumericNotEqual[T constraints.Integer | constraints.Float | bool](xs, ys, r
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Numeric_VecNe(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]), C.uint64_t(len(rt)),
-		(*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(int32(xs.Typ.Oid)))
+		(*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(int32(xs.GetType().Oid)))
 	if rc != 0 {
-		return moerr.NewInvalidArg("numeric not equal", "")
+		return moerr.NewInvalidArgNoCtx("numeric not equal", "")
 	}
 	return nil
 }
@@ -81,9 +81,9 @@ func NumericGreatThan[T constraints.Integer | constraints.Float | bool](xs, ys, 
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Numeric_VecGt(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]), C.uint64_t(len(rt)),
-		(*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(int32(xs.Typ.Oid)))
+		(*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(int32(xs.GetType().Oid)))
 	if rc != 0 {
-		return moerr.NewInvalidArg("numeric greater than", "")
+		return moerr.NewInvalidArgNoCtx("numeric greater than", "")
 	}
 	return nil
 }
@@ -92,9 +92,9 @@ func NumericGreatEqual[T constraints.Integer | constraints.Float | bool](xs, ys,
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Numeric_VecGe(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]), C.uint64_t(len(rt)),
-		(*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(int32(xs.Typ.Oid)))
+		(*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(int32(xs.GetType().Oid)))
 	if rc != 0 {
-		return moerr.NewInvalidArg("numeric greater equal", "")
+		return moerr.NewInvalidArgNoCtx("numeric greater equal", "")
 	}
 	return nil
 }
@@ -103,9 +103,9 @@ func NumericLessThan[T constraints.Integer | constraints.Float | bool](xs, ys, r
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Numeric_VecLt(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]), C.uint64_t(len(rt)),
-		(*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(int32(xs.Typ.Oid)))
+		(*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(int32(xs.GetType().Oid)))
 	if rc != 0 {
-		return moerr.NewInvalidArg("numeric less than", "")
+		return moerr.NewInvalidArgNoCtx("numeric less than", "")
 	}
 	return nil
 }
@@ -114,9 +114,9 @@ func NumericLessEqual[T constraints.Integer | constraints.Float | bool](xs, ys, 
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Numeric_VecLe(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]), C.uint64_t(len(rt)),
-		(*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(int32(xs.Typ.Oid)))
+		(*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(int32(xs.GetType().Oid)))
 	if rc != 0 {
-		return moerr.NewInvalidArg("numeric less equal", "")
+		return moerr.NewInvalidArgNoCtx("numeric less equal", "")
 	}
 	return nil
 }
@@ -127,9 +127,9 @@ func Decimal64VecEq(xs, ys, rs *vector.Vector) error {
 	rt := vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Decimal64_VecEQ((*C.bool)(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewInvalidArg("decimal64 equal", "")
+		return moerr.NewInvalidArgNoCtx("decimal64 equal", "")
 	}
 	return nil
 }
@@ -140,9 +140,9 @@ func Decimal128VecEq(xs, ys, rs *vector.Vector) error {
 	rt := vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Decimal128_VecEQ((*C.bool)(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewInvalidArg("decimal128 equal", "")
+		return moerr.NewInvalidArgNoCtx("decimal128 equal", "")
 	}
 	return nil
 }
@@ -153,9 +153,9 @@ func Decimal64VecNe(xs, ys, rs *vector.Vector) error {
 	rt := vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Decimal64_VecNE((*C.bool)(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewInvalidArg("decimal64 not equal", "")
+		return moerr.NewInvalidArgNoCtx("decimal64 not equal", "")
 	}
 	return nil
 }
@@ -166,9 +166,9 @@ func Decimal128VecNe(xs, ys, rs *vector.Vector) error {
 	rt := vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Decimal128_VecNE((*C.bool)(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewInvalidArg("decimal128 not equal", "")
+		return moerr.NewInvalidArgNoCtx("decimal128 not equal", "")
 	}
 	return nil
 }
@@ -179,9 +179,9 @@ func Decimal64VecGt(xs, ys, rs *vector.Vector) error {
 	rt := vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Decimal64_VecGT((*C.bool)(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewInvalidArg("decimal64 greater than", "")
+		return moerr.NewInvalidArgNoCtx("decimal64 greater than", "")
 	}
 	return nil
 }
@@ -192,9 +192,9 @@ func Decimal128VecGt(xs, ys, rs *vector.Vector) error {
 	rt := vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Decimal128_VecGT((*C.bool)(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewInvalidArg("decimal128 greater than", "")
+		return moerr.NewInvalidArgNoCtx("decimal128 greater than", "")
 	}
 	return nil
 }
@@ -205,9 +205,9 @@ func Decimal64VecGe(xs, ys, rs *vector.Vector) error {
 	rt := vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Decimal64_VecGE((*C.bool)(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewInvalidArg("decimal64 greater equal", "")
+		return moerr.NewInvalidArgNoCtx("decimal64 greater equal", "")
 	}
 	return nil
 }
@@ -218,9 +218,9 @@ func Decimal128VecGe(xs, ys, rs *vector.Vector) error {
 	rt := vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Decimal128_VecGE((*C.bool)(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewInvalidArg("decimal128 greater equal", "")
+		return moerr.NewInvalidArgNoCtx("decimal128 greater equal", "")
 	}
 	return nil
 }
@@ -231,9 +231,9 @@ func Decimal64VecLt(xs, ys, rs *vector.Vector) error {
 	rt := vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Decimal64_VecLT((*C.bool)(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewInvalidArg("decimal64 less than", "")
+		return moerr.NewInvalidArgNoCtx("decimal64 less than", "")
 	}
 	return nil
 }
@@ -244,9 +244,9 @@ func Decimal128VecLt(xs, ys, rs *vector.Vector) error {
 	rt := vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Decimal128_VecLT((*C.bool)(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewInvalidArg("decimal128 less than", "")
+		return moerr.NewInvalidArgNoCtx("decimal128 less than", "")
 	}
 	return nil
 }
@@ -257,9 +257,9 @@ func Decimal64VecLe(xs, ys, rs *vector.Vector) error {
 	rt := vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Decimal64_VecLE((*C.bool)(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewInvalidArg("decimal64 less equal", "")
+		return moerr.NewInvalidArgNoCtx("decimal64 less equal", "")
 	}
 	return nil
 }
@@ -270,9 +270,9 @@ func Decimal128VecLe(xs, ys, rs *vector.Vector) error {
 	rt := vector.MustTCols[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Decimal128_VecLE((*C.bool)(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewInvalidArg("decimal128 less equal", "")
+		return moerr.NewInvalidArgNoCtx("decimal128 less equal", "")
 	}
 	return nil
 }

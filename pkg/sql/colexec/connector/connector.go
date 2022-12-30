@@ -17,7 +17,6 @@ package connector
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,32 +33,30 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	reg := ap.Reg
 	bat := proc.InputBatch()
 	if bat == nil {
-		select {
-		case <-reg.Ctx.Done():
-			return true, nil
-		case reg.Ch <- bat:
-			return true, nil
-		}
+		return true, nil
 	}
 	if bat.Length() == 0 {
 		return false, nil
 	}
+
+	// do not send the source batch to remote node.
 	for i := range bat.Vecs {
-		if bat.Vecs[i].IsOriginal() {
-			vec, err := vector.Dup(bat.Vecs[i], proc.Mp())
-			if err != nil {
-				bat.Clean(proc.Mp())
-				return false, err
-			}
-			vector.Clean(bat.Vecs[i], proc.Mp())
-			bat.Vecs[i] = vec
+		//if bat.Vecs[i].IsOriginal() {
+		vec, err := bat.Vecs[i].Dup(proc.Mp())
+		if err != nil {
+			return false, err
 		}
+		bat.Vecs[i].Free(proc.Mp())
+		bat.Vecs[i] = vec
+		//}
 	}
+
 	select {
 	case <-reg.Ctx.Done():
-		bat.Clean(proc.Mp())
+		bat.Free(proc.Mp())
 		return true, nil
 	case reg.Ch <- bat:
+		proc.SetInputBatch(nil)
 		return false, nil
 	}
 }

@@ -47,7 +47,7 @@ func TestGetBackendLockedWithClosed(t *testing.T) {
 	c := rc.(*client)
 	assert.NoError(t, c.Close())
 
-	b, err := c.getBackendLocked("b1")
+	b, err := c.getBackendLocked("b1", false)
 	assert.Error(t, err)
 	assert.Nil(t, b)
 }
@@ -60,7 +60,7 @@ func TestGetBackendLockedWithEmptyBackends(t *testing.T) {
 		assert.NoError(t, c.Close())
 	}()
 
-	b, err := c.getBackendLocked("b1")
+	b, err := c.getBackendLocked("b1", false)
 	assert.NoError(t, err)
 	assert.Nil(t, b)
 }
@@ -80,10 +80,49 @@ func TestGetBackend(t *testing.T) {
 	c.mu.ops["b1"] = &op{}
 
 	for i := 0; i < n; i++ {
-		b, err := c.getBackend("b1")
+		b, err := c.getBackend("b1", false)
 		assert.NoError(t, err)
 		assert.Equal(t, c.mu.backends["b1"][(i+1)%n], b)
 	}
+}
+
+func TestCannotGetLocedBackend(t *testing.T) {
+	rc, err := NewClient(newTestBackendFactory(), WithClientMaxBackendPerHost(1))
+	assert.NoError(t, err)
+	c := rc.(*client)
+	defer func() {
+		assert.NoError(t, c.Close())
+	}()
+
+	n := 10
+	for i := 0; i < n; i++ {
+		c.mu.backends["b1"] = append(c.mu.backends["b1"], &testBackend{id: i, locked: i == 0, busy: false, activeTime: time.Now()})
+	}
+	c.mu.ops["b1"] = &op{}
+
+	for i := 0; i < n; i++ {
+		b, err := c.getBackend("b1", false)
+		assert.NoError(t, err)
+		assert.False(t, b.Locked())
+	}
+}
+
+func TestCanGetBackendIfALLLockedAndNotReachMaxPerHost(t *testing.T) {
+	rc, err := NewClient(newTestBackendFactory(), WithClientMaxBackendPerHost(3))
+	assert.NoError(t, err)
+	c := rc.(*client)
+	defer func() {
+		assert.NoError(t, c.Close())
+	}()
+
+	c.mu.backends["b1"] = append(c.mu.backends["b1"],
+		&testBackend{id: 1, locked: true, busy: false, activeTime: time.Now()},
+		&testBackend{id: 2, locked: true, busy: false, activeTime: time.Now()})
+	c.mu.ops["b1"] = &op{}
+
+	b, err := c.getBackend("b1", false)
+	assert.NoError(t, err)
+	assert.False(t, b.Locked())
 }
 
 func TestMaybeCreateLockedWithEmptyBackends(t *testing.T) {
@@ -159,7 +198,7 @@ func TestGetBackendWithCreateBackend(t *testing.T) {
 		assert.NoError(t, c.Close())
 	}()
 
-	b, err := c.getBackend("b1")
+	b, err := c.getBackend("b1", false)
 	assert.NoError(t, err)
 	assert.NotNil(t, b)
 	assert.Equal(t, 1, len(c.mu.backends["b1"]))
@@ -176,27 +215,27 @@ func TestCloseIdleBackends(t *testing.T) {
 		assert.NoError(t, c.Close())
 	}()
 
-	b, err := c.getBackend("b1")
+	b, err := c.getBackend("b1", false)
 	assert.NoError(t, err)
 	assert.NotNil(t, b)
 	b.(*testBackend).busy = true
 
-	_, err = c.getBackend("b1")
+	_, err = c.getBackend("b1", false)
 	assert.NoError(t, err)
 	for {
-		c.mu.RLock()
+		c.mu.Lock()
 		v := len(c.mu.backends["b1"])
-		c.mu.RUnlock()
+		c.mu.Unlock()
 		if v == 2 {
 			break
 		}
 	}
 
-	b, err = c.getBackend("b1")
+	b, err = c.getBackend("b1", false)
 	assert.NoError(t, err)
 	assert.NotNil(t, b)
 
-	b2, err := c.getBackend("b1")
+	b2, err := c.getBackend("b1", false)
 	assert.NoError(t, err)
 	assert.NotNil(t, b2)
 	assert.NotEqual(t, b, b2)
@@ -204,7 +243,7 @@ func TestCloseIdleBackends(t *testing.T) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 		defer cancel()
-		st, err := b2.NewStream()
+		st, err := b2.NewStream(false)
 		assert.NoError(t, err)
 		for {
 			assert.NoError(t, st.Send(ctx, newTestMessage(1)))
@@ -212,9 +251,9 @@ func TestCloseIdleBackends(t *testing.T) {
 	}()
 
 	for {
-		c.mu.RLock()
+		c.mu.Lock()
 		v := len(c.mu.backends["b1"])
-		c.mu.RUnlock()
+		c.mu.Unlock()
 		if v == 1 {
 			tb := b.(*testBackend)
 			tb.RLock()
@@ -226,13 +265,38 @@ func TestCloseIdleBackends(t *testing.T) {
 				assert.False(t, tb2.closed)
 				tb2.RUnlock()
 
-				c.mu.RLock()
+				c.mu.Lock()
 				assert.Equal(t, 1, len(c.mu.backends["b1"]))
-				c.mu.RUnlock()
+				c.mu.Unlock()
 				return
 			}
 		}
 	}
+}
+
+func TestLockedbackendCannotClosedWithGCIdleTask(t *testing.T) {
+	rc, err := NewClient(newTestBackendFactory(),
+		WithClientMaxBackendPerHost(2),
+		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100),
+		WithClientCreateTaskChanSize(1))
+	assert.NoError(t, err)
+	c := rc.(*client)
+	defer func() {
+		assert.NoError(t, c.Close())
+	}()
+
+	b, err := c.getBackend("b1", true)
+	assert.NoError(t, err)
+	assert.NotNil(t, b)
+	assert.True(t, b.Locked())
+	b.(*testBackend).RWMutex.Lock()
+	b.(*testBackend).activeTime = time.Time{}
+	b.(*testBackend).RWMutex.Unlock()
+
+	time.Sleep(time.Second * 1)
+	c.mu.Lock()
+	assert.Equal(t, 1, len(c.mu.backends["b1"]))
+	c.mu.Unlock()
 }
 
 func TestGetBackendsWithAllInactiveAndWillCreateNew(t *testing.T) {
@@ -245,16 +309,16 @@ func TestGetBackendsWithAllInactiveAndWillCreateNew(t *testing.T) {
 		assert.NoError(t, c.Close())
 	}()
 
-	b, err := c.getBackend("b1")
+	b, err := c.getBackend("b1", false)
 	assert.NoError(t, err)
 	assert.NotNil(t, b)
 
 	b.(*testBackend).activeTime = time.Time{}
-	b, _ = c.getBackend("b1")
+	b, _ = c.getBackend("b1", false)
 	assert.Nil(t, b)
 
 	for {
-		b, err := c.getBackend("b1")
+		b, err := c.getBackend("b1", false)
 		if err == nil {
 			assert.NotNil(t, b)
 			return

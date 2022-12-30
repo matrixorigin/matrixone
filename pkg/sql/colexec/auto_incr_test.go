@@ -31,8 +31,8 @@ func Test_makeAutoIncrBatch(t *testing.T) {
 		bat := makeAutoIncrBatch(name, uint64(num), uint64(step), mp)
 		convey.So(bat.Attrs, convey.ShouldResemble, AUTO_INCR_TABLE_COLNAME[1:])
 		convey.So(len(bat.Vecs), convey.ShouldEqual, 3)
-		convey.So(bat.Vecs[1].Col, convey.ShouldResemble, []uint64{uint64(num)})
-		convey.So(bat.Vecs[2].Col, convey.ShouldResemble, []uint64{uint64(step)})
+		convey.So(bat.Vecs[1].GetRawData(), convey.ShouldResemble, []uint64{uint64(num)})
+		convey.So(bat.Vecs[2].GetRawData(), convey.ShouldResemble, []uint64{uint64(step)})
 	})
 }
 

@@ -62,7 +62,7 @@ func TestHash(t *testing.T) {
 		bat := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		vec, err := Hash(bat.Vecs, tc.proc)
 		require.NoError(t, err)
-		bat.Clean(tc.proc.Mp())
+		bat.Free(tc.proc.Mp())
 		vec.Free(tc.proc.Mp())
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}

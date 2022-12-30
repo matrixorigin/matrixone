@@ -79,19 +79,19 @@ func TestOffset(t *testing.T) {
 		for {
 			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 				if tc.proc.Reg.InputBatch != nil {
-					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+					tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 				}
 				break
 			}
 			if tc.proc.Reg.InputBatch != nil {
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+				tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 			}
 		}
 		for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
 			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
 				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
 				if bat != nil {
-					bat.Clean(tc.proc.Mp())
+					bat.Free(tc.proc.Mp())
 				}
 			}
 		}
@@ -120,19 +120,19 @@ func BenchmarkOffset(b *testing.B) {
 			for {
 				if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 					if tc.proc.Reg.InputBatch != nil {
-						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+						tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 					}
 					break
 				}
 				if tc.proc.Reg.InputBatch != nil {
-					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+					tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 				}
 			}
 			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
 				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
 					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
 					if bat != nil {
-						bat.Clean(tc.proc.Mp())
+						bat.Free(tc.proc.Mp())
 					}
 				}
 			}

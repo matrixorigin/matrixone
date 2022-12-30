@@ -22,11 +22,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 func updatePartition(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
@@ -36,20 +38,21 @@ func updatePartition(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	if err != nil {
 		return err
 	}
-	logTails, err := getLogTail(op, reqs)
+	logTails, err := getLogTail(ctx, op, reqs)
 	if err != nil {
 		return err
 	}
 	for i := range logTails {
-		if consumerLogTail(idx, primaryIdx, tbl, ts, ctx, db, mvcc, logTails[i]); err != nil {
+		if err := consumeLogTail(idx, primaryIdx, tbl, ts, ctx, db, mvcc, logTails[i]); err != nil {
+			logutil.Errorf("consume %d-%s logtail error: %v\n", tbl.tableId, tbl.tableName, err)
 			return err
 		}
 	}
 	return nil
 }
 
-func getLogTail(op client.TxnOperator, reqs []txn.TxnRequest) ([]*api.SyncLogTailResp, error) {
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute)
+func getLogTail(ctx context.Context, op client.TxnOperator, reqs []txn.TxnRequest) ([]*api.SyncLogTailResp, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	result, err := op.Read(ctx, reqs)
 	if err != nil {
@@ -65,26 +68,37 @@ func getLogTail(op client.TxnOperator, reqs []txn.TxnRequest) ([]*api.SyncLogTai
 	return logTails, nil
 }
 
-func consumerLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
-	ctx context.Context, db *DB, mvcc MVCC, logTail *api.SyncLogTailResp) error {
-	if err := consumerCheckPoint(logTail.CkpLocation); err != nil {
-		return err
+func consumeLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
+	ctx context.Context, db *DB, mvcc MVCC, logTail *api.SyncLogTailResp) (err error) {
+	var entries []*api.Entry
+
+	if entries, err = logtail.LoadCheckpointEntries(
+		ctx,
+		logTail.CkpLocation,
+		tbl.tableId,
+		tbl.tableName,
+		tbl.db.databaseId,
+		tbl.db.databaseName,
+		tbl.db.fs); err != nil {
+		return
 	}
+	for _, e := range entries {
+		if err = consumeEntry(idx, primaryIdx, tbl, ts, ctx,
+			db, mvcc, e); err != nil {
+			return
+		}
+	}
+
 	for i := 0; i < len(logTail.Commands); i++ {
-		if err := consumerEntry(idx, primaryIdx, tbl, ts, ctx,
+		if err = consumeEntry(idx, primaryIdx, tbl, ts, ctx,
 			db, mvcc, logTail.Commands[i]); err != nil {
-			return err
+			return
 		}
 	}
 	return nil
 }
 
-func consumerCheckPoint(ckpt string) error {
-	// TODO
-	return nil
-}
-
-func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
+func consumeEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	ctx context.Context, db *DB, mvcc MVCC, e *api.Entry) error {
 	if e.EntryType == api.Entry_Insert {
 		if isMetaTable(e.TableName) {
@@ -100,7 +114,9 @@ func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 			timestamps := vector.MustTCols[types.TS](timeVec)
 			for i, v := range vs {
 				if err := tbl.parts[idx].DeleteByBlockID(ctx, timestamps[i].ToTimestamp(), v); err != nil {
-					return err
+					if !moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
+						return err
+					}
 				}
 			}
 			return db.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat, false)

@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	ErrHistoryEntryNotFound = moerr.NewInternalError("tae: history not found")
+	ErrHistoryEntryNotFound = moerr.NewInternalErrorNoCtx("tae: history not found")
 )
 
 type HistoryFactory func() History
@@ -130,4 +130,13 @@ func (h *history) EntryIds() []int {
 		ids[idx] = entry.Id()
 	}
 	return ids
+}
+
+func (h *history) Close() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, entry := range h.entries {
+		_ = entry.Close()
+	}
+	h.entries = nil
 }

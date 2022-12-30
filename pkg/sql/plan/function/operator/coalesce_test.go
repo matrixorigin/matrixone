@@ -93,7 +93,7 @@ func TestCoalesceGeneral(t *testing.T) {
 			{
 				inputTypes := make([]types.T, len(tc.vs))
 				for i := range inputTypes {
-					inputTypes[i] = tc.vs[i].Typ.Oid
+					inputTypes[i] = tc.vs[i].GetType().Oid
 				}
 				b := CoalesceTypeCheckFn(inputTypes, nil, types.T_int64)
 				if !tc.match {
@@ -183,7 +183,7 @@ func TestCoalesceString(t *testing.T) {
 			{
 				inputTypes := make([]types.T, len(tc.vs))
 				for i := range inputTypes {
-					inputTypes[i] = tc.vs[i].Typ.Oid
+					inputTypes[i] = tc.vs[i].GetType().Oid
 				}
 				b := CoalesceTypeCheckFn(inputTypes, nil, types.T_varchar)
 				if !tc.match {
@@ -193,7 +193,7 @@ func TestCoalesceString(t *testing.T) {
 				require.True(t, b)
 			}
 
-			got, ergot := coalesceString(tc.vs, tc.proc, types.Type{Oid: types.T_varchar})
+			got, ergot := coalesceString(tc.vs, tc.proc, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 			if tc.err {
 				require.Errorf(t, ergot, fmt.Sprintf("case '%d' expected error, but no error happens", i))
 			} else {

@@ -21,17 +21,16 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/robfig/cron/v3"
-	"go.uber.org/zap"
 )
 
 type taskService struct {
 	store      TaskStorage
 	cronParser cron.Parser
-	logger     *zap.Logger
+	rt         runtime.Runtime
 
 	crons struct {
 		sync.Mutex
@@ -47,10 +46,12 @@ type taskService struct {
 }
 
 // NewTaskService create a task service based on a task storage.
-func NewTaskService(store TaskStorage, logger *zap.Logger) TaskService {
+func NewTaskService(
+	rt runtime.Runtime,
+	store TaskStorage) TaskService {
 	return &taskService{
-		store:  store,
-		logger: logutil.Adjust(logger),
+		rt:    rt,
+		store: store,
 		cronParser: cron.NewParser(
 			cron.Second |
 				cron.Minute |
@@ -66,7 +67,7 @@ func (s *taskService) Create(ctx context.Context, value task.TaskMetadata) error
 	for {
 		select {
 		case <-ctx.Done():
-			s.logger.Error("create task timeout")
+			s.rt.Logger().Error("create task timeout")
 			return errNotReady
 		default:
 			if _, err := s.store.Add(ctx, newTaskFromMetadata(value)); err != nil {
@@ -90,7 +91,7 @@ func (s *taskService) CreateBatch(ctx context.Context, tasks []task.TaskMetadata
 	for {
 		select {
 		case <-ctx.Done():
-			s.logger.Error("create task timeout")
+			s.rt.Logger().Error("create task timeout")
 			return errNotReady
 		default:
 			if _, err := s.store.Add(ctx, values...); err != nil {
@@ -128,10 +129,11 @@ func (s *taskService) CreateCronTask(ctx context.Context, value task.TaskMetadat
 func (s *taskService) Allocate(ctx context.Context, value task.Task, taskRunner string) error {
 	exists, err := s.store.Query(ctx, WithTaskIDCond(EQ, value.ID))
 	if err != nil {
-		return nil
+		return err
 	}
 	if len(exists) != 1 {
-		panic(fmt.Sprintf("query task by primary key, return %d records", len(exists)))
+		s.rt.Logger().Debug(fmt.Sprintf("queried tasks: %v", exists))
+		s.rt.Logger().Fatal(fmt.Sprintf("query task by primary key, return %d records", len(exists)))
 	}
 
 	old := exists[0]
@@ -146,7 +148,7 @@ func (s *taskService) Allocate(ctx context.Context, value task.Task, taskRunner 
 		old.TaskRunner = taskRunner
 		old.LastHeartbeat = time.Now().UnixMilli()
 	default:
-		return moerr.NewInvalidTask(taskRunner, value.ID)
+		return moerr.NewInvalidTask(ctx, taskRunner, value.ID)
 	}
 
 	n, err := s.store.Update(ctx,
@@ -157,7 +159,7 @@ func (s *taskService) Allocate(ctx context.Context, value task.Task, taskRunner 
 		return err
 	}
 	if n == 0 {
-		return moerr.NewInvalidTask(taskRunner, value.ID)
+		return moerr.NewInvalidTask(ctx, taskRunner, value.ID)
 	}
 	return nil
 }
@@ -178,7 +180,7 @@ func (s *taskService) Complete(
 		return err
 	}
 	if n == 0 {
-		return moerr.NewInvalidTask(value.TaskRunner, value.ID)
+		return moerr.NewInvalidTask(ctx, value.TaskRunner, value.ID)
 	}
 	return nil
 }
@@ -193,7 +195,7 @@ func (s *taskService) Heartbeat(ctx context.Context, value task.Task) error {
 		return err
 	}
 	if n == 0 {
-		return moerr.NewInvalidTask(value.TaskRunner, value.ID)
+		return moerr.NewInvalidTask(ctx, value.TaskRunner, value.ID)
 	}
 	return nil
 }

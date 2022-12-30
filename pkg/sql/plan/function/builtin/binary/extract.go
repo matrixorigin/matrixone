@@ -29,15 +29,15 @@ func ExtractFromString(vectors []*vector.Vector, proc *process.Process) (*vector
 	resultType := types.Type{Oid: types.T_uint32, Size: 4}
 	resultElementSize := int(resultType.Size)
 	switch {
-	case left.IsScalar() && right.IsScalar():
-		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
+	case left.IsConst() && right.IsConst():
+		if left.IsConstNull() || right.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		leftValues, rightValues := left.Col.(*types.Bytes), right.Col.(*types.Bytes)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint32, 1)
 		unit := string(leftValues.Data)
-		inputDate, err := types.ParseDate(string(rightValues.Get(0)))
+		inputDate, err := types.ParseDateCast(string(rightValues.Get(0)))
 		if err != nil {
 			return nil, moerr.NewInternalError("invalid input")
 		}
@@ -47,8 +47,8 @@ func ExtractFromString(vectors []*vector.Vector, proc *process.Process) (*vector
 		}
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
-		if left.ConstVectorIsNull() {
+	case left.IsConst() && !right.IsConst():
+		if left.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		leftValues, rightValues := left.Col.(*types.Bytes), right.Col.(*types.Bytes)
@@ -70,20 +70,20 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 	resultElementSize := int(resultType.Size)
 	leftValues, rightValues := vector.MustStrCols(left), vector.MustTCols[types.Date](right)
 	switch {
-	case left.IsScalar() && right.IsScalar():
-		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
+	case left.IsConst() && right.IsConst():
+		if left.IsConstNull() || right.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := vector.MustTCols[uint32](resultVector)
 		unit := leftValues[0]
 		_, err := extract.ExtractFromDate(unit, rightValues, resultValues)
 		if err != nil {
-			return nil, moerr.NewInternalError("invalid input")
+			return nil, moerr.NewInternalErrorNoCtx("invalid input")
 		}
 		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
-		if left.ConstVectorIsNull() {
+	case left.IsConst() && !right.IsConst():
+		if left.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues)))
@@ -98,28 +98,30 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		}
 		return resultVector, nil
 	default:
-		return nil, moerr.NewInternalError("invalid input")
+		return nil, moerr.NewInternalErrorNoCtx("invalid input")
 	}
 }
 
 func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	leftValues, rightValues := vector.MustStrCols(left), vector.MustTCols[types.Datetime](right)
 	switch {
-	case left.IsScalar() && right.IsScalar():
-		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
+	case left.IsConst() && right.IsConst():
+		if left.IsConstNull() || right.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultValues := make([]string, 1)
 		unit := leftValues[0]
 		resultValues, err := extract.ExtractFromDatetime(unit, rightValues, resultValues)
 		if err != nil {
-			return nil, moerr.NewInternalError("invalid input")
+			return nil, moerr.NewInternalErrorNoCtx("invalid input")
 		}
-		return vector.NewConstString(resultType, 1, resultValues[0], proc.Mp()), nil
-	case left.IsScalar() && !right.IsScalar():
-		if left.ConstVectorIsNull() {
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.AppendString(vec, resultValues[0], resultValues[0] == "", proc.Mp())
+		return vec, nil
+	case left.IsConst() && !right.IsConst():
+		if left.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultValues := make([]string, len(rightValues))
@@ -128,8 +130,10 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewWithStrings(resultType, resultValues, right.Nsp, proc.Mp()), nil
+		vec := vector.New(vector.FLAT, resultType)
+		vector.AppendStringList(vec, resultValues, nil, proc.Mp())
+		return vec, nil
 	default:
-		return nil, moerr.NewInternalError("invalid input")
+		return nil, moerr.NewInternalErrorNoCtx("invalid input")
 	}
 }

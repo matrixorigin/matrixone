@@ -47,7 +47,7 @@ func TestDateAdd(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, date.Col.([]types.Date)[0].String())
+			require.Equal(t, c.want, vector.MustTCols[types.Date](date))
 		})
 	}
 
@@ -74,7 +74,7 @@ func TestDatetimeAdd(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, date.Col.([]types.Datetime)[0].String())
+			require.Equal(t, c.want, vector.MustTCols[types.Datetime](date))
 		})
 	}
 
@@ -121,7 +121,7 @@ func TestDateStringAdd(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			date, err := DateStringAdd(c.vecs, c.proc)
-			require.Equal(t, c.want, date.Col.([]types.Datetime)[0].String())
+			require.Equal(t, c.want, vector.MustTCols[types.Datetime](date))
 			require.True(t, moerr.IsMoErrCode(err, c.err))
 		})
 	}
@@ -131,11 +131,11 @@ func TestDateStringAdd(t *testing.T) {
 func makeDateAddVectors(str string, isConst bool, num int64, unit types.IntervalType, mp *mpool.MPool) []*vector.Vector {
 	vec := make([]*vector.Vector, 3)
 
-	date, _ := types.ParseDate(str)
+	date, _ := types.ParseDateCast(str)
 
-	vec[0] = vector.NewConstFixed(types.T_date.ToType(), 1, date, mp)
-	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, num, mp)
-	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(unit), mp)
+	vec[0] = vector.New(vector.CONSTANT, types.T_date.ToType())
+	vec[1] = vector.New(vector.CONSTANT, types.T_int64.ToType())
+	vec[2] = vector.New(vector.CONSTANT, types.T_int64.ToType())
 	return vec
 }
 
@@ -144,16 +144,17 @@ func makeDatetimeAddVectors(str string, isConst bool, num int64, unit types.Inte
 
 	datetime, _ := types.ParseDatetime(str, 0)
 
-	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, datetime, mp)
-	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, num, mp)
-	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(unit), mp)
+	vec[0] = vector.New(vector.CONSTANT, types.T_datetime.ToType())
+	vec[1] = vector.New(vector.CONSTANT, types.T_int64.ToType())
+	vec[2] = vector.New(vector.CONSTANT, types.T_int64.ToType())
 	return vec
 }
 
 func makeDateStringAddVectors(str string, isConst bool, num int64, unit types.IntervalType, mp *mpool.MPool) []*vector.Vector {
 	vec := make([]*vector.Vector, 3)
-	vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, str, mp)
-	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, num, mp)
-	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(unit), mp)
+	vec[0] = vector.New(vector.CONSTANT, types.T_varchar.ToType())
+	vector.AppendString(vec[0], str, str == "", mp)
+	vec[1] = vector.New(vector.CONSTANT, types.T_int64.ToType())
+	vec[2] = vector.New(vector.CONSTANT, types.T_int64.ToType())
 	return vec
 }

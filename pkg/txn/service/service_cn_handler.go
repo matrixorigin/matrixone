@@ -46,7 +46,7 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 	response.CNOpResponse = &txn.CNOpResponse{}
 	s.checkCNRequest(request)
 	if !s.validDNShard(request.GetTargetDN()) {
-		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound("", request.GetTargetDN().ShardID), 0)
+		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound(ctx, "", request.GetTargetDN().ShardID), 0)
 		return nil
 	}
 
@@ -125,7 +125,7 @@ func (s *service) Write(ctx context.Context, request *txn.TxnRequest, response *
 	response.CNOpResponse = &txn.CNOpResponse{}
 	s.checkCNRequest(request)
 	if !s.validDNShard(request.GetTargetDN()) {
-		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound("", request.GetTargetDN().ShardID), 0)
+		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound(ctx, "", request.GetTargetDN().ShardID), 0)
 		return nil
 	}
 
@@ -135,7 +135,7 @@ func (s *service) Write(ctx context.Context, request *txn.TxnRequest, response *
 	// only commit and rollback can held write Lock
 	if !txnCtx.mu.TryRLock() {
 		util.LogTxnNotFoundOn(s.logger, request.Txn, s.shard)
-		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound("", request.GetTargetDN().ShardID), 0)
+		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound(ctx, "", request.GetTargetDN().ShardID), 0)
 		return nil
 	}
 	defer txnCtx.mu.RUnlock()
@@ -143,14 +143,14 @@ func (s *service) Write(ctx context.Context, request *txn.TxnRequest, response *
 	newTxn := txnCtx.getTxnLocked()
 	if !bytes.Equal(newTxn.ID, txnID) {
 		util.LogTxnNotFoundOn(s.logger, request.Txn, s.shard)
-		response.TxnError = txn.WrapError(moerr.NewTxnNotFound(), 0)
+		response.TxnError = txn.WrapError(moerr.NewTxnNotFound(ctx), 0)
 		return nil
 	}
 
 	response.Txn = &newTxn
 	if newTxn.Status != txn.TxnStatus_Active {
 		util.LogTxnWriteOnInvalidStatus(s.logger, newTxn)
-		response.TxnError = txn.WrapError(moerr.NewTxnNotActive(""), 0)
+		response.TxnError = txn.WrapError(moerr.NewTxnNotActive(ctx, ""), 0)
 		return nil
 	}
 
@@ -173,7 +173,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 
 	response.CommitResponse = &txn.TxnCommitResponse{}
 	if !s.validDNShard(request.GetTargetDN()) {
-		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound("", request.GetTargetDN().ShardID), 0)
+		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound(ctx, "", request.GetTargetDN().ShardID), 0)
 		return nil
 	}
 
@@ -185,7 +185,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	txnCtx := s.getTxnContext(txnID)
 	if txnCtx == nil {
 		util.LogTxnNotFoundOn(s.logger, request.Txn, s.shard)
-		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound("", request.GetTargetDN().ShardID), 0)
+		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound(ctx, "", request.GetTargetDN().ShardID), 0)
 		return nil
 	}
 
@@ -196,7 +196,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	newTxn := txnCtx.getTxnLocked()
 	if !bytes.Equal(newTxn.ID, txnID) {
 		util.LogTxnNotFoundOn(s.logger, request.Txn, s.shard)
-		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound("", request.GetTargetDN().ShardID), 0)
+		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound(ctx, "", request.GetTargetDN().ShardID), 0)
 		return nil
 	}
 
@@ -212,7 +212,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	response.Txn = &newTxn
 	if newTxn.Status != txn.TxnStatus_Active {
 		util.LogTxnCommitOnInvalidStatus(s.logger, newTxn)
-		response.TxnError = txn.WrapError(moerr.NewTxnNotActive(""), 0)
+		response.TxnError = txn.WrapError(moerr.NewTxnNotActive(ctx, ""), 0)
 		return nil
 	}
 
@@ -224,7 +224,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 
 	// fast path: write in only one DNShard.
 	if len(newTxn.DNShards) == 1 {
-		newTxn.CommitTS, _ = s.clock.Now()
+		newTxn.CommitTS, _ = s.rt.Clock().Now()
 		txnCtx.updateTxnLocked(newTxn)
 
 		util.LogTxnStart1PCCommit(s.logger, newTxn)
@@ -264,7 +264,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 		util.LogTxnParallelPrepareFailed(s.logger, newTxn, err)
 
 		changeStatus(txn.TxnStatus_Aborted)
-		response.TxnError = txn.WrapError(moerr.NewRpcError(err.Error()), 0)
+		response.TxnError = txn.WrapError(moerr.NewRpcError(ctx, err.Error()), 0)
 		s.startAsyncRollbackTask(newTxn)
 		return nil
 	}
@@ -319,7 +319,7 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 
 	response.RollbackResponse = &txn.TxnRollbackResponse{}
 	if !s.validDNShard(request.GetTargetDN()) {
-		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound("", request.GetTargetDN().ShardID), 0)
+		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound(ctx, "", request.GetTargetDN().ShardID), 0)
 		return nil
 	}
 
@@ -331,7 +331,7 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 	txnCtx := s.getTxnContext(txnID)
 	if txnCtx == nil {
 		util.LogTxnNotFoundOn(s.logger, request.Txn, s.shard)
-		response.TxnError = txn.WrapError(moerr.NewTxnNotFound(), 0)
+		response.TxnError = txn.WrapError(moerr.NewTxnNotFound(ctx), 0)
 		return nil
 	}
 
@@ -341,7 +341,7 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 	newTxn := txnCtx.getTxnLocked()
 	if !bytes.Equal(newTxn.ID, txnID) {
 		util.LogTxnNotFoundOn(s.logger, request.Txn, s.shard)
-		response.TxnError = txn.WrapError(moerr.NewTxnNotFound(), 0)
+		response.TxnError = txn.WrapError(moerr.NewTxnNotFound(ctx), 0)
 		return nil
 	}
 
@@ -426,8 +426,9 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 
 		if result := s.parallelSendWithRetry(ctx, txnMeta, requests, rollbackIngoreErrorCodes); result != nil {
 			result.Release()
-			if ce := s.logger.Check(zap.DebugLevel, "other dnshards committed"); ce != nil {
-				ce.Write(util.TxnIDFieldWithID(txnMeta.ID))
+			if s.logger.Enabled(zap.DebugLevel) {
+				s.logger.Debug("other dnshards committed",
+					util.TxnIDFieldWithID(txnMeta.ID))
 			}
 
 			if err := s.storage.Commit(ctx, txnMeta); err != nil {
@@ -436,8 +437,9 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 					zap.Error(err))
 			}
 
-			if ce := s.logger.Check(zap.DebugLevel, "coordinator dnshard committed, txn committed"); ce != nil {
-				ce.Write(util.TxnIDFieldWithID(txnMeta.ID))
+			if s.logger.Enabled(zap.DebugLevel) {
+				s.logger.Debug("coordinator dnshard committed, txn committed",
+					util.TxnIDFieldWithID(txnMeta.ID))
 			}
 
 			txnCtx.changeStatusLocked(txn.TxnStatus_Committed)
@@ -454,7 +456,7 @@ func (s *service) checkCNRequest(request *txn.TxnRequest) {
 
 func (s *service) waitClockTo(ts timestamp.Timestamp) {
 	for {
-		now, _ := s.clock.Now()
+		now, _ := s.rt.Clock().Now()
 		if now.GreaterEq(ts) {
 			return
 		}

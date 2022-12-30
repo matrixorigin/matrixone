@@ -15,9 +15,10 @@
 package util
 
 import (
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"strconv"
 
 	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -30,7 +31,8 @@ import (
 
 func ExtractCompositePrimaryKeyColumnFromColDefs(colDefs []*plan.ColDef) ([]*plan.ColDef, *plan.ColDef) {
 	for num := range colDefs {
-		if colDefs[num].IsCPkey {
+		isCPkey := JudgeIsCompositePrimaryKeyColumn(colDefs[num].Name)
+		if isCPkey {
 			cPKC := colDefs[num]
 			colDefs = append(colDefs[:num], colDefs[num+1:]...)
 			return colDefs, cPKC
@@ -87,8 +89,8 @@ func FillCompositePKeyBatch(bat *batch.Batch, p *plan.ColDef, proc *process.Proc
 		vs = append(vs, v)
 	}
 	for _, v := range vs {
-		if nulls.Any(v.Nsp) {
-			return moerr.NewConstraintViolation("composite pkey don't support null value")
+		if nulls.Any(v.GetNulls()) {
+			return moerr.NewConstraintViolation(proc.Ctx, "composite pkey don't support null value")
 		}
 	}
 	vec, err := multi.Serial(vs, proc)

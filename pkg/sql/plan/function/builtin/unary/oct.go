@@ -27,8 +27,8 @@ func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_decimal128, Size: 16}
 	inputValues := vector.MustTCols[T](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
@@ -40,7 +40,7 @@ func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 		vector.SetCol(resultVector, col)
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -57,27 +57,27 @@ func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_decimal128, Size: 16}
 	inputValues := vector.MustTCols[T](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]types.Decimal128, 1)
 		col, err := oct.OctFloat(inputValues, resultValues)
 		if err != nil {
-			return nil, moerr.NewInternalError("the input value is out of integer range")
+			return nil, moerr.NewInternalErrorNoCtx("the input value is out of integer range")
 		}
 		vector.SetCol(resultVector, col)
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
 		resultValues := vector.MustTCols[types.Decimal128](resultVector)
 		_, err = oct.OctFloat(inputValues, resultValues)
 		if err != nil {
-			return nil, moerr.NewInternalError("the input value is out of integer range")
+			return nil, moerr.NewInternalErrorNoCtx("the input value is out of integer range")
 		}
 		return resultVector, nil
 	}

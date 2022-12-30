@@ -23,8 +23,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -55,16 +58,16 @@ func TestAddReplica(t *testing.T) {
 }
 
 func TestStartWithReplicas(t *testing.T) {
-	localFS, err := fileservice.NewMemoryFS(localFileServiceName)
+	localFS, err := fileservice.NewMemoryFS(defines.LocalFileServiceName)
 	assert.NoError(t, err)
 
 	factory := func(name string) (*fileservice.FileServices, error) {
-		s3fs, err := fileservice.NewMemoryFS(s3FileServiceName)
+		s3fs, err := fileservice.NewMemoryFS(defines.S3FileServiceName)
 		if err != nil {
 			return nil, err
 		}
 		return fileservice.NewFileServices(
-			localFileServiceName,
+			defines.LocalFileServiceName,
 			s3fs,
 			localFS,
 		)
@@ -140,19 +143,19 @@ func runDNStoreTest(
 	opts ...Option) {
 	runDNStoreTestWithFileServiceFactory(t, testFn, func(name string) (*fileservice.FileServices, error) {
 		local, err := fileservice.NewMemoryFS(
-			localFileServiceName,
+			defines.LocalFileServiceName,
 		)
 		if err != nil {
 			return nil, err
 		}
 		s3, err := fileservice.NewMemoryFS(
-			s3FileServiceName,
+			defines.S3FileServiceName,
 		)
 		if err != nil {
 			return nil, err
 		}
 		etl, err := fileservice.NewMemoryFS(
-			etlFileServiceName,
+			defines.ETLFileServiceName,
 		)
 		if err != nil {
 			return nil, err
@@ -175,7 +178,7 @@ func runDNStoreTestWithFileServiceFactory(
 			return mem.NewMemLog(), nil
 		}),
 		WithConfigAdjust(func(c *Config) {
-			c.HAKeeper.HeatbeatDuration.Duration = time.Millisecond * 10
+			c.HAKeeper.HeatbeatInterval.Duration = time.Millisecond * 10
 			c.Txn.Storage.Backend = StorageMEMKV
 		}))
 
@@ -235,11 +238,21 @@ func newTestStore(
 		UUID:          uuid,
 		ListenAddress: testDNStoreAddr,
 	}
-	options = append(options, WithClock(clock.NewHLCClock(func() int64 { return time.Now().UTC().UnixNano() },
-		time.Duration(math.MaxInt64))))
-	fs, err := fsFactory(localFileServiceName)
+	fs, err := fsFactory(defines.LocalFileServiceName)
 	assert.Nil(t, err)
-	s, err := NewService(c, fs, options...)
+
+	rt := runtime.NewRuntime(
+		metadata.ServiceType_DN,
+		"",
+		logutil.Adjust(nil),
+		runtime.WithClock(
+			clock.NewHLCClock(
+				func() int64 { return time.Now().UTC().UnixNano() },
+				time.Duration(math.MaxInt64))))
+	s, err := NewService(
+		c,
+		rt,
+		fs, options...)
 	assert.NoError(t, err)
 	return s.(*store)
 }

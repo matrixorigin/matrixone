@@ -25,8 +25,8 @@ func DateToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.V
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_timestamp, Precision: 6, Size: 8}
 	inputValues := vector.MustTCols[types.Date](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
@@ -35,7 +35,7 @@ func DateToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -47,10 +47,10 @@ func DateToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.V
 
 func DatetimeToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_timestamp, Precision: inputVector.Typ.Precision, Size: 8}
+	resultType := types.Type{Oid: types.T_timestamp, Precision: inputVector.GetType().Precision, Size: 8}
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
@@ -58,7 +58,7 @@ func DatetimeToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vect
 		vector.SetCol(resultVector, timestamp.DatetimeToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -71,10 +71,10 @@ func DatetimeToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vect
 func TimestampToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	// XXX should this be an Noop?
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_timestamp, Precision: inputVector.Typ.Precision, Size: 8}
+	resultType := types.Type{Oid: types.T_timestamp, Precision: inputVector.GetType().Precision, Size: 8}
 	inputValues := vector.MustTCols[types.Timestamp](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
@@ -83,7 +83,7 @@ func TimestampToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vec
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -98,8 +98,8 @@ func DateStringToTimestamp(vectors []*vector.Vector, proc *process.Process) (*ve
 	resultType := types.Type{Oid: types.T_timestamp, Precision: 6, Size: 8}
 	inputValues := vector.MustStrCols(inputVector)
 
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
@@ -107,7 +107,7 @@ func DateStringToTimestamp(vectors []*vector.Vector, proc *process.Process) (*ve
 		vector.SetCol(resultVector, timestamp.DateStringToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

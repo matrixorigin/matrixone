@@ -25,6 +25,8 @@ const (
 	VarlenaSize       = 24
 	MaxStringSize     = 10485760
 	VarlenaBigHdr     = 0xffffffff
+	MaxVarcharLen     = 65535
+	MaxCharLen        = 255
 )
 
 func (v *Varlena) unsafePtr() unsafe.Pointer {
@@ -46,6 +48,7 @@ func (v *Varlena) OffsetLen() (uint32, uint32) {
 	s := v.U32Slice()
 	return s[1], s[2]
 }
+
 func (v *Varlena) SetOffsetLen(voff, vlen uint32) {
 	s := v.U32Slice()
 	s[0] = VarlenaBigHdr

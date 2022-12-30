@@ -14,7 +14,13 @@
 
 package common
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
 type PPLevel int8
 
@@ -30,4 +36,81 @@ func RepeatStr(str string, times int) string {
 		str = fmt.Sprintf("%s\t", str)
 	}
 	return str
+}
+
+type opt struct {
+	doNotPrintBinary bool
+	specialRowid     bool // just a uint64, blockid
+}
+
+type TypePrintOpt interface {
+	apply(*opt)
+}
+
+type WithDoNotPrintBin struct{}
+
+func (w WithDoNotPrintBin) apply(o *opt) { o.doNotPrintBinary = true }
+
+type WithSpecialRowid struct{}
+
+func (w WithSpecialRowid) apply(o *opt) { o.specialRowid = true }
+
+func TypeStringValue(t types.Type, v any, opts ...TypePrintOpt) string {
+	if types.IsNull(v) {
+		return "null"
+	}
+	opt := &opt{}
+	for _, o := range opts {
+		o.apply(opt)
+	}
+
+	switch t.Oid {
+	case types.T_bool, types.T_int8, types.T_int16, types.T_int32,
+		types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32,
+		types.T_uint64, types.T_float32, types.T_float64:
+		return fmt.Sprintf("%v", v)
+	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
+		buf := v.([]byte)
+		printable := true
+		for _, c := range buf {
+			if !strconv.IsPrint(rune(c)) {
+				printable = false
+				break
+			}
+		}
+		if printable {
+			return string(buf)
+		} else if opt.doNotPrintBinary {
+			return fmt.Sprintf("binary[%d]", len(buf))
+		} else {
+			return fmt.Sprintf("%x", buf)
+		}
+	case types.T_decimal64:
+		val := v.(types.Decimal64)
+		return val.String()
+	case types.T_decimal128:
+		val := v.(types.Decimal128)
+		return val.String()
+	case types.T_json:
+		val := v.([]byte)
+		j := types.DecodeJson(val)
+		return j.String()
+	case types.T_uuid:
+		val := v.(types.Uuid)
+		return val.ToString()
+	case types.T_TS:
+		val := v.(types.TS)
+		return val.ToString()
+	case types.T_Rowid:
+		val := v.(types.Rowid)
+		if opt.specialRowid {
+			return strconv.FormatUint(types.DecodeUint64(val[:]), 10)
+		} else {
+			val := v.(types.Rowid)
+			blkID, offset := pkgcatalog.DecodeRowid(val)
+			return fmt.Sprintf("BLK-%d:Off-%d", blkID, offset)
+		}
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }

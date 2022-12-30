@@ -94,7 +94,7 @@ func TestLikeVarchar(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, likeRes.Col.([]bool))
+			require.Equal(t, c.wantBytes, vector.MustTCols[bool](likeRes))
 		})
 	}
 }
@@ -186,8 +186,8 @@ func TestLikeVarchar2(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, likeRes.Col.([]bool))
-			require.Equal(t, c.wantScalar, likeRes.IsScalar())
+			require.Equal(t, c.wantBytes, vector.MustTCols[bool](likeRes))
+			require.Equal(t, c.wantScalar, likeRes.IsConst())
 		})
 	}
 }

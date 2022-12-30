@@ -45,8 +45,8 @@ func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx,
 		return
 	}
 	// logutil.Infof("Pre: %s", idx.art.String())
-	// logutil.Infof("Post: %s", idx.art.String())
 	err = idx.art.BatchInsert(keysCtx, uint32(offset))
+	// logutil.Infof("Post: %s", idx.art.String())
 	return
 }
 
@@ -68,7 +68,7 @@ func (idx *mutableIndex) GetActiveRow(key any) (row []uint32, err error) {
 	exist := idx.zonemap.Contains(key)
 	// 1. key is definitely not existed
 	if !exist {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	// 2. search art tree for key
@@ -80,18 +80,35 @@ func (idx *mutableIndex) GetActiveRow(key any) (row []uint32, err error) {
 func (idx *mutableIndex) String() string {
 	return idx.art.String()
 }
-func (idx *mutableIndex) Dedup(any) error { panic("implement me") }
+func (idx *mutableIndex) Dedup(key any, skipfn func(row uint32) (err error)) (err error) {
+	exist := idx.zonemap.Contains(key)
+	if !exist {
+		return
+	}
+	rows, err := idx.art.Search(key)
+	if err == index.ErrNotFound {
+		err = nil
+		return
+	}
+	for _, row := range rows {
+		if err = skipfn(row); err != nil {
+			return
+		}
+	}
+	return
+}
+
 func (idx *mutableIndex) BatchDedup(keys containers.Vector,
 	skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error) {
-	keyselects, exist := idx.zonemap.ContainsAny(keys)
+	if keys.Length() == 1 {
+		err = idx.Dedup(keys.Get(0), skipfn)
+		return
+	}
+	exist := idx.zonemap.FastContainsAny(keys)
 	// 1. all keys are definitely not existed
 	if !exist {
 		return
 	}
-	ctx := new(index.KeysCtx)
-	ctx.Keys = keys
-	ctx.Selects = keyselects
-	ctx.SelectAll()
 	op := func(v any, _ int) error {
 		rows, err := idx.art.Search(v)
 		if err == index.ErrNotFound {
@@ -104,8 +121,8 @@ func (idx *mutableIndex) BatchDedup(keys containers.Vector,
 		}
 		return nil
 	}
-	if err = keys.ForeachWindow(0, keys.Length(), op, keyselects); err != nil {
-		if moerr.IsMoErrCode(err, moerr.ErrDuplicate) || moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+	if err = keys.ForeachWindow(0, keys.Length(), op, nil); err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedDup) || moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 			return
 		} else {
 			panic(err)
@@ -146,26 +163,29 @@ func (idx *nonPkMutIndex) Close() error {
 	return nil
 }
 func (idx *nonPkMutIndex) GetActiveRow(any) ([]uint32, error) { panic("not support") }
-func (idx *nonPkMutIndex) String() string                     { panic("not support") }
+func (idx *nonPkMutIndex) String() string                     { return "nonpk" }
 func (idx *nonPkMutIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int) (err error) {
 	return TranslateError(idx.zonemap.BatchUpdate(keysCtx))
 }
 
-func (idx *nonPkMutIndex) Dedup(key any) (err error) {
+func (idx *nonPkMutIndex) Dedup(key any, _ func(uint32) error) (err error) {
 	exist := idx.zonemap.Contains(key)
 	// 1. if not in [min, max], key is definitely not found
 	if !exist {
 		return
 	}
-	return moerr.NewTAEPossibleDuplicate()
+	err = moerr.GetOkExpectedPossibleDup()
+	return
 }
 
-func (idx *nonPkMutIndex) BatchDedup(keys containers.Vector, skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error) {
+func (idx *nonPkMutIndex) BatchDedup(
+	keys containers.Vector,
+	skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error) {
 	keyselects, exist := idx.zonemap.ContainsAny(keys)
 	// 1. all keys are definitely not existed
 	if !exist {
 		return
 	}
-	err = moerr.NewTAEPossibleDuplicate()
+	err = moerr.GetOkExpectedPossibleDup()
 	return
 }

@@ -79,12 +79,12 @@ func TestProjection(t *testing.T) {
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
 		_, _ = Call(0, tc.proc, tc.arg)
 		if tc.proc.Reg.InputBatch != nil {
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 		}
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
 		_, _ = Call(0, tc.proc, tc.arg)
 		if tc.proc.Reg.InputBatch != nil {
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 		}
 		tc.proc.Reg.InputBatch = &batch.Batch{}
 		_, _ = Call(0, tc.proc, tc.arg)

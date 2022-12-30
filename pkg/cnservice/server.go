@@ -22,9 +22,10 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -32,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
@@ -49,7 +49,7 @@ func NewService(
 	}
 
 	// get metadata fs
-	fs, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, "LOCAL")
+	fs, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
 	if err != nil {
 		return nil, err
 	}
@@ -88,10 +88,13 @@ func NewService(
 		&cfg.Frontend,
 		nil,
 		nil,
-		nil,
+		engine.Nodes{engine.Node{
+			Addr: cfg.ServiceAddress,
+		}},
 		memoryengine.GetClusterDetailsFromHAKeeper(ctx, hakeeper),
 	)
 	cfg.Frontend.SetDefaultValues()
+	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
 	frontend.InitServerVersion(pu.SV.MoVersion)
 	if err = srv.initMOServer(ctx, pu); err != nil {
 		return nil, err
@@ -100,6 +103,7 @@ func NewService(
 
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
 		morpc.NewMessageCodec(srv.acquireMessage),
+		morpc.WithServerLogger(srv.logger),
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
 			goetty.WithSessionReleaseMsgFunc(func(v any) {
@@ -140,21 +144,47 @@ func (s *service) Start() error {
 }
 
 func (s *service) Close() error {
+	defer logutil.LogClose(s.logger, "cnservice")()
+
+	s.stopper.Stop()
 	if err := s.stopFrontend(); err != nil {
 		return err
 	}
 	if err := s.stopTask(); err != nil {
 		return err
 	}
-	s.stopper.Stop()
+	if err := s.stopRPCs(); err != nil {
+		return err
+	}
 	return s.server.Close()
 }
 
 func (s *service) stopFrontend() error {
+	defer logutil.LogClose(s.logger, "cnservice/frontend")()
+
 	if err := s.serverShutdown(true); err != nil {
 		return err
 	}
 	s.cancelMoServerFunc()
+	return nil
+}
+
+func (s *service) stopRPCs() error {
+	if s._txnClient != nil {
+		if err := s._txnClient.Close(); err != nil {
+			return err
+		}
+	}
+	if s._hakeeperClient != nil {
+		if err := s._hakeeperClient.Close(); err != nil {
+			return err
+		}
+	}
+	if s._txnSender != nil {
+		if err := s._txnSender.Close(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -184,7 +214,6 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 	cancelMoServerCtx, cancelMoServerFunc := context.WithCancel(ctx)
 	s.cancelMoServerFunc = cancelMoServerFunc
 
-	mpool.InitCap(pu.SV.HostMmuLimitation)
 	pu.FileService = s.fileService
 
 	logutil.Info("Initialize the engine ...")
@@ -227,7 +256,7 @@ func (s *service) initEngine(
 		}
 
 	default:
-		return moerr.NewInternalError("unknown engine type: %s", s.cfg.Engine.Type)
+		return moerr.NewInternalError(ctx, "unknown engine type: %s", s.cfg.Engine.Type)
 
 	}
 
@@ -267,7 +296,9 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 
 func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 	s.initTxnSenderOnce.Do(func() {
-		sender, err = rpc.NewSenderWithConfig(s.cfg.RPC, clock.DefaultClock(), s.logger)
+		sender, err = rpc.NewSenderWithConfig(
+			s.cfg.RPC,
+			runtime.ProcessLevelRuntime())
 		if err != nil {
 			return
 		}
@@ -284,7 +315,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if err != nil {
 			return
 		}
-		c = client.NewTxnClient(sender)
+		c = client.NewTxnClient(runtime.ProcessLevelRuntime(), sender)
 		s._txnClient = c
 	})
 	c = s._txnClient

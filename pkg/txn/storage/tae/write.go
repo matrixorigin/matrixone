@@ -38,11 +38,11 @@ func (s *taeStorage) Write(
 		return handleWrite(
 			ctx, s,
 			txnMeta, payload,
-			s.taeHandler.HandlePreCommit,
+			s.taeHandler.HandlePreCommitWrite,
 		)
 
 	default:
-		panic(moerr.NewInfo("OpCode is not supported"))
+		panic(moerr.NewInfoNoCtx("OpCode is not supported"))
 
 	}
 

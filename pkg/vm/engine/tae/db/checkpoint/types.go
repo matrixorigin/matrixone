@@ -42,6 +42,8 @@ type Runner interface {
 	// for test, delete in next phase
 	TestCheckpoint(entry *CheckpointEntry)
 	DebugUpdateOptions(opts ...Option)
+	GetAllCheckpoints() []*CheckpointEntry
+	CollectCheckpointsInRange(start, end types.TS) (ckpLoc string, lastEnd types.TS)
 }
 
 type DirtyCtx struct {
@@ -93,7 +95,7 @@ var (
 	CheckpointSchemaTypes = []types.Type{
 		types.New(types.T_TS, 0, 0, 0),
 		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_varchar, 0, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0),
 	}
 )
 

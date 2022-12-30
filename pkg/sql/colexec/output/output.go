@@ -32,10 +32,10 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
 	if bat := proc.Reg.InputBatch; bat != nil && len(bat.Zs) > 0 {
 		if err := ap.Func(ap.Data, bat); err != nil {
-			bat.Clean(proc.Mp())
+			bat.Free(proc.Mp())
 			return true, err
 		}
-		bat.Clean(proc.Mp())
+		bat.Free(proc.Mp())
 	}
 	return false, nil
 }

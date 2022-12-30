@@ -87,8 +87,8 @@ func init() {
 		newTestCase(true, mp, types.New(types.T_decimal128, 0, 0, 0)),
 		newTestCase(false, mp, types.New(types.T_decimal128, 0, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_varchar, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_varchar, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)),
 
 		newTestCase(true, mp, types.New(types.T_blob, 0, 0, 0)),
 		newTestCase(false, mp, types.New(types.T_blob, 0, 0, 0)),
@@ -101,7 +101,7 @@ func init() {
 func TestCompare(t *testing.T) {
 	for _, tc := range tcs {
 		nb0 := tc.proc.Mp().CurrNB()
-		c := New(tc.vecs[0].Typ, tc.desc, false)
+		c := New(*tc.vecs[0].GetType(), tc.desc, false)
 		c.Set(0, tc.vecs[0])
 		c.Set(1, tc.vecs[1])
 		err := c.Copy(0, 1, 0, 0, tc.proc)

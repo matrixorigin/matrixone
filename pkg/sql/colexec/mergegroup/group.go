@@ -45,20 +45,16 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(proc, anal); err != nil {
-				ctr.state = End
-				return true, err
+				return false, err
 			}
 			ctr.state = Eval
 		case Eval:
-			ctr.state = End
 			if ctr.bat != nil {
 				if ap.NeedEval {
 					for i, agg := range ctr.bat.Aggs {
 						vec, err := agg.Eval(proc.Mp())
 						if err != nil {
 							ctr.state = End
-							ctr.clean()
-							ctr.bat.Clean(proc.Mp())
 							return false, err
 						}
 						ctr.bat.Aggs[i] = nil
@@ -72,35 +68,21 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 				anal.Output(ctr.bat)
 				ctr.bat.ExpandNulls()
 			}
-			ctr.clean()
+			ctr.state = End
+		case End:
 			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil
-			return true, nil
-		case End:
-			proc.SetInputBatch(nil)
+			ap.Free(proc, false)
 			return true, nil
 		}
 	}
 }
 
 func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
-	if len(proc.Reg.MergeReceivers) == 1 {
-		for {
-			bat := <-proc.Reg.MergeReceivers[0].Ch
-			if bat == nil {
-				return nil
-			}
-			if bat.Length() == 0 {
-				continue
-			}
-			anal.Input(bat)
-			ctr.bat = bat
-			return nil
-		}
-	}
+	var err error
 	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
-		bat := <-proc.Reg.MergeReceivers[i].Ch
-		if bat == nil {
+		bat, ok := <-proc.Reg.MergeReceivers[i].Ch
+		if !ok || bat == nil {
 			continue
 		}
 		if len(bat.Zs) == 0 {
@@ -108,7 +90,8 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 			continue
 		}
 		anal.Input(bat)
-		if err := ctr.process(bat, proc); err != nil {
+		if err = ctr.process(bat, proc); err != nil {
+			bat.Free(proc.Mp())
 			return err
 		}
 	}
@@ -121,7 +104,7 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 	if ctr.bat == nil {
 		size := 0
 		for _, vec := range bat.Vecs {
-			switch vec.Typ.TypeSize() {
+			switch vec.GetType().TypeSize() {
 			case 1:
 				size += 1 + 1
 			case 2:
@@ -160,8 +143,6 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 		err = ctr.processHStr(bat, proc)
 	}
 	if err != nil {
-		ctr.clean()
-		ctr.cleanBatch(proc)
 		return err
 	}
 	return nil
@@ -172,12 +153,15 @@ func (ctr *container) processH0(bat *batch.Batch, proc *process.Process) error {
 		ctr.bat = bat
 		return nil
 	}
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	for _, z := range bat.Zs {
 		ctr.bat.Zs[0] += z
 	}
 	for i, agg := range ctr.bat.Aggs {
-		agg.Merge(bat.Aggs[i], 0, 0)
+		err := agg.Merge(bat.Aggs[i], 0, 0)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -187,7 +171,7 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	itr := ctr.intHashMap.NewIterator()
 	flg := ctr.bat == nil
 	if !flg {
-		defer bat.Clean(proc.Mp())
+		defer bat.Free(proc.Mp())
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
@@ -200,7 +184,7 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 			return err
 		}
 		if !flg {
-			if err := ctr.batchFill(i, n, bat, vals, rowCount, proc); err != nil {
+			if err = ctr.batchFill(i, n, bat, vals, rowCount, proc); err != nil {
 				return err
 			}
 		}
@@ -216,7 +200,7 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 	itr := ctr.strHashMap.NewIterator()
 	flg := ctr.bat == nil
 	if !flg {
-		defer bat.Clean(proc.Mp())
+		defer bat.Free(proc.Mp())
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
 		n := count - i
@@ -271,22 +255,4 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 		}
 	}
 	return nil
-}
-
-func (ctr *container) clean() {
-	if ctr.intHashMap != nil {
-		ctr.intHashMap.Free()
-		ctr.intHashMap = nil
-	}
-	if ctr.strHashMap != nil {
-		ctr.strHashMap.Free()
-		ctr.strHashMap = nil
-	}
-}
-
-func (ctr *container) cleanBatch(proc *process.Process) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(proc.Mp())
-		ctr.bat = nil
-	}
 }

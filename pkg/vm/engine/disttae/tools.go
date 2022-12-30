@@ -50,43 +50,43 @@ func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 	bat.SetZs(1, m)
 	{
 		idx := catalog.MO_DATABASE_DAT_ID_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) // dat_id
-		if err := bat.Vecs[idx].Append(uint64(databaseId), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoDatabaseTypes[idx]) // dat_id
+		if err := vector.Append(bat.Vecs[idx], uint64(databaseId), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_DATABASE_DAT_NAME_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) // datname
-		if err := bat.Vecs[idx].Append([]byte(name), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoDatabaseTypes[idx]) // datname
+		if err := vector.Append(bat.Vecs[idx], []byte(name), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_DATABASE_DAT_CATALOG_NAME_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) // dat_catalog_name
-		if err := bat.Vecs[idx].Append([]byte(catalog.MO_CATALOG), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoDatabaseTypes[idx]) // dat_catalog_name
+		if err := vector.Append(bat.Vecs[idx], []byte(catalog.MO_CATALOG), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_DATABASE_CREATESQL_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx])            // dat_createsql
-		if err := bat.Vecs[idx].Append([]byte(sql), false, m); err != nil { // TODO
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoDatabaseTypes[idx])       // dat_createsql
+		if err := vector.Append(bat.Vecs[idx], []byte(sql), false, m); err != nil { // TODO
 			return nil, err
 		}
 		idx = catalog.MO_DATABASE_OWNER_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) // owner
-		if err := bat.Vecs[idx].Append(roleId, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoDatabaseTypes[idx]) // owner
+		if err := vector.Append(bat.Vecs[idx], roleId, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_DATABASE_CREATOR_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) // creator
-		if err := bat.Vecs[idx].Append(userId, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoDatabaseTypes[idx]) // creator
+		if err := vector.Append(bat.Vecs[idx], userId, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_DATABASE_CREATED_TIME_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) // created_time
-		if err := bat.Vecs[idx].Append(types.Timestamp(time.Now().Unix()), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoDatabaseTypes[idx]) // created_time
+		if err := vector.Append(bat.Vecs[idx], types.Timestamp(time.Now().Unix()), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_DATABASE_ACCOUNT_ID_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) // account_id
-		if err := bat.Vecs[idx].Append(accountId, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoDatabaseTypes[idx]) // account_id
+		if err := vector.Append(bat.Vecs[idx], accountId, false, m); err != nil {
 			return nil, err
 		}
 	}
@@ -99,13 +99,13 @@ func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch,
 	bat.SetZs(1, m)
 	{
 		idx := catalog.MO_DATABASE_DAT_ID_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) // dat_id
-		if err := bat.Vecs[idx].Append(id, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoDatabaseTypes[idx]) // dat_id
+		if err := vector.Append(bat.Vecs[idx], id, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_DATABASE_DAT_NAME_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) // datname
-		if err := bat.Vecs[idx].Append([]byte(name), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoDatabaseTypes[idx]) // datname
+		if err := vector.Append(bat.Vecs[idx], []byte(name), false, m); err != nil {
 			return nil, err
 		}
 	}
@@ -120,73 +120,73 @@ func genCreateTableTuple(tbl *table, sql string, accountId, userId, roleId uint3
 	bat.SetZs(1, m)
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_id
-		if err := bat.Vecs[idx].Append(tableId, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // rel_id
+		if err := vector.Append(bat.Vecs[idx], tableId, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_REL_NAME_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // relname
-		if err := bat.Vecs[idx].Append([]byte(name), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // relname
+		if err := vector.Append(bat.Vecs[idx], []byte(name), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_RELDATABASE_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // reldatabase
-		if err := bat.Vecs[idx].Append([]byte(databaseName), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // reldatabase
+		if err := vector.Append(bat.Vecs[idx], []byte(databaseName), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_RELDATABASE_ID_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // reldatabase_id
-		if err := bat.Vecs[idx].Append(databaseId, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // reldatabase_id
+		if err := vector.Append(bat.Vecs[idx], databaseId, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_RELPERSISTENCE_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // relpersistence
-		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // relpersistence
+		if err := vector.Append(bat.Vecs[idx], []byte(""), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_RELKIND_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // relkind
-		if err := bat.Vecs[idx].Append([]byte(tbl.relKind), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // relkind
+		if err := vector.Append(bat.Vecs[idx], []byte(tbl.relKind), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_REL_COMMENT_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_comment
-		if err := bat.Vecs[idx].Append([]byte(tbl.comment), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // rel_comment
+		if err := vector.Append(bat.Vecs[idx], []byte(tbl.comment), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_REL_CREATESQL_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_createsql
-		if err := bat.Vecs[idx].Append([]byte(tbl.createSql), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // rel_createsql
+		if err := vector.Append(bat.Vecs[idx], []byte(tbl.createSql), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_CREATED_TIME_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // created_time
-		if err := bat.Vecs[idx].Append(types.Timestamp(time.Now().Unix()), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // created_time
+		if err := vector.Append(bat.Vecs[idx], types.Timestamp(time.Now().Unix()), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_CREATOR_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // creator
-		if err := bat.Vecs[idx].Append(userId, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // creator
+		if err := vector.Append(bat.Vecs[idx], userId, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_OWNER_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // owner
-		if err := bat.Vecs[idx].Append(roleId, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // owner
+		if err := vector.Append(bat.Vecs[idx], roleId, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_ACCOUNT_ID_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // account_id
-		if err := bat.Vecs[idx].Append(accountId, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // account_id
+		if err := vector.Append(bat.Vecs[idx], accountId, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_PARTITIONED_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // partition
-		if err := bat.Vecs[idx].Append([]byte(tbl.partition), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // partition
+		if err := vector.Append(bat.Vecs[idx], []byte(tbl.partition), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_VIEWDEF_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // viewdef
-		if err := bat.Vecs[idx].Append([]byte(tbl.viewdef), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // viewdef
+		if err := vector.Append(bat.Vecs[idx], []byte(tbl.viewdef), false, m); err != nil {
 			return nil, err
 		}
 
@@ -200,109 +200,114 @@ func genCreateColumnTuple(col column, m *mpool.MPool) (*batch.Batch, error) {
 	bat.SetZs(1, m)
 	{
 		idx := catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_uniq_name
-		if err := bat.Vecs[idx].Append([]byte(genColumnPrimaryKey(col.tableId, col.name)),
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // att_uniq_name
+		if err := vector.Append(bat.Vecs[idx], []byte(genColumnPrimaryKey(col.tableId, col.name)),
 			false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ACCOUNT_ID_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // account_id
-		if err := bat.Vecs[idx].Append(col.accountId, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // account_id
+		if err := vector.Append(bat.Vecs[idx], col.accountId, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_database_id
-		if err := bat.Vecs[idx].Append(col.databaseId, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // att_database_id
+		if err := vector.Append(bat.Vecs[idx], col.databaseId, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATT_DATABASE_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_database
-		if err := bat.Vecs[idx].Append([]byte(col.databaseName), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // att_database
+		if err := vector.Append(bat.Vecs[idx], []byte(col.databaseName), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_relname_id
-		if err := bat.Vecs[idx].Append(col.tableId, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // att_relname_id
+		if err := vector.Append(bat.Vecs[idx], col.tableId, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATT_RELNAME_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_relname
-		if err := bat.Vecs[idx].Append([]byte(col.tableName), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // att_relname
+		if err := vector.Append(bat.Vecs[idx], []byte(col.tableName), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATTNAME_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // attname
-		if err := bat.Vecs[idx].Append([]byte(col.name), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // attname
+		if err := vector.Append(bat.Vecs[idx], []byte(col.name), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATTTYP_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // atttyp
-		if err := bat.Vecs[idx].Append(col.typ, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // atttyp
+		if err := vector.Append(bat.Vecs[idx], col.typ, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATTNUM_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // attnum
-		if err := bat.Vecs[idx].Append(col.num, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // attnum
+		if err := vector.Append(bat.Vecs[idx], col.num, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATT_LENGTH_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_length
-		if err := bat.Vecs[idx].Append(col.typLen, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // att_length
+		if err := vector.Append(bat.Vecs[idx], col.typLen, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATTNOTNULL_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // attnotnul
-		if err := bat.Vecs[idx].Append(col.notNull, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // attnotnul
+		if err := vector.Append(bat.Vecs[idx], col.notNull, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATTHASDEF_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // atthasdef
-		if err := bat.Vecs[idx].Append(col.hasDef, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // atthasdef
+		if err := vector.Append(bat.Vecs[idx], col.hasDef, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATT_DEFAULT_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_default
-		if err := bat.Vecs[idx].Append(col.defaultExpr, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // att_default
+		if err := vector.Append(bat.Vecs[idx], col.defaultExpr, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATTISDROPPED_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // attisdropped
-		if err := bat.Vecs[idx].Append(int8(0), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // attisdropped
+		if err := vector.Append(bat.Vecs[idx], int8(0), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_constraint_type
-		if err := bat.Vecs[idx].Append([]byte(col.constraintType), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // att_constraint_type
+		if err := vector.Append(bat.Vecs[idx], []byte(col.constraintType), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATT_IS_UNSIGNED_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_is_unsigned
-		if err := bat.Vecs[idx].Append(int8(0), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // att_is_unsigned
+		if err := vector.Append(bat.Vecs[idx], int8(0), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_is_auto_increment
-		if err := bat.Vecs[idx].Append(col.isAutoIncrement, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // att_is_auto_increment
+		if err := vector.Append(bat.Vecs[idx], col.isAutoIncrement, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATT_COMMENT_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_comment
-		if err := bat.Vecs[idx].Append([]byte(col.comment), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // att_comment
+		if err := vector.Append(bat.Vecs[idx], []byte(col.comment), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATT_IS_HIDDEN_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_is_hidden
-		if err := bat.Vecs[idx].Append(col.isHidden, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // att_is_hidden
+		if err := vector.Append(bat.Vecs[idx], col.isHidden, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATT_HAS_UPDATE_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_has_update
-		if err := bat.Vecs[idx].Append(col.hasUpdate, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // att_has_update
+		if err := vector.Append(bat.Vecs[idx], col.hasUpdate, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATT_UPDATE_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_update
-		if err := bat.Vecs[idx].Append(col.updateExpr, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // att_update
+		if err := vector.Append(bat.Vecs[idx], col.updateExpr, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_COLUMNS_ATT_IS_CLUSTERBY
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoColumnsTypes[idx]) // att_constraint_type
+		if err := vector.Append(bat.Vecs[idx], col.isClusterBy, false, m); err != nil {
 			return nil, err
 		}
 
@@ -317,23 +322,23 @@ func genDropTableTuple(id, databaseId uint64, name, databaseName string,
 	bat.SetZs(1, m)
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_id
-		if err := bat.Vecs[idx].Append(id, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // rel_id
+		if err := vector.Append(bat.Vecs[idx], id, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_REL_NAME_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // relname
-		if err := bat.Vecs[idx].Append([]byte(name), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // relname
+		if err := vector.Append(bat.Vecs[idx], []byte(name), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_RELDATABASE_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // reldatabase
-		if err := bat.Vecs[idx].Append([]byte(databaseName), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // reldatabase
+		if err := vector.Append(bat.Vecs[idx], []byte(databaseName), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_RELDATABASE_ID_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // reldatabase_id
-		if err := bat.Vecs[idx].Append(databaseId, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // reldatabase_id
+		if err := vector.Append(bat.Vecs[idx], databaseId, false, m); err != nil {
 			return nil, err
 		}
 	}
@@ -347,23 +352,23 @@ func genTruncateTableTuple(id, databaseId uint64, name, databaseName string,
 	bat.SetZs(1, m)
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_id
-		if err := bat.Vecs[idx].Append(id, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // rel_id
+		if err := vector.Append(bat.Vecs[idx], id, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_REL_NAME_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // relname
-		if err := bat.Vecs[idx].Append([]byte(name), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // relname
+		if err := vector.Append(bat.Vecs[idx], []byte(name), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_RELDATABASE_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // reldatabase
-		if err := bat.Vecs[idx].Append([]byte(databaseName), false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // reldatabase
+		if err := vector.Append(bat.Vecs[idx], []byte(databaseName), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_RELDATABASE_ID_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // reldatabase_id
-		if err := bat.Vecs[idx].Append(databaseId, false, m); err != nil {
+		bat.Vecs[idx] = vector.New(vector.FLAT, catalog.MoTablesTypes[idx]) // reldatabase_id
+		if err := vector.Append(bat.Vecs[idx], databaseId, false, m); err != nil {
 			return nil, err
 		}
 	}
@@ -715,6 +720,7 @@ func getColumnsFromRows(rows [][]any) []column {
 		cols[i].hasUpdate = row[catalog.MO_COLUMNS_ATT_HAS_UPDATE_IDX].(int8)
 		cols[i].updateExpr = row[catalog.MO_COLUMNS_ATT_UPDATE_IDX].([]byte)
 		cols[i].num = row[catalog.MO_COLUMNS_ATTNUM_IDX].(int32)
+		cols[i].isClusterBy = row[catalog.MO_COLUMNS_ATT_IS_CLUSTERBY].(int8)
 	}
 	sort.Sort(Columns(cols))
 	return cols
@@ -746,6 +752,9 @@ func genTableDefOfColumn(col column) engine.TableDef {
 	if col.constraintType == catalog.SystemColPKConstraint {
 		attr.Primary = true
 	}
+	if col.isClusterBy == 1 {
+		attr.ClusterBy = true
+	}
 	return &engine.AttributeDef{Attr: attr}
 }
 
@@ -765,6 +774,10 @@ func genColumns(accountId uint32, tableName, databaseName string,
 					attr, _ := defs[mp[name]].(*engine.AttributeDef)
 					attr.Attr.Primary = true
 				}
+			}
+			if clusterByDef, ok := def.(*engine.ClusterByDef); ok {
+				attr, _ := defs[mp[clusterByDef.Name]].(*engine.AttributeDef)
+				attr.Attr.ClusterBy = true
 			}
 		}
 	}
@@ -823,6 +836,10 @@ func genColumns(accountId uint32, tableName, databaseName string,
 		} else {
 			col.constraintType = catalog.SystemColNoConstraint
 		}
+		if attrDef.Attr.ClusterBy {
+			col.isClusterBy = 1
+		}
+
 		cols = append(cols, col)
 		num++
 	}
@@ -868,17 +885,17 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 	for i := range bats {
 		bats[i] = batch.New(true, bat.Attrs)
 		for j := range bats[i].Vecs {
-			bats[i].SetVector(int32(j), vector.New(bat.GetVector(int32(j)).GetType()))
+			bats[i].SetVector(int32(j), vector.New(vector.FLAT, *bat.GetVector(int32(j)).GetType()))
 		}
 	}
-	vs := vector.GetFixedVectorValues[int64](pvec)
+	vs := vector.MustTCols[int64](pvec)
 	for i := range bat.Vecs {
 		vec := bat.GetVector(int32(i))
 		for j, v := range vs {
 			idx := uint64(v) % uint64(dnNum)
-			if err := vector.UnionOne(bats[idx].GetVector(int32(i)), vec, int64(j), proc.Mp()); err != nil {
+			if err := ats[idx].GetVector(int32(i)).UnionOne(vec, int64(j), proc.Mp()); err != nil {
 				for _, bat := range bats {
-					bat.Clean(proc.Mp())
+					bat.Free(proc.Mp())
 				}
 				return nil, err
 			}
@@ -896,7 +913,7 @@ func partitionDeleteBatch(tbl *table, bat *batch.Batch) ([]*batch.Batch, error) 
 	for i := range bats {
 		bats[i] = batch.New(true, bat.Attrs)
 		for j := range bats[i].Vecs {
-			bats[i].SetVector(int32(j), vector.New(bat.GetVector(int32(j)).GetType()))
+			bats[i].SetVector(int32(j), vector.New(vector.FLAT, *bat.GetVector(int32(j)).GetType()))
 		}
 	}
 	vec := bat.GetVector(0)
@@ -909,9 +926,9 @@ func partitionDeleteBatch(tbl *table, bat *batch.Batch) ([]*batch.Batch, error) 
 				blks = tbl.meta.blocks[j]
 			}
 			if inParttion(v, part, txn.meta.SnapshotTS, blks) {
-				if err := vector.UnionOne(bats[j].GetVector(0), vec, int64(i), txn.proc.Mp()); err != nil {
+				if err := bats[j].GetVector(0).UnionOne(vec, int64(i), bats[j].GetVector(0).Length() == 0, txn.proc.Mp()); err != nil {
 					for _, bat := range bats {
-						bat.Clean(txn.proc.Mp())
+						bat.Free(txn.proc.Mp())
 					}
 					return nil, err
 				}
@@ -1024,10 +1041,10 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 	var vecs []*vector.Vector
 
 	{
-		vec := vector.New(types.New(types.T_Rowid, 0, 0, 0))
+		vec := vector.New(vector.FLAT, types.New(types.T_Rowid, 0, 0, 0))
 		for i := 0; i < bat.Length(); i++ {
 			val := types.Rowid(uuid.New())
-			if err := vec.Append(val, false, m); err != nil {
+			if err := vector.Append(vec, val, false, m); err != nil {
 				return nil, err
 			}
 		}
@@ -1037,9 +1054,9 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 	{
 		var val types.TS
 
-		vec := vector.New(types.New(types.T_TS, 0, 0, 0))
+		vec := vector.New(vector.FLAT, types.New(types.T_TS, 0, 0, 0))
 		for i := 0; i < bat.Length(); i++ {
-			if err := vec.Append(val, false, m); err != nil {
+			if err := vector.Append(vec, val, false, m); err != nil {
 				return nil, err
 			}
 		}

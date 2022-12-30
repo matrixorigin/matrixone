@@ -63,7 +63,7 @@ func Test_readTextFile(t *testing.T) {
 					Name: "a"}},
 			&engine.AttributeDef{
 				Attr: engine.Attribute{
-					Type: types.Type{Oid: types.T_varchar},
+					Type: types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen},
 					Name: "b"}},
 			&engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -181,7 +181,7 @@ func Test_readTextFile(t *testing.T) {
 					Name: "a"}},
 			&engine.AttributeDef{
 				Attr: engine.Attribute{
-					Type: types.Type{Oid: types.T_varchar},
+					Type: types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen},
 					Name: "b"}},
 			&engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -366,7 +366,7 @@ func Test_readTextFile(t *testing.T) {
 					Name: "a"}},
 			&engine.AttributeDef{
 				Attr: engine.Attribute{
-					Type: types.Type{Oid: types.T_varchar},
+					Type: types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen},
 					Name: "b"}},
 			&engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -592,8 +592,9 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 		handler.simdCsvLineArray[0] = field[0]
 		for i := 0; i < curBatchSize; i++ {
 			handler.dataColumnId2TableColumnId[i] = i
-			handler.batchData.Vecs[i] = vector.PreAllocType(Oid[i].ToType(), curBatchSize, curBatchSize, proc.Mp())
-			handler.batchData.Vecs[i].SetOriginal(false)
+			handler.batchData.Vecs[i] = vector.New(vector.FLAT, Oid[i].ToType())
+			handler.batchData.Vecs[i].PreExtend(curBatchSize, proc.Mp())
+			//handler.batchData.Vecs[i].SetOriginal(false)
 		}
 		var force = false
 		convey.So(rowToColumnAndSaveToStorage(handler, proc, force, row2colChoose), convey.ShouldBeNil)
@@ -605,7 +606,7 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 		handler.maxFieldCnt = 0
 		convey.So(rowToColumnAndSaveToStorage(handler, proc, force, row2colChoose), convey.ShouldBeNil)
 
-		handler.batchData.Clean(proc.Mp())
+		handler.batchData.Free(proc.Mp())
 		row2colChoose = true
 
 		handler.batchData.Vecs = make([]*vector.Vector, curBatchSize)
@@ -615,9 +616,11 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 				continue
 			}
 			// XXX Vecs[0]?   What are we testing?
-			handler.batchData.Vecs[i] = vector.PreAllocType(Oid[i].ToType(), curBatchSize, curBatchSize, proc.Mp())
+
+			handler.batchData.Vecs[i] = vector.New(vector.FLAT, Oid[i].ToType())
+			handler.batchData.Vecs[i].PreExtend(curBatchSize, proc.Mp())
 			convey.So(rowToColumnAndSaveToStorage(handler, proc, force, row2colChoose), convey.ShouldNotBeNil)
-			vector.Clean(handler.batchData.Vecs[i], proc.Mp())
+			handler.batchData.Vecs[i].Free(proc.Mp())
 		}
 
 		row2colChoose = false
@@ -627,9 +630,10 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 				continue
 			}
 			// XXX Vecs[0]?   What are we testing?
-			handler.batchData.Vecs[i] = vector.PreAllocType(Oid[i].ToType(), curBatchSize, curBatchSize, proc.Mp())
+			handler.batchData.Vecs[i] = vector.New(vector.FLAT, Oid[i].ToType())
+			handler.batchData.Vecs[i].PreExtend(curBatchSize, proc.Mp())
 			convey.So(rowToColumnAndSaveToStorage(handler, proc, force, row2colChoose), convey.ShouldNotBeNil)
-			vector.Clean(handler.batchData.Vecs[i], proc.Mp())
+			handler.batchData.Vecs[i].Free(proc.Mp())
 		}
 		a := proc.Mp().Stats().NumAlloc.Load()
 		b := proc.Mp().Stats().NumFree.Load()

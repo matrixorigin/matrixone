@@ -15,11 +15,15 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
@@ -31,11 +35,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 
@@ -72,6 +76,21 @@ func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
 	return h
 }
 
+type profileType uint8
+
+const (
+	profileTypeAccountWithName  profileType = 1 << 0
+	profileTypeAccountWithId                = 1 << 1
+	profileTypeSessionId                    = 1 << 2
+	profileTypeConnectionWithId             = 1 << 3
+	profileTypeConnectionWithIp             = 1 << 4
+
+	profileTypeAll = profileTypeAccountWithName | profileTypeAccountWithId |
+		profileTypeSessionId | profileTypeConnectionWithId | profileTypeConnectionWithIp
+
+	profileTypeConcise = profileTypeConnectionWithId
+)
+
 type Session struct {
 	// account id
 	accountId uint32
@@ -80,19 +99,19 @@ type Session struct {
 	protocol Protocol
 
 	//cmd from the client
-	Cmd int
+	cmd CommandType
 
 	//for test
-	Mrs *MysqlResultSet
+	mrs *MysqlResultSet
 
 	// mpool
-	Mp *mpool.MPool
+	mp *mpool.MPool
 
-	Pu *config.ParameterUnit
+	pu *config.ParameterUnit
 
-	IsInternal bool
+	isInternal bool
 
-	Data         [][]interface{}
+	data         [][]interface{}
 	ep           *tree.ExportParam
 	showStmtType ShowStatementType
 
@@ -138,14 +157,22 @@ type Session struct {
 
 	cache *privilegeCache
 
+	profiles [8]string
+
 	mu sync.Mutex
+
+	flag bool
+
+	lastInsertID uint64
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
 func (ses *Session) Dispose() {
-	mp := ses.GetMemPool()
-	mpool.DeleteMPool(mp)
-	ses.SetMemPool(mp)
+	if ses.flag {
+		mp := ses.GetMemPool()
+		mpool.DeleteMPool(mp)
+		ses.SetMemPool(mp)
+	}
 }
 
 type errInfo struct {
@@ -167,27 +194,12 @@ func (e *errInfo) length() int {
 	return len(e.codes)
 }
 
-func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
-	var err error
-	if mp == nil {
-		// If no mp, we create one for session.  Use GuestMmuLimitation as cap.
-		// fixed pool size can be another param, or should be computed from cap,
-		// but here, too lazy, just use Mid.
-		//
-		// XXX MPOOL
-		// We don't have a way to close a session, so the only sane way of creating
-		// a mpool is to use NoFixed
-		mp, err = mpool.NewMPool("session", PU.SV.GuestMmuLimitation, mpool.NoFixed)
-		if err != nil {
-			panic(err)
-		}
-	}
-
-	txnHandler := InitTxnHandler(PU.StorageEngine, PU.TxnClient)
+func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysVars *GlobalSystemVariables, flag bool) *Session {
+	txnHandler := InitTxnHandler(pu.StorageEngine, pu.TxnClient)
 	ses := &Session{
 		protocol: proto,
-		Mp:       mp,
-		Pu:       PU,
+		mp:       mp,
+		pu:       pu,
 		ep: &tree.ExportParam{
 			Outfile: false,
 			Fields:  &tree.Fields{},
@@ -195,16 +207,13 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 		},
 		txnHandler: txnHandler,
 		//TODO:fix database name after the catalog is ready
-		txnCompileCtx:   InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
-		storage:         PU.StorageEngine,
-		sysVars:         gSysVars.CopySysVarsToSession(),
-		userDefinedVars: make(map[string]interface{}),
-		gSysVars:        gSysVars,
+		txnCompileCtx: InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
+		storage:       pu.StorageEngine,
+		gSysVars:      gSysVars,
 
 		serverStatus: 0,
 		optionBits:   0,
 
-		prepareStmts:   make(map[string]*PrepareStmt),
 		outputCallback: getDataFromPipeline,
 		timeZone:       time.Local,
 		errInfo: &errInfo{
@@ -214,10 +223,31 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 		},
 		cache: &privilegeCache{},
 	}
+	if flag {
+		ses.sysVars = gSysVars.CopySysVarsToSession()
+		ses.userDefinedVars = make(map[string]interface{})
+		ses.prepareStmts = make(map[string]*PrepareStmt)
+	}
+	ses.flag = flag
 	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
-	ses.txnCompileCtx.SetSession(ses)
-	ses.txnHandler.SetSession(ses)
+	ses.GetTxnCompileCtx().SetSession(ses)
+	ses.GetTxnHandler().SetSession(ses)
+
+	var err error
+	if ses.mp == nil {
+		// If no mp, we create one for session.  Use GuestMmuLimitation as cap.
+		// fixed pool size can be another param, or should be computed from cap,
+		// but here, too lazy, just use Mid.
+		//
+		// XXX MPOOL
+		// We don't have a way to close a session, so the only sane way of creating
+		// a mpool is to use NoFixed
+		ses.mp, err = mpool.NewMPool("pipeline-"+ses.GetUUIDString(), pu.SV.GuestMmuLimitation, mpool.NoFixed)
+		if err != nil {
+			panic(err)
+		}
+	}
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Dispose()
@@ -233,8 +263,11 @@ type BackgroundSession struct {
 
 // NewBackgroundSession generates an independent background session executing the sql
 func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *BackgroundSession {
-	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars)
+	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars, false)
 	ses.SetOutputCallback(fakeDataSetFetcher)
+	if stmt := trace.StatementFromContext(ctx); stmt != nil {
+		logutil.Infof("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
+	}
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(ctx)
 	ses.SetRequestContext(cancelBackgroundCtx)
 	backSes := &BackgroundSession{
@@ -248,6 +281,83 @@ func (bgs *BackgroundSession) Close() {
 	if bgs.cancel != nil {
 		bgs.cancel()
 	}
+
+	if bgs.Session != nil {
+		bgs.Session.ep = nil
+		bgs.Session.errInfo.codes = nil
+		bgs.Session.errInfo.msgs = nil
+		bgs.Session.errInfo = nil
+		bgs.Session.cache.invalidate()
+		bgs.Session.cache = nil
+		bgs.Session.txnCompileCtx = nil
+		bgs.Session.txnHandler = nil
+		bgs.Session.gSysVars = nil
+	}
+	bgs = nil
+}
+
+func (ses *Session) makeProfile(profileTyp profileType) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	var mask profileType
+	var profile string
+	account := ses.tenant
+	for i := uint8(0); i < 8; i++ {
+		mask = 1 << i
+		switch mask & profileTyp {
+		case profileTypeAccountWithName:
+			if account != nil {
+				profile = fmt.Sprintf("account: %s user: %s role: %s", account.GetTenant(), account.GetUser(), account.GetDefaultRole())
+			}
+		case profileTypeAccountWithId:
+			if account != nil {
+				profile = fmt.Sprintf("accountId: %d userId: %d roleId: %d", account.GetTenantID(), account.GetUserID(), account.GetDefaultRoleID())
+			}
+		case profileTypeSessionId:
+			profile = "sessionId " + ses.uuid.String()
+		case profileTypeConnectionWithId:
+			if ses.protocol != nil {
+				profile = fmt.Sprintf("connectionId %d", ses.protocol.ConnectionID())
+			}
+		case profileTypeConnectionWithIp:
+			if ses.protocol != nil {
+				h, p, _, _ := ses.protocol.Peer()
+				profile = "client " + h + ":" + p
+			}
+		default:
+			profile = ""
+		}
+		ses.profiles[i] = profile
+	}
+}
+
+func (ses *Session) MakeProfile() {
+	ses.makeProfile(profileTypeAll)
+}
+
+func (ses *Session) getProfile(profileTyp profileType) string {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	var mask profileType
+	sb := bytes.Buffer{}
+	for i := uint8(0); i < 8; i++ {
+		mask = 1 << i
+		if mask&profileTyp != 0 {
+			if sb.Len() != 0 {
+				sb.WriteByte(' ')
+			}
+			sb.WriteString(ses.profiles[i])
+		}
+	}
+	return sb.String()
+}
+
+func (ses *Session) GetConciseProfile() string {
+	return ses.getProfile(profileTypeConcise)
+}
+
+func (ses *Session) GetCompleteProfile() string {
+	return ses.getProfile(profileTypeAll)
 }
 
 func (ses *Session) GetPrivilegeCache() *privilegeCache {
@@ -270,43 +380,43 @@ func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
 func (ses *Session) GetIsInternal() bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.IsInternal
+	return ses.isInternal
 }
 
 func (ses *Session) SetMemPool(mp *mpool.MPool) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.Mp = mp
+	ses.mp = mp
 }
 
 func (ses *Session) GetMemPool() *mpool.MPool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.Mp
+	return ses.mp
 }
 
 func (ses *Session) GetParameterUnit() *config.ParameterUnit {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.Pu
+	return ses.pu
 }
 
 func (ses *Session) GetData() [][]interface{} {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.Data
+	return ses.data
 }
 
 func (ses *Session) SetData(data [][]interface{}) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.Data = data
+	ses.data = data
 }
 
 func (ses *Session) AppendData(row []interface{}) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.Data = append(ses.Data, row)
+	ses.data = append(ses.data, row)
 }
 
 func (ses *Session) SetExportParam(ep *tree.ExportParam) {
@@ -358,6 +468,18 @@ func (ses *Session) GetLastStmtId() uint32 {
 	return ses.lastStmtId
 }
 
+func (ses *Session) SetLastInsertID(num uint64) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.lastInsertID = num
+}
+
+func (ses *Session) GetLastInsertID() uint64 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.lastInsertID
+}
+
 func (ses *Session) SetRequestContext(reqCtx context.Context) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -382,28 +504,28 @@ func (ses *Session) GetTimeZone() *time.Location {
 	return ses.timeZone
 }
 
-func (ses *Session) SetCmd(cmd int) {
+func (ses *Session) SetCmd(cmd CommandType) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.Cmd = cmd
+	ses.cmd = cmd
 }
 
-func (ses *Session) GetCmd() int {
+func (ses *Session) GetCmd() CommandType {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.Cmd
+	return ses.cmd
 }
 
 func (ses *Session) SetMysqlResultSet(mrs *MysqlResultSet) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.Mrs = mrs
+	ses.mrs = mrs
 }
 
 func (ses *Session) GetMysqlResultSet() *MysqlResultSet {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.Mrs
+	return ses.mrs
 }
 
 func (ses *Session) AppendMysqlResultSetOfBackgroundTask(mrs *MysqlResultSet) {
@@ -434,7 +556,7 @@ func (ses *Session) GetTenantInfo() *TenantInfo {
 
 // GetTenantName return tenant name according to GetTenantInfo and stmt.
 //
-// With stmt = nil, should be only called in TxnBegin, TxnCommit, TxnRollback
+// With stmt = nil, should be only called in TxnHandler.NewTxn, TxnHandler.CommitTxn, TxnHandler.RollbackTxn
 func (ses *Session) GetTenantName(stmt tree.Statement) string {
 	tenant := sysAccountName
 	if ses.GetTenantInfo() != nil && (stmt == nil || !IsPrepareStatement(stmt)) {
@@ -449,6 +571,12 @@ func (ses *Session) GetUUID() []byte {
 	return ses.uuid[:]
 }
 
+func (ses *Session) GetUUIDString() string {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.uuid.String()
+}
+
 func (ses *Session) SetTenantInfo(ti *TenantInfo) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -460,7 +588,7 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 	defer ses.mu.Unlock()
 	if _, ok := ses.prepareStmts[name]; !ok {
 		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
-			return moerr.NewInvalidState("too many prepared statement, max %d", MaxPrepareNumberInOneSession)
+			return moerr.NewInvalidState(ses.requestCtx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession)
 		}
 	}
 	ses.prepareStmts[name] = prepareStmt
@@ -473,7 +601,7 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 	if prepareStmt, ok := ses.prepareStmts[name]; ok {
 		return prepareStmt, nil
 	}
-	return nil, moerr.NewInvalidState("prepared statement '%s' does not exist", name)
+	return nil, moerr.NewInvalidState(ses.requestCtx, "prepared statement '%s' does not exist", name)
 }
 
 func (ses *Session) RemovePrepareStmt(name string) {
@@ -658,6 +786,11 @@ func (ses *Session) GetConnectionID() uint32 {
 	return ses.GetMysqlProtocol().ConnectionID()
 }
 
+func (ses *Session) GetPeer() (string, string) {
+	rh, rp, _, _ := ses.GetMysqlProtocol().Peer()
+	return rh, rp
+}
+
 func (ses *Session) SetOptionBits(bit uint32) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -698,10 +831,27 @@ func (ses *Session) ServerStatusIsSet(bit uint16) bool {
 InMultiStmtTransactionMode checks the session is in multi-statement transaction mode.
 OPTION_NOT_AUTOCOMMIT: After the autocommit is off, the multi-statement transaction is
 started implicitly by the first statement of the transaction.
-OPTION_BEGAN: Whenever the autocommit is on or off, the multi-statement transaction is
+OPTION_BEGIN: Whenever the autocommit is on or off, the multi-statement transaction is
 started explicitly by the BEGIN statement.
 
 But it does not denote the transaction is active or not.
+
+Cases    | set Autocommit = 1/0 | BEGIN statement |
+---------------------------------------------------
+Case1      1                       Yes
+Case2      1                       No
+Case3      0                       Yes
+Case4      0                       No
+---------------------------------------------------
+
+If it is Case1,Case3,Cass4, Then
+
+	InMultiStmtTransactionMode returns true.
+	Also, the bit SERVER_STATUS_IN_TRANS will be set.
+
+If it is Case2, Then
+
+	InMultiStmtTransactionMode returns false
 */
 func (ses *Session) InMultiStmtTransactionMode() bool {
 	return ses.OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN)
@@ -754,6 +904,23 @@ func (ses *Session) TxnStart() error {
 
 /*
 TxnCommitSingleStatement commits the single statement transaction.
+
+Cases    | set Autocommit = 1/0 | BEGIN statement |
+---------------------------------------------------
+Case1      1                       Yes
+Case2      1                       No
+Case3      0                       Yes
+Case4      0                       No
+---------------------------------------------------
+
+If it is Case1,Case3,Cass4, Then
+
+	InMultiStmtTransactionMode returns true.
+	Also, the bit SERVER_STATUS_IN_TRANS will be set.
+
+If it is Case2, Then
+
+	InMultiStmtTransactionMode returns false
 */
 func (ses *Session) TxnCommitSingleStatement(stmt tree.Statement) error {
 	var err error
@@ -766,45 +933,49 @@ func (ses *Session) TxnCommitSingleStatement(stmt tree.Statement) error {
 				the transaction need to be committed at the end of the statement.
 	*/
 	if !ses.InMultiStmtTransactionMode() ||
-		ses.InActiveTransaction() && IsStatementToBeCommittedInActiveTransaction(stmt) {
+		ses.InActiveTransaction() && NeedToBeCommittedInActiveTransaction(stmt) {
 		err = ses.GetTxnHandler().CommitTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
-		// metric count
-		tenant := ses.GetTenantName(stmt)
-		incTransactionCounter(tenant)
-		if err != nil {
-			incTransactionErrorsCounter(tenant, metric.SQLTypeAutoCommit)
-		}
 	}
 	return err
 }
 
 /*
 TxnRollbackSingleStatement rollbacks the single statement transaction.
+
+Cases    | set Autocommit = 1/0 | BEGIN statement |
+---------------------------------------------------
+Case1      1                       Yes
+Case2      1                       No
+Case3      0                       Yes
+Case4      0                       No
+---------------------------------------------------
+
+If it is Case1,Case3,Cass4, Then
+
+	InMultiStmtTransactionMode returns true.
+	Also, the bit SERVER_STATUS_IN_TRANS will be set.
+
+If it is Case2, Then
+
+	InMultiStmtTransactionMode returns false
 */
 func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 	var err error
 	/*
-		Rollback Rules:
-		1, if it is in single-statement mode:
-			it rollbacks.
-		2, if it is in multi-statement mode:
-			if the statement is the one can be executed in the active transaction,
-				the transaction need to be rollback at the end of the statement.
+			Rollback Rules:
+			1, if it is in single-statement mode (Case2):
+				it rollbacks.
+			2, if it is in multi-statement mode (Case1,Case3,Case4):
+		        the transaction need to be rollback at the end of the statement.
+				(every error will abort the transaction.)
 	*/
 	if !ses.InMultiStmtTransactionMode() ||
-		ses.InActiveTransaction() && IsStatementToBeCommittedInActiveTransaction(stmt) {
+		ses.InActiveTransaction() {
 		err = ses.GetTxnHandler().RollbackTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
-		// metric count
-		tenant := ses.GetTenantName(stmt)
-		incTransactionCounter(tenant)
-		incTransactionErrorsCounter(tenant, metric.SQLTypeOther) // exec rollback cnt
-		if err != nil {
-			incTransactionErrorsCounter(tenant, metric.SQLTypeAutoRollback)
-		}
 	}
 	return err
 }
@@ -815,25 +986,17 @@ It commits the current transaction implicitly.
 */
 func (ses *Session) TxnBegin() error {
 	var err error
-	tenant := ses.GetTenantName(nil)
 	if ses.InMultiStmtTransactionMode() {
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		err = ses.GetTxnHandler().CommitTxn()
-		// metric count: last txn
-		incTransactionCounter(tenant)
 	}
 	ses.ClearOptionBits(OPTION_BEGIN)
 	if err != nil {
-		// metric count: last txn commit failed.
-		incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
 		return err
 	}
 	ses.SetOptionBits(OPTION_BEGIN)
 	ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
 	err = ses.GetTxnHandler().NewTxn()
-	if err != nil {
-		incTransactionErrorsCounter(tenant, metric.SQLTypeBegin)
-	}
 	return err
 }
 
@@ -844,12 +1007,6 @@ func (ses *Session) TxnCommit() error {
 	err = ses.GetTxnHandler().CommitTxn()
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 	ses.ClearOptionBits(OPTION_BEGIN)
-	// metric count
-	tenant := ses.GetTenantName(nil)
-	incTransactionCounter(tenant)
-	if err != nil {
-		incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
-	}
 	return err
 }
 
@@ -859,13 +1016,6 @@ func (ses *Session) TxnRollback() error {
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY)
 	err = ses.GetTxnHandler().RollbackTxn()
 	ses.ClearOptionBits(OPTION_BEGIN)
-	// metric count
-	tenant := ses.GetTenantName(nil)
-	incTransactionCounter(tenant)
-	incTransactionErrorsCounter(tenant, metric.SQLTypeOther)
-	if err != nil {
-		incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
-	}
 	return err
 }
 
@@ -888,7 +1038,7 @@ an active transaction whichever it is started by BEGIN or in 'set autocommit = 0
 */
 func (ses *Session) SetAutocommit(on bool) error {
 	if ses.InActiveTransaction() {
-		return errorParameterModificationInTxn
+		return moerr.NewInternalError(ses.requestCtx, parameterModificationInTxnErrorInfo())
 	}
 	if on {
 		ses.ClearOptionBits(OPTION_BEGIN | OPTION_NOT_AUTOCOMMIT)
@@ -934,7 +1084,11 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 
-	logutil.Debugf("check special user")
+	ses.SetTenantInfo(tenant)
+	ses.MakeProfile()
+	sessionProfile := ses.GetConciseProfile()
+
+	logDebugf(sessionProfile, "check special user")
 	// check the special user for initilization
 	isSpecial, pwdBytes, specialAccount = isSpecialUser(tenant.GetUser())
 	if isSpecial && specialAccount.IsMoAdminRole() {
@@ -951,13 +1105,13 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	sqlForCheckTenant := getSqlForCheckTenant(tenant.GetTenant())
 	pu := ses.GetParameterUnit()
 	mp := ses.GetMemPool()
-	logutil.Debugf("check tenant %s exists", tenant)
+	logDebugf(sessionProfile, "check tenant %s exists", tenant)
 	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, mp, pu, sqlForCheckTenant)
 	if err != nil {
 		return nil, err
 	}
 	if !execResultArrayHasData(rsset) {
-		return nil, moerr.NewInternalError("there is no tenant %s", tenant.GetTenant())
+		return nil, moerr.NewInternalError(ses.GetRequestContext(), "there is no tenant %s", tenant.GetTenant())
 	}
 
 	tenantID, err = rsset[0].GetInt64(0, 0)
@@ -971,7 +1125,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 	tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(tenantID))
 
-	logutil.Debugf("check user of %s exists", tenant)
+	logDebugf(sessionProfile, "check user of %s exists", tenant)
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
 	rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForPasswordOfUser)
@@ -979,7 +1133,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 	if !execResultArrayHasData(rsset) {
-		return nil, moerr.NewInternalError("there is no user %s", tenant.GetUser())
+		return nil, moerr.NewInternalError(ses.GetRequestContext(), "there is no user %s", tenant.GetUser())
 	}
 
 	userID, err = rsset[0].GetInt64(0, 0)
@@ -1014,7 +1168,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	*/
 	//it denotes that there is no default role in the input
 	if tenant.HasDefaultRole() {
-		logutil.Debugf("check default role of user %s.", tenant)
+		logDebugf(sessionProfile, "check default role of user %s.", tenant)
 		//step4 : check role exists or not
 		sqlForCheckRoleExists := getSqlForRoleIdOfRole(tenant.GetDefaultRole())
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForCheckRoleExists)
@@ -1023,10 +1177,10 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		}
 
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError("there is no role %s", tenant.GetDefaultRole())
+			return nil, moerr.NewInternalError(ses.GetRequestContext(), "there is no role %s", tenant.GetDefaultRole())
 		}
 
-		logutil.Debugf("check granted role of user %s.", tenant)
+		logDebugf(sessionProfile, "check granted role of user %s.", tenant)
 		//step4.2 : check the role has been granted to the user or not
 		sqlForRoleOfUser := getSqlForRoleOfUser(userID, tenant.GetDefaultRole())
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForRoleOfUser)
@@ -1034,7 +1188,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 			return nil, err
 		}
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError("the role %s has not been granted to the user %s",
+			return nil, moerr.NewInternalError(ses.GetRequestContext(), "the role %s has not been granted to the user %s",
 				tenant.GetDefaultRole(), tenant.GetUser())
 		}
 
@@ -1044,7 +1198,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		}
 		tenant.SetDefaultRoleID(uint32(defaultRoleID))
 	} else {
-		logutil.Debugf("check designated role of user %s.", tenant)
+		logDebugf(sessionProfile, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sql)
@@ -1052,7 +1206,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 			return nil, err
 		}
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError("get the default role of the user %s failed", tenant.GetUser())
+			return nil, moerr.NewInternalError(ses.GetRequestContext(), "get the default role of the user %s failed", tenant.GetUser())
 		}
 
 		defaultRole, err = rsset[0].GetString(0, 0)
@@ -1062,7 +1216,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		tenant.SetDefaultRole(defaultRole)
 	}
 
-	logutil.Info(tenant.String())
+	logInfo(sessionProfile, tenant.String())
 
 	return []byte(pwd), nil
 }
@@ -1116,7 +1270,7 @@ func (th *TxnHandler) TxnClientNew() error {
 		return err
 	}
 	if th.txn == nil {
-		return moerr.NewInternalError("TxnClientNew: txnClient new a null txn")
+		return moerr.NewInternalError(th.ses.GetRequestContext(), "TxnClientNew: txnClient new a null txn")
 	}
 	return err
 }
@@ -1132,6 +1286,12 @@ func (th *TxnHandler) NewTxn() error {
 		}
 	}
 	th.SetInvalid()
+	defer func() {
+		if err != nil {
+			tenant := th.ses.GetTenantName(nil)
+			incTransactionErrorsCounter(tenant, metric.SQLTypeBegin)
+		}
+	}()
 	err = th.TxnClientNew()
 	if err != nil {
 		return err
@@ -1141,12 +1301,8 @@ func (th *TxnHandler) NewTxn() error {
 		panic("context should not be nil")
 	}
 	storage := th.GetStorage()
-	ctx, cancel := context.WithTimeout(
-		ctx,
-		storage.Hints().CommitOrRollbackTimeout,
-	)
-	defer cancel()
-	return storage.New(ctx, th.GetTxnOperator())
+	err = storage.New(ctx, th.GetTxnOperator())
+	return err
 }
 
 // IsValidTxn checks the transaction is true or not.
@@ -1180,7 +1336,9 @@ func (th *TxnHandler) CommitTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	ctx := th.GetSession().GetRequestContext()
+	ses := th.GetSession()
+	sessionProfile := ses.GetConciseProfile()
+	ctx := ses.GetRequestContext()
 	if ctx == nil {
 		panic("context should not be nil")
 	}
@@ -1191,17 +1349,31 @@ func (th *TxnHandler) CommitTxn() error {
 	)
 	defer cancel()
 	var err, err2 error
+	defer func() {
+		// metric count
+		tenant := ses.GetTenantName(nil)
+		incTransactionCounter(tenant)
+		if err != nil {
+			incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
+		}
+	}()
 	txnOp := th.GetTxnOperator()
 	if txnOp == nil {
-		logutil.Errorf("CommitTxn: txn operator is null")
+		logErrorf(sessionProfile, "CommitTxn: txn operator is null")
 	}
+
+	txnId := txnOp.Txn().DebugString()
+	logDebugf(sessionProfile, "CommitTxn txnId:%s", txnId)
+	defer func() {
+		logDebugf(sessionProfile, "CommitTxn exit txnId:%s", txnId)
+	}()
 	if err = storage.Commit(ctx, txnOp); err != nil {
 		th.SetInvalid()
-		logutil.Errorf("CommitTxn: storage commit failed. error:%v", err)
+		logErrorf(sessionProfile, "CommitTxn: storage commit failed. txnId:%s error:%v", txnId, err)
 		if txnOp != nil {
 			err2 = txnOp.Rollback(ctx)
 			if err2 != nil {
-				logutil.Errorf("CommitTxn: txn operator rollback failed. error:%v", err2)
+				logErrorf(sessionProfile, "CommitTxn: txn operator rollback failed. txnId:%s error:%v", txnId, err2)
 			}
 		}
 		return err
@@ -1209,7 +1381,8 @@ func (th *TxnHandler) CommitTxn() error {
 	if txnOp != nil {
 		err = txnOp.Commit(ctx)
 		if err != nil {
-			logutil.Errorf("CommitTxn: txn operator commit failed. error:%v", err)
+			th.SetInvalid()
+			logErrorf(sessionProfile, "CommitTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
 		}
 	}
 	th.SetInvalid()
@@ -1222,7 +1395,9 @@ func (th *TxnHandler) RollbackTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	ctx := th.GetSession().GetRequestContext()
+	ses := th.GetSession()
+	sessionProfile := ses.GetConciseProfile()
+	ctx := ses.GetRequestContext()
 	if ctx == nil {
 		panic("context should not be nil")
 	}
@@ -1233,17 +1408,31 @@ func (th *TxnHandler) RollbackTxn() error {
 	)
 	defer cancel()
 	var err, err2 error
+	defer func() {
+		// metric count
+		tenant := ses.GetTenantName(nil)
+		incTransactionCounter(tenant)
+		incTransactionErrorsCounter(tenant, metric.SQLTypeOther) // exec rollback cnt
+		if err != nil {
+			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
+		}
+	}()
 	txnOp := th.GetTxnOperator()
 	if txnOp == nil {
-		logutil.Errorf("RollbackTxn: txn operator is null")
+		logErrorf(sessionProfile, "RollbackTxn: txn operator is null")
 	}
+	txnId := txnOp.Txn().DebugString()
+	logDebugf(sessionProfile, "RollbackTxn txnId:%s", txnId)
+	defer func() {
+		logDebugf(sessionProfile, "RollbackTxn exit txnId:%s", txnId)
+	}()
 	if err = storage.Rollback(ctx, txnOp); err != nil {
 		th.SetInvalid()
-		logutil.Errorf("RollbackTxn: storage rollback failed. error:%v", err)
+		logErrorf(sessionProfile, "RollbackTxn: storage rollback failed. txnId:%s error:%v", txnId, err)
 		if txnOp != nil {
 			err2 = txnOp.Rollback(ctx)
 			if err2 != nil {
-				logutil.Errorf("RollbackTxn: txn operator rollback failed. error:%v", err2)
+				logErrorf(sessionProfile, "RollbackTxn: txn operator rollback failed. txnId:%s error:%v", txnId, err2)
 			}
 		}
 		return err
@@ -1251,7 +1440,8 @@ func (th *TxnHandler) RollbackTxn() error {
 	if txnOp != nil {
 		err = txnOp.Rollback(ctx)
 		if err != nil {
-			logutil.Errorf("RollbackTxn: txn operator commit failed. error:%v", err)
+			th.SetInvalid()
+			logErrorf(sessionProfile, "RollbackTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
 		}
 	}
 	th.SetInvalid()
@@ -1264,12 +1454,13 @@ func (th *TxnHandler) GetStorage() engine.Engine {
 	return th.storage
 }
 
-func (th *TxnHandler) GetTxn() TxnOperator {
+func (th *TxnHandler) GetTxn() (TxnOperator, error) {
 	err := th.GetSession().TxnStart()
 	if err != nil {
-		panic(err)
+		logutil.Errorf("GetTxn. error:%v", err)
+		return nil, err
 	}
-	return th.GetTxnOperator()
+	return th.GetTxnOperator(), nil
 }
 
 func (th *TxnHandler) GetTxnOnly() TxnOperator {
@@ -1293,6 +1484,7 @@ type TxnCompilerContext struct {
 	QryTyp     QueryType
 	txnHandler *TxnHandler
 	ses        *Session
+	proc       *process.Process
 	mu         sync.Mutex
 }
 
@@ -1356,12 +1548,22 @@ func (tcc *TxnCompilerContext) GetAccountId() uint32 {
 	return tcc.ses.accountId
 }
 
+func (tcc *TxnCompilerContext) GetContext() context.Context {
+	return tcc.ses.requestCtx
+}
+
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
-	//open database
-	_, err = tcc.GetTxnHandler().GetStorage().Database(tcc.GetSession().GetRequestContext(), name, tcc.GetTxnHandler().GetTxn())
+	var txn TxnOperator
+	txn, err = tcc.GetTxnHandler().GetTxn()
 	if err != nil {
-		logutil.Errorf("get database %v failed. error %v", name, err)
+		return false
+	}
+	//open database
+	ses := tcc.GetSession()
+	_, err = tcc.GetTxnHandler().GetStorage().Database(ses.GetRequestContext(), name, txn)
+	if err != nil {
+		logErrorf(ses.GetConciseProfile(), "get database %v failed. error %v", name, err)
 		return false
 	}
 
@@ -1374,11 +1576,17 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 		return nil, err
 	}
 
-	ctx := tcc.GetSession().GetRequestContext()
-	//open database
-	db, err := tcc.GetTxnHandler().GetStorage().Database(ctx, dbName, tcc.GetTxnHandler().GetTxn())
+	ses := tcc.GetSession()
+	ctx := ses.GetRequestContext()
+	txn, err := tcc.GetTxnHandler().GetTxn()
 	if err != nil {
-		logutil.Errorf("get database %v error %v", dbName, err)
+		return nil, err
+	}
+
+	//open database
+	db, err := tcc.GetTxnHandler().GetStorage().Database(ctx, dbName, txn)
+	if err != nil {
+		logErrorf(ses.GetConciseProfile(), "get database %v error %v", dbName, err)
 		return nil, err
 	}
 
@@ -1386,7 +1594,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 	if err != nil {
 		return nil, err
 	}
-	logutil.Debugf("dbName %v tableNames %v", dbName, tableNames)
+	logDebugf(ses.GetConciseProfile(), "dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
 	table, err := db.Relation(ctx, tableName)
@@ -1401,7 +1609,7 @@ func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, 
 		dbName = tcc.DefaultDatabase()
 	}
 	if len(dbName) == 0 {
-		return "", moerr.NewNoDB()
+		return "", moerr.NewNoDB(tcc.GetContext())
 	}
 	return dbName, nil
 }
@@ -1432,20 +1640,21 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 			col := &plan2.ColDef{
 				Name: attr.Attr.Name,
 				Typ: &plan2.Type{
-					Id:        int32(attr.Attr.Type.Oid),
-					Width:     attr.Attr.Type.Width,
-					Precision: attr.Attr.Type.Precision,
-					Scale:     attr.Attr.Type.Scale,
-					AutoIncr:  attr.Attr.AutoIncrement,
-					Table:     tableName,
+					Id:          int32(attr.Attr.Type.Oid),
+					Width:       attr.Attr.Type.Width,
+					Precision:   attr.Attr.Type.Precision,
+					Scale:       attr.Attr.Type.Scale,
+					AutoIncr:    attr.Attr.AutoIncrement,
+					Table:       tableName,
+					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
 				},
-				Primary:  attr.Attr.Primary,
-				Default:  attr.Attr.Default,
-				OnUpdate: attr.Attr.OnUpdate,
-				Comment:  attr.Attr.Comment,
+				Primary:   attr.Attr.Primary,
+				Default:   attr.Attr.Default,
+				OnUpdate:  attr.Attr.OnUpdate,
+				Comment:   attr.Attr.Comment,
+				ClusterBy: attr.Attr.ClusterBy,
 			}
 			if isCPkey {
-				col.IsCPkey = isCPkey
 				CompositePkey = col
 				continue
 			}
@@ -1488,21 +1697,26 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Partition: p,
 				},
 			})
-		} else if indexDef, ok := def.(*engine.ComputeIndexDef); ok {
-			fields := make([]*plan.Field, len(indexDef.Fields))
-			for i := range indexDef.Fields {
-				fields[i] = &plan.Field{
-					ColNames: indexDef.Fields[i],
-				}
+		} else if indexDef, ok := def.(*engine.UniqueIndexDef); ok {
+			u := &plan.UniqueIndexDef{}
+			err = u.UnMarshalUniqueIndexDef(([]byte)(indexDef.UniqueIndex))
+			if err != nil {
+				return nil, nil
 			}
-			defs = append(defs, &plan2.TableDefType{
-				Def: &plan2.TableDef_DefType_Idx{
-					Idx: &plan2.IndexDef{
-						IndexNames: indexDef.IndexNames,
-						TableNames: indexDef.TableNames,
-						Uniques:    indexDef.Uniques,
-						Fields:     fields,
-					},
+			defs = append(defs, &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_UIdx{
+					UIdx: u,
+				},
+			})
+		} else if indexDef, ok := def.(*engine.SecondaryIndexDef); ok {
+			s := &plan.SecondaryIndexDef{}
+			err = s.UnMarshalSecondaryIndexDef(([]byte)(indexDef.SecondaryIndex))
+			if err != nil {
+				return nil, nil
+			}
+			defs = append(defs, &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_SIdx{
+					SIdx: s,
 				},
 			})
 		}
@@ -1586,7 +1800,6 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 
 	priDefs := make([]*plan2.ColDef, 0, len(priKeys))
 	for _, key := range priKeys {
-		isCPkey := util.JudgeIsCompositePrimaryKeyColumn(key.Name)
 		priDefs = append(priDefs, &plan2.ColDef{
 			Name: key.Name,
 			Typ: &plan2.Type{
@@ -1597,7 +1810,6 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 				Size:      key.Type.Size,
 			},
 			Primary: key.Primary,
-			IsCPkey: isCPkey,
 		})
 	}
 	return priDefs
@@ -1637,6 +1849,17 @@ func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *p
 	return hideDef
 }
 
+func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			fixColumnName(cols, arg)
+		}
+	case *plan.Expr_Col:
+		exprImpl.Col.Name = cols[exprImpl.Col.ColPos].Name
+	}
+}
+
 func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) (cost *plan2.Cost) {
 	cost = new(plan2.Cost)
 	dbName := obj.GetSchemaName()
@@ -1649,12 +1872,28 @@ func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) (cost *
 	if err != nil {
 		return
 	}
-	rows, err := table.Rows(tcc.GetSession().GetRequestContext())
+	if e != nil {
+		cols, _ := table.TableColumns(tcc.GetSession().GetRequestContext())
+		fixColumnName(cols, e)
+	}
+	rows, err := table.FilteredRows(tcc.GetSession().GetRequestContext(), e)
 	if err != nil {
 		return
 	}
-	cost.Card = float64(rows)
+	cost.Card = float64(rows) * plan2.DeduceSelectivity(e)
 	return
+}
+
+func (tcc *TxnCompilerContext) GetProcess() *process.Process {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.proc
+}
+
+func (tcc *TxnCompilerContext) SetProcess(proc *process.Process) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	tcc.proc = proc
 }
 
 // fakeDataSetFetcher gets the result set from the pipeline and save it in the session.
@@ -1666,7 +1905,7 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 
 	ses := handle.(*Session)
 	oq := newFakeOutputQueue(ses.GetMysqlResultSet())
-	n := vector.Length(dataSet.Vecs[0])
+	n := dataSet.Vecs[0].Length()
 	for j := 0; j < n; j++ { //row index
 		if dataSet.Zs[j] <= 0 {
 			continue
@@ -1685,14 +1924,14 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 }
 
 // getResultSet extracts the result set
-func getResultSet(bh BackgroundExec) ([]ExecResult, error) {
+func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) {
 	results := bh.GetExecResultSet()
 	rsset := make([]ExecResult, len(results))
 	for i, value := range results {
 		if er, ok := value.(ExecResult); ok {
 			rsset[i] = er
 		} else {
-			return nil, moerr.NewInternalError("it is not the type of result set")
+			return nil, moerr.NewInternalError(ctx, "it is not the type of result set")
 		}
 	}
 	return rsset, nil
@@ -1723,7 +1962,7 @@ func executeSQLInBackgroundSession(ctx context.Context, mp *mpool.MPool, pu *con
 	//	}
 	//}
 
-	return getResultSet(bh)
+	return getResultSet(ctx, bh)
 }
 
 type BackgroundHandler struct {
@@ -1749,8 +1988,9 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	if ctx == nil {
 		ctx = bh.ses.GetRequestContext()
 	}
+	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 	//logutil.Debugf("-->bh:%s", sql)
-	err := bh.mce.doComQuery(ctx, sql)
+	err := bh.mce.GetDoQueryFunc()(ctx, sql)
 	if err != nil {
 		return err
 	}

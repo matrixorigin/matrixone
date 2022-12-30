@@ -26,7 +26,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/util"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -62,13 +61,14 @@ type tracerProviderConfig struct {
 	// resource contains attributes representing an entity that produces telemetry.
 	resource *Resource // WithMOVersion, WithNode,
 
-	// TODO: can check span's END
+	// debugMode used in Tracer.Debug
 	debugMode bool // DebugMode
 
-	batchProcessMode string // WithBatchProcessMode
+	batchProcessMode string         // WithBatchProcessMode
+	batchProcessor   BatchProcessor // WithBatchProcessor
 
 	// writerFactory gen writer for CSV output
-	writerFactory export.FSWriterFactory // WithFSWriterFactory, default from export.GetFSWriterFactory result
+	writerFactory FSWriterFactory // WithFSWriterFactory, default from export.GetFSWriterFactory4Trace
 
 	sqlExecutor func() ie.InternalExecutor // WithSQLExecutor
 	// needInit control table schema create
@@ -142,7 +142,7 @@ func EnableTracer(enable bool) tracerProviderOption {
 	}
 }
 
-func WithFSWriterFactory(f export.FSWriterFactory) tracerProviderOption {
+func WithFSWriterFactory(f FSWriterFactory) tracerProviderOption {
 	return tracerProviderOption(func(cfg *tracerProviderConfig) {
 		cfg.writerFactory = f
 	})
@@ -169,6 +169,11 @@ func DebugMode(debug bool) tracerProviderOption {
 func WithBatchProcessMode(mode string) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.batchProcessMode = mode
+	}
+}
+func WithBatchProcessor(p BatchProcessor) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.batchProcessor = p
 	}
 }
 
@@ -267,6 +272,8 @@ func ContextField(ctx context.Context) zap.Field {
 type SpanContext struct {
 	TraceID TraceID `json:"trace_id"`
 	SpanID  SpanID  `json:"span_id"`
+	// Kind default SpanKindInternal
+	Kind SpanKind `json:"span_kind"`
 }
 
 func (c *SpanContext) Size() (n int) {
@@ -283,6 +290,7 @@ func (c *SpanContext) MarshalTo(dAtA []byte) (int, error) {
 	return c.Size(), nil
 }
 
+// Unmarshal with default Kind: SpanKindRemote
 func (c *SpanContext) Unmarshal(dAtA []byte) error {
 	l := cap(dAtA)
 	if l < c.Size() {
@@ -290,6 +298,7 @@ func (c *SpanContext) Unmarshal(dAtA []byte) error {
 	}
 	copy(c.TraceID[:], dAtA[0:16])
 	copy(c.SpanID[:], dAtA[16:24])
+	c.Kind = SpanKindRemote
 	return nil
 }
 
@@ -298,8 +307,9 @@ func (c SpanContext) GetIDs() (TraceID, SpanID) {
 }
 
 func (c *SpanContext) Reset() {
-	c.TraceID = TraceID{}
-	c.SpanID = SpanID{}
+	c.TraceID = nilTraceID
+	c.SpanID = nilSpanID
+	c.Kind = SpanKindInternal
 }
 
 func (c *SpanContext) IsEmpty() bool {
@@ -309,20 +319,24 @@ func (c *SpanContext) IsEmpty() bool {
 // MarshalLogObject implement zapcore.ObjectMarshaler
 func (c *SpanContext) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	if !c.TraceID.IsZero() {
-		enc.AddString("statement_id", c.TraceID.String())
+		enc.AddString("trace_id", c.TraceID.String())
 	}
 	if !c.SpanID.IsZero() {
 		enc.AddString("span_id", c.SpanID.String())
 	}
+	if c.Kind != SpanKindInternal {
+		enc.AddString("kind", c.Kind.String())
+	}
 	return nil
 }
 
-func SpanContextWithID(id TraceID) SpanContext {
-	return SpanContext{TraceID: id}
+func SpanContextWithID(id TraceID, kind SpanKind) SpanContext {
+	return SpanContext{TraceID: id, Kind: kind}
 }
 
+// SpanContextWithIDs with default Kind: SpanKindInternal
 func SpanContextWithIDs(tid TraceID, sid SpanID) SpanContext {
-	return SpanContext{TraceID: tid, SpanID: sid}
+	return SpanContext{TraceID: tid, SpanID: sid, Kind: SpanKindInternal}
 }
 
 // SpanConfig is a group of options for a Span.
@@ -368,15 +382,9 @@ func WithNewRoot(newRoot bool) spanOptionFunc {
 	})
 }
 
-func WithTraceID(id TraceID) spanOptionFunc {
+func WithKind(kind SpanKind) spanOptionFunc {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.TraceID = id
-	})
-}
-
-func WithSpanID(id SpanID) spanOptionFunc {
-	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.SpanID = id
+		cfg.Kind = kind
 	})
 }
 
@@ -409,4 +417,37 @@ const NodeTypeStandalone = "Standalone"
 type MONodeResource struct {
 	NodeUuid string `json:"node_uuid"`
 	NodeType string `json:"node_type"`
+}
+
+// SpanKind is the role a Span plays in a Trace.
+type SpanKind int
+
+const (
+	// SpanKindInternal is a SpanKind for a Span that represents an internal
+	// operation within MO.
+	SpanKindInternal SpanKind = 0
+	// SpanKindStatement is a SpanKind for a Span that represents the operation
+	// belong to statement query
+	SpanKindStatement SpanKind = 1
+	// SpanKindRemote is a SpanKind for a Span that represents the operation
+	// cross rpc
+	SpanKindRemote SpanKind = 2
+	// SpanKindSession is a SpanKind for a Span that represents the operation
+	// start from session
+	SpanKindSession SpanKind = 3
+)
+
+func (k SpanKind) String() string {
+	switch k {
+	case SpanKindInternal:
+		return "internal"
+	case SpanKindStatement:
+		return "statement"
+	case SpanKindRemote:
+		return "remote"
+	case SpanKindSession:
+		return "session"
+	default:
+		return "unknown"
+	}
 }

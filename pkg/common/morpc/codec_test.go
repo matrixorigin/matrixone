@@ -17,12 +17,16 @@ package morpc
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEncodeAndDecode(t *testing.T) {
@@ -44,7 +48,7 @@ func TestEncodeAndDecode(t *testing.T) {
 	assert.NotNil(t, v.(RPCMessage).cancel)
 }
 
-func TestEncodeAndDecodeAndChecksum(t *testing.T) {
+func TestEncodeAndDecodeWithChecksum(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
 	defer cancel()
 	codec := newTestCodec(WithCodecEnableChecksum(),
@@ -59,6 +63,51 @@ func TestEncodeAndDecodeAndChecksum(t *testing.T) {
 	_, ok, err := codec.Decode(buf1)
 	assert.False(t, ok)
 	assert.Error(t, err)
+}
+
+func TestEncodeAndDecodeWithCompress(t *testing.T) {
+	p, err := mpool.NewMPool("test", 0, mpool.Small)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
+	defer cancel()
+	codec := newTestCodec(WithCodecEnableCompress(p))
+	buf1 := buf.NewByteBuf(32)
+
+	msg := newTestMessage(1)
+	err = codec.Encode(RPCMessage{Ctx: ctx, Message: msg}, buf1, nil)
+	assert.NoError(t, err)
+
+	buf.Uint64ToBytesTo(0, buf1.RawSlice(5, 5+8))
+	resp, ok, err := codec.Decode(buf1)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+
+	assert.Equal(t, msg, resp.(RPCMessage).Message)
+}
+
+func TestEncodeAndDecodeWithCompressAndHasPayload(t *testing.T) {
+	p, err := mpool.NewMPool("test", 0, mpool.Small)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
+	defer cancel()
+
+	codec := newTestCodec(WithCodecEnableCompress(p))
+	buf1 := buf.NewByteBuf(32)
+	buf2 := buf.NewByteBuf(32)
+
+	msg := RPCMessage{Ctx: ctx, Message: newTestMessage(1)}
+	msg.Message.(*testMessage).payload = []byte(strings.Repeat("payload", 100))
+	err = codec.Encode(msg, buf1, buf2)
+	assert.NoError(t, err)
+
+	v, ok, err := codec.Decode(buf2)
+	assert.True(t, ok)
+	assert.Equal(t, msg.Message, v.(RPCMessage).Message)
+	assert.NoError(t, err)
+	assert.NotNil(t, v.(RPCMessage).Ctx)
+	assert.NotNil(t, v.(RPCMessage).cancel)
 }
 
 func TestEncodeAndDecodeAndChecksumMismatch(t *testing.T) {
@@ -182,4 +231,58 @@ func TestNewWithMaxBodySize(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, v.(RPCMessage).Ctx)
 	assert.NotNil(t, v.(RPCMessage).cancel)
+}
+
+func TestBufferScale(t *testing.T) {
+	stopper := stopper.NewStopper("")
+	defer stopper.Stop()
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
+	defer cancel()
+	c1 := newTestCodec(WithCodecEnableChecksum(),
+		WithCodecIntegrationHLC(clock.NewUnixNanoHLCClockWithStopper(stopper, 0)),
+		WithCodecPayloadCopyBufferSize(16*1024))
+	c2 := newTestCodec(WithCodecEnableChecksum(),
+		WithCodecIntegrationHLC(clock.NewUnixNanoHLCClockWithStopper(stopper, 0)),
+		WithCodecPayloadCopyBufferSize(16*1024))
+	out := buf.NewByteBuf(32)
+	conn := buf.NewByteBuf(32)
+
+	n := 100
+	var messages []RPCMessage
+	for i := 0; i < n; i++ {
+		msg := RPCMessage{Ctx: ctx, Message: newTestMessage(uint64(i))}
+		payload := make([]byte, 1024*1024)
+		payload[len(payload)-1] = byte(i)
+		msg.Message.(*testMessage).payload = payload
+		messages = append(messages, msg)
+
+		require.NoError(t, c1.Encode(msg, out, conn))
+	}
+	_, err := out.WriteTo(conn)
+	if err != nil {
+		require.Equal(t, io.EOF, err)
+	}
+
+	for i := 0; i < n; i++ {
+		msg, ok, err := c2.Decode(conn)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, messages[i].Message, msg.(RPCMessage).Message)
+	}
+}
+
+func TestEncodeWithLargeMessageMustReturnError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	defer cancel()
+
+	maxBodySize := 1024
+	codec := newTestCodec(WithCodecMaxBodySize(maxBodySize))
+	buf1 := buf.NewByteBuf(32)
+	buf2 := buf.NewByteBuf(32)
+
+	msg := RPCMessage{Ctx: ctx, Message: newTestMessage(1)}
+	msg.Message.(*testMessage).payload = make([]byte, 1024)
+	err := codec.Encode(msg, buf1, buf2)
+	assert.Error(t, err)
 }

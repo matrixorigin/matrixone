@@ -16,11 +16,13 @@ package logservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
 	"reflect"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -43,7 +45,7 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	cc, err := getRPCClient(ctx, address, respPool)
+	cc, err := getRPCClient(ctx, address, respPool, defaultMaxMessageSize, "GetShardInfo")
 	if err != nil {
 		return ShardInfo{}, false, err
 	}
@@ -52,6 +54,8 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 			logutil.Error("failed to close client", zap.Error(err))
 		}
 	}()
+	ctx, span := trace.Debug(ctx, "GetShardInfo")
+	defer span.End()
 	req := pb.Request{
 		Method: pb.GET_SHARD_INFO,
 		LogRequest: pb.LogRequest{
@@ -76,7 +80,7 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 	}
 	resp := response.Response
 	defer response.Release()
-	err = toError(resp)
+	err = toError(ctx, resp)
 	if err != nil {
 		return ShardInfo{}, false, err
 	}
@@ -101,7 +105,7 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 func (s *Service) getShardInfo(shardID uint64) (pb.ShardInfoQueryResult, bool) {
 	r, ok := s.store.nh.GetNodeHostRegistry()
 	if !ok {
-		panic(moerr.NewInvalidState("gossip registry not enabled"))
+		panic(moerr.NewInvalidStateNoCtx("gossip registry not enabled"))
 	}
 	shard, ok := r.GetShardInfo(shardID)
 	if !ok {

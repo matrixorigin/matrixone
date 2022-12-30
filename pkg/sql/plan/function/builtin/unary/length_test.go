@@ -26,9 +26,9 @@ import (
 )
 
 func TestLength(t *testing.T) {
-	makeTempVector := func(src string, t types.T, srcIsScalar bool) []*vector.Vector {
+	makeTempVector := func(src string, t types.T, srcIsConst bool) []*vector.Vector {
 		vectors := make([]*vector.Vector, 1)
-		if srcIsScalar {
+		if srcIsConst {
 			vectors[0] = vector.NewConstString(t.ToType(), 1, src, testutil.TestUtilMp)
 		} else {
 			vectors[0] = vector.NewWithStrings(t.ToType(), []string{src}, nil, testutil.TestUtilMp)
@@ -81,21 +81,21 @@ func TestLength(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, lengthRes.Col)
-			require.Equal(t, c.wantScalar, lengthRes.IsScalar())
+			require.Equal(t, c.wantBytes, lengthRes.GetRawData())
+			require.Equal(t, c.wantScalar, lengthRes.IsConst())
 
 		})
 	}
 }
 
 func TestBlobLength(t *testing.T) {
-	makeBlobVector := func(src []byte, srcIsScalar bool, procs *process.Process) *vector.Vector {
+	makeBlobVector := func(src []byte, srcIsConst bool, procs *process.Process) *vector.Vector {
 		inputType := types.New(types.T_blob, 0, 0, 0)
 		var inputVector *vector.Vector
-		if srcIsScalar {
+		if srcIsConst {
 			inputVector = vector.NewConst(inputType, 1)
 		} else {
-			inputVector = vector.New(inputType)
+			inputVector = vector.New(vector.FLAT, inputType)
 		}
 		err := inputVector.Append(src, false, procs.Mp())
 		if err != nil {
@@ -134,8 +134,8 @@ func TestBlobLength(t *testing.T) {
 		convey.Convey(c.name, t, func() {
 			res, err := Length([]*vector.Vector{makeBlobVector(c.ctx, c.isScalar, procs)}, procs)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(res.Col, convey.ShouldResemble, c.want)
-			convey.So(res.IsScalar(), convey.ShouldEqual, c.isScalar)
+			convey.So(res.GetRawData(), convey.ShouldResemble, c.want)
+			convey.So(res.IsConst(), convey.ShouldEqual, c.isScalar)
 		})
 	}
 

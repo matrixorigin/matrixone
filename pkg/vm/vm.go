@@ -16,7 +16,6 @@ package vm
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -54,7 +53,7 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 
 	defer func() {
 		if e := recover(); e != nil {
-			err = moerr.ConvertPanicError(e)
+			err = moerr.ConvertPanicError(proc.Ctx, e)
 		}
 	}()
 	for _, in := range ins {

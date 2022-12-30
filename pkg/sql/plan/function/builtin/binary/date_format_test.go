@@ -547,8 +547,12 @@ func TestDateFormatWithScalar(t *testing.T) {
 			panic(err)
 		}
 
-		vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, datetime, mp)
-		vec[1] = vector.NewConstString(types.T_varchar.ToType(), 1, format, mp)
+		vec[0] = vector.New(vector.CONSTANT, types.T_datetime.ToType())
+		vector.Append(vec[0], datetime, false, mp)
+
+		vec[1] = vector.New(vector.CONSTANT, types.T_varchar.ToType())
+		vector.Append(vec[1], format, false, mp)
+
 		return vec
 	}
 
@@ -667,7 +671,6 @@ func TestDateFormatWithScalar(t *testing.T) {
 }
 
 func TestDatetimeFromat(t *testing.T) {
-
 	kases := []struct {
 		datestr string
 		format  []string

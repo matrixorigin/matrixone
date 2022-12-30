@@ -18,21 +18,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
+	"github.com/cockroachdb/errors/errbase"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
-
-	"github.com/cockroachdb/errors/errbase"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"go.uber.org/zap"
 )
 
-var _ IBuffer2SqlItem = (*MOErrorHolder)(nil)
-var _ CsvFields = (*MOErrorHolder)(nil)
-
+// MOErrorHolder implement export.IBuffer2SqlItem and export.CsvFields
 type MOErrorHolder struct {
 	Error     error     `json:"error"`
 	Timestamp time.Time `json:"timestamp"`
@@ -49,12 +47,12 @@ func (h *MOErrorHolder) Free() {
 	h.Error = nil
 }
 
-func (h *MOErrorHolder) GetRow() *export.Row { return errorView.OriginTable.GetRow() }
+func (h *MOErrorHolder) GetRow() *table.Row { return errorView.OriginTable.GetRow(DefaultContext()) }
 
-func (h *MOErrorHolder) CsvFields(row *export.Row) []string {
+func (h *MOErrorHolder) CsvFields(ctx context.Context, row *table.Row) []string {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, errorView.Table)
-	row.SetColumnVal(timestampCol, time2DatetimeString(h.Timestamp))
+	row.SetColumnVal(timestampCol, Time2DatetimeString(h.Timestamp))
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
 	row.SetColumnVal(errorCol, h.Error.Error())
@@ -65,18 +63,32 @@ func (h *MOErrorHolder) CsvFields(row *export.Row) []string {
 	}
 	if ct := errutil.GetContextTracer(h.Error); ct != nil && ct.Context() != nil {
 		span := SpanFromContext(ct.Context())
-		row.SetColumnVal(stmtIDCol, span.SpanContext().TraceID.String())
+		row.SetColumnVal(traceIDCol, span.SpanContext().TraceID.String())
 		row.SetColumnVal(spanIDCol, span.SpanContext().SpanID.String())
+		row.SetColumnVal(spanKindCol, span.SpanContext().Kind.String())
 	}
 	return row.ToStrings()
 }
 
 func (h *MOErrorHolder) Format(s fmt.State, verb rune) { errbase.FormatError(h.Error, s, verb) }
 
+var disableLogErrorReport atomic.Bool
+
+func DisableLogErrorReport(disable bool) {
+	disableLogErrorReport.Store(disable)
+}
+
 // ReportError send to BatchProcessor
 func ReportError(ctx context.Context, err error, depth int) {
-	msg := fmt.Sprintf("error: %v", err)
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(depth+1)).Info(msg, ContextField(ctx))
+	if !disableLogErrorReport.Load() {
+		msg := fmt.Sprintf("error: %v", err)
+		sc := SpanFromContext(ctx).SpanContext()
+		if sc.IsEmpty() {
+			logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg)
+		} else {
+			logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg, ContextField(ctx))
+		}
+	}
 	if !GetTracerProvider().IsEnable() {
 		return
 	}
@@ -84,5 +96,5 @@ func ReportError(ctx context.Context, err error, depth int) {
 		ctx = DefaultContext()
 	}
 	e := &MOErrorHolder{Error: err, Timestamp: time.Now()}
-	export.GetGlobalBatchProcessor().Collect(ctx, e)
+	GetGlobalBatchProcessor().Collect(ctx, e)
 }

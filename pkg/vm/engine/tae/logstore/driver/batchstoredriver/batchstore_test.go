@@ -19,11 +19,11 @@ import (
 	"sync"
 	"testing"
 
-	// "github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	storeEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -55,7 +55,7 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 	tempLsn := uint64(0)
 	err = s.Replay(func(e *entry.Entry) {
 		if e.Lsn < tempLsn {
-			panic(moerr.NewInternalError("logic error %d<%d", e.Lsn, tempLsn))
+			panic(moerr.NewInternalErrorNoCtx("logic error %d<%d", e.Lsn, tempLsn))
 		}
 		tempLsn = e.Lsn
 		_, err = s.Read(e.Lsn)
@@ -82,6 +82,7 @@ func concurrentAppendReadCheckpoint(s *baseStore, t *testing.T) {
 
 	wg := sync.WaitGroup{}
 	worker, _ := ants.NewPool(10)
+	defer worker.Release()
 	appendfn := func(i int) func() {
 		return func() {
 			e := entries[i]
@@ -133,6 +134,7 @@ func concurrentAppendReadCheckpoint(s *baseStore, t *testing.T) {
 }
 
 func TestDriver(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	s := initEnv(t)
 	concurrentAppendReadCheckpoint(s, t)
 	s = restartStore(s, t)

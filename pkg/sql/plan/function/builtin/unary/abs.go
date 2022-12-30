@@ -26,8 +26,8 @@ func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint64, Size: 8}
 	inputValues := vector.MustTCols[uint64](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
@@ -39,7 +39,7 @@ func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.GetFixedVectorValues[uint64](resultVector)
+		resultValues := vector.MustTCols[uint64](resultVector)
 		abs.AbsUint64(inputValues, resultValues)
 		return resultVector, nil
 	}
@@ -50,8 +50,8 @@ func AbsInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
 	inputValues := vector.MustTCols[int64](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
@@ -74,8 +74,8 @@ func AbsFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_float64, Size: 8}
 	inputValues := vector.MustTCols[float64](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
@@ -95,10 +95,10 @@ func AbsFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 
 func AbsDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_decimal128, Size: 16, Scale: inputVector.Typ.Scale}
+	resultType := types.Type{Oid: types.T_decimal128, Size: 16, Scale: inputVector.GetType().Scale}
 	inputValues := vector.MustTCols[types.Decimal128](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)

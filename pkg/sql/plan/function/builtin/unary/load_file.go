@@ -32,8 +32,8 @@ const (
 func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.New(types.T_text, 0, 0, 0)
-	resultVector := vector.New(resultType)
-	if inputVector.ConstVectorIsNull() {
+	resultVector := vector.New(vector.FLAT, resultType)
+	if inputVector.IsConstNull() {
 		return vector.NewConstNull(resultType, 1), nil
 	}
 	Filepath := vector.GetStrColumn(inputVector)[0]
@@ -45,7 +45,7 @@ func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	ctx, err := io.ReadAll(r)
 	defer r.Close()
 	if len(ctx) > blobsize {
-		return nil, moerr.NewInternalError("Data too long for blob")
+		return nil, moerr.NewInternalErrorNoCtx("Data too long for blob")
 	}
 	var isNull bool
 	if len(ctx) == 0 {
@@ -59,6 +59,9 @@ func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
 	fs, readPath, err := fileservice.GetForETL(fs, Filepath)
+	if fs == nil || err != nil {
+		return nil, err
+	}
 	var r io.ReadCloser
 	ctx := context.TODO()
 	vec := fileservice.IOVector{

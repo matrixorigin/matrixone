@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	Row_ID           = "__mo_rowid"
-	PrefixPriColName = "__mo_cpkey_"
+	Row_ID               = "__mo_rowid"
+	PrefixPriColName     = "__mo_cpkey_"
+	PrefixIndexTableName = "__mo_index_"
 )
 
 const (
@@ -86,6 +87,7 @@ const (
 	SystemColAttr_IsHidden        = "att_is_hidden"
 	SystemColAttr_HasUpdate       = "attr_has_update"
 	SystemColAttr_Update          = "attr_update"
+	SystemColAttr_IsClusterBy     = "attr_is_clusterby"
 
 	BlockMeta_ID         = "block_id"
 	BlockMeta_EntryState = "entry_state"
@@ -93,6 +95,7 @@ const (
 	BlockMeta_MetaLoc    = "meta_loc"
 	BlockMeta_DeltaLoc   = "delta_loc"
 	BlockMeta_CommitTs   = "committs"
+	BlockMeta_SegmentID  = "segment_id"
 
 	SystemCatalogName  = "def"
 	SystemPersistRel   = "p"
@@ -164,6 +167,7 @@ const (
 	MO_COLUMNS_ATT_IS_HIDDEN_IDX         = 18
 	MO_COLUMNS_ATT_HAS_UPDATE_IDX        = 19
 	MO_COLUMNS_ATT_UPDATE_IDX            = 20
+	MO_COLUMNS_ATT_IS_CLUSTERBY          = 21
 
 	BLOCKMETA_ID_IDX         = 0
 	BLOCKMETA_ENTRYSTATE_IDX = 1
@@ -171,6 +175,7 @@ const (
 	BLOCKMETA_METALOC_IDX    = 3
 	BLOCKMETA_DELTALOC_IDX   = 4
 	BLOCKMETA_COMMITTS_IDX   = 5
+	BLOCKMETA_SEGID_IDX      = 6
 )
 
 type BlockInfo struct {
@@ -180,6 +185,7 @@ type BlockInfo struct {
 	MetaLoc    string
 	DeltaLoc   string
 	CommitTs   types.TS
+	SegmentID  uint64
 }
 
 // used for memengine and tae
@@ -274,6 +280,7 @@ var (
 		SystemColAttr_IsHidden,
 		SystemColAttr_HasUpdate,
 		SystemColAttr_Update,
+		SystemColAttr_IsClusterBy,
 	}
 	MoTableMetaSchema = []string{
 		BlockMeta_ID,
@@ -282,32 +289,33 @@ var (
 		BlockMeta_MetaLoc,
 		BlockMeta_DeltaLoc,
 		BlockMeta_CommitTs,
+		BlockMeta_SegmentID,
 	}
 	MoDatabaseTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0),    // dat_id
-		types.New(types.T_varchar, 100, 0, 0), // datname
-		types.New(types.T_varchar, 100, 0, 0), // dat_catalog_name
-		types.New(types.T_varchar, 100, 0, 0), // dat_createsql
-		types.New(types.T_uint32, 0, 0, 0),    // owner
-		types.New(types.T_uint32, 0, 0, 0),    // creator
-		types.New(types.T_timestamp, 0, 0, 0), // created_time
-		types.New(types.T_uint32, 0, 0, 0),    // account_id
+		types.New(types.T_uint64, 0, 0, 0),     // dat_id
+		types.New(types.T_varchar, 5000, 0, 0), // datname
+		types.New(types.T_varchar, 5000, 0, 0), // dat_catalog_name
+		types.New(types.T_varchar, 5000, 0, 0), // dat_createsql
+		types.New(types.T_uint32, 0, 0, 0),     // owner
+		types.New(types.T_uint32, 0, 0, 0),     // creator
+		types.New(types.T_timestamp, 0, 0, 0),  // created_time
+		types.New(types.T_uint32, 0, 0, 0),     // account_id
 	}
 	MoTablesTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0),    // rel_id
-		types.New(types.T_varchar, 100, 0, 0), // relname
-		types.New(types.T_varchar, 100, 0, 0), // reldatabase
-		types.New(types.T_uint64, 0, 0, 0),    // reldatabase_id
-		types.New(types.T_varchar, 100, 0, 0), // relpersistence
-		types.New(types.T_varchar, 100, 0, 0), // relkind
-		types.New(types.T_varchar, 100, 0, 0), // rel_comment
-		types.New(types.T_varchar, 100, 0, 0), // rel_createsql
-		types.New(types.T_timestamp, 0, 0, 0), // created_time
-		types.New(types.T_uint32, 0, 0, 0),    // creator
-		types.New(types.T_uint32, 0, 0, 0),    // owner
-		types.New(types.T_uint32, 0, 0, 0),    // account_id
-		types.New(types.T_blob, 0, 0, 0),      // partition
-		types.New(types.T_blob, 0, 0, 0),      // viewdef
+		types.New(types.T_uint64, 0, 0, 0),     // rel_id
+		types.New(types.T_varchar, 5000, 0, 0), // relname
+		types.New(types.T_varchar, 5000, 0, 0), // reldatabase
+		types.New(types.T_uint64, 0, 0, 0),     // reldatabase_id
+		types.New(types.T_varchar, 5000, 0, 0), // relpersistence
+		types.New(types.T_varchar, 5000, 0, 0), // relkind
+		types.New(types.T_varchar, 5000, 0, 0), // rel_comment
+		types.New(types.T_varchar, 5000, 0, 0), // rel_createsql
+		types.New(types.T_timestamp, 0, 0, 0),  // created_time
+		types.New(types.T_uint32, 0, 0, 0),     // creator
+		types.New(types.T_uint32, 0, 0, 0),     // owner
+		types.New(types.T_uint32, 0, 0, 0),     // account_id
+		types.New(types.T_blob, 0, 0, 0),       // partition
+		types.New(types.T_blob, 0, 0, 0),       // viewdef
 	}
 	MoColumnsTypes = []types.Type{
 		types.New(types.T_varchar, 256, 0, 0),  // att_uniq_name
@@ -322,23 +330,25 @@ var (
 		types.New(types.T_int32, 0, 0, 0),      // att_length
 		types.New(types.T_int8, 0, 0, 0),       // attnotnull
 		types.New(types.T_int8, 0, 0, 0),       // atthasdef
-		types.New(types.T_varchar, 1024, 0, 0), // att_default
+		types.New(types.T_varchar, 2048, 0, 0), // att_default
 		types.New(types.T_int8, 0, 0, 0),       // attisdropped
 		types.New(types.T_char, 1, 0, 0),       // att_constraint_type
 		types.New(types.T_int8, 0, 0, 0),       // att_is_unsigned
 		types.New(types.T_int8, 0, 0, 0),       // att_is_auto_increment
-		types.New(types.T_varchar, 1024, 0, 0), // att_comment
+		types.New(types.T_varchar, 2048, 0, 0), // att_comment
 		types.New(types.T_int8, 0, 0, 0),       // att_is_hidden
 		types.New(types.T_int8, 0, 0, 0),       // att_has_update
-		types.New(types.T_varchar, 1024, 0, 0), // att_update
+		types.New(types.T_varchar, 2048, 0, 0), // att_update
+		types.New(types.T_int8, 0, 0, 0),       // att_is_clusterby
 	}
 	MoTableMetaTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0),  // block_id
-		types.New(types.T_bool, 0, 0, 0),    // entry_state, true for appendable
-		types.New(types.T_bool, 0, 0, 0),    // sorted, true for sorted by primary key
-		types.New(types.T_varchar, 0, 0, 0), // meta_loc
-		types.New(types.T_varchar, 0, 0, 0), // delta_loc
-		types.New(types.T_TS, 0, 0, 0),      // committs
+		types.New(types.T_uint64, 0, 0, 0),                    // block_id
+		types.New(types.T_bool, 0, 0, 0),                      // entry_state, true for appendable
+		types.New(types.T_bool, 0, 0, 0),                      // sorted, true for sorted by primary key
+		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0), // meta_loc
+		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0), // delta_loc
+		types.New(types.T_TS, 0, 0, 0),                        // committs
+		types.New(types.T_uint64, 0, 0, 0),                    // segment_id
 	}
 	// used by memengine or tae
 	MoDatabaseTableDefs = []engine.TableDef{}

@@ -490,7 +490,7 @@ var aggregates = map[int]Functions{
 	},
 	COUNT: {
 		Id:     COUNT,
-		Flag:   plan.Function_AGG,
+		Flag:   plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
 		Layout: STANDARD_FUNCTION,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
 			if len(inputs) == 1 {
@@ -508,7 +508,7 @@ var aggregates = map[int]Functions{
 	},
 	STARCOUNT: {
 		Id:     STARCOUNT,
-		Flag:   plan.Function_AGG,
+		Flag:   plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
 		Layout: STANDARD_FUNCTION,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
 			if len(inputs) == 1 {

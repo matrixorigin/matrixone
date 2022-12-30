@@ -45,17 +45,17 @@ func Decimal64VecSub(xs, ys, rs *vector.Vector) error {
 	rt := vector.MustTCols[types.Decimal64](rs)
 
 	flag := 0
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		flag |= RIGHT_IS_SCALAR
 	}
 
 	rc := C.Decimal64_VecSub(dec64PtrToC(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewOutOfRange("decimal64", "decimal SUB")
+		return moerr.NewOutOfRangeNoCtx("decimal64", "decimal SUB")
 	}
 	return nil
 }
@@ -66,16 +66,16 @@ func Decimal128VecSub(xs, ys, rs *vector.Vector) error {
 	rt := vector.MustTCols[types.Decimal128](rs)
 
 	flag := 0
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		flag |= RIGHT_IS_SCALAR
 	}
 	rc := C.Decimal128_VecSub(dec128PtrToC(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewOutOfRange("decimal128", "decimal SUB")
+		return moerr.NewOutOfRangeNoCtx("decimal128", "decimal SUB")
 	}
 	return nil
 }

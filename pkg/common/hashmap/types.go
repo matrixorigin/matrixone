@@ -17,7 +17,6 @@ package hashmap
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -62,13 +61,12 @@ type Iterator interface {
 
 // JoinMap is used for join
 type JoinMap struct {
-	cnt  int64
+	cnt  *int64
 	sels [][]int64
 	// push-down filter expression, possibly a bloomfilter
 	expr    *plan.Expr
 	mp      *StrHashMap
 	hasNull bool
-	idx     *index.LowCardinalityIndex
 }
 
 // StrHashMap key is []byte, value is an uint64 value (starting from 1)

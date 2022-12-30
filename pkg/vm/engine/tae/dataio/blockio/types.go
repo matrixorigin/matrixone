@@ -16,17 +16,15 @@ package blockio
 
 import (
 	"fmt"
+	"github.com/google/uuid"
 	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 const (
-	BlockExt      = "blk"
-	SegmentExt    = "seg"
 	CheckpointExt = "ckp"
 )
 
@@ -34,65 +32,12 @@ func EncodeCheckpointMetadataFileName(dir, prefix string, start, end types.TS) s
 	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), CheckpointExt)
 }
 
-func EncodeCheckpointName(prefix string, start, end types.TS) (name string) {
-	name = fmt.Sprintf("%s_%s_%s.%s", prefix, start.ToString(), end.ToString(), CheckpointExt)
-	return
+// EncodeObjectName Generate uuid as the file name of the block&segment
+func EncodeObjectName() (name string) {
+	name = uuid.NewString()
+	return name
 }
 
-func EncodeBlkName(id *common.ID, ts types.TS) (name string) {
-	basename := fmt.Sprintf("%d-%d-%d.%s", id.TableID, id.SegmentID, id.BlockID, BlockExt)
-	return basename
-}
-
-func EncodeSegName(id *common.ID) (name string) {
-	basename := fmt.Sprintf("%d-%d.%s", id.TableID, id.SegmentID, SegmentExt)
-	return basename
-}
-
-func DecodeName(name string) []string {
-	fileName := strings.Split(name, ".")
-	info := strings.Split(fileName[0], "-")
-	return info
-}
-
-func DecodeBlkName(name string) (id *common.ID, err error) {
-	info := DecodeName(name)
-	tid, err := strconv.ParseUint(info[0], 10, 32)
-	if err != nil {
-		return
-	}
-	sid, err := strconv.ParseUint(info[1], 10, 32)
-	if err != nil {
-		return
-	}
-	bid, err := strconv.ParseUint(info[2], 10, 32)
-	if err != nil {
-		return
-	}
-	id = &common.ID{
-		TableID:   tid,
-		SegmentID: sid,
-		BlockID:   bid,
-	}
-	return
-}
-
-func DecodeSegName(name string) (id *common.ID, err error) {
-	info := DecodeName(name)
-	tid, err := strconv.ParseUint(info[0], 10, 32)
-	if err != nil {
-		return
-	}
-	sid, err := strconv.ParseUint(info[1], 10, 32)
-	if err != nil {
-		return
-	}
-	id = &common.ID{
-		TableID:   tid,
-		SegmentID: sid,
-	}
-	return
-}
 func DecodeCheckpointMetadataFileName(name string) (start, end types.TS) {
 	fileName := strings.Split(name, ".")
 	info := strings.Split(fileName[0], "_")
@@ -100,55 +45,9 @@ func DecodeCheckpointMetadataFileName(name string) (start, end types.TS) {
 	end = types.StringToTS(info[2])
 	return
 }
-func DecodeCheckpointName(name string) (start, end types.TS) {
-	fileName := strings.Split(name, ".")
-	info := strings.Split(fileName[0], "_")
-	start = types.StringToTS(info[1])
-	end = types.StringToTS(info[2])
-	return
-}
-func EncodeBlkMetaLoc(id *common.ID, ts types.TS, extent objectio.Extent, rows uint32) string {
-	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d",
-		EncodeBlkName(id, ts),
-		extent.Offset(),
-		extent.Length(),
-		extent.OriginSize(),
-		rows,
-	)
-	return metaLoc
-}
-func EncodeCkpMetaLoc(name string, extent objectio.Extent, rows uint32) string {
-	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d",
-		name,
-		extent.Offset(),
-		extent.Length(),
-		extent.OriginSize(),
-		rows,
-	)
-	return metaLoc
-}
-func EncodeBlkMetaLocWithObject(
-	id *common.ID,
-	extent objectio.Extent,
-	rows uint32,
-	blocks []objectio.BlockObject) (string, error) {
-	size, err := GetObjectSizeWithBlocks(blocks)
-	if err != nil {
-		return "", err
-	}
-	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d:%d",
-		EncodeBlkName(id, types.TS{}),
-		extent.Offset(),
-		extent.Length(),
-		extent.OriginSize(),
-		rows,
-		size,
-	)
-	return metaLoc, nil
-}
 
-func EncodeSegMetaLocWithObject(
-	id *common.ID,
+// EncodeMetaLocWithObject Generate a metaloc from an object file
+func EncodeMetaLocWithObject(
 	extent objectio.Extent,
 	rows uint32,
 	blocks []objectio.BlockObject) (string, error) {
@@ -156,8 +55,10 @@ func EncodeSegMetaLocWithObject(
 	if err != nil {
 		return "", err
 	}
+	meta := blocks[0].GetMeta()
+	name := meta.GetName()
 	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d:%d",
-		EncodeSegName(id),
+		name,
 		extent.Offset(),
 		extent.Length(),
 		extent.OriginSize(),

@@ -128,11 +128,14 @@ func getLsn(e entry.Entry) (group uint32, lsn uint64) {
 // ckp C
 // check whether UC is checkpointed
 func TestCheckpointUC(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	driver, dir := initWal(t)
 
 	wg := &sync.WaitGroup{}
 	appendworker, _ := ants.NewPool(100)
 	ckpworker, _ := ants.NewPool(100)
+	defer appendworker.Release()
+	defer ckpworker.Release()
 
 	ckpfn := func(lsn uint64) func() {
 		return func() {

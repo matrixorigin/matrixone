@@ -79,34 +79,36 @@ func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	formatVector := vectors[1]
 
 	resultType := types.T_varchar.ToType()
-	if !formatVector.IsScalar() {
-		return nil, moerr.NewInvalidArg("date format format", "not constant")
+	if !formatVector.IsConst() {
+		return nil, moerr.NewInvalidArgNoCtx("date format format", "not constant")
 	}
 
-	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
+	if dateVector.IsConstNull() || formatVector.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 
 	// get the format string.
-	formatMask := string(formatVector.GetString(0))
+	formatMask := string(formatVector.String())
 
-	if dateVector.IsScalar() {
+	if dateVector.IsConst() {
 		// XXX Null handling maybe broken.
-		datetimes := dateVector.Col.([]types.Datetime)
-		resCol, err := CalcDateFromat(datetimes, formatMask, dateVector.Nsp)
+		datetimes := vector.MustTCols[types.Datetime](dateVector)
+		resCol, err := CalcDateFromat(datetimes, formatMask, dateVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewConstString(resultType, 1, resCol[0], proc.Mp()), nil
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.AppendString(vec, resCol[0], resCol[0] == "", proc.Mp())
+		return vec, nil
 	} else {
-		datetimes := dateVector.Col.([]types.Datetime)
-		resCol, err := CalcDateFromat(datetimes, formatMask, dateVector.Nsp)
+		datetimes := vector.MustTCols[types.Datetime](dateVector)
+		resCol, err := CalcDateFromat(datetimes, formatMask, dateVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.New(resultType)
-		resultVector.Nsp = dateVector.Nsp
-		vector.AppendString(resultVector, resCol, proc.Mp())
+		resultVector := vector.New(vector.FLAT, resultType)
+		resultVector.SetNulls(dateVector.GetNulls())
+		vector.AppendStringList(resultVector, resCol, nil, proc.Mp())
 		return resultVector, nil
 	}
 }
@@ -156,13 +158,13 @@ func makeDateFormat(t types.Datetime, b rune, buf *bytes.Buffer) error {
 	case 'b':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return moerr.NewInvalidInput("invalud date format for month '%d'", m)
+			return moerr.NewInvalidInputNoCtx("invalud date format for month '%d'", m)
 		}
 		buf.WriteString(MonthNames[m-1][:3])
 	case 'M':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return moerr.NewInvalidInput("invalud date format for month '%d'", m)
+			return moerr.NewInvalidInputNoCtx("invalud date format for month '%d'", m)
 		}
 		buf.WriteString(MonthNames[m-1])
 	case 'm':

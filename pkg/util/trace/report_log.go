@@ -15,21 +15,20 @@
 package trace
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
-
 	"go.uber.org/zap"
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
 )
 
 var _ batchpipe.HasName = (*MOZapLog)(nil)
-var _ IBuffer2SqlItem = (*MOZapLog)(nil)
-var _ CsvFields = (*MOZapLog)(nil)
 
+// MOZapLog implement export.IBuffer2SqlItem and export.CsvFields
 type MOZapLog struct {
 	Level       zapcore.Level `json:"Level"`
 	SpanContext *SpanContext  `json:"span"`
@@ -38,6 +37,7 @@ type MOZapLog struct {
 	Caller      string `json:"caller"` // like "util/trace/trace.go:666"
 	Message     string `json:"message"`
 	Extra       string `json:"extra"` // like json text
+	Stack       string `json:"stack"`
 }
 
 func newMOZap() *MOZapLog {
@@ -61,21 +61,23 @@ func (m *MOZapLog) Free() {
 	m.Extra = ""
 }
 
-func (m *MOZapLog) GetRow() *export.Row { return logView.OriginTable.GetRow() }
+func (m *MOZapLog) GetRow() *table.Row { return logView.OriginTable.GetRow(DefaultContext()) }
 
-func (m *MOZapLog) CsvFields(row *export.Row) []string {
+func (m *MOZapLog) CsvFields(ctx context.Context, row *table.Row) []string {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, logView.Table)
-	row.SetColumnVal(stmtIDCol, m.SpanContext.TraceID.String())
+	row.SetColumnVal(traceIDCol, m.SpanContext.TraceID.String())
 	row.SetColumnVal(spanIDCol, m.SpanContext.SpanID.String())
+	row.SetColumnVal(spanKindCol, m.SpanContext.Kind.String())
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
-	row.SetColumnVal(timestampCol, time2DatetimeString(m.Timestamp))
+	row.SetColumnVal(timestampCol, Time2DatetimeString(m.Timestamp))
 	row.SetColumnVal(loggerNameCol, m.LoggerName)
 	row.SetColumnVal(levelCol, m.Level.String())
 	row.SetColumnVal(callerCol, m.Caller)
 	row.SetColumnVal(messageCol, m.Message)
 	row.SetColumnVal(extraCol, m.Extra)
+	row.SetColumnVal(stackCol, m.Stack)
 	return row.ToStrings()
 }
 
@@ -91,9 +93,22 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 	log.Caller = entry.Caller.TrimmedPath()
 	log.Timestamp = entry.Time
 	log.SpanContext = DefaultSpanContext()
-	for _, v := range fields {
+	log.Stack = entry.Stack
+	// find SpanContext
+	endIdx := len(fields) - 1
+	for idx, v := range fields {
 		if IsSpanField(v) {
 			log.SpanContext = v.Interface.(*SpanContext)
+			// find endIdx
+			for ; idx < endIdx && IsSpanField(fields[endIdx]); endIdx-- {
+			}
+			if idx <= endIdx {
+				fields[idx], fields[endIdx] = fields[endIdx], fields[idx]
+				endIdx--
+			}
+			continue
+		}
+		if idx == endIdx {
 			break
 		}
 	}
@@ -101,8 +116,8 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 		log.Free()
 		return jsonEncoder.EncodeEntry(entry, []zap.Field{})
 	}
-	buffer, err := jsonEncoder.EncodeEntry(entry, fields)
+	buffer, err := jsonEncoder.EncodeEntry(entry, fields[:endIdx+1])
 	log.Extra = buffer.String()
-	export.GetGlobalBatchProcessor().Collect(DefaultContext(), log)
+	GetGlobalBatchProcessor().Collect(DefaultContext(), log)
 	return buffer, err
 }

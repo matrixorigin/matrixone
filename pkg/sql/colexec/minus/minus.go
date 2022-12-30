@@ -58,11 +58,11 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 		case buildingHashMap:
 			// step 1: build the hash table by all right batches.
 			if err = arg.ctr.buildHashTable(proc, analyze, 1); err != nil {
-				arg.ctr.hashTable.Free()
-				arg.ctr.state = operatorEnd
-				return true, err
+				arg.Free(proc, true)
+				return false, err
 			}
 			arg.ctr.state = probingHashMap
+
 		case probingHashMap:
 			// step 2: use left batches to probe and update the hash table.
 			//
@@ -71,22 +71,18 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 			last := false
 			last, err = arg.ctr.probeHashTable(proc, analyze, 0)
 			if err != nil {
-				arg.ctr.bat.Clean(proc.Mp())
-				arg.ctr.hashTable.Free()
-				arg.ctr.state = operatorEnd
-				return true, err
+				arg.Free(proc, true)
+				return false, err
 			}
 			if last {
 				arg.ctr.state = operatorEnd
 				continue
 			}
 			return false, nil
+
 		case operatorEnd:
 			// operator over.
-			if arg.ctr.hashTable != nil {
-				arg.ctr.hashTable.Free()
-				arg.ctr.hashTable = nil
-			}
+			arg.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -109,7 +105,7 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 		ana.Input(bat)
 
 		itr := ctr.hashTable.NewIterator()
-		count := vector.Length(bat.Vecs[0])
+		count := bat.Vecs[0].Length()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := count - i
 			if n > hashmap.UnitLimit {
@@ -117,11 +113,11 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 			}
 			_, _, err := itr.Insert(i, n, bat.Vecs)
 			if err != nil {
-				bat.Clean(proc.Mp())
+				bat.Free(proc.Mp())
 				return err
 			}
 		}
-		bat.Clean(proc.Mp())
+		bat.Free(proc.Mp())
 	}
 	return nil
 }
@@ -147,10 +143,10 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 
 		ctr.bat = batch.NewWithSize(len(bat.Vecs))
 		for i := range bat.Vecs {
-			ctr.bat.Vecs[i] = vector.New(bat.Vecs[i].Typ)
+			ctr.bat.Vecs[i] = vector.New(vector.FLAT, *bat.Vecs[i].GetType())
 		}
 
-		count := vector.Length(bat.Vecs[0])
+		count := bat.Vecs[0].Length()
 		itr := ctr.hashTable.NewIterator()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			oldHashGroup := ctr.hashTable.GroupCount()
@@ -161,7 +157,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			}
 			vs, _, err := itr.Insert(i, n, bat.Vecs)
 			if err != nil {
-				bat.Clean(proc.Mp())
+				bat.Free(proc.Mp())
 				return false, err
 			}
 			copy(inserted[:n], restoreInserted[:n])
@@ -180,7 +176,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			if insertCount > 0 {
 				for pos := range bat.Vecs {
 					if err := vector.UnionBatch(ctr.bat.Vecs[pos], bat.Vecs[pos], int64(i), insertCount, inserted[:n], proc.Mp()); err != nil {
-						bat.Clean(proc.Mp())
+						bat.Free(proc.Mp())
 						return false, err
 					}
 				}
@@ -188,7 +184,8 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 		}
 		ana.Output(ctr.bat)
 		proc.SetInputBatch(ctr.bat)
-		bat.Clean(proc.Mp())
+		ctr.bat = nil
+		bat.Free(proc.Mp())
 		return false, nil
 	}
 }

@@ -21,11 +21,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"go.uber.org/zap"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 // WithSenderPayloadBufferSize set buffer size for copy payload data to socket.
@@ -56,14 +55,21 @@ func WithSenderLocalDispatch(localDispatch LocalDispatch) SenderOption {
 	}
 }
 
+// WithSenderMaxMessageSize set max rpc message size
+func WithSenderMaxMessageSize(maxMessageSize int) SenderOption {
+	return func(s *sender) {
+		s.options.maxMessageSize = maxMessageSize
+	}
+}
+
 type sender struct {
-	logger *zap.Logger
-	clock  clock.Clock
+	rt     moruntime.Runtime
 	client morpc.RPCClient
 
 	options struct {
 		localDispatch         LocalDispatch
 		payloadCopyBufferSize int
+		maxMessageSize        int
 		backendCreateOptions  []morpc.BackendOption
 		clientOptions         []morpc.ClientOption
 	}
@@ -77,21 +83,20 @@ type sender struct {
 
 // NewSenderWithConfig create a txn sender by config and options
 func NewSenderWithConfig(cfg Config,
-	clock clock.Clock,
-	logger *zap.Logger,
+	rt moruntime.Runtime,
 	options ...SenderOption) (TxnSender, error) {
 	cfg.adjust()
-	options = append(options, WithSenderBackendOptions(cfg.getBackendOptions(logger)...))
-	options = append(options, WithSenderClientOptions(cfg.getClientOptions(logger)...))
-	return NewSender(clock, logger, options...)
+	options = append(options, WithSenderBackendOptions(cfg.getBackendOptions(rt.Logger().RawLogger())...))
+	options = append(options, WithSenderClientOptions(cfg.getClientOptions(rt.Logger().RawLogger())...))
+	options = append(options, WithSenderMaxMessageSize(int(cfg.MaxMessageSize)))
+	return NewSender(rt, options...)
 }
 
 // NewSender create a txn sender
-func NewSender(clock clock.Clock,
-	logger *zap.Logger,
+func NewSender(
+	rt moruntime.Runtime,
 	options ...SenderOption) (TxnSender, error) {
-	logger = logutil.Adjust(logger)
-	s := &sender{logger: logger, clock: clock}
+	s := &sender{rt: rt}
 	for _, opt := range options {
 		opt(s)
 	}
@@ -118,9 +123,10 @@ func NewSender(clock clock.Clock,
 	}
 
 	codec := morpc.NewMessageCodec(func() morpc.Message { return s.acquireResponse() },
-		morpc.WithCodecIntegrationHLC(s.clock),
+		morpc.WithCodecIntegrationHLC(s.rt.Clock()),
 		morpc.WithCodecPayloadCopyBufferSize(s.options.payloadCopyBufferSize),
-		morpc.WithCodecEnableChecksum())
+		morpc.WithCodecEnableChecksum(),
+		morpc.WithCodecMaxBodySize(s.options.maxMessageSize))
 	bf := morpc.NewGoettyBasedBackendFactory(codec, s.options.backendCreateOptions...)
 	client, err := morpc.NewClient(bf, s.options.clientOptions...)
 	if err != nil {
@@ -135,10 +141,9 @@ func (s *sender) adjust() {
 		s.options.payloadCopyBufferSize = 16 * 1024
 	}
 	s.options.backendCreateOptions = append(s.options.backendCreateOptions,
-		morpc.WithBackendConnectWhenCreate(),
-		morpc.WithBackendLogger(s.logger))
+		morpc.WithBackendLogger(s.rt.Logger().RawLogger()))
 
-	s.options.clientOptions = append(s.options.clientOptions, morpc.WithClientLogger(s.logger))
+	s.options.clientOptions = append(s.options.clientOptions, morpc.WithClientLogger(s.rt.Logger().RawLogger()))
 }
 
 func (s *sender) Close() error {
@@ -188,7 +193,7 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		}
 		v, ok := <-c
 		if !ok {
-			return nil, moerr.NewStreamClosed()
+			return nil, moerr.NewStreamClosedNoCtx()
 		}
 		resp := v.(*txn.TxnResponse)
 		sr.setResponse(resp, idx)
@@ -198,6 +203,8 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 }
 
 func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnResponse, error) {
+	ctx, span := trace.Debug(ctx, "sender.doSend")
+	defer span.End()
 	dn := request.GetTargetDN()
 	if s.options.localDispatch != nil {
 		if handle := s.options.localDispatch(dn); handle != nil {
@@ -228,7 +235,7 @@ func (s *sender) createStream(ctx context.Context, dn metadata.DNShard, size int
 			return ls, nil
 		}
 	}
-	return s.client.NewStream(dn.Address)
+	return s.client.NewStream(dn.Address, false)
 }
 
 func (s *sender) acquireLocalStream() *localStream {
@@ -348,7 +355,7 @@ func (ls *localStream) start() {
 			response := v.responseFactory()
 			err := v.handleFunc(v.ctx, v.request.(*txn.TxnRequest), response)
 			if err != nil {
-				response.TxnError = txn.WrapError(moerr.NewRpcError(err.Error()), 0)
+				response.TxnError = txn.WrapError(moerr.NewRpcErrorNoCtx(err.Error()), 0)
 			}
 			out <- response
 		}

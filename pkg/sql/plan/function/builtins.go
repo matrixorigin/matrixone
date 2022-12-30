@@ -15,12 +15,15 @@
 package function
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/ctl"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/unary"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 )
 
 func initBuiltIns() {
@@ -179,7 +182,7 @@ var builtins = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Volatile:  true,
+				Volatile:  false,
 				Args:      []types.T{},
 				ReturnTyp: types.T_timestamp,
 				Fn:        multi.CurrentTimestamp,
@@ -209,7 +212,7 @@ var builtins = map[int]Functions{
 	},
 	DATE: {
 		Id:     DATE,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -269,24 +272,36 @@ var builtins = map[int]Functions{
 			},
 			{
 				Index:     3,
+				Args:      []types.T{types.T_int64},
+				ReturnTyp: types.T_time,
+				Fn:        unary.Int64ToTime,
+			},
+			{
+				Index:     4,
+				Args:      []types.T{types.T_decimal128},
+				ReturnTyp: types.T_time,
+				Fn:        unary.Decimal128ToTime,
+			},
+			{
+				Index:     5,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_time,
 				Fn:        unary.DateStringToTime,
 			},
 			{
-				Index:     4,
+				Index:     6,
 				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_time,
 				Fn:        unary.DateStringToTime,
 			},
 			{
-				Index:     5,
+				Index:     7,
 				Args:      []types.T{types.T_text},
 				ReturnTyp: types.T_time,
 				Fn:        unary.DateStringToTime,
 			},
 			{
-				Index:     6,
+				Index:     8,
 				Args:      []types.T{types.T_blob},
 				ReturnTyp: types.T_time,
 				Fn:        unary.DateStringToTime,
@@ -434,18 +449,24 @@ var builtins = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Args:      []types.T{types.T_char},
+				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.Length,
 			},
 			{
 				Index:     1,
-				Args:      []types.T{types.T_blob},
+				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.Length,
 			},
 			{
 				Index:     2,
+				Args:      []types.T{types.T_blob},
+				ReturnTyp: types.T_int64,
+				Fn:        unary.Length,
+			},
+			{
+				Index:     3,
 				Args:      []types.T{types.T_text},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.Length,
@@ -618,6 +639,12 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Reverse,
 			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.Reverse,
+			},
 		},
 	},
 	RTRIM: {
@@ -724,7 +751,7 @@ var builtins = map[int]Functions{
 	},
 	YEAR: {
 		Id:     YEAR,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -822,7 +849,7 @@ var builtins = map[int]Functions{
 	// variadic functions
 	CEIL: {
 		Id:     CEIL,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -871,7 +898,7 @@ var builtins = map[int]Functions{
 	},
 	FLOOR: {
 		Id:     FLOOR,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -943,7 +970,7 @@ var builtins = map[int]Functions{
 	},
 	PI: {
 		Id:     PI,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -956,7 +983,7 @@ var builtins = map[int]Functions{
 	},
 	ROUND: {
 		Id:     ROUND,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
@@ -1539,9 +1566,16 @@ var builtins = map[int]Functions{
 			{
 				Index:     2,
 				Volatile:  true,
-				Args:      []types.T{types.T_varchar},
+				Args:      []types.T{types.T_varchar, types.T_int64},
 				ReturnTyp: types.T_int64,
-				Fn:        multi.UnixTimestampVarchar,
+				Fn:        multi.UnixTimestampVarcharToInt64,
+			},
+			{
+				Index:     3,
+				Volatile:  true,
+				Args:      []types.T{types.T_varchar, types.T_decimal128},
+				ReturnTyp: types.T_decimal128,
+				Fn:        multi.UnixTimestampVarcharToDecimal128,
 			},
 		},
 	},
@@ -2004,14 +2038,14 @@ var builtins = map[int]Functions{
 				Index:     0,
 				Volatile:  true,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
-				ReturnTyp: types.T_varchar,
+				ReturnTyp: types.T_json,
 				Fn:        binary.JsonExtractByString,
 			},
 			{
 				Index:     1,
 				Volatile:  true,
 				Args:      []types.T{types.T_json, types.T_varchar},
-				ReturnTyp: types.T_varchar,
+				ReturnTyp: types.T_json,
 				Fn:        binary.JsonExtractByJson,
 			},
 		},
@@ -2412,16 +2446,16 @@ var builtins = map[int]Functions{
 			{
 				Index:     0,
 				Volatile:  true,
-				Args:      []types.T{types.T_datetime, types.T_datetime},
-				ReturnTyp: types.T_varchar,
-				Fn:        binary.TimeDiff[types.Datetime],
+				Args:      []types.T{types.T_time, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        binary.TimeDiff[types.Time],
 			},
 			{
 				Index:     1,
 				Volatile:  true,
-				Args:      []types.T{types.T_time, types.T_time},
-				ReturnTyp: types.T_varchar,
-				Fn:        binary.TimeDiff[types.Time],
+				Args:      []types.T{types.T_datetime, types.T_datetime},
+				ReturnTyp: types.T_time,
+				Fn:        binary.TimeDiff[types.Datetime],
 			},
 		},
 	},
@@ -2436,6 +2470,211 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        ctl.Handler,
+			},
+		},
+	},
+	MO_SHOW_VISIBLE_BIN: {
+		Id:     MO_SHOW_VISIBLE_BIN,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Args:      []types.T{types.T_varchar, types.T_uint8},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.ShowVisibleBin,
+			},
+			{
+				Index:     1,
+				Volatile:  true,
+				Args:      []types.T{types.T_text, types.T_uint8},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.ShowVisibleBin,
+			},
+		},
+	},
+	FIELD: {
+		Id:     FIELD,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			l := len(inputs)
+			if l < 2 {
+				return wrongFunctionParameters, nil
+			}
+
+			//If all arguments are strings, all arguments are compared as strings &&
+			//If all arguments are numbers, all arguments are compared as numbers.
+			returnType := [...]types.T{types.T_varchar, types.T_char, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_float32, types.T_float64}
+			for i := range returnType {
+				if operator.CoalesceTypeCheckFn(inputs, nil, returnType[i]) {
+					if i < 2 {
+						return 0, nil
+					} else {
+						return int32(i - 1), nil
+					}
+				}
+			}
+
+			//Otherwise, the arguments are compared as double.
+			targetTypes := make([]types.T, l)
+
+			for j := 0; j < l; j++ {
+				targetTypes[j] = types.T_float64
+			}
+			if code, _ := tryToMatch(inputs, targetTypes); code == matchedByConvert {
+				return 10, targetTypes
+			}
+
+			return wrongFunctionParameters, nil
+		},
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldString,
+			},
+			{
+				Index:     1,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[int8],
+			},
+			{
+				Index:     2,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[int16],
+			},
+			{
+				Index:     3,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[int32],
+			},
+			{
+				Index:     4,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[int64],
+			},
+			{
+				Index:     5,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[uint8],
+			},
+			{
+				Index:     6,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[uint16],
+			},
+			{
+				Index:     7,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[uint32],
+			},
+			{
+				Index:     8,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[uint64],
+			},
+			{
+				Index:     9,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[float32],
+			},
+			{
+				Index:     10,
+				Volatile:  true,
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.FieldNumber[float64],
+			},
+		},
+	},
+	SUBSTRING_INDEX: {
+		Id:     SUBSTRING_INDEX,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			l := len(inputs)
+			if l != 3 {
+				return wrongFunctionParameters, nil
+			}
+
+			stringType := [...]types.T{types.T_varchar, types.T_char, types.T_text, types.T_blob}
+			numberType := [...]types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_float32, types.T_float64}
+			//the first and second arg's types
+			stringTypeSet := make(map[types.T]bool)
+			for _, v := range stringType {
+				stringTypeSet[v] = true
+			}
+			//the third arg's types
+			numberTypeSet := make(map[types.T]bool)
+			for _, v := range numberType {
+				numberTypeSet[v] = true
+			}
+			if stringTypeSet[inputs[0]] && stringTypeSet[inputs[1]] && numberTypeSet[inputs[2]] {
+				return 0, nil
+			}
+
+			//otherwise, try to cast
+			minCost, minIndex := math.MaxInt32, -1
+			convertTypes := make([]types.T, l)
+			thirdArgType := [...]types.T{types.T_float64, types.T_uint64, types.T_int64}
+
+			for _, first := range stringType {
+				for _, second := range stringType {
+					for _, third := range thirdArgType {
+						targetTypes := []types.T{first, second, third}
+						if code, c := tryToMatch(inputs, targetTypes); code == matchedByConvert {
+							if c < minCost {
+								minCost = c
+								copy(convertTypes, targetTypes)
+								minIndex = 0
+							}
+						}
+					}
+				}
+			}
+			if minIndex != -1 {
+				return 0, convertTypes
+			}
+
+			return wrongFunctionParameters, nil
+		},
+		Overloads: []Function{
+			{
+				Index:     0,
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.SubStrIndex,
+			},
+		},
+	},
+	FORMAT: {
+		Id:     FORMAT,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.Format,
+			},
+			{
+				Index:     1,
+				Volatile:  true,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.Format,
 			},
 		},
 	},

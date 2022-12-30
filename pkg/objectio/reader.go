@@ -16,7 +16,10 @@ package objectio
 
 import (
 	"context"
+	"io"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
@@ -39,82 +42,86 @@ func NewObjectReader(name string, fs fileservice.FileService) (Reader, error) {
 }
 
 func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.MPool) ([]BlockObject, error) {
-	var err error
-	if len(extents) == 0 {
+	l := len(extents)
+	if l == 0 {
 		return nil, nil
 	}
+
 	metas := &fileservice.IOVector{
 		FilePath: r.name,
-		Entries:  make([]fileservice.IOEntry, len(extents)),
+		Entries:  make([]fileservice.IOEntry, 0, l),
 	}
-	for i, extent := range extents {
-		metas.Entries[i] = fileservice.IOEntry{
+	for _, extent := range extents {
+		extent := extent
+		metas.Entries = append(metas.Entries, fileservice.IOEntry{
 			Offset: int64(extent.offset),
 			Size:   int64(extent.originSize),
-		}
+
+			ToObject: func(reader io.Reader, data []byte) (any, int64, error) {
+				// unmarshal to block
+				block := &Block{
+					object: r.object,
+					extent: extent,
+					name:   r.name,
+				}
+				if len(data) == 0 {
+					var err error
+					data, err = io.ReadAll(reader)
+					if err != nil {
+						return nil, 0, err
+					}
+				}
+				if err := block.UnMarshalMeta(data); err != nil {
+					return nil, 0, err
+				}
+				return block, int64(len(data)), nil
+			},
+		})
 	}
-	err = r.allocData(metas.Entries, m)
-	defer r.freeData(metas.Entries, m)
+
+	err := r.object.fs.Read(ctx, metas)
 	if err != nil {
 		return nil, err
 	}
-	err = r.object.fs.Read(ctx, metas)
-	if err != nil {
-		return nil, err
-	}
-	blocks := make([]BlockObject, len(extents))
-	for i := range extents {
-		blocks[i] = &Block{
-			object: r.object,
-			extent: extents[i],
-		}
-		err = blocks[i].(*Block).UnMarshalMeta(metas.Entries[i].Data)
-		if err != nil {
-			return nil, err
-		}
+
+	blocks := make([]BlockObject, 0, l)
+	for _, entry := range metas.Entries {
+		block := entry.Object.(*Block)
+		blocks = append(blocks, block)
 	}
 	return blocks, err
 }
 
 func (r *ObjectReader) Read(ctx context.Context, extent Extent, idxs []uint16, m *mpool.MPool) (*fileservice.IOVector, error) {
-	var err error
-	extents := make([]Extent, 1)
-	extents[0] = extent
-	blocks, err := r.ReadMeta(ctx, extents, m)
+	blocks, err := r.ReadMeta(ctx, []Extent{extent}, m)
 	if err != nil {
 		return nil, err
 	}
 	block := blocks[0]
+
 	data := &fileservice.IOVector{
 		FilePath: r.name,
-		Entries:  make([]fileservice.IOEntry, 0),
+		Entries:  make([]fileservice.IOEntry, 0, len(idxs)),
 	}
 	for _, idx := range idxs {
 		col := block.(*Block).columns[idx]
-		entry := fileservice.IOEntry{
+		data.Entries = append(data.Entries, fileservice.IOEntry{
 			Offset: int64(col.GetMeta().location.Offset()),
 			Size:   int64(col.GetMeta().location.Length()),
-		}
-		data.Entries = append(data.Entries, entry)
+
+			ToObject: newDecompressToObject(int64(col.GetMeta().location.OriginSize())),
+		})
 	}
-	err = r.allocData(data.Entries, m)
-	if err != nil {
-		r.freeData(data.Entries, m)
-		return nil, err
-	}
+
 	err = r.object.fs.Read(ctx, data)
 	if err != nil {
-		r.freeData(data.Entries, m)
 		return nil, err
 	}
 	return data, nil
 }
 
 func (r *ObjectReader) ReadIndex(ctx context.Context, extent Extent, idxs []uint16, typ IndexDataType, m *mpool.MPool) ([]IndexData, error) {
-	var err error
-	extents := make([]Extent, 1)
-	extents[0] = extent
-	blocks, err := r.ReadMeta(ctx, extents, m)
+	blocks, err := r.ReadMeta(ctx, []Extent{extent}, m)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +129,6 @@ func (r *ObjectReader) ReadIndex(ctx context.Context, extent Extent, idxs []uint
 	indexes := make([]IndexData, 0)
 	for _, idx := range idxs {
 		col := block.(*Block).columns[idx]
-
 		index, err := col.GetIndex(ctx, typ, m)
 		if err != nil {
 			return nil, err
@@ -166,50 +172,57 @@ func (r *ObjectReader) readFooter(ctx context.Context, fileSize int64, m *mpool.
 }
 
 func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, size int64, m *mpool.MPool) (*Footer, error) {
-	var err error
 	data := &fileservice.IOVector{
 		FilePath: r.name,
-		Entries:  make([]fileservice.IOEntry, 1),
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: fileSize - size,
+				Size:   size,
+
+				ToObject: func(reader io.Reader, data []byte) (any, int64, error) {
+					// unmarshal
+					if len(data) == 0 {
+						var err error
+						data, err = io.ReadAll(reader)
+						if err != nil {
+							return nil, 0, err
+						}
+					}
+					footer := &Footer{}
+					if err := footer.UnMarshalFooter(data); err != nil {
+						return nil, 0, err
+					}
+					return footer, int64(len(data)), nil
+				},
+			},
+		},
 	}
-	data.Entries[0] = fileservice.IOEntry{
-		Offset: fileSize - size,
-		Size:   size,
-	}
-	err = r.allocData(data.Entries, m)
+	err := r.object.fs.Read(ctx, data)
 	if err != nil {
 		return nil, err
 	}
-	defer r.freeData(data.Entries, m)
-	err = r.object.fs.Read(ctx, data)
-	if err != nil {
-		return nil, err
-	}
-	footer := &Footer{}
-	err = footer.UnMarshalFooter(data.Entries[0].Data)
-	if err != nil {
-		return nil, err
-	}
-	return footer, err
+
+	return data.Entries[0].Object.(*Footer), nil
 }
 
-func (r *ObjectReader) freeData(Entries []fileservice.IOEntry, m *mpool.MPool) {
-	if m != nil {
-		for i := range Entries {
-			if Entries[i].Data != nil {
-				m.Free(Entries[i].Data)
-			}
-		}
-	}
-}
+type ToObjectFunc = func(r io.Reader, buf []byte) (any, int64, error)
 
-func (r *ObjectReader) allocData(Entries []fileservice.IOEntry, m *mpool.MPool) (err error) {
-	if m != nil {
-		for i := range Entries {
-			Entries[i].Data, err = m.Alloc(int(Entries[i].Size))
+// newDecompressToObject the decompression function passed to fileservice
+func newDecompressToObject(size int64) ToObjectFunc {
+	return func(reader io.Reader, data []byte) (any, int64, error) {
+		// decompress
+		var err error
+		if len(data) == 0 {
+			data, err = io.ReadAll(reader)
 			if err != nil {
-				return
+				return nil, 0, err
 			}
 		}
+		decompressed := make([]byte, size)
+		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
+		if err != nil {
+			return nil, 0, err
+		}
+		return decompressed, int64(len(decompressed)), nil
 	}
-	return nil
 }

@@ -28,6 +28,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
@@ -152,10 +154,10 @@ func newS3FS(
 ) (*S3FS, error) {
 
 	if endpoint == "" {
-		moerr.NewBadS3Config("empty endpoint")
+		moerr.NewBadS3ConfigNoCtx("empty endpoint")
 	}
 	if bucket == "" {
-		moerr.NewBadS3Config("empty bucket")
+		moerr.NewBadS3ConfigNoCtx("empty bucket")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*17)
@@ -164,6 +166,15 @@ func newS3FS(
 	configOptions = append(configOptions,
 		config.WithSharedConfigProfile(sharedConfigProfile),
 		config.WithLogger(logutil.GetS3Logger()),
+		config.WithClientLogMode(
+			aws.LogSigning|
+				aws.LogRetries|
+				aws.LogRequest|
+				aws.LogResponse|
+				aws.LogDeprecatedUsage|
+				aws.LogRequestEventMessage|
+				aws.LogResponseEventMessage,
+		),
 	)
 	cfg, err := config.LoadDefaultConfig(ctx,
 		configOptions...,
@@ -182,7 +193,7 @@ func newS3FS(
 		Bucket: ptrTo(bucket),
 	})
 	if err != nil {
-		return nil, moerr.NewInternalError("bad s3 config: %v", err)
+		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
 	}
 
 	fs := &S3FS{
@@ -193,6 +204,7 @@ func newS3FS(
 	}
 	if memCacheCapacity > 0 {
 		fs.memCache = NewMemCache(memCacheCapacity)
+		logutil.Info("fileservice: cache initialized", zap.Any("fs-name", name), zap.Any("capacity", memCacheCapacity))
 	}
 
 	return fs, nil
@@ -203,6 +215,11 @@ func (s *S3FS) Name() string {
 }
 
 func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
+	ctx, span := trace.Start(ctx, "S3FS.List")
+	defer span.End()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	path, err := ParsePathAtService(dirPath, s.name)
 	if err != nil {
@@ -260,6 +277,8 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 }
 
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
+	ctx, span := trace.Start(ctx, "S3FS.Write")
+	defer span.End()
 
 	// check existence
 	path, err := ParsePathAtService(vector.FilePath, s.name)
@@ -288,13 +307,15 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	}
 	if output != nil {
 		// key existed
-		return moerr.NewFileAlreadyExists(path.File)
+		return moerr.NewFileAlreadyExistsNoCtx(path.File)
 	}
 
 	return s.write(ctx, vector)
 }
 
 func (s *S3FS) write(ctx context.Context, vector IOVector) error {
+	ctx, span := trace.Start(ctx, "S3FS.write")
+	defer span.End()
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
@@ -335,9 +356,11 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
+	ctx, span := trace.Start(ctx, "S3FS.Read")
+	defer span.End()
 
 	if len(vector.Entries) == 0 {
-		return moerr.NewEmptyVector()
+		return moerr.NewEmptyVectorNoCtx()
 	}
 
 	if s.memCache == nil {
@@ -353,11 +376,15 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
 }
 
 func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
+	ctx, span := trace.Start(ctx, "S3FS.read")
+	defer span.End()
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
 	}
+	key := s.pathToKey(path.File)
 
+	// calculate object read range
 	min := int64(math.MaxInt)
 	max := int64(0)
 	readToEnd := false
@@ -377,33 +404,28 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		}
 	}
 
-	var content []byte
-
-	if readToEnd {
-		rang := fmt.Sprintf("bytes=%d-", min)
-		key := s.pathToKey(path.File)
-		output, err := s.client.GetObject(
-			ctx,
-			&s3.GetObjectInput{
-				Bucket: ptrTo(s.bucket),
-				Key:    ptrTo(key),
-				Range:  ptrTo(rang),
-			},
-		)
-		err = s.mapError(err, key)
-		if err != nil {
-			return err
-		}
-		defer output.Body.Close()
-		content, err = io.ReadAll(output.Body)
-		err = s.mapError(err, key)
-		if err != nil {
-			return err
+	// a function to get an io.ReadCloser
+	getReader := func(ctx context.Context, readToEnd bool, min int64, max int64) (io.ReadCloser, error) {
+		ctx, spanR := trace.Start(ctx, "S3FS.read.getReader")
+		defer spanR.End()
+		if readToEnd {
+			rang := fmt.Sprintf("bytes=%d-", min)
+			output, err := s.client.GetObject(
+				ctx,
+				&s3.GetObjectInput{
+					Bucket: ptrTo(s.bucket),
+					Key:    ptrTo(key),
+					Range:  ptrTo(rang),
+				},
+			)
+			err = s.mapError(err, key)
+			if err != nil {
+				return nil, err
+			}
+			return output.Body, nil
 		}
 
-	} else {
 		rang := fmt.Sprintf("bytes=%d-%d", min, max)
-		key := s.pathToKey(path.File)
 		output, err := s.client.GetObject(
 			ctx,
 			&s3.GetObjectInput{
@@ -414,14 +436,42 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		)
 		err = s.mapError(err, key)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		defer output.Body.Close()
-		content, err = io.ReadAll(io.LimitReader(output.Body, int64(max-min)))
+		return &readCloser{
+			r:         io.LimitReader(output.Body, int64(max-min)),
+			closeFunc: output.Body.Close,
+		}, nil
+	}
+
+	// a function to get data lazily
+	var contentBytes []byte
+	var contentErr error
+	var getContentDone bool
+	getContent := func(ctx context.Context) (bs []byte, err error) {
+		ctx, spanC := trace.Start(ctx, "S3FS.read.getContent")
+		defer spanC.End()
+		if getContentDone {
+			return contentBytes, contentErr
+		}
+		defer func() {
+			contentBytes = bs
+			contentErr = err
+			getContentDone = true
+		}()
+
+		reader, err := getReader(ctx, readToEnd, min, max)
+		if err != nil {
+			return nil, err
+		}
+		defer reader.Close()
+		bs, err = io.ReadAll(reader)
 		err = s.mapError(err, key)
 		if err != nil {
-			return err
+			return nil, err
 		}
+
+		return
 	}
 
 	for i, entry := range vector.Entries {
@@ -430,41 +480,107 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		}
 
 		start := entry.Offset - min
-		if start >= int64(len(content)) {
-			return moerr.NewEmptyRange(path.File)
+
+		if entry.Size == 0 {
+			return moerr.NewEmptyRangeNoCtx(path.File)
+		} else if entry.Size > 0 {
+			content, err := getContent(ctx)
+			if err != nil {
+				return err
+			}
+			if start >= int64(len(content)) {
+				return moerr.NewEmptyRangeNoCtx(path.File)
+			}
 		}
 
-		var data []byte
-		if entry.Size < 0 {
-			// read to end
-			data = content[start:]
-		} else {
+		// a function to get entry data lazily
+		getData := func(ctx context.Context) ([]byte, error) {
+			ctx, spanD := trace.Start(ctx, "S3FS.reader.getData")
+			defer spanD.End()
+			if entry.Size < 0 {
+				// read to end
+				content, err := getContent(ctx)
+				if err != nil {
+					return nil, err
+				}
+				if start >= int64(len(content)) {
+					return nil, moerr.NewEmptyRangeNoCtx(path.File)
+				}
+				return content[start:], nil
+			}
+			content, err := getContent(ctx)
+			if err != nil {
+				return nil, err
+			}
 			end := start + entry.Size
 			if end > int64(len(content)) {
-				return moerr.NewUnexpectedEOF(path.File)
+				return nil, moerr.NewUnexpectedEOFNoCtx(path.File)
 			}
-			data = content[start:end]
-		}
-		if len(data) == 0 {
-			return moerr.NewEmptyRange(path.File)
+			if start == end {
+				return nil, moerr.NewEmptyRangeNoCtx(path.File)
+			}
+			return content[start:end], nil
 		}
 
 		setData := true
 
 		if w := vector.Entries[i].WriterForRead; w != nil {
 			setData = false
-			_, err := w.Write(data)
-			if err != nil {
-				return err
+			if getContentDone {
+				// data is ready
+				data, err := getData(ctx)
+				if err != nil {
+					return err
+				}
+				_, err = w.Write(data)
+				if err != nil {
+					return err
+				}
+
+			} else {
+				// get a reader and copy
+				reader, err := getReader(ctx, entry.Size < 0, entry.Offset, entry.Offset+entry.Size)
+				if err != nil {
+					return err
+				}
+				defer reader.Close()
+				_, err = io.Copy(w, reader)
+				err = s.mapError(err, key)
+				if err != nil {
+					return err
+				}
 			}
 		}
 
 		if ptr := vector.Entries[i].ReadCloserForRead; ptr != nil {
 			setData = false
-			*ptr = io.NopCloser(bytes.NewReader(data))
+			if getContentDone {
+				// data is ready
+				data, err := getData(ctx)
+				if err != nil {
+					return err
+				}
+				*ptr = io.NopCloser(bytes.NewReader(data))
+
+			} else {
+				// get a new reader
+				reader, err := getReader(ctx, entry.Size < 0, entry.Offset, entry.Offset+entry.Size)
+				if err != nil {
+					return err
+				}
+				*ptr = &readCloser{
+					r:         reader,
+					closeFunc: reader.Close,
+				}
+			}
 		}
 
+		// set Data field
 		if setData {
+			data, err := getData(ctx)
+			if err != nil {
+				return err
+			}
 			if int64(len(entry.Data)) < entry.Size || entry.Size < 0 {
 				entry.Data = data
 			} else {
@@ -472,6 +588,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			}
 		}
 
+		// set Object field
 		if err := entry.setObjectFromData(); err != nil {
 			return err
 		}
@@ -483,6 +600,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 }
 
 func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
+	ctx, span := trace.Start(ctx, "S3FS.Delete")
+	defer span.End()
+
 	if len(filePaths) == 0 {
 		return nil
 	}
@@ -511,6 +631,8 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 }
 
 func (s *S3FS) deleteMultiObj(ctx context.Context, objs []types.ObjectIdentifier) error {
+	ctx, span := trace.Start(ctx, "S3FS.deleteMultiObj")
+	defer span.End()
 	output, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 		Bucket: ptrTo(s.bucket),
 		Delete: &types.Delete{
@@ -534,12 +656,14 @@ func (s *S3FS) deleteMultiObj(ctx context.Context, objs []types.ObjectIdentifier
 		}
 	}
 	if message.Len() > 0 {
-		return moerr.NewInternalError("S3 Delete failed: %s", message.String())
+		return moerr.NewInternalErrorNoCtx("S3 Delete failed: %s", message.String())
 	}
 	return nil
 }
 
 func (s *S3FS) deleteSingle(ctx context.Context, filePath string) error {
+	ctx, span := trace.Start(ctx, "S3FS.deleteSingle")
+	defer span.End()
 	path, err := ParsePathAtService(filePath, s.name)
 	if err != nil {
 		return err
@@ -575,7 +699,7 @@ func (s *S3FS) mapError(err error, path string) error {
 	var httpError *http.ResponseError
 	if errors.As(err, &httpError) {
 		if httpError.Response.StatusCode == 404 {
-			return moerr.NewFileNotFound(path)
+			return moerr.NewFileNotFoundNoCtx(path)
 		}
 	}
 	return err

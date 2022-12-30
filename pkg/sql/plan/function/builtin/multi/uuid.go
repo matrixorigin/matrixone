@@ -26,17 +26,18 @@ const UUID_LENGTH uint32 = 36
 
 func UUID(inputVecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if len(inputVecs) != 1 {
-		return nil, moerr.NewInvalidArg("uuid function num args", len(inputVecs))
+		return nil, moerr.NewInvalidArgNoCtx("uuid function num args", len(inputVecs))
 	}
 	rows := inputVecs[0].Length()
 	results := make([]string, rows)
 	for i := 0; i < rows; i++ {
 		id, err := uuid.NewUUID()
 		if err != nil {
-			return nil, moerr.NewInternalError("newuuid failed")
+			return nil, moerr.NewInternalErrorNoCtx("newuuid failed")
 		}
 		results[i] = id.String()
 	}
-	resultVector := vector.NewWithStrings(types.T_varchar.ToType(), results, nil, proc.Mp())
+	resultVector := vector.New(vector.FLAT, types.T_varchar.ToType())
+	vector.AppendStringList(resultVector, results, nil, proc.Mp())
 	return resultVector, nil
 }

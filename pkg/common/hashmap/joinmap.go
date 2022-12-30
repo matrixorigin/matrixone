@@ -17,18 +17,17 @@ package hashmap
 import (
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func NewJoinMap(sels [][]int64, expr *plan.Expr, mp *StrHashMap, hasNull bool, idx *index.LowCardinalityIndex) *JoinMap {
+func NewJoinMap(sels [][]int64, expr *plan.Expr, mp *StrHashMap, hasNull bool) *JoinMap {
+	cnt := int64(1)
 	return &JoinMap{
-		cnt:     1,
+		cnt:     &cnt,
 		mp:      mp,
 		expr:    expr,
 		sels:    sels,
 		hasNull: hasNull,
-		idx:     idx,
 	}
 }
 
@@ -48,10 +47,6 @@ func (jm *JoinMap) HasNull() bool {
 	return jm.hasNull
 }
 
-func (jm *JoinMap) Index() *index.LowCardinalityIndex {
-	return jm.idx
-}
-
 func (jm *JoinMap) Dup() *JoinMap {
 	m0 := &StrHashMap{
 		m:             jm.mp.m,
@@ -69,17 +64,16 @@ func (jm *JoinMap) Dup() *JoinMap {
 		expr:    jm.expr,
 		sels:    jm.sels,
 		hasNull: jm.hasNull,
-		cnt:     atomic.LoadInt64(&jm.cnt),
-		idx:     jm.idx,
+		cnt:     jm.cnt,
 	}
 }
 
 func (jm *JoinMap) IncRef(ref int64) {
-	atomic.AddInt64(&jm.cnt, ref)
+	atomic.AddInt64(jm.cnt, ref)
 }
 
 func (jm *JoinMap) Free() {
-	if atomic.AddInt64(&jm.cnt, -1) != 0 {
+	if atomic.AddInt64(jm.cnt, -1) != 0 {
 		return
 	}
 	jm.mp.Free()

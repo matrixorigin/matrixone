@@ -47,7 +47,7 @@ func TestDateToTimestamp(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, result.Col.([]types.Timestamp))
+			require.Equal(t, c.want, vector.MustTCols[types.Timestamp](result))
 		})
 	}
 
@@ -74,7 +74,7 @@ func TestDatetimeToTimestamp(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, date.Col.([]types.Timestamp))
+			require.Equal(t, c.want, vector.MustTCols[types.Timestamp](date))
 		})
 	}
 
@@ -117,8 +117,8 @@ func TestDateStringAdd(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, date.Col.([]types.Timestamp))
-			require.Equal(t, c.contain, nulls.Contains(date.Nsp, 0))
+			require.Equal(t, c.want, vector.MustTCols[types.Timestamp](date))
+			require.Equal(t, c.contain, nulls.Contains(date.GetNulls(), 0))
 		})
 	}
 
@@ -127,9 +127,9 @@ func TestDateStringAdd(t *testing.T) {
 func makeDateToTimestampVectors(str string, isConst bool) []*vector.Vector {
 	vec := make([]*vector.Vector, 1)
 
-	date, _ := types.ParseDate(str)
+	date, _ := types.ParseDateCast(str)
 
-	vec[0] = vector.NewConstFixed(types.T_date.ToType(), 1, date, testutil.TestUtilMp)
+	vec[0] = vector.New(vector.CONSTANT, types.T_date.ToType(), 1, date, testutil.TestUtilMp)
 	return vec
 }
 
@@ -137,7 +137,7 @@ func makeDatetimeToTimestampVectors(str string, isConst bool) []*vector.Vector {
 	vec := make([]*vector.Vector, 1)
 
 	datetime, _ := types.ParseDatetime(str, 0)
-	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, datetime, testutil.TestUtilMp)
+	vec[0] = vector.New(vector.CONSTANT, types.T_datetime.ToType(), 1, datetime, testutil.TestUtilMp)
 
 	return vec
 }

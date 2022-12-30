@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -49,7 +50,7 @@ func (p *PartitionReader) Close() error {
 	return nil
 }
 
-func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
+func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
 	if p == nil {
 		return nil, nil
 	}
@@ -61,16 +62,16 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 		p.inserts = p.inserts[1:]
 		b := batch.New(false, colNames)
 		for i, name := range colNames {
-			b.Vecs[i] = vector.New(p.typsMap[name])
+			b.Vecs[i] = vector.New(vector.FLAT, p.typsMap[name])
 		}
-		if _, err := b.Append(mp, bat); err != nil {
+		if _, err := b.Append(ctx, mp, bat); err != nil {
 			return nil, err
 		}
 		return b, nil
 	}
 	b := batch.New(false, colNames)
 	for i, name := range colNames {
-		b.Vecs[i] = vector.New(p.typsMap[name])
+		b.Vecs[i] = vector.New(vector.FLAT, p.typsMap[name])
 	}
 	rows := 0
 	if len(p.index) > 0 {
@@ -97,7 +98,7 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 			}
 			for i, name := range b.Attrs {
 				if name == catalog.Row_ID {
-					b.Vecs[i].Append(types.Rowid(entry.Key), false, mp)
+					vector.Append(b.Vecs[i], types.Rowid(entry.Key), false, mp)
 					continue
 				}
 				value, ok := dataValue.value[name]
@@ -143,9 +144,15 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 			continue
 		}
 
+		if p.skipBlocks != nil {
+			if _, ok := p.skipBlocks[rowIDToBlockID(dataKey)]; ok {
+				continue
+			}
+		}
+
 		for i, name := range b.Attrs {
 			if name == catalog.Row_ID {
-				b.Vecs[i].Append(types.Rowid(dataKey), false, mp)
+				vector.Append(b.Vecs[i], types.Rowid(dataKey), false, mp)
 				continue
 			}
 			value, ok := dataValue.value[name]

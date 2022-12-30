@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
@@ -106,8 +107,10 @@ func (s *Service) handleKillZombie(cmd pb.ScheduleCommand) {
 	s.store.removeMetadata(shardID, replicaID)
 }
 
-func (s *Service) handleShutdownStore(cmd pb.ScheduleCommand) {
-	panic("not implemented")
+func (s *Service) handleShutdownStore(_ pb.ScheduleCommand) {
+	if err := s.Close(); err != nil {
+		s.logger.Error("failed to shutdown replica", zap.Error(err))
+	}
 }
 
 func (s *Service) heartbeatWorker(ctx context.Context) {
@@ -120,6 +123,8 @@ func (s *Service) heartbeatWorker(ctx context.Context) {
 	}()
 	ticker := time.NewTicker(s.cfg.HeartbeatInterval.Duration)
 	defer ticker.Stop()
+	ctx, span := trace.Start(ctx, "heartbeatWorker")
+	defer span.End()
 
 	for {
 		select {

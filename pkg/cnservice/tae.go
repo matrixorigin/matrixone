@@ -51,10 +51,12 @@ func initTAE(
 		lc := func() (logservice.Client, error) {
 			ctx, cancel := context.WithTimeout(ctx, time.Minute)
 			lc, err := logservice.NewClient(ctx, logservice.ClientConfig{
+				Tag:              targetDir,
 				ReadOnly:         false,
 				LogShardID:       pu.SV.LogShardID,
 				DNReplicaID:      pu.SV.DNReplicaID,
 				ServiceAddresses: cfg.HAKeeper.ClientConfig.ServiceAddresses,
+				MaxMessageSize:   int(cfg.RPC.MaxMessageSize),
 			})
 			cancel()
 			return lc, err
@@ -64,7 +66,7 @@ func initTAE(
 	case options.LogstoreBatchStore, "":
 		opts.LogStoreT = options.LogstoreBatchStore
 	default:
-		return moerr.NewInternalError("invalid logstore type: %v", cfg.Engine.Logstore)
+		return moerr.NewInternalError(ctx, "invalid logstore type: %v", cfg.Engine.Logstore)
 	}
 	opts.CheckpointCfg = &options.CheckpointCfg{}
 	opts.CheckpointCfg.FlushInterval = cfg.Engine.FlushInterval.Duration

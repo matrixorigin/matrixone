@@ -255,14 +255,17 @@ func (c *compare[T]) Vector() *vector.Vector {
 
 func (c *compare[T]) Set(idx int, vec *vector.Vector) {
 	c.vs[idx] = vec
-	c.ns[idx] = vec.Nsp
-	c.xs[idx] = vec.Col.([]T)
+	c.ns[idx] = vec.GetNulls()
+	c.xs[idx] = vector.MustTCols[T](vec)
 }
 
 func (c *compare[T]) Compare(veci, vecj int, vi, vj int64) int {
 	cmp := nullsCompare(c.ns[veci], c.ns[vecj], vi, vj, c.nullsLast)
 	if cmp != 0 {
 		return cmp
+	}
+	if nulls.Contains(c.vs[veci].GetNulls(), uint64(vi)) && nulls.Contains(c.vs[veci].GetNulls(), uint64(vj)) {
+		return 0
 	}
 	return c.cmp(c.xs[veci][vi], c.xs[vecj][vj])
 }

@@ -21,18 +21,17 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
-	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
@@ -41,20 +40,6 @@ import (
 var (
 	retryCreateStorageInterval = time.Second * 5
 )
-
-// WithLogger set logger
-func WithLogger(logger *zap.Logger) Option {
-	return func(s *store) {
-		s.logger = logger
-	}
-}
-
-// WithClock set clock
-func WithClock(clock clock.Clock) Option {
-	return func(s *store) {
-		s.clock = clock
-	}
-}
 
 // WithConfigAdjust set adjust config func
 func WithConfigAdjust(adjustConfigFunc func(c *Config)) Option {
@@ -93,8 +78,7 @@ func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 
 type store struct {
 	cfg                 *Config
-	logger              *zap.Logger
-	clock               clock.Clock
+	rt                  runtime.Runtime
 	sender              rpc.TxnSender
 	server              rpc.TxnServer
 	hakeeperClient      logservice.DNHAKeeperClient
@@ -125,6 +109,7 @@ type store struct {
 
 // NewService create DN Service
 func NewService(cfg *Config,
+	rt runtime.Runtime,
 	fileService fileservice.FileService,
 	opts ...Option) (Service, error) {
 	if err := cfg.Validate(); err != nil {
@@ -135,22 +120,23 @@ func NewService(cfg *Config,
 	common.InitTAEMPool()
 
 	// get metadata fs
-	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, localFileServiceName)
+	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
 	if err != nil {
 		return nil, err
 	}
 
 	s := &store{
 		cfg:                 cfg,
+		rt:                  rt,
 		fileService:         fileService,
 		metadataFileService: metadataFS,
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
-	s.logger = logutil.Adjust(s.logger).With(zap.String("dn-store", cfg.UUID))
 	s.replicas = &sync.Map{}
-	s.stopper = stopper.NewStopper("dn-store", stopper.WithLogger(s.logger))
+	s.stopper = stopper.NewStopper("dn-store",
+		stopper.WithLogger(s.rt.Logger().RawLogger()))
 	s.mu.metadata = metadata.DNStore{UUID: cfg.UUID}
 	if s.options.adjustConfigFunc != nil {
 		s.options.adjustConfigFunc(s.cfg)
@@ -182,6 +168,7 @@ func (s *store) Start() error {
 	if err := s.server.Start(); err != nil {
 		return err
 	}
+	s.rt.Logger().Info("dn heartbeat task started")
 	return s.stopper.RunTask(s.heartbeatTask)
 }
 
@@ -246,74 +233,11 @@ func (s *store) getDNShardInfo() []logservicepb.DNShardInfo {
 	return shards
 }
 
-func (s *store) heartbeatTask(ctx context.Context) {
-	ticker := time.NewTicker(s.cfg.HAKeeper.HeatbeatDuration.Duration)
-	defer ticker.Stop()
-
-	s.logger.Info("DNShard heartbeat started")
-	for {
-		select {
-		case <-ctx.Done():
-			s.logger.Info("DNShard heartbeat stopped")
-			return
-		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HAKeeper.HeatbeatTimeout.Duration)
-			commands, err := s.hakeeperClient.SendDNHeartbeat(ctx, logservicepb.DNStoreHeartbeat{
-				UUID:               s.cfg.UUID,
-				ServiceAddress:     s.cfg.ServiceAddress,
-				Shards:             s.getDNShardInfo(),
-				TaskServiceCreated: s.taskServiceCreated(),
-			})
-			cancel()
-
-			if err != nil {
-				s.logger.Error("send DNShard heartbeat request failed",
-					zap.Error(err))
-				continue
-			}
-
-			for _, cmd := range commands.Commands {
-				s.logger.Debug("received hakeeper command",
-					zap.String("cmd", cmd.LogString()))
-
-				if cmd.ServiceType != logservicepb.DNService {
-					s.logger.Fatal("receive invalid schedule command",
-						zap.String("type", cmd.ServiceType.String()))
-				}
-				if cmd.ConfigChange != nil {
-					var err error
-					switch cmd.ConfigChange.ChangeType {
-					case logservicepb.AddReplica, logservicepb.StartReplica:
-						err = s.createReplica(metadata.DNShard{
-							DNShardRecord: metadata.DNShardRecord{
-								ShardID:    cmd.ConfigChange.Replica.ShardID,
-								LogShardID: cmd.ConfigChange.Replica.LogShardID,
-							},
-							ReplicaID: cmd.ConfigChange.Replica.ReplicaID,
-							Address:   s.cfg.ServiceAddress,
-						})
-					case logservicepb.RemoveReplica, logservicepb.StopReplica:
-						err = s.removeReplica(cmd.ConfigChange.Replica.ShardID)
-					}
-					if err != nil {
-						s.logger.Error("handle schedule command failed",
-							zap.String("command", cmd.String()),
-							zap.Error(err))
-					}
-				}
-				if cmd.CreateTaskService != nil {
-					s.createTaskService(cmd.CreateTaskService)
-				}
-			}
-		}
-	}
-}
-
 func (s *store) createReplica(shard metadata.DNShard) error {
-	r := newReplica(shard, s.logger.With(util.TxnDNShardField(shard)))
+	r := newReplica(shard, s.rt)
 	v, ok := s.replicas.LoadOrStore(shard.ShardID, r)
 	if ok {
-		s.logger.Debug("DNShard already created",
+		s.rt.Logger().Debug("DNShard already created",
 			zap.String("new", shard.DebugString()),
 			zap.String("exist", v.(*replica).shard.DebugString()))
 		return nil
@@ -325,7 +249,7 @@ func (s *store) createReplica(shard metadata.DNShard) error {
 			case <-ctx.Done():
 				return
 			default:
-				storage, err := s.createTxnStorage(shard)
+				storage, err := s.createTxnStorage(ctx, shard)
 				if err != nil {
 					r.logger.Error("start DNShard failed",
 						zap.Error(err))
@@ -333,11 +257,11 @@ func (s *store) createReplica(shard metadata.DNShard) error {
 					continue
 				}
 
-				err = r.start(service.NewTxnService(r.logger,
+				err = r.start(service.NewTxnService(
+					r.rt,
 					shard,
 					storage,
 					s.sender,
-					s.clock,
 					s.cfg.Txn.ZombieTimeout.Duration))
 				if err != nil {
 					r.logger.Fatal("start DNShard failed",
@@ -374,9 +298,9 @@ func (s *store) getReplica(id uint64) *replica {
 }
 
 func (s *store) initTxnSender() error {
-	sender, err := rpc.NewSenderWithConfig(s.cfg.RPC,
-		s.clock,
-		s.logger,
+	sender, err := rpc.NewSenderWithConfig(
+		s.cfg.RPC,
+		s.rt,
 		rpc.WithSenderBackendOptions(morpc.WithBackendFilter(func(m morpc.Message, backendAddr string) bool {
 			return s.options.backendFilter == nil || s.options.backendFilter(m.(*txn.TxnRequest), backendAddr)
 		})),
@@ -389,7 +313,10 @@ func (s *store) initTxnSender() error {
 }
 
 func (s *store) initTxnServer() error {
-	server, err := rpc.NewTxnServer(s.cfg.ListenAddress, s.clock, s.logger)
+	server, err := rpc.NewTxnServer(
+		s.cfg.ListenAddress,
+		s.rt,
+		rpc.WithServerMaxMessageSize(int(s.cfg.RPC.MaxMessageSize)))
 	if err != nil {
 		return err
 	}
@@ -399,12 +326,8 @@ func (s *store) initTxnServer() error {
 }
 
 func (s *store) initClocker() error {
-	if s.clock == nil {
-		s.clock = clock.DefaultClock()
-	}
-
-	if s.clock == nil {
-		return moerr.NewBadConfig("missing txn clock")
+	if s.rt.Clock() == nil {
+		return moerr.NewBadConfigNoCtx("missing txn clock")
 	}
 	return nil
 }

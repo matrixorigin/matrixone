@@ -16,8 +16,10 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -41,6 +43,8 @@ type ComputationRunner interface {
 type ComputationWrapper interface {
 	ComputationRunner
 	GetAst() tree.Statement
+
+	GetProcess() *process.Process
 
 	SetDatabaseName(db string) error
 
@@ -107,9 +111,9 @@ func makeCmdFieldListSql(query string) string {
 }
 
 // parseCmdFieldList parses the internal cmd field list
-func parseCmdFieldList(sql string) (*InternalCmdFieldList, error) {
+func parseCmdFieldList(ctx context.Context, sql string) (*InternalCmdFieldList, error) {
 	if !isCmdFieldListSql(sql) {
-		return nil, moerr.NewInternalError("it is not the CMD_FIELD_LIST")
+		return nil, moerr.NewInternalError(ctx, "it is not the CMD_FIELD_LIST")
 	}
 	rest := strings.TrimSpace(sql[len(cmdFieldListSql):])
 	//find null
@@ -121,7 +125,7 @@ func parseCmdFieldList(sql string) (*InternalCmdFieldList, error) {
 		//wildcard := payload[nullIdx+1:]
 		return &InternalCmdFieldList{tableName: tableName}, nil
 	} else {
-		return nil, moerr.NewInternalError("wrong format for COM_FIELD_LIST")
+		return nil, moerr.NewInternalError(ctx, "wrong format for COM_FIELD_LIST")
 	}
 }
 
@@ -172,3 +176,12 @@ type dumpTable struct {
 	attrs  []string
 	isView bool
 }
+
+// profile makes the debug info
+type profile interface {
+	makeProfile(profileTyp profileType)
+
+	getProfile(profileTyp profileType) string
+}
+
+var _ profile = &Session{}

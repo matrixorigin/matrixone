@@ -25,8 +25,8 @@ func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
 	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultValues := make([]string, 1)
@@ -35,6 +35,6 @@ func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	} else {
 		resultValues := make([]string, len(inputValues))
 		reverse.Reverse(inputValues, resultValues)
-		return vector.NewWithStrings(resultType, resultValues, inputVector.Nsp, proc.Mp()), nil
+		return vector.NewWithStrings(resultType, resultValues, inputVector.GetNulls(), proc.Mp()), nil
 	}
 }

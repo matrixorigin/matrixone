@@ -16,7 +16,6 @@ package update
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"sync/atomic"
 
@@ -63,9 +62,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	for i := range bat.Vecs {
 		bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp())
 	}
-	defer bat.Clean(proc.Mp())
-
-	ctx := context.TODO()
+	defer bat.Free(proc.Mp())
 
 	// do null check
 	for i, updateCtx := range p.UpdateCtxs {
@@ -84,10 +81,10 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 		for j := range tmpBat.Vecs {
 			// Not-null check, for more information, please refer to the comments in func InsertValues
-			if (p.TableDefVec[i].Cols[j].Primary && !p.TableDefVec[i].Cols[j].Typ.AutoIncr) || (p.TableDefVec[i].Cols[j].Default != nil && !p.TableDefVec[i].Cols[j].Default.NullAbility) {
+			if (p.TableDefVec[i].Cols[j].Primary && !p.TableDefVec[i].Cols[j].GetType().AutoIncr) || (p.TableDefVec[i].Cols[j].Default != nil && !p.TableDefVec[i].Cols[j].Default.NullAbility) {
 				if nulls.Any(tmpBat.Vecs[j].Nsp) {
-					tmpBat.Clean(proc.Mp())
-					return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
+					tmpBat.Free(proc.Mp())
+					return false, moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
 				}
 			}
 		}
@@ -98,15 +95,15 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 				for i := range tmpBat.Vecs {
 					if tmpBat.Attrs[i] == name {
 						if nulls.Any(tmpBat.Vecs[i].Nsp) {
-							tmpBat.Clean(proc.Mp())
-							return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", updateCtx.OrderAttrs[i]))
+							tmpBat.Free(proc.Mp())
+							return false, moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", updateCtx.OrderAttrs[i]))
 						}
 					}
 				}
 			}
 		}
 
-		tmpBat.Clean(proc.Mp())
+		tmpBat.Free(proc.Mp())
 	}
 
 	// write data
@@ -133,72 +130,83 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 		// in update, we can get a batch[b(update), b(old)]
 		// we should use old b as delete info
-		for i, info := range updateCtx.IndexInfos {
-			rel := updateCtx.IndexTables[i]
-			var attrs []string = nil
-			attrs = append(attrs, updateCtx.UpdateAttrs...)
-			attrs = append(attrs, updateCtx.OtherAttrs...)
-			attrs = append(attrs, updateCtx.IndexAttrs...)
-			oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[int(idx)+1:], attrs, info.Cols, proc)
-			if rowNum != 0 {
-				err := rel.Delete(ctx, oldBatch, info.ColNames[0])
-				if err != nil {
-					delBat.Clean(proc.Mp())
-					tmpBat.Clean(proc.Mp())
-					oldBatch.Clean(proc.Mp())
-					return false, err
+		if updateCtx.UniqueIndexDef != nil {
+			relIdx := 0
+			for num := range updateCtx.UniqueIndexDef.IndexNames {
+				if updateCtx.UniqueIndexDef.TableExists[num] {
+					rel := updateCtx.UniqueIndexTables[relIdx]
+					var attrs []string = nil
+					attrs = append(attrs, updateCtx.UpdateAttrs...)
+					attrs = append(attrs, updateCtx.OtherAttrs...)
+					attrs = append(attrs, updateCtx.IndexAttrs...)
+					oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[int(idx)+1:], attrs, updateCtx.UniqueIndexDef.Fields[num].Cols, proc)
+					if rowNum != 0 {
+						err := rel.Delete(proc.Ctx, oldBatch, updateCtx.UniqueIndexDef.Fields[num].Cols[0].Name)
+						if err != nil {
+							delBat.Free(proc.Mp())
+							tmpBat.Free(proc.Mp())
+							oldBatch.Free(proc.Mp())
+							return false, err
+						}
+					}
+					oldBatch.Free(proc.Mp())
+					relIdx++
 				}
 			}
-			oldBatch.Clean(proc.Mp())
 		}
 
 		// delete old rows
-		err := updateCtx.TableSource.Delete(ctx, delBat, updateCtx.HideKey)
+		err := updateCtx.TableSource.Delete(proc.Ctx, delBat, updateCtx.HideKey)
 		if err != nil {
-			delBat.Clean(proc.Mp())
-			tmpBat.Clean(proc.Mp())
+			delBat.Free(proc.Mp())
+			tmpBat.Free(proc.Mp())
 			return false, err
 		}
-		delBat.Clean(proc.Mp())
+		delBat.Free(proc.Mp())
 
-		if err := colexec.UpdateInsertBatch(p.Engine, ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i], p.DBName[i], p.TblName[i]); err != nil {
-			tmpBat.Clean(proc.Mp())
+		if err := colexec.UpdateInsertBatch(p.Engine, proc.Ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i], p.DBName[i], p.TblName[i]); err != nil {
+			tmpBat.Free(proc.Mp())
 			return false, err
 		}
 
-		for i, info := range updateCtx.IndexInfos {
-			rel := updateCtx.IndexTables[i]
-			b, rowNum := util.BuildUniqueKeyBatch(tmpBat.Vecs, tmpBat.Attrs, info.Cols, proc)
-			if rowNum != 0 {
-				err = rel.Write(ctx, b)
-				if err != nil {
-					b.Clean(proc.Mp())
-					tmpBat.Clean(proc.Mp())
-					return false, err
+		if updateCtx.UniqueIndexDef != nil {
+			relIdx := 0
+			for num := range updateCtx.UniqueIndexDef.IndexNames {
+				if updateCtx.UniqueIndexDef.TableExists[num] {
+					rel := updateCtx.UniqueIndexTables[relIdx]
+					b, rowNum := util.BuildUniqueKeyBatch(tmpBat.Vecs, tmpBat.Attrs, updateCtx.UniqueIndexDef.Fields[num].Cols, proc)
+					if rowNum != 0 {
+						err = rel.Write(proc.Ctx, b)
+						if err != nil {
+							b.Free(proc.Mp())
+							tmpBat.Free(proc.Mp())
+							return false, err
+						}
+					}
+					b.Free(proc.Mp())
 				}
 			}
-			b.Clean(proc.Mp())
 		}
 
 		//fill cpkey column
 		if updateCtx.CPkeyColDef != nil {
 			err := util.FillCompositePKeyBatch(tmpBat, updateCtx.CPkeyColDef, proc)
 			if err != nil {
-				tmpBat.Clean(proc.Mp())
+				tmpBat.Free(proc.Mp())
 				return false, err
 			}
 		}
 		tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 
-		err = updateCtx.TableSource.Write(ctx, tmpBat)
+		err = updateCtx.TableSource.Write(proc.Ctx, tmpBat)
 		if err != nil {
-			tmpBat.Clean(proc.Mp())
+			tmpBat.Free(proc.Mp())
 			return false, err
 		}
 
 		affectedRows += cnt
 
-		tmpBat.Clean(proc.Mp())
+		tmpBat.Free(proc.Mp())
 	}
 
 	atomic.AddUint64(&p.AffectedRows, affectedRows)
@@ -217,121 +225,121 @@ func FilterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Ba
 		rvec := rbat.GetVector(int32(j))
 		switch vec.GetType().Oid {
 		case types.T_bool:
-			vs := vector.GetFixedVectorValues[bool](vec)
+			vs := vector.MustTCols[bool](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_int8:
-			vs := vector.GetFixedVectorValues[int8](vec)
+			vs := vector.MustTCols[int8](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_int16:
-			vs := vector.GetFixedVectorValues[int16](vec)
+			vs := vector.MustTCols[int16](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_int32:
-			vs := vector.GetFixedVectorValues[int32](vec)
+			vs := vector.MustTCols[int32](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_int64:
-			vs := vector.GetFixedVectorValues[int64](vec)
+			vs := vector.MustTCols[int64](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_uint8:
-			vs := vector.GetFixedVectorValues[uint8](vec)
+			vs := vector.MustTCols[uint8](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_uint16:
-			vs := vector.GetFixedVectorValues[uint16](vec)
+			vs := vector.MustTCols[uint16](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_uint32:
-			vs := vector.GetFixedVectorValues[uint32](vec)
+			vs := vector.MustTCols[uint32](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_uint64:
-			vs := vector.GetFixedVectorValues[uint64](vec)
+			vs := vector.MustTCols[uint64](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_float32:
-			vs := vector.GetFixedVectorValues[float32](vec)
+			vs := vector.MustTCols[float32](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_float64:
-			vs := vector.GetFixedVectorValues[float64](vec)
+			vs := vector.MustTCols[float64](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_date:
-			vs := vector.GetFixedVectorValues[types.Date](vec)
+			vs := vector.MustTCols[types.Date](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_time:
-			vs := vector.GetFixedVectorValues[types.Time](vec)
+			vs := vector.MustTCols[types.Time](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_datetime:
-			vs := vector.GetFixedVectorValues[types.Datetime](vec)
+			vs := vector.MustTCols[types.Datetime](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_timestamp:
-			vs := vector.GetFixedVectorValues[types.Timestamp](vec)
+			vs := vector.MustTCols[types.Timestamp](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_decimal64:
-			vs := vector.GetFixedVectorValues[types.Decimal64](vec)
+			vs := vector.MustTCols[types.Decimal64](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_decimal128:
-			vs := vector.GetFixedVectorValues[types.Decimal128](vec)
+			vs := vector.MustTCols[types.Decimal128](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_TS:
-			vs := vector.GetFixedVectorValues[types.TS](vec)
+			vs := vector.MustTCols[types.TS](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_Rowid:
-			vs := vector.GetFixedVectorValues[types.Rowid](vec)
+			vs := vector.MustTCols[types.Rowid](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
 		case types.T_uuid:
-			vs := vector.GetFixedVectorValues[types.Uuid](vec)
+			vs := vector.MustTCols[types.Uuid](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
 				return nil, 0
@@ -378,7 +386,7 @@ func FilterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Ba
 	m := make(map[[16]byte]int, batLen)
 
 	for _, vec := range bat.Vecs {
-		v := vector.New(vec.Typ)
+		v := vector.New(vec.GetType())
 		vector.PreAlloc(v, 0, batLen, proc.Mp())
 		newBat.Vecs = append(newBat.Vecs, v)
 	}
@@ -393,7 +401,7 @@ func FilterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Ba
 
 		for j, vec := range bat.Vecs {
 			var val any
-			if nulls.Contains(vec.Nsp, uint64(idx)) {
+			if nulls.Contains(vec.GetNulls(), uint64(idx)) {
 				nulls.Add(newBat.Vecs[j].Nsp, uint64(cnt)-1)
 				val = getIndexValue(idx, vec, true)
 			} else {
@@ -412,7 +420,7 @@ func FilterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Ba
 
 // XXX isn't this type switch super slow?
 func getIndexValue(idx int, v *vector.Vector, isNull bool) any {
-	switch v.Typ.Oid {
+	switch v.GetType().Oid {
 	case types.T_bool:
 		if isNull {
 			return false

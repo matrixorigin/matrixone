@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -34,14 +36,15 @@ import (
 
 type txnStore struct {
 	txnbase.NoopTxnStore
-	dbs      map[uint64]*txnDB
-	mu       sync.RWMutex
-	driver   wal.Driver
-	nodesMgr base.INodeManager
-	txn      txnif.AsyncTxn
-	catalog  *catalog.Catalog
-	cmdMgr   *commandManager
-	logs     []entry.Entry
+	mu            sync.RWMutex
+	transferTable *model.HashPageTable
+	dbs           map[uint64]*txnDB
+	driver        wal.Driver
+	nodesMgr      base.INodeManager
+	txn           txnif.AsyncTxn
+	catalog       *catalog.Catalog
+	cmdMgr        *commandManager
+	logs          []entry.Entry
 	//warChecker records all the db/table/segment/blocks visited/changed by the txn for
 	//           DML-DDL(DML encounters DDL) conflict detection when preparing commit.
 	warChecker  *warChecker
@@ -49,21 +52,32 @@ type txnStore struct {
 	writeOps    atomic.Uint32
 }
 
-var TxnStoreFactory = func(catalog *catalog.Catalog, driver wal.Driver, txnBufMgr base.INodeManager, dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
+var TxnStoreFactory = func(
+	catalog *catalog.Catalog,
+	driver wal.Driver,
+	transferTable *model.HashPageTable,
+	txnBufMgr base.INodeManager,
+	dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
-		return newStore(catalog, driver, txnBufMgr, dataFactory)
+		return newStore(catalog, driver, transferTable, txnBufMgr, dataFactory)
 	}
 }
 
-func newStore(catalog *catalog.Catalog, driver wal.Driver, txnBufMgr base.INodeManager, dataFactory *tables.DataFactory) *txnStore {
+func newStore(
+	catalog *catalog.Catalog,
+	driver wal.Driver,
+	transferTable *model.HashPageTable,
+	txnBufMgr base.INodeManager,
+	dataFactory *tables.DataFactory) *txnStore {
 	return &txnStore{
-		dbs:         make(map[uint64]*txnDB),
-		catalog:     catalog,
-		cmdMgr:      newCommandManager(driver),
-		driver:      driver,
-		logs:        make([]entry.Entry, 0),
-		dataFactory: dataFactory,
-		nodesMgr:    txnBufMgr,
+		transferTable: transferTable,
+		dbs:           make(map[uint64]*txnDB),
+		catalog:       catalog,
+		cmdMgr:        newCommandManager(driver),
+		driver:        driver,
+		logs:          make([]entry.Entry, 0),
+		dataFactory:   dataFactory,
+		nodesMgr:      txnBufMgr,
 	}
 }
 
@@ -172,9 +186,6 @@ func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32
 	if err != nil {
 		return err
 	}
-	// if table.IsDeleted() {
-	// 	return txnbase.ErrNotFound
-	// }
 	return db.RangeDelete(id, start, end, dt)
 }
 
@@ -251,6 +262,11 @@ func (store *txnStore) UnsafeGetDatabase(id uint64) (h handle.Database, err erro
 }
 
 func (store *txnStore) GetDatabase(name string) (h handle.Database, err error) {
+	defer func() {
+		if err == moerr.GetOkExpectedEOB() {
+			err = moerr.NewBadDBNoCtx(name)
+		}
+	}()
 	meta, err := store.catalog.TxnGetDBEntryByName(name, store.txn)
 	if err != nil {
 		return
@@ -540,7 +556,8 @@ func (store *txnStore) PrePrepare() (err error) {
 
 func (store *txnStore) PrepareCommit() (err error) {
 	if store.warChecker != nil {
-		if err = store.warChecker.check(); err != nil {
+		if err = store.warChecker.checkAll(
+			store.txn.GetPrepareTS()); err != nil {
 			return err
 		}
 	}

@@ -18,25 +18,24 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/generate_series"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -45,9 +44,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
@@ -58,9 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
@@ -79,163 +76,265 @@ func init() {
 	constBat.Zs = []int64{1}
 }
 
-func dupInstruction(in vm.Instruction) vm.Instruction {
-	rin := vm.Instruction{
-		Op:  in.Op,
-		Idx: in.Idx,
-	}
-	switch arg := in.Arg.(type) {
-	case *top.Argument:
-		rin.Arg = &top.Argument{
-			Fs:    arg.Fs,
-			Limit: arg.Limit,
+func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]*process.WaitRegister) vm.Instruction {
+	res := vm.Instruction{Op: sourceIns.Op, Idx: sourceIns.Idx}
+	switch sourceIns.Op {
+	case vm.Anti:
+		t := sourceIns.Arg.(*anti.Argument)
+		res.Arg = &anti.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Cond:       t.Cond,
+			Typs:       t.Typs,
+			Conditions: t.Conditions,
+			Result:     t.Result,
 		}
-	case *limit.Argument:
-		rin.Arg = &limit.Argument{
-			Limit: arg.Limit,
+	case vm.Group:
+		t := sourceIns.Arg.(*group.Argument)
+		res.Arg = &group.Argument{
+			NeedEval: t.NeedEval,
+			Ibucket:  t.Ibucket,
+			Nbucket:  t.Nbucket,
+			Exprs:    t.Exprs,
+			Types:    t.Types,
+			Aggs:     t.Aggs,
 		}
-	case *join.Argument:
-		rin.Arg = &join.Argument{
-			Typs:       arg.Typs,
-			Cond:       arg.Cond,
-			Result:     arg.Result,
-			Conditions: arg.Conditions,
+	case vm.Join:
+		t := sourceIns.Arg.(*join.Argument)
+		res.Arg = &join.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Cond:       t.Cond,
+			Typs:       t.Typs,
+			Conditions: t.Conditions,
 		}
-	case *semi.Argument:
-		rin.Arg = &semi.Argument{
-			Typs:       arg.Typs,
-			Cond:       arg.Cond,
-			Result:     arg.Result,
-			Conditions: arg.Conditions,
+	case vm.Left:
+		t := sourceIns.Arg.(*left.Argument)
+		res.Arg = &left.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Cond:       t.Cond,
+			Result:     t.Result,
+			Typs:       t.Typs,
+			Conditions: t.Conditions,
 		}
-	case *left.Argument:
-		rin.Arg = &left.Argument{
-			Typs:       arg.Typs,
-			Cond:       arg.Cond,
-			Result:     arg.Result,
-			Conditions: arg.Conditions,
+	case vm.Limit:
+		t := sourceIns.Arg.(*limit.Argument)
+		res.Arg = &limit.Argument{
+			Limit: t.Limit,
 		}
-	case *group.Argument:
-		rin.Arg = &group.Argument{
-			Aggs:    arg.Aggs,
-			Exprs:   arg.Exprs,
-			Types:   arg.Types,
-			Ibucket: arg.Ibucket,
-			Nbucket: arg.Nbucket,
+	case vm.LoopAnti:
+		t := sourceIns.Arg.(*loopanti.Argument)
+		res.Arg = &loopanti.Argument{
+			Result: t.Result,
+			Cond:   t.Cond,
+			Typs:   t.Typs,
 		}
-	case *single.Argument:
-		rin.Arg = &single.Argument{
-			Typs:       arg.Typs,
-			Cond:       arg.Cond,
-			Result:     arg.Result,
-			Conditions: arg.Conditions,
+	case vm.LoopJoin:
+		t := sourceIns.Arg.(*loopanti.Argument)
+		res.Arg = &loopanti.Argument{
+			Result: t.Result,
+			Cond:   t.Cond,
+			Typs:   t.Typs,
 		}
-	case *product.Argument:
-		rin.Arg = &product.Argument{
-			Typs:   arg.Typs,
-			Result: arg.Result,
+	case vm.LoopLeft:
+		t := sourceIns.Arg.(*loopleft.Argument)
+		res.Arg = &loopleft.Argument{
+			Cond:   t.Cond,
+			Typs:   t.Typs,
+			Result: t.Result,
 		}
-	case *anti.Argument:
-		rin.Arg = &anti.Argument{
-			Typs:       arg.Typs,
-			Cond:       arg.Cond,
-			Result:     arg.Result,
-			Conditions: arg.Conditions,
+	case vm.LoopSemi:
+		t := sourceIns.Arg.(*loopsemi.Argument)
+		res.Arg = &loopsemi.Argument{
+			Result: t.Result,
+			Cond:   t.Cond,
+			Typs:   t.Typs,
 		}
-	case *mark.Argument:
-		{
-			rin.Arg = &mark.Argument{
-				Typs:       arg.Typs,
-				Cond:       arg.Cond,
-				Result:     arg.Result,
-				Conditions: arg.Conditions,
-				OnList:     arg.OnList,
-			}
+	case vm.LoopSingle:
+		t := sourceIns.Arg.(*loopsingle.Argument)
+		res.Arg = &loopsingle.Argument{
+			Result: t.Result,
+			Cond:   t.Cond,
+			Typs:   t.Typs,
 		}
-	case *offset.Argument:
-		rin.Arg = &offset.Argument{
-			Offset: arg.Offset,
+	case vm.Offset:
+		t := sourceIns.Arg.(*offset.Argument)
+		res.Arg = &offset.Argument{
+			Offset: t.Offset,
 		}
-	case *order.Argument:
-		rin.Arg = &order.Argument{
-			Fs: arg.Fs,
+	case vm.Order:
+		t := sourceIns.Arg.(*order.Argument)
+		res.Arg = &order.Argument{
+			Fs: t.Fs,
 		}
-	case *projection.Argument:
-		rin.Arg = &projection.Argument{
-			Es: arg.Es,
+	case vm.Product:
+		t := sourceIns.Arg.(*product.Argument)
+		res.Arg = &product.Argument{
+			Result: t.Result,
+			Typs:   t.Typs,
 		}
-	case *restrict.Argument:
-		rin.Arg = &restrict.Argument{
-			E: arg.E,
+	case vm.Projection:
+		t := sourceIns.Arg.(*projection.Argument)
+		res.Arg = &projection.Argument{
+			Es: t.Es,
 		}
-	case *output.Argument:
-		rin.Arg = &output.Argument{
-			Data: arg.Data,
-			Func: arg.Func,
+	case vm.Restrict:
+		t := sourceIns.Arg.(*restrict.Argument)
+		res.Arg = &restrict.Argument{
+			E: t.E,
 		}
-	case *loopjoin.Argument:
-		rin.Arg = &loopjoin.Argument{
-			Typs:   arg.Typs,
-			Cond:   arg.Cond,
-			Result: arg.Result,
+	case vm.Semi:
+		t := sourceIns.Arg.(*semi.Argument)
+		res.Arg = &semi.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Cond:       t.Cond,
+			Typs:       t.Typs,
+			Conditions: t.Conditions,
 		}
-	case *loopsemi.Argument:
-		rin.Arg = &loopsemi.Argument{
-			Typs:   arg.Typs,
-			Cond:   arg.Cond,
-			Result: arg.Result,
+	case vm.Single:
+		t := sourceIns.Arg.(*single.Argument)
+		res.Arg = &single.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Cond:       t.Cond,
+			Typs:       t.Typs,
+			Conditions: t.Conditions,
 		}
-	case *loopleft.Argument:
-		rin.Arg = &loopleft.Argument{
-			Typs:   arg.Typs,
-			Cond:   arg.Cond,
-			Result: arg.Result,
+	case vm.Top:
+		t := sourceIns.Arg.(*top.Argument)
+		res.Arg = &top.Argument{
+			Limit: t.Limit,
+			Fs:    t.Fs,
 		}
-	case *loopanti.Argument:
-		rin.Arg = &loopanti.Argument{
-			Typs:   arg.Typs,
-			Cond:   arg.Cond,
-			Result: arg.Result,
+	case vm.Intersect:
+		t := sourceIns.Arg.(*intersect.Argument)
+		res.Arg = &intersect.Argument{
+			IBucket: t.IBucket,
+			NBucket: t.NBucket,
 		}
-	case *loopsingle.Argument:
-		rin.Arg = &loopsingle.Argument{
-			Typs:   arg.Typs,
-			Cond:   arg.Cond,
-			Result: arg.Result,
+	case vm.Minus: // 2
+		t := sourceIns.Arg.(*minus.Argument)
+		res.Arg = &minus.Argument{
+			IBucket: t.IBucket,
+			NBucket: t.NBucket,
 		}
-	case *dispatch.Argument:
-	case *connector.Argument:
-	case *minus.Argument:
-		rin.Arg = &minus.Argument{
-			IBucket: arg.IBucket,
-			NBucket: arg.NBucket,
+	case vm.IntersectAll:
+		t := sourceIns.Arg.(*intersectall.Argument)
+		res.Arg = &intersectall.Argument{
+			IBucket: t.IBucket,
+			NBucket: t.NBucket,
 		}
-	case *intersect.Argument:
-		rin.Arg = &intersect.Argument{
-			IBucket: arg.IBucket,
-			NBucket: arg.NBucket,
+	case vm.Merge:
+		res.Arg = &merge.Argument{}
+	case vm.MergeGroup:
+		t := sourceIns.Arg.(*mergegroup.Argument)
+		res.Arg = &mergegroup.Argument{
+			NeedEval: t.NeedEval,
 		}
-	case *intersectall.Argument:
-		rin.Arg = &intersectall.Argument{
-			IBucket: arg.IBucket,
-			NBucket: arg.NBucket,
+	case vm.MergeLimit:
+		t := sourceIns.Arg.(*mergelimit.Argument)
+		res.Arg = &mergelimit.Argument{
+			Limit: t.Limit,
 		}
-	case *external.Argument:
-		rin.Arg = &external.Argument{
-			Es: arg.Es,
+	case vm.MergeOffset:
+		t := sourceIns.Arg.(*mergeoffset.Argument)
+		res.Arg = &mergeoffset.Argument{
+			Offset: t.Offset,
 		}
-	case *unnest.Argument:
-		rin.Arg = &unnest.Argument{
-			Es: &unnest.Param{
-				Attrs:  arg.Es.Attrs,
-				Cols:   arg.Es.Cols,
-				Extern: arg.Es.Extern,
+	case vm.MergeTop:
+		t := sourceIns.Arg.(*mergetop.Argument)
+		res.Arg = &mergetop.Argument{
+			Limit: t.Limit,
+			Fs:    t.Fs,
+		}
+	case vm.MergeOrder:
+		t := sourceIns.Arg.(*mergeorder.Argument)
+		res.Arg = &mergeorder.Argument{
+			Fs: t.Fs,
+		}
+	case vm.Mark:
+		t := sourceIns.Arg.(*mark.Argument)
+		res.Arg = &mark.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Conditions: t.Conditions,
+			Typs:       t.Typs,
+			Cond:       t.Cond,
+			OnList:     t.OnList,
+		}
+	case vm.TableFunction:
+		t := sourceIns.Arg.(*table_function.Argument)
+		res.Arg = &table_function.Argument{
+			Name:   t.Name,
+			Args:   t.Args,
+			Rets:   t.Rets,
+			Attrs:  t.Attrs,
+			Params: t.Params,
+		}
+
+	case vm.HashBuild:
+		t := sourceIns.Arg.(*hashbuild.Argument)
+		res.Arg = &hashbuild.Argument{
+			NeedHashMap: t.NeedHashMap,
+			NeedExpr:    t.NeedExpr,
+			Ibucket:     t.Ibucket,
+			Nbucket:     t.Nbucket,
+			Typs:        t.Typs,
+			Conditions:  t.Conditions,
+		}
+	case vm.External:
+		t := sourceIns.Arg.(*external.Argument)
+		res.Arg = &external.Argument{
+			Es: &external.ExternalParam{
+				Attrs:         t.Es.Attrs,
+				Cols:          t.Es.Cols,
+				Name2ColIndex: t.Es.Name2ColIndex,
+				CreateSql:     t.Es.CreateSql,
+				FileList:      t.Es.FileList,
+				Fileparam: &external.ExternalFileparam{
+					End:       t.Es.Fileparam.End,
+					FileCnt:   t.Es.Fileparam.FileCnt,
+					FileFin:   t.Es.Fileparam.FileFin,
+					FileIndex: t.Es.Fileparam.FileIndex,
+				},
 			},
 		}
+	case vm.Connector:
+		ok := false
+		if regMap != nil {
+			arg := &connector.Argument{}
+			sourceReg := sourceIns.Arg.(*connector.Argument).Reg
+			if arg.Reg, ok = regMap[sourceReg]; !ok {
+				panic("nonexistent wait register")
+			}
+			res.Arg = arg
+		}
+	case vm.Dispatch:
+		ok := false
+		if regMap != nil {
+			sourceArg := sourceIns.Arg.(*dispatch.Argument)
+			arg := &dispatch.Argument{
+				All:  sourceArg.All,
+				Regs: make([]*process.WaitRegister, len(sourceArg.Regs)),
+			}
+			for j := range arg.Regs {
+				sourceReg := sourceArg.Regs[j]
+				if arg.Regs[j], ok = regMap[sourceReg]; !ok {
+					panic("nonexistent wait register")
+				}
+			}
+			res.Arg = arg
+		}
 	default:
-		panic(moerr.NewInternalError(fmt.Sprintf("unsupport instruction %T\n", in.Arg)))
+		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
-	return rin
+	return res
 }
 
 func constructRestrict(n *plan.Node) *restrict.Argument {
@@ -244,39 +343,58 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 	}
 }
 
-func constructDeletion(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*deletion.Argument, error) {
-	ctx := context.TODO()
+func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*deletion.Argument, error) {
 	count := len(n.DeleteTablesCtx)
 	ds := make([]*deletion.DeleteCtx, count)
 	for i := 0; i < count; i++ {
-		dbSource, err := eg.Database(ctx, n.DeleteTablesCtx[i].DbName, txnOperator)
+		dbSource, err := eg.Database(proc.Ctx, n.DeleteTablesCtx[i].DbName, proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
-		relation, err := dbSource.Relation(ctx, n.DeleteTablesCtx[i].TblName)
+		relation, err := dbSource.Relation(proc.Ctx, n.DeleteTablesCtx[i].TblName)
 		if err != nil {
 			return nil, err
 		}
 
-		indexTables := make([]engine.Relation, 0)
-		for _, info := range n.DeleteTablesCtx[i].IndexInfos {
-			indexTable, err := dbSource.Relation(ctx, info.TableName)
-			if err != nil {
-				return nil, err
+		uniqueIndexTables := make([]engine.Relation, 0)
+		secondaryIndexTables := make([]engine.Relation, 0)
+		uDef := n.DeleteTablesCtx[i].UniqueIndexDef
+		sDef := n.DeleteTablesCtx[i].SecondaryIndexDef
+		if uDef != nil {
+			for i := range uDef.TableNames {
+				if uDef.TableExists[i] {
+					indexTable, err := dbSource.Relation(proc.Ctx, uDef.TableNames[i])
+					if err != nil {
+						return nil, err
+					}
+					uniqueIndexTables = append(uniqueIndexTables, indexTable)
+				}
 			}
-			indexTables = append(indexTables, indexTable)
+		}
+		if sDef != nil {
+			for i := range sDef.TableNames {
+				if sDef.TableExists[i] {
+					indexTable, err := dbSource.Relation(proc.Ctx, sDef.TableNames[i])
+					if err != nil {
+						return nil, err
+					}
+					secondaryIndexTables = append(secondaryIndexTables, indexTable)
+				}
+			}
 		}
 
 		ds[i] = &deletion.DeleteCtx{
-			TableSource:  relation,
-			TableName:    n.DeleteTablesCtx[i].TblName,
-			DbName:       n.DeleteTablesCtx[i].DbName,
-			UseDeleteKey: n.DeleteTablesCtx[i].UseDeleteKey,
-			CanTruncate:  n.DeleteTablesCtx[i].CanTruncate,
-			ColIndex:     n.DeleteTablesCtx[i].ColIndex,
-			IndexInfos:   n.DeleteTablesCtx[i].IndexInfos,
-			IndexTables:  indexTables,
-			IndexAttrs:   n.DeleteTablesCtx[i].IndexAttrs,
+			TableSource:          relation,
+			TableName:            n.DeleteTablesCtx[i].TblName,
+			DbName:               n.DeleteTablesCtx[i].DbName,
+			UseDeleteKey:         n.DeleteTablesCtx[i].UseDeleteKey,
+			CanTruncate:          n.DeleteTablesCtx[i].CanTruncate,
+			ColIndex:             n.DeleteTablesCtx[i].ColIndex,
+			UniqueIndexDef:       n.DeleteTablesCtx[i].UniqueIndexDef,
+			SecondaryIndexDef:    n.DeleteTablesCtx[i].SecondaryIndexDef,
+			UniqueIndexTables:    uniqueIndexTables,
+			SecondaryIndexTables: secondaryIndexTables,
+			IndexAttrs:           n.DeleteTablesCtx[i].IndexAttrs,
 		}
 	}
 
@@ -285,57 +403,74 @@ func constructDeletion(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) 
 	}, nil
 }
 
-func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*insert.Argument, error) {
-	ctx := context.TODO()
-	db, err := eg.Database(ctx, n.ObjRef.SchemaName, txnOperator)
+func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
+	db, err := eg.Database(proc.Ctx, n.ObjRef.SchemaName, proc.TxnOperator)
 	if err != nil {
 		return nil, err
 	}
-	relation, err := db.Relation(ctx, n.TableDef.Name)
+	relation, err := db.Relation(proc.Ctx, n.TableDef.Name)
 	if err != nil {
 		return nil, err
 	}
-	indexTables := make([]engine.Relation, 0)
-	for _, info := range n.TableDef.IndexInfos {
-		indexTable, err := db.Relation(ctx, info.TableName)
-		if err != nil {
-			return nil, err
+	uniqueIndexTables := make([]engine.Relation, 0)
+	secondaryIndexTables := make([]engine.Relation, 0)
+	uDef, sDef := buildIndexDefs(n.TableDef.Defs)
+	if uDef != nil {
+		for i := range uDef.TableNames {
+			if uDef.TableExists[i] {
+				indexTable, err := db.Relation(proc.Ctx, uDef.TableNames[i])
+				if err != nil {
+					return nil, err
+				}
+				uniqueIndexTables = append(uniqueIndexTables, indexTable)
+			}
 		}
-		indexTables = append(indexTables, indexTable)
+	}
+	if sDef != nil {
+		for i := range sDef.TableNames {
+			if sDef.TableExists[i] {
+				indexTable, err := db.Relation(proc.Ctx, sDef.TableNames[i])
+				if err != nil {
+					return nil, err
+				}
+				secondaryIndexTables = append(secondaryIndexTables, indexTable)
+			}
+		}
 	}
 	return &insert.Argument{
-		TargetTable:   relation,
-		TargetColDefs: n.TableDef.Cols,
-		Engine:        eg,
-		DB:            db,
-		TableID:       relation.GetTableID(ctx),
-		DBName:        n.ObjRef.SchemaName,
-		TableName:     n.TableDef.Name,
-		CPkeyColDef:   n.TableDef.CompositePkey,
-		IndexTables:   indexTables,
-		IndexInfos:    n.TableDef.IndexInfos,
+		TargetTable:          relation,
+		TargetColDefs:        n.TableDef.Cols,
+		Engine:               eg,
+		DB:                   db,
+		TableID:              relation.GetTableID(proc.Ctx),
+		DBName:               n.ObjRef.SchemaName,
+		TableName:            n.TableDef.Name,
+		CPkeyColDef:          n.TableDef.CompositePkey,
+		UniqueIndexTables:    uniqueIndexTables,
+		UniqueIndexDef:       uDef,
+		SecondaryIndexTables: secondaryIndexTables,
+		SecondaryIndexDef:    sDef,
 	}, nil
 }
 
-func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*update.Argument, error) {
-	ctx := context.TODO()
+func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*update.Argument, error) {
 	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
 	tableID := make([]string, len(n.UpdateCtxs))
 	db := make([]engine.Database, len(n.UpdateCtxs))
 	dbName := make([]string, len(n.UpdateCtxs))
 	tblName := make([]string, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {
-		dbSource, err := eg.Database(ctx, updateCtx.DbName, txnOperator)
+		dbSource, err := eg.Database(proc.Ctx, updateCtx.DbName, proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
 		db[i] = dbSource
-		relation, err := dbSource.Relation(ctx, updateCtx.TblName)
+		relation, err := dbSource.Relation(proc.Ctx, updateCtx.TblName)
 		if err != nil {
 			return nil, err
 		}
 
-		tableID[i] = relation.GetTableID(ctx)
+		tableID[i] = relation.GetTableID(proc.Ctx)
 		dbName[i] = updateCtx.DbName
 		tblName[i] = updateCtx.TblName
 		colNames := make([]string, 0, len(updateCtx.UpdateCols))
@@ -349,28 +484,47 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 				break
 			}
 		}
-		indexTables := make([]engine.Relation, 0)
-		for _, info := range n.TableDefVec[k].IndexInfos {
-			indexTable, err := dbSource.Relation(ctx, info.TableName)
-			if err != nil {
-				return nil, err
+		uniqueIndexTables := make([]engine.Relation, 0)
+		secondaryIndexTables := make([]engine.Relation, 0)
+		uDef, sDef := buildIndexDefs(n.TableDefVec[k].Defs)
+		if uDef != nil {
+			for i := range uDef.TableNames {
+				if uDef.TableExists[i] {
+					indexTable, err := dbSource.Relation(proc.Ctx, uDef.TableNames[i])
+					if err != nil {
+						return nil, err
+					}
+					uniqueIndexTables = append(uniqueIndexTables, indexTable)
+				}
 			}
-			indexTables = append(indexTables, indexTable)
+		}
+		if sDef != nil {
+			for i := range sDef.TableNames {
+				if sDef.TableExists[i] {
+					indexTable, err := dbSource.Relation(proc.Ctx, sDef.TableNames[i])
+					if err != nil {
+						return nil, err
+					}
+					secondaryIndexTables = append(secondaryIndexTables, indexTable)
+				}
+			}
 		}
 
 		us[i] = &update.UpdateCtx{
-			PriKey:      updateCtx.PriKey,
-			PriKeyIdx:   updateCtx.PriKeyIdx,
-			HideKey:     updateCtx.HideKey,
-			HideKeyIdx:  updateCtx.HideKeyIdx,
-			UpdateAttrs: colNames,
-			OtherAttrs:  updateCtx.OtherAttrs,
-			OrderAttrs:  updateCtx.OrderAttrs,
-			TableSource: relation,
-			CPkeyColDef: updateCtx.CompositePkey,
-			IndexInfos:  n.TableDefVec[k].IndexInfos,
-			IndexTables: indexTables,
-			IndexAttrs:  updateCtx.IndexAttrs,
+			PriKey:               updateCtx.PriKey,
+			PriKeyIdx:            updateCtx.PriKeyIdx,
+			HideKey:              updateCtx.HideKey,
+			HideKeyIdx:           updateCtx.HideKeyIdx,
+			UpdateAttrs:          colNames,
+			OtherAttrs:           updateCtx.OtherAttrs,
+			OrderAttrs:           updateCtx.OrderAttrs,
+			TableSource:          relation,
+			CPkeyColDef:          updateCtx.CompositePkey,
+			UniqueIndexDef:       uDef,
+			SecondaryIndexDef:    sDef,
+			IndexAttrs:           updateCtx.IndexAttrs,
+			UniqueIndexTables:    uniqueIndexTables,
+			SecondaryIndexTables: secondaryIndexTables,
 		}
 	}
 	return &update.Argument{
@@ -390,7 +544,7 @@ func constructProjection(n *plan.Node) *projection.Argument {
 	}
 }
 
-func constructExternal(n *plan.Node, ctx context.Context, fileparam *external.ExternalFileparam) *external.Argument {
+func constructExternal(n *plan.Node, ctx context.Context, fileList []string) *external.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
@@ -402,34 +556,22 @@ func constructExternal(n *plan.Node, ctx context.Context, fileparam *external.Ex
 			Name2ColIndex: n.TableDef.Name2ColIndex,
 			CreateSql:     n.TableDef.Createsql,
 			Ctx:           ctx,
-			Fileparam:     fileparam,
+			FileList:      fileList,
+			Fileparam:     new(external.ExternalFileparam),
 		},
 	}
 }
-func constructUnnest(n *plan.Node, ctx context.Context, param *unnest.ExternalParam) *unnest.Argument {
+func constructTableFunction(n *plan.Node, ctx context.Context, name string) *table_function.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
-	return &unnest.Argument{
-		Es: &unnest.Param{
-			Attrs:  attrs,
-			Cols:   n.TableDef.Cols,
-			Extern: param,
-		},
-	}
-}
-
-func constructGenerateSeries(n *plan.Node, ctx context.Context) *generate_series.Argument {
-	attrs := make([]string, len(n.TableDef.Cols))
-	for j, col := range n.TableDef.Cols {
-		attrs[j] = col.Name
-	}
-	return &generate_series.Argument{
-		Es: &generate_series.Param{
-			Attrs: attrs,
-			Cols:  n.TableDef.Cols,
-		},
+	return &table_function.Argument{
+		Attrs:  attrs,
+		Rets:   n.TableDef.Cols,
+		Args:   n.TblFuncExprList,
+		Name:   name,
+		Params: n.TableDef.TblFunc.Param,
 	}
 }
 
@@ -443,23 +585,23 @@ func constructTop(n *plan.Node, topN int64) *top.Argument {
 func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &join.Argument{
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
 func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr)
+		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI("semi result '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -468,42 +610,42 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
 func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &left.Argument{
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
 func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *single.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &single.Argument{
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
 func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *product.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	return &product.Argument{Typs: typs, Result: result}
 }
@@ -511,9 +653,9 @@ func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *p
 func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr)
+		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI("anti result '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "anti result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -522,16 +664,16 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
 func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onList []*plan.Expr) *mark.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr)
+		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI("mark result '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "mark result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -540,7 +682,7 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onLis
 		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
-		Conditions: constructJoinConditions(conds),
+		Conditions: constructJoinConditions(conds, proc),
 		OnList:     onList,
 	}
 }
@@ -570,8 +712,9 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	if err != nil {
 		panic(err)
 	}
+	defer vec.Free(proc.Mp())
 	return &limit.Argument{
-		Limit: uint64(vec.Col.([]int64)[0]),
+		Limit: uint64(vector.MustTCols[int64](vec)[0]),
 	}
 }
 
@@ -659,8 +802,9 @@ func constructMergeOffset(n *plan.Node, proc *process.Process) *mergeoffset.Argu
 	if err != nil {
 		panic(err)
 	}
+	defer vec.Free(proc.Mp())
 	return &mergeoffset.Argument{
-		Offset: uint64(vec.Col.([]int64)[0]),
+		Offset: uint64(vector.MustTCols[int64](vec)[0]),
 	}
 }
 
@@ -669,8 +813,9 @@ func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argume
 	if err != nil {
 		panic(err)
 	}
+	defer vec.Free(proc.Mp())
 	return &mergelimit.Argument{
-		Limit: uint64(vec.Col.([]int64)[0]),
+		Limit: uint64(vector.MustTCols[int64](vec)[0]),
 	}
 }
 
@@ -683,7 +828,7 @@ func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argume
 func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *loopjoin.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	return &loopjoin.Argument{
 		Typs:   typs,
@@ -695,9 +840,9 @@ func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *
 func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *loopsemi.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr)
+		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI("loop semi result '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "loop semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -711,7 +856,7 @@ func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *
 func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *loopleft.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	return &loopleft.Argument{
 		Typs:   typs,
@@ -723,7 +868,7 @@ func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *
 func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process) *loopsingle.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	return &loopsingle.Argument{
 		Result: result,
@@ -734,9 +879,9 @@ func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process)
 func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *loopanti.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr)
+		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI("loop anti result '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "loop anti result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -747,7 +892,7 @@ func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *
 	}
 }
 
-func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
+func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Argument {
 	switch in.Op {
 	case vm.Anti:
 		arg := in.Arg.(*anti.Argument)
@@ -829,33 +974,33 @@ func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
 		}
 
 	default:
-		panic(moerr.NewInternalError("unsupport join type '%v'", in.Op))
+		panic(moerr.NewInternalError(proc.Ctx, "unsupport join type '%v'", in.Op))
 	}
 }
 
-func constructJoinResult(expr *plan.Expr) (int32, int32) {
+func constructJoinResult(expr *plan.Expr, proc *process.Process) (int32, int32) {
 	e, ok := expr.Expr.(*plan.Expr_Col)
 	if !ok {
-		panic(moerr.NewNYI("join result '%s'", expr))
+		panic(moerr.NewNYI(proc.Ctx, "join result '%s'", expr))
 	}
 	return e.Col.RelPos, e.Col.ColPos
 }
 
-func constructJoinConditions(exprs []*plan.Expr) [][]*plan.Expr {
+func constructJoinConditions(exprs []*plan.Expr, proc *process.Process) [][]*plan.Expr {
 	conds := make([][]*plan.Expr, 2)
 	conds[0] = make([]*plan.Expr, len(exprs))
 	conds[1] = make([]*plan.Expr, len(exprs))
 	for i, expr := range exprs {
-		conds[0][i], conds[1][i] = constructJoinCondition(expr)
+		conds[0][i], conds[1][i] = constructJoinCondition(expr, proc)
 	}
 	return conds
 }
 
-func constructJoinCondition(expr *plan.Expr) (*plan.Expr, *plan.Expr) {
+func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr) {
 	if e, ok := expr.Expr.(*plan.Expr_C); ok { // constant bool
 		b, ok := e.C.Value.(*plan.Const_Bval)
 		if !ok {
-			panic(moerr.NewNYI("join condition '%s'", expr))
+			panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
 		}
 		if b.Bval {
 			return expr, expr
@@ -871,7 +1016,7 @@ func constructJoinCondition(expr *plan.Expr) (*plan.Expr, *plan.Expr) {
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
 	if !ok || !supportedJoinCondition(e.F.Func.GetObj()) {
-		panic(moerr.NewNYI("join condition '%s'", expr))
+		panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
 	}
 	if exprRelPos(e.F.Args[0]) == 1 {
 		return e.F.Args[1], e.F.Args[0]
@@ -978,4 +1123,18 @@ func exprRelPos(expr *plan.Expr) int32 {
 		}
 	}
 	return -1
+}
+
+func buildIndexDefs(defs []*plan.TableDef_DefType) (*plan.UniqueIndexDef, *plan.SecondaryIndexDef) {
+	var uIdxDef *plan.UniqueIndexDef = nil
+	var sIdxDef *plan.SecondaryIndexDef = nil
+	for _, def := range defs {
+		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+			uIdxDef = idxDef.UIdx
+		}
+		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
+			sIdxDef = idxDef.SIdx
+		}
+	}
+	return uIdxDef, sIdxDef
 }

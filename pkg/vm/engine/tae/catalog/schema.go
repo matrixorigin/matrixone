@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
@@ -57,11 +58,79 @@ type Default struct {
 	OriginString string
 }
 
+func (d *Default) Marshal() ([]byte, error) {
+	expr := &plan.Expr{}
+	if d.Expr != nil {
+		if err := expr.Unmarshal(d.Expr); err != nil {
+			logutil.Warnf("deserialze default expr err: %v", err)
+			expr = nil
+		}
+	} else {
+		expr = nil
+	}
+	pDefault := &plan.Default{
+		NullAbility:  d.NullAbility,
+		OriginString: d.OriginString,
+		Expr:         expr,
+	}
+	return types.Encode(pDefault)
+}
+
+func (d *Default) Unmarshal(data []byte) (err error) {
+	if len(data) != len([]byte("")) {
+		pDefault := new(plan.Default)
+		if err = types.Decode(data, pDefault); err != nil {
+			return
+		}
+		d.NullAbility = pDefault.NullAbility
+		d.OriginString = pDefault.OriginString
+		d.Expr = nil
+		if pDefault.Expr != nil {
+			if d.Expr, err = pDefault.Expr.Marshal(); err != nil {
+				return
+			}
+		}
+	}
+	return nil
+}
+
 type OnUpdate struct {
 	Expr         []byte
 	OriginString string
 }
 
+func (u *OnUpdate) Marshal() ([]byte, error) {
+	expr := &plan.Expr{}
+	if u.Expr != nil {
+		if err := expr.Unmarshal(u.Expr); err != nil {
+			logutil.Warnf("deserialze onUpdate expr err: %v", err)
+			expr = nil
+		}
+	} else {
+		expr = nil
+	}
+	pUpdate := &plan.OnUpdate{
+		OriginString: u.OriginString,
+		Expr:         expr,
+	}
+	return types.Encode(pUpdate)
+}
+func (u *OnUpdate) Unmarshal(data []byte) (err error) {
+	if len(data) != len([]byte("")) {
+		pUpdate := &plan.OnUpdate{}
+		if err = types.Decode(data, pUpdate); err != nil {
+			return
+		}
+		u.OriginString = pUpdate.OriginString
+		u.Expr = nil
+		if pUpdate.Expr != nil {
+			if u.Expr, err = pUpdate.Expr.Marshal(); err != nil {
+				return
+			}
+		}
+	}
+	return
+}
 func NewIndexInfo(name string, typ IndexT, colIdx ...int) *IndexInfo {
 	index := &IndexInfo{
 		Name:    name,
@@ -88,6 +157,7 @@ type ColDef struct {
 	Comment       string
 	Default       Default
 	OnUpdate      OnUpdate
+	ClusterBy     bool
 }
 
 func (def *ColDef) GetName() string     { return def.Name }
@@ -99,6 +169,7 @@ func (def *ColDef) IsPhyAddr() bool       { return def.PhyAddr }
 func (def *ColDef) IsPrimary() bool       { return def.Primary }
 func (def *ColDef) IsAutoIncrement() bool { return def.AutoIncrement }
 func (def *ColDef) IsSortKey() bool       { return def.SortKey }
+func (def *ColDef) IsClusterBy() bool     { return def.ClusterBy }
 
 type SortKey struct {
 	Defs      []*ColDef
@@ -145,7 +216,8 @@ type Schema struct {
 	Relkind          string
 	Createsql        string
 	View             string
-	IndexInfos       []*ComputeIndexInfo
+	UniqueIndex      string
+	SecondaryIndex   string
 
 	SortKey    *SortKey
 	PhyAddrKey *ColDef
@@ -153,10 +225,9 @@ type Schema struct {
 
 func NewEmptySchema(name string) *Schema {
 	return &Schema{
-		Name:       name,
-		ColDefs:    make([]*ColDef, 0),
-		NameIndex:  make(map[string]int),
-		IndexInfos: make([]*ComputeIndexInfo, 0),
+		Name:      name,
+		ColDefs:   make([]*ColDef, 0),
+		NameIndex: make(map[string]int),
 	}
 }
 
@@ -389,16 +460,39 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += 1
+		if err = binary.Read(r, binary.BigEndian, &def.ClusterBy); err != nil {
+			return
+		}
+		n += 1
 		def.Default = Default{}
-		if sn, err = UnMarshalDefault(r, &def.Default); err != nil {
+		length := uint64(0)
+		if err = binary.Read(r, binary.BigEndian, &length); err != nil {
 			return
 		}
-		n += sn
+		n += 8
+		buf := make([]byte, length)
+		var sn2 int
+		if sn2, err = r.Read(buf); err != nil {
+			return
+		}
+		n += int64(sn2)
+		if err = def.Default.Unmarshal(buf); err != nil {
+			return
+		}
 		def.OnUpdate = OnUpdate{}
-		if sn, err = UnMarshalOnUpdate(r, &def.OnUpdate); err != nil {
+		length = uint64(0)
+		if err = binary.Read(r, binary.BigEndian, &length); err != nil {
 			return
 		}
-		n += sn
+		n += 8
+		buf = make([]byte, length)
+		if sn2, err = r.Read(buf); err != nil {
+			return
+		}
+		n += int64(sn2)
+		if err = def.OnUpdate.Unmarshal(buf); err != nil {
+			return
+		}
 		if err = s.AppendColDef(def); err != nil {
 			return
 		}
@@ -470,10 +564,30 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		if err = binary.Write(&w, binary.BigEndian, def.SortKey); err != nil {
 			return
 		}
-		if err = MarshalDefault(&w, def.Default); err != nil {
+		if err = binary.Write(&w, binary.BigEndian, def.ClusterBy); err != nil {
 			return
 		}
-		if err = MarshalOnUpdate(&w, def.OnUpdate); err != nil {
+		var data []byte
+		data, err = def.Default.Marshal()
+		if err != nil {
+			data = []byte("")
+		}
+		length := uint64(len(data))
+		if err = binary.Write(&w, binary.BigEndian, length); err != nil {
+			return
+		}
+		if _, err = w.Write(data); err != nil {
+			return
+		}
+		data, err = def.OnUpdate.Marshal()
+		if err != nil {
+			data = []byte("")
+		}
+		length = uint64(len(data))
+		if err = binary.Write(&w, binary.BigEndian, length); err != nil {
+			return
+		}
+		if _, err = w.Write(data); err != nil {
 			return
 		}
 	}
@@ -482,7 +596,6 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 }
 
 func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
-	var err error
 	nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
 	tidVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelID)
 	tid := tidVec.Get(offset).(uint64)
@@ -500,40 +613,22 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
 		data := bat.GetVectorByName((pkgcatalog.SystemColAttr_Type)).Get(offset).([]byte)
 		types.Decode(data, &def.Type)
 		data = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).Get(offset).([]byte)
-		if len(data) != len([]byte("")) {
-			pDefault := new(plan.Default)
-			if err = types.Decode(data, pDefault); err != nil {
-				panic(err)
-			}
-			def.Default.NullAbility = pDefault.NullAbility
-			def.Default.OriginString = pDefault.OriginString
-			def.Default.Expr = nil
-			if pDefault.Expr != nil {
-				if def.Default.Expr, err = pDefault.Expr.Marshal(); err != nil {
-					panic(err)
-				}
-			}
+		err := def.Default.Unmarshal(data)
+		if err != nil {
+			panic(err)
 		}
 		nullable := bat.GetVectorByName((pkgcatalog.SystemColAttr_NullAbility)).Get(offset).(int8)
 		def.NullAbility = i82bool(nullable)
 		isHidden := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsHidden)).Get(offset).(int8)
 		def.Hidden = i82bool(isHidden)
+		isClusterBy := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsClusterBy)).Get(offset).(int8)
+		def.ClusterBy = i82bool(isClusterBy)
 		isAutoIncrement := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsAutoIncrement)).Get(offset).(int8)
 		def.AutoIncrement = i82bool(isAutoIncrement)
 		def.Comment = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).Get(offset).([]byte))
 		data = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).Get(offset).([]byte)
-		if len(data) != len([]byte("")) {
-			pUpdate := &plan.OnUpdate{}
-			if err = types.Decode(data, pUpdate); err != nil {
-				panic(err)
-			}
-			def.OnUpdate.OriginString = pUpdate.OriginString
-			def.OnUpdate.Expr = nil
-			if pUpdate.Expr != nil {
-				if def.OnUpdate.Expr, err = pUpdate.Expr.Marshal(); err != nil {
-					panic(err)
-				}
-			}
+		if err = def.OnUpdate.Unmarshal(data); err != nil {
+			panic(err)
 		}
 		idx := bat.GetVectorByName((pkgcatalog.SystemColAttr_Num)).Get(offset).(int32)
 		s.NameIndex[def.Name] = int(idx - 1)
@@ -562,7 +657,7 @@ func (s *Schema) AppendColDef(def *ColDef) (err error) {
 	s.ColDefs = append(s.ColDefs, def)
 	_, existed := s.NameIndex[def.Name]
 	if existed {
-		err = moerr.NewConstraintViolation("duplicate column \"%s\"", def.Name)
+		err = moerr.NewConstraintViolationNoCtx("duplicate column \"%s\"", def.Name)
 		return
 	}
 	s.NameIndex[def.Name] = def.Idx
@@ -686,6 +781,7 @@ func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 		NullAbility:   attrDefault.NullAbility,
 		AutoIncrement: attr.AutoIncrement,
 		OnUpdate:      attrOnUpdate,
+		ClusterBy:     attr.ClusterBy,
 	}
 	return s.AppendColDef(def)
 }
@@ -700,6 +796,9 @@ func (s *Schema) IsPartOfPK(idx int) bool {
 }
 
 func (s *Schema) Attrs() []string {
+	if len(s.ColDefs) == 0 {
+		return make([]string, 0)
+	}
 	attrs := make([]string, 0, len(s.ColDefs)-1)
 	for _, def := range s.ColDefs {
 		if def.IsPhyAddr() {
@@ -711,6 +810,9 @@ func (s *Schema) Attrs() []string {
 }
 
 func (s *Schema) Types() []types.Type {
+	if len(s.ColDefs) == 0 {
+		return make([]types.Type, 0)
+	}
 	ts := make([]types.Type, 0, len(s.ColDefs)-1)
 	for _, def := range s.ColDefs {
 		if def.IsPhyAddr() {
@@ -722,6 +824,9 @@ func (s *Schema) Types() []types.Type {
 }
 
 func (s *Schema) Nullables() []bool {
+	if len(s.ColDefs) == 0 {
+		return make([]bool, 0)
+	}
 	nulls := make([]bool, 0, len(s.ColDefs)-1)
 	for _, def := range s.ColDefs {
 		if def.IsPhyAddr() {
@@ -733,6 +838,9 @@ func (s *Schema) Nullables() []bool {
 }
 
 func (s *Schema) AllNullables() []bool {
+	if len(s.ColDefs) == 0 {
+		return make([]bool, 0)
+	}
 	nulls := make([]bool, 0, len(s.ColDefs))
 	for _, def := range s.ColDefs {
 		nulls = append(nulls, def.Nullable())
@@ -741,6 +849,9 @@ func (s *Schema) AllNullables() []bool {
 }
 
 func (s *Schema) AllTypes() []types.Type {
+	if len(s.ColDefs) == 0 {
+		return make([]types.Type, 0)
+	}
 	ts := make([]types.Type, 0, len(s.ColDefs))
 	for _, def := range s.ColDefs {
 		ts = append(ts, def.Type)
@@ -749,6 +860,9 @@ func (s *Schema) AllTypes() []types.Type {
 }
 
 func (s *Schema) AllNames() []string {
+	if len(s.ColDefs) == 0 {
+		return make([]string, 0)
+	}
 	names := make([]string, 0, len(s.ColDefs))
 	for _, def := range s.ColDefs {
 		names = append(names, def.Name)
@@ -759,7 +873,7 @@ func (s *Schema) AllNames() []string {
 // Finalize runs various checks and create shortcuts to phyaddr and sortkey
 func (s *Schema) Finalize(rebuild bool) (err error) {
 	if s == nil {
-		err = moerr.NewConstraintViolation("no schema")
+		err = moerr.NewConstraintViolationNoCtx("no schema")
 		return
 	}
 	if !rebuild {
@@ -776,7 +890,7 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		}
 	}
 	if len(s.ColDefs) == 0 {
-		err = moerr.NewConstraintViolation("no schema")
+		err = moerr.NewConstraintViolationNoCtx("no schema")
 		return
 	}
 
@@ -786,11 +900,11 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 	for idx, def := range s.ColDefs {
 		// Check column idx validility
 		if idx != def.Idx {
-			return moerr.NewInvalidInput(fmt.Sprintf("schema: wrong column index %d specified for \"%s\"", def.Idx, def.Name))
+			return moerr.NewInvalidInputNoCtx(fmt.Sprintf("schema: wrong column index %d specified for \"%s\"", def.Idx, def.Name))
 		}
 		// Check unique name
 		if _, ok := names[def.Name]; ok {
-			return moerr.NewInvalidInput("schema: duplicate column \"%s\"", def.Name)
+			return moerr.NewInvalidInputNoCtx("schema: duplicate column \"%s\"", def.Name)
 		}
 		names[def.Name] = true
 		if def.IsSortKey() {
@@ -798,7 +912,7 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		}
 		if def.IsPhyAddr() {
 			if s.PhyAddrKey != nil {
-				return moerr.NewInvalidInput("schema: duplicated physical address column \"%s\"", def.Name)
+				return moerr.NewInvalidInputNoCtx("schema: duplicated physical address column \"%s\"", def.Name)
 			}
 			s.PhyAddrKey = def
 		}
@@ -812,7 +926,7 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 	if len(sortIdx) == 1 {
 		def := s.ColDefs[sortIdx[0]]
 		if def.SortIdx != 0 {
-			err = moerr.NewConstraintViolation("bad sort idx %d, should be 0", def.SortIdx)
+			err = moerr.NewConstraintViolationNoCtx("bad sort idx %d, should be 0", def.SortIdx)
 			return
 		}
 		s.SortKey = NewSortKey()
@@ -822,17 +936,17 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		for _, idx := range sortIdx {
 			def := s.ColDefs[idx]
 			if ok := s.SortKey.AddDef(def); !ok { // Fixme: I guess it is impossible to be duplicated here because no duplicated idx?
-				return moerr.NewInvalidInput("schema: duplicated sort idx specified")
+				return moerr.NewInvalidInputNoCtx("schema: duplicated sort idx specified")
 			}
 		}
 		isPrimary := s.SortKey.Defs[0].IsPrimary()
 		for i, def := range s.SortKey.Defs {
 			if int(def.SortIdx) != i {
-				err = moerr.NewConstraintViolation("duplicated sort idx specified")
+				err = moerr.NewConstraintViolationNoCtx("duplicated sort idx specified")
 				return
 			}
 			if def.IsPrimary() != isPrimary {
-				err = moerr.NewConstraintViolation("duplicated sort idx specified")
+				err = moerr.NewConstraintViolationNoCtx("duplicated sort idx specified")
 				return
 			}
 		}
@@ -957,11 +1071,4 @@ func GetAttrIdx(attrs []string, name string) int {
 		}
 	}
 	panic("logic error")
-}
-
-type ComputeIndexInfo struct {
-	Name      string
-	TableName string
-	Unique    bool
-	Field     []string
 }

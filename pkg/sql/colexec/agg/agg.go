@@ -122,10 +122,11 @@ func (a *UnaryAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) error {
 	vec := vecs[0]
 	hasNull := vec.GetNulls().Contains(uint64(sel))
-	if vec.Typ.IsString() {
-		a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytes(sel)).(T1), a.vs[i], z, a.es[i], hasNull)
+	if vec.GetType().IsString() {
+		vs, area := vector.MustVarlenaRawData(vec)
+		a.vs[i], a.es[i] = a.fill(i, (any)(vs[sel].GetByteSlice(area)).(T1), a.vs[i], z, a.es[i], hasNull)
 	} else {
-		a.vs[i], a.es[i] = a.fill(i, vector.GetColumn[T1](vec)[sel], a.vs[i], z, a.es[i], hasNull)
+		a.vs[i], a.es[i] = a.fill(i, vector.MustTCols[T1](vec)[sel], a.vs[i], z, a.es[i], hasNull)
 	}
 	return nil
 }
@@ -133,17 +134,18 @@ func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) er
 func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vecs []*vector.Vector) error {
 	vec := vecs[0]
 	if vec.GetType().IsString() {
+		vs, area := vector.MustVarlenaRawData(vec)
 		for i := range os {
 			hasNull := vec.GetNulls().Contains(uint64(i) + uint64(start))
 			if vps[i] == 0 {
 				continue
 			}
 			j := vps[i] - 1
-			a.vs[j], a.es[j] = a.fill(int64(j), (any)(vec.GetBytes(int64(i)+start)).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+			a.vs[j], a.es[j] = a.fill(int64(j), (any)(vs[int64(i)+start].GetByteSlice(area)).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 		}
 		return nil
 	}
-	vs := vector.GetColumn[T1](vec)
+	vs := vector.MustTCols[T1](vec)
 	if a.batchFill != nil {
 		if err := a.batchFill(a.vs, vs, start, int64(len(os)), vps, zs, vec.GetNulls()); err != nil {
 			return err
@@ -183,13 +185,14 @@ func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) 
 	vec := vecs[0]
 	if vec.GetType().IsString() {
 		len := vec.Length()
+		vs, area := vector.MustVarlenaRawData(vec)
 		for j := 0; j < len; j++ {
 			hasNull := vec.GetNulls().Contains(uint64(j))
-			a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytes(int64(j))).(T1), a.vs[i], zs[j], a.es[i], hasNull)
+			a.vs[i], a.es[i] = a.fill(i, (any)(vs[j].GetByteSlice(area)).(T1), a.vs[i], zs[j], a.es[i], hasNull)
 		}
 		return nil
 	}
-	vs := vector.GetColumn[T1](vec)
+	vs := vector.MustTCols[T1](vec)
 	for j, v := range vs {
 		hasNull := vec.GetNulls().Contains(uint64(j))
 		a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
@@ -224,6 +227,7 @@ func (a *UnaryAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, vps [
 
 func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 	defer func() {
+		a.Free(m)
 		a.da = nil
 		a.vs = nil
 		a.es = nil
@@ -236,20 +240,37 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 			}
 		}
 	}
+	vec := vector.New(vector.FLAT, a.otyp)
+	vec.SetNulls(nsp)
+	a.vs = a.eval(a.vs)
 	if a.otyp.IsString() {
-		vec := vector.New(a.otyp)
-		vec.Nsp = nsp
-		a.vs = a.eval(a.vs)
 		vs := (any)(a.vs).([][]byte)
 		for _, v := range vs {
-			if err := vec.Append(v, false, m); err != nil {
+			if err := vector.AppendBytes(vec, v, false, m); err != nil {
 				vec.Free(m)
 				return nil, err
 			}
 		}
-		return vec, nil
+	} else {
+		for _, v := range a.vs {
+			if err := vector.Append(vec, v, false, m); err != nil {
+				vec.Free(m)
+				return nil, err
+			}
+		}
 	}
-	return vector.NewWithFixed(a.otyp, a.eval(a.vs), nsp, m), nil
+	return vec, nil
+}
+
+func (a *UnaryAgg[T1, T2]) WildAggReAlloc(m *mpool.MPool) error {
+	d, err := m.Alloc(len(a.da))
+	if err != nil {
+		return err
+	}
+	copy(d, a.da)
+	a.da = d
+	setAggValues[T1, T2](a, a.otyp)
+	return nil
 }
 
 func (a *UnaryAgg[T1, T2]) IsDistinct() bool {
@@ -297,7 +318,7 @@ func getUnaryAggStrVs(strUnaryAgg any) []string {
 	return result
 }
 
-func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
+func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte, mp *mpool.MPool) error {
 	decoded := new(EncodeAgg)
 	if err := types.Decode(data, decoded); err != nil {
 		return err
@@ -308,7 +329,14 @@ func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	a.otyp = types.DecodeType(decoded.OutputType)
 	a.isCount = decoded.IsCount
 	a.es = decoded.Es
-	a.da = decoded.Da
+	//	a.da = decoded.Da
+	data, err := mp.Alloc(len(decoded.Da))
+	if err != nil {
+		return err
+	}
+	copy(data, decoded.Da)
+	a.da = data
+
 	setAggValues[T1, T2](a, a.otyp)
 
 	return a.priv.UnmarshalBinary(decoded.Private)

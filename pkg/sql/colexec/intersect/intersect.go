@@ -50,8 +50,8 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 		switch arg.ctr.state {
 		case build:
 			if err := arg.ctr.buildHashTable(proc, analyze, 1); err != nil {
-				arg.ctr.state = end
-				return true, err
+				arg.Free(proc, true)
+				return false, err
 			}
 			arg.ctr.state = probe
 
@@ -59,7 +59,6 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 			var err error
 			isLast := false
 			if isLast, err = arg.ctr.probeHashTable(proc, analyze, 0); err != nil {
-				arg.ctr.state = end
 				return true, err
 			}
 			if isLast {
@@ -70,7 +69,7 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 			return false, nil
 
 		case end:
-			arg.ctr.freeContainer(proc)
+			arg.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -106,7 +105,7 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 
 			vs, zs, err := itr.Insert(i, n, btc.Vecs)
 			if err != nil {
-				btc.Clean(proc.Mp())
+				btc.Free(proc.Mp())
 				return err
 			}
 
@@ -122,7 +121,7 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 				}
 			}
 		}
-		btc.Clean(proc.Mp())
+		btc.Free(proc.Mp())
 	}
 	return nil
 }
@@ -142,11 +141,10 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		}
 
 		analyze.Input(btc)
-		defer btc.Clean(proc.Mp())
 
 		c.btc = batch.NewWithSize(len(btc.Vecs))
 		for i := range btc.Vecs {
-			c.btc.Vecs[i] = vector.New(btc.Vecs[i].Typ)
+			c.btc.Vecs[i] = vector.New(vector.FLAT, *btc.Vecs[i].GetType())
 		}
 		needInsert := make([]uint8, hashmap.UnitLimit)
 		resetsNeedInsert := make([]uint8, hashmap.UnitLimit)
@@ -194,28 +192,16 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 			if insertcnt > 0 {
 				for pos := range btc.Vecs {
 					if err := vector.UnionBatch(c.btc.Vecs[pos], btc.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp()); err != nil {
+						btc.Free(proc.Mp())
 						return false, err
 					}
 				}
 			}
 		}
 
+		btc.Free(proc.Mp())
 		analyze.Output(c.btc)
 		proc.SetInputBatch(c.btc)
 		return false, nil
-	}
-}
-
-func (c *container) freeContainer(proc *process.Process) {
-	if c.cnts != nil {
-		for i := range c.cnts {
-			proc.Mp().PutSels(c.cnts[i])
-		}
-		c.cnts = nil
-	}
-
-	if c.hashTable != nil {
-		c.hashTable.Free()
-		c.hashTable = nil
 	}
 }

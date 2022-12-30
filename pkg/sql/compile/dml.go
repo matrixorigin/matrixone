@@ -52,10 +52,14 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 		}
 		tableID = rel.GetTableID(c.ctx)
 
-		for _, info := range arg.DeleteCtxs[0].IndexInfos {
-			err = dbSource.Truncate(c.ctx, info.TableName)
-			if err != nil {
-				return 0, err
+		if arg.DeleteCtxs[0].UniqueIndexDef != nil {
+			for i := range arg.DeleteCtxs[0].UniqueIndexDef.TableNames {
+				if arg.DeleteCtxs[0].UniqueIndexDef.TableExists[i] {
+					err = dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].UniqueIndexDef.TableNames[i])
+					if err != nil {
+						return 0, err
+					}
+				}
 			}
 		}
 
@@ -68,7 +72,9 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 		if err != nil {
 			return 0, err
 		}
-		return 0, nil
+
+		affectRows, err := rel.Rows(s.Proc.Ctx)
+		return uint64(affectRows), err
 	}
 
 	if err := s.MergeRun(c); err != nil {
@@ -108,6 +114,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	}
 
 	bat := makeInsertBatch(p)
+	defer bat.Free(c.proc.Mp())
 
 	if p.OtherCols != nil {
 		p.ExplicitCols = append(p.ExplicitCols, p.OtherCols...)
@@ -128,8 +135,8 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	for i := range bat.Vecs {
 		// check for case 1 and case 2
 		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].Typ.AutoIncr) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].Typ.AutoIncr) {
-			if nulls.Any(bat.Vecs[i].Nsp) {
-				return 0, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
+			if nulls.Any(bat.Vecs[i].GetNulls()) {
+				return 0, moerr.NewConstraintViolation(c.ctx, fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
 			}
 		}
 	}
@@ -145,26 +152,30 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 			for i := range bat.Vecs {
 				for _, name := range names {
 					if p.OrderAttrs[i] == name {
-						if nulls.Any(bat.Vecs[i].Nsp) {
-							return 0, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", p.OrderAttrs[i]))
+						if nulls.Any(bat.Vecs[i].GetNulls()) {
+							return 0, moerr.NewConstraintViolation(c.ctx, fmt.Sprintf("Column '%s' cannot be null", p.OrderAttrs[i]))
 						}
 					}
 				}
 			}
 		}
 	}
-	for _, indexInfo := range p.IndexInfos {
-		indexRelation, err := dbSource.Relation(c.ctx, indexInfo.TableName)
-		if err != nil {
-			return 0, err
-		}
-		indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, indexInfo.Cols, c.proc)
-		if rowNum != 0 {
-			if err := indexRelation.Write(c.ctx, indexBatch); err != nil {
-				return 0, err
+	if p.UniqueIndexDef != nil {
+		for i := range p.UniqueIndexDef.IndexNames {
+			if p.UniqueIndexDef.TableExists[i] {
+				indexRelation, err := dbSource.Relation(c.ctx, p.UniqueIndexDef.TableNames[i])
+				if err != nil {
+					return 0, err
+				}
+				indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, p.UniqueIndexDef.Fields[i].Cols, c.proc)
+				if rowNum != 0 {
+					if err := indexRelation.Write(c.ctx, indexBatch); err != nil {
+						return 0, err
+					}
+				}
+				indexBatch.Free(c.proc.Mp())
 			}
 		}
-		indexBatch.Clean(c.proc.Mp())
 	}
 
 	if err := relation.Write(c.ctx, bat); err != nil {
@@ -176,363 +187,26 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 
 // XXX: is this just fill batch with first vec.Col[0]?
 func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *process.Process) error {
-	rowCount := len(p.Columns[0].Column)
-
 	tmpBat := batch.NewWithSize(0)
 	tmpBat.Zs = []int64{1}
 
 	for i, v := range bat.Vecs {
-		switch v.Typ.Oid {
-		case types.T_uuid:
-			vs := make([]types.Uuid, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[types.Uuid](vec, 0)
-					}
-				}
+		for j, expr := range p.Columns[i].Column {
+			vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+			if err != nil {
+				return y.MakeInsertError(proc.Ctx, v.GetType().Oid, p.ExplicitCols[i], rows, i, j, err)
 			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
+			if vec.Size() == 0 {
+				vec = vec.ConstExpand(proc.Mp())
+			}
+			if err := v.UnionOne(vec, 0, v.Length() == 0, proc.Mp()); err != nil {
+				vec.Free(proc.Mp())
 				return err
 			}
-		case types.T_bool:
-			vs := make([]bool, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[bool](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_int8:
-			vs := make([]int8, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[int8](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_int16:
-			vs := make([]int16, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[int16](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_int32:
-			vs := make([]int32, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[int32](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_int64:
-			vs := make([]int64, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[int64](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_uint8:
-			vs := make([]uint8, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[uint8](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_uint16:
-			vs := make([]uint16, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[uint16](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_uint32:
-			vs := make([]uint32, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[uint32](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_uint64:
-			vs := make([]uint64, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[uint64](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_float32:
-			vs := make([]float32, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[float32](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_float64:
-			vs := make([]float64, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[float64](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
-			vs := make([][]byte, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vec.GetBytes(0)
-					}
-				}
-			}
-			if err := vector.AppendBytes(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_date:
-			vs := make([]types.Date, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[types.Date](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_time:
-			vs := make([]types.Time, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[types.Time](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_datetime:
-			vs := make([]types.Datetime, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[types.Datetime](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_timestamp:
-			vs := make([]types.Timestamp, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[types.Timestamp](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_decimal64:
-			vs := make([]types.Decimal64, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[types.Decimal64](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_decimal128:
-			vs := make([]types.Decimal128, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[types.Decimal128](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		default:
-			return moerr.NewInternalError("data truncation: type of '%v' doesn't implement", v.Typ)
+			vec.Free(proc.Mp())
 		}
 	}
-	bat.Zs = make([]int64, len(rows))
-	for i := 0; i < len(rows); i++ {
-		bat.Zs[i] = 1
-	}
+	bat.SetZs(len(rows), proc.Mp())
 	return nil
 }
 
@@ -546,14 +220,15 @@ func makeInsertBatch(p *plan.InsertValues) *batch.Batch {
 		attrs = append(attrs, col.Name)
 	}
 
-	bat := batch.New(true, attrs)
+	bat := batch.NewWithSize(len(attrs))
+	bat.SetAttributes(attrs)
 	idx := 0
 	for _, col := range p.ExplicitCols {
-		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
+		bat.Vecs[idx] = vector.New(vector.FLAT, types.Type{Oid: types.T(col.Typ.Id), Scale: col.Typ.Scale, Width: col.Typ.Width})
 		idx++
 	}
 	for _, col := range p.OtherCols {
-		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
+		bat.Vecs[idx] = vector.New(vector.FLAT, types.Type{Oid: types.T(col.Typ.Id), Scale: col.Typ.Scale, Width: col.Typ.Width})
 		idx++
 	}
 

@@ -469,7 +469,7 @@ func TestDatetimeDesc(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			DatetimeSub(c.vecs[0], c.vecs[1], c.vecs[2])
-			require.Equal(t, c.want, c.vecs[2].Col.([]int64)[0])
+			require.Equal(t, c.want, vector.MustTCols[int64](c.vecs[2])[0])
 		})
 	}
 }
@@ -480,8 +480,8 @@ func makeDatetimeSubVectors(firstStr, secondStr string, proc *process.Process) [
 	firstDate, _ := types.ParseDatetime(firstStr, 0)
 	secondDate, _ := types.ParseDatetime(secondStr, 0)
 
-	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, firstDate, proc.Mp())
-	vec[1] = vector.NewConstFixed(types.T_datetime.ToType(), 1, secondDate, proc.Mp())
+	vec[0] = vector.New(vector.CONSTANT, types.T_datetime.ToType())
+	vec[1] = vector.New(vector.CONSTANT, types.T_datetime.ToType())
 	vec[2] = proc.AllocScalarVector(types.T_int64.ToType())
 
 	return vec

@@ -17,6 +17,7 @@ package update
 import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Argument struct {
@@ -31,17 +32,22 @@ type Argument struct {
 	TblName      []string
 }
 
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+}
+
 type UpdateCtx struct {
-	PriKey      string
-	PriKeyIdx   int32 // delete if -1
-	HideKey     string
-	HideKeyIdx  int32
-	UpdateAttrs []string
-	OtherAttrs  []string
-	IndexAttrs  []string
-	OrderAttrs  []string
-	TableSource engine.Relation
-	CPkeyColDef *plan.ColDef
-	IndexTables []engine.Relation
-	IndexInfos  []*plan.IndexInfo
+	PriKey               string
+	PriKeyIdx            int32 // delete if -1
+	HideKey              string
+	HideKeyIdx           int32
+	UpdateAttrs          []string
+	OtherAttrs           []string
+	IndexAttrs           []string
+	OrderAttrs           []string
+	TableSource          engine.Relation
+	CPkeyColDef          *plan.ColDef
+	UniqueIndexTables    []engine.Relation
+	SecondaryIndexTables []engine.Relation
+	UniqueIndexDef       *plan.UniqueIndexDef
+	SecondaryIndexDef    *plan.SecondaryIndexDef
 }

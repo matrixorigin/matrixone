@@ -15,13 +15,13 @@
 package testutils
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -34,6 +34,7 @@ func WaitExpect(timeout int, expect func() bool) {
 }
 
 func WaitChTimeout[T any](
+	ctx context.Context,
 	after time.Duration,
 	ch <-chan T,
 	onRecvCheck func(element T, closed bool) (moveOn bool, err error),
@@ -42,7 +43,7 @@ func WaitChTimeout[T any](
 	for {
 		select {
 		case <-timeout:
-			return moerr.NewInternalError("timeout")
+			return moerr.NewInternalError(ctx, "timeout")
 		case item, ok := <-ch:
 			moveOn, err := onRecvCheck(item, !ok)
 			if err != nil {
@@ -79,7 +80,12 @@ func InitTestEnv(module string, t *testing.T) string {
 func EnsureNoLeak(t *testing.T) {
 	// assert.Zerof(t, common.DefaultAllocator.CurrNB(), common.DefaultAllocator.Stats().Report(""))
 	// XXX MPOOL: Too noisy
-	if common.DefaultAllocator.CurrNB() != 0 {
-		t.Log(common.DefaultAllocator.Stats().Report(""))
-	}
+	// if common.DefaultAllocator.CurrNB() != 0 {
+	// 	t.Log(common.DefaultAllocator.Stats().Report(""))
+	// }
+}
+
+func AfterTest(t *testing.T) func() {
+	return func() {}
+	// return leaktest.AfterTest(t)
 }

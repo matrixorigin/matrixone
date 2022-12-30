@@ -83,7 +83,7 @@ func TestOrder(t *testing.T) {
 		for {
 			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 				if tc.proc.Reg.InputBatch != nil {
-					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+					tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 				}
 				break
 			}
@@ -92,7 +92,7 @@ func TestOrder(t *testing.T) {
 			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
 				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
 				if bat != nil {
-					bat.Clean(tc.proc.Mp())
+					bat.Free(tc.proc.Mp())
 				}
 			}
 		}
@@ -119,7 +119,7 @@ func BenchmarkOrder(b *testing.B) {
 			for {
 				if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 					if tc.proc.Reg.InputBatch != nil {
-						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+						tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 					}
 					break
 				}
@@ -128,7 +128,7 @@ func BenchmarkOrder(b *testing.B) {
 				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
 					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
 					if bat != nil {
-						bat.Clean(tc.proc.Mp())
+						bat.Free(tc.proc.Mp())
 					}
 				}
 			}

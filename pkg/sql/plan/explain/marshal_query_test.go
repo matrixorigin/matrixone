@@ -16,6 +16,7 @@ package explain
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"github.com/google/uuid"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -152,7 +153,7 @@ func TestNestedQueryToJson(t *testing.T) {
 		"SELECT * FROM NATION where N_REGIONKEY not in (select max(R_REGIONKEY) from REGION)",                            // unrelated
 		"SELECT * FROM NATION where exists (select max(R_REGIONKEY) from REGION)",                                        // unrelated
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY = N_REGIONKEY)", // related
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)", // related
+		//"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)", // related
 		//"DELETE FROM NATION WHERE N_NATIONKEY > 10",
 		`select
 		sum(l_extendedprice) / 7.0 as avg_yearly
@@ -227,6 +228,7 @@ func TestDMLToJson(t *testing.T) {
 }
 
 func buildPlanMarshalTest(opt plan.Optimizer, t *testing.T, sqls []string) {
+	ctx := context.TODO()
 	for _, sql := range sqls {
 		t.Logf("sql: %s \n", sql)
 		mock := plan.NewMockOptimizer()
@@ -254,7 +256,7 @@ func buildPlanMarshalTest(opt plan.Optimizer, t *testing.T, sqls []string) {
 			Format:  EXPLAIN_FORMAT_TEXT,
 		}
 
-		marshalPlan := explainQuery.BuildJsonPlan(uuid.New(), options)
+		marshalPlan := explainQuery.BuildJsonPlan(ctx, uuid.New(), options)
 		//marshal, err := json.Marshal(marshalPlan)
 
 		buffer := &bytes.Buffer{}
@@ -271,7 +273,7 @@ func buildPlanMarshalTest(opt plan.Optimizer, t *testing.T, sqls []string) {
 }
 
 func runSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
-	stmts, err := mysql.Parse(sql)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

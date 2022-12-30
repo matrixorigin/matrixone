@@ -67,7 +67,8 @@ type Aggregate struct {
 // Agg agg interface
 type Agg[T any] interface {
 	encoding.BinaryMarshaler
-	encoding.BinaryUnmarshaler
+	//encoding.BinaryUnmarshaler
+	UnmarshalBinary(data []byte, m *mpool.MPool) error
 
 	// Dup will duplicate a new agg with the same type.
 	Dup() Agg[any]
@@ -86,7 +87,7 @@ type Agg[T any] interface {
 	Free(*mpool.MPool)
 
 	// Grows allocates n groups for the agg.
-	Grows(n int, _ *mpool.MPool) error
+	Grows(n int, m *mpool.MPool) error
 
 	// Eval method calculates and returns the final result of the aggregate function.
 	Eval(_ *mpool.MPool) (*vector.Vector, error)
@@ -129,6 +130,9 @@ type Agg[T any] interface {
 	GetOperatorId() int
 
 	IsDistinct() bool
+
+	// WildAggReAlloc reallocate for agg structure from memory pool.
+	WildAggReAlloc(m *mpool.MPool) error
 }
 
 type AggStruct interface {

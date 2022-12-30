@@ -25,12 +25,12 @@ import (
 
 func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type string) (string, error) {
 	if pos < 1 || occurrence < 0 || pos >= int64(len(expr)) {
-		return expr, moerr.NewInvalidInput("regexp_replace have invalid input")
+		return expr, moerr.NewInvalidInputNoCtx("regexp_replace have invalid input")
 	}
 	//regular expression pattern
 	reg, err := regexp.Compile(pat)
 	if err != nil {
-		return "", moerr.NewInvalidArg("regexp_replace have invalid regexp pattern arg", pat)
+		return "", moerr.NewInvalidArgNoCtx("regexp_replace have invalid regexp pattern arg", pat)
 	}
 	//match result indexs
 	matchRes := reg.FindAllStringIndex(expr, -1)
@@ -68,7 +68,7 @@ func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type st
 
 func RegularReplaceWithReg(expr string, pat *regexp.Regexp, repl string, pos, occurrence int64, match_type string) (string, error) {
 	if pos < 1 || occurrence < 0 || pos >= int64(len(expr)) {
-		return expr, moerr.NewInvalidInput("regexp_replace have invalid input")
+		return expr, moerr.NewInvalidInputNoCtx("regexp_replace have invalid input")
 	}
 	//match result indexs
 	matchRes := pat.FindAllStringIndex(expr, -1)
@@ -106,18 +106,18 @@ func RegularReplaceWithReg(expr string, pat *regexp.Regexp, repl string, pos, oc
 }
 
 func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_type []string, exprN, patN, rplN *nulls.Nulls, resultVector *vector.Vector, proc *process.Process, maxLen int) error {
-	rs := make([]string, maxLen)
+	rs := make([][]byte, maxLen)
 	var rpl string
 	var posValue int64
 	var occValue int64
 	if len(expr) == 1 && len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
 		if err != nil {
-			return moerr.NewInvalidArg("regexp_replace have invalid regexp pattern arg", pat)
+			return moerr.NewInvalidArgNoCtx("regexp_replace have invalid regexp pattern arg", pat)
 		}
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(resultVector.GetNulls(), uint64(i))
 				continue
 			}
 			rpl, posValue, occValue = determineValuesWithThree(rpls, pos, occ, i)
@@ -125,13 +125,15 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 			if err != nil {
 				return err
 			}
-			rs[i] = res
+			rs[i] = []byte(res)
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
+		if err := vector.AppendBytesList(resultVector, rs, nil, proc.Mp()); err != nil {
+			return err
+		}
 	} else if len(expr) == 1 {
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(resultVector.GetNulls(), uint64(i))
 				continue
 			}
 			rpl, posValue, occValue = determineValuesWithThree(rpls, pos, occ, i)
@@ -139,17 +141,19 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 			if err != nil {
 				return err
 			}
-			rs[i] = res
+			rs[i] = []byte(res)
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
+		if err := vector.AppendBytesList(resultVector, rs, nil, proc.Mp()); err != nil {
+			return err
+		}
 	} else if len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
 		if err != nil {
-			return moerr.NewInvalidArg("regexp_replace have invalid regexp pattern arg", pat)
+			return moerr.NewInvalidArgNoCtx("regexp_replace have invalid regexp pattern arg", pat)
 		}
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(resultVector.GetNulls(), uint64(i))
 				continue
 			}
 			rpl, posValue, occValue = determineValuesWithThree(rpls, pos, occ, i)
@@ -157,13 +161,15 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 			if err != nil {
 				return err
 			}
-			rs[i] = res
+			rs[i] = []byte(res)
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
+		if err := vector.AppendBytesList(resultVector, rs, nil, proc.Mp()); err != nil {
+			return err
+		}
 	} else {
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(resultVector.GetNulls(), uint64(i))
 				continue
 			}
 			rpl, posValue, occValue = determineValuesWithThree(rpls, pos, occ, i)
@@ -171,9 +177,11 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 			if err != nil {
 				return err
 			}
-			rs[i] = res
+			rs[i] = []byte(res)
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
+		if err := vector.AppendBytesList(resultVector, rs, nil, proc.Mp()); err != nil {
+			return err
+		}
 	}
 	return nil
 }

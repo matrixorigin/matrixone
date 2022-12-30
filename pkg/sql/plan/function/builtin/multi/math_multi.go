@@ -32,35 +32,35 @@ type mathMultiT interface {
 type mathMultiFun[T mathMultiT] func([]T, []T, int64) []T
 
 func generalMathMulti[T mathMultiT](funName string, vecs []*vector.Vector, proc *process.Process, cb mathMultiFun[T]) (*vector.Vector, error) {
-	typ := vecs[0].Typ.Oid.ToType()
+	typ := vecs[0].GetType().Oid.ToType()
 	digits := int64(0)
 	if len(vecs) > 1 {
-		// if vecs[1].IsScalarNull() {
+		// if vecs[1].IsConstNull() {
 		// 	return proc.AllocScalarNullVector(typ), nil
 		// }
-		if !vecs[1].IsScalar() || vecs[1].Typ.Oid != types.T_int64 {
-			return nil, moerr.NewInvalidArg(fmt.Sprintf("the second argument of the %s", funName), "not const")
+		if !vecs[1].IsConst() || vecs[1].GetType().Oid != types.T_int64 {
+			return nil, moerr.NewInvalidArgNoCtx(fmt.Sprintf("the second argument of the %s", funName), "not const")
 		}
-		digits = vecs[1].Col.([]int64)[0]
+		digits = vector.MustTCols[int64](vecs[1])[0]
 	}
 	vs := vector.MustTCols[T](vecs[0])
-	if vecs[0].IsScalarNull() {
+	if vecs[0].IsConstNull() {
 		return proc.AllocScalarNullVector(typ), nil
 	}
 
-	if vecs[0].IsScalar() {
+	if vecs[0].IsConst() {
 		rs := make([]T, 1)
 		ret_rs := cb(vs, rs, digits)
 
-		vec := vector.NewConstFixed(typ, 1, ret_rs[0], proc.Mp())
-		nulls.Set(vec.Nsp, vecs[0].Nsp)
+		vec := vector.New(vector.CONSTANT, typ)
+		nulls.Set(vec.GetNulls(), vecs[0].GetNulls())
 		return vec, nil
 	} else {
 		rs := make([]T, len(vs))
 		ret_rs := cb(vs, rs, digits)
 
 		vec := vector.NewWithFixed(typ, ret_rs, nulls.NewWithSize(len(ret_rs)), proc.Mp())
-		nulls.Set(vec.Nsp, vecs[0].Nsp)
+		nulls.Set(vec.GetNulls(), vecs[0].GetNulls())
 
 		return vec, nil
 	}

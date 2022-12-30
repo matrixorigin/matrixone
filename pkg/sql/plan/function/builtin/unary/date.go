@@ -26,8 +26,8 @@ func DateToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_date, Size: 4}
 	inputValues := vector.MustTCols[types.Date](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
@@ -50,8 +50,8 @@ func DatetimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_date, Size: 4}
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
@@ -73,8 +73,8 @@ func TimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_date, Size: 4}
 	inputValues := vector.MustTCols[types.Time](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
@@ -97,8 +97,8 @@ func DateStringToDate(vectors []*vector.Vector, proc *process.Process) (*vector.
 	resultType := types.Type{Oid: types.T_date, Size: 4}
 	inputValues := vector.MustStrCols(inputVector)
 
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
@@ -122,8 +122,8 @@ func TimesToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	resultType := types.Type{Oid: types.T_date, Size: 4}
 	inputValues := vector.MustStrCols(inputVector)
 
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)

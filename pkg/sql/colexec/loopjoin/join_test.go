@@ -86,7 +86,7 @@ func TestJoin(t *testing.T) {
 			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 				break
 			}
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 		}
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -114,7 +114,7 @@ func BenchmarkJoin(b *testing.B) {
 				if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 					break
 				}
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+				tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 			}
 		}
 	}
@@ -166,7 +166,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestC
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Args: args,
-				Func: &plan.ObjectRef{Obj: fid},
+				Func: &plan.ObjectRef{Obj: fid, ObjName: "="},
 			},
 		},
 	}

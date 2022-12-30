@@ -94,6 +94,7 @@ const (
 	CEIL           // CEIL
 	CHR            // CHR
 	COALESCE       // COALESCE
+	FIELD          // FIELD
 	CONCAT_WS
 	CONTAINS          // CONTAINS
 	CORR              // CORR
@@ -214,8 +215,9 @@ const (
 	INTERVAL  // INTERVAL
 	EXTRACT   // EXTRACT
 	OCT
-	SUBSTRING // SUBSTRING
-	WEEK      //WEEK
+	SUBSTRING       // SUBSTRING
+	SUBSTRING_INDEX //SUBSTRING_INDEX
+	WEEK            //WEEK
 	WEEKDAY
 	YEAR   // YEAR
 	HOUR   // HOUR
@@ -246,6 +248,7 @@ const (
 	TIMESTAMP    // TIMESTAMP
 	DATE_FORMAT  // DATE_FORMAT
 	JSON_EXTRACT // JSON_EXTRACT
+	FORMAT       // FORMAT
 
 	UUID
 	SERIAL
@@ -264,6 +267,8 @@ const (
 	// MO_CTL is used to check some internal status, and issue some ctl commands to the service.
 	// see builtin.ctl.ctl.go to get detail.
 	MO_CTL
+
+	MO_SHOW_VISIBLE_BIN // parse type/onUpdate/default []byte to visible string
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -361,6 +366,7 @@ var functionIdRegister = map[string]int32{
 	"rpad":              RPAD,
 	"substr":            SUBSTRING,
 	"substring":         SUBSTRING,
+	"mid":               SUBSTRING,
 	"utc_timestamp":     UTC_TIMESTAMP,
 	"unix_timestamp":    UNIX_TIMESTAMP,
 	"from_unixtime":     FROM_UNIXTIME,
@@ -446,13 +452,17 @@ var functionIdRegister = map[string]int32{
 	"mo_enable_memory_usage_detail":  MO_ENABLE_MEMORY_USAGE_DETAIL,
 	"mo_disable_memory_usage_detail": MO_DISABLE_MEMORY_USAGE_DETAIL,
 	"mo_ctl":                         MO_CTL,
+	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
+	"substring_index":                SUBSTRING_INDEX,
+	"field":                          FIELD,
+	"format":                         FORMAT,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
-	fid, err := fromNameToFunctionId(name)
-	if err != nil {
+	fid, exists := fromNameToFunctionIdWithoutError(name)
+	if !exists {
 		return false
 	}
 	fs := functionRegister[fid].Overloads
-	return len(fs) > 0 && fs[0].GetFlag() == plan.Function_WIN
+	return len(fs) > 0 && fs[0].TestFlag(plan.Function_WIN)
 }

@@ -15,6 +15,7 @@
 package logtail
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
@@ -22,7 +23,7 @@ import (
 // Drive a entry visitor, which acts as an api resp builder
 type BaseOperator struct {
 	catalog *catalog.Catalog
-	reader  *LogtailReader
+	reader  *Reader
 }
 
 type BoundOperator struct {
@@ -31,7 +32,7 @@ type BoundOperator struct {
 }
 
 func NewBoundOperator(catalog *catalog.Catalog,
-	reader *LogtailReader,
+	reader *Reader,
 	visitor catalog.Processor) *BoundOperator {
 	return &BoundOperator{
 		BaseOperator: &BaseOperator{
@@ -59,14 +60,22 @@ func (op *BoundOperator) Run() (err error) {
 		}
 		for _, dirtySeg := range tblDirty.Segs {
 			if seg, err = tbl.GetSegmentByID(dirtySeg.ID); err != nil {
-				return err
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					err = nil
+					continue
+				}
+				return
 			}
 			if err = op.visitor.OnSegment(seg); err != nil {
 				return err
 			}
 			for id := range dirtySeg.Blks {
 				if blk, err = seg.GetBlockEntryByID(id); err != nil {
-					return err
+					if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+						err = nil
+						continue
+					}
+					return
 				}
 				if err = op.visitor.OnBlock(blk); err != nil {
 					return err
@@ -85,7 +94,7 @@ type BoundTableOperator struct {
 }
 
 func NewBoundTableOperator(catalog *catalog.Catalog,
-	reader *LogtailReader,
+	reader *Reader,
 	scope Scope,
 	dbID, tableID uint64,
 	visitor catalog.Processor) *BoundTableOperator {
@@ -126,14 +135,22 @@ func (c *BoundTableOperator) processTableData() (err error) {
 	dirty := c.reader.GetDirtyByTable(c.dbID, c.tableID)
 	for _, dirtySeg := range dirty.Segs {
 		if seg, err = tbl.GetSegmentByID(dirtySeg.ID); err != nil {
-			return err
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				err = nil
+				continue
+			}
+			return
 		}
 		if err = c.visitor.OnSegment(seg); err != nil {
 			return err
 		}
 		for id := range dirtySeg.Blks {
 			if blk, err = seg.GetBlockEntryByID(id); err != nil {
-				return err
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					err = nil
+					continue
+				}
+				return
 			}
 			if err = c.visitor.OnBlock(blk); err != nil {
 				return err

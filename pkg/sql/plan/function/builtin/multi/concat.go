@@ -22,14 +22,14 @@ import (
 )
 
 func Concat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	isAllConst := true
 
 	for i := range vectors {
-		if vectors[i].IsScalarNull() {
+		if vectors[i].IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		if !vectors[i].IsScalar() {
+		if !vectors[i].IsConst() {
 			isAllConst = false
 		}
 	}
@@ -40,32 +40,35 @@ func Concat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 }
 
 func concatWithAllConst(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	length := vector.Length(vectors[0])
 	vct := types.T_varchar.ToType()
 	res := ""
 	for i := range vectors {
-		res += vectors[i].GetString(0)
+		res += vectors[i].String()
 	}
-	return vector.NewConstString(vct, length, res, proc.Mp()), nil
+	vec := vector.New(vector.CONSTANT, vct)
+	vector.Append(vec, res, res == "", proc.Mp())
+	return vec, nil
 }
 
 func concatWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	length := vector.Length(vectors[0])
+	length := vectors[0].Length()
 	vct := types.T_varchar.ToType()
 	nsp := new(nulls.Nulls)
 	val := make([]string, length)
 	for i := 0; i < length; i++ {
 		for j := range vectors {
-			if nulls.Contains(vectors[j].Nsp, uint64(i)) {
+			if nulls.Contains(vectors[j].GetNulls(), uint64(i)) {
 				nulls.Add(nsp, uint64(i))
 				break
 			}
-			if vectors[j].IsScalar() {
-				val[i] += vectors[j].GetString(int64(0))
+			if vectors[j].IsConst() {
+				val[i] += vectors[j].String()
 			} else {
-				val[i] += vectors[j].GetString(int64(i))
+				val[i] += vectors[j].String()
 			}
 		}
 	}
-	return vector.NewWithStrings(vct, val, nsp, proc.Mp()), nil
+	vec := vector.New(vector.FLAT, vct)
+	vector.AppendStringList(vec, val, nil, proc.Mp())
+	return vec, nil
 }

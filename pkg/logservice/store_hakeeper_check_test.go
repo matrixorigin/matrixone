@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -143,7 +144,7 @@ func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskse
 	cfg.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 
-	taskService := taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
+	taskService := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
 	defer taskService.StopScheduleCronTask()
 
 	store, err := getTestStore(cfg, false, taskService)
@@ -484,7 +485,6 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 			}
 			if completed {
 				for _, s := range services[:3] {
-					s.store.taskScheduler.StopScheduleCronTask()
 					_ = s.task.holder.Close()
 				}
 				return
@@ -684,6 +684,10 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 0, len(tasks))
 		store.taskSchedule(state)
+		// update state
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		store.taskSchedule(state)
 		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(tasks))
@@ -777,6 +781,10 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 		tasks, err := taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
 		assert.NoError(t, err)
 		assert.Equal(t, 0, len(tasks))
+		store.taskSchedule(state)
+		// update state
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
 		store.taskSchedule(state)
 		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
 		assert.NoError(t, err)

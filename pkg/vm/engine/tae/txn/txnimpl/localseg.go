@@ -174,10 +174,10 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		}
 		if created {
 			seg.table.store.IncreateWriteCnt()
-			seg.table.txnEntries = append(seg.table.txnEntries, anode)
+			seg.table.txnEntries.Append(anode)
 		}
 		id := appender.GetID()
-		seg.table.store.warChecker.ReadBlock(seg.table.entry.GetDB().ID, id)
+		seg.table.store.warChecker.Insert(appender.GetMeta().(*catalog.BlockEntry))
 		seg.table.store.txn.GetMemo().AddBlock(seg.table.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
 		seg.appends = append(seg.appends, ctx)
 		logutil.Debugf("%s: toAppend %d, appended %d, blks=%d", id.String(), toAppend, appended, len(seg.appends))
@@ -224,6 +224,7 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 		logutil.Debugf("Appended: %d, Space:%d", appended, space)
 		if seg.table.schema.HasPK() {
 			if err = seg.index.BatchInsert(
+				data.Attrs[seg.table.schema.GetSingleSortKeyIdx()],
 				data.Vecs[seg.table.schema.GetSingleSortKeyIdx()],
 				int(offset),
 				int(appended),
@@ -360,7 +361,26 @@ func (seg *localSegment) GetPKColumn() containers.Vector {
 }
 
 func (seg *localSegment) BatchDedup(key containers.Vector) error {
-	return seg.index.BatchDedup(key)
+	return seg.index.BatchDedup(seg.table.GetSchema().GetSingleSortKey().Name, key)
+}
+
+func (seg *localSegment) GetColumnDataByIds(
+	blk *catalog.BlockEntry,
+	colIdxes []int,
+	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+	view = model.NewBlockView(seg.table.store.txn.GetStartTS())
+	npos := int(blk.ID)
+	n := seg.nodes[npos]
+	h, err := seg.table.store.nodesMgr.TryPin(n, time.Second)
+	if err != nil {
+		return
+	}
+	err = n.FillBlockView(view, buffers, colIdxes)
+	h.Close()
+	if err != nil {
+		return
+	}
+	return
 }
 
 func (seg *localSegment) GetColumnDataById(

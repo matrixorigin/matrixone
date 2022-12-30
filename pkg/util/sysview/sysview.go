@@ -17,10 +17,11 @@ package sysview
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"time"
 )
 
 const (
@@ -162,30 +163,55 @@ var (
 			"REFERENCED_TABLE_NAME varchar(64)," +
 			"REFERENCED_COLUMN_NAME varchar(64)" +
 			");",
-		"CREATE TABLE IF NOT EXISTS COLUMNS(" +
-			"TABLE_CATALOG varchar(64)," +
-			"TABLE_SCHEMA varchar(64)," +
-			"TABLE_NAME varchar(64)," +
-			"COLUMN_NAME varchar(64)," +
-			"ORDINAL_POSITION int unsigned," +
-			"COLUMN_DEFAULT text," +
-			"IS_NULLABLE varchar(3)," +
-			"DATA_TYPE longtext," +
-			"CHARACTER_MAXIMUM_LENGTH bigint," +
-			"CHARACTER_OCTET_LENGTH bigint," +
-			"NUMERIC_PRECISION bigint unsigned," +
-			"NUMERIC_SCALE bigint unsigned," +
-			"DATETIME_PRECISION int unsigned," +
-			"CHARACTER_SET_NAME varchar(64)," +
-			"COLLATION_NAME varchar(64)," +
-			"COLUMN_TYPE mediumtext," +
-			"COLUMN_KEY varchar(10)," +
-			"EXTRA varchar(256)," +
-			"`PRIVILEGES` varchar(154)," +
-			"COLUMN_COMMENT text," +
-			"GENERATION_EXPRESSION longtext," +
-			"SRS_ID int unsigned" +
-			");",
+		"CREATE VIEW COLUMNS AS select " +
+			"'def' as TABLE_CATALOG," +
+			"att_database as TABLE_SCHEMA," +
+			"att_relname AS TABLE_NAME," +
+			"attname AS COLUMN_NAME," +
+			"attnum AS ORDINAL_POSITION," +
+			"mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT," +
+			"(case when attnotnull=0 then 'NO' else 'YES' end) as IS_NULLABLE," +
+			"mo_show_visible_bin(atttyp,2) as DATA_TYPE," +
+			"att_length as CHARACTER_MAXIMUM_LENGTH," +
+			"att_length as CHARACTER_OCTET_LENGTH," +
+			"0 as NUMERIC_PRECISION," +
+			"0 as NUMERIC_SCALE," +
+			"0 as DATETIME_PRECISION," +
+			"'utf8' as CHARACTER_SET_NAME," +
+			"'utf8_bin' as COLLATION_NAME," +
+			"mo_show_visible_bin(atttyp,3) as COLUMN_TYPE," +
+			"case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY," +
+			"case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA," +
+			"'select,insert,update,references' as `PRIVILEGES`," +
+			"att_comment as COLUMN_COMMENT," +
+			"'' as GENERATION_EXPRESSION," +
+			"0 as SRS_ID " +
+			"from mo_catalog.mo_columns where att_relname!='%!%mo_increment_columns' and att_relname not like '__mo_cpkey%' and attname != '__mo_rowid'",
+		//"CREATE TABLE IF NOT EXISTS COLUMNS(" +
+		//	"TABLE_CATALOG varchar(64)," +
+		//	"TABLE_SCHEMA varchar(64)," +
+		//	"TABLE_NAME varchar(64)," +
+		//	"COLUMN_NAME varchar(64)," +
+		//	"ORDINAL_POSITION int unsigned," +
+		//	"COLUMN_DEFAULT text," +
+		//	"IS_NULLABLE varchar(3)," +
+		//	"DATA_TYPE longtext," +
+		//	"CHARACTER_MAXIMUM_LENGTH bigint," +
+		//	"CHARACTER_OCTET_LENGTH bigint," +
+		//	"NUMERIC_PRECISION bigint unsigned," +
+		//	"NUMERIC_SCALE bigint unsigned," +
+		//	"DATETIME_PRECISION int unsigned," +
+		//	"CHARACTER_SET_NAME varchar(64)," +
+		//	"COLLATION_NAME varchar(64)," +
+		//	"COLUMN_TYPE mediumtext," +
+		//	"COLUMN_KEY varchar(10)," +
+		//	"EXTRA varchar(256)," +
+		//	"`PRIVILEGES` varchar(154)," +
+		//	"COLUMN_COMMENT text," +
+		//	"GENERATION_EXPRESSION longtext," +
+		//	"SRS_ID int unsigned" +
+		//	");",
+
 		"CREATE TABLE IF NOT EXISTS PROFILING (" +
 			"QUERY_ID int NOT NULL DEFAULT '0'," +
 			"SEQ int NOT NULL DEFAULT '0'," +
@@ -222,14 +248,22 @@ var (
 			"PRIVILEGE_TYPE varchar(64) NOT NULL DEFAULT ''," +
 			"IS_GRANTABLE varchar(3) NOT NULL DEFAULT ''" +
 			");",
-		"CREATE TABLE IF NOT EXISTS SCHEMATA (" +
-			"CATALOG_NAME varchar(64)," +
-			"SCHEMA_NAME varchar(64)," +
-			"DEFAULT_CHARACTER_SET_NAME varchar(64)," +
-			"DEFAULT_COLLATION_NAME varchar(64)," +
-			"SQL_PATH binary(0)," +
-			"DEFAULT_ENCRYPTION varchar(10)" +
-			");",
+		//"CREATE TABLE IF NOT EXISTS SCHEMATA (" +
+		//	"CATALOG_NAME varchar(64)," +
+		//	"SCHEMA_NAME varchar(64)," +
+		//	"DEFAULT_CHARACTER_SET_NAME varchar(64)," +
+		//	"DEFAULT_COLLATION_NAME varchar(64)," +
+		//	"SQL_PATH binary(0)," +
+		//	"DEFAULT_ENCRYPTION varchar(10)" +
+		//	");",
+		"CREATE VIEW SCHEMATA AS SELECT " +
+			"dat_catalog_name AS CATALOG_NAME," +
+			"datname AS SCHEMA_NAME," +
+			"'utf8mb4' AS DEFAULT_CHARACTER_SET_NAME," +
+			"'utf8mb4_0900_ai_ci' AS DEFAULT_COLLATION_NAME," +
+			"'' AS SQL_PATH," +
+			"'NO' AS DEFAULT_ENCRYPTION " +
+			"FROM mo_catalog.mo_database;",
 		"CREATE TABLE IF NOT EXISTS CHARACTER_SETS(" +
 			"CHARACTER_SET_NAME varchar(64)," +
 			"DEFAULT_COLLATE_NAME varchar(64)," +
@@ -260,29 +294,29 @@ var (
 			"COLLATION_CONNECTION varchar(64)," +
 			"DATABASE_COLLATION varchar(64)" +
 			");",
-		"CREATE TABLE IF NOT EXISTS TABLES(" +
-			"TABLE_CATALOG varchar(64)," +
-			"TABLE_SCHEMA varchar(64)," +
-			"TABLE_NAME varchar(64)," +
-			"TABLE_TYPE varchar(10)," +
-			"ENGINE varchar(64)," +
-			"VERSION int," +
-			"ROW_FORMAT varchar(10)," +
-			"TABLE_ROWS bigint unsigned," +
-			"AVG_ROW_LENGTH bigint unsigned," +
-			"DATA_LENGTH bigint unsigned," +
-			"MAX_DATA_LENGTH bigint unsigned," +
-			"INDEX_LENGTH bigint unsigned," +
-			"DATA_FREE bigint unsigned," +
-			"`AUTO_INCREMENT` bigint unsigned," +
-			"CREATE_TIME timestamp," +
-			"UPDATE_TIME datetime," +
-			"CHECK_TIME datetime," +
-			"TABLE_COLLATION varchar(64)," +
-			"CHECKSUM bigint," +
-			"CREATE_OPTIONS varchar(256)," +
-			"TABLE_COMMENT text" +
-			");",
+		"CREATE VIEW IF NOT EXISTS TABLES AS " +
+			"SELECT '' AS TABLE_CATALOG," +
+			"reldatabase AS TABLE_SCHEMA," +
+			"relname AS TABLE_NAME," +
+			"'' AS TABLE_TYPE," +
+			"'' AS ENGINE," +
+			"0 AS VERSION," +
+			"'' AS ROW_FORMAT," +
+			"0 AS TABLE_ROWS," +
+			"0 AS AVG_ROW_LENGTH," +
+			"0 AS DATA_LENGTH," +
+			"0 AS MAX_DATA_LENGTH," +
+			"0 AS INDEX_LENGTH," +
+			"0 AS DATA_FREE," +
+			"0 AS `AUTO_INCREMENT`," +
+			"created_time AS CREATE_TIME," +
+			"'' AS UPDATE_TIME," +
+			"'' AS CHECK_TIME," +
+			"'' AS TABLE_COLLATION," +
+			"0 AS CHECKSUM," +
+			"'' AS CREATE_OPTIONS," +
+			"rel_comment AS TABLE_COMMENT " +
+			"FROM mo_catalog.mo_tables;",
 		"CREATE TABLE IF NOT EXISTS ENGINES (" +
 			"ENGINE varchar(64)," +
 			"SUPPORT varchar(8)," +
@@ -291,6 +325,62 @@ var (
 			"XA varchar(3)," +
 			"SAVEPOINTS varchar(3)" +
 			");",
+		"CREATE TABLE IF NOT EXISTS ROUTINES (" +
+			"SPECIFIC_NAME varchar(64)," +
+			"ROUTINE_CATALOG varchar(64)," +
+			"ROUTINE_SCHEMA varchar(64)," +
+			"ROUTINE_NAME varchar(64)," +
+			"ROUTINE_TYPE varchar(10)," +
+			"DATA_TYPE  longtext," +
+			"CHARACTER_MAXIMUM_LENGTH bigint," +
+			"CHARACTER_OCTET_LENGTH bigint," +
+			"NUMERIC_PRECISION int unsigned," +
+			"NUMERIC_SCALE int unsigned," +
+			"DATETIME_PRECISION int unsigned," +
+			"CHARACTER_SET_NAME varchar(64)," +
+			"COLLATION_NAME varchar(64)," +
+			"DTD_IDENTIFIER longtext," +
+			"ROUTINE_BODY varchar(3)," +
+			"ROUTINE_DEFINITION longtext," +
+			"EXTERNAL_NAME binary(0)," +
+			"EXTERNAL_LANGUAGE varchar(64)," +
+			"PARAMETER_STYLE varchar(3)," +
+			"IS_DETERMINISTIC varchar(3)," +
+			"SQL_DATA_ACCESS varchar(10)," +
+			"SQL_PATH varchar(1000)," +
+			"SECURITY_TYPE varchar(10)," +
+			"CREATED timestamp," +
+			"LAST_ALTERED timestamp," +
+			"SQL_MODE varchar(1000)," +
+			"ROUTINE_COMMENT text," +
+			"DEFINER varchar(288)," +
+			"CHARACTER_SET_CLIENT varchar(64)," +
+			"COLLATION_CONNECTION varchar(64)," +
+			"DATABASE_COLLATION  varchar(64)" +
+			");",
+		"CREATE TABLE IF NOT EXISTS PARAMETERS(" +
+			"SPECIFIC_CATALOG varchar(64)," +
+			"SPECIFIC_SCHEMA varchar(64)," +
+			"SPECIFIC_NAME varchar(64)," +
+			"ORDINAL_POSITION bigint unsigned," +
+			"PARAMETER_MODE varchar(5)," +
+			"PARAMETER_NAME varchar(64)," +
+			"DATA_TYPE longtext," +
+			"CHARACTER_MAXIMUM_LENGTH bigint," +
+			"CHARACTER_OCTET_LENGTH bigint," +
+			"NUMERIC_PRECISION int unsigned," +
+			"NUMERIC_SCALE bigint," +
+			"DATETIME_PRECISION int unsigned," +
+			"CHARACTER_SET_NAME varchar(64)," +
+			"COLLATION_NAME varchar(64)," +
+			"DTD_IDENTIFIER mediumtext," +
+			"ROUTINE_TYPE  varchar(64)" +
+			");",
+		"CREATE TABLE IF NOT EXISTS KEYWORDS (" +
+			"WORD varchar(64)," +
+			"RESERVED int unsigned" +
+			");",
+		informationSchemaKeywordsData,
 	}
 )
 

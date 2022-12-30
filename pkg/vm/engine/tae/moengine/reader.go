@@ -16,10 +16,10 @@ package moengine
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -36,7 +36,7 @@ func newReader(rel handle.Relation, it handle.BlockIt) *txnReader {
 	}
 }
 
-func (r *txnReader) Read(attrs []string, _ *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
+func (r *txnReader) Read(ctx context.Context, attrs []string, _ *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
 	r.it.Lock()
 	if !r.it.Valid() {
 		r.it.Unlock()
@@ -56,7 +56,7 @@ func (r *txnReader) Read(attrs []string, _ *plan.Expr, m *mpool.MPool) (*batch.B
 	if err != nil {
 		return nil, err
 	}
-	n := vector.Length(bat.Vecs[0])
+	n := bat.Vecs[0].Length()
 	sels := m.GetSels()
 	if n > cap(sels) {
 		m.PutSels(sels)

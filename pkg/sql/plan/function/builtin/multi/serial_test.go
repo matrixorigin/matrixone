@@ -33,7 +33,7 @@ func TestSerial(t *testing.T) {
 	vs, valueCount := MakeVectors(columnSi, rowCount, proc.Mp())
 	newVec, err := Serial(vs, proc)
 	require.Equal(t, nil, err)
-	bs := vector.GetBytesVectorValues(newVec)
+	bs := vector.MustBytesCols(newVec)
 	tuples := make([]types.Tuple, 0)
 	for i := 0; i < len(bs); i++ {
 		tuple, err := types.Unpack(bs[i])
@@ -49,8 +49,8 @@ func MakeVectors(columnSi int, rowCount int, mp *mpool.MPool) ([]*vector.Vector,
 	valueCount := make(map[int]interface{})
 	vs := make([]*vector.Vector, columnSi)
 	for i := 0; i < columnSi; i++ {
-		vs[i] = vector.New(types.Type{Oid: randType()})
-		randInsertValues(vs[i], vs[i].Typ.Oid, rowCount, valueCount, i*rowCount, mp)
+		vs[i] = vector.New(vector.FLAT, types.Type{Oid: randType()})
+		randInsertValues(vs[i], vs[i].GetType().Oid, rowCount, valueCount, i*rowCount, mp)
 	}
 	return vs, valueCount
 }
@@ -278,11 +278,11 @@ func randTime() types.Time {
 	if tmp := rand.Intn(2); tmp == 0 {
 		isNeg = true
 	}
-	hour := rand.Intn(839)
+	hour := rand.Intn(2562047788)
 	minute := rand.Intn(60)
 	second := rand.Intn(60)
 	microSecond := rand.Intn(1e6)
-	return types.FromTimeClock(isNeg, int32(hour), uint8(minute), uint8(second), uint32(microSecond))
+	return types.FromTimeClock(isNeg, uint64(hour), uint8(minute), uint8(second), uint32(microSecond))
 }
 
 func randDatetime() types.Datetime {

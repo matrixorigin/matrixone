@@ -19,10 +19,13 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 // Routine handles requests.
@@ -41,7 +44,8 @@ type Routine struct {
 	cancelRoutineCtx  context.Context
 	cancelRoutineFunc context.CancelFunc
 
-	routineMgr *RoutineManager
+	rs         goetty.IOSession
+	parameters *config.FrontendParameters
 
 	ses *Session
 	// TODO: the initialization and closure of application in goetty should be clear in 0.7
@@ -78,16 +82,10 @@ func (routine *Routine) getConnID() uint32 {
 	return routine.GetClientProtocol().ConnectionID()
 }
 
-func (routine *Routine) SetRoutineMgr(rtMgr *RoutineManager) {
+func (routine *Routine) getParameters() *config.FrontendParameters {
 	routine.mu.Lock()
 	defer routine.mu.Unlock()
-	routine.routineMgr = rtMgr
-}
-
-func (routine *Routine) GetRoutineMgr() *RoutineManager {
-	routine.mu.Lock()
-	defer routine.mu.Unlock()
-	return routine.routineMgr
+	return routine.parameters
 }
 
 func (routine *Routine) SetSession(ses *Session) {
@@ -108,6 +106,12 @@ func (routine *Routine) GetRequestChannel() chan *Request {
 	return routine.requestChan
 }
 
+func (routine *Routine) getIOSession() goetty.IOSession {
+	routine.mu.Lock()
+	defer routine.mu.Unlock()
+	return routine.rs
+}
+
 /*
 After the handshake with the client is done, the routine goes into processing loop.
 */
@@ -117,12 +121,20 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 	var resp *Response
 	var counted bool
 	var requestChan = routine.GetRequestChannel()
+	var ses *Session
+	rs := routine.getIOSession()
+	defer func(rs goetty.IOSession) {
+		if err := rs.Close(); err != nil {
+			logErrorf(routine.GetSession().GetConciseProfile(), "failed to close io session", zap.Error(err))
+		}
+	}(rs)
+
 	//session for the connection
 	for {
 		quit := false
 		select {
 		case <-routineCtx.Done():
-			logutil.Debugf("-----cancel routine")
+			logDebugf(routine.GetSession().GetConciseProfile(), "-----cancel routine")
 			quit = true
 			if counted {
 				metric.ConnectionCounter(routine.GetSession().GetTenantInfo().Tenant).Dec()
@@ -140,37 +152,48 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 
 		reqBegin := time.Now()
 
-		mgr := routine.GetRoutineMgr()
-		pu := mgr.getParameterUnit()
+		parameters := routine.getParameters()
 		mpi := routine.GetClientProtocol().(*MysqlProtocolImpl)
 		mpi.SetSequenceID(req.seq)
 
-		cancelRequestCtx, cancelRequestFunc := context.WithTimeout(routineCtx, pu.SV.SessionTimeout.Duration)
+		cancelRequestCtx, cancelRequestFunc := context.WithTimeout(routineCtx, parameters.SessionTimeout.Duration)
 		executor := routine.GetCmdExecutor()
 		executor.(*MysqlCmdExecutor).setCancelRequestFunc(cancelRequestFunc)
-		ses := routine.GetSession()
+		ses = routine.GetSession()
+		ses.MakeProfile()
 		tenant := ses.GetTenantInfo()
 		tenantCtx := context.WithValue(cancelRequestCtx, defines.TenantIDKey{}, tenant.GetTenantID())
 		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenant.GetUserID())
 		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
+		tenantCtx = trace.ContextWithSpanContext(tenantCtx, trace.SpanContextWithID(trace.TraceID(ses.uuid), trace.SpanKindSession))
 		ses.SetRequestContext(tenantCtx)
 		executor.PrepareSessionBeforeExecRequest(routine.GetSession())
 
 		if resp, err = executor.ExecRequest(tenantCtx, req); err != nil {
-			logutil.Errorf("routine execute request failed. error:%v \n", err)
+			logErrorf(ses.GetConciseProfile(), "routine execute request failed. error:%v \n", err)
 		}
 
 		if resp != nil {
-			if err = routine.GetClientProtocol().SendResponse(resp); err != nil {
-				logutil.Errorf("routine send response failed %v. error:%v ", resp, err)
+			if err = routine.GetClientProtocol().SendResponse(tenantCtx, resp); err != nil {
+				logErrorf(ses.GetConciseProfile(), "routine send response failed %v. error:%v ", resp, err)
 			}
 		}
 
-		if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-			logutil.Debugf("connection id %d , the time of handling the request %s", routine.getConnID(), time.Since(reqBegin).String())
+		if !parameters.DisableRecordTimeElapsedOfSqlRequest {
+			logDebugf(ses.GetConciseProfile(), "the time of handling the request %s", time.Since(reqBegin).String())
 		}
 
 		cancelRequestFunc()
+	}
+
+	ses = routine.GetSession()
+	//ensure cleaning the transaction
+	if ses != nil {
+		logErrorf(ses.GetConciseProfile(), "rollback the txn.")
+		err = ses.TxnRollback()
+		if err != nil {
+			logErrorf(ses.GetConciseProfile(), "rollback txn failed.error:%v", err)
+		}
 	}
 }
 
@@ -207,7 +230,18 @@ func (routine *Routine) notifyClose() {
 	}
 }
 
-func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecutor, pu *config.ParameterUnit) *Routine {
+func (routine *Routine) notifyDone() {
+	executor := routine.GetCmdExecutor()
+	if executor != nil {
+		cancal := executor.(*MysqlCmdExecutor).getCancelRequestFunc()
+		if cancal != nil {
+			cancal()
+		}
+	}
+}
+
+func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecutor, parameters *config.FrontendParameters, rs goetty.IOSession) *Routine {
+	ctx = trace.Generate(ctx) // fill span{trace_id} in ctx
 	cancelRoutineCtx, cancelRoutineFunc := context.WithCancel(ctx)
 	ri := &Routine{
 		protocol:          protocol,
@@ -215,7 +249,10 @@ func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecuto
 		requestChan:       make(chan *Request, 1),
 		cancelRoutineCtx:  cancelRoutineCtx,
 		cancelRoutineFunc: cancelRoutineFunc,
+		parameters:        parameters,
+		rs:                rs,
 	}
+	rs.Ref()
 
 	//async process request
 	go ri.Loop(cancelRoutineCtx)

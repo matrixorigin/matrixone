@@ -38,7 +38,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
-		ap.ctr.bat.Vecs[i] = vector.New(typ)
+		ap.ctr.bat.Vecs[i] = vector.New(vector.FLAT, typ)
 	}
 	return nil
 }
@@ -53,23 +53,15 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				ctr.state = End
-				if ctr.mp != nil {
-					ctr.mp.Free()
-				}
-				return true, err
+				ap.Free(proc, true)
+				return false, err
 			}
 			ctr.state = Probe
+
 		case Probe:
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
-				if ctr.mp != nil {
-					ctr.mp.Free()
-				}
-				if ctr.bat != nil {
-					ctr.bat.Clean(proc.Mp())
-				}
 				continue
 			}
 			if bat.Length() == 0 {
@@ -77,26 +69,19 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			}
 			if ctr.bat.Length() == 0 {
 				if err := ctr.emptyProbe(bat, ap, proc, anal); err != nil {
-					ctr.state = End
-					if ctr.mp != nil {
-						ctr.mp.Free()
-					}
-					proc.SetInputBatch(nil)
-					return true, err
+					ap.Free(proc, true)
+					return false, err
 				}
-
 			} else {
 				if err := ctr.probe(bat, ap, proc, anal); err != nil {
-					ctr.state = End
-					if ctr.mp != nil {
-						ctr.mp.Free()
-					}
-					proc.SetInputBatch(nil)
-					return true, err
+					ap.Free(proc, true)
+					return false, err
 				}
 			}
 			return false, nil
+
 		default:
+			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -113,7 +98,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	count := bat.Length()
@@ -122,7 +107,8 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Vecs[i] = bat.Vecs[rp.Pos]
 			bat.Vecs[rp.Pos] = nil
 		} else {
-			rbat.Vecs[i] = vector.NewConstNull(ctr.bat.Vecs[rp.Pos].Typ, count)
+			rbat.Vecs[i] = vector.New(vector.FLAT, *ctr.bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i].SetLength(count)
 		}
 	}
 	rbat.Zs = bat.Zs
@@ -133,21 +119,23 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].Typ)
+			rbat.Vecs[i] = vector.New(vector.FLAT, *bat.Vecs[rp.Pos].GetType())
 		} else {
-			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].Typ)
+			rbat.Vecs[i] = vector.New(vector.FLAT, *ctr.bat.Vecs[rp.Pos].GetType())
 		}
 	}
+
+	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
 		return err
 	}
-	defer ctr.freeJoinCondition(proc)
+
 	count := bat.Length()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
@@ -165,13 +153,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if zvals[k] == 0 || vals[k] == 0 {
 				for j, rp := range ap.Result {
 					if rp.Rel == 0 {
-						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
+						if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), rbat.Vecs[j].Length() == 0, proc.Mp()); err != nil {
+							rbat.Free(proc.Mp())
 							return err
 						}
 					} else {
-						if err := vector.UnionNull(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
+						if err := rbat.Vecs[j].UnionNull(ctr.bat.Vecs[rp.Pos], proc.Mp()); err != nil {
+							rbat.Free(proc.Mp())
 							return err
 						}
 					}
@@ -187,7 +175,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					if err != nil {
 						return err
 					}
-					bs := vec.Col.([]bool)
+					bs := vector.MustTCols[bool](vec)
 					if !bs[0] {
 						vec.Free(proc.Mp())
 						continue
@@ -197,13 +185,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				matched = true
 				for j, rp := range ap.Result {
 					if rp.Rel == 0 {
-						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
+						if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), rbat.Vecs[j].Length() == 0, proc.Mp()); err != nil {
+							rbat.Free(proc.Mp())
 							return err
 						}
 					} else {
-						if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
+						if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], sel, rbat.Vecs[j].Length() == 0, proc.Mp()); err != nil {
+							rbat.Free(proc.Mp())
 							return err
 						}
 					}
@@ -213,13 +201,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if !matched {
 				for j, rp := range ap.Result {
 					if rp.Rel == 0 {
-						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
+						if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), rbat.Vecs[j].Length() == 0, proc.Mp()); err != nil {
+							rbat.Free(proc.Mp())
 							return err
 						}
 					} else {
 						if err := vector.UnionNull(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
+							rbat.Free(proc.Mp())
 							return err
 						}
 					}
@@ -239,11 +227,7 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
-			for j := 0; j < i; j++ {
-				if ctr.evecs[j].needFree {
-					vector.Clean(ctr.evecs[j].vec, proc.Mp())
-				}
-			}
+			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
 		ctr.vecs[i] = vec
@@ -257,12 +241,4 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 		}
 	}
 	return nil
-}
-
-func (ctr *container) freeJoinCondition(proc *process.Process) {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].needFree {
-			ctr.evecs[i].vec.Free(proc.Mp())
-		}
-	}
 }

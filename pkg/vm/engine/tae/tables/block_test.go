@@ -19,19 +19,34 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestGetActiveRow(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	ts1 := types.BuildTS(1, 0)
 	ts2 := types.BuildTS(2, 0)
 	mvcc := updates.NewMVCCHandle(nil)
-	blk := &dataBlock{
-		mvcc: mvcc,
+	// blk := &dataBlock{
+	// 	mvcc: mvcc,
+	// }
+	b := &baseBlock{
+		RWMutex: mvcc.RWMutex,
+		mvcc:    mvcc,
 	}
+	mnode := &memoryNode{
+		block: b,
+	}
+	blk := &ablock{baseBlock: b}
+
+	mnode.Ref()
+	n := NewNode(mnode)
+	blk.node.Store(n)
 
 	// appendnode1 [0,1)
 	an1, _ := mvcc.AddAppendNodeLocked(nil, 0, 1)
@@ -56,16 +71,19 @@ func TestGetActiveRow(t *testing.T) {
 	keysCtx.SelectAll()
 	err := idx.BatchUpsert(keysCtx, 0)
 	assert.NoError(t, err)
-	blk.pkIndex = idx
+	blk.node.Load().MustMNode().pkIndex = idx
 
-	row, err := blk.GetActiveRow(int8(1), ts2)
+	node := blk.node.Load().MustMNode()
+	// row, err := blk.GetActiveRow(int8(1), ts2)
+	row, err := blk.getInMemoryRowByFilter(node, ts2, handle.NewEQFilter(int8(1)))
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(1), row)
 
 	//abort appendnode2
 	an2.Aborted = true
 
-	row, err = blk.GetActiveRow(int8(1), ts2)
+	row, err = blk.getInMemoryRowByFilter(node, ts2, handle.NewEQFilter(int8(1)))
+	// row, err = blk.GetActiveRow(int8(1), ts2)
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(0), row)
 }

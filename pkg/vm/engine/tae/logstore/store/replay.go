@@ -44,8 +44,15 @@ func (w *StoreImpl) Replay(h ApplyHandle) error {
 			w.walCurrentLsn[g] = ckped
 			w.synced[g] = ckped
 		}
-		if w.minLsn[g] == 0 {
-			w.minLsn[g] = ckped + 1
+		if w.minLsn[g] <= w.driverCheckpointed {
+			minLsn := w.minLsn[g]
+			for ; minLsn <= ckped+1; minLsn++ {
+				drLsn, err := w.getDriverLsn(g, minLsn)
+				if err == nil && drLsn > w.driverCheckpointed {
+					break
+				}
+			}
+			w.minLsn[g] = minLsn
 		}
 	}
 	return nil

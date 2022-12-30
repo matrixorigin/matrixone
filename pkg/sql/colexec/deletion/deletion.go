@@ -16,7 +16,6 @@ package deletion
 
 import (
 	"bytes"
-	"context"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -51,11 +50,9 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		return false, nil
 	}
 
-	defer bat.Clean(proc.Mp())
-	batLen := batch.Length(bat)
+	defer bat.Free(proc.Mp())
+	batLen := bat.Length()
 	var affectedRows uint64
-
-	ctx := context.TODO()
 
 	for i := range p.DeleteCtxs {
 		filterColIndex := p.DeleteCtxs[i].ColIndex
@@ -68,26 +65,31 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		length := tmpBat.GetVector(0).Length()
 		if length > 0 {
 			tmpBat.SetZs(length, proc.Mp())
-			err := p.DeleteCtxs[i].TableSource.Delete(ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
+			err := p.DeleteCtxs[i].TableSource.Delete(proc.Ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
 			if err != nil {
-				tmpBat.Clean(proc.Mp())
+				tmpBat.Free(proc.Mp())
 				return false, err
 			}
 			affectedRows += cnt
 		}
 
-		tmpBat.Clean(proc.Mp())
-
-		for infoNum, info := range p.DeleteCtxs[i].IndexInfos {
-			rel := p.DeleteCtxs[i].IndexTables[infoNum]
-			oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[filterColIndex+1:filterColIndex+1+int32(len(p.DeleteCtxs[i].IndexAttrs))], p.DeleteCtxs[i].IndexAttrs, info.Cols, proc)
-			if rowNum != 0 {
-				err := rel.Delete(ctx, oldBatch, info.ColNames[0])
-				if err != nil {
-					return false, err
+		tmpBat.Free(proc.Mp())
+		if p.DeleteCtxs[i].UniqueIndexDef != nil {
+			idx := 0
+			for num := range p.DeleteCtxs[i].UniqueIndexDef.IndexNames {
+				if p.DeleteCtxs[i].UniqueIndexDef.TableExists[num] {
+					rel := p.DeleteCtxs[i].UniqueIndexTables[idx]
+					oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[filterColIndex+1:filterColIndex+1+int32(len(p.DeleteCtxs[i].IndexAttrs))], p.DeleteCtxs[i].IndexAttrs, p.DeleteCtxs[i].UniqueIndexDef.Fields[num].Cols, proc)
+					if rowNum != 0 {
+						err := rel.Delete(proc.Ctx, oldBatch, p.DeleteCtxs[i].UniqueIndexDef.Fields[num].Cols[0].Name)
+						if err != nil {
+							return false, err
+						}
+					}
+					oldBatch.Free(proc.Mp())
+					idx++
 				}
 			}
-			oldBatch.Clean(proc.Mp())
 		}
 	}
 	atomic.AddUint64(&p.AffectedRows, affectedRows)

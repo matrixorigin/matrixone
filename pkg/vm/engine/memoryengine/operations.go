@@ -318,7 +318,7 @@ type ReadResp struct {
 
 func (r *ReadResp) Close() error {
 	if r.Batch != nil {
-		r.Batch.Clean(r.mp)
+		r.Batch.Free(r.mp)
 	}
 	return nil
 }

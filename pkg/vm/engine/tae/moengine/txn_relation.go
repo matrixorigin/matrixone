@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
@@ -56,7 +55,7 @@ func (rel *txnRelation) Write(_ context.Context, bat *batch.Batch) error {
 }
 
 func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {
-	return moerr.NewNYI("Update not supported")
+	return moerr.NewNYINoCtx("Update not supported")
 }
 
 func (rel *txnRelation) DeleteByPhyAddrKeys(_ context.Context, keys *vector.Vector) error {
@@ -71,10 +70,8 @@ func (rel *txnRelation) Delete(_ context.Context, bat *batch.Batch, col string) 
 	logutil.Debugf("Delete col: %v", col)
 	allNullables := schema.AllNullables()
 	idx := catalog.GetAttrIdx(schema.AllNames(), col)
-	if data.Typ.Oid == types.T_any {
-		data.Typ = schema.ColDefs[idx].Type
-		logutil.Warn("[Moengine]", common.OperationField("Delete"),
-			common.OperandField("Col type is any"))
+	if data.GetType().Oid == types.T_any {
+		data.SetType(schema.ColDefs[idx].Type)
 	}
 	vec := containers.NewVectorWithSharedMemory(data, allNullables[idx])
 	defer vec.Close()

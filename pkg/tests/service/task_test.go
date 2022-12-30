@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
@@ -75,6 +76,7 @@ func waitTaskRescheduled(t *testing.T, ctx context.Context, taskService taskserv
 }
 
 func TestTaskServiceCanCreate(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -90,21 +92,26 @@ func TestTaskServiceCanCreate(t *testing.T) {
 		WithLogShardNum(1))
 	require.NoError(t, err)
 
-	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
+	// close the cluster
 	defer func(c Cluster) {
-		_ = c.Close()
+		require.NoError(t, c.Close())
 	}(c)
+	// start the cluster
+	require.NoError(t, c.Start())
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	t.Log("cluster log svcs length:", len(c.(*testCluster).log.svcs))
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
 	c.WaitDNStoreTaskServiceCreatedIndexed(ctx, 0)
 	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 0)
+	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 1)
+	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 2)
 }
 
 func TestTaskSchedulerCanAllocateTask(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -115,14 +122,14 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
-	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
+	// close the cluster
 	defer func(c Cluster) {
-		_ = c.Close()
+		require.NoError(t, c.Close())
 	}(c)
+	// start the cluster
+	require.NoError(t, c.Start())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
@@ -155,6 +162,7 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 }
 
 func TestTaskSchedulerCanReallocateTask(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -168,11 +176,25 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
-	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
+	halt := make(chan bool)
+	taskExecutor := func(ctx context.Context, task task.Task) error {
+		t.Logf("task %d is running", task.ID)
+		select {
+		case <-ctx.Done():
+		case <-halt:
+		}
+		return nil
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer func(c Cluster, halt chan bool) {
+		halt <- true
+		require.NoError(t, c.Close())
+		close(halt)
+	}(c, halt)
+	// start the cluster
+	require.NoError(t, c.Start())
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
@@ -182,12 +204,16 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 
 	cn2, err := c.GetCNServiceIndexed(1)
 	require.NoError(t, err)
+	cn1.GetTaskRunner().RegisterExecutor(uint32(task.TaskCode_TestOnly), taskExecutor)
+	cn2.GetTaskRunner().RegisterExecutor(uint32(task.TaskCode_TestOnly), taskExecutor)
 
 	taskService, ok := cn1.GetTaskService()
 	require.True(t, ok)
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: uint32(task.TaskCode_TestOnly)})
 	require.NoError(t, err)
+
 	tasks, err := taskService.QueryTask(ctx,
-		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
+		taskservice.WithTaskExecutorCond(taskservice.EQ, uint32(task.TaskCode_TestOnly)))
 	require.NoError(t, err)
 	require.Equal(t, 1, len(tasks))
 
@@ -199,15 +225,12 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	if uuid1 == cn1.ID() {
 		taskService, ok = cn2.GetTaskService()
 		require.True(t, ok)
-		require.NoError(t, err)
 	}
 	waitTaskRescheduled(t, ctx, taskService, uuid1)
-
-	err = c.Close()
-	require.NoError(t, err)
 }
 
 func TestTaskRunner(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -228,11 +251,14 @@ func TestTaskRunner(t *testing.T) {
 	c, err := NewCluster(t, opt.WithLogLevel(zap.DebugLevel))
 	require.NoError(t, err)
 
+	// close the cluster
+	defer func(c Cluster) {
+		require.NoError(t, c.Close())
+	}(c)
 	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
+	require.NoError(t, c.Start())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
@@ -255,21 +281,13 @@ func TestTaskRunner(t *testing.T) {
 	case i := <-ch:
 		t.Logf("task %d is completed", i)
 	}
-	err = c.Close()
-	require.NoError(t, err)
 }
 
 func TestCronTask(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
-	}
-
-	ch := make(chan int)
-	taskExecutor := func(ctx context.Context, task task.Task) error {
-		t.Logf("task %d is running", task.ID)
-		ch <- int(task.ID)
-		return nil
 	}
 
 	opt := DefaultOptions()
@@ -277,12 +295,25 @@ func TestCronTask(t *testing.T) {
 	c, err := NewCluster(t, opt.WithLogLevel(zap.DebugLevel))
 	require.NoError(t, err)
 
-	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
-	defer c.Close()
+	ch := make(chan int)
+	taskExecutor := func(ctx context.Context, task task.Task) error {
+		t.Logf("task %d is running", task.ID)
+		select {
+		case ch <- int(task.ID):
+		case <-ctx.Done():
+			return nil
+		}
+		return nil
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	// close the cluster
+	defer func(c Cluster) {
+		require.NoError(t, c.Close())
+	}(c)
+	// start the cluster
+	require.NoError(t, c.Start())
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
@@ -294,14 +325,13 @@ func TestCronTask(t *testing.T) {
 	taskService, ok := indexed.GetTaskService()
 	require.True(t, ok)
 
-	err = taskService.CreateCronTask(context.TODO(),
+	require.NoError(t, taskService.CreateCronTask(context.TODO(),
 		task.TaskMetadata{
 			ID:       "a",
 			Executor: uint32(task.TaskCode_TestOnly),
 		},
 		"*/1 * * * * *", // every 1 second
-	)
-	require.NoError(t, err)
+	))
 
 	waitChannelFull(t, ctx, ch, 3)
 }

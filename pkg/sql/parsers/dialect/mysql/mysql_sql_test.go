@@ -15,6 +15,7 @@
 package mysql
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -26,8 +27,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  "create account `abc@124` admin_name `abc@124` identified by '111'",
-		output: "create account abc@124 admin_name 'abc@124' identified by '111'",
+		input: `kill query 9223372036854775809`,
 	}
 )
 
@@ -36,7 +36,7 @@ func TestDebug(t *testing.T) {
 	if debugSQL.output == "" {
 		debugSQL.output = debugSQL.input
 	}
-	ast, err := ParseOne(debugSQL.input)
+	ast, err := ParseOne(context.TODO(), debugSQL.input)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", debugSQL.input, err)
 		return
@@ -52,6 +52,18 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "show variables like 'sql_mode'",
+		output: "show variables like sql_mode",
+	}, {
+		input:  "show index from t1 from db",
+		output: "show index from db.t1",
+	}, {
+		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
+		output: "select * from (select * from (select 1, 2, 3)) as t1",
+	}, {
+		input:  "SELECT count(*) AS low_stock FROM (\nSELECT s_w_id, s_i_id, s_quantity\nFROM bmsql_stock\nWHERE s_w_id = 1 AND s_quantity < 1000 AND s_i_id IN (\nSELECT ol_i_id\nFROM bmsql_district\nJOIN bmsql_order_line ON ol_w_id = d_w_id\nAND ol_d_id = d_id\nAND ol_o_id >= d_next_o_id - 20\nAND ol_o_id < d_next_o_id\nWHERE d_w_id = 1 AND d_id = 1\n)\n);",
+		output: "select count(*) as low_stock from (select s_w_id, s_i_id, s_quantity from bmsql_stock where s_w_id = 1 and s_quantity < 1000 and s_i_id in (select ol_i_id from bmsql_district inner join bmsql_order_line on ol_w_id = d_w_id and ol_d_id = d_id and ol_o_id >= d_next_o_id - 20 and ol_o_id < d_next_o_id where d_w_id = 1 and d_id = 1))",
+	}, {
 		input:  "create account `abc@124` admin_name `abc@124` identified by '111'",
 		output: "create account abc@124 admin_name 'abc@124' identified by '111'",
 	}, {
@@ -582,14 +594,11 @@ var (
 		input:  "create external table t (a int) infile 'data.txt'",
 		output: "create external table t (a int) infile 'data.txt'",
 	}, {
-		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='none'}",
-		output: "create external table t (a int) infile 'data.txt'",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='none'}",
 	}, {
-		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='auto'}",
-		output: "create external table t (a int) infile 'data.txt'",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='auto'}",
 	}, {
-		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
-		output: "create external table t (a int) infile {'filepath':'data.txt', 'compression':'lz4'}",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
 	}, {
 		input:  "create external table t (a int) infile 'data.txt' FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY ''",
 		output: "create external table t (a int) infile 'data.txt' fields terminated by \t optionally enclosed by \u0000 lines",
@@ -649,40 +658,72 @@ var (
 		input:  "load data infile 'data.txt' into table db.a",
 		output: "load data infile data.txt into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
-		output: "load data infile data.txt into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
-		output: "load data infile data.txt into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'gzip', 'format':'csv'} into table db.a",
+		input:  "create external table t (a int) infile 'data.txt'",
+		output: "create external table t (a int) infile 'data.txt'",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'bzip2', 'format':'csv'} into table db.a",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='none'}",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'flate', 'format':'csv'} into table db.a",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='auto'}",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'lzw', 'format':'csv'} into table db.a",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'zlib', 'format':'csv'} into table db.a",
+		input:  "create external table t (a int) infile 'data.txt' FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY ''",
+		output: "create external table t (a int) infile 'data.txt' fields terminated by \t optionally enclosed by \u0000 lines",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'lz4', 'format':'csv'} into table db.a",
+		input:  "create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
+		output: "create external table t (a int) url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'format'='jsonline','jsondata'='array'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'auto', 'format':'jsonline', 'jsondata':'array'} into table db.a",
+		input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
+		output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
+	}, {
+		input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
+		output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by \t optionally enclosed by \u0000 lines",
+	}, {
+		input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
+	}, {
+		input: "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
+	}, {
+		input: "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
+	}, {
+		input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
+	}, {
+		input: "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
+	}, {
+		input: "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
+	}, {
+		input: "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
+	}, {
+		input: "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
+	}, {
+		input:  "LOAD DATA URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
+		output: "load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
 	},
 		{
-			input:  "load data infile {'filepath'='data.txt', 'format'='jsonline','jsondata'='object'} into table db.a",
-			output: "load data infile {'filepath':'data.txt', 'compression':'auto', 'format':'jsonline', 'jsondata':'object'} into table db.a",
+			input: `load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} into table t1`,
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'format'='jsonline', 'jsondata'='array'} into table db.a",
 		},
 		{
-			input:  "load data infile {'filepath'='data.txt', 'compression'='BZIP2','format'='jsonline','jsondata'='object'} into table db.a",
-			output: "load data infile {'filepath':'data.txt', 'compression':'bzip2', 'format':'jsonline', 'jsondata':'object'} into table db.a",
+			input: "load data infile {'filepath'='data.txt', 'format'='jsonline', 'jsondata'='object'} into table db.a",
+		},
+		{
+			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2', 'format'='jsonline', 'jsondata'='object'} into table db.a",
 		},
 		{
 			input:  "import data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
@@ -1570,11 +1611,11 @@ var (
 		},
 		{
 			input:  `select * from unnest("a") as f`,
-			output: `select * from unnest(a, $, false) as f`,
+			output: `select * from unnest(a) as f`,
 		},
 		{
 			input:  `select * from unnest("a", "b") as f`,
-			output: `select * from unnest(a, b, false) as f`,
+			output: `select * from unnest(a, b) as f`,
 		},
 		{
 			input:  `select * from unnest("a", "b", true) as f`,
@@ -1582,11 +1623,11 @@ var (
 		},
 		{
 			input:  `select * from unnest("a")`,
-			output: `select * from unnest(a, $, false)`,
+			output: `select * from unnest(a)`,
 		},
 		{
 			input:  `select * from unnest("a", "b")`,
-			output: `select * from unnest(a, b, false)`,
+			output: `select * from unnest(a, b)`,
 		},
 		{
 			input:  `select * from unnest("a", "b", true)`,
@@ -1594,11 +1635,11 @@ var (
 		},
 		{
 			input:  `select * from unnest(t.a)`,
-			output: `select * from unnest(t.a, $, false)`,
+			output: `select * from unnest(t.a)`,
 		},
 		{
 			input:  `select * from unnest(t.a, "$.b")`,
-			output: `select * from unnest(t.a, $.b, false)`,
+			output: `select * from unnest(t.a, $.b)`,
 		},
 		{
 			input:  `select * from unnest(t.a, "$.b", true)`,
@@ -1606,11 +1647,11 @@ var (
 		},
 		{
 			input:  `select * from unnest(t.a) as f`,
-			output: `select * from unnest(t.a, $, false) as f`,
+			output: `select * from unnest(t.a) as f`,
 		},
 		{
 			input:  `select * from unnest(t.a, "$.b") as f`,
-			output: `select * from unnest(t.a, $.b, false) as f`,
+			output: `select * from unnest(t.a, $.b) as f`,
 		},
 		{
 			input:  `select * from unnest(t.a, "$.b", true) as f`,
@@ -1660,15 +1701,61 @@ var (
 			input:  `modump database t tables t1,t2 into 'a.sql' max_file_size 1`,
 			output: `modump database t tables t1, t2 into a.sql max_file_size 1`,
 		},
+		{
+			input:  `select mo_show_visible_bin('a',0) as m`,
+			output: `select mo_show_visible_bin(a, 0) as m`,
+		},
+		//https://dev.mysql.com/doc/refman/8.0/en/window-functions-usage.html
+		{
+			input: `select avg(a) over () from t1`,
+		},
+		{
+			input: `select avg(a) over (partition by col1, col2) from t1`,
+		},
+		{
+			input: `select avg(a) over (partition by col1, col2 order by col3 desc) from t1`,
+		},
+		//https://dev.mysql.com/doc/refman/8.0/en/window-functions-frames.html
+		{
+			input: `select count(a) over (partition by col1, col2 order by col3 desc rows 1 preceding) from t1`,
+		},
+		{
+			input: `select sum(a) over (partition by col1, col2 order by col3 desc rows between 1 preceding and 20 following) from t1`,
+		},
+		{
+			input: `select count(a) over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1`,
+		},
+		{
+			input: "alter account if exists abc",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' open comment 'str'",
+		},
+		{
+			input: "alter account if exists abc open comment 'str'",
+		},
+		{
+			input: "alter account if exists abc comment 'str'",
+		},
+		{
+			input: "alter account if exists abc open",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' open",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' comment 'str'",
+		},
 	}
 )
 
 func TestValid(t *testing.T) {
+	ctx := context.TODO()
 	for _, tcase := range validSQL {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		ast, err := ParseOne(tcase.input)
+		ast, err := ParseOne(ctx, tcase.input)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -1695,11 +1782,12 @@ var (
 )
 
 func TestMulti(t *testing.T) {
+	ctx := context.TODO()
 	for _, tcase := range multiSQL {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		asts, err := Parse(tcase.input)
+		asts, err := Parse(ctx, tcase.input)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue

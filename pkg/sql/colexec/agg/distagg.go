@@ -160,10 +160,11 @@ func (a *UnaryDistAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector
 	if hasNull {
 		return nil
 	}
-	if vec.Typ.IsString() {
-		v = (any)(vec.GetBytes(sel)).(T1)
+	if vec.GetType().IsString() {
+		vs, area := vector.MustVarlenaRawData(vec)
+		v = (any)(vs[sel].GetByteSlice(area)).(T1)
 	} else {
-		v = vector.GetColumn[T1](vec)[sel]
+		v = vector.MustTCols[T1](vec)[sel]
 	}
 	a.srcs[i] = append(a.srcs[i], v)
 	a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], z, a.es[i], hasNull)
@@ -176,6 +177,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 
 	vec := vecs[0]
 	if vec.GetType().IsString() {
+		vs, area := vector.MustVarlenaRawData(vec)
 		for i := range os {
 			if vps[i] == 0 {
 				continue
@@ -189,14 +191,14 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 				if hasNull {
 					continue
 				}
-				v := (any)(vec.GetString(int64(i) + start)).(T1)
+				v := (any)(vs[int64(i)+start].GetByteSlice(area)).(T1)
 				a.srcs[j] = append(a.srcs[j], v)
 				a.vs[j], a.es[j] = a.fill(int64(j), v, a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 			}
 		}
 		return nil
 	}
-	vs := vector.GetColumn[T1](vec)
+	vs := vector.MustTCols[T1](vec)
 	for i := range os {
 		if vps[i] == 0 {
 			continue
@@ -225,6 +227,7 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vect
 	vec := vecs[0]
 	if vec.GetType().IsString() {
 		len := vec.Length()
+		vs, area := vector.MustVarlenaRawData(vec)
 		for j := 0; j < len; j++ {
 			if ok, err = a.maps[i].Insert(vecs, j); err != nil {
 				return err
@@ -234,14 +237,14 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vect
 				if hasNull {
 					continue
 				}
-				v := (any)(vec.GetBytes(int64(j))).(T1)
+				v := (any)(vs[j].GetByteSlice(area)).(T1)
 				a.srcs[i] = append(a.srcs[i], v)
 				a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
 			}
 		}
 		return nil
 	}
-	vs := vector.GetColumn[T1](vec)
+	vs := vector.MustTCols[T1](vec)
 	for j, v := range vs {
 		if ok, err = a.maps[i].Insert(vecs, j); err != nil {
 			return err
@@ -312,6 +315,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, v
 
 func (a *UnaryDistAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 	defer func() {
+		a.Free(m)
 		a.da = nil
 		a.vs = nil
 		a.es = nil
@@ -328,20 +332,37 @@ func (a *UnaryDistAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 			}
 		}
 	}
+	vec := vector.New(vector.FLAT, a.otyp)
+	vec.SetNulls(nsp)
+	a.vs = a.eval(a.vs)
 	if a.otyp.IsString() {
-		vec := vector.New(a.otyp)
-		vec.Nsp = nsp
-		a.vs = a.eval(a.vs)
 		vs := (any)(a.vs).([][]byte)
 		for _, v := range vs {
-			if err := vec.Append(v, false, m); err != nil {
+			if err := vector.AppendBytes(vec, v, false, m); err != nil {
 				vec.Free(m)
 				return nil, err
 			}
 		}
-		return vec, nil
+	} else {
+		for _, v := range a.vs {
+			if err := vector.Append(vec, v, false, m); err != nil {
+				vec.Free(m)
+				return nil, err
+			}
+		}
 	}
-	return vector.NewWithFixed(a.otyp, a.eval(a.vs), nsp, m), nil
+	return vec, nil
+}
+
+func (a *UnaryDistAgg[T1, T2]) WildAggReAlloc(m *mpool.MPool) error {
+	d, err := m.Alloc(len(a.da))
+	if err != nil {
+		return err
+	}
+	copy(d, a.da)
+	a.da = d
+	setDistAggValues[T1, T2](a, a.otyp)
+	return nil
 }
 
 func (a *UnaryDistAgg[T1, T2]) IsDistinct() bool {
@@ -389,7 +410,7 @@ func getDistAggStrVs(strUnaryDistAgg any) []string {
 	return result
 }
 
-func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
+func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte, m *mpool.MPool) error {
 	decode := new(EncodeAggDistinct[T1])
 	if err := types.Decode(data, decode); err != nil {
 		return err
@@ -400,10 +421,29 @@ func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	a.ityps = decode.InputType
 	a.otyp = decode.OutputType
 	a.es = decode.Es
-	a.da = decode.Da
+	data, err := m.Alloc(len(decode.Da))
+	if err != nil {
+		return err
+	}
+	copy(data, decode.Da)
+	a.da = data
 	setDistAggValues[T1, T2](a, a.otyp)
 	a.srcs = decode.Srcs
-
+	a.maps = make([]*hashmap.StrHashMap, len(a.srcs))
+	for i, src := range a.srcs {
+		mp, err := hashmap.NewStrMap(true, 0, 0, m)
+		if err != nil {
+			m.Free(data)
+			for j := 0; j < i; j++ {
+				a.maps[j].Free()
+			}
+			return err
+		}
+		a.maps[i] = mp
+		for _, v := range src {
+			mp.InsertValue(v)
+		}
+	}
 	return a.priv.UnmarshalBinary(decode.Private)
 }
 

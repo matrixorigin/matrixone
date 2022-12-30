@@ -16,8 +16,8 @@ package frontend
 
 import (
 	"context"
-
 	"sync/atomic"
+	"syscall"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -29,9 +29,11 @@ var initConnectionID uint32 = 1000
 
 // MOServer MatrixOne Server
 type MOServer struct {
-	addr string
-	app  goetty.NetApplication
-	rm   *RoutineManager
+	addr     string
+	uaddr    string
+	app      goetty.NetApplication
+	app_unix goetty.NetApplication
+	rm       *RoutineManager
 }
 
 func (mo *MOServer) Start() error {
@@ -42,16 +44,27 @@ func (mo *MOServer) Start() error {
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("Server Listening on : %s ", mo.addr)
+	if mo.app_unix != nil {
+		logutil.Infof("Server Listening on : %s ", mo.uaddr)
+	}
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
+
+	if mo.app_unix != nil {
+		mo.app_unix.Start()
+	}
 	return mo.app.Start()
 }
 
 func (mo *MOServer) Stop() error {
+	if mo.app_unix != nil {
+		mo.app_unix.Stop()
+		syscall.Unlink(mo.uaddr)
+	}
 	return mo.app.Stop()
 }
 
@@ -71,15 +84,29 @@ func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MO
 		goetty.WithAppSessionOptions(
 			goetty.WithSessionCodec(codec),
 			goetty.WithSessionLogger(logutil.GetGlobalLogger()),
+			goetty.WithSessionDisableCompactAfterGrow(),
 			goetty.WithSessionRWBUfferSize(1024*1024, 1024*1024)),
 		goetty.WithAppSessionAware(rm))
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
 
+	app_unix, err := goetty.NewApplication("unix://"+pu.SV.UAddr, rm.Handler,
+		goetty.WithAppLogger(logutil.GetGlobalLogger()),
+		goetty.WithAppSessionOptions(
+			goetty.WithSessionCodec(codec),
+			goetty.WithSessionLogger(logutil.GetGlobalLogger()),
+			goetty.WithSessionRWBUfferSize(1024*1024, 1024*1024)),
+		goetty.WithAppSessionAware(rm))
+	if err != nil {
+		logutil.Infof("start server on unix domain socket %v failed with %+v", pu.SV.UAddr, err)
+	}
+
 	return &MOServer{
-		addr: addr,
-		app:  app,
-		rm:   rm,
+		addr:     addr,
+		app:      app,
+		uaddr:    pu.SV.UAddr,
+		app_unix: app_unix,
+		rm:       rm,
 	}
 }

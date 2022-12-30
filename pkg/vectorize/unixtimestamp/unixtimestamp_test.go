@@ -41,7 +41,7 @@ func TestUnixTimestamp(t *testing.T) {
 		want[i] = goLcoalTime.Unix()
 	}
 
-	got := unixTimestamp(xs, rs)
+	got := unixTimestampToInt(xs, rs)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("unixtimestamp() want %v but got %v", want, got)
 	}

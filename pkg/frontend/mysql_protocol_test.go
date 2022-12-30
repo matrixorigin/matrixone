@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"math"
 	"reflect"
 	"strconv"
@@ -57,7 +58,7 @@ func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
 	pro := NewMysqlClientProtocol(nextConnectionID(), rs, 1024, tRM.pu.SV)
 	pro.SetSkipCheckUser(true)
 	exe := NewMysqlCmdExecutor()
-	routine := NewRoutine(context.TODO(), pro, exe, tRM.pu)
+	routine := NewRoutine(context.TODO(), pro, exe, tRM.pu.SV, rs)
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
@@ -759,8 +760,8 @@ func makeMysqlDateResultSet() *MysqlResultSet {
 
 	rs.AddColumn(mysqlCol)
 
-	d1, _ := types.ParseDate("1997-01-01")
-	d2, _ := types.ParseDate("2008-02-02")
+	d1, _ := types.ParseDateCast("1997-01-01")
+	d2, _ := types.ParseDateCast("2008-02-02")
 	var cases = []types.Date{
 		d1,
 		d2,
@@ -881,8 +882,8 @@ func make9ColumnsResultSet() *MysqlResultSet {
 		"Double",
 	}
 
-	d1, _ := types.ParseDate("1997-01-01")
-	d2, _ := types.ParseDate("2008-02-02")
+	d1, _ := types.ParseDateCast("1997-01-01")
+	d2, _ := types.ParseDateCast("2008-02-02")
 
 	dt1, _ := types.ParseDatetime("2018-04-28 10:21:15", 0)
 	dt2, _ := types.ParseDatetime("2018-04-28 10:21:15.123", 0)
@@ -1029,15 +1030,16 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	tRM.rwlock.RLock()
 	routine, ok := tRM.clients[rs]
 	tRM.rwlock.RUnlock()
+	ctx := context.TODO()
 
 	pro := routine.GetClientProtocol().(*MysqlProtocolImpl)
 	if !ok {
-		return moerr.NewInternalError("routine does not exist")
+		return moerr.NewInternalError(ctx, "routine does not exist")
 	}
 	packet, ok := msg.(*Packet)
 	pro.SetSequenceID(uint8(packet.SequenceID + 1))
 	if !ok {
-		return moerr.NewInternalError("message is not Packet")
+		return moerr.NewInternalError(ctx, "message is not Packet")
 	}
 
 	length := packet.Length
@@ -1046,12 +1048,12 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 		var err error
 		msg, err = pro.tcpConn.Read(goetty.ReadOptions{})
 		if err != nil {
-			return moerr.NewInternalError("read msg error")
+			return moerr.NewInternalError(ctx, "read msg error")
 		}
 
 		packet, ok = msg.(*Packet)
 		if !ok {
-			return moerr.NewInternalError("message is not Packet")
+			return moerr.NewInternalError(ctx, "message is not Packet")
 		}
 
 		pro.SetSequenceID(uint8(packet.SequenceID + 1))
@@ -1061,7 +1063,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 
 	// finish handshake process
 	if !pro.IsEstablished() {
-		_, err := pro.handleHandshake(payload)
+		_, err := pro.handleHandshake(ctx, payload)
 		if err != nil {
 			return err
 		}
@@ -1072,14 +1074,14 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	var req *Request
 	var resp *Response
 	req = pro.GetRequest(payload)
-	switch uint8(req.GetCmd()) {
+	switch req.GetCmd() {
 	case COM_QUIT:
 		resp = &Response{
 			category: OkResponse,
 			status:   0,
 			data:     nil,
 		}
-		if err := pro.SendResponse(resp); err != nil {
+		if err := pro.SendResponse(ctx, resp); err != nil {
 			fmt.Printf("send response failed. error:%v", err)
 			break
 		}
@@ -1234,7 +1236,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 			}
 		}
 
-		if err := pro.SendResponse(resp); err != nil {
+		if err := pro.SendResponse(ctx, resp); err != nil {
 			fmt.Printf("send response failed. error:%v", err)
 			break
 		}
@@ -1245,7 +1247,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 			int(COM_PING),
 			nil,
 		)
-		if err := pro.SendResponse(resp); err != nil {
+		if err := pro.SendResponse(ctx, resp); err != nil {
 			fmt.Printf("send response failed. error:%v", err)
 			break
 		}
@@ -1253,7 +1255,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	default:
 		fmt.Printf("unsupported command. 0x%x \n", req.cmd)
 	}
-	if uint8(req.cmd) == COM_QUIT {
+	if req.cmd == COM_QUIT {
 		return nil
 	}
 	return nil
@@ -1522,7 +1524,7 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 						x := value.(types.Datetime).String()
 						data = []byte(x)
 					default:
-						require.NoError(t, moerr.NewInternalError("unsupported type %v", col.ColumnType()))
+						require.NoError(t, moerr.NewInternalError(context.TODO(), "unsupported type %v", col.ColumnType()))
 					}
 					//check
 					ret := reflect.DeepEqual(data, val)
@@ -1544,11 +1546,13 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 }
 
 func Test_writePackets(t *testing.T) {
+	ctx := context.TODO()
 	convey.Convey("writepackets 16MB succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -1571,9 +1575,10 @@ func Test_writePackets(t *testing.T) {
 				return nil
 			} else {
 				cnt++
-				return moerr.NewInternalError("write and flush failed.")
+				return moerr.NewInternalError(ctx, "write and flush failed.")
 			}
 		}).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -1591,8 +1596,9 @@ func Test_writePackets(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(func(msg interface{}, opts goetty.WriteOptions) error {
-			return moerr.NewInternalError("write and flush failed.")
+			return moerr.NewInternalError(ctx, "write and flush failed.")
 		}).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -1612,6 +1618,7 @@ func Test_openpacket(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -1633,13 +1640,18 @@ func Test_openpacket(t *testing.T) {
 
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Flush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
-		sv, err := getSystemVariables("test/system_vars_config.toml")
+		pu, err := getParameterUnit("test/system_vars_config.toml", nil, nil)
 		if err != nil {
 			t.Error(err)
 		}
 
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+		// fill proto.ses
+		ses := NewSession(proto, nil, pu, nil, false)
+		ses.SetRequestContext(context.TODO())
+		proto.ses = ses
 
 		err = proto.fillPacket(make([]byte, MaxPayloadSize)...)
 		convey.So(err, convey.ShouldBeNil)
@@ -1656,13 +1668,18 @@ func Test_openpacket(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
-		sv, err := getSystemVariables("test/system_vars_config.toml")
+		pu, err := getParameterUnit("test/system_vars_config.toml", nil, nil)
 		if err != nil {
 			t.Error(err)
 		}
 
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+		// fill proto.ses
+		ses := NewSession(proto, nil, pu, nil, false)
+		ses.SetRequestContext(context.TODO())
+		proto.ses = ses
 
 		err = proto.openPacket()
 		convey.So(err, convey.ShouldBeNil)
@@ -1679,6 +1696,7 @@ func Test_openpacket(t *testing.T) {
 
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Flush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -1776,13 +1794,15 @@ func Test_openpacket(t *testing.T) {
 }
 
 func TestSendPrepareResponse(t *testing.T) {
-	convey.Convey("send prepare response succ", t, func() {
+	ctx := context.TODO()
+	convey.Convey("send Prepare response succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -1792,11 +1812,12 @@ func TestSendPrepareResponse(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?, 1")
-		stmts, err := mysql.Parse(st.Sql)
+		stmts, err := mysql.Parse(ctx, st.Sql)
 		if err != nil {
 			t.Error(err)
 		}
-		preparePlan, err := buildPlan(context.TODO(), nil, nil, st)
+		compCtx := plan.NewEmptyCompilerContext()
+		preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
 		if err != nil {
 			t.Error(err)
 		}
@@ -1805,18 +1826,19 @@ func TestSendPrepareResponse(t *testing.T) {
 			PreparePlan: preparePlan,
 			PrepareStmt: stmts[0],
 		}
-		err = proto.SendPrepareResponse(prepareStmt)
+		err = proto.SendPrepareResponse(ctx, prepareStmt)
 
 		convey.So(err, convey.ShouldBeNil)
 	})
 
-	convey.Convey("send prepare response error", t, func() {
+	convey.Convey("send Prepare response error", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -1826,11 +1848,12 @@ func TestSendPrepareResponse(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		st := tree.NewPrepareString("stmt1", "select ?, 1")
-		stmts, err := mysql.Parse(st.Sql)
+		stmts, err := mysql.Parse(ctx, st.Sql)
 		if err != nil {
 			t.Error(err)
 		}
-		preparePlan, err := buildPlan(context.TODO(), nil, nil, st)
+		compCtx := plan.NewEmptyCompilerContext()
+		preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
 		if err != nil {
 			t.Error(err)
 		}
@@ -1839,19 +1862,21 @@ func TestSendPrepareResponse(t *testing.T) {
 			PreparePlan: preparePlan,
 			PrepareStmt: stmts[0],
 		}
-		err = proto.SendPrepareResponse(prepareStmt)
+		err = proto.SendPrepareResponse(ctx, prepareStmt)
 
 		convey.So(err, convey.ShouldBeError)
 	})
 }
 
 func FuzzParseExecuteData(f *testing.F) {
+	ctx := context.TODO()
 	ctrl := gomock.NewController(f)
 	defer ctrl.Finish()
 	ioses := mock_frontend.NewMockIOSession(ctrl)
 
 	ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 	sv, err := getSystemVariables("test/system_vars_config.toml")
 	if err != nil {
@@ -1861,11 +1886,12 @@ func FuzzParseExecuteData(f *testing.F) {
 	proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 	st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?, 1")
-	stmts, err := mysql.Parse(st.Sql)
+	stmts, err := mysql.Parse(ctx, st.Sql)
 	if err != nil {
 		f.Error(err)
 	}
-	preparePlan, err := buildPlan(context.TODO(), nil, nil, st)
+	compCtx := plan.NewEmptyCompilerContext()
+	preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
 	if err != nil {
 		f.Error(err)
 	}
@@ -1905,11 +1931,12 @@ func FuzzParseExecuteData(f *testing.F) {
 	f.Add(testData)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		proto.ParseExecuteData(prepareStmt, data, 0)
+		proto.ParseExecuteData(ctx, prepareStmt, data, 0)
 	})
 }
 
 func TestParseExecuteData(t *testing.T) {
+	ctx := context.TODO()
 	convey.Convey("parseExecuteData succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -1917,6 +1944,7 @@ func TestParseExecuteData(t *testing.T) {
 
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -1926,11 +1954,12 @@ func TestParseExecuteData(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?, 1")
-		stmts, err := mysql.Parse(st.Sql)
+		stmts, err := mysql.Parse(ctx, st.Sql)
 		if err != nil {
 			t.Error(err)
 		}
-		preparePlan, err := buildPlan(context.TODO(), nil, nil, st)
+		compCtx := plan.NewEmptyCompilerContext()
+		preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
 		if err != nil {
 			t.Error(err)
 		}
@@ -1953,7 +1982,7 @@ func TestParseExecuteData(t *testing.T) {
 		testData = append(testData, 0)                              //is unsigned
 		testData = append(testData, 10)                             //tiny value
 
-		names, vars, err := proto.ParseExecuteData(prepareStmt, testData, 0)
+		names, vars, err := proto.ParseExecuteData(ctx, prepareStmt, testData, 0)
 		convey.So(err, convey.ShouldBeNil)
 		convey.ShouldEqual(len(names), 1)
 		convey.ShouldEqual(len(vars), 1)
@@ -1971,6 +2000,7 @@ func Test_resultset(t *testing.T) {
 
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -1986,7 +2016,7 @@ func Test_resultset(t *testing.T) {
 		}
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
@@ -2003,6 +2033,7 @@ func Test_resultset(t *testing.T) {
 
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -2018,7 +2049,7 @@ func Test_resultset(t *testing.T) {
 		}
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
@@ -2035,6 +2066,7 @@ func Test_resultset(t *testing.T) {
 
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -2050,13 +2082,13 @@ func Test_resultset(t *testing.T) {
 		}
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
 		res := make9ColumnsResultSet()
 
-		err = proto.sendResultSet(res, int(COM_QUERY), 0, 0)
+		err = proto.sendResultSet(ctx, res, int(COM_QUERY), 0, 0)
 		convey.So(err, convey.ShouldBeNil)
 
 		err = proto.SendResultSetTextRow(res, 0)
@@ -2070,6 +2102,7 @@ func Test_resultset(t *testing.T) {
 
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -2085,9 +2118,9 @@ func Test_resultset(t *testing.T) {
 		}
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
-		ses.Cmd = int(COM_STMT_EXECUTE)
+		ses.cmd = COM_STMT_EXECUTE
 		proto.ses = ses
 
 		res := make9ColumnsResultSet()
@@ -2105,6 +2138,7 @@ func Test_send_packet(t *testing.T) {
 
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -2123,6 +2157,7 @@ func Test_send_packet(t *testing.T) {
 
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -2147,7 +2182,7 @@ func Test_analyse320resp(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
-
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2177,7 +2212,7 @@ func Test_analyse320resp(t *testing.T) {
 		data = append(data, []byte(dbName)...)
 		data = append(data, 0x0)
 
-		ok, resp320, err := proto.analyseHandshakeResponse320(data)
+		ok, resp320, err := proto.analyseHandshakeResponse320(context.TODO(), data)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 
@@ -2190,7 +2225,7 @@ func Test_analyse320resp(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
-
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2217,7 +2252,7 @@ func Test_analyse320resp(t *testing.T) {
 		}
 
 		for _, c := range kases {
-			ok, _, _ := proto.analyseHandshakeResponse320(c.data)
+			ok, _, _ := proto.analyseHandshakeResponse320(context.TODO(), c.data)
 			convey.So(ok, convey.ShouldEqual, c.res)
 		}
 	})
@@ -2228,7 +2263,7 @@ func Test_analyse41resp(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
-
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2262,7 +2297,7 @@ func Test_analyse41resp(t *testing.T) {
 		data = append(data, []byte(dbName)...)
 		data = append(data, 0x0)
 
-		ok, resp41, err := proto.analyseHandshakeResponse41(data)
+		ok, resp41, err := proto.analyseHandshakeResponse41(context.TODO(), data)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 
@@ -2277,6 +2312,8 @@ func Test_analyse41resp(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().Read(gomock.Any()).Return(new(Packet), nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2364,18 +2401,20 @@ func Test_analyse41resp(t *testing.T) {
 		}
 
 		for _, c := range kases {
-			ok, _, _ := proto.analyseHandshakeResponse41(c.data)
+			ok, _, _ := proto.analyseHandshakeResponse41(context.TODO(), c.data)
 			convey.So(ok, convey.ShouldEqual, c.res)
 		}
 	})
 }
 
 func Test_handleHandshake(t *testing.T) {
+	ctx := context.TODO()
 	convey.Convey("handleHandshake succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		var IO IOPackageImpl
 		var SV = &config.FrontendParameters{}
@@ -2384,15 +2423,15 @@ func Test_handleHandshake(t *testing.T) {
 		mp.tcpConn = ioses
 		mp.SetSkipCheckUser(true)
 		payload := []byte{'a'}
-		_, err := mp.handleHandshake(payload)
+		_, err := mp.handleHandshake(ctx, payload)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		payload = append(payload, []byte{'b', 'c'}...)
-		_, err = mp.handleHandshake(payload)
+		_, err = mp.handleHandshake(ctx, payload)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		payload = append(payload, []byte{'c', 'd', 0}...)
-		_, err = mp.handleHandshake(payload)
+		_, err = mp.handleHandshake(ctx, payload)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -2402,10 +2441,12 @@ func Test_handleHandshake_Recover(t *testing.T) {
 	count := 10000
 	maxLen := 0
 
+	ctx := context.TODO()
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ioses := mock_frontend.NewMockIOSession(ctrl)
 	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 	convey.Convey("handleHandshake succ", t, func() {
 		var IO IOPackageImpl
@@ -2417,14 +2458,14 @@ func Test_handleHandshake_Recover(t *testing.T) {
 		var payload []byte
 		for i := 0; i < count; i++ {
 			f.Fuzz(&payload)
-			_, _ = mp.handleHandshake(payload)
+			_, _ = mp.handleHandshake(ctx, payload)
 			maxLen = Max(maxLen, len(payload))
 		}
 		maxLen = 0
 		var payload2 string
 		for i := 0; i < count; i++ {
 			f.Fuzz(&payload2)
-			_, _ = mp.handleHandshake([]byte(payload2))
+			_, _ = mp.handleHandshake(ctx, []byte(payload2))
 			maxLen = Max(maxLen, len(payload2))
 		}
 	})

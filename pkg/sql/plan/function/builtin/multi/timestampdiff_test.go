@@ -148,7 +148,7 @@ func TestDateDiff(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, date.Col.([]int64)[0])
+			require.Equal(t, c.want, vector.MustTCols[int64](date)[0])
 		})
 	}
 }
@@ -159,9 +159,10 @@ func makeTimeStampDiffVectors(firstStr, secondStr, unit string, mp *mpool.MPool)
 	firstDate, _ := types.ParseDatetime(firstStr, 0)
 	secondDate, _ := types.ParseDatetime(secondStr, 0)
 
-	vec[1] = vector.NewConstFixed(types.T_datetime.ToType(), 1, firstDate, mp)
-	vec[2] = vector.NewConstFixed(types.T_datetime.ToType(), 1, secondDate, mp)
-	vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, unit, mp)
+	vec[1] = vector.New(vector.CONSTANT, types.T_datetime.ToType())
+	vec[2] = vector.New(vector.CONSTANT, types.T_datetime.ToType())
+	vec[0] = vector.New(vector.CONSTANT, types.T_varchar.ToType())
+	vector.AppendString(vec[0], unit, unit == "", mp)
 	return vec
 }
 
@@ -171,8 +172,9 @@ func makeTimeStampDiffReverseVectors(firstStr, secondStr, unit string, mp *mpool
 	firstDate, _ := types.ParseDatetime(firstStr, 0)
 	secondDate, _ := types.ParseDatetime(secondStr, 0)
 
-	vec[1] = vector.NewConstFixed(types.T_datetime.ToType(), 1, secondDate, mp)
-	vec[2] = vector.NewConstFixed(types.T_datetime.ToType(), 1, firstDate, mp)
-	vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, unit, mp)
+	vec[1] = vector.New(vector.CONSTANT, types.T_datetime.ToType())
+	vec[2] = vector.New(vector.CONSTANT, types.T_datetime.ToType())
+	vec[0] = vector.New(vector.CONSTANT, types.T_varchar.ToType())
+	vector.AppendString(vec[0], unit, unit == "", mp)
 	return vec
 }

@@ -32,14 +32,30 @@ type BfReader struct {
 	bfFacotry evictable.EvictableNodeFactory
 }
 
-func newBfReader(mgr base.INodeManager, typ types.Type, id common.ID, fs *objectio.ObjectFS, col uint16, metaloc string) *BfReader {
+func newBfReader(
+	id *common.ID,
+	typ types.Type,
+	metaloc string,
+	mgr base.INodeManager,
+	fs *objectio.ObjectFS,
+) *BfReader {
 	metaKey := evictable.EncodeColMetaKey(id.Idx, metaloc)
 	bfKey := evictable.EncodeColBfKey(id.Idx, metaloc)
 
 	return &BfReader{
-		mgr:       mgr,
-		bfKey:     bfKey,
-		bfFacotry: func() (base.INode, error) { return evictable.NewBfNode(mgr, bfKey, metaKey, fs, col, metaloc, typ) },
+		mgr:   mgr,
+		bfKey: bfKey,
+		bfFacotry: func() (base.INode, error) {
+			return evictable.NewBfNode(
+				id.Idx,
+				typ,
+				metaloc,
+				bfKey,
+				metaKey,
+				mgr,
+				fs,
+			)
+		},
 	}
 }
 
@@ -134,7 +150,7 @@ func (writer *BFWriter) AddValues(values containers.Vector) error {
 		return nil
 	}
 	if writer.data.GetType() != values.GetType() {
-		return moerr.NewInternalError("wrong type")
+		return moerr.NewInternalErrorNoCtx("wrong type")
 	}
 	writer.data.Extend(values)
 	return nil

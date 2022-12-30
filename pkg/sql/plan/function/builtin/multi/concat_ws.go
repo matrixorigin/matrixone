@@ -24,19 +24,19 @@ import (
 
 // todo(broccoli): revise this, maybe rewrite this? at least clean up the logic
 func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
-	if vectors[0].IsScalar() {
-		if vectors[0].ConstVectorIsNull() {
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
+	if vectors[0].IsConst() {
+		if vectors[0].IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		vectorIsConst := make([]bool, 0)
 		inputCleaned := make([]*vector.Vector, 0) // no NULL const vectors
 		AllConst := true
 		for i := 1; i < len(vectors); i++ {
-			if vectors[i].IsScalarNull() {
+			if vectors[i].IsConstNull() {
 				continue
 			}
-			if vectors[i].IsScalar() {
+			if vectors[i].IsConst() {
 				vectorIsConst = append(vectorIsConst, true)
 			} else {
 				vectorIsConst = append(vectorIsConst, false)
@@ -44,7 +44,7 @@ func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 			}
 			inputCleaned = append(inputCleaned, vectors[i])
 		}
-		separator := vectors[0].GetString(0)
+		separator := vectors[0].String()
 		if AllConst {
 			return concatWsWithConstSeparatorAllConst(inputCleaned, separator, proc.Mp())
 		}
@@ -54,10 +54,10 @@ func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		inputCleaned := make([]*vector.Vector, 0) // no NULL const vectors
 		AllConst := true
 		for i := 1; i < len(vectors); i++ {
-			if vectors[i].IsScalarNull() {
+			if vectors[i].IsConstNull() {
 				continue
 			}
-			if vectors[i].IsScalar() {
+			if vectors[i].IsConst() {
 				vectorIsConst = append(vectorIsConst, true)
 			} else {
 				vectorIsConst = append(vectorIsConst, false)
@@ -77,7 +77,7 @@ func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 func concatWs(inputCleaned []*vector.Vector, separator *vector.Vector, vectorIsConst []bool, proc *process.Process) (*vector.Vector, error) {
 	separators := vector.MustStrCols(separator)
 	length := len(separators)
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	resultNsp := new(nulls.Nulls)
 	resultValues := make([]string, length)
 	for i := 0; i < length; i++ {
@@ -88,30 +88,31 @@ func concatWs(inputCleaned []*vector.Vector, separator *vector.Vector, vectorIsC
 				if len(resultValues[i]) > 0 {
 					resultValues[i] += separators[i]
 				}
-				resultValues[i] += inputCleaned[j].GetString(0)
+				resultValues[i] += inputCleaned[j].String()
 			} else {
-				if nulls.Contains(inputCleaned[j].Nsp, uint64(i)) {
+				if nulls.Contains(inputCleaned[j].GetNulls(), uint64(i)) {
 					continue
 				}
 				allNull = false
 				if len(resultValues[i]) > 0 {
 					resultValues[i] += separators[i]
 				}
-				resultValues[i] += inputCleaned[j].GetString(int64(i))
+				resultValues[i] += inputCleaned[j].String()
 			}
 		}
 		if allNull {
 			nulls.Add(resultNsp, uint64(i))
 		}
 	}
-	resultVector := vector.NewWithStrings(resultType, resultValues, resultNsp, proc.Mp())
+	resultVector := vector.New(vector.FLAT, resultType)
+	vector.AppendStringList(resultVector, resultValues, nil, proc.Mp())
 	return resultVector, nil
 }
 
 func concatWsAllConst(inputCleaned []*vector.Vector, separator *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	separators := vector.MustStrCols(separator)
 	length := len(separators)
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	resultNsp := new(nulls.Nulls)
 	resultValues := make([]string, length)
 	for i := 0; i < length; i++ {
@@ -121,29 +122,32 @@ func concatWsAllConst(inputCleaned []*vector.Vector, separator *vector.Vector, p
 				resultValues[i] += separators[i]
 			}
 			allNull = false
-			resultValues[i] += inputCleaned[j].GetString(0)
+			resultValues[i] += inputCleaned[j].String()
 		}
 		if allNull { // this check is redundant
 			nulls.Add(resultNsp, uint64(i))
 		}
 	}
-	resultVector := vector.NewWithStrings(resultType, resultValues, resultNsp, proc.Mp())
+	resultVector := vector.New(vector.FLAT, resultType)
+	vector.AppendStringList(resultVector, resultValues, nil, proc.Mp())
 	return resultVector, nil
 }
 
 // the inputs are guaranteed to be scalar non-NULL
 func concatWsWithConstSeparatorAllConst(inputCleaned []*vector.Vector, separator string, mp *mpool.MPool) (*vector.Vector, error) {
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	res := ""
 	for i := range inputCleaned {
-		res = res + inputCleaned[i].GetString(0)
+		res = res + inputCleaned[i].String()
 		if i+1 == len(inputCleaned) {
 			break
 		} else {
 			res += separator
 		}
 	}
-	return vector.NewConstString(resultType, 1, res, mp), nil
+	vec := vector.New(vector.CONSTANT, resultType)
+	vector.AppendString(vec, res, res == "", mp)
+	return vec, nil
 }
 
 // inputCleaned does not have NULL const
@@ -161,7 +165,7 @@ func concatWsWithConstSeparator(inputCleaned []*vector.Vector, separator string,
 		}
 	}
 
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	resultNsp := new(nulls.Nulls)
 	resultValues := make([]string, length)
 
@@ -169,26 +173,27 @@ func concatWsWithConstSeparator(inputCleaned []*vector.Vector, separator string,
 		allNull := true
 		for j := range inputCleaned {
 			if vectorIsConst[j] {
-				if j > 0 && !nulls.Contains(inputCleaned[j-1].Nsp, uint64(i)) {
+				if j > 0 && !nulls.Contains(inputCleaned[j-1].GetNulls(), uint64(i)) {
 					resultValues[i] += separator
 				}
 				allNull = false
-				resultValues[i] += inputCleaned[j].GetString(0)
+				resultValues[i] += inputCleaned[j].String()
 			} else {
-				if nulls.Contains(inputCleaned[j].Nsp, uint64(i)) {
+				if nulls.Contains(inputCleaned[j].GetNulls(), uint64(i)) {
 					continue
 				}
-				if j > 0 && !nulls.Contains(inputCleaned[j-1].Nsp, uint64(i)) {
+				if j > 0 && !nulls.Contains(inputCleaned[j-1].GetNulls(), uint64(i)) {
 					resultValues[i] += separator
 				}
 				allNull = false
-				resultValues[i] += inputCleaned[j].GetString(int64(i))
+				resultValues[i] += inputCleaned[j].String()
 			}
 		}
 		if allNull {
 			nulls.Add(resultNsp, uint64(i))
 		}
 	}
-	resultVector := vector.NewWithStrings(resultType, resultValues, resultNsp, proc.Mp())
+	resultVector := vector.New(vector.FLAT, resultType)
+	vector.AppendStringList(resultVector, resultValues, nil, proc.Mp())
 	return resultVector, nil
 }

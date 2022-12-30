@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -34,10 +33,9 @@ func txnBindAccessInfoFromCtx(txn txnif.AsyncTxn, ctx context.Context) {
 		return
 	}
 	tid, okt := ctx.Value(defines.TenantIDKey{}).(uint32)
-	uid, oku := ctx.Value(defines.UserIDKey{}).(uint32)
-	rid, okr := ctx.Value(defines.RoleIDKey{}).(uint32)
-	logutil.Debugf("try set %X txn access info to t%d(%v) u%d(%v) r%d(%v), ", txn.GetID(), tid, okt, uid, oku, rid, okr)
-	if okt { // TODO: tenantID is required, or all need to be ok?
+	uid, _ := ctx.Value(defines.UserIDKey{}).(uint32)
+	rid, _ := ctx.Value(defines.RoleIDKey{}).(uint32)
+	if okt {
 		txn.BindAccessInfo(tid, uid, rid)
 	}
 }
@@ -102,15 +100,15 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		defs = append(defs, viewDef)
 	}
 
-	if len(schema.IndexInfos) != 0 {
-		indexDef := new(engine.ComputeIndexDef)
-		indexDef.Fields = make([][]string, 0)
-		for _, indexInfo := range schema.IndexInfos {
-			indexDef.IndexNames = append(indexDef.IndexNames, indexInfo.Name)
-			indexDef.TableNames = append(indexDef.TableNames, indexInfo.TableName)
-			indexDef.Uniques = append(indexDef.Uniques, indexInfo.Unique)
-			indexDef.Fields = append(indexDef.Fields, indexInfo.Field)
-		}
+	if schema.UniqueIndex != "" {
+		indexDef := new(engine.UniqueIndexDef)
+		indexDef.UniqueIndex = schema.UniqueIndex
+		defs = append(defs, indexDef)
+	}
+
+	if schema.SecondaryIndex != "" {
+		indexDef := new(engine.SecondaryIndexDef)
+		indexDef.SecondaryIndex = schema.SecondaryIndex
 		defs = append(defs, indexDef)
 	}
 
@@ -153,6 +151,7 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 					OriginString: col.OnUpdate.OriginString,
 				},
 				AutoIncrement: col.IsAutoIncrement(),
+				ClusterBy:     col.ClusterBy,
 			},
 		}
 		defs = append(defs, def)
@@ -223,15 +222,11 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 		case *engine.ViewDef:
 			schema.View = defVal.View
 
-		case *engine.ComputeIndexDef:
-			for i := range defVal.IndexNames {
-				schema.IndexInfos = append(schema.IndexInfos, &catalog.ComputeIndexInfo{
-					Name:      defVal.IndexNames[i],
-					TableName: defVal.TableNames[i],
-					Unique:    defVal.Uniques[i],
-					Field:     defVal.Fields[i],
-				})
-			}
+		case *engine.UniqueIndexDef:
+			schema.UniqueIndex = defVal.UniqueIndex
+
+		case *engine.SecondaryIndexDef:
+			schema.SecondaryIndex = defVal.SecondaryIndex
 
 		default:
 			// We will not deal with other cases for the time being
@@ -254,7 +249,7 @@ func HandleDefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Sc
 		case *engine.AttributeDef:
 			if defVal.Attr.Primary {
 				if have_one {
-					panic(moerr.NewInternalError("%s more one pk", name))
+					panic(moerr.NewInternalErrorNoCtx("%s more one pk", name))
 				} else {
 					have_one = true
 				}

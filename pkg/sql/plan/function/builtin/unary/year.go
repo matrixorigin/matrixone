@@ -25,15 +25,15 @@ func DateToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
 	inputValues := vector.MustTCols[types.Date](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultValues := make([]int64, 1)
 		DateToYearPlan2(inputValues, resultValues)
-		return vector.NewConstFixed(resultType, 1, resultValues[0], proc.Mp()), nil
+		return vector.New(vector.CONSTANT, resultType, 1, resultValues[0], proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -51,8 +51,8 @@ func DatetimeToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
@@ -61,7 +61,7 @@ func DatetimeToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -76,14 +76,14 @@ func DateStringToYear(vectors []*vector.Vector, proc *process.Process) (*vector.
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
 	inputValues := vector.MustStrCols(inputVector)
 	if inputVector.IsConst() {
-		if inputVector.ConstVectorIsNull() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultValues := make([]int64, 1)
 		DateStringToYearPlan2(inputValues, nil, resultValues)
-		return vector.NewConstFixed(resultType, 1, resultValues[0], proc.Mp()), nil
+		return vector.New(vector.CONSTANT, resultType, 1, resultValues[0], proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

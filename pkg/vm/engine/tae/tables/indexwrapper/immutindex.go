@@ -17,9 +17,11 @@ package indexwrapper
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -37,8 +39,8 @@ func (index *immutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int) (er
 	panic("not support")
 }
 func (index *immutableIndex) GetActiveRow(key any) ([]uint32, error) { panic("not support") }
-func (index *immutableIndex) String() string                         { panic("not support") }
-func (index *immutableIndex) Dedup(key any) (err error) {
+func (index *immutableIndex) String() string                         { return "immutable" }
+func (index *immutableIndex) Dedup(key any, _ func(row uint32) error) (err error) {
 	exist := index.zmReader.Contains(key)
 	// 1. if not in [min, max], key is definitely not found
 	if !exist {
@@ -57,18 +59,25 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 		}
 	}
 
-	err = moerr.NewTAEPossibleDuplicate()
+	err = moerr.GetOkExpectedPossibleDup()
 	return
 }
 
-func (index *immutableIndex) BatchDedup(keys containers.Vector, skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error) {
-	keyselects, exist := index.zmReader.ContainsAny(keys)
+func (index *immutableIndex) BatchDedup(
+	keys containers.Vector,
+	skipfn func(row uint32) (err error),
+) (keyselects *roaring.Bitmap, err error) {
+	if keys.Length() == 1 {
+		err = index.Dedup(keys.Get(0), skipfn)
+		return
+	}
+	exist := index.zmReader.FastContainsAny(keys)
 	// 1. all keys are not in [min, max]. definitely not
 	if !exist {
 		return
 	}
 	if index.bfReader != nil {
-		exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys, keyselects)
+		exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys, nil)
 		// 2. check bloomfilter has some unknown error. return err
 		if err != nil {
 			err = TranslateError(err)
@@ -79,7 +88,7 @@ func (index *immutableIndex) BatchDedup(keys containers.Vector, skipfn func(row 
 			return
 		}
 	}
-	err = moerr.NewTAEPossibleDuplicate()
+	err = moerr.GetOkExpectedPossibleDup()
 	return
 }
 
@@ -100,15 +109,29 @@ func (index *immutableIndex) Destroy() (err error) {
 	return
 }
 
-func (index *immutableIndex) ReadFrom(blk data.Block, colDef *catalog.ColDef, idx uint16) (err error) {
-	entry := blk.GetMeta().(*catalog.BlockEntry)
-	metaLoc := entry.GetMetaLoc()
-	id := entry.AsCommonID()
+func (index *immutableIndex) ReadFrom(
+	bufMgr base.INodeManager,
+	fs *objectio.ObjectFS,
+	id *common.ID,
+	location string,
+	colDef *catalog.ColDef) (err error) {
 	id.Idx = uint16(colDef.Idx)
-	index.zmReader = newZmReader(blk.GetBufMgr(), colDef.Type, *id, blk.GetFs(), idx, metaLoc)
+	index.zmReader = newZmReader(
+		bufMgr,
+		colDef.Type,
+		*id,
+		fs,
+		id.Idx,
+		location)
 
 	if colDef.IsPrimary() {
-		index.bfReader = newBfReader(blk.GetBufMgr(), colDef.Type, *id, blk.GetFs(), idx, metaLoc)
+		index.bfReader = newBfReader(
+			id,
+			colDef.Type,
+			location,
+			bufMgr,
+			fs,
+		)
 	}
 	return
 }

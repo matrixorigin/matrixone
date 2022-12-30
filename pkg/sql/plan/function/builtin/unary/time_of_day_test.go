@@ -416,7 +416,7 @@ func BenchmarkDatetimeToHour(b *testing.B) {
 			bat := newBatch(t, tc.flags, tc.types, tc.proc, Rows)
 			vec, err := DatetimeToHour(bat.Vecs, tc.proc)
 			require.NoError(t, err)
-			bat.Clean(tc.proc.Mp())
+			bat.Free(tc.proc.Mp())
 			vec.Free(tc.proc.Mp())
 			require.Equal(t, int64(0), tc.proc.Mp().Stats().NumCurrBytes.Load())
 		}

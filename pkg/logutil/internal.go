@@ -15,6 +15,7 @@
 package logutil
 
 import (
+	"context"
 	"os"
 	"sync/atomic"
 	"time"
@@ -33,7 +34,7 @@ func SetupMOLogger(conf *LogConfig) {
 		panic(err)
 	}
 	replaceGlobalLogger(logger)
-	Debugf("MO logger init, level=%s, log file=%s", conf.Level, conf.Filename)
+	Infof("MO logger init, level=%s, log file=%s", conf.Level, conf.Filename)
 }
 
 // initMOLogger initializes a zap Logger.
@@ -162,7 +163,7 @@ func getLoggerEncoder(format string) zapcore.Encoder {
 	case "console":
 		return zapcore.NewConsoleEncoder(encoderConfig)
 	default:
-		panic(moerr.NewInternalError("unsupported log format: %s", format))
+		panic(moerr.NewInternalError(context.Background(), "unsupported log format: %s", format))
 	}
 }
 

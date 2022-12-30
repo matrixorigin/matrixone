@@ -19,11 +19,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -109,7 +111,7 @@ func (ds *dnService) StartDNReplica(shard metadata.DNShard) error {
 	defer ds.Unlock()
 
 	if ds.status != ServiceStarted {
-		return moerr.NewNoService(ds.uuid)
+		return moerr.NewNoServiceNoCtx(ds.uuid)
 	}
 
 	return ds.svc.StartDNReplica(shard)
@@ -120,7 +122,7 @@ func (ds *dnService) CloseDNReplica(shard metadata.DNShard) error {
 	defer ds.Unlock()
 
 	if ds.status != ServiceStarted {
-		return moerr.NewNoService(ds.uuid)
+		return moerr.NewNoServiceNoCtx(ds.uuid)
 	}
 
 	return ds.svc.CloseDNReplica(shard)
@@ -136,10 +138,11 @@ type dnOptions []dnservice.Option
 // newDNService initializes an instance of `DNService`.
 func newDNService(
 	cfg *dnservice.Config,
+	rt runtime.Runtime,
 	fs fileservice.FileService,
 	opts dnOptions,
 ) (DNService, error) {
-	svc, err := dnservice.NewService(cfg, fs, opts...)
+	svc, err := dnservice.NewService(cfg, rt, fs, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -160,8 +163,16 @@ func buildDNConfig(
 	}
 	cfg.DataDir = filepath.Join(opt.rootDataDir, cfg.UUID)
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
-	cfg.HAKeeper.HeatbeatDuration.Duration = opt.heartbeat.dn
+	cfg.HAKeeper.HeatbeatInterval.Duration = opt.heartbeat.dn
 	cfg.Txn.Storage.Backend = opt.storage.dnStorage
+	cfg.Txn.Storage.LogBackend = "logservice"
+
+	// FIXME: disable tae flush
+	cfg.Ckp.MinCount = 2000000
+	cfg.Ckp.FlushInterval.Duration = time.Second * 100000
+	cfg.Ckp.ScanInterval.Duration = time.Second * 100000
+	cfg.Ckp.IncrementalInterval.Duration = time.Second * 100000
+	cfg.Ckp.GlobalInterval.Duration = time.Second * 100000
 
 	// We need the filled version of configuration.
 	// It's necessary when building dnservice.Option.
@@ -206,6 +217,7 @@ func buildDNOptions(cfg *dnservice.Config, filter FilterFunc) dnOptions {
 		ctx = logservice.SetBackendOptions(ctx, morpc.WithBackendFilter(filter))
 
 		return logservice.NewClient(ctx, logservice.ClientConfig{
+			Tag:              "Test-DN",
 			ReadOnly:         false,
 			LogShardID:       shard.LogShardID,
 			DNReplicaID:      shard.ReplicaID,

@@ -15,13 +15,14 @@
 package binary
 
 import (
+	"strings"
+	"unicode"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
-	"unicode"
 )
 
 const (
@@ -35,17 +36,17 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	formatVector := vectors[1]
 
 	resultType := types.T_date.ToType()
-	if !formatVector.IsScalar() {
-		return nil, moerr.NewInvalidArg("to_date format", "not constant")
+	if !formatVector.IsConst() {
+		return nil, moerr.NewInvalidArgNoCtx("to_date format", "not constant")
 	}
-	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
+	if dateVector.IsConstNull() || formatVector.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 	// get the format string.
-	formatMask := formatVector.GetString(0)
+	formatMask := formatVector.String()
 
-	if dateVector.IsScalar() {
-		datestr := dateVector.GetString(0)
+	if dateVector.IsConst() {
+		datestr := dateVector.String()
 		ctx := make(map[string]int)
 		time := NewGeneralTime()
 		success := strToDate(time, datestr, formatMask, ctx)
@@ -64,12 +65,12 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	} else {
 		datestrs := vector.MustStrCols(dateVector)
 		rNsp := nulls.NewWithSize(len(datestrs))
-		resCol, err := CalcStrToDate(datestrs, formatMask, dateVector.Nsp, rNsp)
+		resCol, err := CalcStrToDate(datestrs, formatMask, dateVector.GetNulls(), rNsp)
 		if err != nil {
 			return nil, err
 		}
 		resultVector := vector.NewWithFixed[types.Date](resultType, resCol, rNsp, proc.Mp())
-		nulls.Set(resultVector.Nsp, dateVector.Nsp)
+		nulls.Set(resultVector.Nsp, dateVector.GetNulls())
 		return resultVector, nil
 	}
 }
@@ -80,17 +81,17 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	formatVector := vectors[1]
 
 	resultType := types.T_datetime.ToType()
-	if !formatVector.IsScalar() {
-		return nil, moerr.NewInvalidArg("to_date format", "not constant")
+	if !formatVector.IsConst() {
+		return nil, moerr.NewInvalidArgNoCtx("to_date format", "not constant")
 	}
-	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
+	if dateVector.IsConstNull() || formatVector.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 	// get the format string.
-	formatMask := formatVector.GetString(0)
+	formatMask := formatVector.String()
 
-	if dateVector.IsScalar() {
-		datetimestr := dateVector.GetString(0)
+	if dateVector.IsConst() {
+		datetimestr := dateVector.String()
 		ctx := make(map[string]int)
 		time := NewGeneralTime()
 		success := strToDate(time, datetimestr, formatMask, ctx)
@@ -109,12 +110,12 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	} else {
 		datetimestrs := vector.MustStrCols(dateVector)
 		rNsp := nulls.NewWithSize(len(datetimestrs))
-		resCol, err := CalcStrToDatetime(datetimestrs, formatMask, dateVector.Nsp, rNsp)
+		resCol, err := CalcStrToDatetime(datetimestrs, formatMask, dateVector.GetNulls(), rNsp)
 		if err != nil {
 			return nil, err
 		}
 		resultVector := vector.NewWithFixed[types.Datetime](resultType, resCol, nulls.NewWithSize(len(resCol)), proc.Mp())
-		nulls.Set(resultVector.Nsp, dateVector.Nsp)
+		nulls.Set(resultVector.Nsp, dateVector.GetNulls())
 		return resultVector, nil
 	}
 }
@@ -125,17 +126,17 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	formatVector := vectors[1]
 
 	resultType := types.T_time.ToType()
-	if !formatVector.IsScalar() {
-		return nil, moerr.NewInvalidArg("to_date format", "not constant")
+	if !formatVector.IsConst() {
+		return nil, moerr.NewInvalidArgNoCtx("to_date format", "not constant")
 	}
-	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
+	if dateVector.IsConstNull() || formatVector.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 	// get the format string.
-	formatMask := formatVector.GetString(0)
+	formatMask := formatVector.String()
 
-	if dateVector.IsScalar() {
-		timestr := dateVector.GetString(0)
+	if dateVector.IsConst() {
+		timestr := dateVector.String()
 
 		ctx := make(map[string]int)
 		time := NewGeneralTime()
@@ -145,7 +146,7 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 			return proc.AllocScalarNullVector(resultType), nil
 		} else {
 			if types.ValidTime(uint64(time.hour), uint64(time.minute), uint64(time.second)) {
-				resCol := types.FromTimeClock(false, int32(time.hour), time.minute, time.second, time.microsecond)
+				resCol := types.FromTimeClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
 				return vector.NewConstFixed[types.Time](resultType, 1, resCol, proc.Mp()), nil
 			} else {
 				// should be null
@@ -155,12 +156,12 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	} else {
 		timestrs := vector.MustStrCols(dateVector)
 		rNsp := nulls.NewWithSize(len(timestrs))
-		resCol, err := CalcStrToTime(timestrs, formatMask, dateVector.Nsp, rNsp)
+		resCol, err := CalcStrToTime(timestrs, formatMask, dateVector.GetNulls(), rNsp)
 		if err != nil {
 			return nil, err
 		}
 		resultVector := vector.NewWithFixed[types.Time](resultType, resCol, nulls.NewWithSize(len(resCol)), proc.Mp())
-		nulls.Set(resultVector.Nsp, dateVector.Nsp)
+		nulls.Set(resultVector.Nsp, dateVector.GetNulls())
 		return resultVector, nil
 	}
 }
@@ -226,7 +227,7 @@ func CalcStrToTime(timestrs []string, format string, ns *nulls.Nulls, rNsp *null
 			nulls.Add(rNsp, uint64(idx))
 		} else {
 			if types.ValidTime(uint64(time.hour), uint64(time.minute), uint64(time.second)) {
-				res[idx] = types.FromTimeClock(false, int32(time.hour), time.minute, time.second, time.microsecond)
+				res[idx] = types.FromTimeClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
 			} else {
 				// should be null
 				nulls.Add(rNsp, uint64(idx))
@@ -286,10 +287,10 @@ func strToDate(t *GeneralTime, date string, format string, ctx map[string]int) (
 func checkMysqlTime(t *GeneralTime, ctx map[string]int) error {
 	if valueAMorPm, ok := ctx["%p"]; ok {
 		if _, ok := ctx["%H"]; ok {
-			return moerr.NewInternalError("Truncated incorrect %-.64s value: '%-.128s'", "time", t)
+			return moerr.NewInternalErrorNoCtx("Truncated incorrect %-.64s value: '%-.128s'", "time", t)
 		}
 		if t.getHour() == 0 {
-			return moerr.NewInternalError("Truncated incorrect %-.64s value: '%-.128s'", "time", t)
+			return moerr.NewInternalErrorNoCtx("Truncated incorrect %-.64s value: '%-.128s'", "time", t)
 		}
 		if t.getHour() == 12 {
 			// 12 is a special hour.

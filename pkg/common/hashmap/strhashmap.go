@@ -15,8 +15,6 @@
 package hashmap
 
 import (
-	"unsafe"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -171,8 +169,7 @@ func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 }
 
 func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int) {
-	area := vec.GetArea()
-	vs := vector.MustTCols[types.Varlena](vec)
+	vs, area := vector.MustVarlenaRawData(vec)
 	if !vec.GetNulls().Any() {
 		for i := 0; i < n; i++ {
 			if m.hasNull {
@@ -203,7 +200,7 @@ func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int) {
 }
 
 func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, scale int32) {
-	data := unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), (n+start)*sz)
+	data := vec.GetRawData()[:(n+start)*sz]
 	if !vec.GetNulls().Any() {
 		for i := 0; i < n; i++ {
 			if m.hasNull {

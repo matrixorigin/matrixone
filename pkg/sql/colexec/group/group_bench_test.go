@@ -58,7 +58,7 @@ func initBenchIndex(values []string) (*index.LowCardinalityIndex, error) {
 	var err error
 	m := mpool.MustNewZero()
 	v := testutil.NewVector(len(values), types.T_varchar.ToType(), m, false, values)
-	idx, err := index.New(v.Typ, m)
+	idx, err := index.New(v.GetType(), m)
 	if err != nil {
 		return nil, err
 	}
@@ -133,9 +133,9 @@ func mockTimingCase(t *testing.T, metricMp map[string][]int64, pos int, idx *ind
 	// construct group data part
 	constructGroupDataStart := time.Now().UnixNano()
 	v := testutil.NewVector(len(benchGroupData), types.T_varchar.ToType(), tc.proc.Mp(), false, benchGroupData)
-	if idx != nil {
+	/*if idx != nil {
 		v.SetIndex(idx)
-	}
+	}*/
 	constructGroupDataEnd := time.Now().UnixNano()
 	metricMp["constructGroupDataCost"][pos] = constructGroupDataEnd - constructGroupDataStart
 
@@ -150,7 +150,7 @@ func mockTimingCase(t *testing.T, metricMp map[string][]int64, pos int, idx *ind
 	metricMp["groupbyCost"][pos] = groupbyEnd - groupbyStart
 
 	if tc.proc.Reg.InputBatch != nil {
-		tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+		tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 	}
 
 	totalEnd := time.Now().UnixNano()

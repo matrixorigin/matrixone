@@ -29,9 +29,9 @@ func RegularSubstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	resultType := types.T_varchar.ToType()
 
 	//maxLen
-	maxLen := vector.Length(vectors[0])
+	maxLen := vectors[0].Length()
 	for i := range vectors {
-		val := vector.Length(vectors[i])
+		val := vectors[i].Length()
 		if val > maxLen {
 			maxLen = val
 		}
@@ -59,7 +59,7 @@ func RegularSubstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		match_type = []string{"c"}
 	}
 
-	if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
+	if firstVector.IsConstNull() || secondVector.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 
@@ -67,7 +67,7 @@ func RegularSubstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	if err != nil {
 		return nil, err
 	}
-	err = regular.RegularSubstrWithArrays(firstValues, secondValues, pos, occ, match_type, firstVector.Nsp, secondVector.Nsp, resultVector, proc, maxLen)
+	err = regular.RegularSubstrWithArrays(firstValues, secondValues, pos, occ, match_type, firstVector.GetNulls(), secondVector.GetNulls(), resultVector, proc, maxLen)
 	if err != nil {
 		return nil, err
 	}

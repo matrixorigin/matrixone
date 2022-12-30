@@ -17,6 +17,7 @@ package batch
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -33,12 +34,14 @@ type batchTestCase struct {
 }
 
 var (
+	mp  *mpool.MPool
 	tcs []batchTestCase
 )
 
 func init() {
+	mp = mpool.MustNewZero()
 	tcs = []batchTestCase{
-		newTestCase([]types.Type{{Oid: types.T_int8}}),
+		newTestCase([]types.Type{types.New(types.T_int8, 0, 0, 0)}, mp),
 	}
 }
 
@@ -50,32 +53,35 @@ func TestBatch(t *testing.T) {
 		err = types.Decode(data, rbat)
 		require.NoError(t, err)
 		for i, vec := range rbat.Vecs {
-			require.Equal(t, tc.bat.Vecs[i].Col, vec.Col)
+			require.Equal(t, vector.MustTCols[int8](tc.bat.GetVector(int32(i))), vector.MustTCols[int8](vec))
 		}
+		tc.bat.Free(mp)
 	}
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func newTestCase(ts []types.Type) batchTestCase {
+func newTestCase(ts []types.Type, mp *mpool.MPool) batchTestCase {
 	return batchTestCase{
 		types: ts,
-		bat:   newBatch(ts, Rows),
+		bat:   newBatch(ts, Rows, mp),
 	}
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null
-func newBatch(ts []types.Type, rows int) *Batch {
+func newBatch(ts []types.Type, rows int, mp *mpool.MPool) *Batch {
 	bat := NewWithSize(len(ts))
-	bat.InitZsOne(rows)
+	bat.SetZs(rows, mp)
 	for i, typ := range ts {
 		switch typ.Oid {
 		case types.T_int8:
-			vec := vector.New(typ)
+			vec := vector.New(vector.FLAT, typ)
 			vs := make([]int8, Rows)
 			for j := range vs {
-				vs[j] = int8(j)
+				if err := vector.Append(vec, vs[j], false, mp); err != nil {
+					panic(err)
+				}
 			}
-			vec.Col = vs
-			bat.Vecs[i] = vec
+			bat.SetVector(int32(i), vec)
 		}
 	}
 	return bat

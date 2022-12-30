@@ -78,7 +78,7 @@ func initBenchIndex(values []string) (*index.LowCardinalityIndex, error) {
 	var err error
 	m := mpool.MustNewZero()
 	v := testutil.NewVector(len(values), types.T_varchar.ToType(), m, false, values)
-	idx, err := index.New(v.Typ, m)
+	idx, err := index.New(v.GetType(), m)
 	if err != nil {
 		return nil, err
 	}

@@ -78,7 +78,7 @@ func TestTop(t *testing.T) {
 		tc.proc.Reg.InputBatch = nil
 		_, _ = Call(0, tc.proc, tc.arg)
 		if tc.proc.Reg.InputBatch != nil {
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 		}
 		tc.proc.Reg.InputBatch = nil
 		_, _ = Call(0, tc.proc, tc.arg)
@@ -105,7 +105,7 @@ func BenchmarkTop(b *testing.B) {
 			tc.proc.Reg.InputBatch = nil
 			_, _ = Call(0, tc.proc, tc.arg)
 			if tc.proc.Reg.InputBatch != nil {
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+				tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 			}
 		}
 	}

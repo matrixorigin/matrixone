@@ -44,37 +44,30 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				ctr.state = End
-				return true, err
+				return false, err
 			}
 			ctr.state = Probe
+
 		case Probe:
+			var err error
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
-				if ctr.bat != nil {
-					ctr.bat.Clean(proc.Mp())
-				}
 				continue
 			}
 			if bat.Length() == 0 {
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				if err := ctr.emptyProbe(bat, ap, proc, anal); err != nil {
-					ctr.state = End
-					proc.SetInputBatch(nil)
-					return true, err
-				}
+				err = ctr.emptyProbe(bat, ap, proc, anal)
 			} else {
-				if err := ctr.probe(bat, ap, proc, anal); err != nil {
-					ctr.state = End
-					proc.SetInputBatch(nil)
-					return true, err
-				}
+				err = ctr.probe(bat, ap, proc, anal)
 			}
-			return false, nil
+			bat.Free(proc.Mp())
+			return false, err
+
 		default:
+			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -90,7 +83,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, pos := range ap.Result {
@@ -105,37 +97,38 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
+		rbat.Vecs[i] = vector.New(vector.FLAT, *bat.Vecs[pos].GetType())
 	}
 	count := bat.Length()
 	for i := 0; i < count; i++ {
 		matched := false
 		vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, proc, ap.Cond)
 		if err != nil {
+			rbat.Free(proc.Mp())
 			return err
 		}
-		bs := vec.Col.([]bool)
+		bs := vector.MustTCols[bool](vec)
 		for _, b := range bs {
 			if b {
 				matched = true
 				break
 			}
 		}
-		defer vec.Free(proc.Mp())
-		if !matched && !nulls.Any(vec.Nsp) {
+		if !matched && !nulls.Any(vec.GetNulls()) {
 			for k, pos := range ap.Result {
-				if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[pos], int64(i), proc.Mp()); err != nil {
-					rbat.Clean(proc.Mp())
+				if err := rbat.Vecs[k].UnionOne(bat.Vecs[pos], int64(i), rbat.Vecs[k].Length() == 0, proc.Mp()); err != nil {
+					rbat.Free(proc.Mp())
+					vec.Free(proc.Mp())
 					return err
 				}
 			}
 			rbat.Zs = append(rbat.Zs, bat.Zs[i])
 		}
+		vec.Free(proc.Mp())
 	}
 	rbat.ExpandNulls()
 	anal.Output(rbat)

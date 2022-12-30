@@ -15,6 +15,7 @@
 package fault
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -23,83 +24,84 @@ import (
 func TestCount(t *testing.T) {
 	var ok bool
 	var cnt int64
+	var ctx = context.TODO()
 
 	Enable()
-	AddFaultPoint("a", ":5::", "return", 0, "")
-	AddFaultPoint("aa", ":::", "getcount", 0, "a")
-	_, ok = TriggerFault("a")
+	AddFaultPoint(ctx, "a", ":5::", "return", 0, "")
+	AddFaultPoint(ctx, "aa", ":::", "getcount", 0, "a")
+	_, _, ok = TriggerFault("a")
 	require.Equal(t, true, ok)
-	_, ok = TriggerFault("a")
+	_, _, ok = TriggerFault("a")
 	require.Equal(t, true, ok)
-	_, ok = TriggerFault("a")
+	_, _, ok = TriggerFault("a")
 	require.Equal(t, true, ok)
-	cnt, ok = TriggerFault("aa")
+	cnt, _, ok = TriggerFault("aa")
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(3), cnt)
 
-	_, ok = TriggerFault("a")
+	_, _, ok = TriggerFault("a")
 	require.Equal(t, true, ok)
-	cnt, ok = TriggerFault("aa")
+	cnt, _, ok = TriggerFault("aa")
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(4), cnt)
 
-	_, ok = TriggerFault("a")
+	_, _, ok = TriggerFault("a")
 	require.Equal(t, true, ok)
-	cnt, ok = TriggerFault("aa")
+	cnt, _, ok = TriggerFault("aa")
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(5), cnt)
 
-	_, ok = TriggerFault("a")
+	_, _, ok = TriggerFault("a")
 	require.Equal(t, false, ok)
-	cnt, ok = TriggerFault("aa")
+	cnt, _, ok = TriggerFault("aa")
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(6), cnt)
 
-	RemoveFaultPoint("a")
-	RemoveFaultPoint("aa")
+	RemoveFaultPoint(ctx, "a")
+	RemoveFaultPoint(ctx, "aa")
 
-	AddFaultPoint("a", "3:8:2:", "return", 0, "")
-	AddFaultPoint("aa", ":::", "getcount", 0, "a")
-	_, ok = TriggerFault("a")
+	AddFaultPoint(ctx, "a", "3:8:2:", "return", 0, "")
+	AddFaultPoint(ctx, "aa", ":::", "getcount", 0, "a")
+	_, _, ok = TriggerFault("a")
 	require.Equal(t, false, ok)
-	cnt, ok = TriggerFault("aa")
+	cnt, _, ok = TriggerFault("aa")
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(1), cnt)
 
-	_, ok = TriggerFault("a")
+	_, _, ok = TriggerFault("a")
 	require.Equal(t, false, ok)
 
-	_, ok = TriggerFault("a")
+	_, _, ok = TriggerFault("a")
 	require.Equal(t, true, ok)
-	cnt, _ = TriggerFault("aa")
+	cnt, _, _ = TriggerFault("aa")
 	require.Equal(t, int64(3), cnt)
 
-	_, ok = TriggerFault("a")
+	_, _, ok = TriggerFault("a")
 	require.Equal(t, false, ok)
-	cnt, _ = TriggerFault("aa")
+	cnt, _, _ = TriggerFault("aa")
 	require.Equal(t, int64(4), cnt)
 
 	// 5
-	_, ok = TriggerFault("a")
+	_, _, ok = TriggerFault("a")
 	require.Equal(t, true, ok)
 
 	// 6
-	_, ok = TriggerFault("a")
+	_, _, ok = TriggerFault("a")
 	require.Equal(t, false, ok)
 
 	// 7
-	_, ok = TriggerFault("a")
+	_, _, ok = TriggerFault("a")
 	require.Equal(t, true, ok)
 
 	//8
-	_, ok = TriggerFault("a")
+	_, _, ok = TriggerFault("a")
 	require.Equal(t, false, ok)
 
 	//9
-	_, ok = TriggerFault("a")
+	_, _, ok = TriggerFault("a")
 	require.Equal(t, false, ok)
 
-	cnt, ok = TriggerFault("aa")
+	cnt, _, ok = TriggerFault("aa")
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(9), cnt)
 	Disable()
@@ -107,22 +109,36 @@ func TestCount(t *testing.T) {
 }
 
 func wait(t *testing.T) {
-	_, ok := TriggerFault("w")
+	_, _, ok := TriggerFault("w")
 	require.Equal(t, true, ok)
+}
+
+func TestEcho(t *testing.T) {
+	Enable()
+
+	AddFaultPoint(context.TODO(), "e", ":::", "echo", 21, "guns")
+
+	i, s, ok := TriggerFault("e")
+	require.True(t, ok)
+	require.Equal(t, 21, int(i))
+	require.Equal(t, "guns", s)
+
+	Disable()
 }
 
 func TestWait(t *testing.T) {
 	var ok bool
 	var cnt int64
+	var ctx = context.Background()
 
 	Enable()
 
-	AddFaultPoint("w", ":::", "wait", 0, "")
-	AddFaultPoint("n1", ":::", "notify", 0, "w")
-	AddFaultPoint("nall", ":::", "notifyall", 0, "w")
-	AddFaultPoint("gc", ":::", "getcount", 0, "w")
-	AddFaultPoint("gw", ":::", "getwaiters", 0, "w")
-	AddFaultPoint("s", ":::", "sleep", 1, "w")
+	AddFaultPoint(ctx, "w", ":::", "wait", 0, "")
+	AddFaultPoint(ctx, "n1", ":::", "notify", 0, "w")
+	AddFaultPoint(ctx, "nall", ":::", "notifyall", 0, "w")
+	AddFaultPoint(ctx, "gc", ":::", "getcount", 0, "w")
+	AddFaultPoint(ctx, "gw", ":::", "getwaiters", 0, "w")
+	AddFaultPoint(ctx, "s", ":::", "sleep", 1, "w")
 
 	for i := 0; i < 10; i++ {
 		go wait(t)
@@ -130,33 +146,33 @@ func TestWait(t *testing.T) {
 
 	TriggerFault("s")
 
-	cnt, ok = TriggerFault("gc")
+	cnt, _, ok = TriggerFault("gc")
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(10), cnt)
 
-	cnt, ok = TriggerFault("gw")
+	cnt, _, ok = TriggerFault("gw")
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(10), cnt)
 
 	TriggerFault("n1")
 	TriggerFault("s")
 
-	cnt, ok = TriggerFault("gc")
+	cnt, _, ok = TriggerFault("gc")
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(10), cnt)
 
-	cnt, ok = TriggerFault("gw")
+	cnt, _, ok = TriggerFault("gw")
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(9), cnt)
 
 	TriggerFault("nall")
 	TriggerFault("s")
 
-	cnt, ok = TriggerFault("gc")
+	cnt, _, ok = TriggerFault("gc")
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(10), cnt)
 
-	cnt, ok = TriggerFault("gw")
+	cnt, _, ok = TriggerFault("gw")
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(0), cnt)
 

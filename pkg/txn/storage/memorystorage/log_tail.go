@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 )
 
@@ -43,7 +44,7 @@ func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req
 	tableRow, err := m.relations.Get(tx, tableID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return moerr.NewInternalError("invalid relation id %v", tableID)
+			return moerr.NewInternalError(ctx, "invalid relation id %v", tableID)
 		}
 		return err
 	}
@@ -102,16 +103,16 @@ func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req
 
 	// batches
 	insertBatch := batch.New(false, append(prependCols, insertNames...))
-	insertBatch.Vecs[0] = vector.New(types.T_Rowid.ToType()) // row id
-	insertBatch.Vecs[1] = vector.New(types.T_TS.ToType())    // commit time
+	insertBatch.Vecs[0] = vector.New(vector.FLAT, types.T_Rowid.ToType()) // row id
+	insertBatch.Vecs[1] = vector.New(vector.FLAT, types.T_TS.ToType())    // commit time
 	for i, name := range insertNames {
-		insertBatch.Vecs[startOffset+i] = vector.New(attrsMap[name].Type)
+		insertBatch.Vecs[startOffset+i] = vector.New(vector.FLAT, attrsMap[name].Type)
 	}
 	deleteBatch := batch.New(false, append(prependCols, deleteNames...))
-	deleteBatch.Vecs[0] = vector.New(types.T_Rowid.ToType()) // row id
-	deleteBatch.Vecs[1] = vector.New(types.T_TS.ToType())    // commit time
+	deleteBatch.Vecs[0] = vector.New(vector.FLAT, types.T_Rowid.ToType()) // row id
+	deleteBatch.Vecs[1] = vector.New(vector.FLAT, types.T_TS.ToType())    // commit time
 	for i, name := range deleteNames {
-		deleteBatch.Vecs[startOffset+i] = vector.New(attrsMap[name].Type)
+		deleteBatch.Vecs[startOffset+i] = vector.New(vector.FLAT, attrsMap[name].Type)
 	}
 
 	appendRow := func(batch *batch.Batch, row NamedRow, commitTime Time, readTime Time) error {
@@ -261,7 +262,7 @@ func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req
 }
 
 func logTailHandleSystemTable[
-	K memtable.Ordered[K],
+	K memorytable.Ordered[K],
 	V NamedRow,
 	R memtable.Row[K, V],
 ](

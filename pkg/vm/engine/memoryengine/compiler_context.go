@@ -16,6 +16,7 @@ package memoryengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -47,6 +48,10 @@ var _ plan.CompilerContext = new(CompilerContext)
 
 func (*CompilerContext) Cost(obj *plan.ObjectRef, e *plan.Expr) *plan.Cost {
 	return &plan.Cost{}
+}
+
+func (c *CompilerContext) GetProcess() *process.Process {
+	return nil
 }
 
 func (c *CompilerContext) DatabaseExists(name string) bool {
@@ -102,6 +107,10 @@ func (c *CompilerContext) GetAccountId() uint32 {
 		return v.(uint32)
 	}
 	return 0
+}
+
+func (c *CompilerContext) GetContext() context.Context {
+	return c.ctx
 }
 
 func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
@@ -181,16 +190,17 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 	return &plan.ColDef{
 		Name: attr.Name,
 		Typ: &plan.Type{
-			Id:        int32(attr.Type.Oid),
-			Nullable:  attr.Default != nil && attr.Default.NullAbility,
-			Width:     attr.Type.Width,
-			Precision: attr.Type.Precision,
-			Size:      attr.Type.Size,
-			Scale:     attr.Type.Scale,
+			Id:          int32(attr.Type.Oid),
+			NotNullable: attr.Default != nil && !(attr.Default.NullAbility),
+			Width:       attr.Type.Width,
+			Precision:   attr.Type.Precision,
+			Size:        attr.Type.Size,
+			Scale:       attr.Type.Scale,
 		},
-		Default: attr.Default,
-		Primary: attr.Primary,
-		Pkidx:   int32(idx),
-		Comment: attr.Comment,
+		Default:   attr.Default,
+		Primary:   attr.Primary,
+		Pkidx:     int32(idx),
+		Comment:   attr.Comment,
+		ClusterBy: attr.ClusterBy,
 	}
 }

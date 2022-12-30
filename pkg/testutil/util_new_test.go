@@ -29,7 +29,7 @@ const (
 func TestNewBatch(t *testing.T) {
 	m := mpool.MustNewZero()
 	bat := NewBatch([]types.Type{types.New(types.T_int8, 0, 0, 0)}, true, Rows, m)
-	bat.Clean(m)
+	bat.Free(m)
 	require.Equal(t, int64(0), m.CurrNB())
 }
 
@@ -73,6 +73,10 @@ func TestVector(t *testing.T) {
 	}
 	{
 		vec := NewVector(Rows, types.New(types.T_date, 0, 0, 0), m, true, nil)
+		vec.Free(m)
+	}
+	{
+		vec := NewVector(Rows, types.New(types.T_time, 0, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{

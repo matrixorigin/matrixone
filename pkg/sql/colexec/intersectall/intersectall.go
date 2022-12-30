@@ -62,31 +62,26 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 		switch arg.ctr.state {
 		case Build:
 			if err = arg.ctr.build(proc, analyzer); err != nil {
-				arg.ctr.hashTable.Free()
-				arg.ctr.hashTable = nil
-				arg.ctr.state = End
-				return true, err
+				arg.Free(proc, true)
+				return false, err
 			}
 			arg.ctr.state = Probe
+
 		case Probe:
 			last := false
 			last, err = arg.ctr.probe(proc, analyzer)
 			if err != nil {
-				arg.ctr.hashTable.Free()
-				arg.ctr.hashTable = nil
-				arg.ctr.state = End
-				return true, err
+				arg.Free(proc, true)
+				return false, err
 			}
 			if last {
 				arg.ctr.state = End
 				continue
 			}
 			return false, nil
+
 		case End:
-			if arg.ctr.hashTable != nil {
-				arg.ctr.hashTable.Free()
-				arg.ctr.hashTable = nil
-			}
+			arg.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -97,21 +92,14 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 func (ctr *container) build(proc *process.Process, analyzer process.Analyze) error {
 	for {
 		bat := <-proc.Reg.MergeReceivers[1].Ch
-		// the last batch of pipeline.
 		if bat == nil {
 			break
 		}
-
-		// just an empty batch.
 		if len(bat.Zs) == 0 {
 			continue
 		}
 
-		// collect analyze info
-		{
-			analyzer.Input(bat)
-		}
-
+		analyzer.Input(bat)
 		// build hashTable and a counter to record how many times each key appears
 		{
 			itr := ctr.hashTable.NewIterator()
@@ -124,7 +112,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze) err
 				}
 				vs, _, err := itr.Insert(i, n, bat.Vecs)
 				if err != nil {
-					bat.Clean(proc.Mp())
+					bat.Free(proc.Mp())
 					return err
 				}
 				if uint64(cap(ctr.counter)) < ctr.hashTable.GroupCount() {
@@ -138,7 +126,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze) err
 					ctr.counter[v-1]++
 				}
 			}
-			bat.Clean(proc.Mp())
+			bat.Free(proc.Mp())
 		}
 
 	}
@@ -154,21 +142,14 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze) (bo
 	for {
 
 		bat := <-proc.Reg.MergeReceivers[0].Ch
-
-		// the last batch of block.
 		if bat == nil {
 			return true, nil
 		}
-		// just an empty batch.
 		if len(bat.Zs) == 0 {
 			continue
 		}
 
-		// collect analyze info
-		{
-			analyzer.Input(bat)
-		}
-
+		analyzer.Input(bat)
 		//data to send to the next op
 		var outputBat *batch.Batch
 		//counter to record whether a row should add to output batch or not
@@ -178,7 +159,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze) (bo
 		{
 			outputBat = batch.NewWithSize(len(bat.Vecs))
 			for i := range bat.Vecs {
-				outputBat.Vecs[i] = vector.New(bat.Vecs[i].Typ)
+				outputBat.Vecs[i] = vector.New(vector.FLAT, *bat.Vecs[i].GetType())
 			}
 		}
 
@@ -223,8 +204,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze) (bo
 				if cnt > 0 {
 					for colNum := range bat.Vecs {
 						if err := vector.UnionBatch(outputBat.Vecs[colNum], bat.Vecs[colNum], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
-							outputBat.Clean(proc.Mp())
-							bat.Clean(proc.Mp())
+							bat.Free(proc.Mp())
 							return false, err
 						}
 					}
@@ -234,7 +214,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze) (bo
 		}
 		analyzer.Output(outputBat)
 		proc.SetInputBatch(outputBat)
-		bat.Clean(proc.Mp())
+		bat.Free(proc.Mp())
 		return false, nil
 	}
 }

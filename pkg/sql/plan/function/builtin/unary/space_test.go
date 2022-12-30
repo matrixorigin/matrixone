@@ -51,7 +51,7 @@ func TestSpaceUint64(t *testing.T) {
 	require.Equal(t, output.GetString(1), "  ")
 	require.Equal(t, output.GetString(2), "   ")
 	require.Equal(t, output.GetString(3), "")
-	require.True(t, nulls.Contains(output.Nsp, 4))
+	require.True(t, nulls.Contains(output.GetNulls(), 4))
 }
 
 func TestSpaceInt64(t *testing.T) {
@@ -64,7 +64,7 @@ func TestSpaceInt64(t *testing.T) {
 	require.Equal(t, output.GetString(2), "   ")
 	require.Equal(t, output.GetString(3), "")
 	// XXX should have failed instead returning null
-	require.True(t, nulls.Contains(output.Nsp, 4))
+	require.True(t, nulls.Contains(output.GetNulls(), 4))
 }
 
 func TestSpaceFloat64(t *testing.T) {
@@ -77,5 +77,5 @@ func TestSpaceFloat64(t *testing.T) {
 	require.Equal(t, output.GetString(2), "   ")
 	require.Equal(t, output.GetString(3), "")
 	// XXX should have failed instead returning null
-	require.True(t, nulls.Contains(output.Nsp, 4))
+	require.True(t, nulls.Contains(output.GetNulls(), 4))
 }

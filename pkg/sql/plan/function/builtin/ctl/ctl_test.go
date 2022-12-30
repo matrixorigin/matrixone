@@ -29,42 +29,44 @@ import (
 )
 
 func TestHandlerWithServiceTypeNotSupported(t *testing.T) {
-	vec1 := vector.New(types.New(types.T_varchar, 0, 0, 0))
-	require.NoError(t, vec1.Append([]byte("not support service"), false, mpool.MustNewZero()))
+	vec1 := vector.New(vector.FLAT, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	require.NoError(t, vector.Append(vec1, []byte("not support service"), false, mpool.MustNewZero()))
 
-	vec2 := vector.New(types.New(types.T_varchar, 0, 0, 0))
-	require.NoError(t, vec2.Append([]byte("ping"), false, mpool.MustNewZero()))
+	vec2 := vector.New(vector.FLAT, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	require.NoError(t, vector.Append(vec2, []byte("ping"), false, mpool.MustNewZero()))
 
-	vec3 := vector.New(types.New(types.T_varchar, 0, 0, 0))
-	require.NoError(t, vec3.Append([]byte(""), false, mpool.MustNewZero()))
+	vec3 := vector.New(vector.FLAT, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	require.NoError(t, vector.Append(vec3, []byte(""), false, mpool.MustNewZero()))
 
-	_, err := Handler([]*vector.Vector{vec1, vec2, vec3}, nil)
+	proc := testutil.NewProcess()
+	_, err := Handler([]*vector.Vector{vec1, vec2, vec3}, proc)
 	require.Error(t, err)
 }
 
 func TestHandlerWithCommandNotSupported(t *testing.T) {
-	vec1 := vector.New(types.New(types.T_varchar, 0, 0, 0))
-	require.NoError(t, vec1.Append([]byte("dn"), false, mpool.MustNewZero()))
+	vec1 := vector.New(vector.FLAT, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	require.NoError(t, vector.Append(vec1, []byte("dn"), false, mpool.MustNewZero()))
 
-	vec2 := vector.New(types.New(types.T_varchar, 0, 0, 0))
-	require.NoError(t, vec2.Append([]byte("not supported command"), false, mpool.MustNewZero()))
+	vec2 := vector.New(vector.FLAT, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	require.NoError(t, vector.Append(vec2, []byte("not supported command"), false, mpool.MustNewZero()))
 
-	vec3 := vector.New(types.New(types.T_varchar, 0, 0, 0))
-	require.NoError(t, vec3.Append([]byte(""), false, mpool.MustNewZero()))
+	vec3 := vector.New(vector.FLAT, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	require.NoError(t, vector.Append(vec3, []byte(""), false, mpool.MustNewZero()))
 
-	_, err := Handler([]*vector.Vector{vec1, vec2, vec3}, nil)
+	proc := testutil.NewProcess()
+	_, err := Handler([]*vector.Vector{vec1, vec2, vec3}, proc)
 	require.Error(t, err)
 }
 
 func TestHandler(t *testing.T) {
-	vec1 := vector.New(types.New(types.T_varchar, 0, 0, 0))
-	require.NoError(t, vec1.Append([]byte("dn"), false, mpool.MustNewZero()))
+	vec1 := vector.New(vector.FLAT, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	require.NoError(t, vector.Append(vec1, []byte("dn"), false, mpool.MustNewZero()))
 
-	vec2 := vector.New(types.New(types.T_varchar, 0, 0, 0))
-	require.NoError(t, vec2.Append([]byte("test_cmd"), false, mpool.MustNewZero()))
+	vec2 := vector.New(vector.FLAT, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	require.NoError(t, vector.Append(vec2, []byte("test_cmd"), false, mpool.MustNewZero()))
 
-	vec3 := vector.New(types.New(types.T_varchar, 0, 0, 0))
-	require.NoError(t, vec3.Append([]byte(""), false, mpool.MustNewZero()))
+	vec3 := vector.New(vector.FLAT, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	require.NoError(t, vector.Append(vec3, []byte(""), false, mpool.MustNewZero()))
 	proc := testutil.NewProcess()
 	supportedCmds[strings.ToUpper("test_cmd")] = func(proc *process.Process,
 		service serviceType,

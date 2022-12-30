@@ -38,6 +38,8 @@ func newDB(dnList []DNStore) *DB {
 
 // init is used to insert some data that will not be synchronized by logtail.
 func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
+	db.Lock()
+	defer db.Unlock()
 	{
 		parts := make(Partitions, len(db.dnMap))
 		for i := range parts {
@@ -95,14 +97,14 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 		}
 		ibat, err := genInsertBatch(bat, m)
 		if err != nil {
-			bat.Clean(m)
+			bat.Free(m)
 			return err
 		}
 		if err := part.Insert(ctx, MO_PRIMARY_OFF, ibat, false); err != nil {
-			bat.Clean(m)
+			bat.Free(m)
 			return err
 		}
-		bat.Clean(m)
+		bat.Free(m)
 	}
 	{ // mo_database
 		part := db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
@@ -119,14 +121,14 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 		}
 		ibat, err := genInsertBatch(bat, m)
 		if err != nil {
-			bat.Clean(m)
+			bat.Free(m)
 			return err
 		}
 		if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, ibat, false); err != nil {
-			bat.Clean(m)
+			bat.Free(m)
 			return err
 		}
-		bat.Clean(m)
+		bat.Free(m)
 		part = db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
 		for _, col := range cols {
 			bat, err := genCreateColumnTuple(col, m)
@@ -135,15 +137,15 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			}
 			ibat, err := genInsertBatch(bat, m)
 			if err != nil {
-				bat.Clean(m)
+				bat.Free(m)
 				return err
 			}
 			if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
 				ibat, false); err != nil {
-				bat.Clean(m)
+				bat.Free(m)
 				return err
 			}
-			bat.Clean(m)
+			bat.Free(m)
 		}
 	}
 	{ // mo_tables
@@ -160,14 +162,14 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 		}
 		ibat, err := genInsertBatch(bat, m)
 		if err != nil {
-			bat.Clean(m)
+			bat.Free(m)
 			return err
 		}
 		if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, ibat, false); err != nil {
-			bat.Clean(m)
+			bat.Free(m)
 			return err
 		}
-		bat.Clean(m)
+		bat.Free(m)
 		part = db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
 		for _, col := range cols {
 			bat, err := genCreateColumnTuple(col, m)
@@ -176,15 +178,15 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			}
 			ibat, err := genInsertBatch(bat, m)
 			if err != nil {
-				bat.Clean(m)
+				bat.Free(m)
 				return err
 			}
 			if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
 				ibat, false); err != nil {
-				bat.Clean(m)
+				bat.Free(m)
 				return err
 			}
-			bat.Clean(m)
+			bat.Free(m)
 		}
 	}
 	{ // mo_columns
@@ -201,14 +203,14 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 		}
 		ibat, err := genInsertBatch(bat, m)
 		if err != nil {
-			bat.Clean(m)
+			bat.Free(m)
 			return err
 		}
 		if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, ibat, false); err != nil {
-			bat.Clean(m)
+			bat.Free(m)
 			return err
 		}
-		bat.Clean(m)
+		bat.Free(m)
 		part = db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
 		for _, col := range cols {
 			bat, err := genCreateColumnTuple(col, m)
@@ -217,15 +219,15 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			}
 			ibat, err := genInsertBatch(bat, m)
 			if err != nil {
-				bat.Clean(m)
+				bat.Free(m)
 				return err
 			}
 			if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
 				ibat, false); err != nil {
-				bat.Clean(m)
+				bat.Free(m)
 				return err
 			}
-			bat.Clean(m)
+			bat.Free(m)
 		}
 	}
 	return nil

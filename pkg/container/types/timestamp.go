@@ -41,6 +41,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
+var (
+	FillString = []string{"", "0", "00", "000", "0000", "00000", "000000", "0000000"}
+)
+
 //const microSecondsDigits = 6
 
 var TimestampMinValue Timestamp
@@ -80,6 +84,18 @@ func (ts Timestamp) Unix() int64 {
 	return (int64(ts) - unixEpoch) / microSecsPerSec
 }
 
+func (ts Timestamp) UnixToFloat() float64 {
+	return float64(int64(ts)-unixEpoch) / microSecsPerSec
+}
+
+func (ts Timestamp) UnixToDecimal128() (Decimal128, error) {
+	a, err := Decimal128_FromStringWithScale(fmt.Sprintf("%d", int64(ts)-unixEpoch), 64, 6)
+	if err != nil {
+		return a, err
+	}
+	return a.DivInt64(microSecsPerSec), nil
+}
+
 // this scaleTable stores the corresponding microseconds value for a precision
 var scaleTable = [...]uint32{1000000, 100000, 10000, 1000, 100, 10, 1}
 
@@ -95,7 +111,7 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 		} else if msecStr[precision] >= '0' && msecStr[precision] <= '4' {
 			msecCarry = 0
 		} else {
-			return 0, 0, moerr.NewInvalidArg("get ms", msecStr)
+			return 0, 0, moerr.NewInvalidArgNoCtx("get ms", msecStr)
 		}
 		msecStr = msecStr[:precision]
 	} else if len(msecStr) < int(precision) {
@@ -108,7 +124,7 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 	}
 	m, err := strconv.ParseUint(msecStr, 10, 32)
 	if err != nil {
-		return 0, 0, moerr.NewInvalidArg("get ms", msecStr)
+		return 0, 0, moerr.NewInvalidArgNoCtx("get ms", msecStr)
 	}
 	msecs = (uint32(m) + msecCarry) * scaleTable[precision]
 	if msecs == OneSecInMicroSeconds {
@@ -126,7 +142,7 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 func ParseTimestamp(loc *time.Location, s string, precision int32) (Timestamp, error) {
 	dt, err := ParseDatetime(s, precision)
 	if err != nil {
-		return -1, moerr.NewInvalidArg("parse timestamp", s)
+		return -1, moerr.NewInvalidArgNoCtx("parse timestamp", s)
 	}
 
 	result := dt.ToTimestamp(loc)
@@ -134,7 +150,7 @@ func ParseTimestamp(loc *time.Location, s string, precision int32) (Timestamp, e
 	//according to mysql, timestamp function actually return a datetime value
 	/*
 		if result < TimestampMinValue {
-			return -1, moerr.NewInvalidArg("parse timestamp", s)
+			return -1, moerr.NewInvalidArgNoCtx("parse timestamp", s)
 		}
 	*/
 
@@ -203,4 +219,7 @@ func UnixToTimestamp(ts int64) Timestamp {
 
 func UnixMicroToTimestamp(ts int64) Timestamp {
 	return Timestamp(ts + unixEpoch)
+}
+func UnixNanoToTimestamp(ts int64) Timestamp {
+	return Timestamp(ts/nanoSecsPerMicroSec + unixEpoch)
 }

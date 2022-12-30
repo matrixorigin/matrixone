@@ -59,9 +59,10 @@ type LogService interface {
 	// StartHAKeeperReplica starts hakeeper replicas.
 	StartHAKeeperReplica(replicaID uint64, initialReplicas map[uint64]dragonboat.Target, join bool) error
 
-	// GetTaskService returns the taskservice
+	// GetTaskService returns the taskService
 	GetTaskService() (taskservice.TaskService, bool)
 
+	// CreateInitTasks create init task
 	CreateInitTasks() error
 }
 

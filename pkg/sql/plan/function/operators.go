@@ -40,7 +40,7 @@ func initOperators() {
 var operators = map[int]Functions{
 	ISTRUE: {
 		Id:     ISTRUE,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_PRODUCE_NO_NULL,
 		Layout: IS_NULL_EXPRESSION,
 		Overloads: []Function{
 			{
@@ -55,7 +55,7 @@ var operators = map[int]Functions{
 	},
 	ISNOTTRUE: {
 		Id:     ISNOTTRUE,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_PRODUCE_NO_NULL,
 		Layout: IS_NULL_EXPRESSION,
 		Overloads: []Function{
 			{
@@ -70,7 +70,7 @@ var operators = map[int]Functions{
 	},
 	ISFALSE: {
 		Id:     ISFALSE,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_PRODUCE_NO_NULL,
 		Layout: IS_NULL_EXPRESSION,
 		Overloads: []Function{
 			{
@@ -85,7 +85,7 @@ var operators = map[int]Functions{
 	},
 	ISNOTFALSE: {
 		Id:     ISNOTFALSE,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_PRODUCE_NO_NULL,
 		Layout: IS_NULL_EXPRESSION,
 		Overloads: []Function{
 			{
@@ -101,7 +101,7 @@ var operators = map[int]Functions{
 	// is null operator
 	ISNULL: {
 		Id:     ISNULL,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_PRODUCE_NO_NULL,
 		Layout: IS_NULL_EXPRESSION,
 		Overloads: []Function{
 			{
@@ -277,7 +277,7 @@ var operators = map[int]Functions{
 
 	ISNOTNULL: {
 		Id:     ISNOTNULL,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_PRODUCE_NO_NULL,
 		Layout: IS_NULL_EXPRESSION,
 		Overloads: []Function{
 			{
@@ -603,7 +603,7 @@ var operators = map[int]Functions{
 
 	EQUAL: {
 		Id:          EQUAL,
-		Flag:        plan.Function_STRICT,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      COMPARISON_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -810,7 +810,7 @@ var operators = map[int]Functions{
 
 	GREAT_THAN: {
 		Id:          GREAT_THAN,
-		Flag:        plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      COMPARISON_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -1017,7 +1017,7 @@ var operators = map[int]Functions{
 
 	GREAT_EQUAL: {
 		Id:          GREAT_EQUAL,
-		Flag:        plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      COMPARISON_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -1224,7 +1224,7 @@ var operators = map[int]Functions{
 
 	LESS_THAN: {
 		Id:          LESS_THAN,
-		Flag:        plan.Function_STRICT,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      COMPARISON_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -1431,7 +1431,7 @@ var operators = map[int]Functions{
 
 	LESS_EQUAL: {
 		Id:          LESS_EQUAL,
-		Flag:        plan.Function_STRICT,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      COMPARISON_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -1667,7 +1667,7 @@ var operators = map[int]Functions{
 					types.T_uint32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneral[uint16],
+				Fn:        operator.NeGeneral[uint32],
 			},
 			{
 				Index: 3,
@@ -1880,7 +1880,7 @@ var operators = map[int]Functions{
 
 	BETWEEN: {
 		Id:          BETWEEN,
-		Flag:        plan.Function_STRICT,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      BETWEEN_AND_EXPRESSION,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -1997,7 +1997,7 @@ var operators = map[int]Functions{
 
 	IN: {
 		Id:     IN,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: IN_PREDICATE,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
 			if len(inputs) == 2 && inputs[1] == types.T_tuple {
@@ -2034,7 +2034,7 @@ var operators = map[int]Functions{
 	// logic operator
 	AND: {
 		Id:     AND,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: BINARY_LOGICAL_OPERATOR,
 		Overloads: []Function{
 			{
@@ -2051,7 +2051,7 @@ var operators = map[int]Functions{
 
 	OR: {
 		Id:     OR,
-		Flag:   plan.Function_STRICT,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: BINARY_LOGICAL_OPERATOR,
 		Overloads: []Function{
 			{
@@ -2102,7 +2102,7 @@ var operators = map[int]Functions{
 	// arithmetic operator
 	PLUS: {
 		Id:          PLUS,
-		Flag:        plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      BINARY_ARITHMETIC_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -2189,7 +2189,7 @@ var operators = map[int]Functions{
 
 	MINUS: {
 		Id:          MINUS,
-		Flag:        plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      BINARY_ARITHMETIC_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -2282,7 +2282,7 @@ var operators = map[int]Functions{
 
 	MULTI: {
 		Id:          MULTI,
-		Flag:        plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      BINARY_ARITHMETIC_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
@@ -2363,7 +2363,7 @@ var operators = map[int]Functions{
 
 	DIV: {
 		Id:          DIV,
-		Flag:        plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      BINARY_ARITHMETIC_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn2,
 		Overloads: []Function{
@@ -2396,7 +2396,7 @@ var operators = map[int]Functions{
 
 	INTEGER_DIV: {
 		Id:          INTEGER_DIV,
-		Flag:        plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      BINARY_ARITHMETIC_OPERATOR,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn2,
 		Overloads: []Function{
@@ -2486,7 +2486,7 @@ var operators = map[int]Functions{
 
 	UNARY_PLUS: {
 		Id:     UNARY_PLUS,
-		Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:   plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout: UNARY_ARITHMETIC_OPERATOR,
 		Overloads: []Function{
 			{
@@ -2494,8 +2494,8 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint8},
 				ReturnTyp: types.T_uint8,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]uint8)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[uint8](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
 					return vec, nil
 				},
 			},
@@ -2504,8 +2504,8 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint16},
 				ReturnTyp: types.T_uint16,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]uint16)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[uint16](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
 					return vec, nil
 				},
 			},
@@ -2514,8 +2514,8 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint32},
 				ReturnTyp: types.T_uint32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]uint32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[uint32](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
 					return vec, nil
 				},
 			},
@@ -2524,8 +2524,8 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint64},
 				ReturnTyp: types.T_uint64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]uint64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[uint64](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
 					return vec, nil
 				},
 			},
@@ -2534,8 +2534,8 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int8},
 				ReturnTyp: types.T_int8,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]int8)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[int8](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
 					return vec, nil
 				},
 			},
@@ -2544,8 +2544,8 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int16},
 				ReturnTyp: types.T_int16,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]int16)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[int16](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
 					return vec, nil
 				},
 			},
@@ -2554,8 +2554,8 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int32},
 				ReturnTyp: types.T_int32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]int32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[int32](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
 					return vec, nil
 				},
 			},
@@ -2564,8 +2564,8 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_int64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]int64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[int64](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
 					return vec, nil
 				},
 			},
@@ -2574,8 +2574,8 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_float32},
 				ReturnTyp: types.T_float32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]float32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[float32](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
 					return vec, nil
 				},
 			},
@@ -2584,8 +2584,8 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]float64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[float64](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
 					return vec, nil
 				},
 			},
@@ -2594,8 +2594,8 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_decimal64},
 				ReturnTyp: types.T_decimal64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]types.Decimal64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[types.Decimal64](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
 					return vec, nil
 				},
 			},
@@ -2604,8 +2604,8 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_decimal128},
 				ReturnTyp: types.T_decimal128,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]types.Decimal128)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[types.Decimal128](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
 					return vec, nil
 				},
 			},
@@ -2614,7 +2614,7 @@ var operators = map[int]Functions{
 
 	UNARY_MINUS: {
 		Id:     UNARY_MINUS,
-		Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
+		Flag:   plan.Function_STRICT,
 		Layout: UNARY_ARITHMETIC_OPERATOR,
 		Overloads: []Function{
 			{
@@ -4734,6 +4734,42 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_blob,
 				Fn:        operator.Cast,
 			},
+			{
+				Index:     330,
+				Args:      []types.T{types.T_time, types.T_int64},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     331,
+				Args:      []types.T{types.T_time, types.T_decimal64},
+				ReturnTyp: types.T_decimal64,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     332,
+				Args:      []types.T{types.T_time, types.T_decimal128},
+				ReturnTyp: types.T_decimal128,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     333,
+				Args:      []types.T{types.T_int64, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     334,
+				Args:      []types.T{types.T_decimal64, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     335,
+				Args:      []types.T{types.T_decimal128, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        operator.Cast,
+			},
 		},
 	},
 
@@ -4894,6 +4930,24 @@ var operators = map[int]Functions{
 				Volatile:  true,
 				ReturnTyp: types.T_time,
 				Fn:        operator.CoalesceTime,
+			},
+			{
+				Index:     20,
+				Volatile:  true,
+				ReturnTyp: types.T_json,
+				Fn:        operator.CoalesceJson,
+			},
+			{
+				Index:     21,
+				Volatile:  true,
+				ReturnTyp: types.T_blob,
+				Fn:        operator.CoalesceBlob,
+			},
+			{
+				Index:     22,
+				Volatile:  true,
+				ReturnTyp: types.T_text,
+				Fn:        operator.CoalesceText,
 			},
 		},
 	},
@@ -5077,6 +5131,12 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_time,
 				Fn:        operator.CaseWhenTime,
 			},
+			{
+				Index:     22,
+				Volatile:  true,
+				ReturnTyp: types.T_json,
+				Fn:        operator.CaseWhenJson,
+			},
 		},
 	},
 
@@ -5241,6 +5301,18 @@ var operators = map[int]Functions{
 				Volatile:  true,
 				ReturnTyp: types.T_time,
 				Fn:        operator.IfTime,
+			},
+			{
+				Index:     21,
+				Volatile:  true,
+				ReturnTyp: types.T_json,
+				Fn:        operator.IfJson,
+			},
+			{
+				Index:     22,
+				Volatile:  true,
+				ReturnTyp: types.T_uuid,
+				Fn:        operator.IfUuid,
 			},
 		},
 	},

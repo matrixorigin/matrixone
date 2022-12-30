@@ -17,6 +17,8 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -28,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -142,7 +145,7 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 
 	txID := uuid.NewString()
 
-	iter := memtable.NewBatchIter(bat)
+	iter := memorytable.NewBatchIter(bat)
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
@@ -181,6 +184,10 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 			},
 			indexes: indexes,
 		})
+		// the reason to ignore, see comments in Insert method
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -202,7 +209,7 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 
 	txID := uuid.NewString()
 
-	iter := memtable.NewBatchIter(bat)
+	iter := memorytable.NewBatchIter(bat)
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
@@ -231,7 +238,7 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 				return err
 			}
 			if len(entries) > 0 && needCheck {
-				return moerr.NewDuplicate()
+				return moerr.NewDuplicate(ctx)
 			}
 		}
 
@@ -275,16 +282,26 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			indexes = append(indexes, index)
 		}
 
-		err = p.data.Upsert(tx, &DataRow{
-			rowID:   rowID,
-			value:   dataValue,
-			indexes: indexes,
-		})
-		if err != nil {
-			return err
-		}
-
-		if err := tx.Commit(t); err != nil {
+		_, err := p.data.Get(tx, rowID)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = p.data.Upsert(tx, &DataRow{
+				rowID:   rowID,
+				value:   dataValue,
+				indexes: indexes,
+			})
+			// if conflict comes up here,  probably the checkpoint from dn
+			// has duplicated history versions. As txn write conflict has been
+			// checked in dn, so it is safe to ignore this error
+			if moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if err := tx.Commit(t); err != nil {
+				return err
+			}
+		} else if err != nil {
 			return err
 		}
 	}
@@ -293,31 +310,28 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 }
 
 func (p *Partition) GC(ts timestamp.Timestamp) error {
+	// remove versions only visible before ts
+	// assuming no transaction is reading or writing
 	t := memtable.Time{
 		Timestamp: ts,
 	}
-	tx := memtable.NewTransaction(
-		uuid.NewString(),
-		t,
-		memtable.SnapshotIsolation,
-	)
-	min := memtable.Tuple{
-		index_Time,
-		memtable.Min,
-	}
-	max := memtable.Tuple{
-		index_Time,
-		ts,
-	}
-	iter := p.data.NewIndexIter(tx, min, max)
-	for ok := iter.First(); ok; ok = iter.Next() {
-		entry := iter.Item()
-		err := p.data.Delete(tx, entry.Key)
-		if err != nil {
-			return err
+	err := p.data.FilterVersions(func(k RowID, versions []memtable.Version[DataValue]) (filtered []memtable.Version[DataValue], err error) {
+		for _, version := range versions {
+			if version.LockTime.IsZero() {
+				// not deleted
+				filtered = append(filtered, version)
+				continue
+			}
+			if version.LockTime.Equal(t) ||
+				version.LockTime.After(t) {
+				// still visible after ts
+				filtered = append(filtered, version)
+				continue
+			}
 		}
-	}
-	if err := tx.Commit(t); err != nil {
+		return
+	})
+	if err != nil {
 		return err
 	}
 	return nil

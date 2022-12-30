@@ -37,7 +37,7 @@ func Test_AbsUint64(t *testing.T) {
 		}
 		data, ok := vec.Col.([]uint64)
 		if !ok {
-			log.Fatal(moerr.NewInternalError("the AbsUint64 function return value type is not []uint6"))
+			log.Fatal(moerr.NewInternalError(proc.Ctx, "the AbsUint64 function return value type is not []uint6"))
 		}
 		compVec := []uint64{1, 0}
 		compNsp := []int64{2}
@@ -49,13 +49,13 @@ func Test_AbsUint64(t *testing.T) {
 		for i := 0; i < len(compVec); i++ {
 			if j < len(compNsp) {
 				if compNsp[j] == int64(i) {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeTrue)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeTrue)
 					j++
 				} else {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 				}
 			} else {
-				convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+				convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 			}
 		}
 

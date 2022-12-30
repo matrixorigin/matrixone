@@ -16,8 +16,9 @@ package trace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -38,6 +39,7 @@ const (
 
 	uuidColType        = "varchar(36)"
 	spanIDType         = "varchar(16)"
+	spanKindType       = "varchar(32)"
 	datetime6Type      = "datetime(6)"
 	bigintUnsignedType = "bigint unsigned"
 	stringType         = "varchar(1024)"
@@ -46,32 +48,33 @@ const (
 )
 
 var (
-	stmtIDCol    = export.Column{Name: "statement_id", Type: uuidColType, Default: "0", Comment: "statement uniq id"}
-	txnIDCol     = export.Column{Name: "transaction_id", Type: uuidColType, Default: "0", Comment: "txn uniq id"}
-	sesIDCol     = export.Column{Name: "session_id", Type: uuidColType, Default: "0", Comment: "session uniq id"}
-	accountCol   = export.Column{Name: "account", Type: stringType, Default: "", Comment: "account name"}
-	userCol      = export.Column{Name: "user", Type: stringType, Default: "", Comment: "user name"}
-	hostCol      = export.Column{Name: "host", Type: stringType, Default: "", Comment: "user client ip"}
-	dbCol        = export.Column{Name: "database", Type: stringType, Default: "", Comment: "what database current session stay in."}
-	stmtCol      = export.Column{Name: "statement", Type: "TEXT", Default: "", Comment: "sql statement"}
-	stmtTagCol   = export.Column{Name: "statement_tag", Type: "TEXT", Default: "", Comment: "note tag in statement(Reserved)"}
-	stmtFgCol    = export.Column{Name: "statement_fingerprint", Type: "TEXT", Default: "", Comment: "note tag in statement(Reserved)"}
-	nodeUUIDCol  = export.Column{Name: "node_uuid", Type: uuidColType, Default: "0", Comment: "node uuid, which node gen this data."}
-	nodeTypeCol  = export.Column{Name: "node_type", Type: "varchar(64)", Default: "node", Comment: "node type in MO, val in [DN, CN, LOG]"}
-	reqAtCol     = export.Column{Name: "request_at", Type: datetime6Type, Default: "", Comment: "request accept datetime"}
-	respAtCol    = export.Column{Name: "response_at", Type: datetime6Type, Default: "", Comment: "response send datetime"}
-	durationCol  = export.Column{Name: "duration", Type: bigintUnsignedType, Default: "0", Comment: "exec time, unit: ns"}
-	statusCol    = export.Column{Name: "status", Type: "varchar(32)", Default: "Running", Comment: "sql statement running status, enum: Running, Success, Failed"}
-	errorCol     = export.Column{Name: "error", Type: "TEXT", Default: "", Comment: "error message"}
-	execPlanCol  = export.Column{Name: "exec_plan", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "statement execution plan"}
-	rowsReadCol  = export.Column{Name: "rows_read", Type: bigintUnsignedType, Default: "0", Comment: "rows read total"}
-	bytesScanCol = export.Column{Name: "bytes_scan", Type: bigintUnsignedType, Default: "0", Comment: "bytes scan total"}
+	stmtIDCol    = table.Column{Name: "statement_id", Type: uuidColType, Default: "0", Comment: "statement uniq id"}
+	txnIDCol     = table.Column{Name: "transaction_id", Type: uuidColType, Default: "0", Comment: "txn uniq id"}
+	sesIDCol     = table.Column{Name: "session_id", Type: uuidColType, Default: "0", Comment: "session uniq id"}
+	accountCol   = table.Column{Name: "account", Type: stringType, Default: "", Comment: "account name"}
+	userCol      = table.Column{Name: "user", Type: stringType, Default: "", Comment: "user name"}
+	hostCol      = table.Column{Name: "host", Type: stringType, Default: "", Comment: "user client ip"}
+	dbCol        = table.Column{Name: "database", Type: stringType, Default: "", Comment: "what database current session stay in."}
+	stmtCol      = table.Column{Name: "statement", Type: "TEXT", Default: "", Comment: "sql statement"}
+	stmtTagCol   = table.Column{Name: "statement_tag", Type: "TEXT", Default: "", Comment: "note tag in statement(Reserved)"}
+	stmtFgCol    = table.Column{Name: "statement_fingerprint", Type: "TEXT", Default: "", Comment: "note tag in statement(Reserved)"}
+	nodeUUIDCol  = table.Column{Name: "node_uuid", Type: uuidColType, Default: "0", Comment: "node uuid, which node gen this data."}
+	nodeTypeCol  = table.Column{Name: "node_type", Type: "varchar(64)", Default: "node", Comment: "node type in MO, val in [DN, CN, LOG]"}
+	reqAtCol     = table.Column{Name: "request_at", Type: datetime6Type, Default: "", Comment: "request accept datetime"}
+	respAtCol    = table.Column{Name: "response_at", Type: datetime6Type, Default: "", Comment: "response send datetime"}
+	durationCol  = table.Column{Name: "duration", Type: bigintUnsignedType, Default: "0", Comment: "exec time, unit: ns"}
+	statusCol    = table.Column{Name: "status", Type: "varchar(32)", Default: "Running", Comment: "sql statement running status, enum: Running, Success, Failed"}
+	errorCol     = table.Column{Name: "error", Type: "TEXT", Default: "", Comment: "error message"}
+	execPlanCol  = table.Column{Name: "exec_plan", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "statement execution plan"}
+	rowsReadCol  = table.Column{Name: "rows_read", Type: bigintUnsignedType, Default: "0", Comment: "rows read total"}
+	bytesScanCol = table.Column{Name: "bytes_scan", Type: bigintUnsignedType, Default: "0", Comment: "bytes scan total"}
+	sqlTypeCol   = table.Column{Name: "sql_source_type", Type: "TEXT", Default: "", Comment: "sql statement source type"}
 
-	SingleStatementTable = &export.Table{
-		Account:  export.AccountAll,
+	SingleStatementTable = &table.Table{
+		Account:  table.AccountAll,
 		Database: StatsDatabase,
 		Table:    statementInfoTbl,
-		Columns: []export.Column{
+		Columns: []table.Column{
 			stmtIDCol,
 			txnIDCol,
 			sesIDCol,
@@ -93,42 +96,45 @@ var (
 			execPlanCol,
 			rowsReadCol,
 			bytesScanCol,
+			sqlTypeCol,
 		},
-		PrimaryKeyColumn: []export.Column{stmtIDCol},
-		Engine:           export.ExternalTableEngine,
+		PrimaryKeyColumn: []table.Column{stmtIDCol},
+		Engine:           table.ExternalTableEngine,
 		Comment:          "record each statement and stats info",
-		PathBuilder:      export.NewAccountDatePathBuilder(),
+		PathBuilder:      table.NewAccountDatePathBuilder(),
 		AccountColumn:    &accountCol,
 		// SupportUserAccess
 		SupportUserAccess: true,
 	}
 
-	rawItemCol      = export.Column{Name: "raw_item", Type: stringType, Comment: "raw log item"}
-	timestampCol    = export.Column{Name: "timestamp", Type: datetime6Type, Comment: "timestamp of action"}
-	loggerNameCol   = export.Column{Name: "logger_name", Type: stringType, Comment: "logger name"}
-	levelCol        = export.Column{Name: "level", Type: stringType, Comment: "log level, enum: debug, info, warn, error, panic, fatal"}
-	callerCol       = export.Column{Name: "caller", Type: stringType, Comment: "where it log, like: package/file.go:123"}
-	messageCol      = export.Column{Name: "message", Type: "TEXT", Comment: "log message"}
-	extraCol        = export.Column{Name: "extra", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "log dynamic fields"}
-	errCodeCol      = export.Column{Name: "err_code", Type: stringType, Default: "0"}
-	stackCol        = export.Column{Name: "stack", Type: "varchar(4096)"}
-	spanIDCol       = export.Column{Name: "span_id", Type: spanIDType, Default: "0", Comment: "span uniq id"}
-	parentSpanIDCol = export.Column{Name: "parent_span_id", Type: spanIDType, Default: "0", Comment: "parent span uniq id"}
-	spanNameCol     = export.Column{Name: "span_name", Type: stringType, Default: "", Comment: "span name, for example: step name of execution plan, function name in code, ..."}
-	startTimeCol    = export.Column{Name: "start_time", Type: datetime6Type, Default: ""}
-	endTimeCol      = export.Column{Name: "end_time", Type: datetime6Type, Default: ""}
-	resourceCol     = export.Column{Name: "resource", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "static resource information"}
+	rawItemCol      = table.Column{Name: "raw_item", Type: stringType, Comment: "raw log item"}
+	timestampCol    = table.Column{Name: "timestamp", Type: datetime6Type, Comment: "timestamp of action"}
+	loggerNameCol   = table.Column{Name: "logger_name", Type: stringType, Comment: "logger name"}
+	levelCol        = table.Column{Name: "level", Type: stringType, Comment: "log level, enum: debug, info, warn, error, panic, fatal"}
+	callerCol       = table.Column{Name: "caller", Type: stringType, Comment: "where it log, like: package/file.go:123"}
+	messageCol      = table.Column{Name: "message", Type: "TEXT", Comment: "log message"}
+	extraCol        = table.Column{Name: "extra", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "log dynamic fields"}
+	errCodeCol      = table.Column{Name: "err_code", Type: stringType, Default: "0"}
+	stackCol        = table.Column{Name: "stack", Type: "varchar(4096)"}
+	traceIDCol      = table.Column{Name: "trace_id", Type: uuidColType, Default: "0", Comment: "trace uniq id"}
+	spanIDCol       = table.Column{Name: "span_id", Type: spanIDType, Default: "0", Comment: "span uniq id"}
+	spanKindCol     = table.Column{Name: "span_kind", Type: spanKindType, Default: "", Comment: "span kind, enum: internal, statement, remote"}
+	parentSpanIDCol = table.Column{Name: "parent_span_id", Type: spanIDType, Default: "0", Comment: "parent span uniq id"}
+	spanNameCol     = table.Column{Name: "span_name", Type: stringType, Default: "", Comment: "span name, for example: step name of execution plan, function name in code, ..."}
+	startTimeCol    = table.Column{Name: "start_time", Type: datetime6Type, Default: ""}
+	endTimeCol      = table.Column{Name: "end_time", Type: datetime6Type, Default: ""}
+	resourceCol     = table.Column{Name: "resource", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "static resource information"}
 
-	SingleRowLogTable = &export.Table{
-		Account:  export.AccountAll,
+	SingleRowLogTable = &table.Table{
+		Account:  table.AccountAll,
 		Database: StatsDatabase,
 		Table:    rawLogTbl,
-		Columns: []export.Column{
+		Columns: []table.Column{
 			rawItemCol,
 			nodeUUIDCol,
 			nodeTypeCol,
 			spanIDCol,
-			stmtIDCol,
+			traceIDCol,
 			loggerNameCol,
 			timestampCol,
 			levelCol,
@@ -144,23 +150,25 @@ var (
 			endTimeCol,
 			durationCol,
 			resourceCol,
+			spanKindCol,
 		},
 		PrimaryKeyColumn: nil,
-		Engine:           export.ExternalTableEngine,
+		Engine:           table.ExternalTableEngine,
 		Comment:          "read merge data from log, error, span",
-		PathBuilder:      export.NewAccountDatePathBuilder(),
+		PathBuilder:      table.NewAccountDatePathBuilder(),
 		AccountColumn:    nil,
 		// SupportUserAccess
 		SupportUserAccess: false,
 	}
 
-	logView = &export.View{
+	logView = &table.View{
 		Database:    StatsDatabase,
 		Table:       logInfoTbl,
 		OriginTable: SingleRowLogTable,
-		Columns: []export.Column{
-			stmtIDCol,
+		Columns: []table.Column{
+			traceIDCol,
 			spanIDCol,
+			spanKindCol,
 			nodeUUIDCol,
 			nodeTypeCol,
 			timestampCol,
@@ -169,33 +177,38 @@ var (
 			callerCol,
 			messageCol,
 			extraCol,
+			stackCol,
 		},
-		Condition: &export.ViewSingleCondition{Column: rawItemCol, Table: logInfoTbl},
+		Condition: &table.ViewSingleCondition{Column: rawItemCol, Table: logInfoTbl},
 	}
 
-	errorView = &export.View{
+	errorView = &table.View{
 		Database:    StatsDatabase,
 		Table:       errorInfoTbl,
 		OriginTable: SingleRowLogTable,
-		Columns: []export.Column{
+		Columns: []table.Column{
 			timestampCol,
 			errCodeCol,
 			errorCol,
+			traceIDCol,
+			spanIDCol,
+			spanKindCol,
 			nodeUUIDCol,
 			nodeTypeCol,
 			stackCol,
 		},
-		Condition: &export.ViewSingleCondition{Column: rawItemCol, Table: errorInfoTbl},
+		Condition: &table.ViewSingleCondition{Column: rawItemCol, Table: errorInfoTbl},
 	}
 
-	spanView = &export.View{
+	spanView = &table.View{
 		Database:    StatsDatabase,
 		Table:       spanInfoTbl,
 		OriginTable: SingleRowLogTable,
-		Columns: []export.Column{
-			stmtIDCol,
+		Columns: []table.Column{
+			traceIDCol,
 			spanIDCol,
 			parentSpanIDCol,
+			spanKindCol,
 			nodeUUIDCol,
 			nodeTypeCol,
 			spanNameCol,
@@ -204,7 +217,7 @@ var (
 			durationCol,
 			resourceCol,
 		},
-		Condition: &export.ViewSingleCondition{Column: rawItemCol, Table: spanInfoTbl},
+		Condition: &table.ViewSingleCondition{Column: rawItemCol, Table: spanInfoTbl},
 	}
 )
 
@@ -212,8 +225,8 @@ const (
 	sqlCreateDBConst = `create database if not exists ` + StatsDatabase
 )
 
-var tables = []*export.Table{SingleStatementTable, SingleRowLogTable}
-var views = []*export.View{logView, errorView, spanView}
+var tables = []*table.Table{SingleStatementTable, SingleRowLogTable}
+var views = []*table.View{logView, errorView, spanView}
 
 // InitSchemaByInnerExecutor init schema, which can access db by io.InternalExecutor on any Node.
 func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
@@ -224,7 +237,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(StatsDatabase).Internal(true).Finish())
 	mustExec := func(sql string) error {
 		if err := exec.Exec(ctx, sql, ie.NewOptsBuilder().Finish()); err != nil {
-			return moerr.NewInternalError("[Trace] init table error: %v, sql: %s", err, sql)
+			return moerr.NewInternalError(ctx, "[Trace] init table error: %v, sql: %s", err, sql)
 		}
 		return nil
 	}
@@ -240,12 +253,12 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	instant := time.Now()
 
 	for _, tbl := range tables {
-		if err := mustExec(tbl.ToCreateSql(true)); err != nil {
+		if err := mustExec(tbl.ToCreateSql(ctx, true)); err != nil {
 			return err
 		}
 	}
 	for _, v := range views {
-		if err := mustExec(v.ToCreateSql(true)); err != nil {
+		if err := mustExec(v.ToCreateSql(ctx, true)); err != nil {
 			return err
 		}
 	}
@@ -255,18 +268,18 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 }
 
 // GetSchemaForAccount return account's table, and view's schema
-func GetSchemaForAccount(account string) []string {
+func GetSchemaForAccount(ctx context.Context, account string) []string {
 	var sqls = make([]string, 0, 1)
 	for _, tbl := range tables {
 		if tbl.SupportUserAccess {
 			t := tbl.Clone()
 			t.Account = account
-			sqls = append(sqls, t.ToCreateSql(true))
+			sqls = append(sqls, t.ToCreateSql(ctx, true))
 		}
 	}
 	for _, v := range views {
 		if v.OriginTable.SupportUserAccess {
-			sqls = append(sqls, v.ToCreateSql(true))
+			sqls = append(sqls, v.ToCreateSql(ctx, true))
 		}
 
 	}
@@ -275,8 +288,8 @@ func GetSchemaForAccount(account string) []string {
 
 func init() {
 	for _, tbl := range tables {
-		if old := export.RegisterTableDefine(tbl); old != nil {
-			panic(moerr.NewInternalError("table already registered: %s", old.GetIdentify()))
+		if old := table.RegisterTableDefine(tbl); old != nil {
+			panic(moerr.NewInternalError(context.Background(), "table already registered: %s", old.GetIdentify()))
 		}
 	}
 }

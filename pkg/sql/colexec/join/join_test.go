@@ -99,8 +99,9 @@ func TestJoin(t *testing.T) {
 			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 				break
 			}
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 		}
+		tc.arg.Free(tc.proc, false)
 		nb1 := tc.proc.Mp().CurrNB()
 		require.Equal(t, nb0, nb1)
 	}
@@ -217,7 +218,7 @@ func BenchmarkJoin(b *testing.B) {
 				if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 					break
 				}
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+				tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 			}
 		}
 	}
@@ -285,7 +286,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Args: args,
-				Func: &plan.ObjectRef{Obj: fid},
+				Func: &plan.ObjectRef{Obj: fid, ObjName: "="},
 			},
 		},
 	}
@@ -340,7 +341,7 @@ func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process,
 }
 
 func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
-	idx, err := index.New(v.Typ, m)
+	idx, err := index.New(v.GetType(), m)
 	require.NoError(t, err)
 
 	err = idx.InsertBatch(v)

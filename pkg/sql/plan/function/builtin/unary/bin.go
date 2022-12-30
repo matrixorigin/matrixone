@@ -40,8 +40,8 @@ type binFun[T binT] func(*vector.Vector, *vector.Vector, *process.Process) error
 func generalBin[T binT](vectors []*vector.Vector, proc *process.Process, cb binFun[T]) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := proc.AllocScalarVector(resultType)
@@ -49,17 +49,17 @@ func generalBin[T binT](vectors []*vector.Vector, proc *process.Process, cb binF
 		vector.SetCol(resultVector, resultValues)
 		err := cb(inputVector, resultVector, proc)
 		if err != nil {
-			return nil, moerr.NewInvalidInput("The input value is out of range")
+			return nil, moerr.NewInvalidInputNoCtx("The input value is out of range")
 		}
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, 0, inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, 0, inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
 		err = cb(inputVector, resultVector, proc)
 		if err != nil {
-			return nil, moerr.NewInvalidInput("The input value is out of range")
+			return nil, moerr.NewInvalidInputNoCtx("The input value is out of range")
 		}
 		return resultVector, nil
 	}

@@ -25,13 +25,13 @@ import (
 func Acos(arg, result *vector.Vector) error {
 	argCol := vector.MustTCols[float64](arg)
 	resCol := vector.MustTCols[float64](result)
-	nulls.Set(result.Nsp, arg.Nsp)
+	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
-		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
 			if v < -1 || v > 1 {
 				// MySQL is totally F***ed.
 				// return moerr.NewError(moerr.INVALID_ARGUMENT, fmt.Sprintf("acos argument %v is not valid", v))
-				nulls.Add(result.Nsp, uint64(i))
+				nulls.Add(result.GetNulls(), uint64(i))
 			} else {
 				resCol[i] = math.Acos(v)
 			}
@@ -43,9 +43,9 @@ func Acos(arg, result *vector.Vector) error {
 func Atan(arg, result *vector.Vector) error {
 	argCol := vector.MustTCols[float64](arg)
 	resCol := vector.MustTCols[float64](result)
-	nulls.Set(result.Nsp, arg.Nsp)
+	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
-		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
 			resCol[i] = math.Atan(v)
 		}
 	}
@@ -58,7 +58,7 @@ func AtanWithTwoArg(firstArg, secondArg, result *vector.Vector) error {
 	resCol := vector.MustTCols[float64](result)
 	for i, v := range firstCol {
 		if v == 0 {
-			return moerr.NewInvalidArg("Atan first input", 0)
+			return moerr.NewInvalidArgNoCtx("Atan first input", 0)
 		}
 		resCol[i] = math.Atan(secondCol[i] / v)
 	}
@@ -68,9 +68,9 @@ func AtanWithTwoArg(firstArg, secondArg, result *vector.Vector) error {
 func Cos(arg, result *vector.Vector) error {
 	argCol := vector.MustTCols[float64](arg)
 	resCol := vector.MustTCols[float64](result)
-	nulls.Set(result.Nsp, arg.Nsp)
+	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
-		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
 			resCol[i] = math.Cos(v)
 		}
 	}
@@ -80,11 +80,11 @@ func Cos(arg, result *vector.Vector) error {
 func Cot(arg, result *vector.Vector) error {
 	argCol := vector.MustTCols[float64](arg)
 	resCol := vector.MustTCols[float64](result)
-	nulls.Set(result.Nsp, arg.Nsp)
+	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
-		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
 			if v == 0 {
-				panic(moerr.NewInvalidArg("cot", "cot(0)"))
+				panic(moerr.NewInvalidArgNoCtx("cot", "cot(0)"))
 			} else {
 				resCol[i] = math.Tan(math.Pi/2.0 - v)
 			}
@@ -96,9 +96,9 @@ func Cot(arg, result *vector.Vector) error {
 func Exp(arg, result *vector.Vector) error {
 	argCol := vector.MustTCols[float64](arg)
 	resCol := vector.MustTCols[float64](result)
-	nulls.Set(result.Nsp, arg.Nsp)
+	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
-		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
 			resCol[i] = math.Exp(v)
 		}
 	}
@@ -108,11 +108,11 @@ func Exp(arg, result *vector.Vector) error {
 func Ln(arg, result *vector.Vector) error {
 	argCol := vector.MustTCols[float64](arg)
 	resCol := vector.MustTCols[float64](result)
-	nulls.Set(result.Nsp, arg.Nsp)
+	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
-		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
 			if v <= 0 {
-				return moerr.NewInvalidArg("ln", v)
+				return moerr.NewInvalidArgNoCtx("ln", v)
 			} else {
 				resCol[i] = math.Log(v)
 			}
@@ -124,9 +124,9 @@ func Ln(arg, result *vector.Vector) error {
 func Sin(arg, result *vector.Vector) error {
 	argCol := vector.MustTCols[float64](arg)
 	resCol := vector.MustTCols[float64](result)
-	nulls.Set(result.Nsp, arg.Nsp)
+	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
-		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
 			resCol[i] = math.Sin(v)
 		}
 	}
@@ -136,10 +136,14 @@ func Sin(arg, result *vector.Vector) error {
 func Sinh(arg, result *vector.Vector) error {
 	argCol := vector.MustTCols[float64](arg)
 	resCol := vector.MustTCols[float64](result)
-	nulls.Set(result.Nsp, arg.Nsp)
+	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
-		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
-			resCol[i] = math.Sinh(v)
+		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
+			r := math.Sinh(v)
+			if math.IsInf(r, 0) {
+				return moerr.NewOutOfRangeNoCtx("float64", "DOUBLE value is out of range in 'sinh(%v)'", v)
+			}
+			resCol[i] = r
 		}
 	}
 	return nil
@@ -148,9 +152,9 @@ func Sinh(arg, result *vector.Vector) error {
 func Tan(arg, result *vector.Vector) error {
 	argCol := vector.MustTCols[float64](arg)
 	resCol := vector.MustTCols[float64](result)
-	nulls.Set(result.Nsp, arg.Nsp)
+	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
-		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
 			resCol[i] = math.Tan(v)
 		}
 	}

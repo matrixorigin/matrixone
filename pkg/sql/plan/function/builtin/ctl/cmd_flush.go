@@ -45,6 +45,8 @@ func handleFlush() handleFunc {
 				if err = proc.SessionInfo.StorageEngine.New(proc.Ctx, txnOp); err != nil {
 					return nil, err
 				}
+
+				defer txnOp.Commit(proc.Ctx)
 			}
 			database, err := proc.SessionInfo.StorageEngine.Database(proc.Ctx, parameters[0], txnOp)
 			if err != nil {
@@ -56,11 +58,6 @@ func handleFlush() handleFunc {
 			}
 			dId := database.GetDatabaseId(proc.Ctx)
 			tId := rel.GetTableID(proc.Ctx)
-			err = txnOp.Commit(proc.Ctx)
-			if err != nil {
-				txnOp = nil
-				return nil, err
-			}
 			dbId, err := strconv.Atoi(dId)
 			if err != nil {
 				return nil, err
@@ -79,7 +76,7 @@ func handleFlush() handleFunc {
 				},
 			})
 			if err != nil {
-				return nil, moerr.NewInternalError("payload encode err")
+				return nil, moerr.NewInternalError(proc.Ctx, "payload encode err")
 			}
 			return payload, nil
 		},

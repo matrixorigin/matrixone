@@ -62,7 +62,7 @@ func absSigned[T constraints.Signed | constraints.Float](xs, rs []T) []T {
 			rs[i] = xs[i]
 		}
 		if rs[i] < 0 {
-			panic(moerr.NewOutOfRange("int", "'%v'", xs[i]))
+			panic(moerr.NewOutOfRangeNoCtx("int", "'%v'", xs[i]))
 		}
 	}
 	return rs

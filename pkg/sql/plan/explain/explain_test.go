@@ -15,6 +15,7 @@
 package explain
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -252,6 +253,24 @@ func TestDMLDelete(t *testing.T) {
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
+func TestSystemVariableAndUserVariable(t *testing.T) {
+	sqls := []string{
+		"explain verbose select @@autocommit from NATION",
+		"explain verbose select @@global.autocommit from NATION",
+		"explain verbose select @@session.autocommit from NATION",
+		"explain verbose select @@autocommit,N_NAME, N_REGIONKEY from NATION",
+		"explain verbose select @@global.autocommit,N_NAME, N_REGIONKEY from NATION",
+		"explain verbose select @@session.autocommit,N_NAME, N_REGIONKEY from NATION",
+		"explain verbose select @val from NATION",
+		"explain verbose select @val,@a,@b from NATION",
+		"explain verbose select @val,N_NAME, N_REGIONKEY from NATION",
+		"explain verbose select @@session.autocommit,@val from NATION",
+		"explain verbose select @@session.autocommit,@val,N_NAME from NATION",
+	}
+	mockOptimizer := plan.NewMockOptimizer()
+	runTestShouldPass(mockOptimizer, t, sqls)
+}
+
 func runTestShouldPass(opt plan.Optimizer, t *testing.T, sqls []string) {
 	for _, sql := range sqls {
 		err := runOneStmt(opt, t, sql)
@@ -263,11 +282,12 @@ func runTestShouldPass(opt plan.Optimizer, t *testing.T, sqls []string) {
 
 func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 	t.Logf("SQL: %v\n", sql)
-	stmts, err := mysql.Parse(sql)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
 
+	ctx := context.TODO()
 	if stmt, ok := stmts[0].(*tree.ExplainStmt); ok {
 		es := NewExplainDefaultOptions()
 		for _, v := range stmt.Options {
@@ -277,7 +297,7 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 				} else if strings.EqualFold(v.Value, "FALSE") {
 					es.Verbose = false
 				} else {
-					return moerr.NewInvalidInput("boolean value %v", v.Value)
+					return moerr.NewInvalidInput(ctx, "boolean value %v", v.Value)
 				}
 			} else if strings.EqualFold(v.Name, "ANALYZE") {
 				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
@@ -285,20 +305,20 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 				} else if strings.EqualFold(v.Value, "FALSE") {
 					es.Analyze = false
 				} else {
-					return moerr.NewInvalidInput("boolean value %v", v.Value)
+					return moerr.NewInvalidInput(ctx, "boolean value %v", v.Value)
 				}
 			} else if strings.EqualFold(v.Name, "FORMAT") {
 				if v.Name == "NULL" {
-					return moerr.NewInvalidInput("parameter name %v", v.Name)
+					return moerr.NewInvalidInput(ctx, "parameter name %v", v.Name)
 				} else if strings.EqualFold(v.Value, "TEXT") {
 					es.Format = EXPLAIN_FORMAT_TEXT
 				} else if strings.EqualFold(v.Value, "JSON") {
 					es.Format = EXPLAIN_FORMAT_JSON
 				} else {
-					return moerr.NewInvalidInput("explain format %v", v.Value)
+					return moerr.NewInvalidInput(ctx, "explain format %v", v.Value)
 				}
 			} else {
-				return moerr.NewInvalidInput("EXPLAIN option %v", v.Name)
+				return moerr.NewInvalidInput(ctx, "EXPLAIN option %v", v.Name)
 			}
 		}
 
@@ -311,7 +331,7 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 		}
 		buffer := NewExplainDataBuffer()
 		explainQuery := NewExplainQueryImpl(logicPlan.GetQuery())
-		err = explainQuery.ExplainPlan(buffer, es)
+		err = explainQuery.ExplainPlan(ctx.GetContext(), buffer, es)
 		if err != nil {
 			t.Errorf("explain Query Plan error: '%v'", tree.String(stmt, dialect.MYSQL))
 			return err

@@ -17,10 +17,12 @@ package disttae
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -31,6 +33,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+const (
+	GcCycle = 10 * time.Second
 )
 
 const (
@@ -51,25 +57,6 @@ const (
 )
 
 type DNStore = logservice.DNStore
-
-// tae's block metadata, which is currently just an empty one,
-// does not serve any purpose When tae submits a concrete structure,
-// it will replace this structure with tae's code
-// type BlockMeta struct {
-
-// }
-
-// Cache is a multi-version cache for maintaining some table data.
-// The cache is concurrently secure,  with multiple transactions accessing
-// the cache at the same time.
-// For different dn,  the cache is handled independently, the format
-// for our example is k-v, k being the dn number and v the timestamp,
-// suppose there are 2 dn, for table A exist dn0 - 100, dn1 - 200.
-type Cache interface {
-	// update table's cache to the specified timestamp
-	Update(ctx context.Context, dnList []DNStore, databaseId uint64,
-		tableId uint64, ts timestamp.Timestamp) error
-}
 
 type IDGenerator interface {
 	AllocateID(ctx context.Context) (uint64, error)
@@ -124,6 +111,7 @@ type Partition struct {
 
 // Transaction represents a transaction
 type Transaction struct {
+	sync.Mutex
 	db *DB
 	// readOnly default value is true, once a write happen, then set to false
 	readOnly bool
@@ -133,16 +121,19 @@ type Transaction struct {
 	blockId uint64
 	// use for solving halloween problem
 	statementId uint64
-	meta        txn.TxnMeta
-	op          client.TxnOperator
+	// local timestamp for workspace operations
+	localTS timestamp.Timestamp
+	meta    txn.TxnMeta
+	op      client.TxnOperator
 	// fileMaps used to store the mapping relationship between s3 filenames
 	// and blockId
 	fileMap map[string]uint64
 	// writes cache stores any writes done by txn
 	// every statement is an element
-	writes   [][]Entry
-	dnStores []DNStore
-	proc     *process.Process
+	writes    [][]Entry
+	workspace *memtable.Table[RowID, *workspaceRow, *workspaceRow]
+	dnStores  []DNStore
+	proc      *process.Process
 
 	idGen IDGenerator
 
@@ -216,12 +207,13 @@ type table struct {
 	tableDef   *plan.TableDef
 	proc       *process.Process
 
-	primaryIdx int
-	viewdef    string
-	comment    string
-	partition  string
-	relKind    string
-	createSql  string
+	primaryIdx   int // -1 means no primary key
+	clusterByIdx int // -1 means no clusterBy key
+	viewdef      string
+	comment      string
+	partition    string
+	relKind      string
+	createSql    string
 
 	updated bool
 	// use for skip rows
@@ -244,6 +236,7 @@ type column struct {
 	hasDef          int8
 	defaultExpr     []byte
 	constraintType  string
+	isClusterBy     int8
 	isHidden        int8
 	isAutoIncrement int8
 	hasUpdate       int8
@@ -251,11 +244,20 @@ type column struct {
 }
 
 type blockReader struct {
-	blks     []BlockMeta
-	ctx      context.Context
-	fs       fileservice.FileService
-	ts       timestamp.Timestamp
-	tableDef *plan.TableDef
+	blks       []BlockMeta
+	ctx        context.Context
+	fs         fileservice.FileService
+	ts         timestamp.Timestamp
+	tableDef   *plan.TableDef
+	primaryIdx int
+	expr       *plan.Expr
+
+	// cached meta data.
+	colIdxs        []uint16
+	colTypes       []types.Type
+	colNulls       []bool
+	pkidxInColIdxs int
+	pkName         string
 }
 
 type blockMergeReader struct {
@@ -265,6 +267,11 @@ type blockMergeReader struct {
 	fs       fileservice.FileService
 	ts       timestamp.Timestamp
 	tableDef *plan.TableDef
+
+	// cached meta data.
+	colIdxs  []uint16
+	colTypes []types.Type
+	colNulls []bool
 }
 
 type mergeReader struct {
@@ -293,4 +300,34 @@ func (cols Columns) Less(i, j int) bool { return cols[i].num < cols[j].num }
 
 func (a BlockMeta) Eq(b BlockMeta) bool {
 	return a.Info.BlockID == b.Info.BlockID
+}
+
+type workspaceRow struct {
+	rowID   RowID
+	tableID uint64
+	indexes []memtable.Tuple
+}
+
+var _ memtable.Row[RowID, *workspaceRow] = new(workspaceRow)
+
+func (w *workspaceRow) Key() RowID {
+	return w.rowID
+}
+
+func (w *workspaceRow) Value() *workspaceRow {
+	return w
+}
+
+func (w *workspaceRow) Indexes() []memtable.Tuple {
+	return w.indexes
+}
+
+func (w *workspaceRow) UniqueIndexes() []memtable.Tuple {
+	return nil
+}
+
+type pkRange struct {
+	isRange bool
+	items   []int64
+	ranges  []int64
 }

@@ -33,6 +33,7 @@ import (
 )
 
 func TestReplayCatalog1(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schemas := make([]*catalog.Schema, 4)
@@ -78,6 +79,7 @@ func TestReplayCatalog1(t *testing.T) {
 	var wg sync.WaitGroup
 	pool, err := ants.NewPool(1)
 	assert.Nil(t, err)
+	defer pool.Release()
 	for i, schema := range schemas {
 		wg.Add(1)
 		ckp := false
@@ -107,6 +109,7 @@ func TestReplayCatalog1(t *testing.T) {
 }
 
 func TestReplayCatalog2(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 0)
@@ -183,6 +186,7 @@ func TestReplayCatalog2(t *testing.T) {
 }
 
 func TestReplayCatalog3(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 0)
@@ -268,6 +272,7 @@ func TestReplayCatalog3(t *testing.T) {
 // catalog and data not checkpoint
 // catalog not softdelete
 func TestReplay1(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 1)
@@ -371,6 +376,7 @@ func TestReplay1(t *testing.T) {
 // replay
 // TODO check id and row of data
 func TestReplay2(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 1)
@@ -502,6 +508,7 @@ func TestReplay2(t *testing.T) {
 // 1. Ckp
 // TODO check rows
 func TestReplay3(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := newTestEngine(t, nil)
 	defer tae.Close()
@@ -575,6 +582,7 @@ func TestReplay3(t *testing.T) {
    1. compact
    replay and check rows */
 func TestReplayTableRows(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 1)
@@ -693,6 +701,7 @@ func TestReplayTableRows(t *testing.T) {
 
 // Testing Steps
 func TestReplay4(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -755,6 +764,7 @@ func TestReplay4(t *testing.T) {
 
 // Testing Steps
 func TestReplay5(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -778,7 +788,7 @@ func TestReplay5(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	err = rel.Append(bats[0])
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:2]), false)
@@ -792,9 +802,9 @@ func TestReplay5(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:2]), false)
 	err = rel.Append(bats[0])
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	err = rel.Append(bats[1])
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	err = rel.Append(bats[2])
 	assert.NoError(t, err)
 	err = rel.Append(bats[3])
@@ -814,7 +824,7 @@ func TestReplay5(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[:4]), false)
 	err = rel.Append(bats[3])
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	for _, b := range bats[4:8] {
 		err = rel.Append(b)
 		assert.NoError(t, err)
@@ -832,7 +842,7 @@ func TestReplay5(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[:8]), false)
 	err = rel.Append(bats[0])
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	assert.NoError(t, txn.Commit())
 	// testutils.WaitExpect(3000, func() bool {
 	// 	return tae.Wal.GetCheckpointed() == tae.Wal.GetCurrSeqNum()/2
@@ -848,7 +858,7 @@ func TestReplay5(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[:8]), false)
 	err = rel.Append(bats[0])
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	assert.NoError(t, txn.Commit())
 
 	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
@@ -861,6 +871,7 @@ func TestReplay5(t *testing.T) {
 }
 
 func TestReplay6(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -880,7 +891,7 @@ func TestReplay6(t *testing.T) {
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:1]), false)
 	err = rel.Append(bats[0])
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
@@ -894,7 +905,7 @@ func TestReplay6(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:2]), false)
 	err = rel.Append(bats[0])
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	err = rel.Append(bats[2])
 	assert.NoError(t, err)
 	err = rel.Append(bats[3])
@@ -916,6 +927,7 @@ func TestReplay6(t *testing.T) {
 }
 
 func TestReplay7(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -942,6 +954,7 @@ func TestReplay7(t *testing.T) {
 }
 
 func TestReplay8(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -976,7 +989,7 @@ func TestReplay8(t *testing.T) {
 	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, bats[0].Length()-1, true)
 	err = rel.Append(bats[0])
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	assert.NoError(t, txn.Commit())
 
 	// Try to append the delete row and then rollback
@@ -1005,7 +1018,7 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, err)
 	tuple3 := bat.Window(3, 1)
 	err = rel.Append(tuple3)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
@@ -1017,7 +1030,7 @@ func TestReplay8(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
 	checkAllColRowsByScan(t, rel, bats[0].Length(), true)
 	err = rel.Append(window)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)
 	err = rel.Append(bats[2])
@@ -1032,7 +1045,7 @@ func TestReplay8(t *testing.T) {
 	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, bat.Length(), true)
 	err = rel.Append(window)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 
 	v0_5 := getSingleSortKeyValue(bats[0], schema, 5)
 	filter = handle.NewEQFilter(v0_5)
@@ -1091,6 +1104,7 @@ func TestReplay8(t *testing.T) {
 }
 
 func TestReplay9(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -1186,6 +1200,7 @@ func TestReplay9(t *testing.T) {
 }
 
 func TestReplay10(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -1199,9 +1214,15 @@ func TestReplay10(t *testing.T) {
 		NullAbility: false,
 		Expr:        exprbuf,
 	}
+	schema.ColDefs[1].OnUpdate = catalog.OnUpdate{
+		Expr: exprbuf,
+	}
 	schema.ColDefs[2].Default = catalog.Default{
 		NullAbility: true,
-		Expr:        []byte("world"),
+		Expr:        nil,
+	}
+	schema.ColDefs[2].OnUpdate = catalog.OnUpdate{
+		Expr: nil,
 	}
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
@@ -1219,6 +1240,9 @@ func TestReplay10(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 	schema1 := rel.GetMeta().(*catalog.TableEntry).GetSchema()
 	assert.Equal(t, exprbuf, schema1.ColDefs[1].Default.Expr)
+	assert.Equal(t, exprbuf, schema1.ColDefs[1].OnUpdate.Expr)
+	assert.Equal(t, []byte(nil), schema1.ColDefs[2].Default.Expr)
+	assert.Equal(t, []byte(nil), schema1.ColDefs[2].OnUpdate.Expr)
 	assert.Equal(t, true, schema1.ColDefs[2].Default.NullAbility)
 }
 
@@ -1228,6 +1252,7 @@ func TestReplay10(t *testing.T) {
 // checkpoint
 // restart
 func TestReplaySnapshots(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	schema := catalog.MockSchemaAll(1, -1)

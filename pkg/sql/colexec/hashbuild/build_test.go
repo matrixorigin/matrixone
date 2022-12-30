@@ -82,9 +82,10 @@ func TestBuild(t *testing.T) {
 			require.Equal(t, true, ok)
 			mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
 			mp.Free()
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 			break
 		}
+		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -117,7 +118,7 @@ func TestLowCardinalityBuild(t *testing.T) {
 	require.Equal(t, []int64{3, 5}, sels[2])
 
 	mp.Free()
-	tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+	tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 }
 
 func BenchmarkBuild(b *testing.B) {
@@ -141,7 +142,7 @@ func BenchmarkBuild(b *testing.B) {
 				require.Equal(t, true, ok)
 				mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
 				mp.Free()
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+				tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 				break
 			}
 		}
@@ -191,11 +192,11 @@ func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process,
 }
 
 func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
-	idx, err := index.New(v.Typ, m)
+	idx, err := index.New(v.GetType(), m)
 	require.NoError(t, err)
 
 	err = idx.InsertBatch(v)
 	require.NoError(t, err)
 
-	v.SetIndex(idx)
+	//v.SetIndex(idx)
 }

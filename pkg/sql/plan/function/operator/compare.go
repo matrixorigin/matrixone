@@ -34,18 +34,18 @@ type compareT interface {
 var boolType = types.T_bool.ToType()
 
 func handleScalarNull(v1, v2 *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if v1.IsScalarNull() {
-		return proc.AllocConstNullVector(boolType, vector.Length(v2)), nil
-	} else if v2.IsScalarNull() {
-		return proc.AllocConstNullVector(boolType, vector.Length(v1)), nil
+	if v1.IsConstNull() {
+		return proc.AllocConstNullVector(boolType, v2.Length()), nil
+	} else if v2.IsConstNull() {
+		return proc.AllocConstNullVector(boolType, v1.Length()), nil
 	}
-	panic(moerr.NewInternalError("handleScalarNull failed."))
+	panic(moerr.NewInternalErrorNoCtx("handleScalarNull failed."))
 }
 
 func allocateBoolVector(length int, proc *process.Process) *vector.Vector {
 	vec, err := proc.AllocVectorOfRows(boolType, int64(length), nil)
 	if err != nil {
-		panic(moerr.NewOOM())
+		panic(moerr.NewOOMNoCtx())
 	}
 	return vec
 }
@@ -55,11 +55,11 @@ type compareFn func(v1, v2, r *vector.Vector) error
 func CompareOrdered(vs []*vector.Vector, proc *process.Process, cfn compareFn) (*vector.Vector, error) {
 	left, right := vs[0], vs[1]
 
-	if left.IsScalarNull() || right.IsScalarNull() {
+	if left.IsConstNull() || right.IsConstNull() {
 		return handleScalarNull(left, right, proc)
 	}
 
-	if left.IsScalar() && right.IsScalar() {
+	if left.IsConst() && right.IsConst() {
 		resultVector := proc.AllocScalarVector(boolType)
 		if err := cfn(left, right, resultVector); err != nil {
 			return nil, err
@@ -67,12 +67,12 @@ func CompareOrdered(vs []*vector.Vector, proc *process.Process, cfn compareFn) (
 		return resultVector, nil
 	}
 
-	length := vector.Length(left)
-	if left.IsScalar() {
-		length = vector.Length(right)
+	length := left.Length()
+	if left.IsConst() {
+		length = right.Length()
 	}
 	resultVector := allocateBoolVector(length, proc)
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
+	nulls.Or(left.GetNulls(), right.GetNulls(), resultVector.GetNulls())
 
 	if err := cfn(left, right, resultVector); err != nil {
 		return nil, err
@@ -183,44 +183,44 @@ func CompareBytesNe(v1, v2 []byte, s1, s2 int32) bool {
 func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) (*vector.Vector, error) {
 	v1, v2 := vs[0], vs[1]
 	col1, col2 := vector.MustBytesCols(v1), vector.MustBytesCols(v2)
-	if v1.IsScalarNull() || v2.IsScalarNull() {
+	if v1.IsConstNull() || v2.IsConstNull() {
 		return handleScalarNull(v1, v2, proc)
 	}
 
-	if v1.IsScalar() && v2.IsScalar() {
-		return vector.NewConstFixed(boolType, 1, fn(col1[0], col2[0], v1.Typ.Scale, v2.Typ.Scale), proc.Mp()), nil
+	if v1.IsConst() && v2.IsConst() {
+		return vector.New(vector.CONSTANT, boolType, 1, fn(col1[0], col2[0], v1.GetType().Scale, v2.GetType().Scale), proc.Mp()), nil
 	}
 
-	if v1.IsScalar() {
-		length := vector.Length(v2)
+	if v1.IsConst() {
+		length := v2.Length()
 		vec := allocateBoolVector(length, proc)
-		veccol := vec.Col.([]bool)
+		veccol := vector.MustTCols[bool](vec)
 		for i := range veccol {
-			veccol[i] = fn(col1[0], col2[i], v1.Typ.Scale, v2.Typ.Scale)
+			veccol[i] = fn(col1[0], col2[i], v1.GetType().Scale, v2.GetType().Scale)
 		}
-		nulls.Or(v2.Nsp, nil, vec.Nsp)
+		nulls.Or(v2.GetNulls(), nil, vec.GetNulls())
 		return vec, nil
 	}
 
-	if v2.IsScalar() {
-		length := vector.Length(v1)
+	if v2.IsConst() {
+		length := v1.Length()
 		vec := allocateBoolVector(length, proc)
-		veccol := vec.Col.([]bool)
+		veccol := vector.MustTCols[bool](vec)
 		for i := range veccol {
-			veccol[i] = fn(col1[i], col2[0], v1.Typ.Scale, v2.Typ.Scale)
+			veccol[i] = fn(col1[i], col2[0], v1.GetType().Scale, v2.GetType().Scale)
 		}
-		nulls.Or(v1.Nsp, nil, vec.Nsp)
+		nulls.Or(v1.GetNulls(), nil, vec.GetNulls())
 		return vec, nil
 	}
 
 	// Vec Vec
-	length := vector.Length(v1)
+	length := v1.Length()
 	vec := allocateBoolVector(length, proc)
-	veccol := vec.Col.([]bool)
+	veccol := vector.MustTCols[bool](vec)
 	for i := range veccol {
-		veccol[i] = fn(col1[i], col2[i], v1.Typ.Scale, v2.Typ.Scale)
+		veccol[i] = fn(col1[i], col2[i], v1.GetType().Scale, v2.GetType().Scale)
 	}
-	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
+	nulls.Or(v1.GetNulls(), v2.GetNulls(), vec.GetNulls())
 	return vec, nil
 }
 
@@ -274,44 +274,44 @@ func CompareUuid(vs []*vector.Vector, fn compUuidFn, proc *process.Process) (*ve
 	v1, v2 := vs[0], vs[1]
 	//col1, col2 := vector.MustBytesCols(v1), vector.MustBytesCols(v2)
 	col1, col2 := vector.MustTCols[types.Uuid](v1), vector.MustTCols[types.Uuid](v2)
-	if v1.IsScalarNull() || v2.IsScalarNull() {
+	if v1.IsConstNull() || v2.IsConstNull() {
 		return handleScalarNull(v1, v2, proc)
 	}
 
-	if v1.IsScalar() && v2.IsScalar() {
-		return vector.NewConstFixed(boolType, 1, fn(col1[0], col2[0]), proc.Mp()), nil
+	if v1.IsConst() && v2.IsConst() {
+		return vector.New(vector.CONSTANT, boolType, 1, fn(col1[0], col2[0]), proc.Mp()), nil
 	}
 
-	if v1.IsScalar() {
-		length := vector.Length(v2)
+	if v1.IsConst() {
+		length := v2.Length()
 		vec := allocateBoolVector(length, proc)
-		veccol := vec.Col.([]bool)
+		veccol := vector.MustTCols[bool](vec)
 		for i := range veccol {
 			veccol[i] = fn(col1[0], col2[i])
 		}
-		nulls.Or(v2.Nsp, nil, vec.Nsp)
+		nulls.Or(v2.GetNulls(), nil, vec.GetNulls())
 		return vec, nil
 	}
 
-	if v2.IsScalar() {
-		length := vector.Length(v1)
+	if v2.IsConst() {
+		length := v1.Length()
 		vec := allocateBoolVector(length, proc)
-		veccol := vec.Col.([]bool)
+		veccol := vector.MustTCols[bool](vec)
 		for i := range veccol {
 			veccol[i] = fn(col1[i], col2[0])
 		}
-		nulls.Or(v1.Nsp, nil, vec.Nsp)
+		nulls.Or(v1.GetNulls(), nil, vec.GetNulls())
 		return vec, nil
 	}
 
 	// Vec Vec
-	length := vector.Length(v1)
+	length := v1.Length()
 	vec := allocateBoolVector(length, proc)
-	veccol := vec.Col.([]bool)
+	veccol := vector.MustTCols[bool](vec)
 	for i := range veccol {
 		veccol[i] = fn(col1[i], col2[i])
 	}
-	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
+	nulls.Or(v1.GetNulls(), v2.GetNulls(), vec.GetNulls())
 	return vec, nil
 }
 

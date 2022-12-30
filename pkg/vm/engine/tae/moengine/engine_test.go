@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
@@ -47,6 +46,7 @@ func initDB(t *testing.T, opts *options.Options) *db.DB {
 }
 
 func TestEngine(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	ctx := context.TODO()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
@@ -144,16 +144,17 @@ func TestEngine(t *testing.T) {
 	readers, _ := rel.NewReader(ctx, 10, nil, nil)
 	m := mpool.MustNewZero()
 	for _, reader := range readers {
-		bat, err := reader.Read([]string{schema.ColDefs[1].Name}, nil, m)
+		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
-			assert.Equal(t, 80, vector.Length(bat.Vecs[0]))
+			assert.Equal(t, 80, bat.Vecs[0].Length())
 		}
 	}
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestEngineAllType(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	ctx := context.TODO()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
@@ -252,10 +253,10 @@ func TestEngineAllType(t *testing.T) {
 	readers, _ := rel.NewReader(ctx, 10, nil, nil)
 	m := mpool.MustNewZero()
 	for _, reader := range readers {
-		bat, err := reader.Read(schema.Attrs(), nil, m)
+		bat, err := reader.Read(ctx, schema.Attrs(), nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
-			assert.Equal(t, 80, vector.Length(bat.Vecs[0]))
+			assert.Equal(t, 80, bat.Vecs[0].Length())
 			vec := containers.NewVectorWithSharedMemory(bat.Vecs[12], false)
 			assert.Equal(t, vec.Get(0), basebat.Vecs[12].Get(20))
 		}
@@ -280,6 +281,7 @@ func TestEngineAllType(t *testing.T) {
 }
 
 func TestTxnRelation_GetHideKey(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	ctx := context.TODO()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
@@ -325,10 +327,10 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	delete := mobat.New(true, bat.Attrs)
 	m := mpool.MustNewZero()
 	for _, reader := range readers {
-		bat, err := reader.Read([]string{schema.ColDefs[13].Name}, nil, m)
+		bat, err := reader.Read(ctx, []string{schema.ColDefs[13].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
-			assert.Equal(t, 100, vector.Length(bat.Vecs[0]))
+			assert.Equal(t, 100, bat.Vecs[0].Length())
 			delete = bat
 		}
 	}
@@ -357,10 +359,10 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	readers, _ = rel.NewReader(ctx, 1, nil, nil)
 	m = mpool.MustNewZero()
 	for _, reader := range readers {
-		bat, err := reader.Read([]string{schema.ColDefs[13].Name}, nil, m)
+		bat, err := reader.Read(ctx, []string{schema.ColDefs[13].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
-			assert.Equal(t, 0, vector.Length(bat.Vecs[0]))
+			assert.Equal(t, 0, bat.Vecs[0].Length())
 		}
 	}
 
@@ -368,6 +370,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 }
 
 func TestCopy1(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	t1 := types.T_varchar.ToType()
 	v1 := containers.MockVector(t1, 10, false, true, nil)
@@ -458,6 +461,7 @@ func checkSysTable(t *testing.T, name string, dbase engine.Database, txn Txn, re
 }
 
 func TestSysRelation(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	ctx := context.TODO()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)

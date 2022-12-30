@@ -115,9 +115,9 @@ func TestFindInSetLength(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := result.Col.([]uint64)
+			col := vector.MustTCols[uint64](result)
 			require.Equal(t, c.expected, col)
-			require.Equal(t, c.isScalarL && c.isScalarR, result.IsScalar())
+			require.Equal(t, c.isScalarL && c.isScalarR, result.IsConst())
 		})
 	}
 }
@@ -127,22 +127,24 @@ func makeFindInSetTestVectors(left []string, right []string, isScalarL bool, isS
 	vec := make([]*vector.Vector, 2)
 	if left != nil {
 		if isScalarL {
-			vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, left[0], mp)
+			vec[0] = vector.New(vector.CONSTANT, types.T_varchar.ToType())
+			vector.AppendString(vec[0], left[0], left[0] == "", mp)
 		} else {
 			vec[0] = testutil.MakeVarcharVector(left, nil)
 		}
 	} else {
-		vec[0] = testutil.MakeScalarNull(types.T_varchar, 0)
+		vec[0] = testutil.MakeScalarNull(types.T_varchar, types.MaxVarcharLen)
 	}
 
 	if right != nil {
 		if isScalarR {
-			vec[1] = vector.NewConstString(types.T_varchar.ToType(), 1, right[0], mp)
+			vec[1] = vector.New(vector.CONSTANT, types.T_varchar.ToType())
+			vector.AppendString(vec[1], right[0], right[0] == "", mp)
 		} else {
 			vec[1] = testutil.MakeVarcharVector(right, nil)
 		}
 	} else {
-		vec[1] = testutil.MakeScalarNull(types.T_varchar, 0)
+		vec[1] = testutil.MakeScalarNull(types.T_varchar, types.MaxVarcharLen)
 	}
 
 	return vec

@@ -50,3 +50,23 @@ func (p *PartitionInfo) MarshalPartitionInfo() ([]byte, error) {
 func (p *PartitionInfo) UnMarshalPartitionInfo(data []byte) error {
 	return p.Unmarshal(data)
 }
+
+func (u *UniqueIndexDef) MarshalUniqueIndexDef() ([]byte, error) {
+	data := make([]byte, u.ProtoSize())
+	_, err := u.MarshalTo(data)
+	return data, err
+}
+
+func (u *UniqueIndexDef) UnMarshalUniqueIndexDef(data []byte) error {
+	return u.Unmarshal(data)
+}
+
+func (s *SecondaryIndexDef) MarshalSecondaryIndexDef() ([]byte, error) {
+	data := make([]byte, s.ProtoSize())
+	_, err := s.MarshalTo(data)
+	return data, err
+}
+
+func (s *SecondaryIndexDef) UnMarshalSecondaryIndexDef(data []byte) error {
+	return s.Unmarshal(data)
+}

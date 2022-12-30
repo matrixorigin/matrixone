@@ -15,7 +15,10 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -30,6 +33,11 @@ type MockCompilerContext struct {
 	tables  map[string]*TableDef
 	costs   map[string]*Cost
 	pks     map[string][]int
+
+	mysqlCompatible bool
+
+	// ctx default: nil
+	ctx context.Context
 }
 
 func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -42,11 +50,17 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	vars["decimal_var"] = dec
 	vars["null_var"] = nil
 
+	if m.mysqlCompatible {
+		vars["sql_mode"] = ""
+	} else {
+		vars["sql_mode"] = "ONLY_FULL_GROUP_BY"
+	}
+
 	if result, ok := vars[varName]; ok {
 		return result, nil
 	}
 
-	return nil, moerr.NewInternalError("var not found")
+	return nil, moerr.NewInternalError(m.ctx, "var not found")
 }
 
 type col struct {
@@ -62,6 +76,7 @@ func NewEmptyCompilerContext() *MockCompilerContext {
 	return &MockCompilerContext{
 		objects: make(map[string]*ObjectRef),
 		tables:  make(map[string]*TableDef),
+		ctx:     context.Background(),
 	}
 }
 
@@ -251,13 +266,14 @@ func NewMockCompilerContext() *MockCompilerContext {
 			for _, col := range table.cols {
 				colDefs = append(colDefs, &ColDef{
 					Typ: &plan.Type{
-						Id:        int32(col.Id),
-						Nullable:  col.Nullable,
-						Width:     col.Width,
-						Precision: col.Precision,
+						Id:          int32(col.Id),
+						NotNullable: !col.Nullable,
+						Width:       col.Width,
+						Precision:   col.Precision,
 					},
-					Name:  col.Name,
-					Pkidx: 1,
+					Name:    col.Name,
+					Pkidx:   1,
+					Default: &plan.Default{},
 				})
 			}
 
@@ -364,6 +380,14 @@ func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) *Cost {
 
 func (m *MockCompilerContext) GetAccountId() uint32 {
 	return 0
+}
+
+func (m *MockCompilerContext) GetContext() context.Context {
+	return m.ctx
+}
+
+func (m *MockCompilerContext) GetProcess() *process.Process {
+	return testutil.NewProc()
 }
 
 type MockOptimizer struct {

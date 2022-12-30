@@ -114,7 +114,12 @@ import (
     unresolveNames []*tree.UnresolvedName
 
     partitionOption *tree.PartitionOption
+    clusterByOption *tree.ClusterByOption
     partitionBy *tree.PartitionBy
+    windowSpec *tree.WindowSpec
+    windowFrame *tree.WindowFrame
+    windowFrameBound tree.WindowFrameBound
+    windowFrameUnit tree.WindowFrameUnits
     partition *tree.Partition
     partitions []*tree.Partition
     values tree.Values
@@ -170,6 +175,7 @@ import (
     cteList []*tree.CTE
 
     accountAuthOption tree.AccountAuthOption
+    alterAccountAuthOption tree.AlterAccountAuthOption
     accountIdentified tree.AccountIdentified
     accountStatus tree.AccountStatus
     accountComment tree.AccountComment
@@ -183,6 +189,9 @@ import (
     indexHintScope tree.IndexHintScope
     indexHint *tree.IndexHint
     indexHintList []*tree.IndexHint
+
+    killOption tree.KillOption
+    statementOption tree.StatementOption
 }
 
 %token LEX_ERROR
@@ -240,7 +249,7 @@ import (
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
-%token <str> INT1 INT2 INT3 INT4 INT8
+%token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION
 
 // Select option
 %token <str> SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT
@@ -256,7 +265,7 @@ import (
 %token <str> MAX_ROWS MIN_ROWS PACK_KEYS ROW_FORMAT STATS_AUTO_RECALC STATS_PERSISTENT STATS_SAMPLE_PAGES
 %token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
-%token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
+%token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS CLUSTER
 %token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL
 %token <str> PREPARE DEALLOCATE
 
@@ -292,13 +301,16 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT FROM_JSONLINE
+%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT
 
 // MODump
 %token <str> MODUMP
 
+// Window function
+%token <str> OVER PRECEDING FOLLOWING GROUPS
+
 // Supported SHOW tokens
-%token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
+%token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODELIST LOCKS
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
@@ -332,13 +344,7 @@ import (
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
 //JSON function
-%token <str> JSON_EXTRACT ARROW
-
-// JSON table function
-%token <str> UNNEST
-
-// table function
-%token <str> GENERATE_SERIES
+%token <str> ARROW
 
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE
@@ -361,6 +367,7 @@ import (
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
+%type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> alter_account_stmt alter_user_stmt update_stmt use_stmt update_no_with_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
@@ -375,6 +382,7 @@ import (
 %type <statement> declare_stmt
 %type <statement> values_stmt
 %type <statement> mo_dump_stmt
+%type <statement> kill_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -422,17 +430,16 @@ import (
 %type <groupBy> group_by_opt
 %type <aliasedTableExpr> aliased_table_name
 %type <unionTypeRecord> union_op
-%type <parenTableExpr> derived_table
+%type <parenTableExpr> table_subquery
 %type <str> inner_join straight_join outer_join natural_join
 %type <funcType> func_type_opt
 %type <funcExpr> function_call_generic
 %type <funcExpr> function_call_keyword
 %type <funcExpr> function_call_nonkeyword
 %type <funcExpr> function_call_aggregate
-%type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
-%type <strs> enum_values force_quote_opt force_quote_list
+%type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params
 %type <str> sql_id charset_keyword db_name db_name_opt
 %type <str> not_keyword func_not_keyword
 %type <str> reserved_keyword non_reserved_keyword
@@ -453,7 +460,7 @@ import (
 %type <expr> simple_expr else_opt
 %type <expr> expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
-%type <exprs> expression_list row_value
+%type <exprs> expression_list row_value window_partition_by window_partition_by_opt
 %type <expr> datetime_precision_opt datetime_precision
 %type <tuple> tuple_expression
 %type <comparisonOp> comparison_operator and_or_some
@@ -497,7 +504,12 @@ import (
 %type <privilegeLevel> priv_level
 %type <unresolveNames> column_name_list
 %type <partitionOption> partition_by_opt
+%type <clusterByOption> cluster_by_opt
 %type <partitionBy> partition_method sub_partition_method sub_partition_opt
+%type <windowSpec> window_spec_opt
+%type <windowFrame> window_frame window_frame_opt
+%type <windowFrameBound> window_frame_bound
+%type <windowFrameUnit> window_frame_unit
 %type <str> fields_or_columns
 %type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt
 %type <boolVal> linear_opt
@@ -562,6 +574,7 @@ import (
 
 %type <str> account_name account_admin_name account_role_name
 %type <accountAuthOption> account_auth_option
+%type <alterAccountAuthOption> alter_account_auth_option
 %type <accountIdentified> account_identified
 %type <accountStatus> account_status_option
 %type <accountComment> account_comment_opt
@@ -574,6 +587,10 @@ import (
 %type <indexHint> index_hint
 %type <indexHintList> index_hint_list index_hint_list_opt
 %type <updateList> on_duplicate_key_update_opt
+
+%token <str> KILL
+%type <killOption> kill_opt
+%type <statementOption> statement_id_opt
 %start start_command
 
 %%
@@ -625,11 +642,67 @@ stmt:
     {
         $$ = $1
     }
+|   kill_stmt
 |   /* EMPTY */
     {
         $$ = tree.Statement(nil)
     }
 
+kill_stmt:
+    KILL kill_opt INTEGRAL statement_id_opt
+    {
+        var connectionId uint64
+        switch v := $3.(type) {
+        case uint64:
+	    connectionId = v
+        case int64:
+	    connectionId = uint64(v)
+        default:
+	    yylex.Error("parse integral fail")
+	    return 1
+        }
+
+	$$ = &tree.Kill{
+            Option: $2,
+            ConnectionId: connectionId,
+            StmtOption:  $4,
+	}
+    }
+
+kill_opt:
+{
+    $$ = tree.KillOption{
+        Exist: false,
+    }
+}
+| CONNECTION
+{
+    $$ = tree.KillOption{
+	Exist: true,
+	Typ: tree.KillTypeConnection,
+    }
+}
+| QUERY
+{
+    $$ = tree.KillOption{
+	Exist: true,
+	Typ: tree.KillTypeQuery,
+    }
+}
+
+statement_id_opt:
+{
+    $$ = tree.StatementOption{
+        Exist: false,
+    }
+}
+| STRING
+{
+    $$ = tree.StatementOption{
+        Exist: true,
+        StatementId: $1,
+    }
+}
 
 mo_dump_stmt:
     MODUMP DATABASE database_id INTO STRING max_file_size_opt
@@ -1984,7 +2057,7 @@ alter_stmt:
 // |    alter_ddl_stmt
 
 alter_account_stmt:
-    ALTER ACCOUNT exists_opt account_name account_auth_option account_status_option account_comment_opt
+    ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
     {
     $$ = &tree.AlterAccount{
         IfExists:$3,
@@ -1994,6 +2067,22 @@ alter_account_stmt:
         Comment:$7,
     }
     }
+
+alter_account_auth_option:
+{
+    $$ = tree.AlterAccountAuthOption{
+       Exist: false,
+    }
+}
+| ADMIN_NAME equal_opt account_admin_name account_identified
+{
+    $$ = tree.AlterAccountAuthOption{
+        Exist: true,
+        Equal:$2,
+        AdminName:$3,
+        IdentifiedType:$4,
+    }
+}
 
 alter_user_stmt:
     ALTER USER exists_opt user_spec_list_of_create_user default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
@@ -2139,6 +2228,9 @@ show_stmt:
 |   show_table_status_stmt
 |   show_grants_stmt
 |   show_collation_stmt
+|   show_function_status_stmt
+|   show_node_list_stmt
+|   show_locks_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -2177,6 +2269,27 @@ from_or_in_opt:
 db_name_opt:
     {}
 |    db_name
+
+show_function_status_stmt:
+    SHOW FUNCTION STATUS like_opt where_expression_opt
+    {
+       $$ = &tree.ShowFunctionStatus{
+            Like: $4,
+            Where: $5,
+        }
+    }
+
+show_node_list_stmt:
+    SHOW NODELIST
+    {
+       $$ = &tree.ShowNodeList{}
+    }
+
+show_locks_stmt:
+    SHOW LOCKS
+    {
+       $$ = &tree.ShowLocks{}
+    }
 
 show_target_filter_stmt:
     SHOW show_target like_opt where_expression_opt
@@ -2233,6 +2346,15 @@ show_index_stmt:
             Where: $6,
         }
     }
+|	SHOW extended_opt index_kwd from_or_in ident from_or_in ident where_expression_opt
+     {
+     	 prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($7), ExplicitSchema: true}
+         tbl := tree.NewTableName(tree.Identifier($5), prefix)
+         $$ = &tree.ShowIndex{
+             TableName: *tbl,
+             Where: $8,
+         }
+     }
 
 extended_opt:
     {}
@@ -3651,13 +3773,13 @@ table_factor:
     {
         $$ = $1
     }
-|   derived_table as_opt ident column_list_opt
+|   table_subquery as_opt_id column_list_opt
     {
         $$ = &tree.AliasedTableExpr{
             Expr: $1,
             As: tree.AliasClause{
-                Alias: tree.Identifier($3),
-                Cols: $4,
+                Alias: tree.Identifier($2),
+                Cols: $3,
             },
         }
     }
@@ -3679,191 +3801,24 @@ table_factor:
 		$$ = $2
 	}
 
-derived_table:
-    '(' select_no_parens ')'
+table_subquery:
+    select_with_parens %prec SUBQUERY_AS_EXPR
     {
-        $$ = &tree.ParenTableExpr{Expr: $2}
+    	$$ = &tree.ParenTableExpr{Expr: $1.(*tree.ParenSelect).Select}
     }
 
 table_function:
-    UNNEST '(' STRING ')'
+    ident '(' expression_list_opt ')'
     {
-        a1 := $3
-        a2 := "$"
-        a3 := false
-        e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
+        name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
+       	    Func: &tree.FuncExpr{
+        	Func: tree.FuncName2ResolvableFunctionReference(name),
+        	Exprs: $3,
+        	Type: tree.FUNC_TYPE_TABLE,
             },
-	}
-    }
-|   UNNEST '(' STRING ',' STRING ')'
-    {
-	a1 := $3
-	a2 := "$"
-	if len($5) > 0 {
-       	    a2 = $5
         }
-        a3 := false
-	e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
     }
-|   UNNEST '(' STRING ',' STRING ',' TRUE ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-        if len($5) > 0 {
-            a2 = $5
-        }
-	a3 := true
-	e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "true",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' STRING ',' STRING ',' FALSE ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-    	if len($5) > 0 {
-            a2 = $5
-        }
-    	a3 := false
-	e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' column_name ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-    	a3 := false
-	e1 := a1
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' column_name ',' STRING ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-    	if len($5) > 0 {
-    	    a2 = $5
-    	}
-    	a3 := false
-	e1 := a1
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' column_name ',' STRING ',' TRUE ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-    	if len($5) > 0 {
-    	    a2 = $5
-    	}
-    	a3 := true
-	e1 := a1
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "true",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' column_name ',' STRING ',' FALSE ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-    	if len($5) > 0 {
-    	    a2 = $5
-    	}
-    	a3 := false
-	e1 := a1
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "true",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   GENERATE_SERIES '(' expression_list ')'
-    {
-	name := tree.SetUnresolvedName(strings.ToLower($1))
-	$$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-		Func: tree.FuncName2ResolvableFunctionReference(name),
-		Exprs: $3,
-		Type: tree.FUNC_TYPE_TABLE,
-	    },
-	}
-    }
-
-
-as_opt:
-    {}
-|   AS {}
 
 aliased_table_name:
     table_name as_opt_id index_hint_list_opt
@@ -4598,7 +4553,7 @@ default_opt:
     }
 
 create_table_stmt:
-    CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt
+    CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
     {
         $$ = &tree.CreateTable {
             Temporary: $2,
@@ -4607,6 +4562,7 @@ create_table_stmt:
             Defs: $7,
             Options: $9,
             PartitionOption: $10,
+            ClusterByOption: $11, 
         }
     }
 |   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' load_param_opt_2
@@ -4635,55 +4591,38 @@ load_param_opt:
             Format: tree.CSV,
         }
     }
-|   INFILE '{' STRING '=' STRING '}'
+|   INFILE '{' infile_or_s3_params '}'
     {
-        if strings.ToLower($3) != "filepath" {
-                yylex.Error(fmt.Sprintf("can not recognize the '%s'", $3))
-                return 1
-            }
-        $$ = &tree.ExternParam{
-            Filepath: $5,
-            CompressType: tree.AUTO,
-            Format: tree.CSV,
-        }
-    }
-|   INFILE '{' STRING '=' STRING ',' STRING '=' STRING '}'
-    {
-        if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "compression" {
-                yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' ", $3, $7))
-                return 1
-            }
-        $$ = &tree.ExternParam{
-            Filepath: $5,
-            CompressType: $9,
-            Format: tree.CSV,
-        }
-    }
-|   INFILE '{' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING '}'
-    {
-	if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "format" || strings.ToLower($11) != "jsondata" {
-		yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' or '%s'", $3, $7, $11))
-		return 1
-	    }
 	$$ = &tree.ExternParam{
-	    Filepath: $5,
-	    CompressType: tree.AUTO,
-	    Format: strings.ToLower($9),
-	    JsonData: strings.ToLower($13),
+	    Option: $3,
 	}
     }
-|   INFILE '{' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING '}'
+|   URL S3OPTION '{' infile_or_s3_params '}'
     {
-    	if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "compression" || strings.ToLower($11) != "format" || strings.ToLower($15) != "jsondata" {
-    		yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' or '%s' or '%s'", $3, $7, $11, $15))
-    		return 1
-    	    }
-    	$$ = &tree.ExternParam{
-    	    Filepath: $5,
-    	    CompressType: $9,
-    	    Format: strings.ToLower($13),
-    	    JsonData: strings.ToLower($17),
-    	}
+        $$ = &tree.ExternParam{
+            ScanType: tree.S3,
+            Option: $4,
+        }
+    }
+
+infile_or_s3_params:
+    infile_or_s3_param
+    {
+        $$ = $1
+    }
+|   infile_or_s3_params ',' infile_or_s3_param
+    {
+        $$ = append($1, $3...)
+    }
+
+infile_or_s3_param:
+    {
+        $$ = []string{}
+    }
+|   STRING '=' STRING
+    {
+        $$ = append($$, $1)
+        $$ = append($$, $3)
     }
 
 tail_param_opt:
@@ -4718,6 +4657,24 @@ partition_by_opt:
             PartBy: *$3,
             SubPartBy: $5,
             Partitions: $6,
+        }
+    }
+
+cluster_by_opt:
+    {
+        $$ = nil
+    }
+|   CLUSTER BY column_name
+    {
+        $$ = &tree.ClusterByOption{
+            ColumnList : []*tree.UnresolvedName{$3},
+        }
+
+    }
+    | CLUSTER BY '(' column_name_list ')'
+    {
+        $$ = &tree.ClusterByOption{
+            ColumnList : $4,
         }
     }
 
@@ -5780,10 +5737,6 @@ simple_expr:
     {
         $$ = $1
     }
-|   function_call_json
-    {
-        $$ = $1
-    }
 
 else_opt:
     {
@@ -5977,138 +5930,248 @@ integer_opt:
 |    INTEGER
 |    INT
 
+window_frame_bound:
+  CURRENT ROW
+    {
+        $$ = &tree.WindowFrameBoundCurrentRow{}
+    }
+| UNBOUNDED PRECEDING
+    {
+        $$ = &tree.WindowFrameBoundPreceding{}
+    }
+| expression PRECEDING
+    {
+        $$ = &tree.WindowFrameBoundPreceding{
+            Expr: $1,
+        }
+    }
+| UNBOUNDED FOLLOWING
+    {
+        $$ = &tree.WindowFrameBoundFollowing{}
+    }
+| expression FOLLOWING
+    {
+        $$ = &tree.WindowFrameBoundFollowing{
+            Expr: $1,
+        }
+    }
+
+window_frame_unit:
+    ROWS
+    {
+        $$ = tree.WIN_FRAME_UNIT_ROWS
+    }
+|   RANGE
+    {
+        $$ = tree.WIN_FRAME_UNIT_RANGE
+    }
+|   GROUPS
+    {
+        $$ = tree.WIN_FRAME_UNIT_GROUPS
+    }
+
+window_frame:
+    window_frame_unit window_frame_bound
+    {
+        $$ = &tree.WindowFrame{
+            Unit: $1,
+            StartBound: $2,
+        }
+    }
+|   window_frame_unit BETWEEN window_frame_bound AND window_frame_bound
+    {
+        $$ = &tree.WindowFrame{
+            Unit: $1,
+            StartBound: $3,
+            EndBound: $5,
+        }
+    }
+
+window_frame_opt:
+    {
+        $$ = nil
+    }
+|   window_frame
+    {
+        $$ = $1
+    }
+
+
+window_partition_by:
+   PARTITION BY expression_list
+    {
+        $$ = $3
+    }
+
+window_partition_by_opt:
+    {
+        $$ = nil
+    }
+|   window_partition_by
+    {
+        $$ = $1
+    }
+
+window_spec_opt:
+    {
+        $$ = nil
+    }
+|   OVER '(' window_partition_by_opt order_by_opt window_frame_opt ')'
+    {
+        $$ = &tree.WindowSpec{
+            PartitionBy: $3,
+            OrderBy: $4,
+            WindowFrame: $5,
+        }
+    }
+
 function_call_aggregate:
-    AVG '(' func_type_opt expression  ')'
+    AVG '(' func_type_opt expression  ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   APPROX_COUNT_DISTINCT '(' expression_list ')'
+|   APPROX_COUNT_DISTINCT '(' expression_list ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: $3,
+            WindowSpec: $5,
         }
     }
-|   APPROX_PERCENTILE '(' expression_list ')'
+|   APPROX_PERCENTILE '(' expression_list ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: $3,
+            WindowSpec: $5,
         }
     }
-|   BIT_AND '(' func_type_opt expression ')'
+|   BIT_AND '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   BIT_OR '(' func_type_opt expression ')'
+|   BIT_OR '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   BIT_XOR '(' func_type_opt expression ')'
+|   BIT_XOR '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   COUNT '(' func_type_opt expression_list ')'
+|   COUNT '(' func_type_opt expression_list ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: $4,
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   COUNT '(' '*' ')'
+|   COUNT '(' '*' ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         es := tree.NewNumValWithType(constant.MakeString("*"), "*", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{es},
+            WindowSpec: $5,
         }
     }
-|   MAX '(' func_type_opt expression ')'
+|   MAX '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   MIN '(' func_type_opt expression ')'
+|   MIN '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   SUM '(' func_type_opt expression ')'
+|   SUM '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   std_dev_pop '(' func_type_opt expression ')'
+|   std_dev_pop '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   STDDEV_SAMP '(' func_type_opt expression ')'
+|   STDDEV_SAMP '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   VAR_POP '(' func_type_opt expression ')'
+|   VAR_POP '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
-|   VAR_SAMP '(' func_type_opt expression ')'
+|   VAR_SAMP '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
 
@@ -6229,17 +6292,6 @@ function_call_generic:
         }
     }
 
-function_call_json:
-    JSON_EXTRACT '(' STRING ',' STRING ')'
-    {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
-        a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
-        a2 := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{a1, a2},
-        }
-    }
 
 trim_direction:
     BOTH
@@ -6249,6 +6301,7 @@ trim_direction:
 substr_option:
     SUBSTRING
 |    SUBSTR
+|    MID
 
 time_unit:
     time_stamp_unit
@@ -6817,6 +6870,11 @@ literal:
     {
         $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
     }
+|   UNDERSCORE_BINARY STRING
+    {
+        $$ = tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_ScoreBinary)
+    }
+
 
 column_type:
     numeric_type unsigned_opt zero_fill_opt
@@ -7304,7 +7362,7 @@ char_type:
                 Family: tree.BlobFamily,
                 FamilyString: $1,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_TINY_BLOB),
+                Oid:    uint32(defines.MYSQL_TYPE_TEXT),
             },
         }
     }
@@ -7316,7 +7374,7 @@ char_type:
                 Family: tree.BlobFamily,
                 FamilyString: $1,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_MEDIUM_BLOB),
+                Oid:    uint32(defines.MYSQL_TYPE_TEXT),
             },
         }
     }
@@ -7328,7 +7386,7 @@ char_type:
                 Family: tree.BlobFamily,
                 FamilyString: $1,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_LONG_BLOB),
+                Oid:    uint32(defines.MYSQL_TYPE_TEXT),
             },
         }
     }
@@ -7785,6 +7843,12 @@ reserved_keyword:
 |   SECONDARY
 |   DECLARE
 |   MODUMP
+|   OVER
+|   PRECEDING
+|   FOLLOWING
+|   GROUPS
+|   NODELIST
+|   LOCKS
 
 non_reserved_keyword:
     ACCOUNT
@@ -7801,6 +7865,7 @@ non_reserved_keyword:
 |   BOOL
 |   CHAIN
 |   CHECKSUM
+|   CLUSTER
 |   COMPRESSION
 |   COMMENT_KEYWORD
 |   COMMIT
@@ -7963,6 +8028,7 @@ non_reserved_keyword:
 |   TRIGGERS
 |   HISTORY
 |   LOW_CARDINALITY
+|   S3OPTION
 
 func_not_keyword:
     DATE_ADD
@@ -7975,8 +8041,6 @@ func_not_keyword:
 |   SUBDATE
 |   SYSTEM_USER
 |   TRANSLATE
-|   UNNEST
-|   GENERATE_SERIES
 
 not_keyword:
     ADDDATE

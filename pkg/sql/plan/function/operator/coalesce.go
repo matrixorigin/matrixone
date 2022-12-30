@@ -79,11 +79,23 @@ var (
 	}
 
 	CoalesceVarchar = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceString(vs, proc, types.Type{Oid: types.T_varchar})
+		return coalesceString(vs, proc, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 	}
 
 	CoalesceChar = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return coalesceString(vs, proc, types.Type{Oid: types.T_char})
+	}
+
+	CoalesceJson = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return coalesceString(vs, proc, types.Type{Oid: types.T_json.ToType().Oid})
+	}
+
+	CoalesceBlob = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return coalesceString(vs, proc, types.Type{Oid: types.T_blob.ToType().Oid})
+	}
+
+	CoalesceText = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return coalesceString(vs, proc, types.Type{Oid: types.T_text.ToType().Oid})
 	}
 
 	CoalesceDecimal64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -117,17 +129,17 @@ func CoalesceTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
 // coalesceGeneral is a general evaluate function for coalesce operator
 // when return type is uint / int / float / bool / date / datetime
 func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
-	vecLen := vector.Length(vs[0])
+	vecLen := vs[0].Length()
 	startIdx := 0
 	for i := 0; i < len(vs); i++ {
 		input := vs[i]
-		if input.IsScalar() {
-			if !input.IsScalarNull() {
+		if input.IsConst() {
+			if !input.IsConstNull() {
 				cols := vector.MustTCols[T](input)
 				r := proc.AllocScalarVector(t)
-				r.Typ.Precision = input.Typ.Precision
-				r.Typ.Width = input.Typ.Width
-				r.Typ.Scale = input.Typ.Scale
+				r.GetType().Precision = input.GetType().Precision
+				r.GetType().Width = input.GetType().Width
+				r.GetType().Scale = input.GetType().Scale
 				r.Col = make([]T, 1)
 				r.Col.([]T)[0] = cols[0]
 				return r, nil
@@ -146,52 +158,52 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 	rs.Col = rs.Col.([]T)[:vecLen]
 	rsCols := rs.Col.([]T)
 
-	rs.Nsp = nulls.NewWithSize(vecLen)
-	rs.Nsp.Np.AddRange(0, uint64(vecLen))
+	rs.GetNulls() = nulls.NewWithSize(vecLen)
+	rs.GetNulls().Np.AddRange(0, uint64(vecLen))
 
 	for i := startIdx; i < len(vs); i++ {
 		input := vs[i]
-		if input.Typ.Oid != types.T_any {
-			rs.Typ = input.Typ
+		if input.GetType().Oid != types.T_any {
+			rs.GetType() = input.GetType()
 		}
 		cols := vector.MustTCols[T](input)
-		if input.IsScalar() {
-			if input.IsScalarNull() {
+		if input.IsConst() {
+			if input.IsConstNull() {
 				continue
 			}
 
 			for j := 0; j < vecLen; j++ {
-				if rs.Nsp.Contains(uint64(j)) {
+				if rs.GetNulls().Contains(uint64(j)) {
 					rsCols[j] = cols[0]
 				}
 			}
-			rs.Nsp.Np = nil
+			rs.GetNulls().Np = nil
 			return rs, nil
 		} else {
-			nullsLength := nulls.Length(input.Nsp)
+			nullsLength := nulls.Length(input.GetNulls())
 			if nullsLength == vecLen {
 				// all null do nothing
 				continue
 			} else if nullsLength == 0 {
 				// all not null
 				for j := 0; j < vecLen; j++ {
-					if rs.Nsp.Contains(uint64(j)) {
+					if rs.GetNulls().Contains(uint64(j)) {
 						rsCols[j] = cols[j]
 					}
 				}
-				rs.Nsp.Np = nil
+				rs.GetNulls().Np = nil
 				return rs, nil
 			} else {
 				// some nulls
 				for j := 0; j < vecLen; j++ {
-					if rs.Nsp.Contains(uint64(j)) && !input.Nsp.Contains(uint64(j)) {
+					if rs.GetNulls().Contains(uint64(j)) && !input.GetNulls().Contains(uint64(j)) {
 						rsCols[j] = cols[j]
-						rs.Nsp.Np.Remove(uint64(j))
+						rs.GetNulls().Np.Remove(uint64(j))
 					}
 				}
 
-				if rs.Nsp.Np.IsEmpty() {
-					rs.Nsp.Np = nil
+				if rs.GetNulls().Np.IsEmpty() {
+					rs.GetNulls().Np = nil
 					return rs, nil
 				}
 			}
@@ -204,17 +216,19 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 // coalesceGeneral is a general evaluate function for coalesce operator
 // when return type is char / varchar
 func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vector.Vector, error) {
-	vecLen := vector.Length(vs[0])
+	vecLen := vs[0].Length()
 	startIdx := 0
 
 	// If leading expressions are non null scalar, return.   Otherwise startIdx
 	// is positioned at the first non scalar vector.
 	for i := 0; i < len(vs); i++ {
 		input := vs[i]
-		if input.IsScalar() {
-			if !input.IsScalarNull() {
+		if input.IsConst() {
+			if !input.IsConstNull() {
 				cols := vector.MustStrCols(input)
-				return vector.NewConstString(typ, input.Length(), cols[0], proc.Mp()), nil
+				vec := vector.New(vector.CONSTANT, typ)
+				vector.Append(vec, cols[0], cols[0] == "", proc.Mp())
+				return vec, nil
 			}
 		} else {
 			startIdx = i
@@ -229,8 +243,8 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 	for i := startIdx; i < len(vs); i++ {
 		input := vs[i]
 		cols := vector.MustStrCols(input)
-		if input.IsScalar() {
-			if input.IsScalarNull() {
+		if input.IsConst() {
+			if input.IsConstNull() {
 				continue
 			}
 			for j := 0; j < vecLen; j++ {
@@ -241,7 +255,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 			nsp = nil
 			break
 		} else {
-			nullsLength := nulls.Length(input.Nsp)
+			nullsLength := nulls.Length(input.GetNulls())
 			if nullsLength == vecLen {
 				// all null do nothing
 				continue
@@ -257,7 +271,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 			} else {
 				// some nulls
 				for j := 0; j < vecLen; j++ {
-					if nsp.Contains(uint64(j)) && !input.Nsp.Contains(uint64(j)) {
+					if nsp.Contains(uint64(j)) && !input.GetNulls().Contains(uint64(j)) {
 						rs[j] = cols[j]
 						nsp.Np.Remove(uint64(j))
 					}
@@ -271,6 +285,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 			}
 		}
 	}
-
-	return vector.NewWithStrings(typ, rs, nsp, proc.Mp()), nil
+	vec := vector.New(vector.FLAT, typ)
+	vector.AppendStringList(vec, rs, nil, proc.Mp())
+	return vec, nil
 }

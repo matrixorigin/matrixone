@@ -42,8 +42,10 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
-	bat := proc.Reg.InputBatch
+
+	bat := proc.InputBatch()
 	if bat == nil {
+		proc.SetInputBatch(nil)
 		return true, nil
 	}
 	if bat.Length() == 0 {
@@ -55,8 +57,8 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	for i, e := range ap.Es {
 		vec, err := colexec.EvalExpr(bat, proc, e)
 		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
-			bat.Clean(proc.Mp())
-			rbat.Clean(proc.Mp())
+			bat.Free(proc.Mp())
+			rbat.Free(proc.Mp())
 			return false, err
 		}
 		rbat.Vecs[i] = vec
@@ -71,8 +73,8 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	}
 	rbat.Zs = bat.Zs
 	bat.Zs = nil
-	bat.Clean(proc.Mp())
+	bat.Free(proc.Mp())
 	anal.Output(rbat)
-	proc.Reg.InputBatch = rbat
+	proc.SetInputBatch(rbat)
 	return false, nil
 }

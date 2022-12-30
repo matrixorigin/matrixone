@@ -17,9 +17,10 @@ package plan
 import (
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"go/constant"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -145,7 +146,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindCaseExpr(exprImpl, depth, isRoot)
 
 	case *tree.IntervalExpr:
-		err = moerr.NewNYI("expr interval'%v'", exprImpl)
+		err = moerr.NewNYINoCtx("expr interval'%v'", exprImpl)
 
 	case *tree.XorExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("xor", []tree.Expr{exprImpl.Left, exprImpl.Right}, depth)
@@ -153,7 +154,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	case *tree.Subquery:
 		if !isRoot && exprImpl.Exists {
 			// TODO: implement MARK join to better support non-scalar subqueries
-			return nil, moerr.NewNYI("EXISTS subquery as non-root expression")
+			return nil, moerr.NewNYINoCtx("EXISTS subquery as non-root expression")
 		}
 
 		expr, err = b.impl.BindSubquery(exprImpl, isRoot)
@@ -195,18 +196,18 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.baseBindParam(exprImpl, depth, isRoot)
 
 	case *tree.StrVal:
-		err = moerr.NewNYI("expr str'%v'", exprImpl)
+		err = moerr.NewNYINoCtx("expr str'%v'", exprImpl)
 
 	case *tree.ExprList:
-		err = moerr.NewNYI("expr plan.ExprList'%v'", exprImpl)
+		err = moerr.NewNYINoCtx("expr plan.ExprList'%v'", exprImpl)
 
 	case tree.UnqualifiedStar:
 		// select * from table
 		// * should only appear in SELECT clause
-		err = moerr.NewInvalidInput("SELECT clause contains unqualified star")
+		err = moerr.NewInvalidInputNoCtx("SELECT clause contains unqualified star")
 
 	default:
-		err = moerr.NewNYI("expr '%+v'", exprImpl)
+		err = moerr.NewNYINoCtx("expr '%+v'", exprImpl)
 	}
 
 	return
@@ -242,7 +243,7 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 
 func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	if b.ctx == nil {
-		return nil, moerr.NewInvalidInput("ambigous column reference '%v'", astExpr.Parts[0])
+		return nil, moerr.NewInvalidInputNoCtx("ambigous column reference '%v'", astExpr.Parts[0])
 	}
 
 	col := astExpr.Parts[0]
@@ -261,25 +262,25 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				typ = binding.types[colPos]
 				table = binding.table
 			} else {
-				return nil, moerr.NewInvalidInput("ambiguous column reference '%v'", name)
+				return nil, moerr.NewInvalidInputNoCtx("ambiguous column reference '%v'", name)
 			}
 		} else {
-			err = moerr.NewInvalidInput("column %s does not exist", name)
+			err = moerr.NewInvalidInputNoCtx("column %s does not exist", name)
 		}
 	} else {
 		if binding, ok := b.ctx.bindingByTable[table]; ok {
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {
-				return nil, moerr.NewInvalidInput("ambiguous column reference '%v'", name)
+				return nil, moerr.NewInvalidInputNoCtx("ambiguous column reference '%v'", name)
 			}
 			if colPos != NotFound {
 				typ = binding.types[colPos]
 				relPos = binding.tag
 			} else {
-				err = moerr.NewInvalidInput("column '%s' does not exist", name)
+				err = moerr.NewInvalidInputNoCtx("column '%s' does not exist", name)
 			}
 		} else {
-			err = moerr.NewInvalidInput("missing FROM-clause entry for table '%v'", table)
+			err = moerr.NewInvalidInputNoCtx("missing FROM-clause entry for table '%v'", table)
 		}
 	}
 
@@ -330,7 +331,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Expr, error) {
 	if b.ctx == nil {
-		return nil, moerr.NewInvalidInput("field reference doesn't support SUBQUERY")
+		return nil, moerr.NewInvalidInputNoCtx("field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
 
@@ -344,7 +345,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		}
 
 	default:
-		return nil, moerr.NewNYI("unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL))
+		return nil, moerr.NewNYINoCtx("unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL))
 	}
 
 	rowSize := int32(len(subCtx.results))
@@ -363,9 +364,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	if astExpr.Exists {
 		returnExpr.Typ = &plan.Type{
-			Id:       int32(types.T_bool),
-			Nullable: false,
-			Size:     1,
+			Id:          int32(types.T_bool),
+			NotNullable: true,
+			Size:        1,
 		}
 		returnExpr.Expr.(*plan.Expr_Sub).Sub.Typ = plan.SubqueryRef_EXISTS
 	} else if rowSize == 1 {
@@ -421,9 +422,9 @@ func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot 
 	case tree.UNARY_TILDE:
 		return b.bindFuncExprImplByAstExpr("unary_tilde", []tree.Expr{astExpr.Expr}, depth)
 	case tree.UNARY_MARK:
-		return nil, moerr.NewNYI("'%v'", astExpr)
+		return nil, moerr.NewNYINoCtx("'%v'", astExpr)
 	}
-	return nil, moerr.NewNYI("'%v'", astExpr)
+	return nil, moerr.NewNYINoCtx("'%v'", astExpr)
 }
 
 func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoot bool) (*Expr, error) {
@@ -451,7 +452,7 @@ func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoo
 	case tree.RIGHT_SHIFT:
 		return b.bindFuncExprImplByAstExpr(">>", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	}
-	return nil, moerr.NewNYI("'%v' operator", astExpr.Op.ToString())
+	return nil, moerr.NewNYINoCtx("'%v' operator", astExpr.Op.ToString())
 }
 
 func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int32, isRoot bool) (*Expr, error) {
@@ -511,16 +512,16 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			if subquery, ok := rightArg.Expr.(*plan.Expr_Sub); ok {
 				if !isRoot {
 					// TODO: implement MARK join to better support non-scalar subqueries
-					return nil, moerr.NewNYI("IN subquery as non-root expression")
+					return nil, moerr.NewNYINoCtx("IN subquery as non-root expression")
 				}
 
 				if list, ok := leftArg.Expr.(*plan.Expr_List); ok {
 					if len(list.List.List) != int(subquery.Sub.RowSize) {
-						return nil, moerr.NewNYI("subquery should return %d columns", len(list.List.List))
+						return nil, moerr.NewNYINoCtx("subquery should return %d columns", len(list.List.List))
 					}
 				} else {
 					if subquery.Sub.RowSize > 1 {
-						return nil, moerr.NewInvalidInput("subquery returns more than 1 column")
+						return nil, moerr.NewInvalidInputNoCtx("subquery returns more than 1 column")
 					}
 				}
 
@@ -560,16 +561,16 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			if subquery, ok := rightArg.Expr.(*plan.Expr_Sub); ok {
 				if !isRoot {
 					// TODO: implement MARK join to better support non-scalar subqueries
-					return nil, moerr.NewNYI("IN subquery as non-root expression will be supported in future version")
+					return nil, moerr.NewNYINoCtx("IN subquery as non-root expression will be supported in future version")
 				}
 
 				if list, ok := leftArg.Expr.(*plan.Expr_List); ok {
 					if len(list.List.List) != int(subquery.Sub.RowSize) {
-						return nil, moerr.NewInvalidInput("subquery should return %d columns", len(list.List.List))
+						return nil, moerr.NewInvalidInputNoCtx("subquery should return %d columns", len(list.List.List))
 					}
 				} else {
 					if subquery.Sub.RowSize > 1 {
-						return nil, moerr.NewInvalidInput("subquery should return 1 column")
+						return nil, moerr.NewInvalidInputNoCtx("subquery should return 1 column")
 					}
 				}
 
@@ -590,7 +591,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	case tree.NOT_REG_MATCH:
 		op = "not_reg_match"
 	default:
-		return nil, moerr.NewNYI("'%v'", astExpr)
+		return nil, moerr.NewNYINoCtx("'%v'", astExpr)
 	}
 
 	if astExpr.SubOp >= tree.ANY {
@@ -607,16 +608,16 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		if subquery, ok := expr.Expr.(*plan.Expr_Sub); ok {
 			if !isRoot {
 				// TODO: implement MARK join to better support non-scalar subqueries
-				return nil, moerr.NewNYI("%q subquery as non-root expression", strings.ToUpper(astExpr.SubOp.ToString()))
+				return nil, moerr.NewNYINoCtx("%q subquery as non-root expression", strings.ToUpper(astExpr.SubOp.ToString()))
 			}
 
 			if list, ok := child.Expr.(*plan.Expr_List); ok {
 				if len(list.List.List) != int(subquery.Sub.RowSize) {
-					return nil, moerr.NewInvalidInput("subquery should return %d columns", len(list.List.List))
+					return nil, moerr.NewInvalidInputNoCtx("subquery should return %d columns", len(list.List.List))
 				}
 			} else {
 				if subquery.Sub.RowSize > 1 {
-					return nil, moerr.NewInvalidInput("subquery should return 1 column")
+					return nil, moerr.NewInvalidInputNoCtx("subquery should return 1 column")
 				}
 			}
 
@@ -632,7 +633,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 			return expr, nil
 		} else {
-			return nil, moerr.NewInvalidInput("subquery '%s' is not a quantifying subquery", astExpr.SubOp.ToString())
+			return nil, moerr.NewInvalidInputNoCtx("subquery '%s' is not a quantifying subquery", astExpr.SubOp.ToString())
 		}
 	}
 
@@ -642,7 +643,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bool) (*Expr, error) {
 	funcRef, ok := astExpr.Func.FunctionReference.(*tree.UnresolvedName)
 	if !ok {
-		return nil, moerr.NewNYI("function expr '%v'", astExpr)
+		return nil, moerr.NewNYINoCtx("function expr '%v'", astExpr)
 	}
 	funcName := funcRef.Parts[0]
 
@@ -661,7 +662,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	case "nullif":
 		// rewrite 'nullif(expr1, expr2)' to 'case when expr1=expr2 then null else expr1'
 		if len(astArgs) != 2 {
-			return nil, moerr.NewInvalidArg("nullif need two args", len(astArgs))
+			return nil, moerr.NewInvalidArgNoCtx("nullif need two args", len(astArgs))
 		}
 		elseExpr := astArgs[0]
 		thenExpr := tree.NewNumValWithType(constant.MakeUnknown(), "", false, tree.P_char)
@@ -671,7 +672,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	case "ifnull":
 		// rewrite 'ifnull(expr1, expr2)' to 'case when isnull(expr1) then expr2 else null'
 		if len(astArgs) != 2 {
-			return nil, moerr.NewInvalidArg("ifnull function need two args", len(astArgs))
+			return nil, moerr.NewInvalidArgNoCtx("ifnull function need two args", len(astArgs))
 		}
 		elseExpr := tree.NewNumValWithType(constant.MakeUnknown(), "", false, tree.P_null)
 		thenExpr := astArgs[1]
@@ -685,7 +686,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	//	astArgs[0] = tree.NewNumVal(constant.MakeString(unit), unit, false)
 	case "count":
 		if b.ctx == nil {
-			return nil, moerr.NewInvalidInput("invalid field reference to COUNT")
+			return nil, moerr.NewInvalidInputNoCtx("invalid field reference to COUNT")
 		}
 		// we will rewrite "count(*)" to "starcount(col)"
 		// count(*) : astExprs[0].(type) is *tree.NumVal
@@ -726,7 +727,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	case "date":
 		// rewrite date function to cast function, and retrun directly
 		if len(args) == 0 {
-			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
+			return nil, moerr.NewInvalidArgNoCtx(name+" function have invalid input args length", len(args))
 		}
 		if args[0].Typ.Id != int32(types.T_varchar) && args[0].Typ.Id != int32(types.T_char) {
 			return appendCastBeforeExpr(args[0], &Type{
@@ -770,7 +771,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		// rewrite date_add/date_sub function
 		// date_add(col_name, "1 day"), will rewrite to date_add(col_name, number, unit)
 		if len(args) != 2 {
-			return nil, moerr.NewInvalidArg("date_add/date_sub function need two args", len(args))
+			return nil, moerr.NewInvalidArgNoCtx("date_add/date_sub function need two args", len(args))
 		}
 		args, err = resetDateFunction(args[0], args[1])
 		if err != nil {
@@ -778,7 +779,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	case "adddate", "subdate":
 		if len(args) != 2 {
-			return nil, moerr.NewInvalidArg("adddate/subdate function need two args", len(args))
+			return nil, moerr.NewInvalidArgNoCtx("adddate/subdate function need two args", len(args))
 		}
 		args, err = resetDateFunction(args[0], args[1])
 		if err != nil {
@@ -791,7 +792,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	case "+":
 		if len(args) != 2 {
-			return nil, moerr.NewInvalidArg("operator + need two args", len(args))
+			return nil, moerr.NewInvalidArgNoCtx("operator + need two args", len(args))
 		}
 		if isNullExpr(args[0]) {
 			return args[0], nil
@@ -825,7 +826,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	case "-":
 		if len(args) != 2 {
-			return nil, moerr.NewInvalidArg("operator - need two args", len(args))
+			return nil, moerr.NewInvalidArgNoCtx("operator - need two args", len(args))
 		}
 		if isNullExpr(args[0]) {
 			return args[0], nil
@@ -849,7 +850,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	case "*", "/", "%":
 		if len(args) != 2 {
-			return nil, moerr.NewInvalidArg(fmt.Sprintf("operator %s need two args", name), len(args))
+			return nil, moerr.NewInvalidArgNoCtx(fmt.Sprintf("operator %s need two args", name), len(args))
 		}
 		if isNullExpr(args[0]) {
 			return args[0], nil
@@ -859,12 +860,12 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	case "unary_minus":
 		if len(args) == 0 {
-			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
+			return nil, moerr.NewInvalidArgNoCtx(name+" function have invalid input args length", len(args))
 		}
 		if args[0].Typ.Id == int32(types.T_uint64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
-				Id:       int32(types.T_decimal128),
-				Nullable: false,
+				Id:          int32(types.T_decimal128),
+				NotNullable: true,
 			})
 			if err != nil {
 				return nil, err
@@ -872,12 +873,12 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	case "oct", "bit_and", "bit_or", "bit_xor":
 		if len(args) == 0 {
-			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
+			return nil, moerr.NewInvalidArgNoCtx(name+" function have invalid input args length", len(args))
 		}
 		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
-				Id:       int32(types.T_float64),
-				Nullable: false,
+				Id:          int32(types.T_float64),
+				NotNullable: true,
 			})
 			if err != nil {
 				return nil, err
@@ -886,7 +887,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	case "like":
 		// sql 'select * from t where col like ?'  the ? Expr's type will be T_any
 		if len(args) != 2 {
-			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
+			return nil, moerr.NewInvalidArgNoCtx(name+" function have invalid input args length", len(args))
 		}
 		if args[0].Typ.Id == int32(types.T_any) {
 			args[0].Typ.Id = int32(types.T_varchar)
@@ -896,18 +897,12 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	case "timediff":
 		if len(args) != 2 {
-			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
+			return nil, moerr.NewInvalidArgNoCtx(name+" function have invalid input args length", len(args))
 		}
 
-		if isNullExpr(args[0]) || isNullExpr(args[1]) {
-			break
-		}
-		if int(args[0].Typ.Id) != int(args[1].Typ.Id) {
-			return nil, moerr.NewInvalidInput(name + " function have invalid input args type")
-		}
 	case "str_to_date", "to_date":
 		if len(args) != 2 {
-			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
+			return nil, moerr.NewInvalidArgNoCtx(name+" function have invalid input args length", len(args))
 		}
 
 		if args[1].Typ.Id == int32(types.T_varchar) || args[1].Typ.Id == int32(types.T_char) {
@@ -916,12 +911,30 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				tp, _ := binary.JudgmentToDateReturnType(sval.Sval)
 				args = append(args, makePlan2DateConstNullExpr(tp))
 			} else {
-				return nil, moerr.NewInvalidArg("to_date format", "not constant")
+				return nil, moerr.NewInvalidArgNoCtx("to_date format", "not constant")
 			}
 		} else if args[1].Typ.Id == int32(types.T_any) {
 			args = append(args, makePlan2DateConstNullExpr(types.T_datetime))
 		} else {
-			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
+			return nil, moerr.NewInvalidArgNoCtx(name+" function have invalid input args length", len(args))
+		}
+	case "unix_timestamp":
+		if len(args) == 1 {
+			if types.IsString(types.T(args[0].Typ.Id)) {
+				if exprC, ok := args[0].Expr.(*plan.Expr_C); ok {
+					sval := exprC.C.Value.(*plan.Const_Sval)
+					tp := judgeUnixTimestampReturnType(sval.Sval)
+					if tp == types.T_int64 {
+						args = append(args, makePlan2Int64ConstExprWithType(0))
+					} else {
+						args = append(args, makePlan2Decimal128ConstNullExpr())
+					}
+				} else {
+					args = append(args, makePlan2Decimal128ConstNullExpr())
+				}
+			}
+		} else if len(args) > 1 {
+			return nil, moerr.NewInvalidArgNoCtx(name+" function have invalid input args size", len(args))
 		}
 	}
 
@@ -978,11 +991,20 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				}
 			}
 		}
+
+	case "timediff":
+		if len(argsType) == len(argsCastType) {
+			for i := range argsType {
+				if int(argsType[i].Oid) == int(types.T_time) && int(argsCastType[i].Oid) == int(types.T_datetime) {
+					return nil, moerr.NewInvalidInputNoCtx(name + " function have invalid input args type")
+				}
+			}
+		}
 	}
 
 	if len(argsCastType) != 0 {
 		if len(argsCastType) != argsLength {
-			return nil, moerr.NewInvalidArg("cast types length not match args length", "")
+			return nil, moerr.NewInvalidArgNoCtx("cast types length not match args length", "")
 		}
 		for idx, castType := range argsCastType {
 			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
@@ -1001,6 +1023,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	}
 
 	// return new expr
+	Typ := makePlan2Type(&returnType)
+	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
@@ -1008,12 +1032,12 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				Args: args,
 			},
 		},
-		Typ: makePlan2Type(&returnType),
+		Typ: Typ,
 	}, nil
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) {
-	// over_int64_err := moerr.NewInternalError("", "Constants over int64 will support in future version.")
+	// over_int64_err := moerr.NewInternalErrorNoCtxNoCtx("", "Constants over int64 will support in future version.")
 	// rewrite the hexnum process logic
 	// for float64, if the number is over 1<<53-1,it will lost, so if typ is float64,
 	// don't cast 0xXXXX as float64, use the uint64
@@ -1041,7 +1065,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_int64:
 		val, ok := constant.Int64Val(astExpr.Value)
 		if !ok {
-			return nil, moerr.NewInvalidInput("invalid int value '%s'", astExpr.Value.String())
+			return nil, moerr.NewInvalidInputNoCtx("invalid int value '%s'", astExpr.Value.String())
 		}
 		expr := makePlan2Int64ConstExprWithType(val)
 		if typ != nil && typ.Id == int32(types.T_varchar) {
@@ -1051,7 +1075,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_uint64:
 		val, ok := constant.Uint64Val(astExpr.Value)
 		if !ok {
-			return nil, moerr.NewInvalidInput("invalid int value '%s'", astExpr.Value.String())
+			return nil, moerr.NewInvalidInputNoCtx("invalid int value '%s'", astExpr.Value.String())
 		}
 		return makePlan2Uint64ConstExprWithType(val), nil
 	case tree.P_decimal:
@@ -1108,11 +1132,11 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				},
 			},
 			Typ: &plan.Type{
-				Id:        int32(types.T_decimal128),
-				Width:     34,
-				Scale:     scale,
-				Precision: 34,
-				Nullable:  false,
+				Id:          int32(types.T_decimal128),
+				Width:       34,
+				Scale:       scale,
+				Precision:   34,
+				NotNullable: true,
 			},
 		}, nil
 	case tree.P_float64:
@@ -1138,13 +1162,18 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 		}
 		bytes, _ := hex.DecodeString(s)
 		return returnHexNumExpr(string(bytes), true)
+	case tree.P_ScoreBinary:
+		return returnHexNumExpr(astExpr.String(), true)
 	case tree.P_bit:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_char:
 		expr := makePlan2StringConstExprWithType(astExpr.String())
 		return expr, nil
+	case tree.P_nulltext:
+		expr := MakePlan2NullTextConstExprWithType(astExpr.String())
+		return expr, nil
 	default:
-		return nil, moerr.NewInvalidInput("unsupport value '%s'", astExpr.String())
+		return nil, moerr.NewInvalidInputNoCtx("unsupport value '%s'", astExpr.String())
 	}
 }
 
@@ -1154,6 +1183,7 @@ func appendCastBeforeExpr(expr *Expr, toType *Type, isBin ...bool) (*Expr, error
 	if expr.Typ.Id == int32(types.T_any) {
 		return expr, nil
 	}
+	toType.NotNullable = expr.Typ.NotNullable
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),
@@ -1171,13 +1201,15 @@ func appendCastBeforeExpr(expr *Expr, toType *Type, isBin ...bool) (*Expr, error
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: getFunctionObjRef(funcID, "cast"),
-				Args: []*Expr{expr, {
-					Expr: &plan.Expr_T{
-						T: &plan.TargetType{
-							Typ: &typ,
+				Args: []*Expr{expr,
+					{
+						Typ: &typ,
+						Expr: &plan.Expr_T{
+							T: &plan.TargetType{
+								Typ: &typ,
+							},
 						},
-					},
-				}},
+					}},
 			},
 		},
 		Typ: &typ,

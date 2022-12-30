@@ -92,9 +92,9 @@ func TestEqUuid(t *testing.T) {
 		convey.ShouldBeNil(err)
 		compare := testutil.CompareVectors(wantVector, actVector)
 		convey.ShouldBeTrue(compare)
-		t.Logf("want slice: %+v \n", wantVector.Col)
-		t.Logf("actu slice: %+v \n", actVector.Col)
-		require.Equal(t, wantVector.Col, actVector.Col)
+		t.Logf("want slice: %+v \n", wantVector.GetRawData())
+		t.Logf("actu slice: %+v \n", actVector.GetRawData())
+		require.Equal(t, wantVector.GetRawData(), actVector.GetRawData())
 	})
 
 }
@@ -176,9 +176,9 @@ func TestLeUuid(t *testing.T) {
 
 		compare := testutil.CompareVectors(wantVector, actVector)
 		convey.ShouldBeTrue(compare)
-		t.Logf("want slice: %+v \n", wantVector.Col)
-		t.Logf("actu slice: %+v \n", actVector.Col)
-		require.Equal(t, wantVector.Col, actVector.Col)
+		t.Logf("want slice: %+v \n", wantVector.GetRawData())
+		t.Logf("actu slice: %+v \n", actVector.GetRawData())
+		require.Equal(t, wantVector.GetRawData(), actVector.GetRawData())
 
 	})
 }
@@ -260,9 +260,9 @@ func TestLtUuid(t *testing.T) {
 
 		compare := testutil.CompareVectors(wantVector, actVector)
 		convey.ShouldBeTrue(compare)
-		t.Logf("want slice: %+v \n", wantVector.Col)
-		t.Logf("actu slice: %+v \n", actVector.Col)
-		require.Equal(t, wantVector.Col, actVector.Col)
+		t.Logf("want slice: %+v \n", wantVector.GetRawData())
+		t.Logf("actu slice: %+v \n", actVector.GetRawData())
+		require.Equal(t, wantVector.GetRawData(), actVector.GetRawData())
 
 	})
 }
@@ -344,9 +344,9 @@ func TestGeUuid(t *testing.T) {
 
 		compare := testutil.CompareVectors(wantVector, actVector)
 		convey.ShouldBeTrue(compare)
-		t.Logf("want slice: %+v \n", wantVector.Col)
-		t.Logf("actu slice: %+v \n", actVector.Col)
-		require.Equal(t, wantVector.Col, actVector.Col)
+		t.Logf("want slice: %+v \n", wantVector.GetRawData())
+		t.Logf("actu slice: %+v \n", actVector.GetRawData())
+		require.Equal(t, wantVector.GetRawData(), actVector.GetRawData())
 	})
 }
 
@@ -427,9 +427,9 @@ func TestGtUuid(t *testing.T) {
 
 		compare := testutil.CompareVectors(wantVector, actVector)
 		convey.ShouldBeTrue(compare)
-		t.Logf("want slice: %+v \n", wantVector.Col)
-		t.Logf("actu slice: %+v \n", actVector.Col)
-		require.Equal(t, wantVector.Col, actVector.Col)
+		t.Logf("want slice: %+v \n", wantVector.GetRawData())
+		t.Logf("actu slice: %+v \n", actVector.GetRawData())
+		require.Equal(t, wantVector.GetRawData(), actVector.GetRawData())
 	})
 }
 
@@ -510,8 +510,8 @@ func TestNeUuid(t *testing.T) {
 
 		compare := testutil.CompareVectors(wantVector, actVector)
 		convey.ShouldBeTrue(compare)
-		t.Logf("want slice: %+v \n", wantVector.Col)
-		t.Logf("actu slice: %+v \n", actVector.Col)
-		require.Equal(t, wantVector.Col, actVector.Col)
+		t.Logf("want slice: %+v \n", wantVector.GetRawData())
+		t.Logf("actu slice: %+v \n", actVector.GetRawData())
+		require.Equal(t, wantVector.GetRawData(), actVector.GetRawData())
 	})
 }

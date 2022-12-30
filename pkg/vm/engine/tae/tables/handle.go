@@ -15,7 +15,6 @@
 package tables
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -23,11 +22,11 @@ import (
 
 type tableHandle struct {
 	table    *dataTable
-	block    *dataBlock
+	block    *ablock
 	appender data.BlockAppender
 }
 
-func newHandle(table *dataTable, block *dataBlock) *tableHandle {
+func newHandle(table *dataTable, block *ablock) *tableHandle {
 	h := &tableHandle{
 		table: table,
 		block: block,
@@ -42,10 +41,9 @@ func (h *tableHandle) SetAppender(id *common.ID) (appender data.BlockAppender) {
 	tableMeta := h.table.meta
 	segMeta, _ := tableMeta.GetSegmentByID(id.SegmentID)
 	blkMeta, _ := segMeta.GetBlockEntryByID(id.BlockID)
-	h.block = blkMeta.GetBlockData().(*dataBlock)
+	h.block = blkMeta.GetBlockData().(*ablock)
 	h.appender, _ = h.block.MakeAppender()
 	h.block.Ref()
-
 	return h.appender
 }
 
@@ -54,9 +52,9 @@ func (h *tableHandle) ThrowAppenderAndErr() (appender data.BlockAppender, err er
 	segEntry, _ := h.table.meta.GetSegmentByID(id.SegmentID)
 	if segEntry == nil ||
 		segEntry.GetAppendableBlockCnt() >= int(segEntry.GetTable().GetSchema().SegmentMaxBlocks) {
-		err = moerr.NewAppendableSegmentNotFound()
+		err = data.ErrAppendableSegmentNotFound
 	} else {
-		err = moerr.NewAppendableBlockNotFound()
+		err = data.ErrAppendableBlockNotFound
 		appender = h.appender
 	}
 	h.block = nil
@@ -69,17 +67,17 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 	if h.appender == nil {
 		segEntry = h.table.meta.LastAppendableSegmemt()
 		if segEntry == nil {
-			err = moerr.NewAppendableSegmentNotFound()
+			err = data.ErrAppendableSegmentNotFound
 			return
 		}
 		blkEntry := segEntry.LastAppendableBlock()
 		if blkEntry == nil {
 			blk := segEntry.GetAppendableBlock()
 			h.SetAppender(blk.AsCommonID())
-			err = moerr.NewAppendableSegmentNotFound()
+			err = data.ErrAppendableSegmentNotFound
 			return
 		}
-		h.block = blkEntry.GetBlockData().(*dataBlock)
+		h.block = blkEntry.GetBlockData().(*ablock)
 		h.appender, err = h.block.MakeAppender()
 		if err != nil {
 			panic(err)

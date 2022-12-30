@@ -31,6 +31,7 @@ type VFile interface {
 	RUnlock()
 	SizeLocked() int
 	Destroy() error
+	Close() error
 	Id() int
 	Name() string
 	String() string
@@ -64,6 +65,7 @@ type History interface {
 	DropEntry(int) (VFile, error)
 	OldestEntry() VFile
 	Empty() bool
+	Close()
 }
 
 type File interface {

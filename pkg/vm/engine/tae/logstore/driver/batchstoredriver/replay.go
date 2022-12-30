@@ -16,6 +16,7 @@ package batchstoredriver
 
 import (
 	"math"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
@@ -34,6 +35,9 @@ type replayer struct {
 	addrs  map[int]*common.ClosedIntervals
 	maxlsn uint64
 	minlsn uint64
+
+	readDuration  time.Duration
+	applyDuration time.Duration
 }
 
 func newReplayer(h driver.ApplyHandle) *replayer {
@@ -79,7 +83,9 @@ func (r *replayer) replayHandler(vfile *vFile) error {
 		r.version = vfile.version
 	}
 	e := entry.NewEmptyEntry()
+	t0 := time.Now()
 	_, err := e.ReadAt(vfile.File, r.pos)
+	r.readDuration += time.Since(t0)
 	if err != nil {
 		return err
 	}
@@ -87,7 +93,9 @@ func (r *replayer) replayHandler(vfile *vFile) error {
 		return err
 	}
 	vfile.onReplay(r.pos, e.Lsn)
+	t0 = time.Now()
 	r.applyEntry(e)
+	r.applyDuration += time.Since(t0)
 	r.pos += e.GetSize()
 	e.Entry.Free()
 	return nil

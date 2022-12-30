@@ -186,7 +186,7 @@ func ShuffleColumn(column []containers.Vector, sortedIdx []uint32, fromLayout, t
 //		col[i] = blks[i].Vecs[pk]
 //	}
 //
-//	switch blks[0].Vecs[pk].Typ.Oid {
+//	switch blks[0].Vecs[pk].GetType().Oid {
 //	case types.T_int8:
 //		int8s.Merge(col, mergedSrc)
 //	case types.T_int16:
@@ -223,7 +223,7 @@ func ShuffleColumn(column []containers.Vector, sortedIdx []uint32, fromLayout, t
 //			col[i] = blks[i].Vecs[j]
 //		}
 //
-//		switch blks[0].Vecs[j].Typ.Oid {
+//		switch blks[0].Vecs[j].GetType().Oid {
 //		case types.T_int8:
 //			int8s.Multiplex(col, mergedSrc)
 //		case types.T_int16:

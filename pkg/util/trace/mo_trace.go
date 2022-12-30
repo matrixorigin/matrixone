@@ -26,10 +26,11 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"sync"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
 // TracerConfig is a group of options for a Tracer.
@@ -87,29 +88,37 @@ type MOTracer struct {
 }
 
 func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
+	if !t.provider.IsEnable() {
+		return ctx, noopSpan{}
+	}
 	span := newMOSpan()
 	span.init(name, opts...)
 	span.tracer = t
 
 	parent := SpanFromContext(ctx)
+	psc := parent.SpanContext()
 
-	if span.NewRoot {
+	if span.NewRoot || psc.IsEmpty() {
 		span.TraceID, span.SpanID = t.provider.idGenerator.NewIDs()
 		span.parent = noopSpan{}
-	} else if span.SpanID.IsZero() {
-		span.TraceID, span.SpanID = parent.SpanContext().TraceID, t.provider.idGenerator.NewSpanID()
-		span.parent = parent
 	} else {
+		span.TraceID, span.SpanID, span.Kind = psc.TraceID, t.provider.idGenerator.NewSpanID(), psc.Kind
 		span.parent = parent
 	}
 
 	return ContextWithSpan(ctx, span), span
 }
 
-var _ Span = (*MOSpan)(nil)
-var _ IBuffer2SqlItem = (*MOSpan)(nil)
-var _ CsvFields = (*MOSpan)(nil)
+func (t *MOTracer) Debug(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
+	if !t.provider.debugMode {
+		return ctx, noopSpan{}
+	}
+	return t.Start(ctx, name, opts...)
+}
 
+var _ Span = (*MOSpan)(nil)
+
+// MOSpan implement export.IBuffer2SqlItem and export.CsvFields
 type MOSpan struct {
 	SpanConfig
 	Name      bytes.Buffer `json:"name"`
@@ -143,6 +152,8 @@ func (s *MOSpan) Size() int64 {
 var zeroTime = time.Time{}
 
 func (s *MOSpan) Free() {
+	s.SpanConfig.Reset()
+	s.parent = nil
 	s.Name.Reset()
 	s.tracer = nil
 	s.StartTime = zeroTime
@@ -154,19 +165,20 @@ func (s *MOSpan) GetName() string {
 	return spanView.OriginTable.GetName()
 }
 
-func (s *MOSpan) GetRow() *export.Row { return spanView.OriginTable.GetRow() }
+func (s *MOSpan) GetRow() *table.Row { return spanView.OriginTable.GetRow(DefaultContext()) }
 
-func (s *MOSpan) CsvFields(row *export.Row) []string {
+func (s *MOSpan) CsvFields(ctx context.Context, row *table.Row) []string {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, spanView.Table)
 	row.SetColumnVal(spanIDCol, s.SpanID.String())
-	row.SetColumnVal(stmtIDCol, s.TraceID.String())
+	row.SetColumnVal(traceIDCol, s.TraceID.String())
+	row.SetColumnVal(spanKindCol, s.Kind.String())
 	row.SetColumnVal(parentSpanIDCol, s.parent.SpanContext().SpanID.String())
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
 	row.SetColumnVal(spanNameCol, s.Name.String())
-	row.SetColumnVal(startTimeCol, time2DatetimeString(s.StartTime))
-	row.SetColumnVal(endTimeCol, time2DatetimeString(s.EndTime))
+	row.SetColumnVal(startTimeCol, Time2DatetimeString(s.StartTime))
+	row.SetColumnVal(endTimeCol, Time2DatetimeString(s.EndTime))
 	row.SetColumnVal(durationCol, fmt.Sprintf("%d", s.EndTime.Sub(s.StartTime))) // Duration
 	row.SetColumnVal(resourceCol, s.tracer.provider.resource.String())
 	return row.ToStrings()

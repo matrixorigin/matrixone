@@ -121,7 +121,7 @@ func (e *testEngine) getTestDB() (txn txnif.AsyncTxn, db handle.Database) {
 	return e.getDB(defaultTestDB)
 }
 
-func (e *testEngine) doAppend(bat *containers.Batch) {
+func (e *testEngine) DoAppend(bat *containers.Batch) {
 	txn, rel := e.getRelation()
 	err := rel.Append(bat)
 	assert.NoError(e.t, err)
@@ -169,9 +169,10 @@ func (e *testEngine) deleteAll(skipConflict bool) error {
 		assert.NoError(e.t, err)
 		it.Next()
 	}
-	checkAllColRowsByScan(e.t, rel, 0, true)
+	// checkAllColRowsByScan(e.t, rel, 0, true)
 	err := txn.Commit()
 	if !skipConflict {
+		checkAllColRowsByScan(e.t, rel, 0, true)
 		assert.NoError(e.t, err)
 	}
 	return err
@@ -193,6 +194,7 @@ func initDB(t *testing.T, opts *options.Options) *DB {
 func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalog.Schema)) {
 	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(100)
+	defer pool.Release()
 	for i := 0; i < 17; i++ {
 		schema := catalog.MockSchemaAll(18, i)
 		schema.BlockMaxRows = 10
@@ -204,40 +206,6 @@ func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalo
 		})
 	}
 	wg.Wait()
-}
-
-func getSegmentFileNames(e *DB) (names map[uint64]string) {
-	names = make(map[uint64]string)
-	return
-	/*files, err := os.ReadDir(e.Fs.Dir)
-	if err != nil {
-		panic(err)
-	}
-	for _, f := range files {
-		name := f.Name()
-		id, err := decodeSegName(name)
-		if err != nil {
-			continue
-		}
-		names[id] = name
-	}
-	return*/
-}
-
-func getBlockFileNames(e *DB) (names []string) {
-	names = make([]string, 0)
-	return
-	/*files, err := os.ReadDir(e.Fs.Dir)
-	if err != nil {
-		panic(err)
-	}
-	for _, f := range files {
-		name := f.Name()
-		if strings.HasSuffix(name, ".blk") {
-			names = append(names, name)
-		}
-	}
-	return*/
 }
 
 func lenOfBats(bats []*containers.Batch) int {

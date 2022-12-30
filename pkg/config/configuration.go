@@ -50,8 +50,8 @@ var (
 	//listening ip
 	defaultHost = "0.0.0.0"
 
-	//host mmu limitation. 1 << 40 = 1099511627776
-	defaultHostMmuLimitation = 1099511627776
+	//listening unix domain socket
+	defaultUnixAddr = "/var/lib/mysql/mysql.sock"
 
 	//guest mmu limitation.  1 << 40 = 1099511627776
 	defaultGuestMmuLimitation = 1099511627776
@@ -73,6 +73,8 @@ var (
 
 	//the root directory of the storage
 	defaultStorePath = "./store"
+
+	defaultServerVersionPrefix = "8.0.30-MatrixOne-v"
 
 	//the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
 	defaultLengthOfQueryPrinted = 200000
@@ -118,11 +120,14 @@ var (
 	// defaultMergeCycle default: 4 hours
 	defaultMergeCycle = 4 * time.Hour
 
+	// defaultMaxFileSize default: 128 MB
+	defaultMaxFileSize = 128
+
 	// defaultPathBuilder, val in [DBTable, AccountDate]
 	defaultPathBuilder = "AccountDate"
 
 	// defaultSessionTimeout default: 10 minutes
-	defaultSessionTimeout = 10 * time.Minute
+	defaultSessionTimeout = 24 * time.Hour
 )
 
 // FrontendParameters of the frontend
@@ -148,8 +153,8 @@ type FrontendParameters struct {
 	//listening ip
 	Host string `toml:"host"`
 
-	//host mmu limitation. default: 1 << 40 = 1099511627776
-	HostMmuLimitation int64 `toml:"hostMmuLimitation"`
+	//listening unix domain socket
+	UAddr string `toml:"UAddr"`
 
 	//guest mmu limitation. default: 1 << 40 = 1099511627776
 	GuestMmuLimitation int64 `toml:"guestMmuLimitation"`
@@ -177,6 +182,9 @@ type FrontendParameters struct {
 
 	//the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID
 	StorePath string `toml:"storePath"`
+
+	//the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID
+	ServerVersionPrefix string `toml:"serverVersionPrefix"`
 
 	//the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
 	LengthOfQueryPrinted int64 `toml:"lengthOfQueryPrinted"`
@@ -244,8 +252,13 @@ type FrontendParameters struct {
 	//default is 1
 	DNReplicaID uint64 `toml:"dnreplicalid"`
 
+	EnableDoComQueryInProgress bool `toml:"comQueryInProgress"`
+
 	//timeout of the session. the default is 10minutes
 	SessionTimeout toml.Duration `toml:"sessionTimeout"`
+
+	// MaxMessageSize max size for read messages from dn. Default is 10M
+	MaxMessageSize uint64 `toml:"max-message-size"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -273,8 +286,8 @@ func (fp *FrontendParameters) SetDefaultValues() {
 		fp.Host = defaultHost
 	}
 
-	if fp.HostMmuLimitation == 0 {
-		fp.HostMmuLimitation = int64(defaultHostMmuLimitation)
+	if fp.UAddr == "" {
+		fp.UAddr = defaultUnixAddr
 	}
 
 	if fp.GuestMmuLimitation == 0 {
@@ -303,6 +316,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.StorePath == "" {
 		fp.StorePath = defaultStorePath
+	}
+
+	if fp.ServerVersionPrefix == "" {
+		fp.ServerVersionPrefix = defaultServerVersionPrefix
 	}
 
 	if fp.LengthOfQueryPrinted == 0 {
@@ -344,6 +361,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	if fp.SessionTimeout.Duration == 0 {
 		fp.SessionTimeout.Duration = defaultSessionTimeout
 	}
+}
+
+func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {
+	fp.MaxMessageSize = size
 }
 
 func (fp *FrontendParameters) SetLogAndVersion(log *logutil.LogConfig, version string) {
@@ -402,6 +423,9 @@ type ObservabilityParameters struct {
 	// PS: only used while MO init.
 	MergeCycle toml.Duration `toml:"mergeCycle"`
 
+	// MergeMaxFileSize default: 128 (MB)
+	MergeMaxFileSize int `toml:"mergeMaxFileSize"`
+
 	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]
 	PathBuilder string `toml:"PathBuilder"`
 }
@@ -439,6 +463,10 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.PathBuilder == "" {
 		op.PathBuilder = defaultPathBuilder
+	}
+
+	if op.MergeMaxFileSize <= 0 {
+		op.MergeMaxFileSize = defaultMaxFileSize
 	}
 }
 

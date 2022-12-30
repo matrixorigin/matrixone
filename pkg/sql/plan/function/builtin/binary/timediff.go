@@ -15,6 +15,7 @@
 package binary
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/timediff"
@@ -27,23 +28,31 @@ func TimeDiff[T timediff.DiffT](vectors []*vector.Vector, proc *process.Process)
 	secondVector := vectors[1]
 	firstValues := vector.MustTCols[T](firstVector)
 	secondValues := vector.MustTCols[T](secondVector)
-	resultType := types.T_varchar.ToType()
+	resultType := types.T_time.ToType()
 
-	if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
+	resultPrecision := firstVector.GetType().Precision
+	if firstVector.GetType().Precision < secondVector.GetType().Precision {
+		resultPrecision = secondVector.GetType().Precision
+	}
+	resultType.Precision = resultPrecision
+
+	if firstVector.IsConstNull() || secondVector.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 
 	vectorLen := len(firstValues)
-	if firstVector.IsScalar() {
+	if firstVector.IsConst() {
 		vectorLen = len(secondValues)
 	}
 
-	resultVector, err := proc.AllocVectorOfRows(resultType, 0, nil)
+	resultVector, err := proc.AllocVectorOfRows(resultType, int64(vectorLen), nil)
 	if err != nil {
 		return nil, err
 	}
 
-	if err = timediff.TimeDiffWithTimeFn(firstValues, secondValues, firstVector.Nsp, secondVector.Nsp, resultVector, proc, vectorLen); err != nil {
+	rs := vector.MustTCols[types.Time](resultVector)
+	nulls.Or(firstVector.GetNulls(), secondVector.GetNulls(), resultVector.Nsp)
+	if err = timediff.TimeDiffWithTimeFn(firstValues, secondValues, rs); err != nil {
 		return nil, err
 	}
 	return resultVector, nil

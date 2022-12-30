@@ -41,7 +41,7 @@ func String(arg any, buf *bytes.Buffer) {
 
 func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
-	ap.ctr = new(Container)
+	ap.ctr = new(container)
 	{
 		ap.ctr.desc = make([]bool, len(ap.Fs))
 		ap.ctr.nullsLast = make([]bool, len(ap.Fs))
@@ -64,22 +64,29 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
-	bat := proc.Reg.InputBatch
+
+	bat := proc.InputBatch()
+	ap := arg.(*Argument)
 	if bat == nil {
+		ap.Free(proc, false)
 		return true, nil
 	}
 	if bat.Length() == 0 {
 		return false, nil
 	}
-	ap := arg.(*Argument)
-	return ap.ctr.process(ap, bat, proc)
+	end, err := ap.ctr.process(ap, bat, proc)
+	if err != nil {
+		ap.Free(proc, true)
+		return false, err
+	}
+	return end, nil
 }
 
-func (ctr *Container) process(ap *Argument, bat *batch.Batch, proc *process.Process) (bool, error) {
+func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Process) (bool, error) {
 	for i := 0; i < bat.VectorCount(); i++ {
 		vec := bat.GetVector(int32(i))
 		if vec.IsOriginal() {
-			nvec, err := vector.Dup(bat.Vecs[i], proc.Mp())
+			nvec, err := bat.Vecs[i].Dup(proc.Mp())
 			if err != nil {
 				return false, err
 			}
@@ -90,11 +97,6 @@ func (ctr *Container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 	for i, f := range ap.Fs {
 		vec, err := colexec.EvalExpr(bat, proc, f.Expr)
 		if err != nil {
-			for j := 0; j < i; j++ {
-				if ctr.vecs[j].needFree {
-					vector.Clean(ctr.vecs[j].vec, proc.Mp())
-				}
-			}
 			return false, err
 		}
 		ctr.vecs[i].vec = vec
@@ -106,25 +108,20 @@ func (ctr *Container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 			}
 		}
 	}
-	defer func() {
-		for i := range ctr.vecs {
-			if ctr.vecs[i].needFree {
-				vector.Clean(ctr.vecs[i].vec, proc.Mp())
-			}
-		}
-	}()
+	defer ctr.cleanEvalVectors(proc.Mp())
 	ovec := ctr.vecs[0].vec
 	var strCol []string
-	n := len(bat.Zs)
-	sels := make([]int64, n)
-	for i := range sels {
+
+	sels := make([]int64, len(bat.Zs))
+	for i := 0; i < len(bat.Zs); i++ {
 		sels[i] = int64(i)
 	}
-	nullCnt := nulls.Length(ovec.Nsp)
+
+	nullCnt := nulls.Length(ovec.GetNulls())
 	// skip sort for all nulls
 	if nullCnt < ovec.Length() {
-		if ovec.Typ.IsString() {
-			strCol = vector.GetStrVectorValues(ovec)
+		if ovec.GetType().IsString() {
+			strCol = vector.MustStrCols(ovec)
 		} else {
 			strCol = nil
 		}
@@ -143,11 +140,11 @@ func (ctr *Container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 		nullsLast := ctr.nullsLast[i]
 		ps = partition.Partition(sels, ds, ps, ovec)
 		vec := ctr.vecs[i].vec
-		nullCnt = nulls.Length(vec.Nsp)
+		nullCnt = nulls.Length(vec.GetNulls())
 		// skip sort for all nulls
 		if nullCnt < vec.Length() {
-			if vec.Typ.IsString() {
-				strCol = vector.GetStrVectorValues(vec)
+			if vec.GetType().IsString() {
+				strCol = vector.MustStrCols(vec)
 			} else {
 				strCol = nil
 			}

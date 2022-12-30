@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,6 +27,8 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 // LocalFS is a FileService implementation backed by local file system
@@ -83,7 +86,7 @@ func NewLocalFS(
 			// not empty, check sentinel file
 			_, err := os.Stat(filepath.Join(rootPath, localFSSentinelFileName))
 			if os.IsNotExist(err) {
-				return nil, moerr.NewInternalError("%s is not a file service dir", rootPath)
+				return nil, moerr.NewInternalErrorNoCtx("%s is not a file service dir", rootPath)
 			} else if err != nil {
 				return nil, err
 			}
@@ -102,6 +105,7 @@ func NewLocalFS(
 	}
 	if memCacheCapacity > 0 {
 		fs.memCache = NewMemCache(memCacheCapacity)
+		logutil.Info("fileservice: cache initialized", zap.Any("fs-name", name), zap.Any("capacity", memCacheCapacity))
 	}
 
 	return fs, nil
@@ -122,7 +126,7 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 	_, err = os.Stat(nativePath)
 	if err == nil {
 		// existed
-		return moerr.NewFileAlreadyExists(path.File)
+		return moerr.NewFileAlreadyExistsNoCtx(path.File)
 	}
 
 	return l.write(ctx, vector)
@@ -161,7 +165,7 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 	if n != size {
-		return moerr.NewSizeNotMatch(path.File)
+		return moerr.NewSizeNotMatchNoCtx(path.File)
 	}
 	if err := f.Sync(); err != nil {
 		return err
@@ -192,7 +196,7 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 
 	if len(vector.Entries) == 0 {
-		return moerr.NewEmptyVector()
+		return moerr.NewEmptyVectorNoCtx()
 	}
 
 	if l.memCache == nil {
@@ -217,16 +221,16 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 
 	file, err := os.Open(nativePath)
 	if os.IsNotExist(err) {
-		return moerr.NewFileNotFound(path.File)
+		return moerr.NewFileNotFoundNoCtx(path.File)
 	}
 	if err != nil {
-		return nil
+		return err
 	}
 	defer file.Close()
 
 	for i, entry := range vector.Entries {
 		if entry.Size == 0 {
-			return moerr.NewEmptyRange(path.File)
+			return moerr.NewEmptyRangeNoCtx(path.File)
 		}
 
 		if entry.ignore {
@@ -252,14 +256,14 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				cr := &countingReader{
 					R: r,
 				}
-				obj, size, err := entry.ToObject(cr)
+				obj, size, err := entry.ToObject(cr, nil)
 				if err != nil {
 					return err
 				}
 				vector.Entries[i].Object = obj
 				vector.Entries[i].ObjectSize = size
 				if cr.N != entry.Size {
-					return moerr.NewUnexpectedEOF(path.File)
+					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
 
 			} else {
@@ -268,17 +272,17 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 					return err
 				}
 				if n != int64(entry.Size) {
-					return moerr.NewUnexpectedEOF(path.File)
+					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
 			}
 
 		} else if entry.ReadCloserForRead != nil {
 			file, err := os.Open(nativePath)
 			if os.IsNotExist(err) {
-				return moerr.NewFileNotFound(path.File)
+				return moerr.NewFileNotFoundNoCtx(path.File)
 			}
 			if err != nil {
-				return nil
+				return err
 			}
 			fileWithChecksum := NewFileWithChecksum(file, _BlockContentSize)
 
@@ -305,7 +309,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 					r: io.TeeReader(r, buf),
 					closeFunc: func() error {
 						defer file.Close()
-						obj, size, err := entry.ToObject(buf)
+						obj, size, err := entry.ToObject(buf, buf.Bytes())
 						if err != nil {
 							return err
 						}
@@ -346,7 +350,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 					return err
 				}
 				if int64(n) != entry.Size {
-					return moerr.NewUnexpectedEOF(path.File)
+					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
 			}
 
@@ -396,9 +400,13 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 		nBlock := ceilingDiv(fileSize, _BlockSize)
 		contentSize := fileSize - _ChecksumSize*nBlock
 
+		isDir, err := entryIsDir(nativePath, name, info)
+		if err != nil {
+			return nil, err
+		}
 		ret = append(ret, DirEntry{
 			Name:  name,
-			IsDir: entry.IsDir(),
+			IsDir: isDir,
 			Size:  contentSize,
 		})
 	}
@@ -432,7 +440,7 @@ func (l *LocalFS) deleteSingle(ctx context.Context, filePath string) error {
 
 	_, err = os.Stat(nativePath)
 	if os.IsNotExist(err) {
-		return moerr.NewFileNotFound(path.File)
+		return moerr.NewFileNotFoundNoCtx(path.File)
 	}
 	if err != nil {
 		return err
@@ -538,7 +546,7 @@ func (l *LocalFS) NewMutator(filePath string) (Mutator, error) {
 	nativePath := l.toNativeFilePath(path.File)
 	f, err := os.OpenFile(nativePath, os.O_RDWR, 0644)
 	if os.IsNotExist(err) {
-		return nil, moerr.NewFileNotFound(path.File)
+		return nil, moerr.NewFileNotFoundNoCtx(path.File)
 	}
 	return &LocalFSMutator{
 		osFile:           f,
@@ -579,7 +587,7 @@ func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int64, entries .
 				return err
 			}
 			if int64(n) != entry.Size {
-				return moerr.NewSizeNotMatch("")
+				return moerr.NewSizeNotMatchNoCtx("")
 			}
 
 		} else {
@@ -589,7 +597,7 @@ func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int64, entries .
 				return err
 			}
 			if int64(n) != entry.Size {
-				return moerr.NewSizeNotMatch("")
+				return moerr.NewSizeNotMatchNoCtx("")
 			}
 		}
 	}
@@ -630,4 +638,18 @@ func (l *LocalFS) CacheStats() *CacheStats {
 		return l.memCache.CacheStats()
 	}
 	return nil
+}
+
+func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
+	if entry.IsDir() {
+		return true, nil
+	}
+	if entry.Mode().Type()&fs.ModeSymlink > 0 {
+		stat, err := os.Stat(filepath.Join(path, name))
+		if err != nil {
+			return false, err
+		}
+		return entryIsDir(path, name, stat)
+	}
+	return false, nil
 }

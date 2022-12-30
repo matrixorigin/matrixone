@@ -38,7 +38,13 @@ func newZmReader(mgr base.INodeManager, typ types.Type, id common.ID, fs *object
 		metaKey: metaKey,
 		mgr:     mgr,
 		colMetaFactory: func() (base.INode, error) {
-			return evictable.NewColumnMetaNode(mgr, metaKey, fs, idx, metaloc, typ), nil
+			return evictable.NewColumnMetaNode(
+				idx,
+				typ,
+				metaloc,
+				metaKey,
+				mgr,
+				fs), nil
 		},
 	}
 }
@@ -53,6 +59,16 @@ func (r *ZmReader) Contains(key any) bool {
 	defer h.Close()
 	node := h.GetNode().(*evictable.ColumnMetaNode)
 	return node.Zonemap.Contains(key)
+}
+
+func (r *ZmReader) FastContainsAny(keys containers.Vector) (ok bool) {
+	h, err := evictable.PinEvictableNode(r.mgr, r.metaKey, r.colMetaFactory)
+	if err != nil {
+		return
+	}
+	defer h.Close()
+	node := h.GetNode().(*evictable.ColumnMetaNode)
+	return node.Zonemap.FastContainsAny(keys)
 }
 
 func (r *ZmReader) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok bool) {
@@ -127,7 +143,7 @@ func (writer *ZMWriter) AddValues(values containers.Vector) (err error) {
 		writer.zonemap = index.NewZoneMap(typ)
 	} else {
 		if writer.zonemap.GetType() != typ {
-			err = moerr.NewInternalError("wrong type")
+			err = moerr.NewInternalErrorNoCtx("wrong type")
 			return
 		}
 	}
@@ -143,7 +159,7 @@ func (writer *ZMWriter) SetMinMax(min, max any, typ types.Type) (err error) {
 		writer.zonemap = index.NewZoneMap(typ)
 	} else {
 		if writer.zonemap.GetType() != typ {
-			err = moerr.NewInternalError("wrong type")
+			err = moerr.NewInternalErrorNoCtx("wrong type")
 			return
 		}
 	}

@@ -25,10 +25,10 @@ import (
 
 func HexString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.New(types.T_varchar, 0, 0, 0)
+	resultType := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
 	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultValues := make([]string, 1)
@@ -37,16 +37,16 @@ func HexString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	} else {
 		resultValues := make([]string, len(inputValues))
 		HexEncodeString(inputValues, resultValues)
-		return vector.NewWithStrings(resultType, resultValues, inputVector.Nsp, proc.Mp()), nil
+		return vector.NewWithStrings(resultType, resultValues, inputVector.GetNulls(), proc.Mp()), nil
 	}
 }
 
 func HexInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.New(types.T_varchar, 0, 0, 0)
+	resultType := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
 	inputValues := vector.MustTCols[int64](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultValues := make([]string, 1)
@@ -55,7 +55,7 @@ func HexInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	} else {
 		resultValues := make([]string, len(inputValues))
 		HexEncodeInt64(inputValues, resultValues)
-		return vector.NewWithStrings(resultType, resultValues, inputVector.Nsp, proc.Mp()), nil
+		return vector.NewWithStrings(resultType, resultValues, inputVector.GetNulls(), proc.Mp()), nil
 	}
 }
 

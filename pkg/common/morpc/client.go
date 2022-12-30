@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -68,7 +69,14 @@ func WithClientMaxBackendMaxIdleDuration(value time.Duration) ClientOption {
 	}
 }
 
+func WithClientTag(tag string) ClientOption {
+	return func(c *client) {
+		c.tag = tag
+	}
+}
+
 type client struct {
+	tag         string
 	logger      *zap.Logger
 	stopper     *stopper.Stopper
 	factory     BackendFactory
@@ -76,7 +84,7 @@ type client struct {
 	gcInactiveC chan string
 
 	mu struct {
-		sync.RWMutex
+		sync.Mutex
 		closed   bool
 		backends map[string][]Backend
 		ops      map[string]*op
@@ -103,7 +111,7 @@ func NewClient(factory BackendFactory, options ...ClientOption) (RPCClient, erro
 		opt(c)
 	}
 	c.adjust()
-	c.stopper = stopper.NewStopper("rpc client", stopper.WithLogger(c.logger))
+	c.stopper = stopper.NewStopper(c.tag, stopper.WithLogger(c.logger))
 
 	if err := c.maybeInitBackends(); err != nil {
 		c.Close()
@@ -125,7 +133,8 @@ func NewClient(factory BackendFactory, options ...ClientOption) (RPCClient, erro
 }
 
 func (c *client) adjust() {
-	c.logger = logutil.Adjust(c.logger)
+	c.tag = fmt.Sprintf("rpc-client[%s]", c.tag)
+	c.logger = logutil.Adjust(c.logger).Named(c.tag)
 	if c.createC == nil {
 		c.createC = make(chan string, 16)
 	}
@@ -158,7 +167,7 @@ func (c *client) maybeInitBackends() error {
 }
 
 func (c *client) Send(ctx context.Context, backend string, request Message) (*Future, error) {
-	b, err := c.getBackend(backend)
+	b, err := c.getBackend(backend, false)
 	if err != nil {
 		return nil, err
 	}
@@ -170,13 +179,13 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 	return f, nil
 }
 
-func (c *client) NewStream(backend string) (Stream, error) {
-	b, err := c.getBackend(backend)
+func (c *client) NewStream(backend string, lock bool) (Stream, error) {
+	b, err := c.getBackend(backend, lock)
 	if err != nil {
 		return nil, err
 	}
 
-	return b.NewStream()
+	return b.NewStream(lock)
 }
 
 func (c *client) Close() error {
@@ -199,35 +208,44 @@ func (c *client) Close() error {
 	return nil
 }
 
-func (c *client) getBackend(backend string) (Backend, error) {
-	c.mu.RLock()
-	b, err := c.getBackendLocked(backend)
+func (c *client) getBackend(backend string, lock bool) (Backend, error) {
+	c.mu.Lock()
+	b, err := c.getBackendLocked(backend, lock)
 	if err != nil {
-		c.mu.RUnlock()
+		c.mu.Unlock()
 		return nil, err
 	}
 	if b != nil {
-		c.mu.RUnlock()
+		c.mu.Unlock()
 		return b, nil
 	}
-	c.mu.RUnlock()
+	c.mu.Unlock()
 
-	return c.createBackend(backend)
+	return c.createBackend(backend, lock)
 }
 
-func (c *client) getBackendLocked(backend string) (Backend, error) {
+func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {
 	if c.mu.closed {
-		return nil, moerr.NewClientClosed()
+		return nil, moerr.NewClientClosedNoCtx()
 	}
 
+	lockedCnt := 0
+	inactiveCnt := 0
 	if backends, ok := c.mu.backends[backend]; ok {
 		n := uint64(len(backends))
 		var b Backend
 		for i := uint64(0); i < n; i++ {
 			seq := c.mu.ops[backend].next()
 			b = backends[seq%n]
-			if b.LastActiveTime() != (time.Time{}) {
+			if !b.Locked() && b.LastActiveTime() != (time.Time{}) {
 				break
+			}
+
+			if b.Locked() {
+				lockedCnt++
+			}
+			if b.LastActiveTime() == (time.Time{}) {
+				inactiveCnt++
 			}
 			b = nil
 		}
@@ -235,9 +253,19 @@ func (c *client) getBackendLocked(backend string) (Backend, error) {
 		// all backend inactived, trigger gc inactive.
 		if b == nil && n > 0 {
 			c.triggerGCInactive(backend)
-			return nil, moerr.NewNoAvailableBackend()
+			c.logger.Debug("no available backends",
+				zap.String("backend", backend),
+				zap.Int("locked", lockedCnt),
+				zap.Int("inactive", inactiveCnt),
+				zap.Int("max", c.options.maxBackendsPerHost))
+			if !c.canCreateLocked(backend) {
+				return nil, moerr.NewNoAvailableBackendNoCtx()
+			}
 		}
 
+		if lock && b != nil {
+			b.Lock()
+		}
 		c.maybeCreateLocked(backend)
 		return b, nil
 	}
@@ -254,7 +282,7 @@ func (c *client) maybeCreateLocked(backend string) bool {
 	}
 
 	for _, b := range c.mu.backends[backend] {
-		if b.Busy() {
+		if b.Busy() || b.Locked() {
 			return c.tryCreate(backend)
 		}
 	}
@@ -335,7 +363,8 @@ func (c *client) closeIdleBackends() {
 	for k, backends := range c.mu.backends {
 		var newBackends []Backend
 		for _, b := range backends {
-			if time.Since(b.LastActiveTime()) > c.options.maxIdleDuration {
+			if !b.Locked() &&
+				time.Since(b.LastActiveTime()) > c.options.maxIdleDuration {
 				idleBackends = append(idleBackends, b)
 				continue
 			}
@@ -369,11 +398,11 @@ func (c *client) createTask(ctx context.Context) {
 	}
 }
 
-func (c *client) createBackend(backend string) (Backend, error) {
+func (c *client) createBackend(backend string, lock bool) (Backend, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	b, err := c.getBackendLocked(backend)
+	b, err := c.getBackendLocked(backend, lock)
 	if err != nil {
 		return nil, err
 	}
@@ -381,12 +410,19 @@ func (c *client) createBackend(backend string) (Backend, error) {
 		return b, nil
 	}
 
-	return c.createBackendLocked(backend)
+	b, err = c.createBackendLocked(backend)
+	if err != nil {
+		return nil, err
+	}
+	if lock {
+		b.Lock()
+	}
+	return b, nil
 }
 
 func (c *client) createBackendLocked(backend string) (Backend, error) {
 	if !c.canCreateLocked(backend) {
-		return nil, moerr.NewNoAvailableBackend()
+		return nil, moerr.NewNoAvailableBackendNoCtx()
 	}
 
 	b, err := c.doCreate(backend)

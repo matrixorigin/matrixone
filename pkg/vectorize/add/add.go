@@ -51,49 +51,49 @@ func NumericAddSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 func cNumericAddSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
 	flag := 0
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		flag |= RIGHT_IS_SCALAR
 	}
 
 	rc := C.SignedInt_VecAdd(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(rs.GetType().TypeSize()))
 	if rc != 0 {
-		return moerr.NewOutOfRange("int", "int add overflow")
+		return moerr.NewOutOfRangeNoCtx("int", "int add overflow")
 	}
 	return nil
 }
 
 func goNumericAddSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		for i, y := range yt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = xt[0] + y
 				if signedOverflow(xt[0], y, rt[i]) {
-					return moerr.NewOutOfRange("int", "int add overflow")
+					return moerr.NewOutOfRangeNoCtx("int", "int add overflow")
 				}
 			}
 		}
 		return nil
-	} else if ys.IsScalar() {
+	} else if ys.IsConst() {
 		for i, x := range xt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = x + yt[0]
 				if signedOverflow(x, yt[0], rt[i]) {
-					return moerr.NewOutOfRange("int", "int add overflow")
+					return moerr.NewOutOfRangeNoCtx("int", "int add overflow")
 				}
 			}
 		}
 		return nil
 	} else {
 		for i, x := range xt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = x + yt[i]
 				if signedOverflow(x, yt[i], rt[i]) {
-					return moerr.NewOutOfRange("int", "int add overflow")
+					return moerr.NewOutOfRangeNoCtx("int", "int add overflow")
 				}
 			}
 		}
@@ -108,49 +108,49 @@ func NumericAddUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error
 func cNumericAddUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
 	flag := 0
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		flag |= RIGHT_IS_SCALAR
 	}
 
 	rc := C.UnsignedInt_VecAdd(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(rs.GetType().TypeSize()))
 	if rc != 0 {
-		return moerr.NewOutOfRange("unsigned int", "unsigned int add overflow")
+		return moerr.NewOutOfRangeNoCtx("unsigned int", "unsigned int add overflow")
 	}
 	return nil
 }
 
 func goNumericAddUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		for i, y := range yt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = xt[0] + y
 				if unsignedOverflow(xt[0], y, rt[i]) {
-					return moerr.NewOutOfRange("unsigned int", "unsigned int add overflow")
+					return moerr.NewOutOfRangeNoCtx("unsigned int", "unsigned int add overflow")
 				}
 			}
 		}
 		return nil
-	} else if ys.IsScalar() {
+	} else if ys.IsConst() {
 		for i, x := range xt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = x + yt[0]
 				if unsignedOverflow(x, yt[0], rt[i]) {
-					return moerr.NewOutOfRange("unsigned int", "unsigned int add overflow")
+					return moerr.NewOutOfRangeNoCtx("unsigned int", "unsigned int add overflow")
 				}
 			}
 		}
 		return nil
 	} else {
 		for i, x := range xt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = x + yt[i]
 				if unsignedOverflow(x, yt[i], rt[i]) {
-					return moerr.NewOutOfRange("unsigned int", "unsigned int add overflow")
+					return moerr.NewOutOfRangeNoCtx("unsigned int", "unsigned int add overflow")
 				}
 			}
 		}
@@ -165,40 +165,40 @@ func NumericAddFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 func cNumericAddFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
 	flag := 0
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		flag |= RIGHT_IS_SCALAR
 	}
 
 	rc := C.Float_VecAdd(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(rs.GetType().TypeSize()))
 	if rc != 0 {
-		return moerr.NewOutOfRange("float", "float add overflow")
+		return moerr.NewOutOfRangeNoCtx("float", "float add overflow")
 	}
 	return nil
 }
 
 func goNumericAddFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		for i, y := range yt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = xt[0] + y
 			}
 		}
 		return nil
-	} else if ys.IsScalar() {
+	} else if ys.IsConst() {
 		for i, x := range xt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = x + yt[0]
 			}
 		}
 		return nil
 	} else {
 		for i, x := range xt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = x + yt[i]
 			}
 		}
@@ -210,6 +210,6 @@ func Uint32AddScalar(x uint32, ys []uint32, zs []uint32) {
 	rc := C.UnsignedInt_VecAdd(unsafe.Pointer(&zs[0]), unsafe.Pointer(&x), unsafe.Pointer(&ys[0]),
 		C.uint64_t(len(zs)), nil, C.int32_t(1), C.int32_t(4))
 	if rc != 0 {
-		panic(moerr.NewOutOfRange("uint32", "uint32 add overflow"))
+		panic(moerr.NewOutOfRangeNoCtx("uint32", "uint32 add overflow"))
 	}
 }

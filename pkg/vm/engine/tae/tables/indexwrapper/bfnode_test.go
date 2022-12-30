@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -31,6 +32,7 @@ import (
 )
 
 func TestStaticFilterIndex(t *testing.T) {
+	defer testutils.AfterTest(t)()
 	//bufManager := buffer.NewNodeManager(1024*1024, nil)
 	var err error
 	//var res bool
@@ -44,7 +46,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	name := fmt.Sprintf("%d.blk", id)
 	bat := newBatch()
 	c := fileservice.Config{
-		Name:    "LOCAL",
+		Name:    defines.LocalFileServiceName,
 		Backend: "DISK",
 		DataDir: dir,
 	}

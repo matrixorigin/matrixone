@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,7 +37,7 @@ const MO_DEFUALT_HOSTNAME = "localhost"
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	ctx CompilerContext) (*Plan, error) {
 	if !ctx.DatabaseExists(stmt.Name) {
-		return nil, moerr.NewBadDB(stmt.Name)
+		return nil, moerr.NewBadDB(ctx.GetContext(), stmt.Name)
 	}
 
 	// get data from schema
@@ -60,7 +62,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return nil, moerr.NewNoSuchTable(dbName, tblName)
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
 		newStmt := tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
@@ -84,6 +86,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	rowCount := 0
 	var pkDefs []string
+	var cbDef string
 
 	for _, col := range tableDef.Cols {
 		colName := col.Name
@@ -91,19 +94,13 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			continue
 		}
 		nullOrNot := "NOT NULL"
-		if col.Default != nil {
-			if col.Default.Expr != nil {
-				originStr := col.Default.OriginString
-				if _, ok := col.Default.Expr.Expr.(*plan.Expr_C); ok {
-					if strings.ToUpper(originStr) != "NULL" && needQuoteType(types.T(col.Typ.Id)) {
-						originStr = fmt.Sprintf("'%s'", originStr)
-					}
-				}
-				nullOrNot = "DEFAULT " + originStr
-			} else if col.Default.NullAbility {
-				nullOrNot = "DEFAULT NULL"
-			}
+		// col.Default must be not nil
+		if len(col.Default.OriginString) > 0 {
+			nullOrNot = "DEFAULT " + col.Default.OriginString
+		} else if col.Default.NullAbility {
+			nullOrNot = "DEFAULT NULL"
 		}
+
 		if col.Typ.AutoIncr {
 			nullOrNot = "NOT NULL AUTO_INCREMENT"
 		}
@@ -136,11 +133,21 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		if col.Primary {
 			pkDefs = append(pkDefs, colName)
 		}
+		if col.ClusterBy {
+			cbDef = col.Name
+		}
+	}
+	if tableDef.CompositePkey != nil {
+		pkDefs = append(pkDefs, util.SplitCompositePrimaryKeyColumnName(tableDef.CompositePkey.Name)...)
 	}
 	if len(pkDefs) != 0 {
 		pkStr := "PRIMARY KEY ("
-		for _, def := range pkDefs {
-			pkStr += fmt.Sprintf("`%s`", def)
+		for i, def := range pkDefs {
+			if i == len(pkDefs)-1 {
+				pkStr += fmt.Sprintf("`%s`", def)
+			} else {
+				pkStr += fmt.Sprintf("`%s`,", def)
+			}
 		}
 		pkStr += ")"
 		if rowCount != 0 {
@@ -153,6 +160,11 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		createStr += "\n"
 	}
 	createStr += ")"
+
+	if len(cbDef) > 0 {
+		createStr += " CLUSTER BY "
+		createStr += fmt.Sprintf("`%s`", cbDef)
+	}
 
 	var comment string
 	var partition string
@@ -233,7 +245,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil || tableDef.TableType != catalog.SystemViewRel {
-		return nil, moerr.NewInvalidInput("show view '%s' is not a valid view", tblName)
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "show view '%s' is not a valid view", tblName)
 	}
 	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`"
 	var viewStr string
@@ -263,11 +275,13 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 
 func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
-		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 	accountId := ctx.GetAccountId()
 	ddlType := plan.DataDefinition_SHOW_DATABASES
-	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where account_id = %v or account_id = 0", MO_CATALOG_DB_NAME, accountId)
+	// Any account should shows database MO_CATALOG_DB_NAME
+	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
+	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where (%s)", MO_CATALOG_DB_NAME, accountClause)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -285,11 +299,11 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 
 func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
-		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
 	if stmt.Open {
-		return nil, moerr.NewNYI("statement: '%v'", tree.String(stmt, dialect.MYSQL))
+		return nil, moerr.NewNYI(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
 
 	accountId := ctx.GetAccountId()
@@ -297,19 +311,21 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	if stmt.DBName == "" {
 		dbName = ctx.DefaultDatabase()
 	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(dbName)
+		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
 	}
 
 	if dbName == "" {
-		return nil, moerr.NewNoDB()
+		return nil, moerr.NewNoDB(ctx.GetContext())
 	}
 	ddlType := plan.DataDefinition_SHOW_TABLES
 	var tableType string
 	if stmt.Full {
 		tableType = ", case relkind when 'v' then 'VIEW' else 'BASE TABLE' end as Table_type"
 	}
-	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (account_id = %v or account_id = 0)",
-		dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_cpkey_unique_0_%", accountId)
+	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
+	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
+	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
+		dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_cpkey_unique_0_%", accountClause)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -327,7 +343,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 
 func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
-		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
 	accountId := ctx.GetAccountId()
@@ -335,22 +351,24 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
 	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(dbName)
+		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return nil, moerr.NewNoSuchTable(dbName, tblName)
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
-	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' and (account_id = %v or account_id = 0)"
+	mustShowTable := "att_relname = 'mo_database' or att_relname = 'mo_tables' or att_relname = 'mo_columns'"
+	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
+	sql := "SELECT attname `Field`, atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
 	if stmt.Full {
-		sql = "SELECT attname `Field`,atttyp `Type`, null `Collation`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' and (account_id = %v or account_id = 0)"
+		sql = "SELECT attname `Field`, atttyp `Type`, null `Collation`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
 	}
 
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName, accountId)
+	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -368,7 +386,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 
 func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
-		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
 	dbName := stmt.DbName
@@ -376,17 +394,19 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 		dbName = ctx.DefaultDatabase()
 		stmt.DbName = dbName
 		if dbName == "" {
-			return nil, moerr.NewNoDB()
+			return nil, moerr.NewNoDB(ctx.GetContext())
 		}
 	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(dbName)
+		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
 	}
 
-	accountId := ctx.GetAccountId()
 	ddlType := plan.DataDefinition_SHOW_TABLE_STATUS
-	sql := "select relname as `Name`, 'Tae' as `Engine`, 'Dynamic' as `Row_format`, 0 as `Rows`, 0 as `Avg_row_length`, 0 as `Data_length`, 0 as `Max_data_length`, 0 as `Index_length`, 'NULL' as `Data_free`, 0 as `Auto_increment`, created_time as `Create_time`, 'NULL' as `Update_time`, 'NULL' as `Check_time`, 'utf-8' as `Collation`, 'NULL' as `Checksum`, '' as `Create_options`, rel_comment as `Comment` from %s.mo_tables where reldatabase = '%s' and relname != '%s' and (account_id = %v and account_id = 0)"
+	accountId := ctx.GetAccountId()
+	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
+	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
+	sql := "select relname as `Name`, 'Tae' as `Engine`, 'Dynamic' as `Row_format`, 0 as `Rows`, 0 as `Avg_row_length`, 0 as `Data_length`, 0 as `Max_data_length`, 0 as `Index_length`, 'NULL' as `Data_free`, 0 as `Auto_increment`, created_time as `Create_time`, 'NULL' as `Update_time`, 'NULL' as `Check_time`, 'utf-8' as `Collation`, 'NULL' as `Checksum`, '' as `Create_options`, rel_comment as `Comment` from %s.mo_tables where reldatabase = '%s' and relname != '%s' and (%s)"
 
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", accountId)
+	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", accountClause)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -420,22 +440,25 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
 		if dbName == "" {
-			return nil, moerr.NewNoDB()
+			return nil, moerr.NewNoDB(ctx.GetContext())
 		}
 	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(dbName)
+		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
 	}
 
 	tblName := string(stmt.TableName.Name())
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return nil, moerr.NewNoSuchTable(dbName, tblName)
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
+	accountId := ctx.GetAccountId()
 	ddlType := plan.DataDefinition_SHOW_INDEX
-	sql := "select att_relname as `Table`,  iff(att_constraint_type = 'p', 1, 0) as `Non_unique`,  iff(att_constraint_type = 'p', 'PRIMARY', attname) as `Key_name`,  1 as `Seq_in_index`, attname as `Column_name`, 'A' as `Collation`, 0 as `Cardinality`, 'NULL' as `Sub_part`, 'NULL' as `Packed`, iff(attnotnull = 0, 'YES', 'NO') as `Null`, '' as 'Index_type', att_comment as `Comment`,  iff(att_is_hidden = 0, 'YES', 'NO') as `Visible`, 'NULL' as `Expression` FROM %s.mo_columns WHERE  att_database = '%s' AND att_relname = '%s'"
+	mustShowTable := "att_relname = 'mo_database' or att_relname = 'mo_tables' or att_relname = 'mo_columns'"
+	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
+	sql := "select att_relname as `Table`,  iff(att_constraint_type = 'p', 1, 0) as `Non_unique`,  iff(att_constraint_type = 'p', 'PRIMARY', attname) as `Key_name`,  1 as `Seq_in_index`, attname as `Column_name`, 'A' as `Collation`, 0 as `Cardinality`, 'NULL' as `Sub_part`, 'NULL' as `Packed`, iff(attnotnull = 0, 'YES', 'NO') as `Null`, '' as 'Index_type', att_comment as `Comment`,  iff(att_is_hidden = 0, 'YES', 'NO') as `Visible`, 'NULL' as `Expression` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
 
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName)
+	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -461,7 +484,7 @@ func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) 
 
 func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
-		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
@@ -517,7 +540,7 @@ func buildShowProcessList(stmt *tree.ShowProcessList, ctx CompilerContext) (*Pla
 
 func returnByRewriteSQL(ctx CompilerContext, sql string,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
-	stmt, err := getRewriteSQLStmt(sql)
+	stmt, err := getRewriteSQLStmt(ctx, sql)
 	if err != nil {
 		return nil, err
 	}
@@ -528,7 +551,7 @@ func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
 	where *tree.Where, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	sql := fmt.Sprintf("SELECT * FROM (%s) tbl", baseSQL)
 	// logutil.Info(sql)
-	newStmt, err := getRewriteSQLStmt(sql)
+	newStmt, err := getRewriteSQLStmt(ctx, sql)
 	if err != nil {
 		return nil, err
 	}
@@ -539,7 +562,7 @@ func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
 
 func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonExpr,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
-	newStmt, err := getRewriteSQLStmt(sql)
+	newStmt, err := getRewriteSQLStmt(ctx, sql)
 	if err != nil {
 		return nil, err
 	}
@@ -565,13 +588,13 @@ func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonEx
 	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
 }
 
-func getRewriteSQLStmt(sql string) (tree.Statement, error) {
-	newStmts, err := parsers.Parse(dialect.MYSQL, sql)
+func getRewriteSQLStmt(ctx CompilerContext, sql string) (tree.Statement, error) {
+	newStmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql)
 	if err != nil {
 		return nil, err
 	}
 	if len(newStmts) != 1 {
-		return nil, moerr.NewInvalidInput("rewrite can only contain one statement, %d provided", len(newStmts))
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "rewrite can only contain one statement, %d provided", len(newStmts))
 	}
 	return newStmts[0], nil
 }

@@ -27,8 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-var ErrDriverLsnNotFound = moerr.NewInternalError("driver info: driver lsn not found")
-var ErrRetryTimeOut = moerr.NewInternalError("driver info: retry time out")
+var ErrDriverLsnNotFound = moerr.NewInternalErrorNoCtx("driver info: driver lsn not found")
+var ErrRetryTimeOut = moerr.NewInternalErrorNoCtx("driver info: retry time out")
 
 type driverInfo struct {
 	addr        map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate
@@ -47,6 +47,7 @@ type driverInfo struct {
 	appended   *common.ClosedIntervals
 	appendedMu sync.RWMutex
 	commitCond sync.Cond
+	inReplay   bool
 }
 
 func newDriverInfo() *driverInfo {
@@ -61,6 +62,15 @@ func newDriverInfo() *driverInfo {
 	}
 }
 
+func (info *driverInfo) PreReplay() {
+	info.inReplay = true
+}
+func (info *driverInfo) PostReplay() {
+	info.inReplay = false
+}
+func (info *driverInfo) IsReplaying() bool {
+	return info.inReplay
+}
 func (info *driverInfo) onReplay(r *replayer) {
 	info.driverLsn = r.maxDriverLsn
 	info.synced = r.maxDriverLsn
@@ -69,6 +79,7 @@ func (info *driverInfo) onReplay(r *replayer) {
 		info.truncating.Store(r.minDriverLsn - 1)
 	}
 	info.truncatedLogserviceLsn = r.truncatedLogserviceLsn
+	info.appended.TryMerge(*common.NewClosedIntervalsBySlice(r.appended))
 }
 
 func (info *driverInfo) onReplayRecordEntry(lsn uint64, driverLsns *common.ClosedIntervals) {
