@@ -17,8 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
@@ -196,7 +197,7 @@ func sendBackBatchToCnClient(ctx context.Context, b *batch.Batch, messageId uint
 }
 
 // receiveMessageFromCnServer deal the back message from cn-server.
-func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextOperator *connector.Argument) error {
+func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
 	var val morpc.Message
 	var dataBuffer []byte
 	for {
@@ -236,6 +237,7 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextOperat
 			if err != nil {
 				return err
 			}
+			nextAnalyze.Network(bat)
 			sendToConnectOperator(nextOperator, bat)
 			dataBuffer = nil
 		}
@@ -296,7 +298,10 @@ func (s *Scope) remoteRun(c *Compile) error {
 	if errReceive != nil {
 		return errReceive
 	}
-	return receiveMessageFromCnServer(c, messagesReceive, s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument))
+	nextInstruction := s.Instructions[len(s.Instructions)-1]
+	nextAnalyze := c.proc.GetAnalyze(nextInstruction.Idx)
+	nextArg := nextInstruction.Arg.(*connector.Argument)
+	return receiveMessageFromCnServer(c, messagesReceive, nextAnalyze, nextArg)
 }
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
@@ -604,7 +609,7 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline)
 func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
 	var err error
 
-	in := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx)}
+	in := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
 	switch t := opr.Arg.(type) {
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
@@ -837,7 +842,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 
 // convert pipeline.Instruction to vm.Instruction
 func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.Instruction, error) {
-	v := vm.Instruction{Op: int(opr.Op), Idx: int(opr.Idx)}
+	v := vm.Instruction{Op: int(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
 	switch opr.Op {
 	case vm.Anti:
 		t := opr.GetAnti()
@@ -1114,6 +1119,10 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 		target.analInfos[i].InputSize += n.InputSize
 		target.analInfos[i].MemorySize += n.MemorySize
 		target.analInfos[i].TimeConsumed += n.TimeConsumed
+		target.analInfos[i].WaitTimeConsumed += n.WaitTimeConsumed
+		target.analInfos[i].DiskIO += n.DiskIO
+		target.analInfos[i].S3IO += n.S3IO
+		target.analInfos[i].NetworkIO += n.NetworkIO
 	}
 }
 
@@ -1235,12 +1244,16 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 
 func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 	return &plan.AnalyzeInfo{
-		InputRows:    info.InputRows,
-		OutputRows:   info.OutputRows,
-		InputSize:    info.InputSize,
-		OutputSize:   info.OutputSize,
-		TimeConsumed: info.TimeConsumed,
-		MemorySize:   info.MemorySize,
+		InputRows:        info.InputRows,
+		OutputRows:       info.OutputRows,
+		InputSize:        info.InputSize,
+		OutputSize:       info.OutputSize,
+		TimeConsumed:     info.TimeConsumed,
+		MemorySize:       info.MemorySize,
+		WaitTimeConsumed: info.WaitTimeConsumed,
+		DiskIO:           info.DiskIO,
+		S3IO:             info.S3IO,
+		NetworkIO:        info.NetworkIO,
 	}
 }
 
