@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -298,6 +299,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 				Name2ColIndex: t.Es.Name2ColIndex,
 				CreateSql:     t.Es.CreateSql,
 				FileList:      t.Es.FileList,
+				Filter:        t.Es.Filter,
 				Fileparam: &external.ExternalFileparam{
 					End:       t.Es.Fileparam.End,
 					FileCnt:   t.Es.Fileparam.FileCnt,
@@ -513,7 +515,10 @@ func constructExternal(n *plan.Node, ctx context.Context, fileList []string) *ex
 			Ctx:           ctx,
 			FileList:      fileList,
 			Fileparam:     new(external.ExternalFileparam),
-			ClusterTable:  n.GetClusterTable(),
+			Filter: &external.FilterParam{
+				FilterExpr: colexec.RewriteFilterExprList(n.FilterList),
+			},
+			ClusterTable: n.GetClusterTable(),
 		},
 	}
 }
