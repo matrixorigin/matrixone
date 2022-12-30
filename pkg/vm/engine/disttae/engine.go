@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -50,7 +51,8 @@ func New(
 		panic(err)
 	}
 	db := newDB(cluster.DNStores)
-	if err := db.init(ctx, mp); err != nil {
+	catalogCache := cache.NewCatalog()
+	if err := db.init(ctx, mp, catalogCache); err != nil {
 		panic(err)
 	}
 	e := &Engine{
@@ -59,6 +61,7 @@ func New(
 		fs:                fs,
 		cli:               cli,
 		idGen:             idGen,
+		catalog:           catalogCache,
 		txnHeap:           &transactionHeap{},
 		getClusterDetails: getClusterDetails,
 		txns:              make(map[string]*Transaction),
@@ -74,8 +77,6 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	sql := getSql(ctx)
 	accountId, userId, roleId := getAccessInfo(ctx)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // TODO
-	defer cancel()
 	databaseId, err := txn.allocateID(ctx)
 	if err != nil {
 		return err
@@ -90,6 +91,13 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1); err != nil {
 		return err
 	}
+	txn.databaseMap.Store(genDatabaseKey(ctx, name), &database{
+		txn:          txn,
+		db:           e.db,
+		fs:           e.fs,
+		databaseId:   databaseId,
+		databaseName: name,
+	})
 	return nil
 }
 
@@ -99,9 +107,8 @@ func (e *Engine) Database(ctx context.Context, name string,
 	if txn == nil {
 		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
-	key := genDatabaseKey(ctx, name)
-	if db, ok := txn.databaseMap.Load(key); ok {
-		return db.(*database), nil
+	if v, ok := txn.databaseMap.Load(genDatabaseKey(ctx, name)); ok {
+		return v.(*database), nil
 	}
 	if name == catalog.MO_CATALOG {
 		db := &database{
@@ -111,30 +118,42 @@ func (e *Engine) Database(ctx context.Context, name string,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: name,
 		}
-		txn.databaseMap.Store(key, db)
 		return db, nil
 	}
-	id, err := txn.getDatabaseId(ctx, name)
-	if err != nil {
-		return nil, err
+	key := &cache.DatabaseItem{
+		Name:      name,
+		AccountId: getAccountId(ctx),
+		Ts:        txn.meta.SnapshotTS,
 	}
-	db := &database{
+	if ok := e.catalog.GetDatabase(key); !ok {
+		return nil, moerr.GetOkExpectedEOB()
+	}
+	return &database{
 		txn:          txn,
 		db:           e.db,
 		fs:           e.fs,
-		databaseId:   id,
 		databaseName: name,
-	}
-	txn.databaseMap.Store(key, db)
-	return db, nil
+		databaseId:   key.Id,
+	}, nil
 }
 
 func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
+	var dbs []string
+
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
+		return nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
-	return txn.getDatabaseList(ctx)
+	accountId := getAccountId(ctx)
+	txn.databaseMap.Range(func(k, _ any) bool {
+		key := k.(databaseKey)
+		if key.accountId == accountId {
+			dbs = append(dbs, key.name)
+		}
+		return true
+	})
+	dbs = append(dbs, e.catalog.Databases(getAccountId(ctx), txn.meta.SnapshotTS)...)
+	return dbs, nil
 }
 
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
@@ -145,20 +164,24 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
 	key := genDatabaseKey(ctx, name)
-	if v, ok := txn.databaseMap.Load(key); ok {
-		db = v.(*database)
+	if _, ok := txn.databaseMap.Load(key); ok {
 		txn.databaseMap.Delete(key)
+		return nil
 	} else {
-		id, err := txn.getDatabaseId(ctx, name)
-		if err != nil {
-			return err
+		key := &cache.DatabaseItem{
+			Name:      name,
+			AccountId: getAccountId(ctx),
+			Ts:        txn.meta.SnapshotTS,
+		}
+		if ok := e.catalog.GetDatabase(key); !ok {
+			return moerr.GetOkExpectedEOB()
 		}
 		db = &database{
 			txn:          txn,
 			db:           e.db,
 			fs:           e.fs,
-			databaseId:   id,
 			databaseName: name,
+			databaseId:   key.Id,
 		}
 	}
 	rels, err := db.Relations(ctx)
@@ -229,26 +252,29 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.getClusterDetails,
 	)
 	txn := &Transaction{
-		op:             op,
-		proc:           proc,
-		db:             e.db,
-		readOnly:       true,
-		meta:           op.Txn(),
-		idGen:          e.idGen,
-		rowId:          [2]uint64{math.MaxUint64, 0},
-		workspace:      memtable.NewTable[RowID, *workspaceRow, *workspaceRow](),
-		dnStores:       cluster.DNStores,
-		fileMap:        make(map[string]uint64),
-		tableMap:       new(sync.Map),
-		databaseMap:    new(sync.Map),
-		createTableMap: make(map[uint64]uint8),
+		op:          op,
+		proc:        proc,
+		db:          e.db,
+		readOnly:    true,
+		meta:        op.Txn(),
+		idGen:       e.idGen,
+		rowId:       [2]uint64{math.MaxUint64, 0},
+		workspace:   memtable.NewTable[RowID, *workspaceRow, *workspaceRow](),
+		dnStores:    cluster.DNStores,
+		fileMap:     make(map[string]uint64),
+		tableMap:    new(sync.Map),
+		databaseMap: new(sync.Map),
+		catalog:     e.catalog,
 	}
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
 	// update catalog's cache
 	table := &table{
 		db: &database{
-			fs:         e.fs,
+			fs: e.fs,
+			txn: &Transaction{
+				catalog: e.catalog,
+			},
 			databaseId: catalog.MO_CATALOG_ID,
 		},
 	}
@@ -296,11 +322,6 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return err
 	}
 	_, err = op.Write(ctx, reqs)
-	if err == nil {
-		for _, name := range txn.deleteMetaTables {
-			txn.db.delMetaTable(name)
-		}
-	}
 	return err
 }
 

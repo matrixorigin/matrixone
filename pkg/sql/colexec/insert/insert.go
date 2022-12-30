@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -80,6 +81,7 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 			if n.UniqueIndexDef.TableExists[i] {
 				b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, n.UniqueIndexDef.Fields[i].Parts, primaryKeyName, proc)
 				if rowNum != 0 {
+					b.SetZs(rowNum, proc.Mp())
 					err := n.UniqueIndexTables[idx].Write(ctx, b)
 					if err != nil {
 						return err
