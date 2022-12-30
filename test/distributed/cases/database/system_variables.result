@@ -137,28 +137,28 @@ select table_name, column_name from key_column_usage limit 2;
 table_name    column_name
 desc columns;
 Field    Type    Null    Key    Default    Extra    Comment
-table_catalog    VARCHAR(3)    YES        NULL
+character_maximum_length    INT    YES        NULL
 table_schema    VARCHAR(256)    YES        NULL
 table_name    VARCHAR(256)    YES        NULL
-column_name    VARCHAR(256)    YES        NULL
-ordinal_position    INT    YES        NULL
-column_default    VARCHAR(65535)    YES        NULL
-is_nullable    VARCHAR(2)    YES        NULL
-data_type    VARCHAR(65535)    YES        NULL
-character_maximum_length    INT    YES        NULL
-character_octet_length    INT    YES        NULL
-numeric_precision    BIGINT    YES        NULL
-numeric_scale    BIGINT    YES        NULL
-datetime_precision    BIGINT    YES        NULL
-character_set_name    VARCHAR(4)    YES        NULL
-collation_name    VARCHAR(8)    YES        NULL
-column_type    VARCHAR(65535)    YES        NULL
 column_key    VARCHAR(3)    YES        NULL
+data_type    VARCHAR(65535)    YES        NULL
 extra    VARCHAR(14)    YES        NULL
-PRIVILEGES    VARCHAR(31)    YES        NULL
-column_comment    VARCHAR(2048)    YES        NULL
-generation_expression    VARCHAR(0)    YES        NULL
 srs_id    BIGINT    YES        NULL
+datetime_precision    BIGINT    YES        NULL
+column_comment    VARCHAR(2048)    YES        NULL
+ordinal_position    INT    YES        NULL
+collation_name    VARCHAR(8)    YES        NULL
+column_default    VARCHAR(65535)    YES        NULL
+numeric_precision    BIGINT    YES        NULL
+table_catalog    VARCHAR(3)    YES        NULL
+PRIVILEGES    VARCHAR(31)    YES        NULL
+numeric_scale    BIGINT    YES        NULL
+character_octet_length    INT    YES        NULL
+character_set_name    VARCHAR(4)    YES        NULL
+is_nullable    VARCHAR(3)    YES        NULL
+generation_expression    VARCHAR(0)    YES        NULL
+column_type    VARCHAR(65535)    YES        NULL
+column_name    VARCHAR(256)    YES        NULL
 select table_name, column_name from columns where table_schema = 'mo_catalog' order by table_name, column_name limit 5;
 table_name    column_name
 mo_account    account_id

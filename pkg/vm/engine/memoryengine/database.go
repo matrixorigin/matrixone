@@ -62,14 +62,14 @@ func (d *Database) Create(ctx context.Context, relName string, defs []engine.Tab
 	return nil
 }
 
-func (d *Database) Truncate(ctx context.Context, relName string) error {
+func (d *Database) Truncate(ctx context.Context, relName string) (uint64, error) {
 	newId, err := d.engine.idGenerator.NewID(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	rel, err := d.Relation(ctx, relName)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	oldId := rel.GetTableID(ctx)
 
@@ -88,10 +88,10 @@ func (d *Database) Truncate(ctx context.Context, relName string) error {
 		},
 	)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	return nil
+	return 0, nil
 }
 
 func (d *Database) Delete(ctx context.Context, relName string) error {
