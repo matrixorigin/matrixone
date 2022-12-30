@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -151,7 +152,8 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		return s.MergeRun(c)
 	}
 	mcpu := s.NodeInfo.Mcpu
-	if remote {
+	switch {
+	case remote:
 		var err error
 		ctx := c.ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
@@ -162,7 +164,13 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if err != nil {
 			return err
 		}
-	} else {
+	case s.NodeInfo.Rel != nil:
+		var err error
+
+		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
+			return err
+		}
+	default:
 		var err error
 
 		ctx := c.ctx
@@ -444,6 +452,7 @@ func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRe
 		PreScopes:    make([]*Scope, len(srcScope.PreScopes)),
 		Instructions: make([]vm.Instruction, len(srcScope.Instructions)),
 		NodeInfo: engine.Node{
+			Rel:  srcScope.NodeInfo.Rel,
 			Mcpu: srcScope.NodeInfo.Mcpu,
 			Id:   srcScope.NodeInfo.Id,
 			Addr: srcScope.NodeInfo.Addr,
@@ -473,7 +482,7 @@ func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRe
 
 		// IF const run.
 		if srcScope.DataSource.Bat != nil {
-			newScope.DataSource.Bat = constructValueScanBatch()
+			newScope.DataSource.Bat, _ = constructValueScanBatch(context.TODO(), nil, nil)
 		}
 	}
 

@@ -49,7 +49,8 @@ func (d Weekday) String() string {
 	return "%Weekday(" + strconv.FormatUint(uint64(d), 10) + ")"
 }
 
-var unixEpoch = int64(FromClock(1970, 1, 1, 0, 0, 0, 0))
+var unixEpochSecs = int64(DatetimeFromClock(1970, 1, 1, 0, 0, 0, 0))
+var unixEpochDays = int32(DateFromCalendar(1970, 1, 1))
 
 var (
 	leapYearMonthDays = []uint8{31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
@@ -260,7 +261,7 @@ func ParseDateCast(s string) (Date, error) {
 	month := ToNumber(m)
 	day := ToNumber(d)
 	if ValidDate(int32(year), uint8(month), uint8(day)) {
-		return FromCalendar(int32(year), uint8(month), uint8(day)), nil
+		return DateFromCalendar(int32(year), uint8(month), uint8(day)), nil
 	}
 	return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 }
@@ -490,7 +491,7 @@ var daysBefore = [...]uint16{
 	31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31 + 30 + 31,
 }
 
-func FromCalendar(year int32, month, day uint8) Date {
+func DateFromCalendar(year int32, month, day uint8) Date {
 	// Compute days since the absolute epoch.
 	d := daysSinceEpoch(year - 1)
 
@@ -730,7 +731,7 @@ func (d Date) ToTime() Time {
 func (d Date) ToTimestamp(loc *time.Location) Timestamp {
 	year, mon, day, _ := d.Calendar(true)
 	t := time.Date(int(year), time.Month(mon), int(day), 0, 0, 0, 0, loc)
-	return Timestamp(t.UnixMicro() + unixEpoch)
+	return Timestamp(t.UnixMicro() + unixEpochSecs)
 }
 
 func (d Date) Month() uint8 {
@@ -748,4 +749,8 @@ func LastDay(year int32, month uint8) uint8 {
 func (d Date) Day() uint8 {
 	_, _, day, _ := d.Calendar(true)
 	return day
+}
+
+func (d Date) DaysSinceUnixEpoch() int32 {
+	return int32(d) - unixEpochDays
 }

@@ -1,0 +1,20 @@
+values row(1,1), row(2,2), row(3,3);
+column_0    column_1
+1    1
+2    2
+3    3
+values row(1,1), row(2,2), row(3,3) order by column_0 desc;
+column_0    column_1
+3    3
+2    2
+1    1
+select * from (values row(1,1), row(2,2), row(3,3)) a;
+column_0    column_1
+1    1
+2    2
+3    3
+select * from (values row(1,1), row(2,2), row(3,3)) a(a, b);
+a    b
+1    1
+2    2
+3    3

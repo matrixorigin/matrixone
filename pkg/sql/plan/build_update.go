@@ -129,7 +129,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		if unqiueIndexDef != nil {
 			for j := 0; j < len(unqiueIndexDef.TableNames); j++ {
 				// check whether the the index table needs to be updated and whether the index exists
-				if checkIndexTableNeedUpdate(unqiueIndexDef.Fields[j], updateTableinfo.updateCols) && unqiueIndexDef.TableExists[j] {
+				if checkIndexTableNeedUpdate(unqiueIndexDef.Fields[j], updateTableinfo) && unqiueIndexDef.TableExists[j] {
 					// build left join with origin table and index table
 					indexTableExpr := buildIndexTableExpr(unqiueIndexDef.TableNames[j])
 					joinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[j], unqiueIndexDef.Fields[j])
@@ -311,7 +311,7 @@ func buildUpdateProject(updateTableList *UpdateTableList, tbinfo *tableInfo, ctx
 		offset += int32(len(orderAttrs)) + 1
 		uDef, _ := buildIndexDefs(updateTableinfo.tblDef.Defs)
 		if uDef != nil {
-			idxUpdateCtxs, idxTableDefs, exprs, err := buildIndexTableUpdateCtx(updateTableinfo.objRef, updateTableinfo.updateCols, uDef, &offset, ctx)
+			idxUpdateCtxs, idxTableDefs, exprs, err := buildIndexTableUpdateCtx(updateTableinfo, uDef, &offset, ctx)
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -328,18 +328,18 @@ func buildUpdateProject(updateTableList *UpdateTableList, tbinfo *tableInfo, ctx
 }
 
 // build the update context and projected columns of the index table
-func buildIndexTableUpdateCtx(objRef *ObjectRef, updateCols []updateCol, uDef *UniqueIndexDef, offset *int32, ctx CompilerContext) ([]*plan.UpdateCtx, []*TableDef, tree.SelectExprs, error) {
+func buildIndexTableUpdateCtx(updateTabInfo *updateTableInfo, uDef *UniqueIndexDef, offset *int32, ctx CompilerContext) ([]*plan.UpdateCtx, []*TableDef, tree.SelectExprs, error) {
 	var selectList tree.SelectExprs
 	indexUpCtxs := make([]*plan.UpdateCtx, 0)
 	indexTableDefs := make([]*TableDef, 0)
 
 	for i := range uDef.IndexNames {
 		// check whether the the index table needs to be updated and whether the index exists
-		if checkIndexTableNeedUpdate(uDef.Fields[i], updateCols) && uDef.TableExists[i] {
+		if checkIndexTableNeedUpdate(uDef.Fields[i], updateTabInfo) && uDef.TableExists[i] {
 			indexTableName := uDef.TableNames[i]
 
 			// Get the definition information of the index table
-			idxObjRef, idxTblDef := ctx.Resolve(objRef.SchemaName, indexTableName)
+			idxObjRef, idxTblDef := ctx.Resolve(updateTabInfo.objRef.SchemaName, indexTableName)
 			rowidExpr, err := buildRowIdAstExpr(ctx, nil, idxObjRef.SchemaName, indexTableName)
 			if err != nil {
 				return nil, nil, nil, err
@@ -350,7 +350,7 @@ func buildIndexTableUpdateCtx(objRef *ObjectRef, updateCols []updateCol, uDef *U
 			orderAttrs := getOrderedColNames(idxTblDef)
 
 			updatectx := &plan.UpdateCtx{
-				DbName:             objRef.SchemaName,
+				DbName:             updateTabInfo.objRef.SchemaName,
 				TblName:            indexTableName,
 				HideKey:            catalog.Row_ID,
 				HideKeyIdx:         *offset,
@@ -384,11 +384,26 @@ func getOrderedColNames(tabledef *TableDef) []string {
 }
 
 // Check whether the index table needs to be updated
-func checkIndexTableNeedUpdate(field *plan.Field, updateCols []updateCol) bool {
-	for _, updateCol := range updateCols {
+func checkIndexTableNeedUpdate(field *plan.Field, updateTabInfo *updateTableInfo) bool {
+	var names []string
+	if updateTabInfo.tblDef.CompositePkey != nil {
+		names = util.SplitCompositePrimaryKeyColumnName(updateTabInfo.tblDef.CompositePkey.Name)
+	}
+
+	for _, updateCol := range updateTabInfo.updateCols {
 		for _, part := range field.Parts {
-			if strings.EqualFold(updateCol.colDef.Name, part) {
+			if strings.EqualFold(updateCol.colDef.Name, part) || updateCol.colDef.Primary {
 				return true
+			}
+			if updateCol.colDef.Primary {
+				return true
+			}
+		}
+		if updateTabInfo.tblDef.CompositePkey != nil {
+			for _, name := range names {
+				if strings.EqualFold(updateCol.colDef.Name, name) {
+					return true
+				}
 			}
 		}
 	}

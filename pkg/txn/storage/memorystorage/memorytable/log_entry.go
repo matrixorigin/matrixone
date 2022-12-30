@@ -22,8 +22,8 @@ type logEntry[
 ] struct {
 	Serial  int64
 	Key     K
-	Pair    KVPair[K, V]
-	OldPair KVPair[K, V]
+	Pair    *KVPair[K, V]
+	OldPair *KVPair[K, V]
 }
 
 var nextLogSerial = int64(1 << 48)
