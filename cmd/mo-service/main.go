@@ -21,6 +21,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"math/rand"
 	"net/http"
 	"os"
@@ -327,7 +328,7 @@ func maybeRunInDaemonMode() {
 		if err != nil {
 			panic(err)
 		}
-		childPID, _ := syscall.ForkExec(os.Args[0], os.Args, &syscall.ProcAttr{
+		cpid, err := syscall.ForkExec(os.Args[0], os.Args, &syscall.ProcAttr{
 			Dir: pwd,
 			Env: append(os.Environ(), childENV...),
 			Sys: &syscall.SysProcAttr{
@@ -335,7 +336,10 @@ func maybeRunInDaemonMode() {
 			},
 			Files: []uintptr{0, 1, 2}, // print message to the same pty
 		})
-		fmt.Printf("mo-service is running in daemon mode, child process %d\n", childPID)
+		if err != nil {
+			panic(err)
+		}
+		log.Printf("mo-service is running in daemon mode, child process is %d", cpid)
 		os.Exit(0)
 	}
 }
