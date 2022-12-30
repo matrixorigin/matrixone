@@ -16,8 +16,9 @@ package disttae
 
 import (
 	"context"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"math/rand"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -50,12 +51,14 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 	exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
 	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
 
-	for _, blockmetas := range tbl.meta.blocks {
-		totalBlockCnt += len(blockmetas)
-		for _, blk := range blockmetas {
-			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
-				outcnt += blockRows(blk)
-				blockNum++
+	if tbl.meta != nil {
+		for _, blockmetas := range tbl.meta.blocks {
+			totalBlockCnt += len(blockmetas)
+			for _, blk := range blockmetas {
+				if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
+					outcnt += blockRows(blk)
+					blockNum++
+				}
 			}
 		}
 	}
@@ -69,10 +72,13 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
 	var rows int64
 	var totalBlockCnt int
-	for _, blks := range tbl.meta.blocks {
-		totalBlockCnt += len(blks)
-		for _, blk := range blks {
-			rows += blockRows(blk)
+
+	if tbl.meta != nil {
+		for _, blks := range tbl.meta.blocks {
+			totalBlockCnt += len(blks)
+			for _, blk := range blks {
+				rows += blockRows(blk)
+			}
 		}
 	}
 	// before first execution, no metadata.
@@ -129,9 +135,11 @@ func (tbl *table) Rows(ctx context.Context) (int64, error) {
 	if tbl.meta == nil {
 		return rows, nil
 	}
-	for _, blks := range tbl.meta.blocks {
-		for _, blk := range blks {
-			rows += blockRows(blk)
+	if tbl.meta != nil {
+		for _, blks := range tbl.meta.blocks {
+			for _, blk := range blks {
+				rows += blockRows(blk)
+			}
 		}
 	}
 	return rows, nil
@@ -169,7 +177,8 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			}
 		}
 	}
-	dnList := needSyncDnStores(ctx, expr, tbl.tableDef, priKeys, tbl.db.txn.dnStores, tbl.db.txn.proc)
+	dnList := needSyncDnStores(ctx, expr, tbl.tableDef, priKeys,
+		tbl.db.txn.dnStores, tbl.db.txn.proc)
 	switch {
 	case tbl.tableId == catalog.MO_DATABASE_ID:
 		tbl.dnList = []int{0}
@@ -184,7 +193,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	for _, i := range dnList {
 		dnStores = append(dnStores, tbl.db.txn.dnStores[i])
 	}
-	_, ok := tbl.db.txn.createTableMap[tbl.tableId]
+	_, ok := tbl.db.txn.tableMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
 	if !ok && !tbl.updated {
 		if err := tbl.db.txn.db.Update(ctx, dnStores, tbl, tbl.db.txn.op, tbl.primaryIdx,
 			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
@@ -296,7 +305,6 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 			if attr.Attr.Name != catalog.Row_ID {
 				defs = append(defs, tbl.defs[i])
 			}
-
 		}
 	}
 	pro := new(engine.PropertiesDef)
@@ -340,7 +348,6 @@ func (tbl *table) TableColumns(ctx context.Context) ([]*engine.Attribute, error)
 		}
 	}
 	return attrs, nil
-
 }
 
 func (tbl *table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
@@ -401,7 +408,6 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 }
 
 func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) error {
-
 	bat.SetAttributes([]string{catalog.Row_ID})
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.Length() == 0 {
