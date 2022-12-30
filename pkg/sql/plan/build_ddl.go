@@ -17,6 +17,7 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -673,6 +674,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 	def := &plan.UniqueIndexDef{
 		Fields: make([]*plan.Field, 0),
 	}
+	nameCount := make(map[string]int)
 
 	for _, indexInfo := range indexInfos {
 		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), true, indexInfo.Name)
@@ -761,7 +763,18 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			tableDef.Cols = append(tableDef.Cols, colDef)
 			field.Cols = append(field.Cols, colDef)
 		}
-		def.IndexNames = append(def.IndexNames, indexInfo.Name)
+		if indexInfo.Name == "" {
+			firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
+			nameCount[firstPart]++
+			count := nameCount[firstPart]
+			indexName := firstPart
+			if count > 1 {
+				indexName = firstPart + "_" + strconv.Itoa(count)
+			}
+			def.IndexNames = append(def.IndexNames, indexName)
+		} else {
+			def.IndexNames = append(def.IndexNames, indexInfo.Name)
+		}
 		def.TableNames = append(def.TableNames, indexTableName)
 		def.Fields = append(def.Fields, field)
 		def.TableExists = append(def.TableExists, true)
