@@ -19,8 +19,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 )
 
 func newDB(dnList []DNStore) *DB {
@@ -37,55 +40,27 @@ func newDB(dnList []DNStore) *DB {
 }
 
 // init is used to insert some data that will not be synchronized by logtail.
-func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
+func (db *DB) init(ctx context.Context, m *mpool.MPool, catalogCache *cache.CatalogCache) error {
 	db.Lock()
 	defer db.Unlock()
 	{
 		parts := make(Partitions, len(db.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition(
-				// create index database on mo_database (datname.account_id)
-				[]ColumnsIndexDef{
-					NewColumnsIndexDef(
-						index_Database,
-						MO_PRIMARY_OFF+catalog.MO_DATABASE_DAT_NAME_IDX,
-						MO_PRIMARY_OFF+catalog.MO_DATABASE_ACCOUNT_ID_IDX,
-					),
-				},
-			)
-
+			parts[i] = NewPartition(nil)
 		}
 		db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = parts
 	}
 	{
 		parts := make(Partitions, len(db.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition(
-				// create index table on mo_tables (relname.reldatabase_id.account_id)
-				[]ColumnsIndexDef{
-					NewColumnsIndexDef(
-						index_Table,
-						MO_PRIMARY_OFF+catalog.MO_TABLES_REL_NAME_IDX,
-						MO_PRIMARY_OFF+catalog.MO_TABLES_RELDATABASE_ID_IDX,
-						MO_PRIMARY_OFF+catalog.MO_TABLES_ACCOUNT_ID_IDX,
-					),
-				},
-			)
+			parts[i] = NewPartition(nil)
 		}
 		db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = parts
 	}
 	{
 		parts := make(Partitions, len(db.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition(
-				// create index table on mo_columns (att_relname_id)
-				[]ColumnsIndexDef{
-					NewColumnsIndexDef(
-						index_Column,
-						MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX,
-					),
-				},
-			)
+			parts[i] = NewPartition(nil)
 		}
 		db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = parts
 	}
@@ -104,6 +79,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		catalogCache.InsertDatabase(bat)
 		bat.Clean(m)
 	}
 	{ // mo_database
@@ -128,25 +104,43 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		catalogCache.InsertTable(bat)
 		bat.Clean(m)
 		part = db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
+		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
+		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
+		bat.SetZs(len(cols), m)
 		for _, col := range cols {
-			bat, err := genCreateColumnTuple(col, m)
+			bat0, err := genCreateColumnTuple(col, m)
 			if err != nil {
 				return err
 			}
-			ibat, err := genInsertBatch(bat, m)
-			if err != nil {
-				bat.Clean(m)
-				return err
+			if bat.Vecs[0] == nil {
+				for i, vec := range bat0.Vecs {
+					bat.Vecs[i] = vector.New(vec.GetType())
+				}
 			}
-			if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
-				ibat, false); err != nil {
-				bat.Clean(m)
-				return err
+			for i, vec := range bat0.Vecs {
+				if err := vector.UnionOne(bat.Vecs[i], vec, 0, m); err != nil {
+					bat.Clean(m)
+					bat0.Clean(m)
+					return err
+				}
 			}
-			bat.Clean(m)
+			bat0.Clean(m)
 		}
+		ibat, err = genInsertBatch(bat, m)
+		if err != nil {
+			bat.Clean(m)
+			return err
+		}
+		if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
+			ibat, false); err != nil {
+			bat.Clean(m)
+			return err
+		}
+		catalogCache.InsertColumns(bat)
+		bat.Clean(m)
 	}
 	{ // mo_tables
 		part := db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
@@ -169,25 +163,43 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		catalogCache.InsertTable(bat)
 		bat.Clean(m)
 		part = db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
+		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
+		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
+		bat.SetZs(len(cols), m)
 		for _, col := range cols {
-			bat, err := genCreateColumnTuple(col, m)
+			bat0, err := genCreateColumnTuple(col, m)
 			if err != nil {
 				return err
 			}
-			ibat, err := genInsertBatch(bat, m)
-			if err != nil {
-				bat.Clean(m)
-				return err
+			if bat.Vecs[0] == nil {
+				for i, vec := range bat0.Vecs {
+					bat.Vecs[i] = vector.New(vec.GetType())
+				}
 			}
-			if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
-				ibat, false); err != nil {
-				bat.Clean(m)
-				return err
+			for i, vec := range bat0.Vecs {
+				if err := vector.UnionOne(bat.Vecs[i], vec, 0, m); err != nil {
+					bat.Clean(m)
+					bat0.Clean(m)
+					return err
+				}
 			}
-			bat.Clean(m)
+			bat0.Clean(m)
 		}
+		ibat, err = genInsertBatch(bat, m)
+		if err != nil {
+			bat.Clean(m)
+			return err
+		}
+		if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
+			ibat, false); err != nil {
+			bat.Clean(m)
+			return err
+		}
+		catalogCache.InsertColumns(bat)
+		bat.Clean(m)
 	}
 	{ // mo_columns
 		part := db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
@@ -210,33 +222,45 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		catalogCache.InsertTable(bat)
 		bat.Clean(m)
 		part = db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
+		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
+		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
+		bat.SetZs(len(cols), m)
 		for _, col := range cols {
-			bat, err := genCreateColumnTuple(col, m)
+			bat0, err := genCreateColumnTuple(col, m)
 			if err != nil {
 				return err
 			}
-			ibat, err := genInsertBatch(bat, m)
-			if err != nil {
-				bat.Clean(m)
-				return err
+			if bat.Vecs[0] == nil {
+				for i, vec := range bat0.Vecs {
+					bat.Vecs[i] = vector.New(vec.GetType())
+				}
 			}
-			if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
-				ibat, false); err != nil {
-				bat.Clean(m)
-				return err
+			for i, vec := range bat0.Vecs {
+				if err := vector.UnionOne(bat.Vecs[i], vec, 0, m); err != nil {
+					bat.Clean(m)
+					bat0.Clean(m)
+					return err
+				}
 			}
-			bat.Clean(m)
+			bat0.Clean(m)
 		}
+		ibat, err = genInsertBatch(bat, m)
+		if err != nil {
+			bat.Clean(m)
+			return err
+		}
+		if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
+			ibat, false); err != nil {
+			bat.Clean(m)
+			return err
+		}
+		catalogCache.InsertColumns(bat)
+		bat.Clean(m)
 	}
 	return nil
-}
-
-func (db *DB) delMetaTable(name string) {
-	db.Lock()
-	delete(db.metaTables, name)
-	db.Unlock()
 }
 
 func (db *DB) getMetaPartitions(name string) Partitions {
