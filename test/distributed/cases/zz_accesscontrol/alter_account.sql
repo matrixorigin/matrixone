@@ -43,9 +43,7 @@ drop account abc;
 
 --alter admin_name /password is null
 create account if not exists test ADMIN_NAME '1WERDFT3YG' IDENTIFIED BY '123456';
--- @bvt:issue#7222
 alter account test admin_name='1WERDFT3YG'  IDENTIFIED BY '';
--- @bvt:issue
 
 --alter not exist account ,alter if exists,admin_name not exist
 alter account not_exist_account ADMIN_NAME 'admin' IDENTIFIED BY '123456';
