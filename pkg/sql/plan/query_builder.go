@@ -2047,12 +2047,15 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	if _, ok := tbl.Right.(*tree.TableFunction); ok {
 		return 0, moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
 	}
-	if tblFn, ok := tbl.Right.(*tree.AliasedTableExpr).Expr.(*tree.TableFunction); ok {
-		err = buildTableFunctionStmt(tblFn, tbl.Left, leftCtx)
-		if err != nil {
-			return 0, err
+	if aliasedTblExpr, ok := tbl.Right.(*tree.AliasedTableExpr); ok {
+		if tblFn, ok2 := aliasedTblExpr.Expr.(*tree.TableFunction); ok2 {
+			err = buildTableFunctionStmt(tblFn, tbl.Left, leftCtx)
+			if err != nil {
+				return 0, err
+			}
 		}
 	}
+
 	rightChildID, err := builder.buildTable(tbl.Right, rightCtx)
 	if err != nil {
 		return 0, err
