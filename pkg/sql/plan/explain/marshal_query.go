@@ -544,7 +544,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 			},
 			{
 				Name:  "Wait Time",
-				Value: analyzeInfo.TimeConsumed,
+				Value: analyzeInfo.WaitTimeConsumed,
 				Unit:  "us",
 			},
 		}
