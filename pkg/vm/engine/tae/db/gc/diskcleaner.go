@@ -99,11 +99,6 @@ func (cleaner *DiskCleaner) JobFactory(ctx context.Context) (err error) {
 	return cleaner.tryClean(ctx)
 }
 
-// Replay is an interface provided for testing
-func (cleaner *DiskCleaner) Replay() {
-	cleaner.tryReplay()
-}
-
 func (cleaner *DiskCleaner) tryReplay() {
 	if _, err := cleaner.processQueue.Enqueue(MessgeReplay); err != nil {
 		panic(err)

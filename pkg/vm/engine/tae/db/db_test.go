@@ -4593,7 +4593,6 @@ func TestGCWithCheckpoint(t *testing.T) {
 	manager2 := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager2.Start()
 	defer manager2.Stop()
-	manager2.Replay()
 	testutils.WaitExpect(5000, func() bool {
 		if manager2.GetMaxConsumed() == nil {
 			return false
@@ -4649,7 +4648,6 @@ func TestGCDropDB(t *testing.T) {
 	manager2 := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager2.Start()
 	defer manager2.Stop()
-	manager2.Replay()
 	testutils.WaitExpect(5000, func() bool {
 		if manager2.GetMaxConsumed() == nil {
 			return false
@@ -4721,7 +4719,6 @@ func TestGCDropTable(t *testing.T) {
 	manager2 := gc.NewDiskCleaner(tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager2.Start()
 	defer manager2.Stop()
-	manager2.Replay()
 	testutils.WaitExpect(5000, func() bool {
 		if manager2.GetMaxConsumed() == nil {
 			return false
@@ -4930,12 +4927,14 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	assert.NoError(t, err)
 	tae.incrementalCheckpoint(txn.GetStartTS(), false, true, true)
 	tae.globalCheckpoint(txn.GetStartTS(), 0, false)
+	assert.NoError(t, txn.Commit())
 
 	tae.createRelAndAppend(bat, false)
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
 	tae.incrementalCheckpoint(txn.GetStartTS(), false, true, true)
 	tae.globalCheckpoint(txn.GetStartTS(), 0, false)
+	assert.NoError(t, txn.Commit())
 
 	p := &catalog.LoopProcessor{}
 	tableExisted := false
@@ -5091,6 +5090,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	assert.NoError(t, err)
 	err = tae.incrementalCheckpoint(txn.GetStartTS(), false, true, true)
 	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
 
 	tae.createRelAndAppend(bats[0], true)
 
@@ -5098,6 +5098,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	assert.NoError(t, err)
 	err = tae.globalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
 	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
 
 	tae.DoAppend(bats[1])
 
@@ -5105,6 +5106,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	assert.NoError(t, err)
 	err = tae.globalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
 	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
 
 	tae.checkRowsByScan(40, true)
 
@@ -5124,6 +5126,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	err = tae.globalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
 	assert.NoError(t, err)
 	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
 }
 
 func TestGlobalCheckpoint6(t *testing.T) {
@@ -5150,6 +5153,7 @@ func TestGlobalCheckpoint6(t *testing.T) {
 	assert.NoError(t, err)
 	err = tae.incrementalCheckpoint(txn.GetStartTS(), false, true, true)
 	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
 
 	for i := 0; i < restartCnt; i++ {
 		tae.DoAppend(bats[i+1])
@@ -5157,6 +5161,7 @@ func TestGlobalCheckpoint6(t *testing.T) {
 		assert.NoError(t, err)
 		err = tae.globalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
 		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit())
 
 		rows := (i + 2) * batchsize
 		tae.checkRowsByScan(rows, true)
