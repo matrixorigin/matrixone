@@ -15,9 +15,10 @@
 package explain
 
 import (
+	"strconv"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"strconv"
 )
 
 type ExplainData struct {
@@ -89,6 +90,7 @@ type Global struct {
 }
 
 type Statistics struct {
+	Time       []StatisticValue `json:"Time"`
 	Memory     []StatisticValue `json:"Memory"`
 	Throughput []StatisticValue `json:"Throughput"`
 	IO         []StatisticValue `json:"IO"`

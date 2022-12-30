@@ -46,7 +46,7 @@ func Prepare(_ *process.Process, _ any) error {
 }
 
 // the bool return value means whether it completed its work or not
-func Call(_ int, proc *process.Process, arg any) (bool, error) {
+func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	p := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 

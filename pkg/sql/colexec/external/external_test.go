@@ -169,17 +169,17 @@ func Test_Call(t *testing.T) {
 			param.extern = extern
 			param.Fileparam.End = false
 			param.FileList = []string{"abc.txt"}
-			end, err := Call(1, tcs.proc, tcs.arg)
+			end, err := Call(1, tcs.proc, tcs.arg, false, false)
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(end, convey.ShouldBeFalse)
 
 			param.Fileparam.End = false
-			end, err = Call(1, tcs.proc, tcs.arg)
+			end, err = Call(1, tcs.proc, tcs.arg, false, false)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end, convey.ShouldBeTrue)
 
 			param.Fileparam.End = true
-			end, err = Call(1, tcs.proc, tcs.arg)
+			end, err = Call(1, tcs.proc, tcs.arg, false, false)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end, convey.ShouldBeTrue)
 		}
