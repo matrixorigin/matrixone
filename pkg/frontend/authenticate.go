@@ -55,10 +55,14 @@ type TenantInfo struct {
 	// true: use secondary role all
 	// false: use secondary role none
 	useAllSecondaryRole bool
+
+	delimiter byte
 }
 
 func (ti *TenantInfo) String() string {
-	return fmt.Sprintf("{account %s:%s:%s -- %d:%d:%d}", ti.Tenant, ti.User, ti.DefaultRole, ti.TenantID, ti.UserID, ti.DefaultRoleID)
+	return fmt.Sprintf("{account %s%c%s%c%s -- %d%c%d%c%d}",
+		ti.Tenant, ti.delimiter, ti.User, ti.delimiter, ti.DefaultRole,
+		ti.TenantID, ti.delimiter, ti.UserID, ti.delimiter, ti.DefaultRoleID)
 }
 
 func (ti *TenantInfo) GetTenant() string {
@@ -167,19 +171,14 @@ func isSysTenant(n string) bool {
 	return isCaseInsensitiveEqual(n, sysAccountName)
 }
 
-//GetTenantInfo extract tenant info from the input of the user.
-/**
-The format of the user
-1. tenant:user:role
-2. tenant:user
-3. user
-*/
-func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
-	p := strings.IndexByte(userInput, ':')
+// splitUserInput splits user input into account info
+func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*TenantInfo, error) {
+	p := strings.IndexByte(userInput, delimiter)
 	if p == -1 {
 		return &TenantInfo{
-			Tenant: GetDefaultTenant(),
-			User:   userInput,
+			Tenant:    GetDefaultTenant(),
+			User:      userInput,
+			delimiter: delimiter,
 		}, nil
 	} else {
 		tenant := userInput[:p]
@@ -188,7 +187,7 @@ func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
 			return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid tenant name '%s'", tenant)
 		}
 		userRole := userInput[p+1:]
-		p2 := strings.IndexByte(userRole, ':')
+		p2 := strings.IndexByte(userRole, delimiter)
 		if p2 == -1 {
 			//tenant:user
 			user := userRole
@@ -197,8 +196,9 @@ func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
 				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid user name '%s'", user)
 			}
 			return &TenantInfo{
-				Tenant: tenant,
-				User:   user,
+				Tenant:    tenant,
+				User:      user,
+				delimiter: delimiter,
 			}, nil
 		} else {
 			user := userRole[:p2]
@@ -215,9 +215,30 @@ func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
 				Tenant:      tenant,
 				User:        user,
 				DefaultRole: role,
+				delimiter:   delimiter,
 			}, nil
 		}
 	}
+}
+
+//GetTenantInfo extract tenant info from the input of the user.
+/**
+The format of the user
+1. tenant:user:role
+2. tenant:user
+3. user
+
+a new format:
+1. tenant#user#role
+2. tenant#user
+*/
+func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
+	if strings.IndexByte(userInput, ':') != -1 {
+		return splitUserInput(ctx, userInput, ':')
+	} else if strings.IndexByte(userInput, '#') != -1 {
+		return splitUserInput(ctx, userInput, '#')
+	}
+	return splitUserInput(ctx, userInput, ':')
 }
 
 // initUser for initialization or something special
@@ -1808,7 +1829,7 @@ func nameIsInvalid(name string) bool {
 	if len(s) == 0 {
 		return true
 	}
-	return strings.Contains(s, ":")
+	return strings.Contains(s, ":") || strings.Contains(s, "#")
 }
 
 // normalizeName normalizes and checks the name
@@ -1901,6 +1922,11 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 		}
 		if aa.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
 			return moerr.NewInternalError(ctx, "only support identified by password")
+		}
+
+		if len(aa.AuthOption.IdentifiedType.Str) == 0 {
+			err = moerr.NewInternalError(ctx, "password is empty string")
+			return err
 		}
 	}
 
@@ -3331,8 +3357,6 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeDropAccount)
 	case *tree.AlterAccount:
 		typs = append(typs, PrivilegeTypeAlterAccount)
-	case *tree.AlterView:
-		typs = append(typs, PrivilegeTypeAlterView)
 	case *tree.CreateUser:
 		if st.Role == nil {
 			typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
@@ -3428,6 +3452,13 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
+	case *tree.AlterView:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeAlterView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		if st.Name != nil {
+			dbName = string(st.Name.SchemaName)
+		}
 	case *tree.CreateFunction:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -3489,7 +3520,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		writeDatabaseAndTableDirectly = true
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
-		*tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues:
+		*tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowLocks, *tree.ShowFunctionStatus:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:

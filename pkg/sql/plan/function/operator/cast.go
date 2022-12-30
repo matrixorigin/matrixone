@@ -17,6 +17,7 @@ package operator
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -491,15 +492,15 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 	}
 
 	if lv.Typ.Oid == types.T_timestamp && rv.Typ.Oid == types.T_datetime {
-		return castTimeStampAsDatetime(lv, rv, proc)
+		return castTimestampAsDatetime(lv, rv, proc)
 	}
 
 	if lv.Typ.Oid == types.T_datetime && rv.Typ.Oid == types.T_timestamp {
-		return CastDatetimeAsTimeStamp(lv, rv, proc)
+		return CastDatetimeAsTimestamp(lv, rv, proc)
 	}
 
 	if lv.Typ.Oid == types.T_date && rv.Typ.Oid == types.T_timestamp {
-		return CastDateAsTimeStamp(lv, rv, proc)
+		return CastDateAsTimestamp(lv, rv, proc)
 	}
 
 	if lv.Typ.Oid == types.T_date && rv.Typ.Oid == types.T_time {
@@ -607,6 +608,30 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		case types.T_uint64:
 			return CastTimeAsNumeric[uint64](lv, rv, proc)
 		}
+	}
+
+	if lv.Typ.Oid == types.T_date && rv.Typ.Oid == types.T_int32 {
+		return castDateAsInt32(lv, rv, proc)
+	}
+
+	if lv.Typ.Oid == types.T_date && rv.Typ.Oid == types.T_int64 {
+		return castDateAsInt64(lv, rv, proc)
+	}
+
+	if lv.Typ.Oid == types.T_datetime && rv.Typ.Oid == types.T_int32 {
+		return castDatetimeAsInt32(lv, rv, proc)
+	}
+
+	if lv.Typ.Oid == types.T_datetime && rv.Typ.Oid == types.T_int64 {
+		return castDatetimeAsInt64(lv, rv, proc)
+	}
+
+	if lv.Typ.Oid == types.T_timestamp && rv.Typ.Oid == types.T_int32 {
+		return castTimestampAsInt32(lv, rv, proc)
+	}
+
+	if lv.Typ.Oid == types.T_timestamp && rv.Typ.Oid == types.T_int64 {
+		return castTimestampAsInt64(lv, rv, proc)
 	}
 
 	if IsDecimal(lv.Typ.Oid) && rv.Typ.Oid == types.T_timestamp {
@@ -1527,8 +1552,156 @@ func CastDecimal64AsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*v
 	return vec, nil
 }
 
-// castTimeStampAsDatetime : Cast converts timestamp to datetime decimal128
-func castTimeStampAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+// castDateAsInt32 : Converts date to int32
+func castDateAsInt32(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lvs := vector.MustTCols[types.Date](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := vector.MustTCols[int32](vec)
+		rs[0] = lvs[0].DaysSinceUnixEpoch()
+		nulls.Set(vec.Nsp, lv.Nsp)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVectorOfRows(rv.Typ, int64(len(lvs)), lv.Nsp)
+	if err != nil {
+		return nil, err
+	}
+	rs := vector.MustTCols[int32](vec)
+	for i := range lvs {
+		rs[i] = lvs[i].DaysSinceUnixEpoch()
+	}
+	return vec, nil
+}
+
+// castDateAsInt64 : Converts date to int64
+func castDateAsInt64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lvs := vector.MustTCols[types.Date](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := vector.MustTCols[int64](vec)
+		rs[0] = int64(lvs[0].DaysSinceUnixEpoch())
+		nulls.Set(vec.Nsp, lv.Nsp)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVectorOfRows(rv.Typ, int64(len(lvs)), lv.Nsp)
+	if err != nil {
+		return nil, err
+	}
+	rs := vector.MustTCols[int64](vec)
+	for i := range lvs {
+		rs[i] = int64(lvs[i].DaysSinceUnixEpoch())
+	}
+	return vec, nil
+}
+
+// castDatetimeAsInt32 : Converts datetime to int32
+func castDatetimeAsInt32(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lvs := vector.MustTCols[types.Datetime](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		val := lvs[0].SecsSinceUnixEpoch()
+		if val < math.MinInt32 || val > math.MaxInt32 {
+			return nil, moerr.NewOutOfRangeNoCtx("datetime", "value '%v'", val)
+		}
+		rs := vector.MustTCols[int32](vec)
+		rs[0] = int32(val)
+		nulls.Set(vec.Nsp, lv.Nsp)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVectorOfRows(rv.Typ, int64(len(lvs)), lv.Nsp)
+	if err != nil {
+		return nil, err
+	}
+	rs := vector.MustTCols[int64](vec)
+	for i := range lvs {
+		val := lvs[i].SecsSinceUnixEpoch()
+		if val < math.MinInt32 || val > math.MaxInt32 {
+			return nil, moerr.NewOutOfRangeNoCtx("datetime", "value '%v'", val)
+		}
+		rs[i] = val
+	}
+	return vec, nil
+}
+
+// castDatetimeAsInt64 : Converts datetime to int64
+func castDatetimeAsInt64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lvs := vector.MustTCols[types.Datetime](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := vector.MustTCols[int64](vec)
+		rs[0] = lvs[0].SecsSinceUnixEpoch()
+		nulls.Set(vec.Nsp, lv.Nsp)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVectorOfRows(rv.Typ, int64(len(lvs)), lv.Nsp)
+	if err != nil {
+		return nil, err
+	}
+	rs := vector.MustTCols[int64](vec)
+	for i := range lvs {
+		rs[i] = lvs[i].SecsSinceUnixEpoch()
+	}
+	return vec, nil
+}
+
+// castTimestampAsInt32 : Converts timestamp to int32
+func castTimestampAsInt32(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lvs := vector.MustTCols[types.Timestamp](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := vector.MustTCols[int64](vec)
+		val := lvs[0].Unix()
+		if val < math.MinInt32 || val > math.MaxInt32 {
+			return nil, moerr.NewOutOfRangeNoCtx("timestamp", "value '%v'", val)
+		}
+		rs[0] = val
+		nulls.Set(vec.Nsp, lv.Nsp)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVectorOfRows(rv.Typ, int64(len(lvs)), lv.Nsp)
+	if err != nil {
+		return nil, err
+	}
+	rs := vector.MustTCols[int64](vec)
+	for i := range lvs {
+		val := lvs[i].Unix()
+		if val < math.MinInt32 || val > math.MaxInt32 {
+			return nil, moerr.NewOutOfRangeNoCtx("timestamp", "value '%v'", val)
+		}
+		rs[i] = val
+	}
+	return vec, nil
+}
+
+// castTimestampAsInt64 : Converts timestamp to int64
+func castTimestampAsInt64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lvs := vector.MustTCols[types.Timestamp](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := vector.MustTCols[int64](vec)
+		rs[0] = lvs[0].Unix()
+		nulls.Set(vec.Nsp, lv.Nsp)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVectorOfRows(rv.Typ, int64(len(lvs)), lv.Nsp)
+	if err != nil {
+		return nil, err
+	}
+	rs := vector.MustTCols[int64](vec)
+	for i := range lvs {
+		rs[i] = lvs[i].Unix()
+	}
+	return vec, nil
+}
+
+// castTimestampAsDatetime : Cast converts timestamp to datetime decimal128
+func castTimestampAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var t *time.Location
 	if proc == nil {
 		t = time.Local
@@ -1717,8 +1890,8 @@ func CastStringAsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*vect
 	return vec, nil
 }
 
-// CastDatetimeAsTimeStamp : Cast converts datetime to timestamp
-func CastDatetimeAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+// CastDatetimeAsTimestamp : Cast converts datetime to timestamp
+func CastDatetimeAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var t *time.Location
 	if proc == nil {
 		t = time.Local
@@ -1744,8 +1917,8 @@ func CastDatetimeAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vec
 	return vec, nil
 }
 
-// CastDateAsTimeStamp : Cast converts date to timestamp
-func CastDateAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+// CastDateAsTimestamp : Cast converts date to timestamp
+func CastDateAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var t *time.Location
 	if proc == nil {
 		t = time.Local

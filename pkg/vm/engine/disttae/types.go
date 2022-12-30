@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -86,6 +87,7 @@ type Engine struct {
 	idGen             IDGenerator
 	getClusterDetails engine.GetClusterDetailsFunc
 	txns              map[string]*Transaction
+	catalog           *cache.CatalogCache
 	// minimum heap of currently active transactions
 	txnHeap *transactionHeap
 }
@@ -141,14 +143,12 @@ type Transaction struct {
 	// interim incremental rowid
 	rowId [2]uint64
 
+	catalog *cache.CatalogCache
+
 	// use to cache table
 	tableMap *sync.Map
 	// use to cache database
 	databaseMap *sync.Map
-
-	createTableMap map[uint64]uint8
-
-	deleteMetaTables []string
 }
 
 // Entry represents a delete/insert

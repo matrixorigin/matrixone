@@ -60,6 +60,49 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	return c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
 }
 
+// Drop the old view, and create the new view.
+func (s *Scope) AlterView(c *Compile) error {
+	qry := s.Plan.GetDdl().GetAlterView()
+
+	dbName := c.db
+	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		if qry.GetIfExists() {
+			return nil
+		}
+		return err
+	}
+	tblName := qry.GetTableDef().GetName()
+	if _, err = dbSource.Relation(c.ctx, tblName); err != nil {
+		if qry.GetIfExists() {
+			return nil
+		}
+		return err
+	}
+
+	// Drop view table.
+	if err := dbSource.Delete(c.ctx, tblName); err != nil {
+		return err
+	}
+
+	// Create view table.
+	// convert the plan's cols to the execution's cols
+	planCols := qry.GetTableDef().GetCols()
+	exeCols := planColsToExeCols(planCols)
+
+	// convert the plan's defs to the execution's defs
+	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
+	if err != nil {
+		return err
+	}
+
+	// if _, err := dbSource.Relation(c.ctx, tblName); err == nil {
+	//  	 return moerr.NewTableAlreadyExists(c.ctx, tblName)
+	// }
+
+	return dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...))
+}
+
 func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
@@ -497,20 +540,20 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return err
 	}
 	id := rel.GetTableID(c.ctx)
-	err = dbSource.Truncate(c.ctx, tblName)
+	newId, err := dbSource.Truncate(c.ctx, tblName)
 	if err != nil {
 		return err
 	}
 
 	// Truncate Index Tables if needed
 	for _, name := range tqry.IndexTableNames {
-		err := dbSource.Truncate(c.ctx, name)
+		_, err := dbSource.Truncate(c.ctx, name)
 		if err != nil {
 			return err
 		}
 	}
 
-	err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, dbName)
+	err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, newId, dbName)
 	if err != nil {
 		return err
 	}
