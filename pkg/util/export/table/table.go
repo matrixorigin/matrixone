@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
+const ExternalFilePath = "__mo_filepath"
+
 type CsvOptions struct {
 	FieldTerminator rune // like: ','
 	EncloseRune     rune // like: '"'
@@ -219,6 +221,9 @@ func (tbl *View) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 		if len(col.Alias) > 0 {
 			sb.WriteString(fmt.Sprintf(" as `%s`", col.Alias))
 		}
+	}
+	if tbl.OriginTable.Engine == ExternalTableEngine {
+		sb.WriteString(fmt.Sprintf(", `%s`", ExternalFilePath))
 	}
 	sb.WriteString(fmt.Sprintf(" from `%s`.`%s` where ", tbl.OriginTable.Database, tbl.OriginTable.Table))
 	sb.WriteString(tbl.Condition.String())
