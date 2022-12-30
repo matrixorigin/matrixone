@@ -35,14 +35,26 @@ import (
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *QueryBuilder {
+	var mysqlCompatible bool
+
+	mode, err := ctx.ResolveVariable("sql_mode", true, false)
+	if err == nil {
+		if modeStr, ok := mode.(string); ok {
+			if !strings.Contains(modeStr, "ONLY_FULL_GROUP_BY") {
+				mysqlCompatible = true
+			}
+		}
+	}
+
 	return &QueryBuilder{
 		qry: &Query{
 			StmtType: queryType,
 		},
-		compCtx:      ctx,
-		ctxByNode:    []*BindContext{},
-		nameByColRef: make(map[[2]int32]string),
-		nextTag:      0,
+		compCtx:         ctx,
+		ctxByNode:       []*BindContext{},
+		nameByColRef:    make(map[[2]int32]string),
+		nextTag:         0,
+		mysqlCompatible: mysqlCompatible,
 	}
 }
 
@@ -1470,11 +1482,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) && len(projectionBinder.boundCols) > 0 {
-		mode, err := builder.compCtx.ResolveVariable("sql_mode", true, false)
-		if err != nil {
-			return 0, err
-		}
-		if strings.Contains(mode.(string), "ONLY_FULL_GROUP_BY") {
+		if !builder.mysqlCompatible {
 			return 0, moerr.NewSyntaxError(builder.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0])
 		}
 
