@@ -88,3 +88,164 @@ drop table if exists t1;
 create table t1 (a int,b varchar(10));
 select median(b) from t1;
 invalid argument aggregate function median, bad value [VARCHAR]
+
+SELECT median(1);
+median(1)
+1.0
+SELECT median(-6372.2);
+median(-6372.2)
+-6372.2
+SELECT median(NULL);
+median(null)
+null
+SELECT median(ABS(-99));
+median(abs(-99))
+99.0
+SELECT median(COS(0) + 2);
+median(cos(0) + 2)
+3.0
+SELECT median(1,2,3);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near ",2,3);";
+SELECT median(fekwelwfew);
+invalid input: column fekwelwfew does not exist
+SELECT median(3hewh32ioj);
+invalid input: column 3hewh32ioj does not exist
+SELECT median("ejwjlvd23232r43f");
+invalid argument aggregate function median, bad value [VARCHAR]
+SELECT median("4");
+invalid argument aggregate function median, bad value [VARCHAR]
+SELECT median('');
+invalid argument aggregate function median, bad value [VARCHAR]
+DROP TABLE IF EXISTS median_01;
+CREATE TABLE median_01(id int, d1 tinyint, d2 smallint unsigned, d3 bigint);
+INSERT INTO median_01 VALUES(1, -128, 65534, 5554584122);
+INSERT INTO median_01 VALUES(2, 0, 68, -7855122);
+INSERT INTO median_01 VALUES(3, 45, 0, 67432648932);
+INSERT INTO median_01 VALUES(4, 45, 5789, 0);
+INSERT INTO median_01 VALUES(5, NULL, 3782, NULL);
+INSERT INTO median_01 VALUES(6, -129, 65534, 5554584122);
+truncated type TINYINT value -129 for column d1, 1
+INSERT INTO median_01 VALUES(7, -123, 89555, 5554584122);
+truncated type SMALLINT UNSIGNED value 89555 for column d2, 1
+INSERT INTO median_01 VALUES(8, -62, 33, 9223372036854775808);
+truncated type BIGINT value 9223372036854775808 for column d3, 1
+INSERT INTO median_01 VALUES(2147483648, -62, 33, 9223372036854775808);
+truncated type INT value 2147483648 for column id, 1
+SELECT median(d2) from median_01;
+median(d2)
+3782.0
+SELECT median(d1),median(d2),median(d3),median(id) from median_01;
+median(d1)    median(d2)    median(d3)    median(id)
+22.5    3782.0    2.777292061E9    3.0
+SELECT median(d1) + median(d2) as he, median(d2) * median(d3) as pr from median_01 where id = 2;
+he    pr
+68.0    -5.34148296E8
+SELECT median(id) / 4 from median_01;
+median(id) / 4
+0.75
+SELECT median(d3) FROM median_01 WHERE id BETWEEN 1 AND 4;
+median(d3)
+2.777292061E9
+SELECT median(d1),median(d2),median(d3) from median_01 GROUP by d1;
+median(d1)    median(d2)    median(d3)
+-128.0    65534.0    5.554584122E9
+0.0    68.0    -7855122.0
+45.0    2894.5    3.3716324466E10
+null    3782.0    null
+SELECT d1, d2 FROM median_01 group by median(d1);
+invalid input: GROUP BY clause cannot contain aggregate functions
+SELECT median(d1) FROM median_01 WHERE id = ABS(-1) + TAN(45);
+median(d1)
+null
+SELECT ABS(median(d2)), FLOOR(median(id) * 3) from median_01;
+abs(median(d2))    floor(median(id) * 3)
+3782.0    9.0
+SELECT SIN(median(d1)), COS(median(d2)), TAN(median(d2)) FROM median_01;
+sin(median(d1))    cos(median(d2))    tan(median(d2))
+-0.4871745124605095    0.8881213562994406    -0.5175070078184374
+SELECT TAN(median(d2)), cot(median(d2) * 2), ACOS(median(d1)) FROM median_01;
+tan(median(d2))    cot(median(d2) * 2)    acos(median(d1))
+-0.5175070078184374    -0.707416987399939    null
+SELECT ATAN(median(d2)), SINH(median(id)) FROM median_01;
+atan(median(d2))    sinh(median(id))
+1.5705319164361722    10.017874927409903
+SELECT ROUND(median(id) / 2) from median_01;
+round(median(id) / 2)
+2.0
+SELECT CEIL(median(d1)) FROM median_01 WHERE id = 1;
+ceil(median(d1))
+-128.0
+SELECT power(median(id),3) FROM median_01;
+power(median(id), 3)
+27.0
+SELECT LOG(median(id)) AS a,LN(median(id)) AS b FROM median_01;
+a    b
+1.0986122886681096    1.0986122886681096
+SELECT EXP(median(id)) FROM median_01;
+exp(median(id))
+20.085536923187668
+DROP TABLE IF EXISTS median_02;
+CREATE TABLE median_02(id int PRIMARY KEY, d1 FLOAT, d2 DOUBLE NOT NULL);
+INSERT INTO median_02 VALUES(1, 645545.11, 65534.5554584122);
+INSERT INTO median_02 VALUES(2, NULL, 638239.1);
+INSERT INTO median_02 VALUES(3, -32783, -56323298.8327382);
+INSERT INTO median_02 VALUES(4, 0, 389283920.1);
+INSERT INTO median_02 VALUES(5, 382, 0);
+INSERT INTO median_02 VALUES(6, 0, -1.8976931348623157E+308);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 59 near "1.8976931348623157E+308);";
+INSERT INTO median_02 VALUES(7, 4.402823466351E+38, 5554584122);
+truncated type FLOAT value 4.402823466351e+38 for column d1, 1
+INSERT INTO median_02 VALUES(8, -55845.0, NULL);
+constraint violation: Column 'd2' cannot be null
+SELECT median(d1), median(d2) from median_02;
+median(d1)    median(d2)
+191.0    65534.5554584122
+SELECT median(d2) from median_02 group by d2;
+median(d2)
+65534.5554584122
+638239.1
+-5.63232988327382E7
+3.892839201E8
+0.0
+SELECT median(d2) from median_02 WHERE id BETWEEN 2 AND 4;
+median(d2)
+638239.1
+SELECT median(d1) from median_02 WHERE id = (SELECT id from median_02 where d2 = 65534.5554584122);
+median(d1)
+645545.125
+SELECT ACOS(median(d2)) from median_02;
+acos(median(d2))
+null
+SELECT CEIL(median(d2)), FLOOR(median(d2)) from median_02;
+ceil(median(d2))    floor(median(d2))
+65535.0    65534.0
+SELECT power(median(d2),2) from median_02;
+power(median(d2), 2)
+4.2947779591317043E9
+DROP TABLE IF EXISTS median_03;
+DROP TABLE IF EXISTS median_04;
+CREATE TABLE median_03(id int, ch smallint NOT NULL, ma bigint unsigned NOT NULL, en FLOAT, ph double,
+PRIMARY KEY(id));
+INSERT INTO median_03 VALUES(1, 88, 99999, -99.98, 88.99);
+INSERT INTO median_03 VALUES(2, 65, 744515, 0, 78.789);
+INSERT INTO median_03 VALUES(3, 76, 21, 893293.1, NULL);
+INSERT INTO median_03 VALUES(4, -367, 3298, NULL, 0);
+INSERT INTO median_03 VALUES(5, 674, 432, 8767687.0, 0.1);
+CREATE TABLE median_04(id int, name VARCHAR(10), ch smallint, ma bigint, en FLOAT not NULL,
+PRIMARY KEY(id));
+INSERT INTO median_04 VALUES(1, 'Alice', 327, 45451, 3232.1);
+INSERT INTO median_04 VALUES(2, 'Bob', 3728, -8889, 899);
+INSERT INTO median_04 VALUES(3, 'Grace', 0, NULL, 0.1);
+INSERT INTO median_04 VALUES(4, 'Vicky', 88, 99, 88888.0);
+INSERT INTO median_04 VALUES(5, 'John', 10, 23211, -78);
+SELECT median(median_04.ch) from median_03, median_04 where median_03.id = median_04.id;
+median(median_04.ch)
+88.0
+SELECT median(median_03.ma) AS a, median(median_04.ma) AS b from median_03 join median_04 ON median_03.ph = median_04.en;
+a    b
+null    null
+SELECT median(median_03.ch),median(median_03.en) from median_03 WHERE id % 2 =1;
+median(median_03.ch)    median(median_03.en)
+88.0    893293.125
+SELECT median(median_03.ch) from median_04 WHERE left(name,2) = 'Al';
+invalid input: missing FROM-clause entry for table 'median_03'
