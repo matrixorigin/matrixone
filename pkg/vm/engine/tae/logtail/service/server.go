@@ -288,9 +288,9 @@ func (s *LogtailServer) onSubscription(
 	)
 
 	tableID := TableID(req.Table.String())
-	duplicated := session.Register(tableID, *req.Table)
-	if duplicated {
-		return session.SendErrorResponse(sendCtx, *req.Table, moerr.ErrDuplicate, "duplicated subscription")
+	repeated := session.Register(tableID, *req.Table)
+	if repeated {
+		return nil
 	}
 
 	sub := subscription{
@@ -324,7 +324,7 @@ func (s *LogtailServer) onUnsubscription(
 	tableID := TableID(req.Table.String())
 	state := session.Unregister(tableID)
 	if state == TableNotFound {
-		return session.SendErrorResponse(sendCtx, *req.Table, moerr.ErrNotFound, "subscription not found")
+		return nil
 	}
 
 	if state == TableSubscribed {
@@ -363,8 +363,8 @@ func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 
 			// drop session directly
 			if e.err != nil {
-				s.ssmgr.DeleteSession(e.session.cs)
 				e.session.Drop()
+				s.ssmgr.DeleteSession(e.session.cs)
 				s.subscribed.Unregister(e.session.ListSubscribedTable()...)
 			}
 		}
@@ -399,6 +399,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 			if err != nil {
 				logger.Error("fail to fetch logtail", zap.Error(err))
 
+				// TODO: Retry on error
 				if err := sub.session.SendErrorResponse(
 					sub.sendCtx, *sub.req.Table, moerr.ErrInternal, "fail to fetch logtail",
 				); err != nil {

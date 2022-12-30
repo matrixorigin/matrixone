@@ -158,8 +158,8 @@ func TestSession(t *testing.T) {
 	err := ss.SendErrorResponse(
 		context.Background(),
 		tableA,
-		moerr.ErrDuplicate,
-		"duplicated subscription",
+		moerr.ErrInternal,
+		"interval error",
 	)
 	require.NoError(t, err)
 

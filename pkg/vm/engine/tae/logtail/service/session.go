@@ -172,6 +172,7 @@ func NewSession(
 	return ss
 }
 
+// TODO: how to drop morpc stream
 // Drop closes sender goroutine.
 func (ss *Session) Drop() {
 	ss.cancelFunc()
@@ -180,7 +181,7 @@ func (ss *Session) Drop() {
 
 // Register registers table for client.
 //
-// The returned true value indicates duplicated subscription.
+// The returned true value indicates repeated subscription.
 func (ss *Session) Register(id TableID, table api.TableID) bool {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
