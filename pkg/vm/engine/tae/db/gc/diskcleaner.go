@@ -384,7 +384,7 @@ func (cleaner *DiskCleaner) CheckGC() error {
 		// TODO
 		return moerr.NewInternalErrorNoCtx("processing clean %s: %v", debugCandidates[0].String(), err)
 	}
-	str := debugTable.SoftGC()
+	debugTable.SoftGC()
 	var mergeTable *GCTable
 	if len(cleaner.inputs.tables) > 1 {
 		mergeTable = NewGCTable()
