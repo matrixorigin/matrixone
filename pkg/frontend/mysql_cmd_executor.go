@@ -3102,7 +3102,7 @@ func (ses *Session) getSqlType(sql string) {
 	}
 	p1 := strings.Index(sql, "/*")
 	p2 := strings.Index(sql, "*/")
-	if p1 < 0 || p2 < 0 {
+	if p1 < 0 || p2 < 0 || p2 <= p1+1 {
 		ses.sqlSourceType = externSql
 		return
 	}

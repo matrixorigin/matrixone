@@ -49,7 +49,7 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 	var outcnt int64
 
 	exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
-	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
+	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 
 	if tbl.meta != nil {
 		for _, blockmetas := range tbl.meta.blocks {
@@ -218,7 +218,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	tbl.meta.modifedBlocks = make([][]ModifyBlockMeta, len(tbl.meta.blocks))
 
 	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
-	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
+	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range dnList {
 		blks, deletes := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
 			tbl.meta.blocks[i], writes)
