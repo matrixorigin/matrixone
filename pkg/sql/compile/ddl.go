@@ -540,20 +540,20 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return err
 	}
 	id := rel.GetTableID(c.ctx)
-	err = dbSource.Truncate(c.ctx, tblName)
+	newId, err := dbSource.Truncate(c.ctx, tblName)
 	if err != nil {
 		return err
 	}
 
 	// Truncate Index Tables if needed
 	for _, name := range tqry.IndexTableNames {
-		err := dbSource.Truncate(c.ctx, name)
+		_, err := dbSource.Truncate(c.ctx, name)
 		if err != nil {
 			return err
 		}
 	}
 
-	err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, dbName)
+	err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, newId, dbName)
 	if err != nil {
 		return err
 	}

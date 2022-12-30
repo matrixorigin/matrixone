@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 
@@ -68,12 +69,12 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 
 				tableID := rel.GetTableID(c.ctx)
 
-				err = dbSource.Truncate(c.ctx, deleteCtx.TableName)
+				newId, err := dbSource.Truncate(c.ctx, deleteCtx.TableName)
 				if err != nil {
 					return 0, err
 				}
 
-				err = colexec.MoveAutoIncrCol(c.e, c.ctx, deleteCtx.TableName, dbSource, c.proc, tableID, deleteCtx.DbName)
+				err = colexec.MoveAutoIncrCol(c.e, c.ctx, deleteCtx.TableName, dbSource, c.proc, tableID, newId, deleteCtx.DbName)
 				if err != nil {
 					return 0, err
 				}
@@ -278,6 +279,7 @@ func writeBatch(ctx context.Context,
 				}
 				indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, p.UniqueIndexDef.Fields[i].Parts, primaryKeyName, c.proc)
 				if rowNum != 0 {
+					indexBatch.SetZs(rowNum, c.proc.Mp())
 					if err = indexRelation.Write(ctx, indexBatch); err != nil {
 						return err
 					}

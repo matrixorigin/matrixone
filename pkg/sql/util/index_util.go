@@ -110,6 +110,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 		b.Vecs[1] = compactPrimaryCol(vec, bitMap, proc)
 	}
 
+	b.SetZs(vector.Length(b.Vecs[0]), proc.Mp())
 	return b, vector.Length(b.Vecs[0])
 }
 
