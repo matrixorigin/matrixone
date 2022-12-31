@@ -1,0 +1,18 @@
+drop table if exists t1;
+create table t1(id int PRIMARY KEY,name VARCHAR(255),age int);
+insert into t1 values(1,"Abby", 24);
+insert into t1 values(2,"Bob", 25);
+insert into t1 values(3,"Carol", 23);
+insert into t1 values(4,"Dora", 29);
+create unique index idx on t1(name);
+select * from t1;
+drop table t1;
+
+create table t3 (
+col1 bigint primary key,
+col2 varchar(25),
+col3 float,
+col4 varchar(50)
+);
+create unique index idx on t3(col2) comment 'create varchar index';
+drop table t3;
