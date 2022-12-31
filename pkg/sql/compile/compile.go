@@ -46,6 +46,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	DistributedThreshold uint64 = 10 * mpool.MB
+)
+
 // New is used to new an object of compile
 func New(addr, db string, sql string, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
@@ -318,14 +322,20 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	}
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		if err != nil {
-			return nil, err
+		if qry.Nodes[qry.Nodes[qry.Steps[0]].Children[0]].Stats.Cost > float64(DistributedThreshold) {
+			// ToDo: create 'delete' distributed pipeline
+			// please reference to https://github.com/JackTan25/docs/blob/main/design/CN-Write-S3.md
+			// https://github.com/JackTan25/docs/raw/main/design/imgs/pipeline_design.png
+		} else {
+			scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+			if err != nil {
+				return nil, err
+			}
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.Deletion,
+				Arg: scp,
+			})
 		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Deletion,
-			Arg: scp,
-		})
 	case plan.Query_INSERT:
 		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {

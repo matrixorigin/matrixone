@@ -15,6 +15,7 @@
 package batch
 
 import (
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -53,4 +54,9 @@ type Batch struct {
 	Zs   []int64
 	Aggs []agg.Agg[any]
 	Ht   any // hash table
+}
+
+type WrapperBatch struct {
+	Uuid uuid.UUID
+	Bat  *Batch
 }
