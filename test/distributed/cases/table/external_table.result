@@ -312,6 +312,17 @@ a    num_col1    num_col2    num_col3    num_col4    num_col5    num_col6    num
 99    -128    -32768    -2147483648    -9223372036854775808    0    0    0    0    null    -1.7976931348623157E308    9345.4535000000000000000
 99    127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615    null    1.7976931348623157E308    883453.0999320000000000000
 99    null    null    null    null    null    null    null    null    null    null    null
+create external table ex_table_space(a varchar(200), b varchar(200), c varchar(200)) infile{"filepath"='$resources/external_table_file/ex_table_space.csv'} fields terminated by '|' enclosed by '\"' lines terminated by '\n';
+select length(a), length(b), length(c) from ex_table_space;
+length(a)    length(b)   length(c)
+4    6    8
+2    2    2
+create table t1(a varchar(100), b varchar(100), c varchar(100));
+load data infile '$resources/external_table_file/ex_table_space.csv' into table t1 fields terminated by '|' enclosed by '\"' lines terminated by '\n';
+select length(a), length(b), length(c) from t1;
+length(a)    length(b)   length(c)
+4    6    8
+2    2    2
 drop table if exists ex_table_1;
 drop table if exists ex_table_2_1;
 drop table if exists ex_table_2_2;
@@ -366,3 +377,5 @@ drop table if exists ex_table_15;
 drop table if exists ex_table_drop;
 drop table if exists table_15;
 drop table if exists ex_table_yccs;
+drop table if exists ex_table_space;
+drop table if exists t1;

@@ -75,6 +75,10 @@ type Instruction struct {
 	Idx int
 	// Arg contains the operand of this instruction.
 	Arg InstructionArgument
+
+	// flag for analyzeInfo record the row information
+	IsFirst bool
+	IsLast  bool
 }
 
 type InstructionArgument interface {

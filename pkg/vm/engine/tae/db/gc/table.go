@@ -293,7 +293,7 @@ func (t *GCTable) collectData(files []string) []*containers.Batch {
 	}
 
 	for _, name := range files {
-		bats[DeleteFile].GetVectorByName(GCAttrObjectName).Append(name)
+		bats[DeleteFile].GetVectorByName(GCAttrObjectName).Append([]byte(name))
 	}
 	return bats
 }
@@ -343,6 +343,7 @@ func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []
 	}
 
 	blocks, err := writer.Sync()
+	//logutil.Infof("SaveTable %v-%v, table: %v, gc: %v", start.ToString(), end.ToString(), t.String(), files)
 	return blocks, err
 }
 

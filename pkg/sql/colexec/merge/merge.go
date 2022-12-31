@@ -16,10 +16,12 @@ package merge
 
 import (
 	"bytes"
+	"reflect"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"reflect"
 )
 
 func String(_ any, buf *bytes.Buffer) {
@@ -40,7 +42,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -53,10 +55,12 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			return true, nil
 		}
 
+		start := time.Now()
 		chosen, value, ok := reflect.Select(ctr.receiverListener)
 		if !ok {
 			return false, moerr.NewInternalError(proc.Ctx, "pipeline closed unexpectedly")
 		}
+		anal.WaitStop(start)
 
 		pointer := value.UnsafePointer()
 		bat := (*batch.Batch)(pointer)
@@ -68,8 +72,8 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		if bat.Length() == 0 {
 			continue
 		}
-		anal.Input(bat)
-		anal.Output(bat)
+		anal.Input(bat, isFirst)
+		anal.Output(bat, isLast)
 		proc.SetInputBatch(bat)
 		return false, nil
 	}

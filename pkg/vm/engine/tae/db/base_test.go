@@ -16,6 +16,7 @@ package db
 
 import (
 	"errors"
+	checkpoint2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"sync"
 	"testing"
 	"time"
@@ -254,6 +255,14 @@ func (e *testEngine) incrementalCheckpoint(
 func initDB(t *testing.T, opts *options.Options) *DB {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	db, _ := Open(dir, opts)
+	// only ut executes this checker
+	db.DiskCleaner.AddChecker(
+		func(item any) bool {
+			min := db.TxnMgr.MinTSForTest()
+			checkpoint := item.(*checkpoint2.CheckpointEntry)
+			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
+			return !checkpoint.GetEnd().GreaterEq(min)
+		})
 	return db
 }
 
