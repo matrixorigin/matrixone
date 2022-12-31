@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -31,6 +32,20 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	if ap.crossCN {
+		ap.ctr.streams = make([]*WrapperStream, 0, len(ap.nodes))
+		for i := range ap.ctr.streams {
+			if ap.nodes[i].Node.Addr == "" {
+				ap.ctr.streams = append(ap.ctr.streams, nil)
+				continue
+			}
+			stream, errStream := cnclient.GetStreamSender(ap.nodes[i].Node.Addr)
+			if errStream != nil {
+				return errStream
+			}
+			ap.ctr.streams = append(ap.ctr.streams, &WrapperStream{stream, ap.nodes[i].Uuid})
+		}
+	}
 	return nil
 }
 
