@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"fmt"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -27,14 +26,23 @@ import (
 )
 
 func openSaveQueryResult(ses *Session) bool {
+	// TODO: Graceful judgment
+	sql := strings.ToLower(ses.sql)
+	if strings.Contains(sql, "meta_scan") || strings.Contains(sql, "result_scan") || ses.tStmt == nil {
+		return false
+	}
+	if ses.tStmt.SqlSourceType == "internal_sql" {
+		return false
+	}
 	if strings.ToLower(ses.GetParameterUnit().SV.SaveQueryResult) == "on" {
 		return true
 	}
+	// TODO: Increase priority
 	val, err := ses.GetGlobalVar("save_query_result")
 	if err != nil {
 		return false
 	}
-	if v, _ := val.(uint64); v > 0 {
+	if v, _ := val.(int8); v > 0 {
 		return true
 	}
 	return false
@@ -43,7 +51,7 @@ func openSaveQueryResult(ses *Session) bool {
 func saveQueryResult(ses *Session, bat *batch.Batch) error {
 	fs := ses.GetParameterUnit().FileService
 	// write query result
-	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String())
+	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), ses.GetBlockIdx())
 	writer, err := objectio.NewObjectWriter(path, fs)
 	if err != nil {
 		return err
@@ -56,20 +64,37 @@ func saveQueryResult(ses *Session, bat *batch.Batch) error {
 	if err != nil {
 		return err
 	}
+	return nil
+}
+
+func saveQueryResultMeta(ses *Session, bat *batch.Batch) error {
+	defer func() {
+		ses.ResetBlockIdx()
+	}()
+	fs := ses.GetParameterUnit().FileService
 	// write query result meta
-	var cols string
-	for _, attr := range bat.Attrs {
-		cols += fmt.Sprintf("`%s`", attr)
+	b, err := ses.rs.Marshal()
+	if err != nil {
+		return err
 	}
+	buf := new(strings.Builder)
+	prefix := ",\n"
+	for i := 1; i <= ses.blockIdx; i++ {
+		if i > 1 {
+			buf.WriteString(prefix)
+		}
+		buf.WriteString(catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), i))
+	}
+
 	m := &catalog.Meta{
 		QueryId:    ses.tStmt.StatementID,
 		Statement:  ses.tStmt.Statement,
 		AccountId:  ses.GetTenantInfo().GetTenantID(),
 		RoleId:     ses.tStmt.RoleId,
-		ResultPath: path,
+		ResultPath: buf.String(),
 		CreateTime: types.CurrentTimestamp(),
 		ResultSize: 100, // TODO: implement
-		Columns:    cols,
+		Columns:    string(b),
 	}
 	metaBat, err := buildQueryResultMetaBatch(m, ses.mp)
 	if err != nil {

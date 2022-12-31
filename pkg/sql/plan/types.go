@@ -90,6 +90,8 @@ type CompilerContext interface {
 	GetContext() context.Context
 
 	GetProcess() *process.Process
+
+	GetQueryResultColDefs(uuid string) ([]*ColDef, error)
 }
 
 type Optimizer interface {

@@ -416,8 +416,8 @@ func DecodeRowid(rowid types.Rowid) (blockId uint64, offset uint32) {
 	return
 }
 
-func BuildQueryResultPath(accountName, statementId string) string {
-	return fmt.Sprintf(QueryResultPath, accountName, statementId)
+func BuildQueryResultPath(accountName, statementId string, blockIdx int) string {
+	return fmt.Sprintf(QueryResultPath, accountName, statementId, blockIdx)
 }
 
 func BuildQueryResultMetaPath(accountName, statementId string) string {
@@ -426,4 +426,8 @@ func BuildQueryResultMetaPath(accountName, statementId string) string {
 
 func BuildQueryResultMetaName(accountName, statementId string) string {
 	return fmt.Sprintf(QueryResultMetaName, accountName, statementId)
+}
+
+func BuildQueryResultName(accountName, statementId string, blockIdx int) string {
+	return fmt.Sprintf(QueryResultName, accountName, statementId, blockIdx)
 }

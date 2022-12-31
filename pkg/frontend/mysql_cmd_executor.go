@@ -584,14 +584,20 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
+	if openSaveQueryResult(ses) {
+		ses.lastQueryId = types.Uuid(ses.tStmt.StatementID).ToString()
+		if bat == nil {
+			if err := saveQueryResultMeta(ses, bat); err != nil {
+				return err
+			}
+		} else {
+			if err := saveQueryResult(ses, bat); err != nil {
+				return err
+			}
+		}
+	}
 	if bat == nil {
 		return nil
-	}
-
-	if openSaveQueryResult(ses) {
-		if err := saveQueryResult(ses, bat); err != nil {
-			return err
-		}
 	}
 
 	enableProfile := ses.GetParameterUnit().SV.EnableProfileGetDataFromPipeline
@@ -3156,6 +3162,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		StorageEngine: pu.StorageEngine,
 		LastInsertID:  ses.GetLastInsertID(),
 	}
+	proc.SessionInfo.QueryId = ses.lastQueryId
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
@@ -3531,6 +3538,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				logErrorf(ses.GetConciseProfile(), "GetColumns from Computation handler failed. error: %v", err)
 				goto handleFailed
+			}
+			if c, ok := cw.(*TxnComputationWrapper); ok {
+				ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(c.plan)}
 			}
 			/*
 				Step 1 : send column count and column definition.
