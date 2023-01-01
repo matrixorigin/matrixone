@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
@@ -50,7 +51,8 @@ func NewSessionManager() *SessionManager {
 func (sm *SessionManager) GetSession(
 	rootCtx context.Context,
 	logger *zap.Logger,
-	timeout time.Duration,
+	sendTimeout time.Duration,
+	poisionTime time.Duration,
 	pooler ResponsePooler,
 	notifier SessionErrorNotifier,
 	cs morpc.ClientSession,
@@ -60,7 +62,7 @@ func (sm *SessionManager) GetSession(
 
 	if _, ok := sm.clients[cs]; !ok {
 		sm.clients[cs] = NewSession(
-			rootCtx, logger, timeout, pooler, notifier, cs,
+			rootCtx, logger, sendTimeout, poisionTime, pooler, notifier, cs,
 		)
 	}
 	return sm.clients[cs]
@@ -97,10 +99,11 @@ type Session struct {
 	cancelFunc context.CancelFunc
 	wg         sync.WaitGroup
 
-	logger   *zap.Logger
-	timeout  time.Duration
-	pooler   ResponsePooler
-	notifier SessionErrorNotifier
+	logger      *zap.Logger
+	sendTimeout time.Duration
+	poisionTime time.Duration
+	pooler      ResponsePooler
+	notifier    SessionErrorNotifier
 
 	cs       morpc.ClientSession
 	sendChan chan message
@@ -122,22 +125,24 @@ type ResponsePooler interface {
 func NewSession(
 	rootCtx context.Context,
 	logger *zap.Logger,
-	timeout time.Duration,
+	sendTimeout time.Duration,
+	poisionTime time.Duration,
 	pooler ResponsePooler,
 	notifier SessionErrorNotifier,
 	cs morpc.ClientSession,
 ) *Session {
 	ctx, cancel := context.WithCancel(rootCtx)
 	ss := &Session{
-		sessionCtx: ctx,
-		cancelFunc: cancel,
-		logger:     logger,
-		timeout:    timeout,
-		pooler:     pooler,
-		notifier:   notifier,
-		cs:         cs,
-		sendChan:   make(chan message),
-		tables:     make(map[TableID]TableState),
+		sessionCtx:  ctx,
+		cancelFunc:  cancel,
+		logger:      logger,
+		sendTimeout: sendTimeout,
+		poisionTime: poisionTime,
+		pooler:      pooler,
+		notifier:    notifier,
+		cs:          cs,
+		sendChan:    make(chan message, 16), // cache for morpc stream
+		tables:      make(map[TableID]TableState),
 	}
 
 	sender := func() {
@@ -174,7 +179,7 @@ func NewSession(
 
 // TODO: how to drop morpc stream
 // Drop closes sender goroutine.
-func (ss *Session) Drop() {
+func (ss *Session) PostClean() {
 	ss.cancelFunc()
 	ss.wg.Wait()
 }
@@ -236,7 +241,7 @@ func (ss *Session) FilterLogtail(tails ...tableLogtail) []*logtail.TableLogtail 
 
 // Publish publishes additional logtail.
 func (ss *Session) Publish(ctx context.Context, tails ...tableLogtail) error {
-	sendCtx, cancel := context.WithTimeout(ctx, ss.timeout)
+	sendCtx, cancel := context.WithTimeout(ctx, ss.sendTimeout)
 	defer cancel()
 
 	qualified := ss.FilterLogtail(tails...)
@@ -306,6 +311,17 @@ func (ss *Session) SendResponse(
 		ss.logger.Error("fail to send error response", zap.Error(sendCtx.Err()))
 		ss.pooler.ReleaseResponse(response)
 		return sendCtx.Err()
+	default:
+	}
+
+	select {
+	case <-time.After(ss.poisionTime):
+		ss.logger.Error("poision morpc stream detected")
+		ss.pooler.ReleaseResponse(response)
+		if err := ss.cs.Close(); err != nil {
+			ss.logger.Error("fail to close poision morpc stream", zap.Error(err))
+		}
+		return moerr.NewStreamClosedNoCtx()
 	case ss.sendChan <- message{sendCtx: sendCtx, response: response}:
 		return nil
 	}

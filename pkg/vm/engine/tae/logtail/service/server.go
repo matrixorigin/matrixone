@@ -136,8 +136,8 @@ type LogtailServer struct {
 		sendTimeout           time.Duration
 	}
 
-	ssmgr      *SessionManager
-	subscribed *Waterliner
+	ssmgr     *SessionManager
+	waterline *Waterliner
 
 	errChan chan sessionError // errChan has no buffer in order to improve sensitivity.
 	pubChan chan publishment
@@ -158,13 +158,13 @@ func NewLogtailServer(
 	address string, fetcher LogtailFetcher, clock clock.Clock, opts ...ServerOption,
 ) (morpc.RPCServer, error) {
 	s := &LogtailServer{
-		ssmgr:      NewSessionManager(),
-		subscribed: NewWaterliner(),
-		errChan:    make(chan sessionError),
-		pubChan:    make(chan publishment),
-		subChan:    make(chan subscription, 10),
-		fetcher:    fetcher,
-		clock:      clock,
+		ssmgr:     NewSessionManager(),
+		waterline: NewWaterliner(),
+		errChan:   make(chan sessionError),
+		pubChan:   make(chan publishment),
+		subChan:   make(chan subscription, 10),
+		fetcher:   fetcher,
+		clock:     clock,
 	}
 
 	s.pool.requests = &sync.Pool{
@@ -283,8 +283,9 @@ func (s *LogtailServer) onMessage(
 func (s *LogtailServer) onSubscription(
 	sendCtx context.Context, cs morpc.ClientSession, req *logtail.SubscribeRequest,
 ) error {
+	poisionTime := s.options.collectInterval/2 + 1
 	session := s.ssmgr.GetSession(
-		s.rootCtx, s.options.logger, s.options.sendTimeout, s, s, cs,
+		s.rootCtx, s.options.logger, s.options.sendTimeout, poisionTime, s, s, cs,
 	)
 
 	tableID := TableID(req.Table.String())
@@ -317,8 +318,9 @@ func (s *LogtailServer) onSubscription(
 func (s *LogtailServer) onUnsubscription(
 	sendCtx context.Context, cs morpc.ClientSession, req *logtail.UnsubscribeRequest,
 ) error {
+	poisionTime := s.options.collectInterval/2 + 1
 	session := s.ssmgr.GetSession(
-		s.rootCtx, s.options.logger, s.options.sendTimeout, s, s, cs,
+		s.rootCtx, s.options.logger, s.options.sendTimeout, poisionTime, s, s, cs,
 	)
 
 	tableID := TableID(req.Table.String())
@@ -328,7 +330,7 @@ func (s *LogtailServer) onUnsubscription(
 	}
 
 	if state == TableSubscribed {
-		s.subscribed.Unregister(tableID)
+		s.waterline.Unregister(tableID)
 	}
 
 	return session.SendUnsubscriptionResponse(sendCtx, *req.Table)
@@ -363,9 +365,9 @@ func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 
 			// drop session directly
 			if e.err != nil {
-				e.session.Drop()
+				e.session.PostClean()
 				s.ssmgr.DeleteSession(e.session.cs)
-				s.subscribed.Unregister(e.session.ListSubscribedTable()...)
+				s.waterline.Unregister(e.session.ListSubscribedTable()...)
 			}
 		}
 	}
@@ -389,7 +391,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 			logger.Debug("start to handle subscription", zap.Any("table", sub.req.Table))
 
 			// evaluate waterline for the table
-			want, exist := s.subscribed.Waterline(sub.tableID)
+			want, exist := s.waterline.Waterline(sub.tableID)
 			if !exist {
 				want, _ = s.clock.Now()
 			}
@@ -419,7 +421,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 			sub.session.AdvanceState(sub.tableID)
 
 			// register subscribed table
-			s.subscribed.Register(sub.tableID, *sub.req.Table, want)
+			s.waterline.Register(sub.tableID, *sub.req.Table, want)
 
 		case pub, ok := <-s.pubChan:
 			if !ok {
@@ -436,7 +438,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 			}
 
 			// update waterline for all subscribed tables
-			s.subscribed.AdvanceWaterline(pub.want)
+			s.waterline.Advance(pub.want)
 		}
 	}
 }
@@ -456,7 +458,7 @@ func (s *LogtailServer) collector(ctx context.Context) {
 
 		case <-ticker.C:
 			// take a snapshot for all subscribed tables
-			tables := s.subscribed.ListTable()
+			tables := s.waterline.ListSubscribedTable()
 
 			// take current timestamp
 			want, _ := s.clock.Now()

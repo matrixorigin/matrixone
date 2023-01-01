@@ -66,7 +66,7 @@ func (w *Waterliner) Unregister(ids ...TableID) {
 }
 
 // ListTable takes snapshot for all subscribed tables.
-func (w *Waterliner) ListTable() []tableInfo {
+func (w *Waterliner) ListSubscribedTable() []tableInfo {
 	w.RLock()
 	defer w.RUnlock()
 
@@ -94,7 +94,7 @@ func (w *Waterliner) Waterline(id TableID) (timestamp.Timestamp, bool) {
 // Advance updates waterline.
 //
 // For simplicity, just update all subscribed tables directly.
-func (w *Waterliner) AdvanceWaterline(waterline timestamp.Timestamp) {
+func (w *Waterliner) Advance(waterline timestamp.Timestamp) {
 	w.Lock()
 	defer w.Unlock()
 
