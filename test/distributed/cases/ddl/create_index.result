@@ -5,12 +5,6 @@ insert into t1 values(2,"Bob", 25);
 insert into t1 values(3,"Carol", 23);
 insert into t1 values(4,"Dora", 29);
 create unique index idx on t1(name);
-select * from t1;
-id    name    age
-1    Abby    24
-2    Bob    25
-3    Carol    23
-4    Dora    29
 drop table t1;
 create table t3 (
 col1 bigint primary key,
