@@ -449,6 +449,8 @@ type ExportParam struct {
 	Writer *bufio.Writer
 	// outfile flag
 	Outfile bool
+	// query id
+	QueryId string
 	// filename path
 	FilePath string
 	// Fields
@@ -477,7 +479,16 @@ func (ep *ExportParam) Format(ctx *FmtCtx) {
 	if ep.FilePath == "" {
 		return
 	}
-	ctx.WriteString("into outfile " + ep.FilePath)
+	ep.format(ctx, true)
+}
+
+func (ep *ExportParam) format(ctx *FmtCtx, withOutfile bool) {
+	ctx.WriteString("into")
+	if withOutfile {
+		ctx.WriteString(" outfile")
+	}
+	ctx.WriteByte(' ')
+	ctx.WriteString(ep.FilePath)
 	if ep.Fields != nil {
 		ctx.WriteByte(' ')
 		ep.Fields.Format(ctx)
