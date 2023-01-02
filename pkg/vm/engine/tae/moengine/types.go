@@ -55,6 +55,8 @@ type Relation interface {
 
 	UpdateConstraintWithBin(context.Context, []byte) error
 	//Write just append data into txn's workspace, instead of applying data into state machine.
+	//TODO::Add flag parameter to indicate whether tae need to
+	//      do deduplication check with transaction's workspace and snapshot data.
 	Write(context.Context, *batch.Batch) error
 
 	//AddBlksWithMetaLoc just add  non-appendable blocks into txn's workspace.

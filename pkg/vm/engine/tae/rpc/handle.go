@@ -345,40 +345,74 @@ func (h *Handle) HandleFlushTable(
 	return err
 }
 
-func (h *Handle) loadPksFromFS(
+func (h *Handle) startLoadJobs(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *db.WriteReq,
 ) (err error) {
-	txn, err := h.eng.GetOrCreateTxnWithMeta(
-		nil,
-		meta.GetID(),
-		types.TimestampToTS(meta.GetSnapshotTS()))
-	if err != nil {
-		return err
+	var locations []string
+	var columnTypes []types.Type
+	var columnNames []string
+	var isNull []bool
+	var jobIds []string
+	var columnIdx int
+	if req.Type == db.EntryInsert {
+		txn, err := h.eng.GetOrCreateTxnWithMeta(
+			nil,
+			meta.GetID(),
+			types.TimestampToTS(meta.GetSnapshotTS()))
+		if err != nil {
+			return err
+		}
+		dbase, err := h.eng.GetDatabaseByID(ctx, req.DatabaseId, txn)
+		if err != nil {
+			return err
+		}
+		tb, err := dbase.GetRelationByID(ctx, req.TableID)
+		if err != nil {
+			return err
+		}
+		schema := tb.GetSchema(ctx)
+		if !schema.HasPK() {
+			return err
+		}
+		//for loading primary keys of blocks
+		//locations = req.MetaLocs
+		locations = append(locations, req.MetaLocs...)
+		columnTypes = append(columnTypes, schema.GetSingleSortKey().Type)
+		columnNames = append(columnNames, schema.GetSingleSortKey().Name)
+		columnIdx = schema.GetSingleSortKeyIdx()
+		isNull = append(isNull, false)
+		req.Jobs = make([]*tasks.Job, len(req.MetaLocs))
+		req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
+		for i := range req.MetaLocs {
+			jobIds = append(jobIds,
+				fmt.Sprintf("load-primarykey-%s", req.MetaLocs[i]))
+		}
+
+	} else {
+		//for loading deleted rowid.
+		locations = append(locations, req.DeltaLocs...)
+		columnTypes = append(columnTypes, types.T_Rowid.ToType())
+		columnIdx = 0
+		columnNames = append(columnNames, catalog.Row_ID)
+		isNull = append(isNull, false)
+		req.Jobs = make([]*tasks.Job, len(req.DeltaLocs))
+		req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
+		for i := range req.DeltaLocs {
+			jobIds = append(jobIds,
+				fmt.Sprintf("load-deleted-rowid-%s", req.DeltaLocs[i]))
+		}
 	}
-	dbase, err := h.eng.GetDatabaseByID(ctx, req.DatabaseId, txn)
-	if err != nil {
-		return err
-	}
-	tb, err := dbase.GetRelationByID(ctx, req.TableID)
-	if err != nil {
-		return err
-	}
-	schema := tb.GetSchema(ctx)
-	if !schema.HasPK() {
-		return
-	}
-	//start job for loading primary keys of blocks
-	req.Jobs = make([]*tasks.Job, len(req.MetaLocs))
-	req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
-	for i := range req.MetaLocs {
+	//start loading jobs
+	for i := range locations {
 		req.Jobs[i] = tasks.NewJob(
-			fmt.Sprintf("load-primaykey-%s", req.MetaLocs[i]),
+			jobIds[i],
 			ctx,
 			func(ctx context.Context) (jobR *tasks.JobResult) {
 				jobR = &tasks.JobResult{}
-				reader, err := blockio.NewReader(ctx, h.eng.GetTAE(ctx).Fs, req.MetaLocs[i])
+				reader, err := blockio.NewReader(ctx,
+					h.eng.GetTAE(ctx).Fs, req.MetaLocs[i])
 				if err != nil {
 					jobR.Err = err
 					return
@@ -389,11 +423,11 @@ func (h *Handle) loadPksFromFS(
 					return
 				}
 				bat, err := reader.LoadBlkColumnsByMetaAndIdx(
-					[]types.Type{schema.GetSingleSortKey().Type},
-					[]string{schema.GetSingleSortKey().Name},
-					[]bool{false},
+					columnTypes,
+					columnNames,
+					isNull,
 					meta,
-					schema.GetSingleSortKeyIdx(),
+					columnIdx,
 				)
 				if err != nil {
 					jobR.Err = err
@@ -415,16 +449,13 @@ func (h *Handle) EvaluateTxnRequest(
 	ctx context.Context,
 	meta txn.TxnMeta,
 ) (err error) {
-	//TODO::1. load primary keys from S3/FS
-	//      2. load deleted batch of row ids from S3/FS,
-	//         and decode row id into segment id + block id + offset.
 	h.mu.RLock()
 	txnCtx := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
 	for _, e := range txnCtx.req {
 		if r, ok := e.(*db.WriteReq); ok {
-			if r.FileName != "" && r.Type == db.EntryInsert {
-				return h.loadPksFromFS(ctx, meta, r)
+			if r.FileName != "" {
+				return h.startLoadJobs(ctx, meta, r)
 			}
 		}
 	}
@@ -741,27 +772,44 @@ func (h *Handle) HandleWrite(
 	if req.Type == db.EntryInsert {
 		//Add blocks which had been bulk-loaded into S3 into table.
 		if req.FileName != "" {
-			//wait loading primary key done.
+			//wait for loading primary key done.
 			var pkVecs []containers.Vector
 			for i, job := range req.Jobs {
 				req.JobRes[i] = job.WaitDone()
 				if req.JobRes[i].Err != nil {
 					return req.JobRes[i].Err
 				}
-				pkVecs = append(pkVecs, req.JobRes[i].Res.(containers.Vector))
+				pkVecs = append(
+					pkVecs,
+					req.JobRes[i].Res.(containers.Vector))
 			}
-			err = tb.AddBlksWithMetaLoc(ctx, pkVecs, req.FileName, req.MetaLocs, 0)
+			err = tb.AddBlksWithMetaLoc(
+				ctx,
+				pkVecs,
+				req.FileName,
+				req.MetaLocs,
+				0)
 			return
 		}
 		//Appends a batch of data into table.
-		//TODO::Add a parameter for Write method to represent pre-commit write append?
 		err = tb.Write(ctx, req.Batch)
 		return
 	}
-
-	//TODO::Handle deleted row ids on S3/FS
-	//Vecs[0]--> rowid
-	//Vecs[1]--> PrimaryKey
+	//handle delete
+	if req.FileName != "" {
+		//wait for loading deleted row-id done.
+		for i, job := range req.Jobs {
+			req.JobRes[i] = job.WaitDone()
+			if req.JobRes[i].Err != nil {
+				return req.JobRes[i].Err
+			}
+			taeVec := req.JobRes[i].Res.(containers.Vector)
+			//FIXME::??
+			defer taeVec.Close()
+			tb.DeleteByPhyAddrKeys(ctx, containers.UnmarshalToMoVec(taeVec))
+		}
+		return
+	}
 	err = tb.DeleteByPhyAddrKeys(ctx, req.Batch.GetVector(0))
 	return
 }
