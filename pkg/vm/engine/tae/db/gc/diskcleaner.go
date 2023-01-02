@@ -227,9 +227,8 @@ func (cleaner *DiskCleaner) process(items ...any) {
 	}
 	cleaner.updateInputs(input)
 	cleaner.updateMaxConsumed(candidates[len(candidates)-1])
-
-	// TODO:
 	cleaner.tryGC()
+	cleaner.mergeGCFile()
 }
 
 func (cleaner *DiskCleaner) checkExtras(item any) bool {
@@ -331,7 +330,7 @@ func (cleaner *DiskCleaner) tryGC() {
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
 	go cleaner.delWorker.ExecDelete(gc)
-	cleaner.mergeGCFile()
+
 }
 
 func (cleaner *DiskCleaner) softGC() []string {
@@ -395,11 +394,11 @@ func (cleaner *DiskCleaner) GetAndClearOutputs() []string {
 }
 
 func (cleaner *DiskCleaner) mergeGCFile() error {
-	minMerged := cleaner.minMerged.Load()
 	maxConsumed := cleaner.GetMaxConsumed()
 	if maxConsumed == nil {
 		return nil
 	}
+	minMerged := cleaner.minMerged.Load()
 	if minMerged == nil {
 		minMerged = maxConsumed
 	}
@@ -408,10 +407,11 @@ func (cleaner *DiskCleaner) mergeGCFile() error {
 	}
 	var mergeTable *GCTable
 	cleaner.inputs.RLock()
-	if len(cleaner.inputs.tables) != 1 {
+	if len(cleaner.inputs.tables) == 0 {
 		cleaner.inputs.RUnlock()
 		return nil
 	}
+	// tables[0] has always been a full GCTable
 	mergeTable = cleaner.inputs.tables[0]
 	cleaner.inputs.RUnlock()
 	logutil.Info("[DiskCleaner]", common.OperationField("MergeGCFile start"),
@@ -444,7 +444,6 @@ func (cleaner *DiskCleaner) mergeGCFile() error {
 
 func (cleaner *DiskCleaner) CheckGC() error {
 	debugCandidates := cleaner.ckpClient.GetAllIncrementalCheckpoints()
-	logutil.Infof("debugCandidates1  is %d", len(debugCandidates))
 	cleaner.inputs.RLock()
 	defer cleaner.inputs.RUnlock()
 	maxConsumed := cleaner.GetMaxConsumed()
@@ -464,7 +463,6 @@ func (cleaner *DiskCleaner) CheckGC() error {
 			common.OperandField(start1.ToString()), common.OperandField(start2.ToString()))
 		return moerr.NewInternalErrorNoCtx("TS Compare not equal")
 	}
-	logutil.Infof("debugCandidates is %d", len(debugCandidates))
 	debugTable, err := cleaner.createDebugInput(debugCandidates)
 	if err != nil {
 		logutil.Errorf("processing clean %s: %v", debugCandidates[0].String(), err)
