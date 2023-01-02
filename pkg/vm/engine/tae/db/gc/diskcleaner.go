@@ -244,6 +244,9 @@ func (cleaner *DiskCleaner) checkExtras(item any) bool {
 func (cleaner *DiskCleaner) checkMergeExtras(item any) bool {
 	cleaner.mergeChecker.RLock()
 	defer cleaner.mergeChecker.RUnlock()
+	if len(cleaner.mergeChecker.extras) == 0 {
+		return false
+	}
 	for _, checker := range cleaner.mergeChecker.extras {
 		if !checker(item) {
 			return false
