@@ -162,7 +162,6 @@ func WithQuickScanAndCKPAndGCOpts(in *options.Options) (opts *options.Options) {
 	// ScanGCInterval does not need to be too fast, because manual gc will be performed in the case
 	opts.GCCfg.ScanGCInterval = time.Second * 10
 	opts.GCCfg.GCTTL = time.Millisecond * 1
-	opts.GCCfg.MergeTTL = time.Millisecond * 1
 	return opts
 }
 
