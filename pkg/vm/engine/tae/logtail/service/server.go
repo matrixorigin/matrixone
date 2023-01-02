@@ -290,7 +290,7 @@ func (s *LogtailServer) onSubscription(
 
 	timeout := s.options.sendTimeout
 	if deadline, ok := sendCtx.Deadline(); ok {
-		timeout = deadline.Sub(time.Now())
+		timeout = time.Until(deadline)
 	}
 
 	sub := subscription{
