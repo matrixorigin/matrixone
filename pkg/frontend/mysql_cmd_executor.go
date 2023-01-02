@@ -1031,6 +1031,9 @@ func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db strin
 
 func (mce *MysqlCmdExecutor) handleDump(requestCtx context.Context, dump *tree.MoDump) error {
 	var err error
+	if !dump.DumpDatabase {
+		return doDumpQueryResult(requestCtx, mce.GetSession(), dump.ExportParams)
+	}
 	dump.OutFile = maybeAppendExtension(dump.OutFile)
 	exists, err := fileExists(dump.OutFile)
 	if exists {
