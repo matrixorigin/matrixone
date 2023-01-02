@@ -83,6 +83,7 @@ func (c *LogtailClient) Subscribe(
 			Table: &table,
 		},
 	}
+	request.id = c.stream.ID()
 	return c.stream.Send(ctx, request)
 }
 
@@ -98,6 +99,7 @@ func (c *LogtailClient) Unsubscribe(
 			Table: &table,
 		},
 	}
+	request.id = c.stream.ID()
 	return c.stream.Send(ctx, request)
 }
 

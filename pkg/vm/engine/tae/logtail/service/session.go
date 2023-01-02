@@ -160,6 +160,8 @@ func NewSession(
 					return
 				}
 
+				ss.logger.Debug("send response via morpc stream")
+
 				// TODO: split response here
 				if err := ss.stream.Write(msg.sendCtx, msg.response); err != nil {
 					ss.logger.Error("fail to send logtail response", zap.Error(err))
@@ -249,6 +251,8 @@ func (ss *Session) Publish(ctx context.Context, tails ...wrapLogtail) error {
 
 // TransitionState marks table as subscribed.
 func (ss *Session) AdvanceState(id TableID) {
+	ss.logger.Debug("mark table as subscribed", zap.String("table-id", string(id)))
+
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
@@ -285,7 +289,7 @@ func (ss *Session) SendUnsubscriptionResponse(
 	return ss.SendResponse(sendCtx, resp)
 }
 
-// SendUpdateResponse sends publishement response.
+// SendUpdateResponse sends publishment response.
 func (ss *Session) SendUpdateResponse(
 	sendCtx context.Context, tails ...*logtail.TableLogtail,
 ) error {
@@ -303,11 +307,11 @@ func (ss *Session) SendResponse(
 ) error {
 	select {
 	case <-ss.sessionCtx.Done():
-		ss.logger.Error("fail to send error response", zap.Error(ss.sessionCtx.Err()))
+		ss.logger.Error("session context done", zap.Error(ss.sessionCtx.Err()))
 		ss.pooler.ReleaseResponse(response)
 		return ss.sessionCtx.Err()
 	case <-sendCtx.Done():
-		ss.logger.Error("fail to send error response", zap.Error(sendCtx.Err()))
+		ss.logger.Error("send context done", zap.Error(sendCtx.Err()))
 		ss.pooler.ReleaseResponse(response)
 		return sendCtx.Err()
 	default:
@@ -315,7 +319,7 @@ func (ss *Session) SendResponse(
 
 	select {
 	case <-time.After(ss.poisionTime):
-		ss.logger.Error("poision morpc stream detected")
+		ss.logger.Error("poision morpc stream detected, close it")
 		ss.pooler.ReleaseResponse(response)
 		if err := ss.stream.Close(); err != nil {
 			ss.logger.Error("fail to close poision morpc stream", zap.Error(err))
@@ -336,7 +340,7 @@ func newUnsubscriptionResponse(table api.TableID) *logtail.LogtailResponse_Unsub
 	}
 }
 
-// newUpdateResponse constructs response for publishement.
+// newUpdateResponse constructs response for publishment.
 // go:inline
 func newUpdateResponse(tails []*logtail.TableLogtail) *logtail.LogtailResponse_UpdateResponse {
 	return &logtail.LogtailResponse_UpdateResponse{
