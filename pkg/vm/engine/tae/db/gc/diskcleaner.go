@@ -53,6 +53,10 @@ type DiskCleaner struct {
 	// through which you can get the next checkpoint to be processed
 	maxConsumed atomic.Pointer[checkpoint.CheckpointEntry]
 
+	// minMerged is to mark at which checkpoint the full GCTable in the current
+	// DiskCleaner is generated, through which you can get the time of the next merge
+	minMerged atomic.Pointer[checkpoint.CheckpointEntry]
+
 	// inputs is to record the currently valid GCTable
 	inputs struct {
 		sync.RWMutex
@@ -68,7 +72,14 @@ type DiskCleaner struct {
 	// files, and only one worker will run
 	delWorker *GCWorker
 
+	// checker is to check whether the checkpoint can be consumed
 	checker struct {
+		sync.RWMutex
+		extras []func(item any) bool
+	}
+
+	// mergeChecker is to check whether the full GCTable water level can be moved
+	mergeChecker struct {
 		sync.RWMutex
 		extras []func(item any) bool
 	}
@@ -122,11 +133,14 @@ func (cleaner *DiskCleaner) replay() error {
 	jobScheduler := tasks.NewParallelJobScheduler(100)
 	defer jobScheduler.Stop()
 	maxConsumed := types.TS{}
+	minMerged := types.TS{}
 	for _, dir := range dirs {
-		_, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
+		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
 		if maxConsumed.IsEmpty() || maxConsumed.Less(end) {
 			maxConsumed = end
-			continue
+		}
+		if minMerged.IsEmpty() || minMerged.Greater(start) {
+			minMerged = start
 		}
 	}
 	makeJob := func(i int) (job *tasks.Job) {
@@ -211,6 +225,9 @@ func (cleaner *DiskCleaner) process(items ...any) {
 	}
 	cleaner.updateInputs(input)
 	cleaner.updateMaxConsumed(candidates[len(candidates)-1])
+	if cleaner.minMerged.Load() == nil {
+		cleaner.updateMinMerged(candidates[0])
+	}
 
 	// TODO:
 	cleaner.tryGC()
@@ -227,10 +244,27 @@ func (cleaner *DiskCleaner) checkExtras(item any) bool {
 	return true
 }
 
+func (cleaner *DiskCleaner) checkMergeExtras(item any) bool {
+	cleaner.checker.RLock()
+	defer cleaner.checker.RUnlock()
+	for _, checker := range cleaner.checker.extras {
+		if !checker(item) {
+			return false
+		}
+	}
+	return true
+}
+
 func (cleaner *DiskCleaner) AddChecker(checker func(item any) bool) {
 	cleaner.checker.Lock()
 	defer cleaner.checker.Unlock()
 	cleaner.checker.extras = append(cleaner.checker.extras, checker)
+}
+
+func (cleaner *DiskCleaner) AddMergeChecker(checker func(item any) bool) {
+	cleaner.mergeChecker.Lock()
+	defer cleaner.mergeChecker.Unlock()
+	cleaner.mergeChecker.extras = append(cleaner.mergeChecker.extras, checker)
 }
 
 func (cleaner *DiskCleaner) collectCkpData(
@@ -298,6 +332,7 @@ func (cleaner *DiskCleaner) tryGC() {
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
 	go cleaner.delWorker.ExecDelete(gc)
+	cleaner.mergeGCFile()
 }
 
 func (cleaner *DiskCleaner) softGC() []string {
@@ -319,6 +354,10 @@ func (cleaner *DiskCleaner) softGC() []string {
 
 func (cleaner *DiskCleaner) updateMaxConsumed(e *checkpoint.CheckpointEntry) {
 	cleaner.maxConsumed.Store(e)
+}
+
+func (cleaner *DiskCleaner) updateMinMerged(e *checkpoint.CheckpointEntry) {
+	cleaner.minMerged.Store(e)
 }
 
 func (cleaner *DiskCleaner) updateInputs(input *GCTable) {
@@ -350,6 +389,47 @@ func (cleaner *DiskCleaner) GetAndClearOutputs() []string {
 	//Empty the array, in order to store the next file list
 	cleaner.outputs.files = make([]string, 0)
 	return files
+}
+
+func (cleaner *DiskCleaner) mergeGCFile() error {
+	minMerged := cleaner.minMerged.Load()
+	if minMerged == nil {
+		return nil
+	}
+	if !cleaner.checkMergeExtras(minMerged) {
+		return nil
+	}
+	var mergeTable *GCTable
+	maxConsumed := cleaner.GetMaxConsumed()
+	endTS := cleaner.GetMaxConsumed().GetEnd()
+	cleaner.inputs.RLock()
+	if len(cleaner.inputs.tables) != 1 {
+		cleaner.inputs.RUnlock()
+		return nil
+	}
+	mergeTable = cleaner.inputs.tables[0]
+	cleaner.inputs.RUnlock()
+	dirs, err := cleaner.fs.ListDir(GCMetaDir)
+	if err != nil {
+		return err
+	}
+	_, err = mergeTable.SaveTable(minMerged.GetStart(), endTS, cleaner.fs, nil)
+	if err != nil {
+		return err
+	}
+	deleteFiles := make([]string, 0)
+	for _, dir := range dirs {
+		_, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
+		if end.LessEq(endTS) {
+			deleteFiles = append(deleteFiles, GCMetaDir+dir.Name)
+		}
+	}
+	err = cleaner.fs.DelFiles(context.Background(), deleteFiles)
+	if err != nil {
+		return err
+	}
+	cleaner.updateMinMerged(maxConsumed)
+	return nil
 }
 
 func (cleaner *DiskCleaner) CheckGC() error {

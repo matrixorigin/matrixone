@@ -40,6 +40,7 @@ type CheckpointCfg struct {
 type GCCfg struct {
 	GCTTL          time.Duration
 	ScanGCInterval time.Duration
+	MergeTTL       time.Duration
 }
 
 type SchedulerCfg struct {

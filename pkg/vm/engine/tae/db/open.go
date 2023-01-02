@@ -169,6 +169,12 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(opts.GCCfg.GCTTL), 0)
 			return !checkpoint.GetEnd().GreaterEq(ts)
 		})
+	db.DiskCleaner.AddMergeChecker(
+		func(item any) bool {
+			checkpoint := item.(*checkpoint.CheckpointEntry)
+			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(opts.GCCfg.MergeTTL), 0)
+			return !checkpoint.GetEnd().GreaterEq(ts)
+		})
 	// Init gc manager at last
 	// TODO: clean-try-gc requires configuration parameters
 	db.GCManager = gc.NewManager(
