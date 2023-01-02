@@ -228,7 +228,6 @@ func (cleaner *DiskCleaner) process(items ...any) {
 	cleaner.updateInputs(input)
 	cleaner.updateMaxConsumed(candidates[len(candidates)-1])
 	cleaner.tryGC()
-	cleaner.mergeGCFile()
 }
 
 func (cleaner *DiskCleaner) checkExtras(item any) bool {
@@ -329,8 +328,15 @@ func (cleaner *DiskCleaner) tryGC() {
 	gc := cleaner.softGC()
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
-	go cleaner.delWorker.ExecDelete(gc)
-
+	err := cleaner.delWorker.ExecDelete(gc)
+	if err != nil {
+		return
+	}
+	err = cleaner.mergeGCFile()
+	if err != nil {
+		// TODO: Error handle
+		return
+	}
 }
 
 func (cleaner *DiskCleaner) softGC() []string {
