@@ -4905,10 +4905,7 @@ func TestAppendAndGC(t *testing.T) {
 	err = db.DiskCleaner.CheckGC()
 	assert.Nil(t, err)
 	testutils.WaitExpect(5000, func() bool {
-		if db.DiskCleaner.GetMinMerged() == nil {
-			return false
-		}
-		return true
+		return db.DiskCleaner.GetMinMerged() != nil
 	})
 	minMerged := db.DiskCleaner.GetMinMerged()
 	assert.NotNil(t, minMerged)
