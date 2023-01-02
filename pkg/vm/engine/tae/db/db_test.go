@@ -4859,7 +4859,7 @@ func TestAppendAndGC(t *testing.T) {
 	opts.CacheCfg = new(options.CacheCfg)
 	opts.CacheCfg.InsertCapacity = common.M * 5
 	opts.CacheCfg.TxnCapacity = common.M
-	opts = config.WithQuickScanAndCKPOpts(opts)
+	opts = config.WithQuickScanAndCKPAndMergeGCOpts(opts)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
 	db := tae.DB
