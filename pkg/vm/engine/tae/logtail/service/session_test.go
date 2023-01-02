@@ -43,21 +43,21 @@ func TestSessionManger(t *testing.T) {
 	poisionTime := 10 * time.Millisecond
 
 	/* ---- 1. register sessioin A ---- */
-	csA := mockNormalStream(logger)
-	sessionA := sm.GetSession(ctx, logger, sendTimeout, poisionTime, pooler, notifier, csA)
+	streamA := mockNormalStream(logger)
+	sessionA := sm.GetSession(ctx, logger, sendTimeout, poisionTime, pooler, notifier, streamA)
 	require.NotNil(t, sessionA)
 	require.Equal(t, 1, len(sm.ListSession()))
 
 	/* ---- 2. register sessioin B ---- */
-	csB := mockNormalStream(logger)
-	sessionB := sm.GetSession(ctx, logger, sendTimeout, poisionTime, pooler, notifier, csB)
+	streamB := mockNormalStream(logger)
+	sessionB := sm.GetSession(ctx, logger, sendTimeout, poisionTime, pooler, notifier, streamB)
 	require.NotNil(t, sessionB)
 	require.Equal(t, 2, len(sm.ListSession()))
 
 	/* ---- 3. delete sessioin ---- */
-	sm.DeleteSession(csA)
+	sm.DeleteSession(streamA)
 	require.Equal(t, 1, len(sm.ListSession()))
-	sm.DeleteSession(csB)
+	sm.DeleteSession(streamB)
 	require.Equal(t, 0, len(sm.ListSession()))
 }
 
@@ -69,12 +69,12 @@ func TestSessionError(t *testing.T) {
 	logger := logutil.GetGlobalLogger().Named(LogtailServiceRPCName)
 	pooler := mockResponsePooler()
 	notifier := mockSessionErrorNotifier(logger)
-	cs := mockBrokenStream()
+	stream := mockBrokenStream()
 	sendTimeout := 5 * time.Second
 	poisionTime := 10 * time.Millisecond
 
 	tableA := mockTable(1, 2, 3)
-	ss := NewSession(ctx, logger, sendTimeout, poisionTime, pooler, notifier, cs)
+	ss := NewSession(ctx, logger, sendTimeout, poisionTime, pooler, notifier, stream)
 
 	/* ---- 1. send subscription response ---- */
 	err := ss.SendSubscriptionResponse(
@@ -106,12 +106,12 @@ func TestPoisionSession(t *testing.T) {
 	logger := logutil.GetGlobalLogger().Named(LogtailServiceRPCName)
 	pooler := mockResponsePooler()
 	notifier := mockSessionErrorNotifier(logger)
-	cs := mockBlockStream()
+	stream := mockBlockStream()
 	sendTimeout := 5 * time.Second
 	poisionTime := 10 * time.Millisecond
 
 	tableA := mockTable(1, 2, 3)
-	ss := NewSession(ctx, logger, sendTimeout, poisionTime, pooler, notifier, cs)
+	ss := NewSession(ctx, logger, sendTimeout, poisionTime, pooler, notifier, stream)
 
 	/* ---- 1. send response repeatedly ---- */
 	for i := 0; i < cap(ss.sendChan)+2; i++ {
@@ -144,7 +144,7 @@ func TestSession(t *testing.T) {
 	logger := logutil.GetGlobalLogger().Named(LogtailServiceRPCName)
 	pooler := mockResponsePooler()
 	notifier := mockSessionErrorNotifier(logger)
-	cs := mockNormalStream(logger)
+	stream := mockNormalStream(logger)
 	sendTimeout := 5 * time.Second
 	poisionTime := 10 * time.Millisecond
 
@@ -154,7 +154,7 @@ func TestSession(t *testing.T) {
 	tableB := mockTable(1, 4, 3)
 	idB := TableID(tableB.String())
 
-	ss := NewSession(ctx, logger, sendTimeout, poisionTime, pooler, notifier, cs)
+	ss := NewSession(ctx, logger, sendTimeout, poisionTime, pooler, notifier, stream)
 	defer ss.PostClean()
 
 	// no table resigered now
@@ -182,8 +182,8 @@ func TestSession(t *testing.T) {
 	require.Equal(t, 1, len(ss.ListSubscribedTable()))
 	// filter logtail for subscribed table
 	qualified := ss.FilterLogtail(
-		mockTableLogtail(tableA),
-		mockTableLogtail(tableB),
+		mockWrapLogtail(tableA),
+		mockWrapLogtail(tableB),
 	)
 	require.Equal(t, 1, len(qualified))
 	require.Equal(t, tableA.String(), qualified[0].Table.String())
@@ -193,8 +193,8 @@ func TestSession(t *testing.T) {
 	require.Equal(t, 2, len(ss.ListSubscribedTable()))
 	// filter logtail for subscribed table
 	qualified = ss.FilterLogtail(
-		mockTableLogtail(tableA),
-		mockTableLogtail(tableB),
+		mockWrapLogtail(tableA),
+		mockWrapLogtail(tableB),
 	)
 	require.Equal(t, 2, len(qualified))
 
@@ -234,8 +234,8 @@ func TestSession(t *testing.T) {
 	/* ---- 9. publish update response ---- */
 	err = ss.Publish(
 		context.Background(),
-		mockTableLogtail(tableA),
-		mockTableLogtail(tableB),
+		mockWrapLogtail(tableA),
+		mockWrapLogtail(tableB),
 	)
 	require.NoError(t, err)
 }
@@ -357,7 +357,7 @@ func (m *respPooler) ReleaseResponse(resp *LogtailResponse) {
 	m.pool.Put(resp)
 }
 
-func mockTableLogtail(table api.TableID) wrapLogtail {
+func mockWrapLogtail(table api.TableID) wrapLogtail {
 	return wrapLogtail{
 		id: TableID(table.String()),
 		tail: &logtail.TableLogtail{

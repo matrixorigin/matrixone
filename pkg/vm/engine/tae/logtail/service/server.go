@@ -240,7 +240,7 @@ func (s *LogtailServer) releaseRequest(req *LogtailRequest) {
 
 // onMessage is the handler for morpc stream.
 func (s *LogtailServer) onMessage(
-	ctx context.Context, request morpc.Message, seq uint64, cs morpc.ClientSession,
+	ctx context.Context, request morpc.Message, seq uint64, stream morpc.ClientSession,
 ) error {
 	ctx, span := trace.Debug(ctx, "LogtailServer.onMessage")
 	defer span.End()
@@ -261,12 +261,12 @@ func (s *LogtailServer) onMessage(
 
 	if req := msg.GetSubscribeTable(); req != nil {
 		logger.Debug("handle subscritpion", zap.Any("request", req))
-		return s.onSubscription(ctx, cs, req)
+		return s.onSubscription(ctx, stream, req)
 	}
 
 	if req := msg.GetUnsubscribeTable(); req != nil {
 		logger.Debug("handle unsubscritpion", zap.Any("request", req))
-		return s.onUnsubscription(ctx, cs, req)
+		return s.onUnsubscription(ctx, stream, req)
 	}
 
 	return moerr.NewInvalidArg(ctx, "request", msg)
@@ -274,11 +274,11 @@ func (s *LogtailServer) onMessage(
 
 // onSubscription handls subscription.
 func (s *LogtailServer) onSubscription(
-	sendCtx context.Context, cs morpc.ClientSession, req *logtail.SubscribeRequest,
+	sendCtx context.Context, stream morpc.ClientSession, req *logtail.SubscribeRequest,
 ) error {
 	poisionTime := s.options.collectInterval/2 + 1
 	session := s.ssmgr.GetSession(
-		s.rootCtx, s.options.logger, s.options.sendTimeout, poisionTime, s, s, cs,
+		s.rootCtx, s.options.logger, s.options.sendTimeout, poisionTime, s, s, stream,
 	)
 
 	tableID := TableID(req.Table.String())
@@ -309,11 +309,11 @@ func (s *LogtailServer) onSubscription(
 
 // onUnsubscription sends response for unsubscription.
 func (s *LogtailServer) onUnsubscription(
-	sendCtx context.Context, cs morpc.ClientSession, req *logtail.UnsubscribeRequest,
+	sendCtx context.Context, stream morpc.ClientSession, req *logtail.UnsubscribeRequest,
 ) error {
 	poisionTime := s.options.collectInterval/2 + 1
 	session := s.ssmgr.GetSession(
-		s.rootCtx, s.options.logger, s.options.sendTimeout, poisionTime, s, s, cs,
+		s.rootCtx, s.options.logger, s.options.sendTimeout, poisionTime, s, s, stream,
 	)
 
 	tableID := TableID(req.Table.String())
@@ -355,7 +355,7 @@ func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 			// drop session directly
 			if e.err != nil {
 				e.session.PostClean()
-				s.ssmgr.DeleteSession(e.session.cs)
+				s.ssmgr.DeleteSession(e.session.stream)
 			}
 		}
 	}

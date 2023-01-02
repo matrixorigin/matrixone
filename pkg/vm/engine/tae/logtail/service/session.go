@@ -55,24 +55,24 @@ func (sm *SessionManager) GetSession(
 	poisionTime time.Duration,
 	pooler ResponsePooler,
 	notifier SessionErrorNotifier,
-	cs morpc.ClientSession,
+	stream morpc.ClientSession,
 ) *Session {
 	sm.Lock()
 	defer sm.Unlock()
 
-	if _, ok := sm.clients[cs]; !ok {
-		sm.clients[cs] = NewSession(
-			rootCtx, logger, sendTimeout, poisionTime, pooler, notifier, cs,
+	if _, ok := sm.clients[stream]; !ok {
+		sm.clients[stream] = NewSession(
+			rootCtx, logger, sendTimeout, poisionTime, pooler, notifier, stream,
 		)
 	}
-	return sm.clients[cs]
+	return sm.clients[stream]
 }
 
 // DeleteSession deletes session from manager.
-func (sm *SessionManager) DeleteSession(cs morpc.ClientSession) {
+func (sm *SessionManager) DeleteSession(stream morpc.ClientSession) {
 	sm.Lock()
 	defer sm.Unlock()
-	delete(sm.clients, cs)
+	delete(sm.clients, stream)
 }
 
 // ListSession takes a snapshot of all sessions.
@@ -105,7 +105,7 @@ type Session struct {
 	pooler      ResponsePooler
 	notifier    SessionErrorNotifier
 
-	cs       morpc.ClientSession
+	stream   morpc.ClientSession
 	sendChan chan message
 
 	mu     sync.RWMutex
@@ -129,7 +129,7 @@ func NewSession(
 	poisionTime time.Duration,
 	pooler ResponsePooler,
 	notifier SessionErrorNotifier,
-	cs morpc.ClientSession,
+	stream morpc.ClientSession,
 ) *Session {
 	ctx, cancel := context.WithCancel(rootCtx)
 	ss := &Session{
@@ -140,7 +140,7 @@ func NewSession(
 		poisionTime: poisionTime,
 		pooler:      pooler,
 		notifier:    notifier,
-		cs:          cs,
+		stream:      stream,
 		sendChan:    make(chan message, 16), // cache for morpc stream
 		tables:      make(map[TableID]TableState),
 	}
@@ -161,7 +161,7 @@ func NewSession(
 				}
 
 				// TODO: split response here
-				if err := ss.cs.Write(msg.sendCtx, msg.response); err != nil {
+				if err := ss.stream.Write(msg.sendCtx, msg.response); err != nil {
 					ss.logger.Error("fail to send logtail response", zap.Error(err))
 					ss.pooler.ReleaseResponse(msg.response)
 					ss.notifier.NotifySessionError(ss, err)
@@ -317,7 +317,7 @@ func (ss *Session) SendResponse(
 	case <-time.After(ss.poisionTime):
 		ss.logger.Error("poision morpc stream detected")
 		ss.pooler.ReleaseResponse(response)
-		if err := ss.cs.Close(); err != nil {
+		if err := ss.stream.Close(); err != nil {
 			ss.logger.Error("fail to close poision morpc stream", zap.Error(err))
 		}
 		return moerr.NewStreamClosedNoCtx()
