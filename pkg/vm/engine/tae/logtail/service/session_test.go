@@ -357,8 +357,8 @@ func (m *respPooler) ReleaseResponse(resp *LogtailResponse) {
 	m.pool.Put(resp)
 }
 
-func mockTableLogtail(table api.TableID) tableLogtail {
-	return tableLogtail{
+func mockTableLogtail(table api.TableID) wrapLogtail {
+	return wrapLogtail{
 		id: TableID(table.String()),
 		tail: &logtail.TableLogtail{
 			Table: &table,

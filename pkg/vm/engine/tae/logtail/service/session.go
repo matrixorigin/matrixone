@@ -177,7 +177,6 @@ func NewSession(
 	return ss
 }
 
-// TODO: how to drop morpc stream
 // Drop closes sender goroutine.
 func (ss *Session) PostClean() {
 	ss.cancelFunc()
@@ -226,7 +225,7 @@ func (ss *Session) ListSubscribedTable() []TableID {
 }
 
 // FilterLogtail selects logtail for expected tables.
-func (ss *Session) FilterLogtail(tails ...tableLogtail) []*logtail.TableLogtail {
+func (ss *Session) FilterLogtail(tails ...wrapLogtail) []*logtail.TableLogtail {
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
 
@@ -240,7 +239,7 @@ func (ss *Session) FilterLogtail(tails ...tableLogtail) []*logtail.TableLogtail 
 }
 
 // Publish publishes additional logtail.
-func (ss *Session) Publish(ctx context.Context, tails ...tableLogtail) error {
+func (ss *Session) Publish(ctx context.Context, tails ...wrapLogtail) error {
 	sendCtx, cancel := context.WithTimeout(ctx, ss.sendTimeout)
 	defer cancel()
 

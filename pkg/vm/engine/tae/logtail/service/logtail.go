@@ -15,37 +15,24 @@
 package service
 
 import (
-	"sync"
+	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
-// Waterliner maintains waterline for all subscribed tables.
-type Waterliner struct {
-	sync.RWMutex
-	waterline timestamp.Timestamp
-	// tables    map[TableID]*tableInfo
+// Logtailer provides logtail for the specified table.
+type Logtailer interface {
+	// TableTotalLogtail returns full logtail for the specified table.
+	TableTotal(
+		ctx context.Context, table api.TableID, end timestamp.Timestamp,
+	) (*logtail.TableLogtail, error)
+
+	// RangeLogtail returns logtail for all tables within range (from, to].
+	RangeTotal(
+		ctx context.Context, from, to timestamp.Timestamp,
+	) ([]*logtail.TableLogtail, error)
 }
 
-func NewWaterliner(current timestamp.Timestamp) *Waterliner {
-	return &Waterliner{
-		waterline: current,
-		// tables:    make(map[TableID]*tableInfo),
-	}
-}
-
-// Waterline returns waterline for subscribed table.
-func (w *Waterliner) Waterline() timestamp.Timestamp {
-	w.RLock()
-	defer w.RUnlock()
-
-	return w.waterline
-}
-
-// Advance updates waterline.
-func (w *Waterliner) Advance(update timestamp.Timestamp) {
-	w.Lock()
-	defer w.Unlock()
-
-	w.waterline = update
-}
+// TODO: implement interface Logtailer

@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -39,14 +38,6 @@ const (
 
 	KiB = 1024
 )
-
-// LogtailFetcher provides logtail for the specified table.
-type LogtailFetcher interface {
-	// FetchLogtail returns logtail for the specified table.
-	FetchLogtail(
-		ctx context.Context, table *api.TableID, have, want *timestamp.Timestamp,
-	) (*logtail.TableLogtail, error)
-}
 
 // TableID is type for api.TableID
 type TableID string
@@ -95,15 +86,15 @@ func WithServerSendTimeout(timeout time.Duration) ServerOption {
 }
 
 // tableLogtail describes a table's logtail.
-type tableLogtail struct {
+type wrapLogtail struct {
 	id   TableID
 	tail *logtail.TableLogtail
 }
 
 // publishment describes a batch of logtail.
 type publishment struct {
-	want  timestamp.Timestamp
-	tails []tableLogtail
+	to    timestamp.Timestamp
+	wraps []wrapLogtail
 }
 
 // sessionError describes error when writing via morpc stream.
@@ -143,7 +134,7 @@ type LogtailServer struct {
 	pubChan chan publishment
 	subChan chan subscription
 
-	fetcher LogtailFetcher
+	logtail Logtailer
 	clock   clock.Clock
 
 	rpc morpc.RPCServer
@@ -155,17 +146,19 @@ type LogtailServer struct {
 
 // NewLogtailServer initializes a server for logtail push model.
 func NewLogtailServer(
-	address string, fetcher LogtailFetcher, clock clock.Clock, opts ...ServerOption,
+	address string, logtail Logtailer, clock clock.Clock, opts ...ServerOption,
 ) (morpc.RPCServer, error) {
 	s := &LogtailServer{
-		ssmgr:     NewSessionManager(),
-		waterline: NewWaterliner(),
-		errChan:   make(chan sessionError),
-		pubChan:   make(chan publishment),
-		subChan:   make(chan subscription, 10),
-		fetcher:   fetcher,
-		clock:     clock,
+		ssmgr:   NewSessionManager(),
+		errChan: make(chan sessionError),
+		pubChan: make(chan publishment),
+		subChan: make(chan subscription, 10),
+		logtail: logtail,
+		clock:   clock,
 	}
+
+	current, _ := clock.Now()
+	s.waterline = NewWaterliner(current)
 
 	s.pool.requests = &sync.Pool{
 		New: func() any {
@@ -329,10 +322,6 @@ func (s *LogtailServer) onUnsubscription(
 		return nil
 	}
 
-	if state == TableSubscribed {
-		s.waterline.Unregister(tableID)
-	}
-
 	return session.SendUnsubscriptionResponse(sendCtx, *req.Table)
 }
 
@@ -367,7 +356,6 @@ func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 			if e.err != nil {
 				e.session.PostClean()
 				s.ssmgr.DeleteSession(e.session.cs)
-				s.waterline.Unregister(e.session.ListSubscribedTable()...)
 			}
 		}
 	}
@@ -391,13 +379,10 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 			logger.Debug("start to handle subscription", zap.Any("table", sub.req.Table))
 
 			// evaluate waterline for the table
-			want, exist := s.waterline.Waterline(sub.tableID)
-			if !exist {
-				want, _ = s.clock.Now()
-			}
+			end := s.waterline.Waterline()
 
 			// fetch logtail
-			tail, err := s.fetcher.FetchLogtail(sub.sendCtx, sub.req.Table, nil, &want)
+			tail, err := s.logtail.TableTotal(sub.sendCtx, *sub.req.Table, end)
 			if err != nil {
 				logger.Error("fail to fetch logtail", zap.Error(err))
 
@@ -420,9 +405,6 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 			// mark table as subscribed
 			sub.session.AdvanceState(sub.tableID)
 
-			// register subscribed table
-			s.waterline.Register(sub.tableID, *sub.req.Table, want)
-
 		case pub, ok := <-s.pubChan:
 			if !ok {
 				logger.Info("publishment channel closed")
@@ -431,14 +413,14 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 			// publish all subscribed tables via session manager
 			for _, session := range s.ssmgr.ListSession() {
-				if err := session.Publish(ctx, pub.tails...); err != nil {
+				if err := session.Publish(ctx, pub.wraps...); err != nil {
 					logger.Error("fail to publish additional logtail", zap.Error(err))
 					continue
 				}
 			}
 
 			// update waterline for all subscribed tables
-			s.waterline.Advance(pub.want)
+			s.waterline.Advance(pub.to)
 		}
 	}
 }
@@ -458,22 +440,26 @@ func (s *LogtailServer) collector(ctx context.Context) {
 
 		case <-ticker.C:
 			// take a snapshot for all subscribed tables
-			tables := s.waterline.ListSubscribedTable()
+			from := s.waterline.Waterline()
 
 			// take current timestamp
-			want, _ := s.clock.Now()
+			to, _ := s.clock.Now()
 
-			tails := make([]tableLogtail, 0, len(tables))
-			for _, t := range tables {
-				tail, err := s.fetcher.FetchLogtail(ctx, &t.table, &t.waterline, &want)
-				if err != nil {
-					logger.Error("fail to fetch logtail", zap.Error(err), zap.Any("table", t.table))
-					continue
-				}
-				tails = append(tails, tableLogtail{id: t.id, tail: tail})
+			tails, err := s.logtail.RangeTotal(ctx, from, to)
+			if err != nil {
+				logger.Error("fail to fetch logtail by interval", zap.Error(err))
+				continue
 			}
 
-			s.pubChan <- publishment{want: want, tails: tails}
+			wraps := make([]wrapLogtail, 0, len(tails))
+			for _, tail := range tails {
+				wraps = append(wraps, wrapLogtail{
+					id:   TableID(tail.Table.String()),
+					tail: tail,
+				})
+			}
+
+			s.pubChan <- publishment{to: to, wraps: wraps}
 		}
 	}
 }
