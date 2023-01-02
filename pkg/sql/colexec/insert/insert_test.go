@@ -92,7 +92,7 @@ func TestInsertOperator(t *testing.T) {
 		},
 	}
 	proc.Reg.InputBatch = batch1
-	_, err := Call(0, proc, &argument1)
+	_, err := Call(0, proc, &argument1, false, false)
 	require.NoError(t, err)
 	println(argument1.TargetTable.(*mockRelation).result.Vecs)
 	{
@@ -122,6 +122,6 @@ func TestInsertOperator(t *testing.T) {
 		},
 	}
 	proc.Reg.InputBatch = batch2
-	_, err2 := Call(0, proc, &argument2)
+	_, err2 := Call(0, proc, &argument2, false, false)
 	require.Errorf(t, err2, "should return error when insert null into primary key column")
 }

@@ -137,7 +137,7 @@ count(b)
 2
 select count(b) from t1 where b >= 10;
 count(b)
-0
+2
 select count(c) from t1 where c = 10;
 count(c)
 0

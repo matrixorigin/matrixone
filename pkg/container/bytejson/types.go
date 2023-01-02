@@ -55,7 +55,7 @@ type pathGenerator struct {
 	pos     int
 }
 
-type UnnestResult map[string]string
+type UnnestResult map[string][]byte
 
 const (
 	numberIndices byte = iota + 1
@@ -110,4 +110,19 @@ const (
 
 var (
 	endian = binary.LittleEndian
+)
+
+var (
+	Null = ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+)
+
+var (
+	escapedChars = map[byte]byte{
+		'"': '"',
+		'b': '\b',
+		'f': '\f',
+		'n': '\n',
+		'r': '\r',
+		't': '\t',
+	}
 )

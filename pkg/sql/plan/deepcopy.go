@@ -56,6 +56,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		UpdateCtxs:      make([]*plan.UpdateCtx, len(node.UpdateCtxs)),
 		TableDefVec:     make([]*plan.TableDef, len(node.TableDefVec)),
 		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
+		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
 	}
 
 	copy(newNode.Children, node.Children)
@@ -103,8 +104,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		newNode.UpdateCtxs[i] = &plan.UpdateCtx{
 			DbName:        updateCtx.DbName,
 			TblName:       updateCtx.TblName,
-			PriKey:        updateCtx.PriKey,
-			PriKeyIdx:     updateCtx.PriKeyIdx,
 			HideKey:       updateCtx.HideKey,
 			HideKeyIdx:    updateCtx.HideKeyIdx,
 			UpdateCols:    make([]*ColDef, len(updateCtx.UpdateCols)),
@@ -172,10 +171,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 
 		for idx, col := range node.RowsetData.Cols {
 			newNode.RowsetData.Cols[idx] = DeepCopyColData(col)
-		}
-
-		if node.RowsetData.Schema != nil {
-			newNode.RowsetData.Schema = DeepCopyTableDef(node.RowsetData.Schema)
 		}
 	}
 	for idx, expr := range node.TblFuncExprList {
@@ -385,21 +380,11 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 
 func DeepCopyColData(col *plan.ColData) *plan.ColData {
 	newCol := &plan.ColData{
-		RowCount:  col.RowCount,
-		NullCount: col.NullCount,
-		Nulls:     make([]bool, len(col.Nulls)),
-		I32:       make([]int32, len(col.I32)),
-		I64:       make([]int64, len(col.I64)),
-		F32:       make([]float32, len(col.F32)),
-		F64:       make([]float64, len(col.F64)),
-		S:         make([]string, len(col.S)),
+		Data: make([]*plan.Expr, len(col.Data)),
 	}
-	copy(newCol.Nulls, col.Nulls)
-	copy(newCol.I32, col.I32)
-	copy(newCol.I64, col.I64)
-	copy(newCol.F32, col.F32)
-	copy(newCol.F64, col.F64)
-	copy(newCol.S, col.S)
+	for i, e := range col.Data {
+		newCol.Data[i] = DeepCopyExpr(e)
+	}
 
 	return newCol
 }
@@ -430,6 +415,7 @@ func DeepCopyInsertValues(insert *plan.InsertValues) *plan.InsertValues {
 		Columns:       make([]*plan.Column, len(insert.Columns)),
 		OrderAttrs:    make([]string, len(insert.OrderAttrs)),
 		CompositePkey: DeepCopyColDef(insert.CompositePkey),
+		ClusterTable:  DeepCopyClusterTable(insert.GetClusterTable()),
 	}
 
 	for idx, col := range insert.ExplicitCols {
@@ -534,9 +520,10 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	case *plan.DataDefinition_DropTable:
 		newDf.Definition = &plan.DataDefinition_DropTable{
 			DropTable: &plan.DropTable{
-				IfExists: df.DropTable.IfExists,
-				Database: df.DropTable.Database,
-				Table:    df.DropTable.Table,
+				IfExists:     df.DropTable.IfExists,
+				Database:     df.DropTable.Database,
+				Table:        df.DropTable.Table,
+				ClusterTable: DeepCopyClusterTable(df.DropTable.GetClusterTable()),
 			},
 		}
 
@@ -573,7 +560,8 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	case *plan.DataDefinition_TruncateTable:
 		newDf.Definition = &plan.DataDefinition_TruncateTable{
 			TruncateTable: &plan.TruncateTable{
-				Table: df.TruncateTable.Table,
+				Table:        df.TruncateTable.Table,
+				ClusterTable: DeepCopyClusterTable(df.TruncateTable.GetClusterTable()),
 			},
 		}
 
@@ -745,4 +733,38 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	}
 
 	return newExpr
+}
+
+func DeepCopyClusterTable(cluster *plan.ClusterTable) *plan.ClusterTable {
+	if cluster == nil {
+		return nil
+	}
+
+	accountIds := make([]uint32, len(cluster.GetAccountIDs()))
+	copy(accountIds, cluster.GetAccountIDs())
+	newClusterTable := &plan.ClusterTable{
+		IsClusterTable:         cluster.GetIsClusterTable(),
+		AccountIDs:             accountIds,
+		ColumnIndexOfAccountId: cluster.GetColumnIndexOfAccountId(),
+	}
+	return newClusterTable
+}
+
+func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
+	if analyzeinfo == nil {
+		return nil
+	}
+
+	return &plan.AnalyzeInfo{
+		InputRows:        analyzeinfo.GetInputRows(),
+		OutputRows:       analyzeinfo.GetOutputRows(),
+		InputSize:        analyzeinfo.GetInputSize(),
+		OutputSize:       analyzeinfo.GetOutputSize(),
+		TimeConsumed:     analyzeinfo.GetTimeConsumed(),
+		MemorySize:       analyzeinfo.GetMemorySize(),
+		WaitTimeConsumed: analyzeinfo.GetWaitTimeConsumed(),
+		DiskIO:           analyzeinfo.GetDiskIO(),
+		S3IO:             analyzeinfo.GetS3IO(),
+		NetworkIO:        analyzeinfo.GetNetworkIO(),
+	}
 }

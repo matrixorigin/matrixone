@@ -593,11 +593,12 @@ func (mr *MockDatabaseMockRecorder) Relations(arg0 interface{}) *gomock.Call {
 }
 
 // Truncate mocks base method.
-func (m *MockDatabase) Truncate(arg0 context.Context, arg1 string) error {
+func (m *MockDatabase) Truncate(arg0 context.Context, arg1 string) (uint64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Truncate", arg0, arg1)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(uint64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // Truncate indicates an expected call of Truncate.

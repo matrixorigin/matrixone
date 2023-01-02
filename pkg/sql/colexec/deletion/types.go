@@ -15,7 +15,6 @@
 package deletion
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -27,17 +26,13 @@ type Argument struct {
 }
 
 type DeleteCtx struct {
-	TableName            string
-	DbName               string
-	TableSource          engine.Relation
-	UseDeleteKey         string
-	CanTruncate          bool
-	ColIndex             int32
-	UniqueIndexTables    []engine.Relation
-	UniqueIndexDef       *plan.UniqueIndexDef
-	SecondaryIndexTables []engine.Relation
-	SecondaryIndexDef    *plan.SecondaryIndexDef
-	IndexAttrs           []string
+	TableName          string
+	DbName             string
+	TableSource        engine.Relation
+	UseDeleteKey       string // The column used when deletion(dml), Currently, it is based on '__row_id' column
+	CanTruncate        bool
+	ColIndex           int32
+	IsIndexTableDelete bool
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
