@@ -209,8 +209,8 @@ func initTypeCheckRelated() {
 				if t1 == t2 || t2 == types.T_any {
 					continue
 				}
-				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{t1, t2, t2, t2})
-				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{t2, t1, t2, t2})
+				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{t1, t2, t1, t1})
+				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{t2, t1, t1, t1})
 			}
 		}
 	}
