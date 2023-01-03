@@ -293,6 +293,21 @@ func NewMockCompilerContext() *MockCompilerContext {
 		},
 	}
 
+	moSchema["mo_role_privs"] = &Schema{
+		cols: []col{
+			{"privilege_level", types.T_varchar, false, 100, 0},
+			{"obj_id", types.T_uint64, false, 100, 0},
+			{"obj_type", types.T_varchar, false, 16, 0},
+			{"role_id", types.T_int32, false, 50, 0},
+			{"role_name", types.T_varchar, false, 100, 0},
+			{"granted_time", types.T_timestamp, false, 0, 0},
+			{"operation_user_id", types.T_uint32, false, 50, 0},
+			{"privilege_name", types.T_varchar, false, 100, 0},
+			{"with_grant_option", types.T_bool, false, 0, 0},
+			{"privilege_id", types.T_int32, false, 50, 0},
+		},
+	}
+
 	//---------------------------------------------index test schema---------------------------------------------------------
 
 	//+----------+--------------+------+------+---------+-------+--------------------------------+

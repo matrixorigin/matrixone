@@ -830,7 +830,15 @@ func Test_handleShowColumns(t *testing.T) {
 		proto.ses = ses
 
 		ses.mrs = &MysqlResultSet{}
-		err = handleShowColumns(ses)
+
+		tableName := &tree.UnresolvedObjectName{
+			NumParts: 2,
+		}
+		tableName.Parts[0] = "x"
+		tableName.Parts[0] = "y"
+		err = handleShowColumns(ses, &tree.ShowColumns{
+			Table: tableName,
+		})
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

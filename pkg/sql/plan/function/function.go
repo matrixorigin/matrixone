@@ -415,6 +415,7 @@ func getRealReturnType(fid int32, f Function, realArgs []types.Type) types.Type 
 	for i := range realArgs {
 		if realArgs[i].Oid == rt.Oid {
 			copyType(&rt, &realArgs[i])
+			checkTypeWidth(realArgs, &rt)
 			break
 		}
 		if types.T(rt.Oid) == types.T_decimal128 && types.T(realArgs[i].Oid) == types.T_decimal64 {
@@ -422,6 +423,14 @@ func getRealReturnType(fid int32, f Function, realArgs []types.Type) types.Type 
 		}
 	}
 	return rt
+}
+
+func checkTypeWidth(realArgs []types.Type, rt *types.Type) {
+	for i := range realArgs {
+		if realArgs[i].Oid == rt.Oid && rt.Width < realArgs[i].Width {
+			rt.Width = realArgs[i].Width
+		}
+	}
 }
 
 func copyType(dst, src *types.Type) {

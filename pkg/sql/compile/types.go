@@ -35,11 +35,6 @@ type (
 	TxnOperator = client.TxnOperator
 )
 
-// number of rows per core scheduled to be processed
-const (
-	Single_Core_Rows = 1000000
-)
-
 // type of scope
 const (
 	Merge = iota
@@ -58,6 +53,7 @@ const (
 	Update
 	InsertValues
 	TruncateTable
+	AlterView
 )
 
 // Source contains information of a relation which will be used in execution,
@@ -129,6 +125,7 @@ type scopeContext struct {
 type anaylze struct {
 	// curr is the current index of plan
 	curr      int
+	isFirst   bool
 	qry       *plan.Query
 	analInfos []*process.AnalyzeInfo
 }
