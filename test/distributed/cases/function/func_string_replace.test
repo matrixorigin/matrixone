@@ -1,0 +1,15 @@
+select replace("XYZ FGH XYZ","X","M");
+
+select replace(".*.*.*",".*","1");
+
+select replace("11","","1");
+
+drop table if exists t1;
+create table t1(a varchar,b varchar);
+insert into t1 values("testtest","case case");
+
+select a,replace(b,"case","11") from t1;
+
+select replace(a,"test","22") from t1;
+
+select replace(a,"test",22),replace(b,"case","11") from t1;

@@ -14,10 +14,19 @@
 
 package mergelimit
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
+import (
+	"reflect"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 type container struct {
 	seen uint64
+
+	// aliveMergeReceiver is a count for no-close receiver
+	aliveMergeReceiver int
+	// receiverListener is a structure to listen all the merge receiver.
+	receiverListener []reflect.SelectCase
 }
 
 type Argument struct {

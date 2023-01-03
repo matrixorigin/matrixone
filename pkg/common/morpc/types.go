@@ -90,6 +90,8 @@ type RPCClient interface {
 // ClientSession client session, which is used to send the response message.
 // Note that it is not thread-safe.
 type ClientSession interface {
+	// Close close the client session
+	Close() error
 	// Write writing the response message to the client.
 	Write(ctx context.Context, response Message) error
 }

@@ -115,3 +115,14 @@ var (
 var (
 	Null = ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
 )
+
+var (
+	escapedChars = map[byte]byte{
+		'"': '"',
+		'b': '\b',
+		'f': '\f',
+		'n': '\n',
+		'r': '\r',
+		't': '\t',
+	}
+)

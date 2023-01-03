@@ -52,6 +52,15 @@ func TestGetTenantInfo(t *testing.T) {
 			{"tenant1:    :r1", "{account tenant1::r1 -- 0:0:0}", true},
 			{"     : :r1", "{account tenant1::r1 -- 0:0:0}", true},
 			{"   tenant1   :   u1   :   r1    ", "{account tenant1:u1:r1 -- 0:0:0}", false},
+			{"u1", "{account sys:u1: -- 0:0:0}", false},
+			{"tenant1#u1", "{account tenant1#u1# -- 0#0#0}", false},
+			{"tenant1#u1#r1", "{account tenant1#u1#r1 -- 0#0#0}", false},
+			{"#u1#r1", "{account tenant1#u1#r1 -- 0#0#0}", true},
+			{"tenant1#u1#", "{account tenant1#u1#moadmin -- 0#0#0}", true},
+			{"tenant1##r1", "{account tenant1##r1 -- 0#0#0}", true},
+			{"tenant1#    #r1", "{account tenant1##r1 -- 0#0#0}", true},
+			{"     # #r1", "{account tenant1##r1 -- 0#0#0}", true},
+			{"   tenant1   #   u1   #   r1    ", "{account tenant1#u1#r1 -- 0#0#0}", false},
 		}
 
 		for _, arg := range args {
@@ -3547,7 +3556,7 @@ func Test_determineDML(t *testing.T) {
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 			defer bhStub.Reset()
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetRequestContext(), ses, a.stmt, a.p)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -3645,7 +3654,7 @@ func Test_determineDML(t *testing.T) {
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 			defer bhStub.Reset()
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetRequestContext(), ses, a.stmt, a.p)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -3735,7 +3744,7 @@ func Test_determineDML(t *testing.T) {
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 			defer bhStub.Reset()
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetRequestContext(), ses, a.stmt, a.p)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeFalse)
 		}
@@ -6245,6 +6254,21 @@ func Test_doAlterAccount(t *testing.T) {
 	})
 }
 
+func newMrsForShowTables(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col2 := &MysqlColumn{}
+	col2.SetName("table")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col2)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func Test_doDropAccount(t *testing.T) {
 	convey.Convey("drop account", t, func() {
 		ctrl := gomock.NewController(t)
@@ -6283,6 +6307,8 @@ func Test_doDropAccount(t *testing.T) {
 		sql = "show databases;"
 		bh.sql2result[sql] = newMrsForSqlForShowDatabases([][]interface{}{})
 
+		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+
 		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
@@ -6318,6 +6344,8 @@ func Test_doDropAccount(t *testing.T) {
 		for _, sql = range getSqlForDropAccount() {
 			bh.sql2result[sql] = nil
 		}
+
+		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
 		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)

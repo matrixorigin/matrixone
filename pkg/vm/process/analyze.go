@@ -23,13 +23,17 @@ import (
 
 func NewAnalyzeInfo(nodeId int32) *AnalyzeInfo {
 	return &AnalyzeInfo{
-		NodeId:       nodeId,
-		InputRows:    0,
-		OutputRows:   0,
-		TimeConsumed: 0,
-		InputSize:    0,
-		OutputSize:   0,
-		MemorySize:   0,
+		NodeId:           nodeId,
+		InputRows:        0,
+		OutputRows:       0,
+		TimeConsumed:     0,
+		WaitTimeConsumed: 0,
+		InputSize:        0,
+		OutputSize:       0,
+		MemorySize:       0,
+		DiskIO:           0,
+		S3IO:             0,
+		NetworkIO:        0,
 	}
 }
 
@@ -39,7 +43,8 @@ func (a *analyze) Start() {
 
 func (a *analyze) Stop() {
 	if a.analInfo != nil {
-		atomic.AddInt64(&a.analInfo.TimeConsumed, int64(time.Since(a.start)/time.Microsecond))
+		atomic.AddInt64(&a.analInfo.WaitTimeConsumed, int64(a.wait/time.Microsecond))
+		atomic.AddInt64(&a.analInfo.TimeConsumed, int64((time.Since(a.start)-a.wait)/time.Microsecond))
 	}
 }
 
@@ -49,16 +54,38 @@ func (a *analyze) Alloc(size int64) {
 	}
 }
 
-func (a *analyze) Input(bat *batch.Batch) {
-	if a.analInfo != nil && bat != nil {
+func (a *analyze) Input(bat *batch.Batch, isFirst bool) {
+	if a.analInfo != nil && bat != nil && isFirst {
 		atomic.AddInt64(&a.analInfo.InputSize, int64(bat.Size()))
 		atomic.AddInt64(&a.analInfo.InputRows, int64(bat.Length()))
 	}
 }
 
-func (a *analyze) Output(bat *batch.Batch) {
-	if a.analInfo != nil && bat != nil {
+func (a *analyze) Output(bat *batch.Batch, isLast bool) {
+	if a.analInfo != nil && bat != nil && isLast {
 		atomic.AddInt64(&a.analInfo.OutputSize, int64(bat.Size()))
 		atomic.AddInt64(&a.analInfo.OutputRows, int64(bat.Length()))
+	}
+}
+
+func (a *analyze) WaitStop(start time.Time) {
+	a.wait += time.Since(start)
+}
+
+func (a *analyze) DiskIO(bat *batch.Batch) {
+	if a.analInfo != nil && bat != nil {
+		atomic.AddInt64(&a.analInfo.DiskIO, int64(bat.Size()))
+	}
+}
+
+func (a *analyze) S3IO(bat *batch.Batch) {
+	if a.analInfo != nil && bat != nil {
+		atomic.AddInt64(&a.analInfo.S3IO, int64(bat.Size()))
+	}
+}
+
+func (a *analyze) Network(bat *batch.Batch) {
+	if a.analInfo != nil && bat != nil {
+		atomic.AddInt64(&a.analInfo.S3IO, int64(bat.Size()))
 	}
 }

@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -40,6 +39,7 @@ func ExtractCompositePrimaryKeyColumnFromColDefs(colDefs []*plan.ColDef) ([]*pla
 	return colDefs, nil
 }
 
+// this func can't judge index table col is compound or not
 func JudgeIsCompositePrimaryKeyColumn(s string) bool {
 	if len(s) < len(catalog.PrefixPriColName) {
 		return false
@@ -93,10 +93,7 @@ func FillCompositePKeyBatch(bat *batch.Batch, p *plan.ColDef, proc *process.Proc
 			return moerr.NewConstraintViolation(proc.Ctx, "composite pkey don't support null value")
 		}
 	}
-	vec, err := multi.Serial(vs, proc)
-	if err != nil {
-		return err
-	}
+	vec, _ := serialWithCompacted(vs, proc)
 	bat.Attrs = append(bat.Attrs, p.Name)
 	bat.Vecs = append(bat.Vecs, vec)
 	return nil

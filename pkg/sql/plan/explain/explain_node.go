@@ -189,7 +189,7 @@ func (ndesc *NodeDescribeImpl) GetActualAnalyzeInfo(ctx context.Context, options
 		}
 		result += describe
 	} else {
-		result += "timeConsumed=0ms  inputRows=0  outputRows=0 inputSize=0 bytes outputSize:0 bytes, memorySize=0 bytes"
+		result += "timeConsumed=0ms waitTime=0ms inputRows=0  outputRows=0 inputSize=0 bytes outputSize:0 bytes, memorySize=0 bytes"
 	}
 	return result, nil
 }
@@ -436,6 +436,7 @@ func NewAnalyzeInfoDescribeImpl(analyze *plan.AnalyzeInfo) *AnalyzeInfoDescribeI
 
 func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "timeConsumed=" + strconv.FormatInt(a.AnalyzeInfo.TimeConsumed, 10) + "us" +
+		" waitTime=" + strconv.FormatInt(a.AnalyzeInfo.WaitTimeConsumed, 10) + "us" +
 		" inputRows=" + strconv.FormatInt(a.AnalyzeInfo.InputRows, 10) +
 		" outputRows=" + strconv.FormatInt(a.AnalyzeInfo.OutputRows, 10) +
 		" inputSize=" + strconv.FormatInt(a.AnalyzeInfo.InputSize, 10) + "bytes" +

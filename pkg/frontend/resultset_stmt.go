@@ -93,6 +93,11 @@ type SelectExecutor struct {
 	sel *tree.Select
 }
 
+type ValuesStmtExecutor struct {
+	*resultSetStmtExecutor
+	sel *tree.ValuesStatement
+}
+
 type ShowCreateTableExecutor struct {
 	*resultSetStmtExecutor
 	sct *tree.ShowCreateTable

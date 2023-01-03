@@ -12,22 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memorytable
+package lockservice
 
-type KV[
-	K Ordered[K],
-	V any,
-] interface {
-	Copy() KV[K, V]
-	Get(KVPair[K, V]) (KVPair[K, V], bool)
-	Set(KVPair[K, V]) (KVPair[K, V], bool)
-	Delete(KVPair[K, V])
-	Iter() KVIter[K, V]
+// WithGranularity set rows granularity, the default granularity is Row.
+func (opts LockOptions) WithGranularity(granularity Granularity) LockOptions {
+	opts.granularity = granularity
+	return opts
 }
 
-type KVIter[
-	K Ordered[K],
-	V any,
-] interface {
-	SeekIter[KVPair[K, V]]
+// WithMode set lock mode, the default mode is Exclusive.
+func (opts LockOptions) WithMode(mode LockMode) LockOptions {
+	opts.mode = mode
+	return opts
+}
+
+// WithWaitPolicy set wait policy, the default policy is Wait.
+func (opts LockOptions) WithWaitPolicy(policy WaitPolicy) LockOptions {
+	opts.policy = policy
+	return opts
 }
