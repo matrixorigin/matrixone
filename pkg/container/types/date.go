@@ -754,3 +754,7 @@ func (d Date) Day() uint8 {
 func (d Date) DaysSinceUnixEpoch() int32 {
 	return int32(d) - unixEpochDays
 }
+
+func GetUnixEpochSecs() int64 {
+	return unixEpochSecs
+}
