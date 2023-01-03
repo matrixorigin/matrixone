@@ -610,18 +610,17 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 
 // Truncation operations cannot be performed if the session holds an active table lock.
 func (s *Scope) TruncateTable(c *Compile) error {
-	tqry := s.Plan.GetDdl().GetTruncateTable()
-	dbName := tqry.GetDatabase()
 	var dbSource engine.Database
 	var rel engine.Relation
 	var err error
 	var isTemp bool
-	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
-	if err != nil {
-		return err
-	}
+	var newId uint64
 
+	tqry := s.Plan.GetDdl().GetTruncateTable()
+	dbName := tqry.GetDatabase()
+	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	tblName := tqry.GetTable()
+
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		var e error // avoid contamination of error messages
 		dbSource, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
@@ -635,13 +634,23 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		isTemp = true
 	}
 
+	if isTemp{
+		newId, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, tblName))
+	} else {
+		newId, err = dbSource.Truncate(c.ctx, tblName)
+	}
+
+	if err != nil {
+		return err
+	}
+	
 	// Truncate Index Tables if needed
 	for _, name := range tqry.IndexTableNames {
 		var err error
 		if isTemp {
-			err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
+			_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
 		} else {
-			err = dbSource.Truncate(c.ctx, name)
+			_, err = dbSource.Truncate(c.ctx, name)
 		}
 		if err != nil {
 			return err
@@ -649,22 +658,16 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	id := rel.GetTableID(c.ctx)
+
 	if isTemp {
-		err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, tblName))
-		if err != nil {
-			return err
-		}
-		err = colexec.ResetAutoInsrCol(c.e, c.ctx, engine.GetTempTableName(dbName, tblName), dbSource, c.proc, id, defines.TEMPORARY_DBNAME)
+		err = colexec.ResetAutoInsrCol(c.e, c.ctx, engine.GetTempTableName(dbName, tblName), dbSource, c.proc, id, newId, defines.TEMPORARY_DBNAME)
 	} else {
-		err = dbSource.Truncate(c.ctx, tblName)
-		if err != nil {
-			return err
-		}
-		err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, dbName)
+		err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, newId, dbName)
 	}
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 

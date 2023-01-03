@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 
@@ -80,19 +81,20 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 				}
 
 				tableID := rel.GetTableID(c.ctx)
+				var newId uint64
 
 				if isTemp {
-					err = dbSource.Truncate(c.ctx, engine.GetTempTableName(deleteCtx.DbName, deleteCtx.TableName))
+					newId, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(deleteCtx.DbName, deleteCtx.TableName))
 					if err != nil {
 						return 0, err
 					}
-					err = colexec.MoveAutoIncrCol(c.e, c.ctx, engine.GetTempTableName(deleteCtx.DbName, deleteCtx.TableName), dbSource, c.proc, tableID, defines.TEMPORARY_DBNAME)
+					err = colexec.MoveAutoIncrCol(c.e, c.ctx, engine.GetTempTableName(deleteCtx.DbName, deleteCtx.TableName), dbSource, c.proc, tableID, newId, defines.TEMPORARY_DBNAME)
 				} else {
-					err = dbSource.Truncate(c.ctx, deleteCtx.TableName)
+					newId, err = dbSource.Truncate(c.ctx, deleteCtx.TableName)
 					if err != nil {
 						return 0, err
 					}
-					err = colexec.MoveAutoIncrCol(c.e, c.ctx, deleteCtx.TableName, dbSource, c.proc, tableID, deleteCtx.DbName)
+					err = colexec.MoveAutoIncrCol(c.e, c.ctx, deleteCtx.TableName, dbSource, c.proc, tableID, newId, deleteCtx.DbName)
 				}
 
 				if err != nil {
@@ -328,6 +330,7 @@ func writeBatch(ctx context.Context,
 				}
 				indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, p.UniqueIndexDef.Fields[i].Parts, primaryKeyName, c.proc)
 				if rowNum != 0 {
+					indexBatch.SetZs(rowNum, c.proc.Mp())
 					if err = indexRelation.Write(ctx, indexBatch); err != nil {
 						return err
 					}

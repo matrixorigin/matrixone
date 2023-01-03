@@ -186,7 +186,8 @@ DROP TABLE t1;
 CREATE TABLE t1 (a DATE);
 INSERT INTO t1 VALUES ('2000-01-01');
 SELECT CAST(COALESCE(a,a) AS SIGNED) FROM t1;
-invalid argument operator cast, bad value [DATE BIGINT]
+cast(coalesce(a, a) as signed)
+10957
 SELECT CAST(COALESCE(a,a) AS CHAR) FROM t1;
 CAST(COALESCE(a,a) AS CHAR)
 2000-01-01
@@ -204,7 +205,8 @@ DROP TABLE t1;
 CREATE TABLE t1 (a DATETIME);
 INSERT INTO t1 VALUES ('2000-01-01 00:00:00');
 SELECT CAST(COALESCE(a,a) AS SIGNED) FROM t1;
-invalid argument operator cast, bad value [DATETIME BIGINT]
+cast(coalesce(a, a) as signed)
+946684800
 SELECT CAST(COALESCE(a,a) AS CHAR) FROM t1;
 CAST(COALESCE(a,a) AS CHAR)
 2000-01-01 00:00:00
