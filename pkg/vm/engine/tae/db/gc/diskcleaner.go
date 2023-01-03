@@ -17,18 +17,19 @@ package gc
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"sync"
-	"sync/atomic"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -36,10 +37,10 @@ const (
 	MessgeNormal
 )
 
-// diskCleaner is the main structure of gc operation,
+// DiskCleaner is the main structure of gc operation,
 // and provides "JobFactory" to let tae notify itself
 // to perform a gc
-type diskCleaner struct {
+type DiskCleaner struct {
 	fs *objectio.ObjectFS
 
 	// ckpClient is used to get the instance of the specified checkpoint
@@ -48,7 +49,7 @@ type diskCleaner struct {
 	// Parsing checkpoint needs to use catalog instance
 	catalog *catalog.Catalog
 
-	// maxConsumed is to mark which checkpoint the current diskCleaner has processed,
+	// maxConsumed is to mark which checkpoint the current DiskCleaner has processed,
 	// through which you can get the next checkpoint to be processed
 	maxConsumed atomic.Pointer[checkpoint.CheckpointEntry]
 
@@ -63,9 +64,14 @@ type diskCleaner struct {
 		sync.RWMutex
 		files []string
 	}
-	// delTask is a worker that deletes s3‘s objects or local
+	// delWorker is a worker that deletes s3‘s objects or local
 	// files, and only one worker will run
-	delTask *GCTask
+	delWorker *GCWorker
+
+	checker struct {
+		sync.RWMutex
+		extras []func(item any) bool
+	}
 
 	processQueue sm.Queue
 
@@ -77,38 +83,34 @@ func NewDiskCleaner(
 	fs *objectio.ObjectFS,
 	ckpClient checkpoint.RunnerReader,
 	catalog *catalog.Catalog,
-) *diskCleaner {
-	cleaner := &diskCleaner{
+) *DiskCleaner {
+	cleaner := &DiskCleaner{
 		fs:        fs,
 		ckpClient: ckpClient,
 		catalog:   catalog,
 	}
-	cleaner.delTask = NewGCTask(fs, cleaner)
+	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.processQueue = sm.NewSafeQueue(10000, 1000, cleaner.process)
 	return cleaner
 }
 
-func (cleaner *diskCleaner) JobFactory(ctx context.Context) (err error) {
+func (cleaner *DiskCleaner) JobFactory(ctx context.Context) (err error) {
+	logutil.Info("JobFactory is start")
 	return cleaner.tryClean(ctx)
 }
 
-// Replay is an interface provided for testing
-func (cleaner *diskCleaner) Replay() {
-	cleaner.tryReplay()
-}
-
-func (cleaner *diskCleaner) tryReplay() {
+func (cleaner *DiskCleaner) tryReplay() {
 	if _, err := cleaner.processQueue.Enqueue(MessgeReplay); err != nil {
 		panic(err)
 	}
 }
 
-func (cleaner *diskCleaner) tryClean(ctx context.Context) (err error) {
+func (cleaner *DiskCleaner) tryClean(ctx context.Context) (err error) {
 	_, err = cleaner.processQueue.Enqueue(MessgeNormal)
 	return
 }
 
-func (cleaner *diskCleaner) replay() error {
+func (cleaner *DiskCleaner) replay() error {
 	dirs, err := cleaner.fs.ListDir(GCMetaDir)
 	if err != nil {
 		return err
@@ -165,7 +167,7 @@ func (cleaner *diskCleaner) replay() error {
 	return nil
 }
 
-func (cleaner *diskCleaner) process(items ...any) {
+func (cleaner *DiskCleaner) process(items ...any) {
 	if items[0].(int) == MessgeReplay {
 		err := cleaner.replay()
 		if err != nil {
@@ -184,12 +186,22 @@ func (cleaner *diskCleaner) process(items ...any) {
 		ts = maxConsumed.GetEnd()
 	}
 
-	candidates := cleaner.ckpClient.ICKPSeekLT(ts, 10)
+	checkpoints := cleaner.ckpClient.ICKPSeekLT(ts, 10)
+
+	if len(checkpoints) == 0 {
+		return
+	}
+	candidates := make([]*checkpoint.CheckpointEntry, 0)
+	for _, ckp := range checkpoints {
+		if !cleaner.checkExtras(ckp) {
+			break
+		}
+		candidates = append(candidates, ckp)
+	}
 
 	if len(candidates) == 0 {
 		return
 	}
-
 	var input *GCTable
 	var err error
 	if input, err = cleaner.createNewInput(candidates); err != nil {
@@ -202,10 +214,26 @@ func (cleaner *diskCleaner) process(items ...any) {
 
 	// TODO:
 	cleaner.tryGC()
-
 }
 
-func (cleaner *diskCleaner) collectCkpData(
+func (cleaner *DiskCleaner) checkExtras(item any) bool {
+	cleaner.checker.RLock()
+	defer cleaner.checker.RUnlock()
+	for _, checker := range cleaner.checker.extras {
+		if !checker(item) {
+			return false
+		}
+	}
+	return true
+}
+
+func (cleaner *DiskCleaner) AddChecker(checker func(item any) bool) {
+	cleaner.checker.Lock()
+	defer cleaner.checker.Unlock()
+	cleaner.checker.extras = append(cleaner.checker.extras, checker)
+}
+
+func (cleaner *DiskCleaner) collectCkpData(
 	ckp *checkpoint.CheckpointEntry,
 ) (data *logtail.CheckpointData, err error) {
 	factory := logtail.IncrementalCheckpointDataFactory(
@@ -216,7 +244,7 @@ func (cleaner *diskCleaner) collectCkpData(
 	return
 }
 
-func (cleaner *diskCleaner) createNewInput(
+func (cleaner *DiskCleaner) createNewInput(
 	ckps []*checkpoint.CheckpointEntry) (input *GCTable, err error) {
 	input = NewGCTable()
 	var data *logtail.CheckpointData
@@ -244,20 +272,35 @@ func (cleaner *diskCleaner) createNewInput(
 	return
 }
 
-func (cleaner *diskCleaner) tryGC() {
-	if cleaner.delTask.GetState() == Running {
+func (cleaner *DiskCleaner) createDebugInput(
+	ckps []*checkpoint.CheckpointEntry) (input *GCTable, err error) {
+	input = NewGCTable()
+	var data *logtail.CheckpointData
+	for _, candidate := range ckps {
+		data, err = cleaner.collectCkpData(candidate)
+		if err != nil {
+			logutil.Errorf("processing clean %s: %v", candidate.String(), err)
+			// TODO
+			return
+		}
+		defer data.Close()
+		input.UpdateTable(data)
+	}
+
+	return
+}
+
+func (cleaner *DiskCleaner) tryGC() {
+	if !cleaner.delWorker.Start() {
 		return
 	}
 	gc := cleaner.softGC()
-	if len(gc) == 0 {
-		return
-	}
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
-	go cleaner.delTask.ExecDelete(gc)
+	go cleaner.delWorker.ExecDelete(gc)
 }
 
-func (cleaner *diskCleaner) softGC() []string {
+func (cleaner *DiskCleaner) softGC() []string {
 	cleaner.inputs.Lock()
 	defer cleaner.inputs.Unlock()
 	if len(cleaner.inputs.tables) == 0 {
@@ -270,36 +313,37 @@ func (cleaner *diskCleaner) softGC() []string {
 	gc := mergeTable.SoftGC()
 	cleaner.inputs.tables = make([]*GCTable, 0)
 	cleaner.inputs.tables = append(cleaner.inputs.tables, mergeTable)
+	//logutil.Infof("SoftGC is %v, merge table: %v", gc, mergeTable.String())
 	return gc
 }
 
-func (cleaner *diskCleaner) updateMaxConsumed(e *checkpoint.CheckpointEntry) {
+func (cleaner *DiskCleaner) updateMaxConsumed(e *checkpoint.CheckpointEntry) {
 	cleaner.maxConsumed.Store(e)
 }
 
-func (cleaner *diskCleaner) updateInputs(input *GCTable) {
+func (cleaner *DiskCleaner) updateInputs(input *GCTable) {
 	cleaner.inputs.Lock()
 	defer cleaner.inputs.Unlock()
 	cleaner.inputs.tables = append(cleaner.inputs.tables, input)
 }
 
-func (cleaner *diskCleaner) updateOutputs(files []string) {
+func (cleaner *DiskCleaner) updateOutputs(files []string) {
 	cleaner.outputs.Lock()
 	defer cleaner.outputs.Unlock()
 	cleaner.outputs.files = append(cleaner.outputs.files, files...)
 }
 
-func (cleaner *diskCleaner) GetMaxConsumed() *checkpoint.CheckpointEntry {
+func (cleaner *DiskCleaner) GetMaxConsumed() *checkpoint.CheckpointEntry {
 	return cleaner.maxConsumed.Load()
 }
 
-func (cleaner *diskCleaner) GetInputs() *GCTable {
+func (cleaner *DiskCleaner) GetInputs() *GCTable {
 	cleaner.inputs.RLock()
 	defer cleaner.inputs.RUnlock()
 	return cleaner.inputs.tables[0]
 }
 
-func (cleaner *diskCleaner) GetAndClearOutputs() []string {
+func (cleaner *DiskCleaner) GetAndClearOutputs() []string {
 	cleaner.outputs.RLock()
 	defer cleaner.outputs.RUnlock()
 	files := cleaner.outputs.files
@@ -308,14 +352,63 @@ func (cleaner *diskCleaner) GetAndClearOutputs() []string {
 	return files
 }
 
-func (cleaner *diskCleaner) Start() {
+func (cleaner *DiskCleaner) CheckGC() error {
+	debugCandidates := cleaner.ckpClient.GetAllIncrementalCheckpoints()
+	cleaner.inputs.RLock()
+	defer cleaner.inputs.RUnlock()
+	maxConsumed := cleaner.GetMaxConsumed()
+	if maxConsumed == nil {
+		return moerr.NewInternalErrorNoCtx("GC has not yet run")
+	}
+	for i, ckp := range debugCandidates {
+		if ckp.GetStart().Equal(maxConsumed.GetStart()) {
+			debugCandidates = debugCandidates[:i+1]
+			break
+		}
+	}
+	start1 := debugCandidates[len(debugCandidates)-1].GetStart()
+	start2 := maxConsumed.GetStart()
+	if !start1.Equal(start2) {
+		logutil.Info("[DiskCleaner]", common.OperationField("Compare not equal"),
+			common.OperandField(start1.ToString()), common.OperandField(start2.ToString()))
+		return moerr.NewInternalErrorNoCtx("TS Compare not equal")
+	}
+	debugTable, err := cleaner.createDebugInput(debugCandidates)
+	if err != nil {
+		logutil.Errorf("processing clean %s: %v", debugCandidates[0].String(), err)
+		// TODO
+		return moerr.NewInternalErrorNoCtx("processing clean %s: %v", debugCandidates[0].String(), err)
+	}
+	debugTable.SoftGC()
+	var mergeTable *GCTable
+	if len(cleaner.inputs.tables) > 1 {
+		mergeTable = NewGCTable()
+		for _, table := range cleaner.inputs.tables {
+			mergeTable.Merge(table)
+		}
+		mergeTable.SoftGC()
+	} else {
+		mergeTable = cleaner.inputs.tables[0]
+	}
+	if !mergeTable.Compare(debugTable) {
+		logutil.Errorf("inputs :%v", cleaner.inputs.tables[0].String())
+		logutil.Errorf("debugTable :%v", debugTable.String())
+		return moerr.NewInternalErrorNoCtx("Compare is failed")
+	} else {
+		logutil.Info("[DiskCleaner]", common.OperationField("Compare is End"),
+			common.OperandField(start1.ToString()))
+	}
+	return nil
+}
+
+func (cleaner *DiskCleaner) Start() {
 	cleaner.onceStart.Do(func() {
 		cleaner.processQueue.Start()
 		cleaner.tryReplay()
 	})
 }
 
-func (cleaner *diskCleaner) Stop() {
+func (cleaner *DiskCleaner) Stop() {
 	cleaner.onceStop.Do(func() {
 		cleaner.processQueue.Stop()
 	})
