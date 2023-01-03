@@ -195,7 +195,7 @@ func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, ba
 	return false, nil
 }
 
-func Call(_ int, proc *process.Process, arg any) (bool, error) {
+func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	n := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 	if bat == nil {

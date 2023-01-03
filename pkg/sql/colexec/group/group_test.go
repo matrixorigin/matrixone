@@ -101,22 +101,22 @@ func TestGroup(t *testing.T) {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		_, err = Call(0, tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		_, err = Call(0, tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = &batch.Batch{}
-		_, err = Call(0, tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = nil
-		_, err = Call(0, tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 		if tc.proc.Reg.InputBatch != nil {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
 		tc.proc.Reg.InputBatch = nil
-		_, err = Call(0, tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -138,10 +138,10 @@ func TestLowCardinalityGroup(t *testing.T) {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
-		_, err = Call(0, tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = nil
-		_, err = Call(0, tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 
 		rbat := tc.proc.Reg.InputBatch
@@ -167,10 +167,10 @@ func TestLowCardinalityGroup(t *testing.T) {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
-		_, err = Call(0, tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = nil
-		_, err = Call(0, tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 
 		rbat := tc.proc.Reg.InputBatch
@@ -194,16 +194,16 @@ func BenchmarkGroup(b *testing.B) {
 			err := Prepare(tc.proc, tc.arg)
 			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.types, tc.proc, BenchmarkRows)
-			_, err = Call(0, tc.proc, tc.arg)
+			_, err = Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.types, tc.proc, BenchmarkRows)
-			_, err = Call(0, tc.proc, tc.arg)
+			_, err = Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = &batch.Batch{}
-			_, err = Call(0, tc.proc, tc.arg)
+			_, err = Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = nil
-			_, err = Call(0, tc.proc, tc.arg)
+			_, err = Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
 			if tc.proc.Reg.InputBatch != nil {
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())

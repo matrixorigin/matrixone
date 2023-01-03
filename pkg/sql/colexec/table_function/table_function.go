@@ -17,13 +17,14 @@ package table_function
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	tblArg := arg.(*Argument)
 	switch tblArg.Name {
 	case "unnest":

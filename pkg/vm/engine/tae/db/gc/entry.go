@@ -99,7 +99,7 @@ func (o *ObjectEntry) Compare(object *ObjectEntry) bool {
 
 func (o *ObjectEntry) String() string {
 	var w bytes.Buffer
-	_, _ = w.WriteString("entry:[\n")
+	_, _ = w.WriteString("entry:[")
 	_, _ = w.WriteString(fmt.Sprintf("tid: %d, refs: %d ", o.table.tid, o.refs.Load()))
 	_, _ = w.WriteString("block:[")
 	for _, block := range o.table.blocks {
@@ -111,6 +111,6 @@ func (o *ObjectEntry) String() string {
 		_, _ = w.WriteString(fmt.Sprintf(" %v", id.String()))
 	}
 	_, _ = w.WriteString("]")
-	_, _ = w.WriteString("]")
+	_, _ = w.WriteString("]\n")
 	return w.String()
 }

@@ -53,6 +53,7 @@
 /pkg/frontend @daviszhen
 /pkg/hakeeper @zhangxu19830126 @w-zr
 /pkg/logservice @zhangxu19830126
+/pkg/lockservice @zhangxu19830126 @w-zr
 /pkg/logutil @daviszhen
 /pkg/partition @nnsgmsone
 /pkg/sort @nnsgmsone
