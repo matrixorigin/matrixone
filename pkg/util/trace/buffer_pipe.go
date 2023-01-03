@@ -63,7 +63,6 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	var opts []BufferOption
 	var f genBatchFunc = genCsvData
 	logutil.Debugf("NewItemBuffer name: %s", name)
-	ctx := DefaultContext()
 	switch name {
 	case MOStatementType, SingleStatementTable.GetName():
 	case MOErrorType:
@@ -71,7 +70,7 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	case MOLogType:
 	case MORawLogType:
 	default:
-		panic(moerr.NewInternalError(ctx, "unknown type %s", name))
+		logutil.Warnf("batchCSVHandler handle new type: %s", name)
 	}
 	opts = append(opts, BufferWithGenBatchFunc(f), BufferWithType(name))
 	opts = append(opts, t.defaultOpts...)
@@ -110,8 +109,8 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 			return
 		}
 		if _, err := req.writer.WriteString(req.content); err != nil {
-			logutil.Error(fmt.Sprintf("[Trace] faield to write csv: %s", req.content), logutil.NoReportFiled())
-			logutil.Error(fmt.Sprintf("[Trace] faield to write. err: %v", err), logutil.NoReportFiled())
+			logutil.Error(fmt.Sprintf("[Trace] failed to write csv: %s", req.content), logutil.NoReportFiled())
+			logutil.Error(fmt.Sprintf("[Trace] failed to write. err: %v", err), logutil.NoReportFiled())
 		}
 	}
 

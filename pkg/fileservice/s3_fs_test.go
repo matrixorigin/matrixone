@@ -200,6 +200,38 @@ func TestDynamicS3NoKey(t *testing.T) {
 	})
 }
 
+func TestDynamicS3Opts(t *testing.T) {
+	config, err := loadS3TestConfig()
+	assert.Nil(t, err)
+	if config.Endpoint == "" {
+		// no config
+		t.Skip()
+	}
+	t.Setenv("AWS_REGION", config.Region)
+	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
+	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
+	testFileService(t, func(name string) FileService {
+		buf := new(strings.Builder)
+		w := csv.NewWriter(buf)
+		err := w.Write([]string{
+			"s3-opts",
+			"endpoint=" + config.Endpoint,
+			"region=" + config.Region,
+			"bucket=" + config.Bucket,
+			"prefix=" + time.Now().Format("2006-01-02.15:04:05.000000"),
+			"name=" + name,
+		})
+		assert.Nil(t, err)
+		w.Flush()
+		fs, _, err := GetForETL(nil, JoinPath(
+			buf.String(),
+			"foo/bar/baz",
+		))
+		assert.Nil(t, err)
+		return fs
+	})
+}
+
 func TestS3FSMinioServer(t *testing.T) {
 
 	// find minio executable
