@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 type TestRunner interface {
@@ -32,6 +33,8 @@ type TestRunner interface {
 	ForceIncrementalCheckpoint(end types.TS) error
 	IsAllChangesFlushed(start, end types.TS, printTree bool) bool
 	MaxLSNInRange(end types.TS) uint64
+
+	ForceFlush(ts types.TS, ctx context.Context) (err error)
 }
 
 // DisableCheckpoint stops generating checkpoint
@@ -85,6 +88,47 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Durati
 		interval: versionInterval,
 	})
 	return nil
+}
+func (r *runner) ForceFlush(ts types.TS, ctx context.Context) (err error) {
+	makeCtx := func() *DirtyCtx {
+		tree := r.source.ScanInRangePruned(types.TS{}, ts)
+		tree.GetTree().Compact()
+		if tree.IsEmpty() {
+			return nil
+		}
+		entry := logtail.NewDirtyTreeEntry(types.TS{}, ts, tree.GetTree())
+		dirtyCtx := new(DirtyCtx)
+		dirtyCtx.tree = entry
+		dirtyCtx.force = true
+		// logutil.Infof("try flush %v",tree.String())
+		return dirtyCtx
+	}
+
+	ticker := time.NewTicker(r.options.forceFlushCheckInterval)
+	defer ticker.Stop()
+
+	dirtyCtx := makeCtx()
+	if dirtyCtx == nil {
+		return
+	}
+	if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			logutil.Warnf("Flush timeout %v", dirtyCtx.tree.String())
+			return
+		case <-ticker.C:
+			if dirtyCtx = makeCtx(); dirtyCtx == nil {
+				return
+			}
+			if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
+				return
+			}
+		}
+	}
 }
 
 func (r *runner) ForceIncrementalCheckpoint(end types.TS) error {

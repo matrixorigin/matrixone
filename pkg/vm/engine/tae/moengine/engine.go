@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
@@ -232,10 +233,18 @@ func (e *txnEngine) ForceCheckpoint(ctx context.Context, ts types.TS) error {
 	e.impl.BGCheckpointRunner.DisableCheckpoint()
 	defer e.impl.BGCheckpointRunner.EnableCheckpoint()
 	e.impl.BGCheckpointRunner.CleanPenddingCheckpoint()
-	err := common.WaitUtil(func() bool {
+	t0 := time.Now()
+	err := e.impl.BGCheckpointRunner.ForceFlush(ts, ctx)
+	logutil.Infof("[Force Checkpoint] flush takes %v", time.Since(t0))
+	if err != nil {
+		return err
+	}
+	t0 = time.Now()
+	err = common.WaitUtil(func() bool {
 		flushed := e.impl.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, ts, false)
 		return flushed
 	}, ctx)
+	logutil.Infof("[Force Checkpoint] flush takes %v", time.Since(t0))
 	if err != nil {
 		return err
 	}
@@ -245,5 +254,6 @@ func (e *txnEngine) ForceCheckpoint(ctx context.Context, ts types.TS) error {
 	}
 	lsn := e.impl.BGCheckpointRunner.MaxLSNInRange(ts)
 	_, err = e.impl.Wal.RangeCheckpoint(1, lsn)
+	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
 	return err
 }
