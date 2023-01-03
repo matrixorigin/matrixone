@@ -1183,7 +1183,10 @@ func decimal64ToOthers(ctx context.Context,
 		return decimal64ToUnsigned(ctx, source, rs, 64, length)
 	case types.T_decimal64:
 		rs := result.(*vector.FunctionResult[types.Decimal64])
-		return decimal64ToDecimal64(source, rs, length)
+		v := source.GetSourceVector()
+		v.Typ = toType
+		rs.SetFromParameter(source)
+		return nil
 	case types.T_decimal128:
 		rs := result.(*vector.FunctionResult[types.Decimal128])
 		return decimal64ToDecimal128(source, rs, length)
@@ -1218,7 +1221,10 @@ func decimal128ToOthers(ctx context.Context,
 		return decimal128ToDecimal64(ctx, source, rs, length)
 	case types.T_decimal128:
 		rs := result.(*vector.FunctionResult[types.Decimal128])
-		return decimal128ToDecimal128(source, rs, length)
+		v := source.GetSourceVector()
+		v.Typ = toType
+		rs.SetFromParameter(source)
+		return nil
 	case types.T_float32:
 		rs := result.(*vector.FunctionResult[float32])
 		return decimal128ToFloat[float32](ctx, source, rs, length, 32)
@@ -2372,58 +2378,6 @@ func decimal128ToUnsigned[T constraints.Unsigned](
 			}
 			err = to.Append(T(result), false)
 			if err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func decimal64ToDecimal64(
-	from *vector.FunctionParameter[types.Decimal64],
-	to *vector.FunctionResult[types.Decimal64], length int) error {
-	fromtype := from.GetType()
-	totype := to.GetType()
-	var i uint64
-	for i = 0; i < uint64(length); i++ {
-		v, null := from.GetValue(i)
-		if null {
-			if err := to.Append(v, true); err != nil {
-				return err
-			}
-		} else {
-			d := v.ToStringWithScale(fromtype.Scale)
-			r, err := types.Decimal64_FromStringWithScale(d, totype.Width, totype.Scale)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(r, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func decimal128ToDecimal128(
-	from *vector.FunctionParameter[types.Decimal128],
-	to *vector.FunctionResult[types.Decimal128], length int) error {
-	fromtype := from.GetType()
-	totype := to.GetType()
-	var i uint64
-	for i = 0; i < uint64(length); i++ {
-		v, null := from.GetValue(i)
-		if null {
-			if err := to.Append(v, true); err != nil {
-				return err
-			}
-		} else {
-			d := v.ToStringWithScale(fromtype.Scale)
-			r, err := types.Decimal128_FromStringWithScale(d, totype.Width, totype.Scale)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(r, false); err != nil {
 				return err
 			}
 		}

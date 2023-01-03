@@ -85,7 +85,6 @@ func (fr *FunctionResult[T]) ConvertToStrParameter() FunctionParameter[types.Var
 
 func (fr *FunctionResult[T]) Free() {
 	fr.vec.Free(fr.mp)
-	fr.vec = nil
 }
 
 func (fp *FunctionParameter[T]) GetSourceVector() *Vector {
