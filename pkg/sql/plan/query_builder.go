@@ -2470,6 +2470,10 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, childId)
 	case "generate_series":
 		nodeId = builder.buildGenerateSeries(tbl, ctx, exprs, childId)
+	case "meta_scan":
+		nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, childId)
+	case "result_scan":
+		nodeId, err = builder.buildResultScan(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupported(builder.GetContext(), "table function '%s' not supported", id)
 	}

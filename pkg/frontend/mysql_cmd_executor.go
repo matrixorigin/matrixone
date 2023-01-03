@@ -257,6 +257,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		StatementType:        getStatementType(statement).GetStatementType(),
 		QueryType:            getStatementType(statement).GetQueryType(),
 	}
+	ses.tStmt = stm
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
 	}
@@ -585,6 +586,13 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
 	if bat == nil {
 		return nil
+	}
+
+	if openSaveQueryResult(ses) {
+		ses.lastQueryId = types.Uuid(ses.tStmt.StatementID).ToString()
+		if err := saveQueryResult(ses, bat); err != nil {
+			return err
+		}
 	}
 
 	enableProfile := ses.GetParameterUnit().SV.EnableProfileGetDataFromPipeline
@@ -3153,14 +3161,17 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		LastInsertID:  ses.GetLastInsertID(),
 	}
 	if ses.GetTenantInfo() != nil {
+		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
 		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 	} else {
+		proc.SessionInfo.Account = sysAccountName
 		proc.SessionInfo.AccountId = sysAccountID
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
 	}
+	proc.SessionInfo.QueryId = ses.lastQueryId
 	ses.txnCompileCtx.SetProcess(proc)
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,
@@ -3526,6 +3537,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				logErrorf(ses.GetConciseProfile(), "GetColumns from Computation handler failed. error: %v", err)
 				goto handleFailed
 			}
+			if c, ok := cw.(*TxnComputationWrapper); ok {
+				ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(c.plan)}
+			}
 			/*
 				Step 1 : send column count and column definition.
 			*/
@@ -3885,10 +3899,12 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 	}
 
 	if ses.GetTenantInfo() != nil {
+		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
 		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 	} else {
+		proc.SessionInfo.Account = sysAccountName
 		proc.SessionInfo.AccountId = sysAccountID
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID

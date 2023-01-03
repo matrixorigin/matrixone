@@ -414,3 +414,19 @@ select * from t1 where a != 2;
 a
 1
 drop table if exists t1;
+set global save_query_result = on;
+drop table if exists tt;
+create table tt (a int);
+insert into tt values(1), (2);
+select * from tt;
+a
+1
+2
+select * from result_scan(last_query_id()) as u;
+a
+1
+2
+select count(*) from meta_scan(last_query_id()) as u;
+count(*)
+1
+set global save_query_result = off;

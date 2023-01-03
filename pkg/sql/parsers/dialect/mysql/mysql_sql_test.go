@@ -53,6 +53,12 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select * from result_scan(query_id)",
+		output: "select * from result_scan(query_id)",
+	}, {
+		input:  "select * from meta_scan('query_id');",
+		output: "select * from meta_scan(query_id)",
+	}, {
 		input:  "show variables like 'sql_mode'",
 		output: "show variables like sql_mode",
 	}, {
