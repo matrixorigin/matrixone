@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
@@ -103,31 +104,22 @@ func (r *runner) ForceFlush(ts types.TS, ctx context.Context) (err error) {
 		// logutil.Infof("try flush %v",tree.String())
 		return dirtyCtx
 	}
-
-	ticker := time.NewTicker(r.options.forceFlushCheckInterval)
-	defer ticker.Stop()
-
-	dirtyCtx := makeCtx()
-	if dirtyCtx == nil {
-		return
-	}
-	if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
-		return
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return moerr.NewInternalError(ctx, "timeout")
-		case <-ticker.C:
-			if dirtyCtx = makeCtx(); dirtyCtx == nil {
-				return
-			}
-			if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
-				return
-			}
+	op := func() (ok bool, err error) {
+		dirtyCtx := makeCtx()
+		if dirtyCtx == nil {
+			return true, nil
 		}
+		if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
+			return true, nil
+		}
+		return false, nil
 	}
+
+	err = common.RetryWithIntervalAndTimeout(
+		op,
+		r.options.forceFlushTimeout,
+		r.options.forceFlushCheckInterval)
+	return
 }
 
 func (r *runner) ForceIncrementalCheckpoint(end types.TS) error {
