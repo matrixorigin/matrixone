@@ -59,28 +59,27 @@ select left("龔龖龗龞龡   ",3) from dual;
 left(龔龖龗龞龡   , 3)
 龔龖龗
 drop table if exists t1;
-CREATE TABLE t1 (str VARCHAR(100), len INT);
+CREATE TABLE t1 (str VARCHAR(100) NOT NULL, len INT);
 insert into t1 values('abcdefghijklmn',3);
-insert into t1 values('ABCDEFGH123456', 3);
-insert into t1 values('ABCDEFGHIJKLMN', 20);
-insert into t1 values('ABCDEFGHijklmn', -1);
-insert into t1 values('ABCDEFGH123456', 7);
+insert into t1 values('  ABCDEFGH123456', 3);
+insert into t1 values('ABCDEF  GHIJKLMN', 20);
+insert into t1 values('ABCDEFGHijklmn   ', -1);
+insert into t1 values('ABCDEFGH123456', -35627164);
 insert into t1 values('', 3);
 select left(str, len) from t1;
 left(str, len)
 abc
-ABC
-ABCDEFGHIJKLMN
+  A
+ABCDEF  GHIJKLMN
 
-ABCDEFG
 
-select * from t1 where left(str, len) = 'ABC';
+
+SELECT * from t1 where left(str, cos(0) + 3) = 'ABC' and len > 3;
 str    len
-ABCDEFGH123456    3
 select left(str, 3) from t1;
 left(str, 3)
 abc
-ABC
+  A
 ABC
 ABC
 ABC
@@ -91,70 +90,175 @@ sdf
 sdf
 sdfsdfsdfsdf
 
-sdfsdfs
+
 sdf
+select left(NULL, TAN(45)) FROM t1;
+left(null, tan(45))
+null
+null
+null
+null
+null
+null
+select left('str', COS(0) + TAN(45)) from t1 where len between 6 AND 21;
+left(str, cos(0) + tan(45))
+str
+SELECT left(str, -2) from t1 where len%3 = 1;
+left(str, -2)
 drop table t1;
 DROP TABLE IF EXISTS t;
 CREATE table t(age INT, name CHAR(20), address VARCHAR(30));
-INSERT INTO t VALUES(20,'ejifwvewv','shanghaishi1032long'),(30,'zhangzianjd','minhangqulongminglu'),
-(3627832,'hcdusanjfds','xuhuiqudadao');
+INSERT INTO t VALUES(20,'ejifwvewv','shanghaishi1032long');
+INSERT INTO t VALUES(30,'zhangzianjd','minhangqulongminglu');
+INSERT INTO t VALUES(3627832,'hcdusanjfds','xuhuiqudadao');
+INSERT INTO t VALUES(3782,'ehuwqhd3283&*^','ehiw3232$');
+INSERT INTO t VALUES(42,'','nkej32');
+INSERT INTO t VALUES(-2281928939,'wlll','');
+truncated type INT value -2281928939 for column age, 1
+INSERT INTO t VALUES(-2281928939,'wlll','');
+truncated type INT value -2281928939 for column age, 1
+SELECT left(age, NULL) from t;
+left(age, null)
+null
+null
+null
+null
+null
+SELECT left(age, 0) from t;
+left(age, 0)
+
+
+
+
+
 SELECT left(age, 2),left(name,5),left(address,10) from t;
 left(age, 2)    left(name, 5)    left(address, 10)
 20    ejifw    shanghaish
 30    zhang    minhangqul
 36    hcdus    xuhuiqudad
+37    ehuwq    ehiw3232$
+42        nkej32
 SELECT left(age,'1'),left(name,'2'), left(address, '3') from t;
 left(age, 1)    left(name, 2)    left(address, 3)
 2    ej    sha
 3    zh    min
 3    hc    xuh
+3    eh    ehi
+4        nke
 SELECT left(age, COS(0)),left(name, sin(90) + 1),left(address, TAN(45) + 3) from t;
 left(age, cos(0))    left(name, sin(90) + 1)    left(address, tan(45) + 3)
 2    ej    shang
 3    zh    minha
 3    hc    xuhui
+3    eh    ehiw3
+4        nkej3
 SELECT left(age, length(name) / 2),left(name,1) from t;
 left(age, length(name) / 2)    left(name, 1)
 20    e
 30    z
 362783    h
+3782    e
+
 SELECT left(name, 3) from t where age >= 20;
 left(name, 3)
 eji
 zha
 hcd
+ehu
+
+SELECT left(age, -4) from t where LENGTH(address) >= 20;
+left(age, -4)
+SELECT left(age, 2) from t where name LIKE 'hcdusanjfds';
+left(age, 2)
+36
+SELECT left(age, 2), address from t where name LIKE '%vewv';
+left(age, 2)    address
+20    shanghaishi1032long
+SELECT address from t where left(name, 3) = 'eji';
+address
+shanghaishi1032long
 DROP TABLE IF EXISTS t;
 CREATE TABLE t(id INT,dd1 DATE, dd2 DATETIME,  dd3 TIMESTAMP, PRIMARY KEY (id));
 INSERT INTO t VALUES (1, '2020-01-01', '2020-01-01 12:12:12', '2020-02-02 06:06:06.163');
 INSERT INTO t VALUES (2, '2021-11-11', '2021-01-11 23:23:23', '2021-12-12 16:16:16.843');
+INSERT INTO t VALUES (3, '2002-11-11', '2002-01-11 23:23:23', '2002-12-12 16:16:16.843');
 SELECT left(dd1, length(dd2)) FROM t;
 left(dd1, length(dd2))
 2020-01-01
 2021-11-11
+2002-11-11
 SELECT left(dd1, TAN(45) + 6) FROM t;
 left(dd1, tan(45) + 6)
 2020-01-
 2021-11-
-SELECT left(dd1,cos(10) + 1) FROM t;
+2002-11-
+SELECT left(dd1,COS(10) + 1) FROM t;
 left(dd1, cos(10) + 1)
 
 
-SELECT left(dd1,null) FROM t;
+
+SELECT left(dd1,NULL) FROM t;
 left(dd1, null)
 null
 null
+null
+SELECT left(NULL, -2) FROM t;
+left(null, -2)
+null
+null
+null
+SELECT left(dd3, 4) FROM t WHERE dd1 LIKE '0001-01-01';
+left(dd3, 4)
+SELECT * from t WHERE left(dd1, 2) = 20;
+id    dd1    dd2    dd3
+1    2020-01-01    2020-01-01 12:12:12    2020-02-02 06:06:06
+2    2021-11-11    2021-01-11 23:23:23    2021-12-12 16:16:17
+3    2002-11-11    2002-01-11 23:23:23    2002-12-12 16:16:17
+SELECT * from t WHERE MONTH(dd1) = 11 AND left(dd1, 4) = 2021;
+id    dd1    dd2    dd3
+2    2021-11-11    2021-01-11 23:23:23    2021-12-12 16:16:17
 DROP TABLE IF EXISTS t;
-CREATE TABLE t(id INT,d1 BIGINT,d2 FLOAT,d3 DOUBLE,PRIMARY KEY (id)
-);
-INSERT INTO t VALUES(1,12345678977,467789.4565767,46576898.09877),(2,4251382834,456.785615,32913023.3213);
-SELECT left(d1,abs(-5)),left(d2,tan(45)) from t;
-left(d1, abs(-5))    left(d2, tan(45))
-12345    46
-42513    45
+CREATE TABLE t(id INT,d1 BIGINT,d2 FLOAT,d3 DOUBLE,PRIMARY KEY (id));
+INSERT INTO t VALUES(1,12345678977,4679.45,-46576898.09877);
+INSERT INTO t VALUES(2,4251382834,-456.785,32913023.3213);
+INSERT INTO t VALUES(3,-46382749832,0,456215.454);
+INSERT INTO t VALUES(4,0,8.121,0);
+INSERT INTO t VALUES(5,-329323809293,0,0);
+INSERT INTO t VALUES(6,47832745,4672493280324.37644342323242,-1.8976931348623157E+308);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 85 near "1.8976931348623157E+308);";
+INSERT INTO t VALUES(7,47832745,4.402823466351E+38,666.666);
+truncated type FLOAT value 4.402823466351e+38 for column d2, 1
+INSERT INTO t VALUES(6,47832745,4672493280324.37644342323242,-1.8976931348623157E+308);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 85 near "1.8976931348623157E+308);";
+INSERT INTO t VALUES(7,47832745,4.402823466351E+38,666.666);
+truncated type FLOAT value 4.402823466351e+38 for column d2, 1
+SELECT left(d1,abs(-5)) from t;
+left(d1, abs(-5))
+12345
+42513
+-4638
+0
+-3293
 SELECT left(d2, LENGTH(d1) - 5) from t;
 left(d2, length(d1) - 5)
-467789
-456.7
+4679.4
+-456.
+0
+
+0
+SELECT left(d1, 3),left(d2, 6) from t ORDER by d1;
+left(d1, 3)    left(d2, 6)
+-32    0
+-46    0
+0    8.121
+425    -456.7
+123    4679.4
+SELECT * from t where ABS(d1) > 200000;
+id    d1    d2    d3
+1    12345678977    4679.45    -4.657689809877E7
+2    4251382834    -456.785    3.29130233213E7
+3    -46382749832    0.0    456215.454
+5    -329323809293    0.0    0.0
 DROP TABLE IF EXISTS t;
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t(d INT,d1 VARCHAR(20), d2 BIGINT,PRIMARY KEY (d));
