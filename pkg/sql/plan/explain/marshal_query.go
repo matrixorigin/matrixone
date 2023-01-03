@@ -529,8 +529,17 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	return labels, nil
 }
 
+const TimeConsumed = "Time Consumed"
+const WaitTime = "Wait Time"
+
 const InputRows = "Input Rows"
+const OutputRows = "Output Rows"
 const InputSize = "Input Size"
+const OutputSize = "Output Size"
+const MemorySize = "Memory Size"
+const DiskIO = "Disk IO"
+const S3IO = "S3 IO"
+const Network = "Network"
 
 func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOptions) Statistics {
 	statistics := NewStatistics()
@@ -538,12 +547,12 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 		analyzeInfo := m.node.AnalyzeInfo
 		times := []StatisticValue{
 			{
-				Name:  "Time Consumed",
+				Name:  TimeConsumed,
 				Value: analyzeInfo.TimeConsumed,
 				Unit:  "us",
 			},
 			{
-				Name:  "Wait Time",
+				Name:  WaitTime,
 				Value: analyzeInfo.WaitTimeConsumed,
 				Unit:  "us",
 			},
@@ -555,7 +564,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Unit:  "count",
 			},
 			{
-				Name:  "Output Rows",
+				Name:  OutputRows,
 				Value: analyzeInfo.OutputRows,
 				Unit:  "count",
 			},
@@ -565,7 +574,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Unit:  "byte",
 			},
 			{
-				Name:  "Output Size",
+				Name:  OutputSize,
 				Value: analyzeInfo.OutputSize,
 				Unit:  "byte",
 			},
@@ -573,7 +582,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 
 		mems := []StatisticValue{
 			{
-				Name:  "Memory Size",
+				Name:  MemorySize,
 				Value: analyzeInfo.MemorySize,
 				Unit:  "byte",
 			},
@@ -581,12 +590,12 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 
 		io := []StatisticValue{
 			{
-				Name:  "Disk IO",
+				Name:  DiskIO,
 				Value: analyzeInfo.DiskIO,
 				Unit:  "byte",
 			},
 			{
-				Name:  "S3 IO",
+				Name:  S3IO,
 				Value: analyzeInfo.S3IO,
 				Unit:  "byte",
 			},
@@ -594,7 +603,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 
 		nw := []StatisticValue{
 			{
-				Name:  "Network",
+				Name:  Network,
 				Value: analyzeInfo.NetworkIO,
 				Unit:  "byte",
 			},
