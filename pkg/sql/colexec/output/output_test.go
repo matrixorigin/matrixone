@@ -79,16 +79,16 @@ func TestOutput(t *testing.T) {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		_, err = Call(0, tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		_, err = Call(0, tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = &batch.Batch{}
-		_, err = Call(0, tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = nil
-		_, err = Call(0, tc.proc, tc.arg)
+		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}

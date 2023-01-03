@@ -119,6 +119,6 @@ func (d *dropDB) String() string {
 		_, _ = w.WriteString(fmt.Sprintf("table: %d, isdrop: %t", id, entry.drop))
 		_, _ = w.WriteString(entry.String())
 	}
-	_, _ = w.WriteString("],")
+	_, _ = w.WriteString("]")
 	return w.String()
 }
