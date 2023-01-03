@@ -1396,19 +1396,19 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
 
-	db, err = c.e.Database(c.ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
 		return nil, err
 	}
-	rel, err = db.Relation(c.ctx, n.TableDef.Name)
+	rel, err = db.Relation(ctx, n.TableDef.Name)
 	if err != nil {
 		var e error // avoid contamination of error messages
-		db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
 		if e != nil {
-			return nil, e
+			return nil, err
 		}
 
-		rel, e = db.Relation(c.ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
+		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
 		if e != nil {
 			return nil, err
 		}

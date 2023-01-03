@@ -618,8 +618,11 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	tqry := s.Plan.GetDdl().GetTruncateTable()
 	dbName := tqry.GetDatabase()
-	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	tblName := tqry.GetTable()
+	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
 
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		var e error // avoid contamination of error messages
@@ -634,7 +637,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		isTemp = true
 	}
 
-	if isTemp{
+	if isTemp {
 		newId, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, tblName))
 	} else {
 		newId, err = dbSource.Truncate(c.ctx, tblName)
@@ -643,7 +646,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	
+
 	// Truncate Index Tables if needed
 	for _, name := range tqry.IndexTableNames {
 		var err error

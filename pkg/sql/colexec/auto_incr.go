@@ -521,10 +521,10 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 		return err
 	}
 	var autoRel engine.Relation
-    if dbName == defines.TEMPORARY_DBNAME {
+	if dbName == defines.TEMPORARY_DBNAME {
 		autoRel, err = db.Relation(ctx, AUTO_INCR_TABLE)
 	} else {
-   	    autoRel, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+		autoRel, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
 	}
 	if err != nil {
 		return err
