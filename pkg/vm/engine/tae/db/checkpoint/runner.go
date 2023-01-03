@@ -287,7 +287,7 @@ func (r *runner) onGlobalCheckpointEntries(items ...any) {
 func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	now := time.Now()
 	entry := r.MaxCheckpoint()
-	if entry.GetState() == ST_Finished {
+	if entry.GetState() != ST_Running {
 		return
 	}
 	err := r.doIncrementalCheckpoint(entry)
@@ -521,6 +521,7 @@ func (r *runner) tryScheduleCheckpoint() {
 			if tree.IsEmpty() {
 				done = true
 			}
+			logutil.Infof("ckp %v done %v", entry.String(), done)
 			return
 		}
 
