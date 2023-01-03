@@ -117,7 +117,7 @@ var MetricTable = &table.Table{
 	PrimaryKeyColumn: []table.Column{},
 	Engine:           table.ExternalTableEngine,
 	Comment:          `metric data`,
-	PathBuilder:      table.NewAccountDateWithDatabasePathBuilder(),
+	PathBuilder:      table.NewAccountDatePathBuilder(table.WithDatabase(true)),
 	AccountColumn:    nil,
 	// SupportUserAccess
 	SupportUserAccess:  false,
@@ -150,7 +150,7 @@ var LogsTable = &table.Table{
 	PrimaryKeyColumn: []table.Column{},
 	Engine:           table.ExternalTableEngine,
 	Comment:          `logs data`,
-	PathBuilder:      table.NewAccountDateWithDatabasePathBuilder(),
+	PathBuilder:      table.NewAccountDatePathBuilder(table.WithDatabase(true)),
 	AccountColumn:    nil,
 	// SupportUserAccess
 	SupportUserAccess:  false,
@@ -185,7 +185,7 @@ var SpansTable = &table.Table{
 	PrimaryKeyColumn: []table.Column{},
 	Engine:           table.ExternalTableEngine,
 	Comment:          `spans data`,
-	PathBuilder:      table.NewAccountDateWithDatabasePathBuilder(),
+	PathBuilder:      table.NewAccountDatePathBuilder(table.WithDatabase(true)),
 	AccountColumn:    nil,
 	// SupportUserAccess
 	SupportUserAccess:  false,
