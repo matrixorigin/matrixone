@@ -4,52 +4,86 @@
 -- @label:bvt
 
 -- constant test
-SELECT format(300,2);
-SELECT format(-500,3);
-SELECT format(47382.36271,4);
-SELECT format(-3627382.321313,1);
-SELECT format(3281749832.323,0);
-SELECT format(4382943.2,5);
+SELECT FORMAT(12332.123456, 4);
+SELECT FORMAT(12332.1,4);
+SELECT FORMAT(12332.2,0);
+SELECT FORMAT(19999999.999999999,4);
 
 
-SELECT format("300",2);
-SELECT format("-500",3);
-SELECT format("47382.36271",4);
-SELECT format("-3627382.321313",1);
-SELECT format("3281749832.323",0);
-SELECT format("4382943.2",5);
+SELECT FORMAT("-.12334.2",2);
+SELECT FORMAT("12332.123456", 4);
+SELECT FORMAT("12332.1",4);
+SELECT FORMAT("12332.2",0);
+SELECT FORMAT("19999999.999999999",4);
+SELECT FORMAT(12332.123456, "4");
+SELECT FORMAT(12332.1,"4");
+SELECT FORMAT(12332.2,"0");
+SELECT FORMAT(19999999.999999999,"4");
+SELECT FORMAT("-.12334.2","2");
+SELECT FORMAT("12332.123456", "4");
+SELECT FORMAT("12332.1","4");
+SELECT FORMAT("12332.2","0");
+SELECT FORMAT("19999999.999999999","4");
+
+SELECT FORMAT("-.12334.2","2", "en_US");
+SELECT FORMAT("12332.123456", "4", "en_US");
+SELECT FORMAT("12332.1","4",  "en_US");
+SELECT FORMAT("12332.2","0",  "en_US");
+SELECT FORMAT("19999999.999999999","4", "en_US");
+
+SELECT FORMAT("-.12334.2","2", "ar_SA");
+SELECT FORMAT("12332.123456", "4",  "ar_SA");
+SELECT FORMAT("12332.1","4",  "ar_SA");
+SELECT FORMAT("12332.2","0",  "ar_SA");
+SELECT FORMAT("19999999.999999999","4",  "ar_SA");
+
+SELECT FORMAT("-.12334.2","2", "be_BY");
+SELECT FORMAT("12332.123456", "4",  "be_BY");
+SELECT FORMAT("12332.1","4",  "be_BY");
+SELECT FORMAT("12332.2","0",  "be_BY");
+SELECT FORMAT("19999999.999999999","4",  "be_BY");
+
+SELECT FORMAT("-.12334.2","2", "bg_BG");
+SELECT FORMAT("12332.123456", "4",  "bg_BG");
+SELECT FORMAT("12332.1","4",  "bg_BG");
+SELECT FORMAT("12332.2","0",  "bg_BG");
+SELECT FORMAT("19999999.999999999","4",  "bg_BG");
+
+SELECT FORMAT("-.12334.2","2", "de_CH");
+SELECT FORMAT("12332.123456", "4",  "de_CH");
+SELECT FORMAT("12332.1","4",  "de_CH");
+SELECT FORMAT("12332.2","0",  "de_CH");
+SELECT FORMAT("19999999.999999999","4",  "de_CH");
 
 
-SELECT format(300,"2");
-SELECT format(-500,"3");
-SELECT format(47382.36271,"4");
-SELECT format(-3627382.321313,"1");
-SELECT format(3281749832.323,"0");
-SELECT format(4382943.2,"5");
+create table test(a varchar(100), b varchar(100));
+insert into test values("-.12334.2","2");
+insert into test values("12332.123456", "4");
+insert into test values("12332.1","4");
+insert into test values("12332.2","0");
+insert into test values("19999999.999999999");
+SELECT FORMAT(a, b) from test;
+SELECT FORMAT(a, b, null) from test;
+SELECT FORMAT(a, b, "en_US") from test;
+SELECT FORMAT(a, b, "ar_SA") from test;
+SELECT FORMAT(a, b, "be_BY") from test;
+SELECT FORMAT(a, b, "bg_BG") from test;
+SELECT FORMAT(a, b, "de_CH") from test;
+drop table test;
 
-
-SELECT format("300","2");
-SELECT format("-500","3");
-SELECT format("47382.36271","4");
-SELECT format("-3627382.321313","1");
-SELECT format("3281749832.323","0");
-SELECT format("4382943.2","5");
-
-
-SELECT format("300","2","en_US");
-SELECT format("-500","3","en_US");
-SELECT format("47382.36271","4","en_US");
-SELECT format("-3627382.321313","1","en_US");
-SELECT format("3281749832.323","0","en_US");
-SELECT format("4382943.2","5","en_US");
-
-
-SELECT format("300","2","ar_SA");
-SELECT format("-500","3","ar_SA");
-SELECT format("47382.36271","4","ar_SA");
-SELECT format("-3627382.321313","1","ar_SA");
-SELECT format("3281749832.323","0","ar_SA");
-SELECT format("4382943.2","5","ar_SA");
+create table test(a varchar(100), b varchar(100), c varchar(20));
+insert into test values("-.12334.2","2", "en_US");
+insert into test values("12332.123456", "4", "en_US");
+insert into test values("12332.1","4", "en_US");
+insert into test values("12332.2","0", "en_US");
+insert into test values("19999999.999999999","en_US");
+create table test(a varchar(100), b varchar(100), c varchar(20));
+insert into test values("-.12334.2","2", "de_CH");
+insert into test values("12332.123456", "4", "de_CH");
+insert into test values("12332.1","4", "de_CH");
+insert into test values("12332.2","0", "de_CH");
+insert into test values("19999999.999999999","de_CH");
+drop table test;
 
 
 -- @suite
@@ -70,7 +104,7 @@ INSERT INTO format_01 VALUES(6, 22, 3, 4, 184467440737095516152);
 
 
 -- @case
--- @ integer test 
+-- @ integer test
 SELECT format(d1, id) from format_01;
 SELECT format(d1, id, NULL) from format_01;
 SELECT format(d1, id, "en_US") from format_01;
@@ -89,11 +123,11 @@ SELECT * FROM format_01 ORDER BY format(id, 0) DESC;
 
 
 -- Mathematical function
--- @bvt:issue#7356  
+-- @bvt:issue#7356
 SELECT ABS(format(d3,0)) FROM format_01;
 SELECT CEIL(format(d2, 4)), FLOOR(format(d3, 2)), ROUND(format(d4, 0)) FROM format_01;
 SELECT SIN(format(d1,2)), TAN(format(d3, 0)), COS(format(d4,0)) from format_01;
-SELECT cot(format(45, 0)), ACOS(format(60, 1)), ATAN(format(75, 0)), SINH(format(90, 1)); 
+SELECT cot(format(45, 0)), ACOS(format(60, 1)), ATAN(format(75, 0)), SINH(format(90, 1));
 SELECT power(format(2,1), 2);
 SELECT LOG(format(d1, 1)) as a, LN(format(d2, 2)) as FROM format_01;
 SELECT EXP(format(4, 2));
@@ -119,9 +153,9 @@ INSERT INTO format_02 VALUES(6, 323, 37827329.43432);
 
 
 -- Abnormal insertion
-INSERT INTO format_02 VALUES(6, -1.8976931348623157E+308, 0);  
-INSERT INTO format_02 VALUES(7, 328739232, NULL);              
-INSERT INTO format_02 VALUES(8, 7382,3923404.2132421);        
+INSERT INTO format_02 VALUES(6, -1.8976931348623157E+308, 0);
+INSERT INTO format_02 VALUES(7, 328739232, NULL);
+INSERT INTO format_02 VALUES(8, 7382,3923404.2132421);
 
 SELECT d1, d2 FROM format_02 WHERE format(d2,0) IS NOT NULL;
 SELECT * from format_02 WHERE format(d2, 3) NOT LIKE '47832.43%';
@@ -169,14 +203,14 @@ SELECT FLOOR(format(c,3)) FROM format_04;
 DROP TABLE if exists format_05;
 DROP TABLE if exists format_06;
 CREATE TABLE format_05(
-    c1 int,
-    c2 bigint,
-    primary key (c1)
+                          c1 int,
+                          c2 bigint,
+                          primary key (c1)
 );
 create TABLE format_06(
-    i int,
-    b bigint,
-    primary key (i)
+                          i int,
+                          b bigint,
+                          primary key (i)
 );
 
 -- join
