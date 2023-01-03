@@ -69,6 +69,14 @@ func (e *testEngine) restart() {
 	_ = e.DB.Close()
 	var err error
 	e.DB, err = Open(e.Dir, e.Opts)
+	// only ut executes this checker
+	e.DB.DiskCleaner.AddChecker(
+		func(item any) bool {
+			min := e.DB.TxnMgr.MinTSForTest()
+			checkpoint := item.(*checkpoint2.CheckpointEntry)
+			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
+			return !checkpoint.GetEnd().GreaterEq(min)
+		})
 	assert.NoError(e.t, err)
 }
 
