@@ -2064,7 +2064,7 @@ var operators = map[int]Functions{
 		Id:          NOT_EQUAL,
 		Flag:        plan.Function_STRICT,
 		Layout:      COMPARISON_OPERATOR,
-		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
+		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn3,
 		Overloads: []Function{
 			{
 				Index: 0,
