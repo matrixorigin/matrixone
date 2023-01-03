@@ -59,6 +59,9 @@ func (bx *BitXor[T1]) Fill(_ int64, v1 T1, v2 uint64, z int64, IsEmpty bool, has
 			if float64(v1) > math.MaxUint64 {
 				return math.MaxInt64, false
 			}
+			if float64(v1) < 0 {
+				return uint64(int64(v1)), false
+			}
 			return uint64(v1), false
 		}
 	}
@@ -67,6 +70,9 @@ func (bx *BitXor[T1]) Fill(_ int64, v1 T1, v2 uint64, z int64, IsEmpty bool, has
 	} else {
 		if float64(v1) > math.MaxUint64 {
 			return math.MaxInt64 ^ v2, false
+		}
+		if float64(v1) < 0 {
+			return uint64(int64(v1)) ^ v2, false
 		}
 		return uint64(v1) ^ v2, false
 	}
