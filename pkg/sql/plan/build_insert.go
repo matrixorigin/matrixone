@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
+func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Plan, err error) {
 	if stmt.OnDuplicateUpdate != nil {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ...")
 	}
