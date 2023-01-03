@@ -1,0 +1,146 @@
+SELECT sleep(0);
+sleep(0)
+0
+SELECT sleep(12);
+sleep(12)
+0
+SELECT sleep(7.33);
+sleep(7.33)
+0
+SELECT sleep(-2);
+invalid argument sleep, bad value input contains negative
+SELECT sleep(-23.1);
+invalid argument sleep, bad value input contains negative
+DROP TABLE IF EXISTS sleep_01;
+CREATE TABLE sleep_01
+(
+id int
+);
+SELECT *, sleep(6)
+from sleep_01;
+id    sleep(6)
+INSERT INTO sleep_01
+VALUES (273);
+SELECT *, sleep(6)
+FROM sleep_01;
+id    sleep(6)
+273    0
+SELECT *, sleep(0)
+FROM sleep_01;
+id    sleep(0)
+273    0
+INSERT INTO sleep_01
+VALUES (-32783);
+SELECT *, sleep(6)
+FROM sleep_01;
+[unknown result because it is related to issue#6843]
+SELECT *, sleep(0)
+FROM sleep_01;
+[unknown result because it is related to issue#6843]
+INSERT INTO sleep_01
+VALUES (0);
+SELECT *, sleep(2)
+FROM sleep_01;
+[unknown result because it is related to issue#6843]
+SELECT *, sleep(0)
+FROM sleep_01;
+id    sleep(0)
+273    0
+-32783    0
+0    0
+DROP TABLE IF EXISTS sleep_02;
+CREATE TABLE sleep_02
+(
+id       int,
+name     VARCHAR(10),
+province VARCHAR(100) NOT NULL,
+address  VARCHAR(100)
+);
+INSERT INTO sleep_02
+VALUES (1, ''张三'', ''陕西'', ''大头村二组'');
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 15 near "张三'', ''陕西'', ''大头村二组'');";
+INSERT INTO sleep_02
+VALUES (2, ''李四'', ''北京'', ''快乐村三组'');
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 15 near "李四'', ''北京'', ''快乐村三组'');";
+INSERT INTO sleep_02
+VALUES (3, ''王五'', ''陕西'', ''美丽村四组'');
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 15 near "王五'', ''陕西'', ''美丽村四组'');";
+SELECT province, address, sleep(2)
+FROM sleep_02
+WHERE name = ''张三'';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 3 column 17 near "张三'';";
+SELECT name, sleep(6)
+FROM sleep_02
+WHERE address = ''大头村二组'' AND province = ''陕西'';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 3 column 20 near "大头村二组'' AND province = ''陕西'';";
+SELECT *, sleep(2)
+FROM sleep_02
+WHERE id = COS(0) + TAN(45);
+id    name    province    address    sleep(2)
+SELECT name, province, sleep(2)
+FROM sleep_02;
+[unknown result because it is related to issue#6843]
+DROP TABLE IF EXISTS sleep_03;
+DROP TABLE IF EXISTS sleep_04;
+CREATE TABLE sleep_03
+(
+d  INT,
+d1 VARCHAR(20),
+d2 BIGINT,
+PRIMARY KEY (d)
+);
+CREATE TABLE sleep_04
+(
+d  INT,
+d1 CHAR(20),
+d2 DATE,
+PRIMARY KEY (d)
+);
+INSERT INTO sleep_03
+VALUES (1, ''lijklnfdsalj'', 19290988);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 26 near "lijklnfdsalj'', 19290988);";
+INSERT INTO sleep_03
+VALUES (2, ''xlziblkfdi'', 1949100132);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 24 near "xlziblkfdi'', 1949100132);";
+INSERT INTO sleep_03
+VALUES (3, ''ixioklakmaria'', 69456486);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 27 near "ixioklakmaria'', 69456486);";
+INSERT INTO sleep_03
+VALUES (4, ''brzilaiusd'', 6448781575);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 24 near "brzilaiusd'', 6448781575);";
+INSERT INTO sleep_04
+VALUES (1, ''usaisagoodnat'', ''1970 - 01 - 02 '');
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 27 near "usaisagoodnat'', ''1970 - 01 - 02 '');";
+INSERT INTO sleep_04
+VALUES (2, ''chanialfakbjap'', ''1971 - 11 - 12 '');
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 28 near "chanialfakbjap'', ''1971 - 11 - 12 '');";
+INSERT INTO sleep_04
+VALUES (3, ''indiaisashit'', ''1972 - 09 - 09 '');
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 26 near "indiaisashit'', ''1972 - 09 - 09 '');";
+INSERT INTO sleep_04
+VALUES (4, ''xingoporelka'', ''1973 - 12 - 07 '');
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 26 near "xingoporelka'', ''1973 - 12 - 07 '');";
+SELECT sleep_03.d, sleep(0)
+FROM sleep_03,
+sleep_04
+WHERE sleep_03.d = sleep_04.d;
+d    sleep(0)
+SELECT sleep_03.d, sleep(3.1)
+FROM sleep_03;
+[unknown result because it is related to issue#6843]
+SELECT sleep_03.d, sleep_03.d1, sleep(4)
+FROM sleep_03
+JOIN sleep_04 ON sleep_03.d = sleep_04.d;
+[unknown result because it is related to issue#6843]
+SELECT sleep_03.d, sleep(1)
+FROM sleep_03
+join sleep_04 on sleep_03.d = sleep_04.d;
+[unknown result because it is related to issue#6843]
+SELECT sleep_03.d, sleep(1.432)
+FROM sleep_03
+right join sleep_04 on sleep_03.d = sleep_04.d;
+[unknown result because it is related to issue#6843]
+SELECT d, sleep(5.0)
+FROM sleep_03
+ORDER BY d2 desc;
+[unknown result because it is related to issue#6843]
