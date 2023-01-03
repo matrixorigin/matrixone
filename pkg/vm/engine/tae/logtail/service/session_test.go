@@ -82,7 +82,7 @@ func TestSessionError(t *testing.T) {
 	/* ---- 1. send subscription response ---- */
 	err := ss.SendSubscriptionResponse(
 		context.Background(),
-		&logtail.TableLogtail{
+		logtail.TableLogtail{
 			Table: &tableA,
 		},
 	)
@@ -94,7 +94,7 @@ func TestSessionError(t *testing.T) {
 	/* ---- 2. send subscription response ---- */
 	err = ss.SendSubscriptionResponse(
 		context.Background(),
-		&logtail.TableLogtail{
+		logtail.TableLogtail{
 			Table: &tableA,
 		},
 	)
@@ -123,7 +123,7 @@ func TestPoisionSession(t *testing.T) {
 			context.Background(),
 			mockTimestamp(int64(i), 0),
 			mockTimestamp(int64(i+1), 0),
-			&logtail.TableLogtail{
+			logtail.TableLogtail{
 				Table: &tableA,
 			},
 		)
@@ -209,7 +209,7 @@ func TestSession(t *testing.T) {
 	/* ---- 6. send subscription response ---- */
 	err = ss.SendSubscriptionResponse(
 		context.Background(),
-		&logtail.TableLogtail{
+		logtail.TableLogtail{
 			Table: &tableA,
 		},
 	)
@@ -363,14 +363,14 @@ func (m *respPooler) ReleaseResponse(resp *LogtailResponse) {
 func mockWrapLogtail(table api.TableID) wrapLogtail {
 	return wrapLogtail{
 		id: TableID(table.String()),
-		tail: &logtail.TableLogtail{
+		tail: logtail.TableLogtail{
 			Table: &table,
 		},
 	}
 }
 
-func mockLogtail(table api.TableID) *logtail.TableLogtail {
-	return &logtail.TableLogtail{
+func mockLogtail(table api.TableID) logtail.TableLogtail {
+	return logtail.TableLogtail{
 		Table: &table,
 	}
 }

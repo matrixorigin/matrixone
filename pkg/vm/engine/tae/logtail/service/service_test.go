@@ -150,14 +150,14 @@ func mockLocktailer(tables ...api.TableID) Logtailer {
 
 func (m *logtailer) TableTotal(
 	ctx context.Context, table api.TableID, end timestamp.Timestamp,
-) (*logtail.TableLogtail, error) {
+) (logtail.TableLogtail, error) {
 	return mockLogtail(table), nil
 }
 
 func (m *logtailer) RangeTotal(
 	ctx context.Context, from, to timestamp.Timestamp,
-) ([]*logtail.TableLogtail, error) {
-	tails := make([]*logtail.TableLogtail, 0, len(m.tables))
+) ([]logtail.TableLogtail, error) {
+	tails := make([]logtail.TableLogtail, 0, len(m.tables))
 	for _, table := range m.tables {
 		tails = append(tails, mockLogtail(table))
 	}

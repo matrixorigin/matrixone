@@ -247,11 +247,11 @@ func (ss *Session) ListSubscribedTable() []TableID {
 }
 
 // FilterLogtail selects logtail for expected tables.
-func (ss *Session) FilterLogtail(tails ...wrapLogtail) []*logtail.TableLogtail {
+func (ss *Session) FilterLogtail(tails ...wrapLogtail) []logtail.TableLogtail {
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
 
-	qualified := make([]*logtail.TableLogtail, 0, len(ss.tables))
+	qualified := make([]logtail.TableLogtail, 0, len(ss.tables))
 	for _, t := range tails {
 		if state, ok := ss.tables[t.id]; ok && state == TableSubscribed {
 			qualified = append(qualified, t.tail)
@@ -295,7 +295,7 @@ func (ss *Session) SendErrorResponse(
 
 // SendSubscriptionResponse sends subscription response.
 func (ss *Session) SendSubscriptionResponse(
-	sendCtx context.Context, tail *logtail.TableLogtail,
+	sendCtx context.Context, tail logtail.TableLogtail,
 ) error {
 	resp := ss.pooler.AcquireResponse()
 	resp.Response = newSubscritpionResponse(tail)
@@ -313,7 +313,7 @@ func (ss *Session) SendUnsubscriptionResponse(
 
 // SendUpdateResponse sends publishment response.
 func (ss *Session) SendUpdateResponse(
-	sendCtx context.Context, from, to timestamp.Timestamp, tails ...*logtail.TableLogtail,
+	sendCtx context.Context, from, to timestamp.Timestamp, tails ...logtail.TableLogtail,
 ) error {
 	resp := ss.pooler.AcquireResponse()
 	resp.Response = newUpdateResponse(from, to, tails...)
@@ -367,7 +367,7 @@ func newUnsubscriptionResponse(
 // newUpdateResponse constructs response for publishment.
 // go:inline
 func newUpdateResponse(
-	from, to timestamp.Timestamp, tails ...*logtail.TableLogtail,
+	from, to timestamp.Timestamp, tails ...logtail.TableLogtail,
 ) *logtail.LogtailResponse_UpdateResponse {
 	return &logtail.LogtailResponse_UpdateResponse{
 		UpdateResponse: &logtail.UpdateResponse{
@@ -381,7 +381,7 @@ func newUpdateResponse(
 // newSubscritpionResponse constructs response for subscription.
 // go:inline
 func newSubscritpionResponse(
-	tail *logtail.TableLogtail,
+	tail logtail.TableLogtail,
 ) *logtail.LogtailResponse_SubscribeResponse {
 	return &logtail.LogtailResponse_SubscribeResponse{
 		SubscribeResponse: &logtail.SubscribeResponse{
@@ -398,7 +398,7 @@ func newErrorResponse(
 	return &logtail.LogtailResponse_Error{
 		Error: &logtail.ErrorResponse{
 			Table: &table,
-			Status: &logtail.Status{
+			Status: logtail.Status{
 				Code:    uint32(code),
 				Message: message,
 			},

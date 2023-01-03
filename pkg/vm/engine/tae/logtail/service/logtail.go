@@ -27,12 +27,12 @@ type Logtailer interface {
 	// TableTotalLogtail returns full logtail for the specified table.
 	TableTotal(
 		ctx context.Context, table api.TableID, to timestamp.Timestamp,
-	) (*logtail.TableLogtail, error)
+	) (logtail.TableLogtail, error)
 
 	// RangeLogtail returns logtail for all tables within range (from, to].
 	RangeTotal(
 		ctx context.Context, from, to timestamp.Timestamp,
-	) ([]*logtail.TableLogtail, error)
+	) ([]logtail.TableLogtail, error)
 }
 
 // TODO: implement interface Logtailer

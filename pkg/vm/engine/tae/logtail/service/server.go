@@ -88,7 +88,7 @@ func WithServerSendTimeout(timeout time.Duration) ServerOption {
 // tableLogtail describes a table's logtail.
 type wrapLogtail struct {
 	id   TableID
-	tail *logtail.TableLogtail
+	tail logtail.TableLogtail
 }
 
 // publishment describes a batch of logtail.

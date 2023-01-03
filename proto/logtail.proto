@@ -40,7 +40,7 @@ message TableLogtail {
     string ckp_location         = 1;
     timestamp.Timestamp ts      = 2;
     api.TableID table           = 3;
-    repeated api.Entry commands = 4;
+    repeated api.Entry commands = 4 [(gogoproto.nullable) = false];
 }
 
 // Status describes error details.
@@ -54,7 +54,7 @@ message Status {
 
 // ErrorResponse is the response to notify CN with error.
 message ErrorResponse {
-    Status status     = 1;
+    Status status     = 1 [(gogoproto.nullable) = false];
     api.TableID table = 2;
 }
 
@@ -62,7 +62,7 @@ message ErrorResponse {
 //
 // It contains total logtail for the newly subscribed table.
 message SubscribeResponse {
-    TableLogtail logtail = 1;
+    TableLogtail logtail = 1 [(gogoproto.nullable) = false];
 }
 
 // UpdateResponse is the response for additional logtail
@@ -72,7 +72,7 @@ message SubscribeResponse {
 message UpdateResponse {
     timestamp.Timestamp From           = 1;
     timestamp.Timestamp To             = 2;
-    repeated TableLogtail logtail_list = 3;
+    repeated TableLogtail logtail_list = 3 [(gogoproto.nullable) = false];
 }
 
 // UnSubscribeResponse is the response for unsubscription
