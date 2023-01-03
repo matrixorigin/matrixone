@@ -19,6 +19,7 @@ import (
 	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -43,9 +44,12 @@ type ExternalParam struct {
 	IgnoreLineTag int
 	// tag indicate the fileScan is finished
 	Fileparam    *ExternalFileparam
+	Zoneparam    *ZonemapFileparam
+	Filter       *FilterParam
 	FileList     []string
 	reader       io.ReadCloser
 	maxBatchSize uint64
+	tableDef     *plan.TableDef
 	ClusterTable *plan.ClusterTable
 }
 
@@ -54,6 +58,21 @@ type ExternalFileparam struct {
 	FileCnt   int
 	FileFin   int
 	FileIndex int
+}
+
+type ZonemapFileparam struct {
+	bs     []objectio.BlockObject
+	offset int
+}
+
+type FilterParam struct {
+	maxCol       int
+	exprMono     bool
+	columns      []uint16
+	columnMap    map[int]int
+	File2Size    map[string]int64
+	FilterExpr   *plan.Expr
+	objectReader objectio.Reader
 }
 
 type Argument struct {

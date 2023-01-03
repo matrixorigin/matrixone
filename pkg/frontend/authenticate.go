@@ -1308,12 +1308,17 @@ func getSqlForDeleteUser(userId int64) []string {
 	}
 }
 
+// isClusterTable decides a table is the index table or not
+func isIndexTable(name string) bool {
+	return strings.HasPrefix(name, "__mo_index_unique")
+}
+
 // isClusterTable decides a table is the cluster table or not
 func isClusterTable(dbName, name string) bool {
 	if dbName == moCatalog {
 		//if it is neither among the tables nor the index table,
 		//it is the cluster table.
-		if _, ok := predefinedTables[name]; !ok && !strings.HasPrefix(name, "__mo_index_unique") {
+		if _, ok := predefinedTables[name]; !ok && !isIndexTable(name) {
 			return true
 		}
 	}
@@ -3641,13 +3646,16 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					} else {
 						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
 					}
-					appendPt(privilegeTips{
-						typ:                   t,
-						databaseName:          node.ObjRef.GetSchemaName(),
-						tableName:             node.ObjRef.GetObjName(),
-						isClusterTable:        clusterTable,
-						clusterTableOperation: clusterTableOperation,
-					})
+					//do not check the privilege of the index table
+					if !isIndexTable(node.ObjRef.GetObjName()) {
+						appendPt(privilegeTips{
+							typ:                   t,
+							databaseName:          node.ObjRef.GetSchemaName(),
+							tableName:             node.ObjRef.GetObjName(),
+							isClusterTable:        clusterTable,
+							clusterTableOperation: clusterTableOperation,
+						})
+					}
 				}
 			} else if node.NodeType == plan.Node_INSERT { //insert select
 				if node.ObjRef != nil {
@@ -3656,13 +3664,16 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					} else {
 						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
 					}
-					appendPt(privilegeTips{
-						typ:                   PrivilegeTypeInsert,
-						databaseName:          node.ObjRef.GetSchemaName(),
-						tableName:             node.ObjRef.GetObjName(),
-						isClusterTable:        clusterTable,
-						clusterTableOperation: clusterTableModify,
-					})
+					//do not check the privilege of the index table
+					if !isIndexTable(node.ObjRef.GetObjName()) {
+						appendPt(privilegeTips{
+							typ:                   PrivilegeTypeInsert,
+							databaseName:          node.ObjRef.GetSchemaName(),
+							tableName:             node.ObjRef.GetObjName(),
+							isClusterTable:        clusterTable,
+							clusterTableOperation: clusterTableModify,
+						})
+					}
 				}
 			} else if node.NodeType == plan.Node_DELETE {
 				if node.ObjRef != nil {
@@ -3671,13 +3682,16 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					} else {
 						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
 					}
-					appendPt(privilegeTips{
-						typ:                   PrivilegeTypeDelete,
-						databaseName:          node.ObjRef.GetSchemaName(),
-						tableName:             node.ObjRef.GetObjName(),
-						isClusterTable:        clusterTable,
-						clusterTableOperation: clusterTableModify,
-					})
+					//do not check the privilege of the index table
+					if !isIndexTable(node.ObjRef.GetObjName()) {
+						appendPt(privilegeTips{
+							typ:                   PrivilegeTypeDelete,
+							databaseName:          node.ObjRef.GetSchemaName(),
+							tableName:             node.ObjRef.GetObjName(),
+							isClusterTable:        clusterTable,
+							clusterTableOperation: clusterTableModify,
+						})
+					}
 				}
 			}
 		}
