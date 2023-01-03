@@ -80,13 +80,13 @@ func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*ca
 		scheduler:   scheduler,
 		toSegEntry:  toSegEntry,
 	}
-	dbName := mergedBlks[0].GetSegment().GetTable().GetDB().GetName()
-	database, err := txn.GetDatabase(dbName)
+	dbId := mergedBlks[0].GetSegment().GetTable().GetDB().ID
+	database, err := txn.GetDatabaseByID(dbId)
 	if err != nil {
 		return
 	}
-	relName := mergedBlks[0].GetSchema().Name
-	task.rel, err = database.GetRelationByName(relName)
+	relId := mergedBlks[0].GetSegment().GetTable().ID
+	task.rel, err = database.GetRelationByID(relId)
 	if err != nil {
 		return
 	}

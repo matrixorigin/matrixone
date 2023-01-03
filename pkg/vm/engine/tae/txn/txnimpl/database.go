@@ -131,6 +131,7 @@ func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err err
 	}
 	meta := oldRel.GetMeta().(*catalog.TableEntry)
 	schema := meta.GetSchema().Clone()
+	db.Txn.BindAccessInfo(schema.AcInfo.TenantID, schema.AcInfo.UserID, schema.AcInfo.RoleID)
 	rel, err = db.CreateRelationWithID(schema, newTableId)
 	if err != nil {
 		err = moerr.NewInternalErrorNoCtx("%v: truncate %s error", err, name)
@@ -147,6 +148,7 @@ func (db *txnDatabase) TruncateWithID(name string, newTableId uint64) (rel handl
 	}
 	meta := oldRel.GetMeta().(*catalog.TableEntry)
 	schema := meta.GetSchema().Clone()
+	db.Txn.BindAccessInfo(schema.AcInfo.TenantID, schema.AcInfo.UserID, schema.AcInfo.RoleID)
 	rel, err = db.CreateRelationWithID(schema, newTableId)
 	if err != nil {
 		err = moerr.NewInternalErrorNoCtx("%v: truncate %s error", err, name)
@@ -163,6 +165,7 @@ func (db *txnDatabase) TruncateByID(id uint64, newTableId uint64) (rel handle.Re
 	}
 	meta := oldRel.GetMeta().(*catalog.TableEntry)
 	schema := meta.GetSchema().Clone()
+	db.Txn.BindAccessInfo(schema.AcInfo.TenantID, schema.AcInfo.UserID, schema.AcInfo.RoleID)
 	rel, err = db.CreateRelationWithID(schema, newTableId)
 	if err != nil {
 		err = moerr.NewInternalErrorNoCtx("%v: truncate %d error", err, id)
