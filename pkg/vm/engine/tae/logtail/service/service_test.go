@@ -42,7 +42,11 @@ func TestService(t *testing.T) {
 	/* ---- construct logtail server ---- */
 	logtailServer, err := NewLogtailServer(
 		address, logtailer, clock,
-		WithServerCollectInterval(5*time.Second),
+		WithServerCollectInterval(500*time.Millisecond),
+		WithServerSendTimeout(5*time.Second),
+		WithServerEnableChecksum(true),
+		WithServerMaxMessageSize(16*KiB),
+		WithServerPayloadCopyBufferSize(16*KiB),
 	)
 	require.NoError(t, err)
 
@@ -67,23 +71,21 @@ func TestService(t *testing.T) {
 	rpcStream, err := rpcClient.NewStream(address, false)
 	require.NoError(t, err)
 
-	logtailClient, err := NewLogtailClient(rpcStream)
+	logtailClient, err := NewLogtailClient(rpcStream, WithClientRequestPerSecond(100))
 	require.NoError(t, err)
 	defer func() {
 		err := logtailClient.Close()
 		require.NoError(t, err)
 	}()
 
-	/* ---- send request via logtail client ---- */
+	/* ---- send subscription request via logtail client ---- */
 	{
-		t.Log("send request via logtail client")
+		t.Log("send subscription request via logtail client")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		err := logtailClient.Subscribe(ctx, tableA)
 		require.NoError(t, err)
 	}
-
-	t.FailNow()
 
 	/* ---- wait subscription response via logtail client ---- */
 	{
@@ -102,6 +104,37 @@ func TestService(t *testing.T) {
 		require.NotNil(t, resp.GetUpdateResponse())
 		require.Equal(t, 1, len(resp.GetUpdateResponse().LogtailList))
 		require.Equal(t, tableA.String(), resp.GetUpdateResponse().LogtailList[0].Table.String())
+	}
+
+	/* ---- send unsubscription request via logtail client ---- */
+	{
+		t.Log("send unsubscription request via logtail client")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err := logtailClient.Unsubscribe(ctx, tableA)
+		require.NoError(t, err)
+	}
+
+	/* ---- wait subscription response via logtail client ---- */
+	{
+		t.Log("wait unsubscription response via logtail client")
+		for {
+			resp, err := logtailClient.Receive()
+			require.NoError(t, err)
+			if resp.GetUnsubscribeResponse() != nil {
+				require.Equal(t, tableA.String(), resp.GetUnsubscribeResponse().Table.String())
+				break
+			}
+		}
+	}
+
+	/* ---- wait update response via logtail client ---- */
+	{
+		t.Log("wait update response via logtail client")
+		resp, err := logtailClient.Receive()
+		require.NoError(t, err)
+		require.NotNil(t, resp.GetUpdateResponse())
+		require.Equal(t, 0, len(resp.GetUpdateResponse().LogtailList))
 	}
 }
 

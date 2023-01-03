@@ -20,17 +20,16 @@ import (
 
 type LogtailResponse struct {
 	logtail.LogtailResponse
-	id uint64
 }
 
 var _ morpc.Message = (*LogtailResponse)(nil)
 
 func (r *LogtailResponse) SetID(id uint64) {
-	r.id = id
+	r.ResponseId = id
 }
 
 func (r *LogtailResponse) GetID() uint64 {
-	return r.id
+	return r.ResponseId
 }
 
 func (r *LogtailResponse) DebugString() string {

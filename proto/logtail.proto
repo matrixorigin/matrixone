@@ -25,25 +25,17 @@ option go_package = "github.com/matrixorigin/matrixone/pkg/pb/logtail";
 option (gogoproto.sizer_all)      = false;
 option (gogoproto.protosizer_all) = true;
 
-// subscribe table request
+// SubscribeRequest is the request for subscription.
 message SubscribeRequest {
     api.TableID table = 1;
 }
 
-// unsubscribe table request
+// UnsubscribeRequest is the request for unsubscription.
 message UnsubscribeRequest {
     api.TableID table = 1;
 }
 
-// logtail stream request
-message LogtailRequest {
-    oneof request {
-        SubscribeRequest subscribe_table     = 1;
-        UnsubscribeRequest unsubscribe_table = 2;
-    }
-};
-
-// logtail for table
+// TableLogtail describes total or additional logtail for a table.
 message TableLogtail {
     string ckp_location         = 1;
     timestamp.Timestamp ts      = 2;
@@ -51,39 +43,60 @@ message TableLogtail {
     repeated api.Entry commands = 4;
 }
 
-// response for subscription
-message SubscribeResponse {
-    TableLogtail logtail = 1;
-}
-
-// update for subscription
-message UpdateResponse {
-    repeated TableLogtail logtail_list = 1;
-}
-
-// response for unsubscription
-message UnSubscribeResponse {
-    api.TableID table = 1;
-}
-
+// Status describes error details.
 message Status {
-    uint32 code    = 1;
+    // error code from moerr package
+    uint32 code = 1;
+
+    // error message
     string message = 2;
 }
 
-// Error message to notify CN
+// ErrorResponse is the response to notify CN with error.
 message ErrorResponse {
     Status status     = 1;
     api.TableID table = 2;
 }
 
+// SubscribeResponse is the response for subscription
+//
+// It contains total logtail for the newly subscribed table.
+message SubscribeResponse {
+    TableLogtail logtail = 1;
+}
+
+// UpdateResponse is the response for additional logtail
+//
+// It contains additional logtail for all subscribed tables.
+// The range of duration is (From, to].
+message UpdateResponse {
+    timestamp.Timestamp From           = 1;
+    timestamp.Timestamp To             = 2;
+    repeated TableLogtail logtail_list = 3;
+}
+
+// UnSubscribeResponse is the response for unsubscription
+message UnSubscribeResponse {
+    api.TableID table = 1;
+}
+
+// logtail stream request
+message LogtailRequest {
+    uint64 request_id = 1;
+    oneof request {
+        SubscribeRequest subscribe_table     = 2;
+        UnsubscribeRequest unsubscribe_table = 3;
+    }
+};
+
 // logtail stream response
 message LogtailResponse {
+    uint64 response_id = 1;
     oneof response {
-        SubscribeResponse subscribe_response     = 1;
-        UnSubscribeResponse unsubscribe_response = 2;
-        UpdateResponse update_response           = 3;
-        ErrorResponse error                      = 4;
+        SubscribeResponse subscribe_response     = 2;
+        UnSubscribeResponse unsubscribe_response = 3;
+        UpdateResponse update_response           = 4;
+        ErrorResponse error                      = 5;
     }
 };
 

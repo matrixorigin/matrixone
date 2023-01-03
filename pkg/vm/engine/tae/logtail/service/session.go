@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"go.uber.org/zap"
 )
 
@@ -37,13 +38,13 @@ const (
 // SessionManager manages all client sessions.
 type SessionManager struct {
 	sync.RWMutex
-	clients map[morpc.ClientSession]*Session
+	clients map[morpcStream]*Session
 }
 
 // NewSessionManager constructs a session manager.
 func NewSessionManager() *SessionManager {
 	return &SessionManager{
-		clients: make(map[morpc.ClientSession]*Session),
+		clients: make(map[morpcStream]*Session),
 	}
 }
 
@@ -52,24 +53,24 @@ func (sm *SessionManager) GetSession(
 	rootCtx context.Context,
 	logger *zap.Logger,
 	sendTimeout time.Duration,
-	poisionTime time.Duration,
 	pooler ResponsePooler,
 	notifier SessionErrorNotifier,
-	stream morpc.ClientSession,
+	stream morpcStream,
+	poisionTime time.Duration,
 ) *Session {
 	sm.Lock()
 	defer sm.Unlock()
 
 	if _, ok := sm.clients[stream]; !ok {
 		sm.clients[stream] = NewSession(
-			rootCtx, logger, sendTimeout, poisionTime, pooler, notifier, stream,
+			rootCtx, logger, sendTimeout, pooler, notifier, stream, poisionTime,
 		)
 	}
 	return sm.clients[stream]
 }
 
 // DeleteSession deletes session from manager.
-func (sm *SessionManager) DeleteSession(stream morpc.ClientSession) {
+func (sm *SessionManager) DeleteSession(stream morpcStream) {
 	sm.Lock()
 	defer sm.Unlock()
 	delete(sm.clients, stream)
@@ -93,6 +94,25 @@ type message struct {
 	response *LogtailResponse
 }
 
+// morpcStream describes morpc stream.
+type morpcStream struct {
+	id uint64
+	cs morpc.ClientSession
+}
+
+// Close closes morpc client session.
+func (s *morpcStream) Close() error {
+	return s.cs.Close()
+}
+
+// write sets response ID before writing via morpc client session.
+func (s *morpcStream) write(
+	ctx context.Context, response *LogtailResponse,
+) error {
+	response.SetID(s.id)
+	return s.cs.Write(ctx, response)
+}
+
 // Session manages subscription for logtail client.
 type Session struct {
 	sessionCtx context.Context
@@ -101,12 +121,12 @@ type Session struct {
 
 	logger      *zap.Logger
 	sendTimeout time.Duration
-	poisionTime time.Duration
 	pooler      ResponsePooler
 	notifier    SessionErrorNotifier
 
-	stream   morpc.ClientSession
-	sendChan chan message
+	stream      morpcStream
+	poisionTime time.Duration
+	sendChan    chan message
 
 	mu     sync.RWMutex
 	tables map[TableID]TableState
@@ -126,10 +146,10 @@ func NewSession(
 	rootCtx context.Context,
 	logger *zap.Logger,
 	sendTimeout time.Duration,
-	poisionTime time.Duration,
 	pooler ResponsePooler,
 	notifier SessionErrorNotifier,
-	stream morpc.ClientSession,
+	stream morpcStream,
+	poisionTime time.Duration,
 ) *Session {
 	ctx, cancel := context.WithCancel(rootCtx)
 	ss := &Session{
@@ -137,11 +157,11 @@ func NewSession(
 		cancelFunc:  cancel,
 		logger:      logger,
 		sendTimeout: sendTimeout,
-		poisionTime: poisionTime,
 		pooler:      pooler,
 		notifier:    notifier,
 		stream:      stream,
-		sendChan:    make(chan message, 16), // cache for morpc stream
+		poisionTime: poisionTime,
+		sendChan:    make(chan message, 16), // buffer response for morpc client session
 		tables:      make(map[TableID]TableState),
 	}
 
@@ -160,10 +180,10 @@ func NewSession(
 					return
 				}
 
-				ss.logger.Debug("send response via morpc stream")
+				ss.logger.Debug("send response via morpc client session")
 
 				// TODO: split response here
-				if err := ss.stream.Write(msg.sendCtx, msg.response); err != nil {
+				if err := ss.stream.write(msg.sendCtx, msg.response); err != nil {
 					ss.logger.Error("fail to send logtail response", zap.Error(err))
 					ss.pooler.ReleaseResponse(msg.response)
 					ss.notifier.NotifySessionError(ss, err)
@@ -241,12 +261,14 @@ func (ss *Session) FilterLogtail(tails ...wrapLogtail) []*logtail.TableLogtail {
 }
 
 // Publish publishes additional logtail.
-func (ss *Session) Publish(ctx context.Context, tails ...wrapLogtail) error {
+func (ss *Session) Publish(
+	ctx context.Context, from, to timestamp.Timestamp, wraps ...wrapLogtail,
+) error {
 	sendCtx, cancel := context.WithTimeout(ctx, ss.sendTimeout)
 	defer cancel()
 
-	qualified := ss.FilterLogtail(tails...)
-	return ss.SendUpdateResponse(sendCtx, qualified...)
+	qualified := ss.FilterLogtail(wraps...)
+	return ss.SendUpdateResponse(sendCtx, from, to, qualified...)
 }
 
 // TransitionState marks table as subscribed.
@@ -291,10 +313,10 @@ func (ss *Session) SendUnsubscriptionResponse(
 
 // SendUpdateResponse sends publishment response.
 func (ss *Session) SendUpdateResponse(
-	sendCtx context.Context, tails ...*logtail.TableLogtail,
+	sendCtx context.Context, from, to timestamp.Timestamp, tails ...*logtail.TableLogtail,
 ) error {
 	resp := ss.pooler.AcquireResponse()
-	resp.Response = newUpdateResponse(tails)
+	resp.Response = newUpdateResponse(from, to, tails...)
 	return ss.SendResponse(sendCtx, resp)
 }
 
@@ -319,10 +341,10 @@ func (ss *Session) SendResponse(
 
 	select {
 	case <-time.After(ss.poisionTime):
-		ss.logger.Error("poision morpc stream detected, close it")
+		ss.logger.Error("poision morpc client session detected, close it")
 		ss.pooler.ReleaseResponse(response)
 		if err := ss.stream.Close(); err != nil {
-			ss.logger.Error("fail to close poision morpc stream", zap.Error(err))
+			ss.logger.Error("fail to close poision morpc client session", zap.Error(err))
 		}
 		return moerr.NewStreamClosedNoCtx()
 	case ss.sendChan <- message{sendCtx: sendCtx, response: response}:
@@ -332,7 +354,9 @@ func (ss *Session) SendResponse(
 
 // newUnsubscriptionResponse constructs response for unsubscription.
 // go:inline
-func newUnsubscriptionResponse(table api.TableID) *logtail.LogtailResponse_UnsubscribeResponse {
+func newUnsubscriptionResponse(
+	table api.TableID,
+) *logtail.LogtailResponse_UnsubscribeResponse {
 	return &logtail.LogtailResponse_UnsubscribeResponse{
 		UnsubscribeResponse: &logtail.UnSubscribeResponse{
 			Table: &table,
@@ -342,9 +366,13 @@ func newUnsubscriptionResponse(table api.TableID) *logtail.LogtailResponse_Unsub
 
 // newUpdateResponse constructs response for publishment.
 // go:inline
-func newUpdateResponse(tails []*logtail.TableLogtail) *logtail.LogtailResponse_UpdateResponse {
+func newUpdateResponse(
+	from, to timestamp.Timestamp, tails ...*logtail.TableLogtail,
+) *logtail.LogtailResponse_UpdateResponse {
 	return &logtail.LogtailResponse_UpdateResponse{
 		UpdateResponse: &logtail.UpdateResponse{
+			From:        &from,
+			To:          &to,
 			LogtailList: tails,
 		},
 	}
@@ -352,7 +380,9 @@ func newUpdateResponse(tails []*logtail.TableLogtail) *logtail.LogtailResponse_U
 
 // newSubscritpionResponse constructs response for subscription.
 // go:inline
-func newSubscritpionResponse(tail *logtail.TableLogtail) *logtail.LogtailResponse_SubscribeResponse {
+func newSubscritpionResponse(
+	tail *logtail.TableLogtail,
+) *logtail.LogtailResponse_SubscribeResponse {
 	return &logtail.LogtailResponse_SubscribeResponse{
 		SubscribeResponse: &logtail.SubscribeResponse{
 			Logtail: tail,
@@ -362,7 +392,9 @@ func newSubscritpionResponse(tail *logtail.TableLogtail) *logtail.LogtailRespons
 
 // newErrorResponse constructs response for error condition.
 // go:inline
-func newErrorResponse(table api.TableID, code uint16, message string) *logtail.LogtailResponse_Error {
+func newErrorResponse(
+	table api.TableID, code uint16, message string,
+) *logtail.LogtailResponse_Error {
 	return &logtail.LogtailResponse_Error{
 		Error: &logtail.ErrorResponse{
 			Table: &table,

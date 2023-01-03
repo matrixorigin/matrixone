@@ -26,7 +26,7 @@ var _ = math.Inf
 // proto package needs to be updated.
 const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 
-// subscribe table request
+// SubscribeRequest is the request for subscription.
 type SubscribeRequest struct {
 	Table                *api.TableID `protobuf:"bytes,1,opt,name=table,proto3" json:"table,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}     `json:"-"`
@@ -74,7 +74,7 @@ func (m *SubscribeRequest) GetTable() *api.TableID {
 	return nil
 }
 
-// unsubscribe table request
+// UnsubscribeRequest is the request for unsubscription.
 type UnsubscribeRequest struct {
 	Table                *api.TableID `protobuf:"bytes,1,opt,name=table,proto3" json:"table,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}     `json:"-"`
@@ -122,96 +122,7 @@ func (m *UnsubscribeRequest) GetTable() *api.TableID {
 	return nil
 }
 
-// logtail stream request
-type LogtailRequest struct {
-	// Types that are valid to be assigned to Request:
-	//	*LogtailRequest_SubscribeTable
-	//	*LogtailRequest_UnsubscribeTable
-	Request              isLogtailRequest_Request `protobuf_oneof:"request"`
-	XXX_NoUnkeyedLiteral struct{}                 `json:"-"`
-	XXX_unrecognized     []byte                   `json:"-"`
-	XXX_sizecache        int32                    `json:"-"`
-}
-
-func (m *LogtailRequest) Reset()         { *m = LogtailRequest{} }
-func (m *LogtailRequest) String() string { return proto.CompactTextString(m) }
-func (*LogtailRequest) ProtoMessage()    {}
-func (*LogtailRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_3604137dacc8e6bf, []int{2}
-}
-func (m *LogtailRequest) XXX_Unmarshal(b []byte) error {
-	return m.Unmarshal(b)
-}
-func (m *LogtailRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	if deterministic {
-		return xxx_messageInfo_LogtailRequest.Marshal(b, m, deterministic)
-	} else {
-		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
-		if err != nil {
-			return nil, err
-		}
-		return b[:n], nil
-	}
-}
-func (m *LogtailRequest) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_LogtailRequest.Merge(m, src)
-}
-func (m *LogtailRequest) XXX_Size() int {
-	return m.ProtoSize()
-}
-func (m *LogtailRequest) XXX_DiscardUnknown() {
-	xxx_messageInfo_LogtailRequest.DiscardUnknown(m)
-}
-
-var xxx_messageInfo_LogtailRequest proto.InternalMessageInfo
-
-type isLogtailRequest_Request interface {
-	isLogtailRequest_Request()
-	MarshalTo([]byte) (int, error)
-	ProtoSize() int
-}
-
-type LogtailRequest_SubscribeTable struct {
-	SubscribeTable *SubscribeRequest `protobuf:"bytes,1,opt,name=subscribe_table,json=subscribeTable,proto3,oneof" json:"subscribe_table,omitempty"`
-}
-type LogtailRequest_UnsubscribeTable struct {
-	UnsubscribeTable *UnsubscribeRequest `protobuf:"bytes,2,opt,name=unsubscribe_table,json=unsubscribeTable,proto3,oneof" json:"unsubscribe_table,omitempty"`
-}
-
-func (*LogtailRequest_SubscribeTable) isLogtailRequest_Request()   {}
-func (*LogtailRequest_UnsubscribeTable) isLogtailRequest_Request() {}
-
-func (m *LogtailRequest) GetRequest() isLogtailRequest_Request {
-	if m != nil {
-		return m.Request
-	}
-	return nil
-}
-
-func (m *LogtailRequest) GetSubscribeTable() *SubscribeRequest {
-	if x, ok := m.GetRequest().(*LogtailRequest_SubscribeTable); ok {
-		return x.SubscribeTable
-	}
-	return nil
-}
-
-func (m *LogtailRequest) GetUnsubscribeTable() *UnsubscribeRequest {
-	if x, ok := m.GetRequest().(*LogtailRequest_UnsubscribeTable); ok {
-		return x.UnsubscribeTable
-	}
-	return nil
-}
-
-// XXX_OneofWrappers is for the internal use of the proto package.
-func (*LogtailRequest) XXX_OneofWrappers() []interface{} {
-	return []interface{}{
-		(*LogtailRequest_SubscribeTable)(nil),
-		(*LogtailRequest_UnsubscribeTable)(nil),
-	}
-}
-
-// logtail for table
+// TableLogtail describes total or additional logtail for a table.
 type TableLogtail struct {
 	CkpLocation          string               `protobuf:"bytes,1,opt,name=ckp_location,json=ckpLocation,proto3" json:"ckp_location,omitempty"`
 	Ts                   *timestamp.Timestamp `protobuf:"bytes,2,opt,name=ts,proto3" json:"ts,omitempty"`
@@ -226,7 +137,7 @@ func (m *TableLogtail) Reset()         { *m = TableLogtail{} }
 func (m *TableLogtail) String() string { return proto.CompactTextString(m) }
 func (*TableLogtail) ProtoMessage()    {}
 func (*TableLogtail) Descriptor() ([]byte, []int) {
-	return fileDescriptor_3604137dacc8e6bf, []int{3}
+	return fileDescriptor_3604137dacc8e6bf, []int{2}
 }
 func (m *TableLogtail) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -283,152 +194,11 @@ func (m *TableLogtail) GetCommands() []*api.Entry {
 	return nil
 }
 
-// response for subscription
-type SubscribeResponse struct {
-	Logtail              *TableLogtail `protobuf:"bytes,1,opt,name=logtail,proto3" json:"logtail,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}      `json:"-"`
-	XXX_unrecognized     []byte        `json:"-"`
-	XXX_sizecache        int32         `json:"-"`
-}
-
-func (m *SubscribeResponse) Reset()         { *m = SubscribeResponse{} }
-func (m *SubscribeResponse) String() string { return proto.CompactTextString(m) }
-func (*SubscribeResponse) ProtoMessage()    {}
-func (*SubscribeResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_3604137dacc8e6bf, []int{4}
-}
-func (m *SubscribeResponse) XXX_Unmarshal(b []byte) error {
-	return m.Unmarshal(b)
-}
-func (m *SubscribeResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	if deterministic {
-		return xxx_messageInfo_SubscribeResponse.Marshal(b, m, deterministic)
-	} else {
-		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
-		if err != nil {
-			return nil, err
-		}
-		return b[:n], nil
-	}
-}
-func (m *SubscribeResponse) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_SubscribeResponse.Merge(m, src)
-}
-func (m *SubscribeResponse) XXX_Size() int {
-	return m.ProtoSize()
-}
-func (m *SubscribeResponse) XXX_DiscardUnknown() {
-	xxx_messageInfo_SubscribeResponse.DiscardUnknown(m)
-}
-
-var xxx_messageInfo_SubscribeResponse proto.InternalMessageInfo
-
-func (m *SubscribeResponse) GetLogtail() *TableLogtail {
-	if m != nil {
-		return m.Logtail
-	}
-	return nil
-}
-
-// update for subscription
-type UpdateResponse struct {
-	LogtailList          []*TableLogtail `protobuf:"bytes,1,rep,name=logtail_list,json=logtailList,proto3" json:"logtail_list,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}        `json:"-"`
-	XXX_unrecognized     []byte          `json:"-"`
-	XXX_sizecache        int32           `json:"-"`
-}
-
-func (m *UpdateResponse) Reset()         { *m = UpdateResponse{} }
-func (m *UpdateResponse) String() string { return proto.CompactTextString(m) }
-func (*UpdateResponse) ProtoMessage()    {}
-func (*UpdateResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_3604137dacc8e6bf, []int{5}
-}
-func (m *UpdateResponse) XXX_Unmarshal(b []byte) error {
-	return m.Unmarshal(b)
-}
-func (m *UpdateResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	if deterministic {
-		return xxx_messageInfo_UpdateResponse.Marshal(b, m, deterministic)
-	} else {
-		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
-		if err != nil {
-			return nil, err
-		}
-		return b[:n], nil
-	}
-}
-func (m *UpdateResponse) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_UpdateResponse.Merge(m, src)
-}
-func (m *UpdateResponse) XXX_Size() int {
-	return m.ProtoSize()
-}
-func (m *UpdateResponse) XXX_DiscardUnknown() {
-	xxx_messageInfo_UpdateResponse.DiscardUnknown(m)
-}
-
-var xxx_messageInfo_UpdateResponse proto.InternalMessageInfo
-
-func (m *UpdateResponse) GetLogtailList() []*TableLogtail {
-	if m != nil {
-		return m.LogtailList
-	}
-	return nil
-}
-
-// response for unsubscription
-type UnSubscribeResponse struct {
-	Table                *api.TableID `protobuf:"bytes,1,opt,name=table,proto3" json:"table,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}     `json:"-"`
-	XXX_unrecognized     []byte       `json:"-"`
-	XXX_sizecache        int32        `json:"-"`
-}
-
-func (m *UnSubscribeResponse) Reset()         { *m = UnSubscribeResponse{} }
-func (m *UnSubscribeResponse) String() string { return proto.CompactTextString(m) }
-func (*UnSubscribeResponse) ProtoMessage()    {}
-func (*UnSubscribeResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_3604137dacc8e6bf, []int{6}
-}
-func (m *UnSubscribeResponse) XXX_Unmarshal(b []byte) error {
-	return m.Unmarshal(b)
-}
-func (m *UnSubscribeResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	if deterministic {
-		return xxx_messageInfo_UnSubscribeResponse.Marshal(b, m, deterministic)
-	} else {
-		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
-		if err != nil {
-			return nil, err
-		}
-		return b[:n], nil
-	}
-}
-func (m *UnSubscribeResponse) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_UnSubscribeResponse.Merge(m, src)
-}
-func (m *UnSubscribeResponse) XXX_Size() int {
-	return m.ProtoSize()
-}
-func (m *UnSubscribeResponse) XXX_DiscardUnknown() {
-	xxx_messageInfo_UnSubscribeResponse.DiscardUnknown(m)
-}
-
-var xxx_messageInfo_UnSubscribeResponse proto.InternalMessageInfo
-
-func (m *UnSubscribeResponse) GetTable() *api.TableID {
-	if m != nil {
-		return m.Table
-	}
-	return nil
-}
-
+// Status describes error details.
 type Status struct {
-	Code                 uint32   `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
+	// error code from moerr package
+	Code uint32 `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
+	// error message
 	Message              string   `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
@@ -439,7 +209,7 @@ func (m *Status) Reset()         { *m = Status{} }
 func (m *Status) String() string { return proto.CompactTextString(m) }
 func (*Status) ProtoMessage()    {}
 func (*Status) Descriptor() ([]byte, []int) {
-	return fileDescriptor_3604137dacc8e6bf, []int{7}
+	return fileDescriptor_3604137dacc8e6bf, []int{3}
 }
 func (m *Status) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -482,7 +252,7 @@ func (m *Status) GetMessage() string {
 	return ""
 }
 
-// Error message to notify CN
+// ErrorResponse is the response to notify CN with error.
 type ErrorResponse struct {
 	Status               *Status      `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
 	Table                *api.TableID `protobuf:"bytes,2,opt,name=table,proto3" json:"table,omitempty"`
@@ -495,7 +265,7 @@ func (m *ErrorResponse) Reset()         { *m = ErrorResponse{} }
 func (m *ErrorResponse) String() string { return proto.CompactTextString(m) }
 func (*ErrorResponse) ProtoMessage()    {}
 func (*ErrorResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_3604137dacc8e6bf, []int{8}
+	return fileDescriptor_3604137dacc8e6bf, []int{4}
 }
 func (m *ErrorResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -538,8 +308,271 @@ func (m *ErrorResponse) GetTable() *api.TableID {
 	return nil
 }
 
+// SubscribeResponse is the response for subscription
+//
+// It contains total logtail for the newly subscribed table.
+type SubscribeResponse struct {
+	Logtail              *TableLogtail `protobuf:"bytes,1,opt,name=logtail,proto3" json:"logtail,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}      `json:"-"`
+	XXX_unrecognized     []byte        `json:"-"`
+	XXX_sizecache        int32         `json:"-"`
+}
+
+func (m *SubscribeResponse) Reset()         { *m = SubscribeResponse{} }
+func (m *SubscribeResponse) String() string { return proto.CompactTextString(m) }
+func (*SubscribeResponse) ProtoMessage()    {}
+func (*SubscribeResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_3604137dacc8e6bf, []int{5}
+}
+func (m *SubscribeResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *SubscribeResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_SubscribeResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *SubscribeResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_SubscribeResponse.Merge(m, src)
+}
+func (m *SubscribeResponse) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *SubscribeResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_SubscribeResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_SubscribeResponse proto.InternalMessageInfo
+
+func (m *SubscribeResponse) GetLogtail() *TableLogtail {
+	if m != nil {
+		return m.Logtail
+	}
+	return nil
+}
+
+// UpdateResponse is the response for additional logtail
+//
+// It contains additional logtail for all subscribed tables.
+// The range of duration is (From, to].
+type UpdateResponse struct {
+	From                 *timestamp.Timestamp `protobuf:"bytes,1,opt,name=From,proto3" json:"From,omitempty"`
+	To                   *timestamp.Timestamp `protobuf:"bytes,2,opt,name=To,proto3" json:"To,omitempty"`
+	LogtailList          []*TableLogtail      `protobuf:"bytes,3,rep,name=logtail_list,json=logtailList,proto3" json:"logtail_list,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}             `json:"-"`
+	XXX_unrecognized     []byte               `json:"-"`
+	XXX_sizecache        int32                `json:"-"`
+}
+
+func (m *UpdateResponse) Reset()         { *m = UpdateResponse{} }
+func (m *UpdateResponse) String() string { return proto.CompactTextString(m) }
+func (*UpdateResponse) ProtoMessage()    {}
+func (*UpdateResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_3604137dacc8e6bf, []int{6}
+}
+func (m *UpdateResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *UpdateResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_UpdateResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *UpdateResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_UpdateResponse.Merge(m, src)
+}
+func (m *UpdateResponse) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *UpdateResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_UpdateResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_UpdateResponse proto.InternalMessageInfo
+
+func (m *UpdateResponse) GetFrom() *timestamp.Timestamp {
+	if m != nil {
+		return m.From
+	}
+	return nil
+}
+
+func (m *UpdateResponse) GetTo() *timestamp.Timestamp {
+	if m != nil {
+		return m.To
+	}
+	return nil
+}
+
+func (m *UpdateResponse) GetLogtailList() []*TableLogtail {
+	if m != nil {
+		return m.LogtailList
+	}
+	return nil
+}
+
+// UnSubscribeResponse is the response for unsubscription
+type UnSubscribeResponse struct {
+	Table                *api.TableID `protobuf:"bytes,1,opt,name=table,proto3" json:"table,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}     `json:"-"`
+	XXX_unrecognized     []byte       `json:"-"`
+	XXX_sizecache        int32        `json:"-"`
+}
+
+func (m *UnSubscribeResponse) Reset()         { *m = UnSubscribeResponse{} }
+func (m *UnSubscribeResponse) String() string { return proto.CompactTextString(m) }
+func (*UnSubscribeResponse) ProtoMessage()    {}
+func (*UnSubscribeResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_3604137dacc8e6bf, []int{7}
+}
+func (m *UnSubscribeResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *UnSubscribeResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_UnSubscribeResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *UnSubscribeResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_UnSubscribeResponse.Merge(m, src)
+}
+func (m *UnSubscribeResponse) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *UnSubscribeResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_UnSubscribeResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_UnSubscribeResponse proto.InternalMessageInfo
+
+func (m *UnSubscribeResponse) GetTable() *api.TableID {
+	if m != nil {
+		return m.Table
+	}
+	return nil
+}
+
+// logtail stream request
+type LogtailRequest struct {
+	RequestId uint64 `protobuf:"varint,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	// Types that are valid to be assigned to Request:
+	//	*LogtailRequest_SubscribeTable
+	//	*LogtailRequest_UnsubscribeTable
+	Request              isLogtailRequest_Request `protobuf_oneof:"request"`
+	XXX_NoUnkeyedLiteral struct{}                 `json:"-"`
+	XXX_unrecognized     []byte                   `json:"-"`
+	XXX_sizecache        int32                    `json:"-"`
+}
+
+func (m *LogtailRequest) Reset()         { *m = LogtailRequest{} }
+func (m *LogtailRequest) String() string { return proto.CompactTextString(m) }
+func (*LogtailRequest) ProtoMessage()    {}
+func (*LogtailRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_3604137dacc8e6bf, []int{8}
+}
+func (m *LogtailRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *LogtailRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_LogtailRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *LogtailRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_LogtailRequest.Merge(m, src)
+}
+func (m *LogtailRequest) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *LogtailRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_LogtailRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_LogtailRequest proto.InternalMessageInfo
+
+type isLogtailRequest_Request interface {
+	isLogtailRequest_Request()
+	MarshalTo([]byte) (int, error)
+	ProtoSize() int
+}
+
+type LogtailRequest_SubscribeTable struct {
+	SubscribeTable *SubscribeRequest `protobuf:"bytes,2,opt,name=subscribe_table,json=subscribeTable,proto3,oneof" json:"subscribe_table,omitempty"`
+}
+type LogtailRequest_UnsubscribeTable struct {
+	UnsubscribeTable *UnsubscribeRequest `protobuf:"bytes,3,opt,name=unsubscribe_table,json=unsubscribeTable,proto3,oneof" json:"unsubscribe_table,omitempty"`
+}
+
+func (*LogtailRequest_SubscribeTable) isLogtailRequest_Request()   {}
+func (*LogtailRequest_UnsubscribeTable) isLogtailRequest_Request() {}
+
+func (m *LogtailRequest) GetRequest() isLogtailRequest_Request {
+	if m != nil {
+		return m.Request
+	}
+	return nil
+}
+
+func (m *LogtailRequest) GetRequestId() uint64 {
+	if m != nil {
+		return m.RequestId
+	}
+	return 0
+}
+
+func (m *LogtailRequest) GetSubscribeTable() *SubscribeRequest {
+	if x, ok := m.GetRequest().(*LogtailRequest_SubscribeTable); ok {
+		return x.SubscribeTable
+	}
+	return nil
+}
+
+func (m *LogtailRequest) GetUnsubscribeTable() *UnsubscribeRequest {
+	if x, ok := m.GetRequest().(*LogtailRequest_UnsubscribeTable); ok {
+		return x.UnsubscribeTable
+	}
+	return nil
+}
+
+// XXX_OneofWrappers is for the internal use of the proto package.
+func (*LogtailRequest) XXX_OneofWrappers() []interface{} {
+	return []interface{}{
+		(*LogtailRequest_SubscribeTable)(nil),
+		(*LogtailRequest_UnsubscribeTable)(nil),
+	}
+}
+
 // logtail stream response
 type LogtailResponse struct {
+	ResponseId uint64 `protobuf:"varint,1,opt,name=response_id,json=responseId,proto3" json:"response_id,omitempty"`
 	// Types that are valid to be assigned to Response:
 	//	*LogtailResponse_SubscribeResponse
 	//	*LogtailResponse_UnsubscribeResponse
@@ -591,16 +624,16 @@ type isLogtailResponse_Response interface {
 }
 
 type LogtailResponse_SubscribeResponse struct {
-	SubscribeResponse *SubscribeResponse `protobuf:"bytes,1,opt,name=subscribe_response,json=subscribeResponse,proto3,oneof" json:"subscribe_response,omitempty"`
+	SubscribeResponse *SubscribeResponse `protobuf:"bytes,2,opt,name=subscribe_response,json=subscribeResponse,proto3,oneof" json:"subscribe_response,omitempty"`
 }
 type LogtailResponse_UnsubscribeResponse struct {
-	UnsubscribeResponse *UnSubscribeResponse `protobuf:"bytes,2,opt,name=unsubscribe_response,json=unsubscribeResponse,proto3,oneof" json:"unsubscribe_response,omitempty"`
+	UnsubscribeResponse *UnSubscribeResponse `protobuf:"bytes,3,opt,name=unsubscribe_response,json=unsubscribeResponse,proto3,oneof" json:"unsubscribe_response,omitempty"`
 }
 type LogtailResponse_UpdateResponse struct {
-	UpdateResponse *UpdateResponse `protobuf:"bytes,3,opt,name=update_response,json=updateResponse,proto3,oneof" json:"update_response,omitempty"`
+	UpdateResponse *UpdateResponse `protobuf:"bytes,4,opt,name=update_response,json=updateResponse,proto3,oneof" json:"update_response,omitempty"`
 }
 type LogtailResponse_Error struct {
-	Error *ErrorResponse `protobuf:"bytes,4,opt,name=error,proto3,oneof" json:"error,omitempty"`
+	Error *ErrorResponse `protobuf:"bytes,5,opt,name=error,proto3,oneof" json:"error,omitempty"`
 }
 
 func (*LogtailResponse_SubscribeResponse) isLogtailResponse_Response()   {}
@@ -613,6 +646,13 @@ func (m *LogtailResponse) GetResponse() isLogtailResponse_Response {
 		return m.Response
 	}
 	return nil
+}
+
+func (m *LogtailResponse) GetResponseId() uint64 {
+	if m != nil {
+		return m.ResponseId
+	}
+	return 0
 }
 
 func (m *LogtailResponse) GetSubscribeResponse() *SubscribeResponse {
@@ -656,58 +696,61 @@ func (*LogtailResponse) XXX_OneofWrappers() []interface{} {
 func init() {
 	proto.RegisterType((*SubscribeRequest)(nil), "logtail.SubscribeRequest")
 	proto.RegisterType((*UnsubscribeRequest)(nil), "logtail.UnsubscribeRequest")
-	proto.RegisterType((*LogtailRequest)(nil), "logtail.LogtailRequest")
 	proto.RegisterType((*TableLogtail)(nil), "logtail.TableLogtail")
+	proto.RegisterType((*Status)(nil), "logtail.Status")
+	proto.RegisterType((*ErrorResponse)(nil), "logtail.ErrorResponse")
 	proto.RegisterType((*SubscribeResponse)(nil), "logtail.SubscribeResponse")
 	proto.RegisterType((*UpdateResponse)(nil), "logtail.UpdateResponse")
 	proto.RegisterType((*UnSubscribeResponse)(nil), "logtail.UnSubscribeResponse")
-	proto.RegisterType((*Status)(nil), "logtail.Status")
-	proto.RegisterType((*ErrorResponse)(nil), "logtail.ErrorResponse")
+	proto.RegisterType((*LogtailRequest)(nil), "logtail.LogtailRequest")
 	proto.RegisterType((*LogtailResponse)(nil), "logtail.LogtailResponse")
 }
 
 func init() { proto.RegisterFile("logtail.proto", fileDescriptor_3604137dacc8e6bf) }
 
 var fileDescriptor_3604137dacc8e6bf = []byte{
-	// 595 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x54, 0xcb, 0x6e, 0xd3, 0x4c,
-	0x18, 0xb5, 0xd3, 0x36, 0x69, 0xbe, 0xdc, 0x9a, 0x69, 0xff, 0x1f, 0x13, 0x50, 0x54, 0x2c, 0x04,
-	0xd9, 0x60, 0x57, 0x41, 0xaa, 0xca, 0xd6, 0x4a, 0xa5, 0x50, 0xc2, 0x82, 0x69, 0xb3, 0x41, 0x48,
-	0x91, 0xed, 0x18, 0x63, 0x25, 0xf6, 0x18, 0xcf, 0x58, 0x82, 0xb7, 0x41, 0x62, 0xcd, 0x82, 0xb7,
-	0x60, 0xc9, 0x23, 0xa0, 0xf0, 0x22, 0x28, 0x33, 0xe3, 0x4b, 0x9a, 0x46, 0x42, 0xec, 0xe6, 0xbb,
-	0x9d, 0xef, 0xf8, 0xcc, 0xf1, 0x40, 0x6b, 0x49, 0x7c, 0x66, 0x07, 0x4b, 0x23, 0x4e, 0x08, 0x23,
-	0xa8, 0x26, 0xc3, 0xde, 0x33, 0x3f, 0x60, 0x1f, 0x52, 0xc7, 0x70, 0x49, 0x68, 0xfa, 0xc4, 0x27,
-	0x26, 0xaf, 0x3b, 0xe9, 0x7b, 0x1e, 0xf1, 0x80, 0x9f, 0xc4, 0x5c, 0xaf, 0xc3, 0x82, 0xd0, 0xa3,
-	0xcc, 0x0e, 0x63, 0x99, 0xa8, 0xdb, 0x71, 0x20, 0x8e, 0xfa, 0x39, 0x1c, 0x5d, 0xa7, 0x0e, 0x75,
-	0x93, 0xc0, 0xf1, 0xb0, 0xf7, 0x31, 0xf5, 0x28, 0x43, 0x3a, 0x1c, 0x30, 0xdb, 0x59, 0x7a, 0x9a,
-	0x7a, 0xaa, 0x0e, 0x1a, 0xc3, 0xa6, 0xb1, 0x6e, 0xbf, 0x59, 0x67, 0x5e, 0x8e, 0xb0, 0x28, 0xe9,
-	0x17, 0x80, 0xa6, 0x11, 0xfd, 0x97, 0xc9, 0x6f, 0x2a, 0xb4, 0x27, 0xe2, 0x43, 0xb2, 0xb1, 0x11,
-	0x74, 0x72, 0xa8, 0x59, 0x19, 0xe0, 0xbe, 0x91, 0x29, 0x70, 0x9b, 0xe4, 0x58, 0xc1, 0xed, 0x7c,
-	0x86, 0x6f, 0x40, 0x57, 0xd0, 0x4d, 0xa3, 0xdb, 0x38, 0x15, 0x8e, 0xf3, 0x20, 0xc7, 0xd9, 0x26,
-	0x3d, 0x56, 0xf0, 0x51, 0x69, 0x8e, 0x63, 0x59, 0x75, 0xa8, 0x25, 0xa2, 0xac, 0x7f, 0x55, 0xa1,
-	0xc9, 0x93, 0x92, 0x34, 0x7a, 0x04, 0x4d, 0x77, 0x11, 0xcf, 0x96, 0xc4, 0xb5, 0x59, 0x40, 0x22,
-	0x4e, 0xb5, 0x8e, 0x1b, 0xee, 0x22, 0x9e, 0xc8, 0x14, 0x7a, 0x0c, 0x15, 0x46, 0xe5, 0xee, 0x13,
-	0xa3, 0x90, 0xff, 0x26, 0x3b, 0xe1, 0x0a, 0xa3, 0x85, 0x5a, 0x7b, 0x3b, 0xd5, 0x42, 0x4f, 0xe0,
-	0xd0, 0x25, 0x61, 0x68, 0x47, 0x73, 0xaa, 0xed, 0x9f, 0xee, 0x0d, 0x1a, 0x43, 0xe0, 0x6d, 0x97,
-	0x11, 0x4b, 0x3e, 0xe3, 0xbc, 0xa6, 0x8f, 0xa0, 0x5b, 0x92, 0x88, 0xc6, 0x24, 0xa2, 0x1e, 0x32,
-	0x21, 0xb3, 0x8c, 0xd4, 0xf3, 0xbf, 0x5c, 0x87, 0xf2, 0x17, 0xe1, 0xac, 0x4b, 0xbf, 0x82, 0xf6,
-	0x34, 0x9e, 0xdb, 0xac, 0x80, 0xb8, 0x80, 0xa6, 0x2c, 0xce, 0x96, 0x01, 0x65, 0x9a, 0xca, 0x39,
-	0xec, 0xc0, 0x69, 0xc8, 0xec, 0x24, 0xa0, 0x4c, 0x7f, 0x01, 0xc7, 0xd3, 0x68, 0x9b, 0xd3, 0xdf,
-	0x58, 0xe4, 0x1c, 0xaa, 0xd7, 0xcc, 0x66, 0x29, 0x45, 0x08, 0xf6, 0x5d, 0x32, 0x17, 0xcd, 0x2d,
-	0xcc, 0xcf, 0x48, 0x83, 0x5a, 0xe8, 0x51, 0x6a, 0xfb, 0xe2, 0x76, 0xeb, 0x38, 0x0b, 0xf5, 0x77,
-	0xd0, 0xba, 0x4c, 0x12, 0x92, 0xe4, 0xcb, 0x9e, 0x42, 0x95, 0x72, 0x20, 0xb9, 0xad, 0x53, 0xf8,
-	0x89, 0xa7, 0xb1, 0x2c, 0x17, 0xac, 0x2a, 0xbb, 0x59, 0x7d, 0xaf, 0x40, 0x27, 0x37, 0xae, 0x5c,
-	0xf0, 0x0a, 0x50, 0xe1, 0xb8, 0x44, 0x66, 0xe5, 0xb2, 0xde, 0x5d, 0xe6, 0x15, 0x1d, 0x63, 0x05,
-	0x77, 0xe9, 0x96, 0x34, 0x6f, 0xe0, 0xa4, 0x6c, 0xe0, 0x1c, 0x4e, 0x70, 0x7a, 0x58, 0xf2, 0xf0,
-	0x5d, 0x80, 0xc7, 0x69, 0xb4, 0x0d, 0x69, 0x41, 0x27, 0xe5, 0x17, 0x5a, 0xa0, 0x09, 0xb3, 0xdd,
-	0x2b, 0xd0, 0x36, 0x2e, 0x7c, 0xfd, 0x5f, 0xa5, 0x9b, 0x16, 0x30, 0xe0, 0xc0, 0x5b, 0xab, 0xaa,
-	0xed, 0xf3, 0xc9, 0xff, 0xf3, 0xc9, 0x0d, 0xad, 0xc7, 0x0a, 0x16, 0x6d, 0x16, 0xc0, 0x61, 0xb6,
-	0x6c, 0xf8, 0x1a, 0x6a, 0xd9, 0x6f, 0x63, 0x15, 0xc7, 0x62, 0xf9, 0xe6, 0x43, 0xd0, 0xd3, 0xb6,
-	0x0b, 0x02, 0x48, 0x57, 0x06, 0xea, 0x99, 0x6a, 0x59, 0x3f, 0x56, 0x7d, 0xf5, 0xe7, 0xaa, 0xaf,
-	0xfe, 0x5a, 0xf5, 0x95, 0x2f, 0xbf, 0xfb, 0xea, 0xdb, 0xb3, 0xd2, 0x53, 0x18, 0xda, 0x2c, 0x09,
-	0x3e, 0x91, 0x24, 0xf0, 0x83, 0x28, 0x0b, 0x22, 0xcf, 0x8c, 0x17, 0xbe, 0x19, 0x3b, 0xa6, 0x44,
-	0x76, 0xaa, 0xfc, 0xe1, 0x7b, 0xfe, 0x27, 0x00, 0x00, 0xff, 0xff, 0xac, 0x4e, 0x04, 0xdd, 0x5d,
-	0x05, 0x00, 0x00,
+	// 648 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x54, 0xcd, 0x6e, 0xd3, 0x40,
+	0x10, 0xb6, 0xd3, 0xb4, 0x69, 0x26, 0x69, 0xd3, 0x6e, 0x0b, 0x98, 0x00, 0xa1, 0x58, 0x08, 0x72,
+	0xc1, 0xae, 0x8a, 0x54, 0x95, 0xab, 0xd5, 0xa2, 0x14, 0xca, 0x81, 0x6d, 0x7a, 0x41, 0x48, 0x91,
+	0xff, 0x30, 0xab, 0xc6, 0x5e, 0xe3, 0x5d, 0x4b, 0xf0, 0x2a, 0x9c, 0x90, 0x78, 0x19, 0x0e, 0x1c,
+	0x10, 0x4f, 0x80, 0xca, 0x8b, 0xa0, 0xec, 0xae, 0x7f, 0xd2, 0xb4, 0x08, 0x71, 0x9b, 0x9d, 0x9d,
+	0xf9, 0x66, 0xbe, 0x99, 0x6f, 0x17, 0xd6, 0xa6, 0x34, 0xe2, 0x2e, 0x99, 0x5a, 0x69, 0x46, 0x39,
+	0x45, 0x2d, 0x75, 0xec, 0x3f, 0x89, 0x08, 0x7f, 0x9f, 0x7b, 0x96, 0x4f, 0x63, 0x3b, 0xa2, 0x11,
+	0xb5, 0xc5, 0xbd, 0x97, 0xbf, 0x13, 0x27, 0x71, 0x10, 0x96, 0xcc, 0xeb, 0xf7, 0x38, 0x89, 0x43,
+	0xc6, 0xdd, 0x38, 0x55, 0x8e, 0xb6, 0x9b, 0x12, 0x69, 0x9a, 0xfb, 0xb0, 0x71, 0x9a, 0x7b, 0xcc,
+	0xcf, 0x88, 0x17, 0xe2, 0xf0, 0x43, 0x1e, 0x32, 0x8e, 0x4c, 0x58, 0xe6, 0xae, 0x37, 0x0d, 0x0d,
+	0x7d, 0x47, 0x1f, 0x76, 0xf6, 0xba, 0xd6, 0x2c, 0x7c, 0x3c, 0xf3, 0x1c, 0x1f, 0x62, 0x79, 0x65,
+	0x1e, 0x00, 0x3a, 0x4b, 0xd8, 0xff, 0x64, 0x7e, 0xd5, 0xa1, 0x2b, 0x5c, 0x27, 0x92, 0x0d, 0x7a,
+	0x00, 0x5d, 0xff, 0x3c, 0x9d, 0x4c, 0xa9, 0xef, 0x72, 0x42, 0x13, 0x91, 0xdb, 0xc6, 0x1d, 0xff,
+	0x3c, 0x3d, 0x51, 0x2e, 0xf4, 0x10, 0x1a, 0x9c, 0x19, 0x0d, 0x01, 0xba, 0x6d, 0x55, 0x74, 0xc6,
+	0x85, 0x85, 0x1b, 0x9c, 0x55, 0xd5, 0x97, 0xae, 0xad, 0x8e, 0x1e, 0xc1, 0xaa, 0x4f, 0xe3, 0xd8,
+	0x4d, 0x02, 0x66, 0x34, 0x77, 0x96, 0x86, 0x9d, 0x3d, 0x10, 0x61, 0x47, 0x09, 0xcf, 0x3e, 0xe1,
+	0xf2, 0xce, 0xdc, 0x87, 0x95, 0x53, 0xee, 0xf2, 0x9c, 0x21, 0x04, 0x4d, 0x9f, 0x06, 0x92, 0xd2,
+	0x1a, 0x16, 0x36, 0x32, 0xa0, 0x15, 0x87, 0x8c, 0xb9, 0x51, 0x28, 0x9a, 0x6a, 0xe3, 0xe2, 0x68,
+	0xbe, 0x85, 0xb5, 0xa3, 0x2c, 0xa3, 0x19, 0x0e, 0x59, 0x4a, 0x13, 0x16, 0xa2, 0xc7, 0xb0, 0xc2,
+	0x04, 0x90, 0x9a, 0x49, 0xcf, 0x2a, 0x96, 0x2a, 0xf1, 0xb1, 0xba, 0xae, 0xba, 0x6f, 0x5c, 0x3f,
+	0xbb, 0x43, 0xd8, 0xac, 0x6d, 0x4b, 0x55, 0xb0, 0xa1, 0x10, 0x86, 0x2a, 0x71, 0xa3, 0x2c, 0x51,
+	0x9f, 0x33, 0x2e, 0xa2, 0xcc, 0xcf, 0x3a, 0xac, 0x9f, 0xa5, 0x81, 0xcb, 0x2b, 0x8c, 0x21, 0x34,
+	0x9f, 0x67, 0x34, 0x56, 0x00, 0x57, 0x8f, 0x58, 0x44, 0xcc, 0x56, 0x31, 0xa6, 0x7f, 0x5f, 0xc5,
+	0x98, 0xa2, 0x03, 0xe8, 0xaa, 0x6a, 0x93, 0x29, 0x61, 0xdc, 0x58, 0x12, 0xa3, 0xbe, 0xa6, 0xb1,
+	0x8e, 0xf2, 0x9e, 0x10, 0xc6, 0xcd, 0x67, 0xb0, 0x75, 0x96, 0x2c, 0x92, 0xfc, 0x17, 0x65, 0x7d,
+	0xd7, 0x61, 0xbd, 0xc0, 0x54, 0x82, 0xbc, 0x07, 0x90, 0x49, 0x73, 0x42, 0x02, 0x91, 0xdb, 0xc4,
+	0x6d, 0xe5, 0x39, 0x0e, 0xd0, 0x21, 0xf4, 0x4a, 0x0d, 0x4f, 0xea, 0xd3, 0xbf, 0x5d, 0x6d, 0xe9,
+	0x92, 0xc6, 0x47, 0x1a, 0x5e, 0x2f, 0x73, 0x44, 0x03, 0xe8, 0x05, 0x6c, 0xe6, 0xc9, 0x65, 0x1c,
+	0xa9, 0xc1, 0x3b, 0x25, 0xce, 0xe2, 0x6b, 0x19, 0x69, 0x78, 0xa3, 0x96, 0x27, 0xb0, 0x9c, 0x36,
+	0xb4, 0x54, 0x7b, 0xe6, 0xcf, 0x06, 0xf4, 0x4a, 0x3a, 0x6a, 0x0c, 0xf7, 0xa1, 0x93, 0x29, 0xbb,
+	0x22, 0x04, 0x85, 0xeb, 0x38, 0x40, 0x2f, 0x01, 0x55, 0x9d, 0x14, 0x7e, 0x45, 0xaa, 0x7f, 0x15,
+	0x29, 0x19, 0x31, 0xd2, 0xf0, 0x26, 0x5b, 0x18, 0xfa, 0x6b, 0xd8, 0xae, 0x13, 0x2b, 0xe1, 0x24,
+	0xb7, 0xbb, 0x35, 0x6e, 0x57, 0x01, 0x6e, 0xe5, 0xc9, 0x22, 0xa4, 0x03, 0xbd, 0x5c, 0x48, 0xaf,
+	0x42, 0x6b, 0x0a, 0xb4, 0x5b, 0x15, 0xda, 0x9c, 0x34, 0x67, 0xf3, 0xce, 0xe7, 0xc5, 0x6a, 0xc1,
+	0x72, 0x38, 0x7b, 0x63, 0xc6, 0xb2, 0xc8, 0xbc, 0x59, 0x66, 0xce, 0xbd, 0xbc, 0x91, 0x86, 0x65,
+	0x98, 0x03, 0xb0, 0x5a, 0x14, 0xdb, 0x7b, 0x05, 0xad, 0xe2, 0xdf, 0x71, 0x2a, 0xb3, 0x2a, 0x3e,
+	0xaf, 0x9f, 0xbe, 0xb1, 0x78, 0x21, 0x81, 0x4c, 0x6d, 0xa8, 0xef, 0xea, 0x8e, 0xf3, 0xed, 0x62,
+	0xa0, 0xff, 0xb8, 0x18, 0xe8, 0xbf, 0x2e, 0x06, 0xda, 0x97, 0xdf, 0x03, 0xfd, 0xcd, 0x6e, 0xed,
+	0x6f, 0x8e, 0x5d, 0x9e, 0x91, 0x8f, 0x34, 0x23, 0x11, 0x49, 0x8a, 0x43, 0x12, 0xda, 0xe9, 0x79,
+	0x64, 0xa7, 0x9e, 0xad, 0x90, 0xbd, 0x15, 0xf1, 0x13, 0x3f, 0xfd, 0x13, 0x00, 0x00, 0xff, 0xff,
+	0xd0, 0x12, 0x7b, 0x8c, 0xee, 0x05, 0x00, 0x00,
 }
 
 func (m *SubscribeRequest) Marshal() (dAtA []byte, err error) {
@@ -788,84 +831,6 @@ func (m *UnsubscribeRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *LogtailRequest) Marshal() (dAtA []byte, err error) {
-	size := m.ProtoSize()
-	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
-	if err != nil {
-		return nil, err
-	}
-	return dAtA[:n], nil
-}
-
-func (m *LogtailRequest) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *LogtailRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	_ = i
-	var l int
-	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if m.Request != nil {
-		{
-			size := m.Request.ProtoSize()
-			i -= size
-			if _, err := m.Request.MarshalTo(dAtA[i:]); err != nil {
-				return 0, err
-			}
-		}
-	}
-	return len(dAtA) - i, nil
-}
-
-func (m *LogtailRequest_SubscribeTable) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *LogtailRequest_SubscribeTable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	if m.SubscribeTable != nil {
-		{
-			size, err := m.SubscribeTable.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintLogtail(dAtA, i, uint64(size))
-		}
-		i--
-		dAtA[i] = 0xa
-	}
-	return len(dAtA) - i, nil
-}
-func (m *LogtailRequest_UnsubscribeTable) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *LogtailRequest_UnsubscribeTable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	if m.UnsubscribeTable != nil {
-		{
-			size, err := m.UnsubscribeTable.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintLogtail(dAtA, i, uint64(size))
-		}
-		i--
-		dAtA[i] = 0x12
-	}
-	return len(dAtA) - i, nil
-}
 func (m *TableLogtail) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
@@ -932,125 +897,6 @@ func (m *TableLogtail) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.CkpLocation)
 		copy(dAtA[i:], m.CkpLocation)
 		i = encodeVarintLogtail(dAtA, i, uint64(len(m.CkpLocation)))
-		i--
-		dAtA[i] = 0xa
-	}
-	return len(dAtA) - i, nil
-}
-
-func (m *SubscribeResponse) Marshal() (dAtA []byte, err error) {
-	size := m.ProtoSize()
-	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
-	if err != nil {
-		return nil, err
-	}
-	return dAtA[:n], nil
-}
-
-func (m *SubscribeResponse) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *SubscribeResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	_ = i
-	var l int
-	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if m.Logtail != nil {
-		{
-			size, err := m.Logtail.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintLogtail(dAtA, i, uint64(size))
-		}
-		i--
-		dAtA[i] = 0xa
-	}
-	return len(dAtA) - i, nil
-}
-
-func (m *UpdateResponse) Marshal() (dAtA []byte, err error) {
-	size := m.ProtoSize()
-	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
-	if err != nil {
-		return nil, err
-	}
-	return dAtA[:n], nil
-}
-
-func (m *UpdateResponse) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *UpdateResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	_ = i
-	var l int
-	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if len(m.LogtailList) > 0 {
-		for iNdEx := len(m.LogtailList) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.LogtailList[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintLogtail(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0xa
-		}
-	}
-	return len(dAtA) - i, nil
-}
-
-func (m *UnSubscribeResponse) Marshal() (dAtA []byte, err error) {
-	size := m.ProtoSize()
-	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
-	if err != nil {
-		return nil, err
-	}
-	return dAtA[:n], nil
-}
-
-func (m *UnSubscribeResponse) MarshalTo(dAtA []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *UnSubscribeResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	_ = i
-	var l int
-	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if m.Table != nil {
-		{
-			size, err := m.Table.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintLogtail(dAtA, i, uint64(size))
-		}
 		i--
 		dAtA[i] = 0xa
 	}
@@ -1147,6 +993,232 @@ func (m *ErrorResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *SubscribeResponse) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *SubscribeResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *SubscribeResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.Logtail != nil {
+		{
+			size, err := m.Logtail.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintLogtail(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *UpdateResponse) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *UpdateResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *UpdateResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.LogtailList) > 0 {
+		for iNdEx := len(m.LogtailList) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.LogtailList[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogtail(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x1a
+		}
+	}
+	if m.To != nil {
+		{
+			size, err := m.To.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintLogtail(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x12
+	}
+	if m.From != nil {
+		{
+			size, err := m.From.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintLogtail(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *UnSubscribeResponse) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *UnSubscribeResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *UnSubscribeResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.Table != nil {
+		{
+			size, err := m.Table.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintLogtail(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *LogtailRequest) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *LogtailRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogtailRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.Request != nil {
+		{
+			size := m.Request.ProtoSize()
+			i -= size
+			if _, err := m.Request.MarshalTo(dAtA[i:]); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if m.RequestId != 0 {
+		i = encodeVarintLogtail(dAtA, i, uint64(m.RequestId))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *LogtailRequest_SubscribeTable) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogtailRequest_SubscribeTable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.SubscribeTable != nil {
+		{
+			size, err := m.SubscribeTable.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintLogtail(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x12
+	}
+	return len(dAtA) - i, nil
+}
+func (m *LogtailRequest_UnsubscribeTable) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogtailRequest_UnsubscribeTable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.UnsubscribeTable != nil {
+		{
+			size, err := m.UnsubscribeTable.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintLogtail(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x1a
+	}
+	return len(dAtA) - i, nil
+}
 func (m *LogtailResponse) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
@@ -1180,6 +1252,11 @@ func (m *LogtailResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			}
 		}
 	}
+	if m.ResponseId != 0 {
+		i = encodeVarintLogtail(dAtA, i, uint64(m.ResponseId))
+		i--
+		dAtA[i] = 0x8
+	}
 	return len(dAtA) - i, nil
 }
 
@@ -1200,7 +1277,7 @@ func (m *LogtailResponse_SubscribeResponse) MarshalToSizedBuffer(dAtA []byte) (i
 			i = encodeVarintLogtail(dAtA, i, uint64(size))
 		}
 		i--
-		dAtA[i] = 0xa
+		dAtA[i] = 0x12
 	}
 	return len(dAtA) - i, nil
 }
@@ -1221,7 +1298,7 @@ func (m *LogtailResponse_UnsubscribeResponse) MarshalToSizedBuffer(dAtA []byte) 
 			i = encodeVarintLogtail(dAtA, i, uint64(size))
 		}
 		i--
-		dAtA[i] = 0x12
+		dAtA[i] = 0x1a
 	}
 	return len(dAtA) - i, nil
 }
@@ -1242,7 +1319,7 @@ func (m *LogtailResponse_UpdateResponse) MarshalToSizedBuffer(dAtA []byte) (int,
 			i = encodeVarintLogtail(dAtA, i, uint64(size))
 		}
 		i--
-		dAtA[i] = 0x1a
+		dAtA[i] = 0x22
 	}
 	return len(dAtA) - i, nil
 }
@@ -1263,7 +1340,7 @@ func (m *LogtailResponse_Error) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			i = encodeVarintLogtail(dAtA, i, uint64(size))
 		}
 		i--
-		dAtA[i] = 0x22
+		dAtA[i] = 0x2a
 	}
 	return len(dAtA) - i, nil
 }
@@ -1310,45 +1387,6 @@ func (m *UnsubscribeRequest) ProtoSize() (n int) {
 	return n
 }
 
-func (m *LogtailRequest) ProtoSize() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	if m.Request != nil {
-		n += m.Request.ProtoSize()
-	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
-	}
-	return n
-}
-
-func (m *LogtailRequest_SubscribeTable) ProtoSize() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	if m.SubscribeTable != nil {
-		l = m.SubscribeTable.ProtoSize()
-		n += 1 + l + sovLogtail(uint64(l))
-	}
-	return n
-}
-func (m *LogtailRequest_UnsubscribeTable) ProtoSize() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	if m.UnsubscribeTable != nil {
-		l = m.UnsubscribeTable.ProtoSize()
-		n += 1 + l + sovLogtail(uint64(l))
-	}
-	return n
-}
 func (m *TableLogtail) ProtoSize() (n int) {
 	if m == nil {
 		return 0
@@ -1372,56 +1410,6 @@ func (m *TableLogtail) ProtoSize() (n int) {
 			l = e.ProtoSize()
 			n += 1 + l + sovLogtail(uint64(l))
 		}
-	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
-	}
-	return n
-}
-
-func (m *SubscribeResponse) ProtoSize() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	if m.Logtail != nil {
-		l = m.Logtail.ProtoSize()
-		n += 1 + l + sovLogtail(uint64(l))
-	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
-	}
-	return n
-}
-
-func (m *UpdateResponse) ProtoSize() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	if len(m.LogtailList) > 0 {
-		for _, e := range m.LogtailList {
-			l = e.ProtoSize()
-			n += 1 + l + sovLogtail(uint64(l))
-		}
-	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
-	}
-	return n
-}
-
-func (m *UnSubscribeResponse) ProtoSize() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	if m.Table != nil {
-		l = m.Table.ProtoSize()
-		n += 1 + l + sovLogtail(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -1468,12 +1456,115 @@ func (m *ErrorResponse) ProtoSize() (n int) {
 	return n
 }
 
+func (m *SubscribeResponse) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Logtail != nil {
+		l = m.Logtail.ProtoSize()
+		n += 1 + l + sovLogtail(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *UpdateResponse) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.From != nil {
+		l = m.From.ProtoSize()
+		n += 1 + l + sovLogtail(uint64(l))
+	}
+	if m.To != nil {
+		l = m.To.ProtoSize()
+		n += 1 + l + sovLogtail(uint64(l))
+	}
+	if len(m.LogtailList) > 0 {
+		for _, e := range m.LogtailList {
+			l = e.ProtoSize()
+			n += 1 + l + sovLogtail(uint64(l))
+		}
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *UnSubscribeResponse) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Table != nil {
+		l = m.Table.ProtoSize()
+		n += 1 + l + sovLogtail(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *LogtailRequest) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.RequestId != 0 {
+		n += 1 + sovLogtail(uint64(m.RequestId))
+	}
+	if m.Request != nil {
+		n += m.Request.ProtoSize()
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *LogtailRequest_SubscribeTable) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.SubscribeTable != nil {
+		l = m.SubscribeTable.ProtoSize()
+		n += 1 + l + sovLogtail(uint64(l))
+	}
+	return n
+}
+func (m *LogtailRequest_UnsubscribeTable) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.UnsubscribeTable != nil {
+		l = m.UnsubscribeTable.ProtoSize()
+		n += 1 + l + sovLogtail(uint64(l))
+	}
+	return n
+}
 func (m *LogtailResponse) ProtoSize() (n int) {
 	if m == nil {
 		return 0
 	}
 	var l int
 	_ = l
+	if m.ResponseId != 0 {
+		n += 1 + sovLogtail(uint64(m.ResponseId))
+	}
 	if m.Response != nil {
 		n += m.Response.ProtoSize()
 	}
@@ -1712,127 +1803,6 @@ func (m *UnsubscribeRequest) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *LogtailRequest) Unmarshal(dAtA []byte) error {
-	l := len(dAtA)
-	iNdEx := 0
-	for iNdEx < l {
-		preIndex := iNdEx
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return ErrIntOverflowLogtail
-			}
-			if iNdEx >= l {
-				return io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= uint64(b&0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		fieldNum := int32(wire >> 3)
-		wireType := int(wire & 0x7)
-		if wireType == 4 {
-			return fmt.Errorf("proto: LogtailRequest: wiretype end group for non-group")
-		}
-		if fieldNum <= 0 {
-			return fmt.Errorf("proto: LogtailRequest: illegal tag %d (wire type %d)", fieldNum, wire)
-		}
-		switch fieldNum {
-		case 1:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field SubscribeTable", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowLogtail
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthLogtail
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthLogtail
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			v := &SubscribeRequest{}
-			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			m.Request = &LogtailRequest_SubscribeTable{v}
-			iNdEx = postIndex
-		case 2:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field UnsubscribeTable", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowLogtail
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthLogtail
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthLogtail
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			v := &UnsubscribeRequest{}
-			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			m.Request = &LogtailRequest_UnsubscribeTable{v}
-			iNdEx = postIndex
-		default:
-			iNdEx = preIndex
-			skippy, err := skipLogtail(dAtA[iNdEx:])
-			if err != nil {
-				return err
-			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
-				return ErrInvalidLengthLogtail
-			}
-			if (iNdEx + skippy) > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
-			iNdEx += skippy
-		}
-	}
-
-	if iNdEx > l {
-		return io.ErrUnexpectedEOF
-	}
-	return nil
-}
 func (m *TableLogtail) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
@@ -1997,265 +1967,6 @@ func (m *TableLogtail) Unmarshal(dAtA []byte) error {
 			}
 			m.Commands = append(m.Commands, &api.Entry{})
 			if err := m.Commands[len(m.Commands)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		default:
-			iNdEx = preIndex
-			skippy, err := skipLogtail(dAtA[iNdEx:])
-			if err != nil {
-				return err
-			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
-				return ErrInvalidLengthLogtail
-			}
-			if (iNdEx + skippy) > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
-			iNdEx += skippy
-		}
-	}
-
-	if iNdEx > l {
-		return io.ErrUnexpectedEOF
-	}
-	return nil
-}
-func (m *SubscribeResponse) Unmarshal(dAtA []byte) error {
-	l := len(dAtA)
-	iNdEx := 0
-	for iNdEx < l {
-		preIndex := iNdEx
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return ErrIntOverflowLogtail
-			}
-			if iNdEx >= l {
-				return io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= uint64(b&0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		fieldNum := int32(wire >> 3)
-		wireType := int(wire & 0x7)
-		if wireType == 4 {
-			return fmt.Errorf("proto: SubscribeResponse: wiretype end group for non-group")
-		}
-		if fieldNum <= 0 {
-			return fmt.Errorf("proto: SubscribeResponse: illegal tag %d (wire type %d)", fieldNum, wire)
-		}
-		switch fieldNum {
-		case 1:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Logtail", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowLogtail
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthLogtail
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthLogtail
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			if m.Logtail == nil {
-				m.Logtail = &TableLogtail{}
-			}
-			if err := m.Logtail.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		default:
-			iNdEx = preIndex
-			skippy, err := skipLogtail(dAtA[iNdEx:])
-			if err != nil {
-				return err
-			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
-				return ErrInvalidLengthLogtail
-			}
-			if (iNdEx + skippy) > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
-			iNdEx += skippy
-		}
-	}
-
-	if iNdEx > l {
-		return io.ErrUnexpectedEOF
-	}
-	return nil
-}
-func (m *UpdateResponse) Unmarshal(dAtA []byte) error {
-	l := len(dAtA)
-	iNdEx := 0
-	for iNdEx < l {
-		preIndex := iNdEx
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return ErrIntOverflowLogtail
-			}
-			if iNdEx >= l {
-				return io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= uint64(b&0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		fieldNum := int32(wire >> 3)
-		wireType := int(wire & 0x7)
-		if wireType == 4 {
-			return fmt.Errorf("proto: UpdateResponse: wiretype end group for non-group")
-		}
-		if fieldNum <= 0 {
-			return fmt.Errorf("proto: UpdateResponse: illegal tag %d (wire type %d)", fieldNum, wire)
-		}
-		switch fieldNum {
-		case 1:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field LogtailList", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowLogtail
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthLogtail
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthLogtail
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.LogtailList = append(m.LogtailList, &TableLogtail{})
-			if err := m.LogtailList[len(m.LogtailList)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		default:
-			iNdEx = preIndex
-			skippy, err := skipLogtail(dAtA[iNdEx:])
-			if err != nil {
-				return err
-			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
-				return ErrInvalidLengthLogtail
-			}
-			if (iNdEx + skippy) > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
-			iNdEx += skippy
-		}
-	}
-
-	if iNdEx > l {
-		return io.ErrUnexpectedEOF
-	}
-	return nil
-}
-func (m *UnSubscribeResponse) Unmarshal(dAtA []byte) error {
-	l := len(dAtA)
-	iNdEx := 0
-	for iNdEx < l {
-		preIndex := iNdEx
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return ErrIntOverflowLogtail
-			}
-			if iNdEx >= l {
-				return io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= uint64(b&0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		fieldNum := int32(wire >> 3)
-		wireType := int(wire & 0x7)
-		if wireType == 4 {
-			return fmt.Errorf("proto: UnSubscribeResponse: wiretype end group for non-group")
-		}
-		if fieldNum <= 0 {
-			return fmt.Errorf("proto: UnSubscribeResponse: illegal tag %d (wire type %d)", fieldNum, wire)
-		}
-		switch fieldNum {
-		case 1:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Table", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowLogtail
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthLogtail
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthLogtail
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			if m.Table == nil {
-				m.Table = &api.TableID{}
-			}
-			if err := m.Table.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -2506,6 +2217,477 @@ func (m *ErrorResponse) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
+func (m *SubscribeResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLogtail
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: SubscribeResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: SubscribeResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Logtail", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.Logtail == nil {
+				m.Logtail = &TableLogtail{}
+			}
+			if err := m.Logtail.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLogtail(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *UpdateResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLogtail
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: UpdateResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: UpdateResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field From", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.From == nil {
+				m.From = &timestamp.Timestamp{}
+			}
+			if err := m.From.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field To", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.To == nil {
+				m.To = &timestamp.Timestamp{}
+			}
+			if err := m.To.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LogtailList", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.LogtailList = append(m.LogtailList, &TableLogtail{})
+			if err := m.LogtailList[len(m.LogtailList)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLogtail(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *UnSubscribeResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLogtail
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: UnSubscribeResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: UnSubscribeResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Table", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.Table == nil {
+				m.Table = &api.TableID{}
+			}
+			if err := m.Table.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLogtail(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *LogtailRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLogtail
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: LogtailRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: LogtailRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RequestId", wireType)
+			}
+			m.RequestId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.RequestId |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SubscribeTable", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &SubscribeRequest{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Request = &LogtailRequest_SubscribeTable{v}
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field UnsubscribeTable", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &UnsubscribeRequest{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Request = &LogtailRequest_UnsubscribeTable{v}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLogtail(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
 func (m *LogtailResponse) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
@@ -2536,6 +2718,25 @@ func (m *LogtailResponse) Unmarshal(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ResponseId", wireType)
+			}
+			m.ResponseId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ResponseId |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SubscribeResponse", wireType)
 			}
@@ -2570,7 +2771,7 @@ func (m *LogtailResponse) Unmarshal(dAtA []byte) error {
 			}
 			m.Response = &LogtailResponse_SubscribeResponse{v}
 			iNdEx = postIndex
-		case 2:
+		case 3:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field UnsubscribeResponse", wireType)
 			}
@@ -2605,7 +2806,7 @@ func (m *LogtailResponse) Unmarshal(dAtA []byte) error {
 			}
 			m.Response = &LogtailResponse_UnsubscribeResponse{v}
 			iNdEx = postIndex
-		case 3:
+		case 4:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field UpdateResponse", wireType)
 			}
@@ -2640,7 +2841,7 @@ func (m *LogtailResponse) Unmarshal(dAtA []byte) error {
 			}
 			m.Response = &LogtailResponse_UpdateResponse{v}
 			iNdEx = postIndex
-		case 4:
+		case 5:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Error", wireType)
 			}

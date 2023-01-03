@@ -43,14 +43,16 @@ func TestSessionManger(t *testing.T) {
 	poisionTime := 10 * time.Millisecond
 
 	/* ---- 1. register sessioin A ---- */
-	streamA := mockNormalStream(logger)
-	sessionA := sm.GetSession(ctx, logger, sendTimeout, poisionTime, pooler, notifier, streamA)
+	csA := mockNormalClientSession(logger)
+	streamA := mockMorpcStream(csA, 10)
+	sessionA := sm.GetSession(ctx, logger, sendTimeout, pooler, notifier, streamA, poisionTime)
 	require.NotNil(t, sessionA)
 	require.Equal(t, 1, len(sm.ListSession()))
 
 	/* ---- 2. register sessioin B ---- */
-	streamB := mockNormalStream(logger)
-	sessionB := sm.GetSession(ctx, logger, sendTimeout, poisionTime, pooler, notifier, streamB)
+	csB := mockNormalClientSession(logger)
+	streamB := mockMorpcStream(csB, 11)
+	sessionB := sm.GetSession(ctx, logger, sendTimeout, pooler, notifier, streamB, poisionTime)
 	require.NotNil(t, sessionB)
 	require.Equal(t, 2, len(sm.ListSession()))
 
@@ -69,12 +71,13 @@ func TestSessionError(t *testing.T) {
 	logger := logutil.GetGlobalLogger().Named(LogtailServiceRPCName)
 	pooler := mockResponsePooler()
 	notifier := mockSessionErrorNotifier(logger)
-	stream := mockBrokenStream()
+	cs := mockBrokenClientSession()
+	stream := mockMorpcStream(cs, 10)
 	sendTimeout := 5 * time.Second
 	poisionTime := 10 * time.Millisecond
 
 	tableA := mockTable(1, 2, 3)
-	ss := NewSession(ctx, logger, sendTimeout, poisionTime, pooler, notifier, stream)
+	ss := NewSession(ctx, logger, sendTimeout, pooler, notifier, stream, poisionTime)
 
 	/* ---- 1. send subscription response ---- */
 	err := ss.SendSubscriptionResponse(
@@ -106,17 +109,20 @@ func TestPoisionSession(t *testing.T) {
 	logger := logutil.GetGlobalLogger().Named(LogtailServiceRPCName)
 	pooler := mockResponsePooler()
 	notifier := mockSessionErrorNotifier(logger)
-	stream := mockBlockStream()
+	cs := mockBlockStream()
+	stream := mockMorpcStream(cs, 10)
 	sendTimeout := 5 * time.Second
 	poisionTime := 10 * time.Millisecond
 
 	tableA := mockTable(1, 2, 3)
-	ss := NewSession(ctx, logger, sendTimeout, poisionTime, pooler, notifier, stream)
+	ss := NewSession(ctx, logger, sendTimeout, pooler, notifier, stream, poisionTime)
 
 	/* ---- 1. send response repeatedly ---- */
 	for i := 0; i < cap(ss.sendChan)+2; i++ {
 		err := ss.SendUpdateResponse(
 			context.Background(),
+			mockTimestamp(int64(i), 0),
+			mockTimestamp(int64(i+1), 0),
 			&logtail.TableLogtail{
 				Table: &tableA,
 			},
@@ -126,14 +132,6 @@ func TestPoisionSession(t *testing.T) {
 			break
 		}
 	}
-
-	err := ss.SendUpdateResponse(
-		context.Background(),
-		&logtail.TableLogtail{
-			Table: &tableA,
-		},
-	)
-	require.Error(t, err)
 }
 
 func TestSession(t *testing.T) {
@@ -144,7 +142,8 @@ func TestSession(t *testing.T) {
 	logger := logutil.GetGlobalLogger().Named(LogtailServiceRPCName)
 	pooler := mockResponsePooler()
 	notifier := mockSessionErrorNotifier(logger)
-	stream := mockNormalStream(logger)
+	cs := mockNormalClientSession(logger)
+	stream := mockMorpcStream(cs, 10)
 	sendTimeout := 5 * time.Second
 	poisionTime := 10 * time.Millisecond
 
@@ -154,7 +153,7 @@ func TestSession(t *testing.T) {
 	tableB := mockTable(1, 4, 3)
 	idB := TableID(tableB.String())
 
-	ss := NewSession(ctx, logger, sendTimeout, poisionTime, pooler, notifier, stream)
+	ss := NewSession(ctx, logger, sendTimeout, pooler, notifier, stream, poisionTime)
 	defer ss.PostClean()
 
 	// no table resigered now
@@ -226,6 +225,8 @@ func TestSession(t *testing.T) {
 	/* ---- 8. send update response ---- */
 	err = ss.SendUpdateResponse(
 		context.Background(),
+		mockTimestamp(1, 0),
+		mockTimestamp(2, 0),
 		mockLogtail(tableA),
 		mockLogtail(tableB),
 	)
@@ -234,6 +235,8 @@ func TestSession(t *testing.T) {
 	/* ---- 9. publish update response ---- */
 	err = ss.Publish(
 		context.Background(),
+		mockTimestamp(2, 0),
+		mockTimestamp(3, 0),
 		mockWrapLogtail(tableA),
 		mockWrapLogtail(tableB),
 	)
@@ -265,7 +268,7 @@ func (m *blockStream) Close() error {
 
 type brokenStream struct{}
 
-func mockBrokenStream() morpc.ClientSession {
+func mockBrokenClientSession() morpc.ClientSession {
 	return &brokenStream{}
 }
 
@@ -281,7 +284,7 @@ type normalStream struct {
 	logger *zap.Logger
 }
 
-func mockNormalStream(logger *zap.Logger) morpc.ClientSession {
+func mockNormalClientSession(logger *zap.Logger) morpc.ClientSession {
 	return &normalStream{
 		logger: logger,
 	}
@@ -369,5 +372,12 @@ func mockWrapLogtail(table api.TableID) wrapLogtail {
 func mockLogtail(table api.TableID) *logtail.TableLogtail {
 	return &logtail.TableLogtail{
 		Table: &table,
+	}
+}
+
+func mockMorpcStream(cs morpc.ClientSession, id uint64) morpcStream {
+	return morpcStream{
+		id: id,
+		cs: cs,
 	}
 }

@@ -97,7 +97,7 @@ type publishment struct {
 	wraps    []wrapLogtail
 }
 
-// sessionError describes error when writing via morpc stream.
+// sessionError describes error when writing via morpc client session.
 type sessionError struct {
 	session *Session
 	err     error
@@ -194,10 +194,12 @@ func NewLogtailServer(
 
 	rpc, err := morpc.NewRPCServer(LogtailServiceRPCName, address, codec,
 		morpc.WithServerLogger(s.options.logger),
-		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
-			m := v.(morpc.RPCMessage)
-			s.ReleaseResponse(m.Message.(*LogtailResponse))
-		})),
+		morpc.WithServerGoettyOptions(
+			goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
+				m := v.(morpc.RPCMessage)
+				s.ReleaseResponse(m.Message.(*LogtailResponse))
+			}),
+		),
 	)
 	if err != nil {
 		return nil, err
@@ -239,9 +241,9 @@ func (s *LogtailServer) releaseRequest(req *LogtailRequest) {
 	s.pool.requests.Put(req)
 }
 
-// onMessage is the handler for morpc stream.
+// onMessage is the handler for morpc client session.
 func (s *LogtailServer) onMessage(
-	ctx context.Context, request morpc.Message, seq uint64, stream morpc.ClientSession,
+	ctx context.Context, request morpc.Message, seq uint64, cs morpc.ClientSession,
 ) error {
 	ctx, span := trace.Debug(ctx, "LogtailServer.onMessage")
 	defer span.End()
@@ -260,6 +262,11 @@ func (s *LogtailServer) onMessage(
 	default:
 	}
 
+	stream := morpcStream{
+		id: msg.RequestId,
+		cs: cs,
+	}
+
 	if req := msg.GetSubscribeTable(); req != nil {
 		logger.Debug("on subscritpion", zap.Any("request", req))
 		return s.onSubscription(ctx, stream, req)
@@ -275,14 +282,15 @@ func (s *LogtailServer) onMessage(
 
 // onSubscription handls subscription.
 func (s *LogtailServer) onSubscription(
-	sendCtx context.Context, stream morpc.ClientSession, req *logtail.SubscribeRequest,
+	sendCtx context.Context, stream morpcStream, req *logtail.SubscribeRequest,
 ) error {
-	poisionTime := s.options.collectInterval/2 + 1
-	session := s.ssmgr.GetSession(
-		s.rootCtx, s.options.logger, s.options.sendTimeout, poisionTime, s, s, stream,
-	)
+	logger := s.options.logger
 
 	tableID := TableID(req.Table.String())
+	session := s.ssmgr.GetSession(
+		s.rootCtx, logger, s.options.sendTimeout, s, s, stream, s.streamPoisionTime(),
+	)
+
 	repeated := session.Register(tableID, *req.Table)
 	if repeated {
 		return nil
@@ -302,10 +310,10 @@ func (s *LogtailServer) onSubscription(
 
 	select {
 	case <-s.rootCtx.Done():
-		s.options.logger.Error("logtail server context done", zap.Error(s.rootCtx.Err()))
+		logger.Error("logtail server context done", zap.Error(s.rootCtx.Err()))
 		return s.rootCtx.Err()
 	case <-sendCtx.Done():
-		s.options.logger.Error("request context done", zap.Error(sendCtx.Err()))
+		logger.Error("request context done", zap.Error(sendCtx.Err()))
 		return sendCtx.Err()
 	case s.subChan <- sub:
 	}
@@ -315,14 +323,13 @@ func (s *LogtailServer) onSubscription(
 
 // onUnsubscription sends response for unsubscription.
 func (s *LogtailServer) onUnsubscription(
-	sendCtx context.Context, stream morpc.ClientSession, req *logtail.UnsubscribeRequest,
+	sendCtx context.Context, stream morpcStream, req *logtail.UnsubscribeRequest,
 ) error {
-	poisionTime := s.options.collectInterval/2 + 1
+	tableID := TableID(req.Table.String())
 	session := s.ssmgr.GetSession(
-		s.rootCtx, s.options.logger, s.options.sendTimeout, poisionTime, s, s, stream,
+		s.rootCtx, s.options.logger, s.options.sendTimeout, s, s, stream, s.streamPoisionTime(),
 	)
 
-	tableID := TableID(req.Table.String())
 	state := session.Unregister(tableID)
 	if state == TableNotFound {
 		return nil
@@ -331,7 +338,12 @@ func (s *LogtailServer) onUnsubscription(
 	return session.SendUnsubscriptionResponse(sendCtx, *req.Table)
 }
 
-// notifySessionError notifies session manager with session error.
+// streamPoisionTime returns poision duration for stream.
+func (s *LogtailServer) streamPoisionTime() time.Duration {
+	return s.options.collectInterval/2 + 1
+}
+
+// NotifySessionError notifies session manager with session error.
 func (s *LogtailServer) NotifySessionError(
 	session *Session, err error,
 ) {
@@ -342,7 +354,7 @@ func (s *LogtailServer) NotifySessionError(
 	}
 }
 
-// sessionErrorHandler handles morpc stream writing error.
+// sessionErrorHandler handles morpc client session writing error.
 func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 	logger := s.options.logger
 
@@ -428,7 +440,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 			// publish all subscribed tables via session manager
 			for _, session := range s.ssmgr.ListSession() {
-				if err := session.Publish(ctx, pub.wraps...); err != nil {
+				if err := session.Publish(ctx, pub.from, pub.to, pub.wraps...); err != nil {
 					logger.Error("fail to publish additional logtail", zap.Error(err))
 					continue
 				}
