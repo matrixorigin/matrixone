@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package env
+package metrics
 
 import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/util/export/observability"
 	"sync"
 	"time"
 	"unsafe"
@@ -46,24 +47,24 @@ func NewMetric() *Metric {
 }
 
 func (m *Metric) GetName() string {
-	return MetricTable.GetIdentify()
+	return observability.MetricTable.GetIdentify()
 }
 
 func (m *Metric) GetRow() *table.Row {
-	return MetricTable.GetRow(context.Background())
+	return observability.MetricTable.GetRow(context.Background())
 }
 
 func (m *Metric) CsvFields(ctx context.Context, row *table.Row) []string {
 	row.Reset()
-	row.SetColumnVal(MetricNameColumn, m.Name)
-	row.SetColumnVal(MetricTimestampColumn, Time2DatetimeString(m.Timestamp))
-	row.SetFloat64(MetricValueColumn.Name, m.Value)
+	row.SetColumnVal(observability.MetricNameColumn, m.Name)
+	row.SetColumnVal(observability.MetricTimestampColumn, observability.Time2DatetimeString(m.Timestamp))
+	row.SetFloat64(observability.MetricValueColumn.Name, m.Value)
 
 	labels, err := json.Marshal(&m.Labels)
 	if err != nil {
 		panic(err)
 	}
-	row.SetColumnVal(MetricLabelsColumn, string(labels))
+	row.SetColumnVal(observability.MetricLabelsColumn, string(labels))
 	// calculate md5
 	hash := md5.New()
 	if _, err := hash.Write(export.String2Bytes(m.Name)); err != nil {
@@ -74,7 +75,7 @@ func (m *Metric) CsvFields(ctx context.Context, row *table.Row) []string {
 	}
 	hashed := hash.Sum(nil)
 	m.SeriesId = hex.EncodeToString(hashed)
-	row.SetColumnVal(MetricSeriesIDColumn, m.SeriesId)
+	row.SetColumnVal(observability.MetricSeriesIDColumn, m.SeriesId)
 	return row.ToStrings()
 }
 

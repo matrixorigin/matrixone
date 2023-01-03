@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package env
+package trace
 
 import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/export/observability"
 	"sync"
 	"time"
 	"unsafe"
@@ -55,28 +56,28 @@ func NewSpan() *Span {
 }
 
 func (*Span) GetName() string {
-	return SpansTable.GetIdentify()
+	return observability.SpansTable.GetIdentify()
 }
 
 func (*Span) GetRow() *table.Row {
-	return SpansTable.GetRow(context.Background())
+	return observability.SpansTable.GetRow(context.Background())
 }
 
 func (s *Span) CsvFields(ctx context.Context, row *table.Row) []string {
 	row.Reset()
-	row.SetColumnVal(SpansTraceIDCol, s.TraceId)
-	row.SetColumnVal(SpansSpanIDCol, s.SpanId)
-	row.SetColumnVal(SpansParentTraceIDCol, s.ParentSpanId)
-	row.SetColumnVal(SpansSpanKindCol, s.Kind)
-	row.SetColumnVal(SpansSpanNameCol, s.Name)
-	row.SetColumnVal(SpansStartTimeCol, Time2DatetimeString(s.StartTime))
-	row.SetColumnVal(SpansEndTimeCol, Time2DatetimeString(s.EndTime))
-	row.SetColumnVal(SpansDurationCol, fmt.Sprintf("%d", s.Duration))
-	row.SetColumnVal(SpansStatusCol, trsfStatus(s.Status))
-	row.SetColumnVal(SpansResourceCol, trsfResource(s.Resource))
-	row.SetColumnVal(SpansAttributesCol, trsfAttributes(s.Attributes))
-	row.SetColumnVal(SpansLinksCol, trsfSpanLink(s.Links))
-	row.SetColumnVal(SpansEventsCol, trsfEvents(s.Events))
+	row.SetColumnVal(observability.SpansTraceIDCol, s.TraceId)
+	row.SetColumnVal(observability.SpansSpanIDCol, s.SpanId)
+	row.SetColumnVal(observability.SpansParentTraceIDCol, s.ParentSpanId)
+	row.SetColumnVal(observability.SpansSpanKindCol, s.Kind)
+	row.SetColumnVal(observability.SpansSpanNameCol, s.Name)
+	row.SetColumnVal(observability.SpansStartTimeCol, observability.Time2DatetimeString(s.StartTime))
+	row.SetColumnVal(observability.SpansEndTimeCol, observability.Time2DatetimeString(s.EndTime))
+	row.SetColumnVal(observability.SpansDurationCol, fmt.Sprintf("%d", s.Duration))
+	row.SetColumnVal(observability.SpansStatusCol, trsfStatus(s.Status))
+	row.SetColumnVal(observability.SpansResourceCol, trsfResource(s.Resource))
+	row.SetColumnVal(observability.SpansAttributesCol, trsfAttributes(s.Attributes))
+	row.SetColumnVal(observability.SpansLinksCol, trsfSpanLink(s.Links))
+	row.SetColumnVal(observability.SpansEventsCol, trsfEvents(s.Events))
 
 	return row.ToStrings()
 }

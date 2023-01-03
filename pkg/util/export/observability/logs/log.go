@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package env
+package logs
 
 import (
 	"context"
@@ -21,10 +21,11 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/util/export/observability"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
-type Log struct {
+type LogRecord struct {
 	TraceId     string
 	SpanId      string
 	Timestamp   time.Time
@@ -41,50 +42,50 @@ type Log struct {
 }
 
 var logPool = &sync.Pool{New: func() any {
-	return &Log{}
+	return &LogRecord{}
 }}
 
-func NewLog() *Log {
-	return logPool.Get().(*Log)
+func NewLogRecord() *LogRecord {
+	return logPool.Get().(*LogRecord)
 }
 
-func (*Log) GetName() string {
-	return LogsTable.GetIdentify()
+func (*LogRecord) GetName() string {
+	return observability.LogsTable.GetIdentify()
 }
 
-func (*Log) GetRow() *table.Row {
-	return LogsTable.GetRow(context.Background())
+func (*LogRecord) GetRow() *table.Row {
+	return observability.LogsTable.GetRow(context.Background())
 }
 
-func (l *Log) CsvFields(ctx context.Context, row *table.Row) []string {
+func (l *LogRecord) CsvFields(ctx context.Context, row *table.Row) []string {
 	row.Reset()
-	row.SetColumnVal(LogsTraceIDCol, l.TraceId)
-	row.SetColumnVal(LogsSpanIDCol, l.SpanId)
-	row.SetColumnVal(LogsTimestampCol, Time2DatetimeString(l.Timestamp))
-	row.SetColumnVal(LogsCollectTimeCol, Time2DatetimeString(l.CollectTime))
-	row.SetColumnVal(LogsLoggerNameCol, l.LoggerName)
-	row.SetColumnVal(LogsLevelCol, l.Level)
-	row.SetColumnVal(LogsCallerCol, l.Caller)
-	row.SetColumnVal(LogsMessageCol, l.Message)
-	row.SetColumnVal(LogsStackCol, l.Stack)
+	row.SetColumnVal(observability.LogsTraceIDCol, l.TraceId)
+	row.SetColumnVal(observability.LogsSpanIDCol, l.SpanId)
+	row.SetColumnVal(observability.LogsTimestampCol, observability.Time2DatetimeString(l.Timestamp))
+	row.SetColumnVal(observability.LogsCollectTimeCol, observability.Time2DatetimeString(l.CollectTime))
+	row.SetColumnVal(observability.LogsLoggerNameCol, l.LoggerName)
+	row.SetColumnVal(observability.LogsLevelCol, l.Level)
+	row.SetColumnVal(observability.LogsCallerCol, l.Caller)
+	row.SetColumnVal(observability.LogsMessageCol, l.Message)
+	row.SetColumnVal(observability.LogsStackCol, l.Stack)
 
 	labels, err := json.Marshal(&l.Labels)
 	if err != nil {
 		panic(err)
 	}
-	row.SetColumnVal(LogsLabelsCol, string(labels))
+	row.SetColumnVal(observability.LogsLabelsCol, string(labels))
 
 	return row.ToStrings()
 }
 
-func (l *Log) Size() int64 {
+func (l *LogRecord) Size() int64 {
 	return int64(unsafe.Sizeof(l)) + int64(
 		len(l.TraceId)+len(l.SpanId)+len(l.LoggerName)+len(l.Level)+
 			len(l.Caller)+len(l.Message)+len(l.Stack),
 	)
 }
 
-func (l *Log) Free() {
+func (l *LogRecord) Free() {
 	l.TraceId = ""
 	l.SpanId = ""
 	l.Timestamp = time.Time{}
