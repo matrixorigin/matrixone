@@ -71,15 +71,9 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	if ok := db.txn.catalog.GetTable(key); !ok {
 		return nil, moerr.GetOkExpectedEOB()
 	}
-	columnLength := len(key.TableDef.Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
-	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(key.Id), true, columnLength)
-	if err != nil {
-		return nil, err
-	}
 	parts := db.txn.db.getPartitions(db.databaseId, key.Id)
-	return &table{
+	tbl := &table{
 		db:           db,
-		meta:         meta,
 		parts:        parts,
 		tableId:      key.Id,
 		tableName:    key.Name,
@@ -93,7 +87,22 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 		partition:    key.Partition,
 		createSql:    key.CreateSql,
 		constraint:   key.Constraint,
-	}, nil
+	}
+	_, created := tbl.db.txn.tableMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
+	if _, ok := db.txn.syncMap.Load(key.Id); !created && !ok {
+		if err := db.txn.db.Update(ctx, db.txn.dnStores[:1], tbl, db.txn.op, tbl.primaryIdx,
+			db.databaseId, tbl.tableId, db.txn.meta.SnapshotTS); err != nil {
+			return nil, err
+		}
+		db.txn.syncMap.Store(key.Id, 0)
+	}
+	columnLength := len(key.TableDef.Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
+	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(key.Id), true, columnLength)
+	if err != nil {
+		return nil, err
+	}
+	tbl.meta = meta
+	return tbl, nil
 }
 
 func (db *database) Delete(ctx context.Context, name string) error {
@@ -250,21 +259,14 @@ func (db *database) openSysTable(key tableKey, id uint64, name string,
 	defs []engine.TableDef) engine.Relation {
 	parts := db.txn.db.getPartitions(db.databaseId, id)
 	tbl := &table{
-		db:         db,
-		tableId:    id,
-		tableName:  name,
-		defs:       defs,
-		parts:      parts,
-		primaryIdx: -1,
+		db:           db,
+		tableId:      id,
+		tableName:    name,
+		defs:         defs,
+		parts:        parts,
+		primaryIdx:   -1,
+		clusterByIdx: -1,
 	}
-	// find primary idx
-	for i, def := range defs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			if attr.Attr.Primary {
-				tbl.primaryIdx = i
-				break
-			}
-		}
-	}
+	tbl.getTableDef()
 	return tbl
 }
