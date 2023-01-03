@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
@@ -40,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+/*
 func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]string, error) {
 	rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.dnStores[:1],
 		catalog.MoTablesTableDefs, []string{
@@ -72,14 +74,12 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 		return nil, nil, moerr.NewDuplicate(ctx)
 	}
 	row := rows[0]
-	/*
-		row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			txn.dnStores[:1], catalog.MoTablesTableDefs, catalog.MoTablesSchema,
-			genTableInfoExpr(accountId, databaseId, name))
-		if err != nil {
-			return nil, nil, err
-		}
-	*/
+	//	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+	//		txn.dnStores[:1], catalog.MoTablesTableDefs, catalog.MoTablesSchema,
+	//		genTableInfoExpr(accountId, databaseId, name))
+	//	if err != nil {
+	//		return nil, nil, err
+	//	}
 	tbl := new(table)
 	tbl.primaryIdx = -1
 	tbl.tableId = row[catalog.MO_TABLES_REL_ID_IDX].(uint64)
@@ -88,15 +88,13 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	tbl.comment = string(row[catalog.MO_TABLES_REL_COMMENT_IDX].([]byte))
 	tbl.partition = string(row[catalog.MO_TABLES_PARTITIONED_IDX].([]byte))
 	tbl.createSql = string(row[catalog.MO_TABLES_REL_CREATESQL_IDX].([]byte))
-	tbl.constraint = row[catalog.MO_TABLES_CONSTRAINT].([]byte)
-	/*
-		rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-			txn.dnStores[:1], catalog.MoColumnsTableDefs, catalog.MoColumnsSchema,
-			genColumnInfoExpr(accountId, databaseId, tbl.tableId))
-		if err != nil {
-			return nil, nil, err
-		}
-	*/
+	tbl.constraint = row[catalog.MO_TABLES_CONSTRAINT_IDX].([]byte)
+	//	rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+	//		txn.dnStores[:1], catalog.MoColumnsTableDefs, catalog.MoColumnsSchema,
+	//		genColumnInfoExpr(accountId, databaseId, tbl.tableId))
+	//	if err != nil {
+	//		return nil, nil, err
+	//	}
 	rows, err = txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, "",
 		txn.dnStores[:1], catalog.MoColumnsSchema, genColumnIndexKey(tbl.tableId),
 		genColumnInfoExpr(ctx, accountId, databaseId, tbl.tableId))
@@ -169,20 +167,19 @@ func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64,
 	if len(rows) != 1 {
 		return 0, moerr.NewDuplicate(ctx)
 	}
-	/*
-		row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.dnStores[:1],
-			catalog.MoDatabaseTableDefs, []string{
-				catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
-				catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
-				catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
-			},
-			genDatabaseIdExpr(accountId, name))
-		if err != nil {
-			return 0, err
-		}
-	*/
+	//	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.dnStores[:1],
+	//		catalog.MoDatabaseTableDefs, []string{
+	//			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
+	//			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
+	//			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
+	//		},
+	//		genDatabaseIdExpr(accountId, name))
+	//	if err != nil {
+	//		return 0, err
+	//	}
 	return rows[0][0].(uint64), nil
 }
+*/
 
 func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
 	name string, needUpdated bool, columnLength int) (*tableMeta, error) {
@@ -378,6 +375,7 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 }
 
 // getRow used to get a row of table based on a condition
+/*
 func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId uint64,
 	dnList []DNStore, defs []engine.TableDef, columns []string, expr *plan.Expr) ([]any, error) {
 	bats, err := txn.readTable(ctx, "", databaseId, tableId, defs, dnList, columns, expr)
@@ -402,6 +400,7 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 	}
 	return rows[0], nil
 }
+*/
 
 // getRows used to get rows of table
 func (txn *Transaction) getRows(ctx context.Context, name string, databaseId uint64, tableId uint64,
@@ -423,6 +422,7 @@ func (txn *Transaction) getRows(ctx context.Context, name string, databaseId uin
 	return rows, nil
 }
 
+/*
 func (txn *Transaction) getRowsByIndex(databaseId, tableId uint64, name string,
 	dnList []DNStore, columns []string, index memtable.Tuple, expr *plan.Expr) ([][]any, error) {
 	var rows [][]any
@@ -515,6 +515,7 @@ func (txn *Transaction) getRowsByIndex(databaseId, tableId uint64, name string,
 	}
 	return rows, nil
 }
+*/
 
 // readTable used to get tuples of table based on a condition
 // only used to read data from catalog, for which the execution is currently single-core
@@ -703,7 +704,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	if len(columns) == 0 {
 		bat := batch.NewWithSize(0)
 		defer bat.Clean(proc.Mp())
-		ifNeed, err := evalFilterExpr(notReportErrCtx, expr, bat, proc)
+		ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
 		if err != nil {
 			return true
 		}
@@ -717,7 +718,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	}
 
 	// use all min/max data to build []vectors.
-	buildVectors := buildVectorsByData(datas, dataTypes, proc.Mp())
+	buildVectors := plan2.BuildVectorsByData(datas, dataTypes, proc.Mp())
 	bat := batch.NewWithSize(maxCol + 1)
 	defer bat.Clean(proc.Mp())
 	for k, v := range columnMap {
@@ -730,7 +731,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	}
 	bat.SetZs(buildVectors[0].Length(), proc.Mp())
 
-	ifNeed, err := evalFilterExpr(notReportErrCtx, expr, bat, proc)
+	ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
 	if err != nil {
 		return true
 	}
@@ -806,6 +807,9 @@ func needSyncDnStores(ctx context.Context, expr *plan.Expr, tableDef *plan.Table
 			dnList[i] = i
 		}
 		return dnList
+	}
+	if len(dnStores) == 1 {
+		return []int{0}
 	}
 	for _, key := range priKeys {
 		isCPkey := util.JudgeIsCompositePrimaryKeyColumn(key.Name)

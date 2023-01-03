@@ -43,7 +43,7 @@ func (t *Table[K, V, R]) NewBatch(tx *Transaction) (*Batch[K, V, R], error) {
 	return &Batch[K, V, R]{
 		txTable:   txTable,
 		initState: initState,
-		state:     initState.cloneWithLogs(),
+		state:     initState.clone(),
 	}, nil
 }
 
@@ -73,11 +73,14 @@ func (b *Batch[K, V, R]) Insert(row R) (err error) {
 		Key: key,
 	}
 
-	_, ok := b.state.rows.Get(pair)
+	_, ok := b.state.tree.Get(TreeNode[K, V]{
+		KVPair: pair,
+	})
 	if ok {
 		return moerr.NewDuplicateNoCtx()
 	}
 
+	pair.KVValue = new(KVValue[K, V])
 	pair.ID = atomic.AddInt64(&nextKVPairID, 1)
 	pair.Value = row.Value()
 	pair.Indexes = row.Indexes()
@@ -102,15 +105,18 @@ func (b *Batch[K, V, R]) Update(row R) (err error) {
 		Key: key,
 	}
 
-	oldPair, ok := b.state.rows.Get(pair)
+	oldNode, ok := b.state.tree.Get(TreeNode[K, V]{
+		KVPair: pair,
+	})
 	if !ok {
 		return sql.ErrNoRows
 	}
 
+	pair.KVValue = new(KVValue[K, V])
 	pair.ID = atomic.AddInt64(&nextKVPairID, 1)
 	pair.Value = row.Value()
 	pair.Indexes = row.Indexes()
-	b.state.setPair(pair, oldPair)
+	b.state.setPair(pair, oldNode.KVPair)
 
 	return nil
 }
@@ -126,16 +132,18 @@ func (b *Batch[K, V, R]) Delete(key K) (err error) {
 		}
 	}()
 
-	pivot := &KVPair[K, V]{
+	pivot := KVPair[K, V]{
 		Key: key,
 	}
 
-	oldPair, ok := b.state.rows.Get(pivot)
+	oldNode, ok := b.state.tree.Get(TreeNode[K, V]{
+		KVPair: &pivot,
+	})
 	if !ok {
 		return sql.ErrNoRows
 	}
 
-	b.state.unsetPair(pivot, oldPair)
+	b.state.unsetPair(pivot, oldNode.KVPair)
 
 	return nil
 }
@@ -156,21 +164,25 @@ func (b *Batch[K, V, R]) Upsert(row R) (err error) {
 		Key: key,
 	}
 
-	oldPair, ok := b.state.rows.Get(pair)
+	oldNode, ok := b.state.tree.Get(TreeNode[K, V]{
+		KVPair: pair,
+	})
 	if !ok {
 		// insert
+		pair.KVValue = new(KVValue[K, V])
 		pair.ID = atomic.AddInt64(&nextKVPairID, 1)
 		pair.Value = row.Value()
 		pair.Indexes = row.Indexes()
-		b.state.setPair(pair, oldPair)
+		b.state.setPair(pair, oldNode.KVPair)
 		return nil
 	}
 
 	// update
+	pair.KVValue = new(KVValue[K, V])
 	pair.ID = atomic.AddInt64(&nextKVPairID, 1)
 	pair.Value = row.Value()
 	pair.Indexes = row.Indexes()
-	b.state.setPair(pair, oldPair)
+	b.state.setPair(pair, oldNode.KVPair)
 
 	return nil
 }
@@ -186,14 +198,16 @@ func (b *Batch[K, V, R]) Get(key K) (value V, err error) {
 		}
 	}()
 
-	pair := &KVPair[K, V]{
-		Key: key,
+	node := TreeNode[K, V]{
+		KVPair: &KVPair[K, V]{
+			Key: key,
+		},
 	}
-	pair, ok := b.state.rows.Get(pair)
+	node, ok := b.state.tree.Get(node)
 	if !ok {
 		err = sql.ErrNoRows
 		return
 	}
-	value = pair.Value
+	value = node.KVPair.Value
 	return
 }

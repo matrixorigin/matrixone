@@ -417,6 +417,13 @@ func TestUnnest(t *testing.T) {
 			valid: true,
 		},
 	}
+	filterMap := map[string]struct{}{
+		"index": {},
+		"this":  {},
+		"value": {},
+		"path":  {},
+		"key":   {},
+	}
 	for _, kase := range kases {
 		bj, err := ParseFromString(kase.jsonStr)
 		require.Nil(t, err)
@@ -425,7 +432,7 @@ func TestUnnest(t *testing.T) {
 			path, err = ParseJsonPath(kase.pathStr)
 			require.Nil(t, err)
 		}
-		out, err := bj.Unnest(&path, kase.outer, kase.recursive, kase.mode, nil)
+		out, err := bj.Unnest(&path, kase.outer, kase.recursive, kase.mode, filterMap)
 		if !kase.valid {
 			require.NotNil(t, err)
 			continue
@@ -436,4 +443,74 @@ func TestUnnest(t *testing.T) {
 		}
 	}
 
+}
+
+func TestByteJson_Unquote(t *testing.T) {
+	kases := []struct {
+		jsonStr string
+		outStr  string
+		valid   bool
+	}{
+		{
+			jsonStr: `"a"`,
+			outStr:  "a",
+			valid:   true,
+		},
+		{
+			jsonStr: `"a\"b"`,
+			outStr:  `a"b`,
+			valid:   true,
+		},
+		{
+			jsonStr: `"a\b"`,
+			outStr:  "a\b",
+			valid:   true,
+		},
+		{
+			jsonStr: `"a\r"`,
+			outStr:  "a\r",
+			valid:   true,
+		},
+		{
+			jsonStr: `"a\t"`,
+			outStr:  `a	`,
+			valid:   true,
+		},
+		{
+			jsonStr: `"a\n"`,
+			outStr: `a
+`,
+			valid: true,
+		},
+		{
+			jsonStr: `"\u554a\u554a\u5361\u5361"`,
+			outStr:  `啊啊卡卡`,
+			valid:   true,
+		},
+		{
+			jsonStr: `"\u4f60\u597d\uff0c\u006d\u006f"`,
+			outStr:  `你好，mo`,
+			valid:   true,
+		},
+		{
+			jsonStr: `"\u4f60\u597d\uff0cmo"`,
+			outStr:  `你好，mo`,
+			valid:   true,
+		},
+		{
+			jsonStr: `"\u4f60\u597d\ufc"`,
+			valid:   false,
+		},
+	}
+	for _, kase := range kases {
+		bj, err := ParseFromString(kase.jsonStr)
+		if !kase.valid {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		out, err := bj.Unquote()
+		require.Nil(t, err)
+		require.Equal(t, kase.outStr, out)
+	}
 }

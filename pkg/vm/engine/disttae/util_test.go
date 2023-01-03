@@ -168,7 +168,7 @@ func TestCheckExprIsMonotonic(t *testing.T) {
 
 	t.Run("test checkExprIsMonotonic", func(t *testing.T) {
 		for i, testCase := range testCases {
-			isMonotonic := checkExprIsMonotonic(context.TODO(), testCase.expr)
+			isMonotonic := plan2.CheckExprIsMonotonic(context.TODO(), testCase.expr)
 			if isMonotonic != testCase.result {
 				t.Fatalf("checkExprIsMonotonic testExprs[%d] is different with expected", i)
 			}
@@ -237,7 +237,7 @@ func TestNeedRead(t *testing.T) {
 
 	t.Run("test needRead", func(t *testing.T) {
 		for i, testCase := range testCases {
-			columnMap, columns, maxCol := getColumnsByExpr(testCase.expr, makeTableDefForTest(testCase.columns))
+			columnMap, columns, maxCol := plan2.GetColumnsByExpr(testCase.expr, makeTableDefForTest(testCase.columns))
 			result := needRead(context.Background(), testCase.expr, blockMeta, makeTableDefForTest(testCase.columns), columnMap, columns, maxCol, testutil.NewProc())
 			if result != testCase.result {
 				t.Fatalf("test needRead at cases[%d], get result is different with expected", i)

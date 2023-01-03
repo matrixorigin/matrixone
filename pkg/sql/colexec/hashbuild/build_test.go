@@ -77,7 +77,7 @@ func TestBuild(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		for {
-			ok, err := Call(0, tc.proc, tc.arg)
+			ok, err := Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
 			require.Equal(t, true, ok)
 			mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
@@ -106,7 +106,7 @@ func TestLowCardinalityBuild(t *testing.T) {
 	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
 	tc.proc.Reg.MergeReceivers[0].Ch <- nil
 
-	ok, err := Call(0, tc.proc, tc.arg)
+	ok, err := Call(0, tc.proc, tc.arg, false, false)
 	require.NoError(t, err)
 	require.Equal(t, true, ok)
 	mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
@@ -137,7 +137,7 @@ func BenchmarkBuild(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			for {
-				ok, err := Call(0, tc.proc, tc.arg)
+				ok, err := Call(0, tc.proc, tc.arg, false, false)
 				require.NoError(t, err)
 				require.Equal(t, true, ok)
 				mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)

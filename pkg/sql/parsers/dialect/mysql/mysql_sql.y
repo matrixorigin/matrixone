@@ -544,7 +544,7 @@ import (
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt distinct_opt temporary_opt
 %type <item> pwd_expire clear_pwd_opt
-%type <str> name_confict distinct_keyword
+%type <str> name_confict distinct_keyword separator_opt
 %type <insert> insert_data
 %type <replace> replace_data
 %type <rowsExprs> values_list
@@ -2294,11 +2294,19 @@ show_collation_stmt:
 show_grants_stmt:
     SHOW GRANTS
     {
-        $$ = &tree.ShowGrants{}
+        $$ = &tree.ShowGrants{ShowGrantType: tree.GrantForUser}
     }
-|    SHOW GRANTS    FOR user_name using_roles_opt
+|    SHOW GRANTS FOR user_name using_roles_opt
     {
-        $$ = &tree.ShowGrants{Username: $4.Username, Hostname: $4.Hostname, Roles: $5}
+        $$ = &tree.ShowGrants{Username: $4.Username, Hostname: $4.Hostname, Roles: $5, ShowGrantType: tree.GrantForUser}
+    }
+|    SHOW GRANTS FOR ROLE role_name
+    {
+        s := &tree.ShowGrants{}
+        roles := []*tree.Role{tree.NewRole($5)}
+        s.Roles = roles
+        s.ShowGrantType = tree.GrantForRole
+        $$ = s
     }
 
 using_roles_opt:
@@ -3438,6 +3446,18 @@ select_with_parens:
 |   '(' select_with_parens ')'
     {
         $$ = &tree.ParenSelect{Select: &tree.Select{Select: $2}}
+    }
+|   '(' values_stmt ')'
+    {
+        valuesStmt := $2.(*tree.ValuesStatement);
+        $$ = &tree.ParenSelect{Select: &tree.Select {
+            Select: &tree.ValuesClause {
+                Rows: valuesStmt.Rows,
+                RowWord: true,
+            },
+            OrderBy: valuesStmt.OrderBy,
+            Limit:   valuesStmt.Limit,
+        }}
     }
 
 simple_select:
@@ -5919,6 +5939,18 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
+|   BINARY '(' expression ')'
+    {
+        locale := ""
+        $$ = tree.NewCastExpr($3, &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.StringFamily,
+                FamilyString: "BINARY",
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        })
+    }
 |   CONVERT '(' expression ',' mysql_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
@@ -6223,6 +6255,15 @@ window_partition_by_opt:
         $$ = $1
     }
 
+separator_opt:
+    {
+        $$ = ","
+    }
+|   SEPARATOR STRING
+    {
+       $$ = $2
+    }
+
 window_spec_opt:
     {
         $$ = nil
@@ -6237,7 +6278,18 @@ window_spec_opt:
     }
 
 function_call_aggregate:
-    AVG '(' func_type_opt expression  ')' window_spec_opt
+    GROUP_CONCAT '(' func_type_opt expression_list separator_opt ')' window_spec_opt
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: append($4,tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)),
+            Type: $3,
+            WindowSpec: $7,
+            AggType: 2,
+        }
+    }
+|   AVG '(' func_type_opt expression  ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
@@ -6452,15 +6504,6 @@ function_call_generic:
         }
     }
 |    VARIANCE '(' func_type_opt expression ')'
-    {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{$4},
-            Type: $3,
-        }
-    }
-|    GROUP_CONCAT '(' func_type_opt expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
@@ -6690,14 +6733,6 @@ function_call_keyword:
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: $3,
-        }
-    }
-|   BINARY simple_expr %prec UNARY
-    {
-        name := tree.SetUnresolvedName("binary")
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{$2},
         }
     }
 |   TIMESTAMP STRING
