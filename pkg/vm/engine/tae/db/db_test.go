@@ -4859,10 +4859,11 @@ func TestAppendAndGC(t *testing.T) {
 	opts.CacheCfg = new(options.CacheCfg)
 	opts.CacheCfg.InsertCapacity = common.M * 5
 	opts.CacheCfg.TxnCapacity = common.M
-	opts = config.WithQuickScanAndCKPAndMergeGCOpts(opts)
+	opts = config.WithQuickScanAndCKPOpts(opts)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
 	db := tae.DB
+	db.DiskCleaner.SetMinMergeCountForTest(2)
 
 	schema1 := catalog.MockSchemaAll(13, 2)
 	schema1.BlockMaxRows = 10
@@ -4911,6 +4912,7 @@ func TestAppendAndGC(t *testing.T) {
 	assert.NotNil(t, minMerged)
 	tae.restart()
 	db = tae.DB
+	db.DiskCleaner.SetMinMergeCountForTest(2)
 	testutils.WaitExpect(5000, func() bool {
 		if db.DiskCleaner.GetMaxConsumed() == nil {
 			return false

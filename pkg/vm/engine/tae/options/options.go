@@ -138,10 +138,6 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.GCCfg.ScanGCInterval = o.CheckpointCfg.FlushInterval * 3
 	}
 
-	if o.GCCfg.MergeTTL <= 0 {
-		o.GCCfg.MergeTTL = time.Hour * 24
-	}
-
 	if o.SchedulerCfg == nil {
 		o.SchedulerCfg = &SchedulerCfg{
 			IOWorkers:    DefaultIOWorkers,

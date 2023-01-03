@@ -51,6 +51,15 @@ func DecodeCheckpointMetadataFileName(name string) (start, end types.TS) {
 	return
 }
 
+func DecodeGCMetadataFileName(name string) (start, end types.TS, ext string) {
+	fileName := strings.Split(name, ".")
+	info := strings.Split(fileName[0], "_")
+	start = types.StringToTS(info[1])
+	end = types.StringToTS(info[2])
+	ext = fileName[1]
+	return
+}
+
 // EncodeMetaLocWithObject Generate a metaloc from an object file
 func EncodeMetaLocWithObject(
 	extent objectio.Extent,
