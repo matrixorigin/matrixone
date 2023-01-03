@@ -187,6 +187,35 @@ func (b *AccountDatePathBuilder) SupportMergeSplit() bool      { return true }
 func (b *AccountDatePathBuilder) SupportAccountStrategy() bool { return true }
 func (b *AccountDatePathBuilder) GetName() string              { return "AccountDate" }
 
+var _ PathBuilder = (*AccountDateWithDatabasePathBuilder)(nil)
+
+type AccountDateWithDatabasePathBuilder struct {
+	*AccountDatePathBuilder
+}
+
+func NewAccountDateWithDatabasePathBuilder() *AccountDateWithDatabasePathBuilder {
+	return &AccountDateWithDatabasePathBuilder{
+		AccountDatePathBuilder: NewAccountDatePathBuilder(),
+	}
+}
+
+func (b *AccountDateWithDatabasePathBuilder) Build(account string, typ MergeLogType, ts time.Time, db string, name string) string {
+	dbTblName := fmt.Sprintf("%s.%s", db, name)
+	if ts != ETLParamTSAll {
+		return path.Join(account,
+			typ.String(),
+			fmt.Sprintf("%d", ts.Year()),
+			fmt.Sprintf("%02d", ts.Month()),
+			fmt.Sprintf("%02d", ts.Day()),
+			dbTblName,
+		)
+	} else {
+		return path.Join(account, typ.String(), "*/*/*" /*All datetime*/, dbTblName)
+	}
+}
+
+func (b *AccountDateWithDatabasePathBuilder) GetName() string { return "AccountDateWithDatabase" }
+
 var _ PathBuilder = (*DBTablePathBuilder)(nil)
 
 type DBTablePathBuilder struct{}
@@ -228,6 +257,8 @@ func PathBuilderFactory(pathBuilder string) PathBuilder {
 		return NewDBTablePathBuilder()
 	case (*AccountDatePathBuilder)(nil).GetName():
 		return NewAccountDatePathBuilder()
+	case (*AccountDateWithDatabasePathBuilder)(nil).GetName():
+		return NewAccountDateWithDatabasePathBuilder()
 	default:
 		return nil
 	}
