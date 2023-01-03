@@ -264,6 +264,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		fileMap:     make(map[string]uint64),
 		tableMap:    new(sync.Map),
 		databaseMap: new(sync.Map),
+		syncMap:     new(sync.Map),
 		catalog:     e.catalog,
 	}
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))

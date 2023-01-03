@@ -21,44 +21,49 @@ import (
 	"sync"
 )
 
-type GCTask struct {
+type GCWorker struct {
 	sync.RWMutex
 	// objects is list of files that can be GC
 	objects []string
 
-	// The status of GCTask, only one delete task can be running
+	// The status of GCWorker, only one delete worker can be running
 	state CleanerState
 
-	cleaner *diskCleaner
+	cleaner *DiskCleaner
 	fs      *objectio.ObjectFS
 }
 
-func NewGCTask(fs *objectio.ObjectFS, cleaner *diskCleaner) *GCTask {
-	return &GCTask{
+func NewGCWorker(fs *objectio.ObjectFS, cleaner *DiskCleaner) *GCWorker {
+	return &GCWorker{
 		state:   Idle,
 		fs:      fs,
 		cleaner: cleaner,
 	}
 }
 
-func (g *GCTask) GetState() CleanerState {
-	g.RLock()
-	defer g.RUnlock()
-	return g.state
+func (g *GCWorker) Start() bool {
+	g.Lock()
+	defer g.Unlock()
+	if g.state == Running {
+		return false
+	}
+	g.state = Running
+	return true
 }
 
-func (g *GCTask) resetObjects() {
+func (g *GCWorker) resetObjects() {
 	g.objects = make([]string, 0)
 }
 
-func (g *GCTask) ExecDelete(names []string) error {
+func (g *GCWorker) ExecDelete(names []string) error {
 	g.Lock()
-	g.state = Running
 	g.objects = append(g.objects, names...)
-	g.Unlock()
 	if len(g.objects) == 0 {
+		g.state = Idle
+		g.Unlock()
 		return nil
 	}
+	g.Unlock()
 
 	err := g.fs.DelFiles(context.Background(), g.objects)
 	g.Lock()

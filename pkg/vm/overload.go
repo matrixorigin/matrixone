@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -153,7 +154,7 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	TableFunction: table_function.Prepare,
 }
 
-var execFunc = [...]func(int, *process.Process, any) (bool, error){
+var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	Top:        top.Call,
 	Join:       join.Call,
 	Semi:       semi.Call,
