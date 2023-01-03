@@ -16,10 +16,11 @@ package explain
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func ConvertNode(ctx context.Context, node *plan.Node, options *ExplainOptions) (*Node, error) {
@@ -535,6 +536,18 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 	statistics := NewStatistics()
 	if options.Analyze && m.node.AnalyzeInfo != nil {
 		analyzeInfo := m.node.AnalyzeInfo
+		times := []StatisticValue{
+			{
+				Name:  "Time Consumed",
+				Value: analyzeInfo.TimeConsumed,
+				Unit:  "us",
+			},
+			{
+				Name:  "Wait Time",
+				Value: analyzeInfo.WaitTimeConsumed,
+				Unit:  "us",
+			},
+		}
 		mbps := []StatisticValue{
 			{
 				Name:  InputRows,
@@ -565,8 +578,33 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Unit:  "byte",
 			},
 		}
+
+		io := []StatisticValue{
+			{
+				Name:  "Disk IO",
+				Value: analyzeInfo.DiskIO,
+				Unit:  "byte",
+			},
+			{
+				Name:  "S3 IO",
+				Value: analyzeInfo.S3IO,
+				Unit:  "byte",
+			},
+		}
+
+		nw := []StatisticValue{
+			{
+				Name:  "Network",
+				Value: analyzeInfo.NetworkIO,
+				Unit:  "byte",
+			},
+		}
+
+		statistics.Time = append(statistics.Time, times...)
 		statistics.Throughput = append(statistics.Throughput, mbps...)
 		statistics.Memory = append(statistics.Memory, mems...)
+		statistics.IO = append(statistics.IO, io...)
+		statistics.Network = append(statistics.Network, nw...)
 	}
 	return *statistics
 }

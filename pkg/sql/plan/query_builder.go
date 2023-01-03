@@ -35,14 +35,26 @@ import (
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *QueryBuilder {
+	var mysqlCompatible bool
+
+	mode, err := ctx.ResolveVariable("sql_mode", true, false)
+	if err == nil {
+		if modeStr, ok := mode.(string); ok {
+			if !strings.Contains(modeStr, "ONLY_FULL_GROUP_BY") {
+				mysqlCompatible = true
+			}
+		}
+	}
+
 	return &QueryBuilder{
 		qry: &Query{
 			StmtType: queryType,
 		},
-		compCtx:      ctx,
-		ctxByNode:    []*BindContext{},
-		nameByColRef: make(map[[2]int32]string),
-		nextTag:      0,
+		compCtx:         ctx,
+		ctxByNode:       []*BindContext{},
+		nameByColRef:    make(map[[2]int32]string),
+		nextTag:         0,
+		mysqlCompatible: mysqlCompatible,
 	}
 }
 
@@ -1470,11 +1482,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) && len(projectionBinder.boundCols) > 0 {
-		mode, err := builder.compCtx.ResolveVariable("sql_mode", true, false)
-		if err != nil {
-			return 0, err
-		}
-		if strings.Contains(mode.(string), "ONLY_FULL_GROUP_BY") {
+		if !builder.mysqlCompatible {
 			return 0, moerr.NewSyntaxError(builder.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0])
 		}
 
@@ -1791,8 +1799,18 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					return 0, err
 				}
 				viewStmt, ok := originStmts[0].(*tree.CreateView)
+
+				// No createview stmt, check alterview stmt.
 				if !ok {
-					return 0, moerr.NewParseError(builder.GetContext(), "can not get view statement")
+					alterstmt, ok := originStmts[0].(*tree.AlterView)
+					viewStmt = &tree.CreateView{}
+					if !ok {
+						return 0, moerr.NewParseError(builder.GetContext(), "can not get view statement")
+					}
+					viewStmt.Name = alterstmt.Name
+					viewStmt.ColNames = alterstmt.ColNames
+					viewStmt.AsSource = alterstmt.AsSource
+					viewStmt.Temporary = alterstmt.Temporary
 				}
 
 				viewName := viewStmt.Name.ObjectName
@@ -1873,7 +1891,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 				NumParts: 1,
 				Parts:    tree.NameParts{},
 			}
-			left.Parts[0] = "account_id"
+			left.Parts[0] = util.GetClusterTableAttributeName()
 			right := tree.NewNumVal(constant.MakeUint64(uint64(builder.compCtx.GetAccountId())), "", false)
 			right.ValType = tree.P_uint64
 			//account_id = the accountId of the non-sys account
@@ -2037,12 +2055,15 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	if _, ok := tbl.Right.(*tree.TableFunction); ok {
 		return 0, moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
 	}
-	if tblFn, ok := tbl.Right.(*tree.AliasedTableExpr).Expr.(*tree.TableFunction); ok {
-		err = buildTableFunctionStmt(tblFn, tbl.Left, leftCtx)
-		if err != nil {
-			return 0, err
+	if aliasedTblExpr, ok := tbl.Right.(*tree.AliasedTableExpr); ok {
+		if tblFn, ok2 := aliasedTblExpr.Expr.(*tree.TableFunction); ok2 {
+			err = buildTableFunctionStmt(tblFn, tbl.Left, leftCtx)
+			if err != nil {
+				return 0, err
+			}
 		}
 	}
+
 	rightChildID, err := builder.buildTable(tbl.Right, rightCtx)
 	if err != nil {
 		return 0, err

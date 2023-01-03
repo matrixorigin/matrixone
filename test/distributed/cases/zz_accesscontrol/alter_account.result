@@ -47,7 +47,7 @@ admin    test:aaa
 drop account abc;
 create account if not exists test ADMIN_NAME '1WERDFT3YG' IDENTIFIED BY '123456';
 alter account test admin_name='1WERDFT3YG'  IDENTIFIED BY '';
-internal error: there is no user 1WERDFT3YG
+internal error: password is empty string
 alter account not_exist_account ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 internal error: there is no account not_exist_account
 alter account if exists not_exist_account ADMIN_NAME 'admin' IDENTIFIED BY '123456';

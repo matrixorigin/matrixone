@@ -501,6 +501,10 @@ message AnalyzeInfo {
     int64 output_size = 4;
     int64 time_consumed = 5;
     int64 memory_size = 6;
+    int64 wait_time_consumed = 7;
+    int64 diskIO = 8;
+    int64 s3IO = 9;
+    int64 networkIO = 10;
 }
 
 message Node {
@@ -799,6 +803,7 @@ message DataDefinition {
 		DropIndex drop_index 			= 11;
 		TruncateTable truncate_table	= 12;
 		ShowVariables show_variables 	= 13;
+		AlterView alter_view			= 14;
 	}
 }
 
@@ -836,6 +841,15 @@ message CreateTable {
 message AlterTable {
 	string table 		= 1;
 	TableDef table_def 	= 2;
+}
+
+message AlterView {
+	bool if_exists		= 1;
+	string database 	= 2;
+	bool temporary		= 3;
+	string table		= 4;
+	TableDef table_def	= 5;
+	repeated TableDef index_tables = 6;
 }
 
 message DropTable {

@@ -200,6 +200,10 @@ message Instruction{
   plan.Expr    filter = 19;
   uint64    limit = 20;
   uint64    offset = 21;
+  // isFirst identifies whether it is the first instruction of analyzeInfo corresponding to idx
+  bool isFirst = 22;
+  // isLast identifies whether it is the last instruction of analyzeInfo corresponding to idx
+  bool isLast = 23;
 }
 
 message AnalysisList {

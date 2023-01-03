@@ -37,6 +37,7 @@ type Node struct {
 	Id   string   `json:"id"`
 	Addr string   `json:"address"`
 	Data [][]byte `json:"payload"`
+	Rel  Relation // local relation
 }
 
 // Attribute is a column
@@ -338,7 +339,7 @@ type Database interface {
 
 	Delete(context.Context, string) error
 	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
-	Truncate(context.Context, string) error
+	Truncate(context.Context, string) (uint64, error)
 	GetDatabaseId(context.Context) string
 }
 

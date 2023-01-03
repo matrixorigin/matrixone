@@ -120,9 +120,9 @@ func (db *txnDatabase) Create(_ context.Context, name string, defs []engine.Tabl
 	return err
 }
 
-func (db *txnDatabase) Truncate(_ context.Context, name string) error {
+func (db *txnDatabase) Truncate(_ context.Context, name string) (uint64, error) {
 	_, err := db.handle.TruncateByName(name)
-	return err
+	return 0, err
 }
 
 func (db *txnDatabase) TruncateRelationWithID(_ context.Context, name string, id uint64) error {
