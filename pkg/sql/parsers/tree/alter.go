@@ -142,4 +142,4 @@ func (node *AlterView) Format(ctx *FmtCtx) {
 }
 
 func (node *AlterView) GetStatementType() string { return "Alter View" }
-func (node *AlterView) GetQueryType() string     { return "QueryTypeDDL" }
+func (node *AlterView) GetQueryType() string     { return QueryTypeDDL }

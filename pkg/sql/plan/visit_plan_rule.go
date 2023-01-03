@@ -16,6 +16,9 @@ package plan
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sort"
 	"strconv"
 
@@ -336,4 +339,54 @@ func (r *ConstantFoldRule) ApplyNode(node *Node) error {
 
 func (r *ConstantFoldRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	return e, nil
+}
+
+type RecomputeRealTimeRelatedFuncRule struct {
+	bat  *batch.Batch
+	proc *process.Process
+}
+
+func NewRecomputeRealTimeRelatedFuncRule(proc *process.Process) *RecomputeRealTimeRelatedFuncRule {
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	return &RecomputeRealTimeRelatedFuncRule{bat, proc}
+}
+
+func (r *RecomputeRealTimeRelatedFuncRule) MatchNode(_ *Node) bool {
+	return false
+}
+
+func (r *RecomputeRealTimeRelatedFuncRule) IsApplyExpr() bool {
+	return true
+}
+
+func (r *RecomputeRealTimeRelatedFuncRule) ApplyNode(_ *Node) error {
+	return nil
+}
+
+func (r *RecomputeRealTimeRelatedFuncRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	var err error
+	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_F:
+		for i, arg := range exprImpl.F.Args {
+			exprImpl.F.Args[i], err = r.ApplyExpr(arg)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return e, nil
+	case *plan.Expr_C:
+		if exprImpl.C.SrcFunc != nil {
+			vec, err := colexec.EvalExpr(r.bat, r.proc, exprImpl.C.SrcFunc)
+			if err != nil {
+				return nil, err
+			}
+			constValue := rule.GetConstantValue(vec)
+			constValue.SrcFunc = exprImpl.C.SrcFunc
+			exprImpl.C = constValue
+		}
+		return e, nil
+	default:
+		return e, nil
+	}
 }

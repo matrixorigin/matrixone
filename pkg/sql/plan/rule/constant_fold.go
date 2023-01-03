@@ -104,10 +104,40 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	if err != nil {
 		return e
 	}
-	c := getConstantValue(vec)
+	c := GetConstantValue(vec)
 	if c == nil {
 		return e
 	}
+
+	if f.RealTimeRelated {
+		c.SrcFunc = &plan.Expr{
+			Typ: &plan.Type{
+				Id:          e.Typ.Id,
+				NotNullable: e.Typ.NotNullable,
+				Width:       e.Typ.Width,
+				Precision:   e.Typ.Precision,
+				Size:        e.Typ.Size,
+				Scale:       e.Typ.Scale,
+				AutoIncr:    e.Typ.AutoIncr,
+			},
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{
+						Server:     ef.F.Func.GetServer(),
+						Db:         ef.F.Func.GetDb(),
+						Schema:     ef.F.Func.GetSchema(),
+						Obj:        ef.F.Func.GetObj(),
+						ServerName: ef.F.Func.GetServerName(),
+						DbName:     ef.F.Func.GetDbName(),
+						SchemaName: ef.F.Func.GetSchemaName(),
+						ObjName:    ef.F.Func.GetObjName(),
+					},
+					Args: make([]*plan.Expr, 0),
+				},
+			},
+		}
+	}
+
 	ec := &plan.Expr_C{
 		C: c,
 	}
@@ -116,7 +146,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	return e
 }
 
-func getConstantValue(vec *vector.Vector) *plan.Const {
+func GetConstantValue(vec *vector.Vector) *plan.Const {
 	if nulls.Any(vec.Nsp) {
 		return &plan.Const{Isnull: true}
 	}
@@ -191,6 +221,12 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 		return &plan.Const{
 			Value: &plan.Const_Timestampval{
 				Timestampval: int64(vector.MustTCols[types.Timestamp](vec)[0]),
+			},
+		}
+	case types.T_date:
+		return &plan.Const{
+			Value: &plan.Const_Dateval{
+				Dateval: int32(vector.MustTCols[types.Date](vec)[0]),
 			},
 		}
 	default:

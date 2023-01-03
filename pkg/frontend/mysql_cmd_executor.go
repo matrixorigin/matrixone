@@ -2304,7 +2304,13 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	} else {
 		// replace @var with their values
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
-		vp := plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{resetVarRule})
+
+		var vp *plan2.VisitPlan
+		if cacheHit {
+			vp = plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{resetVarRule, plan2.NewRecomputeRealTimeRelatedFuncRule(cwft.ses.GetTxnCompileCtx().GetProcess())})
+		} else {
+			vp = plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{resetVarRule})
+		}
 		err = vp.Visit(requestCtx)
 		if err != nil {
 			return nil, err

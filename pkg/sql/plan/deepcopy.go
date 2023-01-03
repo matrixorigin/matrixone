@@ -102,20 +102,27 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 
 	for i, updateCtx := range node.UpdateCtxs {
 		newNode.UpdateCtxs[i] = &plan.UpdateCtx{
-			DbName:        updateCtx.DbName,
-			TblName:       updateCtx.TblName,
-			HideKey:       updateCtx.HideKey,
-			HideKeyIdx:    updateCtx.HideKeyIdx,
-			UpdateCols:    make([]*ColDef, len(updateCtx.UpdateCols)),
-			OtherAttrs:    make([]string, len(updateCtx.OtherAttrs)),
-			OrderAttrs:    make([]string, len(updateCtx.OrderAttrs)),
-			CompositePkey: DeepCopyColDef(updateCtx.GetCompositePkey()),
+			DbName:             updateCtx.DbName,
+			TblName:            updateCtx.TblName,
+			HideKey:            updateCtx.HideKey,
+			HideKeyIdx:         updateCtx.HideKeyIdx,
+			UpdateCols:         make([]*ColDef, len(updateCtx.UpdateCols)),
+			OtherAttrs:         make([]string, len(updateCtx.OtherAttrs)),
+			OrderAttrs:         make([]string, len(updateCtx.OrderAttrs)),
+			CompositePkey:      DeepCopyColDef(updateCtx.GetCompositePkey()),
+			IsIndexTableUpdate: updateCtx.IsIndexTableUpdate,
+			UniqueIndexPos:     make([]int32, len(updateCtx.UniqueIndexPos)),
+			SecondaryIndexPos:  make([]int32, len(updateCtx.SecondaryIndexPos)),
+			IndexParts:         make([]string, len(updateCtx.IndexParts)),
 		}
 		for j, col := range updateCtx.UpdateCols {
 			newNode.UpdateCtxs[i].UpdateCols[j] = DeepCopyColDef(col)
 		}
 		copy(newNode.UpdateCtxs[i].OtherAttrs, updateCtx.OtherAttrs)
 		copy(newNode.UpdateCtxs[i].OrderAttrs, updateCtx.OrderAttrs)
+		copy(newNode.UpdateCtxs[i].UniqueIndexPos, updateCtx.UniqueIndexPos)
+		copy(newNode.UpdateCtxs[i].SecondaryIndexPos, updateCtx.SecondaryIndexPos)
+		copy(newNode.UpdateCtxs[i].IndexParts, updateCtx.IndexParts)
 	}
 
 	for i, tbl := range node.TableDefVec {
