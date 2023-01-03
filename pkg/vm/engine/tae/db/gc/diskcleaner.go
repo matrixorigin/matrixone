@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -135,28 +136,49 @@ func (cleaner *DiskCleaner) replay() error {
 	if len(dirs) == 0 {
 		return nil
 	}
-	jobs := make([]*tasks.Job, len(dirs))
-	jobScheduler := tasks.NewParallelJobScheduler(100)
-	defer jobScheduler.Stop()
-	maxConsumedStart := types.TS{}
-	maxConsumedEnd := types.TS{}
 	minMergedStart := types.TS{}
 	minMergedEnd := types.TS{}
+	maxConsumedStart := types.TS{}
+	maxConsumedEnd := types.TS{}
+	var fullGCFile fileservice.DirEntry
+	// Get effective minMerged
 	for _, dir := range dirs {
 		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
-		if ext == blockio.GCExt {
+		if ext == blockio.GCFullExt {
 			if minMergedStart.IsEmpty() || minMergedStart.Less(start) {
 				minMergedStart = start
 				minMergedEnd = end
+				maxConsumedStart = start
+				maxConsumedEnd = end
+				fullGCFile = dir
 			}
 		}
-		if maxConsumedStart.IsEmpty() || maxConsumedStart.Less(end) {
+	}
+	readDirs := make([]fileservice.DirEntry, 0)
+	if !minMergedStart.IsEmpty() {
+		readDirs = append(readDirs, fullGCFile)
+	}
+	logutil.Infof("minMergedEnd is %v", minMergedEnd.ToString())
+	for _, dir := range dirs {
+		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
+		if ext == blockio.GCFullExt {
+			continue
+		}
+		if (maxConsumedStart.IsEmpty() || maxConsumedStart.Less(end)) &&
+			minMergedEnd.Less(end) {
 			maxConsumedStart = start
 			maxConsumedEnd = end
+			readDirs = append(readDirs, dir)
 		}
 	}
+	if len(readDirs) == 0 {
+		return nil
+	}
+	jobs := make([]*tasks.Job, len(readDirs))
+	jobScheduler := tasks.NewParallelJobScheduler(100)
+	defer jobScheduler.Stop()
 	makeJob := func(i int) (job *tasks.Job) {
-		dir := dirs[i]
+		dir := readDirs[i]
 		exec := func(ctx context.Context) (result *tasks.JobResult) {
 			result = &tasks.JobResult{}
 			table := NewGCTable()
@@ -175,7 +197,7 @@ func (cleaner *DiskCleaner) replay() error {
 		return
 	}
 
-	for i := range dirs {
+	for i := range readDirs {
 		jobs[i] = makeJob(i)
 		if err = jobScheduler.Schedule(jobs[i]); err != nil {
 			return err

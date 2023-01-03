@@ -26,7 +26,7 @@ import (
 
 const (
 	CheckpointExt = "ckp"
-	GCExt         = "gc"
+	GCFullExt     = "fgc"
 )
 
 func EncodeCheckpointMetadataFileName(dir, prefix string, start, end types.TS) string {
@@ -34,7 +34,7 @@ func EncodeCheckpointMetadataFileName(dir, prefix string, start, end types.TS) s
 }
 
 func EncodeGCMetadataFileName(dir, prefix string, start, end types.TS) string {
-	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), GCExt)
+	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), GCFullExt)
 }
 
 // EncodeObjectName Generate uuid as the file name of the block&segment

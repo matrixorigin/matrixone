@@ -4863,7 +4863,7 @@ func TestAppendAndGC(t *testing.T) {
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
 	db := tae.DB
-	db.DiskCleaner.SetMinMergeCountForTest(2)
+	db.DiskCleaner.SetMinMergeCountForTest(4)
 
 	schema1 := catalog.MockSchemaAll(13, 2)
 	schema1.BlockMaxRows = 10
@@ -4912,7 +4912,7 @@ func TestAppendAndGC(t *testing.T) {
 	assert.NotNil(t, minMerged)
 	tae.restart()
 	db = tae.DB
-	db.DiskCleaner.SetMinMergeCountForTest(2)
+	db.DiskCleaner.SetMinMergeCountForTest(4)
 	testutils.WaitExpect(5000, func() bool {
 		if db.DiskCleaner.GetMaxConsumed() == nil {
 			return false
