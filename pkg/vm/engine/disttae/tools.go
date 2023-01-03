@@ -89,6 +89,11 @@ func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 		if err := bat.Vecs[idx].Append(accountId, false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_DATABASE_COMPATBILITY_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) //mysql_compatbility_mode
+		if err := bat.Vecs[idx].Append([]byte("mysql_compatbility_mode"), false, m); err != nil {
+			return nil, err
+		}
 	}
 	return bat, nil
 }

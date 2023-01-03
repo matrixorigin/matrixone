@@ -190,6 +190,9 @@ func (e *DBEntry) GetFullName() string {
 	}
 	return e.fullName
 }
+func (e *DBEntry) GetCompatibility() string {
+	return "create at sysblock"
+}
 
 func (e *DBEntry) String() string {
 	e.RLock()

@@ -50,14 +50,15 @@ const (
 	MO_TABLES   = "mo_tables"
 	MO_COLUMNS  = "mo_columns"
 
-	SystemDBAttr_ID          = "dat_id"
-	SystemDBAttr_Name        = "datname"
-	SystemDBAttr_CatalogName = "dat_catalog_name"
-	SystemDBAttr_CreateSQL   = "dat_createsql"
-	SystemDBAttr_Owner       = "owner"
-	SystemDBAttr_Creator     = "creator"
-	SystemDBAttr_CreateAt    = "created_time"
-	SystemDBAttr_AccID       = "account_id"
+	SystemDBAttr_ID                      = "dat_id"
+	SystemDBAttr_Name                    = "datname"
+	SystemDBAttr_CatalogName             = "dat_catalog_name"
+	SystemDBAttr_CreateSQL               = "dat_createsql"
+	SystemDBAttr_Owner                   = "owner"
+	SystemDBAttr_Creator                 = "creator"
+	SystemDBAttr_CreateAt                = "created_time"
+	SystemDBAttr_AccID                   = "account_id"
+	SystemDBAttr_MYSQL_COMPATBILITY_MODE = "mysql_compatbility_mode"
 
 	SystemRelAttr_ID          = "rel_id"
 	SystemRelAttr_Name        = "relname"
@@ -147,6 +148,7 @@ const (
 	MO_DATABASE_CREATOR_IDX          = 5
 	MO_DATABASE_CREATED_TIME_IDX     = 6
 	MO_DATABASE_ACCOUNT_ID_IDX       = 7
+	MO_DATABASE_COMPATBILITY_IDX     = 8
 
 	MO_TABLES_REL_ID_IDX         = 0
 	MO_TABLES_REL_NAME_IDX       = 1
@@ -210,13 +212,14 @@ type BlockInfo struct {
 // tae and memengine do not make the catalog into a table
 // for its convenience, a conversion interface is provided to ensure easy use.
 type CreateDatabase struct {
-	DatabaseId  uint64
-	Name        string
-	CreateSql   string
-	Owner       uint32
-	Creator     uint32
-	AccountId   uint32
-	CreatedTime types.Timestamp
+	DatabaseId   uint64
+	Name         string
+	CreateSql    string
+	Owner        uint32
+	Creator      uint32
+	AccountId    uint32
+	CreatedTime  types.Timestamp
+	COMPATBILITY string
 }
 
 type DropDatabase struct {
@@ -268,6 +271,7 @@ var (
 		SystemDBAttr_Creator,
 		SystemDBAttr_CreateAt,
 		SystemDBAttr_AccID,
+		SystemDBAttr_MYSQL_COMPATBILITY_MODE,
 	}
 	MoTablesSchema = []string{
 		SystemRelAttr_ID,
@@ -328,6 +332,7 @@ var (
 		types.New(types.T_uint32, 0, 0, 0),     // creator
 		types.New(types.T_timestamp, 0, 0, 0),  // created_time
 		types.New(types.T_uint32, 0, 0, 0),     // account_id
+		types.New(types.T_varchar, 5000, 0, 0), // mysql_compatbility_mode
 	}
 	MoTablesTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),     // rel_id
