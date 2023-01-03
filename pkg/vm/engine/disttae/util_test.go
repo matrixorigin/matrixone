@@ -237,7 +237,7 @@ func TestNeedRead(t *testing.T) {
 
 	t.Run("test needRead", func(t *testing.T) {
 		for i, testCase := range testCases {
-			columnMap, columns, maxCol := getColumnsByExpr(testCase.expr, makeTableDefForTest(testCase.columns))
+			columnMap, columns, maxCol := plan2.GetColumnsByExpr(testCase.expr, makeTableDefForTest(testCase.columns))
 			result := needRead(context.Background(), testCase.expr, blockMeta, makeTableDefForTest(testCase.columns), columnMap, columns, maxCol, testutil.NewProc())
 			if result != testCase.result {
 				t.Fatalf("test needRead at cases[%d], get result is different with expected", i)

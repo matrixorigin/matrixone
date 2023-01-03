@@ -49,7 +49,7 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 	var outcnt int64
 
 	exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
-	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
+	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 
 	if tbl.meta != nil {
 		for _, blockmetas := range tbl.meta.blocks {
@@ -189,26 +189,6 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	default:
 		tbl.dnList = dnList
 	}
-	dnStores := make([]DNStore, 0, len(dnList))
-	for _, i := range dnList {
-		dnStores = append(dnStores, tbl.db.txn.dnStores[i])
-	}
-	_, ok := tbl.db.txn.tableMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
-	if !ok && !tbl.updated {
-		if err := tbl.db.txn.db.Update(ctx, dnStores, tbl, tbl.db.txn.op, tbl.primaryIdx,
-			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
-			return nil, err
-		}
-		// update meta
-		columnLength := len(tbl.getTableDef().Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
-		meta, err := tbl.db.txn.getTableMeta(ctx, tbl.db.databaseId,
-			genMetaTableName(tbl.tableId), !ok, columnLength)
-		if err != nil {
-			return nil, err
-		}
-		tbl.meta = meta
-		tbl.updated = true
-	}
 	ranges := make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
 	tbl.skipBlocks = make(map[uint64]uint8)
@@ -218,7 +198,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	tbl.meta.modifedBlocks = make([][]ModifyBlockMeta, len(tbl.meta.blocks))
 
 	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
-	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
+	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range dnList {
 		blks, deletes := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
 			tbl.meta.blocks[i], writes)
