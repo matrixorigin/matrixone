@@ -20,6 +20,10 @@ name = "S3"
 backend = "DISK"
 data-dir = "mo-data/s3"
 
+[fileservice.cache]
+memory-capacity = "512MB"
+disk-capacity = "8GB"
+
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
