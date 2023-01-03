@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"io"
 	"os"
 	"strconv"
@@ -78,12 +79,17 @@ var openNewFile = func(ctx context.Context, ep *tree.ExportParam, mrs *MysqlResu
 	lineSize := ep.LineSize
 	var err error
 	ep.CurFileSize = 0
-	filePath := getExportFilePath(ep.FilePath, ep.FileCnt)
-	ep.File, err = OpenFile(filePath, os.O_RDWR|os.O_EXCL|os.O_CREATE, 0o666)
-	if err != nil {
-		return err
+	if !ep.UseFileService {
+		filePath := getExportFilePath(ep.FilePath, ep.FileCnt)
+		ep.File, err = OpenFile(filePath, os.O_RDWR|os.O_EXCL|os.O_CREATE, 0o666)
+		if err != nil {
+			return err
+		}
+		ep.Writer = bufio.NewWriterSize(ep.File, int(ep.DefaultBufSize))
+	} else {
+		//default 1MB
+		ep.OutputBuffer = make([]byte, 0, int(ep.DefaultBufSize))
 	}
-	ep.Writer = bufio.NewWriterSize(ep.File, int(ep.DefaultBufSize))
 	if ep.Header {
 		var header string
 		n := len(mrs.Columns)
@@ -97,14 +103,14 @@ var openNewFile = func(ctx context.Context, ep *tree.ExportParam, mrs *MysqlResu
 		if ep.MaxFileSize != 0 && uint64(len(header)) >= ep.MaxFileSize {
 			return moerr.NewInternalError(ctx, "the header line size is over the maxFileSize")
 		}
-		if err := writeDataToCSVFile(ep, []byte(header)); err != nil {
+		if err := writeDataToCSVFile(ctx, ep, []byte(header)); err != nil {
 			return err
 		}
 	}
 	if lineSize != 0 {
 		ep.LineSize = 0
 		ep.Rows = 0
-		if err := writeDataToCSVFile(ep, ep.OutputStr); err != nil {
+		if err := writeDataToCSVFile(ctx, ep, ep.OutputStr); err != nil {
 			return err
 		}
 	}
@@ -141,7 +147,10 @@ var formatOutputString = func(oq *outputQueue, tmp, symbol []byte, enclosed byte
 }
 
 var Flush = func(ep *tree.ExportParam) error {
-	return ep.Writer.Flush()
+	if !ep.UseFileService {
+		return ep.Writer.Flush()
+	}
+	return nil
 }
 
 var Seek = func(ep *tree.ExportParam) (int64, error) {
@@ -197,22 +206,53 @@ func writeToCSVFile(oq *outputQueue, output []byte) error {
 		}
 	}
 
-	if err := writeDataToCSVFile(oq.ep, output); err != nil {
+	if err := writeDataToCSVFile(oq.ctx, oq.ep, output); err != nil {
 		return err
 	}
 	return nil
 }
 
-var writeDataToCSVFile = func(ep *tree.ExportParam, output []byte) error {
-	for {
-		if n, err := Write(ep, output); err != nil {
+var writeDataToCSVFile = func(ctx context.Context, ep *tree.ExportParam, output []byte) error {
+	if ep.UseFileService {
+		if err := writeDataByFileService(ctx, ep, output); err != nil {
 			return err
-		} else if n == len(output) {
-			break
+		}
+	} else {
+		for {
+			if n, err := Write(ep, output); err != nil {
+				return err
+			} else if n == len(output) {
+				break
+			}
 		}
 	}
 	ep.LineSize += uint64(len(output))
 	ep.CurFileSize += uint64(len(output))
+	return nil
+}
+
+func writeDataByFileService(ctx context.Context, ep *tree.ExportParam, data []byte) error {
+	if ep.UseFileService {
+		ep.OutputBuffer = append(ep.OutputBuffer, data...)
+	}
+	return nil
+}
+
+func writeIntoFileService(ctx context.Context, ep *tree.ExportParam) error {
+	filePath := getExportFilePath(ep.FilePath, ep.FileCnt)
+	if err := ep.FileService.Write(ctx, fileservice.IOVector{
+		FilePath: filePath,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: 0,
+				Size:   int64(len(ep.OutputBuffer)),
+				Data:   ep.OutputBuffer,
+			},
+		},
+	}); err != nil {
+		return err
+	}
+	ep.OutputBuffer = ep.OutputBuffer[:0]
 	return nil
 }
 

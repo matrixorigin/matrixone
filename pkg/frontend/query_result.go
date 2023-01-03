@@ -27,10 +27,10 @@ import (
 
 func openSaveQueryResult(ses *Session) bool {
 	// TODO: Graceful judgment
-	sql := strings.ToLower(ses.sql)
-	if strings.Contains(sql, "meta_scan") || strings.Contains(sql, "result_scan") || ses.tStmt.SqlSourceType == "internal_sql" {
-		return false
-	}
+	//sql := strings.ToLower(ses.sql)
+	//if strings.Contains(sql, "meta_scan") || strings.Contains(sql, "result_scan") || ses.tStmt.SqlSourceType == "internal_sql" {
+	//	return false
+	//}
 	if strings.ToLower(ses.GetParameterUnit().SV.SaveQueryResult) == "on" {
 		return true
 	}

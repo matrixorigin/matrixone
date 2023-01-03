@@ -121,6 +121,8 @@ func doDumpQueryResult(ctx context.Context, ses *Session, exportParam *tree.Expo
 	oq := NewOutputQueue(ctx, nil, mrs, 1, exportParam, ses.GetShowStmtType())
 	oq.reset()
 	exportParam.DefaultBufSize = ses.GetParameterUnit().SV.ExportDataDefaultFlushSize
+	exportParam.UseFileService = true
+	exportParam.FileService = ses.GetParameterUnit().FileService
 	initExportFileParam(exportParam, mrs)
 	if err = openNewFile(ctx, exportParam, mrs); err != nil {
 		return err
@@ -131,12 +133,14 @@ func doDumpQueryResult(ctx context.Context, ses *Session, exportParam *tree.Expo
 		select {
 		case <-ctx.Done():
 			quit = true
+		default:
 		}
 
 		if quit {
 			break
 		}
 		tmpBatch.Clean(ses.GetMemPool())
+		tmpBatch = batch.NewWithSize(len(columnDefs.ResultCols))
 		ioVector, err := reader.Read(ctx, block.GetExtent(), indexes, ses.GetMemPool())
 		if err != nil {
 			return err
@@ -158,6 +162,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, exportParam *tree.Expo
 			select {
 			case <-ctx.Done():
 				quit = true
+			default:
 			}
 
 			if quit {
@@ -172,11 +177,16 @@ func doDumpQueryResult(ctx context.Context, ses *Session, exportParam *tree.Expo
 				return err
 			}
 		}
-	}
 
-	err = oq.flush()
-	if err != nil {
-		return err
+		err = oq.flush()
+		if err != nil {
+			return err
+		}
+
+		err = writeIntoFileService(ctx, exportParam)
+		if err != nil {
+			return err
+		}
 	}
 
 	return err

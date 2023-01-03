@@ -473,6 +473,13 @@ type ExportParam struct {
 	DefaultBufSize int64
 	OutputStr      []byte
 	LineSize       uint64
+
+	//file service
+	UseFileService bool
+	// FileService
+	FileService       fileservice.FileService
+	FileServiceOffset int64
+	OutputBuffer      []byte
 }
 
 func (ep *ExportParam) Format(ctx *FmtCtx) {
