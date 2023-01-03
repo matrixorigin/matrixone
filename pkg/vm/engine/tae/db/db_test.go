@@ -4881,7 +4881,7 @@ func TestAppendAndGC(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
-	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*20-1))
+	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*10-1))
 	defer bat.Close()
 	bats := bat.Split(bat.Length())
 
