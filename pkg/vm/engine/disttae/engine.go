@@ -180,26 +180,30 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 	return
 }
 
-func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (rel engine.Relation, err error) {
+func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
 	txn := e.getTransaction(op)
 	accountId := getAccountId(ctx)
 	var db engine.Database
 	noRepCtx := errutil.ContextWithNoReport(ctx, true)
 	txn.databaseMap.Range(func(k, _ any) bool {
 		key := k.(databaseKey)
+		dbName = key.name
 		if key.accountId == accountId {
 			db, err = e.Database(ctx, key.name, op)
 			if err != nil {
 				return false
 			}
 			distDb := db.(*database)
-			rel, err = distDb.getRelationById(noRepCtx, tableId)
+			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
 			if err != nil || rel != nil {
 				return false
 			}
 		}
 		return true
 	})
+	if rel == nil {
+		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d", tableId)
+	}
 	return
 }
 
