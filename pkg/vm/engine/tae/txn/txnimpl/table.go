@@ -618,15 +618,10 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 	//TODO::If txn at CN had checked duplication against its snapshot and workspace,
 	// we should skip here.
 	if tbl.schema.HasPK() {
-		pkDef := tbl.schema.GetSingleSortKey()
-		pkVec := containers.MakeVector(pkDef.Type, false)
-		defer pkVec.Close()
 		for _, v := range pkVecs {
-			//Vector.Extend is a deep copy
-			pkVec.Extend(v)
-		}
-		if err = tbl.DoBatchDedup(pkVec); err != nil {
-			return
+			if err = tbl.DoBatchDedup(v); err != nil {
+				return
+			}
 		}
 	}
 	if tbl.localSegment == nil {

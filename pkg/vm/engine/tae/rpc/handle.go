@@ -80,7 +80,7 @@ func NewTAEHandle(path string, opt *options.Options) *Handle {
 
 	h := &Handle{
 		eng:          moengine.NewEngine(tae),
-		jobScheduler: tasks.NewParallelJobScheduler(10),
+		jobScheduler: tasks.NewParallelJobScheduler(100),
 	}
 	h.mu.txnCtxs = make(map[string]*txnContext)
 	return h
@@ -595,10 +595,12 @@ func (h *Handle) HandlePreCommitWrite(
 					if req.Type == db.EntryInsert {
 						//req.Blks[i] = row[catalog.BLOCKMETA_ID_ON_FS_IDX].(uint64)
 						//req.MetaLocs[i] = string(row[catalog.BLOCKMETA_METALOC_ON_FS_IDX].([]byte))
-						req.MetaLocs = append(req.MetaLocs, string(row[0].([]byte)))
+						req.MetaLocs = append(req.MetaLocs,
+							string(row[0].([]byte)))
 					} else {
 						//req.DeltaLocs[i] = string(row[0].([]byte))
-						req.DeltaLocs = append(req.DeltaLocs, string(row[0].([]byte)))
+						req.DeltaLocs = append(req.DeltaLocs,
+							string(row[0].([]byte)))
 					}
 				}
 			}
@@ -805,7 +807,7 @@ func (h *Handle) HandleWrite(
 			}
 			taeVec := req.JobRes[i].Res.(containers.Vector)
 			//FIXME::??
-			defer taeVec.Close()
+			//defer taeVec.Close()
 			tb.DeleteByPhyAddrKeys(ctx, containers.UnmarshalToMoVec(taeVec))
 		}
 		return
