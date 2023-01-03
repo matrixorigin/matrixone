@@ -15,12 +15,15 @@
 package plan
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"strings"
 )
 
 func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
@@ -29,6 +32,136 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	}
 	return buildMultTableDelete(ctx, stmt)
 }
+
+func getTableInfoForUpdate(tableExprs tree.TableExprs, ctx CompilerContext) (*tableInfo, error) {
+	tblLen := len(tableExprs)
+	tblInfo := &tableInfo{
+		alias2BaseNameMap: make(map[string]string),
+		baseName2AliasMap: make(map[string]string),
+		dbNames:           make([]string, tblLen),
+		tableNames:        make([]string, tblLen),
+		tableDefs:         make([]*plan.TableDef, tblLen),
+	}
+
+	for idx, tbl := range tableExprs {
+		tblExpr := tbl.(*tree.AliasedTableExpr)
+		alias := string(tblExpr.As.Alias)
+		dbName := string(tblExpr.Expr.(*tree.TableName).SchemaName)
+		if dbName == "" {
+			dbName = ctx.DefaultDatabase()
+		}
+		tblName := string(tblExpr.Expr.(*tree.TableName).ObjectName)
+		if alias == "" {
+			alias = tblName
+		}
+
+		_, tableDef := ctx.Resolve(dbName, tblName)
+		if tableDef == nil {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "delete has no table def")
+		}
+		if tableDef.TableType == catalog.SystemExternalRel {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from external table")
+		} else if tableDef.TableType == catalog.SystemViewRel {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from view")
+		}
+		if util.TableIsClusterTable(tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can delete the cluster table %s", tableDef.GetName())
+		}
+
+		// var uniqueIdxDef []*UniqueIndexDef
+		// for _, def := range tableDef.Defs {
+		// 	if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+		// 		uniqueIdxDef = append(uniqueIdxDef, idxDef.UIdx)
+		// 	}
+		// }
+
+		// var refTables [][2]string
+		// for _ = range tableDef.RefChildTbls {
+		// 	refTables = append(refTables, [2]string{"dbName", "tblName"})
+		// }
+
+		tblInfo.dbNames[idx] = dbName
+		tblInfo.tableNames[idx] = tblName
+		tblInfo.tableDefs[idx] = tableDef
+	}
+
+	return tblInfo, nil
+}
+
+// delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id
+// select a1.row_id, a2.row_id from t1 as a1 inner join t2 as a2 where a1.id = a2.id
+// select _t.* from (select a1.row_id, a2.row_id from t1 as a1 inner join t2 as a2 where a1.id = a2.id) _t
+func deleteToSelect(node *tree.Delete, dialectType dialect.DialectType, tbls []string) string {
+	ctx := tree.NewFmtCtx(dialectType)
+
+	if node.With != nil {
+		node.With.Format(ctx)
+		ctx.WriteByte(' ')
+	}
+	ctx.WriteString("select ")
+
+	prefix := ""
+	for idx := range node.Tables {
+		ctx.WriteString(prefix)
+		column := fmt.Sprintf("%s.%s", tbls[idx], catalog.Row_ID)
+		ctx.WriteString(column)
+		prefix = ", "
+	}
+
+	// if node.PartitionNames != nil {
+	// 	ctx.WriteString(" partition(")
+	// 	node.PartitionNames.Format(ctx)
+	// 	ctx.WriteByte(')')
+	// }
+
+	if node.TableRefs != nil {
+		ctx.WriteString(" from ")
+		node.TableRefs.Format(ctx)
+	}
+
+	if node.Where != nil {
+		ctx.WriteByte(' ')
+		node.Where.Format(ctx)
+	}
+	if len(node.OrderBy) > 0 {
+		ctx.WriteByte(' ')
+		node.OrderBy.Format(ctx)
+	}
+	if node.Limit != nil {
+		ctx.WriteByte(' ')
+		node.Limit.Format(ctx)
+	}
+	return ctx.String()
+}
+
+// // link ref: https://dev.mysql.com/doc/refman/8.0/en/delete.html
+// func buildSingleTableDelete2(ctx CompilerContext, stmt *tree.Delete) (*Plan, error) {
+// 	tblExpr := stmt.Tables[0].(*tree.AliasedTableExpr)
+// 	alias := tblExpr.As
+// 	dbName := string(tblExpr.Expr.(*tree.TableName).SchemaName)
+// 	if dbName == "" {
+// 		dbName = ctx.DefaultDatabase()
+// 	}
+// 	tblName := string(tblExpr.Expr.(*tree.TableName).ObjectName)
+
+// 	objRef, tableDef := ctx.Resolve(dbName, tblName)
+// 	if tableDef == nil {
+// 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "delete has no table def")
+// 	}
+// 	if tableDef.TableType == catalog.SystemExternalRel {
+// 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from external table")
+// 	} else if tableDef.TableType == catalog.SystemViewRel {
+// 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from view")
+// 	}
+// 	if util.TableIsClusterTable(tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
+// 		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can delete the cluster table %s", tableDef.GetName())
+// 	}
+
+// 	// delete from t1 where a > 10 limit 10;  -> select row_id from t1 where a > 10 limit 10;
+// 	// delete from t1 a where a.a > 10 limit 10;  -> select a.row_id from t1 a where a.a > 10 limit 10;
+
+// 	return nil, nil
+// }
 
 // When the original table contains an index table of multi table deletion statement, build a multi table join query
 // execution plan to query the rowid of the original table and the index table respectively
@@ -246,7 +379,7 @@ func buildSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (*Plan, erro
 		Select: &tree.SelectClause{
 			Exprs: deleteTableList.selectList, // select list
 			From:  fromClause,                 // table and left join
-			Where: stmt.Where,                 //append where clause
+			Where: stmt.Where,                 // append where clause
 		},
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,

@@ -16,18 +16,20 @@ package plan
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"strings"
 )
 
 type tableInfo struct {
 	dbNames           []string
 	tableNames        []string
+	tableDefs         []*TableDef
 	alias2BaseNameMap map[string]string // key: alias name, value: base name
 	baseName2AliasMap map[string]string //  key: base name, value: alias name, reverse asName2BaseNameMap
 }
