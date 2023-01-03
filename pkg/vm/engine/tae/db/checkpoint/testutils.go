@@ -118,8 +118,7 @@ func (r *runner) ForceFlush(ts types.TS, ctx context.Context) (err error) {
 	for {
 		select {
 		case <-ctx.Done():
-			logutil.Warnf("Flush timeout %v", dirtyCtx.tree.String())
-			return
+			return moerr.NewInternalError(ctx, "timeout")
 		case <-ticker.C:
 			if dirtyCtx = makeCtx(); dirtyCtx == nil {
 				return

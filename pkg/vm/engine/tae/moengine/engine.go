@@ -27,7 +27,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -235,15 +234,6 @@ func (e *txnEngine) ForceCheckpoint(ctx context.Context, ts types.TS) error {
 	e.impl.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t0 := time.Now()
 	err := e.impl.BGCheckpointRunner.ForceFlush(ts, ctx)
-	logutil.Infof("[Force Checkpoint] flush takes %v", time.Since(t0))
-	if err != nil {
-		return err
-	}
-	t0 = time.Now()
-	err = common.WaitUtil(func() bool {
-		flushed := e.impl.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, ts, false)
-		return flushed
-	}, ctx)
 	logutil.Infof("[Force Checkpoint] flush takes %v", time.Since(t0))
 	if err != nil {
 		return err
