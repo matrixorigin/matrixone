@@ -1,0 +1,383 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package service
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+)
+
+func TestSessionManger(t *testing.T) {
+	sm := NewSessionManager()
+
+	ctx := context.Background()
+
+	// constructs mocker
+	logger := logutil.GetGlobalLogger().Named(LogtailServiceRPCName)
+	pooler := mockResponsePooler()
+	notifier := mockSessionErrorNotifier(logger)
+	sendTimeout := 5 * time.Second
+	poisionTime := 10 * time.Millisecond
+
+	/* ---- 1. register sessioin A ---- */
+	csA := mockNormalClientSession(logger)
+	streamA := mockMorpcStream(csA, 10)
+	sessionA := sm.GetSession(ctx, logger, sendTimeout, pooler, notifier, streamA, poisionTime)
+	require.NotNil(t, sessionA)
+	require.Equal(t, 1, len(sm.ListSession()))
+
+	/* ---- 2. register sessioin B ---- */
+	csB := mockNormalClientSession(logger)
+	streamB := mockMorpcStream(csB, 11)
+	sessionB := sm.GetSession(ctx, logger, sendTimeout, pooler, notifier, streamB, poisionTime)
+	require.NotNil(t, sessionB)
+	require.Equal(t, 2, len(sm.ListSession()))
+
+	/* ---- 3. delete sessioin ---- */
+	sm.DeleteSession(streamA)
+	require.Equal(t, 1, len(sm.ListSession()))
+	sm.DeleteSession(streamB)
+	require.Equal(t, 0, len(sm.ListSession()))
+}
+
+func TestSessionError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// constructs mocker
+	logger := logutil.GetGlobalLogger().Named(LogtailServiceRPCName)
+	pooler := mockResponsePooler()
+	notifier := mockSessionErrorNotifier(logger)
+	cs := mockBrokenClientSession()
+	stream := mockMorpcStream(cs, 10)
+	sendTimeout := 5 * time.Second
+	poisionTime := 10 * time.Millisecond
+
+	tableA := mockTable(1, 2, 3)
+	ss := NewSession(ctx, logger, sendTimeout, pooler, notifier, stream, poisionTime)
+
+	/* ---- 1. send subscription response ---- */
+	err := ss.SendSubscriptionResponse(
+		context.Background(),
+		logtail.TableLogtail{
+			Table: &tableA,
+		},
+	)
+	require.NoError(t, err)
+
+	// wait session cleaned
+	<-ss.sessionCtx.Done()
+
+	/* ---- 2. send subscription response ---- */
+	err = ss.SendSubscriptionResponse(
+		context.Background(),
+		logtail.TableLogtail{
+			Table: &tableA,
+		},
+	)
+	require.Error(t, err)
+}
+
+func TestPoisionSession(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// constructs mocker
+	logger := logutil.GetGlobalLogger().Named(LogtailServiceRPCName)
+	pooler := mockResponsePooler()
+	notifier := mockSessionErrorNotifier(logger)
+	cs := mockBlockStream()
+	stream := mockMorpcStream(cs, 10)
+	sendTimeout := 5 * time.Second
+	poisionTime := 10 * time.Millisecond
+
+	tableA := mockTable(1, 2, 3)
+	ss := NewSession(ctx, logger, sendTimeout, pooler, notifier, stream, poisionTime)
+
+	/* ---- 1. send response repeatedly ---- */
+	for i := 0; i < cap(ss.sendChan)+2; i++ {
+		err := ss.SendUpdateResponse(
+			context.Background(),
+			mockTimestamp(int64(i), 0),
+			mockTimestamp(int64(i+1), 0),
+			logtail.TableLogtail{
+				Table: &tableA,
+			},
+		)
+		if err != nil {
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrStreamClosed))
+			break
+		}
+	}
+}
+
+func TestSession(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// constructs mocker
+	logger := logutil.GetGlobalLogger().Named(LogtailServiceRPCName)
+	pooler := mockResponsePooler()
+	notifier := mockSessionErrorNotifier(logger)
+	cs := mockNormalClientSession(logger)
+	stream := mockMorpcStream(cs, 10)
+	sendTimeout := 5 * time.Second
+	poisionTime := 10 * time.Millisecond
+
+	// constructs tables
+	tableA := mockTable(1, 2, 3)
+	idA := TableID(tableA.String())
+	tableB := mockTable(1, 4, 3)
+	idB := TableID(tableB.String())
+
+	ss := NewSession(ctx, logger, sendTimeout, pooler, notifier, stream, poisionTime)
+	defer ss.PostClean()
+
+	// no table resigered now
+	require.Equal(t, 0, len(ss.ListSubscribedTable()))
+
+	/* ---- 1. register table ---- */
+	require.False(t, ss.Register(idA, tableA))
+	require.True(t, ss.Register(idA, tableA))
+
+	/* ---- 2. unregister table ---- */
+	require.Equal(t, TableOnSubscription, ss.Unregister(idA))
+	require.Equal(t, TableNotFound, ss.Unregister(idA))
+
+	/* ---- 3. register more table ---- */
+	require.False(t, ss.Register(idA, tableA))
+	require.False(t, ss.Register(idB, tableB))
+	require.Equal(t, 0, len(ss.ListSubscribedTable()))
+
+	/* ---- 4. filter logtail ---- */
+	// promote state for table A
+	ss.AdvanceState(idA)
+	require.Equal(t, 1, len(ss.ListSubscribedTable()))
+	// promote state for non-exist table
+	ss.AdvanceState(TableID("non-exist"))
+	require.Equal(t, 1, len(ss.ListSubscribedTable()))
+	// filter logtail for subscribed table
+	qualified := ss.FilterLogtail(
+		mockWrapLogtail(tableA),
+		mockWrapLogtail(tableB),
+	)
+	require.Equal(t, 1, len(qualified))
+	require.Equal(t, tableA.String(), qualified[0].Table.String())
+
+	// promote state for table B
+	ss.AdvanceState(idB)
+	require.Equal(t, 2, len(ss.ListSubscribedTable()))
+	// filter logtail for subscribed table
+	qualified = ss.FilterLogtail(
+		mockWrapLogtail(tableA),
+		mockWrapLogtail(tableB),
+	)
+	require.Equal(t, 2, len(qualified))
+
+	/* ---- 5. send error response ---- */
+	err := ss.SendErrorResponse(
+		context.Background(),
+		tableA,
+		moerr.ErrInternal,
+		"interval error",
+	)
+	require.NoError(t, err)
+
+	/* ---- 6. send subscription response ---- */
+	err = ss.SendSubscriptionResponse(
+		context.Background(),
+		logtail.TableLogtail{
+			Table: &tableA,
+		},
+	)
+	require.NoError(t, err)
+
+	/* ---- 7. send unsubscription response ---- */
+	err = ss.SendUnsubscriptionResponse(
+		context.Background(),
+		tableA,
+	)
+	require.NoError(t, err)
+
+	/* ---- 8. send update response ---- */
+	err = ss.SendUpdateResponse(
+		context.Background(),
+		mockTimestamp(1, 0),
+		mockTimestamp(2, 0),
+		mockLogtail(tableA),
+		mockLogtail(tableB),
+	)
+	require.NoError(t, err)
+
+	/* ---- 9. publish update response ---- */
+	err = ss.Publish(
+		context.Background(),
+		mockTimestamp(2, 0),
+		mockTimestamp(3, 0),
+		mockWrapLogtail(tableA),
+		mockWrapLogtail(tableB),
+	)
+	require.NoError(t, err)
+}
+
+type blockStream struct {
+	once sync.Once
+	ch   chan bool
+}
+
+func mockBlockStream() morpc.ClientSession {
+	return &blockStream{
+		ch: make(chan bool),
+	}
+}
+
+func (m *blockStream) Write(ctx context.Context, message morpc.Message) error {
+	<-m.ch
+	return moerr.NewStreamClosedNoCtx()
+}
+
+func (m *blockStream) Close() error {
+	m.once.Do(func() {
+		close(m.ch)
+	})
+	return nil
+}
+
+type brokenStream struct{}
+
+func mockBrokenClientSession() morpc.ClientSession {
+	return &brokenStream{}
+}
+
+func (m *brokenStream) Write(ctx context.Context, message morpc.Message) error {
+	return moerr.NewStreamClosedNoCtx()
+}
+
+func (m *brokenStream) Close() error {
+	return nil
+}
+
+type normalStream struct {
+	logger *zap.Logger
+}
+
+func mockNormalClientSession(logger *zap.Logger) morpc.ClientSession {
+	return &normalStream{
+		logger: logger,
+	}
+}
+
+func (m *normalStream) Write(ctx context.Context, message morpc.Message) error {
+	response := message.(*LogtailResponse)
+	if resp := response.GetError(); resp != nil {
+		m.logger.Info(
+			"receive error response",
+			zap.String("content", resp.String()),
+		)
+	} else if resp := response.GetUpdateResponse(); resp != nil {
+		m.logger.Info(
+			"receive update response",
+			zap.String("content", resp.String()),
+		)
+	} else if resp := response.GetSubscribeResponse(); resp != nil {
+		m.logger.Info(
+			"receive subscription response",
+			zap.String("content", resp.String()),
+		)
+	} else if resp := response.GetUnsubscribeResponse(); resp != nil {
+		m.logger.Info(
+			"receive unsubscription response",
+			zap.String("content", resp.String()),
+		)
+	}
+	return nil
+}
+
+func (m *normalStream) Close() error {
+	return nil
+}
+
+type notifySessionError struct {
+	logger *zap.Logger
+}
+
+func mockSessionErrorNotifier(logger *zap.Logger) SessionErrorNotifier {
+	return &notifySessionError{
+		logger: logger,
+	}
+}
+
+func (m *notifySessionError) NotifySessionError(ss *Session, err error) {
+	if err != nil {
+		m.logger.Error("receive session error", zap.Error(err))
+		ss.PostClean()
+	}
+}
+
+type respPooler struct {
+	pool *sync.Pool
+}
+
+func mockResponsePooler() ResponsePooler {
+	return &respPooler{
+		pool: &sync.Pool{
+			New: func() any {
+				return &LogtailResponse{}
+			},
+		},
+	}
+}
+
+func (m *respPooler) AcquireResponse() *LogtailResponse {
+	return m.pool.Get().(*LogtailResponse)
+}
+
+func (m *respPooler) ReleaseResponse(resp *LogtailResponse) {
+	resp.Reset()
+	m.pool.Put(resp)
+}
+
+func mockWrapLogtail(table api.TableID) wrapLogtail {
+	return wrapLogtail{
+		id: TableID(table.String()),
+		tail: logtail.TableLogtail{
+			Table: &table,
+		},
+	}
+}
+
+func mockLogtail(table api.TableID) logtail.TableLogtail {
+	return logtail.TableLogtail{
+		Table: &table,
+	}
+}
+
+func mockMorpcStream(cs morpc.ClientSession, id uint64) morpcStream {
+	return morpcStream{
+		id: id,
+		cs: cs,
+	}
+}

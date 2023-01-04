@@ -37,9 +37,41 @@ func (db *database) Relations(ctx context.Context) ([]string, error) {
 		}
 		return true
 	})
-	rels = append(rels, db.txn.catalog.Tables(getAccountId(ctx), db.databaseId,
-		db.txn.meta.SnapshotTS)...)
+	tbls, _ := db.txn.catalog.Tables(getAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
+	rels = append(rels, tbls...)
 	return rels, nil
+}
+
+func (db *database) getTableNameById(ctx context.Context, id uint64) string {
+	tblName := ""
+	db.txn.tableMap.Range(func(k, _ any) bool {
+		key := k.(tableKey)
+		if key.databaseId == db.databaseId && key.tableId == id {
+			tblName = key.name
+			return false
+		}
+		return true
+	})
+
+	if tblName == "" {
+		tbls, tblIds := db.txn.catalog.Tables(getAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
+		for idx, tblId := range tblIds {
+			if tblId == id {
+				tblName = tbls[idx]
+				break
+			}
+		}
+	}
+	return tblName
+}
+
+func (db *database) getRelationById(ctx context.Context, id uint64) (string, engine.Relation, error) {
+	tblName := db.getTableNameById(ctx, id)
+	if tblName == "" {
+		return "", nil, moerr.NewInternalError(ctx, "can not find table by id %d", id)
+	}
+	rel, err := db.Relation(ctx, tblName)
+	return tblName, rel, err
 }
 
 func (db *database) Relation(ctx context.Context, name string) (engine.Relation, error) {

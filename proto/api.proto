@@ -51,6 +51,7 @@ message Batch {
 message TableID {
     uint64 db_id  = 1; 
     uint64 tb_id  = 2;
+    uint64 partition_id = 3;
 }
 
 // CN pull the tail of redo logs from DN.
