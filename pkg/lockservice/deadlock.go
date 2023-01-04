@@ -47,7 +47,7 @@ type detector struct {
 func newDeadlockDetector(waitTxnsFetchFunc func([]byte, *waiters) bool,
 	waitTxnAbortFunc func([]byte)) *detector {
 	d := &detector{
-		c:                 make(chan []byte, defaultMaxWaiters),
+		c:                 make(chan []byte, 1024),
 		waitTxnsFetchFunc: waitTxnsFetchFunc,
 		waitTxnAbortFunc:  waitTxnAbortFunc,
 		stopper:           stopper.NewStopper("deadlock-detector"),
@@ -70,7 +70,7 @@ func (d *detector) check(txnID []byte) error {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	if d.mu.closed {
-		return nil
+		return ErrDeadlockDetectorClosed
 	}
 
 	d.c <- txnID
