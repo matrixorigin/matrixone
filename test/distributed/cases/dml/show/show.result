@@ -228,6 +228,7 @@ mo_role
 mo_user_grant
 mo_role_grant
 mo_role_privs
+mo_user_defined_function
 show table_number from mo_catalog;
 mo_catalog    Number of tables in mo_catalog
 mo_catalog    9

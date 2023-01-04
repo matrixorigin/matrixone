@@ -2571,7 +2571,6 @@ func generate_salt(n int) []byte {
 func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
 	rand.Seed(time.Now().UTC().UnixNano())
 	salt := generate_salt(20)
-	tcp.Ref()
 	mysql := &MysqlProtocolImpl{
 		ProtocolImpl: ProtocolImpl{
 			io:           NewIOPackage(true),

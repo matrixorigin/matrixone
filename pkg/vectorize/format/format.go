@@ -306,6 +306,19 @@ func format(number string, precision string, comma, decimalPoint []byte) (string
 		number = number[1:]
 	}
 
+	// Check for scientific notition.
+	for _, v := range number {
+		if v == 'E' || v == 'e' {
+			num, err := strconv.ParseFloat(number, 64)
+			if err != nil {
+				return "", err
+			}
+			// Convert to non-scientific notition.
+			number = strconv.FormatFloat(num, 'f', -1, 64)
+			break
+		}
+	}
+
 	for i, v := range number {
 		if unicode.IsDigit(v) {
 			continue

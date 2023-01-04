@@ -431,34 +431,26 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 		return dirtyCtx
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), r.options.forceFlushTimeout)
-	defer cancel()
-
-	ticker := time.NewTicker(r.options.forceFlushCheckInterval)
-	defer ticker.Stop()
-
-	dirtyCtx := makeCtx()
-	if dirtyCtx == nil {
-		return
-	}
-	if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
-		return
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			logutil.Warnf("Flush %d-%d timeout", dbID, tableID)
-			return
-		case <-ticker.C:
-			if dirtyCtx = makeCtx(); dirtyCtx == nil {
-				return
-			}
-			if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
-				return
-			}
+	op := func() (ok bool, err error) {
+		dirtyCtx := makeCtx()
+		if dirtyCtx == nil {
+			return true, nil
 		}
+		if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
+			return true, nil
+		}
+		return false, nil
 	}
+
+	err = common.RetryWithIntervalAndTimeout(
+		op,
+		r.options.forceFlushTimeout,
+		r.options.forceFlushCheckInterval)
+	if moerr.IsMoErrCode(err, moerr.ErrInternal) {
+		logutil.Warnf("Flush %d-%d :%v", dbID, tableID, err)
+		return nil
+	}
+	return
 }
 
 func (r *runner) saveCheckpoint(start, end types.TS) (err error) {

@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "load data infile 'data.txt' into table db.a accounts(a1, a2) fields terminated by '\t' escaped by '\t'",
-		output: "load data infile data.txt into table db.a accounts(a1, a2) fields terminated by \t escaped by \t",
+		input:  "select * from result_scan(query_id)",
+		output: "select * from result_scan(query_id)",
 	}
 )
 
@@ -53,6 +53,12 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select * from result_scan(query_id)",
+		output: "select * from result_scan(query_id)",
+	}, {
+		input:  "select * from meta_scan('query_id');",
+		output: "select * from meta_scan(query_id)",
+	}, {
 		input:  "show variables like 'sql_mode'",
 		output: "show variables like sql_mode",
 	}, {
@@ -1809,6 +1815,10 @@ var (
 			output: `create function charat (x int default 15) returns char language sql as 'select $1'`,
 		},
 		{
+			input:  `create function t.increment (x float) returns float language sql as 'select $1 + 1'`,
+			output: `create function t.increment (x float) returns float language sql as 'select $1 + 1'`,
+		},
+		{
 			input:  `drop function helloworld ()`,
 			output: `drop function helloworld ()`,
 		},
@@ -1819,6 +1829,10 @@ var (
 		{
 			input:  `drop function twosum (int, int)`,
 			output: `drop function twosum (int, int)`,
+		},
+		{
+			input:  `drop function t.increment (float)`,
+			output: `drop function t.increment (float)`,
 		},
 		{
 			input:  `create extension python as strutil file 'stringutils.whl'`,

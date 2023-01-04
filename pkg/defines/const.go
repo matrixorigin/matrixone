@@ -23,7 +23,7 @@ const (
 )
 
 const (
-	S3FileServiceName    = "S3"
-	LocalFileServiceName = "LOCAL"
-	ETLFileServiceName   = "ETL"
+	SharedFileServiceName = "SHARED"
+	LocalFileServiceName  = "LOCAL"
+	ETLFileServiceName    = "ETL"
 )
