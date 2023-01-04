@@ -60,6 +60,10 @@ func (c *CompilerContext) GetProcess() *process.Process {
 	return nil
 }
 
+func (c *CompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
+	return nil, "", nil
+}
+
 func (c *CompilerContext) DatabaseExists(name string) bool {
 	_, err := c.engine.Database(
 		c.ctx,
