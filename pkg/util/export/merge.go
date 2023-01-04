@@ -65,15 +65,15 @@ type Merge struct {
 	datetime    time.Time               // see Main
 	pathBuilder table.PathBuilder       // const as NewAccountDatePathBuilder()
 
-	// MaxFileSize 控制合并后最大文件大小, default: 128 MB
+	// MaxFileSize 控制合并后最大文件大小，default: 128 MB
 	MaxFileSize int64 // WithMaxFileSize
-	// MaxMergeJobs 允许进行的Merge的任务个数，default: 16
+	// MaxMergeJobs 允许进行的 Merge 的任务个数，default: 16
 	MaxMergeJobs int64 // WithMaxMergeJobs
-	// MinFilesMerge 控制Merge最少合并文件个数，default：2
+	// MinFilesMerge 控制 Merge 最少合并文件个数，default：2
 	//
 	// Deprecated: useless in Merge all in one file
 	MinFilesMerge int // WithMinFilesMerge
-	// FileCacheSize 控制Merge 过程中, 允许缓存的文件大小，default: 32 MB
+	// FileCacheSize 控制 Merge 过程中，允许缓存的文件大小，default: 32 MB
 	FileCacheSize int64
 
 	// logger
