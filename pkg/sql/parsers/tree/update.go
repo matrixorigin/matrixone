@@ -147,6 +147,7 @@ type ExternParam struct {
 	S3Param      *S3Parameter
 	Ctx          context.Context
 	LoadFile     bool
+	QueryResult  bool
 }
 
 type S3Parameter struct {

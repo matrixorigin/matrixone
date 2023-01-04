@@ -60,8 +60,8 @@ func (c *CompilerContext) GetProcess() *process.Process {
 	return nil
 }
 
-func (c *CompilerContext) GetQueryResultColDefs(uuid string) ([]*plan.ColDef, error) {
-	return nil, nil
+func (c *CompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
+	return nil, "", nil
 }
 
 func (c *CompilerContext) DatabaseExists(name string) bool {
