@@ -33,8 +33,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return generateSeriesCall(idx, proc, tblArg)
 	case "meta_scan":
 		return metaScanCall(idx, proc, tblArg)
-	case "result_scan":
-		return resultScanCall(idx, proc, tblArg)
 	default:
 		return true, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}
@@ -53,8 +51,6 @@ func Prepare(proc *process.Process, arg any) error {
 		return generateSeriesPrepare(proc, tblArg)
 	case "meta_scan":
 		return metaScanPrepare(proc, tblArg)
-	case "result_scan":
-		return resultScanPrepare(proc, tblArg)
 	default:
 		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}

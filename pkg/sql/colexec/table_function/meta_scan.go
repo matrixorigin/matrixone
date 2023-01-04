@@ -64,7 +64,7 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		}
 	}
 	if size == -1 {
-		return false, moerr.NewInvalidArg(proc.Ctx, "query id", uuid.ToString())
+		return false, moerr.NewQueryIdNotFound(proc.Ctx, uuid.ToString())
 	}
 	// read meta's meta
 	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid.ToString())

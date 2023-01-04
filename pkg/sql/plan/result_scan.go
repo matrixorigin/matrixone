@@ -102,11 +102,10 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	tableDef.Createsql = string(b)
 	node := &plan.Node{
 		NodeType:    plan.Node_EXTERNAL_SCAN,
-		Stats:       nil,
+		Stats:       &plan.Stats{},
 		TableDef:    tableDef,
 		BindingTags: []int32{builder.genNewTag()},
 	}
 	nodeID := builder.appendNode(node, ctx)
-	clearBinding(ctx)
 	return nodeID, nil
 }

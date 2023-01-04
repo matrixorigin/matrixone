@@ -118,8 +118,9 @@ const (
 	ErrDragonboatShardNotFound      uint16 = 20437
 	ErrDragonboatOtherSystemError   uint16 = 20438
 	ErrDropNonExistsDB              uint16 = 20439
-	ErrFunctionAlreadyExists        uint16 = 20440
-	ErrDropNonExistsFunction        uint16 = 20441
+	ErrQueryIdNotFound              uint16 = 20440
+	ErrFunctionAlreadyExists        uint16 = 20441
+	ErrDropNonExistsFunction        uint16 = 20442
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -264,7 +265,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDragonboatShardNotFound:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDragonboatOtherSystemError:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDropNonExistsDB:              {ER_DB_DROP_EXISTS, []string{MySQLDefaultSqlState}, "Can't drop database '%s'; database doesn't exist"},
-
+	ErrQueryIdNotFound:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "query id %s is not found"},
 	// Group 5: rpc timeout
 	ErrRPCTimeout:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
 	ErrClientClosed:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
@@ -584,6 +585,10 @@ func NewEmptyVector(ctx context.Context) *Error {
 
 func NewFileNotFound(ctx context.Context, f string) *Error {
 	return newError(ctx, ErrFileNotFound, f)
+}
+
+func NewQueryIdNotFound(ctx context.Context, f string) *Error {
+	return newError(ctx, ErrQueryIdNotFound, f)
 }
 
 func NewFileAlreadyExists(ctx context.Context, f string) *Error {

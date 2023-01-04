@@ -73,13 +73,6 @@ var (
 				NotNullable: false,
 			},
 		},
-		{
-			Name: catalog.MetaColNames[catalog.COLUMNS_IDX],
-			Typ: &plan.Type{
-				Id:          int32(catalog.MetaColTypes[catalog.COLUMNS_IDX].Oid),
-				NotNullable: false,
-			},
-		},
 	}
 )
 

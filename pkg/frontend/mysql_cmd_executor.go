@@ -233,6 +233,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if cw != nil {
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
+		ses.ast = statement
 		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		statement.Format(fmtCtx)
 		text = SubStringFromBegin(fmtCtx.String(), int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
@@ -587,7 +588,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	if openSaveQueryResult(ses) {
 		ses.lastQueryId = types.Uuid(ses.tStmt.StatementID).ToString()
 		if bat == nil {
-			if err := saveQueryResultMeta(ses, bat); err != nil {
+			if err := saveQueryResultMeta(ses); err != nil {
 				return err
 			}
 		} else {
