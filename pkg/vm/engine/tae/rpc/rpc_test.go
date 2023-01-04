@@ -16,6 +16,12 @@ package rpc
 
 import (
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"path"
 	"sync"
 	"testing"
 	"time"
@@ -32,6 +38,169 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
+	//write two sorted blocks into S3
+	dir := testutils.InitTestEnv(ModuleName, t)
+	dir = path.Join(dir, "/local")
+	id := 1
+	objName := fmt.Sprintf("%d.seg", id)
+	schema := catalog.MockSchema(2, 1)
+	schema.Name = "tbtest"
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	taeBat := catalog.MockBatch(schema, 300)
+	defer taeBat.Close()
+	taeBats := taeBat.Split(3)
+	//sort by primary key
+	_, err := mergesort.SortBlockColumns(taeBats[0].Vecs, 1)
+	assert.Nil(t, err)
+	_, err = mergesort.SortBlockColumns(taeBats[1].Vecs, 1)
+	assert.Nil(t, err)
+	_, err = mergesort.SortBlockColumns(taeBats[2].Vecs, 1)
+	assert.Nil(t, err)
+
+	moBats := make([]*batch.Batch, 3)
+	moBats[0] = containers.CopyToMoBatch(taeBats[0])
+	moBats[1] = containers.CopyToMoBatch(taeBats[1])
+	moBats[2] = containers.CopyToMoBatch(taeBats[2])
+	c := fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+	}
+	service, err := fileservice.NewFileService(c)
+	assert.Nil(t, err)
+
+	objectWriter, err := objectio.NewObjectWriter(objName, service)
+	assert.Nil(t, err)
+	for i, bat := range moBats {
+		if i == 2 {
+			break
+		}
+		fd, err := objectWriter.Write(bat)
+		assert.Nil(t, err)
+		for i, mvec := range bat.Vecs {
+			bloomFilter, zoneMap, err := getIndexDataFromVec(uint16(i), mvec)
+			assert.Nil(t, err)
+			if bloomFilter != nil {
+				err = objectWriter.WriteIndex(fd, bloomFilter)
+				assert.Nil(t, err)
+			}
+			if zoneMap != nil {
+				err = objectWriter.WriteIndex(fd, zoneMap)
+				assert.Nil(t, err)
+			}
+		}
+	}
+	blocks, err := objectWriter.WriteEnd(context.Background())
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(blocks))
+
+	//add blocks into table
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	handle := mockTAEHandle(t, opts)
+	defer handle.HandleClose(context.TODO())
+	IDAlloc := catalog.NewIDAllocator()
+	txnEngine := handle.GetTxnEngine()
+
+	//create db;
+	dbName := "dbtest"
+	ac := AccessInfo{
+		accountId: 0,
+		userId:    0,
+		roleId:    0,
+	}
+	var entries []*api.Entry
+	txn := mock1PCTxn(txnEngine)
+	dbTestID := IDAlloc.NextDB()
+	createDbEntries, err := makeCreateDatabaseEntries(
+		"",
+		ac,
+		dbName,
+		dbTestID,
+		handle.m)
+	assert.Nil(t, err)
+	entries = append(entries, createDbEntries...)
+	//create table from "dbtest"
+	defs, err := moengine.SchemaToDefs(schema)
+	defs[0].(*engine.AttributeDef).Attr.Default = &plan.Default{
+		NullAbility: true,
+		Expr: &plan.Expr{
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Isnull: false,
+					Value: &plan.Const_Sval{
+						Sval: "expr1",
+					},
+				},
+			},
+		},
+		OriginString: "expr1",
+	}
+	defs[1].(*engine.AttributeDef).Attr.Default = &plan.Default{
+		NullAbility: false,
+		Expr: &plan.Expr{
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Isnull: false,
+					Value: &plan.Const_Sval{
+						Sval: "expr2",
+					},
+				},
+			},
+		},
+		OriginString: "expr2",
+	}
+	assert.Nil(t, err)
+
+	//createTbTxn := mock1PCTxn(txnEngine)
+	tbTestID := IDAlloc.NextTable()
+	createTbEntries, err := makeCreateTableEntries(
+		"",
+		ac,
+		schema.Name,
+		tbTestID,
+		dbTestID,
+		dbName,
+		handle.m,
+		defs,
+	)
+	assert.Nil(t, err)
+	entries = append(entries, createTbEntries...)
+
+	//append data into "tbtest" table
+	//moBat := containers.CopyToMoBatch(catalog.MockBatch(schema, 100))
+	insertEntry, err := makePBEntry(INSERT, dbTestID,
+		tbTestID, dbName, schema.Name, "", moBats[2])
+	assert.NoError(t, err)
+	entries = append(entries, insertEntry)
+
+	//add blocks on S3 into "tbtest" table
+	//TODO::
+	metaLocs := batch.Batch{}
+	addBlkEntry, err := makePBEntry(INSERT, dbTestID,
+		tbTestID, dbName, schema.Name, objName, &metaLocs)
+	assert.NoError(t, err)
+	entries = append(entries, addBlkEntry)
+
+	err = handle.HandlePreCommit(
+		context.TODO(),
+		txn,
+		api.PrecommitWriteCmd{
+			UserId:    ac.userId,
+			AccountId: ac.accountId,
+			RoleId:    ac.roleId,
+			EntryList: entries,
+		},
+		new(api.SyncLogTailResp),
+	)
+	assert.Nil(t, err)
+	err = handle.HandleCommit(context.TODO(), txn)
+	assert.Nil(t, err)
+
+}
 
 func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	defer testutils.AfterTest(t)()
@@ -184,7 +353,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	insertTxn := mock1PCTxn(txnEngine)
 	moBat := containers.CopyToMoBatch(catalog.MockBatch(schema, 100))
 	insertEntry, err := makePBEntry(INSERT, dbTestId,
-		tbTestId, dbName, schema.Name, moBat)
+		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
 	err = handle.HandlePreCommit(
 		context.TODO(),
@@ -240,6 +409,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		tbTestId,
 		dbName,
 		schema.Name,
+		"",
 		hideBat,
 	)
 	err = handle.HandlePreCommit(
@@ -415,7 +585,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	//DML::insert batch into table
 	moBat := containers.CopyToMoBatch(catalog.MockBatch(schema, 100))
 	insertEntry, err := makePBEntry(INSERT, dbTestId,
-		tbTestId, dbName, schema.Name, moBat)
+		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
 	txnCmds = []txnCommand{
 		{
@@ -442,7 +612,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	//batch.SetLength(moBat, 20)
 	moBat = containers.CopyToMoBatch(catalog.MockBatch(schema, 20))
 	insertEntry, err = makePBEntry(INSERT, dbTestId,
-		tbTestId, dbName, schema.Name, moBat)
+		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
 	txnCmds = []txnCommand{
 		{
@@ -494,6 +664,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		tbTestId,
 		dbName,
 		schema.Name,
+		"",
 		hideBats[0],
 	)
 	assert.Nil(t, err)
@@ -523,6 +694,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		tbTestId,
 		dbName,
 		schema.Name,
+		"",
 		hideBats[1],
 	)
 	txnCmds = []txnCommand{
@@ -698,7 +870,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	//DML::insert batch into table
 	moBat := containers.CopyToMoBatch(catalog.MockBatch(schema, 100))
 	insertEntry, err := makePBEntry(INSERT, dbTestId,
-		tbTestId, dbName, schema.Name, moBat)
+		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
 	txnCmds = []txnCommand{
 		{
@@ -724,7 +896,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	//batch.SetLength(moBat, 20)
 	moBat = containers.CopyToMoBatch(catalog.MockBatch(schema, 20))
 	insertEntry, err = makePBEntry(INSERT, dbTestId,
-		tbTestId, dbName, schema.Name, moBat)
+		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
 	txnCmds = []txnCommand{
 		{
@@ -748,7 +920,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	//batch.SetLength(moBat, 10)
 	moBat = containers.CopyToMoBatch(catalog.MockBatch(schema, 10))
 	insertEntry, err = makePBEntry(INSERT, dbTestId,
-		tbTestId, dbName, schema.Name, moBat)
+		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
 	txnCmds = []txnCommand{
 		{
@@ -799,6 +971,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		tbTestId,
 		dbName,
 		schema.Name,
+		"",
 		hideBats[0],
 	)
 	assert.Nil(t, err)
@@ -829,6 +1002,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		tbTestId,
 		dbName,
 		schema.Name,
+		"",
 		hideBats[1],
 	)
 	txnCmds = []txnCommand{
@@ -1056,7 +1230,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	//DML::insert batch into table
 	moBat := containers.CopyToMoBatch(catalog.MockBatch(schema, 100))
 	insertEntry, err := makePBEntry(INSERT, dbTestId,
-		tbTestId, dbName, schema.Name, moBat)
+		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
 	txnCmds = []txnCommand{
 		{
@@ -1136,6 +1310,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		tbTestId,
 		dbName,
 		schema.Name,
+		"",
 		hideBats[0],
 	)
 	assert.Nil(t, err)
