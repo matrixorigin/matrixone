@@ -103,6 +103,13 @@ type StatisticValue struct {
 	Unit  string `json:"unit"`
 }
 
+func NewStatisticValue(name string, unit string) *StatisticValue {
+	return &StatisticValue{
+		Name: name,
+		Unit: unit,
+	}
+}
+
 func NewExplainData(uuid uuid.UUID) *ExplainData {
 	return &ExplainData{
 		Steps:   make([]Step, 0),
