@@ -403,6 +403,7 @@ var functionIdRegister = map[string]int32{
 	"ltrim":                          LTRIM,
 	"month":                          MONTH,
 	"oct":                            OCT,
+	"rand":                           RANDOM,
 	"reverse":                        REVERSE,
 	"rtrim":                          RTRIM,
 	"sin":                            SIN,

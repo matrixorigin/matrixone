@@ -220,6 +220,7 @@ type table struct {
 	createSql    string
 	constraint   []byte
 
+	updated bool
 	// use for skip rows
 	skipBlocks map[uint64]uint8
 }

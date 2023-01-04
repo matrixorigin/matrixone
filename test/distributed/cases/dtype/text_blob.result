@@ -85,9 +85,9 @@ select count(t1),max(t2),min(t3) from text_01;
 count(t1)    max(t2)    min(t3)
 5    7834    20
 select bin(t3) from text_01;
-invalid argument cast to uint, bad value 
+Data truncation: data out of range: data type uint8, value '983'
 select space(t3) from text_01;
-invalid argument cast to uint, bad value 
+invalid argument cast to uint64, bad value 中文
 select * from text_01 where t3 is null or length (t1)  >3;
 t1    t2    t3
 中文123abcd        null
