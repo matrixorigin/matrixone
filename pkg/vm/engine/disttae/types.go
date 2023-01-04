@@ -149,6 +149,8 @@ type Transaction struct {
 	tableMap *sync.Map
 	// use to cache database
 	databaseMap *sync.Map
+	// used to mark whether a table has been synchronized with logtail
+	syncMap *sync.Map
 }
 
 // Entry represents a delete/insert
@@ -180,11 +182,13 @@ type database struct {
 type tableKey struct {
 	accountId  uint32
 	databaseId uint64
+	tableId    uint64
 	name       string
 }
 
 type databaseKey struct {
 	accountId uint32
+	id        uint64
 	name      string
 }
 

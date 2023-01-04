@@ -958,14 +958,12 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	if !isConstant(e) {
 		return e, nil
 	}
-	// XXX MPOOL
-	// This is a bug -- colexec EvalExpr need to eval, therefore, could potentially need
-	// a mpool.  proc is passed in a nil, where do I get a mpool?   Session?
 	vec, err := colexec.EvalExpr(bat, proc, e)
 	if err != nil {
 		return nil, err
 	}
 	c := getConstantValue(vec)
+	vec.Free(proc.Mp())
 	if c == nil {
 		return e, nil
 	}

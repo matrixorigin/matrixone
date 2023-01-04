@@ -37,9 +37,41 @@ func (db *database) Relations(ctx context.Context) ([]string, error) {
 		}
 		return true
 	})
-	rels = append(rels, db.txn.catalog.Tables(getAccountId(ctx), db.databaseId,
-		db.txn.meta.SnapshotTS)...)
+	tbls, _ := db.txn.catalog.Tables(getAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
+	rels = append(rels, tbls...)
 	return rels, nil
+}
+
+func (db *database) getTableNameById(ctx context.Context, id uint64) string {
+	tblName := ""
+	db.txn.tableMap.Range(func(k, _ any) bool {
+		key := k.(tableKey)
+		if key.databaseId == db.databaseId && key.tableId == id {
+			tblName = key.name
+			return false
+		}
+		return true
+	})
+
+	if tblName == "" {
+		tbls, tblIds := db.txn.catalog.Tables(getAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
+		for idx, tblId := range tblIds {
+			if tblId == id {
+				tblName = tbls[idx]
+				break
+			}
+		}
+	}
+	return tblName
+}
+
+func (db *database) getRelationById(ctx context.Context, id uint64) (string, engine.Relation, error) {
+	tblName := db.getTableNameById(ctx, id)
+	if tblName == "" {
+		return "", nil, moerr.NewInternalError(ctx, "can not find table by id %d", id)
+	}
+	rel, err := db.Relation(ctx, tblName)
+	return tblName, rel, err
 }
 
 func (db *database) Relation(ctx context.Context, name string) (engine.Relation, error) {
@@ -71,15 +103,12 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	if ok := db.txn.catalog.GetTable(key); !ok {
 		return nil, moerr.GetOkExpectedEOB()
 	}
-	columnLength := len(key.TableDef.Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
-	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(key.Id), true, columnLength)
-	if err != nil {
-		return nil, err
+	if tbl, ok := db.txn.syncMap.Load(key.Id); ok {
+		return tbl.(*table), nil
 	}
 	parts := db.txn.db.getPartitions(db.databaseId, key.Id)
-	return &table{
+	tbl := &table{
 		db:           db,
-		meta:         meta,
 		parts:        parts,
 		tableId:      key.Id,
 		tableName:    key.Name,
@@ -93,7 +122,16 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 		partition:    key.Partition,
 		createSql:    key.CreateSql,
 		constraint:   key.Constraint,
-	}, nil
+	}
+	columnLength := len(key.TableDef.Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
+	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(key.Id), true, columnLength)
+	if err != nil {
+		return nil, err
+	}
+	tbl.meta = meta
+	tbl.updated = false
+	db.txn.syncMap.Store(key, tbl)
+	return tbl, nil
 }
 
 func (db *database) Delete(ctx context.Context, name string) error {
@@ -115,6 +153,7 @@ func (db *database) Delete(ctx context.Context, name string) error {
 		}
 		id = key.Id
 	}
+	db.txn.syncMap.Delete(id)
 	bat, err := genDropTableTuple(id, db.databaseId, name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
 		return err
@@ -250,21 +289,14 @@ func (db *database) openSysTable(key tableKey, id uint64, name string,
 	defs []engine.TableDef) engine.Relation {
 	parts := db.txn.db.getPartitions(db.databaseId, id)
 	tbl := &table{
-		db:         db,
-		tableId:    id,
-		tableName:  name,
-		defs:       defs,
-		parts:      parts,
-		primaryIdx: -1,
+		db:           db,
+		tableId:      id,
+		tableName:    name,
+		defs:         defs,
+		parts:        parts,
+		primaryIdx:   -1,
+		clusterByIdx: -1,
 	}
-	// find primary idx
-	for i, def := range defs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			if attr.Attr.Primary {
-				tbl.primaryIdx = i
-				break
-			}
-		}
-	}
+	tbl.getTableDef()
 	return tbl
 }
