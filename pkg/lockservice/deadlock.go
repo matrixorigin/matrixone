@@ -64,6 +64,7 @@ func (d *detector) close() {
 	d.mu.closed = true
 	d.mu.Unlock()
 	d.stopper.Stop()
+	close(d.c)
 }
 
 func (d *detector) check(txnID []byte) error {
