@@ -24,15 +24,22 @@ import (
 
 // Logtailer provides logtail for the specified table.
 type Logtailer interface {
-	// TableTotalLogtail returns full logtail for the specified table.
+	// TableTotal returns full logtail for the specified table.
 	TableTotal(
 		ctx context.Context, table api.TableID, to timestamp.Timestamp,
 	) (logtail.TableLogtail, error)
 
-	// RangeLogtail returns logtail for all tables within range (from, to].
+	// RangeTotal returns logtail for all tables within the range (from, to].
 	RangeTotal(
 		ctx context.Context, from, to timestamp.Timestamp,
 	) ([]logtail.TableLogtail, error)
+
+	// FetchLogtail returns logtail for the specified table.
+	//
+	// NOTE: If table not exist, logtail.TableLogtail shouldn't be a simple zero value.
+	FetchLogtail(
+		ctx context.Context, table api.TableID, from, to timestamp.Timestamp,
+	) (logtail.TableLogtail, error)
 }
 
 // TODO: implement interface Logtailer

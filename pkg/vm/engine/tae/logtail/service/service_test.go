@@ -47,6 +47,7 @@ func TestService(t *testing.T) {
 		WithServerEnableChecksum(true),
 		WithServerMaxMessageSize(16*KiB),
 		WithServerPayloadCopyBufferSize(16*KiB),
+		WithServerMaxLogtailFetchFailure(5),
 	)
 	require.NoError(t, err)
 
@@ -162,4 +163,15 @@ func (m *logtailer) RangeTotal(
 		tails = append(tails, mockLogtail(table))
 	}
 	return tails, nil
+}
+
+func (m *logtailer) FetchLogtail(
+	ctx context.Context, table api.TableID, from, to timestamp.Timestamp,
+) (logtail.TableLogtail, error) {
+	for _, t := range m.tables {
+		if t.String() == table.String() {
+			return mockLogtail(table), nil
+		}
+	}
+	return logtail.TableLogtail{Table: &table, Ts: &to}, nil
 }
