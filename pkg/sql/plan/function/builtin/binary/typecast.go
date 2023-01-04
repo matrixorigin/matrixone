@@ -848,7 +848,7 @@ func NumericToTime[T constraints.Integer](ctx context.Context, xs []T, rs []type
 func Decimal64ToTime(ctx context.Context, xs []types.Decimal64, rs []types.Time, precision int32) ([]types.Time, error) {
 	for i, x := range xs {
 		var err error
-		rs[i], err = types.ParseDecima64lToTime(x, precision)
+		rs[i], err = types.ParseDecimal64lToTime(x, precision)
 		if err != nil {
 			return rs, err
 		}
@@ -859,7 +859,7 @@ func Decimal64ToTime(ctx context.Context, xs []types.Decimal64, rs []types.Time,
 func Decimal128ToTime(ctx context.Context, xs []types.Decimal128, rs []types.Time, precision int32) ([]types.Time, error) {
 	for i, x := range xs {
 		var err error
-		rs[i], err = types.ParseDecima128lToTime(x, precision)
+		rs[i], err = types.ParseDecimal128lToTime(x, precision)
 		if err != nil {
 			return rs, err
 		}
