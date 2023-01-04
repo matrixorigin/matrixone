@@ -44,34 +44,12 @@ func NewLogtailer(
 	}
 }
 
-// temp use
+// FetchLogtail returns full logtail for the specified table.
 func (l *LogtailerImpl) FetchLogtail(
 	ctx context.Context, table api.TableID, from, to timestamp.Timestamp,
 ) (logtail.TableLogtail, error) {
 	req := api.SyncLogTailReq{
 		CnHave: &from,
-		CnWant: &to,
-		Table:  &table,
-	}
-	resp, err := HandleSyncLogTailReq(l.ckpClient, l.mgr, l.c, req, true)
-	ret := logtail.TableLogtail{}
-	if err != nil {
-		return ret, err
-	}
-	ret.CkpLocation = resp.CkpLocation
-	ret.Ts = &to
-	ret.Table = &table
-	ret.Commands = nonPointerEntryList(resp.Commands)
-	return ret, nil
-}
-
-// TableTotal returns full logtail for the specified table.
-func (l *LogtailerImpl) TableTotal(
-	ctx context.Context, table api.TableID, to timestamp.Timestamp,
-) (logtail.TableLogtail, error) {
-	zero := timestamp.Timestamp{}
-	req := api.SyncLogTailReq{
-		CnHave: &zero,
 		CnWant: &to,
 		Table:  &table,
 	}
