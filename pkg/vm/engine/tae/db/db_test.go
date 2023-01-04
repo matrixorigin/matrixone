@@ -5197,7 +5197,7 @@ func TestGlobalCheckpoint6(t *testing.T) {
 	}
 }
 
-func TestGCCheckpoint(t *testing.T) {
+func TestGCCheckpoint1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -5224,7 +5224,8 @@ func TestGCCheckpoint(t *testing.T) {
 	maxGlobal := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
 
 	testutils.WaitExpect(4000, func() bool {
-		tae.BGCheckpointRunner.GCCheckpoint(gcTS)
+		err := tae.BGCheckpointRunner.GCCheckpoint(gcTS)
+		assert.NoError(t, err)
 		tae.BGCheckpointRunner.ExistPendingEntryToGC()
 		return !tae.BGCheckpointRunner.ExistPendingEntryToGC()
 	})
@@ -5243,4 +5244,66 @@ func TestGCCheckpoint(t *testing.T) {
 		assert.True(t, incremental.GetStart().Equal(prevEnd.Next()))
 		t.Log(incremental.String())
 	}
+}
+
+func TestGCCheckpoint2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := new(options.Options)
+	opts.CacheCfg = new(options.CacheCfg)
+	opts.CacheCfg.InsertCapacity = common.M * 5
+	opts.CacheCfg.TxnCapacity = common.M
+	opts = config.WithQuickScanAndCKPOpts(opts)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	db := tae.DB
+
+	schema1 := catalog.MockSchemaAll(13, 2)
+	schema1.BlockMaxRows = 10
+	schema1.SegmentMaxBlocks = 2
+	tae.bindSchema(schema1)
+
+	schema2 := catalog.MockSchemaAll(13, 2)
+	schema2.BlockMaxRows = 10
+	schema2.SegmentMaxBlocks = 2
+	{
+		txn, _ := db.StartTxn(nil)
+		database, err := txn.CreateDatabase("db", "")
+		assert.Nil(t, err)
+		_, err = database.CreateRelation(schema1)
+		assert.Nil(t, err)
+		_, err = database.CreateRelation(schema2)
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+
+	// rows:=int(schema1.BlockMaxRows*10-1)
+	rows:=1001
+	bat := catalog.MockBatch(schema1, rows)
+	defer bat.Close()
+	bats := bat.Split(bat.Length())
+
+	pool, err := ants.NewPool(200)
+	assert.Nil(t, err)
+	defer pool.Release()
+	var wg sync.WaitGroup
+
+	for _, data := range bats {
+		wg.Add(2)
+		err = pool.Submit(appendClosure(t, data, schema1.Name, db, &wg))
+		assert.Nil(t, err)
+		err = pool.Submit(appendClosure(t, data, schema2.Name, db, &wg))
+		assert.Nil(t, err)
+	}
+	wg.Wait()
+	tae.BGCheckpointRunner.DisableCheckpoint()
+	testutils.WaitExpect(4000, func() bool {
+		gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+		err := tae.BGCheckpointRunner.GCCheckpoint(gcTS)
+		assert.NoError(t, err)
+		tae.BGCheckpointRunner.ExistPendingEntryToGC()
+		return !tae.BGCheckpointRunner.ExistPendingEntryToGC()
+	})
+	tae.restart()
+	tae.checkRowsByScan(rows,true)
 }
