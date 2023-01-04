@@ -161,6 +161,7 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 	txn := e.getTransaction(op)
 	accountId := getAccountId(ctx)
 	var db engine.Database
+	noRepCtx := errutil.ContextWithNoReport(ctx, true)
 	txn.databaseMap.Range(func(k, _ any) bool {
 		key := k.(databaseKey)
 		dbName = key.name
