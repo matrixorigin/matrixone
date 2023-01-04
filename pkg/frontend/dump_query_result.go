@@ -123,6 +123,11 @@ func doDumpQueryResult(ctx context.Context, ses *Session, exportParam *tree.Expo
 	exportParam.DefaultBufSize = ses.GetParameterUnit().SV.ExportDataDefaultFlushSize
 	exportParam.UseFileService = true
 	exportParam.FileService = ses.GetParameterUnit().FileService
+	exportParam.Ctx = ctx
+	defer func() {
+		exportParam.OutputBuffer = nil
+		exportParam.OutputStr = nil
+	}()
 	initExportFileParam(exportParam, mrs)
 	if err = openNewFile(ctx, exportParam, mrs); err != nil {
 		return err
@@ -177,16 +182,16 @@ func doDumpQueryResult(ctx context.Context, ses *Session, exportParam *tree.Expo
 				return err
 			}
 		}
+	}
 
-		err = oq.flush()
-		if err != nil {
-			return err
-		}
+	err = oq.flush()
+	if err != nil {
+		return err
+	}
 
-		err = writeIntoFileService(ctx, exportParam)
-		if err != nil {
-			return err
-		}
+	err = Close(exportParam)
+	if err != nil {
+		return err
 	}
 
 	return err

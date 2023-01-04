@@ -88,7 +88,13 @@ var openNewFile = func(ctx context.Context, ep *tree.ExportParam, mrs *MysqlResu
 		ep.Writer = bufio.NewWriterSize(ep.File, int(ep.DefaultBufSize))
 	} else {
 		//default 1MB
-		ep.OutputBuffer = make([]byte, 0, int(ep.DefaultBufSize))
+		if ep.OutputBuffer == nil {
+			if ep.MaxFileSize == 0 {
+				ep.MaxFileSize = uint64(ep.DefaultBufSize)
+			}
+			ep.OutputBuffer = make([]byte, ep.MaxFileSize)
+		}
+		ep.FileServiceOffset = 0
 	}
 	if ep.Header {
 		var header string
@@ -154,24 +160,57 @@ var Flush = func(ep *tree.ExportParam) error {
 }
 
 var Seek = func(ep *tree.ExportParam) (int64, error) {
-	return ep.File.Seek(int64(ep.CurFileSize-ep.LineSize), io.SeekStart)
+	if !ep.UseFileService {
+		return ep.File.Seek(int64(ep.CurFileSize-ep.LineSize), io.SeekStart)
+	}
+	ep.FileServiceOffset = int64(ep.CurFileSize - ep.LineSize)
+	return ep.FileServiceOffset, nil
 }
 
 var Read = func(ep *tree.ExportParam) (int, error) {
-	ep.OutputStr = make([]byte, ep.LineSize)
-	return ep.File.Read(ep.OutputStr)
+	if !ep.UseFileService {
+		ep.OutputStr = make([]byte, ep.LineSize)
+		return ep.File.Read(ep.OutputStr)
+	} else {
+		ep.OutputStr = make([]byte, ep.LineSize)
+		return copy(ep.OutputStr, ep.OutputBuffer[ep.FileServiceOffset:]), nil
+	}
 }
 
 var Truncate = func(ep *tree.ExportParam) error {
-	return ep.File.Truncate(int64(ep.CurFileSize - ep.LineSize))
+	if !ep.UseFileService {
+		return ep.File.Truncate(int64(ep.CurFileSize - ep.LineSize))
+	} else {
+		ep.FileServiceOffset = int64(ep.CurFileSize - ep.LineSize)
+		return nil
+	}
 }
 
 var Close = func(ep *tree.ExportParam) error {
-	return ep.File.Close()
+	if !ep.UseFileService {
+		return ep.File.Close()
+	} else {
+		return ep.FileService.Write(ep.Ctx, fileservice.IOVector{
+			FilePath: getExportFilePath(ep.FilePath, ep.FileCnt),
+			Entries: []fileservice.IOEntry{
+				{
+					Offset: 0,
+					Size:   ep.FileServiceOffset,
+					Data:   ep.OutputBuffer[:ep.FileServiceOffset],
+				},
+			},
+		})
+	}
 }
 
 var Write = func(ep *tree.ExportParam, output []byte) (int, error) {
-	return ep.Writer.Write(output)
+	if !ep.UseFileService {
+		return ep.Writer.Write(output)
+	} else {
+		copy(ep.OutputBuffer[ep.FileServiceOffset:], output)
+		ep.FileServiceOffset += int64(len(output))
+		return len(output), nil
+	}
 }
 
 func writeToCSVFile(oq *outputQueue, output []byte) error {
@@ -213,46 +252,15 @@ func writeToCSVFile(oq *outputQueue, output []byte) error {
 }
 
 var writeDataToCSVFile = func(ctx context.Context, ep *tree.ExportParam, output []byte) error {
-	if ep.UseFileService {
-		if err := writeDataByFileService(ctx, ep, output); err != nil {
+	for {
+		if n, err := Write(ep, output); err != nil {
 			return err
-		}
-	} else {
-		for {
-			if n, err := Write(ep, output); err != nil {
-				return err
-			} else if n == len(output) {
-				break
-			}
+		} else if n == len(output) {
+			break
 		}
 	}
 	ep.LineSize += uint64(len(output))
 	ep.CurFileSize += uint64(len(output))
-	return nil
-}
-
-func writeDataByFileService(ctx context.Context, ep *tree.ExportParam, data []byte) error {
-	if ep.UseFileService {
-		ep.OutputBuffer = append(ep.OutputBuffer, data...)
-	}
-	return nil
-}
-
-func writeIntoFileService(ctx context.Context, ep *tree.ExportParam) error {
-	filePath := getExportFilePath(ep.FilePath, ep.FileCnt)
-	if err := ep.FileService.Write(ctx, fileservice.IOVector{
-		FilePath: filePath,
-		Entries: []fileservice.IOEntry{
-			{
-				Offset: 0,
-				Size:   int64(len(ep.OutputBuffer)),
-				Data:   ep.OutputBuffer,
-			},
-		},
-	}); err != nil {
-		return err
-	}
-	ep.OutputBuffer = ep.OutputBuffer[:0]
 	return nil
 }
 

@@ -480,6 +480,7 @@ type ExportParam struct {
 	FileService       fileservice.FileService
 	FileServiceOffset int64
 	OutputBuffer      []byte
+	Ctx               context.Context
 }
 
 func (ep *ExportParam) Format(ctx *FmtCtx) {
