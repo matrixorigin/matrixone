@@ -165,7 +165,7 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 		key := k.(databaseKey)
 		dbName = key.name
 		if key.accountId == accountId {
-			db, err = e.Database(ctx, key.name, op)
+			db, err = e.Database(noRepCtx, key.name, op)
 			if err != nil {
 				return false
 			}
@@ -189,7 +189,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		key := k.(databaseKey)
 		dbName = key.name
 		if key.accountId == accountId {
-			db, err = e.Database(ctx, key.name, op)
+			db, err = e.Database(noRepCtx, key.name, op)
 			if err != nil {
 				return false
 			}
