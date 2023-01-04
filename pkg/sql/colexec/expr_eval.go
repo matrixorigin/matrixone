@@ -212,8 +212,6 @@ func getConstVec(ctx context.Context, proc *process.Process, expr *plan.Expr, le
 }
 
 func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
-	var vec *vector.Vector
-
 	if len(bat.Zs) == 0 {
 		return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, 1), nil
 	}
@@ -225,12 +223,12 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		return getConstVec(proc.Ctx, proc, expr, length)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.New(types.Type{
+		return vector.NewConst(types.Type{
 			Oid:       types.T(t.T.Typ.GetId()),
 			Width:     t.T.Typ.GetWidth(),
 			Scale:     t.T.Typ.GetScale(),
 			Precision: t.T.Typ.GetPrecision(),
-		}), nil
+		}, len(bat.Zs)), nil
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
 		if vec.IsScalarNull() {
@@ -240,50 +238,32 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	case *plan.Expr_List:
 		return getConstVecInList(proc.Ctx, proc, t.List.List)
 	case *plan.Expr_F:
-		overloadId := t.F.Func.GetObj()
-		f, err := function.GetFunctionByID(proc.Ctx, overloadId)
+		var result *vector.Vector
+
+		fid := t.F.GetFunc().GetObj()
+		f, err := function.GetFunctionByID(proc.Ctx, fid)
 		if err != nil {
 			return nil, err
 		}
-		vs := make([]*vector.Vector, len(t.F.Args))
-		for i := range vs {
-			v, err := EvalExpr(bat, proc, t.F.Args[i])
+
+		functionParameters := make([]*vector.Vector, len(t.F.Args))
+		for i := range functionParameters {
+			functionParameters[i], err = EvalExpr(bat, proc, t.F.Args[i])
 			if err != nil {
-				if proc != nil {
-					mp := make(map[*vector.Vector]uint8)
-					for i := range bat.Vecs {
-						mp[bat.Vecs[i]] = 0
-					}
-					for j := 0; j < i; j++ {
-						if _, ok := mp[vs[j]]; !ok {
-							vector.Clean(vs[j], proc.Mp())
-						}
-					}
-				}
-				return nil, err
+				break
 			}
-			vs[i] = v
 		}
-		defer func() {
-			if proc != nil {
-				mp := make(map[*vector.Vector]uint8)
-				for i := range bat.Vecs {
-					mp[bat.Vecs[i]] = 0
-				}
-				for i := range vs {
-					if _, ok := mp[vs[i]]; !ok {
-						vector.Clean(vs[i], proc.Mp())
-					}
-				}
-			}
-		}()
-		vec, err = f.VecFn(vs, proc)
+		if err != nil {
+			cleanVectorsExceptList(proc, functionParameters, bat.Vecs)
+			return nil, err
+		}
+
+		result, err = evalFunction(proc, f, functionParameters, len(bat.Zs))
+		cleanVectorsExceptList(proc, functionParameters, append(bat.Vecs, result))
 		if err != nil {
 			return nil, err
 		}
-		vector.SetLength(vec, len(bat.Zs))
-		vec.FillDefaultValue()
-		return vec, nil
+		return result, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
 		return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported eval expr '%v'", t))
@@ -291,19 +271,18 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 }
 
 func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
-	var vec *vector.Vector
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
 		return getConstVec(proc.Ctx, proc, expr, 1)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.New(types.Type{
+		return vector.NewConst(types.Type{
 			Oid:       types.T(t.T.Typ.GetId()),
 			Width:     t.T.Typ.GetWidth(),
 			Scale:     t.T.Typ.GetScale(),
 			Precision: t.T.Typ.GetPrecision(),
-		}), nil
+		}, len(s.Zs)), nil
 	case *plan.Expr_Col:
 		if t.Col.RelPos == 0 {
 			return r.Vecs[t.Col.ColPos].ToConst(rRow, proc.Mp()), nil
@@ -312,46 +291,32 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 	case *plan.Expr_List:
 		return getConstVecInList(proc.Ctx, proc, t.List.List)
 	case *plan.Expr_F:
-		overloadId := t.F.Func.GetObj()
-		f, err := function.GetFunctionByID(proc.Ctx, overloadId)
+		var result *vector.Vector
+
+		fid := t.F.GetFunc().GetObj()
+		f, err := function.GetFunctionByID(proc.Ctx, fid)
 		if err != nil {
 			return nil, err
 		}
-		vs := make([]*vector.Vector, len(t.F.Args))
-		for i := range vs {
-			v, err := JoinFilterEvalExpr(r, s, rRow, proc, t.F.Args[i])
+
+		functionParameters := make([]*vector.Vector, len(t.F.Args))
+		for i := range functionParameters {
+			functionParameters[i], err = JoinFilterEvalExpr(r, s, rRow, proc, t.F.Args[i])
 			if err != nil {
-				mp := make(map[*vector.Vector]uint8)
-				for i := range s.Vecs {
-					mp[s.Vecs[i]] = 0
-				}
-				for j := 0; j < i; j++ {
-					if _, ok := mp[vs[j]]; !ok {
-						vector.Clean(vs[j], proc.Mp())
-					}
-				}
-				return nil, err
+				break
 			}
-			vs[i] = v
 		}
-		defer func() {
-			mp := make(map[*vector.Vector]uint8)
-			for i := range s.Vecs {
-				mp[s.Vecs[i]] = 0
-			}
-			for i := range vs {
-				if _, ok := mp[vs[i]]; !ok {
-					vector.Clean(vs[i], proc.Mp())
-				}
-			}
-		}()
-		vec, err = f.VecFn(vs, proc)
+		if err != nil {
+			cleanVectorsExceptList(proc, functionParameters, append(r.Vecs, s.Vecs...))
+			return nil, err
+		}
+
+		result, err = evalFunction(proc, f, functionParameters, len(s.Zs))
+		cleanVectorsExceptList(proc, functionParameters, append(append(r.Vecs, s.Vecs...), result))
 		if err != nil {
 			return nil, err
 		}
-		vector.SetLength(vec, len(s.Zs))
-		vec.FillDefaultValue()
-		return vec, nil
+		return result, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
 		return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("eval expr '%v'", t))
@@ -359,8 +324,6 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 }
 
 func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
-	var vec *vector.Vector
-
 	if len(bat.Zs) == 0 {
 		return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, 1), nil
 	}
@@ -372,12 +335,12 @@ func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.P
 		return getConstVec(ctx, proc, expr, length)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.New(types.Type{
+		return vector.NewConst(types.Type{
 			Oid:       types.T(t.T.Typ.GetId()),
 			Width:     t.T.Typ.GetWidth(),
 			Scale:     t.T.Typ.GetScale(),
 			Precision: t.T.Typ.GetPrecision(),
-		}), nil
+		}, len(bat.Zs)), nil
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
 		if vec.IsScalarNull() {
@@ -385,48 +348,30 @@ func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.P
 		}
 		return vec, nil
 	case *plan.Expr_F:
-		overloadId := t.F.Func.GetObj()
-		f, err := function.GetFunctionByID(ctx, overloadId)
+		var result *vector.Vector
+
+		fid := t.F.GetFunc().GetObj()
+		f, err := function.GetFunctionByID(proc.Ctx, fid)
 		if err != nil {
 			return nil, err
 		}
-		vs := make([]*vector.Vector, len(t.F.Args))
-		for i := range vs {
-			v, err := EvalExprByZonemapBat(ctx, bat, proc, t.F.Args[i])
+
+		functionParameters := make([]*vector.Vector, len(t.F.Args))
+		for i := range functionParameters {
+			functionParameters[i], err = EvalExprByZonemapBat(ctx, bat, proc, t.F.Args[i])
 			if err != nil {
-				if proc != nil {
-					mp := make(map[*vector.Vector]uint8)
-					for i := range bat.Vecs {
-						mp[bat.Vecs[i]] = 0
-					}
-					for j := 0; j < i; j++ {
-						if _, ok := mp[vs[j]]; !ok {
-							vector.Clean(vs[j], proc.Mp())
-						}
-					}
-				}
-				return nil, err
+				break
 			}
-			vs[i] = v
 		}
-		defer func() {
-			if proc != nil {
-				mp := make(map[*vector.Vector]uint8)
-				for i := range bat.Vecs {
-					mp[bat.Vecs[i]] = 0
-				}
-				for i := range vs {
-					if _, ok := mp[vs[i]]; !ok {
-						vector.Clean(vs[i], proc.Mp())
-					}
-				}
-			}
-		}()
+		if err != nil {
+			cleanVectorsExceptList(proc, functionParameters, bat.Vecs)
+			return nil, err
+		}
 
 		compareAndReturn := func(isTrue bool, err error) (*vector.Vector, error) {
 			if err != nil {
-				// if cann't compare, just return true.
-				// that means we don't known this filter expr's return, so you must readBlock
+				// if it can't compare, just return true.
+				// that means we don't know this filter expr's return, so you must readBlock
 				return vector.NewConstFixed(types.T_bool.ToType(), 1, true, proc.Mp()), nil
 			}
 			return vector.NewConstFixed(types.T_bool.ToType(), 1, isTrue, proc.Mp()), nil
@@ -434,24 +379,24 @@ func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.P
 
 		switch t.F.Func.ObjName {
 		case ">":
-			// if some one in left > some one in right, that will be true
-			return compareAndReturn(vs[0].CompareAndCheckAnyResultIsTrue(ctx, vs[1], ">"))
+			// if someone in left > someone in right, that will be true
+			return compareAndReturn(functionParameters[0].CompareAndCheckAnyResultIsTrue(ctx, functionParameters[1], ">"))
 		case "<":
-			// if some one in left < some one in right, that will be true
-			return compareAndReturn(vs[0].CompareAndCheckAnyResultIsTrue(ctx, vs[1], "<"))
+			// if someone in left < someone in right, that will be true
+			return compareAndReturn(functionParameters[0].CompareAndCheckAnyResultIsTrue(ctx, functionParameters[1], "<"))
 		case "=":
 			// if left intersect right, that will be true
-			return compareAndReturn(vs[0].CompareAndCheckIntersect(ctx, vs[1]))
+			return compareAndReturn(functionParameters[0].CompareAndCheckIntersect(ctx, functionParameters[1]))
 		case ">=":
-			// if some one in left >= some one in right, that will be true
-			return compareAndReturn(vs[0].CompareAndCheckAnyResultIsTrue(ctx, vs[1], ">="))
+			// if someone in left >= someone in right, that will be true
+			return compareAndReturn(functionParameters[0].CompareAndCheckAnyResultIsTrue(ctx, functionParameters[1], ">="))
 		case "<=":
-			// if some one in left <= some one in right, that will be true
-			return compareAndReturn(vs[0].CompareAndCheckAnyResultIsTrue(ctx, vs[1], "<="))
+			// if someone in left <= someone in right, that will be true
+			return compareAndReturn(functionParameters[0].CompareAndCheckAnyResultIsTrue(ctx, functionParameters[1], "<="))
 		case "and":
 			// if left has one true and right has one true, that will be true
-			cols1 := vector.MustTCols[bool](vs[0])
-			cols2 := vector.MustTCols[bool](vs[1])
+			cols1 := vector.MustTCols[bool](functionParameters[0])
+			cols2 := vector.MustTCols[bool](functionParameters[1])
 
 			for _, leftHasTrue := range cols1 {
 				if leftHasTrue {
@@ -465,9 +410,9 @@ func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.P
 			}
 			return vector.NewConstFixed(types.T_bool.ToType(), 1, false, proc.Mp()), nil
 		case "or":
-			// if some one is true in left/right, that will be true
-			cols1 := vector.MustTCols[bool](vs[0])
-			cols2 := vector.MustTCols[bool](vs[1])
+			// if someone is true in left/right, that will be true
+			cols1 := vector.MustTCols[bool](functionParameters[0])
+			cols2 := vector.MustTCols[bool](functionParameters[1])
 			for _, flag := range cols1 {
 				if flag {
 					return vector.NewConstFixed(types.T_bool.ToType(), 1, true, proc.Mp()), nil
@@ -481,14 +426,12 @@ func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.P
 			return vector.NewConstFixed(types.T_bool.ToType(), 1, false, proc.Mp()), nil
 		}
 
-		vec, err = f.VecFn(vs, proc)
-
+		result, err = evalFunction(proc, f, functionParameters, len(bat.Zs))
+		cleanVectorsExceptList(proc, functionParameters, append(bat.Vecs, result))
 		if err != nil {
 			return nil, err
 		}
-		vector.SetLength(vec, len(bat.Zs))
-		vec.FillDefaultValue()
-		return vec, nil
+		return result, nil
 	default:
 		// *plan.Expr_Corr,  *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
 		return nil, moerr.NewNYI(ctx, fmt.Sprintf("unsupported eval expr '%v'", t))
@@ -496,69 +439,121 @@ func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.P
 }
 
 func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
-	var vec *vector.Vector
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
 		return getConstVec(proc.Ctx, proc, expr, 1)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.New(types.Type{
+		return vector.NewConst(types.Type{
 			Oid:       types.T(t.T.Typ.GetId()),
 			Width:     t.T.Typ.GetWidth(),
 			Scale:     t.T.Typ.GetScale(),
 			Precision: t.T.Typ.GetPrecision(),
-		}), nil
+		}, 1), nil
 	case *plan.Expr_Col:
 		if t.Col.RelPos == 0 {
 			return r.Vecs[t.Col.ColPos].ToConst(rRow, proc.Mp()), nil
 		}
 		return s.Vecs[t.Col.ColPos].ToConst(sRow, proc.Mp()), nil
 	case *plan.Expr_F:
-		overloadId := t.F.Func.GetObj()
-		f, err := function.GetFunctionByID(proc.Ctx, overloadId)
-		if err != nil {
-			return nil, err
-		}
-		vs := make([]*vector.Vector, len(t.F.Args))
-		for i := range vs {
-			v, err := JoinFilterEvalExprInBucket(r, s, rRow, sRow, proc, t.F.Args[i])
-			if err != nil {
-				mp := make(map[*vector.Vector]uint8)
-				for i := range s.Vecs {
-					mp[s.Vecs[i]] = 0
-				}
-				for j := 0; j < i; j++ {
-					if _, ok := mp[vs[j]]; !ok {
-						vector.Clean(vs[j], proc.Mp())
-					}
-				}
-				return nil, err
-			}
-			vs[i] = v
-		}
-		defer func() {
-			mp := make(map[*vector.Vector]uint8)
-			for i := range s.Vecs {
-				mp[s.Vecs[i]] = 0
-			}
-			for i := range vs {
-				if _, ok := mp[vs[i]]; !ok {
-					vector.Clean(vs[i], proc.Mp())
-				}
-			}
-		}()
-		vec, err = f.VecFn(vs, proc)
+		var result *vector.Vector
+
+		fid := t.F.GetFunc().GetObj()
+		f, err := function.GetFunctionByID(proc.Ctx, fid)
 		if err != nil {
 			return nil, err
 		}
 
-		vector.SetLength(vec, 1)
-		vec.FillDefaultValue()
-		return vec, nil
+		functionParameters := make([]*vector.Vector, len(t.F.Args))
+		for i := range functionParameters {
+			functionParameters[i], err = JoinFilterEvalExprInBucket(r, s, rRow, sRow, proc, t.F.Args[i])
+			if err != nil {
+				break
+			}
+		}
+		if err != nil {
+			cleanVectorsExceptList(proc, functionParameters, append(r.Vecs, s.Vecs...))
+			return nil, err
+		}
+
+		result, err = evalFunction(proc, f, functionParameters, 1)
+		cleanVectorsExceptList(proc, functionParameters, append(append(r.Vecs, s.Vecs...), result))
+		if err != nil {
+			return nil, err
+		}
+		return result, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
 		return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("eval expr '%v'", t))
+	}
+}
+
+func evalFunction(proc *process.Process, f *function.Function, args []*vector.Vector, length int) (*vector.Vector, error) {
+	if !f.UseNewFramework {
+		v, err := f.VecFn(args, proc)
+		if err != nil {
+			return nil, err
+		}
+		vector.SetLength(v, length)
+		v.FillDefaultValue()
+		return v, nil
+	}
+	var resultWrapper vector.FunctionResultWrapper
+	var err error
+
+	var parameterTypes []types.Type
+	if f.FlexibleReturnType != nil {
+		parameterTypes = make([]types.Type, len(args))
+		for i := range args {
+			parameterTypes[i] = args[i].GetType()
+		}
+	}
+	rTyp, _ := f.ReturnType(parameterTypes)
+	numScalar := 0
+	// If any argument is `NULL`, return NULL.
+	// If all arguments are scalar, return scalar.
+	for i := range args {
+		if args[i].IsScalar() {
+			numScalar++
+		} else {
+			if len(f.ParameterMustScalar) > i && f.ParameterMustScalar[i] {
+				return nil, moerr.NewInternalError(proc.Ctx,
+					fmt.Sprintf("the %dth parameter of function can only be constant", i+1))
+			}
+		}
+	}
+
+	if !f.ResultMustNotScalar && numScalar == len(args) {
+		resultWrapper = vector.NewFunctionResultWrapper(rTyp, proc.Mp(), true, length)
+		// XXX only evaluate the first row.
+		err = f.NewFn(args, resultWrapper, proc, 1)
+	} else {
+		resultWrapper = vector.NewFunctionResultWrapper(rTyp, proc.Mp(), false, length)
+		err = f.NewFn(args, resultWrapper, proc, length)
+	}
+	if err != nil {
+		resultWrapper.Free()
+	}
+	return resultWrapper.GetResultVector(), err
+}
+
+func cleanVectorsExceptList(proc *process.Process, vs []*vector.Vector, excepts []*vector.Vector) {
+	mp := proc.Mp()
+	for i := range vs {
+		if vs[i] == nil {
+			continue
+		}
+		needClean := true
+		for j := range excepts {
+			if excepts[j] == vs[i] {
+				needClean = false
+				break
+			}
+		}
+		if needClean {
+			vs[i].Free(mp)
+		}
 	}
 }
 
