@@ -34,8 +34,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -63,29 +66,23 @@ func NewS3FS(
 	memCacheCapacity int64,
 ) (*S3FS, error) {
 
-	u, err := url.Parse(endpoint)
+	fs, err := newS3FS([]string{
+		"shared-config-profile=" + sharedConfigProfile,
+		"name=" + name,
+		"endpoint=" + endpoint,
+		"bucket=" + bucket,
+		"prefix=" + keyPrefix,
+	})
 	if err != nil {
 		return nil, err
 	}
-	if u.Scheme == "" {
-		u.Scheme = "https"
-	}
-	endpoint = u.String()
 
-	return newS3FS(
-		sharedConfigProfile,
-		name,
-		endpoint,
-		bucket,
-		keyPrefix,
-		memCacheCapacity,
-		nil,
-		[]func(*s3.Options){
-			s3.WithEndpointResolver(
-				s3.EndpointResolverFromURL(endpoint),
-			),
-		},
-	)
+	if memCacheCapacity > 0 {
+		fs.memCache = NewMemCache(memCacheCapacity)
+		logutil.Info("fileservice: cache initialized", zap.Any("fs-name", name), zap.Any("capacity", memCacheCapacity))
+	}
+
+	return fs, nil
 }
 
 // NewS3FSOnMinio creates S3FS on minio server
@@ -99,109 +96,18 @@ func NewS3FSOnMinio(
 	memCacheCapacity int64,
 ) (*S3FS, error) {
 
-	u, err := url.Parse(endpoint)
-	if err != nil {
-		return nil, err
-	}
-	if u.Scheme == "" {
-		u.Scheme = "https"
-	}
-	endpoint = u.String()
-
-	endpointResolver := s3.EndpointResolverFunc(
-		func(
-			region string,
-			options s3.EndpointResolverOptions,
-		) (
-			ep aws.Endpoint,
-			err error,
-		) {
-			_ = options
-			ep.URL = endpoint
-			ep.Source = aws.EndpointSourceCustom
-			ep.HostnameImmutable = true
-			ep.SigningRegion = region
-			return
-		},
-	)
-
-	return newS3FS(
-		sharedConfigProfile,
-		name,
-		endpoint,
-		bucket,
-		keyPrefix,
-		memCacheCapacity,
-		nil,
-		[]func(*s3.Options){
-			s3.WithEndpointResolver(
-				endpointResolver,
-			),
-		},
-	)
-
-}
-
-func newS3FS(
-	sharedConfigProfile string,
-	name string,
-	endpoint string,
-	bucket string,
-	keyPrefix string,
-	memCacheCapacity int64,
-	configOptions []func(*config.LoadOptions) error,
-	s3Options []func(*s3.Options),
-) (*S3FS, error) {
-
-	if endpoint == "" {
-		moerr.NewBadS3ConfigNoCtx("empty endpoint")
-	}
-	if bucket == "" {
-		moerr.NewBadS3ConfigNoCtx("empty bucket")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*17)
-	defer cancel()
-
-	configOptions = append(configOptions,
-		config.WithSharedConfigProfile(sharedConfigProfile),
-		config.WithLogger(logutil.GetS3Logger()),
-		config.WithClientLogMode(
-			aws.LogSigning|
-				aws.LogRetries|
-				aws.LogRequest|
-				aws.LogResponse|
-				aws.LogDeprecatedUsage|
-				aws.LogRequestEventMessage|
-				aws.LogResponseEventMessage,
-		),
-	)
-	cfg, err := config.LoadDefaultConfig(ctx,
-		configOptions...,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	client := s3.NewFromConfig(
-		cfg,
-		s3Options...,
-	)
-
-	// head bucket to validate config
-	_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
-		Bucket: ptrTo(bucket),
+	fs, err := newS3FS([]string{
+		"shared-config-profile=" + sharedConfigProfile,
+		"name=" + name,
+		"endpoint=" + endpoint,
+		"bucket=" + bucket,
+		"prefix=" + keyPrefix,
+		"is-minio=true",
 	})
 	if err != nil {
-		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
+		return nil, err
 	}
 
-	fs := &S3FS{
-		name:      name,
-		client:    client,
-		bucket:    bucket,
-		keyPrefix: keyPrefix,
-	}
 	if memCacheCapacity > 0 {
 		fs.memCache = NewMemCache(memCacheCapacity)
 		logutil.Info("fileservice: cache initialized", zap.Any("fs-name", name), zap.Any("capacity", memCacheCapacity))
@@ -727,4 +633,181 @@ func (s *S3FS) CacheStats() *CacheStats {
 		return s.memCache.CacheStats()
 	}
 	return nil
+}
+
+func newS3FS(arguments []string) (*S3FS, error) {
+	if len(arguments) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid S3 arguments")
+	}
+
+	var endpoint, region, bucket, apiKey, apiSecret, prefix, roleARN, externalID, name, sharedConfigProfile, isMinio string
+	for _, pair := range arguments {
+		key, value, ok := strings.Cut(pair, "=")
+		if !ok {
+			return nil, moerr.NewInvalidInputNoCtx("invalid S3 argument: %s", pair)
+		}
+		switch key {
+		case "endpoint":
+			endpoint = value
+		case "region":
+			region = value
+		case "bucket":
+			bucket = value
+		case "key":
+			apiKey = value
+		case "secret":
+			apiSecret = value
+		case "prefix":
+			prefix = value
+		case "role-arn":
+			roleARN = value
+		case "external-id":
+			externalID = value
+		case "name":
+			name = value
+		case "shared-config-profile":
+			sharedConfigProfile = value
+		case "is-minio":
+			isMinio = value
+		default:
+			return nil, moerr.NewInvalidInputNoCtx("invalid S3 argument: %s", pair)
+		}
+	}
+
+	if endpoint != "" {
+		u, err := url.Parse(endpoint)
+		if err != nil {
+			return nil, err
+		}
+		if u.Scheme == "" {
+			u.Scheme = "https"
+		}
+		endpoint = u.String()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	var credentialProvider aws.CredentialsProvider
+
+	loadConfigOptions := []func(*config.LoadOptions) error{
+		config.WithLogger(logutil.GetS3Logger()),
+		config.WithClientLogMode(
+			aws.LogSigning |
+				aws.LogRetries |
+				aws.LogRequest |
+				aws.LogResponse |
+				aws.LogDeprecatedUsage |
+				aws.LogRequestEventMessage |
+				aws.LogResponseEventMessage,
+		),
+	}
+	if sharedConfigProfile != "" {
+		loadConfigOptions = append(loadConfigOptions,
+			config.WithSharedConfigProfile(sharedConfigProfile),
+		)
+	}
+
+	if apiKey != "" && apiSecret != "" {
+		// static
+		credentialProvider = credentials.NewStaticCredentialsProvider(apiKey, apiSecret, "")
+
+	} else if roleARN != "" {
+		// role arn
+		config, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
+		if err != nil {
+			return nil, err
+		}
+		stsSvc := sts.NewFromConfig(config)
+		credentialProvider = stscreds.NewAssumeRoleProvider(
+			stsSvc,
+			roleARN,
+			func(opts *stscreds.AssumeRoleOptions) {
+				opts.ExternalID = &externalID
+			},
+		)
+	}
+
+	if credentialProvider != nil {
+		loadConfigOptions = append(loadConfigOptions,
+			config.WithCredentialsProvider(
+				credentialProvider,
+			),
+		)
+	}
+	config, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
+	if err != nil {
+		return nil, err
+	}
+
+	s3Options := []func(*s3.Options){}
+
+	if credentialProvider != nil {
+		s3Options = append(s3Options,
+			func(opt *s3.Options) {
+				opt.Credentials = credentialProvider
+			},
+		)
+	}
+
+	if endpoint != "" {
+		if isMinio != "" {
+			// for minio
+			s3Options = append(s3Options,
+				s3.WithEndpointResolver(
+					s3.EndpointResolverFunc(
+						func(
+							region string,
+							options s3.EndpointResolverOptions,
+						) (
+							ep aws.Endpoint,
+							err error,
+						) {
+							ep.URL = endpoint
+							ep.Source = aws.EndpointSourceCustom
+							ep.HostnameImmutable = true
+							ep.SigningRegion = region
+							return
+						},
+					),
+				),
+			)
+		} else {
+			s3Options = append(s3Options,
+				s3.WithEndpointResolver(
+					s3.EndpointResolverFromURL(endpoint),
+				),
+			)
+		}
+	}
+
+	if region != "" {
+		s3Options = append(s3Options,
+			func(opt *s3.Options) {
+				opt.Region = region
+			},
+		)
+	}
+
+	client := s3.NewFromConfig(
+		config,
+		s3Options...,
+	)
+
+	_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: ptrTo(bucket),
+	})
+	if err != nil {
+		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
+	}
+
+	fs := &S3FS{
+		name:      name,
+		client:    client,
+		bucket:    bucket,
+		keyPrefix: prefix,
+	}
+
+	return fs, nil
+
 }
