@@ -5173,3 +5173,52 @@ func TestGlobalCheckpoint6(t *testing.T) {
 		tae.checkRowsByScan(rows, true)
 	}
 }
+
+func TestGCCheckpoint(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(18, 2)
+	schema.BlockMaxRows = 5
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 50)
+
+	tae.createRelAndAppend(bat, true)
+
+	testutils.WaitExpect(4000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+
+	tae.BGCheckpointRunner.DisableCheckpoint()
+	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	t.Log(gcTS.ToString())
+	tae.BGCheckpointRunner.GCCheckpoint(gcTS)
+
+	testutils.WaitExpect(4000, func() bool {
+		tae.BGCheckpointRunner.GCCheckpoint(gcTS)
+		globals := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
+		if len(globals) != 0 {
+			return false
+		}
+
+		incrementals := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+		return len(incrementals) == 0
+	})
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+
+	globals := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
+	assert.Equal(t, 0, len(globals))
+	for _, global := range globals {
+		t.Log(global.String())
+	}
+	incrementals := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	assert.Equal(t, 0, len(incrementals))
+	for _, incremental := range incrementals {
+		t.Log(incremental.String())
+	}
+}

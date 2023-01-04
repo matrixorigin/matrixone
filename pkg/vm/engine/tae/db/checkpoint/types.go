@@ -46,6 +46,7 @@ type Runner interface {
 
 	// MockCheckpoint(end types.TS)
 	FlushTable(dbID, tableID uint64, ts types.TS) error
+	GCCheckpoint(ts types.TS) error
 
 	// for test, delete in next phase
 	DebugUpdateOptions(opts ...Option)

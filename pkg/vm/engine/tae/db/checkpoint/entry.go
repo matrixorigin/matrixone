@@ -66,7 +66,9 @@ func (e *CheckpointEntry) HasOverlap(from, to types.TS) bool {
 	}
 	return true
 }
-
+func (e *CheckpointEntry) Less(ts types.TS) bool {
+	return e.end.Less(ts)
+}
 func (e *CheckpointEntry) SetLocation(location string) {
 	e.Lock()
 	defer e.Unlock()

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -138,4 +139,19 @@ func (r *runner) GetGlobalCheckpointCount() int {
 	r.storage.RLock()
 	defer r.storage.RUnlock()
 	return r.storage.globals.Len()
+}
+
+func (r *runner) GCCheckpoint(ts types.TS) error {
+	r.gcTSMu.Lock()
+	r.gcTS = ts
+	r.gcTSMu.Unlock()
+	logutil.Infof("GC %v", ts.ToString())
+	r.gcCheckpointQueue.Enqueue(struct{}{})
+	return nil
+}
+
+func (r *runner) GetGCTS() types.TS {
+	r.gcTSMu.RLock()
+	defer r.gcTSMu.RUnlock()
+	return r.gcTS
 }

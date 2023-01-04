@@ -193,6 +193,9 @@ type runner struct {
 		globals *btree.BTreeG[*CheckpointEntry]
 	}
 
+	gcTS   types.TS
+	gcTSMu sync.RWMutex
+
 	// checkpoint policy
 	incrementalPolicy *timeBasedPolicy
 	globalPolicy      *countBasedPolicy
@@ -202,6 +205,7 @@ type runner struct {
 	incrementalCheckpointQueue sm.Queue
 	globalCheckpointQueue      sm.Queue
 	postCheckpointQueue        sm.Queue
+	gcCheckpointQueue          sm.Queue
 
 	onceStart sync.Once
 	onceStop  sync.Once
@@ -244,6 +248,7 @@ func NewRunner(
 	r.waitQueue = sm.NewSafeQueue(r.options.waitQueueSize, 100, r.onWaitWaitableItems)
 	r.incrementalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onIncrementalCheckpointEntries)
 	r.globalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onGlobalCheckpointEntries)
+	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
 	return r
 }
@@ -280,6 +285,45 @@ func (r *runner) onGlobalCheckpointEntries(items ...any) {
 			}
 			logutil.Infof("%s is done, takes %s", entry.String(), time.Since(now))
 			r.globalPolicy.Reset()
+		}
+	}
+}
+
+func (r *runner) onGCCheckpointEntries(items ...any) {
+	gcTS := r.GetGCTS()
+	r.gcCheckpointEntries(gcTS)
+}
+
+func (r *runner) gcCheckpointEntries(ts types.TS) {
+	if ts.IsEmpty() {
+		return
+	}
+	incrementals := r.GetAllIncrementalCheckpoints()
+	for _, incremental := range incrementals {
+		if incremental.Less(ts) {
+			err := incremental.GCEntry(r.fs)
+			if err != nil {
+				panic(err)
+			}
+			err = incremental.GCMetadata(r.fs)
+			if err != nil {
+				panic(err)
+			}
+			r.DeleteIncrementalEntry(incremental)
+		}
+	}
+	globals := r.GetAllGlobalCheckpoints()
+	for _, global := range globals {
+		if global.Less(ts) {
+			err := global.GCEntry(r.fs)
+			if err != nil {
+				panic(err)
+			}
+			err = global.GCMetadata(r.fs)
+			if err != nil {
+				panic(err)
+			}
+			r.DeleteGlobalEntry(global)
 		}
 	}
 }
@@ -337,6 +381,16 @@ func (r *runner) MockCheckpoint(end types.TS) {
 	if err = e.WaitDone(); err != nil {
 		panic(err)
 	}
+}
+func (r *runner) DeleteIncrementalEntry(entry *CheckpointEntry) {
+	r.storage.Lock()
+	defer r.storage.Unlock()
+	r.storage.entries.Delete(entry)
+}
+func (r *runner) DeleteGlobalEntry(entry *CheckpointEntry) {
+	r.storage.Lock()
+	defer r.storage.Unlock()
+	r.storage.globals.Delete(entry)
 }
 func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 	makeCtx := func() *DirtyCtx {
@@ -691,6 +745,7 @@ func (r *runner) Start() {
 		r.postCheckpointQueue.Start()
 		r.incrementalCheckpointQueue.Start()
 		r.globalCheckpointQueue.Start()
+		r.gcCheckpointQueue.Start()
 		r.dirtyEntryQueue.Start()
 		r.waitQueue.Start()
 		if err := r.stopper.RunNamedTask("dirty-collector-job", r.crontask); err != nil {
@@ -705,6 +760,7 @@ func (r *runner) Stop() {
 		r.dirtyEntryQueue.Stop()
 		r.incrementalCheckpointQueue.Stop()
 		r.globalCheckpointQueue.Stop()
+		r.gcCheckpointQueue.Stop()
 		r.postCheckpointQueue.Stop()
 		r.waitQueue.Stop()
 	})
