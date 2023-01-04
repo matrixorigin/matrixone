@@ -80,25 +80,3 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 
 	return false, nil
 }
-
-// CN rowId format:
-/**
-* | 12 bytes | 2 bytes | 2 bytes |
-  | segmentId| blockId |  offset |
-**/
-// DN rowId format:
-/**
-* | 6 bytes | 6 bytes | 4 bytes |
-  |segmentId| blockId |  offset |
-**/
-// DN rowId's highest bit is always 0
-// CN rowId's highest bit is always 1
-func DecodeRowId(Id types.Rowid) (segmentId, blockId []byte) {
-	// 1.DN Blocks
-	if Id[0]>>7 == 0 {
-		return Id[0:6], Id[6:12]
-	} else {
-		// 2.CN Blocks
-		return Id[0:12], Id[12:14]
-	}
-}

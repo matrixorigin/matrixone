@@ -16,56 +16,71 @@ package compile
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// deleteDispatch will parse the rowId of the bacth rows to get segmentId and BlockId,
-// and then we can know which CN we need to send,we need to make sure one block will be
-// deleted by only one CN
-// We won't separate batch into CN Blocks and DN Blocks here,
-// but in deletion operator, we will write s3, but for CN blocks we need to do Compaction
-// and DM blocks we won't do Compaction
-
-// streams[IBucket] is nil, because it's a local chan
-func deleteDispatch2(streams []morpc.Stream, IBucket uint64, NBucket uint64, bat *batch.Batch) error {
-	// GetRowId Vec,we use this to acquire block
-	// rowIdVec := bat.GetVector(int32(len(bat.Vecs) - 1))
-	// rowIds := vector.MustTCols[types.Rowid](rowIdVec)
-	// sels := make([][]int64, 0, NBucket)
-	// for i, rowId := range rowIds {
-	// 	segmentId, blockId := DecodeRowId(rowId)
-	// }
-	// message := cnclient.AcquireMessage()
-	// {
-	// 	message.Id = streamSender.ID()
-	// 	message.Data = sData
-	// 	message.ProcInfoData = pData
-	// }
-	return nil
-}
-
-// deleteDispatch will do a full Dispatch
-// streams[IBucket] is nil, because it's a local chan
-func deleteDispatch(streams []*dispatch.WrapperStream, IBucket uint64, NBucket uint64, bat *batch.Batch, localChan *process.WaitRegister, proc *process.Process) error {
+// deleteDispatch will do a full Dispatch (it means it will send batch to all Cns)
+// streams[localIndex] is nil, because we need to send batch to a local chan
+func deleteDispatch(streams []*dispatch.WrapperStream, localIndex uint64, bat *batch.Batch, localChan *process.WaitRegister, proc *process.Process) error {
 	var err error
+	if bat == nil {
+		for i := range streams {
+			if i == int(localIndex) {
+				localChan.Ch <- bat
+			} else {
+				message := cnclient.AcquireMessage()
+				message.Id = streams[i].Stream.ID()
+				message.Cmd = 1
+				message.Sid = pipeline.MessageEnd
+				if err = streams[i].Stream.Send(proc.Ctx, message); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
 	for i := range streams {
-		if i == int(IBucket) {
+		if i == int(localIndex) {
 			localChan.Ch <- bat
 		} else {
-			message := cnclient.AcquireMessage()
-			message.Id = streams[i].Stream.ID()
-			// 1 means is a WrapperBatch data
-			message.Cmd = 1
-			wrapBat := batch.NewWrpaBat(bat, streams[i].Uuid)
-			// Todo: One batch maybe too large, we need to split it
-			if message.Data, err = wrapBat.MarshalBinary(); err != nil {
-				return err
+			encodeData, errEncode := types.Encode(bat)
+			if errEncode != nil {
+				return errEncode
 			}
-			if err = streams[i].Stream.Send(proc.Ctx, message); err != nil {
-				return err
+			if len(encodeData) <= maxMessageSizeToMoRpc {
+				message := cnclient.AcquireMessage()
+				message.Id = streams[i].Stream.ID()
+				message.Data = encodeData
+				message.Cmd = 1
+				message.Uuid = streams[i].Uuid[:]
+				if err = streams[i].Stream.Send(proc.Ctx, message); err != nil {
+					return err
+				}
+			} else {
+				// if data is too large, it should be split into small blocks.
+				start := 0
+				for start < len(encodeData) {
+					end := start + maxMessageSizeToMoRpc
+					sid := pipeline.WaitingNext
+					if end > len(encodeData) {
+						end = len(encodeData)
+						sid = pipeline.BatchEnd
+					}
+					message := cnclient.AcquireMessage()
+					message.Id = streams[i].Stream.ID()
+					message.Data = encodeData[start:end]
+					message.Sid = uint64(sid)
+					message.Cmd = 1
+					message.Uuid = streams[i].Uuid[:]
+					if err = streams[i].Stream.Send(proc.Ctx, message); err != nil {
+						return err
+					}
+					start = end
+				}
 			}
 		}
 	}

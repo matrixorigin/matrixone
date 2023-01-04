@@ -52,6 +52,19 @@ func Prepare(proc *process.Process, arg any) error {
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	ap := arg.(*Argument)
 	bat := proc.InputBatch()
+	if ap.crossCN {
+		if err := ap.sendFunc(ap.ctr.streams, ap.localIndex, bat, ap.Regs[ap.localIndex], proc); err != nil {
+			return false, err
+		}
+		if bat == nil {
+			if err := CloseStreams(ap.ctr.streams); err != nil {
+				return true, err
+			}
+			return true, nil
+		} else {
+			return false, nil
+		}
+	}
 	if bat == nil {
 		return true, nil
 	}
@@ -111,4 +124,16 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		}
 	}
 	return true, nil
+}
+
+func CloseStreams(streams []*WrapperStream) error {
+	for i := range streams {
+		if streams[i] == nil {
+			continue
+		}
+		if err := streams[i].Stream.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
