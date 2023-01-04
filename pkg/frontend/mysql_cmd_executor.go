@@ -2216,6 +2216,8 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	for i, col := range cols {
 		c := new(MysqlColumn)
 		c.SetName(col.Name)
+		c.SetOrgName(col.Name)
+		c.SetTable(col.Typ.Table)
 		c.SetOrgTable(col.Typ.Table)
 		c.SetAutoIncr(col.Typ.AutoIncr)
 		c.SetSchema(cwft.ses.GetTxnCompileCtx().DefaultDatabase())
@@ -3103,7 +3105,7 @@ func (ses *Session) getSqlType(sql string) {
 	}
 	p1 := strings.Index(sql, "/*")
 	p2 := strings.Index(sql, "*/")
-	if p1 < 0 || p2 < 0 {
+	if p1 < 0 || p2 < 0 || p2 <= p1+1 {
 		ses.sqlSourceType = externSql
 		return
 	}
@@ -3847,8 +3849,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	} // end of for
 
 	if proc.Elapse != nil {
-		logInfo("wangjian sql1", "wangjian sql2")
-		//fmt.Println("wangjian sql4 is", proc.Elapse.ScanTime, proc.Elapse.InsertTime)
+		logutil.Infof("load flow cost time is ", proc.Elapse)
 	}
 	return nil
 }

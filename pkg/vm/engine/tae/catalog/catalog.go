@@ -369,7 +369,6 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 				CreatedAt: tblCreatedAt,
 			},
 			TxnMVCCNode:       txnNode,
-			IsUpdate:          true,
 			SchemaConstraints: string(schema.Constraint),
 		}
 		tbl.Insert(un)

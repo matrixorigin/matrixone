@@ -749,3 +749,22 @@ func DeepCopyClusterTable(cluster *plan.ClusterTable) *plan.ClusterTable {
 	}
 	return newClusterTable
 }
+
+func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
+	if analyzeinfo == nil {
+		return nil
+	}
+
+	return &plan.AnalyzeInfo{
+		InputRows:        analyzeinfo.GetInputRows(),
+		OutputRows:       analyzeinfo.GetOutputRows(),
+		InputSize:        analyzeinfo.GetInputSize(),
+		OutputSize:       analyzeinfo.GetOutputSize(),
+		TimeConsumed:     analyzeinfo.GetTimeConsumed(),
+		MemorySize:       analyzeinfo.GetMemorySize(),
+		WaitTimeConsumed: analyzeinfo.GetWaitTimeConsumed(),
+		DiskIO:           analyzeinfo.GetDiskIO(),
+		S3IO:             analyzeinfo.GetS3IO(),
+		NetworkIO:        analyzeinfo.GetNetworkIO(),
+	}
+}

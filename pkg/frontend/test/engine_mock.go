@@ -702,6 +702,39 @@ func (mr *MockEngineMockRecorder) Delete(ctx, databaseName, op interface{}) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockEngine)(nil).Delete), ctx, databaseName, op)
 }
 
+// GetNameById mocks base method.
+func (m *MockEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (string, string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetNameById", ctx, op, tableId)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(string)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// GetNameById indicates an expected call of GetNameById.
+func (mr *MockEngineMockRecorder) GetNameById(ctx, op, tableId interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNameById", reflect.TypeOf((*MockEngine)(nil).GetNameById), ctx, op, tableId)
+}
+
+// GetRelationById mocks base method.
+func (m *MockEngine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (string, string, engine.Relation, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetRelationById", ctx, op, tableId)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(string)
+	ret2, _ := ret[2].(engine.Relation)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
+}
+
+// GetRelationById indicates an expected call of GetRelationById.
+func (mr *MockEngineMockRecorder) GetRelationById(ctx, op, tableId interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRelationById", reflect.TypeOf((*MockEngine)(nil).GetRelationById), ctx, op, tableId)
+}
+
 // Hints mocks base method.
 func (m *MockEngine) Hints() engine.Hints {
 	m.ctrl.T.Helper()

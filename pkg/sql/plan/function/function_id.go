@@ -403,6 +403,7 @@ var functionIdRegister = map[string]int32{
 	"ltrim":                          LTRIM,
 	"month":                          MONTH,
 	"oct":                            OCT,
+	"rand":                           RANDOM,
 	"reverse":                        REVERSE,
 	"rtrim":                          RTRIM,
 	"sin":                            SIN,
@@ -474,6 +475,7 @@ var functionIdRegister = map[string]int32{
 	"current_date":                   CURRENT_DATE,
 	"json_unquote":                   JSON_UNQUOTE,
 	"ascii":                          ASCII,
+	"replace":                        REPLACE,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

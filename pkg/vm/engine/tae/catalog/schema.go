@@ -363,13 +363,15 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint64) (next int) {
 	nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
 	tidVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelID)
+	seenRowid := false
 	for {
 		if offset >= nameVec.Length() {
 			break
 		}
 		name := string(nameVec.Get(offset).([]byte))
 		id := tidVec.Get(offset).(uint64)
-		if name != s.Name || targetTid != id {
+		// every schema has 1 rowid column as last column, if have one, break
+		if name != s.Name || targetTid != id || seenRowid {
 			break
 		}
 		def := new(ColDef)
@@ -391,6 +393,7 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 		s.NameIndex[def.Name] = def.Idx
 		s.ColDefs = append(s.ColDefs, def)
 		if def.Name == PhyAddrColumnName {
+			seenRowid = true
 			def.PhyAddr = true
 		}
 		constraint := string(bat.GetVectorByName(pkgcatalog.SystemColAttr_ConstraintType).Get(offset).([]byte))

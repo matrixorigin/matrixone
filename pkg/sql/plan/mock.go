@@ -34,6 +34,7 @@ type MockCompilerContext struct {
 	tables  map[string]*TableDef
 	stats   map[string]*Stats
 	pks     map[string][]int
+	id2name map[uint64]string
 
 	mysqlCompatible bool
 
@@ -464,6 +465,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 	tables := make(map[string]*TableDef)
 	stats := make(map[string]*Stats)
 	pks := make(map[string][]int)
+	id2name := make(map[uint64]string)
 	// build tpch/mo context data(schema)
 	for db, schema := range schemas {
 		tableIdx := 0
@@ -609,6 +611,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			}
 
 			tables[tableName] = tableDef
+			id2name[tableDef.TblId] = tableName
 			tableIdx++
 
 			if table.outcnt == 0 {
@@ -625,6 +628,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 	return &MockCompilerContext{
 		objects: objects,
 		tables:  tables,
+		id2name: id2name,
 		stats:   stats,
 		pks:     pks,
 		ctx:     context.TODO(),
@@ -649,6 +653,11 @@ func (m *MockCompilerContext) GetUserName() string {
 
 func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectRef, *TableDef) {
 	name := strings.ToLower(tableName)
+	return m.objects[name], m.tables[name]
+}
+
+func (m *MockCompilerContext) ResolveById(tableId uint64) (*ObjectRef, *TableDef) {
+	name := m.id2name[tableId]
 	return m.objects[name], m.tables[name]
 }
 

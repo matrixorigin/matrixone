@@ -144,3 +144,10 @@ show grants for 'user1'@'localhost';
 show grants for ROLE role1;
 drop user user1;
 drop role role1;
+
+drop database if exists test01;
+create database test01;
+use test01;
+create table t1(a int unique key, b int, c int);
+show table_number from test01;
+drop table t1;

@@ -69,6 +69,8 @@ type CompilerContext interface {
 	DatabaseExists(name string) bool
 	// get table definition by database/schema
 	Resolve(schemaName string, tableName string) (*ObjectRef, *TableDef)
+	// get table definition by table id
+	ResolveById(tableId uint64) (*ObjectRef, *TableDef)
 	// get the value of variable
 	ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	// get the list of the account id
@@ -138,6 +140,8 @@ type QueryBuilder struct {
 	nameByColRef map[[2]int32]string
 
 	nextTag int32
+
+	mysqlCompatible bool
 }
 
 type CTERef struct {

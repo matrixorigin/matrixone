@@ -16,8 +16,11 @@ package mergegroup
 
 import (
 	"bytes"
+	"reflect"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -27,24 +30,34 @@ func String(_ interface{}, buf *bytes.Buffer) {
 	buf.WriteString("mergeroup()")
 }
 
-func Prepare(_ *process.Process, arg interface{}) error {
+func Prepare(proc *process.Process, arg interface{}) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
+
+	ap.ctr.receiverListener = make([]reflect.SelectCase, len(proc.Reg.MergeReceivers))
+	for i, mr := range proc.Reg.MergeReceivers {
+		ap.ctr.receiverListener[i] = reflect.SelectCase{
+			Dir:  reflect.SelectRecv,
+			Chan: reflect.ValueOf(mr.Ch),
+		}
+	}
+	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
+func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast bool) (bool, error) {
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
+
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if err := ctr.build(proc, anal, isFirst); err != nil {
 				return false, err
 			}
 			ctr.state = Eval
@@ -65,7 +78,7 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 						ctr.bat.Zs[i] = 1
 					}
 				}
-				anal.Output(ctr.bat)
+				anal.Output(ctr.bat, isLast)
 				ctr.bat.ExpandNulls()
 			}
 			ctr.state = End
@@ -78,24 +91,38 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 	}
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+func (ctr *container) build(proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var err error
-	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
-		bat, ok := <-proc.Reg.MergeReceivers[i].Ch
-		if !ok || bat == nil {
+	for {
+		if ctr.aliveMergeReceiver == 0 {
+			return nil
+		}
+
+		start := time.Now()
+		chosen, value, ok := reflect.Select(ctr.receiverListener)
+		if !ok {
+			return moerr.NewInternalError(proc.Ctx, "pipeline closed unexpectedly")
+		}
+		anal.WaitStop(start)
+
+		pointer := value.UnsafePointer()
+		bat := (*batch.Batch)(pointer)
+		if bat == nil {
+			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
+			ctr.aliveMergeReceiver--
 			continue
 		}
-		if len(bat.Zs) == 0 {
-			i--
+
+		if bat.Length() == 0 {
 			continue
 		}
-		anal.Input(bat)
+
+		anal.Input(bat, isFirst)
 		if err = ctr.process(bat, proc); err != nil {
 			bat.Clean(proc.Mp())
 			return err
 		}
 	}
-	return nil
 }
 
 func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {

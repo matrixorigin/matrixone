@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -51,7 +52,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -60,7 +61,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(ap, proc, anal); err != nil {
+			if err := ctr.build(ap, proc, anal, isFirst); err != nil {
 				ap.Free(proc, true)
 				return false, err
 			}
@@ -81,18 +82,21 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	}
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var err error
 
 	for {
+		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[0].Ch
+		anal.WaitStop(start)
+
 		if bat == nil {
 			break
 		}
 		if bat.Length() == 0 {
 			continue
 		}
-		anal.Input(bat)
+		anal.Input(bat, isFirst)
 		anal.Alloc(int64(bat.Size()))
 		if ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat); err != nil {
 			return err

@@ -293,7 +293,7 @@ func (t *GCTable) collectData(files []string) []*containers.Batch {
 	}
 
 	for _, name := range files {
-		bats[DeleteFile].GetVectorByName(GCAttrObjectName).Append(name)
+		bats[DeleteFile].GetVectorByName(GCAttrObjectName).Append([]byte(name))
 	}
 	return bats
 }
@@ -343,6 +343,24 @@ func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []
 	}
 
 	blocks, err := writer.Sync()
+	//logutil.Infof("SaveTable %v-%v, table: %v, gc: %v", start.ToString(), end.ToString(), t.String(), files)
+	return blocks, err
+}
+
+// SaveFullTable is to write data to s3
+func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, files []string) ([]objectio.BlockObject, error) {
+	bats := t.collectData(files)
+	defer t.closeBatch(bats)
+	name := blockio.EncodeGCMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
+	writer := blockio.NewWriter(context.Background(), fs, name)
+	for i := range bats {
+		if _, err := writer.WriteBlock(bats[i]); err != nil {
+			return nil, err
+		}
+	}
+
+	blocks, err := writer.Sync()
+	//logutil.Infof("SaveTable %v-%v, table: %v, gc: %v", start.ToString(), end.ToString(), t.String(), files)
 	return blocks, err
 }
 
