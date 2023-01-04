@@ -97,7 +97,7 @@ var dummyView = &View{
 	Columns:     []Column{},
 	Condition:   dummyCondition{},
 }
-var dummyViewCreateSql = "CREATE VIEW IF NOT EXISTS `db_dummy`.`view` as select `str` from `db_dummy`.`tbl_dummy` where `str` = \"NIL\""
+var dummyViewCreateSql = "CREATE VIEW IF NOT EXISTS `db_dummy`.`view` as select `str`, `__mo_filepath` from `db_dummy`.`tbl_dummy` where `str` = \"NIL\""
 
 func TestRow_SetFloat64(t *testing.T) {
 	type fields struct {

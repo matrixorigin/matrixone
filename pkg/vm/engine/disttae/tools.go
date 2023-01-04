@@ -78,7 +78,7 @@ func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 		}
 		idx = catalog.MO_DATABASE_CREATED_TIME_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) // created_time
-		if err := bat.Vecs[idx].Append(types.Timestamp(time.Now().Unix()), false, m); err != nil {
+		if err := bat.Vecs[idx].Append(types.Timestamp(time.Now().UnixMicro()+types.GetUnixEpochSecs()), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_DATABASE_ACCOUNT_ID_IDX
@@ -1020,7 +1020,7 @@ func genBlockMetas(
 	rows [][]any,
 	columnLength int,
 	fs fileservice.FileService,
-	m *mpool.MPool) ([]BlockMeta, error) {
+	m *mpool.MPool, prefetch bool) ([]BlockMeta, error) {
 	blockInfos := catalog.GenBlockInfo(rows)
 	{
 		mp := make(map[uint64]catalog.BlockInfo) // block list
@@ -1049,6 +1049,9 @@ func genBlockMetas(
 	for i, blockInfo := range blockInfos {
 		zm, rows, err := fetchZonemapAndRowsFromBlockInfo(ctx, idxs, blockInfo, fs, m)
 		if err != nil {
+			if prefetch {
+				continue
+			}
 			return nil, err
 		}
 		metas[i] = BlockMeta{

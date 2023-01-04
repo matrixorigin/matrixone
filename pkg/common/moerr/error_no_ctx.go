@@ -271,3 +271,7 @@ func NewAppendableSegmentNotFoundNoCtx() *Error {
 func NewAppendableBlockNotFoundNoCtx() *Error {
 	return newError(Context(), ErrAppendableBlockNotFound)
 }
+
+func NewDeadLockDetectedNoCtx() *Error {
+	return newError(Context(), ErrDeadLockDetected)
+}
