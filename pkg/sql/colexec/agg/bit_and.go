@@ -62,8 +62,12 @@ func (ba *BitAnd[T1]) Fill(groupIndex int64, v1 T1, v2 uint64, z int64, isEmpty 
 	if isEmpty {
 		v2 = ^uint64(0)
 	}
+
 	if float64(v1) > math.MaxUint64 {
 		return math.MaxInt64 & v2, false
+	}
+	if float64(v1) < 0 {
+		return uint64(int64(v1)) & v2, false
 	}
 	return uint64(v1) & v2, false
 }
