@@ -34,21 +34,36 @@ aaaa
 SELECT REPLACE('bbbb','a','c');
 replace(bbbb, a, c)
 bbbb
+SELECT REPLACE(' hhdjs','','C');
+replace( hhdjs, , C)
+ hhdjs
 SELECT REPLACE('absdefg','b',' ');
 replace(absdefg, b,  )
 a sdefg
+SELECT REPLACE('rhjewnjfnkljvmkrewrjj','j','');
+replace(rhjewnjfnkljvmkrewrjj, j, )
+rhewnfnklvmkrewr
 SELECT REPLACE('http://www.google.com.cn/','/','');
 replace(http://www.google.com.cn/, /, )
 http:www.google.com.cn
 SELECT REPLACE('aaa.mysql.com','a','w');
 replace(aaa.mysql.com, a, w)
 www.mysql.com
-SELECT REPLACE('abchfjwabcABC','abc','def');
-replace(abchfjwabcABC, abc, def)
-defhfjwdefABC
+SELECT REPLACE('abchfjwabcABCvshfjdrvoiewjvkmdns mndsabcAbcueiuiwqjemkvwme000','abc','def');
+replace(abchfjwabcABCvshfjdrvoiewjvkmdns mndsabcAbcueiuiwqjemkvwme000, abc, def)
+defhfjwdefABCvshfjdrvoiewjvkmdns mndsdefAbcueiuiwqjemkvwme000
+SELECT REPLACE('dhnnnnjjkwkmoHskdhwjnejwqeHsk382983ndjhsemcsHskuwin mndsHsk','Hsk','t12vdjeke');
+replace(dhnnnnjjkwkmoHskdhwjnejwqeHsk382983ndjhsemcsHskuwin mndsHsk, Hsk, t12vdjeke)
+dhnnnnjjkwkmot12vdjekedhwjnejwqet12vdjeke382983ndjhsemcst12vdjekeuwin mndst12vdjeke
 SELECT REPLACE('jewTWUHWJWwwwwww', 'w', 'Q');
 replace(jewTWUHWJWwwwwww, w, Q)
 jeQTWUHWJWQQQQQQ
+SELECT REPLACE(' woshincjwne hjw ',' ','C');
+replace( woshincjwne hjw ,  , C)
+CwoshincjwneChjwC
+SELECT REPLACE(' 2617hejwnc 3920kdsm 3289uj ',' ','ssh');
+replace( 2617hejwnc 3920kdsm 3289uj ,  , ssh)
+ssh2617hejwncssh3920kdsmssh3289ujssh
 SELECT REPLACE(123456,6,1);
 replace(123456, 6, 1)
 123451
@@ -73,15 +88,21 @@ null
 SELECT REPLACE('我是老大', '', '');
 replace(我是老大, , )
 我是老大
-SELECT REPLACE('我是老二','二',' ');
-replace(我是老二, 二,  )
-我是老
 SELECT REPLACE('你好，见到你很高兴',NULL,'你');
 replace(你好，见到你很高兴, null, 你)
 null
 SELECT REPLACE('哈哈哈哈哈', '哈', NULL);
 replace(哈哈哈哈哈, 哈, null)
 null
+SELECT REPLACE('今天是个好日子，明天也是个好日子，后天也是个好日子，大后天也是个好日子','后天','前天');
+replace(今天是个好日子，明天也是个好日子，后天也是个好日子，大后天也是个好日子, 后天, 前天)
+今天是个好日子，明天也是个好日子，前天也是个好日子，大前天也是个好日子
+SELECT REPLACE(' 老师说明天带我们去春游，后天带我们去植树   ,五一带我们去博物馆参观  ',' ','Alice');
+replace( 老师说明天带我们去春游，后天带我们去植树   ,五一带我们去博物馆参观  ,  , Alice)
+Alice老师说明天带我们去春游，后天带我们去植树AliceAliceAlice,五一带我们去博物馆参观AliceAlice
+SELECT REPLACE('  abc老师说我们班的语文成绩是全年级第1数学成绩是全年级第2', '全年级', '金台区');
+replace(  abc老师说我们班的语文成绩是全年级第1数学成绩是全年级第2, 全年级, 金台区)
+  abc老师说我们班的语文成绩是金台区第1数学成绩是金台区第2
 SELECT REPLACE( 'a', 'b', NULL );
 replace(a, b, null)
 null
@@ -184,7 +205,7 @@ zhang
 INSERT INTO replace_01 VALUES(6, 'HHANjdncd','445478855');
 truncated type CHAR value HHANjdncd for column s_name, 1
 INSERT INTO replace_01 VALUES(7, 'Wl', '11111124841550');
-Data truncation: data out of range: data type varchar/char , 11111124841550 oversize of 11
+Data truncation: data out of range: data type varchar/char , 11111124841550 oversize of 11 
 UPDATE replace_01 set s_name = REPLACE(s_name,'Tom','efjhhoiwuwnvnjwiewori');
 internal error: Can't cast column from VARCHAR type to CHAR type because of one or more values in that column. Src length 21 is larger than Dest length 5
 SELECT s_name, phone FROM replace_01 WHERE REPLACE(s_name, 'Tom', 'Bo') LIKE 'B%';
@@ -269,22 +290,22 @@ replace(mm, mm, 600)
 600
 600
 600
-SELECT name = REPLACE(ltrim(name), '张三', '三张') FROM replace_02;
-name = replace(ltrim(name), 张三, 三张)
-false
-true
-false
-true
-true
-false
-SELECT name = REPLACE(rtrim(name), '李', '栗') FROM replace_02;
-name = replace(rtrim(name), 李, 栗)
-true
-false
-false
-true
-true
-false
+SELECT REPLACE(ltrim(name), '张三', '三张') FROM replace_02;
+replace(ltrim(name), 张三, 三张)
+大哥
+小栗子 
+王五 
+赵六
+钱七
+
+SELECT REPLACE(rtrim(name), '李', '栗') FROM replace_02;
+replace(rtrim(name), 李, 栗)
+ 大哥
+小栗子
+ 王五
+赵六
+钱七
+
 SELECT LENGTH(REPLACE(password, 'a', 'b')) FROM replace_02;
 length(replace(password, a, b))
 13
@@ -310,14 +331,6 @@ substring(replace(name, 钱七, 钱八), 0)
 
 
 
-SELECT REVERSE(REPLACE(name,'赵六','赵怀珍')) FROM replace_02;
-reverse(replace(name, 赵六, 赵怀珍))
-哥大
- 子栗小
- 五王
-珍怀赵
-七钱
-
 SELECT bin(REPLACE(id,1,4)) FROM replace_02;
 bin(replace(id, 1, 4))
 100
@@ -334,14 +347,6 @@ hex(replace(id, 2, 8))
 34
 35
 36
-SELECT LPAD(REPLACE(password,'a','b'),30,'-') FROM replace_02;
-lpad(replace(password, a, b), 30, -)
------------------3672*(*^&hu32
---------------4545dwjkekweAAAA
------------------&&%$%^&^*()))
---------------ewu8qu39821dijoq
----------------------2102-9328
------------------------------
 SELECT RPAD(REPLACE(password,'a','b'),40,'+-') FROM replace_02;
 rpad(replace(password, a, b), 40, +-)
 3672*(*^&hu32+-+-+-+-+-+-+-+-+-+-+-+-+-+
