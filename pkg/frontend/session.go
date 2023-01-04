@@ -180,6 +180,7 @@ type Session struct {
 	rs *plan.ResultColDef
 
 	lastQueryId string
+	blockIdx    int
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
@@ -237,7 +238,8 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
 		},
-		cache: &privilegeCache{},
+		cache:    &privilegeCache{},
+		blockIdx: 0,
 	}
 	if flag {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
@@ -311,6 +313,15 @@ func (bgs *BackgroundSession) Close() {
 		bgs.Session.gSysVars = nil
 	}
 	bgs = nil
+}
+
+func (ses *Session) GetBlockIdx() int {
+	ses.blockIdx++
+	return ses.blockIdx
+}
+
+func (ses *Session) ResetBlockIdx() {
+	ses.blockIdx = 0
 }
 
 func (ses *Session) SetBackgroundSession(b bool) {

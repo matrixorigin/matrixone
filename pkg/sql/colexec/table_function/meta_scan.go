@@ -76,9 +76,13 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	idxs := make([]uint16, len(catalog.MetaColNames))
-	for i := range idxs {
-		idxs[i] = uint16(i)
+	var idxs []uint16
+	for i, name := range catalog.MetaColNames {
+		for _, attr := range arg.Attrs {
+			if name == attr {
+				idxs = append(idxs, uint16(i))
+			}
+		}
 	}
 	// read meta's data
 	iov, err := reader.Read(proc.Ctx, bs[0].GetExtent(), idxs, proc.Mp())
@@ -89,7 +93,7 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	rbat.SetAttributes(catalog.MetaColNames)
 	rbat.Cnt = 1
 	for i, e := range iov.Entries {
-		rbat.Vecs[i] = vector.New(catalog.MetaColTypes[i])
+		rbat.Vecs[i] = vector.New(catalog.MetaColTypes[idxs[i]])
 		if err = rbat.Vecs[i].Read(e.Object.([]byte)); err != nil {
 			return false, err
 		}

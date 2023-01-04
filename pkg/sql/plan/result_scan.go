@@ -36,6 +36,9 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 	vec, err := colexec.EvalExpr(bat, builder.compCtx.GetProcess(), exprs[0])
+	if err != nil {
+		return 0, err
+	}
 	uuid := vector.MustTCols[types.Uuid](vec)[0]
 	// get cols
 	cols, err := builder.compCtx.GetQueryResultColDefs(uuid.ToString())

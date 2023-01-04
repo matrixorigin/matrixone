@@ -389,9 +389,9 @@ var (
 	MoTableMetaDefs = []engine.TableDef{}
 )
 
-const QueryResultPath = "s3:/query_result/%s_%s.blk"
+const QueryResultPath = "s3:/query_result/%s_%s_%d.blk"
 const QueryResultDir = "s3:/query_result"
-const QueryResultName = "%s_%s.blk"
+const QueryResultName = "%s_%s_%d.blk"
 const QueryResultMetaPath = "s3:/query_result_meta/%s_%s.blk"
 const QueryResultMetaDir = "s3:/query_result_meta"
 const QueryResultMetaName = "%s_%s.blk"

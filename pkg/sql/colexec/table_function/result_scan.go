@@ -57,7 +57,7 @@ func resultScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		return false, err
 	}
 	var size int64 = -1
-	name := catalog.BuildQueryResultName(proc.SessionInfo.Account, uuid.ToString())
+	name := catalog.BuildQueryResultName(proc.SessionInfo.Account, uuid.ToString(), 1)
 	for _, d := range dirs {
 		if d.Name == name {
 			size = d.Size
@@ -67,7 +67,7 @@ func resultScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		return false, moerr.NewInvalidArg(proc.Ctx, "query id", uuid.ToString())
 	}
 	// read result's meta
-	path := catalog.BuildQueryResultPath(proc.SessionInfo.Account, uuid.ToString())
+	path := catalog.BuildQueryResultPath(proc.SessionInfo.Account, uuid.ToString(), 1)
 	reader, err := objectio.NewObjectReader(path, proc.FileService)
 	if err != nil {
 		return false, err
