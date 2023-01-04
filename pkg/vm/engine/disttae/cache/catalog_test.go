@@ -97,10 +97,11 @@ func TestTables(t *testing.T) {
 		}
 	}
 	cc.InsertTable(bat)
-	tblList := cc.Tables(1, 12, timestamp.Timestamp{
+	tblList, tblIdList := cc.Tables(1, 12, timestamp.Timestamp{
 		PhysicalTime: 100,
 	})
 	require.Equal(t, 10, len(tblList))
+	require.Equal(t, 10, len(tblIdList))
 	bat.Clean(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 }
