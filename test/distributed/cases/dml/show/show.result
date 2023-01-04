@@ -267,3 +267,11 @@ GRANT create table ON database *.* `role1`
 GRANT drop table ON database *.* `role1`
 drop user user1;
 drop role role1;
+drop database if exists test01;
+create database test01;
+use test01;
+create table t1(a int unique key, b int, c int);
+show table_number from test01;
+test01    Number of tables in test01
+test01    1
+drop table t1;

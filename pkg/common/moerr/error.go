@@ -168,6 +168,10 @@ const (
 	ErrTAEDebug                  uint16 = 20626
 	ErrDuplicateKey              uint16 = 20626
 
+	// Group 7: lock service
+	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
+	ErrDeadLockDetected uint16 = 20701
+
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
 )
@@ -292,6 +296,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrAppendableSegmentNotFound: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable segment not found"},
 	ErrAppendableBlockNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable block not found"},
 	ErrDuplicateKey:              {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
+
+	// Group 7: lock service
+	ErrDeadLockDetected: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -871,6 +878,10 @@ func NewAppendableSegmentNotFound(ctx context.Context) *Error {
 
 func NewAppendableBlockNotFound(ctx context.Context) *Error {
 	return newError(ctx, ErrAppendableBlockNotFound)
+}
+
+func NewDeadLockDetected(ctx context.Context) *Error {
+	return newError(ctx, ErrDeadLockDetected)
 }
 
 var contextFunc atomic.Value

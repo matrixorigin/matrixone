@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -37,6 +38,8 @@ const (
 	MessgeNormal
 )
 
+const MinMergeCount = 20
+
 // DiskCleaner is the main structure of gc operation,
 // and provides "JobFactory" to let tae notify itself
 // to perform a gc
@@ -53,6 +56,19 @@ type DiskCleaner struct {
 	// through which you can get the next checkpoint to be processed
 	maxConsumed atomic.Pointer[checkpoint.CheckpointEntry]
 
+	// minMerged is to mark at which checkpoint the full
+	// GCTable in the current DiskCleaner is generated，
+	// UT case needs to use
+	minMerged atomic.Pointer[checkpoint.CheckpointEntry]
+
+	// minMergeCount is the configuration of the merge GC metadata file.
+	// When the GC file is greater than or equal to minMergeCount,
+	// the merge GC metadata file will be triggered and the expired file will be deleted.
+	minMergeCount struct {
+		sync.RWMutex
+		count int
+	}
+
 	// inputs is to record the currently valid GCTable
 	inputs struct {
 		sync.RWMutex
@@ -68,6 +84,7 @@ type DiskCleaner struct {
 	// files, and only one worker will run
 	delWorker *GCWorker
 
+	// checker is to check whether the checkpoint can be consumed
 	checker struct {
 		sync.RWMutex
 		extras []func(item any) bool
@@ -91,6 +108,7 @@ func NewDiskCleaner(
 	}
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.processQueue = sm.NewSafeQueue(10000, 1000, cleaner.process)
+	cleaner.minMergeCount.count = MinMergeCount
 	return cleaner
 }
 
@@ -118,19 +136,49 @@ func (cleaner *DiskCleaner) replay() error {
 	if len(dirs) == 0 {
 		return nil
 	}
-	jobs := make([]*tasks.Job, len(dirs))
-	jobScheduler := tasks.NewParallelJobScheduler(100)
-	defer jobScheduler.Stop()
-	maxConsumed := types.TS{}
+	minMergedStart := types.TS{}
+	minMergedEnd := types.TS{}
+	maxConsumedStart := types.TS{}
+	maxConsumedEnd := types.TS{}
+	var fullGCFile fileservice.DirEntry
+	// Get effective minMerged
 	for _, dir := range dirs {
-		_, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		if maxConsumed.IsEmpty() || maxConsumed.Less(end) {
-			maxConsumed = end
-			continue
+		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
+		if ext == blockio.GCFullExt {
+			if minMergedStart.IsEmpty() || minMergedStart.Less(start) {
+				minMergedStart = start
+				minMergedEnd = end
+				maxConsumedStart = start
+				maxConsumedEnd = end
+				fullGCFile = dir
+			}
 		}
 	}
+	readDirs := make([]fileservice.DirEntry, 0)
+	if !minMergedStart.IsEmpty() {
+		readDirs = append(readDirs, fullGCFile)
+	}
+	logutil.Infof("minMergedEnd is %v", minMergedEnd.ToString())
+	for _, dir := range dirs {
+		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
+		if ext == blockio.GCFullExt {
+			continue
+		}
+		if (maxConsumedStart.IsEmpty() || maxConsumedStart.Less(end)) &&
+			minMergedEnd.Less(end) {
+			maxConsumedStart = start
+			maxConsumedEnd = end
+			readDirs = append(readDirs, dir)
+		}
+	}
+	if len(readDirs) == 0 {
+		return nil
+	}
+	jobs := make([]*tasks.Job, len(readDirs))
+	jobScheduler := tasks.NewParallelJobScheduler(100)
+	defer jobScheduler.Stop()
 	makeJob := func(i int) (job *tasks.Job) {
-		dir := dirs[i]
+		dir := readDirs[i]
 		exec := func(ctx context.Context) (result *tasks.JobResult) {
 			result = &tasks.JobResult{}
 			table := NewGCTable()
@@ -149,7 +197,7 @@ func (cleaner *DiskCleaner) replay() error {
 		return
 	}
 
-	for i := range dirs {
+	for i := range readDirs {
 		jobs[i] = makeJob(i)
 		if err = jobScheduler.Schedule(jobs[i]); err != nil {
 			return err
@@ -162,8 +210,10 @@ func (cleaner *DiskCleaner) replay() error {
 			return err
 		}
 	}
-	ckp := checkpoint.NewCheckpointEntry(types.TS{}, maxConsumed, checkpoint.ET_Incremental)
+	ckp := checkpoint.NewCheckpointEntry(maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
 	cleaner.updateMaxConsumed(ckp)
+	ckp = checkpoint.NewCheckpointEntry(minMergedStart, minMergedEnd, checkpoint.ET_Incremental)
+	cleaner.updateMinMerged(ckp)
 	return nil
 }
 
@@ -211,9 +261,15 @@ func (cleaner *DiskCleaner) process(items ...any) {
 	}
 	cleaner.updateInputs(input)
 	cleaner.updateMaxConsumed(candidates[len(candidates)-1])
-
-	// TODO:
-	cleaner.tryGC()
+	err = cleaner.tryGC()
+	if err != nil {
+		return
+	}
+	err = cleaner.mergeGCFile()
+	if err != nil {
+		// TODO: Error handle
+		return
+	}
 }
 
 func (cleaner *DiskCleaner) checkExtras(item any) bool {
@@ -231,6 +287,18 @@ func (cleaner *DiskCleaner) AddChecker(checker func(item any) bool) {
 	cleaner.checker.Lock()
 	defer cleaner.checker.Unlock()
 	cleaner.checker.extras = append(cleaner.checker.extras, checker)
+}
+
+func (cleaner *DiskCleaner) SetMinMergeCountForTest(count int) {
+	cleaner.minMergeCount.Lock()
+	defer cleaner.minMergeCount.Unlock()
+	cleaner.minMergeCount.count = count
+}
+
+func (cleaner *DiskCleaner) getMinMergeCount() int {
+	cleaner.minMergeCount.RLock()
+	defer cleaner.minMergeCount.RUnlock()
+	return cleaner.minMergeCount.count
 }
 
 func (cleaner *DiskCleaner) collectCkpData(
@@ -290,14 +358,18 @@ func (cleaner *DiskCleaner) createDebugInput(
 	return
 }
 
-func (cleaner *DiskCleaner) tryGC() {
+func (cleaner *DiskCleaner) tryGC() error {
 	if !cleaner.delWorker.Start() {
-		return
+		return nil
 	}
 	gc := cleaner.softGC()
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
-	go cleaner.delWorker.ExecDelete(gc)
+	err := cleaner.delWorker.ExecDelete(gc)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (cleaner *DiskCleaner) softGC() []string {
@@ -321,6 +393,10 @@ func (cleaner *DiskCleaner) updateMaxConsumed(e *checkpoint.CheckpointEntry) {
 	cleaner.maxConsumed.Store(e)
 }
 
+func (cleaner *DiskCleaner) updateMinMerged(e *checkpoint.CheckpointEntry) {
+	cleaner.minMerged.Store(e)
+}
+
 func (cleaner *DiskCleaner) updateInputs(input *GCTable) {
 	cleaner.inputs.Lock()
 	defer cleaner.inputs.Unlock()
@@ -335,6 +411,10 @@ func (cleaner *DiskCleaner) updateOutputs(files []string) {
 
 func (cleaner *DiskCleaner) GetMaxConsumed() *checkpoint.CheckpointEntry {
 	return cleaner.maxConsumed.Load()
+}
+
+func (cleaner *DiskCleaner) GetMinMerged() *checkpoint.CheckpointEntry {
+	return cleaner.minMerged.Load()
 }
 
 func (cleaner *DiskCleaner) GetInputs() *GCTable {
@@ -352,6 +432,55 @@ func (cleaner *DiskCleaner) GetAndClearOutputs() []string {
 	return files
 }
 
+func (cleaner *DiskCleaner) mergeGCFile() error {
+	maxConsumed := cleaner.GetMaxConsumed()
+	if maxConsumed == nil {
+		return nil
+	}
+	dirs, err := cleaner.fs.ListDir(GCMetaDir)
+	if err != nil {
+		return err
+	}
+	deleteFiles := make([]string, 0)
+	for _, dir := range dirs {
+		_, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
+		if end.LessEq(maxConsumed.GetEnd()) {
+			deleteFiles = append(deleteFiles, GCMetaDir+dir.Name)
+		}
+	}
+	if len(deleteFiles) < cleaner.getMinMergeCount() {
+		return nil
+	}
+
+	var mergeTable *GCTable
+	cleaner.inputs.RLock()
+	if len(cleaner.inputs.tables) == 0 {
+		cleaner.inputs.RUnlock()
+		return nil
+	}
+	// tables[0] has always been a full GCTable
+	mergeTable = cleaner.inputs.tables[0]
+	cleaner.inputs.RUnlock()
+	logutil.Info("[DiskCleaner]",
+		common.OperationField("MergeGCFile start"),
+		common.OperandField(maxConsumed.String()))
+	_, err = mergeTable.SaveFullTable(maxConsumed.GetStart(), maxConsumed.GetEnd(), cleaner.fs, nil)
+	if err != nil {
+		logutil.Errorf("SaveTable failed: %v", err.Error())
+		return err
+	}
+	err = cleaner.fs.DelFiles(context.Background(), deleteFiles)
+	if err != nil {
+		logutil.Errorf("DelFiles failed: %v", err.Error())
+		return err
+	}
+	cleaner.updateMinMerged(maxConsumed)
+	logutil.Info("[DiskCleaner]",
+		common.OperationField("MergeGCFile end"),
+		common.OperandField(maxConsumed.String()))
+	return nil
+}
+
 func (cleaner *DiskCleaner) CheckGC() error {
 	debugCandidates := cleaner.ckpClient.GetAllIncrementalCheckpoints()
 	cleaner.inputs.RLock()
@@ -361,13 +490,13 @@ func (cleaner *DiskCleaner) CheckGC() error {
 		return moerr.NewInternalErrorNoCtx("GC has not yet run")
 	}
 	for i, ckp := range debugCandidates {
-		if ckp.GetStart().Equal(maxConsumed.GetStart()) {
+		if ckp.GetEnd().Equal(maxConsumed.GetEnd()) {
 			debugCandidates = debugCandidates[:i+1]
 			break
 		}
 	}
-	start1 := debugCandidates[len(debugCandidates)-1].GetStart()
-	start2 := maxConsumed.GetStart()
+	start1 := debugCandidates[len(debugCandidates)-1].GetEnd()
+	start2 := maxConsumed.GetEnd()
 	if !start1.Equal(start2) {
 		logutil.Info("[DiskCleaner]", common.OperationField("Compare not equal"),
 			common.OperandField(start1.ToString()), common.OperandField(start2.ToString()))
