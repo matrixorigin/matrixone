@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -786,7 +787,10 @@ func (r *runner) Stop() {
 	})
 }
 
-func (r *runner) CollectCheckpointsInRange(start, end types.TS) (locations string, checkpointed types.TS) {
+func (r *runner) CollectCheckpointsInRange(ctx context.Context,start, end types.TS) (locations string, checkpointed types.TS,err error) {
+	if r.IsTSStale(end){
+		return "",types.TS{},moerr.NewInternalError(ctx,"ts %v is staled",end.ToString())
+	}
 	r.storage.Lock()
 	tree := r.storage.entries.Copy()
 	global, _ := r.storage.globals.Max()

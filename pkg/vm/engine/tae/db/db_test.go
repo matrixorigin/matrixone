@@ -3220,8 +3220,8 @@ func TestUpdateAttr(t *testing.T) {
 
 type dummyCpkGetter struct{}
 
-func (c *dummyCpkGetter) CollectCheckpointsInRange(start, end types.TS) (string, types.TS) {
-	return "", types.TS{}
+func (c *dummyCpkGetter) CollectCheckpointsInRange(ctx context.Context,start, end types.TS) (ckpLoc string, lastEnd types.TS,err error) {
+	return "", types.TS{},nil
 }
 
 func (c *dummyCpkGetter) FlushTable(dbID, tableID uint64, ts types.TS) error { return nil }
@@ -3348,8 +3348,10 @@ func TestLogtailBasic(t *testing.T) {
 		}
 	}
 
+	ctx:=context.Background()
+
 	// get db catalog change
-	resp, err := logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, err := logtail.HandleSyncLogTailReq(ctx,new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_DATABASE_ID},
@@ -3370,7 +3372,7 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[1].Bat, 1) // 1 drop db
 
 	// get table catalog change
-	resp, err = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, err = logtail.HandleSyncLogTailReq(ctx,new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -3386,7 +3388,7 @@ func TestLogtailBasic(t *testing.T) {
 	assert.Equal(t, schema.Name, relname.GetString(1))
 
 	// get columns catalog change
-	resp, err = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, err = logtail.HandleSyncLogTailReq(ctx,new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
@@ -3399,7 +3401,7 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[0].Bat, len(schema.ColDefs)*2) // column count of 2 tables
 
 	// get user table change
-	resp, err = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, err = logtail.HandleSyncLogTailReq(ctx,new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(firstWriteTs.Next()), // skip the first write deliberately,
 		CnWant: tots(lastWriteTs),
 		Table:  &api.TableID{DbId: dbID, TbId: tableID},
@@ -4768,7 +4770,8 @@ func TestUpdateCstr(t *testing.T) {
 		return &timestamp.Timestamp{PhysicalTime: types.DecodeInt64(ts[4:12]), LogicalTime: types.DecodeUint32(ts[:4])}
 	}
 
-	resp, _ := logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	ctx:=context.Background()
+	resp, _ := logtail.HandleSyncLogTailReq(ctx,new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -4783,7 +4786,7 @@ func TestUpdateCstr(t *testing.T) {
 
 	tae.restart()
 
-	resp, _ = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, _ = logtail.HandleSyncLogTailReq(ctx,new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -4802,7 +4805,7 @@ func TestUpdateCstr(t *testing.T) {
 	assert.NoError(t, err)
 	txn.Commit()
 
-	resp, _ = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, _ = logtail.HandleSyncLogTailReq(ctx,new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},

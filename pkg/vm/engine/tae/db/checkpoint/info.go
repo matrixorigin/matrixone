@@ -15,6 +15,7 @@
 package checkpoint
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,7 +28,7 @@ type RunnerReader interface {
 	GetAllGlobalCheckpoints() []*CheckpointEntry
 	GetPenddingIncrementalCount() int
 	GetGlobalCheckpointCount() int
-	CollectCheckpointsInRange(start, end types.TS) (ckpLoc string, lastEnd types.TS)
+	CollectCheckpointsInRange(ctx context.Context,start, end types.TS) (ckpLoc string, lastEnd types.TS,err error)
 	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
 	MaxLSN() uint64
 }
@@ -186,4 +187,10 @@ func (r *runner) GetTSToGC() types.TS {
 func (r *runner) ExistPendingEntryToGC() bool {
 	_, needGC := r.getTSTOGC()
 	return needGC
+}
+
+func (r *runner) IsTSStale(ts types.TS) bool {
+	gcts := r.GetGCTS()
+	minValidTS := gcts.Physical() - r.options.globalVersionInterval.Nanoseconds()
+	return ts.Physical() > minValidTS
 }
