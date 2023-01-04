@@ -727,6 +727,7 @@ message InsertValues {
 	UniqueIndexDef unique_index_def = 8;
 	SecondaryIndexDef secondary_index_def = 9;
 	ClusterTable cluster_table = 10;
+	ClusterByDef cb=11;
 }
 
 message column{

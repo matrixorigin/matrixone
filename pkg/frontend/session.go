@@ -1735,6 +1735,16 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				CompositePkey = col
 				continue
 			}
+			if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
+				defs = append(defs, &plan.TableDef_DefType{
+					Def: &plan.TableDef_DefType_Cb{
+						Cb: &plan.ClusterByDef{
+							Name: attr.Attr.Name,
+						},
+					},
+				})
+				continue
+			}
 			cols = append(cols, col)
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
 			for _, p := range pro.Properties {
