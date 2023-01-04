@@ -351,10 +351,6 @@ func (h *Handle) HandleForceCheckpoint(
 	_ db.FlushTable,
 	resp *apipb.SyncLogTailResp) (err error) {
 
-	// We use current TS instead of transaction ts.
-	// Here, the point of this handle function is to trigger a flush
-	// via mo_ctl.  We mimic the behaviour of a real background flush
-	// currTs := types.TimestampToTS(meta.GetSnapshotTS())
 	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 
 	err = h.eng.ForceCheckpoint(ctx,

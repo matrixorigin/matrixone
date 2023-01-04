@@ -492,7 +492,6 @@ func (r *runner) tryScheduleCheckpoint() {
 			if tree.IsEmpty() {
 				done = true
 			}
-			logutil.Infof("ckp %v done %v", entry.String(), done)
 			return
 		}
 
