@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -588,9 +589,14 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 
 	param.FileService = c.proc.FileService
 	param.Ctx = c.ctx
-	fileList, err := external.ReadDir(param)
-	if err != nil {
-		return nil, err
+	var fileList []string
+	if param.QueryResult {
+		fileList = strings.Split(param.Filepath, ",")
+	} else {
+		fileList, err = external.ReadDir(param)
+		if err != nil {
+			return nil, err
+		}
 	}
 	fileList, err = external.FliterFileList(n, c.proc, fileList)
 	if err != nil {
@@ -634,6 +640,7 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, err
 			Arg:     constructTableFunction(n, c.ctx, n.TableDef.TblFunc.Name),
 		})
 	}
+	c.anal.isFirst = false
 	c.anal.isFirst = false
 
 	return ss, nil

@@ -524,7 +524,7 @@ func evalFunction(proc *process.Process, f *function.Function, args []*vector.Ve
 		}
 	}
 
-	if !f.ResultMustNotScalar && numScalar == len(args) {
+	if !f.Volatile && numScalar == len(args) {
 		resultWrapper = vector.NewFunctionResultWrapper(rTyp, proc.Mp(), true, length)
 		// XXX only evaluate the first row.
 		err = f.NewFn(args, resultWrapper, proc, 1)

@@ -820,26 +820,47 @@ func getZonemapBatch(param *ExternalParam, proc *process.Process, size int64, ob
 func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	if param.Filter.objectReader == nil {
 		dir, _ := filepath.Split(param.extern.Filepath)
-		service, _, err := GetForETLWithType(param.extern, param.extern.Filepath)
-		if err != nil {
-			return nil, err
-		}
+		if param.extern.QueryResult {
+			var err error
+			service := param.extern.FileService
+			_, ok := param.Filter.File2Size[param.extern.Filepath]
+			if !ok {
+				fs := objectio.NewObjectFS(service, dir)
+				dirs, err := fs.ListDir(dir)
+				if err != nil {
+					return nil, err
+				}
+				for i := 0; i < len(dirs); i++ {
+					param.Filter.File2Size[dir+dirs[i].Name] = dirs[i].Size
+				}
+			}
 
-		_, ok := param.Filter.File2Size[param.extern.Filepath]
-		if !ok {
-			fs := objectio.NewObjectFS(service, dir)
-			dirs, err := fs.ListDir(dir)
+			param.Filter.objectReader, err = objectio.NewObjectReader(param.extern.Filepath, service)
 			if err != nil {
 				return nil, err
 			}
-			for i := 0; i < len(dirs); i++ {
-				param.Filter.File2Size[dir+dirs[i].Name] = dirs[i].Size
+		} else {
+			service, _, err := GetForETLWithType(param.extern, param.extern.Filepath)
+			if err != nil {
+				return nil, err
 			}
-		}
 
-		param.Filter.objectReader, err = objectio.NewObjectReader(param.extern.Filepath, service)
-		if err != nil {
-			return nil, err
+			_, ok := param.Filter.File2Size[param.extern.Filepath]
+			if !ok {
+				fs := objectio.NewObjectFS(service, dir)
+				dirs, err := fs.ListDir(dir)
+				if err != nil {
+					return nil, err
+				}
+				for i := 0; i < len(dirs); i++ {
+					param.Filter.File2Size[dir+dirs[i].Name] = dirs[i].Size
+				}
+			}
+
+			param.Filter.objectReader, err = objectio.NewObjectReader(param.extern.Filepath, service)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -866,7 +887,7 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 
 // ScanFileData read batch data from external file
 func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
-	if strings.HasSuffix(param.extern.Filepath, ".tae") {
+	if strings.HasSuffix(param.extern.Filepath, ".tae") || strings.HasSuffix(param.extern.Filepath, ".blk") {
 		return ScanZonemapFile(param, proc)
 	} else {
 		return ScanCsvFile(param, proc)

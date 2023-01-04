@@ -124,7 +124,8 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 		constraint:   key.Constraint,
 	}
 	columnLength := len(key.TableDef.Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
-	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(key.Id), true, columnLength)
+	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(key.Id),
+		true, columnLength, false)
 	if err != nil {
 		return nil, err
 	}

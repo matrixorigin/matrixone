@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -23,8 +25,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
 	var err error
+	ctx.binder = NewTableBinder(builder, ctx)
+	exprs := make([]*plan.Expr, 0, len(tbl.Func.Exprs))
+	for _, v := range tbl.Func.Exprs {
+		curExpr, err := ctx.binder.BindExpr(v, 0, false)
+		if err != nil {
+			return 0, err
+		}
+		exprs = append(exprs, curExpr)
+	}
 	exprs[0], err = appendCastBeforeExpr(builder.GetContext(), exprs[0], &plan.Type{
 		Id:          int32(types.T_uuid),
 		NotNullable: true,
@@ -41,7 +52,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	}
 	uuid := vector.MustTCols[types.Uuid](vec)[0]
 	// get cols
-	cols, err := builder.compCtx.GetQueryResultColDefs(uuid.ToString())
+	cols, path, err := builder.compCtx.GetQueryResultMeta(uuid.ToString())
 	if err != nil {
 		return 0, err
 	}
@@ -50,19 +61,52 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 		typs[i] = types.New(types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale, c.Typ.Precision)
 	}
 	builder.compCtx.GetProcess().SessionInfo.ResultColTypes = typs
-	node := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
-		TableDef: &plan.TableDef{
-			TableType: "func_table",
-			TblFunc: &plan.TableFunction{
-				Name: "result_scan",
-			},
-			Cols: cols,
-		},
-		BindingTags:     []int32{builder.genNewTag()},
-		Children:        []int32{childId},
-		TblFuncExprList: exprs,
+	name2ColIndex := map[string]int32{}
+	for i := 0; i < len(cols); i++ {
+		name2ColIndex[cols[i].Name] = int32(i)
 	}
-	return builder.appendNode(node, ctx), nil
+	tableDef := &plan.TableDef{
+		TableType:     "query_result",
+		Cols:          cols,
+		Name2ColIndex: name2ColIndex,
+	}
+	// build external param
+	p := &tree.ExternParam{
+		// ScanType: tree.S3,
+		Filepath: path,
+		// FileService: builder.compCtx.GetProcess().FileService,
+		// S3Param:     &tree.S3Parameter{},
+		Tail:        &tree.TailParameter{},
+		QueryResult: true,
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return 0, err
+	}
+	properties := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: catalog.SystemExternalRel,
+		},
+		{
+			Key:   catalog.SystemRelAttr_CreateSQL,
+			Value: string(b),
+		},
+	}
+	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: properties,
+			},
+		}})
+	tableDef.Createsql = string(b)
+	node := &plan.Node{
+		NodeType:    plan.Node_EXTERNAL_SCAN,
+		Stats:       nil,
+		TableDef:    tableDef,
+		BindingTags: []int32{builder.genNewTag()},
+	}
+	nodeID := builder.appendNode(node, ctx)
+	clearBinding(ctx)
+	return nodeID, nil
 }
