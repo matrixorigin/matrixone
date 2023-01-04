@@ -16,6 +16,7 @@ package intersect
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -79,7 +80,9 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 // build hash table
 func (c *container) buildHashTable(proc *process.Process, analyse process.Analyze, idx int, isFirst bool) error {
 	for {
+		start := time.Now()
 		btc := <-proc.Reg.MergeReceivers[idx].Ch
+		analyse.WaitStop(start)
 
 		// last batch of block
 		if btc == nil {
@@ -128,7 +131,9 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 
 func (c *container) probeHashTable(proc *process.Process, analyze process.Analyze, idx int, isFirst bool, isLast bool) (bool, error) {
 	for {
+		start := time.Now()
 		btc := <-proc.Reg.MergeReceivers[idx].Ch
+		analyze.WaitStop(start)
 
 		// last batch of block
 		if btc == nil {

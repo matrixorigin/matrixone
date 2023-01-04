@@ -16,6 +16,7 @@ package intersectall
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -91,7 +92,10 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 // build use all batches from proc.Reg.MergeReceiver[1](right relation) to build the hash map.
 func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isFirst bool) error {
 	for {
+		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[1].Ch
+		analyzer.WaitStop(start)
+
 		if bat == nil {
 			break
 		}
@@ -140,8 +144,10 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isF
 // if batch is the last one, return true, else return false.
 func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	for {
-
+		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[0].Ch
+		analyzer.WaitStop(start)
+
 		if bat == nil {
 			return true, nil
 		}
