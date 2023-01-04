@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 	"go.uber.org/zap"
 )
 
@@ -37,7 +36,7 @@ type LogtailerImpl struct {
 func NewLogtailer(
 	ckpClient CheckpointClient,
 	mgr *Manager,
-	c *catalog.Catalog) service.Logtailer {
+	c *catalog.Catalog) *LogtailerImpl {
 	return &LogtailerImpl{
 		ckpClient: ckpClient,
 		mgr:       mgr,
