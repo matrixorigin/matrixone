@@ -35,6 +35,7 @@ type CheckpointCfg struct {
 	GlobalMinCount            int64         `toml:"checkpoint-global-interval"`
 	ForceUpdateGlobalInterval bool
 	GlobalVersionInterval     time.Duration
+	GCCheckpointInterval      time.Duration
 }
 
 type GCCfg struct {

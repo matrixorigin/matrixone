@@ -4082,7 +4082,32 @@ func TestReadCheckpoint(t *testing.T) {
 		1000,
 	}
 
-	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	err := tae.BGCheckpointRunner.GCCheckpoint(gcTS)
+	assert.NoError(t, err)
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(time.Since(now))
+	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.BGCheckpointRunner.GetPenddingIncrementalCount() == 0
+	})
+	t.Log(time.Since(now))
+	assert.Equal(t, 0, tae.BGCheckpointRunner.GetPenddingIncrementalCount())
+
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+	testutils.WaitExpect(4000, func() bool {
+		tae.BGCheckpointRunner.ExistPendingEntryToGC()
+		return !tae.BGCheckpointRunner.ExistPendingEntryToGC()
+	})
+	assert.False(t, tae.BGCheckpointRunner.ExistPendingEntryToGC())
+	entries := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
+	for _, entry := range entries {
+		t.Log(entry.String())
+	}
 	for _, entry := range entries {
 		for _, tid := range tids {
 			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
@@ -4093,7 +4118,7 @@ func TestReadCheckpoint(t *testing.T) {
 		}
 	}
 	tae.restart()
-	entries = tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
 		for _, tid := range tids {
 			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
@@ -4841,18 +4866,6 @@ func TestGlobalCheckpoint1(t *testing.T) {
 
 	tae.restart()
 	tae.checkRowsByScan(400, true)
-
-	checkpoints := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
-	for _, entry := range checkpoints {
-		assert.NoError(t, entry.GCEntry(tae.Fs))
-		assert.NoError(t, entry.GCMetadata(tae.Fs))
-	}
-
-	checkpoints = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
-	for _, entry := range checkpoints {
-		assert.NoError(t, entry.GCEntry(tae.Fs))
-		assert.NoError(t, entry.GCMetadata(tae.Fs))
-	}
 }
 
 func TestAppendAndGC(t *testing.T) {
@@ -4863,6 +4876,7 @@ func TestAppendAndGC(t *testing.T) {
 	opts.CacheCfg.InsertCapacity = common.M * 5
 	opts.CacheCfg.TxnCapacity = common.M
 	opts = config.WithQuickScanAndCKPOpts(opts)
+	options.WithGCCheckpointInterval(time.Minute)(opts)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
 	db := tae.DB
@@ -5220,15 +5234,25 @@ func TestGCCheckpoint1(t *testing.T) {
 	})
 	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 
+	testutils.WaitExpect(4000, func() bool {
+		return tae.BGCheckpointRunner.GetPenddingIncrementalCount() == 0
+	})
+	assert.Equal(t, 0, tae.BGCheckpointRunner.GetPenddingIncrementalCount())
+
+	testutils.WaitExpect(4000, func() bool {
+		return tae.BGCheckpointRunner.MaxGlobalCheckpoint().IsFinished()
+	})
+	assert.True(t, tae.BGCheckpointRunner.MaxGlobalCheckpoint().IsFinished())
+
 	tae.BGCheckpointRunner.DisableCheckpoint()
+
 	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	t.Log(gcTS.ToString())
+	tae.BGCheckpointRunner.GCCheckpoint(gcTS)
 
 	maxGlobal := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
 
 	testutils.WaitExpect(4000, func() bool {
-		// err := tae.BGCheckpointRunner.GCCheckpoint(gcTS)
-		// assert.NoError(t, err)
 		tae.BGCheckpointRunner.ExistPendingEntryToGC()
 		return !tae.BGCheckpointRunner.ExistPendingEntryToGC()
 	})

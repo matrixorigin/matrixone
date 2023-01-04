@@ -574,12 +574,21 @@ func (r *runner) tryScheduleCheckpoint() {
 		return
 	}
 	entry := r.MaxCheckpoint()
+	global := r.MaxGlobalCheckpoint()
 
 	// no prev checkpoint found. try schedule the first
 	// checkpoint
 	if entry == nil {
-		r.tryScheduleIncrementalCheckpoint(types.TS{})
-		return
+		if global == nil {
+			r.tryScheduleIncrementalCheckpoint(types.TS{})
+			return
+		} else {
+			maxTS := global.end.Prev()
+			if r.incrementalPolicy.Check(maxTS) {
+				r.tryScheduleIncrementalCheckpoint(maxTS.Next())
+			}
+			return
+		}
 	}
 
 	if entry.IsPendding() {
@@ -606,8 +615,8 @@ func (r *runner) tryScheduleCheckpoint() {
 		return
 	}
 
-	if r.incrementalPolicy.Check(entry.GetEnd()) {
-		r.tryScheduleIncrementalCheckpoint(entry.GetEnd().Next())
+	if r.incrementalPolicy.Check(entry.end) {
+		r.tryScheduleIncrementalCheckpoint(entry.end.Next())
 	}
 }
 

@@ -181,6 +181,14 @@ func (r *runner) GetTSToGC() types.TS {
 	if maxGlobal == nil {
 		return types.TS{}
 	}
+	if maxGlobal.IsFinished() {
+		return maxGlobal.end.Prev()
+	}
+	globals := r.GetAllGlobalCheckpoints()
+	if len(globals) == 1 {
+		return types.TS{}
+	}
+	maxGlobal = globals[len(globals)-1]
 	return maxGlobal.end.Prev()
 }
 
@@ -191,7 +199,7 @@ func (r *runner) ExistPendingEntryToGC() bool {
 
 func (r *runner) IsTSStale(ts types.TS) bool {
 	gcts := r.GetGCTS()
-	if gcts.IsEmpty(){
+	if gcts.IsEmpty() {
 		return false
 	}
 	minValidTS := gcts.Physical() - r.options.globalVersionInterval.Nanoseconds()

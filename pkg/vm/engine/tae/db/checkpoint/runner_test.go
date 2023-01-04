@@ -205,6 +205,7 @@ func TestGetCheckpoints2(t *testing.T) {
 
 	// [25,45]
 	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(25, 1), types.BuildTS(45, 0))
+	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "global3;ckp3", location)
