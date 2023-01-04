@@ -220,9 +220,6 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 		}
 		tblNode := node.(*catalog.TableMVCCNode)
 		if b.scope == ScopeColumns {
-			if tblNode.IsUpdate {
-				continue // update constraints won't affect mo_columns
-			}
 			var dstBatch *containers.Batch
 			if !tblNode.HasDropCommitted() {
 				dstBatch = b.insBatch

@@ -4860,8 +4860,10 @@ func TestAppendAndGC(t *testing.T) {
 	opts.CacheCfg.InsertCapacity = common.M * 5
 	opts.CacheCfg.TxnCapacity = common.M
 	opts = config.WithQuickScanAndCKPOpts(opts)
-	db := initDB(t, opts)
-	defer db.Close()
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	db := tae.DB
+	db.DiskCleaner.SetMinMergeCountForTest(2)
 
 	schema1 := catalog.MockSchemaAll(13, 2)
 	schema1.BlockMaxRows = 10
@@ -4880,7 +4882,7 @@ func TestAppendAndGC(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
-	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*20-1))
+	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*10-1))
 	defer bat.Close()
 	bats := bat.Split(bat.Length())
 
@@ -4903,6 +4905,27 @@ func TestAppendAndGC(t *testing.T) {
 	assert.Equal(t, uint64(0), db.Scheduler.GetPenddingLSNCnt())
 	err = db.DiskCleaner.CheckGC()
 	assert.Nil(t, err)
+	testutils.WaitExpect(5000, func() bool {
+		return db.DiskCleaner.GetMinMerged() != nil
+	})
+	minMerged := db.DiskCleaner.GetMinMerged()
+	testutils.WaitExpect(5000, func() bool {
+		return db.DiskCleaner.GetMinMerged() != nil
+	})
+	assert.NotNil(t, minMerged)
+	tae.restart()
+	db = tae.DB
+	db.DiskCleaner.SetMinMergeCountForTest(2)
+	testutils.WaitExpect(5000, func() bool {
+		if db.DiskCleaner.GetMaxConsumed() == nil {
+			return false
+		}
+		return db.DiskCleaner.GetMaxConsumed().GetEnd().GreaterEq(minMerged.GetEnd())
+	})
+	assert.True(t, db.DiskCleaner.GetMaxConsumed().GetEnd().GreaterEq(minMerged.GetEnd()))
+	err = db.DiskCleaner.CheckGC()
+	assert.Nil(t, err)
+
 }
 
 func TestGlobalCheckpoint2(t *testing.T) {
