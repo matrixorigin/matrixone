@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -53,17 +54,16 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	ap := arg.(*Argument)
 	bat := proc.InputBatch()
 	if ap.crossCN {
-		if err := ap.sendFunc(ap.ctr.streams, ap.localIndex, bat, ap.Regs[ap.localIndex], proc); err != nil {
-			return false, err
-		}
 		if bat == nil {
-			if err := CloseStreams(ap.ctr.streams); err != nil {
+			if err := CloseStreams(ap.ctr.streams, ap.localIndex, ap.Regs[ap.localIndex], proc); err != nil {
 				return true, err
 			}
 			return true, nil
-		} else {
-			return false, nil
 		}
+		if err := ap.sendFunc(ap.ctr.streams, ap.localIndex, bat, ap.Regs[ap.localIndex], proc); err != nil {
+			return false, err
+		}
+		return false, nil
 	}
 	if bat == nil {
 		return true, nil
@@ -126,7 +126,20 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	return true, nil
 }
 
-func CloseStreams(streams []*WrapperStream) error {
+func CloseStreams(streams []*WrapperStream, localIndex uint64, localChan *process.WaitRegister, proc *process.Process) error {
+	for i := range streams {
+		if i == int(localIndex) {
+			localChan.Ch <- nil
+		} else {
+			message := cnclient.AcquireMessage()
+			message.Id = streams[i].Stream.ID()
+			message.Cmd = 1
+			message.Sid = pipeline.MessageEnd
+			if err := streams[i].Stream.Send(proc.Ctx, message); err != nil {
+				return err
+			}
+		}
+	}
 	for i := range streams {
 		if streams[i] == nil {
 			continue

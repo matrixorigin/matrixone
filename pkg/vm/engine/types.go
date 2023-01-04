@@ -20,7 +20,6 @@ import (
 	"encoding/binary"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -39,13 +38,6 @@ type Node struct {
 	Addr string   `json:"address"`
 	Data [][]byte `json:"payload"`
 	Rel  Relation // local relation
-}
-
-// WrapperNode used to spec which node,
-// and which register you need
-type WrapperNode struct {
-	Node Node
-	Uuid uuid.UUID
 }
 
 // Attribute is a column

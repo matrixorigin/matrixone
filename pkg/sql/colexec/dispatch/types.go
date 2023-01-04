@@ -18,7 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -39,7 +39,7 @@ type Argument struct {
 	// crossCN is used to treat dispatch operator as a distributed operator
 	crossCN bool
 	// nodes[IBucket].Node.Address == ""
-	nodes      []engine.WrapperNode
+	nodes      []colexec.WrapperNode
 	localIndex uint64
 	// streams is the stream which connect local CN with remote CN, so
 	// but streams[localIndex] is nil, because you need to send batch locally
