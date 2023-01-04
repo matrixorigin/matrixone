@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -154,6 +155,57 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 	})
 	dbs = append(dbs, e.catalog.Databases(getAccountId(ctx), txn.meta.SnapshotTS)...)
 	return dbs, nil
+}
+
+func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
+	txn := e.getTransaction(op)
+	accountId := getAccountId(ctx)
+	var db engine.Database
+	noRepCtx := errutil.ContextWithNoReport(ctx, true)
+	txn.databaseMap.Range(func(k, _ any) bool {
+		key := k.(databaseKey)
+		dbName = key.name
+		if key.accountId == accountId {
+			db, err = e.Database(noRepCtx, key.name, op)
+			if err != nil {
+				return false
+			}
+			distDb := db.(*database)
+			tblName = distDb.getTableNameById(ctx, key.id)
+			if tblName != "" {
+				return false
+			}
+		}
+		return true
+	})
+	return
+}
+
+func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
+	txn := e.getTransaction(op)
+	accountId := getAccountId(ctx)
+	var db engine.Database
+	noRepCtx := errutil.ContextWithNoReport(ctx, true)
+	txn.databaseMap.Range(func(k, _ any) bool {
+		key := k.(databaseKey)
+		dbName = key.name
+		if key.accountId == accountId {
+			db, err = e.Database(noRepCtx, key.name, op)
+			if err != nil {
+				return false
+			}
+			distDb := db.(*database)
+			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
+			if err != nil || rel != nil {
+				return false
+			}
+		}
+		return true
+	})
+	if rel == nil {
+		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d", tableId)
+	}
+	return
 }
 
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
