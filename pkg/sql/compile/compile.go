@@ -322,14 +322,14 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	}
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-			scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-			if err != nil {
-				return nil, err
-			}
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op:  vm.Deletion,
-				Arg: scp,
-			})
+		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  vm.Deletion,
+			Arg: scp,
+		})
 	case plan.Query_INSERT:
 		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
