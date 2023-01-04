@@ -35,18 +35,16 @@ type Argument struct {
 	ctr  *container
 	All  bool // dispatch batch to each consumer
 	Regs []*process.WaitRegister
-	// for deletion operation, we need to ensure every Block
-	// will be deleted by only one CN, so We need to use bucket
-	// to process this
 
 	// crossCN is used to treat dispatch operator as a distributed operator
 	crossCN bool
-	IBucket uint64
-	// NBucket == len(nodes)
-	NBucket uint64
 	// nodes[IBucket].Node.Address == ""
-	nodes    []engine.WrapperNode
-	sendFunc func(streams []*WrapperStream, IBucket uint64, NBucket uint64, bat *batch.Batch, localChan *process.WaitRegister, proc *process.Process) error
+	nodes      []engine.WrapperNode
+	localIndex uint64
+	// streams is the stream which connect local CN with remote CN, so
+	// but streams[localIndex] is nil, because you need to send batch locally
+	// by localChan
+	sendFunc func(streams []*WrapperStream, localIndex uint64, bat *batch.Batch, localChan *process.WaitRegister, proc *process.Process) error
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

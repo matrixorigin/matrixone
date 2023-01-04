@@ -33,6 +33,7 @@ message Message {
   bytes   proc_info_data = 5;
   bytes   analyse = 6;
   uint64  id = 7;
+  bytes   uuid = 8;
 }
 
 message Connector {

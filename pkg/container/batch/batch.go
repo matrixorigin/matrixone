@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -322,32 +321,4 @@ func (bat *Batch) InitZsOne(len int) {
 	for i := range bat.Zs {
 		bat.Zs[i]++
 	}
-}
-
-func NewWrpaBat(bat *Batch, uuid uuid.UUID) *WrapperBatch {
-	return &WrapperBatch{uuid, bat}
-}
-
-func (wrapBat *WrapperBatch) MarshalBinary() ([]byte, error) {
-	var res []byte
-	var err error
-	if res, err = wrapBat.Bat.MarshalBinary(); err != nil {
-		return nil, err
-	}
-	res = append(res, wrapBat.Uuid[:]...)
-	return res, nil
-}
-
-func (wrapBat *WrapperBatch) UnmarshalBinary(data []byte) error {
-	bytes := data[len(data)-16:]
-	for i := range bytes {
-		wrapBat.Uuid[i] = bytes[i]
-	}
-	if wrapBat.Bat == nil {
-		wrapBat.Bat = &Batch{}
-	}
-	if err := wrapBat.Bat.UnmarshalBinary(data[:len(data)-16]); err != nil {
-		return err
-	}
-	return nil
 }

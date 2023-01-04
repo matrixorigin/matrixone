@@ -322,11 +322,6 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	}
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		if qry.Nodes[qry.Nodes[qry.Steps[0]].Children[0]].Stats.Cost > float64(DistributedThreshold) {
-			// ToDo: create 'delete' distributed pipeline
-			// please reference to https://github.com/JackTan25/docs/blob/main/design/CN-Write-S3.md
-			// https://github.com/JackTan25/docs/raw/main/design/imgs/pipeline_design.png
-		} else {
 			scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 			if err != nil {
 				return nil, err
@@ -335,7 +330,6 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 				Op:  vm.Deletion,
 				Arg: scp,
 			})
-		}
 	case plan.Query_INSERT:
 		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
