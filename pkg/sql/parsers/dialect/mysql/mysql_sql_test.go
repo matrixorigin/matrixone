@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "load data infile 'data.txt' into table db.a accounts(a1, a2) fields terminated by '\t' escaped by '\t'",
-		output: "load data infile data.txt into table db.a accounts(a1, a2) fields terminated by \t escaped by \t",
+		input:  "select * from result_scan(query_id)",
+		output: "select * from result_scan(query_id)",
 	}
 )
 
@@ -53,6 +53,12 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select * from result_scan(query_id)",
+		output: "select * from result_scan(query_id)",
+	}, {
+		input:  "select * from meta_scan('query_id');",
+		output: "select * from meta_scan(query_id)",
+	}, {
 		input:  "show variables like 'sql_mode'",
 		output: "show variables like sql_mode",
 	}, {
