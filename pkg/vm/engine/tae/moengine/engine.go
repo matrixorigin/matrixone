@@ -144,6 +144,14 @@ func (e *txnEngine) DatabaseNames(ctx context.Context, txnHandle Txn) ([]string,
 	return txn.DatabaseNames(), nil
 }
 
+func (e *txnEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
+	return "", "", moerr.NewNYI(ctx, "interface GetNameById is not implemented")
+}
+
+func (e *txnEngine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, rel engine.Relation, err error) {
+	return "", "", nil, moerr.NewNYI(ctx, "interface GetRelationById is not implemented")
+}
+
 func (e *txnEngine) Database(ctx context.Context, name string, txnOp client.TxnOperator) (engine.Database, error) {
 	var err error
 	var txn txnif.AsyncTxn
