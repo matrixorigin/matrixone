@@ -147,7 +147,7 @@ MatrixOne's architecture is as below:
   <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
 </p>
 
-For more details, you can checkout [MatrixOne Architecture](https://docs.matrixorigin.io/0.6.0/MatrixOne/Overview/matrixone-architecture/).
+For more details, you can checkout [MatrixOne Architecture Design](https://docs.matrixorigin.io/0.6.0/MatrixOne/Overview/matrixone-architecture-design/).
 
 
 ## ⚡️ <a id="quick-start">Quick start</a>
