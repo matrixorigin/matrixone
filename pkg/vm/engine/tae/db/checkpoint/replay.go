@@ -142,8 +142,9 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			emptyFileMu.Lock()
 			emptyFile = append(emptyFile, checkpointEntry)
 			emptyFileMu.Unlock()
+		} else {
+			entries[i] = checkpointEntry
 		}
-		entries[i] = checkpointEntry
 	}
 	wg.Add(bat.Length())
 	t0 = time.Now()

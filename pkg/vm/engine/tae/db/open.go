@@ -187,6 +187,16 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 				db.DiskCleaner.JobFactory(ctx)
 				return
 			}),
+		gc.WithCronJob(
+			"checkpoint-gc",
+			opts.GCCfg.ScanGCInterval,
+			func(ctx context.Context) error {
+				consumed := db.DiskCleaner.GetMaxConsumed()
+				if consumed == nil {
+					return nil
+				}
+				return db.BGCheckpointRunner.GCCheckpoint(consumed.GetEnd())
+			}),
 	)
 
 	db.GCManager.Start()

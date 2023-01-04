@@ -28,7 +28,7 @@ type RunnerReader interface {
 	GetAllGlobalCheckpoints() []*CheckpointEntry
 	GetPenddingIncrementalCount() int
 	GetGlobalCheckpointCount() int
-	CollectCheckpointsInRange(ctx context.Context,start, end types.TS) (ckpLoc string, lastEnd types.TS,err error)
+	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
 	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
 	MaxLSN() uint64
 }
@@ -191,6 +191,9 @@ func (r *runner) ExistPendingEntryToGC() bool {
 
 func (r *runner) IsTSStale(ts types.TS) bool {
 	gcts := r.GetGCTS()
+	if gcts.IsEmpty(){
+		return false
+	}
 	minValidTS := gcts.Physical() - r.options.globalVersionInterval.Nanoseconds()
-	return ts.Physical() > minValidTS
+	return ts.Physical() < minValidTS
 }

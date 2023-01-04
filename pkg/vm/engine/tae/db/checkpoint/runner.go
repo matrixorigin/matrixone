@@ -21,8 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -324,6 +324,7 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 		if incremental.LessEq(ts) {
 			err := incremental.GCEntry(r.fs)
 			if err != nil {
+				logutil.Warnf("gc %v failed: %v", incremental.String(), err)
 				panic(err)
 			}
 			err = incremental.GCMetadata(r.fs)
@@ -787,9 +788,9 @@ func (r *runner) Stop() {
 	})
 }
 
-func (r *runner) CollectCheckpointsInRange(ctx context.Context,start, end types.TS) (locations string, checkpointed types.TS,err error) {
-	if r.IsTSStale(end){
-		return "",types.TS{},moerr.NewInternalError(ctx,"ts %v is staled",end.ToString())
+func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (locations string, checkpointed types.TS, err error) {
+	if r.IsTSStale(end) {
+		return "", types.TS{}, moerr.NewInternalError(ctx, "ts %v is staled", end.ToString())
 	}
 	r.storage.Lock()
 	tree := r.storage.entries.Copy()
