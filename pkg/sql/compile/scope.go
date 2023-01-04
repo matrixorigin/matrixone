@@ -276,8 +276,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			}
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-					Op:  vm.Top,
-					Idx: in.Idx,
+					Op:      vm.Top,
+					Idx:     in.Idx,
+					IsFirst: in.IsFirst,
 					Arg: &top.Argument{
 						Fs:    arg.Fs,
 						Limit: arg.Limit,
@@ -297,8 +298,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			}
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-					Op:  vm.Order,
-					Idx: in.Idx,
+					Op:      vm.Order,
+					Idx:     in.Idx,
+					IsFirst: in.IsFirst,
 					Arg: &order.Argument{
 						Fs: arg.Fs,
 					},
@@ -317,8 +319,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			}
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-					Op:  vm.Limit,
-					Idx: in.Idx,
+					Op:      vm.Limit,
+					Idx:     in.Idx,
+					IsFirst: in.IsFirst,
 					Arg: &limit.Argument{
 						Limit: arg.Limit,
 					},
@@ -329,14 +332,17 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			arg := in.Arg.(*group.Argument)
 			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
 			s.Instructions[0] = vm.Instruction{
-				Op: vm.MergeGroup,
+				Op:  vm.MergeGroup,
+				Idx: in.Idx,
 				Arg: &mergegroup.Argument{
 					NeedEval: false,
 				},
 			}
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-					Op: vm.Group,
+					Op:      vm.Group,
+					Idx:     in.Idx,
+					IsFirst: in.IsFirst,
 					Arg: &group.Argument{
 						Aggs:      arg.Aggs,
 						Exprs:     arg.Exprs,
@@ -350,14 +356,17 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			arg := in.Arg.(*offset.Argument)
 			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
 			s.Instructions[0] = vm.Instruction{
-				Op: vm.MergeOffset,
+				Op:  vm.MergeOffset,
+				Idx: in.Idx,
 				Arg: &mergeoffset.Argument{
 					Offset: arg.Offset,
 				},
 			}
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-					Op: vm.Offset,
+					Op:      vm.Offset,
+					Idx:     in.Idx,
+					IsFirst: in.IsFirst,
 					Arg: &offset.Argument{
 						Offset: arg.Offset,
 					},
