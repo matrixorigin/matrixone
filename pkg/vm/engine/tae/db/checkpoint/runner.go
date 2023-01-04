@@ -290,8 +290,28 @@ func (r *runner) onGlobalCheckpointEntries(items ...any) {
 }
 
 func (r *runner) onGCCheckpointEntries(items ...any) {
-	gcTS := r.GetGCTS()
+	gcTS, needGC := r.getTSTOGC()
+	if !needGC {
+		return
+	}
 	r.gcCheckpointEntries(gcTS)
+}
+
+func (r *runner) getTSTOGC() (ts types.TS, needGC bool) {
+	ts = r.GetGCTS()
+	if ts.IsEmpty() {
+		return
+	}
+	tsTOGC := r.GetTSToGC()
+	if tsTOGC.Less(ts) {
+		ts = tsTOGC
+	}
+	gcedTS := r.GetGCedTS()
+	if gcedTS.GreaterEq(ts) {
+		return
+	}
+	needGC = true
+	return
 }
 
 func (r *runner) gcCheckpointEntries(ts types.TS) {
@@ -300,7 +320,7 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 	}
 	incrementals := r.GetAllIncrementalCheckpoints()
 	for _, incremental := range incrementals {
-		if incremental.Less(ts) {
+		if incremental.LessEq(ts) {
 			err := incremental.GCEntry(r.fs)
 			if err != nil {
 				panic(err)
@@ -314,7 +334,7 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 	}
 	globals := r.GetAllGlobalCheckpoints()
 	for _, global := range globals {
-		if global.Less(ts) {
+		if global.LessEq(ts) {
 			err := global.GCEntry(r.fs)
 			if err != nil {
 				panic(err)

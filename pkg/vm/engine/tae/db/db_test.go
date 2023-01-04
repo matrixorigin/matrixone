@@ -5220,28 +5220,27 @@ func TestGCCheckpoint(t *testing.T) {
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	t.Log(gcTS.ToString())
-	tae.BGCheckpointRunner.GCCheckpoint(gcTS)
+
+	maxGlobal := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
 
 	testutils.WaitExpect(4000, func() bool {
 		tae.BGCheckpointRunner.GCCheckpoint(gcTS)
-		globals := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
-		if len(globals) != 0 {
-			return false
-		}
-
-		incrementals := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
-		return len(incrementals) == 0
+		tae.BGCheckpointRunner.ExistPendingEntryToGC()
+		return !tae.BGCheckpointRunner.ExistPendingEntryToGC()
 	})
-	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+	assert.False(t, tae.BGCheckpointRunner.ExistPendingEntryToGC())
 
 	globals := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
-	assert.Equal(t, 0, len(globals))
+	assert.Equal(t, 1, len(globals))
+	assert.True(t, maxGlobal.GetEnd().Equal(globals[0].GetEnd()))
 	for _, global := range globals {
 		t.Log(global.String())
 	}
+
 	incrementals := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
-	assert.Equal(t, 0, len(incrementals))
+	prevEnd := maxGlobal.GetEnd().Prev()
 	for _, incremental := range incrementals {
+		assert.True(t, incremental.GetStart().Equal(prevEnd.Next()))
 		t.Log(incremental.String())
 	}
 }

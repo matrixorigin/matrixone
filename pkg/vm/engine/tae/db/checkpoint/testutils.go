@@ -32,6 +32,9 @@ type TestRunner interface {
 	ForceIncrementalCheckpoint(end types.TS) error
 	IsAllChangesFlushed(start, end types.TS, printTree bool) bool
 	MaxLSNInRange(end types.TS) uint64
+
+	ExistPendingEntryToGC() bool
+	MaxGlobalCheckpoint() *CheckpointEntry
 }
 
 // DisableCheckpoint stops generating checkpoint
