@@ -24,7 +24,6 @@ import (
 	"math"
 	"os"
 	"reflect"
-	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -600,20 +599,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		return nil
 	}
 
-	if openSaveQueryResult(ses) {
-		ses.lastQueryId = types.Uuid(ses.tStmt.StatementID).ToString()
-		if err := saveQueryResult(ses, bat); err != nil {
-			return err
-		}
-	}
-
-	enableProfile := ses.GetParameterUnit().SV.EnableProfileGetDataFromPipeline
-
-	var cpuf *os.File = nil
-	if enableProfile {
-		cpuf, _ = os.Create("cpu_profile")
-	}
-
 	begin := time.Now()
 
 	proto := ses.GetMysqlProtocol()
@@ -645,11 +630,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	n := vector.Length(bat.Vecs[0])
 
-	if enableProfile {
-		if err := pprof.StartCPUProfile(cpuf); err != nil {
-			return err
-		}
-	}
 	requestCtx := ses.GetRequestContext()
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
@@ -683,10 +663,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	err := oq.flush()
 	if err != nil {
 		return err
-	}
-
-	if enableProfile {
-		pprof.StopCPUProfile()
 	}
 
 	procBatchTime := time.Since(procBatchBegin)

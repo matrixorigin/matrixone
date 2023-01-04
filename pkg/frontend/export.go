@@ -188,8 +188,14 @@ var Truncate = func(ep *tree.ExportParam) error {
 
 var Close = func(ep *tree.ExportParam) error {
 	if !ep.UseFileService {
+		ep.FileCnt++
 		return ep.File.Close()
 	} else {
+		//there is no data, do nothing
+		if ep.FileServiceOffset == 0 {
+			return nil
+		}
+		ep.FileCnt++
 		return ep.FileService.Write(ep.Ctx, fileservice.IOVector{
 			FilePath: getExportFilePath(ep.FilePath, ep.FileCnt),
 			Entries: []fileservice.IOEntry{
@@ -218,7 +224,7 @@ func writeToCSVFile(oq *outputQueue, output []byte) error {
 		if oq.ep.Rows == 0 {
 			return moerr.NewInternalError(oq.ctx, "the OneLine size is over the maxFileSize")
 		}
-		oq.ep.FileCnt++
+
 		if err := Flush(oq.ep); err != nil {
 			return err
 		}
