@@ -71,6 +71,9 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	if ok := db.txn.catalog.GetTable(key); !ok {
 		return nil, moerr.GetOkExpectedEOB()
 	}
+	if tbl, ok := db.txn.syncMap.Load(key.Id); ok {
+		return tbl.(*table), nil
+	}
 	parts := db.txn.db.getPartitions(db.databaseId, key.Id)
 	tbl := &table{
 		db:           db,
@@ -88,20 +91,14 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 		createSql:    key.CreateSql,
 		constraint:   key.Constraint,
 	}
-	_, created := tbl.db.txn.tableMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
-	if _, ok := db.txn.syncMap.Load(key.Id); !created && !ok {
-		if err := db.txn.db.Update(ctx, db.txn.dnStores[:1], tbl, db.txn.op, tbl.primaryIdx,
-			db.databaseId, tbl.tableId, db.txn.meta.SnapshotTS); err != nil {
-			return nil, err
-		}
-		db.txn.syncMap.Store(key.Id, 0)
-	}
 	columnLength := len(key.TableDef.Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
 	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(key.Id), true, columnLength)
 	if err != nil {
 		return nil, err
 	}
 	tbl.meta = meta
+	tbl.updated = false
+	db.txn.syncMap.Store(key, tbl)
 	return tbl, nil
 }
 
@@ -124,6 +121,7 @@ func (db *database) Delete(ctx context.Context, name string) error {
 		}
 		id = key.Id
 	}
+	db.txn.syncMap.Delete(id)
 	bat, err := genDropTableTuple(id, db.databaseId, name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
 		return err

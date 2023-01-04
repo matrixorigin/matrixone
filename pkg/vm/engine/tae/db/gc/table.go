@@ -347,6 +347,23 @@ func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []
 	return blocks, err
 }
 
+// SaveFullTable is to write data to s3
+func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, files []string) ([]objectio.BlockObject, error) {
+	bats := t.collectData(files)
+	defer t.closeBatch(bats)
+	name := blockio.EncodeGCMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
+	writer := blockio.NewWriter(context.Background(), fs, name)
+	for i := range bats {
+		if _, err := writer.WriteBlock(bats[i]); err != nil {
+			return nil, err
+		}
+	}
+
+	blocks, err := writer.Sync()
+	//logutil.Infof("SaveTable %v-%v, table: %v, gc: %v", start.ToString(), end.ToString(), t.String(), files)
+	return blocks, err
+}
+
 // ReadTable reads an s3 file and replays a GCTable in memory
 func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS) error {
 	reader, err := objectio.NewObjectReader(name, fs.Service)

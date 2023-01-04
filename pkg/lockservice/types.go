@@ -56,11 +56,15 @@ const (
 type LockStorage interface {
 	// Add we use kv to store the lock. Key is a locked row or a row range. Value is the
 	// TxnID.
-	Add(key, value []byte)
+	Add(key []byte, value Lock)
+	// Get returns the value of the given key
+	Get(key []byte) (Lock, bool)
+	// Len returns number of the locks in the storage
+	Len() int
 	// Delete delete lock from the storage
 	Delete(key []byte)
 	// Seek returns the first KV Pair that is >= the given key
-	Seek(key []byte) ([]byte, []byte, bool)
+	Seek(key []byte) ([]byte, Lock, bool)
 }
 
 // LockService lock service is running at the CN node. The lockservice maintains a set
@@ -97,4 +101,13 @@ type LockOptions struct {
 	granularity Granularity
 	mode        LockMode
 	policy      WaitPolicy
+}
+
+// Lock stores specific lock information. Since there are a large number of lock objects
+// in the LockStorage at runtime, this object has been specially designed to save memory
+// usage.
+type Lock struct {
+	txnID []byte
+	// all lock info will encode into this field to save memory overhead
+	value byte
 }
