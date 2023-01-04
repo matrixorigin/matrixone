@@ -232,6 +232,7 @@ func (txn *Transaction) WriteBatch(
 	primaryIdx int, // pass -1 to indicate no primary key or disable primary key checking
 ) error {
 	txn.readOnly = false
+	bat.Cnt = 1
 	if typ == INSERT {
 		len := bat.Length()
 		vec := vector.New(types.New(types.T_Rowid, 0, 0, 0))
