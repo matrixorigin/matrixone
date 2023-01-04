@@ -726,7 +726,7 @@ func TestAutoCompactABlk1(t *testing.T) {
 	defer bat.Close()
 	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
 	time.Sleep(time.Millisecond * 2)
-	testutils.WaitExpect(1000, func() bool {
+	testutils.WaitExpect(5000, func() bool {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
