@@ -110,6 +110,7 @@ type Engine interface {
 	GetTAE(ctx context.Context) *db.DB
 
 	FlushTable(ctx context.Context, tenantID uint32, databaseId, tableId uint64, ts types.TS) error
+	ForceCheckpoint(ctx context.Context, ts types.TS) error
 }
 
 type TxnEngine interface {

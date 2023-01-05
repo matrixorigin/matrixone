@@ -1021,7 +1021,7 @@ func genBlockMetas(
 	rows [][]any,
 	columnLength int,
 	fs fileservice.FileService,
-	m *mpool.MPool) ([]BlockMeta, error) {
+	m *mpool.MPool, prefetch bool) ([]BlockMeta, error) {
 	blockInfos := catalog.GenBlockInfo(rows)
 	{
 		mp := make(map[uint64]catalog.BlockInfo) // block list
@@ -1050,6 +1050,9 @@ func genBlockMetas(
 	for i, blockInfo := range blockInfos {
 		zm, rows, err := fetchZonemapAndRowsFromBlockInfo(ctx, idxs, blockInfo, fs, m)
 		if err != nil {
+			if prefetch {
+				continue
+			}
 			return nil, err
 		}
 		metas[i] = BlockMeta{

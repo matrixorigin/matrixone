@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
@@ -233,4 +234,24 @@ func (e *txnEngine) Close() (err error) {
 
 func (e *txnEngine) Destroy() (err error) {
 	panic(moerr.NewNYINoCtx("Pls implement me!"))
+}
+
+func (e *txnEngine) ForceCheckpoint(ctx context.Context, ts types.TS) error {
+	e.impl.BGCheckpointRunner.DisableCheckpoint()
+	defer e.impl.BGCheckpointRunner.EnableCheckpoint()
+	e.impl.BGCheckpointRunner.CleanPenddingCheckpoint()
+	t0 := time.Now()
+	err := e.impl.BGCheckpointRunner.ForceFlush(ts, ctx)
+	logutil.Infof("[Force Checkpoint] flush takes %v", time.Since(t0))
+	if err != nil {
+		return err
+	}
+	err = e.impl.BGCheckpointRunner.ForceIncrementalCheckpoint(ts)
+	if err != nil {
+		return err
+	}
+	lsn := e.impl.BGCheckpointRunner.MaxLSNInRange(ts)
+	_, err = e.impl.Wal.RangeCheckpoint(1, lsn)
+	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
+	return err
 }
