@@ -32,20 +32,15 @@ type FunctionParameterWrapper[T types.FixedSizeT] interface {
 	GetSourceVector() *Vector
 
 	// GetValue return the Idx th value and if it's null or not.
+	// watch that, if str type, GetValue will return the []types.Varlena directly.
 	GetValue(idx uint64) (T, bool)
 
 	// GetStrValue return the Idx th string value and if it's null or not.
 	GetStrValue(idx uint64) ([]byte, bool)
 
-	// GetVarlena return the Idx th varlena directly but didn't consider the area.
-	// please use it carefully.
-	GetVarlena(idx uint64) (types.Varlena, bool)
-
 	// UnSafeGetAllValue return all the values.
+	// please use it carefully because we didn't check the null situation.
 	UnSafeGetAllValue() []T
-
-	// IsBin return the is bin of source vector.
-	IsBin() bool
 }
 
 var _ FunctionParameterWrapper[int64] = &FunctionParameterNormal[int64]{}
@@ -97,8 +92,8 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 		return &FunctionParameterScalar[types.Varlena]{
 			typ:          t,
 			sourceVector: v,
+			scalarValue:  cols[0],
 			scalarStr:    cols[0].GetByteSlice(v.area),
-			strValues:    cols[0],
 		}
 	}
 	if v.Nsp != nil && v.Nsp.Np != nil && v.Nsp.Np.Len() > 0 {
@@ -151,19 +146,8 @@ func (p *FunctionParameterNormal[T]) GetStrValue(idx uint64) (value []byte, isNu
 	return p.strValues[idx].GetByteSlice(p.area), false
 }
 
-func (p *FunctionParameterNormal[T]) GetVarlena(idx uint64) (value types.Varlena, isNull bool) {
-	if p.nullMap.Contains(idx) {
-		return value, true
-	}
-	return p.strValues[idx], false
-}
-
 func (p *FunctionParameterNormal[T]) UnSafeGetAllValue() []T {
 	return p.values
-}
-
-func (p *FunctionParameterNormal[T]) IsBin() bool {
-	return p.sourceVector.GetIsBin()
 }
 
 // FunctionParameterWithoutNull is a wrapper of normal vector but
@@ -192,16 +176,8 @@ func (p *FunctionParameterWithoutNull[T]) GetStrValue(idx uint64) ([]byte, bool)
 	return p.strValues[idx].GetByteSlice(p.area), false
 }
 
-func (p *FunctionParameterWithoutNull[T]) GetVarlena(idx uint64) (types.Varlena, bool) {
-	return p.strValues[idx], false
-}
-
 func (p *FunctionParameterWithoutNull[T]) UnSafeGetAllValue() []T {
 	return p.values
-}
-
-func (p *FunctionParameterWithoutNull[T]) IsBin() bool {
-	return p.sourceVector.GetIsBin()
 }
 
 // FunctionParameterScalar is a wrapper of scalar vector.
@@ -210,8 +186,6 @@ type FunctionParameterScalar[T types.FixedSizeT] struct {
 	sourceVector *Vector
 	scalarValue  T
 	scalarStr    []byte
-	// we still maintain this because some method will get it.
-	strValues types.Varlena
 }
 
 func (p *FunctionParameterScalar[T]) GetType() types.Type {
@@ -230,16 +204,8 @@ func (p *FunctionParameterScalar[T]) GetStrValue(_ uint64) ([]byte, bool) {
 	return p.scalarStr, false
 }
 
-func (p *FunctionParameterScalar[T]) GetVarlena(_ uint64) (types.Varlena, bool) {
-	return p.strValues, false
-}
-
 func (p *FunctionParameterScalar[T]) UnSafeGetAllValue() []T {
 	return []T{p.scalarValue}
-}
-
-func (p *FunctionParameterScalar[T]) IsBin() bool {
-	return p.sourceVector.GetIsBin()
 }
 
 // FunctionParameterScalarNull is a wrapper of scalar null vector.
@@ -264,16 +230,8 @@ func (p *FunctionParameterScalarNull[T]) GetStrValue(_ uint64) ([]byte, bool) {
 	return nil, true
 }
 
-func (p *FunctionParameterScalarNull[T]) GetVarlena(_ uint64) (value types.Varlena, isNull bool) {
-	return value, true
-}
-
 func (p *FunctionParameterScalarNull[T]) UnSafeGetAllValue() []T {
 	return nil
-}
-
-func (p *FunctionParameterScalarNull[T]) IsBin() bool {
-	return p.sourceVector.GetIsBin()
 }
 
 type FunctionResultWrapper interface {
