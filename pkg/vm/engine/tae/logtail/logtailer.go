@@ -27,6 +27,23 @@ import (
 	"go.uber.org/zap"
 )
 
+// Logtailer provides logtail for the specified table.
+type Logtailer interface {
+	// RangeLogtail returns logtail for all tables within the range (from, to].
+	RangeLogtail(
+		ctx context.Context, from, to timestamp.Timestamp,
+	) ([]logtail.TableLogtail, error)
+
+	// TableLogtail returns logtail for the specified table.
+	//
+	// NOTE: If table not exist, logtail.TableLogtail shouldn't be a simple zero value.
+	TableLogtail(
+		ctx context.Context, table api.TableID, from, to timestamp.Timestamp,
+	) (logtail.TableLogtail, error)
+}
+
+var _ Logtailer = (*LogtailerImpl)(nil)
+
 type LogtailerImpl struct {
 	ckpClient CheckpointClient
 	mgr       *Manager
@@ -44,8 +61,8 @@ func NewLogtailer(
 	}
 }
 
-// FetchLogtail returns full logtail for the specified table.
-func (l *LogtailerImpl) FetchLogtail(
+// TableLogtail returns logtail for the specified table.
+func (l *LogtailerImpl) TableLogtail(
 	ctx context.Context, table api.TableID, from, to timestamp.Timestamp,
 ) (logtail.TableLogtail, error) {
 	req := api.SyncLogTailReq{
@@ -65,8 +82,8 @@ func (l *LogtailerImpl) FetchLogtail(
 	return ret, nil
 }
 
-// RangeTotal returns logtail for all tables within range (from, to].
-func (l *LogtailerImpl) RangeTotal(
+// RangeLogtail returns logtail for all tables within the range (from, to].
+func (l *LogtailerImpl) RangeLogtail(
 	ctx context.Context, from, to timestamp.Timestamp,
 ) ([]logtail.TableLogtail, error) {
 	start := types.BuildTS(from.PhysicalTime, from.LogicalTime)

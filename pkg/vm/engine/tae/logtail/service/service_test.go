@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	taelogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/require"
 )
 
@@ -143,19 +144,13 @@ type logtailer struct {
 	tables []api.TableID
 }
 
-func mockLocktailer(tables ...api.TableID) Logtailer {
+func mockLocktailer(tables ...api.TableID) taelogtail.Logtailer {
 	return &logtailer{
 		tables: tables,
 	}
 }
 
-func (m *logtailer) TableTotal(
-	ctx context.Context, table api.TableID, end timestamp.Timestamp,
-) (logtail.TableLogtail, error) {
-	return mockLogtail(table), nil
-}
-
-func (m *logtailer) RangeTotal(
+func (m *logtailer) RangeLogtail(
 	ctx context.Context, from, to timestamp.Timestamp,
 ) ([]logtail.TableLogtail, error) {
 	tails := make([]logtail.TableLogtail, 0, len(m.tables))
@@ -165,7 +160,7 @@ func (m *logtailer) RangeTotal(
 	return tails, nil
 }
 
-func (m *logtailer) FetchLogtail(
+func (m *logtailer) TableLogtail(
 	ctx context.Context, table api.TableID, from, to timestamp.Timestamp,
 ) (logtail.TableLogtail, error) {
 	for _, t := range m.tables {

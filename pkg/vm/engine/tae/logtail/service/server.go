@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	taelogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 const (
@@ -142,7 +143,7 @@ type LogtailServer struct {
 	pubChan chan publishment
 	subChan chan subscription
 
-	logtail Logtailer
+	logtail taelogtail.Logtailer
 	clock   clock.Clock
 
 	rpc morpc.RPCServer
@@ -154,7 +155,7 @@ type LogtailServer struct {
 
 // NewLogtailServer initializes a server for logtail push model.
 func NewLogtailServer(
-	address string, logtail Logtailer, clock clock.Clock, opts ...ServerOption,
+	address string, logtail taelogtail.Logtailer, clock clock.Clock, opts ...ServerOption,
 ) (*LogtailServer, error) {
 	s := &LogtailServer{
 		ssmgr:      NewSessionManager(),
@@ -419,7 +420,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				to := s.waterline.Waterline()
 
 				// fetch total logtail for table
-				tail, err := s.logtail.FetchLogtail(sendCtx, table, from, to)
+				tail, err := s.logtail.TableLogtail(sendCtx, table, from, to)
 				if err != nil {
 					logger.Error("fail to fetch table total logtail", zap.Error(err), zap.Any("table", table))
 					if err := sub.session.SendErrorResponse(
@@ -497,7 +498,7 @@ func (s *LogtailServer) collector(ctx context.Context) {
 				tables := s.subscribed.ListTable()
 				wraps := make([]wrapLogtail, 0, len(tables))
 				for _, t := range tables {
-					tail, err := s.logtail.FetchLogtail(ctx, t.table, from, to)
+					tail, err := s.logtail.TableLogtail(ctx, t.table, from, to)
 					if err != nil {
 						logger.Error("fail to fetch additional logtail", zap.Error(err), zap.Any("table", t.table))
 						risk += 1
