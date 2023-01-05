@@ -12,7 +12,7 @@ name = "LOCAL"
 backend = "DISK"
 
 [[fileservice]]
-name = "S3"
+name = "SHARED"
 backend = "MEM"
 
 [[fileservice]]

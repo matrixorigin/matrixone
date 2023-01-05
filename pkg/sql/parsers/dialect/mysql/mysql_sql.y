@@ -4155,7 +4155,13 @@ create_function_stmt:
 func_name:
     ident
     {
-        $$ = tree.NewFuncName(tree.Identifier($1))
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        $$ = tree.NewFuncName(tree.Identifier($1), prefix)
+    }
+|   ident '.' ident
+    {
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1), ExplicitSchema: true}
+        $$ = tree.NewFuncName(tree.Identifier($3), prefix)
     }
 
 func_args_list_opt:
