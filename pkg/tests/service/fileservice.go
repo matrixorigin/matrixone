@@ -73,7 +73,7 @@ func (c *testCluster) buildFileServices() *fileServices {
 		cnServiceNum: cnServiceNum,
 		dnLocalFSs:   dnLocals,
 		cnLocalFSs:   cnLocals,
-		s3FS:         factory(c.opt.rootDataDir, defines.S3FileServiceName),
+		s3FS:         factory(c.opt.rootDataDir, defines.SharedFileServiceName),
 	}
 }
 

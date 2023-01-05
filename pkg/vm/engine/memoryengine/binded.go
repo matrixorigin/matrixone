@@ -77,3 +77,11 @@ func (b *BindedEngine) Nodes() (cnNodes engine.Nodes, err error) {
 func (b *BindedEngine) Rollback(ctx context.Context, _ client.TxnOperator) error {
 	return b.engine.Rollback(ctx, b.txnOp)
 }
+
+func (b *BindedEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
+	return b.engine.GetNameById(ctx, op, tableId)
+}
+
+func (b *BindedEngine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, rel engine.Relation, err error) {
+	return b.engine.GetRelationById(ctx, op, tableId)
+}

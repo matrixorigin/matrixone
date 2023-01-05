@@ -23,7 +23,7 @@ data-dir = "data dir"
 
 [[fileservice]]
 # s3 fileservice instance, used to store data.
-name = "s3"
+name = "SHARED"
 # use s3 as fileservice backend.
 backend = "S3"
 [fileservice.s3]

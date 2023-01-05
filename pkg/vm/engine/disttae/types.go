@@ -182,11 +182,13 @@ type database struct {
 type tableKey struct {
 	accountId  uint32
 	databaseId uint64
+	tableId    uint64
 	name       string
 }
 
 type databaseKey struct {
 	accountId uint32
+	id        uint64
 	name      string
 }
 

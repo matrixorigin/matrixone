@@ -111,7 +111,16 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 	if n != size {
-		return moerr.NewSizeNotMatchNoCtx(path.File)
+		sizeUnknown := false
+		for _, entry := range vector.Entries {
+			if entry.Size < 0 {
+				sizeUnknown = true
+				break
+			}
+		}
+		if !sizeUnknown {
+			return moerr.NewSizeNotMatchNoCtx(path.File)
+		}
 	}
 	if err := f.Close(); err != nil {
 		return err
