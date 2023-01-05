@@ -50,6 +50,20 @@ test02    CREATE TABLE `test02` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL\n
 show create table test04;
 Table    Create Table
 test04    CREATE TABLE `test04` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\n`c` VARCHAR(10) DEFAULT NULL,\nUNIQUE KEY`a`(`a`)\n) CLUSTER BY (`b`, `c`, `a`)
+desc test01;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT    YES        NULL
+b    INT    YES        NULL
+desc test02;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT    YES        NULL
+b    INT    YES        NULL
+desc test04;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT    YES        NULL
+b    INT    YES        NULL
+c    VARCHAR(10)    YES        NULL
+__mo_cbkey_001b001c001a    VARCHAR(65535)    YES        NULL
 drop table test01;
 drop table test02;
 drop table test04;
