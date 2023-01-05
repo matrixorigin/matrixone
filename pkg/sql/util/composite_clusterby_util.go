@@ -15,6 +15,7 @@
 package util
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"strconv"
 
 	"github.com/fagongzi/util/format"
@@ -71,7 +72,7 @@ func FillCompositeClusterByBatch(bat *batch.Batch, cbName string, proc *process.
 		v := cCBVecMap[name]
 		vs = append(vs, v)
 	}
-	vec, _ := serialWithCompacted(vs, proc)
+	vec, _ := multi.Serial(vs, proc)
 	bat.Attrs = append(bat.Attrs, cbName)
 	bat.Vecs = append(bat.Vecs, vec)
 }

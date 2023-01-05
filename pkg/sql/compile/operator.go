@@ -465,6 +465,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 			CPkeyColDef:        updateCtx.CompositePkey,
 			IsIndexTableUpdate: updateCtx.IsIndexTableUpdate,
 			IndexParts:         updateCtx.IndexParts,
+			ClusterByDef:       updateCtx.ClusterByDef,
 		}
 
 		if !updateCtx.IsIndexTableUpdate {
