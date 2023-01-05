@@ -398,7 +398,6 @@ message TableDef {
 			PartitionInfo partition		= 3;
 			UniqueIndexDef uIdx			= 4;
 			SecondaryIndexDef sIdx		= 5;
-			ClusterByDef cb				= 6;
 		}
 	}
 

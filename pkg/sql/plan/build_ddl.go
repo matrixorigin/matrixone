@@ -628,14 +628,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 			colMap[clusterByColName] = colDef
 		}
-
-		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Cb{
-				Cb: &plan.ClusterByDef{
-					Name: clusterByColName,
-				},
-			},
-		})
+		createTable.TableDef.ClusterBy = &plan.ClusterByDef{
+			Name: clusterByColName,
+		}
 	}
 
 	// check index invalid on the type

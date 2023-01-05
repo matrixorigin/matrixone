@@ -186,7 +186,22 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	createStr += ")"
 
-	var clusterby string
+	if tableDef.ClusterBy != nil {
+		clusterby := " CLUSTER BY ("
+		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
+			for i, cbName := range cbNames {
+				if i != 0 {
+					clusterby += fmt.Sprintf(", `%s`", cbName)
+				} else {
+					clusterby += fmt.Sprintf("`%s`", cbName)
+				}
+			}
+			clusterby += ")"
+		}
+		createStr += clusterby
+	}
+
 	var comment string
 	var partition string
 	for _, def := range tableDef.Defs {
@@ -203,23 +218,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 				partition = ` ` + partDef.Partition.PartitionMsg
 			}
 		}
-
-		if cbDef, ok := def.Def.(*plan.TableDef_DefType_Cb); ok {
-			clusterby = " CLUSTER BY ("
-			if util.JudgeIsCompositeClusterByColumn(cbDef.Cb.Name) {
-				cbNames := util.SplitCompositeClusterByColumnName(cbDef.Cb.Name)
-				for i, cbName := range cbNames {
-					if i != 0 {
-						clusterby += fmt.Sprintf(", `%s`", cbName)
-					} else {
-						clusterby += fmt.Sprintf("`%s`", cbName)
-					}
-				}
-				clusterby += ")"
-			}
-		}
 	}
-	createStr += clusterby
 	createStr += comment
 	createStr += partition
 
