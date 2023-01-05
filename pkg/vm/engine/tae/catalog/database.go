@@ -21,7 +21,6 @@ import (
 	"io"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -192,7 +191,7 @@ func (e *DBEntry) GetFullName() string {
 	return e.fullName
 }
 func (e *DBEntry) GetCompatibility() []byte {
-	modeJson, err := types.ParseStringToByteJson(catalog.MYSQL_COMPATBILITY_MODE_DEFAULT_STR)
+	modeJson, err := types.ParseStringToByteJson(pkgcatalog.MYSQL_COMPATBILITY_MODE_DEFAULT_STR)
 	if err != nil {
 		return nil
 	}

@@ -394,6 +394,16 @@ func genCreateDatabaseTuple(
 		if err := bat.Vecs[idx].Append(accountId, false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_DATABASE_COMPATBILITY_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) //mysql_compatbility_mode
+		modeJson, err := types.ParseStringToByteJson(catalog.MYSQL_COMPATBILITY_MODE_DEFAULT_STR)
+		if err != nil {
+			return nil, err
+		}
+		modeJsonBytes, _ := modeJson.Marshal()
+		if err := bat.Vecs[idx].Append([]byte(modeJsonBytes), false, m); err != nil {
+			return nil, err
+		}
 	}
 	return bat, nil
 }
