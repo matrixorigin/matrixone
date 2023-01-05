@@ -83,8 +83,9 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) {
 }
 
 func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
-	ts timestamp.Timestamp) []string {
+	ts timestamp.Timestamp) ([]string, []uint64) {
 	var rs []string
+	var rids []uint64
 
 	key := &TableItem{
 		DatabaseId: databaseId,
@@ -104,11 +105,12 @@ func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 			mp[item.Name] = 0
 			if !item.deleted {
 				rs = append(rs, item.Name)
+				rids = append(rids, item.Id)
 			}
 		}
 		return true
 	})
-	return rs
+	return rs, rids
 }
 
 func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []string {

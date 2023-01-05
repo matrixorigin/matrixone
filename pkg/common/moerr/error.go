@@ -118,6 +118,8 @@ const (
 	ErrDragonboatShardNotFound      uint16 = 20437
 	ErrDragonboatOtherSystemError   uint16 = 20438
 	ErrDropNonExistsDB              uint16 = 20439
+	ErrFunctionAlreadyExists        uint16 = 20440
+	ErrDropNonExistsFunction        uint16 = 20441
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -167,6 +169,10 @@ const (
 	ErrAppendableBlockNotFound   uint16 = 20625
 	ErrTAEDebug                  uint16 = 20626
 	ErrDuplicateKey              uint16 = 20626
+
+	// Group 7: lock service
+	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
+	ErrDeadLockDetected uint16 = 20701
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -238,6 +244,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrNotLeaseHolder:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not lease holder, current lease holder ID %d"},
 	ErrDBAlreadyExists:              {ER_DB_CREATE_EXISTS, []string{MySQLDefaultSqlState}, "database %s already exists"},
 	ErrTableAlreadyExists:           {ER_TABLE_EXISTS_ERROR, []string{MySQLDefaultSqlState}, "table %s already exists"},
+	ErrFunctionAlreadyExists:        {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "function %s already exists"},
+	ErrDropNonExistsFunction:        {ER_CANT_FIND_UDF, []string{MySQLDefaultSqlState}, "function %s doesn't exist"},
 	ErrNoService:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "service %s not found"},
 	ErrDupServiceName:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicate service name %s"},
 	ErrWrongService:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "wrong service, expecting %s, got %s"},
@@ -292,6 +300,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrAppendableSegmentNotFound: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable segment not found"},
 	ErrAppendableBlockNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable block not found"},
 	ErrDuplicateKey:              {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
+
+	// Group 7: lock service
+	ErrDeadLockDetected: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -871,6 +882,10 @@ func NewAppendableSegmentNotFound(ctx context.Context) *Error {
 
 func NewAppendableBlockNotFound(ctx context.Context) *Error {
 	return newError(ctx, ErrAppendableBlockNotFound)
+}
+
+func NewDeadLockDetected(ctx context.Context) *Error {
+	return newError(ctx, ErrDeadLockDetected)
 }
 
 var contextFunc atomic.Value
