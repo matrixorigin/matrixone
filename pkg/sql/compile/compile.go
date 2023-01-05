@@ -306,7 +306,6 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	rs := c.newMergeScope(ss)
 	updateScopesLastFlag([]*Scope{rs})
-	c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 	switch qry.StmtType {
 	case plan.Query_DELETE:
 		rs.Magic = Deletion
@@ -1343,7 +1342,8 @@ func (c *Compile) fillAnalyzeInfo() {
 		c.anal.qry.Nodes[i].AnalyzeInfo.MemorySize = atomic.LoadInt64(&anal.MemorySize)
 		c.anal.qry.Nodes[i].AnalyzeInfo.WaitTimeConsumed = atomic.LoadInt64(&anal.WaitTimeConsumed)
 		c.anal.qry.Nodes[i].AnalyzeInfo.DiskIO = atomic.LoadInt64(&anal.DiskIO)
-		c.anal.qry.Nodes[i].AnalyzeInfo.S3IO = atomic.LoadInt64(&anal.S3IO)
+		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOByte = atomic.LoadInt64(&anal.S3IOByte)
+		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOCount = atomic.LoadInt64(&anal.S3IOCount)
 		c.anal.qry.Nodes[i].AnalyzeInfo.NetworkIO = atomic.LoadInt64(&anal.NetworkIO)
 	}
 }
