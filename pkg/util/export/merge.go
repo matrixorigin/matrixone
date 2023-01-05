@@ -436,11 +436,11 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 			s.reader = nil
 			s.raw.Close()
 			s.raw = nil
-			s.logger.Debug("ContentReader.readerClose", logutil.PathField(s.path), zap.Int("rows", cnt))
+			s.logger.Debug("ContentReader.ReadLine.EOF", logutil.PathField(s.path), zap.Int("rows", cnt))
 		}
 		s.idx = 0
 		s.length = cnt
-		s.logger.Debug("ContentReader.read", logutil.PathField(s.path), zap.Int("rows", cnt),
+		s.logger.Debug("ContentReader.ReadLine", logutil.PathField(s.path), zap.Int("rows", cnt),
 			zap.Bool("SupportedCPU", simdcsv.SupportedCPU()),
 		)
 	}
@@ -448,7 +448,7 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 		idx := s.idx
 		s.idx++
 		if s.content == nil || len(s.content) == 0 {
-			s.logger.Error("ContentReader.read",
+			s.logger.Error("ContentReader.ReadLine.nil",
 				logutil.PathField(s.path),
 				zap.Bool("nil", s.content == nil),
 				zap.Int("cached", len(s.content)),
