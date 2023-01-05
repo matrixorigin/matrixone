@@ -418,6 +418,11 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 		s.content, cnt, err = s.reader.Read(BatchReadRows, s.ctx, s.content)
 		if err != nil {
 			return nil, err
+		} else if s.content == nil && !simdcsv.SupportedCPU() {
+			s.logger.Warn("ContentReader.ReadLine.Done", logutil.PathField(s.path),
+				zap.Bool("nil", s.content == nil),
+			)
+			return nil, moerr.NewInternalError(s.ctx, "read files meet context Done")
 		}
 		if simdcsv.SupportedCPU() && len(s.content) != BatchReadRows {
 			err := moerr.NewInternalError(s.ctx, "read %s file %d rows, but only cache %d rows", s.path, cnt, len(s.content))
