@@ -88,8 +88,7 @@ func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 		}
 		idx = catalog.MO_DATABASE_COMPATBILITY_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) //mysql_compatbility_mode
-		modeStr := "{" + "\"" + "transaction_isolation" + "\"" + ":" + "\"" + "REPEATABLE-READ" + "\"" + "," + "\"" + "lower_case_table_names" + "\"" + ":" + "0" + "}"
-		modeJson, err := types.ParseStringToByteJson(modeStr)
+		modeJson, err := types.ParseStringToByteJson(catalog.MYSQL_COMPATBILITY_MODE_DEFAULT_STR)
 		if err != nil {
 			return nil, err
 		}

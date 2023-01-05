@@ -198,6 +198,14 @@ const (
 	BLOCKMETA_SEGID_IDX      = 6
 )
 
+const (
+	QUOTE = "\""
+)
+
+const (
+	MYSQL_COMPATBILITY_MODE_DEFAULT_STR = "{" + QUOTE + "transaction_isolation" + QUOTE + ":" + QUOTE + "REPEATABLE-READ" + QUOTE + "," + QUOTE + "lower_case_table_names" + QUOTE + ":" + "0" + "}"
+)
+
 type BlockInfo struct {
 	BlockID    uint64
 	EntryState bool
