@@ -4351,8 +4351,10 @@ func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.U
 			jsonBytes = buffer.Bytes()
 		}
 		// data transform Global to json
-		buffer.Reset()
 		if len(marshalPlan.Steps) > 0 {
+			buffer := &bytes.Buffer{}
+			encoder := json.NewEncoder(buffer)
+			encoder.SetEscapeHTML(false)
 			global := marshalPlan.Steps[0].GraphData.Global
 			err = encoder.Encode(&global)
 			if err != nil {
