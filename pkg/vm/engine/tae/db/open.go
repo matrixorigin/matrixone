@@ -151,8 +151,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
-	calibrationOp := newCalibrationOp(db)
-	scanner.RegisterOp(calibrationOp)
+	mergeOp := newMergeTaskBuiler(db)
+	scanner.RegisterOp(mergeOp)
 	db.Wal.Start()
 	db.BGCheckpointRunner.Start()
 

@@ -169,11 +169,11 @@ cast(col5 as tinyint unsigned)
 255
 insert into t8(col5) values ('-1');
 select cast(col5 as tinyint unsigned) from t8;
-invalid argument cast to uint, bad value -1
+invalid argument cast to uint8, bad value -1
 delete from t8 where col5 is not NULL;
 insert into t8(col5) values ('256');
 select cast(col5 as tinyint unsigned) from t8;
-Data truncation: data out of range: data type uint, value '256'
+Data truncation: data out of range: data type uint8, value '256'
 delete from t8 where col5 is not NULL;
 insert into t8(col6) values ('0');
 insert into t8(col6) values ('65535');
@@ -187,11 +187,11 @@ cast(col6 as smallint unsigned)
 65535
 insert into t8(col6) values ('-1');
 select cast(col6 as smallint unsigned) from t8;
-invalid argument cast to uint, bad value -1
+invalid argument cast to uint16, bad value -1
 delete from t8 where col6 is not NULL;
 insert into t8(col6) values ('65636');
 select cast(col6 as smallint unsigned) from t8;
-Data truncation: data out of range: data type uint, value '65636'
+Data truncation: data out of range: data type uint16, value '65636'
 delete from t8 where col6 is not NULL;
 insert into t8(col7) values ('0');
 insert into t8(col7) values ('4294967295');
@@ -205,11 +205,11 @@ cast(col7 as int unsigned)
 4294967295
 insert into t8(col7) values ('-1');
 select cast(col7 as int unsigned) from t8;
-invalid argument cast to uint, bad value -1
+invalid argument cast to uint32, bad value -1
 delete from t8 where col7 is not NULL;
 insert into t8(col7) values ('4294967296');
 select cast(col7 as int unsigned) from t8;
-Data truncation: data out of range: data type uint, value '4294967296'
+Data truncation: data out of range: data type uint32, value '4294967296'
 delete from t8 where col7 is not NULL;
 insert into t8(col8) values ('0');
 insert into t8(col8) values ('18446744073709551615');
@@ -221,11 +221,11 @@ cast(col8 as bigint unsigned)
 18446744073709551615
 insert into t8(col8) values ('-1');
 select cast(col8 as bigint unsigned) from t8;
-invalid argument cast to uint, bad value -1
+invalid argument cast to uint64, bad value -1
 delete from t8 where col8 is not NULL;
 insert into t8(col8) values ('18446744073709551616');
 select cast(col8 as bigint unsigned) from t8;
-Data truncation: data out of range: data type uint, value '18446744073709551616'
+Data truncation: data out of range: data type uint64, value '18446744073709551616'
 delete from t8 where col8 is not NULL;
 insert into t8(col9) values ('1.234567890434546457475756856');
 insert into t8(col9) values ('111.222333344445556667777888899999000008998');

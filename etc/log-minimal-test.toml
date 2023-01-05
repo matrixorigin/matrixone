@@ -33,7 +33,7 @@ backend = "DISK"
 data-dir = "store"
 
 [[fileservice]]
-name = "s3"
+name = "SHARED"
 backend = "DISK"
 data-dir = "store"
 
