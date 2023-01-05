@@ -602,7 +602,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 
 		clusterByColName := clusterByKeys[0]
-		if lenClusterBy == 0 {
+		if lenClusterBy == 1 {
 			for _, col := range createTable.TableDef.Cols {
 				if col.Name == clusterByColName {
 					col.ClusterBy = true
