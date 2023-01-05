@@ -16,6 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -78,6 +79,12 @@ var (
 
 func (builder *QueryBuilder) buildMetaScan(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
 	var err error
+	val, err := builder.compCtx.ResolveVariable("save_query_result", true, true)
+	if err == nil {
+		if v, _ := val.(int8); v == 0 {
+			return 0, moerr.NewNoConfig(builder.GetContext(), "save query result")
+		}
+	}
 	exprs[0], err = appendCastBeforeExpr(builder.GetContext(), exprs[0], &plan.Type{
 		Id:          int32(types.T_uuid),
 		NotNullable: true,
