@@ -597,6 +597,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		return nil, err
 	}
 	fileList, err = external.FliterFileList(n, c.proc, fileList)
+	fmt.Println("wangjian sql3 is", fileList, err)
 	if err != nil {
 		return nil, err
 	}

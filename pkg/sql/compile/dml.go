@@ -248,6 +248,14 @@ func writeBatch(ctx context.Context,
 	}
 	batch.Reorder(bat, p.OrderAttrs)
 
+	//加个判断，表中没有自增列不需走下面函数
+	/*if flag {
+		
+	}*/
+	for i := 0; i < len(p.OtherCols); i++ {
+		fmt.Println("wangjian sql2 is", p.OtherCols[i])
+	}
+
 	//update the auto increment table
 	if err = colexec.UpdateInsertValueBatch(c.e, ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
 		return err

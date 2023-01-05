@@ -256,6 +256,7 @@ func getCurrentIndex(ctx context.Context, param *AutoIncrParam, colName string, 
 		return 0, 0, err
 	}
 
+	// 存入表达式
 	ret, err := rel.Ranges(param.ctx, nil)
 	if err != nil {
 		return 0, 0, err
@@ -320,6 +321,8 @@ func updateAutoIncrTable(ctx context.Context, param *AutoIncrParam, curNum uint6
 	if err != nil {
 		return err
 	}
+
+	// 这里不需要重复读，直接根据前面的rowID进行删除
 	bat, _ := GetDeleteBatch(rel, param.ctx, name, mp)
 	if bat == nil {
 		return moerr.NewInternalError(ctx, "the deleted batch is nil")
