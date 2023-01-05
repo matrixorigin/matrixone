@@ -39,6 +39,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/simdcsv"
 )
 
 func init() {
@@ -288,7 +289,7 @@ func TestNewMerge(t *testing.T) {
 }
 
 func TestNewMergeWithContextDone(t *testing.T) {
-	if !simdcsv.SupportedCPU() {
+	if simdcsv.SupportedCPU() {
 		t.Skip()
 	}
 	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, t.TempDir())
