@@ -17,6 +17,8 @@ package tree
 type FunctionArg interface {
 	NodeFormatter
 	Expr
+	GetName(ctx *FmtCtx) string
+	GetType(ctx *FmtCtx) string
 }
 
 type FunctionArgImpl struct {
@@ -49,12 +51,22 @@ func (node *FunctionArgDecl) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *FunctionArgDecl) GetName(ctx *FmtCtx) string {
+	node.Name.Format(ctx)
+	return ctx.String()
+}
+
+func (node *FunctionArgDecl) GetType(ctx *FmtCtx) string {
+	node.Type.(*T).InternalType.Format(ctx)
+	return ctx.String()
+}
+
 func (node *ReturnType) Format(ctx *FmtCtx) {
 	node.Type.(*T).InternalType.Format(ctx)
 }
 
 type FunctionName struct {
-	Name Identifier
+	Name objName
 }
 
 type CreateFunction struct {
@@ -73,7 +85,19 @@ type DropFunction struct {
 }
 
 func (node *FunctionName) Format(ctx *FmtCtx) {
-	node.Name.Format(ctx)
+	if node.Name.ExplicitCatalog {
+		ctx.WriteString(string(node.Name.CatalogName))
+		ctx.WriteByte('.')
+	}
+	if node.Name.ExplicitSchema {
+		ctx.WriteString(string(node.Name.SchemaName))
+		ctx.WriteByte('.')
+	}
+	ctx.WriteString(string(node.Name.ObjectName))
+}
+
+func (node *FunctionName) HasNoNameQualifier() bool {
+	return !node.Name.ExplicitCatalog && !node.Name.ExplicitSchema
 }
 
 func (node *CreateFunction) Format(ctx *FmtCtx) {
@@ -129,9 +153,12 @@ func NewFunctionArgDecl(n *UnresolvedName, t ResolvableTypeReference, d Expr) *F
 	}
 }
 
-func NewFuncName(name Identifier) *FunctionName {
+func NewFuncName(name Identifier, prefix ObjectNamePrefix) *FunctionName {
 	return &FunctionName{
-		Name: name,
+		Name: objName{
+			ObjectName:       name,
+			ObjectNamePrefix: prefix,
+		},
 	}
 }
 
