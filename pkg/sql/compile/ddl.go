@@ -659,6 +659,12 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 	if len(c.Cts) > 0 {
 		exeDefs = append(exeDefs, c)
 	}
+
+	if tableDef.ClusterBy != nil {
+		exeDefs = append(exeDefs, &engine.ClusterByDef{
+			Name: tableDef.ClusterBy.Name,
+		})
+	}
 	return exeDefs, nil
 }
 

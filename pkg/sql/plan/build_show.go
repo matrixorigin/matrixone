@@ -189,6 +189,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	if tableDef.ClusterBy != nil {
 		clusterby := " CLUSTER BY ("
 		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+			//multi column clusterby
 			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 			for i, cbName := range cbNames {
 				if i != 0 {
@@ -197,8 +198,11 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 					clusterby += fmt.Sprintf("`%s`", cbName)
 				}
 			}
-			clusterby += ")"
+		} else {
+			//single column cluster by
+			clusterby += fmt.Sprintf("`%s`", tableDef.ClusterBy.Name)
 		}
+		clusterby += ")"
 		createStr += clusterby
 	}
 
