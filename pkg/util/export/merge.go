@@ -419,7 +419,7 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(s.content) != BatchReadRows {
+		if simdcsv.SupportedCPU() && len(s.content) != BatchReadRows {
 			err := moerr.NewInternalError(s.ctx, "read %s file %d rows, but only cache %d rows", s.path, cnt, len(s.content))
 			if panicWhileRead.Load() {
 				panic(err)
@@ -435,7 +435,9 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 		}
 		s.idx = 0
 		s.length = cnt
-		s.logger.Debug("ContentReader.read", logutil.PathField(s.path), zap.Int("rows", cnt))
+		s.logger.Debug("ContentReader.read", logutil.PathField(s.path), zap.Int("rows", cnt),
+			zap.Bool("SupportedCPU", simdcsv.SupportedCPU()),
+		)
 	}
 	if s.idx < s.length {
 		idx := s.idx
@@ -446,6 +448,7 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 				zap.Bool("nil", s.content == nil),
 				zap.Int("cached", len(s.content)),
 				zap.Int("idx", idx),
+				zap.Bool("SupportedCPU", simdcsv.SupportedCPU()),
 			)
 		}
 		return s.content[idx], nil
