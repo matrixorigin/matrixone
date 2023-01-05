@@ -138,25 +138,51 @@ func (p *MetricLogPath) Timestamp() []string {
 	return p.timestamps
 }
 
-var _ PathBuilder = (*AccountDatePathBuilder)(nil)
-
-type AccountDatePathBuilder struct{}
-
-func NewAccountDatePathBuilder() *AccountDatePathBuilder {
-	return &AccountDatePathBuilder{}
+type PathBuilderConfig struct {
+	withDatabase bool
 }
 
-func (b *AccountDatePathBuilder) Build(account string, typ MergeLogType, ts time.Time, db string, name string) string {
+type PathBuilderOption func(*PathBuilderConfig)
+
+func (opt PathBuilderOption) Apply(cfg *PathBuilderConfig) {
+	opt(cfg)
+}
+
+func WithDatabase(with bool) PathBuilderOption {
+	return PathBuilderOption(func(cfg *PathBuilderConfig) {
+		cfg.withDatabase = with
+	})
+}
+
+var _ PathBuilder = (*AccountDatePathBuilder)(nil)
+
+type AccountDatePathBuilder struct {
+	PathBuilderConfig
+}
+
+func NewAccountDatePathBuilder(opts ...PathBuilderOption) *AccountDatePathBuilder {
+	builder := &AccountDatePathBuilder{}
+	for _, opt := range opts {
+		opt.Apply(&builder.PathBuilderConfig)
+	}
+	return builder
+}
+
+func (b *AccountDatePathBuilder) Build(account string, typ MergeLogType, ts time.Time, db string, tblName string) string {
+	identify := tblName
+	if b.withDatabase {
+		identify = fmt.Sprintf("%s.%s", db, tblName)
+	}
 	if ts != ETLParamTSAll {
 		return path.Join(account,
 			typ.String(),
 			fmt.Sprintf("%d", ts.Year()),
 			fmt.Sprintf("%02d", ts.Month()),
 			fmt.Sprintf("%02d", ts.Day()),
-			name,
+			identify,
 		)
 	} else {
-		return path.Join(account, typ.String(), "*/*/*" /*All datetime*/, name)
+		return path.Join(account, typ.String(), "*/*/*" /*All datetime*/, identify)
 	}
 }
 

@@ -75,4 +75,11 @@ type Handler interface {
 		req db.FlushTable,
 		resp *apipb.SyncLogTailResp,
 	) error
+
+	HandleForceCheckpoint(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req db.FlushTable,
+		resp *apipb.SyncLogTailResp,
+	) error
 }

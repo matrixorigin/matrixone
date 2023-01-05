@@ -29,7 +29,6 @@ import (
 type TableMVCCNode struct {
 	*EntryMVCCNode
 	*txnbase.TxnMVCCNode
-	IsUpdate          bool   // if true, mo_columns won't send to cn
 	SchemaConstraints string // store as immutable, bytes actually
 }
 
@@ -48,7 +47,6 @@ func (e *TableMVCCNode) CloneAll() txnif.MVCCNode {
 	node := &TableMVCCNode{}
 	node.EntryMVCCNode = e.EntryMVCCNode.Clone()
 	node.TxnMVCCNode = e.TxnMVCCNode.CloneAll()
-	node.IsUpdate = e.IsUpdate
 	node.SchemaConstraints = e.SchemaConstraints
 	return node
 }
@@ -57,7 +55,6 @@ func (e *TableMVCCNode) CloneData() txnif.MVCCNode {
 	return &TableMVCCNode{
 		EntryMVCCNode:     e.EntryMVCCNode.CloneData(),
 		TxnMVCCNode:       &txnbase.TxnMVCCNode{},
-		IsUpdate:          e.IsUpdate,
 		SchemaConstraints: e.SchemaConstraints,
 	}
 }
@@ -75,7 +72,6 @@ func (e *TableMVCCNode) Update(vun txnif.MVCCNode) {
 	un := vun.(*TableMVCCNode)
 	e.CreatedAt = un.CreatedAt
 	e.DeletedAt = un.DeletedAt
-	e.IsUpdate = un.IsUpdate
 	e.SchemaConstraints = un.SchemaConstraints
 }
 
@@ -118,10 +114,6 @@ func (e *TableMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
-	if err = binary.Write(w, binary.BigEndian, e.IsUpdate); err != nil {
-		return
-	}
-	n += 1
 	condata := []byte(e.SchemaConstraints)
 	l := uint32(len(condata))
 	if err = binary.Write(w, binary.BigEndian, l); err != nil {
@@ -149,10 +141,6 @@ func (e *TableMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += sn
 
-	if err = binary.Read(r, binary.BigEndian, &e.IsUpdate); err != nil {
-		return
-	}
-	n += 1
 	length := uint32(0)
 	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
 		return

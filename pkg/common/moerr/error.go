@@ -118,6 +118,8 @@ const (
 	ErrDragonboatShardNotFound      uint16 = 20437
 	ErrDragonboatOtherSystemError   uint16 = 20438
 	ErrDropNonExistsDB              uint16 = 20439
+	ErrFunctionAlreadyExists        uint16 = 20440
+	ErrDropNonExistsFunction        uint16 = 20441
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -242,6 +244,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrNotLeaseHolder:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not lease holder, current lease holder ID %d"},
 	ErrDBAlreadyExists:              {ER_DB_CREATE_EXISTS, []string{MySQLDefaultSqlState}, "database %s already exists"},
 	ErrTableAlreadyExists:           {ER_TABLE_EXISTS_ERROR, []string{MySQLDefaultSqlState}, "table %s already exists"},
+	ErrFunctionAlreadyExists:        {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "function %s already exists"},
+	ErrDropNonExistsFunction:        {ER_CANT_FIND_UDF, []string{MySQLDefaultSqlState}, "function %s doesn't exist"},
 	ErrNoService:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "service %s not found"},
 	ErrDupServiceName:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicate service name %s"},
 	ErrWrongService:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "wrong service, expecting %s, got %s"},

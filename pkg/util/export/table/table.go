@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
+const ExternalFilePath = "__mo_filepath"
+
 type CsvOptions struct {
 	FieldTerminator rune // like: ','
 	EncloseRune     rune // like: '"'
@@ -86,6 +88,8 @@ type Table struct {
 	TableOptions TableOptions
 	// SupportUserAccess default false. if true, user account can access.
 	SupportUserAccess bool
+	// SupportConstAccess default false. if true, use Table.Account
+	SupportConstAccess bool
 }
 
 func (tbl *Table) Clone() *Table {
@@ -218,6 +222,9 @@ func (tbl *View) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 			sb.WriteString(fmt.Sprintf(" as `%s`", col.Alias))
 		}
 	}
+	if tbl.OriginTable.Engine == ExternalTableEngine {
+		sb.WriteString(fmt.Sprintf(", `%s`", ExternalFilePath))
+	}
 	sb.WriteString(fmt.Sprintf(" from `%s`.`%s` where ", tbl.OriginTable.Database, tbl.OriginTable.Table))
 	sb.WriteString(tbl.Condition.String())
 
@@ -271,6 +278,9 @@ func (r *Row) Reset() {
 func (r *Row) GetAccount() string {
 	if r.Table.PathBuilder.SupportAccountStrategy() && r.AccountIdx >= 0 {
 		return r.Columns[r.AccountIdx]
+	}
+	if r.Table.SupportConstAccess && len(r.Table.Account) > 0 {
+		return r.Table.Account
 	}
 	return "sys"
 }

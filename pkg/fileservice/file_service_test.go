@@ -18,12 +18,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/csv"
 	"encoding/gob"
 	"fmt"
 	"io"
 	mrand "math/rand"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -683,6 +685,70 @@ func testFileService(
 		assert.Nil(t, err)
 		assert.Equal(t, 1, len(entries))
 		assert.Equal(t, "to", entries[0].Name)
+	})
+
+	t.Run("streaming write", func(t *testing.T) {
+		ctx := context.Background()
+		fs := newFS(fsName)
+
+		reader, writer := io.Pipe()
+		n := 8
+
+		go func() {
+			csvWriter := csv.NewWriter(writer)
+			for i := 0; i < n; i++ {
+				err := csvWriter.Write([]string{"foo", strconv.Itoa(i)})
+				if err != nil {
+					writer.CloseWithError(err)
+					return
+				}
+			}
+			csvWriter.Flush()
+			if err := csvWriter.Error(); err != nil {
+				writer.CloseWithError(err)
+				return
+			}
+			writer.Close()
+		}()
+
+		vec := IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					ReaderForWrite: reader,
+					Size:           -1, // must set to -1
+				},
+			},
+		}
+
+		// write
+		err := fs.Write(ctx, vec)
+		assert.Nil(t, err)
+
+		// read
+		vec = IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: -1,
+				},
+			},
+		}
+		err = fs.Read(ctx, &vec)
+		assert.Nil(t, err)
+
+		// validate
+		buf := new(bytes.Buffer)
+		csvWriter := csv.NewWriter(buf)
+		for i := 0; i < n; i++ {
+			err := csvWriter.Write([]string{"foo", strconv.Itoa(i)})
+			assert.Nil(t, err)
+		}
+		csvWriter.Flush()
+		err = csvWriter.Error()
+		assert.Nil(t, err)
+		assert.Equal(t, buf.Bytes(), vec.Entries[0].Data)
+
 	})
 
 }

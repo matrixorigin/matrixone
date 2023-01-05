@@ -154,6 +154,12 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 	// create all services
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
 	for _, config := range c.FileServices {
+
+		// for old config compatibility
+		if strings.EqualFold(config.Name, "s3") {
+			config.Name = defines.SharedFileServiceName
+		}
+
 		service, err := fileservice.NewFileService(config)
 		if err != nil {
 			return nil, err
@@ -182,8 +188,8 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 		return nil, err
 	}
 
-	// ensure s3 exists
-	_, err = fileservice.Get[fileservice.FileService](fs, defines.S3FileServiceName)
+	// ensure shared exists
+	_, err = fileservice.Get[fileservice.FileService](fs, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}
