@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -57,8 +56,8 @@ func SplitCompositeClusterByColumnName(s string) []string {
 	return names
 }
 
-func FillCompositeClusterByBatch(bat *batch.Batch, p *plan.ColDef, proc *process.Process) error {
-	names := SplitCompositeClusterByColumnName(p.Name)
+func FillCompositeClusterByBatch(bat *batch.Batch, cbName string, proc *process.Process) {
+	names := SplitCompositeClusterByColumnName(cbName)
 	cCBVecMap := make(map[string]*vector.Vector)
 	for num, attrName := range bat.Attrs {
 		for _, name := range names {
@@ -72,9 +71,7 @@ func FillCompositeClusterByBatch(bat *batch.Batch, p *plan.ColDef, proc *process
 		v := cCBVecMap[name]
 		vs = append(vs, v)
 	}
-
 	vec, _ := serialWithCompacted(vs, proc)
-	bat.Attrs = append(bat.Attrs, p.Name)
+	bat.Attrs = append(bat.Attrs, cbName)
 	bat.Vecs = append(bat.Vecs, vec)
-	return nil
 }

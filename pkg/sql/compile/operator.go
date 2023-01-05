@@ -426,6 +426,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		UniqueIndexDef:       uDef,
 		SecondaryIndexTables: secondaryIndexTables,
 		SecondaryIndexDef:    sDef,
+		ClusterByDef:         n.TableDef.ClusterBy,
 		ClusterTable:         n.GetClusterTable(),
 	}, nil
 }
