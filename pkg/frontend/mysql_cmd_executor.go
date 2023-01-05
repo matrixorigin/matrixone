@@ -316,7 +316,7 @@ type outputQueue struct {
 	mrs          *MysqlResultSet
 	rowIdx       uint64
 	length       uint64
-	ep           *tree.ExportParam
+	ep           *ExportParam
 	lineStr      []byte
 	showStmtType ShowStatementType
 
@@ -328,7 +328,7 @@ func (o *outputQueue) resetLineStr() {
 	o.lineStr = o.lineStr[:0]
 }
 
-func NewOutputQueue(ctx context.Context, proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam, showStatementType ShowStatementType) *outputQueue {
+func NewOutputQueue(ctx context.Context, proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *ExportParam, showStatementType ShowStatementType) *outputQueue {
 	return &outputQueue{
 		ctx:          ctx,
 		proto:        proto,

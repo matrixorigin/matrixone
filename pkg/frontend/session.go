@@ -116,7 +116,7 @@ type Session struct {
 	isInternal bool
 
 	data         [][]interface{}
-	ep           *tree.ExportParam
+	ep           *ExportParam
 	showStmtType ShowStatementType
 
 	txnHandler    *TxnHandler
@@ -218,10 +218,12 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 		protocol: proto,
 		mp:       mp,
 		pu:       pu,
-		ep: &tree.ExportParam{
-			Outfile: false,
-			Fields:  &tree.Fields{},
-			Lines:   &tree.Lines{},
+		ep: &ExportParam{
+			ExportParam: &tree.ExportParam{
+				Outfile: false,
+				Fields:  &tree.Fields{},
+				Lines:   &tree.Lines{},
+			},
 		},
 		txnHandler: txnHandler,
 		//TODO:fix database name after the catalog is ready
@@ -475,10 +477,10 @@ func (ses *Session) AppendData(row []interface{}) {
 func (ses *Session) SetExportParam(ep *tree.ExportParam) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.ep = ep
+	ses.ep.ExportParam = ep
 }
 
-func (ses *Session) GetExportParam() *tree.ExportParam {
+func (ses *Session) GetExportParam() *ExportParam {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.ep

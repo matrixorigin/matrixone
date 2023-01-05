@@ -34,6 +34,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+type ExportParam struct {
+	*tree.ExportParam
+	// file handler
+	File *os.File
+	// bufio.writer
+	Writer *bufio.Writer
+	// curFileSize
+	CurFileSize uint64
+	Rows        uint64
+	FileCnt     uint
+	ColumnFlag  []bool
+	Symbol      [][]byte
+	// default flush size
+	DefaultBufSize int64
+	OutputStr      []byte
+	LineSize       uint64
+
+	//file service
+	UseFileService bool
+	// FileService
+	FileService fileservice.FileService
+	LineBuffer  *bytes.Buffer
+	Ctx         context.Context
+	AsyncReader *io.PipeReader
+	AsyncWriter *io.PipeWriter
+	AsyncGroup  *errgroup.Group
+}
+
 var OpenFile = os.OpenFile
 var escape byte = '"'
 
@@ -57,7 +85,7 @@ func (cld *CloseExportData) Close() {
 	})
 }
 
-func initExportFileParam(ep *tree.ExportParam, mrs *MysqlResultSet) {
+func initExportFileParam(ep *ExportParam, mrs *MysqlResultSet) {
 	ep.DefaultBufSize *= 1024 * 1024
 	n := (int)(mrs.GetColumnCount())
 	if n <= 0 {
@@ -77,7 +105,7 @@ func initExportFileParam(ep *tree.ExportParam, mrs *MysqlResultSet) {
 	}
 }
 
-var openNewFile = func(ctx context.Context, ep *tree.ExportParam, mrs *MysqlResultSet) error {
+var openNewFile = func(ctx context.Context, ep *ExportParam, mrs *MysqlResultSet) error {
 	lineSize := ep.LineSize
 	var err error
 	ep.CurFileSize = 0
@@ -173,21 +201,21 @@ var formatOutputString = func(oq *outputQueue, tmp, symbol []byte, enclosed byte
 	return nil
 }
 
-var Flush = func(ep *tree.ExportParam) error {
+var Flush = func(ep *ExportParam) error {
 	if !ep.UseFileService {
 		return ep.Writer.Flush()
 	}
 	return nil
 }
 
-var Seek = func(ep *tree.ExportParam) (int64, error) {
+var Seek = func(ep *ExportParam) (int64, error) {
 	if !ep.UseFileService {
 		return ep.File.Seek(int64(ep.CurFileSize-ep.LineSize), io.SeekStart)
 	}
 	return 0, nil
 }
 
-var Read = func(ep *tree.ExportParam) (int, error) {
+var Read = func(ep *ExportParam) (int, error) {
 	if !ep.UseFileService {
 		ep.OutputStr = make([]byte, ep.LineSize)
 		return ep.File.Read(ep.OutputStr)
@@ -199,7 +227,7 @@ var Read = func(ep *tree.ExportParam) (int, error) {
 	}
 }
 
-var Truncate = func(ep *tree.ExportParam) error {
+var Truncate = func(ep *ExportParam) error {
 	if !ep.UseFileService {
 		return ep.File.Truncate(int64(ep.CurFileSize - ep.LineSize))
 	} else {
@@ -207,7 +235,7 @@ var Truncate = func(ep *tree.ExportParam) error {
 	}
 }
 
-var Close = func(ep *tree.ExportParam) error {
+var Close = func(ep *ExportParam) error {
 	if !ep.UseFileService {
 		ep.FileCnt++
 		return ep.File.Close()
@@ -221,7 +249,7 @@ var Close = func(ep *tree.ExportParam) error {
 	}
 }
 
-var Write = func(ep *tree.ExportParam, output []byte) (int, error) {
+var Write = func(ep *ExportParam, output []byte) (int, error) {
 	if !ep.UseFileService {
 		return ep.Writer.Write(output)
 	} else {
@@ -229,7 +257,7 @@ var Write = func(ep *tree.ExportParam, output []byte) (int, error) {
 	}
 }
 
-var EndOfLine = func(ep *tree.ExportParam) (int, error) {
+var EndOfLine = func(ep *ExportParam) (int, error) {
 	if ep.UseFileService {
 		n, err := ep.AsyncWriter.Write(ep.LineBuffer.Bytes())
 		ep.LineBuffer.Reset()
@@ -276,7 +304,7 @@ func writeToCSVFile(oq *outputQueue, output []byte) error {
 	return nil
 }
 
-var writeDataToCSVFile = func(ep *tree.ExportParam, output []byte) error {
+var writeDataToCSVFile = func(ep *ExportParam, output []byte) error {
 	for {
 		if n, err := Write(ep, output); err != nil {
 			return err

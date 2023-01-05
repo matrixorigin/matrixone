@@ -177,7 +177,7 @@ type resultFile struct {
 
 // doDumpQueryResult reads data from the query result, converts it into csv and saves it into
 // the file designated by the path.
-func doDumpQueryResult(ctx context.Context, ses *Session, exportParam *tree.ExportParam) error {
+func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportParam) error {
 	var err error
 	var columnDefs *plan.ResultColDef
 	var reader objectio.Reader
@@ -185,11 +185,11 @@ func doDumpQueryResult(ctx context.Context, ses *Session, exportParam *tree.Expo
 	var files []resultFile
 
 	//step1: open file handler
-	if columnDefs, err = openResultMeta(ctx, ses, exportParam.QueryId); err != nil {
+	if columnDefs, err = openResultMeta(ctx, ses, eParam.QueryId); err != nil {
 		return err
 	}
 
-	if files, err = getResultFiles(ctx, ses, exportParam.QueryId); err != nil {
+	if files, err = getResultFiles(ctx, ses, eParam.QueryId); err != nil {
 		return err
 	}
 
@@ -220,6 +220,9 @@ func doDumpQueryResult(ctx context.Context, ses *Session, exportParam *tree.Expo
 	mrs.Data = make([][]interface{}, 1)
 	for i := 0; i < 1; i++ {
 		mrs.Data[i] = make([]interface{}, len(columnDefs.ResultCols))
+	}
+	exportParam := &ExportParam{
+		ExportParam: eParam,
 	}
 	//prepare output queue
 	oq := NewOutputQueue(ctx, nil, mrs, 1, exportParam, ses.GetShowStmtType())
