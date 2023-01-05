@@ -109,14 +109,14 @@ var openNewFile = func(ctx context.Context, ep *tree.ExportParam, mrs *MysqlResu
 		if ep.MaxFileSize != 0 && uint64(len(header)) >= ep.MaxFileSize {
 			return moerr.NewInternalError(ctx, "the header line size is over the maxFileSize")
 		}
-		if err := writeDataToCSVFile(ctx, ep, []byte(header)); err != nil {
+		if err := writeDataToCSVFile(ep, []byte(header)); err != nil {
 			return err
 		}
 	}
 	if lineSize != 0 {
 		ep.LineSize = 0
 		ep.Rows = 0
-		if err := writeDataToCSVFile(ctx, ep, ep.OutputStr); err != nil {
+		if err := writeDataToCSVFile(ep, ep.OutputStr); err != nil {
 			return err
 		}
 	}
@@ -251,13 +251,13 @@ func writeToCSVFile(oq *outputQueue, output []byte) error {
 		}
 	}
 
-	if err := writeDataToCSVFile(oq.ctx, oq.ep, output); err != nil {
+	if err := writeDataToCSVFile(oq.ep, output); err != nil {
 		return err
 	}
 	return nil
 }
 
-var writeDataToCSVFile = func(ctx context.Context, ep *tree.ExportParam, output []byte) error {
+var writeDataToCSVFile = func(ep *tree.ExportParam, output []byte) error {
 	for {
 		if n, err := Write(ep, output); err != nil {
 			return err

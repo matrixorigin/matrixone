@@ -1095,7 +1095,8 @@ func TestHandleDump(t *testing.T) {
 		}
 		mce.ses = ses
 		dump := &tree.MoDump{
-			OutFile: "test",
+			DumpDatabase: true,
+			OutFile:      "test",
 		}
 		err = mce.handleDump(ctx, dump)
 		convey.So(err, convey.ShouldNotBeNil)
