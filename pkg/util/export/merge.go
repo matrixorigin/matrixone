@@ -330,7 +330,6 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, paths []string
 		}
 		if err != nil {
 			reader.Close()
-			m.logger.Error(fmt.Sprintf("merge file meet failed: %v", err))
 			return err
 		}
 
@@ -418,18 +417,13 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 		s.content, cnt, err = s.reader.Read(BatchReadRows, s.ctx, s.content)
 		if err != nil {
 			return nil, err
-		} else if s.content == nil && !simdcsv.SupportedCPU() {
-			s.logger.Warn("ContentReader.ReadLine.Done", logutil.PathField(s.path),
+		} else if s.content == nil {
+			s.logger.Error("ContentReader.ReadLine.nil", logutil.PathField(s.path),
 				zap.Bool("nil", s.content == nil),
+				zap.Error(s.ctx.Err()),
+				zap.Bool("SupportedCPU", simdcsv.SupportedCPU()),
 			)
 			return nil, moerr.NewInternalError(s.ctx, "read files meet context Done")
-		}
-		if simdcsv.SupportedCPU() && len(s.content) != BatchReadRows {
-			err := moerr.NewInternalError(s.ctx, "read %s file %d rows, but only cache %d rows", s.path, cnt, len(s.content))
-			if panicWhileRead.Load() {
-				panic(err)
-			}
-			return nil, err
 		}
 		if cnt < BatchReadRows {
 			//s.reader.Close() // DO NOT call, because it is a forever loop with empty op.
@@ -768,11 +762,6 @@ func InitCronExpr(ctx context.Context, duration time.Duration) error {
 }
 
 var maxFileSize atomic.Int64
-var panicWhileRead atomic.Bool
-
-func SetPanicWhileRead(p bool) {
-	panicWhileRead.Store(p)
-}
 
 func InitMerge(ctx context.Context, mergeCycle time.Duration, filesize int) error {
 	var err error
@@ -783,10 +772,5 @@ func InitMerge(ctx context.Context, mergeCycle time.Duration, filesize int) erro
 		}
 	}
 	maxFileSize.Store(int64(filesize * mpool.MB))
-	// SetPanicWhileRead
 	return nil
-}
-
-func init() {
-	SetPanicWhileRead(true)
 }
