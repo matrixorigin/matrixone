@@ -1,22 +1,451 @@
 select replace("XYZ FGH XYZ","X","M");
-replace("XYZ FGH XYZ","X","M")
+replace(XYZ FGH XYZ, X, M)
 MYZ FGH MYZ
 select replace(".*.*.*",".*","1");
-replace(".*.*.*","1")
+replace(.*.*.*, .*, 1)
 111
 select replace("11","","1");
-replace("11","","1")
+replace(11, , 1)
 11
 drop table if exists t1;
-
 create table t1(a varchar,b varchar);
 insert into t1 values("testtest","case case");
 select a,replace(b,"case","11") from t1;
-a   replace(b,"case","11")
+a    replace(b, case, 11)
 testtest    11 11
 select replace(a,"test","22") from t1;
-replace(a,"test","22")
+replace(a, test, 22)
 2222
 select replace(a,"test",22),replace(b,"case","11") from t1;
-replace(a,"test","22")  replace(b,"case","11")
+replace(a, test, 22)    replace(b, case, 11)
 2222    11 11
+SELECT REPLACE('aaaa','a','b');
+replace(aaaa, a, b)
+bbbb
+SELECT REPLACE('aaaa','aa','b');
+replace(aaaa, aa, b)
+bb
+SELECT REPLACE('aaaa','a','bb');
+replace(aaaa, a, bb)
+bbbbbbbb
+SELECT REPLACE('aaaa','','b');
+replace(aaaa, , b)
+aaaa
+SELECT REPLACE('bbbb','a','c');
+replace(bbbb, a, c)
+bbbb
+SELECT REPLACE(' hhdjs','','C');
+replace( hhdjs, , C)
+ hhdjs
+SELECT REPLACE('absdefg','b',' ');
+replace(absdefg, b,  )
+a sdefg
+SELECT REPLACE('rhjewnjfnkljvmkrewrjj','j','');
+replace(rhjewnjfnkljvmkrewrjj, j, )
+rhewnfnklvmkrewr
+SELECT REPLACE('http://www.google.com.cn/','/','');
+replace(http://www.google.com.cn/, /, )
+http:www.google.com.cn
+SELECT REPLACE('aaa.mysql.com','a','w');
+replace(aaa.mysql.com, a, w)
+www.mysql.com
+SELECT REPLACE('abchfjwabcABCvshfjdrvoiewjvkmdns mndsabcAbcueiuiwqjemkvwme000','abc','def');
+replace(abchfjwabcABCvshfjdrvoiewjvkmdns mndsabcAbcueiuiwqjemkvwme000, abc, def)
+defhfjwdefABCvshfjdrvoiewjvkmdns mndsdefAbcueiuiwqjemkvwme000
+SELECT REPLACE('dhnnnnjjkwkmoHskdhwjnejwqeHsk382983ndjhsemcsHskuwin mndsHsk','Hsk','t12vdjeke');
+replace(dhnnnnjjkwkmoHskdhwjnejwqeHsk382983ndjhsemcsHskuwin mndsHsk, Hsk, t12vdjeke)
+dhnnnnjjkwkmot12vdjekedhwjnejwqet12vdjeke382983ndjhsemcst12vdjekeuwin mndst12vdjeke
+SELECT REPLACE('jewTWUHWJWwwwwww', 'w', 'Q');
+replace(jewTWUHWJWwwwwww, w, Q)
+jeQTWUHWJWQQQQQQ
+SELECT REPLACE(' woshincjwne hjw ',' ','C');
+replace( woshincjwne hjw ,  , C)
+CwoshincjwneChjwC
+SELECT REPLACE(' 2617hejwnc 3920kdsm 3289uj ',' ','ssh');
+replace( 2617hejwnc 3920kdsm 3289uj ,  , ssh)
+ssh2617hejwncssh3920kdsmssh3289ujssh
+SELECT REPLACE(123456,6,1);
+replace(123456, 6, 1)
+123451
+SELECT REPLACE(NULL,'', '');
+replace(null, , )
+null
+SELECT REPLACE('', NULL, 3);
+replace(, null, 3)
+null
+SELECT REPLACE(378273,2,NULL);
+replace(378273, 2, null)
+null
+SELECT REPLACE('我是谁我在哪里', '我', '你');
+replace(我是谁我在哪里, 我, 你)
+你是谁你在哪里
+SELECT REPLACE('老师说我是好孩子', '你', '我');
+replace(老师说我是好孩子, 你, 我)
+老师说我是好孩子
+SELECT REPLACE(NULL, '哈', '哈');
+replace(null, 哈, 哈)
+null
+SELECT REPLACE('我是老大', '', '');
+replace(我是老大, , )
+我是老大
+SELECT REPLACE('你好，见到你很高兴',NULL,'你');
+replace(你好，见到你很高兴, null, 你)
+null
+SELECT REPLACE('哈哈哈哈哈', '哈', NULL);
+replace(哈哈哈哈哈, 哈, null)
+null
+SELECT REPLACE('今天是个好日子，明天也是个好日子，后天也是个好日子，大后天也是个好日子','后天','前天');
+replace(今天是个好日子，明天也是个好日子，后天也是个好日子，大后天也是个好日子, 后天, 前天)
+今天是个好日子，明天也是个好日子，前天也是个好日子，大前天也是个好日子
+SELECT REPLACE(' 老师说明天带我们去春游，后天带我们去植树   ,五一带我们去博物馆参观  ',' ','Alice');
+replace( 老师说明天带我们去春游，后天带我们去植树   ,五一带我们去博物馆参观  ,  , Alice)
+Alice老师说明天带我们去春游，后天带我们去植树AliceAliceAlice,五一带我们去博物馆参观AliceAlice
+SELECT REPLACE('  abc老师说我们班的语文成绩是全年级第1数学成绩是全年级第2', '全年级', '金台区');
+replace(  abc老师说我们班的语文成绩是全年级第1数学成绩是全年级第2, 全年级, 金台区)
+  abc老师说我们班的语文成绩是金台区第1数学成绩是金台区第2
+SELECT REPLACE( 'a', 'b', NULL );
+replace(a, b, null)
+null
+SELECT REPLACE( 'a', '', NULL );
+replace(a, , null)
+null
+SELECT REPLACE('','',NULL);
+replace(, , null)
+null
+SELECT REPLACE( NULL, 'b', 'bravo' );
+replace(null, b, bravo)
+null
+SELECT REPLACE( NULL, '', 'bravo' );
+replace(null, , bravo)
+null
+SELECT REPLACE( 'a', NULL, 'bravo' );
+replace(a, null, bravo)
+null
+SELECT REPLACE( NULL, NULL, 'bravo' );
+replace(null, null, bravo)
+null
+SELECT REPLACE('37829((&^&8', '(', ')');
+replace(37829((&^&8, (, ))
+37829))&^&8
+SELECT REPLACE('dnu2@#$%^&(*()____**&^%', '*', '');
+replace(dnu2@#$%^&(*()____**&^%, *, )
+dnu2@#$%^&(()____&^%
+SELECT REPLACE('7j^$&**JWI*@(@', '@', '@@@@@@')
+SELECT REPLACE(NULL, 'a', '37*&');
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 7 near "
+SELECT REPLACE(NULL, 'a', '37*&');";
+SELECT REPLACE('45e&^%$', NULL, 'abc');
+replace(45e&^%$, null, abc)
+null
+SELECT REPLACE('782hfe4nijned,.,/.', '78', NULL);
+replace(782hfe4nijned,.,/., 78, null)
+null
+SELECT REPLACE(NULL, NULL,'') / 2;
+replace(null, null, ) / 2
+null
+DROP TABLE IF EXISTS replace_01;
+CREATE TABLE replace_01(
+s_id int(20) NOT NULL AUTO_INCREMENT,
+s_name CHAR(5) DEFAULT NULL COMMENT '姓名',
+phone VARCHAR(11) DEFAULT NULL COMMENT '电话',
+PRIMARY KEY (s_id)
+);
+INSERT INTO replace_01 VALUES (1, 'Tom', '13603735566');
+INSERT INTO replace_01 VALUES (2, 'Lee', '13603735533');
+INSERT INTO replace_01 VALUES (3, 'Harry', '13603735544');
+INSERT INTO replace_01 VALUES (4, 'Odin', '13603735577');
+INSERT INTO replace_01 VALUES (5, 'Jack', '13603735587');
+SELECT s_id, s_name, REPLACE(phone,'136','158') FROM replace_01;
+s_id    s_name    replace(phone, 136, 158)
+1    Tom    15803735566
+2    Lee    15803735533
+3    Harry    15803735544
+4    Odin    15803735577
+5    Jack    15803735587
+SELECT * FROM replace_01 WHERE REPLACE(s_name, 'Tom', 'Bob') = 'Bob';
+s_id    s_name    phone
+1    Tom    13603735566
+SELECT REPLACE(s_name,'a','ahfjse') FROM replace_01;
+replace(s_name, a, ahfjse)
+Tom
+Lee
+Hahfjserry
+Odin
+Jahfjseck
+SELECT s_id, s_name FROM replace_01 WHERE s_name = REPLACE('s_name','Jack','Bob');
+s_id    s_name
+SELECT REPLACE(phone, '136', NULL) FROM replace_01;
+replace(phone, 136, null)
+null
+null
+null
+null
+null
+SELECT REPLACE(NULL, 'q','p') FROM replace_01;
+replace(null, q, p)
+null
+null
+null
+null
+null
+SELECT REPLACE(s_name,'Tom','newqjndwdewmwve')FROM replace_01;
+replace(s_name, Tom, newqjndwdewmwve)
+newqjndwdewmwve
+Lee
+Harry
+Odin
+Jack
+SELECT REPLACE(s_name, s_name, 'zhang') FROM replace_01;
+replace(s_name, s_name, zhang)
+zhang
+zhang
+zhang
+zhang
+zhang
+INSERT INTO replace_01 VALUES(6, 'HHANjdncd','445478855');
+truncated type CHAR value HHANjdncd for column s_name, 1
+INSERT INTO replace_01 VALUES(7, 'Wl', '11111124841550');
+Data truncation: data out of range: data type varchar/char , 11111124841550 oversize of 11 
+UPDATE replace_01 set s_name = REPLACE(s_name,'Tom','efjhhoiwuwnvnjwiewori');
+internal error: Can't cast column from VARCHAR type to CHAR type because of one or more values in that column. Src length 21 is larger than Dest length 5
+SELECT s_name, phone FROM replace_01 WHERE REPLACE(s_name, 'Tom', 'Bo') LIKE 'B%';
+s_name    phone
+Tom    13603735566
+SELECT * FROM replace_01 WHERE REPLACE(s_name, 'Tom', 'Bo') NOT LIKE 'B%';
+s_id    s_name    phone
+2    Lee    13603735533
+3    Harry    13603735544
+4    Odin    13603735577
+5    Jack    13603735587
+SELECT s_id, s_name FROM replace_01 WHERE REPLACE(s_id, 1, 6) BETWEEN 4 AND 7;
+s_id    s_name
+1    Tom
+4    Odin
+5    Jack
+SELECT * FROM replace_01 WHERE REPLACE(s_id, 2, 8) NOT BETWEEN 3 AND 6;
+s_id    s_name    phone
+1    Tom    13603735566
+2    Lee    13603735533
+SELECT * FROM replace_01 WHERE REPLACE('s_name','Lee',NULL) IS NULL;
+s_id    s_name    phone
+1    Tom    13603735566
+2    Lee    13603735533
+3    Harry    13603735544
+4    Odin    13603735577
+5    Jack    13603735587
+SELECT * FROM replace_01 WHERE REPLACE('s_name','Lee','Vicky') IS NOT NULL;
+s_id    s_name    phone
+1    Tom    13603735566
+2    Lee    13603735533
+3    Harry    13603735544
+4    Odin    13603735577
+5    Jack    13603735587
+SELECT * FROM replace_01 WHERE REPLACE(s_id, 1, 10) <4;
+s_id    s_name    phone
+2    Lee    13603735533
+3    Harry    13603735544
+SELECT s_id, s_name FROM replace_01 WHERE REPLACE(s_id, 2, 9) > 2;
+s_id    s_name
+2    Lee
+3    Harry
+4    Odin
+5    Jack
+SELECT * FROM replace_01 WHERE REPLACE(s_id, 5, 9) >=5;
+s_id    s_name    phone
+5    Jack    13603735587
+SELECT s_id, s_name FROM replace_01 WHERE REPLACE(s_id, 2, 9) != 6;
+s_id    s_name
+1    Tom
+2    Lee
+3    Harry
+4    Odin
+5    Jack
+SELECT * FROM replace_01 WHERE REPLACE(s_id, 5, 9) <=5;
+s_id    s_name    phone
+1    Tom    13603735566
+2    Lee    13603735533
+3    Harry    13603735544
+4    Odin    13603735577
+DROP TABLE IF EXISTS replace_02;
+CREATE TABLE replace_02(
+id int,
+name VARCHAR(10),
+password varchar(32),
+mm bigint,
+PRIMARY KEY(id)
+);
+INSERT INTO replace_02 VALUES(1, ' 张三', '3672*(*^&hu32', 100);
+INSERT INTO replace_02 VALUES(2, '李四 ', '4545dwjkekwe&&&&', 200);
+INSERT INTO replace_02 VALUES(3, ' 王五 ', '&&%$%^&^*()))', 300);
+INSERT INTO replace_02 VALUES(4, '赵六', 'ewu8qu39821dijoq', 400);
+INSERT INTO replace_02 VALUES(5, '钱七', '--2102-9328', 500);
+INSERT INTO replace_02 VALUES(6, ' ', ' ', 900);
+UPDATE replace_02 set name = REPLACE(name,'张三','大哥');
+UPDATE replace_02 set password = REPLACE(password, '&&&&', 'AAAA'), name = REPLACE(name,'李四','小栗子');
+SELECT REPLACE(mm,mm,600) FROM replace_02;
+replace(mm, mm, 600)
+600
+600
+600
+600
+600
+600
+SELECT REPLACE(ltrim(name), '张三', '三张') FROM replace_02;
+replace(ltrim(name), 张三, 三张)
+大哥
+小栗子 
+王五 
+赵六
+钱七
+
+SELECT REPLACE(rtrim(name), '李', '栗') FROM replace_02;
+replace(rtrim(name), 李, 栗)
+ 大哥
+小栗子
+ 王五
+赵六
+钱七
+
+SELECT LENGTH(REPLACE(password, 'a', 'b')) FROM replace_02;
+length(replace(password, a, b))
+13
+16
+13
+16
+11
+1
+SELECT ltrim(REPLACE('nhfej', 'fe', ' fe'));
+ltrim(replace(nhfej, fe,  fe))
+nh fej
+SELECT rtrim(REPLACE('ejdwj 3782 ', '37', '2222'));
+rtrim(replace(ejdwj 3782 , 37, 2222))
+ejdwj 222282
+SELECT find_in_set('b',(REPLACE('a,b,c','a','b')));
+find_in_set(b, (replace(a,b,c, a, b)))
+1
+SELECT substring(REPLACE(name,'钱七','钱八'),0) FROM replace_02;
+substring(replace(name, 钱七, 钱八), 0)
+
+
+
+
+
+
+SELECT bin(REPLACE(id,1,4)) FROM replace_02;
+bin(replace(id, 1, 4))
+100
+10
+11
+100
+101
+110
+SELECT hex(REPLACE(id, 2, 8)) FROM replace_02;
+hex(replace(id, 2, 8))
+31
+38
+33
+34
+35
+36
+SELECT RPAD(REPLACE(password,'a','b'),40,'+-') FROM replace_02;
+rpad(replace(password, a, b), 40, +-)
+3672*(*^&hu32+-+-+-+-+-+-+-+-+-+-+-+-+-+
+4545dwjkekweAAAA+-+-+-+-+-+-+-+-+-+-+-+-
+&&%$%^&^*()))+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ewu8qu39821dijoq+-+-+-+-+-+-+-+-+-+-+-+-
+--2102-9328+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+SELECT REPLACE(id, 2, 10) AS newid FROM replace_02 ORDER BY newid DESC;
+newid
+6
+5
+4
+3
+10
+1
+DROP TABLE IF EXISTS replace_04;
+CREATE TABLE replace_04(
+id INT,
+dd1 DATE,
+dd2 DATETIME NOT NULL,
+dd3 TIMESTAMP,
+PRIMARY KEY (id)
+);
+INSERT INTO replace_04 VALUES (1, '2020-01-01', '2020-01-01 12:12:12', '2020-02-02 06:06:06.163');
+INSERT INTO replace_04 VALUES (2, '2021-11-11', '2021-01-11 23:23:23', '2021-12-12 16:16:16.843');
+INSERT INTO replace_04 VALUES (3, '2002-11-11', '2002-01-11 23:23:23', '2002-12-12 16:16:16.843');
+INSERT INTO replace_04 VALUES (4, '2023-01-04', '1998-01-09 11:10:56', NULL);
+SELECT * FROM replace_04 WHERE REPLACE(dd1,'20','21') < '2020-01-01';
+id    dd1    dd2    dd3
+SELECT dd3 FROM replace_04 WHERE REPLACE(dd1, '20', '21') > '2020-01-01';
+dd3
+2020-02-02 06:06:06
+2021-12-12 16:16:17
+2002-12-12 16:16:17
+null
+SELECT MONTH(REPLACE(dd1, '20', '21')) FROM replace_04;
+month(replace(dd1, 20, 21))
+1
+11
+11
+1
+SELECT year(REPLACE(dd2, 12, 20)) FROM replace_04;
+year(replace(dd2, 12, 20))
+2020
+2021
+2002
+1998
+SELECT day(REPLACE(dd2, '23:23', '10:10')) , dd3 FROM replace_04;
+day(replace(dd2, 23:23, 10:10))    dd3
+1    2020-02-02 06:06:06
+11    2021-12-12 16:16:17
+11    2002-12-12 16:16:17
+9    null
+SELECT DATE_FORMAT(REPLACE(dd1, '20', '21'),'%m-%d-%Y') FROM replace_04;
+date_format(replace(dd1, 20, 21), %m-%d-%Y)
+01-01-2121
+11-11-2121
+11-11-2102
+01-04-2123
+SELECT DATE(REPLACE(dd2, 12, 20)) FROM replace_04;
+date(replace(dd2, 12, 20))
+2020-01-01
+2021-01-11
+2002-01-11
+1998-01-09
+SELECT to_date(REPLACE(dd2, '23:23', '10:10'),'%Y-%m-%d %H:%i:%s') FROM replace_04;
+to_date(replace(dd2, 23:23, 10:10), %Y-%m-%d %H:%i:%s)
+2020-01-01 12:12:12
+2021-01-11 10:10:23
+2002-01-11 10:10:23
+1998-01-09 11:10:56
+SELECT weekday(REPLACE(dd2, 12, 20)) FROM replace_04;
+weekday(replace(dd2, 12, 20))
+2
+0
+4
+4
+SELECT dayofyear(REPLACE(dd1, 20, 21)) FROM replace_04;
+dayofyear(replace(dd1, 20, 21))
+1
+315
+315
+4
+SELECT id, extract(year FROM REPLACE(dd3, 20, 18)) FROM replace_04;
+id    extract(year, replace(dd3, 20, 18))
+1    1818
+2    1821
+3    1802
+4    null
+SELECT id, extract(MONTH FROM REPLACE(dd3, 20, 18)) FROM replace_04;
+id    extract(month, replace(dd3, 20, 18))
+1    02
+2    12
+3    12
+4    null
+SELECT UNIX_TIMESTAMP(REPLACE(dd2, '23:23', '10:10')) FROM replace_04;
+unix_timestamp(replace(dd2, 23:23, 10:10))
+1577909532.000000
+1610388623.000000
+1010772623.000000
+884373056.000000

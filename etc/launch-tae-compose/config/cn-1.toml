@@ -15,7 +15,7 @@ name = "LOCAL"
 
 [[fileservice]]
 backend = "MINIO"
-name = "S3"
+name = "SHARED"
 
 [fileservice.s3]
 bucket = "mo-test"
