@@ -110,6 +110,10 @@ func (fp *FunctionParameter[T]) UnSafeGetAllValue() []T {
 	return fp.values
 }
 
+func (fp *FunctionParameter[T]) UnSafeGetAllVarlena() []types.Varlena {
+	return fp.strValues
+}
+
 // GetStrValue return nth value of string parameter and if it's null or not.
 func (fp *FunctionParameter[T]) GetStrValue(idx uint64) (value []byte, isNull bool) {
 	if fp.isScalar {
@@ -120,6 +124,18 @@ func (fp *FunctionParameter[T]) GetStrValue(idx uint64) (value []byte, isNull bo
 	}
 	vrl := fp.strValues[idx]
 	return vrl.GetByteSlice(fp.area), false
+}
+
+// GetVarlena return nth varlena value of string parameter but not consider the area.
+// watch that, you should call the method only the width of str type is less than 24.
+func (fp *FunctionParameter[T]) GetVarlena(idx uint64) (value types.Varlena, isNull bool) {
+	if fp.isScalar {
+		idx = 0
+	}
+	if fp.containsNull && fp.nullMap.Contains(idx) {
+		return types.Varlena{}, true
+	}
+	return fp.strValues[idx], false
 }
 
 func (fp *FunctionParameter[T]) GetType() types.Type {
