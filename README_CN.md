@@ -271,16 +271,6 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commi
 
 运行 Docker Hub 时需要输入用户名和密码，获取用户名和密码可以参考**连接 MatrixOne 服务**章节所述。
 
-**步骤 3.**  挂载配置文件（选做）
-
-如果你需要自定义配置文件，可以挂载存放在本地磁盘的自定义配置文件到容器镜像：
-
-- **挂载配置文件**
-
-```
-docker run -d -p 6001:6001 -v ${local_data_path}/etc:/etc:rw  --entrypoint "/mo-service" matrixorigin/matrixone:0.6.0 -launch /etc/quickstart/launch.toml
-```
-
 ### 🌟 连接 MatrixOne 服务
 
 1. 安装 MySQL 客户端
