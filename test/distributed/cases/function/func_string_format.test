@@ -85,6 +85,13 @@ insert into test values("12332.2","0", "de_CH");
 insert into test values("19999999.999999999","de_CH");
 drop table test;
 
+create table t(id int, d1 float, d2 double not null);
+insert into t values(4, 0, -38902093.4324);
+insert into t values(5, 323, 37827329.43432);
+insert into t values(8, 7382,3923404.2132421);
+insert into t values(5, 2, 10000000);
+select format(d2, id) from t;
+drop table t;
 
 -- @suite
 -- @setup

@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -106,7 +107,8 @@ type Scope struct {
 	// Proc contains the execution context.
 	Proc *process.Process
 
-	Reg *process.WaitRegister
+	Reg   *process.WaitRegister
+	uuids []uuid.UUID
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
@@ -134,6 +136,12 @@ type Server struct {
 	sync.Mutex
 	id uint64
 	mp map[uint64]*process.WaitRegister // k = id, v = reg
+	// chanMp will be used in two ways
+	// 1. uuid --> WaitRegister, we need to know the batch which is recieved from
+	// remote CN should be filled into which chan
+	// 2. messgage.Id --> dataBuf (when a batch is too large, it will be split into small ones in the source
+	// CN, and the target CN need to recieve them all and then merge them into one batch)
+	chanBufMp sync.Map
 }
 
 // Compile contains all the information needed for compilation.
