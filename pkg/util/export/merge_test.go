@@ -28,19 +28,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/simdcsv"
 )
 
 func init() {
 	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
 	table.RegisterTableDefine(dummyTable)
+	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
 }
 
 var mux sync.Mutex
@@ -142,30 +147,53 @@ func initLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Ta
 	buf := make([]byte, 0, 4096)
 
 	ts1 := ts
-	writer, _ := NewCSVWriter(ctx, fs, newFilePath(ts1), buf)
+	writer, _ := newETLWriter(ctx, fs, newFilePath(ts1), buf)
 	writer.WriteStrings(dummyFillTable("row1", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts2 := ts.Add(time.Minute)
-	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts2), buf)
+	writer, _ = newETLWriter(ctx, fs, newFilePath(ts2), buf)
 	writer.WriteStrings(dummyFillTable("row3", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row4", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts3 := ts.Add(time.Hour)
-	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts3), buf)
+	writer, _ = newETLWriter(ctx, fs, newFilePath(ts3), buf)
 	writer.WriteStrings(dummyFillTable("row5", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row6", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts1New := ts.Add(time.Hour + time.Minute)
-	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts1New), buf)
+	writer, _ = newETLWriter(ctx, fs, newFilePath(ts1New), buf)
 	writer.WriteStrings(dummyFillTable("row1", 1, 11.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 22.0).ToStrings())
 	writer.FlushAndClose()
 
 	return nil
+}
+
+func initEmptyLogFile(ctx context.Context, fs fileservice.FileService, tbl *table.Table, ts time.Time) ([]string, error) {
+	mux.Lock()
+	defer mux.Unlock()
+
+	var newFilePath = func(ts time.Time) string {
+		filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts)
+		p := tbl.PathBuilder.Build(tbl.Account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.GetName())
+		filepath := path.Join(p, filename)
+		return filepath
+	}
+
+	files := []string{}
+	buf := make([]byte, 0, 4096)
+
+	ts1 := ts
+	filePath := newFilePath(ts1)
+	files = append(files, filePath)
+	writer, _ := newETLWriter(ctx, fs, filePath, buf)
+	writer.FlushAndClose()
+
+	return files, nil
 }
 
 func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Table, ts time.Time) error {
@@ -182,7 +210,7 @@ func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *ta
 	buf := make([]byte, 0, 4096)
 
 	ts1 := ts
-	writer, _ := NewCSVWriter(ctx, fs, newFilePath(ts1), buf)
+	writer, _ := newETLWriter(ctx, fs, newFilePath(ts1), buf)
 	writer.WriteStrings(dummyFillTable("row1", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
@@ -194,6 +222,8 @@ func TestNewMerge(t *testing.T) {
 	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, t.TempDir())
 	require.Nil(t, err)
 	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
+
+	ctx := trace.Generate(context.Background())
 
 	type args struct {
 		ctx  context.Context
@@ -207,7 +237,7 @@ func TestNewMerge(t *testing.T) {
 		{
 			name: "normal",
 			args: args{
-				ctx: context.Background(),
+				ctx: ctx,
 				opts: []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
 					WithFileService(fs), WithTable(dummyTable),
 					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)},
@@ -254,6 +284,53 @@ func TestNewMerge(t *testing.T) {
 			require.Nil(t, err)
 			require.Equal(t, 6, lines)
 
+		})
+	}
+}
+
+func TestNewMergeWithContextDone(t *testing.T) {
+	if simdcsv.SupportedCPU() {
+		t.Skip()
+	}
+	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, t.TempDir())
+	require.Nil(t, err)
+	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
+
+	ctx := trace.Generate(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	type args struct {
+		ctx  context.Context
+		opts []MergeOption
+	}
+	tests := []struct {
+		name string
+		args args
+		want *Merge
+	}{
+		{
+			name: "normal",
+			args: args{
+				ctx: ctx,
+				opts: []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
+					WithFileService(fs), WithTable(dummyTable),
+					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)},
+			},
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			files, err := initEmptyLogFile(tt.args.ctx, fs, dummyTable, ts)
+			require.Nil(t, err)
+
+			got := NewMerge(tt.args.ctx, tt.args.opts...)
+			require.NotNil(t, got)
+
+			err = got.doMergeFiles(ctx, dummyTable.Table, files, 0)
+			require.Equal(t, err.Error(), "internal error: read files meet context Done")
 		})
 	}
 }
