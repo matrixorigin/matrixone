@@ -367,3 +367,7 @@ func (ip *internalProtocol) ResetStatistics() {
 }
 
 func (ip *internalProtocol) GetStats() string { return "internal unknown stats" }
+
+func (ip *internalProtocol) sendLocalInfileRequest(filename string) error {
+	return nil
+}

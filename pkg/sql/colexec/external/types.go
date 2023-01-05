@@ -47,6 +47,7 @@ type ExternalParam struct {
 	reader       io.ReadCloser
 	maxBatchSize uint64
 	ClusterTable *plan.ClusterTable
+	prevStr      string
 }
 
 type ExternalFileparam struct {
@@ -72,3 +73,8 @@ type ParseLineHandler struct {
 	//simd csv
 	simdCsvLineArray [][]string
 }
+
+const (
+	START = "start"
+	ERROR = "error"
+)

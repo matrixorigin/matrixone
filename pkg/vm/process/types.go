@@ -135,6 +135,8 @@ type Process struct {
 	LoadTag bool
 
 	LastInsertID *uint64
+
+	LoadLocalBuffer *Buffer
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
@@ -189,4 +191,11 @@ func (si *SessionInfo) GetDatabase() string {
 
 func (si *SessionInfo) GetVersion() string {
 	return si.Version
+}
+
+type Buffer struct {
+	ch    chan []byte
+	buf   []byte
+	off   int
+	empty bool
 }

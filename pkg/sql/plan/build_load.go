@@ -94,6 +94,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 
 	stmt.Param.Tail.ColumnList = nil
 	stmt.Param.LoadFile = true
+	stmt.Param.Local = stmt.Local
+
 	json_byte, err := json.Marshal(stmt.Param)
 	if err != nil {
 		return nil, err

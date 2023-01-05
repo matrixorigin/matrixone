@@ -83,6 +83,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 			Ch:  make(chan *batch.Batch, 1),
 		}
 	}
+	proc.LoadLocalBuffer = p.LoadLocalBuffer
 	return proc
 }
 

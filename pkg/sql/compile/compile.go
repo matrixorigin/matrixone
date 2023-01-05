@@ -559,9 +559,12 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	if mcpu < 1 {
 		mcpu = 1
 	}
-	ss := make([]*Scope, mcpu)
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
+	if param.Local {
+		mcpu = 1
+	}
+	ss := make([]*Scope, mcpu)
 	if err != nil {
 		return nil, err
 	}
@@ -577,16 +580,21 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 
 	param.FileService = c.proc.FileService
 	param.Ctx = c.ctx
-	fileList, err := external.ReadDir(param)
-	if err != nil {
-		return nil, err
-	}
-	fileList, err = external.FliterFileList(n, c.proc, fileList)
-	if err != nil {
-		return nil, err
-	}
-	if param.LoadFile && len(fileList) == 0 {
-		return nil, moerr.NewInvalidInput(ctx, "the file does not exist in load flow")
+	var fileList []string
+	if !param.Local {
+		fileList, err = external.ReadDir(param)
+		if err != nil {
+			return nil, err
+		}
+		fileList, err = external.FliterFileList(n, c.proc, fileList)
+		if err != nil {
+			return nil, err
+		}
+		if param.LoadFile && len(fileList) == 0 {
+			return nil, moerr.NewInvalidInput(ctx, "the file does not exist in load flow")
+		}
+	} else {
+		fileList = []string{param.Filepath}
 	}
 	cnt := len(fileList) / mcpu
 	tag := len(fileList) % mcpu

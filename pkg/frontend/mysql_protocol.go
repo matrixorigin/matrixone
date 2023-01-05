@@ -1577,7 +1577,7 @@ func (mp *MysqlProtocolImpl) makeLocalInfileRequestPayload(filename string) []by
 	data := make([]byte, HeaderOffset+1+len(filename)+1)
 	pos := HeaderOffset
 	pos = mp.io.WriteUint8(data, pos, defines.LocalInFileHeader)
-	pos = mp.writeStringNUL(data, pos, filename)
+	pos = mp.writeStringFix(data, pos, filename, len(filename))
 	return data[:pos]
 }
 

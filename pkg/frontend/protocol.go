@@ -116,10 +116,6 @@ func NewOkResponse(affectedRows, lastInsertId uint64, warnings, status uint16, c
 	return resp
 }
 
-func NewLocalInfileRequest(filename string) *Response {
-	return NewResponse(LocalInfileRequest, 0, 0, filename)
-}
-
 func (resp *Response) GetData() interface{} {
 	return resp.data
 }
@@ -574,3 +570,7 @@ func (fp *FakeProtocol) SetUserName(s string) {
 }
 
 func (fp *FakeProtocol) Quit() {}
+
+func (fp *FakeProtocol) sendLocalInfileRequest(filename string) error {
+	return nil
+}
