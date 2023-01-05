@@ -115,19 +115,27 @@ SELECT format(d1, id, "bg_BG") from format_01;
 
 
 -- Filtering, nesting, mathematical operation
-SELECT * FROM format_01 WHERE format(d1,1) = 126.0;
+SELECT * FROM format_01 WHERE format(d1,0) = 126;
 SELECT id FROM (SELECT * FROM format_01 WHERE format(d1,0) = 126) as a;
-SELECT format(d1, id) FROM format_01 WHERE d3 % 2 != 0;
+SELECT format(d1, id) FROM format_01 WHERE d3 % 2 = 0;
 SELECT format(d3, 4) FROM format_01 WHERE ABS(d3) > 1000;
 SELECT COUNT(format(d1, 2)) FROM format_01 GROUP BY d1;
-SELECT * FROM format_01 ORDER BY format(id, 4) DESC;
+SELECT * FROM format_01 ORDER BY format(id, 0) DESC;
+SELECT SIN(format(d1,2)), TAN(format(id, 0)), COS(format(id,0)) from format_01;
+SELECT cot(format(45, 0)), ACOS(format(60, 1)), ATAN(format(75, 0)), SINH(format(90, 1));
+SELECT EXP(format(4, 2));
+SELECT MAX(format(d1, id)), MIN(format(d3, 0)) from format_01;
 
 
 -- Mathematical function
-SELECT SIN(format(id,2)), COS(format(id,2)), TAN(format(id,0)) FROM format_01;
-SELECT cot(format(45, 0)), ACOS(format(60, 1)), ATAN(format(75, 0)), SINH(format(90, 1));
-SELECT power(format(id,2), 2)FROM format_01;
-SELECT EXP(format(id, 2)) FROM format_01;
+-- @bvt:issue#7464
+SELECT ABS(format(d3,0)) FROM format_01;
+SELECT SUM(format(id,2)) FROM format_01;
+SELECT CEIL(format(d3, 4))FROM format_01;
+SELECT ROUND(format(d4, 0)) FROM format_01;
+SELECT power(format(2,1), 2);
+SELECT COUNT(format(d3,2)) FROM format_01;
+-- @bvt:issue
 
 
 -- @suite
@@ -152,17 +160,26 @@ INSERT INTO format_02 VALUES(8, 7382,3923404.2132421);
 
 SELECT d1, d2 FROM format_02 WHERE format(d2,0) IS NOT NULL;
 SELECT * from format_02 WHERE format(d2, 3) NOT LIKE '47832.43%';
-
 SELECT format(d2, id) FROM format_02;
 SELECT format(d2, id, NULL) from format_02;
 SELECT format(d2, id, "en_US") from format_02;
 SELECT format(d2,0)FROM format_02;
 SELECT format(d1, id) FROM format_02 WHERE d2 % 2 = 0;
 SELECT format(d2, 4) FROM format_02 WHERE ABS(d2) > 1000;
-SELECT * FROM format_02 WHERE format(d2,0) IN (73, 32789);
-SELECT * FROM format_02 WHERE format(d2,0) NOT IN (73, 32789);
+SELECT any_value(format(id,2)) FROM format_02;
+SELECT d1, d2 FROM format_02 WHERE format(id,0) BETWEEN 0 AND 400;
+SELECT * from format_02 WHERE format(id, 1) like '1.2';
 SELECT format(FLOOR(d2),4) FROM format_02;
 SELECT format(CEIL(d2),6) FROM format_02;
+
+
+-- @bvt:issue#7464
+SELECT * from format_02 WHERE format(d2, 2) >= 0;
+SELECT * FROM format_02 WHERE format(d2, 0) NOT BETWEEN 0 AND 100;
+SELECT * FROM format_02 WHERE format(d2,0) IN (73, 32789);
+SELECT * FROM format_02 WHERE format(d2,0) NOT IN (73, 32789);
+SELECT * FROM format_02 WHERE format(d2, 2) MOD 2 = 0;
+-- @bvt:issue
 
 
 -- @suite
@@ -178,6 +195,11 @@ INSERT INTO format_04 VALUES("12332.2","0", "en_US");
 SELECT format(a, 4) from format_04;
 SELECT format(a, 2),format(b, 3) FROM format_04 WHERE b > 0;
 SELECT a,b,c FROM format_04 WHERE format(b,0) = 4;
+
+-- @bvt:issue#7464
+SELECT ABS(format(b,5)) FROM format_04;
+SELECT FLOOR(format(c,3)) FROM format_04;
+-- @bvt:issue
 
 
 -- @suite
