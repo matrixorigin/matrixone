@@ -492,6 +492,7 @@ message UpdateCtx {
 	repeated int32 uniqueIndexPos = 10;
 	repeated int32	secondaryIndexPos = 11;
 	repeated string indexParts = 12;
+	ClusterByDef clusterByDef = 13;
 }
 
 message AnalyzeInfo {
