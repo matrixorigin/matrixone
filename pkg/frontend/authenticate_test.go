@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/fagongzi/goetty/v2/buf"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -398,12 +399,40 @@ func Test_initFunction(t *testing.T) {
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().AnyTimes()
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		rs := mock_frontend.NewMockExecResult(ctrl)
+		rs.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{rs}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		locale := ""
+
 		cu := &tree.CreateFunction{
-			Name:       tree.NewFuncName("testFunc"),
-			Args:       nil,
-			ReturnType: tree.NewReturnType("int"),
-			Body:       "",
-			Language:   "sql",
+			Name: tree.NewFuncName("testFunc",
+				tree.ObjectNamePrefix{
+					SchemaName:      tree.Identifier("db"),
+					CatalogName:     tree.Identifier(""),
+					ExplicitSchema:  true,
+					ExplicitCatalog: false,
+				},
+			),
+			Args: nil,
+			ReturnType: tree.NewReturnType(&tree.T{
+				InternalType: tree.InternalType{
+					Family:       tree.IntFamily,
+					FamilyString: "INT",
+					Width:        24,
+					Locale:       &locale,
+					Oid:          uint32(defines.MYSQL_TYPE_INT24),
+				},
+			}),
+			Body:     "",
+			Language: "sql",
 		}
 
 		tenant := &TenantInfo{
@@ -5504,14 +5533,32 @@ func Test_doDropFunction(t *testing.T) {
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().AnyTimes()
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		rs := mock_frontend.NewMockExecResult(ctrl)
+		rs.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{rs}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
 		cu := &tree.DropFunction{
-			Name: tree.NewFuncName("testFunc"),
+			Name: tree.NewFuncName("testFunc",
+				tree.ObjectNamePrefix{
+					SchemaName:      tree.Identifier("db"),
+					CatalogName:     tree.Identifier(""),
+					ExplicitSchema:  true,
+					ExplicitCatalog: false,
+				},
+			),
 			Args: nil,
 		}
 
 		ses := &Session{}
 		err := doDropFunction(ctx, ses, cu)
-		convey.So(err, convey.ShouldBeNil)
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
 

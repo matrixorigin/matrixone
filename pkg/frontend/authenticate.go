@@ -17,8 +17,8 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"math"
 	"math/bits"
 	"os"
@@ -26,6 +26,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
@@ -36,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/tidwall/btree"
@@ -687,26 +691,28 @@ var (
 		"system_metrics":     0,
 	}
 	sysWantedTables = map[string]int8{
-		"mo_user":                 0,
-		"mo_account":              0,
-		"mo_role":                 0,
-		"mo_user_grant":           0,
-		"mo_role_grant":           0,
-		"mo_role_privs":           0,
-		`%!%mo_increment_columns`: 0,
+		"mo_user":                  0,
+		"mo_account":               0,
+		"mo_role":                  0,
+		"mo_user_grant":            0,
+		"mo_role_grant":            0,
+		"mo_role_privs":            0,
+		"mo_user_defined_function": 0,
+		`%!%mo_increment_columns`:  0,
 	}
 	//predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
-		"mo_database":             0,
-		"mo_tables":               0,
-		"mo_columns":              0,
-		"mo_account":              0,
-		"mo_user":                 0,
-		"mo_role":                 0,
-		"mo_user_grant":           0,
-		"mo_role_grant":           0,
-		"mo_role_privs":           0,
-		"%!%mo_increment_columns": 0,
+		"mo_database":              0,
+		"mo_tables":                0,
+		"mo_columns":               0,
+		"mo_account":               0,
+		"mo_user":                  0,
+		"mo_role":                  0,
+		"mo_user_grant":            0,
+		"mo_role_grant":            0,
+		"mo_role_privs":            0,
+		"mo_user_defined_function": 0,
+		"%!%mo_increment_columns":  0,
 	}
 	createAutoTableSql = "create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);"
 	//the sqls creating many tables for the tenant.
@@ -767,6 +773,19 @@ var (
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
+		`create table mo_user_defined_function(
+				function_id int auto_increment,
+				name     varchar(100),
+				args     text,
+				retType  varchar(20),
+				body     text,
+				language varchar(20),
+				db       varchar(100),
+				definer  varchar(50),
+				modified_time timestamp,
+				created_time  timestamp,
+				primary key(function_id)
+			);`,
 	}
 
 	//drop tables for the tenant
@@ -778,6 +797,17 @@ var (
 		`drop table if exists mo_catalog.mo_role_privs;`,
 		//"drop table if exists mo_catalog.`%!%mo_increment_columns`;",
 	}
+
+	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
+		name,
+		args,
+		retType,
+		body,
+		language,
+		db,
+		definer,
+		modified_time,
+		created_time) values ("%s",'%s',"%s","%s","%s","%s","%s","%s","%s");`
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
 				account_id,
@@ -1070,6 +1100,10 @@ const (
 					and rp.privilege_id = %d
 					and rp.privilege_level = "%s";`
 
+	checkUdfArgs = `select args,function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`
+
+	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and args = '%s';`
+
 	//delete role from mo_role,mo_user_grant,mo_role_grant,mo_role_privs
 	deleteRoleFromMoRoleFormat = `delete from mo_catalog.mo_role where role_id = %d;`
 
@@ -1083,6 +1117,9 @@ const (
 	deleteUserFromMoUserFormat = `delete from mo_catalog.mo_user where user_id = %d;`
 
 	deleteUserFromMoUserGrantFormat = `delete from mo_catalog.mo_user_grant where user_id = %d;`
+
+	// delete user defined function from mo_user_defined_function
+	deleteUserDefinedFunctionFormat = `delete from mo_catalog.mo_user_defined_function where function_id = %d;`
 )
 
 var (
@@ -2496,7 +2533,103 @@ handleFailed:
 }
 
 func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) error {
-	return nil
+	var err error
+	var sql string
+	var argstr string
+	var checkDatabase string
+	var dbName string
+	var funcId int64
+	var fmtctx *tree.FmtCtx
+	var erArray []ExecResult
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// a database must be selected or specified as qualifier when create a function
+	if df.Name.HasNoNameQualifier() {
+		if ses.DatabaseNameIsEmpty() {
+			return moerr.NewNoDBNoCtx()
+		}
+		dbName = ses.GetDatabaseName()
+	} else {
+		dbName = string(df.Name.Name.SchemaName)
+	}
+
+	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+
+	// validate database name and signature (name + args)
+	bh.ClearExecResultSet()
+	checkDatabase = fmt.Sprintf(checkUdfArgs, string(df.Name.Name.ObjectName), dbName)
+	err = bh.Exec(ctx, checkDatabase)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if execResultArrayHasData(erArray) {
+		// function with provided name and db exists, now check arguments
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			argstr, err = erArray[0].GetString(ctx, i, 0)
+			if err != nil {
+				goto handleFailed
+			}
+			funcId, err = erArray[0].GetInt64(ctx, i, 1)
+			if err != nil {
+				goto handleFailed
+			}
+			logutil.Debug("argstr: " + argstr)
+			argMap := make(map[string]string)
+			json.Unmarshal([]byte(argstr), &argMap)
+			argCount := 0
+			if len(argMap) == len(df.Args) {
+				for _, v := range argMap {
+					if v != (df.Args[argCount].GetType(fmtctx)) {
+						goto handleFailed
+					}
+					argCount++
+					fmtctx.Reset()
+				}
+				goto handleArgMatch
+			}
+		}
+		goto handleFailed
+	} else {
+		// no such function
+		return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
+	}
+
+handleArgMatch:
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
+
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
 }
 
 // doRevokePrivilege accomplishes the RevokePrivilege statement
@@ -5827,5 +5960,92 @@ handleFailed:
 }
 
 func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) error {
-	return nil
+	var err error
+	var initMoUdf string
+	var retTypeStr string
+	var dbName string
+	var checkExistence string
+	var argsJson []byte
+	var fmtctx *tree.FmtCtx
+	var argMap map[string]string
+	var erArray []ExecResult
+
+	// a database must be selected or specified as qualifier when create a function
+	if cf.Name.HasNoNameQualifier() {
+		if ses.DatabaseNameIsEmpty() {
+			return moerr.NewNoDBNoCtx()
+		}
+		dbName = ses.GetDatabaseName()
+	} else {
+		dbName = string(cf.Name.Name.SchemaName)
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// format return type
+	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+	cf.ReturnType.Format(fmtctx)
+	retTypeStr = fmtctx.String()
+	fmtctx.Reset()
+
+	// build argmap and marshal as json
+	argMap = make(map[string]string)
+	for i := 0; i < len(cf.Args); i++ {
+		curName := cf.Args[i].GetName(fmtctx)
+		fmtctx.Reset()
+		argMap[curName] = cf.Args[i].GetType(fmtctx)
+		fmtctx.Reset()
+	}
+	argsJson, err = json.Marshal(argMap)
+	if err != nil {
+		goto handleFailed
+	}
+
+	// validate duplicate function declaration
+	bh.ClearExecResultSet()
+	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, string(argsJson))
+	logutil.Debug("Exist: " + checkExistence)
+	err = bh.Exec(ctx, checkExistence)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if execResultArrayHasData(erArray) {
+		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
+	}
+
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
+		string(cf.Name.Name.ObjectName),
+		string(argsJson),
+		retTypeStr, cf.Body, cf.Language, dbName,
+		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0))
+	err = bh.Exec(ctx, initMoUdf)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return err
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
 }
