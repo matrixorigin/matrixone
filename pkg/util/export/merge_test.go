@@ -172,6 +172,26 @@ func initLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Ta
 	return nil
 }
 
+func initEmptyLogFile(ctx context.Context, fs fileservice.FileService, tbl *table.Table, ts time.Time) error {
+	mux.Lock()
+	defer mux.Unlock()
+
+	var newFilePath = func(ts time.Time) string {
+		filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts)
+		p := tbl.PathBuilder.Build(tbl.Account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.GetName())
+		filepath := path.Join(p, filename)
+		return filepath
+	}
+
+	buf := make([]byte, 0, 4096)
+
+	ts1 := ts
+	writer, _ := newETLWriter(ctx, fs, newFilePath(ts1), buf)
+	writer.FlushAndClose()
+
+	return nil
+}
+
 func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Table, ts time.Time) error {
 	mux.Lock()
 	defer mux.Unlock()
@@ -259,6 +279,66 @@ func TestNewMerge(t *testing.T) {
 			}
 			require.Nil(t, err)
 			require.Equal(t, 6, lines)
+
+		})
+	}
+}
+
+func TestNewMergeEmptyFile(t *testing.T) {
+	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, t.TempDir())
+	require.Nil(t, err)
+	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
+
+	ctx := trace.Generate(context.Background())
+
+	type args struct {
+		ctx  context.Context
+		opts []MergeOption
+	}
+	tests := []struct {
+		name string
+		args args
+		want *Merge
+	}{
+		{
+			name: "normal",
+			args: args{
+				ctx: ctx,
+				opts: []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
+					WithFileService(fs), WithTable(dummyTable),
+					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)},
+			},
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			err := initEmptyLogFile(tt.args.ctx, fs, dummyTable, ts)
+			require.Nil(t, err)
+
+			got := NewMerge(tt.args.ctx, tt.args.opts...)
+			require.NotNil(t, got)
+
+			err = got.Main(tt.args.ctx, ts)
+			require.Nilf(t, err, "err: %v", err)
+
+			files := make([]string, 0, 1)
+			dir := []string{"/"}
+			for len(dir) > 0 {
+				entrys, _ := fs.List(tt.args.ctx, dir[0])
+				for _, e := range entrys {
+					p := path.Join(dir[0], e.Name)
+					if e.IsDir {
+						dir = append(dir, p)
+					} else {
+						files = append(files, p)
+					}
+				}
+				dir = dir[1:]
+			}
+			require.Equal(t, 1, len(files))
+			t.Logf("%v", files)
 
 		})
 	}

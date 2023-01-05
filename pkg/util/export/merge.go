@@ -431,7 +431,7 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 			s.reader = nil
 			s.raw.Close()
 			s.raw = nil
-			s.logger.Error("ContentReader.readerClose", logutil.PathField(s.path))
+			s.logger.Debug("ContentReader.readerClose", logutil.PathField(s.path), zap.Int("rows", cnt))
 		}
 		s.idx = 0
 		s.length = cnt
