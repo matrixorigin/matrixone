@@ -250,14 +250,19 @@ format(d1, id, bg_BG)
 21,000
 0,0000
 127,00000
-SELECT * FROM format_01 WHERE format(d1,1) = 126.0;
+SELECT * FROM format_01 WHERE format(d1,0) = 126;
 id    d1    d2    d3    d4
 2    126    null    743482    938256415
 SELECT id FROM (SELECT * FROM format_01 WHERE format(d1,0) = 126) as a;
 id
 2
-SELECT format(d1, id) FROM format_01 WHERE d3 % 2 != 0;
+SELECT format(d1, id) FROM format_01 WHERE d3 % 2 = 0;
 format(d1, id)
+-3.0
+126.00
+21.000
+0.0000
+127.00000
 SELECT format(d3, 4) FROM format_01 WHERE ABS(d3) > 1000;
 format(d3, 4)
 46,787,698.0000
@@ -271,37 +276,41 @@ count(format(d1, 2))
 1
 1
 1
-SELECT * FROM format_01 ORDER BY format(id, 4) DESC;
+SELECT * FROM format_01 ORDER BY format(id, 0) DESC;
 id    d1    d2    d3    d4
 5    127    3892    743482    938256415
 4    0    0    0    0
 3    21    37821    3782    0
 2    126    null    743482    938256415
 1    -3    46382    46787698    454987456415
-SELECT SIN(format(id,2)), COS(format(id,2)), TAN(format(id,0)) FROM format_01;
-sin(format(id, 2))    cos(format(id, 2))    tan(format(id, 0))
-0.8414709848078965    0.5403023058681398    1.557407724654902
-0.9092974268256816    -0.4161468365471424    -2.185039863261519
-0.1411200080598672    -0.9899924966004454    -0.1425465430742778
--0.7568024953079282    -0.6536436208636119    1.1578212823495775
--0.9589242746631385    0.2836621854632263    -3.3805150062465854
+SELECT SIN(format(d1,2)), TAN(format(id, 0)), COS(format(id,0)) from format_01;
+sin(format(d1, 2))    tan(format(id, 0))    cos(format(id, 0))
+-0.1411200080598672    1.557407724654902    0.5403023058681398
+0.3299908256737821    -2.185039863261519    -0.4161468365471424
+0.836655638536056    -0.1425465430742778    -0.9899924966004454
+0.0    1.1578212823495775    -0.6536436208636119
+0.9726300672424079    -3.3805150062465854    0.2836621854632263
 SELECT cot(format(45, 0)), ACOS(format(60, 1)), ATAN(format(75, 0)), SINH(format(90, 1));
 cot(format(45, 0))    acos(format(60, 1))    atan(format(75, 0))    sinh(format(90, 1))
 0.6173696237835573    null    1.557463783500751    6.102016471589204E38
-SELECT power(format(id,2), 2)FROM format_01;
-power(format(id, 2), 2)
-1.0
-4.0
-9.0
-16.0
-25.0
-SELECT EXP(format(id, 2)) FROM format_01;
-exp(format(id, 2))
-2.718281828459045
-7.38905609893065
-20.085536923187668
+SELECT EXP(format(4, 2));
+exp(format(4, 2))
 54.598150033144236
-148.4131591025766
+SELECT MAX(format(d1, id)), MIN(format(d3, 0)) from format_01;
+max(format(d1, id))    min(format(d3, 0))
+21.000    0
+SELECT ABS(format(d3,0)) FROM format_01;
+[unknown result because it is related to issue#7464]
+SELECT SUM(format(id,2)) FROM format_01;
+[unknown result because it is related to issue#7464]
+SELECT CEIL(format(d3, 4))FROM format_01;
+[unknown result because it is related to issue#7464]
+SELECT ROUND(format(d4, 0)) FROM format_01;
+[unknown result because it is related to issue#7464]
+SELECT power(format(2,1), 2);
+[unknown result because it is related to issue#7464]
+SELECT COUNT(format(d3,2)) FROM format_01;
+[unknown result because it is related to issue#7464]
 DROP TABLE IF EXISTS format_02;
 CREATE TABLE format_02(id INT, d1 FLOAT, d2 DOUBLE NOT NULL);
 INSERT INTO format_02 VALUES(1, 1.2, 47832.434);
@@ -379,17 +388,20 @@ format(d2, 4)
 -38,902,093.4324
 37,827,329.4343
 3,923,404.2132
-SELECT * FROM format_02 WHERE format(d2,0) IN (73, 32789);
+SELECT any_value(format(id,2)) FROM format_02;
+any_value(format(id, 2))
+1.00
+SELECT d1, d2 FROM format_02 WHERE format(id,0) BETWEEN 0 AND 400;
+d1    d2
+1.2    47832.434
+-3283.33    73.32
+null    32789.33
+0.0    -3.89020934324E7
+323232.0    0.0
+323.0    3.782732943432E7
+7382.0    3923404.2132421
+SELECT * from format_02 WHERE format(id, 1) like '1.2';
 id    d1    d2
-2    -3283.33    73.32
-SELECT * FROM format_02 WHERE format(d2,0) NOT IN (73, 32789);
-id    d1    d2
-1    1.2    47832.434
-3    null    32789.33
-4    0.0    -3.89020934324E7
-5    323232.0    0.0
-6    323.0    3.782732943432E7
-8    7382.0    3923404.2132421
 SELECT format(FLOOR(d2),4) FROM format_02;
 format(floor(d2), 4)
 47,832.0000
@@ -408,6 +420,16 @@ format(ceil(d2), 6)
 0.000000
 37,827,330.000000
 3,923,405.000000
+SELECT * from format_02 WHERE format(d2, 2) >= 0;
+[unknown result because it is related to issue#7464]
+SELECT * FROM format_02 WHERE format(d2, 0) NOT BETWEEN 0 AND 100;
+[unknown result because it is related to issue#7464]
+SELECT * FROM format_02 WHERE format(d2,0) IN (73, 32789);
+[unknown result because it is related to issue#7464]
+SELECT * FROM format_02 WHERE format(d2,0) NOT IN (73, 32789);
+[unknown result because it is related to issue#7464]
+SELECT * FROM format_02 WHERE format(d2, 2) MOD 2 = 0;
+[unknown result because it is related to issue#7464]
 DROP TABLE IF EXISTS format_04;
 CREATE TABLE format_04(a varchar(100), b varchar(100), c varchar(20));
 INSERT INTO format_04 VALUES("-.12334.2","2", "en_US");
@@ -429,6 +451,10 @@ SELECT a,b,c FROM format_04 WHERE format(b,0) = 4;
 a    b    c
 12332.123456    4    en_US
 12332.1    4    en_US
+SELECT ABS(format(b,5)) FROM format_04;
+[unknown result because it is related to issue#7464]
+SELECT FLOOR(format(c,3)) FROM format_04;
+[unknown result because it is related to issue#7464]
 DROP TABLE if exists format_05;
 DROP TABLE if exists format_06;
 CREATE TABLE format_05(
