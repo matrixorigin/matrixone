@@ -273,7 +273,6 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, paths []string
 	for _, path_ := range paths {
 		p, err = m.pathBuilder.ParsePath(ctx, path_)
 		if err != nil {
-			m.logger.Error(fmt.Sprintf("merge file meet failed"))
 			return err
 		}
 		ts := p.Timestamp()
