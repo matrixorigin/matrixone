@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"golang.org/x/sync/errgroup"
 	"io"
 	"os"
 	"strconv"
@@ -88,13 +89,32 @@ var openNewFile = func(ctx context.Context, ep *tree.ExportParam, mrs *MysqlResu
 		ep.Writer = bufio.NewWriterSize(ep.File, int(ep.DefaultBufSize))
 	} else {
 		//default 1MB
-		if ep.OutputBuffer == nil {
-			if ep.MaxFileSize == 0 {
-				ep.MaxFileSize = uint64(ep.DefaultBufSize)
+		//if ep.OutputBuffer == nil {
+		//	if ep.MaxFileSize == 0 {
+		//		ep.MaxFileSize = uint64(ep.DefaultBufSize)
+		//	}
+		//	ep.OutputBuffer = make([]byte, ep.MaxFileSize)
+		//}
+		//ep.FileServiceOffset = 0
+		ep.AsyncReader, ep.AsyncWriter = io.Pipe()
+		filePath := getExportFilePath(ep.FilePath, ep.FileCnt)
+
+		asyncWriteFunc := func() error {
+			vec := fileservice.IOVector{
+				FilePath: filePath,
+				Entries: []fileservice.IOEntry{
+					{
+						ReaderForWrite: ep.AsyncReader,
+						Size:           -1,
+					},
+				},
 			}
-			ep.OutputBuffer = make([]byte, ep.MaxFileSize)
+			return ep.FileService.Write(ctx, vec)
 		}
-		ep.FileServiceOffset = 0
+
+		ep.AsyncGroup, _ = errgroup.WithContext(ctx)
+		ep.AsyncGroup.Go(asyncWriteFunc)
+		ep.Writer = bufio.NewWriterSize(ep.AsyncWriter, int(ep.DefaultBufSize))
 	}
 	if ep.Header {
 		var header string
@@ -153,18 +173,14 @@ var formatOutputString = func(oq *outputQueue, tmp, symbol []byte, enclosed byte
 }
 
 var Flush = func(ep *tree.ExportParam) error {
-	if !ep.UseFileService {
-		return ep.Writer.Flush()
-	}
-	return nil
+	return ep.Writer.Flush()
 }
 
 var Seek = func(ep *tree.ExportParam) (int64, error) {
 	if !ep.UseFileService {
 		return ep.File.Seek(int64(ep.CurFileSize-ep.LineSize), io.SeekStart)
 	}
-	ep.FileServiceOffset = int64(ep.CurFileSize - ep.LineSize)
-	return ep.FileServiceOffset, nil
+	return 0, nil
 }
 
 var Read = func(ep *tree.ExportParam) (int, error) {
@@ -172,8 +188,7 @@ var Read = func(ep *tree.ExportParam) (int, error) {
 		ep.OutputStr = make([]byte, ep.LineSize)
 		return ep.File.Read(ep.OutputStr)
 	} else {
-		ep.OutputStr = make([]byte, ep.LineSize)
-		return copy(ep.OutputStr, ep.OutputBuffer[ep.FileServiceOffset:]), nil
+		return int(ep.LineSize), nil
 	}
 }
 
@@ -181,7 +196,6 @@ var Truncate = func(ep *tree.ExportParam) error {
 	if !ep.UseFileService {
 		return ep.File.Truncate(int64(ep.CurFileSize - ep.LineSize))
 	} else {
-		ep.FileServiceOffset = int64(ep.CurFileSize - ep.LineSize)
 		return nil
 	}
 }
@@ -191,21 +205,16 @@ var Close = func(ep *tree.ExportParam) error {
 		ep.FileCnt++
 		return ep.File.Close()
 	} else {
-		//there is no data, do nothing
-		if ep.FileServiceOffset == 0 {
-			return nil
-		}
 		ep.FileCnt++
-		return ep.FileService.Write(ep.Ctx, fileservice.IOVector{
-			FilePath: getExportFilePath(ep.FilePath, ep.FileCnt),
-			Entries: []fileservice.IOEntry{
-				{
-					Offset: 0,
-					Size:   ep.FileServiceOffset,
-					Data:   ep.OutputBuffer[:ep.FileServiceOffset],
-				},
-			},
-		})
+		err := ep.Writer.Flush()
+		if err != nil {
+			return err
+		}
+		err = ep.AsyncWriter.Close()
+		if err != nil {
+			return err
+		}
+		return ep.AsyncGroup.Wait()
 	}
 }
 

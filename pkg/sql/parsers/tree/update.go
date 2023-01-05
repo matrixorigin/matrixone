@@ -17,6 +17,8 @@ package tree
 import (
 	"bufio"
 	"context"
+	"golang.org/x/sync/errgroup"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -482,6 +484,9 @@ type ExportParam struct {
 	FileServiceOffset int64
 	OutputBuffer      []byte
 	Ctx               context.Context
+	AsyncReader       *io.PipeReader
+	AsyncWriter       *io.PipeWriter
+	AsyncGroup        *errgroup.Group
 }
 
 func (ep *ExportParam) Format(ctx *FmtCtx) {
