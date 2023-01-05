@@ -136,7 +136,7 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 	}
 
 	// use s3 as main fs
-	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.S3FileServiceName)
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}

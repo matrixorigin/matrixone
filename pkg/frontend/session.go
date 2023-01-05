@@ -1669,6 +1669,20 @@ func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, 
 	return dbName, nil
 }
 
+func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *plan2.TableDef) {
+	ses := tcc.GetSession()
+	ctx := ses.GetRequestContext()
+	txn, err := tcc.GetTxnHandler().GetTxn()
+	if err != nil {
+		return nil, nil
+	}
+	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(ctx, txn, tableId)
+	if err != nil {
+		return nil, nil
+	}
+	return tcc.getTableDef(ctx, table, dbName, tableName)
+}
+
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
@@ -1678,7 +1692,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if err != nil {
 		return nil, nil
 	}
+	return tcc.getTableDef(ctx, table, dbName, tableName)
+}
 
+func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Relation, dbName, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
 	tableId := table.GetTableID(ctx)
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
