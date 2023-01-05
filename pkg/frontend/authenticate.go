@@ -784,6 +784,12 @@ var (
 				definer  varchar(50),
 				modified_time timestamp,
 				created_time  timestamp,
+				type    varchar(10) default 'FUNCTION',
+				security_type varchar(10) default 'DEFINER', 
+				comment  varchar(5000) default '',
+				character_set_client varchar(64) default 'utf8mb4',
+				collation_connection varchar(64) default 'utf8mb4_0900_ai_ci',
+				database_collation varchar(64) default 'utf8mb4_0900_ai_ci',
 				primary key(function_id)
 			);`,
 	}
