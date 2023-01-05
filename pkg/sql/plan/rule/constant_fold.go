@@ -110,7 +110,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	}
 
 	if f.RealTimeRelated {
-		c.SrcFunc = &plan.Expr{
+		c.Src = &plan.Expr{
 			Typ: &plan.Type{
 				Id:          e.Typ.Id,
 				NotNullable: e.Typ.NotNullable,
@@ -119,6 +119,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 				Size:        e.Typ.Size,
 				Scale:       e.Typ.Scale,
 				AutoIncr:    e.Typ.AutoIncr,
+				Table:       e.Typ.Table,
 			},
 			Expr: &plan.Expr_F{
 				F: &plan.Function{
@@ -135,6 +136,31 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 					Args: make([]*plan.Expr, 0),
 				},
 			},
+		}
+	} else {
+		existRealTimeFunc := false
+		for i, expr := range ef.F.Args {
+			if ac, cok := expr.Expr.(*plan.Expr_C); cok && ac.C.Src != nil {
+				if _, pok := ac.C.Src.Expr.(*plan.Expr_P); !pok {
+					ef.F.Args[i] = ac.C.Src
+					existRealTimeFunc = true
+				}
+			}
+		}
+		if existRealTimeFunc {
+			c.Src = &plan.Expr{
+				Typ: &plan.Type{
+					Id:          e.Typ.Id,
+					NotNullable: e.Typ.NotNullable,
+					Width:       e.Typ.Width,
+					Precision:   e.Typ.Precision,
+					Size:        e.Typ.Size,
+					Scale:       e.Typ.Scale,
+					AutoIncr:    e.Typ.AutoIncr,
+					Table:       e.Typ.Table,
+				},
+				Expr: ef,
+			}
 		}
 	}
 

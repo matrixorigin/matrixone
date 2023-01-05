@@ -2243,6 +2243,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if !cacheHit {
 		cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 	} else if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil {
+		cwft.ses.accountId = getAccountId(requestCtx)
 		err = authenticateCanExecuteStatementAndPlan(requestCtx, cwft.ses, cwft.stmt, cwft.plan)
 	}
 	if err != nil {
@@ -2273,7 +2274,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 		// replace ? and @var with their values
 		resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
-		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
+		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())
 		constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
 		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
 		err = vp.Visit(requestCtx)
@@ -2302,14 +2303,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 			return nil, err
 		}
 	} else {
-		// replace @var with their values
-		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
-
 		var vp *plan2.VisitPlan
 		if cacheHit {
-			vp = plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{resetVarRule, plan2.NewRecomputeRealTimeRelatedFuncRule(cwft.ses.GetTxnCompileCtx().GetProcess())})
+			vp = plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess()), plan2.NewRecomputeRealTimeRelatedFuncRule(cwft.ses.GetTxnCompileCtx().GetProcess())})
 		} else {
-			vp = plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{resetVarRule})
+			vp = plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())})
 		}
 		err = vp.Visit(requestCtx)
 		if err != nil {
@@ -2318,13 +2316,18 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	}
 
 	txnHandler := cwft.ses.GetTxnHandler()
-	if cwft.plan.NeedImplicitTxn() || cacheHit {
+	if cacheHit {
 		cwft.proc.TxnOperator, err = txnHandler.GetTxn()
 		if err != nil {
 			return nil, err
 		}
 	} else if cwft.plan.GetQuery().GetLoadTag() {
 		cwft.proc.TxnOperator = txnHandler.GetTxnOnly()
+	} else if cwft.plan.NeedImplicitTxn() {
+		cwft.proc.TxnOperator, err = txnHandler.GetTxn()
+		if err != nil {
+			return nil, err
+		}
 	}
 	addr := ""
 	if len(cwft.ses.GetParameterUnit().ClusterNodes) > 0 {
@@ -3216,8 +3219,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {
 			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL ||
 				cwft.stmt.GetQueryType() == tree.QueryTypeTCL {
-				canCache = false
+				/*if _, ok := cwft.stmt.(*tree.SetVar); !ok {
+					ses.cleanCache()
+				}*/
 				ses.cleanCache()
+				canCache = false
 			}
 		}
 
