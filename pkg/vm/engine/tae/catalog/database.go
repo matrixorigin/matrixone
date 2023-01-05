@@ -190,8 +190,14 @@ func (e *DBEntry) GetFullName() string {
 	}
 	return e.fullName
 }
-func (e *DBEntry) GetCompatibility() string {
-	return "create at sysblock"
+func (e *DBEntry) GetCompatibility() []byte {
+	modeStr := "{" + "\"" + "transaction_isolation" + "\"" + ":" + "\"" + "REPEATABLE-READ" + "\"" + "," + "\"" + "lower_case_table_names" + "\"" + ":" + "0" + "}"
+	modeJson, err := types.ParseStringToByteJson(modeStr)
+	if err != nil {
+		return nil
+	}
+	modeJsonBytes, _ := modeJson.Marshal()
+	return modeJsonBytes
 }
 
 func (e *DBEntry) String() string {

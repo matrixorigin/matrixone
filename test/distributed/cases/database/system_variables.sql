@@ -149,3 +149,9 @@ set @@sql_mode = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
 select @@sql_mode;
 set @@sql_mode = default;
 select @@sql_mode;
+
+--mysql_compatbility_mode 
+drop database if exists test;
+create database test;
+select mysql_compatbility_mode from mo_catalog.mo_database where datname ="test";
+drop database test;

@@ -336,7 +336,7 @@ func FillDBRow(db *catalog.DBEntry, attr string, colData containers.Vector, _ ty
 	case pkgcatalog.SystemDBAttr_AccID:
 		colData.Append(db.GetTenantID())
 	case pkgcatalog.SystemDBAttr_MYSQL_COMPATBILITY_MODE:
-		colData.Append([]byte(db.GetCompatibility()))
+		colData.Append(db.GetCompatibility())
 	default:
 		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}

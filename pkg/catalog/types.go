@@ -332,7 +332,7 @@ var (
 		types.New(types.T_uint32, 0, 0, 0),     // creator
 		types.New(types.T_timestamp, 0, 0, 0),  // created_time
 		types.New(types.T_uint32, 0, 0, 0),     // account_id
-		types.New(types.T_varchar, 5000, 0, 0), // mysql_compatbility_mode
+		types.New(types.T_json, 5000, 0, 0),    // mysql_compatbility_mode
 	}
 	MoTablesTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),     // rel_id
