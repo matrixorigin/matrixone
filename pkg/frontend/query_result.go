@@ -230,7 +230,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, exportParam *tree.Expo
 	exportParam.FileService = ses.GetParameterUnit().FileService
 	exportParam.Ctx = ctx
 	defer func() {
-		exportParam.OutputBuffer = nil
+		exportParam.LineBuffer = nil
 		exportParam.OutputStr = nil
 	}()
 	initExportFileParam(exportParam, mrs)

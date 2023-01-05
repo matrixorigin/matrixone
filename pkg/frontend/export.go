@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -89,13 +90,11 @@ var openNewFile = func(ctx context.Context, ep *tree.ExportParam, mrs *MysqlResu
 		ep.Writer = bufio.NewWriterSize(ep.File, int(ep.DefaultBufSize))
 	} else {
 		//default 1MB
-		//if ep.OutputBuffer == nil {
-		//	if ep.MaxFileSize == 0 {
-		//		ep.MaxFileSize = uint64(ep.DefaultBufSize)
-		//	}
-		//	ep.OutputBuffer = make([]byte, ep.MaxFileSize)
-		//}
-		//ep.FileServiceOffset = 0
+		if ep.LineBuffer == nil {
+			ep.LineBuffer = &bytes.Buffer{}
+		} else {
+			ep.LineBuffer.Reset()
+		}
 		ep.AsyncReader, ep.AsyncWriter = io.Pipe()
 		filePath := getExportFilePath(ep.FilePath, ep.FileCnt)
 
@@ -114,7 +113,6 @@ var openNewFile = func(ctx context.Context, ep *tree.ExportParam, mrs *MysqlResu
 
 		ep.AsyncGroup, _ = errgroup.WithContext(ctx)
 		ep.AsyncGroup.Go(asyncWriteFunc)
-		ep.Writer = bufio.NewWriterSize(ep.AsyncWriter, int(ep.DefaultBufSize))
 	}
 	if ep.Header {
 		var header string
@@ -130,6 +128,9 @@ var openNewFile = func(ctx context.Context, ep *tree.ExportParam, mrs *MysqlResu
 			return moerr.NewInternalError(ctx, "the header line size is over the maxFileSize")
 		}
 		if err := writeDataToCSVFile(ep, []byte(header)); err != nil {
+			return err
+		}
+		if _, err := EndOfLine(ep); err != nil {
 			return err
 		}
 	}
@@ -173,7 +174,10 @@ var formatOutputString = func(oq *outputQueue, tmp, symbol []byte, enclosed byte
 }
 
 var Flush = func(ep *tree.ExportParam) error {
-	return ep.Writer.Flush()
+	if !ep.UseFileService {
+		return ep.Writer.Flush()
+	}
+	return nil
 }
 
 var Seek = func(ep *tree.ExportParam) (int64, error) {
@@ -188,6 +192,9 @@ var Read = func(ep *tree.ExportParam) (int, error) {
 		ep.OutputStr = make([]byte, ep.LineSize)
 		return ep.File.Read(ep.OutputStr)
 	} else {
+		ep.OutputStr = make([]byte, ep.LineSize)
+		copy(ep.OutputStr, ep.LineBuffer.Bytes())
+		ep.LineBuffer.Reset()
 		return int(ep.LineSize), nil
 	}
 }
@@ -206,11 +213,7 @@ var Close = func(ep *tree.ExportParam) error {
 		return ep.File.Close()
 	} else {
 		ep.FileCnt++
-		err := ep.Writer.Flush()
-		if err != nil {
-			return err
-		}
-		err = ep.AsyncWriter.Close()
+		err := ep.AsyncWriter.Close()
 		if err != nil {
 			return err
 		}
@@ -222,10 +225,17 @@ var Write = func(ep *tree.ExportParam, output []byte) (int, error) {
 	if !ep.UseFileService {
 		return ep.Writer.Write(output)
 	} else {
-		copy(ep.OutputBuffer[ep.FileServiceOffset:], output)
-		ep.FileServiceOffset += int64(len(output))
-		return len(output), nil
+		return ep.LineBuffer.Write(output)
 	}
+}
+
+var EndOfLine = func(ep *tree.ExportParam) (int, error) {
+	if ep.UseFileService {
+		n, err := ep.AsyncWriter.Write(ep.LineBuffer.Bytes())
+		ep.LineBuffer.Reset()
+		return n, err
+	}
+	return 0, nil
 }
 
 func writeToCSVFile(oq *outputQueue, output []byte) error {
@@ -460,5 +470,6 @@ func exportDataToCSVFile(oq *outputQueue) error {
 		}
 	}
 	oq.ep.Rows++
-	return nil
+	_, err := EndOfLine(oq.ep)
+	return err
 }
