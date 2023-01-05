@@ -346,7 +346,7 @@ func writeBatch(ctx context.Context,
 			}
 
 		}
-	} else if n.ClusterByDef != nil {
+	} else if n.ClusterByDef != nil && util.JudgeIsCompositeClusterByColumn(n.ClusterByDef.Name) {
 		util.FillCompositeClusterByBatch(bat, n.ClusterByDef.Name, proc)
 	}
 	// set null value's data
