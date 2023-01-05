@@ -345,6 +345,19 @@ func (h *Handle) HandleFlushTable(
 	return err
 }
 
+func (h *Handle) HandleForceCheckpoint(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	_ db.FlushTable,
+	resp *apipb.SyncLogTailResp) (err error) {
+
+	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+
+	err = h.eng.ForceCheckpoint(ctx,
+		currTs)
+	return err
+}
+
 func (h *Handle) loadPksFromFS(
 	ctx context.Context,
 	meta txn.TxnMeta,

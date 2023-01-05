@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,29 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package deletion
+package ctl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/fagongzi/util/protoc"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type Argument struct {
-	Ts           uint64
-	DeleteCtxs   []*DeleteCtx
-	AffectedRows uint64
-	IsRemote     bool
-}
-
-type DeleteCtx struct {
-	TableName          string
-	DbName             string
-	TableSource        engine.Relation
-	UseDeleteKey       string // The column used when deletion(dml), Currently, it is based on '__row_id' column
-	CanTruncate        bool
-	ColIndex           int32
-	IsIndexTableDelete bool
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func handleCheckpoint() handleFunc {
+	return getDNHandlerFunc(
+		pb.CmdMethod_Checkpoint,
+		func(_ string) ([]uint64, error) {
+			return nil, nil
+		},
+		func(dnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
+			return nil, nil
+		},
+		func(data []byte) (interface{}, error) {
+			resp := pb.DNStringResponse{}
+			protoc.MustUnmarshal(&resp, data)
+			return resp, nil
+		})
 }
