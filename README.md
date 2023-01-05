@@ -274,16 +274,6 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.6.0
     !!! info
          The *nightly* version is updated once a day.
 
-3. Mount the data directory(Optional)
-
-   To customize the configuration file, you can mount the custom configuration file stored on the local disk.
-
-   - **Mount the configuration file**
-
-   ```
-   docker run -d -p 6001:6001 -v ${local_data_path}/etc:/etc:rw  --entrypoint "/mo-service" matrixorigin/matrixone:0.6.0 -launch /etc/quickstart/launch.toml
-   ```
-
 ### 🌟 Connecting to MatrixOne server
 
 1. Install MySQL client.
