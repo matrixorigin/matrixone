@@ -88,3 +88,11 @@ func (e *EntireEngine) NewBlockReader(ctx context.Context, num int, ts timestamp
 	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]Reader, error) {
 	return e.Engine.NewBlockReader(ctx, num, ts, expr, ranges, tblDef)
 }
+
+func (e *EntireEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
+	return e.Engine.GetNameById(ctx, op, tableId)
+}
+
+func (e *EntireEngine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, rel Relation, err error) {
+	return e.Engine.GetRelationById(ctx, op, tableId)
+}

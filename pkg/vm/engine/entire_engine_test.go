@@ -298,6 +298,14 @@ func (e *testEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timest
 	return nil, nil
 }
 
+func (e *testEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
+	return "", "", nil
+}
+
+func (e *testEngine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, rel Relation, err error) {
+	return "", "", nil, nil
+}
+
 func newtestOperator() *testOperator {
 	return &testOperator{}
 }
