@@ -3139,7 +3139,10 @@ func (ses *Session) getSqlType(sql string) {
 
 func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
 	defer func() {
-		err = writer.Close()
+		err2 := writer.Close()
+		if err == nil {
+			err = err2
+		}
 	}()
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
