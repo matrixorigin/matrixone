@@ -50,8 +50,6 @@ type bufferHolder struct {
 	trigger *time.Timer
 
 	mux sync.Mutex
-
-	batch *any
 }
 
 type bufferSignalFunc func(*bufferHolder)
@@ -112,8 +110,7 @@ func (r *bufferGenerateReq) handle(buf *bytes.Buffer) (exportReq, error) {
 }
 
 func (r *bufferGenerateReq) callback(err error) {
-	//TODO implement me
-	panic("implement me")
+	return
 }
 
 var _ exportReq = (*bufferExportReq)(nil)
@@ -134,8 +131,7 @@ func (r *bufferExportReq) handle() error {
 }
 
 func (r *bufferExportReq) callback(err error) {
-	//TODO implement me
-	panic("implement me")
+	return
 }
 
 func (b *bufferHolder) getGenerateReq() generateReq {
