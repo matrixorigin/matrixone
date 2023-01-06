@@ -21,22 +21,217 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-type FunctionResult[T types.FixedSizeT] struct {
-	vec *Vector
-	mp  *mpool.MPool
+// FunctionParameterWrapper is generated from a vector.
+// It hides the relevant details of vector (like scalar and contain null or not.)
+// and provides a series of methods to get values.
+type FunctionParameterWrapper[T types.FixedSizeT] interface {
+	// GetType will return the type info of wrapped parameter.
+	GetType() types.Type
+
+	// GetSourceVector return the source vector.
+	GetSourceVector() *Vector
+
+	// GetValue return the Idx th value and if it's null or not.
+	// watch that, if str type, GetValue will return the []types.Varlena directly.
+	GetValue(idx uint64) (T, bool)
+
+	// GetStrValue return the Idx th string value and if it's null or not.
+	GetStrValue(idx uint64) ([]byte, bool)
+
+	// UnSafeGetAllValue return all the values.
+	// please use it carefully because we didn't check the null situation.
+	UnSafeGetAllValue() []T
 }
 
-type FunctionParameter[T types.FixedSizeT] struct {
+var _ FunctionParameterWrapper[int64] = &FunctionParameterNormal[int64]{}
+var _ FunctionParameterWrapper[int64] = &FunctionParameterWithoutNull[int64]{}
+var _ FunctionParameterWrapper[int64] = &FunctionParameterScalar[int64]{}
+var _ FunctionParameterWrapper[int64] = &FunctionParameterScalarNull[int64]{}
+
+func GenerateFunctionFixedTypeParameter[T types.FixedSizeT](v *Vector) FunctionParameterWrapper[T] {
+	t := v.GetType()
+	if v.IsScalarNull() {
+		return &FunctionParameterScalarNull[T]{
+			typ:          t,
+			sourceVector: v,
+		}
+	}
+	cols := MustTCols[T](v)
+	if v.IsScalar() {
+		return &FunctionParameterScalar[T]{
+			typ:          t,
+			sourceVector: v,
+			scalarValue:  cols[0],
+		}
+	}
+	if v.Nsp != nil && v.Nsp.Np != nil && v.Nsp.Np.Len() > 0 {
+		return &FunctionParameterNormal[T]{
+			typ:          t,
+			sourceVector: v,
+			values:       cols,
+			nullMap:      v.Nsp.Np,
+		}
+	}
+	return &FunctionParameterWithoutNull[T]{
+		typ:          t,
+		sourceVector: v,
+		values:       cols,
+	}
+}
+
+func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varlena] {
+	t := v.GetType()
+	if v.IsScalarNull() {
+		return &FunctionParameterScalarNull[types.Varlena]{
+			typ:          t,
+			sourceVector: v,
+		}
+	}
+	cols := MustTCols[types.Varlena](v)
+	if v.IsScalar() {
+		return &FunctionParameterScalar[types.Varlena]{
+			typ:          t,
+			sourceVector: v,
+			scalarValue:  cols[0],
+			scalarStr:    cols[0].GetByteSlice(v.area),
+		}
+	}
+	if v.Nsp != nil && v.Nsp.Np != nil && v.Nsp.Np.Len() > 0 {
+		return &FunctionParameterNormal[types.Varlena]{
+			typ:          t,
+			sourceVector: v,
+			strValues:    cols,
+			area:         v.area,
+			nullMap:      v.Nsp.Np,
+		}
+	}
+	return &FunctionParameterWithoutNull[types.Varlena]{
+		typ:          t,
+		sourceVector: v,
+		strValues:    cols,
+		area:         v.area,
+	}
+}
+
+// FunctionParameterNormal is a wrapper of normal vector which
+// may contains null value.
+type FunctionParameterNormal[T types.FixedSizeT] struct {
 	typ          types.Type
 	sourceVector *Vector
-	isScalar     bool
 	values       []T
 	strValues    []types.Varlena
 	area         []byte
-
-	// nulls information related.
-	containsNull bool
 	nullMap      *bitmap.Bitmap
+}
+
+func (p *FunctionParameterNormal[T]) GetType() types.Type {
+	return p.typ
+}
+
+func (p *FunctionParameterNormal[T]) GetSourceVector() *Vector {
+	return p.sourceVector
+}
+
+func (p *FunctionParameterNormal[T]) GetValue(idx uint64) (value T, isNull bool) {
+	if p.nullMap.Contains(idx) {
+		return value, true
+	}
+	return p.values[idx], false
+}
+
+func (p *FunctionParameterNormal[T]) GetStrValue(idx uint64) (value []byte, isNull bool) {
+	if p.nullMap.Contains(idx) {
+		return nil, true
+	}
+	return p.strValues[idx].GetByteSlice(p.area), false
+}
+
+func (p *FunctionParameterNormal[T]) UnSafeGetAllValue() []T {
+	return p.values
+}
+
+// FunctionParameterWithoutNull is a wrapper of normal vector but
+// without null value.
+type FunctionParameterWithoutNull[T types.FixedSizeT] struct {
+	typ          types.Type
+	sourceVector *Vector
+	values       []T
+	strValues    []types.Varlena
+	area         []byte
+}
+
+func (p *FunctionParameterWithoutNull[T]) GetType() types.Type {
+	return p.typ
+}
+
+func (p *FunctionParameterWithoutNull[T]) GetSourceVector() *Vector {
+	return p.sourceVector
+}
+
+func (p *FunctionParameterWithoutNull[T]) GetValue(idx uint64) (T, bool) {
+	return p.values[idx], false
+}
+
+func (p *FunctionParameterWithoutNull[T]) GetStrValue(idx uint64) ([]byte, bool) {
+	return p.strValues[idx].GetByteSlice(p.area), false
+}
+
+func (p *FunctionParameterWithoutNull[T]) UnSafeGetAllValue() []T {
+	return p.values
+}
+
+// FunctionParameterScalar is a wrapper of scalar vector.
+type FunctionParameterScalar[T types.FixedSizeT] struct {
+	typ          types.Type
+	sourceVector *Vector
+	scalarValue  T
+	scalarStr    []byte
+}
+
+func (p *FunctionParameterScalar[T]) GetType() types.Type {
+	return p.typ
+}
+
+func (p *FunctionParameterScalar[T]) GetSourceVector() *Vector {
+	return p.sourceVector
+}
+
+func (p *FunctionParameterScalar[T]) GetValue(_ uint64) (T, bool) {
+	return p.scalarValue, false
+}
+
+func (p *FunctionParameterScalar[T]) GetStrValue(_ uint64) ([]byte, bool) {
+	return p.scalarStr, false
+}
+
+func (p *FunctionParameterScalar[T]) UnSafeGetAllValue() []T {
+	return []T{p.scalarValue}
+}
+
+// FunctionParameterScalarNull is a wrapper of scalar null vector.
+type FunctionParameterScalarNull[T types.FixedSizeT] struct {
+	typ          types.Type
+	sourceVector *Vector
+}
+
+func (p *FunctionParameterScalarNull[T]) GetType() types.Type {
+	return p.typ
+}
+
+func (p *FunctionParameterScalarNull[T]) GetSourceVector() *Vector {
+	return p.sourceVector
+}
+
+func (p *FunctionParameterScalarNull[T]) GetValue(_ uint64) (value T, isNull bool) {
+	return value, true
+}
+
+func (p *FunctionParameterScalarNull[T]) GetStrValue(_ uint64) ([]byte, bool) {
+	return nil, true
+}
+
+func (p *FunctionParameterScalarNull[T]) UnSafeGetAllValue() []T {
+	return nil
 }
 
 type FunctionResultWrapper interface {
@@ -44,7 +239,21 @@ type FunctionResultWrapper interface {
 	Free()
 }
 
-func NewResultFunc[T types.FixedSizeT](v *Vector, mp *mpool.MPool) *FunctionResult[T] {
+var _ FunctionResultWrapper = &FunctionResult[int64]{}
+
+type FunctionResult[T types.FixedSizeT] struct {
+	vec *Vector
+	mp  *mpool.MPool
+}
+
+func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *FunctionResult[T] {
+	if fr, ok := wrapper.(*FunctionResult[T]); ok {
+		return fr
+	}
+	panic("wrong type for FunctionResultWrapper")
+}
+
+func newResultFunc[T types.FixedSizeT](v *Vector, mp *mpool.MPool) *FunctionResult[T] {
 	return &FunctionResult[T]{
 		vec: v,
 		mp:  mp,
@@ -63,113 +272,28 @@ func (fr *FunctionResult[T]) GetType() types.Type {
 	return fr.vec.Typ
 }
 
-func (fr *FunctionResult[T]) SetFromParameter(fp *FunctionParameter[T]) {
+func (fr *FunctionResult[T]) SetFromParameter(fp FunctionParameterWrapper[T]) {
 	// clean the old memory
-	if fr.vec != fp.sourceVector {
+	if fr.vec != fp.GetSourceVector() {
 		fr.Free()
 	}
-	fr.vec = fp.sourceVector
+	fr.vec = fp.GetSourceVector()
 }
 
 func (fr *FunctionResult[T]) GetResultVector() *Vector {
 	return fr.vec
 }
 
-func (fr *FunctionResult[T]) ConvertToParameter() FunctionParameter[T] {
+func (fr *FunctionResult[T]) ConvertToParameter() FunctionParameterWrapper[T] {
 	return GenerateFunctionFixedTypeParameter[T](fr.vec)
 }
 
-func (fr *FunctionResult[T]) ConvertToStrParameter() FunctionParameter[types.Varlena] {
+func (fr *FunctionResult[T]) ConvertToStrParameter() FunctionParameterWrapper[types.Varlena] {
 	return GenerateFunctionStrParameter(fr.vec)
 }
 
 func (fr *FunctionResult[T]) Free() {
 	fr.vec.Free(fr.mp)
-}
-
-func (fp *FunctionParameter[T]) GetSourceVector() *Vector {
-	return fp.sourceVector
-}
-
-// GetValue return the nth value and if it's null or not.
-func (fp *FunctionParameter[T]) GetValue(idx uint64) (value T, isNull bool) {
-	if fp.isScalar {
-		idx = 0
-	}
-	if fp.containsNull && fp.nullMap.Contains(idx) {
-		return value, true
-	}
-	return fp.values[idx], false
-}
-
-func (fp *FunctionParameter[T]) IsBin() bool {
-	return fp.sourceVector.GetIsBin()
-}
-
-func (fp *FunctionParameter[T]) UnSafeGetAllValue() []T {
-	return fp.values
-}
-
-// GetStrValue return nth value of string parameter and if it's null or not.
-func (fp *FunctionParameter[T]) GetStrValue(idx uint64) (value []byte, isNull bool) {
-	if fp.isScalar {
-		idx = 0
-	}
-	if fp.containsNull && fp.nullMap.Contains(idx) {
-		return nil, true
-	}
-	vrl := fp.strValues[idx]
-	return vrl.GetByteSlice(fp.area), false
-}
-
-func (fp *FunctionParameter[T]) GetType() types.Type {
-	return fp.typ
-}
-
-// GenerateFunctionFixedTypeParameter generate a structure which is easy to get value.
-func GenerateFunctionFixedTypeParameter[T types.FixedSizeT](v *Vector) FunctionParameter[T] {
-	var containsNull = false
-	var nullMap *bitmap.Bitmap
-	cols := MustTCols[T](v)
-	if v.IsScalarNull() && len(cols) == 0 {
-		cols = make([]T, 1)
-	}
-	if v.Nsp != nil && v.Nsp.Np != nil && v.Nsp.Np.Len() > 0 {
-		containsNull = true
-		nullMap = v.Nsp.Np
-	}
-	return FunctionParameter[T]{
-		typ:          v.GetType(),
-		sourceVector: v,
-		isScalar:     v.IsScalar(),
-		values:       cols,
-		containsNull: containsNull,
-		nullMap:      nullMap,
-	}
-}
-
-func GenerateFunctionStrParameter(v *Vector) FunctionParameter[types.Varlena] {
-	var containsNull = false
-	var nullMap *bitmap.Bitmap
-	cols := MustTCols[types.Varlena](v)
-	area := v.area
-	if v.IsScalarNull() && len(cols) == 0 {
-		cols = make([]types.Varlena, 1)
-		area = make([]byte, 0)
-	}
-	if v.Nsp != nil && v.Nsp.Np != nil && v.Nsp.Np.Len() > 0 {
-		containsNull = true
-		nullMap = v.Nsp.Np
-	}
-	return FunctionParameter[types.Varlena]{
-		typ:          v.GetType(),
-		sourceVector: v,
-		isScalar:     v.IsScalar(),
-		area:         area,
-		strValues:    cols,
-		containsNull: containsNull,
-		nullMap:      nullMap,
-	}
 }
 
 func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool, isConst bool, length int) FunctionResultWrapper {
@@ -183,9 +307,9 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool, isConst bool, len
 	switch typ.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		// IF STRING type.
-		return NewResultFunc[types.Varlena](v, mp)
+		return newResultFunc[types.Varlena](v, mp)
 	case types.T_json:
-		return NewResultFunc[types.Varlena](v, mp)
+		return newResultFunc[types.Varlena](v, mp)
 	}
 
 	// Pre allocate the memory
@@ -194,45 +318,45 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool, isConst bool, len
 	//SetLength(v, 0)
 	switch typ.Oid {
 	case types.T_bool:
-		return NewResultFunc[bool](v, mp)
+		return newResultFunc[bool](v, mp)
 	case types.T_int8:
-		return NewResultFunc[int8](v, mp)
+		return newResultFunc[int8](v, mp)
 	case types.T_int16:
-		return NewResultFunc[int16](v, mp)
+		return newResultFunc[int16](v, mp)
 	case types.T_int32:
-		return NewResultFunc[int32](v, mp)
+		return newResultFunc[int32](v, mp)
 	case types.T_int64:
-		return NewResultFunc[int64](v, mp)
+		return newResultFunc[int64](v, mp)
 	case types.T_uint8:
-		return NewResultFunc[uint8](v, mp)
+		return newResultFunc[uint8](v, mp)
 	case types.T_uint16:
-		return NewResultFunc[uint16](v, mp)
+		return newResultFunc[uint16](v, mp)
 	case types.T_uint32:
-		return NewResultFunc[uint32](v, mp)
+		return newResultFunc[uint32](v, mp)
 	case types.T_uint64:
-		return NewResultFunc[uint64](v, mp)
+		return newResultFunc[uint64](v, mp)
 	case types.T_float32:
-		return NewResultFunc[float32](v, mp)
+		return newResultFunc[float32](v, mp)
 	case types.T_float64:
-		return NewResultFunc[float64](v, mp)
+		return newResultFunc[float64](v, mp)
 	case types.T_date:
-		return NewResultFunc[types.Date](v, mp)
+		return newResultFunc[types.Date](v, mp)
 	case types.T_datetime:
-		return NewResultFunc[types.Datetime](v, mp)
+		return newResultFunc[types.Datetime](v, mp)
 	case types.T_time:
-		return NewResultFunc[types.Time](v, mp)
+		return newResultFunc[types.Time](v, mp)
 	case types.T_timestamp:
-		return NewResultFunc[types.Timestamp](v, mp)
+		return newResultFunc[types.Timestamp](v, mp)
 	case types.T_decimal64:
-		return NewResultFunc[types.Decimal64](v, mp)
+		return newResultFunc[types.Decimal64](v, mp)
 	case types.T_decimal128:
-		return NewResultFunc[types.Decimal128](v, mp)
+		return newResultFunc[types.Decimal128](v, mp)
 	case types.T_TS:
-		return NewResultFunc[types.TS](v, mp)
+		return newResultFunc[types.TS](v, mp)
 	case types.T_Rowid:
-		return NewResultFunc[types.Rowid](v, mp)
+		return newResultFunc[types.Rowid](v, mp)
 	case types.T_uuid:
-		return NewResultFunc[types.Uuid](v, mp)
+		return newResultFunc[types.Uuid](v, mp)
 	}
 	panic(fmt.Sprintf("unexpected type %s for function result", typ))
 }
