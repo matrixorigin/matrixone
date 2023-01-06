@@ -784,6 +784,12 @@ var (
 				definer  varchar(50),
 				modified_time timestamp,
 				created_time  timestamp,
+				type    varchar(10),
+				security_type varchar(10), 
+				comment  varchar(5000),
+				character_set_client varchar(64),
+				collation_connection varchar(64),
+				database_collation varchar(64),
 				primary key(function_id)
 			);`,
 	}
@@ -807,7 +813,13 @@ var (
 		db,
 		definer,
 		modified_time,
-		created_time) values ("%s",'%s',"%s","%s","%s","%s","%s","%s","%s");`
+		created_time,
+		type,
+		security_type,
+		comment,
+		character_set_client,
+		collation_connection,
+		database_collation) values ("%s",'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
 				account_id,
@@ -6029,7 +6041,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 		string(cf.Name.Name.ObjectName),
 		string(argsJson),
 		retTypeStr, cf.Body, cf.Language, dbName,
-		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0))
+		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	err = bh.Exec(ctx, initMoUdf)
 	if err != nil {
 		goto handleFailed
