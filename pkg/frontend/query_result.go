@@ -42,11 +42,11 @@ func getQueryResultDir() string {
 	return fileservice.JoinPath(defines.SharedFileServiceName, "/query_result")
 }
 
-func BuildPrefixOfQueryResultFile(accountName, statementId string) string {
+func getPrefixOfQueryResultFile(accountName, statementId string) string {
 	return fmt.Sprintf(queryResultPrefix, accountName, statementId)
 }
 
-func BuildPathOfQueryResultFile(fileName string) string {
+func getPathOfQueryResultFile(fileName string) string {
 	return fmt.Sprintf("%s/%s", getQueryResultDir(), fileName)
 }
 
@@ -223,9 +223,13 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	return bat, nil
 }
 
-type resultFile struct {
-	name       string
-	size       int64
+// resultFileInfo holds the info of the result file
+type resultFileInfo struct {
+	// the name of the result file
+	name string
+	// the size of the result file
+	size int64
+	// the block id of the result file
 	blockIndex int64
 }
 
@@ -236,7 +240,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	var columnDefs *plan.ResultColDef
 	var reader objectio.Reader
 	var blocks []objectio.BlockObject
-	var files []resultFile
+	var files []resultFileInfo
 
 	//step1: open file handler
 	if columnDefs, err = openResultMeta(ctx, ses, eParam.QueryId); err != nil {
@@ -423,7 +427,7 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 }
 
 // getResultFiles lists all result files of queryId
-func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]resultFile, error) {
+func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]resultFileInfo, error) {
 	fs := objectio.NewObjectFS(ses.GetParameterUnit().FileService, getQueryResultDir())
 	files, err := fs.ListDir(getQueryResultDir())
 	if err != nil {
@@ -433,8 +437,8 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 	if account == nil {
 		return nil, moerr.NewInternalError(ctx, "modump does not work without the account info")
 	}
-	prefix := BuildPrefixOfQueryResultFile(account.GetTenant(), queryId)
-	ret := make([]resultFile, 0, len(files))
+	prefix := getPrefixOfQueryResultFile(account.GetTenant(), queryId)
+	ret := make([]resultFileInfo, 0, len(files))
 	for _, file := range files {
 		if file.IsDir {
 			continue
@@ -460,7 +464,7 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 			if blockIndex < 0 {
 				return nil, moerr.NewInternalError(ctx, "the query result file %s has the invalid name", file.Name)
 			}
-			ret = append(ret, resultFile{
+			ret = append(ret, resultFileInfo{
 				name:       file.Name,
 				size:       file.Size,
 				blockIndex: blockIndex,
@@ -476,7 +480,7 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 // openResultFile reads all blocks of the result file
 func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize int64) (objectio.Reader, []objectio.BlockObject, error) {
 	// read result's blocks
-	filePath := BuildPathOfQueryResultFile(fileName)
+	filePath := getPathOfQueryResultFile(fileName)
 	reader, err := objectio.NewObjectReader(filePath, ses.GetParameterUnit().FileService)
 	if err != nil {
 		return nil, nil, err
