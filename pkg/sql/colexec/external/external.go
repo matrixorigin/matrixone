@@ -609,19 +609,14 @@ func FliterFileList(node *plan.Node, proc *process.Process, fileList []string) (
 
 func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
 	if param.ScanType == tree.S3 {
-		var err error
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
-		if param.S3Param.APIKey == "" && param.S3Param.APISecret == "" {
-			if param.S3Param.Provider == "" ||  param.S3Param.Provider == "aws" {
-				err = w.Write([]string{"s3-opts", "role-arn="+param.S3Param.RoleArn, "external-id="+param.S3Param.ExternalId})
-			} else {
-				err = w.Write([]string{"s3-no-key", param.S3Param.Endpoint, param.S3Param.Region, param.S3Param.Bucket, ""})
-			}
-		} else {
-			err = w.Write([]string{"s3", param.S3Param.Endpoint, param.S3Param.Region, param.S3Param.Bucket, param.S3Param.APIKey, param.S3Param.APISecret, ""})
+		opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
+			"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
+		if param.S3Param.Provider == "minio" {
+			opts = append(opts, "is-minio=true")
 		}
-		if err != nil {
+		if err = w.Write(opts); err != nil {
 			return nil, "", err
 		}
 		w.Flush()

@@ -57,20 +57,19 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 			Vecs:  make([]*vector.Vector, 1),
 			Cnt:   1,
 		}
+		b.Attrs[0] = catalog.IndexTableIndexColName
 	} else {
 		b = &batch.Batch{
 			Attrs: make([]string, 2),
 			Vecs:  make([]*vector.Vector, 2),
 			Cnt:   1,
 		}
+		b.Attrs[0] = catalog.IndexTableIndexColName
+		b.Attrs[1] = catalog.IndexTablePrimaryColName
 	}
 	isCompoundIndex := false
 	if len(parts) > 1 {
 		isCompoundIndex = true
-	}
-	b.Attrs[0] = catalog.IndexTableIndexColName
-	if len(b.Attrs) > 1 {
-		b.Attrs[1] = catalog.IndexTablePrimaryColName
 	}
 	//bitMap := new(nulls.Nulls)
 	var bitMap *nulls.Nulls

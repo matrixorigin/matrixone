@@ -16,6 +16,8 @@ package catalog
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -387,4 +389,65 @@ var (
 	MoColumnsTableDefs = []engine.TableDef{}
 	// used by memengine or tae or cn
 	MoTableMetaDefs = []engine.TableDef{}
+)
+
+var (
+	QueryResultPath     string
+	QueryResultMetaPath string
+	QueryResultMetaDir  string
+)
+
+func init() {
+	QueryResultPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result/%s_%s_%d.blk")
+	QueryResultMetaPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta/%s_%s.blk")
+	QueryResultMetaDir = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta")
+}
+
+const QueryResultName = "%s_%s_%d.blk"
+const QueryResultMetaName = "%s_%s.blk"
+
+type Meta struct {
+	QueryId    [16]byte
+	Statement  string
+	AccountId  uint32
+	RoleId     uint32
+	ResultPath string
+	CreateTime types.Timestamp
+	ResultSize float64
+	Columns    string
+}
+
+var (
+	MetaColTypes = []types.Type{
+		types.New(types.T_uuid, 0, 0, 0),      // query_id
+		types.New(types.T_text, 0, 0, 0),      // statement
+		types.New(types.T_uint32, 0, 0, 0),    // account_id
+		types.New(types.T_uint32, 0, 0, 0),    // role_id
+		types.New(types.T_text, 0, 0, 0),      // result_path
+		types.New(types.T_timestamp, 0, 0, 0), // create_time
+		types.New(types.T_float64, 0, 0, 0),   // result_size
+		types.New(types.T_text, 0, 0, 0),      // columns
+	}
+
+	MetaColNames = []string{
+		"query_id",
+		"statement",
+		"account_id",
+		"role_id",
+		"result_path",
+		"create_time",
+		"result_size",
+		"columns",
+	}
+)
+
+const (
+	QUERY_ID_IDX    = 0
+	STATEMENT_IDX   = 1
+	ACCOUNT_ID_IDX  = 2
+	ROLE_ID_IDX     = 3
+	RESULT_PATH_IDX = 4
+	CREATE_TIME_IDX = 5
+	RESULT_SIZE_IDX = 6
+	COLUMNS_IDX     = 7
 )

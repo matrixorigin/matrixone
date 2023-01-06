@@ -1036,15 +1036,15 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	// index.TableDef.Defs store info of index need to be modified
 	// index.IndexTables store index table need to be created
+	oriPriKeyName := GetTablePriKeyName(tableDef.Cols, tableDef.CompositePkey)
+	createIndex.OriginTablePrimaryKey = oriPriKeyName
+
 	index := &plan.CreateTable{TableDef: &TableDef{}}
-	if err := buildUniqueIndexTable(index, []*tree.UniqueIndex{idx}, colMap, "", ctx); err != nil {
+	if err := buildUniqueIndexTable(index, []*tree.UniqueIndex{idx}, colMap, oriPriKeyName, ctx); err != nil {
 		return nil, err
 	}
 	createIndex.Index = index
 	createIndex.Table = tableName
-
-	oriPriKeyName := GetTablePriKeyName(tableDef.Cols, tableDef.CompositePkey)
-	createIndex.OriginTablePrimaryKey = oriPriKeyName
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
