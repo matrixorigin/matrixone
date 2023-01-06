@@ -156,9 +156,8 @@ func (rule *ResetParamOrderRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 // ---------------------------
 
 type ResetParamRefRule struct {
-	ctx     context.Context
-	params  []*Expr
-	compCtx CompilerContext
+	ctx    context.Context
+	params []*Expr
 }
 
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
