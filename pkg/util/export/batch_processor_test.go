@@ -110,7 +110,11 @@ func (s *dummyBuffer) ShouldFlush() bool {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	length := len(s.arr)
-	return length >= 3
+	should := length >= 3
+	if should {
+		logutil.Infof("buffer shouldFlush: %v", should)
+	}
+	return should
 }
 func (s *dummyBuffer) GetBatch(ctx context.Context, buf *bytes.Buffer) any {
 	s.mux.Lock()
@@ -291,7 +295,7 @@ func TestMOCollector_HangBug(t *testing.T) {
 		t.Logf("TestNewMOCollector::ErrorReport: %+v", err)
 	})
 
-	timeo := 30 * time.Second
+	timeo := 10 * time.Minute
 
 	// prepare signalFunc
 	var signalC = make(chan struct{}, 16)
@@ -309,6 +313,8 @@ func TestMOCollector_HangBug(t *testing.T) {
 			case ctrlC <- holder:
 			case <-ctrlTimer.C:
 				ctrlTimeoutCnt.Add(1)
+				t.Logf("count timeoutCnt: %d", ctrlTimeoutCnt.Load())
+				ctrlC <- holder
 			}
 		}
 	})

@@ -209,6 +209,19 @@ func LastInsertID(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	)
 }
 
+func LastQueryID(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return adapter(vectors, proc, types.T_varchar.ToType(), 0,
+		func(proc *process.Process, params ...interface{}) (int, error) {
+			return 0, nil
+		},
+		func(proc *process.Process, params ...interface{}) (interface{}, error) {
+			result := params[0].([]string)
+			result[0] = proc.SessionInfo.QueryId
+			return result, nil
+		},
+	)
+}
+
 // RolesGraphml returns a GraphML document representing memory role subgraphs
 func RolesGraphml(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return adapter(vectors, proc, types.T_varchar.ToType(), 0,

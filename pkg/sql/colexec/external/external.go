@@ -730,7 +730,9 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 	for k := 0; k < n; k++ {
 		bat.Zs[k] = 1
 	}
-	param.Zoneparam.offset++
+	if !param.extern.QueryResult {
+		param.Zoneparam.offset++
+	}
 	return bat, nil
 }
 
@@ -795,7 +797,13 @@ func needRead(param *ExternalParam, proc *process.Process, objectReader objectio
 }
 
 func getZonemapBatch(param *ExternalParam, proc *process.Process, size int64, objectReader objectio.Reader) (*batch.Batch, error) {
-	if param.Zoneparam.bs == nil {
+	var err error
+	if param.extern.QueryResult {
+		param.Zoneparam.bs, err = objectReader.ReadAllMeta(param.Ctx, size, proc.GetMPool())
+		if err != nil {
+			return nil, err
+		}
+	} else if param.Zoneparam.bs == nil {
 		param.plh = &ParseLineHandler{}
 		var err error
 		param.Zoneparam.bs, err = objectReader.ReadAllMeta(param.Ctx, size, proc.GetMPool())
@@ -818,13 +826,18 @@ func getZonemapBatch(param *ExternalParam, proc *process.Process, size int64, ob
 }
 
 func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
-	if param.Filter.objectReader == nil {
+	if param.Filter.objectReader == nil || param.extern.QueryResult {
 		dir, _ := filepath.Split(param.extern.Filepath)
-		service, _, err := GetForETLWithType(param.extern, param.extern.Filepath)
-		if err != nil {
-			return nil, err
+		var service fileservice.FileService
+		var err error
+		if param.extern.QueryResult {
+			service = param.extern.FileService
+		} else {
+			service, _, err = GetForETLWithType(param.extern, param.extern.Filepath)
+			if err != nil {
+				return nil, err
+			}
 		}
-
 		_, ok := param.Filter.File2Size[param.extern.Filepath]
 		if !ok {
 			fs := objectio.NewObjectFS(service, dir)
@@ -866,7 +879,7 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 
 // ScanFileData read batch data from external file
 func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
-	if strings.HasSuffix(param.extern.Filepath, ".tae") {
+	if strings.HasSuffix(param.extern.Filepath, ".tae") || param.extern.QueryResult {
 		return ScanZonemapFile(param, proc)
 	} else {
 		return ScanCsvFile(param, proc)

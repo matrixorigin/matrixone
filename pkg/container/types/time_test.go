@@ -406,7 +406,7 @@ func TestTime_ParseTimeFromDecimal128(t *testing.T) {
 			println("the decimal is ", dcm.String())
 			require.NoError(t, err)
 			if !c.isErr {
-				parsed, err := ParseDecima128lToTime(dcm, c.precision)
+				parsed, err := ParseDecimal128lToTime(dcm, c.precision)
 				require.NoError(t, err)
 				require.Equal(t, parsed, c.expected)
 

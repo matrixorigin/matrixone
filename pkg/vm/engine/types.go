@@ -371,6 +371,12 @@ type Engine interface {
 
 	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
 		expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]Reader, error)
+
+	// Get database name & table name by table id
+	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)
+
+	// Get relation by table id
+	GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, rel Relation, err error)
 }
 
 type Hints struct {

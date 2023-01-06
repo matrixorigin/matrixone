@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -44,6 +45,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+const (
+	DistributedThreshold uint64 = 10 * mpool.MB
 )
 
 // New is used to new an object of compile
@@ -595,11 +600,7 @@ func (c *Compile) ConstructScope() *Scope {
 }
 
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
-	mcpu := c.NumCPU()
-	if mcpu < 1 {
-		mcpu = 1
-	}
-	ss := make([]*Scope, mcpu)
+	mcpu := c.cnList[0].Mcpu
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
 	if err != nil {
@@ -617,9 +618,17 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 
 	param.FileService = c.proc.FileService
 	param.Ctx = c.ctx
-	fileList, err := external.ReadDir(param)
-	if err != nil {
-		return nil, err
+	var fileList []string
+	if param.QueryResult {
+		fileList = strings.Split(param.Filepath, ",")
+		for i := range fileList {
+			fileList[i] = strings.TrimSpace(fileList[i])
+		}
+	} else {
+		fileList, err = external.ReadDir(param)
+		if err != nil {
+			return nil, err
+		}
 	}
 	fileList, err = external.FliterFileList(n, c.proc, fileList)
 	if err != nil {
@@ -632,6 +641,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	tag := len(fileList) % mcpu
 	index := 0
 	currentFirstFlag := c.anal.isFirst
+	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.ConstructScope()
 		var fileListTmp []string
@@ -663,6 +673,7 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, err
 			Arg:     constructTableFunction(n, c.ctx, n.TableDef.TblFunc.Name),
 		})
 	}
+	c.anal.isFirst = false
 	c.anal.isFirst = false
 
 	return ss, nil

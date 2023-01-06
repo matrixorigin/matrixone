@@ -243,6 +243,7 @@ const (
 	FOUND_ROWS
 	ICULIBVERSION
 	LAST_INSERT_ID
+	LAST_QUERY_ID
 	ROLES_GRAPHML
 	ROW_COUNT
 	VERSION
@@ -403,6 +404,7 @@ var functionIdRegister = map[string]int32{
 	"ltrim":                          LTRIM,
 	"month":                          MONTH,
 	"oct":                            OCT,
+	"rand":                           RANDOM,
 	"reverse":                        REVERSE,
 	"rtrim":                          RTRIM,
 	"sin":                            SIN,
@@ -433,6 +435,7 @@ var functionIdRegister = map[string]int32{
 	"found_rows":                     FOUND_ROWS,
 	"icu_version":                    ICULIBVERSION,
 	"last_insert_id":                 LAST_INSERT_ID,
+	"last_query_id":                  LAST_QUERY_ID,
 	"roles_graphml":                  ROLES_GRAPHML,
 	"row_count":                      ROW_COUNT,
 	"version":                        VERSION,

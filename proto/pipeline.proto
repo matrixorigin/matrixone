@@ -18,7 +18,6 @@ syntax = "proto3";
 package pipeline;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
-
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/pipeline";
 option (gogoproto.sizer_all) = false;
 option (gogoproto.protosizer_all) = true;
@@ -34,6 +33,7 @@ message Message {
   bytes   proc_info_data = 5;
   bytes   analyse = 6;
   uint64  id = 7;
+  bytes   uuid = 8;
 }
 
 message Connector {
@@ -276,4 +276,6 @@ message Pipeline {
   NodeInfo node = 9;
   int32 push_down_info = 10;
   int32 children_count = 11;
+
+  repeated bytes uuids = 12;
 }

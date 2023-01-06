@@ -131,11 +131,11 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 
 	if o.GCCfg.GCTTL <= 0 {
-		o.GCCfg.GCTTL = o.CheckpointCfg.FlushInterval * 4
+		o.GCCfg.GCTTL = DefaultGCTTL
 	}
 
 	if o.GCCfg.ScanGCInterval <= 0 {
-		o.GCCfg.ScanGCInterval = o.CheckpointCfg.FlushInterval * 3
+		o.GCCfg.ScanGCInterval = DefaultScanGCInterval
 	}
 
 	if o.SchedulerCfg == nil {
