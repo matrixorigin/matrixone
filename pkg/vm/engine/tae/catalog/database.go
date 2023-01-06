@@ -190,14 +190,6 @@ func (e *DBEntry) GetFullName() string {
 	}
 	return e.fullName
 }
-func (e *DBEntry) GetCompatibility() []byte {
-	modeJson, err := types.ParseStringToByteJson(pkgcatalog.MYSQL_COMPATBILITY_MODE_DEFAULT_STR)
-	if err != nil {
-		return nil
-	}
-	modeJsonBytes, _ := modeJson.Marshal()
-	return modeJsonBytes
-}
 
 func (e *DBEntry) String() string {
 	e.RLock()

@@ -342,12 +342,14 @@ func (cc *CatalogCache) InsertDatabase(bat *batch.Batch) {
 	accounts := vector.MustTCols[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
 	names := vector.MustStrCols(bat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
 	ids := vector.MustTCols[uint64](bat.GetVector(catalog.MO_DATABASE_DAT_ID_IDX + MO_OFF))
+	compatbility := vector.MustStrCols(bat.GetVector(catalog.MO_DATABASE_COMPATBILITY_IDX + MO_OFF))
 	for i, account := range accounts {
 		item := new(DatabaseItem)
 		item.Id = ids[i]
 		item.Name = names[i]
 		item.AccountId = account
 		item.Ts = timestamps[i].ToTimestamp()
+		item.compatbility = compatbility[i]
 		copy(item.Rowid[:], rowids[i][:])
 		cc.databases.data.Set(item)
 		cc.databases.rowidIndex.Set(item)

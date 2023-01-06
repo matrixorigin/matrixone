@@ -45,6 +45,9 @@ func init() {
 	for i, name := range MoTableMetaSchema {
 		MoTableMetaDefs[i] = newAttributeDef(name, MoTableMetaTypes[i], i == 0)
 	}
+
+	modeJson, _ := types.ParseStringToByteJson(MYSQL_COMPATBILITY_MODE_DEFAULT_STR)
+	MoMysqlCompatbilityModeDefault, _ = modeJson.Marshal()
 }
 
 func newAttributeDef(name string, typ types.Type, isPrimary bool) engine.TableDef {

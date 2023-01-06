@@ -400,4 +400,6 @@ var (
 	MoColumnsTableDefs = []engine.TableDef{}
 	// used by memengine or tae or cn
 	MoTableMetaDefs = []engine.TableDef{}
+	// uesd to init mysql_compatbility_mode
+	MoMysqlCompatbilityModeDefault []byte
 )

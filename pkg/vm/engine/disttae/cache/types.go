@@ -72,6 +72,9 @@ type DatabaseItem struct {
 
 	// Mark if it is a delete
 	deleted bool
+
+	// Save compatbility configuration
+	compatbility string
 }
 
 type TableItem struct {
