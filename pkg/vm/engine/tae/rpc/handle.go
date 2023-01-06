@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -61,8 +62,9 @@ type txnContext struct {
 	//createAt is used to GC the abandoned txn.
 	createAt time.Time
 	meta     txn.TxnMeta
-	req      []any
-	//res      []any
+	reqs     []any
+	//the table to create by this txn.
+	toCreate map[uint64]*catalog2.Schema
 }
 
 func (h *Handle) GetTxnEngine() moengine.TxnEngine {
@@ -95,7 +97,7 @@ func (h *Handle) HandleCommit(
 	//Handle precommit-write command for 1PC
 	var txn moengine.Txn
 	if ok {
-		for _, e := range txnCtx.req {
+		for _, e := range txnCtx.reqs {
 			switch req := e.(type) {
 			case *db.CreateDatabaseReq:
 				err = h.HandleCreateDatabase(
@@ -210,7 +212,7 @@ func (h *Handle) HandlePrepare(
 	var txn moengine.Txn
 	if ok {
 		//handle pre-commit write for 2PC
-		for _, e := range txnCtx.req {
+		for _, e := range txnCtx.reqs {
 			switch req := e.(type) {
 			case *db.CreateDatabaseReq:
 				err = h.HandleCreateDatabase(
@@ -357,31 +359,11 @@ func (h *Handle) startLoadJobs(
 	var jobIds []string
 	var columnIdx int
 	if req.Type == db.EntryInsert {
-		txn, err := h.eng.GetOrCreateTxnWithMeta(
-			nil,
-			meta.GetID(),
-			types.TimestampToTS(meta.GetSnapshotTS()))
-		if err != nil {
-			return err
-		}
-		dbase, err := h.eng.GetDatabaseByID(ctx, req.DatabaseId, txn)
-		if err != nil {
-			return err
-		}
-		tb, err := dbase.GetRelationByID(ctx, req.TableID)
-		if err != nil {
-			return err
-		}
-		schema := tb.GetSchema(ctx)
-		if !schema.HasPK() {
-			return err
-		}
 		//for loading primary keys of blocks
-		//locations = req.MetaLocs
 		locations = append(locations, req.MetaLocs...)
-		columnTypes = append(columnTypes, schema.GetSingleSortKey().Type)
-		columnNames = append(columnNames, schema.GetSingleSortKey().Name)
-		columnIdx = schema.GetSingleSortKeyIdx()
+		columnTypes = append(columnTypes, req.Schema.GetSingleSortKey().Type)
+		columnNames = append(columnNames, req.Schema.GetSingleSortKey().Name)
+		columnIdx = req.Schema.GetSingleSortKeyIdx()
 		isNull = append(isNull, false)
 		req.Jobs = make([]*tasks.Job, len(req.MetaLocs))
 		req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
@@ -389,7 +371,6 @@ func (h *Handle) startLoadJobs(
 			jobIds = append(jobIds,
 				fmt.Sprintf("load-primarykey-%s", req.MetaLocs[i]))
 		}
-
 	} else {
 		//for loading deleted rowid.
 		locations = append(locations, req.DeltaLocs...)
@@ -405,14 +386,21 @@ func (h *Handle) startLoadJobs(
 		}
 	}
 	//start loading jobs
-	for i := range locations {
+	for i, v := range locations {
+		ctx := context.WithValue(ctx, db.LocationKey{}, v)
 		req.Jobs[i] = tasks.NewJob(
 			jobIds[i],
 			ctx,
 			func(ctx context.Context) (jobR *tasks.JobResult) {
 				jobR = &tasks.JobResult{}
+				loc, ok := ctx.Value(db.LocationKey{}).(string)
+				if !ok {
+					panic(moerr.NewInternalErrorNoCtx("Miss Location"))
+				}
+				//reader, err := blockio.NewReader(ctx,
+				//	h.eng.GetTAE(ctx).Fs, req.MetaLocs[i])
 				reader, err := blockio.NewReader(ctx,
-					h.eng.GetTAE(ctx).Fs, req.MetaLocs[i])
+					h.eng.GetTAE(ctx).Fs, loc)
 				if err != nil {
 					jobR.Err = err
 					return
@@ -452,9 +440,38 @@ func (h *Handle) EvaluateTxnRequest(
 	h.mu.RLock()
 	txnCtx := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
-	for _, e := range txnCtx.req {
+	for _, e := range txnCtx.reqs {
 		if r, ok := e.(*db.WriteReq); ok {
 			if r.FileName != "" {
+				if r.Type == db.EntryInsert {
+					v, ok := txnCtx.toCreate[r.TableID]
+					if !ok {
+						txn, err := h.eng.GetOrCreateTxnWithMeta(
+							nil,
+							meta.GetID(),
+							types.TimestampToTS(meta.GetSnapshotTS()))
+						if err != nil {
+							return err
+						}
+						dbase, err := h.eng.GetDatabaseByID(ctx, r.DatabaseId, txn)
+						if err != nil {
+							return err
+						}
+						tb, err := dbase.GetRelationByID(ctx, r.TableID)
+						if err != nil {
+							return err
+						}
+						r.Schema = tb.GetSchema(ctx)
+					} else {
+						r.Schema = v
+					}
+					if r.Schema.HasPK() {
+						//start to load primary keys
+						return h.startLoadJobs(ctx, meta, r)
+					}
+					return
+				}
+				//start to load deleted row ids
 				return h.startLoadJobs(ctx, meta, r)
 			}
 		}
@@ -473,11 +490,19 @@ func (h *Handle) CacheTxnRequest(
 		txnCtx = &txnContext{
 			createAt: time.Now(),
 			meta:     meta,
+			toCreate: make(map[uint64]*catalog2.Schema),
 		}
 		h.mu.txnCtxs[string(meta.GetID())] = txnCtx
 	}
 	h.mu.Unlock()
-	txnCtx.req = append(txnCtx.req, req)
+	txnCtx.reqs = append(txnCtx.reqs, req)
+	if r, ok := req.(*db.CreateRelationReq); ok {
+		schema, err := moengine.HandleDefsToSchema(r.Name, r.Defs)
+		if err != nil {
+			return err
+		}
+		txnCtx.toCreate[r.RelationId] = schema
+	}
 	return nil
 }
 
@@ -612,7 +637,7 @@ func (h *Handle) HandlePreCommitWrite(
 			panic(moerr.NewNYI(ctx, ""))
 		}
 	}
-	//evaluate all the txn requests asynchronously.
+	//evaluate all the txn requests.
 	return h.EvaluateTxnRequest(ctx, meta)
 }
 

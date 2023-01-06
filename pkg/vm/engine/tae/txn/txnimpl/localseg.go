@@ -220,6 +220,8 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		}
 		return
 	}
+	//TODO::if the count of block in non-appendable segment over maximum,
+	//      should create a new non-appendable segment?
 	if seg.nseg == nil {
 		seg.nseg, err = seg.table.CreateNonAppendableSegment(true)
 		if err != nil {

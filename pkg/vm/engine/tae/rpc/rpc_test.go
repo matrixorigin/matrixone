@@ -17,10 +17,14 @@ package rpc
 import (
 	"context"
 	"fmt"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"os"
 	"path"
 	"sync"
 	"testing"
@@ -40,20 +44,42 @@ import (
 )
 
 func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
-	//write two sorted blocks into S3
-	dir := testutils.InitTestEnv(ModuleName, t)
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+
+	//create  file service;
+	//dir := testutils.GetDefaultTestPath(ModuleName, t)
+	dir := "/tmp/s3"
 	dir = path.Join(dir, "/local")
-	id := 1
-	objName := fmt.Sprintf("%d.seg", id)
+	c := fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+	}
+	service, err := fileservice.NewFileService(c)
+	assert.Nil(t, err)
+	defer func() {
+		os.RemoveAll(dir)
+	}()
+	opts.Fs = service
+	handle := mockTAEHandle(t, opts)
+	defer handle.HandleClose(context.TODO())
+	IDAlloc := catalog.NewIDAllocator()
+	txnEngine := handle.GetTxnEngine()
+
 	schema := catalog.MockSchema(2, 1)
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	taeBat := catalog.MockBatch(schema, 300)
+	taeBat := catalog.MockBatch(schema, 30)
 	defer taeBat.Close()
 	taeBats := taeBat.Split(3)
+	taeBats[0] = taeBats[0].CloneWindow(0, 10)
+	taeBats[1] = taeBats[1].CloneWindow(0, 10)
+	taeBats[2] = taeBats[2].CloneWindow(0, 10)
+
 	//sort by primary key
-	_, err := mergesort.SortBlockColumns(taeBats[0].Vecs, 1)
+	_, err = mergesort.SortBlockColumns(taeBats[0].Vecs, 1)
 	assert.Nil(t, err)
 	_, err = mergesort.SortBlockColumns(taeBats[1].Vecs, 1)
 	assert.Nil(t, err)
@@ -64,14 +90,10 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	moBats[0] = containers.CopyToMoBatch(taeBats[0])
 	moBats[1] = containers.CopyToMoBatch(taeBats[1])
 	moBats[2] = containers.CopyToMoBatch(taeBats[2])
-	c := fileservice.Config{
-		Name:    defines.LocalFileServiceName,
-		Backend: "DISK",
-		DataDir: dir,
-	}
-	service, err := fileservice.NewFileService(c)
-	assert.Nil(t, err)
 
+	//write two blocks into file service
+	id := 1
+	objName := fmt.Sprintf("%d.seg", id)
 	objectWriter, err := objectio.NewObjectWriter(objName, service)
 	assert.Nil(t, err)
 	for i, bat := range moBats {
@@ -96,14 +118,18 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	blocks, err := objectWriter.WriteEnd(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(blocks))
-
-	//add blocks into table
-	defer testutils.AfterTest(t)()
-	opts := config.WithLongScanAndCKPOpts(nil)
-	handle := mockTAEHandle(t, opts)
-	defer handle.HandleClose(context.TODO())
-	IDAlloc := catalog.NewIDAllocator()
-	txnEngine := handle.GetTxnEngine()
+	metaLoc1, err := blockio.EncodeMetaLocWithObject(
+		blocks[0].GetExtent(),
+		uint32(moBats[0].Vecs[0].Length()),
+		blocks,
+	)
+	assert.Nil(t, err)
+	metaLoc2, err := blockio.EncodeMetaLocWithObject(
+		blocks[1].GetExtent(),
+		uint32(moBats[1].Vecs[0].Length()),
+		blocks,
+	)
+	assert.Nil(t, err)
 
 	//create db;
 	dbName := "dbtest"
@@ -154,8 +180,6 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		OriginString: "expr2",
 	}
 	assert.Nil(t, err)
-
-	//createTbTxn := mock1PCTxn(txnEngine)
 	tbTestID := IDAlloc.NextTable()
 	createTbEntries, err := makeCreateTableEntries(
 		"",
@@ -169,21 +193,31 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	)
 	assert.Nil(t, err)
 	entries = append(entries, createTbEntries...)
-
 	//append data into "tbtest" table
-	//moBat := containers.CopyToMoBatch(catalog.MockBatch(schema, 100))
 	insertEntry, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, "", moBats[2])
 	assert.NoError(t, err)
 	entries = append(entries, insertEntry)
 
-	//add blocks on S3 into "tbtest" table
-	//TODO::
-	metaLocs := batch.Batch{}
-	addBlkEntry, err := makePBEntry(INSERT, dbTestID,
-		tbTestID, dbName, schema.Name, objName, &metaLocs)
+	//add blocks from S3 into "tbtest" table
+	attrs := []string{catalog2.BlockMeta_MetaLoc}
+	vecTypes := []types.Type{types.New(types.T_varchar,
+		types.MaxVarcharLen, 0, 0)}
+	nullable := []bool{false}
+	vecOpts := containers.Options{}
+	vecOpts.Capacity = 0
+	metaLocBat := containers.BuildBatch(attrs, vecTypes, nullable, vecOpts)
+	metaLocBat.Vecs[0].Append([]byte(metaLoc1))
+	metaLocBat.Vecs[0].Append([]byte(metaLoc2))
+	metaLocMoBat := containers.CopyToMoBatch(metaLocBat)
+	addS3BlkEntry, err := makePBEntry(INSERT, dbTestID,
+		tbTestID, dbName, schema.Name, objName, metaLocMoBat)
 	assert.NoError(t, err)
-	entries = append(entries, addBlkEntry)
+	loc1 := vector.GetStrVectorValues(metaLocMoBat.GetVector(0))[0]
+	loc2 := vector.GetStrVectorValues(metaLocMoBat.GetVector(0))[1]
+	assert.Equal(t, metaLoc1, loc1)
+	assert.Equal(t, metaLoc2, loc2)
+	entries = append(entries, addS3BlkEntry)
 
 	err = handle.HandlePreCommit(
 		context.TODO(),
@@ -197,6 +231,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		new(api.SyncLogTailResp),
 	)
 	assert.Nil(t, err)
+	//t.FailNow()
 	err = handle.HandleCommit(context.TODO(), txn)
 	assert.Nil(t, err)
 

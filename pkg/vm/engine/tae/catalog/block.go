@@ -72,10 +72,11 @@ func NewBlockEntryWithMeta(
 		segment:       segment,
 		state:         state,
 	}
+	e.MetaBaseEntry.CreateWithTxnAndMeta(txn, metaLoc, deltaLoc)
 	if dataFactory != nil {
 		e.blkData = dataFactory(e)
 	}
-	e.MetaBaseEntry.CreateWithTxnAndMeta(txn, metaLoc, deltaLoc)
+	//e.MetaBaseEntry.CreateWithTxnAndMeta(txn, metaLoc, deltaLoc)
 	return e
 }
 
