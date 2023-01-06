@@ -183,20 +183,14 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 	})
 
 	if tblName == "" {
-		dbNames, err := e.Databases(ctx, op)
-		if err != nil {
-			return "", "", err
-		}
+		dbNames := e.catalog.Databases(accountId, txn.meta.SnapshotTS)
 		for _, dbName := range dbNames {
 			db, err = e.Database(noRepCtx, dbName, op)
 			if err != nil {
 				return "", "", err
 			}
 			distDb := db.(*database)
-			tableName, rel, err := distDb.getRelationById(noRepCtx, tableId)
-			if err != nil {
-				return "", "", err
-			}
+			tableName, rel, _ := distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				tblName = tableName
 				break
@@ -229,7 +223,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			}
 			distDb := db.(*database)
 			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
-			if err != nil || rel != nil {
+			if rel != nil {
 				return false
 			}
 		}
@@ -237,10 +231,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	})
 
 	if rel == nil {
-		dbNames, err := e.Databases(ctx, op)
-		if err != nil {
-			return "", "", nil, err
-		}
+		dbNames := e.catalog.Databases(accountId, txn.meta.SnapshotTS)
 		for _, dbName := range dbNames {
 			db, err = e.Database(noRepCtx, dbName, op)
 			if err != nil {
@@ -248,9 +239,6 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			}
 			distDb := db.(*database)
 			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
-			if err != nil {
-				return "", "", nil, err
-			}
 			if rel != nil {
 				break
 			}
