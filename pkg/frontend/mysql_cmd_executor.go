@@ -4329,7 +4329,7 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 	return buffer.Bytes()
 }
 
-func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, rows int64, size int64) {
+func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, statsJonsBytes []byte, stats trace.Statistic) {
 	if queryPlan != nil && queryPlan.GetQuery() != nil {
 		explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
 		options := &explain.ExplainOptions{
@@ -4338,7 +4338,7 @@ func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.U
 			Format:  explain.EXPLAIN_FORMAT_TEXT,
 		}
 		marshalPlan := explainQuery.BuildJsonPlan(ctx, uuid, options)
-		rows, size = marshalPlan.StatisticsRead()
+		stats.RowsRead, stats.BytesScan = marshalPlan.StatisticsRead()
 		// data transform to json datastruct
 		buffer := &bytes.Buffer{}
 		encoder := json.NewEncoder(buffer)
@@ -4350,19 +4350,35 @@ func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.U
 		} else {
 			jsonBytes = buffer.Bytes()
 		}
+		// data transform Global to json
+		if len(marshalPlan.Steps) > 0 {
+			if len(marshalPlan.Steps) > 1 {
+				logutil.Fatalf("need handle multi execPlan trees, cnt: %d", len(marshalPlan.Steps))
+			}
+			buffer := &bytes.Buffer{}
+			encoder := json.NewEncoder(buffer)
+			encoder.SetEscapeHTML(false)
+			global := marshalPlan.Steps[0].GraphData.Global
+			err = encoder.Encode(&global)
+			if err != nil {
+				statsJonsBytes = []byte(fmt.Sprintf(`{"code":200,"message":"%q"}`, err.Error()))
+			} else {
+				statsJonsBytes = buffer.Bytes()
+			}
+		}
 	} else {
 		jsonBytes = buildErrorJsonPlan(uuid, moerr.ErrWarn, "sql query no record execution plan")
 	}
-	return jsonBytes, rows, size
+	return jsonBytes, statsJonsBytes, stats
 }
 
 // SerializeExecPlan Serialize the execution plan by json
-var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]byte, int64, int64) {
+var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]byte, []byte, trace.Statistic) {
 	if plan == nil {
 		return serializePlanToJson(ctx, nil, uuid)
 	} else if queryPlan, ok := plan.(*plan2.Plan); !ok {
 		moError := moerr.NewInternalError(ctx, "execPlan not type of plan2.Plan: %s", reflect.ValueOf(plan).Type().Name())
-		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error()), 0, 0
+		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error()), []byte{}, trace.Statistic{}
 	} else {
 		// data transform to json dataStruct
 		return serializePlanToJson(ctx, queryPlan, uuid)
