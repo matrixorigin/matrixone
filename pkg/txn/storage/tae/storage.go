@@ -16,6 +16,7 @@ package taestorage
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -60,6 +61,13 @@ func NewTAEStorage(
 
 var _ storage.TxnStorage = new(taeStorage)
 
+// TODO
+// Start starts logtail push service.
+func (s *taeStorage) Start() error {
+	return nil
+}
+
+// TODO: close logtail push service
 // Close implements storage.TxnTAEStorage
 func (s *taeStorage) Close(ctx context.Context) error {
 	return s.taeHandler.HandleClose(ctx)
