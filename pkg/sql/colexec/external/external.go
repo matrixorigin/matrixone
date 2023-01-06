@@ -833,7 +833,6 @@ func getZonemapBatch(param *ExternalParam, proc *process.Process, size int64, ob
 func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	if param.Filter.objectReader == nil || param.extern.QueryResult {
 		dir, _ := filepath.Split(param.extern.Filepath)
-
 		var service fileservice.FileService
 		var err error
 		if param.extern.QueryResult {
@@ -854,28 +853,11 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 			for i := 0; i < len(dirs); i++ {
 				param.Filter.File2Size[dir+dirs[i].Name] = dirs[i].Size
 			}
-		} else {
-			service, _, err := GetForETLWithType(param.extern, param.extern.Filepath)
-			if err != nil {
-				return nil, err
-			}
+		}
 
-			_, ok := param.Filter.File2Size[param.extern.Filepath]
-			if !ok {
-				fs := objectio.NewObjectFS(service, dir)
-				dirs, err := fs.ListDir(dir)
-				if err != nil {
-					return nil, err
-				}
-				for i := 0; i < len(dirs); i++ {
-					param.Filter.File2Size[dir+dirs[i].Name] = dirs[i].Size
-				}
-			}
-
-			param.Filter.objectReader, err = objectio.NewObjectReader(param.extern.Filepath, service)
-			if err != nil {
-				return nil, err
-			}
+		param.Filter.objectReader, err = objectio.NewObjectReader(param.extern.Filepath, service)
+		if err != nil {
+			return nil, err
 		}
 	}
 
