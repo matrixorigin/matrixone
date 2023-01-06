@@ -1859,6 +1859,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		return builder.buildJoinTable(tbl, ctx)
 
 	case *tree.TableFunction:
+		if tbl.Id() == "result_scan" {
+			return builder.buildResultScan(tbl, ctx)
+		}
 		return builder.buildTableFunction(tbl, ctx)
 
 	case *tree.ParenTableExpr:
@@ -2470,6 +2473,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, childId)
 	case "generate_series":
 		nodeId = builder.buildGenerateSeries(tbl, ctx, exprs, childId)
+	case "meta_scan":
+		nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupported(builder.GetContext(), "table function '%s' not supported", id)
 	}

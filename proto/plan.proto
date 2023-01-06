@@ -204,6 +204,10 @@ message decimal128 {
 	int64 b = 2;
 }
 
+message ResultColDef {
+	repeated ColDef ResultCols = 1;
+}
+
 message ColDef {
 	uint64 col_id		= 1;
 	string name 		= 2;

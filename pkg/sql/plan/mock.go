@@ -710,6 +710,10 @@ func (m *MockCompilerContext) GetProcess() *process.Process {
 	return testutil.NewProc()
 }
 
+func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {
+	return nil, "", nil
+}
+
 type MockOptimizer struct {
 	ctxt MockCompilerContext
 }
