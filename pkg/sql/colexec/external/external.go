@@ -846,6 +846,9 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 			if err != nil {
 				return nil, err
 			}
+			for i := 0; i < len(dirs); i++ {
+				param.Filter.File2Size[dir+dirs[i].Name] = dirs[i].Size
+			}
 		} else {
 			service, _, err := GetForETLWithType(param.extern, param.extern.Filepath)
 			if err != nil {

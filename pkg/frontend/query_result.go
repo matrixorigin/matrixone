@@ -16,6 +16,8 @@ package frontend
 
 import (
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"sort"
@@ -33,6 +35,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"strings"
 )
+
+const queryResultPrefix = "%s_%s_"
+
+func getQueryResultDir() string {
+	return fileservice.JoinPath(defines.SharedFileServiceName, "/query_result")
+}
+
+func BuildPrefixOfQueryResultFile(accountName, statementId string) string {
+	return fmt.Sprintf(queryResultPrefix, accountName, statementId)
+}
+
+func BuildPathOfQueryResultFile(fileName string) string {
+	return fmt.Sprintf("%s/%s", getQueryResultDir(), fileName)
+}
 
 func openSaveQueryResult(ses *Session) bool {
 	if ses.ast == nil || ses.tStmt == nil {
@@ -408,8 +424,8 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 
 // getResultFiles lists all result files of queryId
 func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]resultFile, error) {
-	fs := objectio.NewObjectFS(ses.GetParameterUnit().FileService, catalog.QueryResultDir)
-	files, err := fs.ListDir(catalog.QueryResultDir)
+	fs := objectio.NewObjectFS(ses.GetParameterUnit().FileService, getQueryResultDir())
+	files, err := fs.ListDir(getQueryResultDir())
 	if err != nil {
 		return nil, err
 	}
