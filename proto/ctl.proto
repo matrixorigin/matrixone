@@ -26,12 +26,14 @@ option (gogoproto.goproto_enum_prefix_all) = true;
 // CmdMethod debug command method
 enum CmdMethod {
     // Ping ping the service.
-    Ping   = 0;
+    Ping       = 0;
     // Flush is to force flush the table data.
     // parameter should be "DbName.TableName"
-    Flush  = 1;
+    Flush      = 1;
     // Task disable or enable task framework
-    Task   = 2;
+    Task       = 2;
+    // Checkpoint is to force incremental checkpoint.
+    Checkpoint = 3;
 }
 
 // DNPingRequest ping request

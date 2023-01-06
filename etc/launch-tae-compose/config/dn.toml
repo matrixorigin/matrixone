@@ -12,7 +12,7 @@ name = "LOCAL"
 
 [[fileservice]]
 backend = "MINIO"
-name = "S3"
+name = "SHARED"
 
 [fileservice.s3]
 bucket = "mo-test"
@@ -44,7 +44,7 @@ listen-address = "0.0.0.0:41010"
 
 [dn.Txn.Storage]
 backend = "TAE"
-fileservice = "S3"
+fileservice = "SHARED"
 log-backend = "logservice"
 
 [dn.Ckp]

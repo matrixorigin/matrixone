@@ -29,6 +29,7 @@ mo_role
 mo_user_grant
 mo_role_grant
 mo_role_privs
+mo_user_defined_function
 create database t;
 internal error: do not have privilege to execute the statement
 grant create database on account * to r1;

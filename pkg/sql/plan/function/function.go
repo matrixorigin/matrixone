@@ -143,7 +143,6 @@ type Function struct {
 	layout FuncExplainLayout
 
 	UseNewFramework     bool
-	ResultMustNotScalar bool
 	ResultWillNotNull   bool
 	FlexibleReturnType  func(parameters []types.Type) types.Type
 	ParameterMustScalar []bool

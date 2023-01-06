@@ -139,7 +139,7 @@ MatrixOne的架构图如下图所示：
   <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
 </p>
 
-关于更详细的MatrixOne技术架构，可以参考[MatrixOne架构](https://docs.matrixorigin.io/cn/0.6.0/MatrixOne/Overview/matrixone-architecture/)。
+关于更详细的MatrixOne技术架构，可以参考[MatrixOne架构设计](https://docs.matrixorigin.io/cn/0.6.0/MatrixOne/Overview/matrixone-architecture-design/)。
 
 ## ⚡️ <a id="quick-start">快速上手</a>
 
@@ -270,16 +270,6 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commi
      如上面代码所示，*nightly* 为标识的 Tag 版本每天都进行更新，请注意获取最新的镜像。
 
 运行 Docker Hub 时需要输入用户名和密码，获取用户名和密码可以参考**连接 MatrixOne 服务**章节所述。
-
-**步骤 3.**  挂载配置文件（选做）
-
-如果你需要自定义配置文件，可以挂载存放在本地磁盘的自定义配置文件到容器镜像：
-
-- **挂载配置文件**
-
-```
-docker run -d -p 6001:6001 -v ${local_data_path}/etc:/etc:rw  --entrypoint "/mo-service" matrixorigin/matrixone:0.6.0 -launch /etc/quickstart/launch.toml
-```
 
 ### 🌟 连接 MatrixOne 服务
 
