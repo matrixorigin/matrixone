@@ -109,9 +109,7 @@ func (r *bufferGenerateReq) handle(buf *bytes.Buffer) (exportReq, error) {
 	}, nil
 }
 
-func (r *bufferGenerateReq) callback(err error) {
-	return
-}
+func (r *bufferGenerateReq) callback(err error) {}
 
 var _ exportReq = (*bufferExportReq)(nil)
 
@@ -130,9 +128,7 @@ func (r *bufferExportReq) handle() error {
 	return nil
 }
 
-func (r *bufferExportReq) callback(err error) {
-	return
-}
+func (r *bufferExportReq) callback(err error) {}
 
 func (b *bufferHolder) getGenerateReq() generateReq {
 	b.mux.Lock()
