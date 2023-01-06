@@ -54,4 +54,3 @@ INSERT INTO curdate_02 VALUES('2023-01-07 10:10:10');
 
 
 SELECT datediff(curdate(),a) FROM curdate_02;
-SELECT * FROM curdate_02 WHERE datediff(curdate(), a) > 19079 ;
