@@ -182,6 +182,10 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 		return true
 	})
 
+	if err != nil {
+		return
+	}
+
 	if tblName == "" {
 		dbNames, err := e.Databases(ctx, op)
 		if err != nil {
@@ -228,6 +232,10 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		}
 		return true
 	})
+
+	if err != nil {
+		return
+	}
 
 	if rel == nil {
 		dbNames, err := e.Databases(ctx, op)
