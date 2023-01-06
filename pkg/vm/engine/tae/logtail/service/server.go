@@ -32,12 +32,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	taelogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 const (
 	LogtailServiceRPCName = "logtail-push-rpc"
-
-	KiB = 1024
 )
 
 // TableID is type for api.TableID
@@ -48,47 +47,47 @@ type ServerOption func(*LogtailServer)
 // WithServerLogger sets logger
 func WithServerLogger(logger *zap.Logger) ServerOption {
 	return func(s *LogtailServer) {
-		s.options.logger = logger
+		s.logger = logger
 	}
 }
 
 // WithServerMaxMessageSize sets max rpc message size
-func WithServerMaxMessageSize(maxMessageSize int) ServerOption {
+func WithServerMaxMessageSize(maxMessageSize int64) ServerOption {
 	return func(s *LogtailServer) {
-		s.options.maxMessageSize = maxMessageSize
+		s.cfg.RpcMaxMessageSize = maxMessageSize
 	}
 }
 
 // WithServerPayloadCopyBufferSize sets payload copy buffer size
-func WithServerPayloadCopyBufferSize(size int) ServerOption {
+func WithServerPayloadCopyBufferSize(size int64) ServerOption {
 	return func(s *LogtailServer) {
-		s.options.payloadCopyBufferSize = size
+		s.cfg.RpcPayloadCopyBufferSize = size
 	}
 }
 
 // WithServerEnableChecksum enables checksum
 func WithServerEnableChecksum(enable bool) ServerOption {
 	return func(s *LogtailServer) {
-		s.options.enableChecksum = enable
+		s.cfg.RpcEnableChecksum = enable
 	}
 }
 
 // WithServerCollectInterval sets logtail collection interval.
 func WithServerCollectInterval(interval time.Duration) ServerOption {
 	return func(s *LogtailServer) {
-		s.options.collectInterval = interval
+		s.cfg.LogtailCollectInterval = interval
 	}
 }
 
 func WithServerSendTimeout(timeout time.Duration) ServerOption {
 	return func(s *LogtailServer) {
-		s.options.sendTimeout = timeout
+		s.cfg.ResponseSendTimeout = timeout
 	}
 }
 
 func WithServerMaxLogtailFetchFailure(max int) ServerOption {
 	return func(s *LogtailServer) {
-		s.options.maxLogtailFetchFailure = max
+		s.cfg.MaxLogtailFetchFailure = max
 	}
 }
 
@@ -125,15 +124,8 @@ type LogtailServer struct {
 		responses *sync.Pool
 	}
 
-	options struct {
-		logger                 *zap.Logger
-		maxMessageSize         int
-		payloadCopyBufferSize  int
-		enableChecksum         bool
-		collectInterval        time.Duration
-		sendTimeout            time.Duration
-		maxLogtailFetchFailure int
-	}
+	logger *zap.Logger
+	cfg    *options.LogtailServerCfg
 
 	ssmgr      *SessionManager
 	waterline  *Waterliner
@@ -155,9 +147,11 @@ type LogtailServer struct {
 
 // NewLogtailServer initializes a server for logtail push model.
 func NewLogtailServer(
-	address string, logtail taelogtail.Logtailer, clock clock.Clock, opts ...ServerOption,
+	address string, cfg *options.LogtailServerCfg, logtail taelogtail.Logtailer, clock clock.Clock, opts ...ServerOption,
 ) (*LogtailServer, error) {
 	s := &LogtailServer{
+		logger:     logutil.GetLogger(),
+		cfg:        cfg,
 		ssmgr:      NewSessionManager(),
 		waterline:  NewWaterliner(clock),
 		subscribed: NewTableStacker(),
@@ -179,30 +173,24 @@ func NewLogtailServer(
 		},
 	}
 
-	// default configuration
-	s.options.maxMessageSize = 1024 * KiB
-	s.options.payloadCopyBufferSize = 1024 * KiB
-	s.options.logger = logutil.GetLogger()
-	s.options.enableChecksum = true
-	s.options.collectInterval = 50 * time.Millisecond
-	s.options.sendTimeout = 10 * time.Second
-	s.options.maxLogtailFetchFailure = 5
-
 	for _, opt := range opts {
 		opt(s)
 	}
 
-	s.options.logger = s.options.logger.
+	s.logger = s.logger.
 		With(zap.String("server-id", uuid.NewString()))
 
-	codec := morpc.NewMessageCodec(s.acquireRequest,
-		morpc.WithCodecPayloadCopyBufferSize(s.options.payloadCopyBufferSize),
-		morpc.WithCodecEnableChecksum(),
-		morpc.WithCodecMaxBodySize(s.options.maxMessageSize),
-	)
+	codecOpts := []morpc.CodecOption{
+		morpc.WithCodecPayloadCopyBufferSize(int(s.cfg.RpcPayloadCopyBufferSize)),
+		morpc.WithCodecMaxBodySize(int(s.cfg.RpcMaxMessageSize)),
+	}
+	if s.cfg.RpcEnableChecksum {
+		codecOpts = append(codecOpts, morpc.WithCodecEnableChecksum())
+	}
+	codec := morpc.NewMessageCodec(s.acquireRequest, codecOpts...)
 
 	rpc, err := morpc.NewRPCServer(LogtailServiceRPCName, address, codec,
-		morpc.WithServerLogger(s.options.logger),
+		morpc.WithServerLogger(s.logger),
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 				m := v.(morpc.RPCMessage)
@@ -222,7 +210,7 @@ func NewLogtailServer(
 	s.rootCtx = ctx
 	s.cancelFunc = cancel
 	s.stopper = stopper.NewStopper(
-		LogtailServiceRPCName, stopper.WithLogger(s.options.logger),
+		LogtailServiceRPCName, stopper.WithLogger(s.logger),
 	)
 
 	return s, nil
@@ -257,7 +245,7 @@ func (s *LogtailServer) onMessage(
 	ctx, span := trace.Debug(ctx, "LogtailServer.onMessage")
 	defer span.End()
 
-	logger := s.options.logger
+	logger := s.logger
 
 	msg, ok := request.(*LogtailRequest)
 	if !ok {
@@ -293,11 +281,11 @@ func (s *LogtailServer) onMessage(
 func (s *LogtailServer) onSubscription(
 	sendCtx context.Context, stream morpcStream, req *logtail.SubscribeRequest,
 ) error {
-	logger := s.options.logger
+	logger := s.logger
 
 	tableID := TableID(req.Table.String())
 	session := s.ssmgr.GetSession(
-		s.rootCtx, logger, s.options.sendTimeout, s, s, stream, s.streamPoisionTime(),
+		s.rootCtx, logger, s.cfg.ResponseSendTimeout, s, s, stream, s.streamPoisionTime(),
 	)
 
 	repeated := session.Register(tableID, *req.Table)
@@ -305,7 +293,7 @@ func (s *LogtailServer) onSubscription(
 		return nil
 	}
 
-	timeout := s.options.sendTimeout
+	timeout := s.cfg.ResponseSendTimeout
 	if deadline, ok := sendCtx.Deadline(); ok {
 		timeout = time.Until(deadline)
 	}
@@ -336,7 +324,7 @@ func (s *LogtailServer) onUnsubscription(
 ) error {
 	tableID := TableID(req.Table.String())
 	session := s.ssmgr.GetSession(
-		s.rootCtx, s.options.logger, s.options.sendTimeout, s, s, stream, s.streamPoisionTime(),
+		s.rootCtx, s.logger, s.cfg.ResponseSendTimeout, s, s, stream, s.streamPoisionTime(),
 	)
 
 	state := session.Unregister(tableID)
@@ -353,7 +341,7 @@ func (s *LogtailServer) onUnsubscription(
 
 // streamPoisionTime returns poision duration for stream.
 func (s *LogtailServer) streamPoisionTime() time.Duration {
-	return s.options.collectInterval/2 + 1
+	return s.cfg.LogtailCollectInterval/2 + 1
 }
 
 // NotifySessionError notifies session manager with session error.
@@ -362,14 +350,14 @@ func (s *LogtailServer) NotifySessionError(
 ) {
 	select {
 	case <-s.rootCtx.Done():
-		s.options.logger.Error("fail to notify session error", zap.Error(s.rootCtx.Err()))
+		s.logger.Error("fail to notify session error", zap.Error(s.rootCtx.Err()))
 	case s.errChan <- sessionError{session: session, err: err}:
 	}
 }
 
 // sessionErrorHandler handles morpc client session writing error.
 func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
-	logger := s.options.logger
+	logger := s.logger
 
 	for {
 		select {
@@ -395,7 +383,7 @@ func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 
 // logtailSender sends total or additional logtail.
 func (s *LogtailServer) logtailSender(ctx context.Context) {
-	logger := s.options.logger
+	logger := s.logger
 
 	for {
 		select {
@@ -472,9 +460,9 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 // collector collects logtail by interval.
 func (s *LogtailServer) collector(ctx context.Context) {
-	logger := s.options.logger
+	logger := s.logger
 
-	ticker := time.NewTicker(s.options.collectInterval)
+	ticker := time.NewTicker(s.cfg.LogtailCollectInterval)
 	defer ticker.Stop()
 
 	risk := 0
@@ -487,7 +475,7 @@ func (s *LogtailServer) collector(ctx context.Context) {
 		case <-ticker.C:
 			collectFunc := func() {
 				defer func() {
-					if risk >= s.options.maxLogtailFetchFailure {
+					if risk >= s.cfg.MaxLogtailFetchFailure {
 						panic("fail to fetch additional logtail many times")
 					}
 				}()
@@ -529,7 +517,7 @@ func (s *LogtailServer) Close() error {
 
 // Start starts logtail publishment service.
 func (s *LogtailServer) Start() error {
-	logger := s.options.logger
+	logger := s.logger
 
 	if err := s.stopper.RunNamedTask("session error handler", s.sessionErrorHandler); err != nil {
 		logger.Error("fail to start session error handler", zap.Error(err))

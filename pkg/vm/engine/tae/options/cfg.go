@@ -16,6 +16,11 @@ package options
 
 import "time"
 
+const (
+	KiB = 1024
+	MiB = 1024 * KiB
+)
+
 type CacheCfg struct {
 	IndexCapacity  uint64 `toml:"index-cache-size"`
 	InsertCapacity uint64 `toml:"insert-cache-size"`
@@ -49,4 +54,24 @@ type SchedulerCfg struct {
 
 type LogtailCfg struct {
 	PageSize int32 `toml:"page-size"`
+}
+
+type LogtailServerCfg struct {
+	RpcMaxMessageSize        int64
+	RpcPayloadCopyBufferSize int64
+	RpcEnableChecksum        bool
+	LogtailCollectInterval   time.Duration
+	ResponseSendTimeout      time.Duration
+	MaxLogtailFetchFailure   int
+}
+
+func NewDefaultLogtailServerCfg() *LogtailServerCfg {
+	return &LogtailServerCfg{
+		RpcMaxMessageSize:        1024 * KiB,
+		RpcPayloadCopyBufferSize: 1024 * KiB,
+		RpcEnableChecksum:        true,
+		LogtailCollectInterval:   50 * time.Millisecond,
+		ResponseSendTimeout:      10 * time.Second,
+		MaxLogtailFetchFailure:   5,
+	}
 }

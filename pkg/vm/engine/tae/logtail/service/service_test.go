@@ -20,11 +20,13 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	taelogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,12 +44,12 @@ func TestService(t *testing.T) {
 
 	/* ---- construct logtail server ---- */
 	logtailServer, err := NewLogtailServer(
-		address, logtailer, clock,
+		address, options.NewDefaultLogtailServerCfg(), logtailer, clock,
 		WithServerCollectInterval(500*time.Millisecond),
 		WithServerSendTimeout(5*time.Second),
 		WithServerEnableChecksum(true),
-		WithServerMaxMessageSize(16*KiB),
-		WithServerPayloadCopyBufferSize(16*KiB),
+		WithServerMaxMessageSize(16*mpool.KB),
+		WithServerPayloadCopyBufferSize(16*mpool.KB),
 		WithServerMaxLogtailFetchFailure(5),
 	)
 	require.NoError(t, err)
@@ -62,9 +64,9 @@ func TestService(t *testing.T) {
 
 	/* ---- construct logtail client ---- */
 	codec := morpc.NewMessageCodec(func() morpc.Message { return &LogtailResponse{} },
-		morpc.WithCodecPayloadCopyBufferSize(16*KiB),
+		morpc.WithCodecPayloadCopyBufferSize(16*mpool.KB),
 		morpc.WithCodecEnableChecksum(),
-		morpc.WithCodecMaxBodySize(16*KiB),
+		morpc.WithCodecMaxBodySize(16*mpool.KB),
 	)
 	bf := morpc.NewGoettyBasedBackendFactory(codec)
 	rpcClient, err := morpc.NewClient(bf, morpc.WithClientMaxBackendPerHost(1))
