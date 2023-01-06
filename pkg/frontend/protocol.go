@@ -443,6 +443,7 @@ const (
 type FakeProtocol struct {
 	username string
 	database string
+	ioses    goetty.IOSession
 }
 
 func (fp *FakeProtocol) GetCapability() uint32 {
@@ -462,7 +463,7 @@ func (fp *FakeProtocol) HandleHandshake(ctx context.Context, payload []byte) (bo
 }
 
 func (fp *FakeProtocol) GetTcpConnection() goetty.IOSession {
-	return nil
+	return fp.ioses
 }
 
 func (fp *FakeProtocol) GetConciseProfile() string {
