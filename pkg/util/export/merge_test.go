@@ -211,7 +211,11 @@ func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *ta
 	return nil
 }
 
+var mergeLock sync.Mutex
+
 func TestNewMerge(t *testing.T) {
+	mergeLock.Lock()
+	defer mergeLock.Unlock()
 	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, t.TempDir())
 	require.Nil(t, err)
 	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
@@ -285,6 +289,8 @@ func TestNewMergeWithContextDone(t *testing.T) {
 	if simdcsv.SupportedCPU() {
 		t.Skip()
 	}
+	mergeLock.Lock()
+	defer mergeLock.Unlock()
 	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, t.TempDir())
 	require.Nil(t, err)
 	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
@@ -337,6 +343,8 @@ func TestNewMergeNOFiles(t *testing.T) {
 	if simdcsv.SupportedCPU() {
 		t.Skip()
 	}
+	mergeLock.Lock()
+	defer mergeLock.Unlock()
 	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, t.TempDir())
 	require.Nil(t, err)
 	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
