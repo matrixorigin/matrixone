@@ -2316,7 +2316,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	}
 
 	txnHandler := cwft.ses.GetTxnHandler()
-	if cacheHit {
+	if cacheHit && cwft.plan.NeedImplicitTxn() {
 		cwft.proc.TxnOperator, err = txnHandler.GetTxn()
 		if err != nil {
 			return nil, err
@@ -3219,10 +3219,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {
 			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL ||
 				cwft.stmt.GetQueryType() == tree.QueryTypeTCL {
-				/*if _, ok := cwft.stmt.(*tree.SetVar); !ok {
+				if _, ok := cwft.stmt.(*tree.SetVar); !ok {
 					ses.cleanCache()
-				}*/
-				ses.cleanCache()
+				}
 				canCache = false
 			}
 		}
