@@ -69,9 +69,7 @@ var (
 	execPlanCol  = table.Column{Name: "exec_plan", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "statement execution plan"}
 	rowsReadCol  = table.Column{Name: "rows_read", Type: bigintUnsignedType, Default: "0", Comment: "rows read total"}
 	bytesScanCol = table.Column{Name: "bytes_scan", Type: bigintUnsignedType, Default: "0", Comment: "bytes scan total"}
-	cpuCol       = table.Column{Name: "cpu", Type: bigintUnsignedType, Default: "0", Comment: "cpu time, unit: ?"}
-	memoryCol    = table.Column{Name: "memory", Type: bigintUnsignedType, Default: "0", Comment: "memory cost byte"}
-	ioCol        = table.Column{Name: "io", Type: bigintUnsignedType, Default: "0", Comment: "io count"}
+	statsCol     = table.Column{Name: "stats", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "global stats info in exec_plan"}
 	stmtTypeCol  = table.Column{Name: "statement_type", Type: "varchar(128)", Default: "", Comment: "statement type, val in [Insert, Delete, Update, Drop Table, Drop User, ...]"}
 	queryTypeCol = table.Column{Name: "query_type", Type: "varchar(128)", Default: "", Comment: "query type, val in [DQL, DDL, DML, DCL, TCL]"}
 	sqlTypeCol   = table.Column{Name: "sql_source_type", Type: "TEXT", Default: "", Comment: "sql statement source type"}
@@ -102,9 +100,7 @@ var (
 			execPlanCol,
 			rowsReadCol,
 			bytesScanCol,
-			cpuCol,
-			memoryCol,
-			ioCol,
+			statsCol,
 			stmtTypeCol,
 			queryTypeCol,
 			roleIdCol,
