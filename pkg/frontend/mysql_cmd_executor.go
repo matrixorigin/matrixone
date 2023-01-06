@@ -233,6 +233,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if cw != nil {
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
+		ses.ast = statement
 		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		statement.Format(fmtCtx)
 		text = SubStringFromBegin(fmtCtx.String(), int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
@@ -256,6 +257,10 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		RequestAt:            requestAt,
 		StatementType:        getStatementType(statement).GetStatementType(),
 		QueryType:            getStatementType(statement).GetQueryType(),
+	}
+	if ses.sqlSourceType != "internal_sql" {
+		ses.tStmt = stm
+		ses.lastQueryId = types.Uuid(stmID).ToString()
 	}
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
@@ -583,6 +588,18 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
+	if openSaveQueryResult(ses) {
+		// ses.lastQueryId = types.Uuid(ses.tStmt.StatementID).ToString()
+		if bat == nil {
+			if err := saveQueryResultMeta(ses); err != nil {
+				return err
+			}
+		} else {
+			if err := saveQueryResult(ses, bat); err != nil {
+				return err
+			}
+		}
+	}
 	if bat == nil {
 		return nil
 	}
@@ -3149,11 +3166,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		StorageEngine: pu.StorageEngine,
 		LastInsertID:  ses.GetLastInsertID(),
 	}
+	proc.SessionInfo.QueryId = ses.lastQueryId
 	if ses.GetTenantInfo() != nil {
+		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
 		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 	} else {
+		proc.SessionInfo.Account = sysAccountName
 		proc.SessionInfo.AccountId = sysAccountID
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
@@ -3523,6 +3543,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				logErrorf(ses.GetConciseProfile(), "GetColumns from Computation handler failed. error: %v", err)
 				goto handleFailed
 			}
+			if c, ok := cw.(*TxnComputationWrapper); ok {
+				ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(c.plan)}
+			}
 			/*
 				Step 1 : send column count and column definition.
 			*/
@@ -3882,10 +3905,12 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 	}
 
 	if ses.GetTenantInfo() != nil {
+		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
 		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 	} else {
+		proc.SessionInfo.Account = sysAccountName
 		proc.SessionInfo.AccountId = sysAccountID
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
