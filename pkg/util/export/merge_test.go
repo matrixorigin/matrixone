@@ -357,11 +357,11 @@ func TestNewMergeNOFiles(t *testing.T) {
 
 	ctx := trace.Generate(context.Background())
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	type args struct {
-		ctx    context.Context
-		cancel context.CancelFunc
-		opts   []MergeOption
+		ctx  context.Context
+		opts []MergeOption
 	}
 	tests := []struct {
 		name string
@@ -371,8 +371,7 @@ func TestNewMergeNOFiles(t *testing.T) {
 		{
 			name: "normal",
 			args: args{
-				ctx:    ctx,
-				cancel: cancel,
+				ctx: ctx,
 				opts: []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
 					WithFileService(fs), WithTable(dummyTable),
 					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)},
@@ -382,8 +381,6 @@ func TestNewMergeNOFiles(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer tt.args.cancel()
-
 			filePath := newFilePath(dummyTable, ts)
 			files := []string{filePath}
 
