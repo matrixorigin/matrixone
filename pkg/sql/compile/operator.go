@@ -66,6 +66,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
@@ -126,6 +127,17 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Cond:       t.Cond,
 			Result:     t.Result,
 			Typs:       t.Typs,
+			Conditions: t.Conditions,
+		}
+	case vm.Right:
+		t := sourceIns.Arg.(*right.Argument)
+		res.Arg = &right.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Cond:       t.Cond,
+			Result:     t.Result,
+			Right_typs: t.Right_typs,
+			Left_typs:  t.Left_typs,
 			Conditions: t.Conditions,
 		}
 	case vm.Limit:
@@ -760,6 +772,23 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 	}
 }
 
+func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *right.Argument {
+	result := make([]colexec.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
+	}
+	cond, conds := extraJoinConditions(n.OnList)
+	return &right.Argument{
+		Left_typs:  left_typs,
+		Right_typs: right_typs,
+		Nbucket:    Nbucket,
+		Ibucket:    Ibucket,
+		Result:     result,
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds, proc),
+	}
+}
+
 func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *single.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
@@ -1212,6 +1241,15 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 		return &hashbuild.Argument{
 			NeedHashMap: true,
 			Typs:        arg.Typs,
+			Conditions:  arg.Conditions[1],
+		}
+	case vm.Right:
+		arg := in.Arg.(*right.Argument)
+		return &hashbuild.Argument{
+			Ibucket:     arg.Ibucket,
+			Nbucket:     arg.Nbucket,
+			NeedHashMap: true,
+			Typs:        arg.Right_typs,
 			Conditions:  arg.Conditions[1],
 		}
 	case vm.Semi:

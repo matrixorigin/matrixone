@@ -497,9 +497,9 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		}
 		c.SetAnalyzeCurrent(children, curr)
 		if needSwap {
-			return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[0]], children, ss, joinTyp)), nil
+			return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[1]], ns[n.Children[0]], children, ss, joinTyp)), nil
 		}
-		return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[1]], ss, children, joinTyp)), nil
+		return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[0]], ns[n.Children[1]], ss, children, joinTyp)), nil
 	case plan.Node_SORT:
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
@@ -893,22 +893,29 @@ func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) 
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
-	//rs := c.newJoinScopeList(ss, children)
-	rs := c.newShuffleJoinScopeList(ss, children)
+func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
+	var rs []*Scope
 	isEq := isEquiJoin(n.OnList)
-	typs := make([]types.Type, len(right.ProjectList))
+
+	right_typs := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
-		typs[i] = dupType(expr.Typ)
+		right_typs[i] = dupType(expr.Typ)
 	}
+
+	left_typs := make([]types.Type, len(left.ProjectList))
+	for i, expr := range left.ProjectList {
+		left_typs[i] = dupType(expr.Typ)
+	}
+
 	switch joinTyp {
 	case plan.Node_INNER:
+		rs := c.newShuffleJoinScopeList(ss, children)
 		if len(n.OnList) == 0 {
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Product,
 					Idx: c.anal.curr,
-					Arg: constructProduct(n, typs, c.proc),
+					Arg: constructProduct(n, right_typs, c.proc),
 				})
 			}
 		} else {
@@ -917,83 +924,107 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.Join,
 						Idx: c.anal.curr,
-						Arg: constructJoin(n, typs, c.proc),
+						Arg: constructJoin(n, right_typs, c.proc),
 					})
 				} else {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.LoopJoin,
 						Idx: c.anal.curr,
-						Arg: constructLoopJoin(n, typs, c.proc),
+						Arg: constructLoopJoin(n, right_typs, c.proc),
 					})
 				}
 			}
 		}
 	case plan.Node_SEMI:
+		rs := c.newShuffleJoinScopeList(ss, children)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Semi,
 					Idx: c.anal.curr,
-					Arg: constructSemi(n, typs, c.proc),
+					Arg: constructSemi(n, right_typs, c.proc),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopSemi,
 					Idx: c.anal.curr,
-					Arg: constructLoopSemi(n, typs, c.proc),
+					Arg: constructLoopSemi(n, right_typs, c.proc),
 				})
 			}
 		}
 	case plan.Node_LEFT:
+		rs := c.newShuffleJoinScopeList(ss, children)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Left,
 					Idx: c.anal.curr,
-					Arg: constructLeft(n, typs, c.proc),
+					Arg: constructLeft(n, right_typs, c.proc),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopLeft,
 					Idx: c.anal.curr,
-					Arg: constructLoopLeft(n, typs, c.proc),
+					Arg: constructLoopLeft(n, right_typs, c.proc),
+				})
+			}
+		}
+	case plan.Node_RIGHT:
+		rs = make([]*Scope, len(ss))
+		for i := range rs {
+			rs[i] = new(Scope)
+			rs[i].Magic = Remote
+			rs[i].IsJoin = true
+			rs[i].NodeInfo = ss[i].NodeInfo
+			rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+		}
+		rs = c.newJoinScopeListWithBucket(rs, ss, children)
+		for i := range rs {
+			if isEq {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.Right,
+					Idx: c.anal.curr,
+					Arg: constructRight(n, left_typs, right_typs, uint64(i), uint64(len(rs)), c.proc),
 				})
 			}
 		}
 	case plan.Node_SINGLE:
+		rs := c.newShuffleJoinScopeList(ss, children)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Single,
 					Idx: c.anal.curr,
-					Arg: constructSingle(n, typs, c.proc),
+					Arg: constructSingle(n, right_typs, c.proc),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopSingle,
 					Idx: c.anal.curr,
-					Arg: constructLoopSingle(n, typs, c.proc),
+					Arg: constructLoopSingle(n, right_typs, c.proc),
 				})
 			}
 		}
 	case plan.Node_ANTI:
+		rs := c.newShuffleJoinScopeList(ss, children)
 		_, conds := extraJoinConditions(n.OnList)
 		for i := range rs {
 			if isEq && len(conds) == 1 {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Anti,
 					Idx: c.anal.curr,
-					Arg: constructAnti(n, typs, c.proc),
+					Arg: constructAnti(n, right_typs, c.proc),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopAnti,
 					Idx: c.anal.curr,
-					Arg: constructLoopAnti(n, typs, c.proc),
+					Arg: constructLoopAnti(n, right_typs, c.proc),
 				})
 			}
 		}
 	case plan.Node_MARK:
+		rs := c.newShuffleJoinScopeList(ss, children)
 		for i := range rs {
 			//if isEq {
 			//	rs[i].appendInstruction(vm.Instruction{
@@ -1005,7 +1036,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			rs[i].appendInstruction(vm.Instruction{
 				Op:  vm.LoopMark,
 				Idx: c.anal.curr,
-				Arg: constructLoopMark(n, typs, c.proc),
+				Arg: constructLoopMark(n, right_typs, c.proc),
 			})
 			//}
 		}

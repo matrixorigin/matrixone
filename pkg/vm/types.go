@@ -64,6 +64,7 @@ const (
 	// MergeBlock is used to recieve S3 block metLoc Info, and write
 	// them to S3
 	MergeBlock
+	Right
 	// LastInstructionOp is not a true operator and must set at last.
 	// It was used by unit testing to ensure that
 	// all functions related to instructions can reach 100% coverage.

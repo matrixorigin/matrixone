@@ -43,7 +43,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -82,7 +82,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				continue
 			}
 
-			if err := ctr.probe(bat, ap, proc, anal); err != nil {
+			if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
 				ap.Free(proc, true)
 				return false, err
 			}
@@ -90,7 +90,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			return false, nil
 
 		default:
-			ctr.emptyProbe(ap, proc, anal)
+			ctr.emptyProbe(ap, proc, anal, isFirst, isLast)
 			ap.Free(proc, false)
 			return true, nil
 		}
@@ -106,7 +106,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	return nil
 }
 
-func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	msel := ctr.mp.Sels()
 	unmatch := make([]int64, 0)
 	matched_sels := make(map[int64]bool)
@@ -178,14 +178,14 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 		rbat.Zs = append(rbat.Zs, ctr.bat.Zs[unmatch[i]])
 	}
 
-	anal.Output(rbat)
+	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	defer bat.Clean(proc.Mp())
-	anal.Input(bat)
+	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
@@ -248,7 +248,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 	rbat.ExpandNulls()
-	anal.Output(rbat)
+	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
 }
@@ -256,7 +256,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
+		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
 			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
