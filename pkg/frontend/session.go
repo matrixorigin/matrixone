@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"runtime"
 	"strings"
 	"sync"
@@ -174,6 +175,16 @@ type Session struct {
 
 	isBackgroundSession bool
 
+	tStmt *trace.StatementInfo
+
+	ast tree.Statement
+
+	rs *plan.ResultColDef
+
+	lastQueryId string
+
+	blockIdx int
+
 	planCache *planCache
 }
 
@@ -232,8 +243,8 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
 		},
-		cache: &privilegeCache{},
-
+		cache:    &privilegeCache{},
+		blockIdx: 0,
 		planCache: newPlanCache(100),
 	}
 	if flag {
@@ -308,6 +319,15 @@ func (bgs *BackgroundSession) Close() {
 		bgs.Session.gSysVars = nil
 	}
 	bgs = nil
+}
+
+func (ses *Session) GetBlockIdx() int {
+	ses.blockIdx++
+	return ses.blockIdx
+}
+
+func (ses *Session) ResetBlockIdx() {
+	ses.blockIdx = 0
 }
 
 func (ses *Session) SetBackgroundSession(b bool) {

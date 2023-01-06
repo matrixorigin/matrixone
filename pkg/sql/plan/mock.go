@@ -309,6 +309,27 @@ func NewMockCompilerContext() *MockCompilerContext {
 		},
 	}
 
+	moSchema["mo_user_defined_function"] = &Schema{
+		cols: []col{
+			{"function_id", types.T_int32, false, 50, 0},
+			{"name", types.T_varchar, false, 100, 0},
+			{"args", types.T_text, false, 1000, 0},
+			{"retType", types.T_varchar, false, 20, 0},
+			{"body", types.T_text, false, 1000, 0},
+			{"language", types.T_varchar, false, 20, 0},
+			{"db", types.T_varchar, false, 100, 0},
+			{"definer", types.T_varchar, false, 50, 0},
+			{"modified_time", types.T_timestamp, false, 0, 0},
+			{"created_time", types.T_timestamp, false, 0, 0},
+			{"type", types.T_varchar, false, 10, 0},
+			{"security_type", types.T_varchar, false, 10, 0},
+			{"comment", types.T_varchar, false, 5000, 0},
+			{"character_set_client", types.T_varchar, false, 64, 0},
+			{"collation_connection", types.T_varchar, false, 64, 0},
+			{"database_collation", types.T_varchar, false, 64, 0},
+		},
+	}
+
 	//---------------------------------------------index test schema---------------------------------------------------------
 
 	//+----------+--------------+------+------+---------+-------+--------------------------------+
@@ -687,6 +708,10 @@ func (m *MockCompilerContext) GetContext() context.Context {
 
 func (m *MockCompilerContext) GetProcess() *process.Process {
 	return testutil.NewProc()
+}
+
+func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {
+	return nil, "", nil
 }
 
 type MockOptimizer struct {

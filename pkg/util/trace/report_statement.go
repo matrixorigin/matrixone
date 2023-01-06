@@ -60,9 +60,6 @@ type StatementInfo struct {
 	// RowsRead, BytesScan generated from ExecPlan
 	RowsRead  int64 `json:"rows_read"`  // see ExecPlan2Json
 	BytesScan int64 `json:"bytes_scan"` // see ExecPlan2Json
-	Cpu       int64 `json:"cpu"`        // see ExecPlan2Json
-	Memory    int64 `json:"memory"`     // see ExecPlan2Json
-	IO        int64 `json:"io"`         // see ExecPlan2Json
 	// SerializeExecPlan
 	SerializeExecPlan SerializeExecPlanFunc // see SetExecPlan, ExecPlan2Json
 
@@ -73,6 +70,11 @@ type StatementInfo struct {
 	reported bool
 	// mark exported
 	exported bool
+}
+
+type Statistic struct {
+	RowsRead  int64
+	BytesScan int64
 }
 
 func (s *StatementInfo) GetName() string {
@@ -132,12 +134,11 @@ func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string 
 		row.SetColumnVal(errCodeCol, fmt.Sprintf("%d", errCode))
 		row.SetColumnVal(errorCol, fmt.Sprintf("%s", s.Error))
 	}
-	row.SetColumnVal(execPlanCol, s.ExecPlan2Json(ctx))
+	execPlan, stats := s.ExecPlan2Json(ctx)
+	row.SetColumnVal(execPlanCol, execPlan)
 	row.SetColumnVal(rowsReadCol, fmt.Sprintf("%d", s.RowsRead))
 	row.SetColumnVal(bytesScanCol, fmt.Sprintf("%d", s.BytesScan))
-	row.SetColumnVal(cpuCol, fmt.Sprintf("%d", s.Cpu))
-	row.SetColumnVal(memoryCol, fmt.Sprintf("%d", s.Memory))
-	row.SetColumnVal(ioCol, fmt.Sprintf("%d", s.IO))
+	row.SetColumnVal(statsCol, stats)
 	row.SetColumnVal(stmtTypeCol, s.StatementType)
 	row.SetColumnVal(queryTypeCol, s.QueryType)
 
@@ -148,31 +149,36 @@ func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string 
 // and set RowsRead, BytesScan from ExecPlan
 //
 // please used in s.mux.Lock()
-func (s *StatementInfo) ExecPlan2Json(ctx context.Context) string {
+func (s *StatementInfo) ExecPlan2Json(ctx context.Context) (string, string) {
 	var jsonByte []byte
+	var statsJsonByte []byte
+	var stats Statistic
 	if s.SerializeExecPlan == nil {
 		// use defaultSerializeExecPlan
 		if f := getDefaultSerializeExecPlan(); f == nil {
 			uuidStr := uuid.UUID(s.StatementID).String()
-			return fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr)
+			return fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr),
+				`{"code":200,"message":"NO ExecPlan"}`
 		} else {
-			jsonByte, s.RowsRead, s.BytesScan = f(ctx, s.ExecPlan, uuid.UUID(s.StatementID))
+			jsonByte, statsJsonByte, stats = f(ctx, s.ExecPlan, uuid.UUID(s.StatementID))
+			s.RowsRead, s.BytesScan = stats.RowsRead, stats.BytesScan
 		}
 	} else {
 		// use s.SerializeExecPlan
 		// get real ExecPlan json-str
-		jsonByte, s.RowsRead, s.BytesScan = s.SerializeExecPlan(ctx, s.ExecPlan, uuid.UUID(s.StatementID))
+		jsonByte, statsJsonByte, stats = s.SerializeExecPlan(ctx, s.ExecPlan, uuid.UUID(s.StatementID))
+		s.RowsRead, s.BytesScan = stats.RowsRead, stats.BytesScan
 		if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
 			// get nil ExecPlan json-str
 			jsonByte, _, _ = s.SerializeExecPlan(ctx, nil, uuid.UUID(s.StatementID))
 		}
 	}
-	return string(jsonByte)
+	return string(jsonByte), string(statsJsonByte)
 }
 
 var defaultSerializeExecPlan atomic.Value
 
-type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, rows int64, bytes int64)
+type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, statsJson []byte, stats Statistic)
 
 func SetDefaultSerializeExecPlan(f SerializeExecPlanFunc) {
 	defaultSerializeExecPlan.Store(f)

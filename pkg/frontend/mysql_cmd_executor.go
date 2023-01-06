@@ -233,6 +233,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if cw != nil {
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
+		ses.ast = statement
 		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		statement.Format(fmtCtx)
 		text = SubStringFromBegin(fmtCtx.String(), int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
@@ -256,6 +257,10 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		RequestAt:            requestAt,
 		StatementType:        getStatementType(statement).GetStatementType(),
 		QueryType:            getStatementType(statement).GetQueryType(),
+	}
+	if ses.sqlSourceType != "internal_sql" {
+		ses.tStmt = stm
+		ses.lastQueryId = types.Uuid(stmID).ToString()
 	}
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
@@ -583,6 +588,18 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
+	if openSaveQueryResult(ses) {
+		// ses.lastQueryId = types.Uuid(ses.tStmt.StatementID).ToString()
+		if bat == nil {
+			if err := saveQueryResultMeta(ses); err != nil {
+				return err
+			}
+		} else {
+			if err := saveQueryResult(ses, bat); err != nil {
+				return err
+			}
+		}
+	}
 	if bat == nil {
 		return nil
 	}
@@ -3172,11 +3189,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		StorageEngine: pu.StorageEngine,
 		LastInsertID:  ses.GetLastInsertID(),
 	}
+	proc.SessionInfo.QueryId = ses.lastQueryId
 	if ses.GetTenantInfo() != nil {
+		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
 		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 	} else {
+		proc.SessionInfo.Account = sysAccountName
 		proc.SessionInfo.AccountId = sysAccountID
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
@@ -3557,6 +3577,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				logErrorf(ses.GetConciseProfile(), "GetColumns from Computation handler failed. error: %v", err)
 				goto handleFailed
 			}
+			if c, ok := cw.(*TxnComputationWrapper); ok {
+				ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(c.plan)}
+			}
 			/*
 				Step 1 : send column count and column definition.
 			*/
@@ -3929,10 +3952,12 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 	}
 
 	if ses.GetTenantInfo() != nil {
+		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
 		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 	} else {
+		proc.SessionInfo.Account = sysAccountName
 		proc.SessionInfo.AccountId = sysAccountID
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
@@ -4351,7 +4376,7 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 	return buffer.Bytes()
 }
 
-func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, rows int64, size int64) {
+func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, statsJonsBytes []byte, stats trace.Statistic) {
 	if queryPlan != nil && queryPlan.GetQuery() != nil {
 		explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
 		options := &explain.ExplainOptions{
@@ -4360,7 +4385,7 @@ func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.U
 			Format:  explain.EXPLAIN_FORMAT_TEXT,
 		}
 		marshalPlan := explainQuery.BuildJsonPlan(ctx, uuid, options)
-		rows, size = marshalPlan.StatisticsRead()
+		stats.RowsRead, stats.BytesScan = marshalPlan.StatisticsRead()
 		// data transform to json datastruct
 		buffer := &bytes.Buffer{}
 		encoder := json.NewEncoder(buffer)
@@ -4372,19 +4397,35 @@ func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.U
 		} else {
 			jsonBytes = buffer.Bytes()
 		}
+		// data transform Global to json
+		if len(marshalPlan.Steps) > 0 {
+			if len(marshalPlan.Steps) > 1 {
+				logutil.Fatalf("need handle multi execPlan trees, cnt: %d", len(marshalPlan.Steps))
+			}
+			buffer := &bytes.Buffer{}
+			encoder := json.NewEncoder(buffer)
+			encoder.SetEscapeHTML(false)
+			global := marshalPlan.Steps[0].GraphData.Global
+			err = encoder.Encode(&global)
+			if err != nil {
+				statsJonsBytes = []byte(fmt.Sprintf(`{"code":200,"message":"%q"}`, err.Error()))
+			} else {
+				statsJonsBytes = buffer.Bytes()
+			}
+		}
 	} else {
 		jsonBytes = buildErrorJsonPlan(uuid, moerr.ErrWarn, "sql query no record execution plan")
 	}
-	return jsonBytes, rows, size
+	return jsonBytes, statsJonsBytes, stats
 }
 
 // SerializeExecPlan Serialize the execution plan by json
-var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]byte, int64, int64) {
+var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]byte, []byte, trace.Statistic) {
 	if plan == nil {
 		return serializePlanToJson(ctx, nil, uuid)
 	} else if queryPlan, ok := plan.(*plan2.Plan); !ok {
 		moError := moerr.NewInternalError(ctx, "execPlan not type of plan2.Plan: %s", reflect.ValueOf(plan).Type().Name())
-		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error()), 0, 0
+		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error()), []byte{}, trace.Statistic{}
 	} else {
 		// data transform to json dataStruct
 		return serializePlanToJson(ctx, queryPlan, uuid)

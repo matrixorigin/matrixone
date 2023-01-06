@@ -256,6 +256,15 @@ type FrontendParameters struct {
 
 	// MaxMessageSize max size for read messages from dn. Default is 10M
 	MaxMessageSize uint64 `toml:"max-message-size"`
+
+	// default off
+	SaveQueryResult string `toml:"saveQueryResult"`
+
+	// default 24 (h)
+	QueryResultTimeout uint64 `toml:"queryResultTimeout"`
+
+	// default 100 (MB)
+	QueryResultMaxsize uint64 `toml:"queryResultMaxsize"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -357,6 +366,18 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.SessionTimeout.Duration == 0 {
 		fp.SessionTimeout.Duration = defaultSessionTimeout
+	}
+
+	if fp.SaveQueryResult == "" {
+		fp.SaveQueryResult = "off"
+	}
+
+	if fp.QueryResultTimeout == 0 {
+		fp.QueryResultTimeout = 24
+	}
+
+	if fp.QueryResultMaxsize == 0 {
+		fp.QueryResultMaxsize = 100
 	}
 }
 
