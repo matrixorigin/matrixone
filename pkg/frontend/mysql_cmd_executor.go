@@ -3221,8 +3221,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				cwft.stmt.GetQueryType() == tree.QueryTypeTCL {
 				if _, ok := cwft.stmt.(*tree.SetVar); !ok {
 					ses.cleanCache()
+					canCache = false
 				}
-				canCache = false
 			}
 		}
 

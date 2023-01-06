@@ -54,3 +54,20 @@ func Test_LRU(t *testing.T) {
 	require.True(t, pc.isCached("2"))
 	require.False(t, pc.isCached("3"))
 }
+
+func Test_CleanCache(t *testing.T) {
+	pc := newPlanCache(3)
+
+	pc.cache("1", nil, nil)
+	pc.cache("2", nil, nil)
+	pc.cache("3", nil, nil)
+	require.True(t, pc.isCached("1"))
+	require.True(t, pc.isCached("2"))
+	require.True(t, pc.isCached("3"))
+
+	pc.clean()
+
+	require.False(t, pc.isCached("1"))
+	require.False(t, pc.isCached("2"))
+	require.False(t, pc.isCached("3"))
+}
