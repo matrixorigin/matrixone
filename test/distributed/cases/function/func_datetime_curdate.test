@@ -8,9 +8,10 @@ create table t1 (a int);
 insert into t1 values (1),(2),(3);
 select cast(now() as date)=curdate() q from t1;
 
-SELECT curdate();
 SELECT curdate() + 0;
 SELECT curdate() - 3;
+SELECT datediff('2023-01-09',curdate());
+
 
 -- @suite
 -- @setup
@@ -18,33 +19,29 @@ DROP TABLE IF EXISTS curdate_01;
 
 CREATE TABLE curdate_01( d INT,d1 CHAR(20),d2 DATE,PRIMARY KEY (d));
 
-INSERT INTO curdate_01 VALUES (1,'usaisagoodnat','1970-01-02');
-INSERT INTO curdate_01 VALUES (2,'chanialfakbjap','1971-11-12');
-INSERT INTO curdate_01 VALUES (3,'indiaisashit','1972-09-09');
+INSERT INTO curdate_01 VALUES (1,'usaisagoodnat','1999-01-02');
+INSERT INTO curdate_01 VALUES (2,'chanialfakbjap','2017-11-12');
+INSERT INTO curdate_01 VALUES (3,'indiaisashit','2004-09-09');
 INSERT INTO curdate_01 VALUES (4,'xingoporelka','1973-12-07');
-INSERT INTO curdate_01 VALUES (5,'wlllew','2023-01-06');
+INSERT INTO curdate_01 VALUES (5,'wlllew','2023-01-04');
 
 
 -- case
-SELECT * FROM curdate_01 WHERE d2 < curdate();
-SELECT * FROM curdate_01 WHERE d2 > curdate();
+SELECT datediff(curdate(), d2) FROM curdate_01;
+SELECT * FROM curdate_01 WHERE datediff(curdate(), d2) < 8000;
+SELECT * ,datediff(curdate(), d2) AS datecount FROM curdate_01 WHERE datediff(curdate(), d2) > 10000;
 
 
 -- curdate()与cast的嵌套
-SELECT CAST(curdate() AS DATE);
-SELECT CAST(curdate() AS DATETIME);
-
+SELECT datediff(CAST(curdate() AS DATE),'2012-06-23');
+SELECT datediff(CAST(curdate() AS DATETIME),'1988-01-29 12:12:12');
 
 -- date function
-SELECT date_format(curdate(),'%W %D %M %Y');
-SELECT DATE(curdate());
-SELECT TO_DATE(curdate(),'%Y-%m-%d %T');
-SELECT year(curdate()) AS y, month(curdate()) AS m, DAY(curdate()) AS d;
+SELECT datediff(DATE(curdate()),'1971-01-01');
+SELECT year(curdate()) - 10 AS y, month(curdate()) - 2 AS m, DAY(curdate()) - 4 AS d;
 SELECT weekday(curdate());
-SELECT dayofyear(curdate());
 SELECT EXTRACT(YEAR_MONTH FROM curdate());
 SELECT unix_timestamp(curdate());
-SELECT FROM_UNIXTIME(1672905600);
 SELECT datediff(curdate(),'1970-01-01');
 
 
@@ -57,8 +54,6 @@ INSERT INTO curdate_02 VALUES('1970-10-11 01:02:03');
 INSERT INTO curdate_02 VALUES(curdate());
 INSERT INTO curdate_02 VALUES('2023-01-07 10:10:10');
 
-SELECT * FROM curdate_02 WHERE a < curdate();
-SELECT * FROM curdate_02 WHERE a > curdate();
-SELECT a FROM curdate_02 WHERE YEAR(a) = YEAR(curdate());
-SELECT * FROM curdate_02 WHERE MONTH(a) = MONTH(curdate());
-SELECT weekday(a) AS t FROM curdate_02 WHERE weekday(a) = weekday(curdate());
+SELECT datediff(curdate(),a) FROM curdate_02;
+SELECT *, datediff(curdate(),a) AS df FROM curdate_02 WHERE datediff(curdate(), a) = 19079 ;
+
