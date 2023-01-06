@@ -15,12 +15,7 @@
 package tree
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"golang.org/x/sync/errgroup"
-	"io"
-	"os"
 	"strconv"
 	"strings"
 
@@ -447,10 +442,6 @@ type LoadColumn interface {
 }
 
 type ExportParam struct {
-	// file handler
-	File *os.File
-	// bufio.writer
-	Writer *bufio.Writer
 	// outfile flag
 	Outfile bool
 	// query id
@@ -463,30 +454,9 @@ type ExportParam struct {
 	Lines *Lines
 	// fileSize
 	MaxFileSize uint64
-	// curFileSize
-	CurFileSize uint64
-	Rows        uint64
-	FileCnt     uint
 	// header flag
 	Header     bool
 	ForceQuote []string
-	ColumnFlag []bool
-	Symbol     [][]byte
-
-	// default flush size
-	DefaultBufSize int64
-	OutputStr      []byte
-	LineSize       uint64
-
-	//file service
-	UseFileService bool
-	// FileService
-	FileService fileservice.FileService
-	LineBuffer  *bytes.Buffer
-	Ctx         context.Context
-	AsyncReader *io.PipeReader
-	AsyncWriter *io.PipeWriter
-	AsyncGroup  *errgroup.Group
 }
 
 func (ep *ExportParam) Format(ctx *FmtCtx) {

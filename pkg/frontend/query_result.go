@@ -235,6 +235,12 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	defer func() {
 		exportParam.LineBuffer = nil
 		exportParam.OutputStr = nil
+		if exportParam.AsyncReader != nil {
+			_ = exportParam.AsyncReader.Close()
+		}
+		if exportParam.AsyncWriter != nil {
+			_ = exportParam.AsyncWriter.Close()
+		}
 	}()
 	initExportFileParam(exportParam, mrs)
 

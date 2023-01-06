@@ -136,7 +136,14 @@ var openNewFile = func(ctx context.Context, ep *ExportParam, mrs *MysqlResultSet
 					},
 				},
 			}
-			return ep.FileService.Write(ctx, vec)
+			err := ep.FileService.Write(ctx, vec)
+			if err != nil {
+				err2 := ep.AsyncReader.CloseWithError(err)
+				if err2 != nil {
+					return err2
+				}
+			}
+			return err
 		}
 
 		ep.AsyncGroup, _ = errgroup.WithContext(ctx)
@@ -245,7 +252,18 @@ var Close = func(ep *ExportParam) error {
 		if err != nil {
 			return err
 		}
-		return ep.AsyncGroup.Wait()
+		err = ep.AsyncGroup.Wait()
+		if err != nil {
+			return err
+		}
+		err = ep.AsyncReader.Close()
+		if err != nil {
+			return err
+		}
+		ep.AsyncReader = nil
+		ep.AsyncWriter = nil
+		ep.AsyncGroup = nil
+		return err
 	}
 }
 
@@ -260,6 +278,12 @@ var Write = func(ep *ExportParam, output []byte) (int, error) {
 var EndOfLine = func(ep *ExportParam) (int, error) {
 	if ep.UseFileService {
 		n, err := ep.AsyncWriter.Write(ep.LineBuffer.Bytes())
+		if err != nil {
+			err2 := ep.AsyncWriter.CloseWithError(err)
+			if err2 != nil {
+				return 0, err2
+			}
+		}
 		ep.LineBuffer.Reset()
 		return n, err
 	}
