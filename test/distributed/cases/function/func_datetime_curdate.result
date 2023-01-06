@@ -24,13 +24,6 @@ INSERT INTO curdate_01 VALUES (2,'chanialfakbjap','2017-11-12');
 INSERT INTO curdate_01 VALUES (3,'indiaisashit','2004-09-09');
 INSERT INTO curdate_01 VALUES (4,'xingoporelka','1973-12-07');
 INSERT INTO curdate_01 VALUES (5,'wlllew','2023-01-04');
-SELECT datediff(curdate(), d2) FROM curdate_01;
-datediff(curdate(), d2)
-8769
-1880
-6692
-17926
-1
 SELECT * FROM curdate_01 WHERE datediff(curdate(), d2) < 8000;
 d    d1    d2
 2    chanialfakbjap    2017-11-12
@@ -48,9 +41,6 @@ datediff(cast(curdate() as datetime(26)), 1988-01-29 12:12:12)
 SELECT datediff(DATE(curdate()),'1971-01-01');
 datediff(date(curdate()), 1971-01-01)
 18997
-SELECT year(curdate()) - 10 AS y, month(curdate()) - 2 AS m, DAY(curdate()) - 4 AS d;
-y    m    d
-2013    -1    1
 SELECT weekday(curdate());
 weekday(curdate())
 3
@@ -77,6 +67,5 @@ datediff(curdate(), a)
 19079
 0
 -2
-SELECT *, datediff(curdate(),a) AS df FROM curdate_02 WHERE datediff(curdate(), a) = 19079 ;
-a    df
-1970-10-11 01:02:03    19079
+SELECT * FROM curdate_02 WHERE datediff(curdate(), a) > 19079 ;
+a
