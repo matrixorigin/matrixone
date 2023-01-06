@@ -163,6 +163,7 @@ func testFileService(
 	t.Run("WriterForRead", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
+
 		err := fs.Write(ctx, IOVector{
 			FilePath: "foo",
 			Entries: []IOEntry{
@@ -174,6 +175,7 @@ func testFileService(
 			},
 		})
 		assert.Nil(t, err)
+
 		buf := new(bytes.Buffer)
 		vec := &IOVector{
 			FilePath: "foo",
@@ -188,6 +190,22 @@ func testFileService(
 		err = fs.Read(ctx, vec)
 		assert.Nil(t, err)
 		assert.Equal(t, []byte("1234"), buf.Bytes())
+
+		buf = new(bytes.Buffer)
+		vec = &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Offset:        0,
+					Size:          -1,
+					WriterForRead: buf,
+				},
+			},
+		}
+		err = fs.Read(ctx, vec)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("1234"), buf.Bytes())
+
 	})
 
 	t.Run("ReadCloserForRead", func(t *testing.T) {
