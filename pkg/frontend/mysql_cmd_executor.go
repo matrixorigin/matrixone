@@ -23,6 +23,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"golang.org/x/sync/errgroup"
+	"io"
 	"math"
 	"os"
 	"reflect"
@@ -3099,9 +3100,9 @@ func (ses *Session) getSqlType(sql string) {
 	}
 }
 
-func (mce *MysqlCmdExecutor) processLoadLocal(proc *process.Process, param *tree.ExternParam) (err error) {
+func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
 	defer func() {
-		_, err = proc.LoadLocalBuffer.Write(nil)
+		err = writer.Close()
 	}()
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
@@ -3118,7 +3119,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(proc *process.Process, param *tree
 	msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
-			err = moerr.NewFileNotFound(proc.Ctx, param.Filepath)
+			err = moerr.NewFileNotFound(ctx, param.Filepath)
 		}
 		proto.SetSequenceID(proto.GetSequenceId() + 1)
 		return
@@ -3127,7 +3128,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(proc *process.Process, param *tree
 	packet, ok := msg.(*Packet)
 	if !ok {
 		proto.SetSequenceID(proto.GetSequenceId() + 1)
-		err = moerr.NewInvalidInput(proc.Ctx, "invalid packet")
+		err = moerr.NewInvalidInput(ctx, "invalid packet")
 		return
 	}
 
@@ -3137,13 +3138,13 @@ func (mce *MysqlCmdExecutor) processLoadLocal(proc *process.Process, param *tree
 	if length == 0 {
 		return
 	}
-	_, err = proc.LoadLocalBuffer.Write(packet.Payload)
+	_, err = writer.Write(packet.Payload)
 	if err != nil {
 		return
 	}
 	nowStart := time.Now()
 	for {
-		logutil.Infof("time cost since last packet: %f seconds", time.Since(nowStart).Seconds())
+		logutil.Infof("last time cost %f seconds", time.Since(nowStart).Seconds())
 		nowStart = time.Now()
 		msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
 		logutil.Infof("read tcp cost %f seconds", time.Since(nowStart).Seconds())
@@ -3157,7 +3158,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(proc *process.Process, param *tree
 		}
 		packet, ok = msg.(*Packet)
 		if !ok {
-			err = moerr.NewInvalidInput(proc.Ctx, "invalid packet")
+			err = moerr.NewInvalidInput(ctx, "invalid packet")
 			seq += 1
 			proto.SetSequenceID(seq)
 			break
@@ -3166,7 +3167,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(proc *process.Process, param *tree
 		proto.SetSequenceID(seq)
 
 		writeStart := time.Now()
-		_, err = proc.LoadLocalBuffer.Write(packet.Payload)
+		_, err = writer.Write(packet.Payload)
 		logutil.Infof("write pipe cost %f seconds", time.Since(writeStart).Seconds())
 		if err != nil {
 			return
@@ -3250,6 +3251,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var columns []interface{}
 	var mrs *MysqlResultSet
 	var loadLocalErrGroup *errgroup.Group
+	var loadLocalWriter *io.PipeWriter
 
 	singleStatement := len(cws) == 1
 	for i, cw := range cws {
@@ -3528,7 +3530,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.Load:
 			if st.Local {
-				proc.LoadLocalBuffer = process.NewBuffer()
+				proc.LoadLocalReader, loadLocalWriter = io.Pipe()
 			}
 		}
 
@@ -3709,7 +3711,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				if st.Local {
 					loadLocalErrGroup = new(errgroup.Group)
 					loadLocalErrGroup.Go(func() error {
-						return mce.processLoadLocal(proc, st.Param)
+						return mce.processLoadLocal(proc.Ctx, st.Param, loadLocalWriter)
 					})
 				}
 			}

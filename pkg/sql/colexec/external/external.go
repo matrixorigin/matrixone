@@ -410,7 +410,7 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 
 func ReadFile(param *tree.ExternParam, proc *process.Process) (io.ReadCloser, error) {
 	if param.Local {
-		return io.NopCloser(proc.LoadLocalBuffer), nil
+		return io.NopCloser(proc.LoadLocalReader), nil
 	}
 	fs, readPath, err := GetForETLWithType(param, param.Filepath)
 	if err != nil {
@@ -643,7 +643,9 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 	plh := param.plh
 	plh.simdCsvLineArray = make([][]string, ONE_BATCH_MAX_ROW)
 	finish := false
+	nowStart := time.Now()
 	plh.simdCsvLineArray, cnt, finish, err = plh.simdCsvReader.ReadLimitSize(ONE_BATCH_MAX_ROW, proc.Ctx, param.maxBatchSize, plh.simdCsvLineArray)
+	logutil.Infof("read lines cost %f seconds, %d lines, finish:%v", time.Since(nowStart).Seconds(), cnt, finish)
 	if err != nil {
 		return nil, err
 	}

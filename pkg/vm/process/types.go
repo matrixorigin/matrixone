@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"io"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -136,7 +137,7 @@ type Process struct {
 
 	LastInsertID *uint64
 
-	LoadLocalBuffer *Buffer
+	LoadLocalReader io.Reader
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
