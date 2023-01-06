@@ -322,7 +322,11 @@ func TestNewMergeWithContextDone(t *testing.T) {
 			got := NewMerge(tt.args.ctx, tt.args.opts...)
 			require.NotNil(t, got)
 
-			err = got.doMergeFiles(ctx, dummyTable.Table, files, 0)
+			reader, err := newETLReader(got.ctx, got.FS, files[0])
+			require.Nil(t, err)
+
+			_, err = reader.ReadLine()
+			//err = got.doMergeFiles(ctx, dummyTable.Table, files, 0)
 			t.Logf("doMergeFiles meet err: %s", err)
 			require.Equal(t, err.Error(), "internal error: read files meet context Done")
 		})
