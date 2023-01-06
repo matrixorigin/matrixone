@@ -323,6 +323,7 @@ func TestNewMergeWithContextDone(t *testing.T) {
 			require.NotNil(t, got)
 
 			err = got.doMergeFiles(ctx, dummyTable.Table, files, 0)
+			t.Logf("doMergeFiles meet err: %s", err)
 			require.Equal(t, err.Error(), "internal error: read files meet context Done")
 		})
 	}
