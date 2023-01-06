@@ -642,7 +642,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	if isTemp {
-		newId, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, tblName))
+		// memoryengine truncate always return 0, so for temporary table, just use origin tableId as newId
+		_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, tblName))
+		newId = rel.GetTableID(c.ctx)
 	} else {
 		newId, err = dbSource.Truncate(c.ctx, tblName)
 	}
@@ -721,7 +723,7 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
-		return colexec.DeleteAutoIncrCol(c.e, c.ctx, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
+		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
 	} else {
 		if err := dbSource.Delete(c.ctx, tblName); err != nil {
 			return err
@@ -731,7 +733,7 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
-		return colexec.DeleteAutoIncrCol(c.e, c.ctx, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
 	}
 }
 
