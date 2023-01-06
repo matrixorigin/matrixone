@@ -571,11 +571,7 @@ func (c *Compile) ConstructScope() *Scope {
 }
 
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
-	mcpu := c.NumCPU()
-	if mcpu < 1 {
-		mcpu = 1
-	}
-	ss := make([]*Scope, mcpu)
+	mcpu := c.cnList[0].Mcpu
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
 	if err != nil {
@@ -596,6 +592,9 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	var fileList []string
 	if param.QueryResult {
 		fileList = strings.Split(param.Filepath, ",")
+		for i := range fileList {
+			fileList[i] = strings.TrimSpace(fileList[i])
+		}
 	} else {
 		fileList, err = external.ReadDir(param)
 		if err != nil {
@@ -613,6 +612,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	tag := len(fileList) % mcpu
 	index := 0
 	currentFirstFlag := c.anal.isFirst
+	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.ConstructScope()
 		var fileListTmp []string

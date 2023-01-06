@@ -16,41 +16,29 @@ package frontend
 
 import (
 	"context"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"sort"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"sort"
-	"strconv"
 	"strings"
 )
 
-const QueryResultPrefix = "%s_%s_"
-
-func BuildPrefixOfQueryResultFile(accountName, statementId string) string {
-	return fmt.Sprintf(QueryResultPrefix, accountName, statementId)
-}
-
-func BuildPathOfQueryResultFile(fileName string) string {
-	return fmt.Sprintf("%s/%s", catalog.QueryResultDir, fileName)
-}
-
 func openSaveQueryResult(ses *Session) bool {
-	// TODO: Graceful judgment
-	sql := strings.ToLower(ses.sql)
-	if strings.Contains(sql, "meta_scan") || strings.Contains(sql, "result_scan") || ses.tStmt == nil {
+	if ses.ast == nil || ses.tStmt == nil {
 		return false
 	}
-	if ses.tStmt.SqlSourceType == "internal_sql" {
+	if ses.tStmt.SqlSourceType == "internal_sql" || isSimpleResultQuery(ses.ast) {
 		return false
 	}
 	if strings.ToLower(ses.GetParameterUnit().SV.SaveQueryResult) == "on" {
@@ -63,6 +51,53 @@ func openSaveQueryResult(ses *Session) bool {
 	}
 	if v, _ := val.(int8); v > 0 {
 		return true
+	}
+	return false
+}
+
+func isSimpleResultQuery(ast tree.Statement) bool {
+	switch stmt := ast.(type) {
+	case *tree.Select:
+		if stmt.With != nil || stmt.OrderBy != nil || stmt.Ep != nil {
+			return false
+		}
+		if clause, ok := stmt.Select.(*tree.SelectClause); ok {
+			if len(clause.From.Tables) > 1 || clause.Where != nil || clause.Having != nil || len(clause.GroupBy) > 0 {
+				return false
+			}
+			t := clause.From.Tables[0]
+			// judge table
+			if j, ok := t.(*tree.JoinTableExpr); ok {
+				if j.Right != nil {
+					return false
+				}
+				if a, ok := j.Left.(*tree.AliasedTableExpr); ok {
+					if f, ok := a.Expr.(*tree.TableFunction); ok {
+						if f.Id() != "result_scan" && f.Id() != "meta_scan" {
+							return false
+						}
+						// judge proj
+						for _, selectExpr := range clause.Exprs {
+							switch selectExpr.Expr.(type) {
+							case tree.UnqualifiedStar:
+								continue
+							case *tree.UnresolvedName:
+								continue
+							default:
+								return false
+							}
+						}
+						return true
+					}
+					return false
+				}
+				return false
+			}
+			return false
+		}
+		return false
+	case *tree.ParenSelect:
+		return isSimpleResultQuery(stmt)
 	}
 	return false
 }
@@ -86,10 +121,13 @@ func saveQueryResult(ses *Session, bat *batch.Batch) error {
 	return nil
 }
 
-func saveQueryResultMeta(ses *Session, bat *batch.Batch) error {
+func saveQueryResultMeta(ses *Session) error {
 	defer func() {
 		ses.ResetBlockIdx()
 	}()
+	if ses.blockIdx == 0 {
+		return nil
+	}
 	fs := ses.GetParameterUnit().FileService
 	// write query result meta
 	b, err := ses.rs.Marshal()

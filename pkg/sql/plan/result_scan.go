@@ -17,6 +17,7 @@ package plan
 import (
 	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -27,6 +28,12 @@ import (
 
 func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
 	var err error
+	val, err := builder.compCtx.ResolveVariable("save_query_result", true, true)
+	if err == nil {
+		if v, _ := val.(int8); v == 0 {
+			return 0, moerr.NewNoConfig(builder.GetContext(), "save query result")
+		}
+	}
 	ctx.binder = NewTableBinder(builder, ctx)
 	exprs := make([]*plan.Expr, 0, len(tbl.Func.Exprs))
 	for _, v := range tbl.Func.Exprs {
@@ -102,11 +109,10 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	tableDef.Createsql = string(b)
 	node := &plan.Node{
 		NodeType:    plan.Node_EXTERNAL_SCAN,
-		Stats:       nil,
+		Stats:       &plan.Stats{},
 		TableDef:    tableDef,
 		BindingTags: []int32{builder.genNewTag()},
 	}
 	nodeID := builder.appendNode(node, ctx)
-	clearBinding(ctx)
 	return nodeID, nil
 }

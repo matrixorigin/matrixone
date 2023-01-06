@@ -1,0 +1,24 @@
+set global save_query_result = on;
+drop table if exists tt;
+create table tt (a int);
+insert into tt values(1), (2);
+select * from tt;
+select * from result_scan(last_query_id()) as u;
+select * from tt;
+select count(*) from meta_scan(last_query_id()) as u;
+set global save_query_result = off;
+
+select * from tt;
+select * from result_scan(last_query_id()) as u;
+set global save_query_result = on;
+drop table if exists t2;
+create table t2 (a int, b int, c int);
+insert into t2 values(1, 2, 3), (1, 2, 3);
+select c from tt, t2 where tt.a = t2.a;
+select * from result_scan(last_query_id()) as u;
+select c from tt, t2 where tt.a = t2.a;
+select t2.b from result_scan(last_query_id()) as u, t2 where u.c = t2.c;
+select * from result_scan(last_query_id()) as u;
+select c from tt, t2 where tt.a = t2.a;
+select * from result_scan(last_query_id()) as u, result_scan(last_query_id()) as v limit 1;
+set global save_query_result = off;

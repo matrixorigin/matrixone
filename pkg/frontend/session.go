@@ -177,6 +177,8 @@ type Session struct {
 
 	tStmt *trace.StatementInfo
 
+	ast tree.Statement
+
 	rs *plan.ResultColDef
 
 	lastQueryId string
@@ -2078,7 +2080,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 		}
 	}
 	if size == -1 {
-		return nil, "", moerr.NewInvalidArg(proc.Ctx, "query id", uuid)
+		return nil, "", moerr.NewQueryIdNotFound(proc.Ctx, uuid)
 	}
 	// read meta's meta
 	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)

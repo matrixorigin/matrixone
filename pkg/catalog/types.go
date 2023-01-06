@@ -17,6 +17,7 @@ package catalog
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -390,11 +391,19 @@ var (
 	MoTableMetaDefs = []engine.TableDef{}
 )
 
-const QueryResultPath = defines.SharedFileServiceName + ":/query_result/%s_%s_%d.blk"
-const QueryResultDir = defines.SharedFileServiceName + ":/query_result"
+var (
+	QueryResultPath     string
+	QueryResultMetaPath string
+	QueryResultMetaDir  string
+)
+
+func init() {
+	QueryResultPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result/%s_%s_%d.blk")
+	QueryResultMetaPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta/%s_%s.blk")
+	QueryResultMetaDir = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta")
+}
+
 const QueryResultName = "%s_%s_%d.blk"
-const QueryResultMetaPath = defines.SharedFileServiceName + ":/query_result_meta/%s_%s.blk"
-const QueryResultMetaDir = defines.SharedFileServiceName + ":/query_result_meta"
 const QueryResultMetaName = "%s_%s.blk"
 
 type Meta struct {

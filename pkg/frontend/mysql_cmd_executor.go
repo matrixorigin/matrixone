@@ -232,6 +232,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if cw != nil {
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
+		ses.ast = statement
 		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		statement.Format(fmtCtx)
 		text = SubStringFromBegin(fmtCtx.String(), int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
@@ -256,7 +257,10 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		StatementType:        getStatementType(statement).GetStatementType(),
 		QueryType:            getStatementType(statement).GetQueryType(),
 	}
-	ses.tStmt = stm
+	if ses.sqlSourceType != "internal_sql" {
+		ses.tStmt = stm
+		ses.lastQueryId = types.Uuid(stmID).ToString()
+	}
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
 	}
@@ -584,9 +588,9 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
 	if openSaveQueryResult(ses) {
-		ses.lastQueryId = types.Uuid(ses.tStmt.StatementID).ToString()
+		// ses.lastQueryId = types.Uuid(ses.tStmt.StatementID).ToString()
 		if bat == nil {
-			if err := saveQueryResultMeta(ses, bat); err != nil {
+			if err := saveQueryResultMeta(ses); err != nil {
 				return err
 			}
 		} else {
