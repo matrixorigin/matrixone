@@ -106,7 +106,6 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 			if err != nil {
 				return
 			}
-			return
 
 		case "s3-no-key":
 			arguments := fsPath.ServiceArguments
@@ -131,7 +130,6 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 			if err != nil {
 				return
 			}
-			return
 
 		case "s3-opts":
 			res, err = newS3FS(fsPath.ServiceArguments)
@@ -168,7 +166,6 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 			if err != nil {
 				return
 			}
-			return
 
 		default:
 			err = moerr.NewInvalidInputNoCtx("no such service: %s", fsPath.Service)
