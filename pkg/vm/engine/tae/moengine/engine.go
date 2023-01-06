@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
@@ -144,6 +145,14 @@ func (e *txnEngine) DatabaseNames(ctx context.Context, txnHandle Txn) ([]string,
 	return txn.DatabaseNames(), nil
 }
 
+func (e *txnEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
+	return "", "", moerr.NewNYI(ctx, "interface GetNameById is not implemented")
+}
+
+func (e *txnEngine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, rel engine.Relation, err error) {
+	return "", "", nil, moerr.NewNYI(ctx, "interface GetRelationById is not implemented")
+}
+
 func (e *txnEngine) Database(ctx context.Context, name string, txnOp client.TxnOperator) (engine.Database, error) {
 	var err error
 	var txn txnif.AsyncTxn
@@ -225,4 +234,24 @@ func (e *txnEngine) Close() (err error) {
 
 func (e *txnEngine) Destroy() (err error) {
 	panic(moerr.NewNYINoCtx("Pls implement me!"))
+}
+
+func (e *txnEngine) ForceCheckpoint(ctx context.Context, ts types.TS) error {
+	e.impl.BGCheckpointRunner.DisableCheckpoint()
+	defer e.impl.BGCheckpointRunner.EnableCheckpoint()
+	e.impl.BGCheckpointRunner.CleanPenddingCheckpoint()
+	t0 := time.Now()
+	err := e.impl.BGCheckpointRunner.ForceFlush(ts, ctx)
+	logutil.Infof("[Force Checkpoint] flush takes %v", time.Since(t0))
+	if err != nil {
+		return err
+	}
+	err = e.impl.BGCheckpointRunner.ForceIncrementalCheckpoint(ts)
+	if err != nil {
+		return err
+	}
+	lsn := e.impl.BGCheckpointRunner.MaxLSNInRange(ts)
+	_, err = e.impl.Wal.RangeCheckpoint(1, lsn)
+	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
+	return err
 }

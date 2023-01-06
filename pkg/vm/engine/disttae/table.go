@@ -16,8 +16,9 @@ package disttae
 
 import (
 	"context"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"math/rand"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -48,14 +49,16 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 	var outcnt int64
 
 	exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
-	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
+	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 
-	for _, blockmetas := range tbl.meta.blocks {
-		totalBlockCnt += len(blockmetas)
-		for _, blk := range blockmetas {
-			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
-				outcnt += blockRows(blk)
-				blockNum++
+	if tbl.meta != nil {
+		for _, blockmetas := range tbl.meta.blocks {
+			totalBlockCnt += len(blockmetas)
+			for _, blk := range blockmetas {
+				if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
+					outcnt += blockRows(blk)
+					blockNum++
+				}
 			}
 		}
 	}
@@ -69,10 +72,13 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
 	var rows int64
 	var totalBlockCnt int
-	for _, blks := range tbl.meta.blocks {
-		totalBlockCnt += len(blks)
-		for _, blk := range blks {
-			rows += blockRows(blk)
+
+	if tbl.meta != nil {
+		for _, blks := range tbl.meta.blocks {
+			totalBlockCnt += len(blks)
+			for _, blk := range blks {
+				rows += blockRows(blk)
+			}
 		}
 	}
 	// before first execution, no metadata.
@@ -129,9 +135,11 @@ func (tbl *table) Rows(ctx context.Context) (int64, error) {
 	if tbl.meta == nil {
 		return rows, nil
 	}
-	for _, blks := range tbl.meta.blocks {
-		for _, blk := range blks {
-			rows += blockRows(blk)
+	if tbl.meta != nil {
+		for _, blks := range tbl.meta.blocks {
+			for _, blk := range blks {
+				rows += blockRows(blk)
+			}
 		}
 	}
 	return rows, nil
@@ -169,7 +177,8 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			}
 		}
 	}
-	dnList := needSyncDnStores(ctx, expr, tbl.tableDef, priKeys, tbl.db.txn.dnStores, tbl.db.txn.proc)
+	dnList := needSyncDnStores(ctx, expr, tbl.tableDef, priKeys,
+		tbl.db.txn.dnStores, tbl.db.txn.proc)
 	switch {
 	case tbl.tableId == catalog.MO_DATABASE_ID:
 		tbl.dnList = []int{0}
@@ -180,26 +189,21 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	default:
 		tbl.dnList = dnList
 	}
-	dnStores := make([]DNStore, 0, len(dnList))
-	for _, i := range dnList {
-		dnStores = append(dnStores, tbl.db.txn.dnStores[i])
-	}
-	_, ok := tbl.db.txn.createTableMap[tbl.tableId]
-	if !ok && !tbl.updated {
-		if err := tbl.db.txn.db.Update(ctx, dnStores, tbl, tbl.db.txn.op, tbl.primaryIdx,
+	_, created := tbl.db.txn.tableMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
+	if !created && !tbl.updated {
+		if err := tbl.db.txn.db.Update(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
 			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 			return nil, err
 		}
-		// update meta
-		columnLength := len(tbl.getTableDef().Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
-		meta, err := tbl.db.txn.getTableMeta(ctx, tbl.db.databaseId,
-			genMetaTableName(tbl.tableId), !ok, columnLength)
+		columnLength := len(tbl.tableDef.Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
+		meta, err := tbl.db.txn.getTableMeta(ctx, tbl.db.databaseId, genMetaTableName(tbl.tableId), true, columnLength, true)
 		if err != nil {
 			return nil, err
 		}
 		tbl.meta = meta
 		tbl.updated = true
 	}
+
 	ranges := make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
 	tbl.skipBlocks = make(map[uint64]uint8)
@@ -209,7 +213,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	tbl.meta.modifedBlocks = make([][]ModifyBlockMeta, len(tbl.meta.blocks))
 
 	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
-	columnMap, columns, maxCol := getColumnsByExpr(expr, tbl.getTableDef())
+	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range dnList {
 		blks, deletes := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
 			tbl.meta.blocks[i], writes)
@@ -296,7 +300,6 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 			if attr.Attr.Name != catalog.Row_ID {
 				defs = append(defs, tbl.defs[i])
 			}
-
 		}
 	}
 	pro := new(engine.PropertiesDef)
@@ -340,7 +343,6 @@ func (tbl *table) TableColumns(ctx context.Context) ([]*engine.Attribute, error)
 		}
 	}
 	return attrs, nil
-
 }
 
 func (tbl *table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
@@ -401,7 +403,6 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 }
 
 func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) error {
-
 	bat.SetAttributes([]string{catalog.Row_ID})
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.Length() == 0 {

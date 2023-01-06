@@ -819,6 +819,11 @@ func TestShow(t *testing.T) {
 		"show column_number from nation",
 		"show config",
 		"show index from tpch.nation",
+		"show locks",
+		"show node list",
+		"show grants for ROLE role1",
+		"show function status",
+		"show function status like '%ff'",
 		// "show grants",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)

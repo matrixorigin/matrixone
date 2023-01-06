@@ -16,9 +16,10 @@ package deletion
 
 import (
 	"bytes"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -33,7 +34,7 @@ func Prepare(_ *process.Process, _ any) error {
 }
 
 // the bool return value means whether it completed its work or not
-func Call(_ int, proc *process.Process, arg any) (bool, error) {
+func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	p := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 

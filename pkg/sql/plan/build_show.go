@@ -88,10 +88,17 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	rowCount := 0
 	var pkDefs []string
 	var cbDef string
+	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
 
 	for _, col := range tableDef.Cols {
 		colName := col.Name
 		if colName == catalog.Row_ID {
+			continue
+		}
+		//the non-sys account skips the column account_id of the cluster table
+		if util.IsClusterTableAttribute(colName) &&
+			isClusterTable &&
+			ctx.GetAccountId() != catalog.System_Account {
 			continue
 		}
 		nullOrNot := "NOT NULL"
@@ -155,6 +162,27 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			createStr += ",\n"
 		}
 		createStr += pkStr
+	}
+
+	uIndexDef, _ := buildIndexDefs(tableDef.Defs)
+	if uIndexDef != nil {
+		for i, name := range uIndexDef.IndexNames {
+			uIStr := "UNIQUE KEY"
+			uIStr += fmt.Sprintf("`%s`(", name)
+			for num, part := range uIndexDef.Fields[i].Parts {
+				if num == len(uIndexDef.Fields[i].Parts)-1 {
+					uIStr += fmt.Sprintf("`%s`", part)
+				} else {
+					uIStr += fmt.Sprintf("`%s`,", part)
+				}
+			}
+			uIStr += ")"
+			if rowCount != 0 {
+				createStr += ",\n"
+			}
+			createStr += uIStr
+		}
+
 	}
 
 	if rowCount != 0 {
@@ -353,7 +381,7 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 	ddlType := plan.DataDefinition_SHOW_TABLES
 
 	sql := "SELECT '%s', count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'"
-	sql = fmt.Sprintf(sql, dbName, dbName, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_cpkey_unique_0_%")
+	sql = fmt.Sprintf(sql, dbName, dbName, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%")
 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
@@ -408,6 +436,7 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
+
 func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
@@ -475,9 +504,9 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 	accountId := ctx.GetAccountId()
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
-	sql := "select relname as `Name`, 'Tae' as `Engine`, 'Dynamic' as `Row_format`, 0 as `Rows`, 0 as `Avg_row_length`, 0 as `Data_length`, 0 as `Max_data_length`, 0 as `Index_length`, 'NULL' as `Data_free`, 0 as `Auto_increment`, created_time as `Create_time`, 'NULL' as `Update_time`, 'NULL' as `Check_time`, 'utf-8' as `Collation`, 'NULL' as `Checksum`, '' as `Create_options`, rel_comment as `Comment` from %s.mo_tables where reldatabase = '%s' and relname != '%s' and (%s)"
+	sql := "select relname as `Name`, 'Tae' as `Engine`, 'Dynamic' as `Row_format`, 0 as `Rows`, 0 as `Avg_row_length`, 0 as `Data_length`, 0 as `Max_data_length`, 0 as `Index_length`, 'NULL' as `Data_free`, 0 as `Auto_increment`, created_time as `Create_time`, 'NULL' as `Update_time`, 'NULL' as `Check_time`, 'utf-8' as `Collation`, 'NULL' as `Checksum`, '' as `Create_options`, rel_comment as `Comment` from %s.mo_tables where reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)"
 
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", accountClause)
+	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%", accountClause)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -505,6 +534,43 @@ func buildShowTarget(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error) 
 	default:
 		sql = "select 1 where 0"
 	}
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowLocks(stmt *tree.ShowLocks, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := "select 1 where 0"
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowNodeList(stmt *tree.ShowNodeList, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := "select 1 where 0"
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowFunctionStatus(stmt *tree.ShowFunctionStatus, ctx CompilerContext) (*Plan, error) {
+	if stmt.Like != nil && stmt.Where != nil {
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
+	}
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	if stmt.Like != nil && stmt.Where != nil {
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
+	}
+
+	sql := fmt.Sprintf("SELECT db as `Db`, name as `Name`, type as `Type`, definer as `Definer`, modified_time as `Modified`, created_time as `Created`, security_type as `Security_type`, comment as `Comment`, character_set_client, collation_connection, database_collation as `Database Collation` FROM %s.mo_user_defined_function", MO_CATALOG_DB_NAME)
+
+	if stmt.Where != nil {
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+	}
+
+	if stmt.Like != nil {
+		// append filter [AND ma.attname like stmt.Like] to WHERE clause
+		likeExpr := stmt.Like
+		likeExpr.Left = tree.SetUnresolvedName("name")
+		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+	}
+
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
@@ -575,17 +641,24 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 
 // TODO: Improve SQL. Currently, Lack of the mata of grants
 func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) {
-	ddlType := plan.DataDefinition_SHOW_TARGET
-	if stmt.Hostname == "" {
-		stmt.Hostname = MO_DEFUALT_HOSTNAME
-	}
-	if stmt.Username == "" {
-		stmt.Username = ctx.GetUserName()
-	}
-	sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\", \"@\", \"`%s`\")  as `Grants for %s@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
-	sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Username, stmt.Hostname)
 
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	if stmt.ShowGrantType == tree.GrantForRole {
+		role_name := stmt.Roles[0].UserName
+		sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\")  as `Grants for %s` from  %s.mo_role_privs as p where p.role_name = '%s';"
+		sql = fmt.Sprintf(sql, role_name, role_name, MO_CATALOG_DB_NAME, role_name)
+		return returnByRewriteSQL(ctx, sql, ddlType)
+	} else {
+		if stmt.Hostname == "" {
+			stmt.Hostname = MO_DEFUALT_HOSTNAME
+		}
+		if stmt.Username == "" {
+			stmt.Username = ctx.GetUserName()
+		}
+		sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\", \"@\", \"`%s`\")  as `Grants for %s@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
+		sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Username, stmt.Hostname)
+		return returnByRewriteSQL(ctx, sql, ddlType)
+	}
 }
 
 func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, error) {

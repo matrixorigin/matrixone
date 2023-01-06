@@ -310,7 +310,6 @@ func (pi *ProtocolImpl) ConnectionID() uint32 {
 // before calling NewMysqlClientProtocol, tcpConn.Connected() must be true
 // please check goetty/application.go::doStart() and goetty/application.go::NewIOSession(...) for details
 func (pi *ProtocolImpl) Quit() {
-	var err error
 	pi.m.Lock()
 	defer pi.m.Unlock()
 	//if it was quit, do nothing
@@ -318,13 +317,8 @@ func (pi *ProtocolImpl) Quit() {
 		return
 	}
 	if pi.tcpConn != nil {
-		err = pi.tcpConn.Disconnect()
-		if err != nil {
+		if err := pi.tcpConn.Disconnect(); err != nil {
 			return
-		}
-		err = pi.tcpConn.Close()
-		if err != nil {
-			logutil.Errorf("close tcp conn failed. error:%v", err)
 		}
 	}
 }

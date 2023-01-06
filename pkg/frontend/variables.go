@@ -592,13 +592,15 @@ func (svst SystemVariableSetType) bits2string(bits uint64) (string, error) {
 			if !ok {
 				return "", errorValueIsInvalid
 			}
+			bld.WriteString(v)
 			if i != 0 {
 				bld.WriteByte(',')
 			}
-			bld.WriteString(v)
 		}
 	}
-	return bld.String(), nil
+
+	bldString := bld.String()
+	return bldString[:len(bldString)-1], nil
 }
 
 func (svst SystemVariableSetType) string2bits(s string) (uint64, error) {
@@ -1223,6 +1225,30 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableUintType("sql_select_limit", 0, 18446744073709551615),
 		Default:           uint64(18446744073709551615),
+	},
+	"save_query_result": {
+		Name:              "save_query_result",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("save_query_result"),
+		Default:           int64(0),
+	},
+	"query_result_timeout": {
+		Name:              "query_result_timeout",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableUintType("query_result_timeout", 1, 18446744073709551615),
+		Default:           uint64(24),
+	},
+	"query_result_maxsize": {
+		Name:              "sql_select_limit",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableUintType("query_result_maxsize", 1, 18446744073709551615),
+		Default:           uint64(100),
 	},
 }
 

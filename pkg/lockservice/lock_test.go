@@ -12,22 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memorytable
+package lockservice
 
-type KV[
-	K Ordered[K],
-	V any,
-] interface {
-	Copy() KV[K, V]
-	Get(KVPair[K, V]) (KVPair[K, V], bool)
-	Set(KVPair[K, V]) (KVPair[K, V], bool)
-	Delete(KVPair[K, V])
-	Iter() KVIter[K, V]
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestNewRowLock(t *testing.T) {
+	txnID := []byte("1")
+	l := newRowLock(txnID, Exclusive)
+	assert.True(t, l.isLockRow())
+	assert.Equal(t, Exclusive, l.getLockMode())
 }
 
-type KVIter[
-	K Ordered[K],
-	V any,
-] interface {
-	SeekIter[KVPair[K, V]]
+func TestNewRangeLock(t *testing.T) {
+	txnID := []byte("1")
+	sl, el := newRangeLock(txnID, Shared)
+
+	assert.True(t, sl.isLockRange())
+	assert.True(t, sl.isLockRangeStart())
+	assert.Equal(t, Shared, sl.getLockMode())
+
+	assert.True(t, el.isLockRange())
+	assert.True(t, el.isLockRangeEnd())
+	assert.Equal(t, Shared, el.getLockMode())
 }

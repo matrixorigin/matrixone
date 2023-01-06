@@ -141,6 +141,12 @@ type Function struct {
 
 	// Layout adapt to plan/function.go, used for `explain SQL`.
 	layout FuncExplainLayout
+
+	UseNewFramework     bool
+	ResultWillNotNull   bool
+	FlexibleReturnType  func(parameters []types.Type) types.Type
+	ParameterMustScalar []bool
+	NewFn               func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error
 }
 
 func (f *Function) TestFlag(funcFlag plan.Function_FuncFlag) bool {
@@ -153,8 +159,11 @@ func (f *Function) GetLayout() FuncExplainLayout {
 
 // ReturnType return result-type of function, and the result is nullable
 // if nullable is false, function won't return a vector with null value.
-func (f Function) ReturnType() (typ types.T, nullable bool) {
-	return f.ReturnTyp, true
+func (f Function) ReturnType(args []types.Type) (typ types.Type, nullable bool) {
+	if f.FlexibleReturnType != nil {
+		return f.FlexibleReturnType(args), !f.ResultWillNotNull
+	}
+	return f.ReturnTyp.ToType(), !f.ResultWillNotNull
 }
 
 func (f Function) VecFn(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -411,10 +420,14 @@ func getRealReturnType(fid int32, f Function, realArgs []types.Type) types.Type 
 			}
 		}
 	}
+	if f.FlexibleReturnType != nil {
+		return f.FlexibleReturnType(realArgs)
+	}
 	rt := f.ReturnTyp.ToType()
 	for i := range realArgs {
 		if realArgs[i].Oid == rt.Oid {
 			copyType(&rt, &realArgs[i])
+			checkTypeWidth(realArgs, &rt)
 			break
 		}
 		if types.T(rt.Oid) == types.T_decimal128 && types.T(realArgs[i].Oid) == types.T_decimal64 {
@@ -422,6 +435,14 @@ func getRealReturnType(fid int32, f Function, realArgs []types.Type) types.Type 
 		}
 	}
 	return rt
+}
+
+func checkTypeWidth(realArgs []types.Type, rt *types.Type) {
+	for i := range realArgs {
+		if realArgs[i].Oid == rt.Oid && rt.Width < realArgs[i].Width {
+			rt.Width = realArgs[i].Width
+		}
+	}
 }
 
 func copyType(dst, src *types.Type) {

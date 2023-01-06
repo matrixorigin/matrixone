@@ -1,8 +1,53 @@
+create database udf_first;
+create database udf_second;
+use udf_first;
 create function helloworld () returns int language sql as 'select id from test_table limit 1';
+select args, rettype, language, db from mo_catalog.mo_user_defined_function where name = 'helloworld';
+args    rettype    language    db
+{}    int    sql    udf_first
+use udf_first;
+create function helloworld () returns int language sql as 'select id from test_table limit 1';
+function helloworld already exists
+use udf_first;
 create function twosum (x int, y int) returns int language sql as 'select $1 + $2' ;
+select args, rettype, language, db from mo_catalog.mo_user_defined_function where name = 'twosum';
+args    rettype    language    db
+{"x":"int","y":"int"}    int    sql    udf_first
 create function twosum (x float, y float) returns float language sql as 'select $1 + $2' ;
+select args, rettype, language, db from mo_catalog.mo_user_defined_function where name = 'twosum';
+args    rettype    language    db
+{"x":"int","y":"int"}    int    sql    udf_first
+{"x":"float","y":"float"}    float    sql    udf_first
 create function twosum (x int) returns int language sql as 'select $1 + 10' ;
-drop function helloWorld ();
+select args, rettype, language, db from mo_catalog.mo_user_defined_function where name = 'twosum';
+args    rettype    language    db
+{"x":"int","y":"int"}    int    sql    udf_first
+{"x":"float","y":"float"}    float    sql    udf_first
+{"x":"int"}    int    sql    udf_first
+use udf_first;
+create function udf_second.helloworld () returns int language sql as 'select id from test_table limit 1';
+select args, rettype, language, db from mo_catalog.mo_user_defined_function where name = 'helloworld' and db = 'udf_second';
+args    rettype    language    db
+{}    int    sql    udf_second
+drop function helloworld ();
+select args, rettype, language, db from mo_catalog.mo_user_defined_function where name = 'helloworld' and db = 'udf_first';
+args    rettype    language    db
 drop function twosum (int, int);
+select args, rettype, language, db from mo_catalog.mo_user_defined_function where name = 'twosum';
+args    rettype    language    db
+{"x":"float","y":"float"}    float    sql    udf_first
+{"x":"int"}    int    sql    udf_first
 drop function twosum (int);
+select args, rettype, language, db from mo_catalog.mo_user_defined_function where name = 'twosum';
+args    rettype    language    db
+{"x":"float","y":"float"}    float    sql    udf_first
 drop function twosum (float, float);
+select args, rettype, language, db from mo_catalog.mo_user_defined_function where name = 'twosum';
+args    rettype    language    db
+use udf_first;
+drop function udf_second.helloworld ();
+select args, rettype, language, db from mo_catalog.mo_user_defined_function where name = 'helloworld' and db = 'udf_second';
+args    rettype    language    db
+use udf_second;
+drop function helloworld();
+function helloworld doesn't exist

@@ -60,6 +60,49 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	return c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
 }
 
+// Drop the old view, and create the new view.
+func (s *Scope) AlterView(c *Compile) error {
+	qry := s.Plan.GetDdl().GetAlterView()
+
+	dbName := c.db
+	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		if qry.GetIfExists() {
+			return nil
+		}
+		return err
+	}
+	tblName := qry.GetTableDef().GetName()
+	if _, err = dbSource.Relation(c.ctx, tblName); err != nil {
+		if qry.GetIfExists() {
+			return nil
+		}
+		return err
+	}
+
+	// Drop view table.
+	if err := dbSource.Delete(c.ctx, tblName); err != nil {
+		return err
+	}
+
+	// Create view table.
+	// convert the plan's cols to the execution's cols
+	planCols := qry.GetTableDef().GetCols()
+	exeCols := planColsToExeCols(planCols)
+
+	// convert the plan's defs to the execution's defs
+	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
+	if err != nil {
+		return err
+	}
+
+	// if _, err := dbSource.Relation(c.ctx, tblName); err == nil {
+	//  	 return moerr.NewTableAlreadyExists(c.ctx, tblName)
+	// }
+
+	return dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...))
+}
+
 func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
@@ -254,6 +297,8 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	// insert data into index table
 	switch t := qry.GetIndex().GetTableDef().Defs[0].Def.(type) {
 	case *plan.TableDef_DefType_UIdx:
+		targetAttrs := getIndexColsFromOriginTable(tblDefs, t.UIdx.Fields[0].Parts)
+
 		ret, err := r.Ranges(c.ctx, nil)
 		if err != nil {
 			return err
@@ -262,7 +307,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		bat, err := rds[0].Read(c.ctx, t.UIdx.Fields[0].Parts, nil, c.proc.Mp())
+		bat, err := rds[0].Read(c.ctx, targetAttrs, nil, c.proc.Mp())
 		if err != nil {
 			return err
 		}
@@ -271,17 +316,19 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			return err
 		}
 
-		indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, t.UIdx.Fields[0].Parts, t.UIdx.Fields[0].Parts, qry.OriginTablePrimaryKey, c.proc)
-		indexR, err := d.Relation(c.ctx, t.UIdx.TableNames[0])
-		if err != nil {
-			return err
-		}
-		if cnt != 0 {
-			if err := indexR.Write(c.ctx, indexBat); err != nil {
+		if bat != nil {
+			indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, targetAttrs, t.UIdx.Fields[0].Parts, qry.OriginTablePrimaryKey, c.proc)
+			indexR, err := d.Relation(c.ctx, t.UIdx.TableNames[0])
+			if err != nil {
 				return err
 			}
+			if cnt != 0 {
+				if err := indexR.Write(c.ctx, indexBat); err != nil {
+					return err
+				}
+			}
+			indexBat.Clean(c.proc.Mp())
 		}
-		indexBat.Clean(c.proc.Mp())
 		// other situation is not supported now and check in plan
 	}
 
@@ -497,20 +544,20 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return err
 	}
 	id := rel.GetTableID(c.ctx)
-	err = dbSource.Truncate(c.ctx, tblName)
+	newId, err := dbSource.Truncate(c.ctx, tblName)
 	if err != nil {
 		return err
 	}
 
 	// Truncate Index Tables if needed
 	for _, name := range tqry.IndexTableNames {
-		err := dbSource.Truncate(c.ctx, name)
+		_, err := dbSource.Truncate(c.ctx, name)
 		if err != nil {
 			return err
 		}
 	}
 
-	err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, dbName)
+	err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, newId, dbName)
 	if err != nil {
 		return err
 	}
@@ -655,4 +702,36 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 		}
 	}
 	return exeCols
+}
+
+// Get the required columns of the index table from the original table
+func getIndexColsFromOriginTable(tblDefs []engine.TableDef, indexColumns []string) []string {
+	colNameMap := make(map[string]int)
+	for _, def := range tblDefs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			if attr.Attr.Primary {
+				colNameMap[attr.Attr.Name] = 1
+				break
+			}
+		} else if cpk, ok := def.(*engine.PrimaryIndexDef); ok {
+			for _, name := range cpk.Names {
+				colNameMap[name] = 1
+			}
+			break
+		} else {
+			continue
+		}
+	}
+
+	for _, column := range indexColumns {
+		colNameMap[column] = 1
+	}
+
+	j := 0
+	keys := make([]string, len(colNameMap))
+	for k := range colNameMap {
+		keys[j] = k
+		j++
+	}
+	return keys
 }

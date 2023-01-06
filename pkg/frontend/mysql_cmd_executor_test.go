@@ -830,7 +830,15 @@ func Test_handleShowColumns(t *testing.T) {
 		proto.ses = ses
 
 		ses.mrs = &MysqlResultSet{}
-		err = handleShowColumns(ses)
+
+		tableName := &tree.UnresolvedObjectName{
+			NumParts: 2,
+		}
+		tableName.Parts[0] = "x"
+		tableName.Parts[0] = "y"
+		err = handleShowColumns(ses, &tree.ShowColumns{
+			Table: tableName,
+		})
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -1171,9 +1179,9 @@ func TestSerializePlanToJson(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		json, rows, bytes := serializePlanToJson(mock.CurrentContext().GetContext(), plan, uuid.New())
-		require.Equal(t, int64(0), rows)
-		require.Equal(t, int64(0), bytes)
+		json, _, stats := serializePlanToJson(mock.CurrentContext().GetContext(), plan, uuid.New())
+		require.Equal(t, int64(0), stats.RowsRead)
+		require.Equal(t, int64(0), stats.BytesScan)
 		t.Logf("SQL plan to json : %s\n", string(json))
 	}
 }

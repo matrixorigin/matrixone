@@ -126,6 +126,18 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.CheckpointCfg.GlobalVersionInterval = DefaultGlobalVersionInterval
 	}
 
+	if o.GCCfg == nil {
+		o.GCCfg = new(GCCfg)
+	}
+
+	if o.GCCfg.GCTTL <= 0 {
+		o.GCCfg.GCTTL = DefaultGCTTL
+	}
+
+	if o.GCCfg.ScanGCInterval <= 0 {
+		o.GCCfg.ScanGCInterval = DefaultScanGCInterval
+	}
+
 	if o.SchedulerCfg == nil {
 		o.SchedulerCfg = &SchedulerCfg{
 			IOWorkers:    DefaultIOWorkers,

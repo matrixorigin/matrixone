@@ -155,27 +155,27 @@ var realNoExecPlanJsonResult = `{"code":200,"message":"NO ExecPlan Serialize fun
 var dummyNoExecPlanJsonResult = `{"code":200,"message":"no exec plan"}`
 var dummyNoExecPlanJsonResult2 = `{"func":"dummy2","code":200,"message":"no exec plan"}`
 
-var dummySerializeExecPlan = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, int64, int64) {
+var dummySerializeExecPlan = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, []byte, Statistic) {
 	if plan == nil {
-		return []byte(dummyNoExecPlanJsonResult), 0, 0
+		return []byte(dummyNoExecPlanJsonResult), []byte{}, Statistic{}
 	}
 	json, err := json.Marshal(plan)
 	if err != nil {
-		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error())), 0, 0
+		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error())), []byte{}, Statistic{}
 	}
-	return json, 1, 1
+	return json, []byte{}, Statistic{RowsRead: 1, BytesScan: 1}
 }
 
-var dummySerializeExecPlan2 = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, int64, int64) {
+var dummySerializeExecPlan2 = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, []byte, Statistic) {
 	if plan == nil {
-		return []byte(dummyNoExecPlanJsonResult2), 0, 0
+		return []byte(dummyNoExecPlanJsonResult2), []byte{}, Statistic{}
 	}
 	json, err := json.Marshal(plan)
 	if err != nil {
-		return []byte(fmt.Sprintf(`{"func":"dymmy2","err": %q}`, err.Error())), 0, 0
+		return []byte(fmt.Sprintf(`{"func":"dymmy2","err": %q}`, err.Error())), []byte{}, Statistic{}
 	}
 	val := fmt.Sprintf(`{"func":"dummy2","result":%s}`, json)
-	return []byte(val), 0, 0
+	return []byte(val), []byte{}, Statistic{}
 }
 
 func TestStatementInfo_ExecPlan2Json(t *testing.T) {
@@ -281,7 +281,7 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 			tt.args.setDefault()
 			s := &StatementInfo{}
 			s.SetExecPlan(tt.args.ExecPlan, tt.args.SerializeExecPlan)
-			got := s.ExecPlan2Json(ctx)
+			got, _ := s.ExecPlan2Json(ctx)
 			assert.Equalf(t, tt.want, got, "ExecPlan2Json()")
 
 			mapper := new(map[string]any)

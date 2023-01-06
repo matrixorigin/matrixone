@@ -2294,11 +2294,19 @@ show_collation_stmt:
 show_grants_stmt:
     SHOW GRANTS
     {
-        $$ = &tree.ShowGrants{}
+        $$ = &tree.ShowGrants{ShowGrantType: tree.GrantForUser}
     }
-|    SHOW GRANTS    FOR user_name using_roles_opt
+|    SHOW GRANTS FOR user_name using_roles_opt
     {
-        $$ = &tree.ShowGrants{Username: $4.Username, Hostname: $4.Hostname, Roles: $5}
+        $$ = &tree.ShowGrants{Username: $4.Username, Hostname: $4.Hostname, Roles: $5, ShowGrantType: tree.GrantForUser}
+    }
+|    SHOW GRANTS FOR ROLE role_name
+    {
+        s := &tree.ShowGrants{}
+        roles := []*tree.Role{tree.NewRole($5)}
+        s.Roles = roles
+        s.ShowGrantType = tree.GrantForRole
+        $$ = s
     }
 
 using_roles_opt:
@@ -4147,7 +4155,13 @@ create_function_stmt:
 func_name:
     ident
     {
-        $$ = tree.NewFuncName(tree.Identifier($1))
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        $$ = tree.NewFuncName(tree.Identifier($1), prefix)
+    }
+|   ident '.' ident
+    {
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1), ExplicitSchema: true}
+        $$ = tree.NewFuncName(tree.Identifier($3), prefix)
     }
 
 func_args_list_opt:

@@ -16,6 +16,7 @@ package memoryengine
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -57,6 +58,10 @@ func (*CompilerContext) Stats(obj *plan.ObjectRef, e *plan.Expr) *plan.Stats {
 
 func (c *CompilerContext) GetProcess() *process.Process {
 	return nil
+}
+
+func (c *CompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
+	return nil, "", nil
 }
 
 func (c *CompilerContext) DatabaseExists(name string) bool {
@@ -116,6 +121,14 @@ func (c *CompilerContext) GetAccountId() uint32 {
 
 func (c *CompilerContext) GetContext() context.Context {
 	return c.ctx
+}
+
+func (c *CompilerContext) ResolveById(tableId uint64) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
+	dbName, tableName, _ := c.engine.GetNameById(c.ctx, c.txnOp, tableId)
+	if dbName == "" || tableName == "" {
+		return nil, nil
+	}
+	return c.Resolve(dbName, tableName)
 }
 
 func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {

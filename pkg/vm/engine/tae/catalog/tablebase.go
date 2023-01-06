@@ -110,7 +110,6 @@ func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader) (isNewNode bool, err
 	var entry *TableMVCCNode
 	isNewNode, entry = be.getOrSetUpdateNode(txn)
 	entry.Delete()
-	entry.IsUpdate = false
 	return
 }
 
@@ -130,7 +129,6 @@ func (be *TableBaseEntry) UpdateConstraint(txn txnif.TxnReader, cstr []byte) (is
 	var entry *TableMVCCNode
 	isNewNode, entry = be.getOrSetUpdateNode(txn)
 	entry.SchemaConstraints = string(cstr)
-	entry.IsUpdate = true
 	return
 }
 

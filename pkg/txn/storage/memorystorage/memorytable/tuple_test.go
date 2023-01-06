@@ -15,45 +15,26 @@
 package memorytable
 
 import (
+	"bytes"
 	"testing"
 )
 
-func TestBTreeKVEncoding(t *testing.T) {
-	kv := NewBTreeKV[Int, int]()
-	for i := 0; i < 10; i++ {
-		kv.Set(KVPair[Int, int]{
-			Key: Int(i),
-			KVValue: &KVValue[Int, int]{
-				Value: i,
-			},
-		})
-	}
-	data, err := kv.MarshalBinary()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	kv2 := new(BTreeKV[Int, int])
-	if err := kv2.UnmarshalBinary(data); err != nil {
-		t.Fatal(err)
-	}
-
-	m := make(map[Int]int)
-	iter := kv2.Iter()
-	for ok := iter.First(); ok; ok = iter.Next() {
-		pair, err := iter.Read()
-		if err != nil {
-			t.Fatal()
-		}
-		m[pair.Key] = pair.Value
-	}
-	if len(m) != 10 {
-		t.Fatal()
-	}
-	for i := 0; i < 10; i++ {
-		if m[Int(i)] != i {
-			t.Fatal()
+func BenchmarkTupleLess(b *testing.B) {
+	x := Tuple{Int(1)}
+	y := Tuple{Int(2)}
+	for i := 0; i < b.N; i++ {
+		if y.Less(x) {
+			b.Fatal()
 		}
 	}
+}
 
+func BenchmarkBytesCompare(b *testing.B) {
+	x := []byte{1}
+	y := []byte{2}
+	for i := 0; i < b.N; i++ {
+		if bytes.Compare(x, y) >= 0 {
+			b.Fatal()
+		}
+	}
 }

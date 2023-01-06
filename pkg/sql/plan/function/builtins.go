@@ -1975,6 +1975,20 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	LAST_QUERY_ID: {
+		Id:     LAST_QUERY_ID,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Args:      []types.T{},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.LastQueryID,
+			},
+		},
+	},
 	ROLES_GRAPHML: {
 		Id:     ROLES_GRAPHML,
 		Flag:   plan.Function_STRICT,
@@ -2347,6 +2361,19 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_uint8},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.RegularInstr,
+			},
+		},
+	},
+	REPLACE: {
+		Id:     REPLACE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.Replace,
 			},
 		},
 	},

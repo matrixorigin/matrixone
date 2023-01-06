@@ -37,6 +37,7 @@ type Node struct {
 	Id   string   `json:"id"`
 	Addr string   `json:"address"`
 	Data [][]byte `json:"payload"`
+	Rel  Relation // local relation
 }
 
 // Attribute is a column
@@ -338,7 +339,7 @@ type Database interface {
 
 	Delete(context.Context, string) error
 	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
-	Truncate(context.Context, string) error
+	Truncate(context.Context, string) (uint64, error)
 	GetDatabaseId(context.Context) string
 }
 
@@ -370,6 +371,12 @@ type Engine interface {
 
 	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
 		expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]Reader, error)
+
+	// Get database name & table name by table id
+	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)
+
+	// Get relation by table id
+	GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, rel Relation, err error)
 }
 
 type Hints struct {

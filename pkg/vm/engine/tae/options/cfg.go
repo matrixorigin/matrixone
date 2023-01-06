@@ -37,6 +37,11 @@ type CheckpointCfg struct {
 	GlobalVersionInterval     time.Duration
 }
 
+type GCCfg struct {
+	GCTTL          time.Duration
+	ScanGCInterval time.Duration
+}
+
 type SchedulerCfg struct {
 	IOWorkers    int `toml:"io-workers"`
 	AsyncWorkers int `toml:"async-workers"`
