@@ -27,7 +27,6 @@ INSERT INTO curdate_01 VALUES (5,'wlllew','2023-01-04');
 
 
 -- case
-SELECT datediff(curdate(), d2) FROM curdate_01;
 SELECT * FROM curdate_01 WHERE datediff(curdate(), d2) < 8000;
 SELECT * ,datediff(curdate(), d2) AS datecount FROM curdate_01 WHERE datediff(curdate(), d2) > 10000;
 
@@ -38,7 +37,6 @@ SELECT datediff(CAST(curdate() AS DATETIME),'1988-01-29 12:12:12');
 
 -- date function
 SELECT datediff(DATE(curdate()),'1971-01-01');
-SELECT year(curdate()) - 10 AS y, month(curdate()) - 2 AS m, DAY(curdate()) - 4 AS d;
 SELECT weekday(curdate());
 SELECT EXTRACT(YEAR_MONTH FROM curdate());
 SELECT unix_timestamp(curdate());
@@ -54,6 +52,6 @@ INSERT INTO curdate_02 VALUES('1970-10-11 01:02:03');
 INSERT INTO curdate_02 VALUES(curdate());
 INSERT INTO curdate_02 VALUES('2023-01-07 10:10:10');
 
-SELECT datediff(curdate(),a) FROM curdate_02;
-SELECT *, datediff(curdate(),a) AS df FROM curdate_02 WHERE datediff(curdate(), a) = 19079 ;
 
+SELECT datediff(curdate(),a) FROM curdate_02;
+SELECT * FROM curdate_02 WHERE datediff(curdate(), a) > 19079 ;
