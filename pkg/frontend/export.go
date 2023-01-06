@@ -51,15 +51,14 @@ type ExportParam struct {
 	OutputStr      []byte
 	LineSize       uint64
 
-	//file service
+	//file service & buffer for the line
 	UseFileService bool
-	// FileService
-	FileService fileservice.FileService
-	LineBuffer  *bytes.Buffer
-	Ctx         context.Context
-	AsyncReader *io.PipeReader
-	AsyncWriter *io.PipeWriter
-	AsyncGroup  *errgroup.Group
+	FileService    fileservice.FileService
+	LineBuffer     *bytes.Buffer
+	Ctx            context.Context
+	AsyncReader    *io.PipeReader
+	AsyncWriter    *io.PipeWriter
+	AsyncGroup     *errgroup.Group
 }
 
 var OpenFile = os.OpenFile
