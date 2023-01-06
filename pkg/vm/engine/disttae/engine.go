@@ -159,6 +159,9 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 
 func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
 	txn := e.getTransaction(op)
+	if txn == nil {
+		return "", "", moerr.NewTxnClosed(ctx, op.Txn().ID)
+	}
 	accountId := getAccountId(ctx)
 	var db engine.Database
 	noRepCtx := errutil.ContextWithNoReport(ctx, true)
@@ -178,6 +181,29 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 		}
 		return true
 	})
+
+	if tblName == "" {
+		dbNames, err := e.Databases(ctx, op)
+		if err != nil {
+			return "", "", err
+		}
+		for _, dbName := range dbNames {
+			db, err = e.Database(noRepCtx, dbName, op)
+			if err != nil {
+				return "", "", err
+			}
+			distDb := db.(*database)
+			tableName, rel, err := distDb.getRelationById(noRepCtx, tableId)
+			if err != nil {
+				return "", "", err
+			}
+			if rel != nil {
+				tblName = tableName
+				break
+			}
+		}
+	}
+
 	return
 }
 
@@ -202,6 +228,28 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		}
 		return true
 	})
+
+	if rel == nil {
+		dbNames, err := e.Databases(ctx, op)
+		if err != nil {
+			return "", "", nil, err
+		}
+		for _, dbName := range dbNames {
+			db, err = e.Database(noRepCtx, dbName, op)
+			if err != nil {
+				return "", "", nil, err
+			}
+			distDb := db.(*database)
+			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
+			if err != nil {
+				return "", "", nil, err
+			}
+			if rel != nil {
+				break
+			}
+		}
+	}
+
 	if rel == nil {
 		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d", tableId)
 	}
