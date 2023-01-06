@@ -330,6 +330,7 @@ func TestNewMergeWithContextDone(t *testing.T) {
 
 			reader, err := newETLReader(got.ctx, got.FS, files[0])
 			if err != nil {
+				t.Logf("newETLReader err: %s", err)
 				if strings.Contains(err.Error(), "not found") {
 					t.Skip()
 				}
