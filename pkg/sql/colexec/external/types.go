@@ -73,8 +73,3 @@ type ParseLineHandler struct {
 	//simd csv
 	simdCsvLineArray [][]string
 }
-
-const (
-	START = "start"
-	ERROR = "error"
-)

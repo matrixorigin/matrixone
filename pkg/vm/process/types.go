@@ -193,10 +193,3 @@ func (si *SessionInfo) GetDatabase() string {
 func (si *SessionInfo) GetVersion() string {
 	return si.Version
 }
-
-type Buffer struct {
-	ch    chan []byte
-	buf   []byte
-	off   int
-	empty bool
-}
