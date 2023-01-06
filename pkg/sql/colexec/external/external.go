@@ -155,6 +155,251 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	return false, nil
 }
 
+// ScanFileData read batch data from external file
+func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
+	if strings.HasSuffix(param.extern.Filepath, ".tae") {
+		return ScanZonemapFile(param, proc)
+	} else {
+		return ScanCsvFile(param, proc)
+	}
+}
+
+func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
+	if param.Filter.objectReader == nil {
+		dir, _ := filepath.Split(param.extern.Filepath)
+		service, _, err := GetForETLWithType(param.extern, param.extern.Filepath)
+		if err != nil {
+			return nil, err
+		}
+
+		_, ok := param.Filter.File2Size[param.extern.Filepath]
+		if !ok {
+			fs := objectio.NewObjectFS(service, dir)
+			dirs, err := fs.ListDir(dir)
+			if err != nil {
+				return nil, err
+			}
+			for i := 0; i < len(dirs); i++ {
+				param.Filter.File2Size[dir+dirs[i].Name] = dirs[i].Size
+			}
+		}
+
+		param.Filter.objectReader, err = objectio.NewObjectReader(param.extern.Filepath, service)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	size, ok := param.Filter.File2Size[param.extern.Filepath]
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("can' t find the filepath %s", param.extern.Filepath)
+	}
+	bat, err := getZonemapBatch(param, proc, size, param.Filter.objectReader)
+	if err != nil {
+		return nil, err
+	}
+
+	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
+		param.Filter.objectReader = nil
+		param.Zoneparam.bs = nil
+		param.plh = nil
+		param.Fileparam.FileFin++
+		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
+			param.Fileparam.End = true
+		}
+	}
+	return bat, nil
+}
+
+func getZonemapBatch(param *ExternalParam, proc *process.Process, size int64, objectReader objectio.Reader) (*batch.Batch, error) {
+	if param.Zoneparam.bs == nil {
+		param.plh = &ParseLineHandler{}
+		var err error
+		param.Zoneparam.bs, err = objectReader.ReadAllMeta(param.Ctx, size, proc.GetMPool())
+		if err != nil {
+			return nil, err
+		}
+	}
+	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
+		return nil, nil
+	}
+
+	if param.Filter.exprMono {
+		for !needRead(param, proc, objectReader) {
+			param.Zoneparam.offset++
+		}
+		return getBatchFromZonemapFile(param, proc, objectReader)
+	} else {
+		return getBatchFromZonemapFile(param, proc, objectReader)
+	}
+}
+
+func needRead(param *ExternalParam, proc *process.Process, objectReader objectio.Reader) bool {
+	indexes, err := objectReader.ReadIndex(context.Background(), param.Zoneparam.bs[param.Zoneparam.offset].GetExtent(),
+		param.Filter.columns, objectio.ZoneMapType, proc.GetMPool())
+	if err != nil {
+		return true
+	}
+
+	notReportErrCtx := errutil.ContextWithNoReport(proc.Ctx, true)
+	// if expr match no columns, just eval expr
+	if len(param.Filter.columns) == 0 {
+		bat := batch.NewWithSize(0)
+		defer bat.Clean(proc.Mp())
+		ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, param.Filter.FilterExpr, bat, proc)
+		if err != nil {
+			return true
+		}
+		return ifNeed
+	}
+
+	dataLength := len(param.Filter.columns)
+	datas := make([][2]any, dataLength)
+	dataTypes := make([]uint8, dataLength)
+	for i := 0; i < dataLength; i++ {
+		idx := param.Filter.columns[i]
+		dataTypes[i] = uint8(param.Cols[idx].Typ.Id)
+		typ := types.T(dataTypes[i]).ToType()
+
+		zm := index.NewZoneMap(typ)
+		err = zm.Unmarshal(indexes[i].(*objectio.ZoneMap).GetData())
+		if err != nil {
+			return true
+		}
+		min := zm.GetMin()
+		max := zm.GetMax()
+		if min == nil || max == nil {
+			return true
+		}
+		datas[i] = [2]any{min, max}
+	}
+	// use all min/max data to build []vectors.
+	buildVectors := plan2.BuildVectorsByData(datas, dataTypes, proc.Mp())
+	bat := batch.NewWithSize(param.Filter.maxCol + 1)
+	defer bat.Clean(proc.Mp())
+	for k, v := range param.Filter.columnMap {
+		for i, realIdx := range param.Filter.columns {
+			if int(realIdx) == v {
+				bat.SetVector(int32(k), buildVectors[i])
+				break
+			}
+		}
+	}
+	bat.SetZs(buildVectors[0].Length(), proc.Mp())
+
+	ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, param.Filter.FilterExpr, bat, proc)
+	if err != nil {
+		return true
+	}
+	return ifNeed
+}
+
+func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, objectReader objectio.Reader) (*batch.Batch, error) {
+	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
+		return nil, nil
+	}
+
+	rows := 0
+	bat := makeBatch(param, 0, proc.Mp())
+	idxs := make([]uint16, len(param.Attrs))
+	for i := 0; i < len(param.Attrs); i++ {
+		idxs[i] = uint16(param.Name2ColIndex[param.Attrs[i]])
+	}
+
+	vec, err := objectReader.Read(param.Ctx, param.Zoneparam.bs[param.Zoneparam.offset].GetExtent(), idxs, proc.GetMPool())
+	if err != nil {
+		return nil, err
+	}
+	for i := 0; i < len(param.Attrs); i++ {
+		var vecTmp *vector.Vector
+		if catalog.ContainExternalHidenCol(param.Attrs[i]) {
+			vecTmp = vector.New(makeType(param.Cols, i))
+			vector.PreAlloc(vecTmp, rows, rows, proc.GetMPool())
+			for j := 0; j < rows; j++ {
+				err := vector.SetStringAt(vecTmp, j, param.extern.Filepath, proc.GetMPool())
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			vecTmp = vector.New(bat.Vecs[i].Typ)
+			err = vecTmp.Read(vec.Entries[i].Object.([]byte))
+			if err != nil {
+				return nil, err
+			}
+			rows = vecTmp.Length()
+		}
+		sels := make([]int64, vecTmp.Length())
+		for j := 0; j < len(sels); j++ {
+			sels[j] = int64(j)
+		}
+		vector.Union(bat.Vecs[i], vecTmp, sels, true, proc.GetMPool())
+	}
+
+	n := vector.Length(bat.Vecs[0])
+	sels := proc.Mp().GetSels()
+	if n > cap(sels) {
+		proc.Mp().PutSels(sels)
+		sels = make([]int64, n)
+	}
+	bat.Zs = sels[:n]
+	for k := 0; k < n; k++ {
+		bat.Zs[k] = 1
+	}
+	param.Zoneparam.offset++
+	return bat, nil
+}
+
+func ScanCsvFile(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
+	var bat *batch.Batch
+	var err error
+	var cnt int
+	if param.plh == nil {
+		param.IgnoreLine = param.IgnoreLineTag
+		param.plh, err = GetSimdcsvReader(param)
+		if err != nil {
+			return nil, err
+		}
+	}
+	plh := param.plh
+	plh.simdCsvLineArray = make([][]string, ONE_BATCH_MAX_ROW)
+	finish := false
+	plh.simdCsvLineArray, cnt, finish, err = plh.simdCsvReader.ReadLimitSize(ONE_BATCH_MAX_ROW, proc.Ctx, param.maxBatchSize, plh.simdCsvLineArray)
+	if err != nil {
+		return nil, err
+	}
+
+	if finish {
+		err := param.reader.Close()
+		if err != nil {
+			logutil.Errorf("close file failed. err:%v", err)
+		}
+		plh.simdCsvReader.Close()
+		param.plh = nil
+		param.Fileparam.FileFin++
+		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
+			param.Fileparam.End = true
+		}
+	}
+	if param.IgnoreLine != 0 {
+		if cnt >= param.IgnoreLine {
+			plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:cnt]
+			cnt -= param.IgnoreLine
+		} else {
+			plh.simdCsvLineArray = nil
+			cnt = 0
+		}
+		param.IgnoreLine = 0
+	}
+	plh.batchSize = cnt
+	bat, err = GetBatchData(param, plh, proc)
+	if err != nil {
+		return nil, err
+	}
+	bat.Cnt = 1
+	return bat, nil
+}
+
 func InitInfileParam(param *tree.ExternParam) error {
 	for i := 0; i < len(param.Option); i += 2 {
 		switch strings.ToLower(param.Option[i]) {
@@ -209,6 +454,12 @@ func InitS3Param(param *tree.ExternParam) error {
 			param.Filepath = param.Option[i+1]
 		case "compression":
 			param.CompressType = param.Option[i+1]
+		case "provider":
+			param.S3Param.Provider = param.Option[i+1]
+		case "role_arn":
+			param.S3Param.RoleArn = param.Option[i+1]
+		case "external_id":
+			param.S3Param.ExternalId = param.Option[i+1]
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
 			if format != tree.CSV && format != tree.JSONLINE {
@@ -222,7 +473,6 @@ func InitS3Param(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
-
 		default:
 			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
 		}
@@ -363,7 +613,11 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
 		if param.S3Param.APIKey == "" && param.S3Param.APISecret == "" {
-			err = w.Write([]string{"s3-no-key", param.S3Param.Endpoint, param.S3Param.Region, param.S3Param.Bucket, ""})
+			if param.S3Param.Provider == "" ||  param.S3Param.Provider == "aws" {
+				err = w.Write([]string{"s3-opts", "role-arn="+param.S3Param.RoleArn, "external-id="+param.S3Param.ExternalId})
+			} else {
+				err = w.Write([]string{"s3-no-key", param.S3Param.Endpoint, param.S3Param.Region, param.S3Param.Bucket, ""})
+			}
 		} else {
 			err = w.Write([]string{"s3", param.S3Param.Endpoint, param.S3Param.Region, param.S3Param.Bucket, param.S3Param.APIKey, param.S3Param.APISecret, ""})
 		}
@@ -626,251 +880,6 @@ func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 		false)
 
 	return plh, nil
-}
-
-func ScanCsvFile(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
-	var bat *batch.Batch
-	var err error
-	var cnt int
-	if param.plh == nil {
-		param.IgnoreLine = param.IgnoreLineTag
-		param.plh, err = GetSimdcsvReader(param)
-		if err != nil {
-			return nil, err
-		}
-	}
-	plh := param.plh
-	plh.simdCsvLineArray = make([][]string, ONE_BATCH_MAX_ROW)
-	finish := false
-	plh.simdCsvLineArray, cnt, finish, err = plh.simdCsvReader.ReadLimitSize(ONE_BATCH_MAX_ROW, proc.Ctx, param.maxBatchSize, plh.simdCsvLineArray)
-	if err != nil {
-		return nil, err
-	}
-
-	if finish {
-		err := param.reader.Close()
-		if err != nil {
-			logutil.Errorf("close file failed. err:%v", err)
-		}
-		plh.simdCsvReader.Close()
-		param.plh = nil
-		param.Fileparam.FileFin++
-		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
-			param.Fileparam.End = true
-		}
-	}
-	if param.IgnoreLine != 0 {
-		if cnt >= param.IgnoreLine {
-			plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:cnt]
-			cnt -= param.IgnoreLine
-		} else {
-			plh.simdCsvLineArray = nil
-			cnt = 0
-		}
-		param.IgnoreLine = 0
-	}
-	plh.batchSize = cnt
-	bat, err = GetBatchData(param, plh, proc)
-	if err != nil {
-		return nil, err
-	}
-	bat.Cnt = 1
-	return bat, nil
-}
-
-func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, objectReader objectio.Reader) (*batch.Batch, error) {
-	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
-		return nil, nil
-	}
-
-	rows := 0
-	bat := makeBatch(param, 0, proc.Mp())
-	idxs := make([]uint16, len(param.Attrs))
-	for i := 0; i < len(param.Attrs); i++ {
-		idxs[i] = uint16(param.Name2ColIndex[param.Attrs[i]])
-	}
-
-	vec, err := objectReader.Read(param.Ctx, param.Zoneparam.bs[param.Zoneparam.offset].GetExtent(), idxs, proc.GetMPool())
-	if err != nil {
-		return nil, err
-	}
-	for i := 0; i < len(param.Attrs); i++ {
-		var vecTmp *vector.Vector
-		if catalog.ContainExternalHidenCol(param.Attrs[i]) {
-			vecTmp = vector.New(makeType(param.Cols, i))
-			vector.PreAlloc(vecTmp, rows, rows, proc.GetMPool())
-			for j := 0; j < rows; j++ {
-				err := vector.SetStringAt(vecTmp, j, param.extern.Filepath, proc.GetMPool())
-				if err != nil {
-					return nil, err
-				}
-			}
-		} else {
-			vecTmp = vector.New(bat.Vecs[i].Typ)
-			err = vecTmp.Read(vec.Entries[i].Object.([]byte))
-			if err != nil {
-				return nil, err
-			}
-			rows = vecTmp.Length()
-		}
-		sels := make([]int64, vecTmp.Length())
-		for j := 0; j < len(sels); j++ {
-			sels[j] = int64(j)
-		}
-		vector.Union(bat.Vecs[i], vecTmp, sels, true, proc.GetMPool())
-	}
-
-	n := vector.Length(bat.Vecs[0])
-	sels := proc.Mp().GetSels()
-	if n > cap(sels) {
-		proc.Mp().PutSels(sels)
-		sels = make([]int64, n)
-	}
-	bat.Zs = sels[:n]
-	for k := 0; k < n; k++ {
-		bat.Zs[k] = 1
-	}
-	param.Zoneparam.offset++
-	return bat, nil
-}
-
-func needRead(param *ExternalParam, proc *process.Process, objectReader objectio.Reader) bool {
-	indexes, err := objectReader.ReadIndex(context.Background(), param.Zoneparam.bs[param.Zoneparam.offset].GetExtent(),
-		param.Filter.columns, objectio.ZoneMapType, proc.GetMPool())
-	if err != nil {
-		return true
-	}
-
-	notReportErrCtx := errutil.ContextWithNoReport(proc.Ctx, true)
-	// if expr match no columns, just eval expr
-	if len(param.Filter.columns) == 0 {
-		bat := batch.NewWithSize(0)
-		defer bat.Clean(proc.Mp())
-		ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, param.Filter.FilterExpr, bat, proc)
-		if err != nil {
-			return true
-		}
-		return ifNeed
-	}
-
-	dataLength := len(param.Filter.columns)
-	datas := make([][2]any, dataLength)
-	dataTypes := make([]uint8, dataLength)
-	for i := 0; i < dataLength; i++ {
-		idx := param.Filter.columns[i]
-		dataTypes[i] = uint8(param.Cols[idx].Typ.Id)
-		typ := types.T(dataTypes[i]).ToType()
-
-		zm := index.NewZoneMap(typ)
-		err = zm.Unmarshal(indexes[i].(*objectio.ZoneMap).GetData())
-		if err != nil {
-			return true
-		}
-		min := zm.GetMin()
-		max := zm.GetMax()
-		if min == nil || max == nil {
-			return true
-		}
-		datas[i] = [2]any{min, max}
-	}
-	// use all min/max data to build []vectors.
-	buildVectors := plan2.BuildVectorsByData(datas, dataTypes, proc.Mp())
-	bat := batch.NewWithSize(param.Filter.maxCol + 1)
-	defer bat.Clean(proc.Mp())
-	for k, v := range param.Filter.columnMap {
-		for i, realIdx := range param.Filter.columns {
-			if int(realIdx) == v {
-				bat.SetVector(int32(k), buildVectors[i])
-				break
-			}
-		}
-	}
-	bat.SetZs(buildVectors[0].Length(), proc.Mp())
-
-	ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, param.Filter.FilterExpr, bat, proc)
-	if err != nil {
-		return true
-	}
-	return ifNeed
-}
-
-func getZonemapBatch(param *ExternalParam, proc *process.Process, size int64, objectReader objectio.Reader) (*batch.Batch, error) {
-	if param.Zoneparam.bs == nil {
-		param.plh = &ParseLineHandler{}
-		var err error
-		param.Zoneparam.bs, err = objectReader.ReadAllMeta(param.Ctx, size, proc.GetMPool())
-		if err != nil {
-			return nil, err
-		}
-	}
-	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
-		return nil, nil
-	}
-
-	if param.Filter.exprMono {
-		for !needRead(param, proc, objectReader) {
-			param.Zoneparam.offset++
-		}
-		return getBatchFromZonemapFile(param, proc, objectReader)
-	} else {
-		return getBatchFromZonemapFile(param, proc, objectReader)
-	}
-}
-
-func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
-	if param.Filter.objectReader == nil {
-		dir, _ := filepath.Split(param.extern.Filepath)
-		service, _, err := GetForETLWithType(param.extern, param.extern.Filepath)
-		if err != nil {
-			return nil, err
-		}
-
-		_, ok := param.Filter.File2Size[param.extern.Filepath]
-		if !ok {
-			fs := objectio.NewObjectFS(service, dir)
-			dirs, err := fs.ListDir(dir)
-			if err != nil {
-				return nil, err
-			}
-			for i := 0; i < len(dirs); i++ {
-				param.Filter.File2Size[dir+dirs[i].Name] = dirs[i].Size
-			}
-		}
-
-		param.Filter.objectReader, err = objectio.NewObjectReader(param.extern.Filepath, service)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	size, ok := param.Filter.File2Size[param.extern.Filepath]
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("can' t find the filepath %s", param.extern.Filepath)
-	}
-	bat, err := getZonemapBatch(param, proc, size, param.Filter.objectReader)
-	if err != nil {
-		return nil, err
-	}
-
-	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
-		param.Filter.objectReader = nil
-		param.Zoneparam.bs = nil
-		param.plh = nil
-		param.Fileparam.FileFin++
-		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
-			param.Fileparam.End = true
-		}
-	}
-	return bat, nil
-}
-
-// ScanFileData read batch data from external file
-func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
-	if strings.HasSuffix(param.extern.Filepath, ".tae") {
-		return ScanZonemapFile(param, proc)
-	} else {
-		return ScanCsvFile(param, proc)
-	}
 }
 
 func transJson2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, jsonData string) ([]string, error) {
