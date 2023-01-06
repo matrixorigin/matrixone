@@ -67,5 +67,3 @@ datediff(curdate(), a)
 19079
 0
 -2
-SELECT * FROM curdate_02 WHERE datediff(curdate(), a) > 19079 ;
-a
