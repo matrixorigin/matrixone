@@ -8,64 +8,58 @@ q
 true
 true
 true
-SELECT curdate();
-curdate()
-2023-01-05
 SELECT curdate() + 0;
 curdate() + 0
 19362
 SELECT curdate() - 3;
 curdate() - 3
 19359
+SELECT datediff('2023-01-09',curdate());
+datediff(2023-01-09, curdate())
+4
 DROP TABLE IF EXISTS curdate_01;
 CREATE TABLE curdate_01( d INT,d1 CHAR(20),d2 DATE,PRIMARY KEY (d));
-INSERT INTO curdate_01 VALUES (1,'usaisagoodnat','1970-01-02');
-INSERT INTO curdate_01 VALUES (2,'chanialfakbjap','1971-11-12');
-INSERT INTO curdate_01 VALUES (3,'indiaisashit','1972-09-09');
+INSERT INTO curdate_01 VALUES (1,'usaisagoodnat','1999-01-02');
+INSERT INTO curdate_01 VALUES (2,'chanialfakbjap','2017-11-12');
+INSERT INTO curdate_01 VALUES (3,'indiaisashit','2004-09-09');
 INSERT INTO curdate_01 VALUES (4,'xingoporelka','1973-12-07');
-INSERT INTO curdate_01 VALUES (5,'wlllew','2023-01-06');
-SELECT * FROM curdate_01 WHERE d2 < curdate();
+INSERT INTO curdate_01 VALUES (5,'wlllew','2023-01-04');
+SELECT datediff(curdate(), d2) FROM curdate_01;
+datediff(curdate(), d2)
+8769
+1880
+6692
+17926
+1
+SELECT * FROM curdate_01 WHERE datediff(curdate(), d2) < 8000;
 d    d1    d2
-1    usaisagoodnat    1970-01-02
-2    chanialfakbjap    1971-11-12
-3    indiaisashit    1972-09-09
-4    xingoporelka    1973-12-07
-SELECT * FROM curdate_01 WHERE d2 > curdate();
-d    d1    d2
-5    wlllew    2023-01-06
-SELECT CAST(curdate() AS DATE);
-cast(curdate() as date)
-2023-01-05
-SELECT CAST(curdate() AS DATETIME);
-cast(curdate() as datetime(26))
-2023-01-05 00:00:00
-SELECT date_format(curdate(),'%W %D %M %Y');
-date_format(curdate(), %W %D %M %Y)
-Thursday 5th January 2023
-SELECT DATE(curdate());
-date(curdate())
-2023-01-05
-SELECT TO_DATE(curdate(),'%Y-%m-%d %T');
-to_date(curdate(), %Y-%m-%d %T)
-2023-01-05 00:00:00
-SELECT year(curdate()) AS y, month(curdate()) AS m, DAY(curdate()) AS d;
+2    chanialfakbjap    2017-11-12
+3    indiaisashit    2004-09-09
+5    wlllew    2023-01-04
+SELECT * ,datediff(curdate(), d2) AS datecount FROM curdate_01 WHERE datediff(curdate(), d2) > 10000;
+d    d1    d2    datecount
+4    xingoporelka    1973-12-07    17926
+SELECT datediff(CAST(curdate() AS DATE),'2012-06-23');
+datediff(cast(curdate() as date), 2012-06-23)
+3848
+SELECT datediff(CAST(curdate() AS DATETIME),'1988-01-29 12:12:12');
+datediff(cast(curdate() as datetime(26)), 1988-01-29 12:12:12)
+12760
+SELECT datediff(DATE(curdate()),'1971-01-01');
+datediff(date(curdate()), 1971-01-01)
+18997
+SELECT year(curdate()) - 10 AS y, month(curdate()) - 2 AS m, DAY(curdate()) - 4 AS d;
 y    m    d
-2023    1    5
+2013    -1    1
 SELECT weekday(curdate());
 weekday(curdate())
 3
-SELECT dayofyear(curdate());
-dayofyear(curdate())
-5
 SELECT EXTRACT(YEAR_MONTH FROM curdate());
 extract(year_month, curdate())
 202301
 SELECT unix_timestamp(curdate());
 unix_timestamp(curdate())
 1672905600
-SELECT FROM_UNIXTIME(1672905600);
-from_unixtime(1672905600)
-2023-01-05 00:00:00
 SELECT datediff(curdate(),'1970-01-01');
 datediff(curdate(), 1970-01-01)
 19362
@@ -76,24 +70,13 @@ INSERT INTO curdate_02 VALUES('2021-10-01 12:12:12');
 INSERT INTO curdate_02 VALUES('1970-10-11 01:02:03');
 INSERT INTO curdate_02 VALUES(curdate());
 INSERT INTO curdate_02 VALUES('2023-01-07 10:10:10');
-SELECT * FROM curdate_02 WHERE a < curdate();
-a
-2021-10-01 12:12:12
-1970-10-11 01:02:03
-SELECT * FROM curdate_02 WHERE a > curdate();
-a
-2023-01-07 10:10:10
-SELECT a FROM curdate_02 WHERE YEAR(a) = YEAR(curdate());
-a
-2023-01-05 00:00:00
-2023-01-05 00:00:00
-2023-01-07 10:10:10
-SELECT * FROM curdate_02 WHERE MONTH(a) = MONTH(curdate());
-a
-2023-01-05 00:00:00
-2023-01-05 00:00:00
-2023-01-07 10:10:10
-SELECT weekday(a) AS t FROM curdate_02 WHERE weekday(a) = weekday(curdate());
-t
-3
-3
+SELECT datediff(curdate(),a) FROM curdate_02;
+datediff(curdate(), a)
+0
+461
+19079
+0
+-2
+SELECT *, datediff(curdate(),a) AS df FROM curdate_02 WHERE datediff(curdate(), a) = 19079 ;
+a    df
+1970-10-11 01:02:03    19079
