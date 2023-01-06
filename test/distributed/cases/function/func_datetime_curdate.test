@@ -12,7 +12,6 @@ SELECT curdate();
 SELECT curdate() + 0;
 SELECT curdate() - 3;
 
-
 -- @suite
 -- @setup
 DROP TABLE IF EXISTS curdate_01;
