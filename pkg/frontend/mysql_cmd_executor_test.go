@@ -231,6 +231,11 @@ func Test_mce(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 
 		ses := NewSession(proto, nil, pu, &gSys, true)
+		ses.txnHandler = &TxnHandler{
+			storage:   &engine.EntireEngine{Engine: pu.StorageEngine},
+			txnClient: pu.TxnClient,
+		}
+		ses.txnHandler.SetSession(ses)
 		ses.SetRequestContext(ctx)
 
 		ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
@@ -1179,9 +1184,9 @@ func TestSerializePlanToJson(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		json, rows, bytes := serializePlanToJson(mock.CurrentContext().GetContext(), plan, uuid.New())
-		require.Equal(t, int64(0), rows)
-		require.Equal(t, int64(0), bytes)
+		json, _, stats := serializePlanToJson(mock.CurrentContext().GetContext(), plan, uuid.New())
+		require.Equal(t, int64(0), stats.RowsRead)
+		require.Equal(t, int64(0), stats.BytesScan)
 		t.Logf("SQL plan to json : %s\n", string(json))
 	}
 }

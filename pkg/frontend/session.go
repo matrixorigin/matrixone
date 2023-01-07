@@ -18,16 +18,19 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -44,6 +47,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -73,10 +77,16 @@ type TxnHandler struct {
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
 	h := &TxnHandler{
-		storage:   storage,
+		storage:   &engine.EntireEngine{Engine: storage},
 		txnClient: txnClient,
 	}
 	return h
+}
+
+// we don't need to lock. TxnHandler is holded by one session.
+func (th *TxnHandler) SetTempEngine(te engine.Engine) {
+	ee := th.storage.(*engine.EntireEngine)
+	ee.TempEngine = te
 }
 
 type profileType uint8
@@ -164,15 +174,28 @@ type Session struct {
 
 	mu sync.Mutex
 
-	flag bool
-
+	flag         bool
 	lastInsertID uint64
 
 	skipAuth bool
 
 	sqlSourceType string
 
+	InitTempEngine bool
+
+	tempTablestorage *memorystorage.Storage
+
 	isBackgroundSession bool
+
+	tStmt *trace.StatementInfo
+
+	ast tree.Statement
+
+	rs *plan.ResultColDef
+
+	lastQueryId string
+
+	blockIdx int
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
@@ -217,7 +240,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 		txnHandler: txnHandler,
 		//TODO:fix database name after the catalog is ready
 		txnCompileCtx: InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
-		storage:       pu.StorageEngine,
+		storage:       &engine.EntireEngine{Engine: pu.StorageEngine},
 		gSysVars:      gSysVars,
 
 		serverStatus: 0,
@@ -230,7 +253,8 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
 		},
-		cache: &privilegeCache{},
+		cache:    &privilegeCache{},
+		blockIdx: 0,
 	}
 	if flag {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
@@ -304,6 +328,15 @@ func (bgs *BackgroundSession) Close() {
 		bgs.Session.gSysVars = nil
 	}
 	bgs = nil
+}
+
+func (ses *Session) GetBlockIdx() int {
+	ses.blockIdx++
+	return ses.blockIdx
+}
+
+func (ses *Session) ResetBlockIdx() {
+	ses.blockIdx = 0
 }
 
 func (ses *Session) SetBackgroundSession(b bool) {
@@ -392,6 +425,51 @@ func (ses *Session) GetConciseProfile() string {
 
 func (ses *Session) GetCompleteProfile() string {
 	return ses.getProfile(profileTypeAll)
+}
+
+func (ses *Session) IfInitedTempEngine() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.InitTempEngine
+}
+
+func (ses *Session) GetTempTableStorage() *memorystorage.Storage {
+	if ses.tempTablestorage == nil {
+		panic("temp table storage is not initialized")
+	}
+	return ses.tempTablestorage
+}
+
+func (ses *Session) SetTempTableStorage(ck clock.Clock) (*logservicepb.DNStore, error) {
+	// Without concurrency, there is no potential for data competition
+
+	// Arbitrary value is OK since it's single sharded. Let's use 0xbeef
+	// suggested by @reusee
+	shard := logservicepb.DNShardInfo{
+		ShardID:   0xbeef,
+		ReplicaID: 0xbeef,
+	}
+	shards := []logservicepb.DNShardInfo{
+		shard,
+	}
+	// Arbitrary value is OK, for more information about TEMPORARY_TABLE_DN_ADDR, please refer to the comment in defines/const.go
+	dnAddr := defines.TEMPORARY_TABLE_DN_ADDR
+	dnStore := logservicepb.DNStore{
+		UUID:           uuid.NewString(),
+		ServiceAddress: dnAddr,
+		Shards:         shards,
+	}
+
+	ms, err := memorystorage.NewMemoryStorage(
+		mpool.MustNewZero(),
+		ck,
+		memoryengine.RandomIDGenerator,
+	)
+	if err != nil {
+		return nil, err
+	}
+	ses.tempTablestorage = ms
+	return &dnStore, nil
 }
 
 func (ses *Session) GetPrivilegeCache() *privilegeCache {
@@ -786,14 +864,40 @@ func (ses *Session) GetSql() string {
 func (ses *Session) IsTaeEngine() bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	_, ok := ses.storage.(moengine.TxnEngine)
-	return ok
+	e, isEntire := ses.storage.(*engine.EntireEngine)
+	if isEntire {
+		_, ok := e.Engine.(moengine.TxnEngine)
+		return ok
+	} else {
+		_, ok := ses.storage.(moengine.TxnEngine)
+		return ok
+	}
+}
+
+func (ses *Session) IsEntireEngine() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	_, isEntire := ses.storage.(*engine.EntireEngine)
+	if isEntire {
+		return true
+	} else {
+		return false
+	}
 }
 
 func (ses *Session) GetStorage() engine.Engine {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.storage
+}
+
+func (ses *Session) SetTempEngine(ctx context.Context, te engine.Engine) error {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ee := ses.storage.(*engine.EntireEngine)
+	ee.TempEngine = te
+	ses.requestCtx = ctx
+	return nil
 }
 
 func (ses *Session) GetDatabaseName() string {
@@ -1388,6 +1492,9 @@ func (th *TxnHandler) CommitTxn() error {
 	if ctx == nil {
 		panic("context should not be nil")
 	}
+	if ses.tempTablestorage != nil {
+		ctx = context.WithValue(ctx, defines.TemporaryDN{}, ses.tempTablestorage)
+	}
 	storage := th.GetStorage()
 	ctx, cancel := context.WithTimeout(
 		ctx,
@@ -1446,6 +1553,9 @@ func (th *TxnHandler) RollbackTxn() error {
 	ctx := ses.GetRequestContext()
 	if ctx == nil {
 		panic("context should not be nil")
+	}
+	if ses.tempTablestorage != nil {
+		ctx = context.WithValue(ctx, defines.TemporaryDN{}, ses.tempTablestorage)
 	}
 	storage := th.GetStorage()
 	ctx, cancel := context.WithTimeout(
@@ -1654,9 +1764,30 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (con
 	//open table
 	table, err := db.Relation(ctx, tableName)
 	if err != nil {
-		return nil, nil, err
+		tmpTable, e := tcc.getTmpRelation(ctx, engine.GetTempTableName(dbName, tableName))
+		if e != nil {
+			logutil.Errorf("get table %v error %v", tableName, err)
+			return nil, nil, err
+		} else {
+			table = tmpTable
+		}
 	}
 	return ctx, table, nil
+}
+
+func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName string) (engine.Relation, error) {
+	e := tcc.ses.storage
+	txn, err := tcc.txnHandler.GetTxn()
+	if err != nil {
+		return nil, err
+	}
+	db, err := e.Database(ctx, defines.TEMPORARY_DBNAME, txn)
+	if err != nil {
+		logutil.Errorf("get temp database error %v", err)
+		return nil, err
+	}
+	table, err := db.Relation(ctx, tableName)
+	return table, err
 }
 
 func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, error) {
@@ -2039,6 +2170,61 @@ func (tcc *TxnCompilerContext) GetProcess() *process.Process {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	return tcc.proc
+}
+
+func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
+	proc := tcc.proc
+	// get file size
+	fs := objectio.NewObjectFS(proc.FileService, catalog.QueryResultMetaDir)
+	dirs, err := fs.ListDir(catalog.QueryResultMetaDir)
+	if err != nil {
+		return nil, "", err
+	}
+	var size int64 = -1
+	name := catalog.BuildQueryResultMetaName(proc.SessionInfo.Account, uuid)
+	for _, d := range dirs {
+		if d.Name == name {
+			size = d.Size
+		}
+	}
+	if size == -1 {
+		return nil, "", moerr.NewQueryIdNotFound(proc.Ctx, uuid)
+	}
+	// read meta's meta
+	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
+	reader, err := objectio.NewObjectReader(path, proc.FileService)
+	if err != nil {
+		return nil, "", err
+	}
+	bs, err := reader.ReadAllMeta(proc.Ctx, size, proc.Mp())
+	if err != nil {
+		return nil, "", err
+	}
+	idxs := make([]uint16, 2)
+	idxs[0] = catalog.COLUMNS_IDX
+	idxs[1] = catalog.RESULT_PATH_IDX
+	// read meta's data
+	iov, err := reader.Read(proc.Ctx, bs[0].GetExtent(), idxs, proc.Mp())
+	if err != nil {
+		return nil, "", err
+	}
+	// cols
+	vec := vector.New(catalog.MetaColTypes[catalog.COLUMNS_IDX])
+	if err = vec.Read(iov.Entries[0].Object.([]byte)); err != nil {
+		return nil, "", err
+	}
+	def := vector.MustStrCols(vec)[0]
+	r := &plan.ResultColDef{}
+	if err = r.Unmarshal([]byte(def)); err != nil {
+		return nil, "", err
+	}
+	// paths
+	vec = vector.New(catalog.MetaColTypes[catalog.RESULT_PATH_IDX])
+	if err = vec.Read(iov.Entries[1].Object.([]byte)); err != nil {
+		return nil, "", err
+	}
+	str := vector.MustStrCols(vec)[0]
+	return r.ResultCols, str, nil
 }
 
 func (tcc *TxnCompilerContext) SetProcess(proc *process.Process) {

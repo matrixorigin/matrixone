@@ -64,37 +64,63 @@ func (i *ioEntriesReader) Read(buf []byte) (n int, err error) {
 		}
 
 		// copy data
-		numBytes := entry.Size
-		if l := int64(len(buf)); l < numBytes {
-			numBytes = l
-		}
-		if entry.ReaderForWrite != nil {
-			r := io.LimitReader(entry.ReaderForWrite, int64(numBytes))
-			var bytesRead int
-			bytesRead, err = io.ReadFull(r, buf[:numBytes])
+		var bytesRead int
+
+		if entry.ReaderForWrite != nil && entry.Size < 0 {
+			// read from size unknown reader
+			bytesRead, err = entry.ReaderForWrite.Read(buf)
+			i.entries[0].Offset += int64(bytesRead)
+			if err == io.EOF {
+				i.entries = i.entries[1:]
+			} else if err != nil {
+				return
+			}
+
+		} else if entry.ReaderForWrite != nil {
+			bytesToRead := entry.Size
+			if l := int64(len(buf)); bytesToRead > l {
+				bytesToRead = l
+			}
+			r := io.LimitReader(entry.ReaderForWrite, int64(bytesToRead))
+			bytesRead, err = io.ReadFull(r, buf[:bytesToRead])
 			if err != nil {
 				return
 			}
-			if int64(bytesRead) != numBytes {
+			if int64(bytesRead) != bytesToRead {
 				err = moerr.NewSizeNotMatchNoCtx("")
 				return
 			}
+			i.entries[0].Offset += int64(bytesRead)
+			i.entries[0].Size -= int64(bytesRead)
+			if i.entries[0].Size == 0 {
+				i.entries = i.entries[1:]
+			}
+
 		} else {
+			bytesToRead := entry.Size
+			if l := int64(len(buf)); bytesToRead > l {
+				bytesToRead = l
+			}
 			if int64(len(entry.Data)) != entry.Size {
 				err = moerr.NewSizeNotMatchNoCtx("")
 				return
 			}
-			copy(buf, entry.Data[:numBytes])
-			i.entries[0].Data = entry.Data[numBytes:]
+			bytesRead = copy(buf, entry.Data[:bytesToRead])
+			if int64(bytesRead) != bytesToRead {
+				err = moerr.NewSizeNotMatchNoCtx("")
+				return
+			}
+			i.entries[0].Data = entry.Data[bytesRead:]
+			i.entries[0].Offset += int64(bytesRead)
+			i.entries[0].Size -= int64(bytesRead)
+			if i.entries[0].Size == 0 {
+				i.entries = i.entries[1:]
+			}
 		}
-		buf = buf[numBytes:]
-		i.entries[0].Offset += numBytes
-		i.entries[0].Size -= numBytes
-		if i.entries[0].Size == 0 {
-			i.entries = i.entries[1:]
-		}
-		i.offset += numBytes
-		n += int(numBytes)
+
+		buf = buf[bytesRead:]
+		i.offset += int64(bytesRead)
+		n += int(bytesRead)
 
 	}
 }

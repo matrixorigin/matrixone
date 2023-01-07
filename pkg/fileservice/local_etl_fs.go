@@ -111,7 +111,16 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 	if n != size {
-		return moerr.NewSizeNotMatchNoCtx(path.File)
+		sizeUnknown := false
+		for _, entry := range vector.Entries {
+			if entry.Size < 0 {
+				sizeUnknown = true
+				break
+			}
+		}
+		if !sizeUnknown {
+			return moerr.NewSizeNotMatchNoCtx(path.File)
+		}
 	}
 	if err := f.Close(); err != nil {
 		return err
@@ -195,7 +204,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				}
 				vector.Entries[i].Object = obj
 				vector.Entries[i].ObjectSize = size
-				if cr.N != entry.Size {
+				if entry.Size > 0 && cr.N != entry.Size {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
 
@@ -204,7 +213,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				if err != nil {
 					return err
 				}
-				if n != int64(entry.Size) {
+				if entry.Size > 0 && n != int64(entry.Size) {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
 			}

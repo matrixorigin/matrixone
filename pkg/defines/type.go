@@ -162,3 +162,6 @@ type SqlKey struct{}
 
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
+
+// use TemporaryDN to get temporary storage from Context
+type TemporaryDN struct{}
