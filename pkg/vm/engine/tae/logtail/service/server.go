@@ -403,14 +403,21 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				sendCtx, cancel := context.WithTimeout(ctx, sub.timeout)
 				defer cancel()
 
+				var subErr error
+				defer func() {
+					if subErr != nil {
+						sub.session.Unregister(sub.tableID)
+					}
+				}()
+
 				table := *sub.req.Table
 				from := timestamp.Timestamp{}
 				to := s.waterline.Waterline()
 
 				// fetch total logtail for table
-				tail, err := s.logtail.TableLogtail(sendCtx, table, from, to)
-				if err != nil {
-					logger.Error("fail to fetch table total logtail", zap.Error(err), zap.Any("table", table))
+				tail, subErr := s.logtail.TableLogtail(sendCtx, table, from, to)
+				if subErr != nil {
+					logger.Error("fail to fetch table total logtail", zap.Error(subErr), zap.Any("table", table))
 					if err := sub.session.SendErrorResponse(
 						sendCtx, table, moerr.ErrInternal, "fail to fetch table total logtail",
 					); err != nil {
@@ -422,8 +429,9 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				logger.Debug("send subscription response", zap.Any("table", sub.req.Table), zap.Any("To", to.String()))
 
 				// send subscription response
-				if err := sub.session.SendSubscriptionResponse(sendCtx, tail); err != nil {
-					logger.Error("fail to send subscription response", zap.Error(err))
+				subErr = sub.session.SendSubscriptionResponse(sendCtx, tail)
+				if subErr != nil {
+					logger.Error("fail to send subscription response", zap.Error(subErr))
 					return
 				}
 
