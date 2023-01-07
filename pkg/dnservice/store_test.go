@@ -37,7 +37,8 @@ import (
 )
 
 var (
-	testDNStoreAddr = "unix:///tmp/test-dnstore.sock"
+	testDNListenAddr  = "unix:///tmp/test-dnstore.sock"
+	testDNServiceAddr = "127.0.0.1:22002"
 )
 
 func TestNewAndStartAndCloseService(t *testing.T) {
@@ -233,10 +234,11 @@ func newTestStore(
 	uuid string,
 	fsFactory fileservice.NewFileServicesFunc,
 	options ...Option) *store {
-	assert.NoError(t, os.RemoveAll(testDNStoreAddr[7:]))
+	assert.NoError(t, os.RemoveAll(testDNListenAddr[7:]))
 	c := &Config{
-		UUID:          uuid,
-		ListenAddress: testDNStoreAddr,
+		UUID:           uuid,
+		ListenAddress:  testDNListenAddr,
+		ServiceAddress: testDNServiceAddr,
 	}
 	fs, err := fsFactory(defines.LocalFileServiceName)
 	assert.Nil(t, err)
@@ -261,7 +263,7 @@ func newTestDNShard(shardID, replicaID, logShardID uint64) metadata.DNShard {
 	dnShard := service.NewTestDNShard(shardID)
 	dnShard.ReplicaID = replicaID
 	dnShard.LogShardID = logShardID
-	dnShard.Address = testDNStoreAddr
+	dnShard.Address = testDNServiceAddr
 	return dnShard
 }
 
