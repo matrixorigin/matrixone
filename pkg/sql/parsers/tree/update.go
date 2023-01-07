@@ -151,11 +151,14 @@ type ExternParam struct {
 }
 
 type S3Parameter struct {
-	Endpoint  string `json:"s3-test-endpoint"`
-	Region    string `json:"s3-test-region"`
-	APIKey    string `json:"s3-test-key"`
-	APISecret string `json:"s3-test-secret"`
-	Bucket    string `json:"s3-test-bucket"`
+	Endpoint   string `json:"s3-test-endpoint"`
+	Region     string `json:"s3-test-region"`
+	APIKey     string `json:"s3-test-key"`
+	APISecret  string `json:"s3-test-secret"`
+	Bucket     string `json:"s3-test-bucket"`
+	Provider   string `json:"s3-test-rovider"`
+	RoleArn    string `json:"s3-test-rolearn"`
+	ExternalId string `json:"s3-test-externalid"`
 }
 
 type TailParameter struct {

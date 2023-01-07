@@ -32,12 +32,15 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
@@ -54,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -1303,6 +1307,8 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 func doLoadData(requestCtx context.Context, ses *Session, proc *process.Process, load *tree.Import) (*LoadResult, error) {
 	var err error
 	var txn TxnOperator
+	var dbHandler engine.Database
+	var tableHandler engine.Relation
 	proto := ses.GetMysqlProtocol()
 
 	logInfof(ses.GetConciseProfile(), "+++++load data")
@@ -1354,7 +1360,7 @@ func doLoadData(requestCtx context.Context, ses *Session, proc *process.Process,
 	if err != nil {
 		return nil, err
 	}
-	dbHandler, err := ses.GetStorage().Database(requestCtx, loadDb, txn)
+	dbHandler, err = ses.GetStorage().Database(requestCtx, loadDb, txn)
 	if err != nil {
 		//echo client. no such database
 		return nil, moerr.NewBadDB(requestCtx, loadDb)
@@ -1370,10 +1376,27 @@ func doLoadData(requestCtx context.Context, ses *Session, proc *process.Process,
 	/*
 		check table
 	*/
-	tableHandler, err := dbHandler.Relation(requestCtx, loadTable)
+	if ses.IfInitedTempEngine() {
+		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, ses.GetTempTableStorage())
+	}
+	tableHandler, err = dbHandler.Relation(requestCtx, loadTable)
 	if err != nil {
-		//echo client. no such table
-		return nil, moerr.NewNoSuchTable(requestCtx, loadDb, loadTable)
+		txn, err = ses.txnHandler.GetTxn()
+		if err != nil {
+			return nil, err
+		}
+		dbHandler, err = ses.GetStorage().Database(requestCtx, defines.TEMPORARY_DBNAME, txn)
+		if err != nil {
+			return nil, moerr.NewNoSuchTable(requestCtx, loadDb, loadTable)
+		}
+		loadTable = engine.GetTempTableName(loadDb, loadTable)
+		tableHandler, err = dbHandler.Relation(requestCtx, loadTable)
+		if err != nil {
+			//echo client. no such table
+			return nil, moerr.NewNoSuchTable(requestCtx, loadDb, loadTable)
+		}
+		loadDb = defines.TEMPORARY_DBNAME
+		load.Table.ObjectName = tree.Identifier(loadTable)
 	}
 
 	/*
@@ -2249,6 +2272,11 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	return columns, err
 }
 
+func (cwft *TxnComputationWrapper) GetClock() clock.Clock {
+	rt := runtime.ProcessLevelRuntime()
+	return rt.Clock()
+}
+
 func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 	return cwft.compile.GetAffectedRows()
 }
@@ -2256,6 +2284,11 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
 	defer RecordStatementTxnID(requestCtx, cwft.ses)
+	if cwft.ses.IfInitedTempEngine() {
+		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
+		cwft.ses.SetRequestContext(requestCtx)
+		cwft.proc.Ctx = context.WithValue(cwft.proc.Ctx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
+	}
 	cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 	if err != nil {
 		return nil, err
@@ -2346,6 +2379,51 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if err != nil {
 		return nil, err
 	}
+	// check if it is necessary to initialize the temporary engine
+	if cwft.compile.NeedInitTempEngine(cwft.ses.IfInitedTempEngine()) {
+		// 0. init memory-non-dist storage
+		dnStore, err := cwft.ses.SetTempTableStorage(cwft.GetClock())
+		if err != nil {
+			return nil, err
+		}
+
+		// temporary storage is passed through Ctx
+		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
+
+		// 1. init memory-non-dist engine
+		tempEngine := memoryengine.New(
+			requestCtx,
+			memoryengine.NewDefaultShardPolicy(
+				mpool.MustNewZero(),
+			),
+			func() (logservicepb.ClusterDetails, error) {
+				return logservicepb.ClusterDetails{
+					DNStores: []logservicepb.DNStore{
+						*dnStore,
+					},
+				}, nil
+			},
+			memoryengine.RandomIDGenerator,
+		)
+
+		// 2. bind the temporary engine to the session and txnHandler
+		cwft.ses.SetTempEngine(requestCtx, tempEngine)
+		cwft.compile.SetTempEngine(requestCtx, tempEngine)
+		txnHandler := cwft.ses.txnCompileCtx.txnHandler
+		txnHandler.SetTempEngine(tempEngine)
+
+		// 3. init temp-db to store temporary relations
+		err = tempEngine.Create(requestCtx, defines.TEMPORARY_DBNAME, cwft.ses.txnHandler.txn)
+		if err != nil {
+			return nil, err
+		}
+
+		// 4. add auto_IncrementTable fortemp-db
+		colexec.CreateAutoIncrTable(cwft.ses.GetStorage(), requestCtx, cwft.proc, defines.TEMPORARY_DBNAME)
+
+		cwft.ses.InitTempEngine = true
+	}
+	RecordStatementTxnID(requestCtx, cwft.ses)
 	return cwft.compile, err
 }
 
@@ -3146,7 +3224,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	proc := process.New(
 		requestCtx,
 		ses.GetMemPool(),
-		pu.TxnClient,
+		ses.GetTxnHandler().GetTxnClient(),
 		ses.GetTxnHandler().GetTxnOperator(),
 		pu.FileService,
 		pu.GetClusterDetails,
