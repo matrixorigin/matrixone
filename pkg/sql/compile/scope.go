@@ -172,18 +172,28 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 	default:
 		var err error
+		var db engine.Database
+		var rel engine.Relation
 
 		ctx := c.ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		}
-		db, err := c.e.Database(ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
+		db, err = c.e.Database(ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
 		if err != nil {
 			return err
 		}
-		rel, err := db.Relation(ctx, s.DataSource.RelationName)
+		rel, err = db.Relation(ctx, s.DataSource.RelationName)
 		if err != nil {
-			return err
+			var e error // avoid contamination of error messages
+			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
+			if e != nil {
+				return e
+			}
+			rel, e = db.Relation(c.ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName))
+			if e != nil {
+				return err
+			}
 		}
 		if rds, err = rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err

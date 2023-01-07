@@ -56,7 +56,7 @@ func NewCatalogHandler(upstream *MemHandler) (*CatalogHandler, error) {
 	}
 	handler.iterators.Map = make(map[ID]any)
 
-	now := memorytable.Now(upstream.clock)
+	now := Time{}
 	tx := memorytable.NewTransaction(now)
 	defer func() {
 		if err := tx.Commit(now); err != nil {

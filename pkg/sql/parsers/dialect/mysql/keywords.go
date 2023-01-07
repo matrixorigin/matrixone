@@ -532,5 +532,6 @@ func init() {
 		"column_number":            COLUMN_NUMBER,
 		"returns":                  RETURNS,
 		"extension":                EXTENSION,
+		"query_result":             QUERY_RESULT,
 	}
 }
