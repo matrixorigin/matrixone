@@ -245,3 +245,30 @@ drop account if exists user_strip_01;
 drop account if exists account_1;
 drop account if exists aaa;
 drop account if exists account;
+drop account if exists acc1;
+create account if not exists acc1 ADMIN_NAME 'root' IDENTIFIED BY '123456' comment 'account comment';
+use mo_catalog;
+show tables;
+mo_database
+mo_columns
+mo_tables
+mo_database
+mo_user
+mo_role
+mo_user_grant
+mo_role_grant
+mo_role_privs
+mo_user_defined_function
+select datname,account_id from mo_database;
+datname    account_id
+system    53
+system_metrics    53
+information_schema    53
+mysql    53
+select distinct account_id from mo_tables;
+account_id
+53
+select distinct account_id from mo_columns;
+account_id
+53
+drop account acc1;
