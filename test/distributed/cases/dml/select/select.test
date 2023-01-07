@@ -216,4 +216,3 @@ drop table if exists t1;
 create table t1 (a int(11) unsigned);
 insert into t1 values (1), (2);
 select * from t1 where a != 2;
-drop table if exists t1;

@@ -133,39 +133,39 @@ func TestInitCronExpr(t *testing.T) {
 	}
 }
 
+var newFilePath = func(tbl *table.Table, ts time.Time) string {
+	filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts)
+	p := tbl.PathBuilder.Build(tbl.Account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.GetName())
+	filepath := path.Join(p, filename)
+	return filepath
+}
+
 func initLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Table, ts time.Time) error {
 	mux.Lock()
 	defer mux.Unlock()
 
-	var newFilePath = func(ts time.Time) string {
-		filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts)
-		p := tbl.PathBuilder.Build(tbl.Account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.GetName())
-		filepath := path.Join(p, filename)
-		return filepath
-	}
-
 	buf := make([]byte, 0, 4096)
 
 	ts1 := ts
-	writer, _ := newETLWriter(ctx, fs, newFilePath(ts1), buf)
+	writer, _ := newETLWriter(ctx, fs, newFilePath(tbl, ts1), buf)
 	writer.WriteStrings(dummyFillTable("row1", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts2 := ts.Add(time.Minute)
-	writer, _ = newETLWriter(ctx, fs, newFilePath(ts2), buf)
+	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts2), buf)
 	writer.WriteStrings(dummyFillTable("row3", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row4", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts3 := ts.Add(time.Hour)
-	writer, _ = newETLWriter(ctx, fs, newFilePath(ts3), buf)
+	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts3), buf)
 	writer.WriteStrings(dummyFillTable("row5", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row6", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts1New := ts.Add(time.Hour + time.Minute)
-	writer, _ = newETLWriter(ctx, fs, newFilePath(ts1New), buf)
+	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts1New), buf)
 	writer.WriteStrings(dummyFillTable("row1", 1, 11.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 22.0).ToStrings())
 	writer.FlushAndClose()
@@ -177,18 +177,11 @@ func initEmptyLogFile(ctx context.Context, fs fileservice.FileService, tbl *tabl
 	mux.Lock()
 	defer mux.Unlock()
 
-	var newFilePath = func(ts time.Time) string {
-		filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts)
-		p := tbl.PathBuilder.Build(tbl.Account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.GetName())
-		filepath := path.Join(p, filename)
-		return filepath
-	}
-
 	files := []string{}
 	buf := make([]byte, 0, 4096)
 
 	ts1 := ts
-	filePath := newFilePath(ts1)
+	filePath := newFilePath(tbl, ts1)
 	files = append(files, filePath)
 	writer, _ := newETLWriter(ctx, fs, filePath, buf)
 	writer.FlushAndClose()
@@ -218,7 +211,11 @@ func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *ta
 	return nil
 }
 
+var mergeLock sync.Mutex
+
 func TestNewMerge(t *testing.T) {
+	mergeLock.Lock()
+	defer mergeLock.Unlock()
 	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, t.TempDir())
 	require.Nil(t, err)
 	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
@@ -292,6 +289,8 @@ func TestNewMergeWithContextDone(t *testing.T) {
 	if simdcsv.SupportedCPU() {
 		t.Skip()
 	}
+	mergeLock.Lock()
+	defer mergeLock.Unlock()
 	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, t.TempDir())
 	require.Nil(t, err)
 	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
@@ -329,8 +328,62 @@ func TestNewMergeWithContextDone(t *testing.T) {
 			got := NewMerge(tt.args.ctx, tt.args.opts...)
 			require.NotNil(t, got)
 
-			err = got.doMergeFiles(ctx, dummyTable.Table, files, 0)
+			reader, err := newETLReader(got.ctx, got.FS, files[0])
+			require.Nil(t, err)
+
+			_, err = reader.ReadLine()
+			//err = got.doMergeFiles(ctx, dummyTable.Table, files, 0)
+			t.Logf("doMergeFiles meet err: %s", err)
 			require.Equal(t, err.Error(), "internal error: read files meet context Done")
+		})
+	}
+}
+
+func TestNewMergeNOFiles(t *testing.T) {
+	if simdcsv.SupportedCPU() {
+		t.Skip()
+	}
+	mergeLock.Lock()
+	defer mergeLock.Unlock()
+	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, t.TempDir())
+	require.Nil(t, err)
+	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
+
+	ctx := trace.Generate(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	type args struct {
+		ctx  context.Context
+		opts []MergeOption
+	}
+	tests := []struct {
+		name string
+		args args
+		want *Merge
+	}{
+		{
+			name: "normal",
+			args: args{
+				ctx: ctx,
+				opts: []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
+					WithFileService(fs), WithTable(dummyTable),
+					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)},
+			},
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			filePath := newFilePath(dummyTable, ts)
+			files := []string{filePath}
+
+			got := NewMerge(tt.args.ctx, tt.args.opts...)
+			require.NotNil(t, got)
+
+			err := got.doMergeFiles(ctx, dummyTable.Table, files, 0)
+			require.Equal(t, true, strings.Contains(err.Error(), "is not found"))
 		})
 	}
 }

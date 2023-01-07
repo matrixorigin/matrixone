@@ -308,7 +308,6 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, paths []string
 		// open reader
 		reader, err = newETLReader(m.ctx, m.FS, path)
 		if err != nil {
-			reader.Close()
 			m.logger.Error(fmt.Sprintf("merge file meet read failed: %v", err))
 			return err
 		}
@@ -460,6 +459,10 @@ func (s *ContentReader) Close() {
 	for idx := range s.content {
 		s.content[idx] = nil
 	}
+	if s.raw != nil {
+		_ = s.raw.Close()
+		s.raw = nil
+	}
 }
 
 func newETLReader(ctx context.Context, fs fileservice.FileService, path string) (ETLReader, error) {
@@ -470,6 +473,9 @@ func newETLReader(ctx context.Context, fs fileservice.FileService, path string) 
 	}
 }
 
+// NewCSVReader create new csv reader.
+// success case return: ok_reader, nil error
+// failed case return: nil_reader, error
 func NewCSVReader(ctx context.Context, fs fileservice.FileService, path string) (ETLReader, error) {
 	// external.ReadFile
 	var reader io.ReadCloser
