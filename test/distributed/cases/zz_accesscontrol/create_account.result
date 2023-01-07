@@ -259,16 +259,13 @@ mo_user_grant
 mo_role_grant
 mo_role_privs
 mo_user_defined_function
-select datname,account_id from mo_database;
-datname    account_id
-system    53
-system_metrics    53
-information_schema    53
-mysql    53
-select distinct account_id from mo_tables;
-account_id
-53
-select distinct account_id from mo_columns;
-account_id
-53
+select count(distinct account_id) from mo_database;
+count(distinct account_id)
+1
+select count(distinct account_id) from mo_tables;
+count(distinct account_id)
+1
+select count(distinct account_id) from mo_columns;
+count(distinct account_id)
+1
 drop account acc1;

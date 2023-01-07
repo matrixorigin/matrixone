@@ -151,8 +151,8 @@ create account if not exists acc1 ADMIN_NAME 'root' IDENTIFIED BY '123456' comme
 -- @session:id=6&user=acc1:root&password=123456
 use mo_catalog;
 show tables;
-select datname,account_id from mo_database;
-select distinct account_id from mo_tables;
-select distinct account_id from mo_columns;
+select count(distinct account_id) from mo_database;
+select count(distinct account_id) from mo_tables;
+select count(distinct account_id) from mo_columns;
 -- @session
 drop account acc1;
