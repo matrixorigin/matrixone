@@ -88,7 +88,7 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 			return nil, err
 		}
 		block.(*Block).columns[i].(*ColumnBlock).meta.location = Extent{
-			id:         block.GetMeta().header.blockId,
+			id:         uint32(block.GetMeta().header.blockId),
 			offset:     uint32(offset),
 			length:     uint32(length),
 			originSize: uint32(originSize),
@@ -114,6 +114,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context) ([]BlockObject, error) {
 	w.RLock()
 	defer w.RUnlock()
 	var buf bytes.Buffer
+	metaLen := 0
 	for i, block := range w.blocks {
 		meta, err := block.(*Block).MarshalMeta()
 		if err != nil {
@@ -123,8 +124,9 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context) ([]BlockObject, error) {
 		if err != nil {
 			return nil, err
 		}
+		metaLen += length
 		w.blocks[i].(*Block).extent = Extent{
-			id:         block.(*Block).header.blockId,
+			id:         uint32(i),
 			offset:     uint32(offset),
 			length:     uint32(length),
 			originSize: uint32(length),
@@ -158,6 +160,12 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context) ([]BlockObject, error) {
 	// Because the outside may hold this writer
 	// After WriteEnd is called, no more data can be written
 	w.buffer = nil
+
+	w.object.metaLoc = Extent{
+		offset:     w.blocks[0].GetExtent().Offset(),
+		length:     uint32(metaLen),
+		originSize: uint32(metaLen),
+	}
 	return w.blocks, err
 }
 

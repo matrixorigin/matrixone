@@ -24,7 +24,8 @@ type Object struct {
 	// name is the object file's name
 	name string
 	// fs is an instance of fileservice
-	fs fileservice.FileService
+	fs      fileservice.FileService
+	metaLoc Extent
 }
 
 func NewObject(name string, fs fileservice.FileService) *Object {
@@ -33,4 +34,8 @@ func NewObject(name string, fs fileservice.FileService) *Object {
 		fs:   fs,
 	}
 	return object
+}
+
+func (o *Object) GetMetaLoc() Extent {
+	return o.metaLoc
 }

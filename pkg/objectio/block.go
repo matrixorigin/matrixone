@@ -19,6 +19,8 @@ import (
 	"encoding/binary"
 )
 
+const BlockMetaLen = 1088
+
 // Block is the organizational structure of a batch in objectio
 // Write one batch at a time, and batch and block correspond one-to-one
 type Block struct {

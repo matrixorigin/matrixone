@@ -163,8 +163,16 @@ func (f *Footer) UnMarshalFooter(data []byte) error {
 	}
 	extents := data[len(data)-int(FooterSize+f.blockCount*ExtentTypeSize):]
 	ExtentsCache := bytes.NewBuffer(extents)
+	if err = binary.Read(ExtentsCache, endian, &f.extents[0].offset); err != nil {
+		return err
+	}
+	size := f.blockCount * BlockMetaLen
 	for i := 0; i < int(f.blockCount); i++ {
-		if err = binary.Read(ExtentsCache, endian, &f.extents[i].offset); err != nil {
+		f.extents[i].id = uint32(i)
+		f.extents[i].offset = f.extents[0].offset
+		f.extents[i].length = size
+		f.extents[i].originSize = size
+		/*if err = binary.Read(ExtentsCache, endian, &f.extents[i].offset); err != nil {
 			return err
 		}
 		if err = binary.Read(ExtentsCache, endian, &f.extents[i].length); err != nil {
@@ -172,7 +180,7 @@ func (f *Footer) UnMarshalFooter(data []byte) error {
 		}
 		if err = binary.Read(ExtentsCache, endian, &f.extents[i].originSize); err != nil {
 			return err
-		}
+		}*/
 	}
 
 	return err
