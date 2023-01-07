@@ -49,7 +49,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.
 
 	metas := &fileservice.IOVector{
 		FilePath: r.name,
-		Entries:  make([]fileservice.IOEntry, 0, 1),
+		Entries:  make([]fileservice.IOEntry, 1),
 	}
 
 	metas.Entries[0] = fileservice.IOEntry{
@@ -65,7 +65,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.
 					return nil, 0, err
 				}
 			}
-			blocks := make([]*Block, blockCnt)
+			blocks := make([]*Block, 0)
 			for i := 0; i < int(blockCnt); i++ {
 				extent := Extent{
 					id:         uint32(i),
@@ -79,7 +79,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.
 					name:   r.name,
 				}
 				// unmarshal to block
-				if err := block.UnMarshalMeta(data[i*BlockMetaLen : BlockMetaLen]); err != nil {
+				if err := block.UnMarshalMeta(data[i*BlockMetaLen : i*BlockMetaLen+BlockMetaLen]); err != nil {
 					return nil, 0, err
 				}
 				blocks = append(blocks, block)

@@ -115,6 +115,8 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context) ([]BlockObject, error) {
 	defer w.RUnlock()
 	var buf bytes.Buffer
 	metaLen := 0
+	start := 0
+	size := len(w.blocks) * BlockMetaLen
 	for i, block := range w.blocks {
 		meta, err := block.(*Block).MarshalMeta()
 		if err != nil {
@@ -124,20 +126,23 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context) ([]BlockObject, error) {
 		if err != nil {
 			return nil, err
 		}
+		if start == 0 {
+			start = offset
+		}
 		metaLen += length
 		w.blocks[i].(*Block).extent = Extent{
 			id:         uint32(i),
-			offset:     uint32(offset),
-			length:     uint32(length),
-			originSize: uint32(length),
+			offset:     uint32(start),
+			length:     uint32(size),
+			originSize: uint32(size),
 		}
-		if err = binary.Write(&buf, endian, w.blocks[i].(*Block).extent.Offset()); err != nil {
+		if err = binary.Write(&buf, endian, uint32(offset)); err != nil {
 			return nil, err
 		}
-		if err = binary.Write(&buf, endian, w.blocks[i].(*Block).extent.Length()); err != nil {
+		if err = binary.Write(&buf, endian, uint32(length)); err != nil {
 			return nil, err
 		}
-		if err = binary.Write(&buf, endian, w.blocks[i].(*Block).extent.OriginSize()); err != nil {
+		if err = binary.Write(&buf, endian, uint32(length)); err != nil {
 			return nil, err
 		}
 	}
