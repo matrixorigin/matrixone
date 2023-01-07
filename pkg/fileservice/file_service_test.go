@@ -480,7 +480,7 @@ func testFileService(
 				},
 			},
 		})
-		assert.True(t, moerr.IsMoErrCode(moerr.ConvertGoError(context.TODO(), err), moerr.ErrUnexpectedEOF))
+		assert.True(t, moerr.IsMoErrCode(moerr.ConvertGoError(ctx, err), moerr.ErrUnexpectedEOF))
 
 		err = fs.Read(ctx, &IOVector{
 			FilePath: "foo",
@@ -604,8 +604,8 @@ func testFileService(
 			FilePath: "foo",
 			Entries: []IOEntry{
 				{
-					Size:   int64(len(data)),
-					ignore: true,
+					Size: int64(len(data)),
+					done: true,
 				},
 				{
 					Size: int64(len(data)),
@@ -710,7 +710,7 @@ func testFileService(
 		fs := newFS(fsName)
 
 		reader, writer := io.Pipe()
-		n := 8
+		n := 65536
 
 		go func() {
 			csvWriter := csv.NewWriter(writer)
