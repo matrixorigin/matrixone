@@ -14,11 +14,19 @@
 
 package options
 
-import "time"
+import (
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+)
 
 const (
-	KiB = 1024
-	MiB = 1024 * KiB
+	defaultRpcMaxMessageSize        = 16 * mpool.KB
+	defaultRpcPayloadCopyBufferSize = 16 * mpool.KB
+	defaultRpcEnableChecksum        = true
+	defaultLogtailCollectInterval   = 50 * time.Millisecond
+	defaultResponseSendTimeout      = 10 * time.Second
+	defaultMaxLogtailFetchFailure   = 5
 )
 
 type CacheCfg struct {
@@ -67,11 +75,29 @@ type LogtailServerCfg struct {
 
 func NewDefaultLogtailServerCfg() *LogtailServerCfg {
 	return &LogtailServerCfg{
-		RpcMaxMessageSize:        1024 * KiB,
-		RpcPayloadCopyBufferSize: 1024 * KiB,
-		RpcEnableChecksum:        true,
-		LogtailCollectInterval:   50 * time.Millisecond,
-		ResponseSendTimeout:      10 * time.Second,
-		MaxLogtailFetchFailure:   5,
+		RpcMaxMessageSize:        defaultRpcMaxMessageSize,
+		RpcPayloadCopyBufferSize: defaultRpcPayloadCopyBufferSize,
+		RpcEnableChecksum:        defaultRpcEnableChecksum,
+		LogtailCollectInterval:   defaultLogtailCollectInterval,
+		ResponseSendTimeout:      defaultResponseSendTimeout,
+		MaxLogtailFetchFailure:   defaultMaxLogtailFetchFailure,
+	}
+}
+
+func (l *LogtailServerCfg) Validate() {
+	if l.RpcMaxMessageSize <= 0 {
+		l.RpcMaxMessageSize = defaultRpcMaxMessageSize
+	}
+	if l.RpcPayloadCopyBufferSize <= 0 {
+		l.RpcPayloadCopyBufferSize = defaultRpcPayloadCopyBufferSize
+	}
+	if l.LogtailCollectInterval <= 0 {
+		l.LogtailCollectInterval = defaultLogtailCollectInterval
+	}
+	if l.ResponseSendTimeout <= 0 {
+		l.ResponseSendTimeout = defaultResponseSendTimeout
+	}
+	if l.MaxLogtailFetchFailure <= 0 {
+		l.MaxLogtailFetchFailure = defaultMaxLogtailFetchFailure
 	}
 }

@@ -134,7 +134,10 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		IncrementalInterval: s.cfg.Ckp.IncrementalInterval.Duration,
 		GlobalMinCount:      s.cfg.Ckp.GlobalMinCount,
 	}
-	logtailServerAddr := s.cfg.LogtailServer.ListenAddress
+
+	// NOTE: shard.Address comes from s.cfg.ServiceAddress, which is also used in heartbeat message.
+	logtailServerAddr := shard.Address
+
 	logtailServerCfg := &options.LogtailServerCfg{
 		RpcMaxMessageSize:        int64(s.cfg.LogtailServer.RpcMaxMessageSize),
 		RpcPayloadCopyBufferSize: int64(s.cfg.LogtailServer.RpcPayloadCopyBufferSize),
@@ -143,6 +146,7 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		ResponseSendTimeout:      s.cfg.LogtailServer.LogtailResponseSendTimeout.Duration,
 		MaxLogtailFetchFailure:   s.cfg.LogtailServer.MaxLogtailFetchFailure,
 	}
+	logtailServerCfg.Validate()
 
 	// use s3 as main fs
 	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)

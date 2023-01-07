@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
 // DNService describes expected behavior for dn service.
@@ -158,8 +159,9 @@ func buildDNConfig(
 	index int, opt Options, address serviceAddresses,
 ) *dnservice.Config {
 	cfg := &dnservice.Config{
-		UUID:          uuid.New().String(),
-		ListenAddress: address.getDnListenAddress(index),
+		UUID:           uuid.New().String(),
+		ListenAddress:  address.getDnListenAddress(index),
+		ServiceAddress: address.getDnServiceAddress(index),
 	}
 	cfg.DataDir = filepath.Join(opt.rootDataDir, cfg.UUID)
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
@@ -173,6 +175,13 @@ func buildDNConfig(
 	cfg.Ckp.ScanInterval.Duration = time.Second * 100000
 	cfg.Ckp.IncrementalInterval.Duration = time.Second * 100000
 	cfg.Ckp.GlobalMinCount = 10000
+
+	// logtail push service config for tae storage
+	cfg.LogtailServer.RpcMaxMessageSize = toml.ByteSize(opt.logtailPushServer.rpcMaxMessageSize)
+	cfg.LogtailServer.RpcPayloadCopyBufferSize = toml.ByteSize(opt.logtailPushServer.rpcPayloadCopyBufferSize)
+	cfg.LogtailServer.LogtailCollectInterval.Duration = opt.logtailPushServer.logtailCollectInterval
+	cfg.LogtailServer.LogtailResponseSendTimeout.Duration = opt.logtailPushServer.logtailResponseSendTimeout
+	cfg.LogtailServer.MaxLogtailFetchFailure = opt.logtailPushServer.maxLogtailFetchFailure
 
 	// We need the filled version of configuration.
 	// It's necessary when building dnservice.Option.
