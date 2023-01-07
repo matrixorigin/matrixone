@@ -24,7 +24,6 @@ import (
 	"math"
 	"os"
 	"reflect"
-	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -325,7 +324,7 @@ type outputQueue struct {
 	mrs          *MysqlResultSet
 	rowIdx       uint64
 	length       uint64
-	ep           *tree.ExportParam
+	ep           *ExportParam
 	lineStr      []byte
 	showStmtType ShowStatementType
 
@@ -337,7 +336,7 @@ func (o *outputQueue) resetLineStr() {
 	o.lineStr = o.lineStr[:0]
 }
 
-func NewOutputQueue(ctx context.Context, proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam, showStatementType ShowStatementType) *outputQueue {
+func NewOutputQueue(ctx context.Context, proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *ExportParam, showStatementType ShowStatementType) *outputQueue {
 	return &outputQueue{
 		ctx:          ctx,
 		proto:        proto,
@@ -608,13 +607,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		return nil
 	}
 
-	enableProfile := ses.GetParameterUnit().SV.EnableProfileGetDataFromPipeline
-
-	var cpuf *os.File = nil
-	if enableProfile {
-		cpuf, _ = os.Create("cpu_profile")
-	}
-
 	begin := time.Now()
 
 	proto := ses.GetMysqlProtocol()
@@ -646,11 +638,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	n := vector.Length(bat.Vecs[0])
 
-	if enableProfile {
-		if err := pprof.StartCPUProfile(cpuf); err != nil {
-			return err
-		}
-	}
 	requestCtx := ses.GetRequestContext()
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
@@ -684,10 +671,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	err := oq.flush()
 	if err != nil {
 		return err
-	}
-
-	if enableProfile {
-		pprof.StopCPUProfile()
 	}
 
 	procBatchTime := time.Since(procBatchBegin)
@@ -1052,6 +1035,9 @@ func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db strin
 
 func (mce *MysqlCmdExecutor) handleDump(requestCtx context.Context, dump *tree.MoDump) error {
 	var err error
+	if !dump.DumpDatabase {
+		return doDumpQueryResult(requestCtx, mce.GetSession(), dump.ExportParams)
+	}
 	dump.OutFile = maybeAppendExtension(dump.OutFile)
 	exists, err := fileExists(dump.OutFile)
 	if exists {
@@ -3256,6 +3242,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
 	}
+	proc.SessionInfo.QueryId = ses.lastQueryId
 	ses.txnCompileCtx.SetProcess(proc)
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,

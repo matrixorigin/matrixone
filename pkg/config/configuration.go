@@ -195,9 +195,6 @@ type FrontendParameters struct {
 	//default is false. Skip writing batch into the storage
 	LoadDataSkipWritingBatch bool `toml:"loadDataSkipWritingBatch"`
 
-	//default is false. true for profiling the getDataFromPipeline
-	EnableProfileGetDataFromPipeline bool `toml:"enableProfileGetDataFromPipeline"`
-
 	//KB. When the number of bytes in the outbuffer exceeds it,the outbuffer will be flushed.
 	MaxBytesInOutbufToFlush int64 `toml:"maxBytesInOutbufToFlush"`
 

@@ -15,9 +15,7 @@
 package tree
 
 import (
-	"bufio"
 	"context"
-	"os"
 	"strconv"
 	"strings"
 
@@ -447,12 +445,10 @@ type LoadColumn interface {
 }
 
 type ExportParam struct {
-	// file handler
-	File *os.File
-	// bufio.writer
-	Writer *bufio.Writer
 	// outfile flag
 	Outfile bool
+	// query id
+	QueryId string
 	// filename path
 	FilePath string
 	// Fields
@@ -461,27 +457,25 @@ type ExportParam struct {
 	Lines *Lines
 	// fileSize
 	MaxFileSize uint64
-	// curFileSize
-	CurFileSize uint64
-	Rows        uint64
-	FileCnt     uint
 	// header flag
 	Header     bool
 	ForceQuote []string
-	ColumnFlag []bool
-	Symbol     [][]byte
-
-	// default flush size
-	DefaultBufSize int64
-	OutputStr      []byte
-	LineSize       uint64
 }
 
 func (ep *ExportParam) Format(ctx *FmtCtx) {
 	if ep.FilePath == "" {
 		return
 	}
-	ctx.WriteString("into outfile " + ep.FilePath)
+	ep.format(ctx, true)
+}
+
+func (ep *ExportParam) format(ctx *FmtCtx, withOutfile bool) {
+	ctx.WriteString("into")
+	if withOutfile {
+		ctx.WriteString(" outfile")
+	}
+	ctx.WriteByte(' ')
+	ctx.WriteString(ep.FilePath)
 	if ep.Fields != nil {
 		ctx.WriteByte(' ')
 		ep.Fields.Format(ctx)
