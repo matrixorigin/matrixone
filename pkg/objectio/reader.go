@@ -70,6 +70,9 @@ func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.
 			size := uint32(0)
 			i := uint32(0)
 			for {
+				if size > uint32(dataLen) {
+					logutil.Infof("sfsdfsdfsd")
+				}
 				if size == uint32(dataLen) {
 					break
 				}
@@ -84,8 +87,8 @@ func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.
 					extent: extent,
 					name:   r.name,
 				}
-				data = data[size:dataLen]
-				unSize, err := block.UnMarshalMeta(data)
+				cache := data[size:dataLen]
+				unSize, err := block.UnMarshalMeta(cache)
 				if err != nil {
 					logutil.Infof("UnMarshalMeta failed: %v, extent %v", err.Error(), extents[0])
 					return nil, 0, err
