@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"bytes"
+	"context"
 	"testing"
 	"testing/iotest"
 
@@ -23,6 +24,7 @@ import (
 )
 
 func TestIOEntriesReader(t *testing.T) {
+	ctx := context.Background()
 
 	entries := []IOEntry{
 		{
@@ -31,7 +33,7 @@ func TestIOEntriesReader(t *testing.T) {
 			Data:   []byte("a"),
 		},
 	}
-	assert.Nil(t, iotest.TestReader(newIOEntriesReader(entries), []byte("a")))
+	assert.Nil(t, iotest.TestReader(newIOEntriesReader(ctx, entries), []byte("a")))
 
 	entries = []IOEntry{
 		{
@@ -40,7 +42,7 @@ func TestIOEntriesReader(t *testing.T) {
 			Data:   []byte("a"),
 		},
 	}
-	assert.Nil(t, iotest.TestReader(newIOEntriesReader(entries), []byte("\x00a")))
+	assert.Nil(t, iotest.TestReader(newIOEntriesReader(ctx, entries), []byte("\x00a")))
 
 	entries = []IOEntry{
 		{
@@ -49,7 +51,7 @@ func TestIOEntriesReader(t *testing.T) {
 			Data:   bytes.Repeat([]byte("a"), 1024),
 		},
 	}
-	assert.Nil(t, iotest.TestReader(newIOEntriesReader(entries), bytes.Repeat([]byte("a"), 1024)))
+	assert.Nil(t, iotest.TestReader(newIOEntriesReader(ctx, entries), bytes.Repeat([]byte("a"), 1024)))
 
 	entries = []IOEntry{
 		{
@@ -57,6 +59,6 @@ func TestIOEntriesReader(t *testing.T) {
 			ReaderForWrite: bytes.NewReader([]byte("abc")),
 		},
 	}
-	assert.Nil(t, iotest.TestReader(newIOEntriesReader(entries), []byte("abc")))
+	assert.Nil(t, iotest.TestReader(newIOEntriesReader(ctx, entries), []byte("abc")))
 
 }

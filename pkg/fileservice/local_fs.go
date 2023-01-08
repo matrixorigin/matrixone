@@ -116,6 +116,12 @@ func (l *LocalFS) Name() string {
 }
 
 func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
@@ -133,6 +139,12 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 }
 
 func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
@@ -160,7 +172,7 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 	fileWithChecksum := NewFileWithChecksum(f, _BlockContentSize)
-	n, err := io.Copy(fileWithChecksum, newIOEntriesReader(vector.Entries))
+	n, err := io.Copy(fileWithChecksum, newIOEntriesReader(ctx, vector.Entries))
 	if err != nil {
 		return err
 	}
@@ -203,6 +215,11 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 }
 
 func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
@@ -389,6 +406,11 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 }
 
 func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 
 	path, err := ParsePathAtService(dirPath, l.name)
 	if err != nil {
@@ -443,6 +465,12 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 }
 
 func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	for _, filePath := range filePaths {
 		if err := l.deleteSingle(ctx, filePath); err != nil {
 			return err
@@ -583,6 +611,11 @@ func (l *LocalFSMutator) Append(ctx context.Context, entries ...IOEntry) error {
 }
 
 func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int64, entries ...IOEntry) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	// write
 	for _, entry := range entries {
