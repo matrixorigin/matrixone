@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/stretchr/testify/require"
 	"path"
 	"strings"
@@ -137,8 +136,4 @@ func genLines(cnt int) (lines [][]any) {
 	}
 
 	return
-}
-
-func init() {
-	motrace.Init(context.TODO(), motrace.EnableTracer(true))
 }
