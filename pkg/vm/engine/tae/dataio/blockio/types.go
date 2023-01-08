@@ -70,7 +70,7 @@ func EncodeMetaLocWithObject(
 		return "", err
 	}
 	meta := blocks[0].GetMeta()
-	metaLen := len(blocks) * objectio.BlockMetaLen
+	metaLen := blocks[0].GetExtent().Length()
 	name := meta.GetName()
 	metaLoc := fmt.Sprintf("%s:%d_%d_%d_%d:%d:%d",
 		name,

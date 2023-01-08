@@ -85,7 +85,7 @@ func DecodeMetaLocToMeta(metaLoc string) (*Meta, error) {
 
 func EncodeMetalocFromMetas(name string, blks []objectio.BlockObject) string {
 	offset := blks[0].GetExtent().Offset()
-	length := len(blks) * objectio.BlockMetaLen
+	length := blks[0].GetExtent().Length()
 	var buf bytes.Buffer
 	_, _ = buf.WriteString(name)
 	for _, blk := range blks {

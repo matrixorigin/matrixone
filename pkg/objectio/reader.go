@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -57,7 +58,6 @@ func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.
 		Size:   int64(extents[0].originSize),
 
 		ToObject: func(reader io.Reader, data []byte) (any, int64, error) {
-			blockCnt := extents[0].originSize / BlockMetaLen
 			if len(data) == 0 {
 				var err error
 				data, err = io.ReadAll(reader)
@@ -65,10 +65,16 @@ func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.
 					return nil, 0, err
 				}
 			}
+			dataLen := len(data)
 			blocks := make([]*Block, 0)
-			for i := 0; i < int(blockCnt); i++ {
+			size := uint32(0)
+			i := uint32(0)
+			for {
+				if size == uint32(dataLen) {
+					break
+				}
 				extent := Extent{
-					id:         uint32(i),
+					id:         i,
 					offset:     extents[0].offset,
 					length:     extents[0].length,
 					originSize: extents[0].originSize,
@@ -78,10 +84,14 @@ func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.
 					extent: extent,
 					name:   r.name,
 				}
-				// unmarshal to block
-				if err := block.UnMarshalMeta(data[i*BlockMetaLen : i*BlockMetaLen+BlockMetaLen]); err != nil {
+				data = data[size:dataLen]
+				unSize, err := block.UnMarshalMeta(data)
+				if err != nil {
+					logutil.Infof("UnMarshalMeta failed: %v, extent %v", err.Error(), extents[0])
 					return nil, 0, err
 				}
+				i++
+				size += unSize
 				blocks = append(blocks, block)
 			}
 			return blocks, int64(len(data)), nil

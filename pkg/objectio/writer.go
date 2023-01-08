@@ -116,8 +116,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context) ([]BlockObject, error) {
 	var buf bytes.Buffer
 	metaLen := 0
 	start := 0
-	size := len(w.blocks) * BlockMetaLen
-	for i, block := range w.blocks {
+	for _, block := range w.blocks {
 		meta, err := block.(*Block).MarshalMeta()
 		if err != nil {
 			return nil, err
@@ -130,12 +129,6 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context) ([]BlockObject, error) {
 			start = offset
 		}
 		metaLen += length
-		w.blocks[i].(*Block).extent = Extent{
-			id:         uint32(i),
-			offset:     uint32(start),
-			length:     uint32(size),
-			originSize: uint32(size),
-		}
 		if err = binary.Write(&buf, endian, uint32(offset)); err != nil {
 			return nil, err
 		}
@@ -159,6 +152,14 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context) ([]BlockObject, error) {
 	err = w.Sync(ctx)
 	if err != nil {
 		return nil, err
+	}
+	for i := range w.blocks {
+		w.blocks[i].(*Block).extent = Extent{
+			id:         uint32(i),
+			offset:     uint32(start),
+			length:     uint32(metaLen),
+			originSize: uint32(metaLen),
+		}
 	}
 
 	// The buffer needs to be released at the end of WriteEnd
