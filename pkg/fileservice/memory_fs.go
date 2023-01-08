@@ -49,6 +49,12 @@ func (m *MemoryFS) Name() string {
 }
 
 func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	m.RLock()
 	defer m.RUnlock()
 
@@ -88,6 +94,12 @@ func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry
 }
 
 func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	m.Lock()
 	defer m.Unlock()
 
@@ -108,6 +120,11 @@ func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
 }
 
 func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	path, err := ParsePathAtService(vector.FilePath, m.name)
 	if err != nil {
@@ -128,7 +145,7 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 		return vector.Entries[i].Offset < vector.Entries[j].Offset
 	})
 
-	r := newIOEntriesReader(vector.Entries)
+	r := newIOEntriesReader(ctx, vector.Entries)
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -143,6 +160,11 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 }
 
 func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	path, err := ParsePathAtService(vector.FilePath, m.name)
 	if err != nil {
@@ -218,6 +240,12 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 }
 
 func (m *MemoryFS) Delete(ctx context.Context, filePaths ...string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	m.Lock()
 	defer m.Unlock()
 	for _, filePath := range filePaths {
