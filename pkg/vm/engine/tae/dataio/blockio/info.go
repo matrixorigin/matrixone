@@ -61,7 +61,7 @@ func DecodeMetaLocToMeta(metaLoc string) (*Meta, error) {
 	if err != nil {
 		return nil, err
 	}
-	id, err := strconv.ParseUint(location[2], 10, 32)
+	id, err := strconv.ParseUint(location[3], 10, 32)
 	if err != nil {
 		return nil, err
 	}
