@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -28,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
 
@@ -91,11 +91,11 @@ func ReportError(ctx context.Context, err error, depth int) {
 	}
 	// log every time
 	msg := fmt.Sprintf("error: %v", err)
-	sc := SpanFromContext(ctx).SpanContext()
+	sc := trace.SpanFromContext(ctx).SpanContext()
 	if sc.IsEmpty() {
 		logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg)
 	} else {
-		logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg, ContextField(ctx))
+		logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg, trace.ContextField(ctx))
 	}
 	// record ctrl
 	if !GetTracerProvider().IsEnable() {

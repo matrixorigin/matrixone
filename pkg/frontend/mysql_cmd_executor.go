@@ -4395,7 +4395,7 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 	return buffer.Bytes()
 }
 
-func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, statsJonsBytes []byte, stats trace.Statistic) {
+func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, statsJonsBytes []byte, stats motrace.Statistic) {
 	if queryPlan != nil && queryPlan.GetQuery() != nil {
 		explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
 		options := &explain.ExplainOptions{
@@ -4439,12 +4439,12 @@ func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.U
 }
 
 // SerializeExecPlan Serialize the execution plan by json
-var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]byte, []byte, trace.Statistic) {
+var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]byte, []byte, motrace.Statistic) {
 	if plan == nil {
 		return serializePlanToJson(ctx, nil, uuid)
 	} else if queryPlan, ok := plan.(*plan2.Plan); !ok {
 		moError := moerr.NewInternalError(ctx, "execPlan not type of plan2.Plan: %s", reflect.ValueOf(plan).Type().Name())
-		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error()), []byte{}, trace.Statistic{}
+		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error()), []byte{}, motrace.Statistic{}
 	} else {
 		// data transform to json dataStruct
 		return serializePlanToJson(ctx, queryPlan, uuid)

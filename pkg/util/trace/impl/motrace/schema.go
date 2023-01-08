@@ -71,7 +71,7 @@ var (
 	execPlanCol  = table.Column{Name: "exec_plan", Type: "JSON", ColType: table.TJson, Default: jsonColumnDEFAULT, Comment: "statement execution plan"}
 	rowsReadCol  = table.Column{Name: "rows_read", Type: bigintUnsignedType, ColType: table.TUint64, Default: "0", Comment: "rows read total"}
 	bytesScanCol = table.Column{Name: "bytes_scan", Type: bigintUnsignedType, ColType: table.TUint64, Default: "0", Comment: "bytes scan total"}
-	statsCol     = table.Column{Name: "stats", Type: "JSON", RawType: table.TJson, Default: jsonColumnDEFAULT, Comment: "global stats info in exec_plan"}
+	statsCol     = table.Column{Name: "stats", Type: "JSON", ColType: table.TJson, Default: jsonColumnDEFAULT, Comment: "global stats info in exec_plan"}
 	stmtTypeCol  = table.Column{Name: "statement_type", Type: "varchar(128)", ColType: table.TVarchar, Default: "", Comment: "statement type, val in [Insert, Delete, Update, Drop Table, Drop User, ...]"}
 	queryTypeCol = table.Column{Name: "query_type", Type: "varchar(128)", ColType: table.TVarchar, Default: "", Comment: "query type, val in [DQL, DDL, DML, DCL, TCL]"}
 	sqlTypeCol   = table.Column{Name: "sql_source_type", Type: "TEXT", ColType: table.TText, Default: "", Comment: "sql statement source type"}

@@ -187,7 +187,7 @@ type Session struct {
 
 	isBackgroundSession bool
 
-	tStmt *trace.StatementInfo
+	tStmt *motrace.StatementInfo
 
 	ast tree.Statement
 

@@ -46,7 +46,7 @@ type bufferHolder struct {
 	// signal send signal to Collector
 	signal bufferSignalFunc // see awakeBufferFactory
 	// impl NewItemBatchHandler
-	impl trace.PipeImpl
+	impl motrace.PipeImpl
 	// trigger handle Reminder strategy
 	trigger *time.Timer
 
@@ -55,7 +55,7 @@ type bufferHolder struct {
 
 type bufferSignalFunc func(*bufferHolder)
 
-func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl trace.PipeImpl, signal bufferSignalFunc) *bufferHolder {
+func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl motrace.PipeImpl, signal bufferSignalFunc) *bufferHolder {
 	buffer := impl.NewItemBuffer(name.GetName())
 	b := &bufferHolder{
 		ctx:    ctx,
