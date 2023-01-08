@@ -64,6 +64,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	gTracer = GetTracerProvider().Tracer("MatrixOne")
 	_, span := gTracer.Start(ctx, "TraceInit")
 	defer span.End()
+	defer trace.SetDefaultTracer(gTracer)
 
 	// init DefaultContext / DefaultSpanContext
 	var spanId trace.SpanID
