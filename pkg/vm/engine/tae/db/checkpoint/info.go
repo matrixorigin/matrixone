@@ -143,23 +143,29 @@ func (r *runner) GetGlobalCheckpointCount() int {
 }
 
 func (r *runner) GCCheckpoint(ts types.TS) error {
-	r.gcTSMu.Lock()
-	if r.gcTS.Less(ts) {
-		r.gcTS = ts
+	prev := r.gcTS.Load()
+	if prev == nil {
+		r.gcTS.Store(ts)
+	} else {
+		prevTS := prev.(types.TS)
+		if prevTS.Less(ts) {
+			r.gcTS.Store(ts)
+		}
 	}
-	r.gcTSMu.Unlock()
 	logutil.Infof("GC %v", ts.ToString())
 	r.gcCheckpointQueue.Enqueue(struct{}{})
 	return nil
 }
 
-func (r *runner) GetGCTS() types.TS {
-	r.gcTSMu.RLock()
-	defer r.gcTSMu.RUnlock()
-	return r.gcTS
+func (r *runner) getGCTS() types.TS {
+	prev := r.gcTS.Load()
+	if prev == nil {
+		return types.TS{}
+	}
+	return prev.(types.TS)
 }
 
-func (r *runner) GetGCedTS() types.TS {
+func (r *runner) getGCedTS() types.TS {
 	r.storage.RLock()
 	minGlobal, _ := r.storage.globals.Min()
 	minIncremental, _ := r.storage.entries.Min()
@@ -176,7 +182,7 @@ func (r *runner) GetGCedTS() types.TS {
 	return minIncremental.start
 }
 
-func (r *runner) GetTSToGC() types.TS {
+func (r *runner) getTSToGC() types.TS {
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal == nil {
 		return types.TS{}
@@ -198,7 +204,7 @@ func (r *runner) ExistPendingEntryToGC() bool {
 }
 
 func (r *runner) IsTSStale(ts types.TS) bool {
-	gcts := r.GetGCTS()
+	gcts := r.getGCTS()
 	if gcts.IsEmpty() {
 		return false
 	}

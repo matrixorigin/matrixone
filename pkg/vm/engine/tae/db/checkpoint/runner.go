@@ -194,8 +194,7 @@ type runner struct {
 		globals *btree.BTreeG[*CheckpointEntry]
 	}
 
-	gcTS   types.TS
-	gcTSMu sync.RWMutex
+	gcTS atomic.Value
 
 	// checkpoint policy
 	incrementalPolicy *timeBasedPolicy
@@ -299,15 +298,15 @@ func (r *runner) onGCCheckpointEntries(items ...any) {
 }
 
 func (r *runner) getTSTOGC() (ts types.TS, needGC bool) {
-	ts = r.GetGCTS()
+	ts = r.getGCTS()
 	if ts.IsEmpty() {
 		return
 	}
-	tsTOGC := r.GetTSToGC()
+	tsTOGC := r.getTSToGC()
 	if tsTOGC.Less(ts) {
 		ts = tsTOGC
 	}
-	gcedTS := r.GetGCedTS()
+	gcedTS := r.getGCedTS()
 	if gcedTS.GreaterEq(ts) {
 		return
 	}
@@ -382,28 +381,6 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{end: entry.end, interval: r.options.globalVersionInterval})
 }
 
-func (r *runner) MockCheckpoint(end types.TS) {
-	var err error
-	entry := NewCheckpointEntry(types.TS{}, end, ET_Incremental)
-	if err = r.doIncrementalCheckpoint(entry); err != nil {
-		panic(err)
-	}
-	r.storage.Lock()
-	r.storage.entries.Set(entry)
-	r.storage.Unlock()
-	entry.SetState(ST_Finished)
-	if err = r.saveCheckpoint(entry.start, entry.end); err != nil {
-		panic(err)
-	}
-	lsn := r.source.GetMaxLSN(entry.start, entry.end)
-	e, err := r.wal.RangeCheckpoint(1, lsn)
-	if err != nil {
-		panic(err)
-	}
-	if err = e.WaitDone(); err != nil {
-		panic(err)
-	}
-}
 func (r *runner) DeleteIncrementalEntry(entry *CheckpointEntry) {
 	r.storage.Lock()
 	defer r.storage.Unlock()
