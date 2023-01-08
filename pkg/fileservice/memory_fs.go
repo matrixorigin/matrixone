@@ -166,7 +166,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 	}
 
 	for i, entry := range vector.Entries {
-		if entry.ignore {
+		if entry.done {
 			continue
 		}
 
@@ -197,8 +197,11 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 		}
 
 		if setData {
-			if int64(len(entry.Data)) < entry.Size {
+			if int64(len(entry.Data)) < entry.Size || entry.Size < 0 {
 				entry.Data = data
+				if entry.Size < 0 {
+					entry.Size = int64(len(data))
+				}
 			} else {
 				copy(entry.Data, data)
 			}
