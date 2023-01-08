@@ -170,7 +170,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 			return moerr.NewEmptyRangeNoCtx(path.File)
 		}
 
-		if entry.ignore {
+		if entry.done {
 			continue
 		}
 
@@ -284,6 +284,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 					return err
 				}
 				entry.Data = data
+				entry.Size = int64(len(data))
 
 			} else {
 				if int64(len(entry.Data)) < entry.Size {

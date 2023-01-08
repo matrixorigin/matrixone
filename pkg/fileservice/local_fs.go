@@ -202,18 +202,25 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 	return nil
 }
 
-func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
+func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
 
-	if l.memCache == nil {
-		// no cache
-		return l.read(ctx, vector)
+	if l.memCache != nil {
+		if err := l.memCache.Read(ctx, vector); err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				return
+			}
+			err = l.memCache.Update(ctx, vector)
+		}()
 	}
 
-	if err := l.memCache.Read(ctx, vector, l.read); err != nil {
+	if err := l.read(ctx, vector); err != nil {
 		return err
 	}
 
@@ -221,6 +228,9 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 }
 
 func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
+	if vector.allDone() {
+		return nil
+	}
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
@@ -242,7 +252,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 			return moerr.NewEmptyRangeNoCtx(path.File)
 		}
 
-		if entry.ignore {
+		if entry.done {
 			continue
 		}
 
@@ -349,6 +359,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 					return err
 				}
 				entry.Data = data
+				entry.Size = int64(len(data))
 
 			} else {
 				if int64(len(entry.Data)) < entry.Size {
@@ -513,15 +524,6 @@ func (l *LocalFS) ensureDir(nativePath string) error {
 	return nil
 }
 
-var osPathSeparatorStr = string([]rune{os.PathSeparator})
-
-func (l *LocalFS) toOSPath(filePath string) string {
-	if os.PathSeparator == '/' {
-		return filePath
-	}
-	return strings.ReplaceAll(filePath, "/", osPathSeparatorStr)
-}
-
 func (l *LocalFS) syncDir(nativePath string) error {
 	l.Lock()
 	f, ok := l.dirFiles[nativePath]
@@ -542,7 +544,7 @@ func (l *LocalFS) syncDir(nativePath string) error {
 }
 
 func (l *LocalFS) toNativeFilePath(filePath string) string {
-	return filepath.Join(l.rootPath, l.toOSPath(filePath))
+	return filepath.Join(l.rootPath, toOSPath(filePath))
 }
 
 var _ MutableFileService = new(LocalFS)
