@@ -163,6 +163,7 @@ func testFileService(
 	t.Run("WriterForRead", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
+
 		err := fs.Write(ctx, IOVector{
 			FilePath: "foo",
 			Entries: []IOEntry{
@@ -174,6 +175,7 @@ func testFileService(
 			},
 		})
 		assert.Nil(t, err)
+
 		buf := new(bytes.Buffer)
 		vec := &IOVector{
 			FilePath: "foo",
@@ -188,6 +190,22 @@ func testFileService(
 		err = fs.Read(ctx, vec)
 		assert.Nil(t, err)
 		assert.Equal(t, []byte("1234"), buf.Bytes())
+
+		buf = new(bytes.Buffer)
+		vec = &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Offset:        0,
+					Size:          -1,
+					WriterForRead: buf,
+				},
+			},
+		}
+		err = fs.Read(ctx, vec)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("1234"), buf.Bytes())
+
 	})
 
 	t.Run("ReadCloserForRead", func(t *testing.T) {
@@ -462,7 +480,7 @@ func testFileService(
 				},
 			},
 		})
-		assert.True(t, moerr.IsMoErrCode(moerr.ConvertGoError(context.TODO(), err), moerr.ErrUnexpectedEOF))
+		assert.True(t, moerr.IsMoErrCode(moerr.ConvertGoError(ctx, err), moerr.ErrUnexpectedEOF))
 
 		err = fs.Read(ctx, &IOVector{
 			FilePath: "foo",
@@ -586,8 +604,8 @@ func testFileService(
 			FilePath: "foo",
 			Entries: []IOEntry{
 				{
-					Size:   int64(len(data)),
-					ignore: true,
+					Size: int64(len(data)),
+					done: true,
 				},
 				{
 					Size: int64(len(data)),
@@ -692,7 +710,7 @@ func testFileService(
 		fs := newFS(fsName)
 
 		reader, writer := io.Pipe()
-		n := 8
+		n := 65536
 
 		go func() {
 			csvWriter := csv.NewWriter(writer)

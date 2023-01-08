@@ -18,29 +18,39 @@ import "strconv"
 
 type MoDump struct {
 	statementImpl
-	Database    Identifier
-	Tables      TableNames
-	OutFile     string
-	MaxFileSize int64
+	DumpDatabase bool
+	Database     Identifier
+	Tables       TableNames
+	OutFile      string
+	MaxFileSize  int64
+	ExportParams *ExportParam
 }
 
 func (node *MoDump) Format(ctx *FmtCtx) {
 	ctx.WriteString("modump")
-	if node.Database != "" {
-		ctx.WriteString(" database ")
-		ctx.WriteString(string(node.Database))
-	}
-	if node.Tables != nil {
-		ctx.WriteString(" tables ")
-		node.Tables.Format(ctx)
-	}
-	if node.OutFile != "" {
-		ctx.WriteString(" into ")
-		ctx.WriteString(node.OutFile)
-	}
-	if node.MaxFileSize != 0 {
-		ctx.WriteString(" max_file_size ")
-		ctx.WriteString(strconv.FormatInt(node.MaxFileSize, 10))
+	if node.DumpDatabase {
+		if node.Database != "" {
+			ctx.WriteString(" database ")
+			ctx.WriteString(string(node.Database))
+		}
+		if node.Tables != nil {
+			ctx.WriteString(" tables ")
+			node.Tables.Format(ctx)
+		}
+		if node.OutFile != "" {
+			ctx.WriteString(" into ")
+			ctx.WriteString(node.OutFile)
+		}
+		if node.MaxFileSize != 0 {
+			ctx.WriteString(" max_file_size ")
+			ctx.WriteString(strconv.FormatInt(node.MaxFileSize, 10))
+		}
+	} else {
+		ctx.WriteString(" query_result")
+		ctx.WriteByte(' ')
+		ctx.WriteString(node.ExportParams.QueryId)
+		ctx.WriteByte(' ')
+		node.ExportParams.format(ctx, false)
 	}
 }
 
