@@ -218,7 +218,7 @@ func TestGetSchemaForAccount(t *testing.T) {
 			args: args{
 				account: "user1",
 			},
-			wantPath: "/user1/*/*/*/*/metric/*.csv",
+			wantPath: "/user1/*/*/*/*/metric/*",
 		},
 	}
 	ctx := context.Background()
@@ -235,7 +235,7 @@ func TestGetSchemaForAccount(t *testing.T) {
 			require.Equal(t, 6, len(schemas))
 			require.Equal(t, true, found)
 			found = false
-			if strings.Contains(SingleMetricTable.ToCreateSql(ctx, true), "/*/*/*/*/*/metric/*.csv") {
+			if strings.Contains(SingleMetricTable.ToCreateSql(ctx, true), "/*/*/*/*/*/metric/*") {
 				found = true
 			}
 			require.Equal(t, true, found)

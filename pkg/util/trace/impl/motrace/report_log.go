@@ -65,6 +65,10 @@ func (m *MOZapLog) Free() {
 func (m *MOZapLog) GetRow() *table.Row { return logView.OriginTable.GetRow(DefaultContext()) }
 
 func (m *MOZapLog) CsvFields(ctx context.Context, row *table.Row) []string {
+	m.FillRow(ctx, row)
+	return row.ToStrings()
+}
+func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, logView.Table)
 	row.SetColumnVal(traceIDCol, m.SpanContext.TraceID.String())
@@ -72,14 +76,13 @@ func (m *MOZapLog) CsvFields(ctx context.Context, row *table.Row) []string {
 	row.SetColumnVal(spanKindCol, m.SpanContext.Kind.String())
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
-	row.SetColumnVal(timestampCol, Time2DatetimeString(m.Timestamp))
+	row.SetColumnVal(timestampCol, m.Timestamp)
 	row.SetColumnVal(loggerNameCol, m.LoggerName)
 	row.SetColumnVal(levelCol, m.Level.String())
 	row.SetColumnVal(callerCol, m.Caller)
 	row.SetColumnVal(messageCol, m.Message)
 	row.SetColumnVal(extraCol, m.Extra)
 	row.SetColumnVal(stackCol, m.Stack)
-	return row.ToStrings()
 }
 
 func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {

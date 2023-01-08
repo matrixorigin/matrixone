@@ -103,6 +103,11 @@ func (s *StatementInfo) Free() {
 func (s *StatementInfo) GetRow() *table.Row { return SingleStatementTable.GetRow(DefaultContext()) }
 
 func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string {
+	s.FillRow(ctx, row)
+	return row.ToStrings()
+}
+
+func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.exported = true
@@ -111,7 +116,7 @@ func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string 
 	row.SetColumnVal(txnIDCol, uuid.UUID(s.TransactionID).String())
 	row.SetColumnVal(sesIDCol, uuid.UUID(s.SessionID).String())
 	row.SetColumnVal(accountCol, s.Account)
-	row.SetColumnVal(roleIdCol, fmt.Sprintf("%d", s.RoleId))
+	row.SetColumnVal(roleIdCol, s.RoleId)
 	row.SetColumnVal(userCol, s.User)
 	row.SetColumnVal(hostCol, s.Host)
 	row.SetColumnVal(dbCol, s.Database)
@@ -123,7 +128,7 @@ func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string 
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
 	row.SetColumnVal(reqAtCol, Time2DatetimeString(s.RequestAt))
 	row.SetColumnVal(respAtCol, Time2DatetimeString(s.ResponseAt))
-	row.SetColumnVal(durationCol, fmt.Sprintf("%d", s.Duration))
+	row.SetColumnVal(durationCol, s.Duration)
 	row.SetColumnVal(statusCol, s.Status.String())
 	if s.Error != nil {
 		var moError *moerr.Error
@@ -136,13 +141,11 @@ func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string 
 	}
 	execPlan, stats := s.ExecPlan2Json(ctx)
 	row.SetColumnVal(execPlanCol, execPlan)
-	row.SetColumnVal(rowsReadCol, fmt.Sprintf("%d", s.RowsRead))
-	row.SetColumnVal(bytesScanCol, fmt.Sprintf("%d", s.BytesScan))
+	row.SetColumnVal(rowsReadCol, s.RowsRead)
+	row.SetColumnVal(bytesScanCol, s.BytesScan)
 	row.SetColumnVal(statsCol, stats)
 	row.SetColumnVal(stmtTypeCol, s.StatementType)
 	row.SetColumnVal(queryTypeCol, s.QueryType)
-
-	return row.ToStrings()
 }
 
 // ExecPlan2Json return ExecPlan Serialized json-str

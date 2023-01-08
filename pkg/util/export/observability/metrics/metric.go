@@ -55,10 +55,15 @@ func (m *Metric) GetRow() *table.Row {
 }
 
 func (m *Metric) CsvFields(ctx context.Context, row *table.Row) []string {
+	m.FillRow(ctx, row)
+	return row.ToStrings()
+}
+
+func (m *Metric) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
 	row.SetColumnVal(observability.MetricNameColumn, m.Name)
-	row.SetColumnVal(observability.MetricTimestampColumn, observability.Time2DatetimeString(m.Timestamp))
-	row.SetFloat64(observability.MetricValueColumn.Name, m.Value)
+	row.SetColumnVal(observability.MetricTimestampColumn, m.Timestamp)
+	row.SetColumnVal(observability.MetricValueColumn, m.Value)
 
 	labels, err := json.Marshal(&m.Labels)
 	if err != nil {
@@ -76,7 +81,6 @@ func (m *Metric) CsvFields(ctx context.Context, row *table.Row) []string {
 	hashed := hash.Sum(nil)
 	m.SeriesId = hex.EncodeToString(hashed)
 	row.SetColumnVal(observability.MetricSeriesIDColumn, m.SeriesId)
-	return row.ToStrings()
 }
 
 func (m *Metric) Size() int64 {

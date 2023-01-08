@@ -58,11 +58,16 @@ func (*LogRecord) GetRow() *table.Row {
 }
 
 func (l *LogRecord) CsvFields(ctx context.Context, row *table.Row) []string {
+	l.FillRow(ctx, row)
+	return row.ToStrings()
+}
+
+func (l *LogRecord) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
 	row.SetColumnVal(observability.LogsTraceIDCol, l.TraceId)
 	row.SetColumnVal(observability.LogsSpanIDCol, l.SpanId)
-	row.SetColumnVal(observability.LogsTimestampCol, observability.Time2DatetimeString(l.Timestamp))
-	row.SetColumnVal(observability.LogsCollectTimeCol, observability.Time2DatetimeString(l.CollectTime))
+	row.SetColumnVal(observability.LogsTimestampCol, l.Timestamp)
+	row.SetColumnVal(observability.LogsCollectTimeCol, l.CollectTime)
 	row.SetColumnVal(observability.LogsLoggerNameCol, l.LoggerName)
 	row.SetColumnVal(observability.LogsLevelCol, l.Level)
 	row.SetColumnVal(observability.LogsCallerCol, l.Caller)
@@ -74,8 +79,6 @@ func (l *LogRecord) CsvFields(ctx context.Context, row *table.Row) []string {
 		panic(err)
 	}
 	row.SetColumnVal(observability.LogsLabelsCol, string(labels))
-
-	return row.ToStrings()
 }
 
 func (l *LogRecord) Size() int64 {

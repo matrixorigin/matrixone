@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"io"
 	"reflect"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -78,7 +77,11 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	return newItemBuffer(opts...)
 }
 
-type CSVRequests []*CSVRequest
+type WriteRequest interface {
+	Handle() (int, error)
+}
+
+type CSVRequests []WriteRequest
 
 type CSVRequest struct {
 	writer  io.StringWriter
@@ -97,6 +100,21 @@ func (r *CSVRequest) Content() string {
 	return r.content
 }
 
+type RowRequest struct {
+	writer table.RowWriter
+}
+
+func NewRowRequest(writer table.RowWriter) *RowRequest {
+	return &RowRequest{writer}
+}
+
+func (r *RowRequest) Handle() (int, error) {
+	if r.writer == nil {
+		return 0, nil
+	}
+	return r.writer.FlushAndClose()
+}
+
 // NewItemBatchHandler implement batchpipe.PipeImpl
 func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 
@@ -105,11 +123,7 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 		if !ok {
 			panic(moerr.NewInternalError(ctx, "batchCSVHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
 		}
-		if len(req.content) == 0 {
-			logutil.Warnf("meet empty csv content")
-			return
-		}
-		if _, err := req.writer.WriteString(req.content); err != nil {
+		if _, err := req.Handle(); err != nil {
 			logutil.Error(fmt.Sprintf("[Trace] failed to write. err: %v", err), logutil.NoReportFiled())
 		}
 	}
@@ -137,37 +151,18 @@ type CsvFields interface {
 	CsvFields(ctx context.Context, row *table.Row) []string
 }
 
-var QuoteFieldFunc = func(ctx context.Context, buf *bytes.Buffer, value string, enclose rune) string {
-	replaceRules := map[rune]string{
-		'"':  `""`,
-		'\'': `\'`,
-	}
-	quotedClose, hasRule := replaceRules[enclose]
-	if !hasRule {
-		panic(moerr.NewInternalError(ctx, "not support csv enclose: %c", enclose))
-	}
-	for _, c := range value {
-		if c == enclose {
-			buf.WriteString(quotedClose)
-		} else {
-			buf.WriteRune(c)
-		}
-	}
-	return value
-}
-
 type WriteFactoryConfig struct {
 	Account     string
 	Ts          time.Time
 	PathBuilder table.PathBuilder
 }
 
-type FSWriterFactory func(ctx context.Context, db string, name bp.HasName, config WriteFactoryConfig) io.StringWriter
+type FSWriterFactory func(ctx context.Context, db string, name bp.HasName, config WriteFactoryConfig) table.RowWriter
 
-func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer) any {
+func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, factory FSWriterFactory) any {
 	buf.Reset()
 	if len(in) == 0 {
-		return NewCSVRequest(nil, "")
+		return NewRowRequest(nil)
 	}
 
 	i, ok := in[0].(CsvFields)
@@ -176,20 +171,25 @@ func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer) an
 	}
 
 	ts := time.Now()
-	buffer := make(map[string]*bytes.Buffer, 2)
-	writeValues := func(item CsvFields, row *table.Row) {
-		fields := item.CsvFields(ctx, row)
-		buf, exist := buffer[row.GetAccount()]
+	buffer := make(map[string]table.RowWriter, 2)
+	writeValues := func(item table.RowField, row *table.Row) {
+		account := row.GetAccount()
+		w, exist := buffer[account]
 		if !exist {
-			buf = bytes.NewBuffer(nil)
-			buffer[row.GetAccount()] = buf
+			if factory == nil {
+				factory = GetTracerProvider().writerFactory
+			}
+			w = factory(ctx, row.Table.Database, row.Table,
+				WriteFactoryConfig{Account: account, Ts: ts, PathBuilder: row.Table.PathBuilder})
+			buffer[row.GetAccount()] = w
 		}
-		writeCsvOneLine(ctx, buf, fields)
+		item.FillRow(ctx, row)
+		w.WriteRow(row)
 	}
 
 	row := i.GetRow()
 	for _, i := range in {
-		item, ok := i.(CsvFields)
+		item, ok := i.(table.RowField)
 		if !ok {
 			panic("not MalCsv, dont support output CSV")
 		}
@@ -197,30 +197,11 @@ func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer) an
 	}
 
 	reqs := make(CSVRequests, 0, len(buffer))
-	for account, buf := range buffer {
-		writer := GetTracerProvider().writerFactory(DefaultContext(), row.Table.Database, row.Table,
-			WriteFactoryConfig{Account: account, Ts: ts, PathBuilder: row.Table.PathBuilder})
-		reqs = append(reqs, NewCSVRequest(writer, buf.String()))
+	for _, ww := range buffer {
+		reqs = append(reqs, NewRowRequest(ww))
 	}
 
 	return reqs
-}
-
-func writeCsvOneLine(ctx context.Context, buf *bytes.Buffer, fields []string) {
-	opts := table.CommonCsvOptions
-	for idx, field := range fields {
-		if idx > 0 {
-			buf.WriteRune(opts.FieldTerminator)
-		}
-		if strings.ContainsRune(field, opts.FieldTerminator) || strings.ContainsRune(field, opts.EncloseRune) || strings.ContainsRune(field, opts.Terminator) {
-			buf.WriteRune(opts.EncloseRune)
-			QuoteFieldFunc(ctx, buf, field, opts.EncloseRune)
-			buf.WriteRune(opts.EncloseRune)
-		} else {
-			buf.WriteString(field)
-		}
-	}
-	buf.WriteRune(opts.Terminator)
 }
 
 var _ bp.ItemBuffer[bp.HasName, any] = &itemBuffer{}
@@ -239,10 +220,10 @@ type itemBuffer struct {
 }
 
 type filterItemFunc func(IBuffer2SqlItem)
-type genBatchFunc func(context.Context, []IBuffer2SqlItem, *bytes.Buffer) any
+type genBatchFunc func(context.Context, []IBuffer2SqlItem, *bytes.Buffer, FSWriterFactory) any
 
 var noopFilterItemFunc = func(IBuffer2SqlItem) {}
-var noopGenBatchSQL = genBatchFunc(func(context.Context, []IBuffer2SqlItem, *bytes.Buffer) any { return "" })
+var noopGenBatchSQL = genBatchFunc(func(context.Context, []IBuffer2SqlItem, *bytes.Buffer, FSWriterFactory) any { return "" })
 
 func newItemBuffer(opts ...BufferOption) *itemBuffer {
 	b := &itemBuffer{
@@ -322,7 +303,7 @@ func (b *itemBuffer) GetBatch(ctx context.Context, buf *bytes.Buffer) any {
 	if b.isEmpty() {
 		return nil
 	}
-	return b.genBatchFunc(ctx, b.buf, buf)
+	return b.genBatchFunc(ctx, b.buf, buf, nil)
 }
 
 type BufferOption interface {

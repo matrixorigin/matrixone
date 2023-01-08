@@ -81,7 +81,7 @@ func TestPathBuilder(t *testing.T) {
 			require.Equal(t, tt.wantDir, gotDir)
 			gotETLPath := m.BuildETLPath(tt.args.db, tt.args.name, ETLParamAccountAll)
 			require.Equal(t, tt.wantETLPath, gotETLPath)
-			gotLogFN := m.NewLogFilename(tt.args.name, tt.args.nodeUUID, tt.args.nodeType, tt.args.ts)
+			gotLogFN := m.NewLogFilename(tt.args.name, tt.args.nodeUUID, tt.args.nodeType, tt.args.ts, CsvExtension)
 			require.Equal(t, tt.wantLogFN, gotLogFN)
 		})
 	}

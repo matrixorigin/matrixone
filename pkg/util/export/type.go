@@ -15,6 +15,7 @@
 package export
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"io"
 	"reflect"
 	"unsafe"
@@ -25,6 +26,14 @@ type stringWriter interface {
 	io.Writer
 	io.StringWriter
 	//WriteRune(rune) (int, error)
+}
+
+type ETLWriter interface {
+	WriteRow(row *table.Row) error
+	// WriteStrings write record as one line into csv file
+	WriteStrings(record []string) error
+	// FlushAndClose flush its buffer and close.
+	FlushAndClose() (int, error)
 }
 
 func String2Bytes(s string) (ret []byte) {

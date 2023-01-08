@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/export/writer"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"io"
-	"os"
 	"testing"
 	"time"
 
@@ -54,9 +54,7 @@ func init() {
 		WithMOVersion("v0.test.0"),
 		WithNode("node_uuid", trace.NodeTypeStandalone),
 		WithBatchProcessMode(FileService),
-		WithFSWriterFactory(func(ctx context.Context, _ string, _ batchpipe.HasName, _ WriteFactoryConfig) io.StringWriter {
-			return os.Stdout
-		}),
+		WithFSWriterFactory(dummyFSWriterFactory),
 		WithSQLExecutor(func() internalExecutor.InternalExecutor {
 			return nil
 		}),
@@ -77,6 +75,24 @@ func init() {
 		panic(err)
 	}
 	fmt.Println("Finish tests init.")
+}
+
+type dummyStringWriter struct{}
+
+func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
+	return fmt.Printf("dummyStringWriter: %s\n", s)
+}
+func (w *dummyStringWriter) WriteRow(row *table.Row) error {
+	fmt.Printf("dummyStringWriter: %v\n", row.ToStrings())
+	return nil
+}
+func (w *dummyStringWriter) FlushAndClose() (int, error) {
+	return 0, nil
+}
+func (w *dummyStringWriter) GetContent() string { return "" }
+
+var dummyFSWriterFactory = func(context.Context, string, batchpipe.HasName, WriteFactoryConfig) table.RowWriter {
+	return &dummyStringWriter{}
 }
 
 func Test_newBuffer2Sql_base(t *testing.T) {
@@ -267,6 +283,13 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 	<-gCtrlSqlCh
 }*/
 
+var genFactory = func() FSWriterFactory {
+	return func(ctx context.Context, db string, name batchpipe.HasName, config WriteFactoryConfig) table.RowWriter {
+		buf := bytes.NewBuffer(nil)
+		return writer.NewCSVWriter(ctx, buf, &dummyStringWriter{})
+	}
+}
+
 func Test_genCsvData(t *testing.T) {
 	errorFormatter.Store("%v")
 	logStackFormatter.Store("%n")
@@ -454,15 +477,17 @@ error_info,node_uuid,Standalone,0,0,,0001-01-01 00:00:00.001001,,,,{},20101,test
 `,
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := genCsvData(DefaultContext(), tt.args.in, tt.args.buf)
+			got := genCsvData(DefaultContext(), tt.args.in, tt.args.buf, genFactory())
 			require.NotEqual(t, nil, got)
 			req, ok := got.(CSVRequests)
 			require.Equal(t, true, ok)
 			require.Equal(t, 1, len(req))
-			batch := req[0]
-			assert.Equalf(t, tt.want, batch.content, "genCsvData(%v, %v)", batch.content, tt.args.buf)
+			batch := req[0].(*RowRequest)
+			content := batch.writer.GetContent()
+			assert.Equalf(t, tt.want, content, "genCsvData(%v, %v)", content, tt.args.buf)
 			t.Logf("%s", tt.want)
 		})
 	}
@@ -543,7 +568,7 @@ func Test_genCsvData_diffAccount(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := genCsvData(DefaultContext(), tt.args.in, tt.args.buf)
+			got := genCsvData(DefaultContext(), tt.args.in, tt.args.buf, genFactory())
 			require.NotEqual(t, nil, got)
 			reqs, ok := got.(CSVRequests)
 			require.Equal(t, true, ok)
@@ -551,13 +576,14 @@ func Test_genCsvData_diffAccount(t *testing.T) {
 			require.Equal(t, len(tt.args.in), len(tt.want))
 			for _, req := range reqs {
 				found := false
+				batch := req.(*RowRequest)
 				for idx, w := range tt.want {
-					if w == req.content {
+					if w == batch.writer.GetContent() {
 						found = true
 						t.Logf("idx %d: %s", idx, w)
 					}
 				}
-				assert.Equalf(t, true, found, "genCsvData: %v", req.content)
+				assert.Equalf(t, true, found, "genCsvData: %v", batch.writer.GetContent())
 			}
 		})
 	}
@@ -639,13 +665,14 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			GetTracerProvider().longQueryTime = tt.args.queryT
-			got := genCsvData(DefaultContext(), tt.args.in, tt.args.buf)
+			got := genCsvData(DefaultContext(), tt.args.in, tt.args.buf, genFactory())
 			require.NotEqual(t, nil, got)
 			req, ok := got.(CSVRequests)
 			require.Equal(t, true, ok)
 			require.Equal(t, 1, len(req))
-			batch := req[0]
-			assert.Equalf(t, tt.want, batch.content, "genCsvData(%v, %v)", batch.content, tt.args.buf)
+			batch := req[0].(*RowRequest)
+			content := batch.writer.GetContent()
+			assert.Equalf(t, tt.want, content, "genCsvData(%v, %v)", content, tt.args.buf)
 			t.Logf("%s", tt.want)
 			GetTracerProvider().longQueryTime = 0
 		})

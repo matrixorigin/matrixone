@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/export/writer"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/matrixorigin/simdcsv"
@@ -191,10 +192,15 @@ func (m *Merge) Stop() {
 // main logic
 // =======================
 
+type FileMeta struct {
+	FilePath string
+	FileSize int64
+}
+
 // Main handle cron job
 // foreach all
 func (m *Merge) Main(ctx context.Context, ts time.Time) error {
-	var files = make([]string, 0, 1000)
+	var files = make([]*FileMeta, 0, 1000)
 	var totalSize int64
 
 	m.datetime = ts
@@ -228,7 +234,7 @@ func (m *Merge) Main(ctx context.Context, ts time.Time) error {
 		for _, f := range fileEntrys {
 			filepath := path.Join(rootPath, f.Name)
 			totalSize += f.Size
-			files = append(files, filepath)
+			files = append(files, &FileMeta{filepath, f.Size})
 			if totalSize > m.MaxFileSize {
 				if err = m.doMergeFiles(ctx, account.Name, files, totalSize); err != nil {
 					m.logger.Error(fmt.Sprintf("merge task meet error: %v", err))
@@ -253,7 +259,7 @@ func (m *Merge) Main(ctx context.Context, ts time.Time) error {
 // Step 2. make new filename, file writer
 // Step 3. read file data(valid format), and write down new file
 // Step 4. delete old files.
-func (m *Merge) doMergeFiles(ctx context.Context, account string, paths []string, bufferSize int64) error {
+func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileMeta, bufferSize int64) error {
 
 	var err error
 
@@ -263,21 +269,21 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, paths []string
 		<-m.runningJobs
 	}()
 
-	if len(paths) < m.MinFilesMerge {
-		return moerr.NewInternalError(ctx, "file cnt %d less then threshold %d", len(paths), m.MinFilesMerge)
+	if len(files) < m.MinFilesMerge {
+		return moerr.NewInternalError(ctx, "file cnt %d less then threshold %d", len(files), m.MinFilesMerge)
 	}
 
 	// Step 1. group by node_uuid, find target timestamp
-	timestamps := make([]string, 0, len(paths))
+	timestamps := make([]string, 0, len(files))
 	var p table.CSVPath
-	for _, path_ := range paths {
-		p, err = m.pathBuilder.ParsePath(ctx, path_)
+	for _, f := range files {
+		p, err = m.pathBuilder.ParsePath(ctx, f.FilePath)
 		if err != nil {
 			return err
 		}
 		ts := p.Timestamp()
 		if len(ts) == 0 {
-			m.logger.Warn(fmt.Sprintf("merge file meet unknown file: %s", path_))
+			m.logger.Warn(fmt.Sprintf("merge file meet unknown file: %s", f.FilePath))
 			continue
 		}
 		timestamps = append(timestamps, ts[0])
@@ -296,7 +302,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, paths []string
 
 	// Step 2. new filename, file writer
 	prefix := m.pathBuilder.Build(account, table.MergeLogTypeMerged, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
-	mergeFilename := m.pathBuilder.NewMergeFilename(timestampStart, timestampEnd)
+	mergeFilename := m.pathBuilder.NewMergeFilename(timestampStart, timestampEnd, table.TaeExtension)
 	mergeFilepath := path.Join(prefix, mergeFilename)
 	newFileWriter, _ := newETLWriter(m.ctx, m.FS, mergeFilepath, buf)
 
@@ -304,9 +310,9 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, paths []string
 	cacheFileData := newRowCache(m.Table)
 	row := m.Table.GetRow(ctx)
 	var reader ETLReader
-	for _, path := range paths {
+	for _, path := range files {
 		// open reader
-		reader, err = newETLReader(m.ctx, m.FS, path)
+		reader, err = newETLReader(m.ctx, m.Table, m.FS, path.FilePath, path.FileSize)
 		if err != nil {
 			m.logger.Error(fmt.Sprintf("merge file meet read failed: %v", err))
 			return err
@@ -319,7 +325,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, paths []string
 			if err = row.ParseRow(line); err != nil {
 				m.logger.Error("parse ETL rows failed",
 					logutil.TableField(m.Table.GetIdentify()),
-					logutil.PathField(path),
+					logutil.PathField(path.FilePath),
 					logutil.VarsField(SubStringPrefixLimit(fmt.Sprintf("%v", line), 102400)),
 				)
 				return err
@@ -349,12 +355,16 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, paths []string
 		}
 	}
 	// close writer
-	if err = newFileWriter.FlushAndClose(); err != nil {
+	if _, err = newFileWriter.FlushAndClose(); err != nil {
 		m.logger.Error(fmt.Sprintf("merge file meet write failed: %v", err))
 		return err
 	}
 
 	// step 4. delete old files
+	paths := make([]string, len(files))
+	for idx, f := range files {
+		paths[idx] = f.FilePath
+	}
 	if err = m.FS.Delete(m.ctx, paths...); err != nil {
 		m.logger.Error(fmt.Sprintf("merge file meet delete failed: %v", err))
 		return err
@@ -465,9 +475,11 @@ func (s *ContentReader) Close() {
 	}
 }
 
-func newETLReader(ctx context.Context, fs fileservice.FileService, path string) (ETLReader, error) {
+func newETLReader(ctx context.Context, tbl *table.Table, fs fileservice.FileService, path string, size int64) (ETLReader, error) {
 	if strings.LastIndex(path, table.CsvExtension) > 0 {
 		return NewCSVReader(ctx, fs, path)
+	} else if strings.LastIndex(path, table.TaeExtension) > 0 {
+		return writer.NewTaeReader(tbl, path, size, fs)
 	} else {
 		panic("NOT Implements")
 	}
@@ -505,19 +517,17 @@ func NewCSVReader(ctx context.Context, fs fileservice.FileService, path string) 
 	return NewContentReader(ctx, path, simdCsvReader, reader), nil
 }
 
-type ETLWriter interface {
-	// WriteStrings write record as one line into csv file
-	WriteStrings(record []string) error
-	// FlushAndClose flush its buffer and close.
-	FlushAndClose() error
-}
-
 var _ ETLWriter = (*ContentWriter)(nil)
 
 type ContentWriter struct {
 	writer io.StringWriter
 	buf    *bytes.Buffer
 	parser *csv.Writer
+}
+
+func (w *ContentWriter) WriteRow(row *table.Row) error {
+	//TODO implement me
+	panic("implement me")
 }
 
 func NewContentWriter(writer io.StringWriter, buffer []byte) *ContentWriter {
@@ -537,15 +547,23 @@ func (w *ContentWriter) WriteStrings(record []string) error {
 	return nil
 }
 
-func (w *ContentWriter) FlushAndClose() error {
-	_, err := w.writer.WriteString(w.buf.String())
-	return err
+func (w *ContentWriter) FlushAndClose() (int, error) {
+	return w.writer.WriteString(w.buf.String())
 }
 
-func newETLWriter(ctx context.Context, fs fileservice.FileService, path string, buf []byte) (ETLWriter, error) {
+func newETLWriter(ctx context.Context, fs fileservice.FileService, filePath string, buf []byte) (ETLWriter, error) {
 
-	factory := GetFSWriterFactory(fs, "", "")
-	fsWriter := factory(ctx, "", nil, WithFilePath(path))
+	var fsWriter io.StringWriter
+	var err error
+	if strings.LastIndex(filePath, table.TaeExtension) > 0 {
+		fsWriter, err = writer.NewTAEWriter(ctx /*tbl*/, nil /* mp*/, nil, filePath, fs)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		factory := GetFSWriterFactory(fs, "", "")
+		fsWriter = factory(ctx, "", nil, WithFilePath(filePath))
+	}
 
 	return NewContentWriter(fsWriter, buf), nil
 }
@@ -586,7 +604,7 @@ func (c *SliceCache) IsEmpty() bool {
 }
 
 func (c *SliceCache) Put(r *table.Row) {
-	c.m = append(c.m, r.ToRawStrings())
+	c.m = append(c.m, r.GetCsvStrings())
 	c.size += r.Size()
 }
 
@@ -622,7 +640,7 @@ func (c *MapCache) IsEmpty() bool {
 }
 
 func (c *MapCache) Put(r *table.Row) {
-	c.m[r.PrimaryKey()] = r.ToRawStrings()
+	c.m[r.PrimaryKey()] = r.GetCsvStrings()
 	c.size += r.Size()
 }
 

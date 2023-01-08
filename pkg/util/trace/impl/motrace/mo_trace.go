@@ -24,7 +24,6 @@ package motrace
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 	"time"
@@ -128,6 +127,10 @@ func (s *MOSpan) GetName() string {
 func (s *MOSpan) GetRow() *table.Row { return spanView.OriginTable.GetRow(DefaultContext()) }
 
 func (s *MOSpan) CsvFields(ctx context.Context, row *table.Row) []string {
+	s.FillRow(ctx, row)
+	return row.ToStrings()
+}
+func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, spanView.Table)
 	row.SetColumnVal(spanIDCol, s.SpanID.String())
@@ -137,11 +140,10 @@ func (s *MOSpan) CsvFields(ctx context.Context, row *table.Row) []string {
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
 	row.SetColumnVal(spanNameCol, s.Name.String())
-	row.SetColumnVal(startTimeCol, Time2DatetimeString(s.StartTime))
-	row.SetColumnVal(endTimeCol, Time2DatetimeString(s.EndTime))
-	row.SetColumnVal(durationCol, fmt.Sprintf("%d", s.EndTime.Sub(s.StartTime))) // Duration
+	row.SetColumnVal(startTimeCol, s.StartTime)
+	row.SetColumnVal(endTimeCol, s.EndTime)
+	row.SetColumnVal(durationCol, s.EndTime.Sub(s.StartTime)) // Duration
 	row.SetColumnVal(resourceCol, s.tracer.provider.resource.String())
-	return row.ToStrings()
 }
 
 func (s *MOSpan) End(options ...trace.SpanEndOption) {

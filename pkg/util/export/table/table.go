@@ -17,12 +17,12 @@ package table
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
@@ -76,13 +76,123 @@ func (c *ColType) ToType() types.Type {
 	}
 }
 
+func (c *ColType) String(precision int) string {
+	switch *c {
+	case TDatetime:
+		return "Datetime(6)"
+	case TUint64:
+		return "BIGINT UNSIGNED"
+	case TInt64:
+		return "BIGINT"
+	case TFloat64:
+		return "DOUBLE"
+	case TJson:
+		return "JSON"
+	case TText:
+		return "TEXT"
+	case TVarchar:
+		if precision == 0 {
+			precision = 1024
+		}
+		return fmt.Sprintf("VARCHAR(%d)", precision)
+	default:
+		panic("not support ColType")
+	}
+}
+
+func StringColumn(name, comment string) Column {
+	return Column{
+		Name:      name,
+		ColType:   TVarchar,
+		Precision: 1024,
+		Default:   "",
+		Comment:   comment,
+	}
+}
+func StringDefaultColumn(name, defaultVal, comment string) Column {
+	return Column{
+		Name:      name,
+		ColType:   TVarchar,
+		Precision: 1024,
+		Default:   defaultVal,
+		Comment:   comment,
+	}
+}
+func StringWithPrecision(name string, precision int, comment string) Column {
+	return Column{
+		Name:      name,
+		ColType:   TVarchar,
+		Precision: precision,
+		Default:   "",
+		Comment:   comment,
+	}
+}
+
+func UuidStringColumn(name, comment string) Column {
+	col := StringDefaultColumn(name, "0", comment)
+	col.Precision = 36
+	return col
+}
+
+func SpanIDStringColumn(name, comment string) Column {
+	col := StringDefaultColumn(name, "0", comment)
+	col.Precision = 16
+	return col
+}
+
+func TextColumn(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TText,
+		Default: "",
+		Comment: comment,
+	}
+}
+
+func DatetimeColumn(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TDatetime,
+		Default: "",
+		Comment: comment,
+	}
+}
+
+func JsonColumn(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TJson,
+		Default: "{}",
+		Comment: comment,
+	}
+}
+
+func ValueColumn(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TFloat64,
+		Default: "0.0",
+		Comment: comment,
+	}
+}
+
+func UInt64Column(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TUint64,
+		Default: "0",
+		Comment: comment,
+	}
+}
+
 type Column struct {
 	Name    string
-	Type    string
-	Default string
-	Comment string
-	Alias   string // only use in view
 	ColType ColType
+	// Precision default 0, usually for varchar
+	Precision int
+	Default   string
+	Comment   string
+	Alias     string // only use in view
 }
 
 // ToCreateSql return column scheme in create sql
@@ -90,8 +200,8 @@ type Column struct {
 //   - case 2: `column_name` varchar(36) NOT NULL COMMENT "what am I. Without default, SO NOT NULL."
 func (col *Column) ToCreateSql(ctx context.Context) string {
 	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("`%s` %s ", col.Name, col.Type))
-	if strings.ToUpper(col.Type) == "JSON" {
+	sb.WriteString(fmt.Sprintf("`%s` %s ", col.Name, col.ColType.String(col.Precision)))
+	if col.ColType == TJson {
 		sb.WriteString("NOT NULL ")
 		if len(col.Default) == 0 {
 			panic(moerr.NewNotSupported(ctx, "json column need default in csv, but not in schema"))
@@ -282,8 +392,8 @@ func (tbl *ViewSingleCondition) String() string {
 type Row struct {
 	Table          *Table
 	AccountIdx     int
-	Columns        []string
-	RawColumns     []any
+	Columns        []any
+	CsvColumns     []string
 	Name2ColumnIdx map[string]int
 }
 
@@ -291,8 +401,8 @@ func (tbl *Table) GetRow(ctx context.Context) *Row {
 	row := &Row{
 		Table:          tbl,
 		AccountIdx:     -1,
-		Columns:        make([]string, len(tbl.Columns)),
-		RawColumns:     make([]any, len(tbl.Columns)),
+		Columns:        make([]any, len(tbl.Columns)),
+		CsvColumns:     nil,
 		Name2ColumnIdx: make(map[string]int),
 	}
 	for idx, col := range tbl.Columns {
@@ -310,23 +420,20 @@ func (tbl *Table) GetRow(ctx context.Context) *Row {
 }
 
 func (r *Row) Reset() {
-	for idx := 0; idx < len(r.Columns); idx++ {
-		r.Columns[idx] = ""
-	}
 	for idx, typ := range r.Table.Columns {
 		switch typ.ColType.ToType().Oid {
 		case types.T_int64:
-			r.RawColumns[idx] = int64(0)
+			r.Columns[idx] = int64(0)
 		case types.T_uint64:
-			r.RawColumns[idx] = uint64(0)
+			r.Columns[idx] = uint64(0)
 		case types.T_float64:
-			r.RawColumns[idx] = float64(0)
+			r.Columns[idx] = float64(0)
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-			r.RawColumns[idx] = typ.Default
+			r.Columns[idx] = typ.Default
 		case types.T_json:
-			r.RawColumns[idx] = typ.Default
+			r.Columns[idx] = typ.Default
 		case types.T_datetime:
-			r.RawColumns[idx] = time.Time{}
+			r.Columns[idx] = time.Time{}
 		default:
 			logutil.Errorf("the value type %v is not SUPPORT", typ.ColType.ToType().String())
 			panic("the value type is not support now")
@@ -338,7 +445,7 @@ func (r *Row) Reset() {
 // else return "sys"
 func (r *Row) GetAccount() string {
 	if r.Table.PathBuilder.SupportAccountStrategy() && r.AccountIdx >= 0 {
-		return r.Columns[r.AccountIdx]
+		return r.Columns[r.AccountIdx].(string)
 	}
 	if r.Table.SupportConstAccess && len(r.Table.Account) > 0 {
 		return r.Table.Account
@@ -354,7 +461,7 @@ func (r *Row) SetVal(col string, val string) {
 	}
 }
 
-func (r *Row) SetColumnVal(col Column, val string) {
+func (r *Row) SetColumnVal(col Column, val any) {
 	if idx, exist := r.Name2ColumnIdx[col.Name]; !exist {
 		logutil.Fatalf("column(%s) not exist in table(%s)", col.Name, r.Table.Table)
 	} else {
@@ -362,44 +469,43 @@ func (r *Row) SetColumnVal(col Column, val string) {
 	}
 }
 
-func (r *Row) SetFloat64(col string, val float64) {
-	r.SetVal(col, fmt.Sprintf("%f", val))
-}
-
-func (r *Row) SetInt64(col string, val int64) {
-	r.SetVal(col, fmt.Sprintf("%d", val))
-}
-
-func (r *Row) SetRawColumnVal(col Column, val any) {
-	if idx, exist := r.Name2ColumnIdx[col.Name]; !exist {
-		logutil.Fatalf("column(%s) not exist in table(%s)", col.Name, r.Table.Table)
-	} else {
-		r.RawColumns[idx] = val
-	}
-}
-
 // ToStrings output all column as string
 func (r *Row) ToStrings() []string {
-	for idx, col := range r.Columns {
-		if len(col) == 0 {
-			r.Columns[idx] = r.Table.Columns[idx].Default
+	col := make([]string, len(r.Table.Columns))
+	for idx, typ := range r.Table.Columns {
+		switch typ.ColType.ToType().Oid {
+		case types.T_int64:
+			col[idx] = fmt.Sprintf("%d", r.Columns[idx].(int64))
+		case types.T_uint64:
+			col[idx] = fmt.Sprintf("%d", r.Columns[idx].(uint64))
+		case types.T_float64:
+			col[idx] = fmt.Sprintf("%f", r.Columns[idx].(float64))
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+			col[idx] = r.Columns[idx].(string)
+		case types.T_json:
+			col[idx] = r.Columns[idx].(string)
+		case types.T_datetime:
+			col[idx] = Time2DatetimeString(r.Columns[idx].(time.Time))
+		default:
+			logutil.Errorf("the value type %v is not SUPPORT", typ.ColType.ToType().String())
+			panic("the value type is not support now")
 		}
 	}
-	return r.Columns
+	return col
 }
 
 func (r *Row) GetRawColumn() []any {
-	return r.RawColumns
+	return r.Columns
 }
 
-// ToRawStrings not format
-func (r *Row) ToRawStrings() []string {
-	return r.Columns
+// GetCsvStrings not format
+func (r *Row) GetCsvStrings() []string {
+	return r.CsvColumns
 }
 
 func (r *Row) ParseRow(cols []string) error {
 	// fixme: check len(r.Name2ColumnIdx) != len(cols)
-	r.Columns = cols
+	r.CsvColumns = cols
 	return nil
 }
 
@@ -408,21 +514,46 @@ func (r *Row) PrimaryKey() string {
 		return ""
 	}
 	if len(r.Table.PrimaryKeyColumn) == 1 {
-		return r.Columns[r.Name2ColumnIdx[r.Table.PrimaryKeyColumn[0].Name]]
+		return r.Columns[r.Name2ColumnIdx[r.Table.PrimaryKeyColumn[0].Name]].(string)
 	}
 	sb := strings.Builder{}
 	for _, col := range r.Table.PrimaryKeyColumn {
-		sb.WriteString(r.Columns[r.Name2ColumnIdx[col.Name]])
+		sb.WriteString(fmt.Sprintf("%s", r.Columns[r.Name2ColumnIdx[col.Name]]))
 		sb.WriteRune('-')
 	}
 	return sb.String()
 }
 
 func (r *Row) Size() (size int64) {
-	for _, col := range r.Columns {
-		size += int64(len(col))
+	for idx, typ := range r.Table.Columns {
+		switch typ.ColType.ToType().Oid {
+		case types.T_int64:
+			size += 8
+		case types.T_uint64:
+			size += 8
+		case types.T_float64:
+			size += 8
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+			size += int64(len(r.Columns[idx].(string)))
+		case types.T_json:
+			size += int64(len(r.Columns[idx].(string)))
+		case types.T_datetime:
+			size += 16
+		}
 	}
 	return
+}
+
+type RowWriter interface {
+	WriteRow(row *Row) error
+	// GetContent get buffer content
+	GetContent() string
+	// FlushAndClose flush its buffer and close.
+	FlushAndClose() (int, error)
+}
+
+type RowField interface {
+	FillRow(context.Context, *Row)
 }
 
 var _ TableOptions = (*NoopTableOptions)(nil)
@@ -522,4 +653,10 @@ func SetPathBuilder(ctx context.Context, pathBuilder string) error {
 		tbl.PathBuilder = bp
 	}
 	return nil
+}
+
+const timestampFormatter = "2006-01-02 15:04:05.000000"
+
+func Time2DatetimeString(t time.Time) string {
+	return t.Format(timestampFormatter)
 }

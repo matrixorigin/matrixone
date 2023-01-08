@@ -32,6 +32,8 @@ import (
 
 const BatchSize = 8192
 
+var _ table.RowWriter = (*TAEWriter)(nil)
+
 type TAEWriter struct {
 	ctx          context.Context
 	columnsTypes []types.Type
@@ -85,17 +87,34 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 	return batch
 }
 
+// WriteRow implement ETLWriter
+func (w *TAEWriter) WriteRow(row *table.Row) error {
+	return w.WriteElems(row.GetRawColumn())
+}
+
+// WriteStrings implement ETLWriter
+func (w *TAEWriter) WriteStrings(record []string) error {
+	panic("implement me")
+}
+
+func (w *TAEWriter) GetContent() string { return "" }
+
+// FlushAndClose implement ETLWriter
+func (w *TAEWriter) FlushAndClose() (int, error) {
+	return 0, w.flush()
+}
+
 func (w *TAEWriter) WriteElems(line []any) error {
 	w.buffer = append(w.buffer, line)
 	if len(w.buffer) >= w.batchSize {
-		if err := w.WriteBatch(); err != nil {
+		if err := w.writeBatch(); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (w *TAEWriter) WriteBatch() error {
+func (w *TAEWriter) writeBatch() error {
 	batch := newBatch(len(w.buffer), w.columnsTypes, w.mp)
 	for rowId, line := range w.buffer {
 		err := getOneRowData(w.ctx, batch, line, rowId, w.columnsTypes, w.mp)
@@ -108,15 +127,21 @@ func (w *TAEWriter) WriteBatch() error {
 	return nil
 }
 
-func (w *TAEWriter) Flush() error {
+func (w *TAEWriter) flush() error {
 	if len(w.buffer) > 0 {
-		w.WriteBatch()
+		w.writeBatch()
 	}
 	_, err := w.writer.Sync()
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+// WriteString implement io.StringWriter
+func (w *TAEWriter) WriteString(s string) (n int, err error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int, typs []types.Type, mp *mpool.MPool) error {
@@ -263,6 +288,13 @@ func (r *TAEReader) ReadAll(ctx context.Context, pool *mpool.MPool) ([]*batch.Ba
 
 	return r.batchs, nil
 }
+
+func (r *TAEReader) ReadLine() ([]string, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (r *TAEReader) Close() {}
 
 func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
 	typ := vec.Typ

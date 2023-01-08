@@ -344,13 +344,13 @@ func WithExportInterval(sec int) InitOption {
 }
 
 var (
-	metricNameColumn        = table.Column{Name: `metric_name`, Type: `VARCHAR(128)`, ColType: table.TVarchar, Default: `unknown`, Comment: `metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...`}
-	metricCollectTimeColumn = table.Column{Name: `collecttime`, Type: `DATETIME(6)`, ColType: table.TDatetime, Comment: `metric data collect time`}
-	metricValueColumn       = table.Column{Name: `value`, Type: `DOUBLE`, ColType: table.TFloat64, Default: `0.0`, Comment: `metric value`}
-	metricNodeColumn        = table.Column{Name: `node`, Type: `VARCHAR(36)`, ColType: table.TVarchar, Default: ALL_IN_ONE_MODE, Comment: `mo node uuid`}
-	metricRoleColumn        = table.Column{Name: `role`, Type: `VARCHAR(32)`, ColType: table.TVarchar, Default: ALL_IN_ONE_MODE, Comment: `mo node role, like: CN, DN, LOG`}
-	metricAccountColumn     = table.Column{Name: `account`, Type: `VARCHAR(128)`, ColType: table.TVarchar, Default: `sys`, Comment: `account name`}
-	metricTypeColumn        = table.Column{Name: `type`, Type: `VARCHAR(32)`, ColType: table.TVarchar, Comment: `sql type, like: insert, select, ...`}
+	metricNameColumn        = table.StringDefaultColumn(`metric_name`, `sys`, `metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...`)
+	metricCollectTimeColumn = table.DatetimeColumn(`collecttime`, `metric data collect time`)
+	metricValueColumn       = table.ValueColumn(`value`, `metric value`)
+	metricNodeColumn        = table.StringDefaultColumn(`node`, ALL_IN_ONE_MODE, `mo node uuid`)
+	metricRoleColumn        = table.StringDefaultColumn(`role`, ALL_IN_ONE_MODE, `mo node role, like: CN, DN, LOG`)
+	metricAccountColumn     = table.StringDefaultColumn(`account`, `sys`, `account name`)
+	metricTypeColumn        = table.StringColumn(`type`, `sql type, like: insert, select, ...`)
 )
 
 var SingleMetricTable = &table.Table{

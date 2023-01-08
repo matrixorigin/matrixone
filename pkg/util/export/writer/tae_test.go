@@ -28,12 +28,12 @@ import (
 	"time"
 )
 
-var dummyStrColumn = table.Column{Name: "str", Type: "varchar(32)", ColType: table.TVarchar, Default: "", Comment: "str column"}
-var dummyInt64Column = table.Column{Name: "int64", Type: "BIGINT", ColType: table.TInt64, Default: "0", Comment: "int64 column"}
-var dummyFloat64Column = table.Column{Name: "float64", Type: "DOUBLE", ColType: table.TFloat64, Default: "0.0", Comment: "float64 column"}
-var dummyUInt64Column = table.Column{Name: "int64", Type: "BIGINT UNSIGNED", ColType: table.TUint64, Default: "0", Comment: "uint64 column"}
-var dummyDatetimeColumn = table.Column{Name: "datetime_6", Type: "datetime(6)", ColType: table.TDatetime, Default: "", Comment: "datetime.6 column"}
-var dummyJsonColumn = table.Column{Name: "json_col", Type: "JSON", ColType: table.TJson, Default: "{}", Comment: "json column"}
+var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Precision: 32, Default: "", Comment: "str column"}
+var dummyInt64Column = table.Column{Name: "int64", ColType: table.TInt64, Default: "0", Comment: "int64 column"}
+var dummyFloat64Column = table.Column{Name: "float64", ColType: table.TFloat64, Default: "0.0", Comment: "float64 column"}
+var dummyUInt64Column = table.Column{Name: "int64", ColType: table.TUint64, Default: "0", Comment: "uint64 column"}
+var dummyDatetimeColumn = table.Column{Name: "datetime_6", ColType: table.TDatetime, Default: "", Comment: "datetime.6 column"}
+var dummyJsonColumn = table.Column{Name: "json_col", ColType: table.TJson, Default: "{}", Comment: "json column"}
 
 var dummyAllTypeTable = &table.Table{
 	Account:          "test",
@@ -81,7 +81,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 		err = writer.WriteElems(line)
 		require.Nil(t, err)
 	}
-	err = writer.Flush()
+	_, err = writer.FlushAndClose()
 	require.Nil(t, err)
 	// Done. write
 
@@ -128,12 +128,12 @@ func genLines(cnt int) (lines [][]any) {
 	lines = make([][]any, 0, cnt)
 	for i := 0; i < cnt; i++ {
 		row := dummyAllTypeTable.GetRow(context.TODO())
-		row.SetRawColumnVal(dummyStrColumn, fmt.Sprintf("str_val_%d", i))
-		row.SetRawColumnVal(dummyInt64Column, int64(i))
-		row.SetRawColumnVal(dummyFloat64Column, float64(i))
-		row.SetRawColumnVal(dummyUInt64Column, uint64(i))
-		row.SetRawColumnVal(dummyDatetimeColumn, time.Now())
-		row.SetRawColumnVal(dummyJsonColumn, fmt.Sprintf(`{"cnt":"%d"}`, i))
+		row.SetColumnVal(dummyStrColumn, fmt.Sprintf("str_val_%d", i))
+		row.SetColumnVal(dummyInt64Column, int64(i))
+		row.SetColumnVal(dummyFloat64Column, float64(i))
+		row.SetColumnVal(dummyUInt64Column, uint64(i))
+		row.SetColumnVal(dummyDatetimeColumn, time.Now())
+		row.SetColumnVal(dummyJsonColumn, fmt.Sprintf(`{"cnt":"%d"}`, i))
 		lines = append(lines, row.GetRawColumn())
 	}
 

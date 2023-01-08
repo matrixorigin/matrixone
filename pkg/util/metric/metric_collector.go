@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/export/writer"
 	"runtime"
 	"strings"
 	"time"
@@ -319,7 +320,7 @@ func (s *mfsetCSV) writeCsvOneLine(ctx context.Context, buf *bytes.Buffer, field
 		}
 		if strings.ContainsRune(field, opts.FieldTerminator) || strings.ContainsRune(field, opts.EncloseRune) || strings.ContainsRune(field, opts.Terminator) {
 			buf.WriteRune(opts.EncloseRune)
-			motrace.QuoteFieldFunc(ctx, buf, field, opts.EncloseRune)
+			writer.QuoteFieldFunc(ctx, buf, field, opts.EncloseRune)
 			buf.WriteRune(opts.EncloseRune)
 		} else {
 			buf.WriteString(field)
@@ -379,7 +380,7 @@ func (s *mfsetCSV) GetBatchMultiTable(ctx context.Context, buf *bytes.Buffer) mo
 			}
 		}
 	}
-	return []*motrace.CSVRequest{motrace.NewCSVRequest(writer, buf.String())}
+	return []motrace.WriteRequest{motrace.NewCSVRequest(writer, buf.String())}
 }
 
 func (s *mfsetCSV) GetBatchSingleTable(ctx context.Context, buf *bytes.Buffer) motrace.CSVRequests {
@@ -402,9 +403,9 @@ func (s *mfsetCSV) GetBatchSingleTable(ctx context.Context, buf *bytes.Buffer) m
 
 			// reserved labels
 			row.Reset()
-			row.SetVal(metricNameColumn.Name, mf.GetName())
-			row.SetVal(metricNodeColumn.Name, mf.GetNode())
-			row.SetVal(metricRoleColumn.Name, mf.GetRole())
+			row.SetColumnVal(metricNameColumn, mf.GetName())
+			row.SetColumnVal(metricNodeColumn, mf.GetNode())
+			row.SetColumnVal(metricRoleColumn, mf.GetRole())
 			// custom labels
 			for _, lbl := range metric.Label {
 				row.SetVal(lbl.GetName(), lbl.GetValue())
@@ -413,19 +414,19 @@ func (s *mfsetCSV) GetBatchSingleTable(ctx context.Context, buf *bytes.Buffer) m
 			switch mf.GetType() {
 			case pb.MetricType_COUNTER:
 				time := localTimeStr(metric.GetCollecttime())
-				row.SetVal(metricCollectTimeColumn.Name, time)
-				row.SetFloat64(metricValueColumn.Name, metric.Counter.GetValue())
+				row.SetColumnVal(metricCollectTimeColumn, time)
+				row.SetColumnVal(metricValueColumn, metric.Counter.GetValue())
 				writeValues(row)
 			case pb.MetricType_GAUGE:
 				time := localTimeStr(metric.GetCollecttime())
-				row.SetVal(metricCollectTimeColumn.Name, time)
-				row.SetFloat64(metricValueColumn.Name, metric.Gauge.GetValue())
+				row.SetColumnVal(metricCollectTimeColumn, time)
+				row.SetColumnVal(metricValueColumn, metric.Gauge.GetValue())
 				writeValues(row)
 			case pb.MetricType_RAWHIST:
 				for _, sample := range metric.RawHist.Samples {
 					time := localTimeStr(sample.GetDatetime())
-					row.SetVal(metricCollectTimeColumn.Name, time)
-					row.SetFloat64(metricValueColumn.Name, sample.GetValue())
+					row.SetColumnVal(metricCollectTimeColumn, time)
+					row.SetColumnVal(metricValueColumn, sample.GetValue())
 					writeValues(row)
 				}
 			default:
@@ -434,7 +435,7 @@ func (s *mfsetCSV) GetBatchSingleTable(ctx context.Context, buf *bytes.Buffer) m
 		}
 	}
 
-	reqs := make([]*motrace.CSVRequest, 0, len(buffer))
+	reqs := make([]motrace.WriteRequest, 0, len(buffer))
 	for account, buf := range buffer {
 		writer := s.writerFactory(motrace.DefaultContext(), SingleMetricTable.Database, SingleMetricTable,
 			export.WithAccount(account), export.WithTimestamp(ts), export.WithPathBuilder(SingleMetricTable.PathBuilder))

@@ -45,33 +45,26 @@ var (
 	statementInfoTbl   = "statement_info"
 	rawLogTbl          = "rawlog"
 
-	uuidColType        = "varchar(36)"
-	spanIDType         = "varchar(16)"
-	datetime6Type      = "datetime(6)"
-	bigintUnsignedType = "bigint unsigned"
-	stringType         = "varchar(1024)"
-	jsonColumnDEFAULT  = "{}"
-
-	stmtIDCol    = table.Column{Name: "statement_id", Type: uuidColType, Default: "0", Comment: "statement uniq id"}
-	txnIDCol     = table.Column{Name: "transaction_id", Type: uuidColType, Default: "0", Comment: "txn uniq id"}
-	sesIDCol     = table.Column{Name: "session_id", Type: uuidColType, Default: "0", Comment: "session uniq id"}
-	accountCol   = table.Column{Name: "account", Type: stringType, Default: "", Comment: "account name"}
-	userCol      = table.Column{Name: "user", Type: stringType, Default: "", Comment: "user name"}
-	hostCol      = table.Column{Name: "host", Type: stringType, Default: "", Comment: "user client ip"}
-	dbCol        = table.Column{Name: "database", Type: stringType, Default: "", Comment: "what database current session stay in."}
-	stmtCol      = table.Column{Name: "statement", Type: "TEXT", Default: "", Comment: "sql statement"}
-	stmtTagCol   = table.Column{Name: "statement_tag", Type: "TEXT", Default: "", Comment: "note tag in statement(Reserved)"}
-	stmtFgCol    = table.Column{Name: "statement_fingerprint", Type: "TEXT", Default: "", Comment: "note tag in statement(Reserved)"}
-	nodeUUIDCol  = table.Column{Name: "node_uuid", Type: uuidColType, Default: "0", Comment: "node uuid, which node gen this data."}
-	nodeTypeCol  = table.Column{Name: "node_type", Type: "varchar(64)", Default: "node", Comment: "node type in MO, val in [DN, CN, LOG]"}
-	reqAtCol     = table.Column{Name: "request_at", Type: datetime6Type, Default: "", Comment: "request accept datetime"}
-	respAtCol    = table.Column{Name: "response_at", Type: datetime6Type, Default: "", Comment: "response send datetime"}
-	durationCol  = table.Column{Name: "duration", Type: bigintUnsignedType, Default: "0", Comment: "exec time, unit: ns"}
-	statusCol    = table.Column{Name: "status", Type: "varchar(32)", Default: "Running", Comment: "sql statement running status, enum: Running, Success, Failed"}
-	errorCol     = table.Column{Name: "error", Type: "TEXT", Default: "", Comment: "error message"}
-	execPlanCol  = table.Column{Name: "exec_plan", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "statement execution plan"}
-	rowsReadCol  = table.Column{Name: "rows_read", Type: bigintUnsignedType, Default: "0", Comment: "rows read total"}
-	bytesScanCol = table.Column{Name: "bytes_scan", Type: bigintUnsignedType, Default: "0", Comment: "bytes scan total"}
+	stmtIDCol    = table.UuidStringColumn("statement_id", "statement uniq id")
+	txnIDCol     = table.UuidStringColumn("transaction_id", "txn uniq id")
+	sesIDCol     = table.UuidStringColumn("session_id", "session uniq id")
+	accountCol   = table.StringColumn("account", "account name")
+	userCol      = table.StringColumn("user", "user name")
+	hostCol      = table.StringColumn("host", "user client ip")
+	dbCol        = table.StringColumn("database", "what database current session stay in.")
+	stmtCol      = table.TextColumn("statement", "sql statement")
+	stmtTagCol   = table.TextColumn("statement_tag", "note tag in statement(Reserved)")
+	stmtFgCol    = table.TextColumn("statement_fingerprint", "note tag in statement(Reserved)")
+	nodeUUIDCol  = table.UuidStringColumn("node_uuid", "node uuid, which node gen this data.")
+	nodeTypeCol  = table.StringColumn("node_type", "node type in MO, val in [DN, CN, LOG]")
+	reqAtCol     = table.DatetimeColumn("request_at", "request accept datetime")
+	respAtCol    = table.DatetimeColumn("response_at", "response send datetime")
+	durationCol  = table.UInt64Column("duration", "exec time, unit: ns")
+	statusCol    = table.StringColumn("status", "sql statement running status, enum: Running, Success, Failed")
+	errorCol     = table.TextColumn("error", "error message")
+	execPlanCol  = table.JsonColumn("exec_plan", "statement execution plan")
+	rowsReadCol  = table.UInt64Column("rows_read", "rows read total")
+	bytesScanCol = table.UInt64Column("bytes_scan", "bytes scan total")
 
 	// dummyStatementTable helps to handle statement records.
 	// One statement identified by statement_id, but may record 2 times in different files.
@@ -112,21 +105,21 @@ var (
 		SupportUserAccess: true,
 	}
 
-	rawItemCol      = table.Column{Name: "raw_item", Type: stringType, Comment: "raw log item"}
-	timestampCol    = table.Column{Name: "timestamp", Type: datetime6Type, Comment: "timestamp of action"}
-	loggerNameCol   = table.Column{Name: "logger_name", Type: stringType, Comment: "logger name"}
-	levelCol        = table.Column{Name: "level", Type: stringType, Comment: "log level, enum: debug, info, warn, error, panic, fatal"}
-	callerCol       = table.Column{Name: "caller", Type: stringType, Comment: "where it log, like: package/file.go:123"}
-	messageCol      = table.Column{Name: "message", Type: "TEXT", Comment: "log message"}
-	extraCol        = table.Column{Name: "extra", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "log dynamic fields"}
-	errCodeCol      = table.Column{Name: "err_code", Type: stringType, Default: "0"}
-	stackCol        = table.Column{Name: "stack", Type: "varchar(4096)"}
-	spanIDCol       = table.Column{Name: "span_id", Type: spanIDType, Default: "0", Comment: "span uniq id"}
-	parentSpanIDCol = table.Column{Name: "parent_span_id", Type: spanIDType, Default: "0", Comment: "parent span uniq id"}
-	spanNameCol     = table.Column{Name: "span_name", Type: stringType, Default: "", Comment: "span name, for example: step name of execution plan, function name in code, ..."}
-	startTimeCol    = table.Column{Name: "start_time", Type: datetime6Type, Default: ""}
-	endTimeCol      = table.Column{Name: "end_time", Type: datetime6Type, Default: ""}
-	resourceCol     = table.Column{Name: "resource", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "static resource information"}
+	rawItemCol      = table.StringColumn("raw_item", "raw log item")
+	timestampCol    = table.DatetimeColumn("timestamp", "timestamp of action")
+	loggerNameCol   = table.StringColumn("logger_name", "logger name")
+	levelCol        = table.StringColumn("level", "log level, enum: debug, info, warn, error, panic, fatal")
+	callerCol       = table.StringColumn("caller", "where it log, like: package/file.go:123")
+	messageCol      = table.TextColumn("message", "log message")
+	extraCol        = table.TextColumn("extra", "log dynamic fields")
+	errCodeCol      = table.StringDefaultColumn("err_code", "0", "error code info")
+	stackCol        = table.StringWithPrecision("stack", 4096, "caller stack info")
+	spanIDCol       = table.SpanIDStringColumn("span_id", "span uniq id")
+	parentSpanIDCol = table.SpanIDStringColumn("parent_span_id", "parent span uniq id")
+	spanNameCol     = table.StringColumn("span_name", "span name, for example: step name of execution plan, function name in code, ...")
+	startTimeCol    = table.DatetimeColumn("start_time", "start time")
+	endTimeCol      = table.DatetimeColumn("end_time", "end time")
+	resourceCol     = table.JsonColumn("resource", "static resource information")
 
 	// dummyRawlogTable helps to handle error, log, span data.
 	dummyRawlogTable = &table.Table{

@@ -34,6 +34,7 @@ const MergeLogTypeALL MergeLogType = "*"
 
 const FilenameSeparator = "_"
 const CsvExtension = ".csv"
+const TaeExtension = ".tae"
 
 const ETLParamTypeAll = MergeLogTypeALL
 const ETLParamAccountAll = "*"
@@ -57,8 +58,8 @@ type PathBuilder interface {
 	// case "{timestamp_start}_{timestamp_end}_merged.csv"
 	// }
 	ParsePath(ctx context.Context, path string) (CSVPath, error)
-	NewMergeFilename(timestampStart, timestampEnd string) string
-	NewLogFilename(name, nodeUUID, nodeType string, ts time.Time) string
+	NewMergeFilename(timestampStart, timestampEnd, extension string) string
+	NewLogFilename(name, nodeUUID, nodeType string, ts time.Time, extension string) string
 	// SupportMergeSplit const. if false, not support SCV merge|split task
 	SupportMergeSplit() bool
 	// SupportAccountStrategy const
@@ -192,7 +193,7 @@ func (b *AccountDatePathBuilder) Build(account string, typ MergeLogType, ts time
 // like: *       /*    /*/*/* /metric /*.csv
 func (b *AccountDatePathBuilder) BuildETLPath(db, name, account string) string {
 	etlDirectory := b.Build(account, ETLParamTypeAll, ETLParamTSAll, db, name)
-	etlFilename := "*" + CsvExtension
+	etlFilename := "*"
 	return path.Join("/", etlDirectory, etlFilename)
 }
 
@@ -201,11 +202,11 @@ func (b *AccountDatePathBuilder) ParsePath(ctx context.Context, path string) (CS
 	return p, p.Parse(ctx)
 }
 
-func (b *AccountDatePathBuilder) NewMergeFilename(timestampStart, timestampEnd string) string {
+func (b *AccountDatePathBuilder) NewMergeFilename(timestampStart, timestampEnd, extension string) string {
 	return strings.Join([]string{timestampStart, timestampEnd, string(MergeLogTypeMerged)}, FilenameSeparator) + CsvExtension
 }
 
-func (b *AccountDatePathBuilder) NewLogFilename(name, nodeUUID, nodeType string, ts time.Time) string {
+func (b *AccountDatePathBuilder) NewLogFilename(name, nodeUUID, nodeType string, ts time.Time, extension string) string {
 	return strings.Join([]string{fmt.Sprintf("%d", ts.Unix()), nodeUUID, nodeType}, FilenameSeparator) + CsvExtension
 }
 
@@ -236,11 +237,11 @@ func (m *DBTablePathBuilder) ParsePath(ctx context.Context, path string) (CSVPat
 	panic("not implement")
 }
 
-func (m *DBTablePathBuilder) NewMergeFilename(timestampStart, timestampEnd string) string {
+func (m *DBTablePathBuilder) NewMergeFilename(timestampStart, timestampEnd, extension string) string {
 	panic("not implement")
 }
 
-func (m *DBTablePathBuilder) NewLogFilename(name, nodeUUID, nodeType string, ts time.Time) string {
+func (m *DBTablePathBuilder) NewLogFilename(name, nodeUUID, nodeType string, ts time.Time, extension string) string {
 	return fmt.Sprintf(`%s_%s_%s_%s`, name, nodeUUID, nodeType, ts.Format("20060102.150405.000000")) + CsvExtension
 }
 

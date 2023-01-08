@@ -50,9 +50,9 @@ func init() {
 
 var mux sync.Mutex
 
-var dummyStrColumn = table.Column{Name: "str", Type: "varchar(32)", ColType: table.TVarchar, Default: "", Comment: "str column"}
-var dummyInt64Column = table.Column{Name: "int64", Type: "BIGINT", ColType: table.TInt64, Default: "0", Comment: "int64 column"}
-var dummyFloat64Column = table.Column{Name: "float64", Type: "DOUBLE", ColType: table.TFloat64, Default: "0.0", Comment: "float64 column"}
+var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Precision: 32, Default: "", Comment: "str column"}
+var dummyInt64Column = table.Column{Name: "int64", ColType: table.TInt64, Default: "0", Comment: "int64 column"}
+var dummyFloat64Column = table.Column{Name: "float64", ColType: table.TFloat64, Default: "0.0", Comment: "float64 column"}
 
 var dummyTable = &table.Table{
 	Account:          "test",
@@ -68,9 +68,9 @@ var dummyTable = &table.Table{
 
 func dummyFillTable(str string, i int64, f float64) *table.Row {
 	row := dummyTable.GetRow(context.TODO())
-	row.SetVal(dummyStrColumn.Name, str)
-	row.SetInt64(dummyInt64Column.Name, i)
-	row.SetFloat64(dummyFloat64Column.Name, f)
+	row.SetColumnVal(dummyStrColumn, str)
+	row.SetColumnVal(dummyInt64Column, i)
+	row.SetColumnVal(dummyFloat64Column, f)
 	return row
 }
 
@@ -134,7 +134,7 @@ func TestInitCronExpr(t *testing.T) {
 }
 
 var newFilePath = func(tbl *table.Table, ts time.Time) string {
-	filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts)
+	filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts, table.CsvExtension)
 	p := tbl.PathBuilder.Build(tbl.Account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.GetName())
 	filepath := path.Join(p, filename)
 	return filepath
@@ -200,7 +200,7 @@ func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *ta
 	defer mux.Unlock()
 
 	var newFilePath = func(ts time.Time) string {
-		filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts)
+		filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts, table.CsvExtension)
 		p := tbl.PathBuilder.Build(tbl.Account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.GetName())
 		filepath := path.Join(p, filename)
 		return filepath
@@ -333,7 +333,7 @@ func TestNewMergeWithContextDone(t *testing.T) {
 			got := NewMerge(ctx, tt.args.opts...)
 			require.NotNil(t, got)
 
-			reader, err := newETLReader(got.ctx, got.FS, files[0])
+			reader, err := newETLReader(got.ctx, dummyTable, got.FS, files[0], 0)
 			require.Nil(t, err)
 
 			// trigger context.Done
@@ -382,7 +382,8 @@ func TestNewMergeNOFiles(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			filePath := newFilePath(dummyTable, ts)
-			files := []string{filePath}
+			fm := &FileMeta{filePath, 0}
+			files := []*FileMeta{fm}
 
 			got := NewMerge(tt.args.ctx, tt.args.opts...)
 			require.NotNil(t, got)

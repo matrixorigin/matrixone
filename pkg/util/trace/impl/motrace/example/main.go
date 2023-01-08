@@ -18,7 +18,7 @@ import (
 	"context"
 	goErrors "errors"
 	"fmt"
-	"io"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"time"
 
 	"github.com/lni/dragonboat/v4/logger"
@@ -50,8 +50,14 @@ type dummyStringWriter struct{}
 func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
 	return fmt.Printf("dummyStringWriter: %s\n", s)
 }
+func (w *dummyStringWriter) WriteRow(row *table.Row) error {
+	fmt.Printf("dummyStringWriter: %v\n", row.ToStrings())
+	return nil
+}
+func (w *dummyStringWriter) GetContent() string          { return "" }
+func (w *dummyStringWriter) FlushAndClose() (int, error) { return 0, nil }
 
-var dummyFSWriterFactory = func(context.Context, string, batchpipe.HasName, motrace.WriteFactoryConfig) io.StringWriter {
+var dummyFSWriterFactory = func(context.Context, string, batchpipe.HasName, motrace.WriteFactoryConfig) table.RowWriter {
 	return &dummyStringWriter{}
 }
 
