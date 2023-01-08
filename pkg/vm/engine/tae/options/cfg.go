@@ -49,6 +49,7 @@ type CheckpointCfg struct {
 	ForceUpdateGlobalInterval bool
 	GlobalVersionInterval     time.Duration
 	GCCheckpointInterval      time.Duration
+	DisableGCCheckpoint       bool
 }
 
 type GCCfg struct {

@@ -191,6 +191,9 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			"checkpoint-gc",
 			opts.CheckpointCfg.GCCheckpointInterval,
 			func(ctx context.Context) error {
+				if opts.CheckpointCfg.DisableGCCheckpoint {
+					return nil
+				}
 				consumed := db.DiskCleaner.GetMaxConsumed()
 				if consumed == nil {
 					return nil

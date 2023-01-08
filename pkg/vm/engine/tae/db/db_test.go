@@ -4876,7 +4876,7 @@ func TestAppendAndGC(t *testing.T) {
 	opts.CacheCfg.InsertCapacity = common.M * 5
 	opts.CacheCfg.TxnCapacity = common.M
 	opts = config.WithQuickScanAndCKPOpts(opts)
-	options.WithGCCheckpointInterval(time.Minute)(opts)
+	options.WithDisableGCCheckpoint()(opts)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
 	db := tae.DB

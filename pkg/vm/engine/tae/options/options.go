@@ -89,6 +89,15 @@ func WithGCCheckpointInterval(interval time.Duration) func(*Options) {
 	}
 }
 
+func WithDisableGCCheckpoint() func(*Options) {
+	return func(opts *Options) {
+		if opts.CheckpointCfg == nil {
+			opts.CheckpointCfg = new(CheckpointCfg)
+		}
+		opts.CheckpointCfg.DisableGCCheckpoint = true
+	}
+}
+
 func (o *Options) FillDefaults(dirname string) *Options {
 	if o == nil {
 		o = &Options{}
