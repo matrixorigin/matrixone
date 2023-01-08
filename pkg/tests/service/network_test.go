@@ -101,7 +101,7 @@ func TestServiceAddress(t *testing.T) {
 	// the first address set should contain the following addresses.
 	dnListenAddr := address.getDnListenAddress(int(dnIndex))
 	require.True(t, addrSets[0].contains(dnListenAddr))
-	dnServiceAddr := address.getDnServiceAddress(int(dnIndex))
+	dnServiceAddr := address.getDnLogtailAddress(int(dnIndex))
 	require.True(t, addrSets[0].contains(dnServiceAddr))
 	logListenAddr := address.getLogListenAddress(int(logIndex))
 	require.True(t, addrSets[0].contains(logListenAddr))
@@ -130,10 +130,10 @@ func TestGetDnServiceAddress(t *testing.T) {
 	dnNum := 3
 	address := newServiceAddresses(t, 1, dnNum, 0, "127.0.0.1")
 
-	addr0 := address.getDnServiceAddress(0)
-	addr1 := address.getDnServiceAddress(1)
-	addr2 := address.getDnServiceAddress(2)
-	addr3 := address.getDnServiceAddress(3)
+	addr0 := address.getDnLogtailAddress(0)
+	addr1 := address.getDnLogtailAddress(1)
+	addr2 := address.getDnLogtailAddress(2)
+	addr3 := address.getDnLogtailAddress(3)
 
 	require.NotEqual(t, addr0, addr1)
 	require.NotEqual(t, addr0, addr2)

@@ -159,10 +159,10 @@ func buildDNConfig(
 	index int, opt Options, address serviceAddresses,
 ) *dnservice.Config {
 	cfg := &dnservice.Config{
-		UUID:           uuid.New().String(),
-		ListenAddress:  address.getDnListenAddress(index),
-		ServiceAddress: address.getDnServiceAddress(index),
+		UUID:          uuid.New().String(),
+		ListenAddress: address.getDnListenAddress(index),
 	}
+	cfg.LogtailServer.ListenAddress = address.getDnLogtailAddress(index)
 	cfg.DataDir = filepath.Join(opt.rootDataDir, cfg.UUID)
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
 	cfg.HAKeeper.HeatbeatInterval.Duration = opt.heartbeat.dn

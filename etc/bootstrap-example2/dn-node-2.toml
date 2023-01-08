@@ -35,7 +35,7 @@ data-dir = "data-dir2"
 [dn]
 uuid = "dd5dccb4-4d3c-41f8-b482-5251dc7a41bf"
 listen-address = "127.0.0.1:41020"
-service-address = "127.0.0.1:41021"
+service-address = "127.0.0.1:41020"
 
 [dn.Txn.Storage]
 # txn storage backend implementation. [TAE|MEM]

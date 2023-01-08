@@ -29,7 +29,8 @@ import (
 
 var (
 	defaultListenAddress    = "0.0.0.0:22000"
-	defaultServiceAddress   = "127.0.0.1:22001"
+	defaultServiceAddress   = "127.0.0.1:22000"
+	defaultLogtailAddress   = "127.0.0.1:22001"
 	defaultZombieTimeout    = time.Hour
 	defaultDiscoveryTimeout = time.Second * 30
 	defaultHeatbeatInterval = time.Second
@@ -61,8 +62,8 @@ type Config struct {
 	UUID string `toml:"uuid"`
 	// ListenAddress listening address for receiving external requests.
 	ListenAddress string `toml:"listen-address"`
-	// ServiceAddress service address for communication, this address is used
-	// as logtail push service address, it must be different with ListenAddress.
+	// ServiceAddress service address for communication, if this address is not set, use
+	// ListenAddress as the communication address.
 	ServiceAddress string `toml:"service-address"`
 
 	// HAKeeper configuration
@@ -95,6 +96,7 @@ type Config struct {
 	}
 
 	LogtailServer struct {
+		ListenAddress              string        `toml:"listen-address"`
 		RpcMaxMessageSize          toml.ByteSize `toml:"rpc-max-message-size"`
 		RpcPayloadCopyBufferSize   toml.ByteSize `toml:"rpc-payload-copy-buffer-size"`
 		RpcEnableChecksum          bool          `toml:"rpc-enable-checksum"`
@@ -132,9 +134,10 @@ func (c *Config) Validate() error {
 	c.Txn.Storage.dataDir = filepath.Join(c.DataDir, storageDir)
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
+		c.ServiceAddress = defaultServiceAddress
 	}
 	if c.ServiceAddress == "" {
-		c.ServiceAddress = defaultServiceAddress
+		c.ServiceAddress = c.ListenAddress
 	}
 	if c.Txn.Storage.Backend == "" {
 		c.Txn.Storage.Backend = StorageTAE
@@ -174,6 +177,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Ckp.GlobalMinCount == 0 {
 		c.Ckp.GlobalMinCount = defaultGlobalMinCount
+	}
+	if c.LogtailServer.ListenAddress == "" {
+		c.LogtailServer.ListenAddress = defaultLogtailAddress
 	}
 	if c.LogtailServer.RpcMaxMessageSize <= 0 {
 		c.LogtailServer.RpcMaxMessageSize = toml.ByteSize(defaultRpcMaxMsgSize)

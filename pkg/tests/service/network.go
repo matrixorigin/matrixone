@@ -112,14 +112,14 @@ func (a serviceAddresses) getDnListenAddress(index int) string {
 	return a.dnAddresses[index].listenAddr
 }
 
-// getDnServiceAddress gets dn service address by its index.
-func (a serviceAddresses) getDnServiceAddress(index int) string {
+// getDnLogtailAddress gets logtail server address by its index.
+func (a serviceAddresses) getDnLogtailAddress(index int) string {
 	a.assertDNService()
 
 	if index >= len(a.dnAddresses) || index < 0 {
 		return ""
 	}
-	return a.dnAddresses[index].serviceAddr
+	return a.dnAddresses[index].logtailAddr
 }
 
 // getLogListenAddress gets log service address by its index.
@@ -278,7 +278,7 @@ func (la logServiceAddress) listAddresses() []string {
 // dnServiceAddress contains address for dn service.
 type dnServiceAddress struct {
 	listenAddr  string
-	serviceAddr string
+	logtailAddr string
 }
 
 func newDNServiceAddress(host string) (dnServiceAddress, error) {
@@ -288,13 +288,13 @@ func newDNServiceAddress(host string) (dnServiceAddress, error) {
 	}
 	return dnServiceAddress{
 		listenAddr:  addrs[0],
-		serviceAddr: addrs[1],
+		logtailAddr: addrs[1],
 	}, nil
 }
 
 // listAddresses returns all addresses for single dn service.
 func (da dnServiceAddress) listAddresses() []string {
-	return []string{da.listenAddr, da.serviceAddr}
+	return []string{da.listenAddr, da.logtailAddr}
 }
 
 type cnServiceAddress struct {
