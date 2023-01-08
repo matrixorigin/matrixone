@@ -53,6 +53,8 @@ func (t NoopTracer) Debug(ctx context.Context, name string, opts ...SpanOption) 
 	return t.Start(ctx, name, opts...)
 }
 
+func (t NoopTracer) IsEnable() bool { return false }
+
 // NoopSpan is an implementation of Span that preforms no operations.
 type NoopSpan struct{}
 

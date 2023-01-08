@@ -39,6 +39,10 @@ func Generate(ctx context.Context) context.Context {
 	return ctx
 }
 
+func IsEnable() bool {
+	return DefaultTracer().IsEnable()
+}
+
 var gTracerHolder atomic.Value
 
 type tracerHolder struct {

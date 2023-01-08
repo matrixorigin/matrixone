@@ -72,6 +72,10 @@ func (t *MOTracer) Debug(ctx context.Context, name string, opts ...trace.SpanOpt
 	return t.Start(ctx, name, opts...)
 }
 
+func (t *MOTracer) IsEnable() bool {
+	return t.provider.IsEnable()
+}
+
 var _ trace.Span = (*MOSpan)(nil)
 
 // MOSpan implement export.IBuffer2SqlItem and export.CsvFields
