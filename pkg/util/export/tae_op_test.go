@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package export
 
 import (
@@ -44,7 +58,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 		DataDir: t.TempDir(),
 	},
 	}
-	var services []fileservice.FileService
+	var services = make([]fileservice.FileService, 0, 1)
 	for _, config := range configs {
 		service, err := fileservice.NewFileService(config)
 		require.Nil(t, err)
@@ -84,6 +98,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, (cnt+BatchSize)/BatchSize, len(batchs))
 
+	readCnt := 0
 	for batIDX, bat := range batchs {
 		for _, vec := range bat.Vecs {
 			rows, err := GetVectorArrayLen(context.TODO(), vec)
@@ -101,8 +116,11 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 			}
 			ctn.WriteRune('\n')
 		}
-		t.Logf("batch %d: \n%s", batIDX, ctn.String())
+		//t.Logf("batch %d: \n%s", batIDX, ctn.String())
+		t.Logf("read batch %d", batIDX)
+		readCnt += rows
 	}
+	require.Equal(t, cnt, readCnt)
 }
 
 func genLines(cnt int) (lines [][]any) {

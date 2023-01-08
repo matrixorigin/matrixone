@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"time"
 )
 
@@ -34,12 +35,15 @@ const BatchSize = 8192
 type TAEWriter struct {
 	ctx          context.Context
 	columnsTypes []types.Type
+	idxs         []uint16
 	batchSize    int
 	mp           *mpool.MPool
 	filename     string
 	fs           fileservice.FileService
-	writer       objectio.Writer
-	buffer       [][]any
+	//writer       objectio.Writer
+	objectFS *objectio.ObjectFS
+	writer   *blockio.Writer
+	buffer   [][]any
 }
 
 func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filename string, fs fileservice.FileService) (*TAEWriter, error) {
@@ -53,10 +57,13 @@ func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filena
 		buffer:    make([][]any, 0, BatchSize),
 	}
 
-	for _, c := range tbl.Columns {
+	w.idxs = make([]uint16, len(tbl.Columns))
+	for idx, c := range tbl.Columns {
 		w.columnsTypes = append(w.columnsTypes, c.ColType.ToType())
+		w.idxs[idx] = uint16(idx)
 	}
-	w.writer, err = objectio.NewObjectWriter(filename, fs)
+	w.objectFS = objectio.NewObjectFS(fs, "")
+	w.writer = blockio.NewWriter(ctx, w.objectFS, filename)
 	if err != nil {
 		return nil, err
 	}
@@ -96,27 +103,7 @@ func (w *TAEWriter) WriteBatch() error {
 			return err
 		}
 	}
-	fd, err := w.writer.Write(batch)
-	if err != nil {
-		return err
-	}
-	for i := range batch.Vecs {
-		buf := fmt.Sprintf("test index %d", i)
-		index := objectio.NewBloomFilter(uint16(i), 0, []byte(buf))
-		err = w.writer.WriteIndex(fd, index)
-		if err != nil {
-			return err
-		}
-
-		zbuf := make([]byte, 64)
-		zbuf[31] = 1
-		zbuf[63] = 10
-		index, err = objectio.NewZoneMap(uint16(i), zbuf)
-		err = w.writer.WriteIndex(fd, index)
-		if err != nil {
-			return err
-		}
-	}
+	w.writer.WriteBlockAndZoneMap(batch, w.idxs)
 	w.buffer = w.buffer[:0]
 	return nil
 }
@@ -125,7 +112,7 @@ func (w *TAEWriter) Flush() error {
 	if len(w.buffer) > 0 {
 		w.WriteBatch()
 	}
-	_, err := w.writer.WriteEnd(context.Background())
+	_, err := w.writer.Sync()
 	if err != nil {
 		return err
 	}
@@ -325,7 +312,7 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 		return bjson.String(), nil
 	case types.T_datetime:
 		cols := vector.MustTCols[types.Datetime](vec)
-		return fmt.Sprintf("%s", Time2DatetimeString(cols[rowIdx].ConvertToGoTime(time.Local))), nil
+		return Time2DatetimeString(cols[rowIdx].ConvertToGoTime(time.Local)), nil
 	default:
 		return "", moerr.NewInternalError(ctx, "the value type %d is not support now", vec.Typ)
 	}

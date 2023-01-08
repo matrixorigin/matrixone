@@ -21,7 +21,6 @@ import (
 )
 
 var _1TraceID TraceID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
-var _2TraceID TraceID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x2}
 var _1SpanID SpanID = [8]byte{0, 0, 0, 0, 0, 0, 0, 1}
 
 func TestTraceID_IsZero(t *testing.T) {

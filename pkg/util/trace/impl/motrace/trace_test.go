@@ -158,7 +158,7 @@ func TestGetNodeResource(t *testing.T) {
 	}{
 		{
 			name: "normal",
-			want: &trace.MONodeResource{"node_uuid", trace.NodeTypeStandalone},
+			want: &trace.MONodeResource{NodeUuid: "node_uuid", NodeType: trace.NodeTypeStandalone},
 		},
 	}
 	for _, tt := range tests {
