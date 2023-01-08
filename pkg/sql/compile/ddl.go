@@ -16,9 +16,8 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"strconv"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -26,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -134,6 +134,18 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		return moerr.NewTableAlreadyExists(c.ctx, tblName)
 	}
+
+	// check in EntireEngine.TempEngine, notice that TempEngine may not init
+	tmpDBSource, err := c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+	if err == nil {
+		if _, err := tmpDBSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName)); err == nil {
+			if qry.GetIfNotExists() {
+				return nil
+			}
+			return moerr.NewTableAlreadyExists(c.ctx, fmt.Sprintf("temporary '%s'", tblName))
+		}
+	}
+
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
@@ -238,6 +250,76 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 	return colexec.CreateAutoIncrCol(c.e, c.ctx, dbSource, c.proc, tableCols, dbName, tblName)
+}
+
+func (s *Scope) CreateTempTable(c *Compile) error {
+	qry := s.Plan.GetDdl().GetCreateTable()
+	// convert the plan's cols to the execution's cols
+	planCols := qry.GetTableDef().GetCols()
+	tableCols := planCols
+	exeCols := planColsToExeCols(planCols)
+
+	// convert the plan's defs to the execution's defs
+	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
+	if err != nil {
+		return err
+	}
+
+	// Temporary table names and persistent table names are not allowed to be duplicated
+	// So before create temporary table, need to check if it exists a table has same name
+	dbName := c.db
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
+
+	// check in EntireEngine.TempEngine
+	tmpDBSource, err := c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	tblName := qry.GetTableDef().GetName()
+	if _, err := tmpDBSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName)); err == nil {
+		if qry.GetIfNotExists() {
+			return nil
+		}
+		return moerr.NewTableAlreadyExists(c.ctx, fmt.Sprintf("temporary '%s'", tblName))
+	}
+
+	// check in EntireEngine.Engine
+	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	if _, err := dbSource.Relation(c.ctx, tblName); err == nil {
+		if qry.GetIfNotExists() {
+			return nil
+		}
+		return moerr.NewTableAlreadyExists(c.ctx, tblName)
+	}
+
+	// create temporary table
+	if err := tmpDBSource.Create(c.ctx, engine.GetTempTableName(dbName, tblName), append(exeCols, exeDefs...)); err != nil {
+		return err
+	}
+
+	// build index table
+	for _, def := range qry.IndexTables {
+		planCols = def.GetCols()
+		exeCols = planColsToExeCols(planCols)
+		exeDefs, err = planDefsToExeDefs(def)
+		if err != nil {
+			return err
+		}
+		if _, err := tmpDBSource.Relation(c.ctx, def.Name); err == nil {
+			return moerr.NewTableAlreadyExists(c.ctx, def.Name)
+		}
+
+		if err := tmpDBSource.Create(c.ctx, engine.GetTempTableName(dbName, def.Name), append(exeCols, exeDefs...)); err != nil {
+			return err
+		}
+	}
+
+	return colexec.CreateAutoIncrCol(c.e, c.ctx, tmpDBSource, c.proc, tableCols, defines.TEMPORARY_DBNAME, engine.GetTempTableName(dbName, tblName))
 }
 
 func (s *Scope) CreateIndex(c *Compile) error {
@@ -532,35 +614,69 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 
 // Truncation operations cannot be performed if the session holds an active table lock.
 func (s *Scope) TruncateTable(c *Compile) error {
+	var dbSource engine.Database
+	var rel engine.Relation
+	var err error
+	var isTemp bool
+	var newId uint64
+
 	tqry := s.Plan.GetDdl().GetTruncateTable()
 	dbName := tqry.GetDatabase()
-	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	tblName := tqry.GetTable()
+	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
-	tblName := tqry.GetTable()
-	var rel engine.Relation
+
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
-		return err
+		var e error // avoid contamination of error messages
+		dbSource, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		if e != nil {
+			return err
+		}
+		rel, e = dbSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName))
+		if e != nil {
+			return err
+		}
+		isTemp = true
 	}
-	id := rel.GetTableID(c.ctx)
-	newId, err := dbSource.Truncate(c.ctx, tblName)
+
+	if isTemp {
+		// memoryengine truncate always return 0, so for temporary table, just use origin tableId as newId
+		_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, tblName))
+		newId = rel.GetTableID(c.ctx)
+	} else {
+		newId, err = dbSource.Truncate(c.ctx, tblName)
+	}
+
 	if err != nil {
 		return err
 	}
 
 	// Truncate Index Tables if needed
 	for _, name := range tqry.IndexTableNames {
-		_, err := dbSource.Truncate(c.ctx, name)
+		var err error
+		if isTemp {
+			_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
+		} else {
+			_, err = dbSource.Truncate(c.ctx, name)
+		}
 		if err != nil {
 			return err
 		}
 	}
 
-	err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, newId, dbName)
+	id := rel.GetTableID(c.ctx)
+
+	if isTemp {
+		err = colexec.ResetAutoInsrCol(c.e, c.ctx, engine.GetTempTableName(dbName, tblName), dbSource, c.proc, id, newId, defines.TEMPORARY_DBNAME)
+	} else {
+		err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, newId, dbName)
+	}
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -568,7 +684,11 @@ func (s *Scope) DropTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetDropTable()
 
 	dbName := qry.GetDatabase()
-	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	var dbSource engine.Database
+	var rel engine.Relation
+	var err error
+	var isTemp bool
+	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if qry.GetIfExists() {
 			return nil
@@ -576,22 +696,45 @@ func (s *Scope) DropTable(c *Compile) error {
 		return err
 	}
 	tblName := qry.GetTable()
-	var rel engine.Relation
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
-		if qry.GetIfExists() {
+		var e error // avoid contamination of error messages
+		dbSource, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		if dbSource == nil && qry.GetIfExists() {
 			return nil
-		}
-		return err
-	}
-	if err := dbSource.Delete(c.ctx, tblName); err != nil {
-		return err
-	}
-	for _, name := range qry.IndexTableNames {
-		if err := dbSource.Delete(c.ctx, name); err != nil {
+		} else if e != nil {
 			return err
 		}
+		rel, e = dbSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName))
+		if e != nil {
+			if qry.GetIfExists() {
+				return nil
+			} else {
+				return err
+			}
+		}
+		isTemp = true
 	}
-	return colexec.DeleteAutoIncrCol(c.e, c.ctx, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+	if isTemp {
+		if err := dbSource.Delete(c.ctx, engine.GetTempTableName(dbName, tblName)); err != nil {
+			return err
+		}
+		for _, name := range qry.IndexTableNames {
+			if err := dbSource.Delete(c.ctx, name); err != nil {
+				return err
+			}
+		}
+		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
+	} else {
+		if err := dbSource.Delete(c.ctx, tblName); err != nil {
+			return err
+		}
+		for _, name := range qry.IndexTableNames {
+			if err := dbSource.Delete(c.ctx, name); err != nil {
+				return err
+			}
+		}
+		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+	}
 }
 
 func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {

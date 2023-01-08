@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"encoding/csv"
+	"os"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -102,4 +103,13 @@ func JoinPath(serviceName string, path string) string {
 	buf.WriteString(ServiceNameSeparator)
 	buf.WriteString(path)
 	return buf.String()
+}
+
+var osPathSeparatorStr = string([]rune{os.PathSeparator})
+
+func toOSPath(filePath string) string {
+	if os.PathSeparator == '/' {
+		return filePath
+	}
+	return strings.ReplaceAll(filePath, "/", osPathSeparatorStr)
 }

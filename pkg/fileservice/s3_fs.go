@@ -49,7 +49,8 @@ type S3FS struct {
 	bucket    string
 	keyPrefix string
 
-	memCache *MemCache
+	memCache  *MemCache
+	diskCache *DiskCache
 }
 
 // key mapping scheme:
@@ -64,6 +65,8 @@ func NewS3FS(
 	bucket string,
 	keyPrefix string,
 	memCacheCapacity int64,
+	diskCacheCapacity int64,
+	diskCachePath string,
 ) (*S3FS, error) {
 
 	fs, err := newS3FS([]string{
@@ -77,9 +80,12 @@ func NewS3FS(
 		return nil, err
 	}
 
-	if memCacheCapacity > 0 {
-		fs.memCache = NewMemCache(memCacheCapacity)
-		logutil.Info("fileservice: cache initialized", zap.Any("fs-name", name), zap.Any("capacity", memCacheCapacity))
+	if err := fs.initCaches(
+		memCacheCapacity,
+		diskCacheCapacity,
+		diskCachePath,
+	); err != nil {
+		return nil, err
 	}
 
 	return fs, nil
@@ -94,6 +100,8 @@ func NewS3FSOnMinio(
 	bucket string,
 	keyPrefix string,
 	memCacheCapacity int64,
+	diskCacheCapacity int64,
+	diskCachePath string,
 ) (*S3FS, error) {
 
 	fs, err := newS3FS([]string{
@@ -108,12 +116,46 @@ func NewS3FSOnMinio(
 		return nil, err
 	}
 
-	if memCacheCapacity > 0 {
-		fs.memCache = NewMemCache(memCacheCapacity)
-		logutil.Info("fileservice: cache initialized", zap.Any("fs-name", name), zap.Any("capacity", memCacheCapacity))
+	if err := fs.initCaches(
+		memCacheCapacity,
+		diskCacheCapacity,
+		diskCachePath,
+	); err != nil {
+		return nil, err
 	}
 
 	return fs, nil
+}
+
+func (s *S3FS) initCaches(
+	memCacheCapacity int64,
+	diskCacheCapacity int64,
+	diskCachePath string,
+) error {
+
+	// memory cache
+	if memCacheCapacity == 0 {
+		memCacheCapacity = 512 << 20
+	}
+	if memCacheCapacity > 0 {
+		s.memCache = NewMemCache(memCacheCapacity)
+		logutil.Info("fileservice: mem cache initialized", zap.Any("fs-name", s.name), zap.Any("capacity", memCacheCapacity))
+	}
+
+	// disk cache
+	if diskCacheCapacity == 0 {
+		diskCacheCapacity = 8 << 30
+	}
+	if diskCacheCapacity > 0 && diskCachePath != "" {
+		var err error
+		s.diskCache, err = NewDiskCache(diskCachePath, diskCacheCapacity)
+		if err != nil {
+			return err
+		}
+		logutil.Info("fileservice: disk cache initialized", zap.Any("fs-name", s.name), zap.Any("capacity", memCacheCapacity))
+	}
+
+	return nil
 }
 
 func (s *S3FS) Name() string {
@@ -121,6 +163,12 @@ func (s *S3FS) Name() string {
 }
 
 func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	ctx, span := trace.Start(ctx, "S3FS.List")
 	defer span.End()
 	if ctx == nil {
@@ -183,6 +231,12 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 }
 
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	ctx, span := trace.Start(ctx, "S3FS.Write")
 	defer span.End()
 
@@ -241,7 +295,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 	}
 
 	// put
-	content, err := io.ReadAll(newIOEntriesReader(vector.Entries))
+	content, err := io.ReadAll(newIOEntriesReader(ctx, vector.Entries))
 	if err != nil {
 		return err
 	}
@@ -266,7 +320,13 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 	return nil
 }
 
-func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
+func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	ctx, span := trace.Start(ctx, "S3FS.Read")
 	defer span.End()
 
@@ -274,12 +334,31 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
 		return moerr.NewEmptyVectorNoCtx()
 	}
 
-	if s.memCache == nil {
-		// no cache
-		return s.read(ctx, vector)
+	if s.memCache != nil {
+		if err := s.memCache.Read(ctx, vector); err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				return
+			}
+			err = s.memCache.Update(ctx, vector)
+		}()
 	}
 
-	if err := s.memCache.Read(ctx, vector, s.read); err != nil {
+	if s.diskCache != nil {
+		if err := s.diskCache.Read(ctx, vector); err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				return
+			}
+			err = s.diskCache.Update(ctx, vector)
+		}()
+	}
+
+	if err := s.read(ctx, vector); err != nil {
 		return err
 	}
 
@@ -287,6 +366,10 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
 }
 
 func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
+	if vector.allDone() {
+		return nil
+	}
+
 	ctx, span := trace.Start(ctx, "S3FS.read")
 	defer span.End()
 	path, err := ParsePathAtService(vector.FilePath, s.name)
@@ -300,7 +383,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 	max := int64(0)
 	readToEnd := false
 	for _, entry := range vector.Entries {
-		if entry.ignore {
+		if entry.done {
 			continue
 		}
 		if entry.Offset < min {
@@ -386,7 +469,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 	}
 
 	for i, entry := range vector.Entries {
-		if entry.ignore {
+		if entry.done {
 			continue
 		}
 
@@ -494,6 +577,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			}
 			if int64(len(entry.Data)) < entry.Size || entry.Size < 0 {
 				entry.Data = data
+				if entry.Size < 0 {
+					entry.Size = int64(len(data))
+				}
 			} else {
 				copy(entry.Data, data)
 			}
@@ -511,6 +597,12 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 }
 
 func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	ctx, span := trace.Start(ctx, "S3FS.Delete")
 	defer span.End()
 
@@ -758,7 +850,7 @@ func newS3FS(arguments []string) (*S3FS, error) {
 					s3.EndpointResolverFunc(
 						func(
 							region string,
-							options s3.EndpointResolverOptions,
+							_ s3.EndpointResolverOptions,
 						) (
 							ep aws.Endpoint,
 							err error,
