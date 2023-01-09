@@ -27,10 +27,10 @@ import (
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 const CHAN_CAPACITY = 10000
@@ -247,7 +247,7 @@ func (s *mfset) GetBatch(ctx context.Context, buf *bytes.Buffer) string {
 var _ MetricCollector = (*metricFSCollector)(nil)
 
 type metricFSCollector struct {
-	*bp.BaseBatchPipe[*pb.MetricFamily, trace.CSVRequests]
+	*bp.BaseBatchPipe[*pb.MetricFamily, motrace.CSVRequests]
 	writerFactory export.FSWriterFactory
 	opts          collectorOpts
 }
@@ -278,13 +278,13 @@ func newMetricFSCollector(writerFactory export.FSWriterFactory, opts ...collecto
 				return SingleMetricTable.GetName()
 			}))
 	}
-	base := bp.NewBaseBatchPipe[*pb.MetricFamily, trace.CSVRequests](c, pipeOpts...)
+	base := bp.NewBaseBatchPipe[*pb.MetricFamily, motrace.CSVRequests](c, pipeOpts...)
 	c.BaseBatchPipe = base
 	return c
 }
 
-func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch trace.CSVRequests) {
-	return func(batchs trace.CSVRequests) {
+func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch motrace.CSVRequests) {
+	return func(batchs motrace.CSVRequests) {
 		for _, batch := range batchs {
 			if _, err := batch.Handle(); err != nil {
 				logutil.Errorf("[Metric] failed to write csv, err: %v", err)
@@ -293,7 +293,7 @@ func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch 
 	}
 }
 
-func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, trace.CSVRequests] {
+func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, motrace.CSVRequests] {
 	return &mfsetCSV{
 		mfset: mfset{
 			Reminder:        bp.NewConstantClock(c.opts.flushInterval),
@@ -319,7 +319,7 @@ func (s *mfsetCSV) writeCsvOneLine(ctx context.Context, buf *bytes.Buffer, field
 		}
 		if strings.ContainsRune(field, opts.FieldTerminator) || strings.ContainsRune(field, opts.EncloseRune) || strings.ContainsRune(field, opts.Terminator) {
 			buf.WriteRune(opts.EncloseRune)
-			trace.QuoteFieldFunc(ctx, buf, field, opts.EncloseRune)
+			motrace.QuoteFieldFunc(ctx, buf, field, opts.EncloseRune)
 			buf.WriteRune(opts.EncloseRune)
 		} else {
 			buf.WriteString(field)
@@ -328,18 +328,18 @@ func (s *mfsetCSV) writeCsvOneLine(ctx context.Context, buf *bytes.Buffer, field
 	buf.WriteRune(opts.Terminator)
 }
 
-func (s *mfsetCSV) GetBatch(ctx context.Context, buf *bytes.Buffer) trace.CSVRequests {
+func (s *mfsetCSV) GetBatch(ctx context.Context, buf *bytes.Buffer) motrace.CSVRequests {
 	if !s.multiTable {
 		return s.GetBatchSingleTable(ctx, buf)
 	}
 	return s.GetBatchMultiTable(ctx, buf)
 }
 
-func (s *mfsetCSV) GetBatchMultiTable(ctx context.Context, buf *bytes.Buffer) trace.CSVRequests {
+func (s *mfsetCSV) GetBatchMultiTable(ctx context.Context, buf *bytes.Buffer) motrace.CSVRequests {
 
 	buf.Reset()
 
-	writer := s.writerFactory(trace.DefaultContext(), MetricDBConst, s.mfs[0])
+	writer := s.writerFactory(motrace.DefaultContext(), MetricDBConst, s.mfs[0])
 
 	//buf.WriteString(fmt.Sprintf("insert into %s.%s values ", MetricDBConst, s.mfs[0].GetName()))
 	writeValues := func(t string, v float64, lbls ...string) {
@@ -379,10 +379,10 @@ func (s *mfsetCSV) GetBatchMultiTable(ctx context.Context, buf *bytes.Buffer) tr
 			}
 		}
 	}
-	return []*trace.CSVRequest{trace.NewCSVRequest(writer, buf.String())}
+	return []*motrace.CSVRequest{motrace.NewCSVRequest(writer, buf.String())}
 }
 
-func (s *mfsetCSV) GetBatchSingleTable(ctx context.Context, buf *bytes.Buffer) trace.CSVRequests {
+func (s *mfsetCSV) GetBatchSingleTable(ctx context.Context, buf *bytes.Buffer) motrace.CSVRequests {
 	buf.Reset()
 
 	ts := time.Now()
@@ -434,11 +434,11 @@ func (s *mfsetCSV) GetBatchSingleTable(ctx context.Context, buf *bytes.Buffer) t
 		}
 	}
 
-	reqs := make([]*trace.CSVRequest, 0, len(buffer))
+	reqs := make([]*motrace.CSVRequest, 0, len(buffer))
 	for account, buf := range buffer {
-		writer := s.writerFactory(trace.DefaultContext(), SingleMetricTable.Database, SingleMetricTable,
+		writer := s.writerFactory(motrace.DefaultContext(), SingleMetricTable.Database, SingleMetricTable,
 			export.WithAccount(account), export.WithTimestamp(ts), export.WithPathBuilder(SingleMetricTable.PathBuilder))
-		reqs = append(reqs, trace.NewCSVRequest(writer, buf.String()))
+		reqs = append(reqs, motrace.NewCSVRequest(writer, buf.String()))
 	}
 
 	return reqs

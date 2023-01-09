@@ -17,7 +17,6 @@ package util
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"strings"
 )
@@ -39,16 +38,6 @@ func SplitTableAndColumn(name string) (string, string) {
 		schema += xs[i]
 	}
 	return schema, xs[len(xs)-1]
-}
-
-func FindPrimaryKey(def *plan.TableDef) bool {
-	for _, def := range def.Defs {
-		switch def.Def.(type) {
-		case *plan.TableDef_DefType_Pk:
-			return true
-		}
-	}
-	return false
 }
 
 // TableIsClusterTable check the table type is cluster table
