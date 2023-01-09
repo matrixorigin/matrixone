@@ -143,7 +143,40 @@ func (catalog *Catalog) InitSystemDB() {
 		panic(err)
 	}
 }
-
+func (catalog *Catalog) GCCatalog(ts types.TS) {
+	processor := LoopProcessor{}
+	processor.DatabaseFn = func(d *DBEntry) error {
+		if d.DeleteBefore(ts) {
+			catalog.HardDeleteDatabase(d.ID)
+		}
+		return nil
+	}
+	processor.TableFn = func(te *TableEntry) error {
+		if te.DeleteBefore(ts) {
+			db := te.db
+			db.HardDeleteTable(te.ID)
+		}
+		return nil
+	}
+	processor.SegmentFn = func(se *SegmentEntry) error {
+		if se.DeleteBefore(ts) {
+			tbl := se.table
+			tbl.HardDeleteSegment(se.ID)
+		}
+		return nil
+	}
+	processor.BlockFn = func(be *BlockEntry) error {
+		if be.DeleteBefore(ts) {
+			seg := be.segment
+			seg.HardDeleteBlock(be.ID)
+		}
+		return nil
+	}
+	err := catalog.RecurLoop(&processor)
+	if err != nil {
+		panic(err)
+	}
+}
 func (catalog *Catalog) ReplayCmd(
 	txncmd txnif.TxnCmd,
 	dataFactory DataFactory,
@@ -830,6 +863,21 @@ func (catalog *Catalog) AddEntryLocked(database *DBEntry, txn txnif.TxnReader, s
 		nn.CreateNode(database.GetID())
 	}
 	return nil
+}
+func (catalog *Catalog) HardDeleteDatabase(dbid uint64) {
+	catalog.Lock()
+	defer catalog.Unlock()
+
+	n := catalog.entries[dbid]
+	fullName := n.GetPayload().GetFullName()
+	nn := catalog.nameNodes[fullName]
+
+	catalog.link.Delete(n)
+	nn.DeleteNode(dbid)
+	if nn.Length() == 0 {
+		delete(catalog.nameNodes, fullName)
+	}
+	delete(catalog.entries, dbid)
 }
 
 func (catalog *Catalog) MakeDBIt(reverse bool) *common.GenericSortedDListIt[*DBEntry] {

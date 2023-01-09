@@ -300,6 +300,11 @@ func (entry *SegmentEntry) AddEntryLocked(block *BlockEntry) {
 	n := entry.link.Insert(block)
 	entry.entries[block.GetID()] = n
 }
+func (entry *SegmentEntry) HardDeleteBlock(blkID uint64) {
+	n := entry.entries[blkID]
+	entry.link.Delete(n)
+	delete(entry.entries, blkID)
+}
 
 func (entry *SegmentEntry) AsCommonID() *common.ID {
 	return &common.ID{

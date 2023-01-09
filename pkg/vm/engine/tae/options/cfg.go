@@ -57,6 +57,10 @@ type GCCfg struct {
 	ScanGCInterval time.Duration
 }
 
+type CatalogCfg struct {
+	GCInterval time.Duration
+}
+
 type SchedulerCfg struct {
 	IOWorkers    int `toml:"io-workers"`
 	AsyncWorkers int `toml:"async-workers"`

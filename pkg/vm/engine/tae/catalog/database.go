@@ -447,6 +447,21 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 	return
 }
 
+func (e *DBEntry) HardDeleteTable(tid uint64) {
+	e.Lock()
+	defer e.Unlock()
+
+	n := e.entries[tid]
+	fullName := n.GetPayload().GetFullName()
+	nn := e.nameNodes[fullName]
+	e.link.Delete(n)
+	nn.DeleteNode(tid)
+	if nn.Length() == 0 {
+		delete(e.nameNodes, fullName)
+	}
+	delete(e.entries, tid)
+}
+
 func (e *DBEntry) MakeCommand(id uint32) (txnif.TxnCmd, error) {
 	cmdType := CmdUpdateDatabase
 	e.RLock()

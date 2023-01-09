@@ -200,6 +200,17 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 				}
 				return db.BGCheckpointRunner.GCCheckpoint(consumed.GetEnd())
 			}),
+		gc.WithCronJob(
+			"catalog-gc",
+			opts.CheckpointCfg.GCCheckpointInterval,
+			func(ctx context.Context) error {
+				consumed := db.DiskCleaner.GetMaxConsumed()
+				if consumed == nil {
+					return nil
+				}
+				db.Catalog.GCCatalog(consumed.GetEnd())
+				return nil
+			}),
 	)
 
 	db.GCManager.Start()
