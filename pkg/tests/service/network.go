@@ -15,19 +15,12 @@
 package service
 
 import (
-	"sync"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/tests/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-)
-
-var (
-	maxPort   = 65535
-	curPort   = 10000 // curPort indicates allocated port.
-	curPortMu sync.Mutex
 )
 
 // serviceAddresses contains addresses of all services.
