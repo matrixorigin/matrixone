@@ -15,8 +15,13 @@
 package disttae
 
 import (
+	"context"
 	"database/sql"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,8 +29,14 @@ import (
 )
 
 const (
-	// time gap to check if txn timestamp is legal or not when a txn start.
+	// gapToCheckTxnTimestamp is the time gap to check if txn timestamp is legal or not when a txn start.
 	gapToCheckTxnTimestamp = 10 * time.Millisecond
+
+	// maxSubscribeRequestPerSecond record how many client request we supported to subscribe table per second.
+	maxSubscribeRequestPerSecond = 256
+
+	// reconnectDeadTime if the time of losing response with dn reaches reconnectDeadTime, we will reconnect.
+	reconnectDeadTime = 5 * time.Minute
 )
 
 // cnLogTailTimestamp each cn-node will hold one global log time.
@@ -86,4 +97,73 @@ func SetTableSubscribe(tblId uint64) {
 func GetTableSubscribe(tblId uint64) bool {
 	_, b := tableSubscribeRecord.Load(tblId)
 	return b
+}
+
+type TableLogTailSubscriber struct {
+	dnNodeID      uint32
+	logTailClient *service.LogtailClient
+	streamSender  morpc.Stream
+	// if dead time, we should reconnect to dn.
+	deadTime timestamp.Timestamp
+}
+
+var cnLogTailSubscriber *TableLogTailSubscriber
+
+func initCnLogTailSubscriber(dnLogTailServerBackend string) error {
+	var logtailClient *service.LogtailClient
+	// clean the old subscriber if it's a reconnect action.
+	if old := cnLogTailSubscriber; old != nil {
+		_ = cnLogTailSubscriber.logTailClient.Close()
+	}
+	s, err := cnclient.GetStreamSender(dnLogTailServerBackend)
+	if err != nil {
+		return err
+	}
+	logtailClient, err = service.NewLogtailClient(s,
+		service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
+	if err != nil {
+		return err
+	}
+	cnLogTailSubscriber = &TableLogTailSubscriber{
+		logTailClient: logtailClient,
+		streamSender:  s,
+	}
+	return nil
+}
+
+func (logSub *TableLogTailSubscriber) SubscribeTable(
+	ctx context.Context, tblId api.TableID) error {
+	return logSub.logTailClient.Subscribe(ctx, tblId)
+}
+
+func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail(
+	handleResponse func(ltail *service.LogtailResponse), // how to update the logtail.
+) {
+	go func() {
+		type response struct {
+			r   *service.LogtailResponse
+			err error
+		}
+		generateResponse := func(ltR *service.LogtailResponse, err error) response {
+			return response{r: ltR, err: err}
+		}
+
+		ch := make(chan response)
+		for {
+			deadLine, cf := context.WithTimeout(context.TODO(), reconnectDeadTime)
+			select {
+			case <-deadLine.Done():
+				initTableSubscribeRecord()
+				cf()
+				return
+			case ch <- generateResponse(logSub.logTailClient.Receive()):
+				cf()
+			}
+			resp := <-ch
+			if resp.err == nil {
+				handleResponse(resp.r)
+				// UpdateCnLogTimestamp()
+			}
+		}
+	}()
 }
