@@ -31,6 +31,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
@@ -111,6 +121,7 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Join:       join.Prepare,
 	Semi:       semi.Prepare,
 	Left:       left.Prepare,
+	Right:      right.Prepare,
 	Single:     single.Prepare,
 	Limit:      limit.Prepare,
 	Order:      order.Prepare,
@@ -158,6 +169,7 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	Join:       join.Call,
 	Semi:       semi.Call,
 	Left:       left.Call,
+	Right:      right.Call,
 	Single:     single.Call,
 	Limit:      limit.Call,
 	Order:      order.Call,
