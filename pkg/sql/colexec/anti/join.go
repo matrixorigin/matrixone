@@ -93,6 +93,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		ctr.bat = bat
 		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
 		ctr.hasNull = ctr.mp.HasNull()
+		anal.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
 }

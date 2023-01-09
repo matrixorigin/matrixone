@@ -54,6 +54,7 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 				arg.Free(proc, true)
 				return false, err
 			}
+			analyze.Alloc(arg.ctr.hashTable.Size())
 			arg.ctr.state = probe
 
 		case probe:
@@ -205,6 +206,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		}
 
 		btc.Clean(proc.Mp())
+		analyze.Alloc(int64(c.btc.Size()))
 		analyze.Output(c.btc, isLast)
 		proc.SetInputBatch(c.btc)
 		return false, nil

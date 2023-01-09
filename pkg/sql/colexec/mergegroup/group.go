@@ -72,6 +72,7 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 						}
 						ctr.bat.Aggs[i] = nil
 						ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
+						anal.Alloc(int64(vec.Size()))
 					}
 					ctr.bat.Aggs = nil
 					for i := range ctr.bat.Zs { // reset zs

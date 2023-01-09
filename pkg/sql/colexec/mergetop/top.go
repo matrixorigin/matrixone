@@ -136,6 +136,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			if flg {
 				ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
 				bat.Vecs = append(bat.Vecs, vec)
+			} else {
+				anal.Alloc(int64(vec.Size()))
 			}
 		}
 		if ctr.bat == nil {

@@ -66,6 +66,7 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 				arg.Free(proc, true)
 				return false, err
 			}
+			analyzer.Alloc(arg.ctr.hashTable.Size())
 			arg.ctr.state = Probe
 
 		case Probe:
@@ -167,6 +168,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 			for i := range bat.Vecs {
 				outputBat.Vecs[i] = vector.New(bat.Vecs[i].Typ)
 			}
+			analyzer.Alloc(int64(outputBat.Size()))
 		}
 
 		// probe hashTable
@@ -218,6 +220,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 			}
 
 		}
+		analyzer.Alloc(int64(outputBat.Size()))
 		analyzer.Output(outputBat, isLast)
 		proc.SetInputBatch(outputBat)
 		bat.Clean(proc.Mp())

@@ -108,6 +108,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		}
 		if ctr.bat != nil {
 			ctr.bat.ExpandNulls()
+			anal.Alloc(int64(ctr.bat.Size()))
 			anal.Output(ctr.bat, isLast)
 			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil
@@ -189,6 +190,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 					}
 					ctr.bat.Aggs[i] = nil
 					ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
+					anal.Alloc(int64(vec.Size()))
 				}
 				ctr.bat.Aggs = nil
 				for i := range ctr.bat.Zs { // reset zs
@@ -524,7 +526,6 @@ func (ctr *container) evalMultiAggs(bat *batch.Batch, multiAggs []group_concat.A
 			if ctr.multiVecs[i][j].needFree {
 				analyze.Alloc(int64(vec.Size()))
 			}
-
 		}
 	}
 	return nil

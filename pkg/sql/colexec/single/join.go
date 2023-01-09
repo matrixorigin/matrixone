@@ -101,6 +101,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+		anal.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
 }

@@ -100,6 +100,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+		anal.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
 }
@@ -138,7 +139,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 
 	ctr.cleanEvalVectors(proc.Mp())
-	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
+	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc, anal); err != nil {
 		return err
 	}
 
@@ -229,7 +230,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	return nil
 }
 
-func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
+func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, analyze process.Analyze) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
@@ -244,6 +245,9 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 				ctr.evecs[i].needFree = false
 				break
 			}
+		}
+		if ctr.evecs[i].needFree {
+			analyze.Alloc(int64(vec.Size()))
 		}
 	}
 	return nil

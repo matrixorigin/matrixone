@@ -95,6 +95,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+		anal.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
 }
@@ -114,7 +115,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 
 	idxFlg := false
 	ctr.cleanEvalVectors(proc.Mp())
-	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc, &idxFlg); err != nil {
+	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc, &idxFlg, anal); err != nil {
 		rbat.Clean(proc.Mp())
 		return err
 	}
@@ -194,6 +195,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 	rbat.ExpandNulls()
+	anal.Alloc(int64(rbat.Size()))
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
@@ -242,7 +244,7 @@ func (ctr *container) indexProbe(ap *Argument, bat, rbat *batch.Batch, mSels [][
 	return nil
 }
 
-func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, flg *bool) error {
+func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, flg *bool, analyze process.Analyze) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
@@ -257,6 +259,9 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 				ctr.evecs[i].needFree = false
 				break
 			}
+		}
+		if ctr.evecs[i].needFree {
+			analyze.Alloc(int64(vec.Size()))
 		}
 
 		if *flg, err = ctr.dictEncoding(proc.Mp()); err != nil {
