@@ -16,18 +16,67 @@ package service
 
 import (
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/stretchr/testify/require"
 )
 
 func TestWaterliner(t *testing.T) {
 	current := mockTimestamp(100, 100)
-	w := NewWaterliner(current)
+	clock := mockPermanentClock(current)
+
+	w := NewWaterliner(clock)
+
+	/* ---- advance on uninitialized instance ---- */
+	require.Panics(t, func() {
+		w.Advance(current)
+	})
+
+	/* ---- initialized on its first call ---- */
 	waterline := w.Waterline()
 	require.Equal(t, current, waterline)
 
-	current = current.Next()
-	w.Advance(current)
+	/* ---- advance with a backward ts ---- */
+	require.Panics(t, func() {
+		prev := current.Prev()
+		w.Advance(prev)
+	})
+
+	/* ---- advance with a monotonous ts ---- */
+	next := current.Next()
+	w.Advance(next)
 	waterline = w.Waterline()
-	require.Equal(t, current, waterline)
+	require.Equal(t, next, waterline)
+}
+
+type permanentClock struct {
+	ts timestamp.Timestamp
+}
+
+func mockPermanentClock(ts timestamp.Timestamp) clock.Clock {
+	return &permanentClock{
+		ts: ts,
+	}
+}
+
+func (m *permanentClock) Now() (timestamp.Timestamp, timestamp.Timestamp) {
+	return m.ts, timestamp.Timestamp{}
+}
+
+func (m *permanentClock) Update(ts timestamp.Timestamp) {
+	m.ts = ts
+}
+
+func (m *permanentClock) HasNetworkLatency() bool {
+	return false
+}
+
+func (m *permanentClock) MaxOffset() time.Duration {
+	return 0
+}
+
+func (m *permanentClock) SetNodeID(id uint16) {
+
 }
