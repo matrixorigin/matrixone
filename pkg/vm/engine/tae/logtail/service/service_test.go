@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -45,6 +46,7 @@ func TestService(t *testing.T) {
 	/* ---- construct logtail server ---- */
 	logtailServer, err := NewLogtailServer(
 		address, options.NewDefaultLogtailServerCfg(), logtailer, clock,
+		WithServerLogger(logutil.GetLogger()),
 		WithServerCollectInterval(500*time.Millisecond),
 		WithServerSendTimeout(5*time.Second),
 		WithServerEnableChecksum(true),
