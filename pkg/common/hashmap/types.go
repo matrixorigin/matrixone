@@ -45,6 +45,8 @@ type HashMap interface {
 	AddGroups(uint64)
 	// GroupCount returns the hash map's row count.
 	GroupCount() uint64
+	// Size returns the hash map's size
+	Size() int64
 }
 
 // Iterator allows users to do insert or find operations on hash tables in bulk.

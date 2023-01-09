@@ -16,15 +16,18 @@ package logtail
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"go.uber.org/zap"
 )
 
 type Manager struct {
 	txnbase.NoopCommitListener
-	table *TxnTable
+	table     *TxnTable
+	truncated types.TS
 }
 
 func NewManager(blockSize int, clock clock.Clock) *Manager {
@@ -47,6 +50,15 @@ func (mgr *Manager) GetReader(from, to types.TS) *Reader {
 		to:    to,
 		table: mgr.table,
 	}
+}
+
+func (mgr *Manager) GCTruncate(ts types.TS) {
+	if ts.Equal(mgr.truncated) {
+		return
+	}
+	mgr.truncated = ts
+	cnt := mgr.table.TruncateByTimeStamp(ts)
+	logutil.Info("[logtail] GC", zap.String("ts", ts.ToString()), zap.Int("deleted", cnt))
 }
 
 func (mgr *Manager) GetTableOperator(

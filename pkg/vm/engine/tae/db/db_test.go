@@ -677,9 +677,8 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		err = txn.Commit()
 		assert.Nil(t, err)
 
-		//"tb" table now has one non-appendable segment
-		//which contains two non-appendable blocks, and one
-		// appendable segment which contains one appendable block.
+		//"tb-1" table now has one committed non-appendable segment which contains
+		//two non-appendable block, and one committed appendable segment which contains one appendable block.
 
 		//do deduplication check
 		txn, rel = getRelation(t, 0, db, "db", schema.Name)
@@ -689,7 +688,6 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		assert.NotNil(t, err)
 		err = rel.Append(bats[3])
 		assert.Nil(t, err)
-
 		cntOfAblk := 0
 		cntOfblk := 0
 		forEachBlock(rel, func(blk handle.Block) (err error) {
@@ -697,7 +695,6 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 				view, err := blk.GetColumnDataById(3, nil)
 				assert.NoError(t, err)
 				defer view.Close()
-				//assert.True(t, view.GetData().Equals(bats[2].Vecs[3]))
 				cntOfAblk++
 				return nil
 			}
@@ -720,6 +717,21 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		})
 		assert.True(t, cntOfblk == 2)
 		assert.True(t, cntOfAblk == 2)
+		assert.Nil(t, txn.Commit())
+		//check count of committed segments.
+		cntOfAseg := 0
+		cntOfseg := 0
+		txn, rel = getRelation(t, 0, db, "db", schema.Name)
+		forEachSegment(rel, func(seg handle.Segment) (err error) {
+			if seg.IsAppendable() {
+				cntOfAseg++
+				return
+			}
+			cntOfseg++
+			return
+		})
+		assert.True(t, cntOfseg == 1)
+		assert.True(t, cntOfAseg == 1)
 		assert.Nil(t, txn.Commit())
 	}
 }

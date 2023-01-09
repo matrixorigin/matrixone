@@ -16,11 +16,12 @@ package db
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"path"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -214,6 +215,17 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 				db.Catalog.GCCatalog(consumed.GetEnd())
 				return nil
 			}),
+		gc.WithCronJob(
+			"logtail-gc",
+			opts.CheckpointCfg.GCCheckpointInterval,
+			func(ctx context.Context) error {
+				global := db.BGCheckpointRunner.MaxGlobalCheckpoint()
+				if global != nil {
+					db.LogtailMgr.GCTruncate(global.GetEnd())
+				}
+				return nil
+			},
+		),
 	)
 
 	db.GCManager.Start()
