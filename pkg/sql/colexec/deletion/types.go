@@ -23,6 +23,7 @@ type Argument struct {
 	Ts           uint64
 	DeleteCtxs   []*DeleteCtx
 	AffectedRows uint64
+	IsRemote     bool
 }
 
 type DeleteCtx struct {

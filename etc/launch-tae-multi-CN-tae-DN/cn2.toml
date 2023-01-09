@@ -16,7 +16,7 @@ name = "LOCAL"
 backend = "DISK"
 
 [[fileservice]]
-name = "S3"
+name = "SHARED"
 backend = "DISK"
 data-dir = "mo-data/s3"
 

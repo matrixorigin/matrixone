@@ -56,6 +56,7 @@ type PartitionInfo = plan.PartitionInfo
 type TableDef_DefType_UIdx = plan.TableDef_DefType_UIdx
 type TableDef_DefType_SIdx = plan.TableDef_DefType_SIdx
 type UniqueIndexDef = plan.UniqueIndexDef
+type ClusterByDef = plan.ClusterByDef
 type SecondaryIndexDef = plan.SecondaryIndexDef
 type OrderBySpec = plan.OrderBySpec
 type CreateTable_FkColName = plan.CreateTable_FkColName
@@ -90,6 +91,8 @@ type CompilerContext interface {
 	GetContext() context.Context
 
 	GetProcess() *process.Process
+
+	GetQueryResultMeta(uuid string) ([]*ColDef, string, error)
 }
 
 type Optimizer interface {

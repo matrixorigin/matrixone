@@ -18,13 +18,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"os"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"go.uber.org/zap"
@@ -56,6 +58,8 @@ type Handle struct {
 	}
 	jobScheduler tasks.JobScheduler
 }
+
+var _ rpchandle.Handler = (*Handle)(nil)
 
 type txnContext struct {
 	//createAt is used to GC the abandoned txn.
@@ -313,6 +317,7 @@ func (h *Handle) HandleGetLogTail(
 	resp *apipb.SyncLogTailResp) (err error) {
 	tae := h.eng.GetTAE(context.Background())
 	res, err := logtail.HandleSyncLogTailReq(
+		ctx,
 		tae.BGCheckpointRunner,
 		tae.LogtailMgr,
 		tae.Catalog,
@@ -341,6 +346,19 @@ func (h *Handle) HandleFlushTable(
 		req.AccessInfo.AccountID,
 		req.DatabaseID,
 		req.TableID,
+		currTs)
+	return err
+}
+
+func (h *Handle) HandleForceCheckpoint(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	_ db.FlushTable,
+	resp *apipb.SyncLogTailResp) (err error) {
+
+	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+
+	err = h.eng.ForceCheckpoint(ctx,
 		currTs)
 	return err
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -57,15 +58,15 @@ func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
 var NewProc = NewProcess
 
 func NewFS() *fileservice.FileServices {
-	local, err := fileservice.NewMemoryFS("local")
+	local, err := fileservice.NewMemoryFS(defines.LocalFileServiceName)
 	if err != nil {
 		panic(err)
 	}
-	s3, err := fileservice.NewMemoryFS("s3")
+	s3, err := fileservice.NewMemoryFS(defines.SharedFileServiceName)
 	if err != nil {
 		panic(err)
 	}
-	etl, err := fileservice.NewMemoryFS("etl")
+	etl, err := fileservice.NewMemoryFS(defines.ETLFileServiceName)
 	if err != nil {
 		panic(err)
 	}

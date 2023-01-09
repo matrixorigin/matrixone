@@ -1703,7 +1703,11 @@ func writeBatchToStorage(handler *WriteBatchHandler, proc *process.Process, forc
 		tableHandler := handler.tableHandler
 		initSes := handler.ses
 		// XXX run backgroup session using initSes.Mp, is this correct thing?
-		tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), gSysVariables)
+		tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), GSysVariables)
+		if e, ok := initSes.storage.(*engine.EntireEngine); ok {
+			tmpSes.storage = e
+			tmpSes.txnHandler = initSes.txnHandler
+		}
 		defer tmpSes.Close()
 		if !handler.skipWriteBatch {
 			if handler.oneTxnPerBatch {
@@ -1855,7 +1859,11 @@ func writeBatchToStorage(handler *WriteBatchHandler, proc *process.Process, forc
 				// dbHandler := handler.dbHandler
 				initSes := handler.ses
 				// XXX: Using initSes.Mp
-				tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), gSysVariables)
+				tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), GSysVariables)
+				if e, ok := initSes.storage.(*engine.EntireEngine); ok {
+					tmpSes.storage = e
+					tmpSes.txnHandler = initSes.txnHandler
+				}
 				defer tmpSes.Close()
 				var dbHandler engine.Database
 				var txn TxnOperator

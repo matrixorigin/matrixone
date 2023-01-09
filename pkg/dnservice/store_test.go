@@ -37,7 +37,8 @@ import (
 )
 
 var (
-	testDNStoreAddr = "unix:///tmp/test-dnstore.sock"
+	testDNStoreAddr      = "unix:///tmp/test-dnstore.sock"
+	testDNLogtailAddress = "127.0.0.1:22001"
 )
 
 func TestNewAndStartAndCloseService(t *testing.T) {
@@ -62,7 +63,7 @@ func TestStartWithReplicas(t *testing.T) {
 	assert.NoError(t, err)
 
 	factory := func(name string) (*fileservice.FileServices, error) {
-		s3fs, err := fileservice.NewMemoryFS(defines.S3FileServiceName)
+		s3fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName)
 		if err != nil {
 			return nil, err
 		}
@@ -149,7 +150,7 @@ func runDNStoreTest(
 			return nil, err
 		}
 		s3, err := fileservice.NewMemoryFS(
-			defines.S3FileServiceName,
+			defines.SharedFileServiceName,
 		)
 		if err != nil {
 			return nil, err
@@ -238,6 +239,7 @@ func newTestStore(
 		UUID:          uuid,
 		ListenAddress: testDNStoreAddr,
 	}
+	c.LogtailServer.ListenAddress = testDNLogtailAddress
 	fs, err := fsFactory(defines.LocalFileServiceName)
 	assert.Nil(t, err)
 
