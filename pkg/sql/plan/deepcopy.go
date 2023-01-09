@@ -416,6 +416,7 @@ func DeepCopyInsertValues(insert *plan.InsertValues) *plan.InsertValues {
 		OrderAttrs:    make([]string, len(insert.OrderAttrs)),
 		CompositePkey: DeepCopyColDef(insert.CompositePkey),
 		ClusterTable:  DeepCopyClusterTable(insert.GetClusterTable()),
+		HasAutoCol:    insert.HasAutoCol,
 	}
 
 	for idx, col := range insert.ExplicitCols {

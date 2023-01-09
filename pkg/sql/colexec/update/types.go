@@ -30,6 +30,7 @@ type Argument struct {
 	TableID      []uint64
 	DBName       []string
 	TblName      []string
+	HasAutoCol   []bool
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

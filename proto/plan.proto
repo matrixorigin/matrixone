@@ -204,6 +204,10 @@ message decimal128 {
 	int64 b = 2;
 }
 
+message ResultColDef {
+	repeated ColDef ResultCols = 1;
+}
+
 message ColDef {
 	uint64 col_id		= 1;
 	string name 		= 2;
@@ -727,6 +731,7 @@ message InsertValues {
 	UniqueIndexDef unique_index_def = 8;
 	SecondaryIndexDef secondary_index_def = 9;
 	ClusterTable cluster_table = 10;
+	bool has_auto_col = 11;
 }
 
 message column{
