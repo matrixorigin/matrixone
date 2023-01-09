@@ -144,6 +144,7 @@ func (catalog *Catalog) InitSystemDB() {
 	}
 }
 func (catalog *Catalog) GCCatalog(ts types.TS) {
+	logutil.Infof("GC Catalog %v", ts.ToString())
 	processor := LoopProcessor{}
 	processor.DatabaseFn = func(d *DBEntry) error {
 		d.RLock()
