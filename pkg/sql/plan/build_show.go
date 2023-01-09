@@ -305,12 +305,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 	ddlType := plan.DataDefinition_SHOW_DATABASES
 	// Any account should shows database MO_CATALOG_DB_NAME
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
-	var sql string
-	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where (%s)", MO_CATALOG_DB_NAME, accountClause)
-	} else {
-		sql = fmt.Sprintf("select 'mo_catalog' union SELECT datname `Database` FROM %s.mo_database where (%s)", MO_CATALOG_DB_NAME, accountClause)
-	}
+	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where (%s)", MO_CATALOG_DB_NAME, accountClause)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -354,15 +349,8 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-
-	var sql string
-	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
-			dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%", accountClause)
-	} else {
-		sql = fmt.Sprintf("select 'mo_database' union select 'mo_tables' union select 'mo_columns' union SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
-			dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%", accountClause)
-	}
+	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
+		dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%", accountClause)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
