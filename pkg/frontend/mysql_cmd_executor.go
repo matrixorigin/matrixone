@@ -3312,8 +3312,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				cwft.stmt.GetQueryType() == tree.QueryTypeTCL {
 				if _, ok := cwft.stmt.(*tree.SetVar); !ok {
 					ses.cleanCache()
-					canCache = false
 				}
+				canCache = false
 			}
 		}
 
@@ -3978,15 +3978,31 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		plans := make([]*plan.Plan, len(cws))
 		stmts := make([]*tree.Statement, len(cws))
 		for i, cw := range cws {
-			if cwft, ok := cw.(*TxnComputationWrapper); ok {
+			if cwft, ok := cw.(*TxnComputationWrapper); ok && checkNodeCanCache(cwft.plan) {
 				plans[i] = cwft.plan
 				stmts[i] = &cwft.stmt
+			} else {
+				return nil
 			}
 		}
 		ses.cachePlan(sql, stmts, plans)
 	}
 
 	return nil
+}
+
+func checkNodeCanCache(p *plan2.Plan) bool {
+	if p == nil {
+		return true
+	}
+	if q, ok := p.Plan.(*plan2.Plan_Query); ok {
+		for _, node := range q.Query.Nodes {
+			if node.NodeType == plan.Node_EXTERNAL_SCAN && node.TableDef.TableType == "query_result" {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // execute query. Currently, it is developing. Finally, it will replace the doComQuery.

@@ -141,7 +141,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 		existRealTimeFunc := false
 		for i, expr := range ef.F.Args {
 			if ac, cok := expr.Expr.(*plan.Expr_C); cok && ac.C.Src != nil {
-				if _, pok := ac.C.Src.Expr.(*plan.Expr_P); !pok {
+				if _, pok := ac.C.Src.Expr.(*plan.Expr_V); !pok {
 					ef.F.Args[i] = ac.C.Src
 					existRealTimeFunc = true
 				}
