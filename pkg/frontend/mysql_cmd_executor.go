@@ -263,7 +263,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	}
 	if ses.sqlSourceType != "internal_sql" {
 		ses.tStmt = stm
-		ses.lastQueryId = types.Uuid(stmID).ToString()
+		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
@@ -592,7 +592,6 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
 	if openSaveQueryResult(ses) {
-		// ses.lastQueryId = types.Uuid(ses.tStmt.StatementID).ToString()
 		if bat == nil {
 			if err := saveQueryResultMeta(ses); err != nil {
 				return err
@@ -1695,7 +1694,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		}
 		row := make([]interface{}, 2)
 		row[0] = name
-		gsv, ok := gSysVariables.GetDefinitionOfSysVar(name)
+		gsv, ok := GSysVariables.GetDefinitionOfSysVar(name)
 		if !ok {
 			return moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
 		}
@@ -3230,13 +3229,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		StorageEngine: pu.StorageEngine,
 		LastInsertID:  ses.GetLastInsertID(),
 	}
-	proc.SessionInfo.QueryId = ses.lastQueryId
-	val, err := ses.GetGlobalVar("save_query_result")
-	if err == nil {
-		if v, _ := val.(int8); v > 0 {
-			proc.SessionInfo.SaveQueryResult = true
-		}
-	}
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
@@ -3248,7 +3240,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
 	}
-	proc.SessionInfo.QueryId = ses.lastQueryId
+	proc.SessionInfo.QueryId = ses.QueryId
 	ses.txnCompileCtx.SetProcess(proc)
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,
