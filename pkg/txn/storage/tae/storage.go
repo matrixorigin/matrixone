@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 	"go.uber.org/multierr"
+	"go.uber.org/zap"
 )
 
 type taeStorage struct {
@@ -48,6 +49,7 @@ func NewTAEStorage(
 	fs fileservice.FileService,
 	clock clock.Clock,
 	ckpCfg *options.CheckpointCfg,
+	logger *zap.Logger,
 	logtailServerAddr string,
 	logtailServerCfg *options.LogtailServerCfg,
 	logStore options.LogstoreType,
@@ -64,7 +66,10 @@ func NewTAEStorage(
 	taeHandler := rpc.NewTAEHandle(dataDir, opt)
 	tae := taeHandler.GetTxnEngine().GetTAE(context.Background())
 	logtailer := logtail.NewLogtailer(tae.BGCheckpointRunner, tae.LogtailMgr, tae.Catalog)
-	server, err := service.NewLogtailServer(logtailServerAddr, logtailServerCfg, logtailer, clock)
+	server, err := service.NewLogtailServer(
+		logtailServerAddr, logtailServerCfg, logtailer, clock,
+		service.WithServerLogger(logger),
+	)
 	if err != nil {
 		return nil, err
 	}
