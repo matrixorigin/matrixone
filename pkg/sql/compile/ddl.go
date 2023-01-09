@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -600,14 +599,12 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	tqry := s.Plan.GetDdl().GetTruncateTable()
 	dbName := tqry.GetDatabase()
 	tblName := tqry.GetTable()
+	oldId := tqry.GetTableId()
+
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
-
-	tblName := tqry.GetTable()
-	oldId := tqry.GetTableId()
-	var rel engine.Relation
 
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		var e error // avoid contamination of error messages
@@ -685,7 +682,6 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	}
 
-	err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, newId, dbName)
 	id := rel.GetTableID(c.ctx)
 
 	if isTemp {
@@ -708,6 +704,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	var rel engine.Relation
 	var err error
 	var isTemp bool
+
+	tblName := qry.GetTable()
+	tblId := qry.GetTableId()
+
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if qry.GetIfExists() {
@@ -715,9 +715,6 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 		return err
 	}
-	tblName := qry.GetTable()
-	tblId := qry.GetTableId()
-	var rel engine.Relation
 
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		var e error // avoid contamination of error messages
