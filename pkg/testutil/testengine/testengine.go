@@ -50,12 +50,10 @@ func New(
 		shard,
 	}
 	dnAddr := "1"
-	logtailAddr := "2"
 	dnStore := logservicepb.DNStore{
-		UUID:                 uuid.NewString(),
-		ServiceAddress:       dnAddr,
-		Shards:               shards,
-		LogtailServerAddress: logtailAddr,
+		UUID:           uuid.NewString(),
+		ServiceAddress: dnAddr,
+		Shards:         shards,
 	}
 
 	storage, err := memorystorage.NewMemoryStorage(
