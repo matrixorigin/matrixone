@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/tests/utils"
+	"github.com/matrixorigin/matrixone/pkg/tests"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -249,7 +249,7 @@ type logServiceAddress struct {
 }
 
 func newLogServiceAddress(host string) (logServiceAddress, error) {
-	addrs, err := utils.GetAddressBatch(host, 3)
+	addrs, err := tests.GetAddressBatch(host, 3)
 	if err != nil {
 		return logServiceAddress{}, err
 	}
@@ -273,7 +273,7 @@ type dnServiceAddress struct {
 }
 
 func newDNServiceAddress(host string) (dnServiceAddress, error) {
-	addrs, err := utils.GetAddressBatch(host, 2)
+	addrs, err := tests.GetAddressBatch(host, 2)
 	if err != nil {
 		return dnServiceAddress{}, err
 	}
@@ -293,7 +293,7 @@ type cnServiceAddress struct {
 }
 
 func newCNServiceAddress(host string) (cnServiceAddress, error) {
-	addrs, err := utils.GetAddressBatch(host, 1)
+	addrs, err := tests.GetAddressBatch(host, 1)
 	if err != nil {
 		return cnServiceAddress{}, err
 	}
