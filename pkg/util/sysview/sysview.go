@@ -21,7 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
 const (
@@ -411,8 +411,8 @@ var (
 )
 
 func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
-	initMysqlTables(ctx, ieFactory, trace.FileService)
-	initInformationSchemaTables(ctx, ieFactory, trace.FileService)
+	initMysqlTables(ctx, ieFactory, motrace.FileService)
+	initInformationSchemaTables(ctx, ieFactory, motrace.FileService)
 	return nil
 }
 

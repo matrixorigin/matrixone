@@ -163,6 +163,12 @@ func (s *S3FS) Name() string {
 }
 
 func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	ctx, span := trace.Start(ctx, "S3FS.List")
 	defer span.End()
 	if ctx == nil {
@@ -225,6 +231,12 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 }
 
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	ctx, span := trace.Start(ctx, "S3FS.Write")
 	defer span.End()
 
@@ -283,7 +295,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 	}
 
 	// put
-	content, err := io.ReadAll(newIOEntriesReader(vector.Entries))
+	content, err := io.ReadAll(newIOEntriesReader(ctx, vector.Entries))
 	if err != nil {
 		return err
 	}
@@ -309,6 +321,12 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	ctx, span := trace.Start(ctx, "S3FS.Read")
 	defer span.End()
 
@@ -579,6 +597,12 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 }
 
 func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	ctx, span := trace.Start(ctx, "S3FS.Delete")
 	defer span.End()
 

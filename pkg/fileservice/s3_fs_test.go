@@ -168,11 +168,12 @@ func TestDynamicS3(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, _, err := GetForETL(nil, JoinPath(
+		fs, path, err := GetForETL(nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))
 		assert.Nil(t, err)
+		assert.Equal(t, path, "foo/bar/baz")
 		return fs
 	})
 }
@@ -200,11 +201,12 @@ func TestDynamicS3NoKey(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, _, err := GetForETL(nil, JoinPath(
+		fs, path, err := GetForETL(nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))
 		assert.Nil(t, err)
+		assert.Equal(t, path, "foo/bar/baz")
 		return fs
 	})
 }
@@ -232,11 +234,12 @@ func TestDynamicS3Opts(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, _, err := GetForETL(nil, JoinPath(
+		fs, path, err := GetForETL(nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))
 		assert.Nil(t, err)
+		assert.Equal(t, path, "foo/bar/baz")
 		return fs
 	})
 }

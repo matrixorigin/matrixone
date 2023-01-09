@@ -32,7 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/stretchr/testify/assert"
 	"io"
 	"testing"
@@ -68,7 +68,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 	//new session
-	ses := NewSession(proto, testPool, pu, gSysVariables, true)
+	ses := NewSession(proto, testPool, pu, GSysVariables, true)
 	return ses
 }
 
@@ -100,6 +100,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	var files []resultFileInfo
 	//prepare session
 	ses := newTestSession(t, ctrl)
+	_ = ses.SetGlobalVar("save_query_result", int8(1))
 	defer ses.Dispose()
 	const blockCnt int = 3
 
@@ -134,7 +135,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	}
 
 	testUUID := uuid.NullUUID{}.UUID
-	ses.tStmt = &trace.StatementInfo{
+	ses.tStmt = &motrace.StatementInfo{
 		StatementID: testUUID,
 	}
 
@@ -146,6 +147,8 @@ func Test_saveQueryResultMeta(t *testing.T) {
 
 	yes := openSaveQueryResult(ses)
 	assert.True(t, yes)
+
+	ses.requestCtx = context.Background()
 
 	//result string
 	wantResult := "0,0,0\n1,1,1\n2,2,2\n0,0,0\n1,1,1\n2,2,2\n0,0,0\n1,1,1\n2,2,2\n"
