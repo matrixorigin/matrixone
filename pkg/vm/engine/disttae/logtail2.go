@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 	"sync"
@@ -85,17 +86,22 @@ func txnTimeIsLegal(txnTime timestamp.Timestamp) bool {
 // the key is table-id, value is true or false.
 var tableSubscribeRecord *sync.Map
 
+type subscribeID struct {
+	db  uint64
+	tbl uint64
+}
+
 func initTableSubscribeRecord() {
 	newM := &sync.Map{}
 	atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(tableSubscribeRecord)), unsafe.Pointer(newM))
 }
 
-func SetTableSubscribe(tblId uint64) {
-	tableSubscribeRecord.Store(tblId, true)
+func SetTableSubscribe(dbId, tblId uint64) {
+	tableSubscribeRecord.Store(subscribeID{dbId, tblId}, true)
 }
 
-func GetTableSubscribe(tblId uint64) bool {
-	_, b := tableSubscribeRecord.Load(tblId)
+func GetTableSubscribe(dbId, tblId uint64) bool {
+	_, b := tableSubscribeRecord.Load(subscribeID{dbId, tblId})
 	return b
 }
 
@@ -137,8 +143,9 @@ func (logSub *TableLogTailSubscriber) SubscribeTable(
 }
 
 func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail(
-	handleResponse func(ltail *service.LogtailResponse), // how to update the logtail.
+	handleResponse func(tl *logtail.TableLogtail), // how to update the logtail.
 ) {
+	// start a background routine to receive table log tail and update related structure.
 	go func() {
 		type response struct {
 			r   *service.LogtailResponse
@@ -153,6 +160,7 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail(
 			deadLine, cf := context.WithTimeout(context.TODO(), reconnectDeadTime)
 			select {
 			case <-deadLine.Done():
+				initCnLogTailTimestamp()
 				initTableSubscribeRecord()
 				cf()
 				return
@@ -161,8 +169,24 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail(
 			}
 			resp := <-ch
 			if resp.err == nil {
-				handleResponse(resp.r)
-				// UpdateCnLogTimestamp()
+				// if we receive the response, update the partition
+				// and global timestamp.
+				switch {
+				case resp.r.GetError() != nil:
+				case resp.r.GetSubscribeResponse() != nil:
+					lt := resp.r.GetSubscribeResponse().GetLogtail()
+					logTs := lt.GetTs()
+					handleResponse(&lt)
+					UpdateCnLogTimestamp(*logTs)
+					SetTableSubscribe(lt.Table.DbId, lt.Table.TbId)
+				case resp.r.GetUnsubscribeResponse() != nil:
+				case resp.r.GetUpdateResponse() != nil:
+					logLists := resp.r.GetUpdateResponse().GetLogtailList()
+					for _, l := range logLists {
+						handleResponse(&l)
+						UpdateCnLogTimestamp(*l.Ts)
+					}
+				}
 			}
 		}
 	}()
