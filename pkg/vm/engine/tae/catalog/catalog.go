@@ -151,7 +151,7 @@ func (catalog *Catalog) GCCatalog(ts types.TS) {
 		needGC := d.DeleteBefore(ts)
 		d.RUnlock()
 		if needGC {
-			catalog.HardDeleteDatabase(d.ID)
+			catalog.RemoveEntry(d)
 		}
 		return nil
 	}
@@ -161,7 +161,7 @@ func (catalog *Catalog) GCCatalog(ts types.TS) {
 		te.RUnlock()
 		if needGC {
 			db := te.db
-			db.HardDeleteTable(te.ID)
+			db.RemoveEntry(te)
 		}
 		return nil
 	}
@@ -171,7 +171,7 @@ func (catalog *Catalog) GCCatalog(ts types.TS) {
 		se.RUnlock()
 		if needGC {
 			tbl := se.table
-			tbl.HardDeleteSegment(se.ID)
+			tbl.RemoveEntry(se)
 		}
 		return nil
 	}
@@ -181,7 +181,7 @@ func (catalog *Catalog) GCCatalog(ts types.TS) {
 		be.RUnlock()
 		if needGC {
 			seg := be.segment
-			seg.HardDeleteBlock(be.ID)
+			seg.RemoveEntry(be)
 		}
 		return nil
 	}
@@ -877,21 +877,6 @@ func (catalog *Catalog) AddEntryLocked(database *DBEntry, txn txnif.TxnReader, s
 	}
 	return nil
 }
-func (catalog *Catalog) HardDeleteDatabase(dbid uint64) {
-	catalog.Lock()
-	defer catalog.Unlock()
-
-	n := catalog.entries[dbid]
-	fullName := n.GetPayload().GetFullName()
-	nn := catalog.nameNodes[fullName]
-
-	catalog.link.Delete(n)
-	nn.DeleteNode(dbid)
-	if nn.Length() == 0 {
-		delete(catalog.nameNodes, fullName)
-	}
-	delete(catalog.entries, dbid)
-}
 
 func (catalog *Catalog) MakeDBIt(reverse bool) *common.GenericSortedDListIt[*DBEntry] {
 	catalog.RLock()
@@ -941,6 +926,7 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 		}
 		delete(catalog.entries, database.GetID())
 	}
+	database.Close()
 	return nil
 }
 

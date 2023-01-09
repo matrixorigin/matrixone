@@ -300,13 +300,6 @@ func (entry *SegmentEntry) AddEntryLocked(block *BlockEntry) {
 	n := entry.link.Insert(block)
 	entry.entries[block.GetID()] = n
 }
-func (entry *SegmentEntry) HardDeleteBlock(blkID uint64) {
-	entry.Lock()
-	defer entry.Unlock()
-	n := entry.entries[blkID]
-	entry.link.Delete(n)
-	delete(entry.entries, blkID)
-}
 
 func (entry *SegmentEntry) AsCommonID() *common.ID {
 	return &common.ID{
@@ -333,9 +326,26 @@ func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 		entry.link.Delete(n)
 		delete(entry.entries, block.GetID())
 	}
+	block.blkData.Close()
+	block.blkData = nil
 	return nil
 }
+func (entry *SegmentEntry) Close() {
+	blks := entry.getAllBlksLocked()
+	for _, blk := range blks {
+		entry.deleteEntryLocked(blk)
+	}
+}
 
+func (entry *SegmentEntry) getAllBlksLocked() []*BlockEntry {
+	blks := make([]*BlockEntry, 0)
+	it := entry.MakeBlockIt(false)
+	for it.Valid() {
+		blks = append(blks, it.Get().GetPayload())
+		it.Next()
+	}
+	return blks
+}
 func (entry *SegmentEntry) RemoveEntry(block *BlockEntry) (err error) {
 	logutil.Debug("[Catalog]", common.OperationField("remove"),
 		common.OperandField(block.String()))

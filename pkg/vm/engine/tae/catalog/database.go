@@ -397,7 +397,25 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 		}
 		delete(e.entries, table.GetID())
 	}
+	table.Close()
 	return
+}
+
+func (entry *DBEntry) Close() {
+	tbls := entry.getAllTablesLocked()
+	for _, tbl := range tbls {
+		entry.RemoveEntry(tbl)
+	}
+}
+
+func (entry *DBEntry) getAllTablesLocked() []*TableEntry {
+	tbls := make([]*TableEntry, 0)
+	it := entry.MakeTableIt(false)
+	for it.Valid() {
+		tbls = append(tbls, it.Get().GetPayload())
+		it.Next()
+	}
+	return tbls
 }
 
 // Catalog entry is created in following steps:
@@ -445,21 +463,6 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 		nn.CreateNode(table.GetID())
 	}
 	return
-}
-
-func (e *DBEntry) HardDeleteTable(tid uint64) {
-	e.Lock()
-	defer e.Unlock()
-
-	n := e.entries[tid]
-	fullName := n.GetPayload().GetFullName()
-	nn := e.nameNodes[fullName]
-	e.link.Delete(n)
-	nn.DeleteNode(tid)
-	if nn.Length() == 0 {
-		delete(e.nameNodes, fullName)
-	}
-	delete(e.entries, tid)
 }
 
 func (e *DBEntry) MakeCommand(id uint32) (txnif.TxnCmd, error) {

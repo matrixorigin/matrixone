@@ -187,13 +187,6 @@ func (entry *TableEntry) AddEntryLocked(segment *SegmentEntry) {
 	n := entry.link.Insert(segment)
 	entry.entries[segment.GetID()] = n
 }
-func (entry *TableEntry) HardDeleteSegment(sid uint64) {
-	entry.Lock()
-	defer entry.Unlock()
-	n := entry.entries[sid]
-	entry.link.Delete(n)
-	delete(entry.entries, sid)
-}
 
 func (entry *TableEntry) deleteEntryLocked(segment *SegmentEntry) error {
 	if n, ok := entry.entries[segment.GetID()]; !ok {
@@ -201,6 +194,7 @@ func (entry *TableEntry) deleteEntryLocked(segment *SegmentEntry) error {
 	} else {
 		entry.link.Delete(n)
 		delete(entry.entries, segment.GetID())
+		segment.Close()
 	}
 	return nil
 }
@@ -365,7 +359,24 @@ func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
 		common.OperandField(segment.String()))
 	entry.Lock()
 	defer entry.Unlock()
+	segment.Close()
 	return entry.deleteEntryLocked(segment)
+}
+func (entry *TableEntry) Close() {
+	segs := entry.getAllSegsLocked()
+	for _, seg := range segs {
+		entry.deleteEntryLocked(seg)
+	}
+}
+
+func (entry *TableEntry) getAllSegsLocked() []*SegmentEntry {
+	segs := make([]*SegmentEntry, 0)
+	it := entry.MakeSegmentIt(false)
+	for it.Valid() {
+		segs = append(segs, it.Get().GetPayload())
+		it.Next()
+	}
+	return segs
 }
 
 func (entry *TableEntry) PrepareRollback() (err error) {

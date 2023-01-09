@@ -5667,3 +5667,42 @@ func TestGCCatalog2(t *testing.T) {
 	assert.True(t, checkCompactAndGCFn())
 	t.Log(tae.Catalog.SimplePPString(3))
 }
+func TestGCCatalog3(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	options.WithCatalogGCInterval(10 * time.Millisecond)(opts)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchema(3, 2)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 33)
+
+	checkCompactAndGCFn := func() bool {
+		p := &catalog.LoopProcessor{}
+		dbCount := 0
+		p.DatabaseFn = func(be *catalog.DBEntry) error {
+			if be.IsSystemDB() {
+				return nil
+			}
+			dbCount++
+			return nil
+		}
+		err := tae.Catalog.RecurLoop(p)
+		assert.NoError(t, err)
+		return dbCount == 0
+	}
+
+	tae.createRelAndAppend(bat, true)
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.DropDatabase("db")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	t.Log(tae.Catalog.SimplePPString(3))
+	testutils.WaitExpect(4000, checkCompactAndGCFn)
+	assert.True(t, checkCompactAndGCFn())
+	t.Log(tae.Catalog.SimplePPString(3))
+}
