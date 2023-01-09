@@ -19,9 +19,11 @@
 //
 // Modified the behavior and the interface of the step.
 
-package trace
+package motrace
 
-var _ TracerProvider = &MOTracerProvider{}
+import "github.com/matrixorigin/matrixone/pkg/util/trace"
+
+var _ trace.TracerProvider = &MOTracerProvider{}
 
 type MOTracerProvider struct {
 	tracerProviderConfig
@@ -31,13 +33,13 @@ func defaultMOTracerProvider() *MOTracerProvider {
 	pTracer := &MOTracerProvider{
 		tracerProviderConfig{
 			enable:           false,
-			resource:         newResource(),
+			resource:         trace.NewResource(),
 			idGenerator:      &moIDGenerator{},
 			batchProcessMode: FileService,
-			batchProcessor:   noopBatchProcessor{},
+			batchProcessor:   NoopBatchProcessor{},
 		},
 	}
-	WithNode("node_uuid", NodeTypeStandalone).apply(&pTracer.tracerProviderConfig)
+	WithNode("node_uuid", trace.NodeTypeStandalone).apply(&pTracer.tracerProviderConfig)
 	WithMOVersion("MatrixOne").apply(&pTracer.tracerProviderConfig)
 	return pTracer
 }
@@ -50,17 +52,17 @@ func newMOTracerProvider(opts ...TracerProviderOption) *MOTracerProvider {
 	return pTracer
 }
 
-func (p *MOTracerProvider) Tracer(instrumentationName string, opts ...TracerOption) Tracer {
+func (p *MOTracerProvider) Tracer(instrumentationName string, opts ...trace.TracerOption) trace.Tracer {
 	if !p.IsEnable() {
-		return noopTracer{}
+		return trace.NoopTracer{}
 	}
 
 	tracer := &MOTracer{
-		TracerConfig: TracerConfig{Name: instrumentationName},
+		TracerConfig: trace.TracerConfig{Name: instrumentationName},
 		provider:     p,
 	}
 	for _, opt := range opts {
-		opt.apply(&tracer.TracerConfig)
+		opt.Apply(&tracer.TracerConfig)
 	}
 	return tracer
 }

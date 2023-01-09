@@ -35,18 +35,115 @@ create table test01(a int primary key, b int) cluster by a;
 not supported: cluster by with primary key is not support
 create table test01(a int, b int) cluster by a;
 create table test02(a int, b int) cluster by b;
+insert into test01 values(1,1),(2,2),(3,null),(null,4);
+select * from test01;
+a    b
+1    1
+2    2
+3    null
+null    4
+insert into test02 select * from test01;
+select * from test02;
+a    b
+1    1
+2    2
+3    null
+null    4
+update test02 set b=null where a=1;
+select * from test02;
+a    b
+2    2
+3    null
+null    4
+1    null
 create table test03(a int, b int) cluster by c;
 invalid input: column 'c' doesn't exist in table
-create table test04(a int, b int) cluster by (a,b);
-cluster by multi columns is not yet implemented
+create table test04(a int, b int, c varchar(10), unique key(a)) cluster by (b,c,a);
+insert into test04 values(11,3,'bb');
+insert into test04 values(1,2,'a');
+insert into test04 values(2,2,'');
+insert into test04 values(3,2,null);
+select * from test04;
+a    b    c
+11    3    bb
+1    2    a
+2    2
+3    2    null
+create table test06(a int, b int, c varchar(10)) cluster by (b,a,c);
+insert into test06 select * from test04;
+select * from test06;
+a    b    c
+11    3    bb
+1    2    a
+2    2
+3    2    null
+update test06 set c=null where a=11;
+select * from test06;
+a    b    c
+1    2    a
+2    2
+3    2    null
+11    3    null
+insert into test06 select * from test04;
+select * from test06;
+a    b    c
+1    2    a
+2    2
+3    2    null
+11    3    null
+11    3    bb
+1    2    a
+2    2
+3    2    null
+update test06 set c=a where b=2;
+select * from test06;
+a    b    c
+11    3    null
+11    3    bb
+1    2    1
+2    2    2
+3    2    3
+1    2    1
+2    2    2
+3    2    3
+create table test05(a int, b int, c varchar(10)) cluster by (b,c,d);
+invalid input: column 'd' doesn't exist in table
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL\n) CLUSTER BY `a`
+test01    CREATE TABLE `test01` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL\n) CLUSTER BY (`a`)
 show create table test02;
 Table    Create Table
-test02    CREATE TABLE `test02` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL\n) CLUSTER BY `b`
+test02    CREATE TABLE `test02` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL\n) CLUSTER BY (`b`)
+show create table test04;
+Table    Create Table
+test04    CREATE TABLE `test04` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\n`c` VARCHAR(10) DEFAULT NULL,\nUNIQUE KEY`a`(`a`)\n) CLUSTER BY (`b`, `c`, `a`)
+show create table test06;
+Table    Create Table
+test06    CREATE TABLE `test06` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\n`c` VARCHAR(10) DEFAULT NULL\n) CLUSTER BY (`b`, `a`, `c`)
+desc test01;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT    YES        NULL
+b    INT    YES        NULL
+desc test02;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT    YES        NULL
+b    INT    YES        NULL
+desc test04;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT    YES        NULL
+b    INT    YES        NULL
+c    VARCHAR(10)    YES        NULL
+__mo_cbkey_001b001c001a    VARCHAR(65535)    YES        NULL
+desc test06;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT    YES        NULL
+b    INT    YES        NULL
+c    VARCHAR(10)    YES        NULL
+__mo_cbkey_001b001a001c    VARCHAR(65535)    YES        NULL
 drop table test01;
 drop table test02;
+drop table test04;
+drop table test06;
 drop table if exists t1;
 create table t1(a int, b int, unique key(a), unique key(a, b));
 show create table t1;

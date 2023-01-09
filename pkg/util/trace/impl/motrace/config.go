@@ -1,0 +1,206 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package motrace
+
+import (
+	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"sync"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+)
+
+const (
+	InternalExecutor = "InternalExecutor"
+	FileService      = "FileService"
+)
+
+const (
+	MOStatementType = "statement"
+	MOSpanType      = "span"
+	MOLogType       = "log"
+	MOErrorType     = "error"
+	MORawLogType    = "rawlog"
+)
+
+// tracerProviderConfig.
+type tracerProviderConfig struct {
+	// spanProcessors contains collection of SpanProcessors that are processing pipeline
+	// for spans in the trace signal.
+	// SpanProcessors registered with a TracerProvider and are called at the start
+	// and end of a Span's lifecycle, and are called in the order they are
+	// registered.
+	spanProcessors []trace.SpanProcessor
+
+	enable bool // SetEnable
+
+	// idGenerator is used to generate all Span and Trace IDs when needed.
+	idGenerator trace.IDGenerator
+
+	// resource contains attributes representing an entity that produces telemetry.
+	resource *trace.Resource // WithMOVersion, WithNode,
+
+	// debugMode used in Tracer.Debug
+	debugMode bool // DebugMode
+
+	batchProcessMode string         // WithBatchProcessMode
+	batchProcessor   BatchProcessor // WithBatchProcessor
+
+	// writerFactory gen writer for CSV output
+	writerFactory FSWriterFactory // WithFSWriterFactory, default from export.GetFSWriterFactory4Trace
+
+	sqlExecutor func() ie.InternalExecutor // WithSQLExecutor
+	// needInit control table schema create
+	needInit bool // WithInitAction
+
+	exportInterval time.Duration //  WithExportInterval
+	// longQueryTime unit ns
+	longQueryTime int64 //  WithLongQueryTime
+
+	mux sync.RWMutex
+}
+
+func (cfg *tracerProviderConfig) getNodeResource() *trace.MONodeResource {
+	cfg.mux.RLock()
+	defer cfg.mux.RUnlock()
+	if val, has := cfg.resource.Get("Node"); !has {
+		return &trace.MONodeResource{}
+	} else {
+		return val.(*trace.MONodeResource)
+	}
+}
+
+func (cfg *tracerProviderConfig) IsEnable() bool {
+	cfg.mux.RLock()
+	defer cfg.mux.RUnlock()
+	return cfg.enable
+}
+
+func (cfg *tracerProviderConfig) SetEnable(enable bool) {
+	cfg.mux.Lock()
+	defer cfg.mux.Unlock()
+	cfg.enable = enable
+}
+
+func (cfg *tracerProviderConfig) GetSqlExecutor() func() ie.InternalExecutor {
+	cfg.mux.RLock()
+	defer cfg.mux.RUnlock()
+	return cfg.sqlExecutor
+}
+
+// TracerProviderOption configures a TracerProvider.
+type TracerProviderOption interface {
+	apply(*tracerProviderConfig)
+}
+
+type tracerProviderOption func(config *tracerProviderConfig)
+
+func (f tracerProviderOption) apply(config *tracerProviderConfig) {
+	f(config)
+}
+
+func WithMOVersion(v string) tracerProviderOption {
+	return func(config *tracerProviderConfig) {
+		config.resource.Put("version", v)
+	}
+}
+
+// WithNode give id as NodeId, t as NodeType
+func WithNode(uuid string, t string) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.resource.Put("Node", &trace.MONodeResource{
+			NodeUuid: uuid,
+			NodeType: t,
+		})
+	}
+}
+
+func EnableTracer(enable bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.SetEnable(enable)
+	}
+}
+
+func WithFSWriterFactory(f FSWriterFactory) tracerProviderOption {
+	return tracerProviderOption(func(cfg *tracerProviderConfig) {
+		cfg.writerFactory = f
+	})
+}
+
+func WithExportInterval(secs int) tracerProviderOption {
+	return tracerProviderOption(func(cfg *tracerProviderConfig) {
+		cfg.exportInterval = time.Second * time.Duration(secs)
+	})
+}
+
+func WithLongQueryTime(secs float64) tracerProviderOption {
+	return tracerProviderOption(func(cfg *tracerProviderConfig) {
+		cfg.longQueryTime = int64(float64(time.Second) * secs)
+	})
+}
+
+func DebugMode(debug bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.debugMode = debug
+	}
+}
+
+func WithBatchProcessMode(mode string) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.batchProcessMode = mode
+	}
+}
+func WithBatchProcessor(p BatchProcessor) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.batchProcessor = p
+	}
+}
+
+func WithSQLExecutor(f func() ie.InternalExecutor) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.mux.Lock()
+		defer cfg.mux.Unlock()
+		cfg.sqlExecutor = f
+	}
+}
+
+func WithInitAction(init bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.mux.Lock()
+		defer cfg.mux.Unlock()
+		cfg.needInit = init
+	}
+}
+
+var _ trace.IDGenerator = &moIDGenerator{}
+
+type moIDGenerator struct{}
+
+func (M moIDGenerator) NewIDs() (trace.TraceID, trace.SpanID) {
+	tid := trace.TraceID{}
+	binary.BigEndian.PutUint64(tid[:], util.Fastrand64())
+	binary.BigEndian.PutUint64(tid[8:], util.Fastrand64())
+	sid := trace.SpanID{}
+	binary.BigEndian.PutUint64(sid[:], util.Fastrand64())
+	return tid, sid
+}
+
+func (M moIDGenerator) NewSpanID() trace.SpanID {
+	sid := trace.SpanID{}
+	binary.BigEndian.PutUint64(sid[:], util.Fastrand64())
+	return sid
+}

@@ -209,3 +209,10 @@ prepare stmt1 from 'INSERT INTO t1 values(1, 2, 3)';
 execute stmt1;
 execute stmt1;
 select * from t1;
+
+prepare stmt1 from 'update t1 set b = ? where a = ?';
+set @varb = 22;
+set @vara = 1;
+execute stmt1 using @varb,@vara;
+select * from t1;
+drop table t1;

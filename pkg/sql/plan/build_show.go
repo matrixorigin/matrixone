@@ -87,7 +87,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	rowCount := 0
 	var pkDefs []string
-	var cbDef string
 	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
 
 	for _, col := range tableDef.Cols {
@@ -141,9 +140,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		if col.Primary {
 			pkDefs = append(pkDefs, colName)
 		}
-		if col.ClusterBy {
-			cbDef = col.Name
-		}
 	}
 	if tableDef.CompositePkey != nil {
 		pkDefs = append(pkDefs, util.SplitCompositePrimaryKeyColumnName(tableDef.CompositePkey.Name)...)
@@ -190,9 +186,24 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	createStr += ")"
 
-	if len(cbDef) > 0 {
-		createStr += " CLUSTER BY "
-		createStr += fmt.Sprintf("`%s`", cbDef)
+	if tableDef.ClusterBy != nil {
+		clusterby := " CLUSTER BY ("
+		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+			//multi column clusterby
+			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
+			for i, cbName := range cbNames {
+				if i != 0 {
+					clusterby += fmt.Sprintf(", `%s`", cbName)
+				} else {
+					clusterby += fmt.Sprintf("`%s`", cbName)
+				}
+			}
+		} else {
+			//single column cluster by
+			clusterby += fmt.Sprintf("`%s`", tableDef.ClusterBy.Name)
+		}
+		clusterby += ")"
+		createStr += clusterby
 	}
 
 	var comment string
@@ -305,12 +316,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 	ddlType := plan.DataDefinition_SHOW_DATABASES
 	// Any account should shows database MO_CATALOG_DB_NAME
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
-	var sql string
-	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where (%s)", MO_CATALOG_DB_NAME, accountClause)
-	} else {
-		sql = fmt.Sprintf("select 'mo_catalog' union SELECT datname `Database` FROM %s.mo_database where (%s)", MO_CATALOG_DB_NAME, accountClause)
-	}
+	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where (%s)", MO_CATALOG_DB_NAME, accountClause)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -354,15 +360,8 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-
-	var sql string
-	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
-			dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%", accountClause)
-	} else {
-		sql = fmt.Sprintf("select 'mo_database' union select 'mo_tables' union select 'mo_columns' union SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
-			dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%", accountClause)
-	}
+	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
+		dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%", accountClause)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)

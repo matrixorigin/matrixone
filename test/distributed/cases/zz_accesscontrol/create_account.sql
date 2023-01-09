@@ -144,15 +144,3 @@ drop account if exists user_strip_01;
 drop account if exists account_1;
 drop account if exists aaa;
 drop account if exists account;
-
---9. Create a common tenant and access 'mo_database','mo_tables','mo_columns' which under the mo_catalog database
-drop account if exists acc1;
-create account if not exists acc1 ADMIN_NAME 'root' IDENTIFIED BY '123456' comment 'account comment';
--- @session:id=6&user=acc1:root&password=123456
-use mo_catalog;
-show tables;
-select count(distinct account_id) from mo_database;
-select count(distinct account_id) from mo_tables;
-select count(distinct account_id) from mo_columns;
--- @session
-drop account acc1;

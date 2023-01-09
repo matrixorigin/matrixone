@@ -75,22 +75,21 @@ type Limitation struct {
 
 // SessionInfo session information
 type SessionInfo struct {
-	Account         string
-	User            string
-	Host            string
-	Role            string
-	ConnectionID    uint64
-	AccountId       uint32
-	RoleId          uint32
-	UserId          uint32
-	LastInsertID    uint64
-	Database        string
-	Version         string
-	TimeZone        *time.Location
-	StorageEngine   engine.Engine
-	QueryId         string
-	ResultColTypes  []types.Type
-	SaveQueryResult bool
+	Account        string
+	User           string
+	Host           string
+	Role           string
+	ConnectionID   uint64
+	AccountId      uint32
+	RoleId         uint32
+	UserId         uint32
+	LastInsertID   uint64
+	Database       string
+	Version        string
+	TimeZone       *time.Location
+	StorageEngine  engine.Engine
+	QueryId        []string
+	ResultColTypes []types.Type
 }
 
 // AnalyzeInfo  analyze information for query

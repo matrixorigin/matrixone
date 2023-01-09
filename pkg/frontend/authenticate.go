@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 
@@ -691,28 +692,30 @@ var (
 		"system_metrics":     0,
 	}
 	sysWantedTables = map[string]int8{
-		"mo_user":                  0,
-		"mo_account":               0,
-		"mo_role":                  0,
-		"mo_user_grant":            0,
-		"mo_role_grant":            0,
-		"mo_role_privs":            0,
-		"mo_user_defined_function": 0,
-		`%!%mo_increment_columns`:  0,
+		"mo_user":                    0,
+		"mo_account":                 0,
+		"mo_role":                    0,
+		"mo_user_grant":              0,
+		"mo_role_grant":              0,
+		"mo_role_privs":              0,
+		"mo_user_defined_function":   0,
+		"mo_mysql_compatbility_mode": 0,
+		`%!%mo_increment_columns`:    0,
 	}
 	//predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
-		"mo_database":              0,
-		"mo_tables":                0,
-		"mo_columns":               0,
-		"mo_account":               0,
-		"mo_user":                  0,
-		"mo_role":                  0,
-		"mo_user_grant":            0,
-		"mo_role_grant":            0,
-		"mo_role_privs":            0,
-		"mo_user_defined_function": 0,
-		"%!%mo_increment_columns":  0,
+		"mo_database":                0,
+		"mo_tables":                  0,
+		"mo_columns":                 0,
+		"mo_account":                 0,
+		"mo_user":                    0,
+		"mo_role":                    0,
+		"mo_user_grant":              0,
+		"mo_role_grant":              0,
+		"mo_role_privs":              0,
+		"mo_user_defined_function":   0,
+		"mo_mysql_compatbility_mode": 0,
+		"%!%mo_increment_columns":    0,
 	}
 	createAutoTableSql = "create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);"
 	//the sqls creating many tables for the tenant.
@@ -792,6 +795,12 @@ var (
 				database_collation varchar(64),
 				primary key(function_id)
 			);`,
+		`create table mo_mysql_compatbility_mode(
+				configuration_id int auto_increment,
+				dat_name     varchar(5000),
+				configuration  json,
+				primary key(configuration_id)
+			);`,
 	}
 
 	//drop tables for the tenant
@@ -804,22 +813,26 @@ var (
 		//"drop table if exists mo_catalog.`%!%mo_increment_columns`;",
 	}
 
+	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatbility_mode(
+		dat_name,
+		configuration) values ("%s",%s);`
+
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
-		name,
-		args,
-		retType,
-		body,
-		language,
-		db,
-		definer,
-		modified_time,
-		created_time,
-		type,
-		security_type,
-		comment,
-		character_set_client,
-		collation_connection,
-		database_collation) values ("%s",'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+			name,
+			args,
+			retType,
+			body,
+			language,
+			db,
+			definer,
+			modified_time,
+			created_time,
+			type,
+			security_type,
+			comment,
+			character_set_client,
+			collation_connection,
+			database_collation) values ("%s",'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
 				account_id,
@@ -1132,6 +1145,9 @@ const (
 
 	// delete user defined function from mo_user_defined_function
 	deleteUserDefinedFunctionFormat = `delete from mo_catalog.mo_user_defined_function where function_id = %d;`
+
+	// delete a tuple from mo_mysql_compatbility_mode when drop a database
+	deleteMysqlCompatbilityModeFormat = `delete from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s";`
 )
 
 var (
@@ -1355,6 +1371,10 @@ func getSqlForDeleteUser(userId int64) []string {
 		fmt.Sprintf(deleteUserFromMoUserFormat, userId),
 		fmt.Sprintf(deleteUserFromMoUserGrantFormat, userId),
 	}
+}
+
+func getSqlForDeleteMysqlCompatbilityMode(dtname string) string {
+	return fmt.Sprintf(deleteMysqlCompatbilityModeFormat, dtname)
 }
 
 // isClusterTable decides a table is the index table or not
@@ -5421,9 +5441,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	var comment = ""
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
-	var password string
 	ctx, span := trace.Debug(ctx, "createTablesInMoCatalogOfGeneralTenant")
-
 	defer span.End()
 
 	if nameIsInvalid(ca.Name) {
@@ -5433,18 +5451,6 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 
 	if nameIsInvalid(ca.AuthOption.AdminName) {
 		err = moerr.NewInternalError(ctx, "the admin name is invalid")
-		goto handleFailed
-	}
-
-	//add new user entry to the mo_user
-	if ca.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
-		err = moerr.NewInternalError(newTenantCtx, "only support password verification now")
-		goto handleFailed
-	}
-
-	password = ca.AuthOption.IdentifiedType.Str
-	if len(password) == 0 {
-		err = moerr.NewInternalError(newTenantCtx, "password is empty string")
 		goto handleFailed
 	}
 
@@ -5605,9 +5611,9 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 
 	var err error
 	sqls := make([]string, 0)
-	sqls = append(sqls, "create database "+trace.SystemDBConst+";")
-	sqls = append(sqls, "use "+trace.SystemDBConst+";")
-	traceTables := trace.GetSchemaForAccount(ctx, newTenant.GetTenant())
+	sqls = append(sqls, "create database "+motrace.SystemDBConst+";")
+	sqls = append(sqls, "use "+motrace.SystemDBConst+";")
+	traceTables := motrace.GetSchemaForAccount(ctx, newTenant.GetTenant())
 	sqls = append(sqls, traceTables...)
 	sqls = append(sqls, "create database "+metric.MetricDBConst+";")
 	sqls = append(sqls, "use "+metric.MetricDBConst+";")

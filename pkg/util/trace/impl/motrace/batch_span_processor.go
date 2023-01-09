@@ -19,16 +19,17 @@
 //
 // Modified the behavior and the interface of the step.
 
-package trace
+package motrace
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
-var _ SpanProcessor = &batchSpanProcessor{}
+var _ trace.SpanProcessor = &batchSpanProcessor{}
 
 // batchSpanProcessor is a SpanProcessor that batches asynchronously-received
 // spans and sends them to a trace.Exporter when complete.
@@ -40,7 +41,7 @@ type batchSpanProcessor struct {
 	stopCh   chan struct{}
 }
 
-func NewBatchSpanProcessor(exporter BatchProcessor) SpanProcessor {
+func NewBatchSpanProcessor(exporter BatchProcessor) trace.SpanProcessor {
 	bsp := &batchSpanProcessor{
 		e:      exporter,
 		stopCh: make(chan struct{}),
@@ -50,10 +51,10 @@ func NewBatchSpanProcessor(exporter BatchProcessor) SpanProcessor {
 }
 
 // OnStart method does nothing.
-func (bsp *batchSpanProcessor) OnStart(parent context.Context, s Span) {}
+func (bsp *batchSpanProcessor) OnStart(parent context.Context, s trace.Span) {}
 
 // OnEnd method enqueues a ReadOnlySpan for later processing.
-func (bsp *batchSpanProcessor) OnEnd(s Span) {
+func (bsp *batchSpanProcessor) OnEnd(s trace.Span) {
 	// Do not enqueue spans if we are just going to drop them.
 	if bsp.e == nil {
 		return

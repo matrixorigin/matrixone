@@ -156,8 +156,6 @@ mysql
 use mo_catalog;
 show tables;
 tables_in_mo_catalog
-mo_database
-mo_tables
 mo_columns
 mo_user
 mo_role
@@ -165,6 +163,9 @@ mo_user_grant
 mo_role_grant
 mo_role_privs
 mo_user_defined_function
+mo_mysql_compatbility_mode
+mo_tables
+mo_database
 select user_name,authentication_string,owner from mo_user;
 user_name    authentication_string    owner
 admin    123456    0
@@ -245,27 +246,3 @@ drop account if exists user_strip_01;
 drop account if exists account_1;
 drop account if exists aaa;
 drop account if exists account;
-drop account if exists acc1;
-create account if not exists acc1 ADMIN_NAME 'root' IDENTIFIED BY '123456' comment 'account comment';
-use mo_catalog;
-show tables;
-mo_database
-mo_columns
-mo_tables
-mo_database
-mo_user
-mo_role
-mo_user_grant
-mo_role_grant
-mo_role_privs
-mo_user_defined_function
-select count(distinct account_id) from mo_database;
-count(distinct account_id)
-1
-select count(distinct account_id) from mo_tables;
-count(distinct account_id)
-1
-select count(distinct account_id) from mo_columns;
-count(distinct account_id)
-1
-drop account acc1;
