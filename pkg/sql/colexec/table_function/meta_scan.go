@@ -43,9 +43,6 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if bat == nil {
 		return true, nil
 	}
-	if !proc.SessionInfo.SaveQueryResult {
-		return false, moerr.NewNoConfig(proc.Ctx, "save query result")
-	}
 	v, err := colexec.EvalExpr(bat, proc, arg.Args[0])
 	if err != nil {
 		return false, err

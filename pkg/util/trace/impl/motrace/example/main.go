@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"go.uber.org/zap"
 )
 
@@ -50,26 +51,26 @@ func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
 	return fmt.Printf("dummyStringWriter: %s\n", s)
 }
 
-var dummyFSWriterFactory = func(context.Context, string, batchpipe.HasName, trace.WriteFactoryConfig) io.StringWriter {
+var dummyFSWriterFactory = func(context.Context, string, batchpipe.HasName, motrace.WriteFactoryConfig) io.StringWriter {
 	return &dummyStringWriter{}
 }
 
 func bootstrap(ctx context.Context) (context.Context, error) {
 	logutil.SetupMOLogger(&logutil.LogConfig{Format: "console", DisableStore: false})
 	// init trace/log/error framework & BatchProcessor
-	return trace.Init(ctx,
-		trace.WithMOVersion("v0.6.0"),
+	return motrace.Init(ctx,
+		motrace.WithMOVersion("v0.6.0"),
 		// nodeType like CN/DN/LogService; id maybe in config.
-		trace.WithNode("node_uuid", trace.NodeTypeStandalone),
+		motrace.WithNode("node_uuid", trace.NodeTypeStandalone),
 		// config[enableTrace], default: true
-		trace.EnableTracer(true),
+		motrace.EnableTracer(true),
 		// config[traceBatchProcessor], distributed node should use "FileService" in system_vars_config.toml
 		// "FileService" is not implement yet
-		trace.WithBatchProcessMode("FileService"),
+		motrace.WithBatchProcessMode("FileService"),
 		// WithFSWriterFactory for config[traceBatchProcessor] = "FileService"
-		trace.WithFSWriterFactory(dummyFSWriterFactory),
+		motrace.WithFSWriterFactory(dummyFSWriterFactory),
 		// WithSQLExecutor for config[traceBatchProcessor] = "InternalExecutor"
-		trace.WithSQLExecutor(func() ie.InternalExecutor {
+		motrace.WithSQLExecutor(func() ie.InternalExecutor {
 			return &logOutputExecutor{}
 		}),
 	)
@@ -209,10 +210,10 @@ func mixUsage(ctx context.Context) {
 	logutil.Info("message", trace.ContextField(newCtx))
 
 	err := childFunc(newCtx)
-	trace.ReportError(newCtx, errutil.Wrapf(err, "extra %s", "message"), 0)
+	motrace.ReportError(newCtx, errutil.Wrapf(err, "extra %s", "message"), 0)
 	logutil.Warnf("ReportError with NoReport: '%v'", err)
 	noReportCtx := errutil.ContextWithNoReport(newCtx, true)
-	trace.ReportError(noReportCtx, err, 0)
+	motrace.ReportError(noReportCtx, err, 0)
 	logutil.Warnf("ReportError with NoReport, Done.")
 
 }
@@ -224,7 +225,7 @@ func childFunc(ctx context.Context) error {
 
 func shutdown(ctx context.Context) {
 	logutil.Warn("shutdown", trace.ContextField(ctx))
-	trace.Shutdown(ctx)
+	motrace.Shutdown(ctx)
 }
 
 func main() {
@@ -237,7 +238,7 @@ func main() {
 	}
 	// show rootCtx in zap.logger format
 	logutil.Info("root ctx", trace.ContextField(rootCtx))
-	logutil.Info("default ctx", trace.ContextField(trace.DefaultContext()))
+	logutil.Info("default ctx", trace.ContextField(motrace.DefaultContext()))
 
 	traceUsage(rootCtx)
 

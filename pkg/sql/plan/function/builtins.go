@@ -1985,6 +1985,13 @@ var builtins = map[int]Functions{
 				Volatile:  true,
 				Args:      []types.T{},
 				ReturnTyp: types.T_varchar,
+				Fn:        unary.LastQueryIDWithoutParam,
+			},
+			{
+				Index:     1,
+				Volatile:  true,
+				Args:      []types.T{types.T_int64},
+				ReturnTyp: types.T_varchar,
 				Fn:        unary.LastQueryID,
 			},
 		},
