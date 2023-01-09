@@ -18,9 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/export/writer"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -295,106 +293,36 @@ func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch 
 }
 
 func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, motrace.CSVRequests] {
-	return &mfsetCSV{
+	return &mfsetETL{
 		mfset: mfset{
 			Reminder:        bp.NewConstantClock(c.opts.flushInterval),
 			metricThreshold: c.opts.metricThreshold,
 			sampleThreshold: c.opts.sampleThreshold,
 		},
 		writerFactory: c.writerFactory,
-		multiTable:    c.opts.multiTable,
 	}
 }
 
-type mfsetCSV struct {
+type mfsetETL struct {
 	mfset
 	writerFactory export.FSWriterFactory
-	multiTable    bool
 }
 
-func (s *mfsetCSV) writeCsvOneLine(ctx context.Context, buf *bytes.Buffer, fields []string) {
-	opts := table.CommonCsvOptions
-	for idx, field := range fields {
-		if idx > 0 {
-			buf.WriteRune(opts.FieldTerminator)
-		}
-		if strings.ContainsRune(field, opts.FieldTerminator) || strings.ContainsRune(field, opts.EncloseRune) || strings.ContainsRune(field, opts.Terminator) {
-			buf.WriteRune(opts.EncloseRune)
-			writer.QuoteFieldFunc(ctx, buf, field, opts.EncloseRune)
-			buf.WriteRune(opts.EncloseRune)
-		} else {
-			buf.WriteString(field)
-		}
-	}
-	buf.WriteRune(opts.Terminator)
-}
-
-func (s *mfsetCSV) GetBatch(ctx context.Context, buf *bytes.Buffer) motrace.CSVRequests {
-	if !s.multiTable {
-		return s.GetBatchSingleTable(ctx, buf)
-	}
-	return s.GetBatchMultiTable(ctx, buf)
-}
-
-func (s *mfsetCSV) GetBatchMultiTable(ctx context.Context, buf *bytes.Buffer) motrace.CSVRequests {
-
-	buf.Reset()
-
-	writer := s.writerFactory(motrace.DefaultContext(), MetricDBConst, s.mfs[0])
-
-	//buf.WriteString(fmt.Sprintf("insert into %s.%s values ", MetricDBConst, s.mfs[0].GetName()))
-	writeValues := func(t string, v float64, lbls ...string) {
-		var fields []string
-		fields = append(fields, t)
-		fields = append(fields, fmt.Sprintf("%f", v))
-		fields = append(fields, lbls...)
-		s.writeCsvOneLine(ctx, buf, fields)
-	}
-
-	for _, mf := range s.mfs {
-		for _, metric := range mf.Metric {
-
-			var lbls []string
-			// reserved labels
-			lbls = append(lbls, mf.GetNode())
-			lbls = append(lbls, mf.GetRole())
-			// custom labels
-			for _, lbl := range metric.Label {
-				lbls = append(lbls, lbl.GetValue())
-			}
-
-			switch mf.GetType() {
-			case pb.MetricType_COUNTER:
-				time := localTimeStr(metric.GetCollecttime())
-				writeValues(time, metric.Counter.GetValue(), lbls...)
-			case pb.MetricType_GAUGE:
-				time := localTimeStr(metric.GetCollecttime())
-				writeValues(time, metric.Gauge.GetValue(), lbls...)
-			case pb.MetricType_RAWHIST:
-				for _, sample := range metric.RawHist.Samples {
-					time := localTimeStr(sample.GetDatetime())
-					writeValues(time, sample.GetValue(), lbls...)
-				}
-			default:
-				panic(moerr.NewInternalError(ctx, "unsupported metric type %v", mf.GetType()))
-			}
-		}
-	}
-	return []motrace.WriteRequest{motrace.NewCSVRequest(writer, buf.String())}
-}
-
-func (s *mfsetCSV) GetBatchSingleTable(ctx context.Context, buf *bytes.Buffer) motrace.CSVRequests {
+func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) motrace.CSVRequests {
 	buf.Reset()
 
 	ts := time.Now()
-	buffer := make(map[string]*bytes.Buffer, 2)
-	writeValues := func(row *table.Row) {
-		buf, exist := buffer[row.GetAccount()]
+	buffer := make(map[string]table.RowWriter, 2)
+	writeValues := func(row *table.Row) error {
+		w, exist := buffer[row.GetAccount()]
 		if !exist {
-			buf = bytes.NewBuffer(nil)
-			buffer[row.GetAccount()] = buf
+			w = s.writerFactory(ctx, row.GetAccount(), SingleMetricTable, ts)
+			buffer[row.GetAccount()] = w
 		}
-		s.writeCsvOneLine(ctx, buf, row.ToStrings())
+		if err := w.WriteRow(row); err != nil {
+			return err
+		}
+		return nil
 	}
 
 	row := SingleMetricTable.GetRow(ctx)
@@ -416,18 +344,18 @@ func (s *mfsetCSV) GetBatchSingleTable(ctx context.Context, buf *bytes.Buffer) m
 				time := localTime(metric.GetCollecttime())
 				row.SetColumnVal(metricCollectTimeColumn, time)
 				row.SetColumnVal(metricValueColumn, metric.Counter.GetValue())
-				writeValues(row)
+				_ = writeValues(row)
 			case pb.MetricType_GAUGE:
 				time := localTime(metric.GetCollecttime())
 				row.SetColumnVal(metricCollectTimeColumn, time)
 				row.SetColumnVal(metricValueColumn, metric.Gauge.GetValue())
-				writeValues(row)
+				_ = writeValues(row)
 			case pb.MetricType_RAWHIST:
 				for _, sample := range metric.RawHist.Samples {
 					time := localTime(sample.GetDatetime())
 					row.SetColumnVal(metricCollectTimeColumn, time)
 					row.SetColumnVal(metricValueColumn, sample.GetValue())
-					writeValues(row)
+					_ = writeValues(row)
 				}
 			default:
 				panic(moerr.NewInternalError(ctx, "unsupported metric type %v", mf.GetType()))
@@ -436,10 +364,8 @@ func (s *mfsetCSV) GetBatchSingleTable(ctx context.Context, buf *bytes.Buffer) m
 	}
 
 	reqs := make([]motrace.WriteRequest, 0, len(buffer))
-	for account, buf := range buffer {
-		writer := s.writerFactory(motrace.DefaultContext(), SingleMetricTable.Database, SingleMetricTable,
-			export.WithAccount(account), export.WithTimestamp(ts), export.WithPathBuilder(SingleMetricTable.PathBuilder))
-		reqs = append(reqs, motrace.NewCSVRequest(writer, buf.String()))
+	for _, w := range buffer {
+		reqs = append(reqs, motrace.NewRowRequest(w))
 	}
 
 	return reqs

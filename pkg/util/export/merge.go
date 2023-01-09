@@ -302,7 +302,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 
 	// Step 2. new filename, file writer
 	prefix := m.pathBuilder.Build(account, table.MergeLogTypeMerged, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
-	mergeFilename := m.pathBuilder.NewMergeFilename(timestampStart, timestampEnd, table.TaeExtension)
+	mergeFilename := m.pathBuilder.NewMergeFilename(timestampStart, timestampEnd, mergedExtension)
 	mergeFilepath := path.Join(prefix, mergeFilename)
 	newFileWriter, _ := newETLWriter(m.ctx, m.FS, mergeFilepath, buf)
 
@@ -554,15 +554,11 @@ func (w *ContentWriter) FlushAndClose() (int, error) {
 func newETLWriter(ctx context.Context, fs fileservice.FileService, filePath string, buf []byte) (ETLWriter, error) {
 
 	var fsWriter io.StringWriter
-	var err error
 	if strings.LastIndex(filePath, table.TaeExtension) > 0 {
-		fsWriter, err = writer.NewTAEWriter(ctx /*tbl*/, nil /* mp*/, nil, filePath, fs)
-		if err != nil {
-			return nil, err
-		}
+		fsWriter = writer.NewTAEWriter(ctx /*tbl*/, nil /* mp*/, nil, filePath, fs)
 	} else {
-		factory := GetFSWriterFactory(fs, "", "")
-		fsWriter = factory(ctx, "", nil, WithFilePath(filePath))
+		// CSV
+		fsWriter = NewFSWriter(ctx, fs, WithFilePath(filePath))
 	}
 
 	return NewContentWriter(fsWriter, buf), nil
@@ -785,8 +781,9 @@ func InitCronExpr(ctx context.Context, duration time.Duration) error {
 }
 
 var maxFileSize atomic.Int64
+var mergedExtension = table.GetExtension(table.CsvExtension)
 
-func InitMerge(ctx context.Context, mergeCycle time.Duration, filesize int) error {
+func InitMerge(ctx context.Context, mergeCycle time.Duration, filesize int, ext string) error {
 	var err error
 	if mergeCycle > 0 {
 		err = InitCronExpr(ctx, mergeCycle)
@@ -795,5 +792,6 @@ func InitMerge(ctx context.Context, mergeCycle time.Duration, filesize int) erro
 		}
 	}
 	maxFileSize.Store(int64(filesize * mpool.MB))
+	mergedExtension = table.GetExtension(ext)
 	return nil
 }

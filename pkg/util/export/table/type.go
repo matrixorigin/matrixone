@@ -259,3 +259,16 @@ func PathBuilderFactory(pathBuilder string) PathBuilder {
 		return nil
 	}
 }
+
+func GetExtension(ext string) string {
+	switch ext {
+	case CsvExtension, TaeExtension:
+		return ext
+	case "csv":
+		return CsvExtension
+	case "tae":
+		return TaeExtension
+	default:
+		panic("unknown type of ext")
+	}
+}

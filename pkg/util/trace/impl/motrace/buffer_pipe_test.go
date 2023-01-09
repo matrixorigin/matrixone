@@ -91,7 +91,7 @@ func (w *dummyStringWriter) FlushAndClose() (int, error) {
 }
 func (w *dummyStringWriter) GetContent() string { return "" }
 
-var dummyFSWriterFactory = func(context.Context, string, batchpipe.HasName, WriteFactoryConfig) table.RowWriter {
+var dummyFSWriterFactory = func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 	return &dummyStringWriter{}
 }
 
@@ -284,7 +284,7 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 }*/
 
 var genFactory = func() FSWriterFactory {
-	return func(ctx context.Context, db string, name batchpipe.HasName, config WriteFactoryConfig) table.RowWriter {
+	return func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 		buf := bytes.NewBuffer(nil)
 		return writer.NewCSVWriter(ctx, buf, &dummyStringWriter{})
 	}
@@ -460,7 +460,7 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 				},
 				buf: buf,
 			},
-			want: `error_info,node_uuid,Standalone,0,0,,0001-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},
+			want: `error_info,node_uuid,Standalone,0,,,0001-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},
 `,
 		},
 		{
@@ -472,8 +472,8 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 				},
 				buf: buf,
 			},
-			want: `error_info,node_uuid,Standalone,0,0,,0001-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},
-error_info,node_uuid,Standalone,0,0,,0001-01-01 00:00:00.001001,,,,{},20101,test2: internal error: test1,test2: internal error: test1,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},
+			want: `error_info,node_uuid,Standalone,0,,,0001-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},
+error_info,node_uuid,Standalone,0,,,0001-01-01 00:00:00.001001,,,,{},20101,test2: internal error: test1,test2: internal error: test1,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},
 `,
 		},
 	}

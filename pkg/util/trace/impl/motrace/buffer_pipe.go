@@ -171,18 +171,17 @@ func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 	}
 
 	ts := time.Now()
-	buffer := make(map[string]table.RowWriter, 2)
+	writerMap := make(map[string]table.RowWriter, 2)
 	writeValues := func(item table.RowField, row *table.Row) {
 		item.FillRow(ctx, row)
 		account := row.GetAccount()
-		w, exist := buffer[account]
+		w, exist := writerMap[account]
 		if !exist {
 			if factory == nil {
 				factory = GetTracerProvider().writerFactory
 			}
-			w = factory(ctx, row.Table,
-				WriteFactoryConfig{Account: account, Ts: ts, PathBuilder: row.Table.PathBuilder})
-			buffer[row.GetAccount()] = w
+			w = factory(ctx, account, row.Table, ts)
+			writerMap[row.GetAccount()] = w
 		}
 		w.WriteRow(row)
 	}
@@ -196,8 +195,8 @@ func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 		writeValues(item, row)
 	}
 
-	reqs := make(CSVRequests, 0, len(buffer))
-	for _, ww := range buffer {
+	reqs := make(CSVRequests, 0, len(writerMap))
+	for _, ww := range writerMap {
 		reqs = append(reqs, NewRowRequest(ww))
 	}
 

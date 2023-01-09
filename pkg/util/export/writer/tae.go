@@ -48,8 +48,7 @@ type TAEWriter struct {
 	buffer   [][]any
 }
 
-func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filename string, fs fileservice.FileService) (*TAEWriter, error) {
-	var err error
+func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filename string, fs fileservice.FileService) *TAEWriter {
 	w := &TAEWriter{
 		ctx:       ctx,
 		batchSize: BatchSize,
@@ -66,11 +65,7 @@ func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filena
 	}
 	w.objectFS = objectio.NewObjectFS(fs, "")
 	w.writer = blockio.NewWriter(ctx, w.objectFS, filename)
-	if err != nil {
-		return nil, err
-	}
-
-	return w, nil
+	return w
 }
 
 func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch {

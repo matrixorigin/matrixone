@@ -23,7 +23,6 @@ import (
 
 	"github.com/lni/dragonboat/v4/logger"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -57,7 +56,7 @@ func (w *dummyStringWriter) WriteRow(row *table.Row) error {
 func (w *dummyStringWriter) GetContent() string          { return "" }
 func (w *dummyStringWriter) FlushAndClose() (int, error) { return 0, nil }
 
-var dummyFSWriterFactory = func(context.Context, string, batchpipe.HasName, motrace.WriteFactoryConfig) table.RowWriter {
+var dummyFSWriterFactory = func(context.Context, string, *table.Table, time.Time) table.RowWriter {
 	return &dummyStringWriter{}
 }
 

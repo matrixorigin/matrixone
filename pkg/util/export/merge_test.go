@@ -187,7 +187,7 @@ func initEmptyLogFile(ctx context.Context, fs fileservice.FileService, tbl *tabl
 	if err != nil {
 		return nil, err
 	}
-	err = writer.FlushAndClose()
+	_, err = writer.FlushAndClose()
 	if err != nil {
 		return nil, err
 	}

@@ -72,7 +72,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	)
 	require.Nil(t, err)
 
-	writer, err := NewTAEWriter(ctx, dummyAllTypeTable, mp, filepath, fs)
+	writer := NewTAEWriter(ctx, dummyAllTypeTable, mp, filepath, fs)
 	require.Nil(t, err)
 
 	cnt := 10240

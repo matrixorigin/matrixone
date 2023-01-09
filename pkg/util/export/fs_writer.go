@@ -17,6 +17,7 @@ package export
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/export/writer"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -28,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
 var _ stringWriter = (*FSWriter)(nil)
@@ -107,17 +107,14 @@ func (w *FSWriter) WriteString(s string) (n int, err error) {
 	return w.Write(b)
 }
 
-type FSWriterFactory func(ctx context.Context, db string, name batchpipe.HasName, options ...FSWriterOption) io.StringWriter
+type FSWriterFactory0 func(ctx context.Context, account string, tbl *table.Table, ts time.Time) io.StringWriter
+type FSWriterFactory func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter
 
-type RowWriterFactory func(ctx context.Context, db string, name batchpipe.HasName, options ...FSWriterOption) table.RowWriter
-
-func GetFSWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string) FSWriterFactory {
-	return func(ctx context.Context, db string, name batchpipe.HasName, options ...FSWriterOption) io.StringWriter {
-		options = append(options, WithDatabase(db), WithNode(nodeUUID, nodeType))
-		if name != nil {
-			options = append(options, WithName(name.GetName()))
-		}
-		return NewFSWriter(ctx, fs, options...)
+func GetFSWriterFactory(fs fileservice.FileService, nodeUUID, nodeType, ext string) FSWriterFactory0 {
+	var extension = table.GetExtension(ext)
+	var cfg = FilePathCfg{NodeUUID: nodeUUID, NodeType: nodeType, Extension: extension}
+	return func(ctx context.Context, account string, tbl *table.Table, ts time.Time) io.StringWriter {
+		return NewFSWriter(ctx, fs, WithFilePath(cfg.LogsFilePathFactory(account, tbl, ts)))
 	}
 }
 
@@ -133,8 +130,9 @@ func (c *FilePathCfg) LogsFilePathFactory(account string, tbl *table.Table, ts t
 	return path.Join(dir, filename)
 }
 
-func GetRowWriterFactory4Trace(fs fileservice.FileService, nodeUUID, nodeType string, extension string) (factory motrace.FSWriterFactory) {
+func GetRowWriterFactory4Trace(fs fileservice.FileService, nodeUUID, nodeType string, ext string) (factory motrace.FSWriterFactory) {
 
+	var extension = table.GetExtension(ext)
 	var cfg = FilePathCfg{NodeUUID: nodeUUID, NodeType: nodeType, Extension: extension}
 
 	switch extension {
@@ -149,13 +147,15 @@ func GetRowWriterFactory4Trace(fs fileservice.FileService, nodeUUID, nodeType st
 			return writer.NewCSVWriter(ctx, bytes.NewBuffer(nil), NewFSWriter(ctx, fs, options...))
 		}
 	case table.TaeExtension:
+		mp, err := mpool.NewMPool("etl_fs_writer", 0, mpool.NoFixed)
+		if err != nil {
+			panic(err)
+		}
 		factory = func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 			var options []FSWriterOption
 			options = append(options)
-			//if name != nil {
-			//	options = append(options, WithName(name))
-			//}
-			return writer.NewTAEWriter()
+			filePath := cfg.LogsFilePathFactory(account, tbl, ts)
+			return writer.NewTAEWriter(ctx, tbl, mp, filePath, fs)
 		}
 	}
 
