@@ -60,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
 	"github.com/google/uuid"
 )
@@ -205,7 +206,7 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 }
 
 var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt string, useEnv bool) context.Context {
-	if !trace.GetTracerProvider().IsEnable() {
+	if !motrace.GetTracerProvider().IsEnable() {
 		return ctx
 	}
 	sessInfo := proc.SessionInfo
@@ -244,7 +245,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stmID = uuid.New()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	}
-	stm := &trace.StatementInfo{
+	stm := &motrace.StatementInfo{
 		StatementID:          stmID,
 		TransactionID:        txnID,
 		SessionID:            sesID,
@@ -263,7 +264,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	}
 	if ses.sqlSourceType != "internal_sql" {
 		ses.tStmt = stm
-		ses.lastQueryId = types.Uuid(stmID).ToString()
+		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
@@ -272,7 +273,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	proc.WithSpanContext(sc)
 	reqCtx := ses.GetRequestContext()
 	ses.SetRequestContext(trace.ContextWithSpanContext(reqCtx, sc))
-	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
+	return motrace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string) context.Context {
@@ -290,7 +291,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 	var err error
 	var txn TxnOperator
-	if stm := trace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
+	if stm := motrace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
 			txn, err = handler.GetTxn()
 			if err != nil {
@@ -592,7 +593,6 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
 	if openSaveQueryResult(ses) {
-		// ses.lastQueryId = types.Uuid(ses.tStmt.StatementID).ToString()
 		if bat == nil {
 			if err := saveQueryResultMeta(ses); err != nil {
 				return err
@@ -1695,7 +1695,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		}
 		row := make([]interface{}, 2)
 		row[0] = name
-		gsv, ok := gSysVariables.GetDefinitionOfSysVar(name)
+		gsv, ok := GSysVariables.GetDefinitionOfSysVar(name)
 		if !ok {
 			return moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
 		}
@@ -2414,7 +2414,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
-	if stm := trace.StatementFromContext(ctx); stm != nil {
+	if stm := motrace.StatementFromContext(ctx); stm != nil {
 		stm.SetExecPlan(cwft.plan, SerializeExecPlan)
 	}
 	return nil
@@ -3230,7 +3230,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		StorageEngine: pu.StorageEngine,
 		LastInsertID:  ses.GetLastInsertID(),
 	}
-	proc.SessionInfo.QueryId = ses.lastQueryId
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
@@ -3242,7 +3241,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
 	}
-	proc.SessionInfo.QueryId = ses.lastQueryId
+	proc.SessionInfo.QueryId = ses.QueryId
 	ses.txnCompileCtx.SetProcess(proc)
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,
@@ -4394,7 +4393,7 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 	return buffer.Bytes()
 }
 
-func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, statsJonsBytes []byte, stats trace.Statistic) {
+func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, statsJonsBytes []byte, stats motrace.Statistic) {
 	if queryPlan != nil && queryPlan.GetQuery() != nil {
 		explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
 		options := &explain.ExplainOptions{
@@ -4438,12 +4437,12 @@ func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.U
 }
 
 // SerializeExecPlan Serialize the execution plan by json
-var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]byte, []byte, trace.Statistic) {
+var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]byte, []byte, motrace.Statistic) {
 	if plan == nil {
 		return serializePlanToJson(ctx, nil, uuid)
 	} else if queryPlan, ok := plan.(*plan2.Plan); !ok {
 		moError := moerr.NewInternalError(ctx, "execPlan not type of plan2.Plan: %s", reflect.ValueOf(plan).Type().Name())
-		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error()), []byte{}, trace.Statistic{}
+		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error()), []byte{}, motrace.Statistic{}
 	} else {
 		// data transform to json dataStruct
 		return serializePlanToJson(ctx, queryPlan, uuid)
@@ -4451,7 +4450,7 @@ var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]b
 }
 
 func init() {
-	trace.SetDefaultSerializeExecPlan(SerializeExecPlan)
+	motrace.SetDefaultSerializeExecPlan(SerializeExecPlan)
 }
 
 func getAccountId(ctx context.Context) uint32 {
