@@ -16,37 +16,37 @@ package service
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	taelogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/stretchr/testify/require"
 )
 
 func TestService(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	tableA := mockTable(1, 1, 1)
 	tableB := mockTable(2, 2, 2)
 	tableC := mockTable(3, 3, 3)
 
 	address := "127.0.0.1:9999"
 	logtailer := mockLocktailer(tableA, tableB, tableC)
-	clock := clock.NewUnixNanoHLCClock(ctx, 500*time.Millisecond)
+	rt := mockRuntime()
 
 	/* ---- construct logtail server ---- */
 	logtailServer, err := NewLogtailServer(
-		address, options.NewDefaultLogtailServerCfg(), logtailer, clock,
-		WithServerLogger(logutil.GetLogger()),
+		address, options.NewDefaultLogtailServerCfg(), logtailer, rt,
 		WithServerCollectInterval(500*time.Millisecond),
 		WithServerSendTimeout(5*time.Second),
 		WithServerEnableChecksum(true),
@@ -173,4 +173,18 @@ func (m *logtailer) TableLogtail(
 		}
 	}
 	return logtail.TableLogtail{Table: &table, Ts: &to}, nil
+}
+
+func mockRuntime() runtime.Runtime {
+	return runtime.NewRuntime(
+		metadata.ServiceType_DN,
+		"uuid",
+		logutil.GetLogger(),
+		runtime.WithClock(
+			clock.NewHLCClock(
+				func() int64 { return time.Now().UTC().UnixNano() },
+				time.Duration(math.MaxInt64),
+			),
+		),
+	)
 }

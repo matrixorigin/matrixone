@@ -17,12 +17,14 @@ package taestorage
 import (
 	"context"
 
+	"go.uber.org/multierr"
+
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
@@ -30,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
-	"go.uber.org/multierr"
 )
 
 type taeStorage struct {
@@ -46,14 +47,14 @@ func NewTAEStorage(
 	shard metadata.DNShard,
 	factory logservice.ClientFactory,
 	fs fileservice.FileService,
-	clock clock.Clock,
+	rt runtime.Runtime,
 	ckpCfg *options.CheckpointCfg,
 	logtailServerAddr string,
 	logtailServerCfg *options.LogtailServerCfg,
 	logStore options.LogstoreType,
 ) (*taeStorage, error) {
 	opt := &options.Options{
-		Clock:         clock,
+		Clock:         rt.Clock(),
 		Fs:            fs,
 		Lc:            logservicedriver.LogServiceClientFactory(factory),
 		Shard:         shard,
@@ -64,7 +65,7 @@ func NewTAEStorage(
 	taeHandler := rpc.NewTAEHandle(dataDir, opt)
 	tae := taeHandler.GetTxnEngine().GetTAE(context.Background())
 	logtailer := logtail.NewLogtailer(tae.BGCheckpointRunner, tae.LogtailMgr, tae.Catalog)
-	server, err := service.NewLogtailServer(logtailServerAddr, logtailServerCfg, logtailer, clock)
+	server, err := service.NewLogtailServer(logtailServerAddr, logtailServerCfg, logtailer, rt)
 	if err != nil {
 		return nil, err
 	}

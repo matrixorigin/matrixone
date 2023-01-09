@@ -23,10 +23,11 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -43,13 +44,6 @@ const (
 type TableID string
 
 type ServerOption func(*LogtailServer)
-
-// WithServerLogger sets logger
-func WithServerLogger(logger *zap.Logger) ServerOption {
-	return func(s *LogtailServer) {
-		s.logger = logger
-	}
-}
 
 // WithServerMaxMessageSize sets max rpc message size
 func WithServerMaxMessageSize(maxMessageSize int64) ServerOption {
@@ -124,8 +118,11 @@ type LogtailServer struct {
 		responses *sync.Pool
 	}
 
-	logger *zap.Logger
-	cfg    *options.LogtailServerCfg
+	rt     runtime.Runtime
+	logger *log.MOLogger
+	clock  clock.Clock
+
+	cfg *options.LogtailServerCfg
 
 	ssmgr      *SessionManager
 	waterline  *Waterliner
@@ -136,7 +133,6 @@ type LogtailServer struct {
 	subChan chan subscription
 
 	logtail taelogtail.Logtailer
-	clock   clock.Clock
 
 	rpc morpc.RPCServer
 
@@ -147,19 +143,20 @@ type LogtailServer struct {
 
 // NewLogtailServer initializes a server for logtail push model.
 func NewLogtailServer(
-	address string, cfg *options.LogtailServerCfg, logtail taelogtail.Logtailer, clock clock.Clock, opts ...ServerOption,
+	address string, cfg *options.LogtailServerCfg, logtail taelogtail.Logtailer, rt runtime.Runtime, opts ...ServerOption,
 ) (*LogtailServer, error) {
 	s := &LogtailServer{
-		logger:     logutil.GetGlobalLogger(),
+		rt:         rt,
+		logger:     rt.Logger(),
+		clock:      rt.Clock(),
 		cfg:        cfg,
 		ssmgr:      NewSessionManager(),
-		waterline:  NewWaterliner(clock),
+		waterline:  NewWaterliner(rt.Clock()),
 		subscribed: NewTableStacker(),
 		errChan:    make(chan sessionError),
 		pubChan:    make(chan publishment),
 		subChan:    make(chan subscription, 10),
 		logtail:    logtail,
-		clock:      clock,
 	}
 
 	s.pool.requests = &sync.Pool{
@@ -177,7 +174,7 @@ func NewLogtailServer(
 		opt(s)
 	}
 
-	s.logger = s.logger.
+	s.logger = s.logger.Named(LogtailServiceRPCName).
 		With(zap.String("server-id", uuid.NewString()))
 
 	codecOpts := []morpc.CodecOption{
@@ -190,7 +187,7 @@ func NewLogtailServer(
 	codec := morpc.NewMessageCodec(s.acquireRequest, codecOpts...)
 
 	rpc, err := morpc.NewRPCServer(LogtailServiceRPCName, address, codec,
-		morpc.WithServerLogger(s.logger),
+		morpc.WithServerLogger(s.logger.RawLogger()),
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 				m := v.(morpc.RPCMessage)
@@ -210,7 +207,7 @@ func NewLogtailServer(
 	s.rootCtx = ctx
 	s.cancelFunc = cancel
 	s.stopper = stopper.NewStopper(
-		LogtailServiceRPCName, stopper.WithLogger(s.logger),
+		LogtailServiceRPCName, stopper.WithLogger(s.logger.RawLogger()),
 	)
 
 	return s, nil
