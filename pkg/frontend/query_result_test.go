@@ -32,7 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/stretchr/testify/assert"
 	"io"
 	"testing"
@@ -135,7 +135,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	}
 
 	testUUID := uuid.NullUUID{}.UUID
-	ses.tStmt = &trace.StatementInfo{
+	ses.tStmt = &motrace.StatementInfo{
 		StatementID: testUUID,
 	}
 

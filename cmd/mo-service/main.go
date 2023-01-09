@@ -46,7 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"go.uber.org/zap"
 )
 
@@ -287,24 +287,24 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	if !SV.DisableTrace {
 		initWG.Add(1)
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
-			if ctx, err = trace.Init(ctx,
-				trace.WithMOVersion(SV.MoVersion),
-				trace.WithNode(UUID, nodeRole),
-				trace.EnableTracer(!SV.DisableTrace),
-				trace.WithBatchProcessMode(SV.BatchProcessor),
-				trace.WithBatchProcessor(export.NewMOCollector(ctx)),
-				trace.WithFSWriterFactory(export.GetFSWriterFactory4Trace(fs, UUID, nodeRole)),
-				trace.WithExportInterval(SV.TraceExportInterval),
-				trace.WithLongQueryTime(SV.LongQueryTime),
-				trace.WithSQLExecutor(nil),
-				trace.DebugMode(SV.EnableTraceDebug),
+			if ctx, err = motrace.Init(ctx,
+				motrace.WithMOVersion(SV.MoVersion),
+				motrace.WithNode(UUID, nodeRole),
+				motrace.EnableTracer(!SV.DisableTrace),
+				motrace.WithBatchProcessMode(SV.BatchProcessor),
+				motrace.WithBatchProcessor(export.NewMOCollector(ctx)),
+				motrace.WithFSWriterFactory(export.GetFSWriterFactory4Trace(fs, UUID, nodeRole)),
+				motrace.WithExportInterval(SV.TraceExportInterval),
+				motrace.WithLongQueryTime(SV.LongQueryTime),
+				motrace.WithSQLExecutor(nil),
+				motrace.DebugMode(SV.EnableTraceDebug),
 			); err != nil {
 				panic(err)
 			}
 			initWG.Done()
 			<-ctx.Done()
 			// flush trace/log/error framework
-			if err = trace.Shutdown(trace.DefaultContext()); err != nil {
+			if err = motrace.Shutdown(motrace.DefaultContext()); err != nil {
 				logutil.Warn("Shutdown trace", logutil.ErrorField(err), logutil.NoReportFiled())
 			}
 		})

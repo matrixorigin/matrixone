@@ -49,4 +49,5 @@ type UpdateCtx struct {
 	UniqueIndexPos    []int
 	SecondaryIndexPos []int
 	IndexParts        []string
+	ClusterByDef      *plan.ClusterByDef
 }

@@ -20,7 +20,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"os"
 	"reflect"
@@ -29,6 +28,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -60,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
 	"github.com/google/uuid"
 )
@@ -205,7 +207,7 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 }
 
 var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt string, useEnv bool) context.Context {
-	if !trace.GetTracerProvider().IsEnable() {
+	if !motrace.GetTracerProvider().IsEnable() {
 		return ctx
 	}
 	sessInfo := proc.SessionInfo
@@ -244,7 +246,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stmID = uuid.New()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	}
-	stm := &trace.StatementInfo{
+	stm := &motrace.StatementInfo{
 		StatementID:          stmID,
 		TransactionID:        txnID,
 		SessionID:            sesID,
@@ -272,7 +274,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	proc.WithSpanContext(sc)
 	reqCtx := ses.GetRequestContext()
 	ses.SetRequestContext(trace.ContextWithSpanContext(reqCtx, sc))
-	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
+	return motrace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string) context.Context {
@@ -290,7 +292,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 	var err error
 	var txn TxnOperator
-	if stm := trace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
+	if stm := motrace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
 			txn, err = handler.GetTxn()
 			if err != nil {
@@ -2413,7 +2415,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
-	if stm := trace.StatementFromContext(ctx); stm != nil {
+	if stm := motrace.StatementFromContext(ctx); stm != nil {
 		stm.SetExecPlan(cwft.plan, SerializeExecPlan)
 	}
 	return nil
@@ -3837,7 +3839,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		}
 		switch stmt.(type) {
-		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
+		case *tree.CreateTable, *tree.DropTable,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.Load, *tree.MoDump,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
@@ -3853,6 +3855,24 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					ses.SetLastInsertID(proc.GetLastInsertID())
 				}
 			}
+			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
+				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
+				return retErr
+			}
+
+		case *tree.CreateDatabase:
+			insertRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
+			resp := mce.setResponse(i, len(cws), rspLen)
+			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
+				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
+				return retErr
+			}
+
+		case *tree.DropDatabase:
+			deleteRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
+			resp := mce.setResponse(i, len(cws), rspLen)
 			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
 				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
@@ -4392,7 +4412,7 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 	return buffer.Bytes()
 }
 
-func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, statsJonsBytes []byte, stats trace.Statistic) {
+func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, statsJonsBytes []byte, stats motrace.Statistic) {
 	if queryPlan != nil && queryPlan.GetQuery() != nil {
 		explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
 		options := &explain.ExplainOptions{
@@ -4436,12 +4456,12 @@ func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.U
 }
 
 // SerializeExecPlan Serialize the execution plan by json
-var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]byte, []byte, trace.Statistic) {
+var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]byte, []byte, motrace.Statistic) {
 	if plan == nil {
 		return serializePlanToJson(ctx, nil, uuid)
 	} else if queryPlan, ok := plan.(*plan2.Plan); !ok {
 		moError := moerr.NewInternalError(ctx, "execPlan not type of plan2.Plan: %s", reflect.ValueOf(plan).Type().Name())
-		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error()), []byte{}, trace.Statistic{}
+		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error()), []byte{}, motrace.Statistic{}
 	} else {
 		// data transform to json dataStruct
 		return serializePlanToJson(ctx, queryPlan, uuid)
@@ -4449,7 +4469,7 @@ var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]b
 }
 
 func init() {
-	trace.SetDefaultSerializeExecPlan(SerializeExecPlan)
+	motrace.SetDefaultSerializeExecPlan(SerializeExecPlan)
 }
 
 func getAccountId(ctx context.Context) uint32 {
@@ -4459,4 +4479,38 @@ func getAccountId(ctx context.Context) uint32 {
 		accountId = v.(uint32)
 	}
 	return accountId
+}
+
+func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
+	var datname string
+	var configuration string
+
+	if createDatabaseStmt, ok := stmt.(*tree.CreateDatabase); ok {
+		datname = string(createDatabaseStmt.Name)
+		configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+","+"%q"+":"+"0"+"}"+"'", "transaction_ioslation", "SNAPSHOT_ISOLATION", "lower_case_table_names")
+		insertSql := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, datname, configuration)
+
+		bh := ses.GetBackgroundExec(ctx)
+		err := bh.Exec(ctx, insertSql)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
+	var datname string
+
+	if deleteDatabaseStmt, ok := stmt.(*tree.DropDatabase); ok {
+		datname = string(deleteDatabaseStmt.Name)
+		deletesql := getSqlForDeleteMysqlCompatbilityMode(datname)
+
+		bh := ses.GetBackgroundExec(ctx)
+		err := bh.Exec(ctx, deletesql)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

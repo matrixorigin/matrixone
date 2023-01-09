@@ -19,11 +19,12 @@
 //
 // Modified the behavior and the interface of the step.
 
-package trace
+package motrace
 
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"reflect"
 	"testing"
 
@@ -61,7 +62,7 @@ func Test_initExport(t *testing.T) {
 				enableTracer: true,
 				config: &tracerProviderConfig{
 					enable: true, batchProcessMode: InternalExecutor, sqlExecutor: newDummyExecutorFactory(ch),
-					batchProcessor: noopBatchProcessor{},
+					batchProcessor: NoopBatchProcessor{},
 				},
 				needRecover: true,
 				shutdownCtx: context.Background(),
@@ -74,7 +75,7 @@ func Test_initExport(t *testing.T) {
 				enableTracer: true,
 				config: &tracerProviderConfig{
 					enable: true, batchProcessMode: FileService, sqlExecutor: newDummyExecutorFactory(ch),
-					batchProcessor: noopBatchProcessor{},
+					batchProcessor: NoopBatchProcessor{},
 				},
 				shutdownCtx: context.Background(),
 			},
@@ -86,7 +87,7 @@ func Test_initExport(t *testing.T) {
 				enableTracer: true,
 				config: &tracerProviderConfig{
 					enable: true, batchProcessMode: FileService, sqlExecutor: newDummyExecutorFactory(ch),
-					batchProcessor: noopBatchProcessor{},
+					batchProcessor: NoopBatchProcessor{},
 				},
 				shutdownCtx: cancledCtx,
 			},
@@ -105,14 +106,14 @@ func Test_initExport(t *testing.T) {
 				}()
 			}
 			initExporter(context.TODO(), tt.args.config)
-			require.Equal(t, "trace.noopBatchProcessor", fmt.Sprintf("%v", reflect.ValueOf(GetGlobalBatchProcessor()).Type()))
+			require.Equal(t, "motrace.NoopBatchProcessor", fmt.Sprintf("%v", reflect.ValueOf(GetGlobalBatchProcessor()).Type()))
 			require.Equal(t, Shutdown(tt.args.shutdownCtx), nil)
 		})
 	}
 }
 
 func TestDefaultContext(t *testing.T) {
-	var spanId SpanID
+	var spanId trace.SpanID
 	spanId.SetByUUID(GetNodeResource().NodeUuid)
 	tests := []struct {
 		name string
@@ -120,7 +121,7 @@ func TestDefaultContext(t *testing.T) {
 	}{
 		{
 			name: "normal",
-			want: ContextWithSpanContext(context.Background(), SpanContextWithIDs(nilTraceID, spanId)),
+			want: trace.ContextWithSpanContext(context.Background(), trace.SpanContextWithIDs(trace.NilTraceID, spanId)),
 		},
 	}
 	for _, tt := range tests {
@@ -131,12 +132,12 @@ func TestDefaultContext(t *testing.T) {
 }
 
 func TestDefaultSpanContext(t *testing.T) {
-	var spanId SpanID
+	var spanId trace.SpanID
 	spanId.SetByUUID(GetNodeResource().NodeUuid)
-	sc := SpanContextWithIDs(nilTraceID, spanId)
+	sc := trace.SpanContextWithIDs(trace.NilTraceID, spanId)
 	tests := []struct {
 		name string
-		want *SpanContext
+		want *trace.SpanContext
 	}{
 		{
 			name: "normal",
@@ -153,16 +154,35 @@ func TestDefaultSpanContext(t *testing.T) {
 func TestGetNodeResource(t *testing.T) {
 	tests := []struct {
 		name string
-		want *MONodeResource
+		want *trace.MONodeResource
 	}{
 		{
 			name: "normal",
-			want: &MONodeResource{"node_uuid", NodeTypeStandalone},
+			want: &trace.MONodeResource{NodeUuid: "node_uuid", NodeType: trace.NodeTypeStandalone},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equalf(t, tt.want, GetNodeResource(), "GetNodeResource()")
+		})
+	}
+}
+
+func TestGetGlobalBatchProcessor(t *testing.T) {
+	tests := []struct {
+		name string
+		want BatchProcessor
+	}{
+		{
+			name: "normal",
+			want: NoopBatchProcessor{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := GetGlobalBatchProcessor(); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("GetGlobalBatchProcessor() = %v, want %v", got, tt.want)
+			}
 		})
 	}
 }

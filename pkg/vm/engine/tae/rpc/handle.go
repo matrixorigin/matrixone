@@ -317,6 +317,7 @@ func (h *Handle) HandleGetLogTail(
 	resp *apipb.SyncLogTailResp) (err error) {
 	tae := h.eng.GetTAE(context.Background())
 	res, err := logtail.HandleSyncLogTailReq(
+		ctx,
 		tae.BGCheckpointRunner,
 		tae.LogtailMgr,
 		tae.Catalog,
