@@ -244,6 +244,7 @@ const (
 	ICULIBVERSION
 	LAST_INSERT_ID
 	LAST_QUERY_ID
+	LAST_UUID
 	ROLES_GRAPHML
 	ROW_COUNT
 	VERSION
@@ -277,6 +278,9 @@ const (
 	MO_CTL
 
 	MO_SHOW_VISIBLE_BIN // parse type/onUpdate/default []byte to visible string
+
+	MO_TABLE_ROWS // table rows
+	MO_TABLE_SIZE // table size
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -436,6 +440,7 @@ var functionIdRegister = map[string]int32{
 	"icu_version":                    ICULIBVERSION,
 	"last_insert_id":                 LAST_INSERT_ID,
 	"last_query_id":                  LAST_QUERY_ID,
+	"last_uuid":                      LAST_QUERY_ID,
 	"roles_graphml":                  ROLES_GRAPHML,
 	"row_count":                      ROW_COUNT,
 	"version":                        VERSION,
@@ -478,6 +483,8 @@ var functionIdRegister = map[string]int32{
 	"json_unquote":                   JSON_UNQUOTE,
 	"ascii":                          ASCII,
 	"replace":                        REPLACE,
+	"mo_table_rows":                  MO_TABLE_ROWS,
+	"mo_table_size":                  MO_TABLE_SIZE,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

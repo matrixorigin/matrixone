@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -249,33 +250,6 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 	bindContext := NewBindContext(builder, nil)
-
-	if stmt.ClusterByOption != nil {
-		if util.FindPrimaryKey(createTable.TableDef) {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
-		}
-		if len(stmt.ClusterByOption.ColumnList) > 1 {
-			return nil, moerr.NewNYI(ctx.GetContext(), "cluster by multi columns")
-		}
-		colName := stmt.ClusterByOption.ColumnList[0].Parts[0]
-		var found bool
-		for _, col := range createTable.TableDef.Cols {
-			if col.Name == colName {
-				found = true
-				col.ClusterBy = true
-			}
-		}
-		if !found {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", colName)
-		}
-		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Cb{
-				Cb: &plan.ClusterByDef{
-					Name: colName,
-				},
-			},
-		})
-	}
 
 	// set partition(unsupport now)
 	if stmt.PartitionOption != nil {
@@ -610,6 +584,53 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					},
 				},
 			})
+		}
+	}
+
+	//handle cluster by keys
+	if stmt.ClusterByOption != nil {
+		if len(primaryKeys) > 0 {
+			return moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
+		}
+		lenClusterBy := len(stmt.ClusterByOption.ColumnList)
+		var clusterByKeys []string
+		for i := 0; i < lenClusterBy; i++ {
+			colName := stmt.ClusterByOption.ColumnList[i].Parts[0]
+			if _, ok := colMap[colName]; !ok {
+				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", colName)
+			}
+			clusterByKeys = append(clusterByKeys, colName)
+		}
+
+		clusterByColName := clusterByKeys[0]
+		if lenClusterBy == 1 {
+			for _, col := range createTable.TableDef.Cols {
+				if col.Name == clusterByColName {
+					col.ClusterBy = true
+				}
+			}
+		} else {
+			clusterByColName = util.BuildCompositeClusterByColumnName(clusterByKeys)
+			colDef := &ColDef{
+				Name:      clusterByColName,
+				Alg:       plan.CompressType_Lz4,
+				ClusterBy: true,
+				Typ: &Type{
+					Id:    int32(types.T_varchar),
+					Size:  types.VarlenaSize,
+					Width: types.MaxVarcharLen,
+				},
+				Default: &plan.Default{
+					NullAbility:  true,
+					Expr:         nil,
+					OriginString: "",
+				},
+			}
+			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
+			colMap[clusterByColName] = colDef
+		}
+		createTable.TableDef.ClusterBy = &plan.ClusterByDef{
+			Name: clusterByColName,
 		}
 	}
 
@@ -951,6 +972,9 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 }
 
 func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan, error) {
+	if string(stmt.Name) == defines.TEMPORARY_DBNAME {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "this database name is used by mo temporary engine")
+	}
 	createDB := &plan.CreateDatabase{
 		IfNotExists: stmt.IfNotExists,
 		Database:    string(stmt.Name),

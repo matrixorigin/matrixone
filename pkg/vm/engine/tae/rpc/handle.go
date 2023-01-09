@@ -18,14 +18,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"os"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"go.uber.org/zap"
@@ -57,6 +58,8 @@ type Handle struct {
 	}
 	jobScheduler tasks.JobScheduler
 }
+
+var _ rpchandle.Handler = (*Handle)(nil)
 
 type txnContext struct {
 	//createAt is used to GC the abandoned txn.
@@ -315,6 +318,7 @@ func (h *Handle) HandleGetLogTail(
 	resp *apipb.SyncLogTailResp) (err error) {
 	tae := h.eng.GetTAE(context.Background())
 	res, err := logtail.HandleSyncLogTailReq(
+		ctx,
 		tae.BGCheckpointRunner,
 		tae.LogtailMgr,
 		tae.Catalog,

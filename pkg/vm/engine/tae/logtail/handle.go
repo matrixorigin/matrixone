@@ -45,7 +45,7 @@ import (
 const Size90M = 80 * 1024 * 1024
 
 type CheckpointClient interface {
-	CollectCheckpointsInRange(start, end types.TS) (location string, checkpointed types.TS)
+	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
 	FlushTable(dbID, tableID uint64, ts types.TS) error
 }
 
@@ -65,6 +65,7 @@ func DecideTableScope(tableID uint64) Scope {
 }
 
 func HandleSyncLogTailReq(
+	ctx context.Context,
 	ckpClient CheckpointClient,
 	mgr *Manager,
 	c *catalog.Catalog,
@@ -89,7 +90,10 @@ func HandleSyncLogTailReq(
 		start = tableEntry.GetCreatedAt()
 	}
 
-	ckpLoc, checkpointed := ckpClient.CollectCheckpointsInRange(start, end)
+	ckpLoc, checkpointed, err := ckpClient.CollectCheckpointsInRange(ctx, start, end)
+	if err != nil {
+		return
+	}
 
 	if checkpointed.GreaterEq(end) {
 		return api.SyncLogTailResp{
@@ -124,7 +128,7 @@ func HandleSyncLogTailReq(
 				return api.SyncLogTailResp{}, err
 			}
 			// try again after flushing
-			newResp, err := HandleSyncLogTailReq(ckpClient, mgr, c, req, false)
+			newResp, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
 			logutil.Infof("[logtail] flush result: %d -> %d err: %v", resp.ProtoSize(), newResp.ProtoSize(), err)
 			return newResp, err
 		}
