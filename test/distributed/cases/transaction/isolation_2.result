@@ -421,10 +421,11 @@ a    b    c
 commit;
 commit;
 update dis_table_04 set b=(select 'kkkk')  where a=879;
+Duplicate entry 'kkkk' for key '__mo_index_idx_col'
 select * from dis_table_04;
 a    b    c
 6666    kkkk    2010-11-25 00:00:00
-879    kkkk    2011-11-26 00:00:00
+879    uuyyy    2011-11-26 00:00:00
 begin ;
 use isolation_2;
 create temporary table dis_table_05(a int,b varchar(25) not null,c datetime,primary key(a),unique key bstr (b),key cdate (c));
