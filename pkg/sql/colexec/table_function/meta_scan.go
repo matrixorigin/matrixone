@@ -39,16 +39,17 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 			rbat.Clean(proc.Mp())
 		}
 	}()
-
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
+	}
+	if !proc.SessionInfo.SaveQueryResult {
+		return false, moerr.NewNoConfig(proc.Ctx, "save query result")
 	}
 	v, err := colexec.EvalExpr(bat, proc, arg.Args[0])
 	if err != nil {
 		return false, err
 	}
-
 	uuid := vector.MustTCols[types.Uuid](v)[0]
 	// get file size
 	fs := objectio.NewObjectFS(proc.FileService, catalog.QueryResultMetaDir)
