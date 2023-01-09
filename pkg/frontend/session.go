@@ -44,7 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
@@ -185,15 +185,24 @@ type Session struct {
 
 	isBackgroundSession bool
 
-	tStmt *trace.StatementInfo
+	tStmt *motrace.StatementInfo
 
 	ast tree.Statement
 
 	rs *plan.ResultColDef
 
-	lastQueryId string
+	QueryId []string
 
 	blockIdx int
+}
+
+const saveQueryIdCnt = 10
+
+func (ses *Session) pushQueryId(uuid string) {
+	if len(ses.QueryId) > saveQueryIdCnt {
+		ses.QueryId = ses.QueryId[1:]
+	}
+	ses.QueryId = append(ses.QueryId, uuid)
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
@@ -298,7 +307,7 @@ type BackgroundSession struct {
 func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *BackgroundSession {
 	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars, false)
 	ses.SetOutputCallback(fakeDataSetFetcher)
-	if stmt := trace.StatementFromContext(ctx); stmt != nil {
+	if stmt := motrace.StatementFromContext(ctx); stmt != nil {
 		logutil.Infof("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
 	}
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(ctx)
@@ -1839,6 +1848,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		return nil, nil
 	}
 
+	var clusterByDef *plan2.ClusterByDef
 	var cols []*plan2.ColDef
 	var defs []*plan2.TableDefType
 	var properties []*plan2.Property
@@ -1871,6 +1881,14 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 			if isCPkey {
 				CompositePkey = col
 				continue
+			}
+			if attr.Attr.ClusterBy {
+				clusterByDef = &plan.ClusterByDef{
+					Name: attr.Attr.Name,
+				}
+				if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
+					continue
+				}
 			}
 			cols = append(cols, col)
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
@@ -1985,6 +2003,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		ViewSql:       viewSql,
 		Fkeys:         foreignKeys,
 		RefChildTbls:  refChildTbls,
+		ClusterBy:     clusterByDef,
 	}
 	return obj, tableDef
 }
@@ -2316,7 +2335,7 @@ type BackgroundHandler struct {
 var NewBackgroundHandler = func(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit) BackgroundExec {
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
-		ses: NewBackgroundSession(ctx, mp, pu, gSysVariables),
+		ses: NewBackgroundSession(ctx, mp, pu, GSysVariables),
 	}
 	return bh
 }

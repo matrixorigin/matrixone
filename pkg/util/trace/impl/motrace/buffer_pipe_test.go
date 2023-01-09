@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package trace
+package motrace
 
 import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"io"
 	"os"
 	"testing"
@@ -51,7 +52,7 @@ func init() {
 		context.Background(),
 		EnableTracer(true),
 		WithMOVersion("v0.test.0"),
-		WithNode("node_uuid", NodeTypeStandalone),
+		WithNode("node_uuid", trace.NodeTypeStandalone),
 		WithBatchProcessMode(FileService),
 		WithFSWriterFactory(func(ctx context.Context, _ string, _ batchpipe.HasName, _ WriteFactoryConfig) io.StringWriter {
 			return os.Stdout
@@ -67,7 +68,7 @@ func init() {
 	}
 	errutil.SetErrorReporter(noopReportError)
 
-	sc := SpanFromContext(DefaultContext()).SpanContext()
+	sc := trace.SpanFromContext(DefaultContext()).SpanContext()
 	traceIDSpanIDColumnStr = fmt.Sprintf(`"%s", "%s"`, sc.TraceID.String(), sc.SpanID.String())
 	traceIDSpanIDCsvStr = fmt.Sprintf(`%s,%s`, sc.TraceID.String(), sc.SpanID.String())
 
@@ -273,7 +274,7 @@ func Test_genCsvData(t *testing.T) {
 		in  []IBuffer2SqlItem
 		buf *bytes.Buffer
 	}
-	sc := SpanContextWithIDs(_1TraceID, _1SpanID)
+	sc := trace.SpanContextWithIDs(_1TraceID, _1SpanID)
 	tests := []struct {
 		name string
 		args args
@@ -284,7 +285,7 @@ func Test_genCsvData(t *testing.T) {
 			args: args{
 				in: []IBuffer2SqlItem{
 					&MOSpan{
-						SpanConfig: SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _1SpanID}, parent: noopSpan{}},
+						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _1SpanID}, Parent: trace.NoopSpan{}},
 						Name:       *bytes.NewBuffer([]byte("span1")),
 						StartTime:  zeroTime,
 						EndTime:    zeroTime.Add(time.Microsecond),
@@ -301,14 +302,14 @@ func Test_genCsvData(t *testing.T) {
 			args: args{
 				in: []IBuffer2SqlItem{
 					&MOSpan{
-						SpanConfig: SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _1SpanID, Kind: SpanKindStatement}, parent: noopSpan{}},
+						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _1SpanID, Kind: trace.SpanKindStatement}, Parent: trace.NoopSpan{}},
 						Name:       *bytes.NewBuffer([]byte("span1")),
 						StartTime:  zeroTime,
 						EndTime:    zeroTime.Add(time.Microsecond),
 						tracer:     gTracer.(*MOTracer),
 					},
 					&MOSpan{
-						SpanConfig: SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _2SpanID, Kind: SpanKindRemote}, parent: noopSpan{}},
+						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _2SpanID, Kind: trace.SpanKindRemote}, Parent: trace.NoopSpan{}},
 						Name:       *bytes.NewBuffer([]byte("span2")),
 						StartTime:  zeroTime.Add(time.Microsecond),
 						EndTime:    zeroTime.Add(time.Millisecond),

@@ -19,10 +19,11 @@
 //
 // Modified the behavior and the interface of the step.
 
-package trace
+package motrace
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"runtime"
 	"testing"
 
@@ -31,12 +32,12 @@ import (
 
 var _1TxnID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
 var _1SesID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
-var _1TraceID TraceID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
-var _2TraceID TraceID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x2}
-var _10F0TraceID TraceID = [16]byte{0x09, 0x87, 0x65, 0x43, 0x21, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0}
-var _1SpanID SpanID = [8]byte{0, 0, 0, 0, 0, 0, 0, 1}
-var _2SpanID SpanID = [8]byte{0, 0, 0, 0, 0, 0, 0, 2}
-var _16SpanID SpanID = [8]byte{0, 0, 0, 0, 0, 0x12, 0x34, 0x56}
+var _1TraceID trace.TraceID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
+var _2TraceID trace.TraceID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x2}
+var _10F0TraceID trace.TraceID = [16]byte{0x09, 0x87, 0x65, 0x43, 0x21, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0}
+var _1SpanID trace.SpanID = [8]byte{0, 0, 0, 0, 0, 0, 0, 1}
+var _2SpanID trace.SpanID = [8]byte{0, 0, 0, 0, 0, 0, 0, 2}
+var _16SpanID trace.SpanID = [8]byte{0, 0, 0, 0, 0, 0x12, 0x34, 0x56}
 
 func TestMOTracer_Start(t *testing.T) {
 	if runtime.GOOS == `linux` {
@@ -49,77 +50,77 @@ func TestMOTracer_Start(t *testing.T) {
 	type args struct {
 		ctx  context.Context
 		name string
-		opts []SpanOption
+		opts []trace.SpanOption
 	}
-	rootCtx := ContextWithSpanContext(context.Background(), SpanContextWithIDs(_1TraceID, _1SpanID))
-	stmCtx := ContextWithSpanContext(context.Background(), SpanContextWithID(_1TraceID, SpanKindStatement))
+	rootCtx := trace.ContextWithSpanContext(context.Background(), trace.SpanContextWithIDs(_1TraceID, _1SpanID))
+	stmCtx := trace.ContextWithSpanContext(context.Background(), trace.SpanContextWithID(_1TraceID, trace.SpanKindStatement))
 	dAtA := make([]byte, 24)
-	span := SpanFromContext(stmCtx)
+	span := trace.SpanFromContext(stmCtx)
 	c := span.SpanContext()
 	cnt, err := c.MarshalTo(dAtA)
 	require.Nil(t, err)
 	require.Equal(t, 24, cnt)
-	sc := &SpanContext{}
+	sc := &trace.SpanContext{}
 	err = sc.Unmarshal(dAtA)
 	require.Nil(t, err)
-	remoteCtx := ContextWithSpanContext(context.Background(), *sc)
+	remoteCtx := trace.ContextWithSpanContext(context.Background(), *sc)
 	tests := []struct {
 		name             string
 		fields           fields
 		args             args
 		wantNewRoot      bool
-		wantTraceId      TraceID
-		wantParentSpanId SpanID
-		wantKind         SpanKind
+		wantTraceId      trace.TraceID
+		wantParentSpanId trace.SpanID
+		wantKind         trace.SpanKind
 	}{
 		{
 			name:             "normal",
 			fields:           fields{Enable: true},
-			args:             args{ctx: rootCtx, name: "normal", opts: []SpanOption{}},
+			args:             args{ctx: rootCtx, name: "normal", opts: []trace.SpanOption{}},
 			wantNewRoot:      false,
 			wantTraceId:      _1TraceID,
 			wantParentSpanId: _1SpanID,
-			wantKind:         SpanKindInternal,
+			wantKind:         trace.SpanKindInternal,
 		},
 		{
 			name:             "newRoot",
 			fields:           fields{Enable: true},
-			args:             args{ctx: rootCtx, name: "newRoot", opts: []SpanOption{WithNewRoot(true)}},
+			args:             args{ctx: rootCtx, name: "newRoot", opts: []trace.SpanOption{trace.WithNewRoot(true)}},
 			wantNewRoot:      true,
 			wantTraceId:      _1TraceID,
 			wantParentSpanId: _1SpanID,
-			wantKind:         SpanKindInternal,
+			wantKind:         trace.SpanKindInternal,
 		},
 		{
 			name:             "statement",
 			fields:           fields{Enable: true},
-			args:             args{ctx: stmCtx, name: "newStmt", opts: []SpanOption{}},
+			args:             args{ctx: stmCtx, name: "newStmt", opts: []trace.SpanOption{}},
 			wantNewRoot:      false,
 			wantTraceId:      _1TraceID,
-			wantParentSpanId: nilSpanID,
-			wantKind:         SpanKindStatement,
+			wantParentSpanId: trace.NilSpanID,
+			wantKind:         trace.SpanKindStatement,
 		},
 		{
 			name:             "empty",
 			fields:           fields{Enable: true},
-			args:             args{ctx: context.Background(), name: "backgroundCtx", opts: []SpanOption{}},
+			args:             args{ctx: context.Background(), name: "backgroundCtx", opts: []trace.SpanOption{}},
 			wantNewRoot:      true,
-			wantTraceId:      nilTraceID,
+			wantTraceId:      trace.NilTraceID,
 			wantParentSpanId: _1SpanID,
-			wantKind:         SpanKindInternal,
+			wantKind:         trace.SpanKindInternal,
 		},
 		{
 			name:             "remote",
 			fields:           fields{Enable: true},
-			args:             args{ctx: remoteCtx, name: "remoteCtx", opts: []SpanOption{}},
+			args:             args{ctx: remoteCtx, name: "remoteCtx", opts: []trace.SpanOption{}},
 			wantNewRoot:      false,
 			wantTraceId:      _1TraceID,
-			wantParentSpanId: nilSpanID,
-			wantKind:         SpanKindRemote,
+			wantParentSpanId: trace.NilSpanID,
+			wantKind:         trace.SpanKindRemote,
 		},
 	}
 	tracer := &MOTracer{
-		TracerConfig: TracerConfig{Name: "motrace_test"},
+		TracerConfig: trace.TracerConfig{Name: "motrace_test"},
 		provider:     defaultMOTracerProvider(),
 	}
 	for _, tt := range tests {
@@ -129,22 +130,22 @@ func TestMOTracer_Start(t *testing.T) {
 			if !tt.wantNewRoot {
 				require.Equal(t1, tt.wantTraceId, span.SpanContext().TraceID)
 				require.Equal(t1, tt.wantParentSpanId, span.ParentSpanContext().SpanID)
-				require.Equal(t1, tt.wantParentSpanId, SpanFromContext(newCtx).ParentSpanContext().SpanID)
+				require.Equal(t1, tt.wantParentSpanId, trace.SpanFromContext(newCtx).ParentSpanContext().SpanID)
 			} else {
 				require.NotEqualf(t1, tt.wantTraceId, span.SpanContext().TraceID, "want %s, but got %s", tt.wantTraceId.String(), span.SpanContext().TraceID.String())
 				require.NotEqual(t1, tt.wantParentSpanId, span.ParentSpanContext().SpanID)
-				require.NotEqual(t1, tt.wantParentSpanId, SpanFromContext(newCtx).ParentSpanContext().SpanID)
+				require.NotEqual(t1, tt.wantParentSpanId, trace.SpanFromContext(newCtx).ParentSpanContext().SpanID)
 			}
-			require.Equal(t1, tt.wantKind, SpanFromContext(newCtx).ParentSpanContext().Kind)
-			require.Equal(t1, span, SpanFromContext(newCtx))
+			require.Equal(t1, tt.wantKind, trace.SpanFromContext(newCtx).ParentSpanContext().Kind)
+			require.Equal(t1, span, trace.SpanFromContext(newCtx))
 		})
 	}
 }
 
 func TestSpanContext_MarshalTo(t *testing.T) {
 	type fields struct {
-		TraceID TraceID
-		SpanID  SpanID
+		TraceID trace.TraceID
+		SpanID  trace.SpanID
 	}
 	type args struct {
 		dAtA []byte
@@ -159,7 +160,7 @@ func TestSpanContext_MarshalTo(t *testing.T) {
 		{
 			name: "normal",
 			fields: fields{
-				TraceID: nilTraceID,
+				TraceID: trace.NilTraceID,
 				SpanID:  _16SpanID,
 			},
 			args: args{dAtA: make([]byte, 24)},
@@ -181,16 +182,16 @@ func TestSpanContext_MarshalTo(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := &SpanContext{
+			c := &trace.SpanContext{
 				TraceID: tt.fields.TraceID,
 				SpanID:  tt.fields.SpanID,
-				Kind:    SpanKindRemote,
+				Kind:    trace.SpanKindRemote,
 			}
 			got, err := c.MarshalTo(tt.args.dAtA)
 			require.Equal(t, nil, err)
 			require.Equal(t, got, tt.want)
 			require.Equal(t, tt.wantBytes, tt.args.dAtA)
-			newC := &SpanContext{}
+			newC := &trace.SpanContext{}
 			err = newC.Unmarshal(tt.args.dAtA)
 			require.Equal(t, nil, err)
 			require.Equal(t, c, newC)

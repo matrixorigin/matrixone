@@ -57,10 +57,6 @@ func openSaveQueryResult(ses *Session) bool {
 	if ses.tStmt.SqlSourceType == "internal_sql" || isSimpleResultQuery(ses.ast) {
 		return false
 	}
-	if strings.ToLower(ses.GetParameterUnit().SV.SaveQueryResult) == "on" {
-		return true
-	}
-	// TODO: Increase priority
 	val, err := ses.GetGlobalVar("save_query_result")
 	if err != nil {
 		return false
