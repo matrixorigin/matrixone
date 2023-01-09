@@ -35,6 +35,8 @@ type TestRunner interface {
 	IsAllChangesFlushed(start, end types.TS, printTree bool) bool
 	MaxLSNInRange(end types.TS) uint64
 
+	ExistPendingEntryToGC() bool
+	MaxGlobalCheckpoint() *CheckpointEntry
 	ForceFlush(ts types.TS, ctx context.Context) (err error)
 }
 

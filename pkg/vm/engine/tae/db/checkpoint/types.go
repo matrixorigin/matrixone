@@ -45,6 +45,7 @@ type Runner interface {
 	Replay(catalog.DataFactory) (types.TS, error)
 
 	FlushTable(dbID, tableID uint64, ts types.TS) error
+	GCCheckpoint(ts types.TS) error
 
 	// for test, delete in next phase
 	DebugUpdateOptions(opts ...Option)
