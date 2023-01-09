@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package export
+package writer
 
 import (
 	"context"
@@ -28,7 +28,9 @@ import (
 	"time"
 )
 
-// var dummyStrColumn = table.Column{Name: "str", Type: "varchar(32)", ColType: types.T_varchar.ToType(), Default: "", Comment: "str column"}
+var dummyStrColumn = table.Column{Name: "str", Type: "varchar(32)", ColType: table.TVarchar, Default: "", Comment: "str column"}
+var dummyInt64Column = table.Column{Name: "int64", Type: "BIGINT", ColType: table.TInt64, Default: "0", Comment: "int64 column"}
+var dummyFloat64Column = table.Column{Name: "float64", Type: "DOUBLE", ColType: table.TFloat64, Default: "0.0", Comment: "float64 column"}
 var dummyUInt64Column = table.Column{Name: "int64", Type: "BIGINT UNSIGNED", ColType: table.TUint64, Default: "0", Comment: "uint64 column"}
 var dummyDatetimeColumn = table.Column{Name: "datetime_6", Type: "datetime(6)", ColType: table.TDatetime, Default: "", Comment: "datetime.6 column"}
 var dummyJsonColumn = table.Column{Name: "json_col", Type: "JSON", ColType: table.TJson, Default: "{}", Comment: "json column"}
