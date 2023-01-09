@@ -152,9 +152,9 @@ func TestRow_ToStrings(t *testing.T) {
 				prepare: func(r *Row) {
 					r.SetColumnVal(dummyStrColumn, "0")
 					r.SetColumnVal(dummyFloat64Column, 1.1)
-					r.SetColumnVal(dummyInt64Column, 1)
+					r.SetColumnVal(dummyInt64Column, int64(1))
 				}},
-			want: []string{"0", "1", "1.100000"},
+			want: []string{"0", "1", "1.1"},
 		},
 	}
 	for _, tt := range tests {

@@ -173,6 +173,7 @@ func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 	ts := time.Now()
 	buffer := make(map[string]table.RowWriter, 2)
 	writeValues := func(item table.RowField, row *table.Row) {
+		item.FillRow(ctx, row)
 		account := row.GetAccount()
 		w, exist := buffer[account]
 		if !exist {
@@ -183,7 +184,6 @@ func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 				WriteFactoryConfig{Account: account, Ts: ts, PathBuilder: row.Table.PathBuilder})
 			buffer[row.GetAccount()] = w
 		}
-		item.FillRow(ctx, row)
 		w.WriteRow(row)
 	}
 

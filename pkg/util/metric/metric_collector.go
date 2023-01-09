@@ -413,18 +413,18 @@ func (s *mfsetCSV) GetBatchSingleTable(ctx context.Context, buf *bytes.Buffer) m
 
 			switch mf.GetType() {
 			case pb.MetricType_COUNTER:
-				time := localTimeStr(metric.GetCollecttime())
+				time := localTime(metric.GetCollecttime())
 				row.SetColumnVal(metricCollectTimeColumn, time)
 				row.SetColumnVal(metricValueColumn, metric.Counter.GetValue())
 				writeValues(row)
 			case pb.MetricType_GAUGE:
-				time := localTimeStr(metric.GetCollecttime())
+				time := localTime(metric.GetCollecttime())
 				row.SetColumnVal(metricCollectTimeColumn, time)
 				row.SetColumnVal(metricValueColumn, metric.Gauge.GetValue())
 				writeValues(row)
 			case pb.MetricType_RAWHIST:
 				for _, sample := range metric.RawHist.Samples {
-					time := localTimeStr(sample.GetDatetime())
+					time := localTime(sample.GetDatetime())
 					row.SetColumnVal(metricCollectTimeColumn, time)
 					row.SetColumnVal(metricValueColumn, sample.GetValue())
 					writeValues(row)
@@ -443,6 +443,10 @@ func (s *mfsetCSV) GetBatchSingleTable(ctx context.Context, buf *bytes.Buffer) m
 	}
 
 	return reqs
+}
+
+func localTime(value int64) time.Time {
+	return time.UnixMicro(value).In(time.Local)
 }
 
 func localTimeStr(value int64) string {

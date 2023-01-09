@@ -640,7 +640,7 @@ func (c *MapCache) IsEmpty() bool {
 }
 
 func (c *MapCache) Put(r *table.Row) {
-	c.m[r.PrimaryKey()] = r.GetCsvStrings()
+	c.m[r.CsvPrimaryKey()] = r.GetCsvStrings()
 	c.size += r.Size()
 }
 

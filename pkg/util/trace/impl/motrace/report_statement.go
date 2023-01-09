@@ -116,7 +116,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(txnIDCol, uuid.UUID(s.TransactionID).String())
 	row.SetColumnVal(sesIDCol, uuid.UUID(s.SessionID).String())
 	row.SetColumnVal(accountCol, s.Account)
-	row.SetColumnVal(roleIdCol, s.RoleId)
+	row.SetColumnVal(roleIdCol, int64(s.RoleId))
 	row.SetColumnVal(userCol, s.User)
 	row.SetColumnVal(hostCol, s.Host)
 	row.SetColumnVal(dbCol, s.Database)
@@ -126,9 +126,9 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(stmtFgCol, s.StatementFingerprint)
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
-	row.SetColumnVal(reqAtCol, Time2DatetimeString(s.RequestAt))
-	row.SetColumnVal(respAtCol, Time2DatetimeString(s.ResponseAt))
-	row.SetColumnVal(durationCol, s.Duration)
+	row.SetColumnVal(reqAtCol, s.RequestAt)
+	row.SetColumnVal(respAtCol, s.ResponseAt)
+	row.SetColumnVal(durationCol, uint64(s.Duration))
 	row.SetColumnVal(statusCol, s.Status.String())
 	if s.Error != nil {
 		var moError *moerr.Error

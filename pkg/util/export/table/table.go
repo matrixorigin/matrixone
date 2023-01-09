@@ -129,7 +129,7 @@ func StringWithPrecision(name string, precision int, comment string) Column {
 }
 
 func UuidStringColumn(name, comment string) Column {
-	col := StringDefaultColumn(name, "0", comment)
+	col := StringColumn(name, comment)
 	col.Precision = 36
 	return col
 }
@@ -172,6 +172,15 @@ func ValueColumn(name, comment string) Column {
 		Name:    name,
 		ColType: TFloat64,
 		Default: "0.0",
+		Comment: comment,
+	}
+}
+
+func Int64Column(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TInt64,
+		Default: "0",
 		Comment: comment,
 	}
 }
@@ -479,11 +488,15 @@ func (r *Row) ToStrings() []string {
 		case types.T_uint64:
 			col[idx] = fmt.Sprintf("%d", r.Columns[idx].(uint64))
 		case types.T_float64:
-			col[idx] = fmt.Sprintf("%f", r.Columns[idx].(float64))
+			col[idx] = fmt.Sprintf("%.1f", r.Columns[idx].(float64))
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-			col[idx] = r.Columns[idx].(string)
+			col[idx] = r.Columns[idx].(string) // default val can see Row.Reset
 		case types.T_json:
-			col[idx] = r.Columns[idx].(string)
+			val := r.Columns[idx].(string)
+			if len(val) == 0 {
+				val = typ.Default
+			}
+			col[idx] = val
 		case types.T_datetime:
 			col[idx] = Time2DatetimeString(r.Columns[idx].(time.Time))
 		default:
@@ -509,16 +522,16 @@ func (r *Row) ParseRow(cols []string) error {
 	return nil
 }
 
-func (r *Row) PrimaryKey() string {
+func (r *Row) CsvPrimaryKey() string {
 	if len(r.Table.PrimaryKeyColumn) == 0 {
 		return ""
 	}
 	if len(r.Table.PrimaryKeyColumn) == 1 {
-		return r.Columns[r.Name2ColumnIdx[r.Table.PrimaryKeyColumn[0].Name]].(string)
+		return r.CsvColumns[r.Name2ColumnIdx[r.Table.PrimaryKeyColumn[0].Name]]
 	}
 	sb := strings.Builder{}
 	for _, col := range r.Table.PrimaryKeyColumn {
-		sb.WriteString(fmt.Sprintf("%s", r.Columns[r.Name2ColumnIdx[col.Name]]))
+		sb.WriteString(fmt.Sprintf("%s", r.CsvColumns[r.Name2ColumnIdx[col.Name]]))
 		sb.WriteRune('-')
 	}
 	return sb.String()

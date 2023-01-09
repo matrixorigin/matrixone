@@ -142,7 +142,7 @@ func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(spanNameCol, s.Name.String())
 	row.SetColumnVal(startTimeCol, s.StartTime)
 	row.SetColumnVal(endTimeCol, s.EndTime)
-	row.SetColumnVal(durationCol, s.EndTime.Sub(s.StartTime)) // Duration
+	row.SetColumnVal(durationCol, uint64(s.EndTime.Sub(s.StartTime))) // Duration
 	row.SetColumnVal(resourceCol, s.tracer.provider.resource.String())
 }
 
