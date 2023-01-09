@@ -124,6 +124,7 @@ func (w *TAEWriter) writeBatch() error {
 	}
 	w.writer.WriteBlockAndZoneMap(batch, w.idxs)
 	w.buffer = w.buffer[:0]
+	batch.Clean(w.mp)
 	return nil
 }
 
@@ -140,8 +141,7 @@ func (w *TAEWriter) flush() error {
 
 // WriteString implement io.StringWriter
 func (w *TAEWriter) WriteString(s string) (n int, err error) {
-	//TODO implement me
-	panic("implement me")
+	panic("NOT implement")
 }
 
 func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int, typs []types.Type, mp *mpool.MPool) error {

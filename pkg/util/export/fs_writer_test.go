@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/stretchr/testify/require"
 )
 
@@ -142,7 +141,7 @@ func TestFSWriter_Write(t *testing.T) {
 	type fields struct {
 		ctx      context.Context
 		fs       fileservice.FileService
-		prefix   batchpipe.HasName
+		table    string
 		database string
 		nodeUUID string
 		nodeType string
@@ -170,7 +169,7 @@ func TestFSWriter_Write(t *testing.T) {
 			fields: fields{
 				ctx:      context.Background(),
 				fs:       localFs,
-				prefix:   newDummy(1),
+				table:    newDummy(1).GetName(),
 				database: "system",
 				nodeUUID: "node_uuid",
 				nodeType: "standalone",
@@ -187,9 +186,7 @@ func TestFSWriter_Write(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := NewFSWriter(tt.fields.ctx, tt.fields.fs,
-				WithName(tt.fields.prefix),
-				WithDatabase(tt.fields.database),
-				WithNode(tt.fields.nodeUUID, tt.fields.nodeType),
+				WithFilePath("filepath"),
 			)
 			gotN, err := w.Write(tt.args.p)
 			if (err != nil) != tt.wantErr {

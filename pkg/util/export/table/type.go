@@ -203,11 +203,11 @@ func (b *AccountDatePathBuilder) ParsePath(ctx context.Context, path string) (CS
 }
 
 func (b *AccountDatePathBuilder) NewMergeFilename(timestampStart, timestampEnd, extension string) string {
-	return strings.Join([]string{timestampStart, timestampEnd, string(MergeLogTypeMerged)}, FilenameSeparator) + CsvExtension
+	return strings.Join([]string{timestampStart, timestampEnd, string(MergeLogTypeMerged)}, FilenameSeparator) + extension
 }
 
 func (b *AccountDatePathBuilder) NewLogFilename(name, nodeUUID, nodeType string, ts time.Time, extension string) string {
-	return strings.Join([]string{fmt.Sprintf("%d", ts.Unix()), nodeUUID, nodeType}, FilenameSeparator) + CsvExtension
+	return strings.Join([]string{fmt.Sprintf("%d", ts.Unix()), nodeUUID, nodeType}, FilenameSeparator) + extension
 }
 
 func (b *AccountDatePathBuilder) SupportMergeSplit() bool      { return true }

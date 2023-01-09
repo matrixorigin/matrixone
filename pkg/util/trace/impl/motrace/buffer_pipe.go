@@ -157,7 +157,7 @@ type WriteFactoryConfig struct {
 	PathBuilder table.PathBuilder
 }
 
-type FSWriterFactory func(ctx context.Context, db string, name bp.HasName, config WriteFactoryConfig) table.RowWriter
+type FSWriterFactory func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter
 
 func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, factory FSWriterFactory) any {
 	buf.Reset()
@@ -180,7 +180,7 @@ func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 			if factory == nil {
 				factory = GetTracerProvider().writerFactory
 			}
-			w = factory(ctx, row.Table.Database, row.Table,
+			w = factory(ctx, row.Table,
 				WriteFactoryConfig{Account: account, Ts: ts, PathBuilder: row.Table.PathBuilder})
 			buffer[row.GetAccount()] = w
 		}
@@ -294,7 +294,6 @@ func (b *itemBuffer) GetBufferType() string {
 }
 
 func (b *itemBuffer) GetBatch(ctx context.Context, buf *bytes.Buffer) any {
-	// fixme: CollectCycle
 	ctx, span := trace.Start(ctx, "GenBatch")
 	defer span.End()
 	b.mux.Lock()
