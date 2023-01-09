@@ -17,9 +17,13 @@ package common
 import (
 	"context"
 	"runtime"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type RetryOp = func() error
+type WaitOp = func() (ok bool, err error)
 
 func DoRetry(op RetryOp, ctx context.Context) (err error) {
 	for {
@@ -37,4 +41,34 @@ func DoRetry(op RetryOp, ctx context.Context) (err error) {
 		runtime.Gosched()
 	}
 	return
+}
+
+func RetryWithIntervalAndTimeout(
+	op WaitOp,
+	timeout time.Duration,
+	interval time.Duration) (err error) {
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	var ok bool
+	ok, err = op()
+	if ok {
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return moerr.NewInternalError(ctx, "timeout")
+		case <-ticker.C:
+			ok, err = op()
+			if ok {
+				return
+			}
+		}
+	}
 }

@@ -179,10 +179,10 @@ Payload = The size of payload is ($Size * 1K - 2B - 4B)
 
 Suppose the `MinPartSize` is `4`, which stands for `4K`. It starts with an empty segment (No Parts). Now we do the following in sequence
 
-1. Append a block (Block0) of 3 columns，and the compressed sizes of the three columns are 3.4K, 7.1K, and 2.5K.
+1. Append a block (Block0) of 3 columns, and the compressed sizes of the three columns are 3.4K, 7.1K, and 2.5K.
    ```
-   1）Calculate an optimal size for each column：4K，8K and 4K
-   2）Find unused candidate parts. Not found here.
+   1) Calculate an optimal size for each column: 4K, 8K and 4K
+   2) Find unused candidate parts. Not found here.
    3) Allocate new parts for these 3 columns
    4) Flush these 3 columns to the specified part
    5) Flush meta
@@ -190,10 +190,10 @@ Suppose the `MinPartSize` is `4`, which stands for `4K`. It starts with an empty
 
 <img src="https://user-images.githubusercontent.com/39627130/158206129-09394ea4-4a24-4c7a-a167-bf61aa6113a7.png" height="100%" width="100%" />
 
-2. Append a block (Block1) of 3 columns，and the compressed sizes of the three columns are 11.3K, 7.8K, and 3.5K.
+2. Append a block (Block1) of 3 columns, and the compressed sizes of the three columns are 11.3K, 7.8K, and 3.5K.
    ```
-   1）Calculate an optimal size for each column：12K，8K and 4K
-   2）Find unused candidate parts. Not found here.
+   1) Calculate an optimal size for each column: 12K, 8K and 4K
+   2) Find unused candidate parts. Not found here.
    3) Allocate new parts for these 3 columns
    4) Flush these 3 columns to the specified new parts
    5) Flush meta
@@ -202,8 +202,8 @@ Suppose the `MinPartSize` is `4`, which stands for `4K`. It starts with an empty
 
 3. There are some updates to the 3rd column of Block0, which is marked as `Block0-2`. Now we start to checkpoint the updates into segment file. The compressed size of the updated `Block0-2` is 7.3K.
    ```
-   1）Calculate an optimal size：8K
-   2）Find unused candidate parts. Not found here.
+   1) Calculate an optimal size: 8K
+   2) Find unused candidate parts. Not found here.
    3) Allocate a new part
    4) Flush to the specified new part
    5) Flush meta
@@ -213,18 +213,18 @@ Suppose the `MinPartSize` is `4`, which stands for `4K`. It starts with an empty
 
 4. There are some updates to the first column of Block1, which is marked as `Block1-0`. Now we start to checkpoint the updates into segment file. The compressed size of the updated `Block1-0` is 3.6K.
    ```
-   1）Calculate an optimal size：4K
-   2）Find unused candidate parts. Unused Part(3, 1) found
+   1) Calculate an optimal size: 4K
+   2) Find unused candidate parts. Unused Part(3, 1) found
    3) Flush to the specified unused part
    4) Flush meta
    ```
 
 ![image](https://user-images.githubusercontent.com/39627130/158209321-59404617-fa1b-4ac8-aecf-9f30ecffa200.png)
 
-5. Append a block (Block2) of 3 columns，and the compressed sizes of the three columns are 2.8K, 3.1K, and 3.7K.
+5. Append a block (Block2) of 3 columns, and the compressed sizes of the three columns are 2.8K, 3.1K, and 3.7K.
    ```
-   1）Calculate an optimal size for each column：4K，4K and 4K
-   2）Find unused candidate parts. Unused Part(4, 1), Part(5, 1), Part(6, 1) found
+   1) Calculate an optimal size for each column: 4K, 4K and 4K
+   2) Find unused candidate parts. Unused Part(4, 1), Part(5, 1), Part(6, 1) found
    3) Flush these 3 columns to the specified unused parts
    4) Flush meta
    ```
@@ -595,7 +595,7 @@ Txn Local Storage
 
 #### UPDATE & DELETE
 ##### UPDATE & DELETE INSERTED DATA
-If any deletes applied to the batch in the transaction local store，a bitmap for deletion is created. Any update will be transfer to a delete and insert.
+If any deletes applied to the batch in the transaction local store, a bitmap for deletion is created. Any update will be transfer to a delete and insert.
 
 ##### UPDATE & DELETE COMMITTED DATA
 A delete history will be create for blocks with any **DELETE** operation.
@@ -634,7 +634,7 @@ A transaction usually contains multiple **DDL** and **DML** statements. As menti
 All **DDL** operations correspond to **Catalog** **DML** operations, see the [corresponding chapter](#Catalog) for details.
 
 ### Commit
-As mentioned earlier，the data of a transaction is grouped by table, and each group of data is a combination of the following data types
+As mentioned earlier, the data of a transaction is grouped by table, and each group of data is a combination of the following data types
 - <img src="https://latex.codecogs.com/svg.image?Batch_{}^{i}" title="Batch_{}^{i}" />. The i-th uncommitted batch
 - <img src="https://latex.codecogs.com/svg.image?Bitmap_{}^{i}" title="Bitmap_{}^{i}" />. The delete bitmap of <img src="https://latex.codecogs.com/svg.image?Batch_{}^{i}" title="Batch_{}^{i}" />
 - <img src="https://latex.codecogs.com/svg.image?DeleteNode_{blk}" title="DeleteNode_{blk}" />. The delete node of a committed block.

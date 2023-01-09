@@ -68,6 +68,18 @@ func (e *ExplainQueryImpl) BuildJsonPlan(ctx context.Context, uuid uuid.UUID, op
 			}
 			return errdata
 		}
+		err = graphData.StatisticsGlobalResource(ctx)
+		if err != nil {
+			var errdata *ExplainData
+			if moErr, ok := err.(*moerr.Error); ok {
+				errdata = NewExplainDataFail(uuid, moErr.MySQLCode(), moErr.Error())
+			} else {
+				newError := moerr.NewInternalError(ctx, "An error occurred when plan is serialized to json")
+				errdata = NewExplainDataFail(uuid, newError.MySQLCode(), newError.Error())
+			}
+			return errdata
+		}
+
 		step := NewStep(index)
 		step.GraphData = *graphData
 
@@ -241,4 +253,100 @@ func (d *ExplainData) StatisticsRead() (rows int64, size int64) {
 		}
 	}
 	return
+}
+
+// Statistics of global resource usage, adding resources of all nodes
+func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error {
+	if graphData == nil {
+		return moerr.NewInternalError(ctx, "explain graphData data is null")
+	} else {
+		// time
+		gtimeConsumed := NewStatisticValue(TimeConsumed, "us")
+		gwaitTime := NewStatisticValue(WaitTime, "us")
+
+		// Throughput
+		ginputRows := NewStatisticValue(InputRows, "count")
+		goutputRows := NewStatisticValue(OutputRows, "count")
+		ginputSize := NewStatisticValue(InputSize, "byte")
+		goutputSize := NewStatisticValue(OutputSize, "byte")
+
+		// memory
+		gMemorySize := NewStatisticValue(MemorySize, "byte")
+
+		//io
+		gDiskIO := NewStatisticValue(DiskIO, "byte")
+		gS3IO := NewStatisticValue(S3IO, "byte")
+
+		// network
+		gNetwork := NewStatisticValue(Network, "byte")
+
+		gtotalStats := TotalStats{
+			Name:  "Time spent",
+			Value: 0,
+			Unit:  "us",
+		}
+
+		for _, node := range graphData.Nodes {
+			for _, timeStatValue := range node.Statistics.Time {
+				if timeStatValue.Name == TimeConsumed {
+					gtimeConsumed.Value += timeStatValue.Value
+				}
+				if timeStatValue.Name == WaitTime {
+					gwaitTime.Value += timeStatValue.Value
+				}
+			}
+
+			for _, throughputValue := range node.Statistics.Throughput {
+				if throughputValue.Name == InputRows {
+					ginputRows.Value += throughputValue.Value
+				}
+				if throughputValue.Name == OutputRows {
+					goutputRows.Value += throughputValue.Value
+				}
+				if throughputValue.Name == InputSize {
+					ginputSize.Value += throughputValue.Value
+				}
+				if throughputValue.Name == OutputSize {
+					goutputSize.Value += throughputValue.Value
+				}
+			}
+
+			for _, memoryValue := range node.Statistics.Memory {
+				if memoryValue.Name == MemorySize {
+					gMemorySize.Value += memoryValue.Value
+				}
+			}
+
+			for _, ioValue := range node.Statistics.IO {
+				if ioValue.Name == DiskIO {
+					gDiskIO.Value += ioValue.Value
+				}
+				if ioValue.Name == S3IO {
+					gS3IO.Value += ioValue.Value
+				}
+			}
+
+			for _, networkValue := range node.Statistics.Network {
+				if networkValue.Name == Network {
+					gNetwork.Value += networkValue.Value
+				}
+			}
+			gtotalStats.Value += node.TotalStats.Value
+		}
+
+		times := []StatisticValue{*gtimeConsumed, *gwaitTime}
+		mbps := []StatisticValue{*ginputRows, *goutputRows, *ginputSize, *goutputSize}
+		mems := []StatisticValue{*gMemorySize}
+		io := []StatisticValue{*gDiskIO, *gS3IO}
+		nw := []StatisticValue{*gNetwork}
+
+		graphData.Global.Statistics.Time = append(graphData.Global.Statistics.Time, times...)
+		graphData.Global.Statistics.Throughput = append(graphData.Global.Statistics.Throughput, mbps...)
+		graphData.Global.Statistics.Memory = append(graphData.Global.Statistics.Memory, mems...)
+		graphData.Global.Statistics.IO = append(graphData.Global.Statistics.IO, io...)
+		graphData.Global.Statistics.Network = append(graphData.Global.Statistics.Network, nw...)
+
+		graphData.Global.TotalStats = gtotalStats
+	}
+	return nil
 }

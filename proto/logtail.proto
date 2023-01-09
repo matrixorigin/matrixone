@@ -1,0 +1,105 @@
+/*
+ * Copyright 2021 Matrix Origin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto3";
+package logtail;
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "timestamp.proto";
+import "api.proto";
+
+option go_package = "github.com/matrixorigin/matrixone/pkg/pb/logtail";
+option (gogoproto.sizer_all)      = false;
+option (gogoproto.protosizer_all) = true;
+
+// SubscribeRequest is the request for subscription.
+message SubscribeRequest {
+    api.TableID table = 1;
+}
+
+// UnsubscribeRequest is the request for unsubscription.
+message UnsubscribeRequest {
+    api.TableID table = 1;
+}
+
+// TableLogtail describes total or additional logtail for a table.
+message TableLogtail {
+    string ckp_location         = 1;
+    timestamp.Timestamp ts      = 2;
+    api.TableID table           = 3;
+    repeated api.Entry commands = 4 [(gogoproto.nullable) = false];
+}
+
+// Status describes error details.
+message Status {
+    // error code from moerr package
+    uint32 code = 1;
+
+    // error message
+    string message = 2;
+}
+
+// ErrorResponse is the response to notify CN with error.
+message ErrorResponse {
+    Status status     = 1 [(gogoproto.nullable) = false];
+    api.TableID table = 2;
+}
+
+// SubscribeResponse is the response for subscription
+//
+// It contains total logtail for the newly subscribed table.
+message SubscribeResponse {
+    TableLogtail logtail = 1 [(gogoproto.nullable) = false];
+}
+
+// UpdateResponse is the response for additional logtail
+//
+// It contains additional logtail for all subscribed tables.
+// The range of duration is (From, to].
+message UpdateResponse {
+    timestamp.Timestamp From           = 1;
+    timestamp.Timestamp To             = 2;
+    repeated TableLogtail logtail_list = 3 [(gogoproto.nullable) = false];
+}
+
+// UnSubscribeResponse is the response for unsubscription
+message UnSubscribeResponse {
+    api.TableID table = 1;
+}
+
+// logtail stream request
+message LogtailRequest {
+    uint64 request_id = 1;
+    oneof request {
+        SubscribeRequest subscribe_table     = 2;
+        UnsubscribeRequest unsubscribe_table = 3;
+    }
+};
+
+// logtail stream response
+message LogtailResponse {
+    uint64 response_id = 1;
+    oneof response {
+        SubscribeResponse subscribe_response     = 2;
+        UnSubscribeResponse unsubscribe_response = 3;
+        UpdateResponse update_response           = 4;
+        ErrorResponse error                      = 5;
+    }
+};
+
+service Logtail {
+    rpc Logtail(stream LogtailRequest) returns (stream LogtailResponse) {}
+}
