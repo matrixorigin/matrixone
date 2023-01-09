@@ -37,7 +37,8 @@ import (
 )
 
 var (
-	testDNStoreAddr = "unix:///tmp/test-dnstore.sock"
+	testDNStoreAddr      = "unix:///tmp/test-dnstore.sock"
+	testDNLogtailAddress = "127.0.0.1:22001"
 )
 
 func TestNewAndStartAndCloseService(t *testing.T) {
@@ -238,6 +239,7 @@ func newTestStore(
 		UUID:          uuid,
 		ListenAddress: testDNStoreAddr,
 	}
+	c.LogtailServer.ListenAddress = testDNLogtailAddress
 	fs, err := fsFactory(defines.LocalFileServiceName)
 	assert.Nil(t, err)
 
