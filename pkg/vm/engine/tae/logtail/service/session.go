@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -51,7 +52,7 @@ func NewSessionManager() *SessionManager {
 // GetSession constructs a session for new morpc.ClientSession.
 func (sm *SessionManager) GetSession(
 	rootCtx context.Context,
-	logger *zap.Logger,
+	logger *log.MOLogger,
 	sendTimeout time.Duration,
 	pooler ResponsePooler,
 	notifier SessionErrorNotifier,
@@ -119,7 +120,7 @@ type Session struct {
 	cancelFunc context.CancelFunc
 	wg         sync.WaitGroup
 
-	logger      *zap.Logger
+	logger      *log.MOLogger
 	sendTimeout time.Duration
 	pooler      ResponsePooler
 	notifier    SessionErrorNotifier
@@ -144,7 +145,7 @@ type ResponsePooler interface {
 // NewSession constructs a session for logtail client.
 func NewSession(
 	rootCtx context.Context,
-	logger *zap.Logger,
+	logger *log.MOLogger,
 	sendTimeout time.Duration,
 	pooler ResponsePooler,
 	notifier SessionErrorNotifier,

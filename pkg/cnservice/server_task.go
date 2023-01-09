@@ -32,7 +32,7 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"go.uber.org/zap"
 )
 
@@ -232,7 +232,7 @@ func (s *service) registerExecutorsLocked() {
 			if err := metric.InitSchema(moServerCtx, ieFactory); err != nil {
 				return err
 			}
-			if err := trace.InitSchema(moServerCtx, ieFactory); err != nil {
+			if err := motrace.InitSchema(moServerCtx, ieFactory); err != nil {
 				return err
 			}
 

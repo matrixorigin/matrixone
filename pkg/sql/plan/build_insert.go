@@ -245,6 +245,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 				OrderAttrs:        orderAttrs,
 				Columns:           columns,
 				CompositePkey:     tblRef.CompositePkey,
+				Cb:                tblRef.ClusterBy,
 				UniqueIndexDef:    uDef,
 				SecondaryIndexDef: sDef,
 				ClusterTable:      clusterTable,

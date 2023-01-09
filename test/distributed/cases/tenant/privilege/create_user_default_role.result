@@ -20,9 +20,6 @@ grant connect on account * to r1;
 use mo_catalog;
 show tables;
 tables_in_mo_catalog
-mo_database
-mo_tables
-mo_columns
 mo_user
 mo_account
 mo_role
@@ -30,6 +27,10 @@ mo_user_grant
 mo_role_grant
 mo_role_privs
 mo_user_defined_function
+mo_mysql_compatbility_mode
+mo_columns
+mo_tables
+mo_database
 create database t;
 internal error: do not have privilege to execute the statement
 grant create database on account * to r1;

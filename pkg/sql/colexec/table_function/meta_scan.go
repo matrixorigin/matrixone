@@ -39,7 +39,6 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 			rbat.Clean(proc.Mp())
 		}
 	}()
-
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
@@ -48,7 +47,6 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-
 	uuid := vector.MustTCols[types.Uuid](v)[0]
 	// get file size
 	fs := objectio.NewObjectFS(proc.FileService, catalog.QueryResultMetaDir)

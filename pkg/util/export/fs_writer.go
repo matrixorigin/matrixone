@@ -17,7 +17,7 @@ package export
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"io"
 	"path"
 	"sync"
@@ -170,8 +170,8 @@ func GetFSWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string) F
 	}
 }
 
-func GetFSWriterFactory4Trace(fs fileservice.FileService, nodeUUID, nodeType string) trace.FSWriterFactory {
-	return func(ctx context.Context, db string, name batchpipe.HasName, config trace.WriteFactoryConfig) io.StringWriter {
+func GetFSWriterFactory4Trace(fs fileservice.FileService, nodeUUID, nodeType string) motrace.FSWriterFactory {
+	return func(ctx context.Context, db string, name batchpipe.HasName, config motrace.WriteFactoryConfig) io.StringWriter {
 		var options []FSWriterOption
 		options = append(options,
 			WithAccount(config.Account), WithTimestamp(config.Ts), WithPathBuilder(config.PathBuilder),

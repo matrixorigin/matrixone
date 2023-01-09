@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package trace
+package motrace
 
 import (
 	"context"
@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
 
@@ -62,7 +63,7 @@ func (h *MOErrorHolder) CsvFields(ctx context.Context, row *table.Row) []string 
 		row.SetColumnVal(errCodeCol, fmt.Sprintf("%d", moError.ErrorCode()))
 	}
 	if ct := errutil.GetContextTracer(h.Error); ct != nil && ct.Context() != nil {
-		span := SpanFromContext(ct.Context())
+		span := trace.SpanFromContext(ct.Context())
 		row.SetColumnVal(traceIDCol, span.SpanContext().TraceID.String())
 		row.SetColumnVal(spanIDCol, span.SpanContext().SpanID.String())
 		row.SetColumnVal(spanKindCol, span.SpanContext().Kind.String())
@@ -90,11 +91,11 @@ func ReportError(ctx context.Context, err error, depth int) {
 	}
 	// log every time
 	msg := fmt.Sprintf("error: %v", err)
-	sc := SpanFromContext(ctx).SpanContext()
+	sc := trace.SpanFromContext(ctx).SpanContext()
 	if sc.IsEmpty() {
 		logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg)
 	} else {
-		logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg, ContextField(ctx))
+		logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg, trace.ContextField(ctx))
 	}
 	// record ctrl
 	if !GetTracerProvider().IsEnable() {
