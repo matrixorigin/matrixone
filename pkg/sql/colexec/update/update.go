@@ -117,6 +117,8 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 					tmpBat.Clean(proc.Mp())
 					return false, err
 				}
+			} else if updateCtx.ClusterByDef != nil && util.JudgeIsCompositeClusterByColumn(updateCtx.ClusterByDef.Name) {
+				util.FillCompositeClusterByBatch(tmpBat, updateCtx.ClusterByDef.Name, proc)
 			}
 			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 

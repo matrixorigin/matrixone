@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package trace
+package motrace
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"testing"
 	"time"
 
@@ -31,7 +32,7 @@ func TestReportZap(t *testing.T) {
 		entry       zapcore.Entry
 		fields      []zapcore.Field
 	}
-	spanField := ContextField(ContextWithSpanContext(context.Background(), SpanContext{}))
+	spanField := trace.ContextField(trace.ContextWithSpanContext(context.Background(), trace.SpanContext{}))
 	entry := zapcore.Entry{
 		Level:      zapcore.InfoLevel,
 		Time:       time.Unix(0, 0),

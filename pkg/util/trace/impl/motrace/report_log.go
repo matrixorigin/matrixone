@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package trace
+package motrace
 
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"time"
 	"unsafe"
 
@@ -30,9 +31,9 @@ var _ batchpipe.HasName = (*MOZapLog)(nil)
 
 // MOZapLog implement export.IBuffer2SqlItem and export.CsvFields
 type MOZapLog struct {
-	Level       zapcore.Level `json:"Level"`
-	SpanContext *SpanContext  `json:"span"`
-	Timestamp   time.Time     `json:"timestamp"`
+	Level       zapcore.Level      `json:"Level"`
+	SpanContext *trace.SpanContext `json:"span"`
+	Timestamp   time.Time          `json:"timestamp"`
 	LoggerName  string
 	Caller      string `json:"caller"` // like "util/trace/trace.go:666"
 	Message     string `json:"message"`
@@ -97,10 +98,10 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 	// find SpanContext
 	endIdx := len(fields) - 1
 	for idx, v := range fields {
-		if IsSpanField(v) {
-			log.SpanContext = v.Interface.(*SpanContext)
+		if trace.IsSpanField(v) {
+			log.SpanContext = v.Interface.(*trace.SpanContext)
 			// find endIdx
-			for ; idx < endIdx && IsSpanField(fields[endIdx]); endIdx-- {
+			for ; idx < endIdx && trace.IsSpanField(fields[endIdx]); endIdx-- {
 			}
 			if idx <= endIdx {
 				fields[idx], fields[endIdx] = fields[endIdx], fields[idx]

@@ -16,7 +16,7 @@
 /CODEOWNERS @fengttt
 
 # top level folders
-/cgo @fengttt
+/cgo @aunjgr
 /docs @dengn
 /etc @zhangxu19830126
 /optools @sukki37
@@ -27,13 +27,13 @@
 /cmd/mo-service @zhangxu19830126
 
 # pkg itself
-/pkg @fengttt
+/pkg @sukki37
 
 # pkg/common
-/pkg/common/async @fengttt
+/pkg/common/async @zhangxu19830126
 /pkg/common/bitmap @nnsgmsone
 /pkg/common/hashmap @nnsgmsone
-/pkg/common/moerror @fengttt
+/pkg/common/moerror @xzxiong
 /pkg/common/morpc @zhangxu19830126
 /pkg/common/stopper @zhangxu19830126
 /pkg/common/log @zhangxu19830126
@@ -81,7 +81,7 @@
 /proto/metadata.proto @zhangxu19830126
 /proto/metric.proto @aptend
 /proto/pipeline.proto @nnsgmsone
-/proto/plan.proto @fengttt @nnsgmsone
+/proto/plan.proto @nnsgmsone
 /proto/timestamp.proto @zhangxu19830126
 /proto/txn.proto @zhangxu19830126
 
@@ -91,7 +91,7 @@
 /pkg/pb/metadata @zhangxu19830126
 /pkg/pb/metric @aptend
 /pkg/pb/pipeline @nnsgmsone
-/pkg/pb/plan @fengttt @nnsgmsone
+/pkg/pb/plan @nnsgmsone
 /pkg/pb/timestamp @zhangxu19830126
 /pkg/pb/txn @zhangxu19830126 
 

@@ -801,10 +801,6 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 	c := new(engine.ConstraintDef)
 	for _, def := range planDefs {
 		switch defVal := def.GetDef().(type) {
-		case *plan.TableDef_DefType_Cb:
-			exeDefs = append(exeDefs, &engine.ClusterByDef{
-				Name: defVal.Cb.Name,
-			})
 		case *plan.TableDef_DefType_Pk:
 			exeDefs = append(exeDefs, &engine.PrimaryIndexDef{
 				Names: defVal.Pk.GetNames(),
@@ -867,6 +863,12 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 
 	if len(c.Cts) > 0 {
 		exeDefs = append(exeDefs, c)
+	}
+
+	if tableDef.ClusterBy != nil {
+		exeDefs = append(exeDefs, &engine.ClusterByDef{
+			Name: tableDef.ClusterBy.Name,
+		})
 	}
 	return exeDefs, nil
 }
