@@ -231,6 +231,11 @@ func Test_mce(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 
 		ses := NewSession(proto, nil, pu, &gSys, true)
+		ses.txnHandler = &TxnHandler{
+			storage:   &engine.EntireEngine{Engine: pu.StorageEngine},
+			txnClient: pu.TxnClient,
+		}
+		ses.txnHandler.SetSession(ses)
 		ses.SetRequestContext(ctx)
 
 		ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
@@ -1095,7 +1100,8 @@ func TestHandleDump(t *testing.T) {
 		}
 		mce.ses = ses
 		dump := &tree.MoDump{
-			OutFile: "test",
+			DumpDatabase: true,
+			OutFile:      "test",
 		}
 		err = mce.handleDump(ctx, dump)
 		convey.So(err, convey.ShouldNotBeNil)

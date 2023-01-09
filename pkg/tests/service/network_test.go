@@ -49,7 +49,7 @@ func TestServiceAddress(t *testing.T) {
 	for i := 0; i < dnServiceNum; i++ {
 		addrList := address.listDnServiceAddresses(i)
 		// 1 address for every dn service now
-		require.Equal(t, 1, len(addrList))
+		require.Equal(t, 2, len(addrList))
 	}
 	// valid dn index: 0, 1
 	// invalid dn index: 2
@@ -94,13 +94,15 @@ func TestServiceAddress(t *testing.T) {
 	// there are 2 address sets corresponding with 2 partitions
 	require.Equal(t, 2, len(addrSets))
 	// in partition 1, there are 1 dn service, 1 log service and 1 cn service.
-	require.Equal(t, 3+1+1, len(addrSets[0]))
-	// in partition 1, there are 1 dn service, 1 cn service and 2 log service.
-	require.Equal(t, 3*2+1+1, len(addrSets[1]))
+	require.Equal(t, 3+2+1, len(addrSets[0]))
+	// in partition 2, there are 1 dn service, 1 cn service and 2 log service.
+	require.Equal(t, 3*2+2+1, len(addrSets[1]))
 
 	// the first address set should contain the following addresses.
 	dnListenAddr := address.getDnListenAddress(int(dnIndex))
 	require.True(t, addrSets[0].contains(dnListenAddr))
+	dnServiceAddr := address.getDnLogtailAddress(int(dnIndex))
+	require.True(t, addrSets[0].contains(dnServiceAddr))
 	logListenAddr := address.getLogListenAddress(int(logIndex))
 	require.True(t, addrSets[0].contains(logListenAddr))
 	logRaftAddr := address.getLogListenAddress(int(logIndex))
@@ -117,6 +119,21 @@ func TestGetDnListenAddress(t *testing.T) {
 	addr1 := address.getDnListenAddress(1)
 	addr2 := address.getDnListenAddress(2)
 	addr3 := address.getDnListenAddress(3)
+
+	require.NotEqual(t, addr0, addr1)
+	require.NotEqual(t, addr0, addr2)
+	require.NotEqual(t, addr1, addr2)
+	require.Equal(t, "", addr3)
+}
+
+func TestGetDnServiceAddress(t *testing.T) {
+	dnNum := 3
+	address := newServiceAddresses(t, 1, dnNum, 0, "127.0.0.1")
+
+	addr0 := address.getDnLogtailAddress(0)
+	addr1 := address.getDnLogtailAddress(1)
+	addr2 := address.getDnLogtailAddress(2)
+	addr3 := address.getDnLogtailAddress(3)
 
 	require.NotEqual(t, addr0, addr1)
 	require.NotEqual(t, addr0, addr2)
