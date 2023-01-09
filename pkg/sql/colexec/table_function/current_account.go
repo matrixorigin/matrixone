@@ -29,29 +29,65 @@ func currentAccountPrepare(proc *process.Process, arg *Argument) error {
 	return nil
 }
 
-func currentAccountCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
-	rbat := batch.New(false, arg.Attrs)
-	rbat.Vecs[0] = vector.NewConstString(
+func getAccountName(proc *process.Process) *vector.Vector {
+	return vector.NewConstString(
 		types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen},
 		1,
 		proc.SessionInfo.Account,
 		proc.Mp(),
 	)
-	rbat.Vecs[1] = vector.NewConstFixed[uint32](types.Type{Oid: types.T_uint32}, 1, proc.SessionInfo.AccountId, proc.Mp())
-	rbat.Vecs[2] = vector.NewConstString(
-		types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen},
-		1,
-		proc.SessionInfo.User,
-		proc.Mp(),
-	)
-	rbat.Vecs[3] = vector.NewConstFixed[uint32](types.Type{Oid: types.T_uint32}, 1, proc.SessionInfo.UserId, proc.Mp())
-	rbat.Vecs[4] = vector.NewConstString(
+}
+
+func getRoleName(proc *process.Process) *vector.Vector {
+	return vector.NewConstString(
 		types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen},
 		1,
 		proc.SessionInfo.Role,
 		proc.Mp(),
 	)
-	rbat.Vecs[5] = vector.NewConstFixed[uint32](types.Type{Oid: types.T_uint32}, 1, proc.SessionInfo.RoleId, proc.Mp())
+}
+
+func getUserName(proc *process.Process) *vector.Vector {
+	return vector.NewConstString(
+		types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen},
+		1,
+		proc.SessionInfo.User,
+		proc.Mp(),
+	)
+}
+
+func getAccountId(proc *process.Process) *vector.Vector {
+	return vector.NewConstFixed[uint32](types.Type{Oid: types.T_uint32}, 1, proc.SessionInfo.AccountId, proc.Mp())
+}
+
+func getRoleId(proc *process.Process) *vector.Vector {
+	return vector.NewConstFixed[uint32](types.Type{Oid: types.T_uint32}, 1, proc.SessionInfo.RoleId, proc.Mp())
+}
+
+func getUserId(proc *process.Process) *vector.Vector {
+	return vector.NewConstFixed[uint32](types.Type{Oid: types.T_uint32}, 1, proc.SessionInfo.UserId, proc.Mp())
+}
+
+func currentAccountCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
+	rbat := batch.New(false, arg.Attrs)
+	for i, attr := range arg.Attrs {
+		switch attr {
+		case "account_name":
+			rbat.Vecs[i] = getAccountName(proc)
+		case "account_id":
+			rbat.Vecs[i] = getAccountId(proc)
+		case "user_name":
+			rbat.Vecs[i] = getUserName(proc)
+		case "user_id":
+			rbat.Vecs[i] = getUserId(proc)
+		case "role_name":
+			rbat.Vecs[i] = getRoleName(proc)
+		case "role_id":
+			rbat.Vecs[i] = getRoleId(proc)
+		default:
+			return false, moerr.NewInvalidInput(proc.Ctx, "%v is not supported by current_account()", attr)
+		}
+	}
 	rbat.InitZsOne(1)
 	proc.SetInputBatch(rbat)
 	return true, nil
