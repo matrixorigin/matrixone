@@ -244,6 +244,7 @@ const (
 	ICULIBVERSION
 	LAST_INSERT_ID
 	LAST_QUERY_ID
+	LAST_UUID
 	ROLES_GRAPHML
 	ROW_COUNT
 	VERSION
@@ -439,6 +440,7 @@ var functionIdRegister = map[string]int32{
 	"icu_version":                    ICULIBVERSION,
 	"last_insert_id":                 LAST_INSERT_ID,
 	"last_query_id":                  LAST_QUERY_ID,
+	"last_uuid":                      LAST_QUERY_ID,
 	"roles_graphml":                  ROLES_GRAPHML,
 	"row_count":                      ROW_COUNT,
 	"version":                        VERSION,

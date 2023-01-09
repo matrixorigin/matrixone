@@ -812,7 +812,7 @@ type GlobalSystemVariables struct {
 }
 
 // the set of variables
-var gSysVariables = &GlobalSystemVariables{
+var GSysVariables = &GlobalSystemVariables{
 	sysVars: make(map[string]interface{}),
 }
 
@@ -916,7 +916,7 @@ func (gsv *GlobalSystemVariables) SetGlobalSysVar(ctx context.Context, name stri
 }
 
 func init() {
-	InitGlobalSystemVariables(gSysVariables)
+	InitGlobalSystemVariables(GSysVariables)
 }
 
 // definitions of system variables

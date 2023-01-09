@@ -150,7 +150,7 @@ func NewLogtailServer(
 	address string, cfg *options.LogtailServerCfg, logtail taelogtail.Logtailer, clock clock.Clock, opts ...ServerOption,
 ) (*LogtailServer, error) {
 	s := &LogtailServer{
-		logger:     logutil.GetLogger(),
+		logger:     logutil.GetGlobalLogger(),
 		cfg:        cfg,
 		ssmgr:      NewSessionManager(),
 		waterline:  NewWaterliner(clock),
