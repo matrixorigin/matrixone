@@ -301,3 +301,12 @@ execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1,@__mo_stmt_var_2;
 Duplicate entry '7' for key 'id'
 reset prepare __mo_stmt_id_1;
 deallocate prepare __mo_stmt_id_1;
+drop table if exists t1;
+create table t1( a int unique key,  b int,  c int );
+prepare stmt1 from 'INSERT INTO t1 values(1, 2, 3)';
+execute stmt1;
+execute stmt1;
+Duplicate entry '1' for key '__mo_index_idx_col'
+select * from t1;
+a    b    c
+1    2    3
