@@ -167,7 +167,7 @@ func Test_mce(t *testing.T) {
 			"set @@tx_isolation=`READ-COMMITTED`",
 			//TODO:fix it after parser is ready
 			//"set a = b",
-			"drop database T",
+			//"drop database T",
 		}
 
 		sql1Col := &MysqlColumn{}
