@@ -147,6 +147,8 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	yes := openSaveQueryResult(ses)
 	assert.True(t, yes)
 
+	ses.requestCtx = context.Background()
+
 	//result string
 	wantResult := "0,0,0\n1,1,1\n2,2,2\n0,0,0\n1,1,1\n2,2,2\n0,0,0\n1,1,1\n2,2,2\n"
 	//save blocks

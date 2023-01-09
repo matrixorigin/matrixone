@@ -2889,4 +2889,34 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	MO_TABLE_ROWS: {
+		Id:     MO_TABLE_ROWS,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.MoTableRows,
+			},
+		},
+	},
+	MO_TABLE_SIZE: {
+		Id:     MO_TABLE_SIZE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.MoTableSize,
+			},
+		},
+	},
 }

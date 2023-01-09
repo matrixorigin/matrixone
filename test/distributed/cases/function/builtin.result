@@ -660,3 +660,14 @@ select * from t1 where second(a) between 10 and 36;
 a    b
 2011-01-31 12:32:11    1979-10-22 00:00:00
 drop table if exists t1;
+drop table if exists t1;
+create table t1(a int, b int);
+select mo_table_rows(db_name,'t1'),mo_table_size(db_name,'t1') from (select database() as db_name);
+mo_table_rows(db_name, t1)    mo_table_size(db_name, t1)
+0    0
+insert into t1 values(1, 2);
+insert into t1 values(3, 4);
+select mo_table_rows(db_name,'t1'),mo_table_size(db_name,'t1') from (select database() as db_name);
+mo_table_rows(db_name, t1)    mo_table_size(db_name, t1)
+2    48
+drop table if exists t1;

@@ -157,11 +157,14 @@ type TenantIDKey struct{}
 type UserIDKey struct{}
 type RoleIDKey struct{}
 
-// use SqlKey{} to get string value from Context
+// EngineKey use EngineKey{} to get engine from Context
+type EngineKey struct{}
+
+// SqlKey use SqlKey{} to get string value from Context
 type SqlKey struct{}
 
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 
-// use TemporaryDN to get temporary storage from Context
+// TemporaryDN use TemporaryDN to get temporary storage from Context
 type TemporaryDN struct{}

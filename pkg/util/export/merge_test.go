@@ -297,11 +297,11 @@ func TestNewMergeWithContextDone(t *testing.T) {
 
 	ctx := trace.Generate(context.Background())
 	ctx, cancel := context.WithCancel(ctx)
-	cancel()
 
 	type args struct {
-		ctx  context.Context
-		opts []MergeOption
+		ctx    context.Context
+		cancel context.CancelFunc
+		opts   []MergeOption
 	}
 	tests := []struct {
 		name string
@@ -311,7 +311,8 @@ func TestNewMergeWithContextDone(t *testing.T) {
 		{
 			name: "normal",
 			args: args{
-				ctx: ctx,
+				ctx:    ctx,
+				cancel: cancel,
 				opts: []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
 					WithFileService(fs), WithTable(dummyTable),
 					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)},
@@ -337,6 +338,7 @@ func TestNewMergeWithContextDone(t *testing.T) {
 			}
 			require.Nil(t, err)
 
+			tt.args.cancel()
 			_, err = reader.ReadLine()
 			//err = got.doMergeFiles(ctx, dummyTable.Table, files, 0)
 			t.Logf("doMergeFiles meet err: %s", err)
@@ -357,11 +359,11 @@ func TestNewMergeNOFiles(t *testing.T) {
 
 	ctx := trace.Generate(context.Background())
 	ctx, cancel := context.WithCancel(ctx)
-	cancel()
 
 	type args struct {
-		ctx  context.Context
-		opts []MergeOption
+		ctx    context.Context
+		cancel context.CancelFunc
+		opts   []MergeOption
 	}
 	tests := []struct {
 		name string
@@ -371,7 +373,8 @@ func TestNewMergeNOFiles(t *testing.T) {
 		{
 			name: "normal",
 			args: args{
-				ctx: ctx,
+				ctx:    ctx,
+				cancel: cancel,
 				opts: []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
 					WithFileService(fs), WithTable(dummyTable),
 					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)},
@@ -381,6 +384,7 @@ func TestNewMergeNOFiles(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			defer tt.args.cancel()
 
 			filePath := newFilePath(dummyTable, ts)
 			files := []string{filePath}
@@ -390,6 +394,7 @@ func TestNewMergeNOFiles(t *testing.T) {
 
 			err := got.doMergeFiles(ctx, dummyTable.Table, files, 0)
 			require.Equal(t, true, strings.Contains(err.Error(), "is not found"))
+
 		})
 	}
 }
