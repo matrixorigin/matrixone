@@ -314,6 +314,8 @@ func writeBatch(ctx context.Context,
 				}
 			}
 		}
+	} else if p.Cb != nil && util.JudgeIsCompositeClusterByColumn(p.Cb.Name) {
+		util.FillCompositeClusterByBatch(bat, p.Cb.Name, c.proc)
 	}
 
 	//update unique index table

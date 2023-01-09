@@ -254,7 +254,7 @@ func getRangeExpr(colName string) *plan.Expr {
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
-					Obj: 10,
+					Obj:     10,
 					ObjName: "=",
 				},
 				Args: []*plan.Expr{
@@ -344,10 +344,10 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 				break
 			}
 		}
-		retbat.Vecs = append(retbat.Vecs, bat.Vecs[0])
-		retbat.Vecs[0].Col = retbat.Vecs[0].Col.([]types.Rowid)[rowIndex : rowIndex+1]
-		retbat.SetZs(1, mp)
 		if rowIndex < int64(bat.Length()) {
+			retbat.Vecs = append(retbat.Vecs, bat.Vecs[0])
+			retbat.Vecs[0].Col = retbat.Vecs[0].Col.([]types.Rowid)[rowIndex : rowIndex+1]
+			retbat.SetZs(1, mp)
 			bat.Clean(mp)
 			return vs2[rowIndex], vs3[rowIndex], retbat, nil
 		}

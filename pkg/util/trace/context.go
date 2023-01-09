@@ -21,7 +21,9 @@
 
 package trace
 
-import "context"
+import (
+	"context"
+)
 
 type traceContextKeyType int
 
@@ -32,35 +34,15 @@ func ContextWithSpan(parent context.Context, span Span) context.Context {
 }
 
 func ContextWithSpanContext(parent context.Context, sc SpanContext) context.Context {
-	return ContextWithSpan(parent, &nonRecordingSpan{sc: sc})
+	return ContextWithSpan(parent, &NonRecordingSpan{sc: sc})
 }
 
 func SpanFromContext(ctx context.Context) Span {
 	if ctx == nil {
-		return noopSpan{}
+		return NoopSpan{}
 	}
 	if span, ok := ctx.Value(currentSpanKey).(Span); ok {
 		return span
 	}
-	return noopSpan{}
-}
-
-type stmContextKeyType int
-
-const currentStmKey stmContextKeyType = iota
-
-func ContextWithStatement(parent context.Context, s *StatementInfo) context.Context {
-	return context.WithValue(parent, currentStmKey, s)
-}
-
-func StatementFromContext(ctx context.Context) *StatementInfo {
-	if ctx == nil {
-		return nil
-	} else if val := ctx.Value(currentStmKey); val == nil {
-		return nil
-	} else if stm, ok := val.(*StatementInfo); !ok {
-		return nil
-	} else {
-		return stm
-	}
+	return NoopSpan{}
 }

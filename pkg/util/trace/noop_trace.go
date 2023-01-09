@@ -25,51 +25,60 @@ import (
 	"context"
 )
 
-var _ Tracer = &noopTracer{}
-var _ Span = &noopSpan{}
+var _ TracerProvider = &noopTracerProvider{}
+var _ Tracer = &NoopTracer{}
+var _ Span = &NoopSpan{}
 
-// noopTracer is an implementation of Tracer that preforms no operations.
-type noopTracer struct{}
+type noopTracerProvider struct{}
+
+func (n noopTracerProvider) Tracer(string, ...TracerOption) Tracer {
+	return NoopTracer{}
+}
+
+// NoopTracer is an implementation of Tracer that preforms no operations.
+type NoopTracer struct{}
 
 // Start carries forward a non-recording Span, if one is present in the context, otherwise it
 // creates a no-op Span.
-func (t noopTracer) Start(ctx context.Context, name string, _ ...SpanOption) (context.Context, Span) {
+func (t NoopTracer) Start(ctx context.Context, name string, _ ...SpanOption) (context.Context, Span) {
 	span := SpanFromContext(ctx)
-	if _, ok := span.(noopSpan); !ok {
-		// span is likely already a noopSpan, but let's be sure
-		span = noopSpan{}
+	if _, ok := span.(NoopSpan); !ok {
+		// span is likely already a NoopSpan, but let's be sure
+		span = NoopSpan{}
 	}
 	return ContextWithSpan(ctx, span), span
 }
 
-func (t noopTracer) Debug(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
+func (t NoopTracer) Debug(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
 	return t.Start(ctx, name, opts...)
 }
 
-// noopSpan is an implementation of Span that preforms no operations.
-type noopSpan struct{}
+func (t NoopTracer) IsEnable() bool { return false }
 
-var _ Span = noopSpan{}
+// NoopSpan is an implementation of Span that preforms no operations.
+type NoopSpan struct{}
+
+var _ Span = NoopSpan{}
 
 // SpanContext returns an empty span context.
-func (noopSpan) SpanContext() SpanContext { return SpanContext{} }
+func (NoopSpan) SpanContext() SpanContext { return SpanContext{} }
 
-func (noopSpan) ParentSpanContext() SpanContext { return SpanContext{} }
+func (NoopSpan) ParentSpanContext() SpanContext { return SpanContext{} }
 
 // End does nothing.
-func (noopSpan) End(...SpanEndOption) {}
+func (NoopSpan) End(...SpanEndOption) {}
 
 // SetName does nothing.
-func (noopSpan) SetName(string) {}
+func (NoopSpan) SetName(string) {}
 
 // TracerProvider returns a no-op TracerProvider.
-func (noopSpan) TracerProvider() TracerProvider { return GetTracerProvider() }
+func (NoopSpan) TracerProvider() TracerProvider { return noopTracerProvider{} }
 
-// nonRecordingSpan keep SpanContext{TraceID, SpanID}
-type nonRecordingSpan struct {
-	noopSpan
+// NonRecordingSpan keep SpanContext{TraceID, SpanID}
+type NonRecordingSpan struct {
+	NoopSpan
 	sc SpanContext
 }
 
-func (s *nonRecordingSpan) SpanContext() SpanContext       { return s.sc }
-func (s *nonRecordingSpan) ParentSpanContext() SpanContext { return SpanContext{} }
+func (s *NonRecordingSpan) SpanContext() SpanContext       { return s.sc }
+func (s *NonRecordingSpan) ParentSpanContext() SpanContext { return SpanContext{} }

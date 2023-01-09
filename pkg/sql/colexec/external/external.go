@@ -265,13 +265,7 @@ func judgeContainColname(expr *plan.Expr) bool {
 	if !ok || !containColname(expr_Col.Col.Name) {
 		return false
 	}
-	_, ok = expr_F.F.Args[1].Expr.(*plan.Expr_C)
-	if !ok {
-		return false
-	}
-
-	str := expr_F.F.Args[1].Expr.(*plan.Expr_C).C.GetSval()
-	return str != ""
+	return true
 }
 
 func getAccountCol(filepath string) string {

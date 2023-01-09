@@ -495,6 +495,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		UniqueIndexDef:       uDef,
 		SecondaryIndexTables: secondaryIndexTables,
 		SecondaryIndexDef:    sDef,
+		ClusterByDef:         n.TableDef.ClusterBy,
 		ClusterTable:         n.GetClusterTable(),
 		HasAutoCol:           hasAutoCol,
 	}, nil
@@ -556,6 +557,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 			CPkeyColDef:        updateCtx.CompositePkey,
 			IsIndexTableUpdate: updateCtx.IsIndexTableUpdate,
 			IndexParts:         updateCtx.IndexParts,
+			ClusterByDef:       updateCtx.ClusterByDef,
 		}
 
 		if !updateCtx.IsIndexTableUpdate {
