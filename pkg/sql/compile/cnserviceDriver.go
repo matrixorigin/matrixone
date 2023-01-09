@@ -17,8 +17,10 @@ package compile
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -114,6 +116,10 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	if err != nil {
 		errData = pipeline.EncodedMessageError(ctx, err)
 	}
+	// batch data, not scope
+	if analysis == nil {
+		return nil
+	}
 	backMessage := messageAcquirer().(*pipeline.Message)
 	backMessage.Id = message.GetID()
 	backMessage.Sid = pipeline.MessageEnd
@@ -131,7 +137,45 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	if !ok {
 		panic("unexpected message type for cn-server")
 	}
-
+	// it's a Batch
+	if m.GetCmd() == 1 {
+		var v any
+		var dataBuffer []byte
+		var ok bool
+		for {
+			v, ok = srv.chanBufMp.Load(m.GetUuid())
+			if !ok {
+				runtime.Gosched()
+			} else {
+				break
+			}
+		}
+		if dataBuffer, ok := srv.chanBufMp.Load(m.GetID()); !ok {
+			srv.chanBufMp.Store(m.GetID(), dataBuffer)
+		}
+		wg := v.(*process.WaitRegister)
+		if m.IsEndMessage() {
+			wg.Ch <- nil
+			srv.chanBufMp.Delete(m.GetID())
+			return nil, err
+		} else {
+			if len(dataBuffer) == 0 {
+				dataBuffer = m.Data
+			} else {
+				dataBuffer = append(dataBuffer, m.Data...)
+			}
+			if m.WaitingNextToMerge() {
+				return nil, nil
+			}
+			bat, err := decodeBatch(c.proc, dataBuffer)
+			if err != nil {
+				return nil, err
+			}
+			wg.Ch <- bat
+			srv.chanBufMp.Store(m.GetID(), []byte{})
+			return nil, nil
+		}
+	}
 	// generate Compile-structure to run scope.
 	procHelper, err = generateProcessHelper(m.GetProcInfoData(), cli)
 	if err != nil {
@@ -439,6 +483,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.PipelineId = ctx.id
 	p.IsEnd = s.IsEnd
 	p.IsJoin = s.IsJoin
+	p.Uuids = convertScopeUuids(s)
 	// Plan
 	if ctxId == 1 {
 		// encode and decode cost is too large for it.
@@ -521,6 +566,24 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 	return ctxId, nil
 }
 
+func convertPipelineUuid(p *pipeline.Pipeline) (res []uuid.UUID) {
+	res = make([]uuid.UUID, len(p.Uuids))
+	for i := range p.Uuids {
+		res = append(res, uuid.UUID{})
+		copy(res[i][:], p.Uuids[i])
+	}
+	return
+}
+
+func convertScopeUuids(s *Scope) (res [][]byte) {
+	res = make([][]byte, len(s.uuids))
+	for i := range s.uuids {
+		res = append(res, nil)
+		res[i] = s.uuids[i][:]
+	}
+	return
+}
+
 // generateScope generate a scope from scope context and pipeline.
 func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContext,
 	analNodes []*process.AnalyzeInfo, isRemote bool) (*Scope, error) {
@@ -535,6 +598,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		IsJoin:   p.IsJoin,
 		Plan:     ctx.plan,
 		IsRemote: isRemote,
+		uuids:    convertPipelineUuid(p),
 	}
 	dsc := p.GetDataSource()
 	if dsc != nil {
@@ -566,6 +630,19 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		}
 	}
 	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
+	for i := range s.uuids {
+		if len(s.uuids[i]) == 0 {
+			continue
+		}
+		v, ok := srv.chanBufMp.Load(s.uuids[i])
+		if !ok {
+			srv.chanBufMp.Store(s.uuids[i], s.Proc.Reg.MergeReceivers[i])
+		} else {
+			wg := v.(*process.WaitRegister)
+			wg.Ctx = s.Proc.Ctx
+			srv.chanBufMp.Store(s.uuids[i], wg)
+		}
+	}
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)

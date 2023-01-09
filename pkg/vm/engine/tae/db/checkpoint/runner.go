@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -316,28 +317,6 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{end: entry.end, interval: r.options.globalVersionInterval})
 }
 
-func (r *runner) MockCheckpoint(end types.TS) {
-	var err error
-	entry := NewCheckpointEntry(types.TS{}, end, ET_Incremental)
-	if err = r.doIncrementalCheckpoint(entry); err != nil {
-		panic(err)
-	}
-	r.storage.Lock()
-	r.storage.entries.Set(entry)
-	r.storage.Unlock()
-	entry.SetState(ST_Finished)
-	if err = r.saveCheckpoint(entry.start, entry.end); err != nil {
-		panic(err)
-	}
-	lsn := r.source.GetMaxLSN(entry.start, entry.end)
-	e, err := r.wal.RangeCheckpoint(1, lsn)
-	if err != nil {
-		panic(err)
-	}
-	if err = e.WaitDone(); err != nil {
-		panic(err)
-	}
-}
 func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 	makeCtx := func() *DirtyCtx {
 		tree := r.source.ScanInRangePruned(types.TS{}, ts)
@@ -355,34 +334,26 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 		return dirtyCtx
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), r.options.forceFlushTimeout)
-	defer cancel()
-
-	ticker := time.NewTicker(r.options.forceFlushCheckInterval)
-	defer ticker.Stop()
-
-	dirtyCtx := makeCtx()
-	if dirtyCtx == nil {
-		return
-	}
-	if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
-		return
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			logutil.Warnf("Flush %d-%d timeout", dbID, tableID)
-			return
-		case <-ticker.C:
-			if dirtyCtx = makeCtx(); dirtyCtx == nil {
-				return
-			}
-			if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
-				return
-			}
+	op := func() (ok bool, err error) {
+		dirtyCtx := makeCtx()
+		if dirtyCtx == nil {
+			return true, nil
 		}
+		if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
+			return true, nil
+		}
+		return false, nil
 	}
+
+	err = common.RetryWithIntervalAndTimeout(
+		op,
+		r.options.forceFlushTimeout,
+		r.options.forceFlushCheckInterval)
+	if moerr.IsMoErrCode(err, moerr.ErrInternal) {
+		logutil.Warnf("Flush %d-%d :%v", dbID, tableID, err)
+		return nil
+	}
+	return
 }
 
 func (r *runner) saveCheckpoint(start, end types.TS) (err error) {

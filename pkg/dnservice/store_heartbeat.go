@@ -55,10 +55,11 @@ func (s *store) heartbeat(ctx context.Context) {
 	defer cancel()
 
 	hb := logservicepb.DNStoreHeartbeat{
-		UUID:               s.cfg.UUID,
-		ServiceAddress:     s.cfg.ServiceAddress,
-		Shards:             s.getDNShardInfo(),
-		TaskServiceCreated: s.taskServiceCreated(),
+		UUID:                 s.cfg.UUID,
+		ServiceAddress:       s.cfg.ServiceAddress,
+		Shards:               s.getDNShardInfo(),
+		TaskServiceCreated:   s.taskServiceCreated(),
+		LogtailServerAddress: s.cfg.LogtailServer.ListenAddress,
 	}
 	cb, err := s.hakeeperClient.SendDNHeartbeat(ctx2, hb)
 	if err != nil {

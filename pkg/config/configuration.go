@@ -195,9 +195,6 @@ type FrontendParameters struct {
 	//default is false. Skip writing batch into the storage
 	LoadDataSkipWritingBatch bool `toml:"loadDataSkipWritingBatch"`
 
-	//default is false. true for profiling the getDataFromPipeline
-	EnableProfileGetDataFromPipeline bool `toml:"enableProfileGetDataFromPipeline"`
-
 	//KB. When the number of bytes in the outbuffer exceeds it,the outbuffer will be flushed.
 	MaxBytesInOutbufToFlush int64 `toml:"maxBytesInOutbufToFlush"`
 
@@ -256,6 +253,15 @@ type FrontendParameters struct {
 
 	// MaxMessageSize max size for read messages from dn. Default is 10M
 	MaxMessageSize uint64 `toml:"max-message-size"`
+
+	// default off
+	SaveQueryResult string `toml:"saveQueryResult"`
+
+	// default 24 (h)
+	QueryResultTimeout uint64 `toml:"queryResultTimeout"`
+
+	// default 100 (MB)
+	QueryResultMaxsize uint64 `toml:"queryResultMaxsize"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -357,6 +363,18 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.SessionTimeout.Duration == 0 {
 		fp.SessionTimeout.Duration = defaultSessionTimeout
+	}
+
+	if fp.SaveQueryResult == "" {
+		fp.SaveQueryResult = "off"
+	}
+
+	if fp.QueryResultTimeout == 0 {
+		fp.QueryResultTimeout = 24
+	}
+
+	if fp.QueryResultMaxsize == 0 {
+		fp.QueryResultMaxsize = 100
 	}
 }
 

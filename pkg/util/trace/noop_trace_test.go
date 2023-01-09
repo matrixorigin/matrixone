@@ -31,7 +31,7 @@ import (
 
 func Test_nonRecordingSpan_ParentSpanContext(t *testing.T) {
 	type fields struct {
-		noopSpan noopSpan
+		NoopSpan NoopSpan
 		sc       SpanContext
 	}
 	tests := []struct {
@@ -41,14 +41,14 @@ func Test_nonRecordingSpan_ParentSpanContext(t *testing.T) {
 	}{
 		{
 			name:   "normal",
-			fields: fields{noopSpan: noopSpan{}, sc: SpanContext{}},
+			fields: fields{NoopSpan: NoopSpan{}, sc: SpanContext{}},
 			want:   SpanContext{},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := &nonRecordingSpan{
-				noopSpan: tt.fields.noopSpan,
+			s := &NonRecordingSpan{
+				NoopSpan: tt.fields.NoopSpan,
 				sc:       tt.fields.sc,
 			}
 			require.Equal(t, tt.want, s.ParentSpanContext())
@@ -58,7 +58,7 @@ func Test_nonRecordingSpan_ParentSpanContext(t *testing.T) {
 
 func Test_nonRecordingSpan_SpanContext(t *testing.T) {
 	type fields struct {
-		noopSpan noopSpan
+		NoopSpan NoopSpan
 		sc       SpanContext
 	}
 	tests := []struct {
@@ -68,14 +68,14 @@ func Test_nonRecordingSpan_SpanContext(t *testing.T) {
 	}{
 		{
 			name:   "normal",
-			fields: fields{noopSpan: noopSpan{}, sc: SpanContext{}},
+			fields: fields{NoopSpan: NoopSpan{}, sc: SpanContext{}},
 			want:   SpanContext{},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := &nonRecordingSpan{
-				noopSpan: tt.fields.noopSpan,
+			s := &NonRecordingSpan{
+				NoopSpan: tt.fields.NoopSpan,
 				sc:       tt.fields.sc,
 			}
 			assert.Equalf(t, tt.want, s.SpanContext(), "SpanContext()")
@@ -83,7 +83,7 @@ func Test_nonRecordingSpan_SpanContext(t *testing.T) {
 	}
 }
 
-func Test_noopSpan_End(t *testing.T) {
+func Test_NoopSpan_End(t *testing.T) {
 	type args struct {
 		in0 []SpanEndOption
 	}
@@ -95,13 +95,13 @@ func Test_noopSpan_End(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			no := noopSpan{}
+			no := NoopSpan{}
 			no.End(tt.args.in0...)
 		})
 	}
 }
 
-func Test_noopSpan_ParentSpanContext(t *testing.T) {
+func Test_NoopSpan_ParentSpanContext(t *testing.T) {
 	tests := []struct {
 		name string
 		want SpanContext
@@ -113,13 +113,13 @@ func Test_noopSpan_ParentSpanContext(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			no := noopSpan{}
+			no := NoopSpan{}
 			assert.Equalf(t, tt.want, no.ParentSpanContext(), "ParentSpanContext()")
 		})
 	}
 }
 
-func Test_noopSpan_SetName(t *testing.T) {
+func Test_NoopSpan_SetName(t *testing.T) {
 	type args struct {
 		in0 string
 	}
@@ -134,13 +134,13 @@ func Test_noopSpan_SetName(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			no := noopSpan{}
+			no := NoopSpan{}
 			no.SetName(tt.args.in0)
 		})
 	}
 }
 
-func Test_noopSpan_SpanContext(t *testing.T) {
+func Test_NoopSpan_SpanContext(t *testing.T) {
 	tests := []struct {
 		name string
 		want SpanContext
@@ -149,31 +149,31 @@ func Test_noopSpan_SpanContext(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			no := noopSpan{}
+			no := NoopSpan{}
 			assert.Equalf(t, tt.want, no.SpanContext(), "SpanContext()")
 		})
 	}
 }
 
-func Test_noopSpan_TracerProvider(t *testing.T) {
+func Test_NoopSpan_TracerProvider(t *testing.T) {
 	tests := []struct {
 		name string
 		want TracerProvider
 	}{
 		{
 			name: "normal",
-			want: GetTracerProvider(),
+			want: noopTracerProvider{},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			no := noopSpan{}
+			no := NoopSpan{}
 			assert.Equalf(t, tt.want, no.TracerProvider(), "TracerProvider()")
 		})
 	}
 }
 
-func Test_noopTracer_Start(t1 *testing.T) {
+func Test_NoopTracer_Start(t1 *testing.T) {
 	type args struct {
 		ctx   context.Context
 		name  string
@@ -190,28 +190,28 @@ func Test_noopTracer_Start(t1 *testing.T) {
 			name: "normal",
 			args: args{
 				ctx:   context.Background(),
-				name:  "noopTracer_Start",
+				name:  "NoopTracer_Start",
 				in2:   []SpanOption{WithNewRoot(true)},
 				endIn: []SpanEndOption{},
 			},
-			want:  ContextWithSpan(context.Background(), noopSpan{}),
-			want1: noopSpan{},
+			want:  ContextWithSpan(context.Background(), NoopSpan{}),
+			want1: NoopSpan{},
 		},
 		{
-			name: "nonRecording",
+			name: "NonRecording",
 			args: args{
-				ctx:   ContextWithSpan(context.Background(), &nonRecordingSpan{}),
-				name:  "noopTracer_Start",
+				ctx:   ContextWithSpan(context.Background(), &NonRecordingSpan{}),
+				name:  "NoopTracer_Start",
 				in2:   []SpanOption{WithNewRoot(true)},
 				endIn: []SpanEndOption{},
 			},
-			want:  ContextWithSpan(ContextWithSpan(context.Background(), &nonRecordingSpan{}), noopSpan{}),
-			want1: noopSpan{},
+			want:  ContextWithSpan(ContextWithSpan(context.Background(), &NonRecordingSpan{}), NoopSpan{}),
+			want1: NoopSpan{},
 		},
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
-			t := noopTracer{}
+			t := NoopTracer{}
 			got, got1 := t.Start(tt.args.ctx, tt.args.name, tt.args.in2...)
 			assert.Equalf(t1, tt.want, got, "Start(%v, %v, %v)", tt.args.ctx, tt.args.name, tt.args.in2)
 			assert.Equalf(t1, tt.want1, got1, "Start(%v, %v, %v)", tt.args.ctx, tt.args.name, tt.args.in2)

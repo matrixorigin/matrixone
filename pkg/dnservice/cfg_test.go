@@ -25,7 +25,6 @@ func TestValidate(t *testing.T) {
 	assert.Error(t, c.Validate())
 	c.UUID = "dn1"
 	assert.NoError(t, c.Validate())
-	assert.Equal(t, defaultListenAddress, c.ListenAddress)
 	assert.Equal(t, c.ListenAddress, defaultListenAddress)
 	assert.Equal(t, c.ServiceAddress, defaultServiceAddress)
 	assert.Equal(t, StorageTAE, c.Txn.Storage.Backend)
