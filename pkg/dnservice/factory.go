@@ -155,9 +155,8 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		shard,
 		factory,
 		fs,
-		s.rt.Clock(),
+		s.rt,
 		ckpcfg,
-		s.rt.Logger().RawLogger(),
 		logtailServerAddr,
 		logtailServerCfg,
 		options.LogstoreType(s.cfg.Txn.Storage.LogBackend))
