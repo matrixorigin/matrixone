@@ -168,7 +168,6 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 			for i := range bat.Vecs {
 				outputBat.Vecs[i] = vector.New(bat.Vecs[i].Typ)
 			}
-			analyzer.Alloc(int64(outputBat.Size()))
 		}
 
 		// probe hashTable

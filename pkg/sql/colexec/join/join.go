@@ -195,7 +195,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 	rbat.ExpandNulls()
-	anal.Alloc(int64(rbat.Size()))
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil

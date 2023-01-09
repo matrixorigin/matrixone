@@ -72,7 +72,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 				if ap.NeedHashMap {
 					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull, ctr.idx)
 				}
-				anal.Alloc(ap.ctr.mp.Size())
 				proc.SetInputBatch(ctr.bat)
 				ctr.bat = nil
 			} else {
