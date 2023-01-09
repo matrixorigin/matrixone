@@ -14,7 +14,20 @@
 
 package options
 
-import "time"
+import (
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+)
+
+const (
+	defaultRpcMaxMessageSize        = 16 * mpool.KB
+	defaultRpcPayloadCopyBufferSize = 16 * mpool.KB
+	defaultRpcEnableChecksum        = true
+	defaultLogtailCollectInterval   = 50 * time.Millisecond
+	defaultResponseSendTimeout      = 10 * time.Second
+	defaultMaxLogtailFetchFailure   = 5
+)
 
 type CacheCfg struct {
 	IndexCapacity  uint64 `toml:"index-cache-size"`
@@ -49,4 +62,42 @@ type SchedulerCfg struct {
 
 type LogtailCfg struct {
 	PageSize int32 `toml:"page-size"`
+}
+
+type LogtailServerCfg struct {
+	RpcMaxMessageSize        int64
+	RpcPayloadCopyBufferSize int64
+	RpcEnableChecksum        bool
+	LogtailCollectInterval   time.Duration
+	ResponseSendTimeout      time.Duration
+	MaxLogtailFetchFailure   int
+}
+
+func NewDefaultLogtailServerCfg() *LogtailServerCfg {
+	return &LogtailServerCfg{
+		RpcMaxMessageSize:        defaultRpcMaxMessageSize,
+		RpcPayloadCopyBufferSize: defaultRpcPayloadCopyBufferSize,
+		RpcEnableChecksum:        defaultRpcEnableChecksum,
+		LogtailCollectInterval:   defaultLogtailCollectInterval,
+		ResponseSendTimeout:      defaultResponseSendTimeout,
+		MaxLogtailFetchFailure:   defaultMaxLogtailFetchFailure,
+	}
+}
+
+func (l *LogtailServerCfg) Validate() {
+	if l.RpcMaxMessageSize <= 0 {
+		l.RpcMaxMessageSize = defaultRpcMaxMessageSize
+	}
+	if l.RpcPayloadCopyBufferSize <= 0 {
+		l.RpcPayloadCopyBufferSize = defaultRpcPayloadCopyBufferSize
+	}
+	if l.LogtailCollectInterval <= 0 {
+		l.LogtailCollectInterval = defaultLogtailCollectInterval
+	}
+	if l.ResponseSendTimeout <= 0 {
+		l.ResponseSendTimeout = defaultResponseSendTimeout
+	}
+	if l.MaxLogtailFetchFailure <= 0 {
+		l.MaxLogtailFetchFailure = defaultMaxLogtailFetchFailure
+	}
 }

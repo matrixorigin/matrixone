@@ -53,7 +53,7 @@ type Column struct {
 func (col *Column) ToCreateSql(ctx context.Context) string {
 	sb := strings.Builder{}
 	sb.WriteString(fmt.Sprintf("`%s` %s ", col.Name, col.Type))
-	if col.Type == "JSON" {
+	if strings.ToUpper(col.Type) == "JSON" {
 		sb.WriteString("NOT NULL ")
 		if len(col.Default) == 0 {
 			panic(moerr.NewNotSupported(ctx, "json column need default in csv, but not in schema"))
@@ -105,6 +105,7 @@ func (tbl *Table) GetDatabase() string {
 	return tbl.Database
 }
 
+// GetIdentify return identify like database.table
 func (tbl *Table) GetIdentify() string {
 	return fmt.Sprintf("%s.%s", tbl.Database, tbl.Table)
 }
@@ -325,6 +326,7 @@ func (r *Row) ToRawStrings() []string {
 }
 
 func (r *Row) ParseRow(cols []string) error {
+	// fixme: check len(r.Name2ColumnIdx) != len(cols)
 	r.Columns = cols
 	return nil
 }

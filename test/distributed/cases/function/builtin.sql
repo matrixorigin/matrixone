@@ -443,3 +443,16 @@ select * from t1 where second(a) between 10 and 36;
 
 -- @teardown
 drop table if exists t1;
+
+-- @suite
+-- @setup
+drop table if exists t1;
+create table t1(a int, b int);
+select mo_table_rows(db_name,'t1'),mo_table_size(db_name,'t1') from (select database() as db_name);
+insert into t1 values(1, 2);
+insert into t1 values(3, 4);
+select mo_table_rows(db_name,'t1'),mo_table_size(db_name,'t1') from (select database() as db_name);
+
+
+-- @teardown
+drop table if exists t1;

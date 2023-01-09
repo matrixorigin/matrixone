@@ -16,6 +16,7 @@ package taestorage
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -25,14 +26,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
+	"go.uber.org/multierr"
 )
 
 type taeStorage struct {
-	shard      metadata.DNShard
-	taeHandler rpchandle.Handler
+	shard         metadata.DNShard
+	taeHandler    rpchandle.Handler
+	logtailServer *service.LogtailServer
 }
+
+var _ storage.TxnStorage = (*taeStorage)(nil)
 
 func NewTAEStorage(
 	dataDir string,
@@ -41,6 +48,8 @@ func NewTAEStorage(
 	fs fileservice.FileService,
 	clock clock.Clock,
 	ckpCfg *options.CheckpointCfg,
+	logtailServerAddr string,
+	logtailServerCfg *options.LogtailServerCfg,
 	logStore options.LogstoreType,
 ) (*taeStorage, error) {
 	opt := &options.Options{
@@ -51,17 +60,34 @@ func NewTAEStorage(
 		CheckpointCfg: ckpCfg,
 		LogStoreT:     logStore,
 	}
-	storage := &taeStorage{
-		shard:      shard,
-		taeHandler: rpc.NewTAEHandle(dataDir, opt),
+
+	taeHandler := rpc.NewTAEHandle(dataDir, opt)
+	tae := taeHandler.GetTxnEngine().GetTAE(context.Background())
+	logtailer := logtail.NewLogtailer(tae.BGCheckpointRunner, tae.LogtailMgr, tae.Catalog)
+	server, err := service.NewLogtailServer(logtailServerAddr, logtailServerCfg, logtailer, clock)
+	if err != nil {
+		return nil, err
 	}
-	return storage, nil
+
+	return &taeStorage{
+		shard:         shard,
+		taeHandler:    taeHandler,
+		logtailServer: server,
+	}, nil
 }
 
 var _ storage.TxnStorage = new(taeStorage)
 
+// Start starts logtail push service.
+func (s *taeStorage) Start() error {
+	return s.logtailServer.Start()
+}
+
 // Close implements storage.TxnTAEStorage
 func (s *taeStorage) Close(ctx context.Context) error {
+	if err := s.logtailServer.Close(); err != nil {
+		return multierr.Append(err, s.taeHandler.HandleClose(ctx))
+	}
 	return s.taeHandler.HandleClose(ctx)
 }
 

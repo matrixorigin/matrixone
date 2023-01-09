@@ -18,17 +18,18 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"math"
-	"strconv"
-	"strings"
-	"time"
-	"unsafe"
 )
 
 // XXX need this one to make a pretty function register.
@@ -289,70 +290,70 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = scalarNullToOthers(proc.Ctx, toType, result, length)
 	case types.T_bool:
 		s := vector.GenerateFunctionFixedTypeParameter[bool](from)
-		err = boolToOthers(proc.Ctx, &s, toType, result, length)
+		err = boolToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_int8:
 		s := vector.GenerateFunctionFixedTypeParameter[int8](from)
-		err = int8ToOthers(proc.Ctx, &s, toType, result, length)
+		err = int8ToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_int16:
 		s := vector.GenerateFunctionFixedTypeParameter[int16](from)
-		err = int16ToOthers(proc.Ctx, &s, toType, result, length)
+		err = int16ToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_int32:
 		s := vector.GenerateFunctionFixedTypeParameter[int32](from)
-		err = int32ToOthers(proc.Ctx, &s, toType, result, length)
+		err = int32ToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_int64:
 		s := vector.GenerateFunctionFixedTypeParameter[int64](from)
-		err = int64ToOthers(proc.Ctx, &s, toType, result, length)
+		err = int64ToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_uint8:
 		s := vector.GenerateFunctionFixedTypeParameter[uint8](from)
-		err = uint8ToOthers(proc.Ctx, &s, toType, result, length)
+		err = uint8ToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_uint16:
 		s := vector.GenerateFunctionFixedTypeParameter[uint16](from)
-		err = uint16ToOthers(proc.Ctx, &s, toType, result, length)
+		err = uint16ToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_uint32:
 		s := vector.GenerateFunctionFixedTypeParameter[uint32](from)
-		err = uint32ToOthers(proc.Ctx, &s, toType, result, length)
+		err = uint32ToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_uint64:
 		s := vector.GenerateFunctionFixedTypeParameter[uint64](from)
-		err = uint64ToOthers(proc.Ctx, &s, toType, result, length)
+		err = uint64ToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_float32:
 		s := vector.GenerateFunctionFixedTypeParameter[float32](from)
-		err = float32ToOthers(proc.Ctx, &s, toType, result, length)
+		err = float32ToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_float64:
 		s := vector.GenerateFunctionFixedTypeParameter[float64](from)
-		err = float64ToOthers(proc.Ctx, &s, toType, result, length)
+		err = float64ToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_decimal64:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from)
-		err = decimal64ToOthers(proc.Ctx, &s, toType, result, length)
+		err = decimal64ToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_decimal128:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
-		err = decimal128ToOthers(proc.Ctx, &s, toType, result, length)
+		err = decimal128ToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_date:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Date](from)
-		err = dateToOthers(proc, &s, toType, result, length)
+		err = dateToOthers(proc, s, toType, result, length)
 	case types.T_datetime:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Datetime](from)
-		err = datetimeToOthers(proc, &s, toType, result, length)
+		err = datetimeToOthers(proc, s, toType, result, length)
 	case types.T_time:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Time](from)
-		err = timeToOthers(proc.Ctx, &s, toType, result, length)
+		err = timeToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_timestamp:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from)
-		err = timestampToOthers(proc, &s, toType, result, length)
+		err = timestampToOthers(proc, s, toType, result, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		s := vector.GenerateFunctionStrParameter(from)
-		err = strTypeToOthers(proc, &s, toType, result, length)
+		err = strTypeToOthers(proc, s, toType, result, length)
 	case types.T_uuid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Uuid](from)
-		err = uuidToOthers(proc.Ctx, &s, toType, result, length)
+		err = uuidToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_TS:
 		s := vector.GenerateFunctionFixedTypeParameter[types.TS](from)
-		err = tsToOthers(proc.Ctx, &s, toType, result, length)
+		err = tsToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_Rowid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Rowid](from)
-		err = rowidToOthers(proc.Ctx, &s, toType, result, length)
+		err = rowidToOthers(proc.Ctx, s, toType, result, length)
 	case types.T_json:
 		s := vector.GenerateFunctionStrParameter(from)
-		err = jsonToOthers(proc.Ctx, &s, toType, result, length)
+		err = jsonToOthers(proc.Ctx, s, toType, result, length)
 	default:
 		// XXX we set the function here to adapt to the BVT cases.
 		err = formatCastError(proc.Ctx, from, toType, "")
@@ -404,41 +405,41 @@ func scalarNullToOthers(ctx context.Context,
 }
 
 func boolToOthers(ctx context.Context,
-	source *vector.FunctionParameter[bool],
+	source vector.FunctionParameterWrapper[bool],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
-		rs := result.(*vector.FunctionResult[bool])
+		rs := vector.MustFunctionResult[bool](result)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		// string type.
-		rs := result.(*vector.FunctionResult[types.Varlena])
+		rs := vector.MustFunctionResult[types.Varlena](result)
 		return boolToStr(source, rs, length)
 	case types.T_int8:
-		rs := result.(*vector.FunctionResult[int8])
-		return boolToInteger[int8](source, rs, length)
+		rs := vector.MustFunctionResult[int8](result)
+		return boolToInteger(source, rs, length)
 	case types.T_int16:
-		rs := result.(*vector.FunctionResult[int16])
-		return boolToInteger[int16](source, rs, length)
+		rs := vector.MustFunctionResult[int16](result)
+		return boolToInteger(source, rs, length)
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
-		return boolToInteger[int32](source, rs, length)
+		rs := vector.MustFunctionResult[int32](result)
+		return boolToInteger(source, rs, length)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
-		return boolToInteger[int64](source, rs, length)
+		rs := vector.MustFunctionResult[int64](result)
+		return boolToInteger(source, rs, length)
 	case types.T_uint8:
-		rs := result.(*vector.FunctionResult[uint8])
-		return boolToInteger[uint8](source, rs, length)
+		rs := vector.MustFunctionResult[uint8](result)
+		return boolToInteger(source, rs, length)
 	case types.T_uint16:
-		rs := result.(*vector.FunctionResult[uint16])
-		return boolToInteger[uint16](source, rs, length)
+		rs := vector.MustFunctionResult[uint16](result)
+		return boolToInteger(source, rs, length)
 	case types.T_uint32:
-		rs := result.(*vector.FunctionResult[uint32])
-		return boolToInteger[uint32](source, rs, length)
+		rs := vector.MustFunctionResult[uint32](result)
+		return boolToInteger(source, rs, length)
 	case types.T_uint64:
-		rs := result.(*vector.FunctionResult[uint64])
-		return boolToInteger[uint64](source, rs, length)
+		rs := vector.MustFunctionResult[uint64](result)
+		return boolToInteger(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from bool to %s", toType))
 }
@@ -447,639 +448,639 @@ func boolToOthers(ctx context.Context,
 // but for extensibility, we didn't do that.
 // uint and float are the same.
 func int8ToOthers(ctx context.Context,
-	source *vector.FunctionParameter[int8],
+	source vector.FunctionParameterWrapper[int8],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
-		rs := result.(*vector.FunctionResult[bool])
-		return numericToBool[int8](source, rs, length)
+		rs := vector.MustFunctionResult[bool](result)
+		return numericToBool(source, rs, length)
 	case types.T_int8:
-		rs := result.(*vector.FunctionResult[int8])
+		rs := vector.MustFunctionResult[int8](result)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_int16:
-		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[int8, int16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int16](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[int8, int32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[int8, int64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint8:
-		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[int8, uint8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint8](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint16:
-		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[int8, uint16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint16](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint32:
-		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[int8, uint32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint64:
-		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[int8, uint64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float32:
-		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[int8, float32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float64:
-		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[int8, float64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_decimal64:
-		rs := result.(*vector.FunctionResult[types.Decimal64])
-		return signedToDecimal64[int8](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return signedToDecimal64(source, rs, length)
 	case types.T_decimal128:
-		rs := result.(*vector.FunctionResult[types.Decimal128])
-		return signedToDecimal128[int8](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return signedToDecimal128(source, rs, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		// string type.
-		rs := result.(*vector.FunctionResult[types.Varlena])
-		return signedToStr[int8](source, rs, length)
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return signedToStr(source, rs, length)
 	case types.T_time:
-		rs := result.(*vector.FunctionResult[types.Time])
-		return integerToTime[int8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[types.Time](result)
+		return integerToTime(ctx, source, rs, length)
 	case types.T_timestamp:
-		rs := result.(*vector.FunctionResult[types.Timestamp])
-		return integerToTimestamp[int8](source, rs, length)
+		rs := vector.MustFunctionResult[types.Timestamp](result)
+		return integerToTimestamp(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int8 to %s", toType))
 }
 
 func int16ToOthers(ctx context.Context,
-	source *vector.FunctionParameter[int16],
+	source vector.FunctionParameterWrapper[int16],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
-		rs := result.(*vector.FunctionResult[bool])
-		return numericToBool[int16](source, rs, length)
+		rs := vector.MustFunctionResult[bool](result)
+		return numericToBool(source, rs, length)
 	case types.T_int8:
-		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[int16, int8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int8](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int16:
-		rs := result.(*vector.FunctionResult[int16])
+		rs := vector.MustFunctionResult[int16](result)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[int16, int32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[int16, int64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint8:
-		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[int16, uint8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint8](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint16:
-		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[int16, uint16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint16](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint32:
-		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[int16, uint32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint64:
-		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[int16, uint64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float32:
-		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[int16, float32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float64:
-		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[int16, float64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_decimal64:
-		rs := result.(*vector.FunctionResult[types.Decimal64])
-		return signedToDecimal64[int16](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return signedToDecimal64(source, rs, length)
 	case types.T_decimal128:
-		rs := result.(*vector.FunctionResult[types.Decimal128])
-		return signedToDecimal128[int16](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return signedToDecimal128(source, rs, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		// string type.
-		rs := result.(*vector.FunctionResult[types.Varlena])
-		return signedToStr[int16](source, rs, length)
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return signedToStr(source, rs, length)
 	case types.T_time:
-		rs := result.(*vector.FunctionResult[types.Time])
-		return integerToTime[int16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[types.Time](result)
+		return integerToTime(ctx, source, rs, length)
 	case types.T_timestamp:
-		rs := result.(*vector.FunctionResult[types.Timestamp])
-		return integerToTimestamp[int16](source, rs, length)
+		rs := vector.MustFunctionResult[types.Timestamp](result)
+		return integerToTimestamp(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int16 to %s", toType))
 }
 
 func int32ToOthers(ctx context.Context,
-	source *vector.FunctionParameter[int32],
+	source vector.FunctionParameterWrapper[int32],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
-		rs := result.(*vector.FunctionResult[bool])
-		return numericToBool[int32](source, rs, length)
+		rs := vector.MustFunctionResult[bool](result)
+		return numericToBool(source, rs, length)
 	case types.T_int8:
-		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[int32, int8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int8](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int16:
-		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[int32, int16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int16](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
+		rs := vector.MustFunctionResult[int32](result)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[int32, int64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint8:
-		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[int32, uint8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint8](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint16:
-		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[int32, uint16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint16](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint32:
-		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[int32, uint32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint64:
-		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[int32, uint64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float32:
-		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[int32, float32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float64:
-		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[int32, float64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_decimal64:
-		rs := result.(*vector.FunctionResult[types.Decimal64])
-		return signedToDecimal64[int32](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return signedToDecimal64(source, rs, length)
 	case types.T_decimal128:
-		rs := result.(*vector.FunctionResult[types.Decimal128])
-		return signedToDecimal128[int32](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return signedToDecimal128(source, rs, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		// string type.
-		rs := result.(*vector.FunctionResult[types.Varlena])
-		return signedToStr[int32](source, rs, length)
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return signedToStr(source, rs, length)
 	case types.T_time:
-		rs := result.(*vector.FunctionResult[types.Time])
-		return integerToTime[int32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[types.Time](result)
+		return integerToTime(ctx, source, rs, length)
 	case types.T_timestamp:
-		rs := result.(*vector.FunctionResult[types.Timestamp])
-		return integerToTimestamp[int32](source, rs, length)
+		rs := vector.MustFunctionResult[types.Timestamp](result)
+		return integerToTimestamp(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int32 to %s", toType))
 }
 
 func int64ToOthers(ctx context.Context,
-	source *vector.FunctionParameter[int64],
+	source vector.FunctionParameterWrapper[int64],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
-		rs := result.(*vector.FunctionResult[bool])
-		return numericToBool[int64](source, rs, length)
+		rs := vector.MustFunctionResult[bool](result)
+		return numericToBool(source, rs, length)
 	case types.T_int8:
-		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[int64, int8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int8](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int16:
-		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[int64, int16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int16](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[int64, int32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
+		rs := vector.MustFunctionResult[int64](result)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_uint8:
-		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[int64, uint8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint8](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint16:
-		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[int64, uint16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint16](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint32:
-		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[int64, uint32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint64:
-		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[int64, uint64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float32:
-		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[int64, float32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float64:
-		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[int64, float64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_decimal64:
-		rs := result.(*vector.FunctionResult[types.Decimal64])
-		return signedToDecimal64[int64](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return signedToDecimal64(source, rs, length)
 	case types.T_decimal128:
-		rs := result.(*vector.FunctionResult[types.Decimal128])
-		return signedToDecimal128[int64](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return signedToDecimal128(source, rs, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		// string type.
-		rs := result.(*vector.FunctionResult[types.Varlena])
-		return signedToStr[int64](source, rs, length)
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return signedToStr(source, rs, length)
 	case types.T_time:
-		rs := result.(*vector.FunctionResult[types.Time])
-		return integerToTime[int64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[types.Time](result)
+		return integerToTime(ctx, source, rs, length)
 	case types.T_timestamp:
-		rs := result.(*vector.FunctionResult[types.Timestamp])
-		return integerToTimestamp[int64](source, rs, length)
+		rs := vector.MustFunctionResult[types.Timestamp](result)
+		return integerToTimestamp(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int64 to %s", toType))
 }
 
 func uint8ToOthers(ctx context.Context,
-	source *vector.FunctionParameter[uint8],
+	source vector.FunctionParameterWrapper[uint8],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
-		rs := result.(*vector.FunctionResult[bool])
-		return numericToBool[uint8](source, rs, length)
+		rs := vector.MustFunctionResult[bool](result)
+		return numericToBool(source, rs, length)
 	case types.T_int8:
-		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[uint8, int8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int8](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int16:
-		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[uint8, int16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int16](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[uint8, int32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[uint8, int64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint8:
-		rs := result.(*vector.FunctionResult[uint8])
+		rs := vector.MustFunctionResult[uint8](result)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_uint16:
-		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[uint8, uint16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint16](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint32:
-		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[uint8, uint32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint64:
-		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[uint8, uint64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float32:
-		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[uint8, float32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float64:
-		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[uint8, float64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_decimal64:
-		rs := result.(*vector.FunctionResult[types.Decimal64])
-		return unsignedToDecimal64[uint8](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return unsignedToDecimal64(source, rs, length)
 	case types.T_decimal128:
-		rs := result.(*vector.FunctionResult[types.Decimal128])
-		return unsignedToDecimal128[uint8](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return unsignedToDecimal128(source, rs, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		rs := result.(*vector.FunctionResult[types.Varlena])
-		return unsignedToStr[uint8](source, rs, length)
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return unsignedToStr(source, rs, length)
 	case types.T_time:
-		rs := result.(*vector.FunctionResult[types.Time])
-		return integerToTime[uint8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[types.Time](result)
+		return integerToTime(ctx, source, rs, length)
 	case types.T_timestamp:
-		rs := result.(*vector.FunctionResult[types.Timestamp])
-		return integerToTimestamp[uint8](source, rs, length)
+		rs := vector.MustFunctionResult[types.Timestamp](result)
+		return integerToTimestamp(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint8 to %s", toType))
 }
 
 func uint16ToOthers(ctx context.Context,
-	source *vector.FunctionParameter[uint16],
+	source vector.FunctionParameterWrapper[uint16],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
-		rs := result.(*vector.FunctionResult[bool])
-		return numericToBool[uint16](source, rs, length)
+		rs := vector.MustFunctionResult[bool](result)
+		return numericToBool(source, rs, length)
 	case types.T_int8:
-		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[uint16, int8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int8](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int16:
-		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[uint16, int16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int16](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[uint16, int32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[uint16, int64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint8:
-		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[uint16, uint8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint8](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint16:
-		rs := result.(*vector.FunctionResult[uint16])
+		rs := vector.MustFunctionResult[uint16](result)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_uint32:
-		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[uint16, uint32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint64:
-		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[uint16, uint64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float32:
-		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[uint16, float32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float64:
-		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[uint16, float64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_decimal64:
-		rs := result.(*vector.FunctionResult[types.Decimal64])
-		return unsignedToDecimal64[uint16](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return unsignedToDecimal64(source, rs, length)
 	case types.T_decimal128:
-		rs := result.(*vector.FunctionResult[types.Decimal128])
-		return unsignedToDecimal128[uint16](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return unsignedToDecimal128(source, rs, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		rs := result.(*vector.FunctionResult[types.Varlena])
-		return unsignedToStr[uint16](source, rs, length)
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return unsignedToStr(source, rs, length)
 	case types.T_time:
-		rs := result.(*vector.FunctionResult[types.Time])
-		return integerToTime[uint16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[types.Time](result)
+		return integerToTime(ctx, source, rs, length)
 	case types.T_timestamp:
-		rs := result.(*vector.FunctionResult[types.Timestamp])
-		return integerToTimestamp[uint16](source, rs, length)
+		rs := vector.MustFunctionResult[types.Timestamp](result)
+		return integerToTimestamp(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint16 to %s", toType))
 }
 
 func uint32ToOthers(ctx context.Context,
-	source *vector.FunctionParameter[uint32],
+	source vector.FunctionParameterWrapper[uint32],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
-		rs := result.(*vector.FunctionResult[bool])
-		return numericToBool[uint32](source, rs, length)
+		rs := vector.MustFunctionResult[bool](result)
+		return numericToBool(source, rs, length)
 	case types.T_int8:
-		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[uint32, int8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int8](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int16:
-		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[uint32, int16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int16](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[uint32, int32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[uint32, int64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint8:
-		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[uint32, uint8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint8](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint16:
-		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[uint32, uint16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint16](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint32:
-		rs := result.(*vector.FunctionResult[uint32])
+		rs := vector.MustFunctionResult[uint32](result)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_uint64:
-		rs := result.(*vector.FunctionResult[uint64])
-		return numericToNumeric[uint32, uint64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float32:
-		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[uint32, float32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float64:
-		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[uint32, float64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_decimal64:
-		rs := result.(*vector.FunctionResult[types.Decimal64])
-		return unsignedToDecimal64[uint32](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return unsignedToDecimal64(source, rs, length)
 	case types.T_decimal128:
-		rs := result.(*vector.FunctionResult[types.Decimal128])
-		return unsignedToDecimal128[uint32](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return unsignedToDecimal128(source, rs, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		rs := result.(*vector.FunctionResult[types.Varlena])
-		return unsignedToStr[uint32](source, rs, length)
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return unsignedToStr(source, rs, length)
 	case types.T_time:
-		rs := result.(*vector.FunctionResult[types.Time])
-		return integerToTime[uint32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[types.Time](result)
+		return integerToTime(ctx, source, rs, length)
 	case types.T_timestamp:
-		rs := result.(*vector.FunctionResult[types.Timestamp])
-		return integerToTimestamp[uint32](source, rs, length)
+		rs := vector.MustFunctionResult[types.Timestamp](result)
+		return integerToTimestamp(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint32 to %s", toType))
 }
 
 func uint64ToOthers(ctx context.Context,
-	source *vector.FunctionParameter[uint64],
+	source vector.FunctionParameterWrapper[uint64],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
-		rs := result.(*vector.FunctionResult[bool])
-		return numericToBool[uint64](source, rs, length)
+		rs := vector.MustFunctionResult[bool](result)
+		return numericToBool(source, rs, length)
 	case types.T_int8:
-		rs := result.(*vector.FunctionResult[int8])
-		return numericToNumeric[uint64, int8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int8](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int16:
-		rs := result.(*vector.FunctionResult[int16])
-		return numericToNumeric[uint64, int16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int16](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
-		return numericToNumeric[uint64, int32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
-		return numericToNumeric[uint64, int64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint8:
-		rs := result.(*vector.FunctionResult[uint8])
-		return numericToNumeric[uint64, uint8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint8](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint16:
-		rs := result.(*vector.FunctionResult[uint16])
-		return numericToNumeric[uint64, uint16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint16](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint32:
-		rs := result.(*vector.FunctionResult[uint32])
-		return numericToNumeric[uint64, uint32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint64:
-		rs := result.(*vector.FunctionResult[uint64])
+		rs := vector.MustFunctionResult[uint64](result)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_float32:
-		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[uint64, float32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float64:
-		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[uint64, float64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_decimal64:
-		rs := result.(*vector.FunctionResult[types.Decimal64])
-		return unsignedToDecimal64[uint64](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return unsignedToDecimal64(source, rs, length)
 	case types.T_decimal128:
-		rs := result.(*vector.FunctionResult[types.Decimal128])
-		return unsignedToDecimal128[uint64](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return unsignedToDecimal128(source, rs, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		rs := result.(*vector.FunctionResult[types.Varlena])
-		return unsignedToStr[uint64](source, rs, length)
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return unsignedToStr(source, rs, length)
 	case types.T_time:
-		rs := result.(*vector.FunctionResult[types.Time])
-		return integerToTime[uint64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[types.Time](result)
+		return integerToTime(ctx, source, rs, length)
 	case types.T_timestamp:
-		rs := result.(*vector.FunctionResult[types.Timestamp])
-		return integerToTimestamp[uint64](source, rs, length)
+		rs := vector.MustFunctionResult[types.Timestamp](result)
+		return integerToTimestamp(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint64 to %s", toType))
 }
 
 func float32ToOthers(ctx context.Context,
-	source *vector.FunctionParameter[float32],
+	source vector.FunctionParameterWrapper[float32],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
-		rs := result.(*vector.FunctionResult[bool])
-		return numericToBool[float32](source, rs, length)
+		rs := vector.MustFunctionResult[bool](result)
+		return numericToBool(source, rs, length)
 	case types.T_int8:
-		rs := result.(*vector.FunctionResult[int8])
-		return floatToInteger[float32, int8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int8](result)
+		return floatToInteger(ctx, source, rs, length)
 	case types.T_int16:
-		rs := result.(*vector.FunctionResult[int16])
-		return floatToInteger[float32, int16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int16](result)
+		return floatToInteger(ctx, source, rs, length)
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
-		return floatToInteger[float32, int32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int32](result)
+		return floatToInteger(ctx, source, rs, length)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
-		return floatToInteger[float32, int64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int64](result)
+		return floatToInteger(ctx, source, rs, length)
 	case types.T_uint8:
-		rs := result.(*vector.FunctionResult[uint8])
-		return floatToInteger[float32, uint8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint8](result)
+		return floatToInteger(ctx, source, rs, length)
 	case types.T_uint16:
-		rs := result.(*vector.FunctionResult[uint16])
-		return floatToInteger[float32, uint16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint16](result)
+		return floatToInteger(ctx, source, rs, length)
 	case types.T_uint32:
-		rs := result.(*vector.FunctionResult[uint32])
-		return floatToInteger[float32, uint32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint32](result)
+		return floatToInteger(ctx, source, rs, length)
 	case types.T_uint64:
-		rs := result.(*vector.FunctionResult[uint64])
-		return floatToInteger[float32, uint64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint64](result)
+		return floatToInteger(ctx, source, rs, length)
 	case types.T_float32:
-		rs := result.(*vector.FunctionResult[float32])
+		rs := vector.MustFunctionResult[float32](result)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_float64:
-		rs := result.(*vector.FunctionResult[float64])
-		return numericToNumeric[float32, float64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float64](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_decimal64:
-		rs := result.(*vector.FunctionResult[types.Decimal64])
-		return floatToDecimal64[float32](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return floatToDecimal64(source, rs, length)
 	case types.T_decimal128:
-		rs := result.(*vector.FunctionResult[types.Decimal128])
-		return floatToDecimal128[float32](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return floatToDecimal128(source, rs, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		rs := result.(*vector.FunctionResult[types.Varlena])
-		return floatToStr[float32](source, rs, length)
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return floatToStr(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from float32 to %s", toType))
 }
 
 func float64ToOthers(ctx context.Context,
-	source *vector.FunctionParameter[float64],
+	source vector.FunctionParameterWrapper[float64],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_bool:
-		rs := result.(*vector.FunctionResult[bool])
-		return numericToBool[float64](source, rs, length)
+		rs := vector.MustFunctionResult[bool](result)
+		return numericToBool(source, rs, length)
 	case types.T_int8:
-		rs := result.(*vector.FunctionResult[int8])
-		return floatToInteger[float64, int8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int8](result)
+		return floatToInteger(ctx, source, rs, length)
 	case types.T_int16:
-		rs := result.(*vector.FunctionResult[int16])
-		return floatToInteger[float64, int16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int16](result)
+		return floatToInteger(ctx, source, rs, length)
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
-		return floatToInteger[float64, int32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int32](result)
+		return floatToInteger(ctx, source, rs, length)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
-		return floatToInteger[float64, int64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int64](result)
+		return floatToInteger(ctx, source, rs, length)
 	case types.T_uint8:
-		rs := result.(*vector.FunctionResult[uint8])
-		return floatToInteger[float64, uint8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint8](result)
+		return floatToInteger(ctx, source, rs, length)
 	case types.T_uint16:
-		rs := result.(*vector.FunctionResult[uint16])
-		return floatToInteger[float64, uint16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint16](result)
+		return floatToInteger(ctx, source, rs, length)
 	case types.T_uint32:
-		rs := result.(*vector.FunctionResult[uint32])
-		return floatToInteger[float64, uint32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint32](result)
+		return floatToInteger(ctx, source, rs, length)
 	case types.T_uint64:
-		rs := result.(*vector.FunctionResult[uint64])
-		return floatToInteger[float64, uint64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint64](result)
+		return floatToInteger(ctx, source, rs, length)
 	case types.T_float32:
-		rs := result.(*vector.FunctionResult[float32])
-		return numericToNumeric[float64, float32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[float32](result)
+		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float64:
-		rs := result.(*vector.FunctionResult[float64])
+		rs := vector.MustFunctionResult[float64](result)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_decimal64:
-		rs := result.(*vector.FunctionResult[types.Decimal64])
-		return floatToDecimal64[float64](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return floatToDecimal64(source, rs, length)
 	case types.T_decimal128:
-		rs := result.(*vector.FunctionResult[types.Decimal128])
-		return floatToDecimal128[float64](source, rs, length)
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return floatToDecimal128(source, rs, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		rs := result.(*vector.FunctionResult[types.Varlena])
-		return floatToStr[float64](source, rs, length)
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return floatToStr(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from float64 to %s", toType))
 }
 
 func dateToOthers(proc *process.Process,
-	source *vector.FunctionParameter[types.Date],
+	source vector.FunctionParameterWrapper[types.Date],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
-		return dateToSigned[int32](source, rs, length)
+		rs := vector.MustFunctionResult[int32](result)
+		return dateToSigned(source, rs, length)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
-		return dateToSigned[int64](source, rs, length)
+		rs := vector.MustFunctionResult[int64](result)
+		return dateToSigned(source, rs, length)
 	case types.T_date:
-		rs := result.(*vector.FunctionResult[types.Date])
+		rs := vector.MustFunctionResult[types.Date](result)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_time:
-		rs := result.(*vector.FunctionResult[types.Time])
+		rs := vector.MustFunctionResult[types.Time](result)
 		return dateToTime(source, rs, length)
 	case types.T_timestamp:
 		zone := time.Local
 		if proc != nil {
 			zone = proc.SessionInfo.TimeZone
 		}
-		rs := result.(*vector.FunctionResult[types.Timestamp])
+		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return dateToTimestamp(source, rs, length, zone)
 	case types.T_datetime:
-		rs := result.(*vector.FunctionResult[types.Datetime])
+		rs := vector.MustFunctionResult[types.Datetime](result)
 		return dateToDatetime(source, rs, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		rs := result.(*vector.FunctionResult[types.Varlena])
+		rs := vector.MustFunctionResult[types.Varlena](result)
 		return dateToStr(source, rs, length)
 	}
 	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from date to %s", toType))
 }
 
 func datetimeToOthers(proc *process.Process,
-	source *vector.FunctionParameter[types.Datetime],
+	source vector.FunctionParameterWrapper[types.Datetime],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
+		rs := vector.MustFunctionResult[int32](result)
 		return datetimeToInt32(proc.Ctx, source, rs, length)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
+		rs := vector.MustFunctionResult[int64](result)
 		return datetimeToInt64(source, rs, length)
 	case types.T_timestamp:
 		zone := time.Local
 		if proc != nil {
 			zone = proc.SessionInfo.TimeZone
 		}
-		rs := result.(*vector.FunctionResult[types.Timestamp])
+		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return datetimeToTimestamp(source, rs, length, zone)
 	case types.T_date:
-		rs := result.(*vector.FunctionResult[types.Date])
+		rs := vector.MustFunctionResult[types.Date](result)
 		return datetimeToDate(source, rs, length)
 	case types.T_datetime:
-		rs := result.(*vector.FunctionResult[types.Datetime])
+		rs := vector.MustFunctionResult[types.Datetime](result)
 		v := source.GetSourceVector()
 		v.Typ = toType
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_time:
-		rs := result.(*vector.FunctionResult[types.Time])
+		rs := vector.MustFunctionResult[types.Time](result)
 		return datetimeToTime(source, rs, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		rs := result.(*vector.FunctionResult[types.Varlena])
+		rs := vector.MustFunctionResult[types.Varlena](result)
 		return datetimeToStr(source, rs, length)
 	}
 	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from datetime to %s", toType))
 }
 
 func timestampToOthers(proc *process.Process,
-	source *vector.FunctionParameter[types.Timestamp],
+	source vector.FunctionParameterWrapper[types.Timestamp],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	zone := time.Local
 	if proc != nil {
@@ -1088,251 +1089,251 @@ func timestampToOthers(proc *process.Process,
 
 	switch toType.Oid {
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
+		rs := vector.MustFunctionResult[int32](result)
 		return timestampToInt32(proc.Ctx, source, rs, length)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
+		rs := vector.MustFunctionResult[int64](result)
 		return timestampToInt64(source, rs, length)
 	case types.T_date:
-		rs := result.(*vector.FunctionResult[types.Date])
+		rs := vector.MustFunctionResult[types.Date](result)
 		return timestampToDate(proc.Ctx, source, rs, length, zone)
 	case types.T_datetime:
-		rs := result.(*vector.FunctionResult[types.Datetime])
+		rs := vector.MustFunctionResult[types.Datetime](result)
 		return timestampToDatetime(proc.Ctx, source, rs, length, zone)
 	case types.T_timestamp:
-		rs := result.(*vector.FunctionResult[types.Timestamp])
+		rs := vector.MustFunctionResult[types.Timestamp](result)
 		v := source.GetSourceVector()
 		v.Typ = toType
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		rs := result.(*vector.FunctionResult[types.Varlena])
+		rs := vector.MustFunctionResult[types.Varlena](result)
 		return timestampToStr(source, rs, length, zone)
 	}
 	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from timestamp to %s", toType))
 }
 
 func timeToOthers(ctx context.Context,
-	source *vector.FunctionParameter[types.Time],
+	source vector.FunctionParameterWrapper[types.Time],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_int8:
-		rs := result.(*vector.FunctionResult[int8])
-		return timeToInteger[int8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int8](result)
+		return timeToInteger(ctx, source, rs, length)
 	case types.T_int16:
-		rs := result.(*vector.FunctionResult[int16])
-		return timeToInteger[int16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int16](result)
+		return timeToInteger(ctx, source, rs, length)
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
-		return timeToInteger[int32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int32](result)
+		return timeToInteger(ctx, source, rs, length)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
-		return timeToInteger[int64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[int64](result)
+		return timeToInteger(ctx, source, rs, length)
 	case types.T_uint8:
-		rs := result.(*vector.FunctionResult[uint8])
-		return timeToInteger[uint8](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint8](result)
+		return timeToInteger(ctx, source, rs, length)
 	case types.T_uint16:
-		rs := result.(*vector.FunctionResult[uint16])
-		return timeToInteger[uint16](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint16](result)
+		return timeToInteger(ctx, source, rs, length)
 	case types.T_uint32:
-		rs := result.(*vector.FunctionResult[uint32])
-		return timeToInteger[uint32](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint32](result)
+		return timeToInteger(ctx, source, rs, length)
 	case types.T_uint64:
-		rs := result.(*vector.FunctionResult[uint64])
-		return timeToInteger[uint64](ctx, source, rs, length)
+		rs := vector.MustFunctionResult[uint64](result)
+		return timeToInteger(ctx, source, rs, length)
 	case types.T_date:
-		rs := result.(*vector.FunctionResult[types.Date])
+		rs := vector.MustFunctionResult[types.Date](result)
 		return timeToDate(source, rs, length)
 	case types.T_datetime:
-		rs := result.(*vector.FunctionResult[types.Datetime])
+		rs := vector.MustFunctionResult[types.Datetime](result)
 		return timeToDatetime(source, rs, length)
 	case types.T_time:
-		rs := result.(*vector.FunctionResult[types.Time])
+		rs := vector.MustFunctionResult[types.Time](result)
 		v := source.GetSourceVector()
 		v.Typ = toType
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		rs := result.(*vector.FunctionResult[types.Varlena])
+		rs := vector.MustFunctionResult[types.Varlena](result)
 		return timeToStr(source, rs, length)
 	case types.T_decimal64:
-		rs := result.(*vector.FunctionResult[types.Decimal64])
+		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return timeToDecimal64(ctx, source, rs, length)
 	case types.T_decimal128:
-		rs := result.(*vector.FunctionResult[types.Decimal128])
+		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return timeToDecimal128(ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from time to %s", toType))
 }
 
 func decimal64ToOthers(ctx context.Context,
-	source *vector.FunctionParameter[types.Decimal64],
+	source vector.FunctionParameterWrapper[types.Decimal64],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_float32:
-		rs := result.(*vector.FunctionResult[float32])
-		return decimal64ToFloat[float32](ctx, source, rs, length, 32)
+		rs := vector.MustFunctionResult[float32](result)
+		return decimal64ToFloat(ctx, source, rs, length, 32)
 	case types.T_float64:
-		rs := result.(*vector.FunctionResult[float64])
-		return decimal64ToFloat[float64](ctx, source, rs, length, 64)
+		rs := vector.MustFunctionResult[float64](result)
+		return decimal64ToFloat(ctx, source, rs, length, 64)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
+		rs := vector.MustFunctionResult[int64](result)
 		return decimal64ToInt64(ctx, source, rs, length)
 	case types.T_uint64:
-		rs := result.(*vector.FunctionResult[uint64])
+		rs := vector.MustFunctionResult[uint64](result)
 		return decimal64ToUnsigned(ctx, source, rs, 64, length)
 	case types.T_decimal64:
-		rs := result.(*vector.FunctionResult[types.Decimal64])
+		rs := vector.MustFunctionResult[types.Decimal64](result)
 		v := source.GetSourceVector()
 		v.Typ = toType
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_decimal128:
-		rs := result.(*vector.FunctionResult[types.Decimal128])
+		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return decimal64ToDecimal128(source, rs, length)
 	case types.T_timestamp:
-		rs := result.(*vector.FunctionResult[types.Timestamp])
+		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return decimal64ToTimestamp(source, rs, length)
 	case types.T_time:
-		rs := result.(*vector.FunctionResult[types.Time])
+		rs := vector.MustFunctionResult[types.Time](result)
 		return decimal64ToTime(source, rs, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		rs := result.(*vector.FunctionResult[types.Varlena])
+		rs := vector.MustFunctionResult[types.Varlena](result)
 		return decimal64ToStr(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal64 to %s", toType))
 }
 
 func decimal128ToOthers(ctx context.Context,
-	source *vector.FunctionParameter[types.Decimal128],
+	source vector.FunctionParameterWrapper[types.Decimal128],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
-		return decimal128ToSigned[int32](ctx, source, rs, 32, length)
+		rs := vector.MustFunctionResult[int32](result)
+		return decimal128ToSigned(ctx, source, rs, 32, length)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
-		return decimal128ToSigned[int64](ctx, source, rs, 64, length)
+		rs := vector.MustFunctionResult[int64](result)
+		return decimal128ToSigned(ctx, source, rs, 64, length)
 	case types.T_uint64:
-		rs := result.(*vector.FunctionResult[uint64])
-		return decimal128ToUnsigned[uint64](ctx, source, rs, 64, length)
+		rs := vector.MustFunctionResult[uint64](result)
+		return decimal128ToUnsigned(ctx, source, rs, 64, length)
 	case types.T_decimal64:
-		rs := result.(*vector.FunctionResult[types.Decimal64])
+		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return decimal128ToDecimal64(ctx, source, rs, length)
 	case types.T_decimal128:
-		rs := result.(*vector.FunctionResult[types.Decimal128])
+		rs := vector.MustFunctionResult[types.Decimal128](result)
 		v := source.GetSourceVector()
 		v.Typ = toType
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_float32:
-		rs := result.(*vector.FunctionResult[float32])
-		return decimal128ToFloat[float32](ctx, source, rs, length, 32)
+		rs := vector.MustFunctionResult[float32](result)
+		return decimal128ToFloat(ctx, source, rs, length, 32)
 	case types.T_float64:
-		rs := result.(*vector.FunctionResult[float64])
-		return decimal128ToFloat[float64](ctx, source, rs, length, 64)
+		rs := vector.MustFunctionResult[float64](result)
+		return decimal128ToFloat(ctx, source, rs, length, 64)
 	case types.T_time:
-		rs := result.(*vector.FunctionResult[types.Time])
+		rs := vector.MustFunctionResult[types.Time](result)
 		return decimal128ToTime(source, rs, length)
 	case types.T_timestamp:
-		rs := result.(*vector.FunctionResult[types.Timestamp])
+		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return decimal128ToTimestamp(source, rs, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		rs := result.(*vector.FunctionResult[types.Varlena])
+		rs := vector.MustFunctionResult[types.Varlena](result)
 		return decimal128ToStr(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal128 to %s", toType))
 }
 
 func strTypeToOthers(proc *process.Process,
-	source *vector.FunctionParameter[types.Varlena],
+	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_int8:
-		rs := result.(*vector.FunctionResult[int8])
-		return strToSigned[int8](ctx, source, rs, 8, length)
+		rs := vector.MustFunctionResult[int8](result)
+		return strToSigned(ctx, source, rs, 8, length)
 	case types.T_int16:
-		rs := result.(*vector.FunctionResult[int16])
-		return strToSigned[int16](ctx, source, rs, 16, length)
+		rs := vector.MustFunctionResult[int16](result)
+		return strToSigned(ctx, source, rs, 16, length)
 	case types.T_int32:
-		rs := result.(*vector.FunctionResult[int32])
-		return strToSigned[int32](ctx, source, rs, 32, length)
+		rs := vector.MustFunctionResult[int32](result)
+		return strToSigned(ctx, source, rs, 32, length)
 	case types.T_int64:
-		rs := result.(*vector.FunctionResult[int64])
-		return strToSigned[int64](ctx, source, rs, 64, length)
+		rs := vector.MustFunctionResult[int64](result)
+		return strToSigned(ctx, source, rs, 64, length)
 	case types.T_uint8:
-		rs := result.(*vector.FunctionResult[uint8])
-		return strToUnsigned[uint8](ctx, source, rs, 8, length)
+		rs := vector.MustFunctionResult[uint8](result)
+		return strToUnsigned(ctx, source, rs, 8, length)
 	case types.T_uint16:
-		rs := result.(*vector.FunctionResult[uint16])
-		return strToUnsigned[uint16](ctx, source, rs, 16, length)
+		rs := vector.MustFunctionResult[uint16](result)
+		return strToUnsigned(ctx, source, rs, 16, length)
 	case types.T_uint32:
-		rs := result.(*vector.FunctionResult[uint32])
-		return strToUnsigned[uint32](ctx, source, rs, 32, length)
+		rs := vector.MustFunctionResult[uint32](result)
+		return strToUnsigned(ctx, source, rs, 32, length)
 	case types.T_uint64:
-		rs := result.(*vector.FunctionResult[uint64])
-		return strToUnsigned[uint64](ctx, source, rs, 64, length)
+		rs := vector.MustFunctionResult[uint64](result)
+		return strToUnsigned(ctx, source, rs, 64, length)
 	case types.T_float32:
-		rs := result.(*vector.FunctionResult[float32])
-		return strToFloat[float32](ctx, source, rs, 32, length)
+		rs := vector.MustFunctionResult[float32](result)
+		return strToFloat(ctx, source, rs, 32, length)
 	case types.T_float64:
-		rs := result.(*vector.FunctionResult[float64])
-		return strToFloat[float64](ctx, source, rs, 64, length)
+		rs := vector.MustFunctionResult[float64](result)
+		return strToFloat(ctx, source, rs, 64, length)
 	case types.T_decimal64:
-		rs := result.(*vector.FunctionResult[types.Decimal64])
+		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return strToDecimal64(source, rs, length)
 	case types.T_decimal128:
-		rs := result.(*vector.FunctionResult[types.Decimal128])
+		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return strToDecimal128(source, rs, length)
 	case types.T_bool:
-		rs := result.(*vector.FunctionResult[bool])
+		rs := vector.MustFunctionResult[bool](result)
 		return strToBool(source, rs, length)
 	case types.T_json:
-		rs := result.(*vector.FunctionResult[types.Varlena])
+		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToJson(source, rs, length)
 	case types.T_uuid:
-		rs := result.(*vector.FunctionResult[types.Uuid])
+		rs := vector.MustFunctionResult[types.Uuid](result)
 		return strToUuid(source, rs, length)
 	case types.T_date:
-		rs := result.(*vector.FunctionResult[types.Date])
+		rs := vector.MustFunctionResult[types.Date](result)
 		return strToDate(source, rs, length)
 	case types.T_datetime:
-		rs := result.(*vector.FunctionResult[types.Datetime])
+		rs := vector.MustFunctionResult[types.Datetime](result)
 		return strToDatetime(source, rs, length)
 	case types.T_time:
-		rs := result.(*vector.FunctionResult[types.Time])
+		rs := vector.MustFunctionResult[types.Time](result)
 		return strToTime(source, rs, length)
 	case types.T_timestamp:
-		rs := result.(*vector.FunctionResult[types.Timestamp])
+		rs := vector.MustFunctionResult[types.Timestamp](result)
 		zone := time.Local
 		if proc != nil {
 			zone = proc.SessionInfo.TimeZone
 		}
 		return strToTimestamp(source, rs, zone, length)
 	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
-		rs := result.(*vector.FunctionResult[types.Varlena])
+		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(proc.Ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", source.GetType(), toType))
 }
 
 func uuidToOthers(ctx context.Context,
-	source *vector.FunctionParameter[types.Uuid],
+	source vector.FunctionParameterWrapper[types.Uuid],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		rs := result.(*vector.FunctionResult[types.Varlena])
+		rs := vector.MustFunctionResult[types.Varlena](result)
 		return uuidToStr(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uuid to %s", toType))
 }
 
 func tsToOthers(ctx context.Context,
-	source *vector.FunctionParameter[types.TS],
+	source vector.FunctionParameterWrapper[types.TS],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	if toType.Oid == types.T_TS {
-		rs := result.(*vector.FunctionResult[types.TS])
+		rs := vector.MustFunctionResult[types.TS](result)
 		rs.SetFromParameter(source)
 		return nil
 	}
@@ -1340,10 +1341,10 @@ func tsToOthers(ctx context.Context,
 }
 
 func rowidToOthers(ctx context.Context,
-	source *vector.FunctionParameter[types.Rowid],
+	source vector.FunctionParameterWrapper[types.Rowid],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	if toType.Oid == types.T_Rowid {
-		rs := result.(*vector.FunctionResult[types.Rowid])
+		rs := vector.MustFunctionResult[types.Rowid](result)
 		rs.SetFromParameter(source)
 		return nil
 	}
@@ -1351,11 +1352,11 @@ func rowidToOthers(ctx context.Context,
 }
 
 func jsonToOthers(ctx context.Context,
-	source *vector.FunctionParameter[types.Varlena],
+	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
 	case types.T_char, types.T_varchar, types.T_text:
-		rs := result.(*vector.FunctionResult[types.Varlena])
+		rs := vector.MustFunctionResult[types.Varlena](result)
 		return jsonToStr(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from json to %s", toType))
@@ -1364,7 +1365,7 @@ func jsonToOthers(ctx context.Context,
 // XXX do not use it to cast float to integer, please use floatToInteger
 func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](
 	ctx context.Context,
-	from *vector.FunctionParameter[T1], to *vector.FunctionResult[T2], length int) error {
+	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2], length int) error {
 	var i uint64
 	var dftValue T2
 	times := uint64(length)
@@ -1389,7 +1390,7 @@ func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](
 // XXX do not use it to cast float to integer, please use floatToInteger
 func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
 	ctx context.Context,
-	from *vector.FunctionParameter[T1], to *vector.FunctionResult[T2],
+	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2],
 	length int) error {
 	var i uint64
 	var dftValue T2
@@ -1413,7 +1414,7 @@ func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
 }
 
 func numericToBool[T constraints.Integer | constraints.Float](
-	from *vector.FunctionParameter[T],
+	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[bool], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1428,7 +1429,7 @@ func numericToBool[T constraints.Integer | constraints.Float](
 }
 
 func boolToStr(
-	from *vector.FunctionParameter[bool],
+	from vector.FunctionParameterWrapper[bool],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1454,7 +1455,7 @@ func boolToStr(
 }
 
 func boolToInteger[T constraints.Integer](
-	from *vector.FunctionParameter[bool],
+	from vector.FunctionParameterWrapper[bool],
 	to *vector.FunctionResult[T], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1481,7 +1482,7 @@ func boolToInteger[T constraints.Integer](
 }
 
 func signedToDecimal64[T1 constraints.Signed](
-	from *vector.FunctionParameter[T1],
+	from vector.FunctionParameterWrapper[T1],
 	to *vector.FunctionResult[types.Decimal64], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1508,7 +1509,7 @@ func signedToDecimal64[T1 constraints.Signed](
 }
 
 func signedToDecimal128[T1 constraints.Signed](
-	from *vector.FunctionParameter[T1],
+	from vector.FunctionParameterWrapper[T1],
 	to *vector.FunctionResult[types.Decimal128], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1535,7 +1536,7 @@ func signedToDecimal128[T1 constraints.Signed](
 }
 
 func unsignedToDecimal64[T1 constraints.Unsigned](
-	from *vector.FunctionParameter[T1],
+	from vector.FunctionParameterWrapper[T1],
 	to *vector.FunctionResult[types.Decimal64], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1562,7 +1563,7 @@ func unsignedToDecimal64[T1 constraints.Unsigned](
 }
 
 func unsignedToDecimal128[T1 constraints.Unsigned](
-	from *vector.FunctionParameter[T1],
+	from vector.FunctionParameterWrapper[T1],
 	to *vector.FunctionResult[types.Decimal128], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1589,7 +1590,7 @@ func unsignedToDecimal128[T1 constraints.Unsigned](
 }
 
 func floatToDecimal64[T constraints.Float](
-	from *vector.FunctionParameter[T],
+	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[types.Decimal64], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1616,7 +1617,7 @@ func floatToDecimal64[T constraints.Float](
 }
 
 func floatToDecimal128[T constraints.Float](
-	from *vector.FunctionParameter[T],
+	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[types.Decimal128], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1643,7 +1644,7 @@ func floatToDecimal128[T constraints.Float](
 }
 
 func signedToStr[T constraints.Integer](
-	from *vector.FunctionParameter[T],
+	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1664,7 +1665,7 @@ func signedToStr[T constraints.Integer](
 }
 
 func unsignedToStr[T constraints.Unsigned](
-	from *vector.FunctionParameter[T],
+	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1685,7 +1686,7 @@ func unsignedToStr[T constraints.Unsigned](
 }
 
 func floatToStr[T constraints.Float](
-	from *vector.FunctionParameter[T],
+	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1707,7 +1708,7 @@ func floatToStr[T constraints.Float](
 }
 
 func integerToTimestamp[T constraints.Integer](
-	from *vector.FunctionParameter[T],
+	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[types.Timestamp], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1731,7 +1732,7 @@ func integerToTimestamp[T constraints.Integer](
 
 func integerToTime[T constraints.Integer](
 	ctx context.Context,
-	from *vector.FunctionParameter[T],
+	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[types.Time], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1761,7 +1762,7 @@ func integerToTime[T constraints.Integer](
 }
 
 func dateToSigned[T int32 | int64](
-	from *vector.FunctionParameter[types.Date],
+	from vector.FunctionParameterWrapper[types.Date],
 	to *vector.FunctionResult[T], length int) error {
 	var i uint64
 	for i = 0; i < uint64(length); i++ {
@@ -1781,7 +1782,7 @@ func dateToSigned[T int32 | int64](
 }
 
 func dateToTime(
-	from *vector.FunctionParameter[types.Date],
+	from vector.FunctionParameterWrapper[types.Date],
 	to *vector.FunctionResult[types.Time], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1801,7 +1802,7 @@ func dateToTime(
 }
 
 func datetimeToTime(
-	from *vector.FunctionParameter[types.Datetime],
+	from vector.FunctionParameterWrapper[types.Datetime],
 	to *vector.FunctionResult[types.Time], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1822,7 +1823,7 @@ func datetimeToTime(
 }
 
 func dateToTimestamp(
-	from *vector.FunctionParameter[types.Date],
+	from vector.FunctionParameterWrapper[types.Date],
 	to *vector.FunctionResult[types.Timestamp], length int,
 	zone *time.Location) error {
 	var i uint64
@@ -1844,7 +1845,7 @@ func dateToTimestamp(
 
 func datetimeToInt32(
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Datetime],
+	from vector.FunctionParameterWrapper[types.Datetime],
 	to *vector.FunctionResult[int32], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1868,7 +1869,7 @@ func datetimeToInt32(
 }
 
 func datetimeToInt64(
-	from *vector.FunctionParameter[types.Datetime],
+	from vector.FunctionParameterWrapper[types.Datetime],
 	to *vector.FunctionResult[int64], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1889,7 +1890,7 @@ func datetimeToInt64(
 }
 
 func datetimeToTimestamp(
-	from *vector.FunctionParameter[types.Datetime],
+	from vector.FunctionParameterWrapper[types.Datetime],
 	to *vector.FunctionResult[types.Timestamp], length int,
 	zone *time.Location) error {
 	var i uint64
@@ -1910,7 +1911,7 @@ func datetimeToTimestamp(
 }
 
 func dateToDatetime(
-	from *vector.FunctionParameter[types.Date],
+	from vector.FunctionParameterWrapper[types.Date],
 	to *vector.FunctionResult[types.Datetime], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1931,7 +1932,7 @@ func dateToDatetime(
 
 func timestampToDatetime(
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Timestamp],
+	from vector.FunctionParameterWrapper[types.Timestamp],
 	to *vector.FunctionResult[types.Datetime], length int,
 	zone *time.Location) error {
 	var i uint64
@@ -1959,7 +1960,7 @@ func timestampToDatetime(
 }
 
 func timeToDatetime(
-	from *vector.FunctionParameter[types.Time],
+	from vector.FunctionParameterWrapper[types.Time],
 	to *vector.FunctionResult[types.Datetime], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -1980,7 +1981,7 @@ func timeToDatetime(
 }
 
 func datetimeToDate(
-	from *vector.FunctionParameter[types.Datetime],
+	from vector.FunctionParameterWrapper[types.Datetime],
 	to *vector.FunctionResult[types.Date], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2001,7 +2002,7 @@ func datetimeToDate(
 
 func timestampToInt32(
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Timestamp],
+	from vector.FunctionParameterWrapper[types.Timestamp],
 	to *vector.FunctionResult[int32], length int) error {
 	var i uint64
 	for i = 0; i < uint64(length); i++ {
@@ -2024,7 +2025,7 @@ func timestampToInt32(
 }
 
 func timestampToInt64(
-	from *vector.FunctionParameter[types.Timestamp],
+	from vector.FunctionParameterWrapper[types.Timestamp],
 	to *vector.FunctionResult[int64], length int) error {
 	var i uint64
 	for i = 0; i < uint64(length); i++ {
@@ -2045,7 +2046,7 @@ func timestampToInt64(
 
 func timestampToDate(
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Timestamp],
+	from vector.FunctionParameterWrapper[types.Timestamp],
 	to *vector.FunctionResult[types.Date], length int,
 	zone *time.Location) error {
 	var i uint64
@@ -2076,7 +2077,7 @@ func timestampToDate(
 
 func timeToInteger[T constraints.Integer](
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Time],
+	from vector.FunctionParameterWrapper[types.Time],
 	to *vector.FunctionResult[T], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2102,7 +2103,7 @@ func timeToInteger[T constraints.Integer](
 }
 
 func timeToDate(
-	from *vector.FunctionParameter[types.Time],
+	from vector.FunctionParameterWrapper[types.Time],
 	to *vector.FunctionResult[types.Date], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2122,7 +2123,7 @@ func timeToDate(
 }
 
 func dateToStr(
-	from *vector.FunctionParameter[types.Date],
+	from vector.FunctionParameterWrapper[types.Date],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2142,7 +2143,7 @@ func dateToStr(
 }
 
 func datetimeToStr(
-	from *vector.FunctionParameter[types.Datetime],
+	from vector.FunctionParameterWrapper[types.Datetime],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2163,7 +2164,7 @@ func datetimeToStr(
 }
 
 func timestampToStr(
-	from *vector.FunctionParameter[types.Timestamp],
+	from vector.FunctionParameterWrapper[types.Timestamp],
 	to *vector.FunctionResult[types.Varlena], length int,
 	zone *time.Location) error {
 	var i uint64
@@ -2185,7 +2186,7 @@ func timestampToStr(
 }
 
 func timeToStr(
-	from *vector.FunctionParameter[types.Time],
+	from vector.FunctionParameterWrapper[types.Time],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2207,7 +2208,7 @@ func timeToStr(
 
 func timeToDecimal64(
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Time],
+	from vector.FunctionParameterWrapper[types.Time],
 	to *vector.FunctionResult[types.Decimal64], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2235,7 +2236,7 @@ func timeToDecimal64(
 
 func timeToDecimal128(
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Time],
+	from vector.FunctionParameterWrapper[types.Time],
 	to *vector.FunctionResult[types.Decimal128], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2263,7 +2264,7 @@ func timeToDecimal128(
 
 func decimal64ToInt64(
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Decimal64],
+	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[int64], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2294,7 +2295,7 @@ func decimal64ToInt64(
 
 func decimal128ToSigned[T constraints.Signed](
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Decimal128],
+	from vector.FunctionParameterWrapper[types.Decimal128],
 	to *vector.FunctionResult[T], bitSize int, length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2323,7 +2324,7 @@ func decimal128ToSigned[T constraints.Signed](
 
 func decimal64ToUnsigned[T constraints.Unsigned](
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Decimal64],
+	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[T], bitSize int,
 	length int) error {
 	var i uint64
@@ -2355,7 +2356,7 @@ func decimal64ToUnsigned[T constraints.Unsigned](
 
 func decimal128ToUnsigned[T constraints.Unsigned](
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Decimal128],
+	from vector.FunctionParameterWrapper[types.Decimal128],
 	to *vector.FunctionResult[T], bitSize int,
 	length int) error {
 	var i uint64
@@ -2386,7 +2387,7 @@ func decimal128ToUnsigned[T constraints.Unsigned](
 }
 
 func decimal64ToTime(
-	from *vector.FunctionParameter[types.Decimal64],
+	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[types.Time], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2411,7 +2412,7 @@ func decimal64ToTime(
 }
 
 func decimal128ToTime(
-	from *vector.FunctionParameter[types.Decimal128],
+	from vector.FunctionParameterWrapper[types.Decimal128],
 	to *vector.FunctionResult[types.Time], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2436,7 +2437,7 @@ func decimal128ToTime(
 }
 
 func decimal64ToTimestamp(
-	from *vector.FunctionParameter[types.Decimal64],
+	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[types.Timestamp], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2457,7 +2458,7 @@ func decimal64ToTimestamp(
 }
 
 func decimal128ToTimestamp(
-	from *vector.FunctionParameter[types.Decimal128],
+	from vector.FunctionParameterWrapper[types.Decimal128],
 	to *vector.FunctionResult[types.Timestamp], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2479,7 +2480,7 @@ func decimal128ToTimestamp(
 
 func decimal64ToFloat[T constraints.Float](
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Decimal64],
+	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[T], length int, bitSize int) error {
 	// IF float32, then bitSize should be 32. IF float64, then 64
 	var i uint64
@@ -2507,7 +2508,7 @@ func decimal64ToFloat[T constraints.Float](
 
 func decimal128ToFloat[T constraints.Float](
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Decimal128],
+	from vector.FunctionParameterWrapper[types.Decimal128],
 	to *vector.FunctionResult[T], length int, bitSize int) error {
 	// IF float32, then bitSize should be 32. IF float64, then 64
 	var i uint64
@@ -2534,7 +2535,7 @@ func decimal128ToFloat[T constraints.Float](
 }
 
 func decimal64ToDecimal128(
-	from *vector.FunctionParameter[types.Decimal64],
+	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[types.Decimal128], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2568,7 +2569,7 @@ func decimal64ToDecimal128(
 // this cast function is too slow, and therefore only temporary, rewrite needed
 func decimal128ToDecimal64(
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Decimal128],
+	from vector.FunctionParameterWrapper[types.Decimal128],
 	to *vector.FunctionResult[types.Decimal64], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2595,7 +2596,7 @@ func decimal128ToDecimal64(
 }
 
 func decimal64ToStr(
-	from *vector.FunctionParameter[types.Decimal64],
+	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2617,7 +2618,7 @@ func decimal64ToStr(
 }
 
 func decimal128ToStr(
-	from *vector.FunctionParameter[types.Decimal128],
+	from vector.FunctionParameterWrapper[types.Decimal128],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	var i uint64
 	l := uint64(length)
@@ -2640,12 +2641,12 @@ func decimal128ToStr(
 
 func strToSigned[T constraints.Signed](
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Varlena],
+	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
 	length int) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := from.IsBin()
+	isBinary := from.GetSourceVector().GetIsBin()
 
 	var result T
 	for i = 0; i < l; i++ {
@@ -2690,12 +2691,12 @@ func strToSigned[T constraints.Signed](
 
 func strToUnsigned[T constraints.Unsigned](
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Varlena],
+	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
 	length int) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := from.IsBin()
+	isBinary := from.GetSourceVector().GetIsBin()
 
 	var val uint64
 	var tErr error
@@ -2732,12 +2733,12 @@ func strToUnsigned[T constraints.Unsigned](
 
 func strToFloat[T constraints.Float](
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Varlena],
+	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
 	length int) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := from.IsBin()
+	isBinary := from.GetSourceVector().GetIsBin()
 
 	var result T
 	var tErr error
@@ -2778,14 +2779,14 @@ func strToFloat[T constraints.Float](
 }
 
 func strToDecimal64(
-	from *vector.FunctionParameter[types.Varlena],
+	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Decimal64], length int,
 ) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Decimal64
 	totype := to.GetType()
-	isb := from.IsBin()
+	isb := from.GetSourceVector().GetIsBin()
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -2808,14 +2809,14 @@ func strToDecimal64(
 }
 
 func strToDecimal128(
-	from *vector.FunctionParameter[types.Varlena],
+	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Decimal128], length int,
 ) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Decimal128
 	totype := to.GetType()
-	isb := from.IsBin()
+	isb := from.GetSourceVector().GetIsBin()
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -2838,7 +2839,7 @@ func strToDecimal128(
 }
 
 func strToBool(
-	from *vector.FunctionParameter[types.Varlena],
+	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[bool], length int) error {
 	var i uint64
 	var l = uint64(length)
@@ -2863,7 +2864,7 @@ func strToBool(
 }
 
 func strToUuid(
-	from *vector.FunctionParameter[types.Varlena],
+	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Uuid], length int) error {
 	var i uint64
 	var l = uint64(length)
@@ -2889,7 +2890,7 @@ func strToUuid(
 }
 
 func strToJson(
-	from *vector.FunctionParameter[types.Varlena],
+	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	var i uint64
 	var l = uint64(length)
@@ -2918,7 +2919,7 @@ func strToJson(
 }
 
 func strToDate(
-	from *vector.FunctionParameter[types.Varlena],
+	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Date], length int) error {
 	var i uint64
 	var l = uint64(length)
@@ -2944,7 +2945,7 @@ func strToDate(
 }
 
 func strToTime(
-	from *vector.FunctionParameter[types.Varlena],
+	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Time], length int) error {
 	var i uint64
 	var l = uint64(length)
@@ -2971,7 +2972,7 @@ func strToTime(
 }
 
 func strToDatetime(
-	from *vector.FunctionParameter[types.Varlena],
+	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Datetime], length int) error {
 	var i uint64
 	var l = uint64(length)
@@ -2998,7 +2999,7 @@ func strToDatetime(
 }
 
 func strToTimestamp(
-	from *vector.FunctionParameter[types.Varlena],
+	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Timestamp],
 	zone *time.Location, length int) error {
 	var i uint64
@@ -3027,7 +3028,7 @@ func strToTimestamp(
 
 func strToStr(
 	ctx context.Context,
-	from *vector.FunctionParameter[types.Varlena],
+	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	totype := to.GetType()
 	destLen := int(totype.Width)
@@ -3071,7 +3072,7 @@ func strToStr(
 }
 
 func uuidToStr(
-	from *vector.FunctionParameter[types.Uuid],
+	from vector.FunctionParameterWrapper[types.Uuid],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	var i uint64
 	var l = uint64(length)
@@ -3092,7 +3093,7 @@ func uuidToStr(
 }
 
 func jsonToStr(
-	from *vector.FunctionParameter[types.Varlena],
+	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	var i uint64
 	for i = 0; i < uint64(length); i++ {

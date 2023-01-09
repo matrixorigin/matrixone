@@ -88,6 +88,7 @@ func TestS3FS(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
 
 	t.Run("file service", func(t *testing.T) {
+		cacheDir := t.TempDir()
 		testFileService(t, func(name string) FileService {
 
 			fs, err := NewS3FS(
@@ -97,6 +98,8 @@ func TestS3FS(t *testing.T) {
 				config.Bucket,
 				time.Now().Format("2006-01-02.15:04:05.000000"),
 				128*1024,
+				128*1024,
+				cacheDir,
 			)
 			assert.Nil(t, err)
 
@@ -105,6 +108,7 @@ func TestS3FS(t *testing.T) {
 	})
 
 	t.Run("list root", func(t *testing.T) {
+		cacheDir := t.TempDir()
 		fs, err := NewS3FS(
 			"",
 			"s3",
@@ -112,6 +116,8 @@ func TestS3FS(t *testing.T) {
 			config.Bucket,
 			"",
 			128*1024,
+			128*1024,
+			cacheDir,
 		)
 		assert.Nil(t, err)
 		ctx := context.Background()
@@ -121,6 +127,7 @@ func TestS3FS(t *testing.T) {
 	})
 
 	t.Run("caching file service", func(t *testing.T) {
+		cacheDir := t.TempDir()
 		testCachingFileService(t, func() CachingFileService {
 			fs, err := NewS3FS(
 				"",
@@ -129,6 +136,8 @@ func TestS3FS(t *testing.T) {
 				config.Bucket,
 				time.Now().Format("2006-01-02.15:04:05.000000"),
 				128*1024,
+				128*1024,
+				cacheDir,
 			)
 			assert.Nil(t, err)
 			return fs
@@ -159,11 +168,12 @@ func TestDynamicS3(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, _, err := GetForETL(nil, JoinPath(
+		fs, path, err := GetForETL(nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))
 		assert.Nil(t, err)
+		assert.Equal(t, path, "foo/bar/baz")
 		return fs
 	})
 }
@@ -191,11 +201,12 @@ func TestDynamicS3NoKey(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, _, err := GetForETL(nil, JoinPath(
+		fs, path, err := GetForETL(nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))
 		assert.Nil(t, err)
+		assert.Equal(t, path, "foo/bar/baz")
 		return fs
 	})
 }
@@ -223,11 +234,12 @@ func TestDynamicS3Opts(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, _, err := GetForETL(nil, JoinPath(
+		fs, path, err := GetForETL(nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))
 		assert.Nil(t, err)
+		assert.Equal(t, path, "foo/bar/baz")
 		return fs
 	})
 }
@@ -298,6 +310,7 @@ func TestS3FSMinioServer(t *testing.T) {
 
 	// run test
 	t.Run("file service", func(t *testing.T) {
+		cacheDir := t.TempDir()
 		testFileService(t, func(name string) FileService {
 
 			fs, err := NewS3FSOnMinio(
@@ -307,6 +320,8 @@ func TestS3FSMinioServer(t *testing.T) {
 				"test",
 				time.Now().Format("2006-01-02.15:04:05.000000"),
 				128*1024,
+				128*1024,
+				cacheDir,
 			)
 			assert.Nil(t, err)
 
@@ -328,6 +343,8 @@ func BenchmarkS3FS(b *testing.B) {
 	b.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
 	b.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
 
+	cacheDir := b.TempDir()
+
 	b.ResetTimer()
 
 	benchmarkFileService(b, func() FileService {
@@ -338,6 +355,8 @@ func BenchmarkS3FS(b *testing.B) {
 			config.Bucket,
 			time.Now().Format("2006-01-02.15:04:05.000000"),
 			128*1024,
+			128*1024,
+			cacheDir,
 		)
 		assert.Nil(b, err)
 		return fs

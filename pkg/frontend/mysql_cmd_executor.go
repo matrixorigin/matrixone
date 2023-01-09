@@ -24,7 +24,6 @@ import (
 	"math"
 	"os"
 	"reflect"
-	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,12 +31,15 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
@@ -54,6 +56,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -233,6 +236,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if cw != nil {
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
+		ses.ast = statement
 		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		statement.Format(fmtCtx)
 		text = SubStringFromBegin(fmtCtx.String(), int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
@@ -256,6 +260,10 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		RequestAt:            requestAt,
 		StatementType:        getStatementType(statement).GetStatementType(),
 		QueryType:            getStatementType(statement).GetQueryType(),
+	}
+	if ses.sqlSourceType != "internal_sql" {
+		ses.tStmt = stm
+		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
@@ -316,7 +324,7 @@ type outputQueue struct {
 	mrs          *MysqlResultSet
 	rowIdx       uint64
 	length       uint64
-	ep           *tree.ExportParam
+	ep           *ExportParam
 	lineStr      []byte
 	showStmtType ShowStatementType
 
@@ -328,7 +336,7 @@ func (o *outputQueue) resetLineStr() {
 	o.lineStr = o.lineStr[:0]
 }
 
-func NewOutputQueue(ctx context.Context, proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam, showStatementType ShowStatementType) *outputQueue {
+func NewOutputQueue(ctx context.Context, proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *ExportParam, showStatementType ShowStatementType) *outputQueue {
 	return &outputQueue{
 		ctx:          ctx,
 		proto:        proto,
@@ -583,15 +591,19 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
+	if openSaveQueryResult(ses) {
+		if bat == nil {
+			if err := saveQueryResultMeta(ses); err != nil {
+				return err
+			}
+		} else {
+			if err := saveQueryResult(ses, bat); err != nil {
+				return err
+			}
+		}
+	}
 	if bat == nil {
 		return nil
-	}
-
-	enableProfile := ses.GetParameterUnit().SV.EnableProfileGetDataFromPipeline
-
-	var cpuf *os.File = nil
-	if enableProfile {
-		cpuf, _ = os.Create("cpu_profile")
 	}
 
 	begin := time.Now()
@@ -625,11 +637,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	n := vector.Length(bat.Vecs[0])
 
-	if enableProfile {
-		if err := pprof.StartCPUProfile(cpuf); err != nil {
-			return err
-		}
-	}
 	requestCtx := ses.GetRequestContext()
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
@@ -663,10 +670,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	err := oq.flush()
 	if err != nil {
 		return err
-	}
-
-	if enableProfile {
-		pprof.StopCPUProfile()
 	}
 
 	procBatchTime := time.Since(procBatchBegin)
@@ -1031,6 +1034,9 @@ func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db strin
 
 func (mce *MysqlCmdExecutor) handleDump(requestCtx context.Context, dump *tree.MoDump) error {
 	var err error
+	if !dump.DumpDatabase {
+		return doDumpQueryResult(requestCtx, mce.GetSession(), dump.ExportParams)
+	}
 	dump.OutFile = maybeAppendExtension(dump.OutFile)
 	exists, err := fileExists(dump.OutFile)
 	if exists {
@@ -1286,6 +1292,8 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 func doLoadData(requestCtx context.Context, ses *Session, proc *process.Process, load *tree.Import) (*LoadResult, error) {
 	var err error
 	var txn TxnOperator
+	var dbHandler engine.Database
+	var tableHandler engine.Relation
 	proto := ses.GetMysqlProtocol()
 
 	logInfof(ses.GetConciseProfile(), "+++++load data")
@@ -1337,7 +1345,7 @@ func doLoadData(requestCtx context.Context, ses *Session, proc *process.Process,
 	if err != nil {
 		return nil, err
 	}
-	dbHandler, err := ses.GetStorage().Database(requestCtx, loadDb, txn)
+	dbHandler, err = ses.GetStorage().Database(requestCtx, loadDb, txn)
 	if err != nil {
 		//echo client. no such database
 		return nil, moerr.NewBadDB(requestCtx, loadDb)
@@ -1353,10 +1361,27 @@ func doLoadData(requestCtx context.Context, ses *Session, proc *process.Process,
 	/*
 		check table
 	*/
-	tableHandler, err := dbHandler.Relation(requestCtx, loadTable)
+	if ses.IfInitedTempEngine() {
+		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, ses.GetTempTableStorage())
+	}
+	tableHandler, err = dbHandler.Relation(requestCtx, loadTable)
 	if err != nil {
-		//echo client. no such table
-		return nil, moerr.NewNoSuchTable(requestCtx, loadDb, loadTable)
+		txn, err = ses.txnHandler.GetTxn()
+		if err != nil {
+			return nil, err
+		}
+		dbHandler, err = ses.GetStorage().Database(requestCtx, defines.TEMPORARY_DBNAME, txn)
+		if err != nil {
+			return nil, moerr.NewNoSuchTable(requestCtx, loadDb, loadTable)
+		}
+		loadTable = engine.GetTempTableName(loadDb, loadTable)
+		tableHandler, err = dbHandler.Relation(requestCtx, loadTable)
+		if err != nil {
+			//echo client. no such table
+			return nil, moerr.NewNoSuchTable(requestCtx, loadDb, loadTable)
+		}
+		loadDb = defines.TEMPORARY_DBNAME
+		load.Table.ObjectName = tree.Identifier(loadTable)
 	}
 
 	/*
@@ -1669,7 +1694,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		}
 		row := make([]interface{}, 2)
 		row[0] = name
-		gsv, ok := gSysVariables.GetDefinitionOfSysVar(name)
+		gsv, ok := GSysVariables.GetDefinitionOfSysVar(name)
 		if !ok {
 			return moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
 		}
@@ -2232,6 +2257,11 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	return columns, err
 }
 
+func (cwft *TxnComputationWrapper) GetClock() clock.Clock {
+	rt := runtime.ProcessLevelRuntime()
+	return rt.Clock()
+}
+
 func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 	return cwft.compile.GetAffectedRows()
 }
@@ -2239,6 +2269,11 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
 	defer RecordStatementTxnID(requestCtx, cwft.ses)
+	if cwft.ses.IfInitedTempEngine() {
+		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
+		cwft.ses.SetRequestContext(requestCtx)
+		cwft.proc.Ctx = context.WithValue(cwft.proc.Ctx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
+	}
 	cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 	if err != nil {
 		return nil, err
@@ -2329,6 +2364,51 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if err != nil {
 		return nil, err
 	}
+	// check if it is necessary to initialize the temporary engine
+	if cwft.compile.NeedInitTempEngine(cwft.ses.IfInitedTempEngine()) {
+		// 0. init memory-non-dist storage
+		dnStore, err := cwft.ses.SetTempTableStorage(cwft.GetClock())
+		if err != nil {
+			return nil, err
+		}
+
+		// temporary storage is passed through Ctx
+		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
+
+		// 1. init memory-non-dist engine
+		tempEngine := memoryengine.New(
+			requestCtx,
+			memoryengine.NewDefaultShardPolicy(
+				mpool.MustNewZero(),
+			),
+			func() (logservicepb.ClusterDetails, error) {
+				return logservicepb.ClusterDetails{
+					DNStores: []logservicepb.DNStore{
+						*dnStore,
+					},
+				}, nil
+			},
+			memoryengine.RandomIDGenerator,
+		)
+
+		// 2. bind the temporary engine to the session and txnHandler
+		cwft.ses.SetTempEngine(requestCtx, tempEngine)
+		cwft.compile.SetTempEngine(requestCtx, tempEngine)
+		txnHandler := cwft.ses.txnCompileCtx.txnHandler
+		txnHandler.SetTempEngine(tempEngine)
+
+		// 3. init temp-db to store temporary relations
+		err = tempEngine.Create(requestCtx, defines.TEMPORARY_DBNAME, cwft.ses.txnHandler.txn)
+		if err != nil {
+			return nil, err
+		}
+
+		// 4. add auto_IncrementTable fortemp-db
+		colexec.CreateAutoIncrTable(cwft.ses.GetStorage(), requestCtx, cwft.proc, defines.TEMPORARY_DBNAME)
+
+		cwft.ses.InitTempEngine = true
+	}
+	RecordStatementTxnID(requestCtx, cwft.ses)
 	return cwft.compile, err
 }
 
@@ -3129,7 +3209,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	proc := process.New(
 		requestCtx,
 		ses.GetMemPool(),
-		pu.TxnClient,
+		ses.GetTxnHandler().GetTxnClient(),
 		ses.GetTxnHandler().GetTxnOperator(),
 		pu.FileService,
 		pu.GetClusterDetails,
@@ -3150,14 +3230,17 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		LastInsertID:  ses.GetLastInsertID(),
 	}
 	if ses.GetTenantInfo() != nil {
+		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
 		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 	} else {
+		proc.SessionInfo.Account = sysAccountName
 		proc.SessionInfo.AccountId = sysAccountID
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
 	}
+	proc.SessionInfo.QueryId = ses.QueryId
 	ses.txnCompileCtx.SetProcess(proc)
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,
@@ -3523,6 +3606,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				logErrorf(ses.GetConciseProfile(), "GetColumns from Computation handler failed. error: %v", err)
 				goto handleFailed
 			}
+			if c, ok := cw.(*TxnComputationWrapper); ok {
+				ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(c.plan)}
+			}
 			/*
 				Step 1 : send column count and column definition.
 			*/
@@ -3882,10 +3968,12 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 	}
 
 	if ses.GetTenantInfo() != nil {
+		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
 		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 	} else {
+		proc.SessionInfo.Account = sysAccountName
 		proc.SessionInfo.AccountId = sysAccountID
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
@@ -4304,7 +4392,7 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 	return buffer.Bytes()
 }
 
-func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, rows int64, size int64) {
+func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, statsJonsBytes []byte, stats trace.Statistic) {
 	if queryPlan != nil && queryPlan.GetQuery() != nil {
 		explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
 		options := &explain.ExplainOptions{
@@ -4313,7 +4401,7 @@ func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.U
 			Format:  explain.EXPLAIN_FORMAT_TEXT,
 		}
 		marshalPlan := explainQuery.BuildJsonPlan(ctx, uuid, options)
-		rows, size = marshalPlan.StatisticsRead()
+		stats.RowsRead, stats.BytesScan = marshalPlan.StatisticsRead()
 		// data transform to json datastruct
 		buffer := &bytes.Buffer{}
 		encoder := json.NewEncoder(buffer)
@@ -4325,19 +4413,35 @@ func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.U
 		} else {
 			jsonBytes = buffer.Bytes()
 		}
+		// data transform Global to json
+		if len(marshalPlan.Steps) > 0 {
+			if len(marshalPlan.Steps) > 1 {
+				logutil.Fatalf("need handle multi execPlan trees, cnt: %d", len(marshalPlan.Steps))
+			}
+			buffer := &bytes.Buffer{}
+			encoder := json.NewEncoder(buffer)
+			encoder.SetEscapeHTML(false)
+			global := marshalPlan.Steps[0].GraphData.Global
+			err = encoder.Encode(&global)
+			if err != nil {
+				statsJonsBytes = []byte(fmt.Sprintf(`{"code":200,"message":"%q"}`, err.Error()))
+			} else {
+				statsJonsBytes = buffer.Bytes()
+			}
+		}
 	} else {
 		jsonBytes = buildErrorJsonPlan(uuid, moerr.ErrWarn, "sql query no record execution plan")
 	}
-	return jsonBytes, rows, size
+	return jsonBytes, statsJonsBytes, stats
 }
 
 // SerializeExecPlan Serialize the execution plan by json
-var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]byte, int64, int64) {
+var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]byte, []byte, trace.Statistic) {
 	if plan == nil {
 		return serializePlanToJson(ctx, nil, uuid)
 	} else if queryPlan, ok := plan.(*plan2.Plan); !ok {
 		moError := moerr.NewInternalError(ctx, "execPlan not type of plan2.Plan: %s", reflect.ValueOf(plan).Type().Name())
-		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error()), 0, 0
+		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error()), []byte{}, trace.Statistic{}
 	} else {
 		// data transform to json dataStruct
 		return serializePlanToJson(ctx, queryPlan, uuid)
