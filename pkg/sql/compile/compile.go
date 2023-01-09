@@ -620,6 +620,9 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	param.Ctx = c.ctx
 	var fileList []string
 	if param.QueryResult {
+		if !c.proc.SessionInfo.SaveQueryResult {
+			return nil, moerr.NewNoConfig(ctx, "save query result")
+		}
 		fileList = strings.Split(param.Filepath, ",")
 		for i := range fileList {
 			fileList[i] = strings.TrimSpace(fileList[i])
