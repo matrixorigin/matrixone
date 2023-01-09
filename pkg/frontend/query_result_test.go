@@ -68,7 +68,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 	//new session
-	ses := NewSession(proto, testPool, pu, gSysVariables, true)
+	ses := NewSession(proto, testPool, pu, GSysVariables, true)
 	return ses
 }
 
@@ -100,6 +100,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	var files []resultFileInfo
 	//prepare session
 	ses := newTestSession(t, ctrl)
+	_ = ses.SetGlobalVar("save_query_result", int8(1))
 	defer ses.Dispose()
 	const blockCnt int = 3
 

@@ -193,9 +193,18 @@ type Session struct {
 
 	rs *plan.ResultColDef
 
-	lastQueryId string
+	QueryId []string
 
 	blockIdx int
+}
+
+const saveQueryIdCnt = 10
+
+func (ses *Session) pushQueryId(uuid string) {
+	if len(ses.QueryId) > saveQueryIdCnt {
+		ses.QueryId = ses.QueryId[1:]
+	}
+	ses.QueryId = append(ses.QueryId, uuid)
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
@@ -2312,7 +2321,7 @@ type BackgroundHandler struct {
 var NewBackgroundHandler = func(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit) BackgroundExec {
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
-		ses: NewBackgroundSession(ctx, mp, pu, gSysVariables),
+		ses: NewBackgroundSession(ctx, mp, pu, GSysVariables),
 	}
 	return bh
 }
