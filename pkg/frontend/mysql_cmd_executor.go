@@ -3231,6 +3231,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		LastInsertID:  ses.GetLastInsertID(),
 	}
 	proc.SessionInfo.QueryId = ses.lastQueryId
+	val, err := ses.GetGlobalVar("save_query_result")
+	if err == nil {
+		if v, _ := val.(int8); v > 0 {
+			proc.SessionInfo.SaveQueryResult = true
+		}
+	}
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
