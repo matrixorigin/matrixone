@@ -27,6 +27,7 @@ backend = "DISK-ETL"
 [observability]
 statusPort = 7001
 enableTraceDebug = false
+logsExtension = "tae"
 
 [hakeeper-client]
 service-addresses = [

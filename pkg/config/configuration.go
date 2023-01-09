@@ -448,13 +448,13 @@ type ObservabilityParameters struct {
 	MergeMaxFileSize int `toml:"mergeMaxFileSize"`
 
 	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]
-	PathBuilder string `toml:"PathBuilder"`
+	PathBuilder string `toml:"pathBuilder"`
 
 	// LogsExtension default: csv. Support val in [csv, tae]
-	LogsExtension string `toml:"LogsExtension"`
+	LogsExtension string `toml:"logsExtension"`
 
 	// MergedExtension default: tae. Support val in [csv, tae]
-	MergedExtension string `toml:"MergedExtension"`
+	MergedExtension string `toml:"mergedExtension"`
 }
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -48,7 +49,8 @@ type TAEWriter struct {
 	buffer   [][]any
 }
 
-func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filename string, fs fileservice.FileService) *TAEWriter {
+func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePath string, fs fileservice.FileService) *TAEWriter {
+	filename := defines.ETLFileServiceName + fileservice.ServiceNameSeparator + filePath
 	w := &TAEWriter{
 		ctx:       ctx,
 		batchSize: BatchSize,

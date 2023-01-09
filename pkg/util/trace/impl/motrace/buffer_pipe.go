@@ -119,7 +119,7 @@ func (r *RowRequest) Handle() (int, error) {
 func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 
 	handle := func(b any) {
-		req, ok := b.(*CSVRequest) // see genCsvData
+		req, ok := b.(WriteRequest) // see genCsvData
 		if !ok {
 			panic(moerr.NewInternalError(ctx, "batchCSVHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
 		}
@@ -132,7 +132,7 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 		_, span := trace.Start(DefaultContext(), "batchCSVHandler")
 		defer span.End()
 		switch b := batch.(type) {
-		case *CSVRequest:
+		case WriteRequest:
 			handle(b)
 		case CSVRequests:
 			for _, req := range b {
