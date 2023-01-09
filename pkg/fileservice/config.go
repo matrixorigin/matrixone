@@ -102,6 +102,8 @@ func newMinioFileService(cfg Config) (FileService, error) {
 		cfg.S3.Bucket,
 		cfg.S3.KeyPrefix,
 		int64(cfg.Cache.MemoryCapacity),
+		int64(cfg.Cache.DiskCapacity),
+		cfg.Cache.DiskPath,
 	)
 	if err != nil {
 		return nil, err
@@ -117,6 +119,8 @@ func newS3FileService(cfg Config) (FileService, error) {
 		cfg.S3.Bucket,
 		cfg.S3.KeyPrefix,
 		int64(cfg.Cache.MemoryCapacity),
+		int64(cfg.Cache.DiskCapacity),
+		cfg.Cache.DiskPath,
 	)
 	if err != nil {
 		return nil, err

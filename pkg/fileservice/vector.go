@@ -14,33 +14,11 @@
 
 package fileservice
 
-import (
-	"context"
-
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
-)
-
-type CacheKey struct {
-	Path   string
-	Offset int64
-	Size   int64
-}
-
-type CacheConfig struct {
-	MemoryCapacity toml.ByteSize `toml:"memory-capacity"`
-	DiskPath       string        `toml:"disk-path"`
-	DiskCapacity   toml.ByteSize `toml:"disk-capacity"`
-}
-
-type Cache interface {
-	Read(
-		ctx context.Context,
-		vector *IOVector,
-	) error
-	Update(
-		ctx context.Context,
-		vector *IOVector,
-	) error
-	Flush()
-	CacheStats() *CacheStats
+func (v *IOVector) allDone() bool {
+	for _, entry := range v.Entries {
+		if !entry.done {
+			return false
+		}
+	}
+	return true
 }

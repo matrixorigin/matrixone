@@ -52,6 +52,7 @@ func PrintScope(prefix []byte, ss []*Scope) {
 
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
+	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
 	if s.DataSource.Bat != nil {
 		if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
@@ -67,6 +68,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
+	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
@@ -145,6 +147,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	var rds []engine.Reader
 
+	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	if s.IsJoin {
 		return s.JoinRun(c)
 	}
