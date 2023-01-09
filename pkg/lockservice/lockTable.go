@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"bytes"
 	"context"
 	"sync"
 )
@@ -30,17 +31,6 @@ type lockTable struct {
 	btrees map[uint64]LockStorage
 
 	stateChanged chan struct{}
-
-	deadlock struct {
-		// Send the txnID to checkTxn channel when a new lock is acquired by a txn.
-		// checkDeadlock will update entries in dependentQueue related with received txnID.
-		checkTxn chan []byte
-		// Send a signal to rebuildQueue channel when Unlock is called.
-		// refreshDependentQueue will rebuild the queue based on current txn dependent relationship.
-		rebuildQueue chan struct{}
-
-		// dependentQueue
-	}
 }
 
 func NewLockService() LockService {
@@ -48,57 +38,39 @@ func NewLockService() LockService {
 		locks:        make(map[string]map[uint64][][]byte),
 		btrees:       make(map[uint64]LockStorage),
 		stateChanged: make(chan struct{}),
-
-		deadlock: struct {
-			checkTxn     chan []byte
-			rebuildQueue chan struct{}
-		}{checkTxn: make(chan []byte), rebuildQueue: make(chan struct{})},
 	}
 }
 
-func (l *lockTable) Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) (ok bool, err error) {
-	defer func(txnID []byte) {
-		if ok == true {
-			l.deadlock.checkTxn <- txnID
-		}
-	}(txnID)
-
-	if ok = l.tryLock(tableID, rows, txnID, options); ok {
+func (l *lockTable) Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) (bool, error) {
+	if ok := l.acquireLock(ctx, tableID, rows, txnID, options); ok {
 		return ok, nil
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return false, l.Unlock(ctx, txnID)
-		case <-l.stateChanged:
-			if ok = l.tryLock(tableID, rows, txnID, options); ok {
-				return ok, nil
-			}
-		}
+	} else {
+		return false, l.Unlock(ctx, txnID)
 	}
 }
 
 func (l *lockTable) Unlock(ctx context.Context, txnID []byte) error {
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	for tableID, keys := range l.locks[string(txnID)] {
 		for _, key := range keys {
-			l.btrees[tableID].Delete(key)
+			if lock, ok := l.btrees[tableID].Get(key); ok {
+				if waiter := lock.waiter.close(); waiter != nil {
+					lock.waiter = waiter
+					l.btrees[tableID].Add(key, lock)
+				} else {
+					l.btrees[tableID].Delete(key)
+				}
+			}
 		}
-		if l.btrees[tableID].Len() == 0 {
-			delete(l.btrees, tableID)
-		}
+		delete(l.locks[string(txnID)], tableID)
 	}
-	delete(l.locks, string(txnID))
-	defer l.mu.Unlock()
-	l.notifyStateChanged(true)
+	//delete(l.locks, string(txnID))
 	return nil
 }
 
-func (l *lockTable) tryLock(tableID uint64, rows [][]byte, txnID []byte, options LockOptions) bool {
+func (l *lockTable) acquireLock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) bool {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	if _, ok := l.locks[string(txnID)]; !ok {
 		l.locks[string(txnID)] = make(map[uint64][][]byte)
 	}
@@ -106,44 +78,44 @@ func (l *lockTable) tryLock(tableID uint64, rows [][]byte, txnID []byte, options
 	if _, ok := l.btrees[tableID]; !ok {
 		l.btrees[tableID] = newBtreeBasedStorage()
 	}
+	l.mu.Unlock()
 
 	if options.granularity == Row {
-		return l.tryRowLock(tableID, rows[0], txnID, options)
+		return l.acquireRowLock(ctx, tableID, rows[0], txnID, options)
 	} else {
-		return l.tryRangeLock(tableID, rows[0], rows[1], txnID, options)
+		return l.acquireRangeLock(tableID, rows[0], rows[1], txnID, options)
 	}
 }
 
-func (l *lockTable) tryRowLock(tableID uint64, row []byte, txnID []byte, options LockOptions) bool {
-
-	return false
-}
-
-func (l *lockTable) tryRangeLock(tableID uint64, start, end []byte, txnID []byte, options LockOptions) bool {
-
-	return false
-}
-
-func (l *lockTable) notifyStateChanged(rebuildDependentQueue bool) {
-	l.stateChanged <- struct{}{}
-	if rebuildDependentQueue {
-		l.deadlock.rebuildQueue <- struct{}{}
-	}
-}
-
-func (l *lockTable) checkDeadlock() {
-	for {
-		select {
-		case txnID := <-l.deadlock.checkTxn:
-			l.updateTxnDependency(txnID)
-		case <-l.deadlock.rebuildQueue:
-			l.rebuildDependentQueue()
+func (l *lockTable) acquireRowLock(ctx context.Context, tableID uint64, row []byte, txnID []byte, options LockOptions) bool {
+	waiter := acquireWaiter(txnID)
+	l.mu.Lock()
+	key, lock, ok := l.btrees[tableID].Seek(row)
+	if ok && (bytes.Equal(key, row) || lock.isLockRangeEnd()) {
+		err := lock.add(waiter)
+		l.mu.Unlock()
+		if err != nil {
+			return false
 		}
+		if err := waiter.wait(ctx); err != nil {
+			return false
+		}
+	} else {
+		l.addRowLock(txnID, tableID, row, waiter)
+		l.mu.Unlock()
 	}
+	l.mu.Lock()
+	l.locks[string(txnID)][tableID] = append(l.locks[string(txnID)][tableID], row)
+	l.mu.Unlock()
+	return true
 }
 
-func (l *lockTable) updateTxnDependency(txnID []byte) {
+func (l *lockTable) acquireRangeLock(tableID uint64, start, end []byte, txnID []byte, options LockOptions) bool {
+	return false
 }
 
-func (l *lockTable) rebuildDependentQueue() {
+func (l *lockTable) addRowLock(txnID []byte, tableID uint64, row []byte, waiter *waiter) {
+	lock := newRowLock(txnID, Exclusive)
+	lock.waiter = waiter
+	l.btrees[tableID].Add(row, lock)
 }
