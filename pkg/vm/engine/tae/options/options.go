@@ -107,6 +107,15 @@ func WithCatalogGCInterval(internal time.Duration) func(*Options) {
 	}
 }
 
+func WithDisableGCCatalog() func(*Options) {
+	return func(o *Options) {
+		if o.CatalogCfg == nil {
+			o.CatalogCfg = new(CatalogCfg)
+		}
+		o.CatalogCfg.DisableGC = true
+	}
+}
+
 func (o *Options) FillDefaults(dirname string) *Options {
 	if o == nil {
 		o = &Options{}

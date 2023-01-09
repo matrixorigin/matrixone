@@ -188,6 +188,8 @@ func (entry *TableEntry) AddEntryLocked(segment *SegmentEntry) {
 	entry.entries[segment.GetID()] = n
 }
 func (entry *TableEntry) HardDeleteSegment(sid uint64) {
+	entry.Lock()
+	defer entry.Unlock()
 	n := entry.entries[sid]
 	entry.link.Delete(n)
 	delete(entry.entries, sid)

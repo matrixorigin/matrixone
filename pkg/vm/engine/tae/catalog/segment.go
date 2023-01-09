@@ -301,6 +301,8 @@ func (entry *SegmentEntry) AddEntryLocked(block *BlockEntry) {
 	entry.entries[block.GetID()] = n
 }
 func (entry *SegmentEntry) HardDeleteBlock(blkID uint64) {
+	entry.Lock()
+	defer entry.Unlock()
 	n := entry.entries[blkID]
 	entry.link.Delete(n)
 	delete(entry.entries, blkID)

@@ -146,27 +146,39 @@ func (catalog *Catalog) InitSystemDB() {
 func (catalog *Catalog) GCCatalog(ts types.TS) {
 	processor := LoopProcessor{}
 	processor.DatabaseFn = func(d *DBEntry) error {
-		if d.DeleteBefore(ts) {
+		d.RLock()
+		needGC := d.DeleteBefore(ts)
+		d.RUnlock()
+		if needGC {
 			catalog.HardDeleteDatabase(d.ID)
 		}
 		return nil
 	}
 	processor.TableFn = func(te *TableEntry) error {
-		if te.DeleteBefore(ts) {
+		te.RLock()
+		needGC := te.DeleteBefore(ts)
+		te.RUnlock()
+		if needGC {
 			db := te.db
 			db.HardDeleteTable(te.ID)
 		}
 		return nil
 	}
 	processor.SegmentFn = func(se *SegmentEntry) error {
-		if se.DeleteBefore(ts) {
+		se.RLock()
+		needGC := se.DeleteBefore(ts)
+		se.RUnlock()
+		if needGC {
 			tbl := se.table
 			tbl.HardDeleteSegment(se.ID)
 		}
 		return nil
 	}
 	processor.BlockFn = func(be *BlockEntry) error {
-		if be.DeleteBefore(ts) {
+		be.RLock()
+		needGC := be.DeleteBefore(ts)
+		be.RUnlock()
+		if needGC {
 			seg := be.segment
 			seg.HardDeleteBlock(be.ID)
 		}

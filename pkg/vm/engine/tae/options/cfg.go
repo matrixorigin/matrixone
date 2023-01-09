@@ -59,6 +59,7 @@ type GCCfg struct {
 
 type CatalogCfg struct {
 	GCInterval time.Duration
+	DisableGC  bool
 }
 
 type SchedulerCfg struct {
