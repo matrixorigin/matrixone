@@ -15,13 +15,11 @@
 package service
 
 import (
-	"net"
-	"strconv"
 	"sync"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/tests/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -258,7 +256,7 @@ type logServiceAddress struct {
 }
 
 func newLogServiceAddress(host string) (logServiceAddress, error) {
-	addrs, err := getAddressBatch(host, 3)
+	addrs, err := utils.GetAddressBatch(host, 3)
 	if err != nil {
 		return logServiceAddress{}, err
 	}
@@ -282,7 +280,7 @@ type dnServiceAddress struct {
 }
 
 func newDNServiceAddress(host string) (dnServiceAddress, error) {
-	addrs, err := getAddressBatch(host, 2)
+	addrs, err := utils.GetAddressBatch(host, 2)
 	if err != nil {
 		return dnServiceAddress{}, err
 	}
@@ -302,7 +300,7 @@ type cnServiceAddress struct {
 }
 
 func newCNServiceAddress(host string) (cnServiceAddress, error) {
-	addrs, err := getAddressBatch(host, 1)
+	addrs, err := utils.GetAddressBatch(host, 1)
 	if err != nil {
 		return cnServiceAddress{}, err
 	}
@@ -311,44 +309,6 @@ func newCNServiceAddress(host string) (cnServiceAddress, error) {
 
 func (ca cnServiceAddress) listAddresses() []string {
 	return []string{ca.listenAddr}
-}
-
-// getAddressBatch generates service addresses by batch.
-func getAddressBatch(host string, batch int) ([]string, error) {
-	addrs := make([]string, batch)
-	for i := 0; i < batch; i++ {
-		port, err := getAvailablePort(host)
-		if err != nil {
-			return nil, err
-		}
-		addrs[i] = net.JoinHostPort(host, port)
-	}
-	return addrs, nil
-}
-
-// getAvailablePort gets available port on host address.
-func getAvailablePort(host string) (string, error) {
-	curPortMu.Lock()
-	defer curPortMu.Unlock()
-
-	port := 0
-	for curPort < maxPort {
-		curPort++
-
-		ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP(host), Port: curPort})
-		if err != nil {
-			continue
-		}
-		ln.Close()
-
-		port = curPort
-		break
-	}
-
-	if port == 0 {
-		return "", moerr.NewInternalErrorNoCtx("failed to allocate")
-	}
-	return strconv.Itoa(port), nil
 }
 
 // addressSet records addresses for services within the same partition.
