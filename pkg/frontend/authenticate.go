@@ -5421,7 +5421,9 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	var comment = ""
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
+	var password string
 	ctx, span := trace.Debug(ctx, "createTablesInMoCatalogOfGeneralTenant")
+
 	defer span.End()
 
 	if nameIsInvalid(ca.Name) {
@@ -5431,6 +5433,18 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 
 	if nameIsInvalid(ca.AuthOption.AdminName) {
 		err = moerr.NewInternalError(ctx, "the admin name is invalid")
+		goto handleFailed
+	}
+
+	//add new user entry to the mo_user
+	if ca.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
+		err = moerr.NewInternalError(newTenantCtx, "only support password verification now")
+		goto handleFailed
+	}
+
+	password = ca.AuthOption.IdentifiedType.Str
+	if len(password) == 0 {
+		err = moerr.NewInternalError(newTenantCtx, "password is empty string")
 		goto handleFailed
 	}
 
