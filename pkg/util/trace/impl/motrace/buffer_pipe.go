@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package trace
+package motrace
 
 import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"io"
 	"reflect"
 	"strings"
@@ -114,7 +115,7 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 	}
 
 	var f = func(batch any) {
-		_, span := Start(DefaultContext(), "batchCSVHandler")
+		_, span := trace.Start(DefaultContext(), "batchCSVHandler")
 		defer span.End()
 		switch b := batch.(type) {
 		case *CSVRequest:
@@ -313,7 +314,7 @@ func (b *itemBuffer) GetBufferType() string {
 
 func (b *itemBuffer) GetBatch(ctx context.Context, buf *bytes.Buffer) any {
 	// fixme: CollectCycle
-	ctx, span := Start(ctx, "GenBatch")
+	ctx, span := trace.Start(ctx, "GenBatch")
 	defer span.End()
 	b.mux.Lock()
 	defer b.mux.Unlock()

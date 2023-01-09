@@ -53,6 +53,7 @@ type Argument struct {
 	UniqueIndexDef       *plan.UniqueIndexDef
 	SecondaryIndexTables []engine.Relation
 	SecondaryIndexDef    *plan.SecondaryIndexDef
+	ClusterByDef         *plan.ClusterByDef
 	ClusterTable         *plan.ClusterTable
 }
 
@@ -345,6 +346,8 @@ func writeBatch(ctx context.Context,
 			}
 
 		}
+	} else if n.ClusterByDef != nil && util.JudgeIsCompositeClusterByColumn(n.ClusterByDef.Name) {
+		util.FillCompositeClusterByBatch(bat, n.ClusterByDef.Name, proc)
 	}
 	// set null value's data
 	for i := range bat.Vecs {

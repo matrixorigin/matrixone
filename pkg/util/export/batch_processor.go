@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
 const defaultQueueSize = 1310720 // queue mem cost = 10MB
@@ -45,7 +46,7 @@ type bufferHolder struct {
 	// signal send signal to Collector
 	signal bufferSignalFunc // see awakeBufferFactory
 	// impl NewItemBatchHandler
-	impl trace.PipeImpl
+	impl motrace.PipeImpl
 	// trigger handle Reminder strategy
 	trigger *time.Timer
 
@@ -54,7 +55,7 @@ type bufferHolder struct {
 
 type bufferSignalFunc func(*bufferHolder)
 
-func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl trace.PipeImpl, signal bufferSignalFunc) *bufferHolder {
+func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl motrace.PipeImpl, signal bufferSignalFunc) *bufferHolder {
 	buffer := impl.NewItemBuffer(name.GetName())
 	b := &bufferHolder{
 		ctx:    ctx,
@@ -153,11 +154,11 @@ func (b *bufferHolder) resetTrigger() {
 	b.trigger.Reset(b.buffer.(batchpipe.Reminder).RemindNextAfter())
 }
 
-var _ trace.BatchProcessor = (*MOCollector)(nil)
+var _ motrace.BatchProcessor = (*MOCollector)(nil)
 
 // MOCollector handle all bufferPipe
 type MOCollector struct {
-	trace.BatchProcessor
+	motrace.BatchProcessor
 	ctx context.Context
 
 	// mux control all changes on buffers
@@ -227,7 +228,7 @@ func (c *MOCollector) initCnt() {
 	}
 }
 
-func (c *MOCollector) Register(name batchpipe.HasName, impl trace.PipeImpl) {
+func (c *MOCollector) Register(name batchpipe.HasName, impl motrace.PipeImpl) {
 	_ = c.pipeImplHolder.Put(name.GetName(), impl)
 }
 
@@ -401,23 +402,23 @@ func (c *MOCollector) Stop(graceful bool) error {
 
 type PipeImplHolder struct {
 	mux   sync.RWMutex
-	impls map[string]trace.PipeImpl
+	impls map[string]motrace.PipeImpl
 }
 
 func newPipeImplHolder() *PipeImplHolder {
 	return &PipeImplHolder{
-		impls: make(map[string]trace.PipeImpl),
+		impls: make(map[string]motrace.PipeImpl),
 	}
 }
 
-func (h *PipeImplHolder) Get(name string) (trace.PipeImpl, bool) {
+func (h *PipeImplHolder) Get(name string) (motrace.PipeImpl, bool) {
 	h.mux.RLock()
 	defer h.mux.RUnlock()
 	impl, has := h.impls[name]
 	return impl, has
 }
 
-func (h *PipeImplHolder) Put(name string, impl trace.PipeImpl) bool {
+func (h *PipeImplHolder) Put(name string, impl motrace.PipeImpl) bool {
 	h.mux.Lock()
 	defer h.mux.Unlock()
 	_, has := h.impls[name]
