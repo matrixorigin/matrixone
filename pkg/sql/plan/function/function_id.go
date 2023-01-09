@@ -278,6 +278,9 @@ const (
 
 	MO_SHOW_VISIBLE_BIN // parse type/onUpdate/default []byte to visible string
 
+	MO_TABLE_ROWS // table rows
+	MO_TABLE_SIZE // table size
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -478,6 +481,8 @@ var functionIdRegister = map[string]int32{
 	"json_unquote":                   JSON_UNQUOTE,
 	"ascii":                          ASCII,
 	"replace":                        REPLACE,
+	"mo_table_rows":                  MO_TABLE_ROWS,
+	"mo_table_size":                  MO_TABLE_SIZE,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

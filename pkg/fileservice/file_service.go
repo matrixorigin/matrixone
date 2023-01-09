@@ -111,10 +111,9 @@ type IOEntry struct {
 	// used in capacity limited caches
 	ObjectSize int64
 
-	// ignore indicates the entry should be ignored
-	// if true, implementations must not change any field
-	// for caches to skip individual IOEntry without using another IOVector
-	ignore bool
+	// done indicates whether the entry is filled with data
+	// for implementing cascade cache
+	done bool
 }
 
 // DirEntry is a file or dir

@@ -80,7 +80,7 @@ func init() {
 
 func Test_newBuffer2Sql_base(t *testing.T) {
 
-	buf := newBuffer2Sql()
+	buf := newItemBuffer()
 	byteBuf := new(bytes.Buffer)
 	assert.Equal(t, true, buf.IsEmpty())
 	buf.Add(&MOSpan{})
@@ -126,7 +126,7 @@ func Test_buffer2Sql_IsEmpty(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := &buffer2Sql{
+			b := &itemBuffer{
 				Reminder:      tt.fields.Reminder,
 				buf:           tt.fields.buf,
 				sizeThreshold: tt.fields.sizeThreshold,
@@ -174,7 +174,7 @@ func Test_buffer2Sql_Reset(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := &buffer2Sql{
+			b := &itemBuffer{
 				Reminder:      tt.fields.Reminder,
 				buf:           tt.fields.buf,
 				sizeThreshold: tt.fields.sizeThreshold,
@@ -203,7 +203,7 @@ func Test_withSizeThreshold(t *testing.T) {
 		{name: "1 GB", args: args{size: mpool.GB}, want: 1 << 30},
 		{name: "1.001 GB", args: args{size: mpool.GB + mpool.MB}, want: 1<<30 + 1<<20},
 	}
-	buf := &buffer2Sql{}
+	buf := &itemBuffer{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			BufferWithSizeThreshold(tt.args.size).apply(buf)
