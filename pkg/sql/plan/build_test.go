@@ -43,7 +43,8 @@ func TestSingleSQL(t *testing.T) {
 	// }
 	// t.Logf("%+v", string(getJSON(stmts[0], t)))
 	// sql := "SELECT UNIX_TIMESTAMP('2000-01-01 12:00:00.159')"
-	sql := "select * from (values row(1,1), row(2,2), row(3,3)) a(c1,c2);"
+	sql := "SELECT n_name FROM (select n_name from NATION) a"
+	// sql := "SELECT NATION.* FROM NATION left join REGION on NATION.N_REGIONKEY = REGION.R_REGIONKEY left join nation2 on nation.n_name = nation2.n_name"
 	// sql := "select -1"
 
 	mock := NewMockOptimizer()
@@ -51,7 +52,7 @@ func TestSingleSQL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	outPutPlan(logicPlan, false, t)
+	outPutPlan(logicPlan, true, t)
 }
 
 //Test Query Node Tree

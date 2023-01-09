@@ -29,7 +29,6 @@ import (
 type tableInfo struct {
 	dbNames           []string
 	tableNames        []string
-	tableDefs         []*TableDef
 	alias2BaseNameMap map[string]string // key: alias name, value: base name
 	baseName2AliasMap map[string]string //  key: base name, value: alias name, reverse asName2BaseNameMap
 }
