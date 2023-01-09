@@ -402,7 +402,6 @@ message TableDef {
 			PartitionInfo partition		= 3;
 			UniqueIndexDef uIdx			= 4;
 			SecondaryIndexDef sIdx		= 5;
-			ClusterByDef cb				= 6;
 		}
 	}
 
@@ -496,6 +495,7 @@ message UpdateCtx {
 	repeated int32 uniqueIndexPos = 10;
 	repeated int32	secondaryIndexPos = 11;
 	repeated string indexParts = 12;
+	ClusterByDef clusterByDef = 13;
 }
 
 message AnalyzeInfo {
@@ -731,6 +731,7 @@ message InsertValues {
 	UniqueIndexDef unique_index_def = 8;
 	SecondaryIndexDef secondary_index_def = 9;
 	ClusterTable cluster_table = 10;
+	ClusterByDef cb=11;
 }
 
 message column{

@@ -1844,6 +1844,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		return nil, nil
 	}
 
+	var clusterByDef *plan2.ClusterByDef
 	var cols []*plan2.ColDef
 	var defs []*plan2.TableDefType
 	var properties []*plan2.Property
@@ -1876,6 +1877,14 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 			if isCPkey {
 				CompositePkey = col
 				continue
+			}
+			if attr.Attr.ClusterBy {
+				clusterByDef = &plan.ClusterByDef{
+					Name: attr.Attr.Name,
+				}
+				if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
+					continue
+				}
 			}
 			cols = append(cols, col)
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
@@ -1990,6 +1999,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		ViewSql:       viewSql,
 		Fkeys:         foreignKeys,
 		RefChildTbls:  refChildTbls,
+		ClusterBy:     clusterByDef,
 	}
 	return obj, tableDef
 }
