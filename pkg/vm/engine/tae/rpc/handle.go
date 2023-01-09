@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"os"
 	"sync"
 	"syscall"
