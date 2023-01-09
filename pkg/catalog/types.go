@@ -52,7 +52,6 @@ const (
 	MO_TABLES   = "mo_tables"
 	MO_COLUMNS  = "mo_columns"
 
-	// 'mo_database' table
 	SystemDBAttr_ID          = "dat_id"
 	SystemDBAttr_Name        = "datname"
 	SystemDBAttr_CatalogName = "dat_catalog_name"
@@ -62,7 +61,6 @@ const (
 	SystemDBAttr_CreateAt    = "created_time"
 	SystemDBAttr_AccID       = "account_id"
 
-	// 'mo_tables' table
 	SystemRelAttr_ID          = "rel_id"
 	SystemRelAttr_Name        = "relname"
 	SystemRelAttr_DBName      = "reldatabase"
@@ -79,7 +77,6 @@ const (
 	SystemRelAttr_ViewDef     = "viewdef"
 	SystemRelAttr_Constraint  = "constraint"
 
-	// 'mo_columns' table
 	SystemColAttr_UniqName        = "att_uniq_name"
 	SystemColAttr_AccID           = "account_id"
 	SystemColAttr_Name            = "attname"

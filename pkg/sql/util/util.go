@@ -56,23 +56,6 @@ func TableIsClusterTable(tableType string) bool {
 	return tableType == catalog.SystemClusterRel
 }
 
-// Check whether it is three system tables 'mo_database, mo_tables , mo_columns' in the mo_catalog database
-// If yes, return the name of the tenant id field of the corresponding system table
-func IsMoSystemTable(obj *plan.ObjectRef, tableDef *plan.TableDef) (bool, string) {
-	dbName := obj.SchemaName
-	tableName := tableDef.Name
-	if dbName == catalog.MO_CATALOG {
-		if tableName == catalog.MO_DATABASE {
-			return true, catalog.SystemDBAttr_AccID
-		} else if tableName == catalog.MO_TABLES {
-			return true, catalog.SystemRelAttr_AccID
-		} else if tableName == catalog.MO_COLUMNS {
-			return true, catalog.SystemColAttr_AccID
-		}
-	}
-	return false, ""
-}
-
 var (
 	clusterTableAttributeName = "account_id"
 	clusterTableAttributeType = &tree.T{InternalType: tree.InternalType{
