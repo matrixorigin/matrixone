@@ -88,7 +88,7 @@ type SessionInfo struct {
 	Version        string
 	TimeZone       *time.Location
 	StorageEngine  engine.Engine
-	QueryId        string
+	QueryId        []string
 	ResultColTypes []types.Type
 }
 

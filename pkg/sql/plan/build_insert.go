@@ -234,6 +234,10 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 
 	uDef, sDef := buildIndexDefs(tblRef.Defs)
 
+	if otherCols != nil {
+		explicitCols = append(explicitCols, otherCols...)
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Ins{
 			Ins: &plan.InsertValues{
@@ -244,6 +248,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 				OrderAttrs:        orderAttrs,
 				Columns:           columns,
 				CompositePkey:     tblRef.CompositePkey,
+				Cb:                tblRef.ClusterBy,
 				UniqueIndexDef:    uDef,
 				SecondaryIndexDef: sDef,
 				ClusterTable:      clusterTable,

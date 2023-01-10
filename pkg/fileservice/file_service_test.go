@@ -20,6 +20,7 @@ import (
 	"crypto/rand"
 	"encoding/csv"
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"io"
 	mrand "math/rand"
@@ -163,6 +164,7 @@ func testFileService(
 	t.Run("WriterForRead", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
+
 		err := fs.Write(ctx, IOVector{
 			FilePath: "foo",
 			Entries: []IOEntry{
@@ -174,6 +176,7 @@ func testFileService(
 			},
 		})
 		assert.Nil(t, err)
+
 		buf := new(bytes.Buffer)
 		vec := &IOVector{
 			FilePath: "foo",
@@ -188,6 +191,22 @@ func testFileService(
 		err = fs.Read(ctx, vec)
 		assert.Nil(t, err)
 		assert.Equal(t, []byte("1234"), buf.Bytes())
+
+		buf = new(bytes.Buffer)
+		vec = &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Offset:        0,
+					Size:          -1,
+					WriterForRead: buf,
+				},
+			},
+		}
+		err = fs.Read(ctx, vec)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("1234"), buf.Bytes())
+
 	})
 
 	t.Run("ReadCloserForRead", func(t *testing.T) {
@@ -462,7 +481,7 @@ func testFileService(
 				},
 			},
 		})
-		assert.True(t, moerr.IsMoErrCode(moerr.ConvertGoError(context.TODO(), err), moerr.ErrUnexpectedEOF))
+		assert.True(t, moerr.IsMoErrCode(moerr.ConvertGoError(ctx, err), moerr.ErrUnexpectedEOF))
 
 		err = fs.Read(ctx, &IOVector{
 			FilePath: "foo",
@@ -586,8 +605,8 @@ func testFileService(
 			FilePath: "foo",
 			Entries: []IOEntry{
 				{
-					Size:   int64(len(data)),
-					ignore: true,
+					Size: int64(len(data)),
+					done: true,
 				},
 				{
 					Size: int64(len(data)),
@@ -692,7 +711,9 @@ func testFileService(
 		fs := newFS(fsName)
 
 		reader, writer := io.Pipe()
-		n := 8
+		n := 65536
+		defer reader.Close()
+		defer writer.Close()
 
 		go func() {
 			csvWriter := csv.NewWriter(writer)
@@ -711,8 +732,9 @@ func testFileService(
 			writer.Close()
 		}()
 
+		filePath := "foo"
 		vec := IOVector{
-			FilePath: "foo",
+			FilePath: filePath,
 			Entries: []IOEntry{
 				{
 					ReaderForWrite: reader,
@@ -727,7 +749,7 @@ func testFileService(
 
 		// read
 		vec = IOVector{
-			FilePath: "foo",
+			FilePath: filePath,
 			Entries: []IOEntry{
 				{
 					Size: -1,
@@ -749,6 +771,64 @@ func testFileService(
 		assert.Nil(t, err)
 		assert.Equal(t, buf.Bytes(), vec.Entries[0].Data)
 
+		// write to existed
+		vec = IOVector{
+			FilePath: filePath,
+			Entries: []IOEntry{
+				{
+					ReaderForWrite: bytes.NewReader([]byte("abc")),
+					Size:           -1,
+				},
+			},
+		}
+		err = fs.Write(ctx, vec)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists))
+
+		// cancel write
+		reader, writer = io.Pipe()
+		defer reader.Close()
+		defer writer.Close()
+		vec = IOVector{
+			FilePath: "bar",
+			Entries: []IOEntry{
+				{
+					ReaderForWrite: reader,
+					Size:           -1,
+				},
+			},
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		errCh := make(chan error)
+		go func() {
+			err := fs.Write(ctx, vec)
+			errCh <- err
+		}()
+		select {
+		case err := <-errCh:
+			assert.True(t, errors.Is(err, context.Canceled))
+		case <-time.After(time.Second * 10):
+			t.Fatal("should cancel")
+		}
+
+	})
+
+	t.Run("context cancel", func(t *testing.T) {
+		fs := newFS(fsName)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := fs.Write(ctx, IOVector{})
+		assert.ErrorIs(t, err, context.Canceled)
+
+		err = fs.Read(ctx, &IOVector{})
+		assert.ErrorIs(t, err, context.Canceled)
+
+		_, err = fs.List(ctx, "")
+		assert.ErrorIs(t, err, context.Canceled)
+
+		err = fs.Delete(ctx, "")
+		assert.ErrorIs(t, err, context.Canceled)
 	})
 
 }

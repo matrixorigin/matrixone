@@ -293,7 +293,9 @@ func buildUpdateProject(updateTableList *UpdateTableList, tbinfo *tableInfo, ctx
 			OrderAttrs:         orderAttrs,
 			IsIndexTableUpdate: false,
 			CompositePkey:      updateTableinfo.tblDef.CompositePkey,
+			ClusterByDef:       updateTableinfo.tblDef.ClusterBy,
 		}
+
 		for _, u := range updateCols {
 			ct.UpdateCols = append(ct.UpdateCols, u.colDef)
 		}

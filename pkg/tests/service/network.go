@@ -102,7 +102,7 @@ func (a serviceAddresses) assertCnService() {
 	assert.Equal(a.t, a.cnServiceNum, len(a.cnAddresses))
 }
 
-// getDnListenAddress gets dn service address by its index.
+// getDnListenAddress gets dn listen address by its index.
 func (a serviceAddresses) getDnListenAddress(index int) string {
 	a.assertDNService()
 
@@ -110,6 +110,16 @@ func (a serviceAddresses) getDnListenAddress(index int) string {
 		return ""
 	}
 	return a.dnAddresses[index].listenAddr
+}
+
+// getDnLogtailAddress gets logtail server address by its index.
+func (a serviceAddresses) getDnLogtailAddress(index int) string {
+	a.assertDNService()
+
+	if index >= len(a.dnAddresses) || index < 0 {
+		return ""
+	}
+	return a.dnAddresses[index].logtailAddr
 }
 
 // getLogListenAddress gets log service address by its index.
@@ -267,22 +277,24 @@ func (la logServiceAddress) listAddresses() []string {
 
 // dnServiceAddress contains address for dn service.
 type dnServiceAddress struct {
-	listenAddr string
+	listenAddr  string
+	logtailAddr string
 }
 
 func newDNServiceAddress(host string) (dnServiceAddress, error) {
-	addrs, err := getAddressBatch(host, 1)
+	addrs, err := getAddressBatch(host, 2)
 	if err != nil {
 		return dnServiceAddress{}, err
 	}
 	return dnServiceAddress{
-		listenAddr: addrs[0],
+		listenAddr:  addrs[0],
+		logtailAddr: addrs[1],
 	}, nil
 }
 
 // listAddresses returns all addresses for single dn service.
 func (da dnServiceAddress) listAddresses() []string {
-	return []string{da.listenAddr}
+	return []string{da.listenAddr, da.logtailAddr}
 }
 
 type cnServiceAddress struct {
