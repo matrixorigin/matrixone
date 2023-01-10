@@ -199,7 +199,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.NoError(t, err)
 	entries = append(entries, insertEntry)
 
-	//add blocks from S3 into "tbtest" table
+	//add two non-appendable blocks from S3 into "tbtest" table
 	attrs := []string{catalog2.BlockMeta_MetaLoc}
 	vecTypes := []types.Type{types.New(types.T_varchar,
 		types.MaxVarcharLen, 0, 0)}
@@ -234,15 +234,18 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//t.FailNow()
 	err = handle.HandleCommit(context.TODO(), txn)
 	assert.Nil(t, err)
-	//check rows of "tbtest"
+	//check rows of "tbtest" which should has three blocks.
 	txnR, err := txnEngine.StartTxn(nil)
 	assert.NoError(t, err)
 	dbHandle, err := txnEngine.GetDatabase(context.TODO(), dbName, txnR)
 	assert.NoError(t, err)
 	tbHandle, err := dbHandle.GetRelation(context.TODO(), schema.Name)
 	assert.NoError(t, err)
+	hideDef, err := tbHandle.GetHideKeys(context.TODO())
+	assert.NoError(t, err)
 	blkReaders, _ := tbHandle.NewReader(context.TODO(), 1, nil, nil)
 	rows := 0
+	var hideBats []*batch.Batch
 	for i := 0; i < len(taeBats); i++ {
 		//read primary key column
 		bat, err := blkReaders[0].Read(
@@ -256,9 +259,114 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		}
 	}
 	assert.Equal(t, taeBat.Length(), rows)
+
+	//read physical addr column
+	blkReaders, _ = tbHandle.NewReader(context.TODO(), 1, nil, nil)
+	for i := 0; i < len(taeBats); i++ {
+		hideBat, err := blkReaders[0].Read(
+			context.TODO(),
+			[]string{hideDef[0].Name},
+			nil,
+			handle.m,
+		)
+		assert.Nil(t, err)
+		if hideBat != nil {
+			batch.SetLength(hideBat, 5)
+			hideBats = append(hideBats, hideBat)
+		}
+	}
+	assert.Equal(t, len(taeBats), len(hideBats))
 	err = txnR.Commit()
 	assert.Nil(t, err)
 
+	//write deleted row ids into FS
+	id += 1
+	objName = fmt.Sprintf("%d.del", id)
+	objectWriter, err = objectio.NewObjectWriter(objName, service)
+	assert.Nil(t, err)
+	for _, bat := range hideBats {
+		_, err := objectWriter.Write(bat)
+		assert.Nil(t, err)
+	}
+	blocks, err = objectWriter.WriteEnd(context.Background())
+	assert.Nil(t, err)
+	assert.Equal(t, 3, len(blocks))
+	delLoc1, err := blockio.EncodeMetaLocWithObject(
+		blocks[0].GetExtent(),
+		uint32(hideBats[0].Vecs[0].Length()),
+		blocks,
+	)
+	assert.Nil(t, err)
+	delLoc2, err := blockio.EncodeMetaLocWithObject(
+		blocks[1].GetExtent(),
+		uint32(hideBats[1].Vecs[0].Length()),
+		blocks,
+	)
+	assert.Nil(t, err)
+	delLoc3, err := blockio.EncodeMetaLocWithObject(
+		blocks[2].GetExtent(),
+		uint32(hideBats[2].Vecs[0].Length()),
+		blocks,
+	)
+	assert.Nil(t, err)
+
+	//prepare delete locations.
+	attrs = []string{catalog2.BlockMeta_DeltaLoc}
+	vecTypes = []types.Type{types.New(types.T_varchar,
+		types.MaxVarcharLen, 0, 0)}
+	nullable = []bool{false}
+	vecOpts = containers.Options{}
+	vecOpts.Capacity = 0
+	delLocBat := containers.BuildBatch(attrs, vecTypes, nullable, vecOpts)
+	delLocBat.Vecs[0].Append([]byte(delLoc1))
+	delLocBat.Vecs[0].Append([]byte(delLoc2))
+	delLocBat.Vecs[0].Append([]byte(delLoc3))
+	delLocMoBat := containers.CopyToMoBatch(delLocBat)
+	var delApiEntries []*api.Entry
+	deleteS3BlkEntry, err := makePBEntry(DELETE, dbTestID,
+		tbTestID, dbName, schema.Name, objName, delLocMoBat)
+	assert.NoError(t, err)
+	delApiEntries = append(delApiEntries, deleteS3BlkEntry)
+
+	txn = mock1PCTxn(txnEngine)
+	err = handle.HandlePreCommit(
+		context.TODO(),
+		txn,
+		api.PrecommitWriteCmd{
+			UserId:    ac.userId,
+			AccountId: ac.accountId,
+			RoleId:    ac.roleId,
+			EntryList: delApiEntries,
+		},
+		new(api.SyncLogTailResp),
+	)
+	assert.Nil(t, err)
+	err = handle.HandleCommit(context.TODO(), txn)
+	assert.Nil(t, err)
+	//Now, the "tbtest" table has fifteen rows left.
+	txnR, err = txnEngine.StartTxn(nil)
+	assert.NoError(t, err)
+	dbHandle, err = txnEngine.GetDatabase(context.TODO(), dbName, txnR)
+	assert.NoError(t, err)
+	tbHandle, err = dbHandle.GetRelation(context.TODO(), schema.Name)
+	assert.NoError(t, err)
+	blkReaders, _ = tbHandle.NewReader(context.TODO(), 1, nil, nil)
+	rows = 0
+	for i := 0; i < len(taeBats); i++ {
+		//read primary key column
+		bat, err := blkReaders[0].Read(
+			context.TODO(),
+			[]string{schema.ColDefs[1].Name},
+			nil,
+			handle.m)
+		assert.Nil(t, err)
+		if bat != nil {
+			rows += vector.Length(bat.Vecs[0])
+		}
+	}
+	assert.Equal(t, 15, rows)
+	err = txnR.Commit()
+	assert.Nil(t, err)
 }
 
 func TestHandle_HandlePreCommit1PC(t *testing.T) {
