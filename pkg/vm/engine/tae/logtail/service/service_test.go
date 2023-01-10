@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/tests"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	taelogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -40,7 +41,10 @@ func TestService(t *testing.T) {
 	tableB := mockTable(2, 2, 2)
 	tableC := mockTable(3, 3, 3)
 
-	address := "127.0.0.1:9999"
+	addrs, err := tests.GetAddressBatch("127.0.0.1", 1)
+	require.NoError(t, err)
+
+	address := addrs[0]
 	logtailer := mockLocktailer(tableA, tableB, tableC)
 	rt := mockRuntime()
 
