@@ -2926,4 +2926,34 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	MO_TABLE_COL_MAX: {
+		Id:     MO_TABLE_COL_MAX,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp:       types.T_varchar,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.MoTableColMax,
+			},
+		},
+	},
+	MO_TABLE_COL_MIN: {
+		Id:     MO_TABLE_COL_MIN,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp:       types.T_varchar,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.MoTableColMin,
+			},
+		},
+	},
 }
