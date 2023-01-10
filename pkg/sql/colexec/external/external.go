@@ -742,6 +742,9 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 }
 
 func needRead(param *ExternalParam, proc *process.Process, objectReader objectio.Reader) bool {
+	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
+		return true
+	}
 	indexes, err := objectReader.ReadIndex(context.Background(), param.Zoneparam.bs[param.Zoneparam.offset].GetExtent(),
 		param.Filter.columns, objectio.ZoneMapType, proc.GetMPool())
 	if err != nil {
