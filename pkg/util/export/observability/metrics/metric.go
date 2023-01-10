@@ -49,13 +49,8 @@ func (m *Metric) GetName() string {
 	return observability.MetricTable.GetIdentify()
 }
 
-func (m *Metric) GetRow() *table.Row {
-	return observability.MetricTable.GetRow(context.Background())
-}
-
-func (m *Metric) CsvFields(ctx context.Context, row *table.Row) []string {
-	m.FillRow(ctx, row)
-	return row.ToStrings()
+func (m *Metric) GetRow() *table.Table {
+	return observability.MetricTable
 }
 
 func (m *Metric) FillRow(ctx context.Context, row *table.Row) {

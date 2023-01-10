@@ -47,18 +47,18 @@ type IBuffer2SqlItem interface {
 	Free()
 }
 
-var _ PipeImpl = (*batchCSVHandler)(nil)
+var _ PipeImpl = (*batchETLHandler)(nil)
 
-type batchCSVHandler struct {
+type batchETLHandler struct {
 	defaultOpts []BufferOption
 }
 
 func NewBufferPipe2CSVWorker(opt ...BufferOption) bp.PipeImpl[bp.HasName, any] {
-	return &batchCSVHandler{opt}
+	return &batchETLHandler{opt}
 }
 
 // NewItemBuffer implement batchpipe.PipeImpl
-func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, any] {
+func (t batchETLHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, any] {
 	var opts []BufferOption
 	var f genBatchFunc = genCsvData
 	logutil.Debugf("NewItemBuffer name: %s", name)
@@ -69,7 +69,7 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	case MOLogType:
 	case MORawLogType:
 	default:
-		logutil.Warnf("batchCSVHandler handle new type: %s", name)
+		logutil.Warnf("batchETLHandler handle new type: %s", name)
 	}
 	opts = append(opts, BufferWithGenBatchFunc(f), BufferWithType(name))
 	opts = append(opts, t.defaultOpts...)
@@ -77,12 +77,12 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 }
 
 // NewItemBatchHandler implement batchpipe.PipeImpl
-func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
+func (t batchETLHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 
 	handle := func(b any) {
 		req, ok := b.(table.WriteRequest) // see genCsvData
 		if !ok {
-			panic(moerr.NewInternalError(ctx, "batchCSVHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
+			panic(moerr.NewInternalError(ctx, "batchETLHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
 		}
 		if _, err := req.Handle(); err != nil {
 			logutil.Error(fmt.Sprintf("[Trace] failed to write. err: %v", err), logutil.NoReportFiled())
@@ -90,7 +90,7 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 	}
 
 	var f = func(batch any) {
-		_, span := trace.Start(DefaultContext(), "batchCSVHandler")
+		_, span := trace.Start(DefaultContext(), "batchETLHandler")
 		defer span.End()
 		switch b := batch.(type) {
 		case table.WriteRequest:
@@ -104,12 +104,6 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 		}
 	}
 	return f
-}
-
-type CsvFields interface {
-	bp.HasName
-	GetRow() *table.Row
-	CsvFields(ctx context.Context, row *table.Row) []string
 }
 
 type WriteFactoryConfig struct {
@@ -126,7 +120,7 @@ func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 		return table.NewRowRequest(nil)
 	}
 
-	i, ok := in[0].(CsvFields)
+	i, ok := in[0].(table.RowField)
 	if !ok {
 		panic("not MalCsv, dont support output CSV")
 	}
@@ -147,7 +141,7 @@ func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 		w.WriteRow(row)
 	}
 
-	row := i.GetRow()
+	row := i.GetTable().GetRow(ctx)
 	for _, i := range in {
 		item, ok := i.(table.RowField)
 		if !ok {

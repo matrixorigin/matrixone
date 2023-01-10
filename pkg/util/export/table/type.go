@@ -294,6 +294,7 @@ type RowWriter interface {
 }
 
 type RowField interface {
+	GetTable() *Table
 	FillRow(context.Context, *Row)
 }
 

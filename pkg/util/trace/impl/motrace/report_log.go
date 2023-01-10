@@ -62,12 +62,8 @@ func (m *MOZapLog) Free() {
 	m.Extra = ""
 }
 
-func (m *MOZapLog) GetRow() *table.Row { return logView.OriginTable.GetRow(DefaultContext()) }
+func (m *MOZapLog) GetTable() *table.Table { return logView.OriginTable }
 
-func (m *MOZapLog) CsvFields(ctx context.Context, row *table.Row) []string {
-	m.FillRow(ctx, row)
-	return row.ToStrings()
-}
 func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, logView.Table)

@@ -48,12 +48,7 @@ func (h *MOErrorHolder) Free() {
 	h.Error = nil
 }
 
-func (h *MOErrorHolder) GetRow() *table.Row { return errorView.OriginTable.GetRow(DefaultContext()) }
-
-func (h *MOErrorHolder) CsvFields(ctx context.Context, row *table.Row) []string {
-	h.FillRow(ctx, row)
-	return row.ToStrings()
-}
+func (h *MOErrorHolder) GetTable() *table.Table { return errorView.OriginTable }
 
 func (h *MOErrorHolder) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()

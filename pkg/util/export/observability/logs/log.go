@@ -53,13 +53,8 @@ func (*LogRecord) GetName() string {
 	return observability.LogsTable.GetIdentify()
 }
 
-func (*LogRecord) GetRow() *table.Row {
-	return observability.LogsTable.GetRow(context.Background())
-}
-
-func (l *LogRecord) CsvFields(ctx context.Context, row *table.Row) []string {
-	l.FillRow(ctx, row)
-	return row.ToStrings()
+func (*LogRecord) GetTable() *table.Table {
+	return observability.LogsTable
 }
 
 func (l *LogRecord) FillRow(ctx context.Context, row *table.Row) {

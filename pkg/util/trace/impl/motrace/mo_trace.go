@@ -123,12 +123,8 @@ func (s *MOSpan) GetName() string {
 	return spanView.OriginTable.GetName()
 }
 
-func (s *MOSpan) GetRow() *table.Row { return spanView.OriginTable.GetRow(DefaultContext()) }
+func (s *MOSpan) GetTable() *table.Table { return spanView.OriginTable }
 
-func (s *MOSpan) CsvFields(ctx context.Context, row *table.Row) []string {
-	s.FillRow(ctx, row)
-	return row.ToStrings()
-}
 func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, spanView.Table)

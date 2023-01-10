@@ -100,12 +100,7 @@ func (s *StatementInfo) Free() {
 	}
 }
 
-func (s *StatementInfo) GetRow() *table.Row { return SingleStatementTable.GetRow(DefaultContext()) }
-
-func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string {
-	s.FillRow(ctx, row)
-	return row.ToStrings()
-}
+func (s *StatementInfo) GetTable() *table.Table { return SingleStatementTable }
 
 func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	s.mux.Lock()

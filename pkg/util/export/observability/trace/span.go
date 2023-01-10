@@ -58,13 +58,8 @@ func (*Span) GetName() string {
 	return observability.SpansTable.GetIdentify()
 }
 
-func (*Span) GetRow() *table.Row {
-	return observability.SpansTable.GetRow(context.Background())
-}
-
-func (s *Span) CsvFields(ctx context.Context, row *table.Row) []string {
-	s.FillRow(ctx, row)
-	return row.ToStrings()
+func (*Span) GetTable() *table.Table {
+	return observability.SpansTable
 }
 
 func (s *Span) FillRow(ctx context.Context, row *table.Row) {
