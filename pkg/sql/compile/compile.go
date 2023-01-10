@@ -137,9 +137,19 @@ func (c *Compile) Run(_ uint64) (err error) {
 		defer c.fillAnalyzeInfo()
 		return c.scope.RemoteRun(c)
 	case CreateDatabase:
-		return c.scope.CreateDatabase(c)
+		err := c.scope.CreateDatabase(c)
+		if err != nil {
+			return err
+		}
+		c.setAffectedRows(1)
+		return nil
 	case DropDatabase:
-		return c.scope.DropDatabase(c)
+		err := c.scope.DropDatabase(c)
+		if err != nil {
+			return err
+		}
+		c.setAffectedRows(1)
+		return nil
 	case CreateTable:
 		qry := c.scope.Plan.GetDdl().GetCreateTable()
 		if qry.Temporary {
