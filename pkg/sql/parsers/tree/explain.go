@@ -69,6 +69,9 @@ func (node *ExplainStmt) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *ExplainStmt) GetStatementType() string { return "Explain" }
+func (node *ExplainStmt) GetQueryType() string     { return QueryTypeDQL }
+
 func NewExplainStmt(stmt Statement, f string) *ExplainStmt {
 	return &ExplainStmt{explainImpl{Statement: stmt, Format: f}}
 }
@@ -112,6 +115,9 @@ func (node *ExplainAnalyze) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *ExplainAnalyze) GetStatementType() string { return "Explain Analyze" }
+func (node *ExplainAnalyze) GetQueryType() string     { return QueryTypeDQL }
+
 func NewExplainAnalyze(stmt Statement, f string) *ExplainAnalyze {
 	return &ExplainAnalyze{explainImpl{Statement: stmt, Format: f}}
 }
@@ -128,6 +134,9 @@ func (node *ExplainFor) Format(ctx *FmtCtx) {
 	ctx.WriteString(" for connection ")
 	ctx.WriteString(strconv.FormatInt(int64(node.ID), 10))
 }
+
+func (node *ExplainFor) GetStatementType() string { return "Explain Format" }
+func (node *ExplainFor) GetQueryType() string     { return QueryTypeDQL }
 
 func NewExplainFor(f string, id uint64) *ExplainFor {
 	return &ExplainFor{

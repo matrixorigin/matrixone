@@ -51,6 +51,9 @@ func (node *AlterUser) Format(ctx *FmtCtx) {
 	node.CommentOrAttribute.Format(ctx)
 }
 
+func (node *AlterUser) GetStatementType() string { return "Alter User" }
+func (node *AlterUser) GetQueryType() string     { return QueryTypeDCL }
+
 func NewAlterUser(ife bool, u []*User, r *Role, m UserMiscOption) *AlterUser {
 	return &AlterUser{
 		IfExists: ife,
@@ -101,3 +104,42 @@ func (ca *AlterAccount) Format(ctx *FmtCtx) {
 	ca.StatusOption.Format(ctx)
 	ca.Comment.Format(ctx)
 }
+
+func (ca *AlterAccount) GetStatementType() string { return "Alter Account" }
+func (ca *AlterAccount) GetQueryType() string     { return QueryTypeDCL }
+
+type AlterView struct {
+	statementImpl
+	IfExists    bool
+	Name        *TableName
+	ColNames    IdentifierList
+	AsSource    *Select
+	IfNotExists bool
+	Temporary   bool
+}
+
+func (node *AlterView) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter ")
+
+	if node.Temporary {
+		ctx.WriteString("temporary ")
+	}
+
+	ctx.WriteString("view ")
+
+	if node.IfExists {
+		ctx.WriteString("if exists ")
+	}
+
+	node.Name.Format(ctx)
+	if len(node.ColNames) > 0 {
+		ctx.WriteString(" (")
+		node.ColNames.Format(ctx)
+		ctx.WriteByte(')')
+	}
+	ctx.WriteString(" as ")
+	node.AsSource.Format(ctx)
+}
+
+func (node *AlterView) GetStatementType() string { return "Alter View" }
+func (node *AlterView) GetQueryType() string     { return QueryTypeDDL }

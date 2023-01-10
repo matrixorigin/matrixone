@@ -17,7 +17,11 @@ package timestamp
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
+
+	"github.com/fagongzi/util/format"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 /*
@@ -106,4 +110,22 @@ func (m Timestamp) DebugString() string {
 
 func (m Timestamp) ProtoSize() int {
 	return m.Size()
+}
+
+// ParseTimestamp parse timestamp from debug string
+func ParseTimestamp(value string) (Timestamp, error) {
+	values := strings.Split(value, "-")
+	if len(values) != 2 {
+		return Timestamp{}, moerr.NewInvalidInputNoCtx("invalid debug timestamp string: %s", value)
+	}
+
+	p, err := format.ParseStringInt64(values[0])
+	if err != nil {
+		return Timestamp{}, moerr.NewInvalidInputNoCtx("invalid debug timestamp string: %s", value)
+	}
+	l, err := format.ParseStringUint32(values[1])
+	if err != nil {
+		return Timestamp{}, moerr.NewInvalidInputNoCtx("invalid debug timestamp string: %s", value)
+	}
+	return Timestamp{PhysicalTime: p, LogicalTime: l}, nil
 }

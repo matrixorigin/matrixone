@@ -64,6 +64,7 @@ func newTestCase(all bool, format, jsondata string) externalTestCase {
 			Es: &ExternalParam{
 				Ctx:       ctx,
 				Fileparam: &ExternalFileparam{},
+				Filter:    &FilterParam{},
 			},
 		},
 		cancel:   cancel,
@@ -168,17 +169,17 @@ func Test_Call(t *testing.T) {
 			param.extern = extern
 			param.Fileparam.End = false
 			param.FileList = []string{"abc.txt"}
-			end, err := Call(1, tcs.proc, tcs.arg)
+			end, err := Call(1, tcs.proc, tcs.arg, false, false)
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(end, convey.ShouldBeFalse)
 
 			param.Fileparam.End = false
-			end, err = Call(1, tcs.proc, tcs.arg)
-			convey.So(err, convey.ShouldNotBeNil)
-			convey.So(end, convey.ShouldBeFalse)
+			end, err = Call(1, tcs.proc, tcs.arg, false, false)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(end, convey.ShouldBeTrue)
 
 			param.Fileparam.End = true
-			end, err = Call(1, tcs.proc, tcs.arg)
+			end, err = Call(1, tcs.proc, tcs.arg, false, false)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end, convey.ShouldBeTrue)
 		}
@@ -268,7 +269,7 @@ func Test_makeBatch(t *testing.T) {
 		plh := &ParseLineHandler{
 			batchSize: 1,
 		}
-		_ = makeBatch(param, plh, testutil.TestUtilMp)
+		_ = makeBatch(param, plh.batchSize, testutil.TestUtilMp)
 	})
 }
 
@@ -548,6 +549,7 @@ func Test_GetBatchData(t *testing.T) {
 
 func TestReadDirSymlink(t *testing.T) {
 	root := t.TempDir()
+	ctx := context.Background()
 
 	// create a/b/c
 	err := os.MkdirAll(filepath.Join(root, "a", "b", "c"), 0755)
@@ -568,7 +570,7 @@ func TestReadDirSymlink(t *testing.T) {
 	fooPathInB := filepath.Join(root, "a", "b", "d", "foo")
 	files, err := ReadDir(&tree.ExternParam{
 		Filepath: fooPathInB,
-		Ctx:      context.Background(),
+		Ctx:      ctx,
 	})
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(files))
@@ -577,6 +579,7 @@ func TestReadDirSymlink(t *testing.T) {
 	path1 := root + "/a//b/./../b/c/foo"
 	files1, err := ReadDir(&tree.ExternParam{
 		Filepath: path1,
+		Ctx:      ctx,
 	})
 	assert.Nil(t, err)
 	pathWant1 := root + "/a/b/c/foo"

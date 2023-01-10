@@ -44,3 +44,6 @@ func (node *CreateView) Format(ctx *FmtCtx) {
 	ctx.WriteString(" as ")
 	node.AsSource.Format(ctx)
 }
+
+func (node *CreateView) GetStatementType() string { return "Create View" }
+func (node *CreateView) GetQueryType() string     { return QueryTypeDDL }

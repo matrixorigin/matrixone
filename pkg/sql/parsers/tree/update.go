@@ -15,9 +15,7 @@
 package tree
 
 import (
-	"bufio"
 	"context"
-	"os"
 	"strconv"
 	"strings"
 
@@ -63,6 +61,9 @@ func (node *Update) Format(ctx *FmtCtx) {
 		node.Limit.Format(ctx)
 	}
 }
+
+func (node *Update) GetStatementType() string { return "Update" }
+func (node *Update) GetQueryType() string     { return QueryTypeDML }
 
 type UpdateExprs []*UpdateExpr
 
@@ -144,14 +145,18 @@ type ExternParam struct {
 	S3Param      *S3Parameter
 	Ctx          context.Context
 	LoadFile     bool
+	QueryResult  bool
 }
 
 type S3Parameter struct {
-	Endpoint  string `json:"s3-test-endpoint"`
-	Region    string `json:"s3-test-region"`
-	APIKey    string `json:"s3-test-key"`
-	APISecret string `json:"s3-test-secret"`
-	Bucket    string `json:"s3-test-bucket"`
+	Endpoint   string `json:"s3-test-endpoint"`
+	Region     string `json:"s3-test-region"`
+	APIKey     string `json:"s3-test-key"`
+	APISecret  string `json:"s3-test-secret"`
+	Bucket     string `json:"s3-test-bucket"`
+	Provider   string `json:"s3-test-rovider"`
+	RoleArn    string `json:"s3-test-rolearn"`
+	ExternalId string `json:"s3-test-externalid"`
 }
 
 type TailParameter struct {
@@ -173,6 +178,7 @@ type Load struct {
 	Local             bool
 	DuplicateHandling DuplicateKey
 	Table             *TableName
+	Accounts          IdentifierList
 	//Partition
 	Param *ExternParam
 }
@@ -242,6 +248,12 @@ func (node *Load) Format(ctx *FmtCtx) {
 	ctx.WriteString(" into table ")
 	node.Table.Format(ctx)
 
+	if node.Accounts != nil {
+		ctx.WriteString(" accounts(")
+		node.Accounts.Format(ctx)
+		ctx.WriteByte(')')
+	}
+
 	if node.Param.Tail.Fields != nil {
 		ctx.WriteByte(' ')
 		node.Param.Tail.Fields.Format(ctx)
@@ -271,6 +283,9 @@ func (node *Load) Format(ctx *FmtCtx) {
 		node.Param.Tail.Assignments.Format(ctx)
 	}
 }
+
+func (node *Load) GetStatementType() string { return "Load" }
+func (node *Load) GetQueryType() string     { return QueryTypeDML }
 
 func (node *Import) Format(ctx *FmtCtx) {
 	ctx.WriteString("import data")
@@ -326,6 +341,9 @@ func (node *Import) Format(ctx *FmtCtx) {
 		node.Param.Tail.Assignments.Format(ctx)
 	}
 }
+
+func (node *Import) GetStatementType() string { return "Import" }
+func (node *Import) GetQueryType() string     { return QueryTypeDML }
 
 type DuplicateKey interface{}
 
@@ -427,12 +445,10 @@ type LoadColumn interface {
 }
 
 type ExportParam struct {
-	// file handler
-	File *os.File
-	// bufio.writer
-	Writer *bufio.Writer
 	// outfile flag
 	Outfile bool
+	// query id
+	QueryId string
 	// filename path
 	FilePath string
 	// Fields
@@ -441,27 +457,25 @@ type ExportParam struct {
 	Lines *Lines
 	// fileSize
 	MaxFileSize uint64
-	// curFileSize
-	CurFileSize uint64
-	Rows        uint64
-	FileCnt     uint
 	// header flag
 	Header     bool
 	ForceQuote []string
-	ColumnFlag []bool
-	Symbol     [][]byte
-
-	// default flush size
-	DefaultBufSize int64
-	OutputStr      []byte
-	LineSize       uint64
 }
 
 func (ep *ExportParam) Format(ctx *FmtCtx) {
 	if ep.FilePath == "" {
 		return
 	}
-	ctx.WriteString("into outfile " + ep.FilePath)
+	ep.format(ctx, true)
+}
+
+func (ep *ExportParam) format(ctx *FmtCtx, withOutfile bool) {
+	ctx.WriteString("into")
+	if withOutfile {
+		ctx.WriteString(" outfile")
+	}
+	ctx.WriteByte(' ')
+	ctx.WriteString(ep.FilePath)
 	if ep.Fields != nil {
 		ctx.WriteByte(' ')
 		ep.Fields.Format(ctx)

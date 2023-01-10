@@ -15,7 +15,9 @@
 package util
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"strings"
 )
 
@@ -38,12 +40,29 @@ func SplitTableAndColumn(name string) (string, string) {
 	return schema, xs[len(xs)-1]
 }
 
-func FindPrimaryKey(def *plan.TableDef) bool {
-	for _, def := range def.Defs {
-		switch def.Def.(type) {
-		case *plan.TableDef_DefType_Pk:
-			return true
-		}
-	}
-	return false
+// TableIsClusterTable check the table type is cluster table
+func TableIsClusterTable(tableType string) bool {
+	return tableType == catalog.SystemClusterRel
+}
+
+var (
+	clusterTableAttributeName = "account_id"
+	clusterTableAttributeType = &tree.T{InternalType: tree.InternalType{
+		Family:   tree.IntFamily,
+		Width:    32,
+		Oid:      uint32(defines.MYSQL_TYPE_LONG),
+		Unsigned: true,
+	}}
+)
+
+func GetClusterTableAttributeName() string {
+	return clusterTableAttributeName
+}
+
+func GetClusterTableAttributeType() *tree.T {
+	return clusterTableAttributeType
+}
+
+func IsClusterTableAttribute(name string) bool {
+	return name == clusterTableAttributeName
 }

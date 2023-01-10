@@ -17,7 +17,8 @@ package tree
 // the VALUES clause
 type ValuesClause struct {
 	SelectStatement
-	Rows []Exprs
+	RowWord bool
+	Rows    []Exprs
 }
 
 func (node *ValuesClause) Format(ctx *FmtCtx) {
@@ -25,6 +26,9 @@ func (node *ValuesClause) Format(ctx *FmtCtx) {
 	comma := ""
 	for i := range node.Rows {
 		ctx.WriteString(comma)
+		if node.RowWord {
+			ctx.WriteString("row")
+		}
 		ctx.WriteByte('(')
 		node.Rows[i].Format(ctx)
 		ctx.WriteByte(')')
@@ -74,3 +78,5 @@ func (node *ValuesStatement) Format(ctx *FmtCtx) {
 		node.Limit.Format(ctx)
 	}
 }
+func (node *ValuesStatement) GetStatementType() string { return "Values" }
+func (node *ValuesStatement) GetQueryType() string     { return QueryTypeDML }

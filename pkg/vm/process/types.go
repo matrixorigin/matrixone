@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,8 +31,12 @@ type Analyze interface {
 	Stop()
 	Start()
 	Alloc(int64)
-	Input(*batch.Batch)
-	Output(*batch.Batch)
+	Input(*batch.Batch, bool)
+	Output(*batch.Batch, bool)
+	WaitStop(time.Time)
+	DiskIO(*batch.Batch)
+	S3IO(*batch.Batch)
+	Network(*batch.Batch)
 }
 
 // WaitRegister channel
@@ -70,18 +75,21 @@ type Limitation struct {
 
 // SessionInfo session information
 type SessionInfo struct {
-	User          string
-	Host          string
-	Role          string
-	ConnectionID  uint64
-	AccountId     uint32
-	RoleId        uint32
-	UserId        uint32
-	LastInsertID  uint64
-	Database      string
-	Version       string
-	TimeZone      *time.Location
-	StorageEngine engine.Engine
+	Account        string
+	User           string
+	Host           string
+	Role           string
+	ConnectionID   uint64
+	AccountId      uint32
+	RoleId         uint32
+	UserId         uint32
+	LastInsertID   uint64
+	Database       string
+	Version        string
+	TimeZone       *time.Location
+	StorageEngine  engine.Engine
+	QueryId        []string
+	ResultColTypes []types.Type
 }
 
 // AnalyzeInfo  analyze information for query
@@ -94,12 +102,20 @@ type AnalyzeInfo struct {
 	OutputRows int64
 	// TimeConsumed, time taken by the node in milliseconds
 	TimeConsumed int64
+	// WaitTimeConsumed, time taken by the node waiting for channel in milliseconds
+	WaitTimeConsumed int64
 	// InputSize, data size accepted by node
 	InputSize int64
 	// OutputSize, data size output by node
 	OutputSize int64
 	// MemorySize, memory alloc by node
 	MemorySize int64
+	// DiskIO, data size read from disk
+	DiskIO int64
+	// S3IO, data size read from s3
+	S3IO int64
+	// NetworkIO, message size send between CN node
+	NetworkIO int64
 }
 
 // Process contains context used in query execution
@@ -152,6 +168,7 @@ func (proc *Process) GetLastInsertID() uint64 {
 
 type analyze struct {
 	start    time.Time
+	wait     time.Duration
 	analInfo *AnalyzeInfo
 }
 

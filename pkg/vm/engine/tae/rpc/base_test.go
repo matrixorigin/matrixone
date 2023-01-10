@@ -17,6 +17,12 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,9 +36,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"testing"
-	"time"
 )
 
 const ModuleName = "TAEHANDLE"
@@ -152,7 +157,8 @@ func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
 	}
 
 	mh.Handle = &Handle{
-		eng: moengine.NewEngine(tae),
+		eng:          moengine.NewEngine(tae),
+		jobScheduler: tasks.NewParallelJobScheduler(5),
 	}
 	mh.Handle.mu.txnCtxs = make(map[string]*txnContext)
 	return mh
@@ -203,10 +209,8 @@ type Entry struct {
 	databaseId   uint64
 	tableName    string
 	databaseName string
-	// blockName for s3 file
+	//object name for s3 file
 	fileName string
-	// blockId for s3 file
-	blockId uint64
 	// update or delete tuples
 	bat *batch.Batch
 }
@@ -319,7 +323,8 @@ func makePBEntry(
 	dbId,
 	tableId uint64,
 	dbName,
-	tbName string,
+	tbName,
+	file string,
 	bat *batch.Batch) (pe *api.Entry, err error) {
 	e := Entry{
 		typ:          typ,
@@ -327,6 +332,7 @@ func makePBEntry(
 		databaseId:   dbId,
 		tableName:    tbName,
 		tableId:      tableId,
+		fileName:     file,
 		bat:          bat,
 	}
 	return toPBEntry(e)
@@ -551,6 +557,7 @@ func makeCreateDatabaseEntries(
 		catalog.MO_DATABASE_ID,
 		catalog.MO_CATALOG,
 		catalog.MO_DATABASE,
+		"",
 		createDbBat,
 	)
 	if err != nil {
@@ -588,7 +595,7 @@ func makeCreateTableEntries(
 		}
 		createTbEntry, err := makePBEntry(INSERT,
 			catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat)
+			catalog.MO_CATALOG, catalog.MO_TABLES, "", bat)
 		if err != nil {
 			return nil, err
 		}
@@ -599,8 +606,10 @@ func makeCreateTableEntries(
 		if err != nil {
 			return nil, err
 		}
-		createColumnEntry, err := makePBEntry(INSERT, catalog.MO_CATALOG_ID,
-			catalog.MO_COLUMNS_ID, catalog.MO_CATALOG, catalog.MO_COLUMNS, bat)
+		createColumnEntry, err := makePBEntry(
+			INSERT, catalog.MO_CATALOG_ID,
+			catalog.MO_COLUMNS_ID, catalog.MO_CATALOG,
+			catalog.MO_COLUMNS, "", bat)
 		if err != nil {
 			return nil, err
 		}
@@ -695,7 +704,7 @@ func genCreateTableTuple(
 		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
 			return nil, err
 		}
-		idx = catalog.MO_TABLES_CONSTRAINT
+		idx = catalog.MO_TABLES_CONSTRAINT_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // constraint
 		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
 			return nil, err
@@ -722,7 +731,6 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		TableName:    e.tableName,
 		DatabaseName: e.databaseName,
 		FileName:     e.fileName,
-		BlockId:      e.blockId,
 	}, nil
 }
 
@@ -737,6 +745,51 @@ func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
 		rbat.Vecs = append(rbat.Vecs, pbVector)
 	}
 	return rbat, nil
+}
+
+func getIndexDataFromVec(
+	idx uint16,
+	vec *vector.Vector,
+) (objectio.IndexData, objectio.IndexData, error) {
+	var bloomFilter, zoneMap objectio.IndexData
+
+	// get min/max from  vector
+	if vec.Length() > 0 {
+		cvec := containers.NewVectorWithSharedMemory(vec, true)
+
+		// create zone map
+		zm := index.NewZoneMap(vec.Typ)
+		ctx := new(index.KeysCtx)
+		ctx.Keys = cvec
+		ctx.Count = vec.Length()
+		defer ctx.Keys.Close()
+		err := zm.BatchUpdate(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		buf, err := zm.Marshal()
+		if err != nil {
+			return nil, nil, err
+		}
+		zoneMap, err = objectio.NewZoneMap(idx, buf)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// create bloomfilter
+		sf, err := index.NewBinaryFuseFilter(cvec)
+		if err != nil {
+			return nil, nil, err
+		}
+		bf, err := sf.Marshal()
+		if err != nil {
+			return nil, nil, err
+		}
+		alg := uint8(0)
+		bloomFilter = objectio.NewBloomFilter(idx, alg, bf)
+	}
+
+	return bloomFilter, zoneMap, nil
 }
 
 //gen LogTail

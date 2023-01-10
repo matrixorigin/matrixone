@@ -28,7 +28,7 @@ func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg any) (bool, error) {
+func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	ap := arg.(*Argument)
 	if bat := proc.Reg.InputBatch; bat != nil && len(bat.Zs) > 0 {
 		if err := ap.Func(ap.Data, bat); err != nil {

@@ -15,7 +15,10 @@
 package plan
 
 import (
+	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
 
@@ -37,7 +40,7 @@ func appendQueryNode(query *Query, node *Node) int32 {
 	return nodeID
 }
 
-func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
+func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*plan.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
 		switch defines.MysqlType(n.InternalType.Oid) {
 		case defines.MYSQL_TYPE_TINY:
@@ -78,9 +81,9 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 				}
 			}
 			if n.InternalType.FamilyString == "char" && width > types.MaxCharLen {
-				return nil, moerr.NewOutOfRangeNoCtx("char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
+				return nil, moerr.NewOutOfRange(ctx, "char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if n.InternalType.FamilyString == "varchar" && width > types.MaxVarcharLen {
-				return nil, moerr.NewOutOfRangeNoCtx("varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
+				return nil, moerr.NewOutOfRange(ctx, "varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			}
 			if n.InternalType.FamilyString == "char" { // type char
 				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil
@@ -100,9 +103,9 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 				}
 			}
 			if n.InternalType.FamilyString == "char" && width > types.MaxCharLen {
-				return nil, moerr.NewOutOfRangeNoCtx("char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
+				return nil, moerr.NewOutOfRange(ctx, "char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if n.InternalType.FamilyString == "varchar" && width > types.MaxVarcharLen {
-				return nil, moerr.NewOutOfRangeNoCtx("varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
+				return nil, moerr.NewOutOfRange(ctx, "varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			}
 			if n.InternalType.FamilyString == "char" { // type char
 				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil
@@ -139,10 +142,10 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 		case defines.MYSQL_TYPE_LONG_BLOB:
 			return &plan.Type{Id: int32(types.T_blob), Size: types.VarlenaSize}, nil
 		default:
-			return nil, moerr.NewNYINoCtx("data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
+			return nil, moerr.NewNYI(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}
 	}
-	return nil, moerr.NewInternalErrorNoCtx("unknown data type")
+	return nil, moerr.NewInternalError(ctx, "unknown data type")
 }
 
 func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Process) (*plan.Default, error) {
@@ -164,11 +167,11 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Pr
 
 	if typ.Id == int32(types.T_json) {
 		if expr != nil && !isNullAstExpr(expr) {
-			return nil, moerr.NewNotSupportedNoCtx(fmt.Sprintf("JSON column '%s' cannot have default value", col.Name.Parts[0]))
+			return nil, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("JSON column '%s' cannot have default value", col.Name.Parts[0]))
 		}
 	}
 	if !nullAbility && isNullAstExpr(expr) {
-		return nil, moerr.NewInvalidInputNoCtx("invalid default value for column '%s'", col.Name.Parts[0])
+		return nil, moerr.NewInvalidInput(proc.Ctx, "invalid default value for column '%s'", col.Name.Parts[0])
 	}
 
 	if expr == nil {
@@ -179,7 +182,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Pr
 		}, nil
 	}
 
-	binder := NewDefaultBinder(nil, nil, typ, nil)
+	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
 	planExpr, err := binder.BindExpr(expr, 0, false)
 	if err != nil {
 		return nil, err
@@ -187,11 +190,11 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Pr
 
 	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
 		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" {
-			return nil, moerr.NewInvalidInputNoCtx("invalid default value for column '%s'", col.Name.Parts[0])
+			return nil, moerr.NewInvalidInput(proc.Ctx, "invalid default value for column '%s'", col.Name.Parts[0])
 		}
 	}
 
-	defaultExpr, err := makePlan2CastExpr(planExpr, typ)
+	defaultExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -227,13 +230,13 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Proce
 		return nil, nil
 	}
 
-	binder := NewDefaultBinder(nil, nil, typ, nil)
+	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
 	planExpr, err := binder.BindExpr(expr, 0, false)
 	if err != nil {
 		return nil, err
 	}
 
-	onUpdateExpr, err := makePlan2CastExpr(planExpr, typ)
+	onUpdateExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -241,10 +244,11 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Proce
 	// try to calculate on update value, return err if fails
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	_, err = colexec.EvalExpr(bat, proc, onUpdateExpr)
+	v, err := colexec.EvalExpr(bat, proc, onUpdateExpr)
 	if err != nil {
 		return nil, err
 	}
+	v.Free(proc.Mp())
 	ret := &plan.OnUpdate{
 		Expr:         onUpdateExpr,
 		OriginString: tree.String(expr, dialect.MYSQL),
@@ -303,9 +307,68 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 	}
 }
 
-func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
+// getAccountIds transforms the account names into account ids.
+// if accounts is nil, return the id of the sys account.
+func getAccountIds(ctx CompilerContext, accounts tree.IdentifierList) ([]uint32, error) {
+	var accountIds []uint32
+	var err error
+	if len(accounts) != 0 {
+		accountNames := make([]string, len(accounts))
+		for i, account := range accounts {
+			accountNames[i] = string(account)
+		}
+		accountIds, err = ctx.ResolveAccountIds(accountNames)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		accountIds = []uint32{catalog.System_Account}
+	}
+	if len(accountIds) == 0 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "need specify account for the cluster tables")
+	}
+	return accountIds, err
+}
+
+func getAccountInfoOfClusterTable(ctx CompilerContext, accounts tree.IdentifierList, tableDef *TableDef, isClusterTable bool) (*plan.ClusterTable, error) {
+	var accountIds []uint32
+	var columnIndexOfAccountId int32 = -1
+	var err error
+	if isClusterTable {
+		accountIds, err = getAccountIds(ctx, accounts)
+		if err != nil {
+			return nil, err
+		}
+		for i, col := range tableDef.GetCols() {
+			if util.IsClusterTableAttribute(col.Name) {
+				if columnIndexOfAccountId >= 0 {
+					return nil, moerr.NewInternalError(ctx.GetContext(), "there are two account_ids in the cluster table")
+				} else {
+					columnIndexOfAccountId = int32(i)
+				}
+			}
+		}
+
+		if columnIndexOfAccountId == -1 {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "there is no account_id in the cluster table")
+		} else if columnIndexOfAccountId >= int32(len(tableDef.GetCols())) {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "the index of the account_id in the cluster table is invalid")
+		}
+	} else {
+		if len(accounts) != 0 {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "can not specify the accounts for the non cluster table")
+		}
+	}
+	return &plan.ClusterTable{
+		IsClusterTable:         isClusterTable,
+		AccountIDs:             accountIds,
+		ColumnIndexOfAccountId: columnIndexOfAccountId,
+	}, nil
+}
+
+func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 	if !d.Default.NullAbility && d.Default.Expr == nil && !d.Typ.AutoIncr {
-		return nil, moerr.NewInvalidInputNoCtx("invalid default value")
+		return nil, moerr.NewInvalidInput(ctx, "invalid default value")
 	}
 	if d.Default.Expr == nil {
 		return &Expr{
@@ -338,4 +401,19 @@ func judgeUnixTimestampReturnType(timestr string) types.T {
 	} else {
 		return types.T_decimal128
 	}
+}
+
+// Get the primary key name of the table
+func GetTablePriKeyName(cols []*plan.ColDef, cPkeyCol *plan.ColDef) string {
+	for _, col := range cols {
+		if col.Name != catalog.Row_ID && col.Primary {
+			return col.Name
+		}
+
+	}
+
+	if cPkeyCol != nil {
+		return cPkeyCol.Name
+	}
+	return ""
 }

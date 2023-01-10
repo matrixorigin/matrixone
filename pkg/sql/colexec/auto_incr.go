@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"context"
+	"fmt"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -37,8 +39,8 @@ var AUTO_INCR_TABLE = "%!%mo_increment_columns"
 var AUTO_INCR_TABLE_COLNAME []string = []string{catalog.Row_ID, "name", "offset", "step"}
 
 type AutoIncrParam struct {
-	eg      engine.Engine
-	rel     engine.Relation
+	eg engine.Engine
+	//	rel     engine.Relation
 	ctx     context.Context
 	proc    *process.Process
 	dbName  string
@@ -46,7 +48,7 @@ type AutoIncrParam struct {
 	colDefs []*plan.ColDef
 }
 
-func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID, dbName, tblName string) error {
+func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID uint64, dbName, tblName string) error {
 	incrParam := &AutoIncrParam{
 		eg:      e,
 		ctx:     ctx,
@@ -69,7 +71,7 @@ func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Proce
 
 func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.Process, p *plan.InsertValues, bat *batch.Batch, dbName, tblName string) error {
 	ColDefs := p.ExplicitCols
-	orderColDefs(p.OrderAttrs, ColDefs)
+	orderColDefs(p.OrderAttrs, ColDefs, p.Columns)
 	db, err := e.Database(ctx, p.DbName, proc.TxnOperator)
 	if err != nil {
 		return err
@@ -83,7 +85,7 @@ func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.
 
 // get autoincr columns values.  This function updates the auto incr table.
 // multiple txn may cause a conflicts, but we retry off band transactions.
-func getRangeFromAutoIncrTable(ctx context.Context, param *AutoIncrParam, bat *batch.Batch, tableID string) ([]uint64, []uint64, error) {
+func getRangeFromAutoIncrTable(ctx context.Context, param *AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
 	var err error
 	loopCnt := 0
 loop:
@@ -104,11 +106,8 @@ loop:
 			continue
 		}
 		var d, s uint64
-		param.rel, err = GetNewRelation(param.eg, param.dbName, AUTO_INCR_TABLE, txn, param.ctx)
-		if err != nil {
-			goto loop
-		}
-		if d, s, err = getOneColRangeFromAutoIncrTable(ctx, param, bat, tableID+"_"+col.Name, i); err != nil {
+		name := fmt.Sprintf("%d_%s", tableID, col.Name)
+		if d, s, err = getOneColRangeFromAutoIncrTable(ctx, param, bat, name, i, txn); err != nil {
 			RolllbackTxn(param.eg, txn, param.ctx)
 			goto loop
 		}
@@ -159,8 +158,8 @@ func updateVector[T constraints.Integer](vec *vector.Vector, length, curNum, ste
 	}
 }
 
-func getOneColRangeFromAutoIncrTable(ctx context.Context, param *AutoIncrParam, bat *batch.Batch, name string, pos int) (uint64, uint64, error) {
-	oriNum, step, err := getCurrentIndex(ctx, param, name, param.proc.Mp())
+func getOneColRangeFromAutoIncrTable(ctx context.Context, param *AutoIncrParam, bat *batch.Batch, name string, pos int, txn client.TxnOperator) (uint64, uint64, error) {
+	oriNum, step, err := getCurrentIndex(ctx, param, name, txn, param.proc.Mp())
 	if err != nil {
 		return 0, 0, err
 	}
@@ -210,7 +209,7 @@ func getOneColRangeFromAutoIncrTable(ctx context.Context, param *AutoIncrParam, 
 	default:
 		return 0, 0, moerr.NewInvalidInput(ctx, "the auto_incr col is not integer type")
 	}
-	if err := updateAutoIncrTable(ctx, param, maxNum, name, param.proc.Mp()); err != nil {
+	if err := updateAutoIncrTable(ctx, param, maxNum, name, txn, param.proc.Mp()); err != nil {
 		return 0, 0, err
 	}
 	return oriNum, step, nil
@@ -250,35 +249,40 @@ func updateBatchImpl(ctx context.Context, ColDefs []*plan.ColDef, bat *batch.Bat
 	return nil
 }
 
-func getCurrentIndex(ctx context.Context, param *AutoIncrParam, colName string, mp *mpool.MPool) (uint64, uint64, error) {
+func getCurrentIndex(ctx context.Context, param *AutoIncrParam, colName string, txn client.TxnOperator, mp *mpool.MPool) (uint64, uint64, error) {
 	var rds []engine.Reader
 
-	ret, err := param.rel.Ranges(param.ctx, nil)
+	rel, err := GetNewRelation(param.eg, param.dbName, AUTO_INCR_TABLE, txn, param.ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	ret, err := rel.Ranges(param.ctx, nil)
 	if err != nil {
 		return 0, 0, err
 	}
 	switch {
 	case len(ret) == 0:
-		if rds, err = param.rel.NewReader(param.ctx, 1, nil, nil); err != nil {
+		if rds, err = rel.NewReader(param.ctx, 1, nil, nil); err != nil {
 			return 0, 0, err
 		}
 	case len(ret) == 1 && len(ret[0]) == 0:
-		if rds, err = param.rel.NewReader(param.ctx, 1, nil, nil); err != nil {
+		if rds, err = rel.NewReader(param.ctx, 1, nil, nil); err != nil {
 			return 0, 0, err
 		}
 	case len(ret[0]) == 0:
-		rds0, err := param.rel.NewReader(param.ctx, 1, nil, nil)
+		rds0, err := rel.NewReader(param.ctx, 1, nil, nil)
 		if err != nil {
 			return 0, 0, err
 		}
-		rds1, err := param.rel.NewReader(param.ctx, 1, nil, ret[1:])
+		rds1, err := rel.NewReader(param.ctx, 1, nil, ret[1:])
 		if err != nil {
 			return 0, 0, err
 		}
 		rds = append(rds, rds0...)
 		rds = append(rds, rds1...)
 	default:
-		rds, _ = param.rel.NewReader(param.ctx, 1, nil, ret)
+		rds, _ = rel.NewReader(param.ctx, 1, nil, ret)
 	}
 
 	for len(rds) > 0 {
@@ -312,19 +316,23 @@ func getCurrentIndex(ctx context.Context, param *AutoIncrParam, colName string, 
 	return 0, 0, nil
 }
 
-func updateAutoIncrTable(ctx context.Context, param *AutoIncrParam, curNum uint64, name string, mp *mpool.MPool) error {
-	bat, _ := GetDeleteBatch(param.rel, param.ctx, name, mp)
+func updateAutoIncrTable(ctx context.Context, param *AutoIncrParam, curNum uint64, name string, txn client.TxnOperator, mp *mpool.MPool) error {
+	rel, err := GetNewRelation(param.eg, param.dbName, AUTO_INCR_TABLE, txn, param.ctx)
+	if err != nil {
+		return err
+	}
+	bat, _ := GetDeleteBatch(rel, param.ctx, name, mp)
 	if bat == nil {
 		return moerr.NewInternalError(ctx, "the deleted batch is nil")
 	}
 	bat.SetZs(bat.GetVector(0).Length(), mp)
-	err := param.rel.Delete(param.ctx, bat, AUTO_INCR_TABLE_COLNAME[0])
+	err = rel.Delete(param.ctx, bat, AUTO_INCR_TABLE_COLNAME[0])
 	if err != nil {
 		bat.Clean(mp)
 		return err
 	}
 	bat = makeAutoIncrBatch(name, curNum, 1, mp)
-	if err = param.rel.Write(param.ctx, bat); err != nil {
+	if err = rel.Write(param.ctx, bat); err != nil {
 		bat.Clean(mp)
 		return err
 	}
@@ -340,6 +348,7 @@ func makeAutoIncrBatch(name string, num, step uint64, mp *mpool.MPool) *batch.Ba
 		Attrs: AUTO_INCR_TABLE_COLNAME[1:],
 		Vecs:  []*vector.Vector{vec, vec2, vec3},
 	}
+	bat.SetZs(1, mp)
 	return bat
 }
 
@@ -417,7 +426,7 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 	if err != nil {
 		return err
 	}
-	name := rel.GetTableID(ctx) + "_"
+	name := fmt.Sprintf("%d_", rel.GetTableID(ctx))
 
 	txn, err := NewTxn(eg, proc, ctx)
 	if err != nil {
@@ -428,7 +437,14 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 		if !attr.Typ.AutoIncr {
 			continue
 		}
-		rel2, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+		var rel2 engine.Relation
+		// Essentially, temporary table is not an operation of a transaction.
+		// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
+		if dbName == defines.TEMPORARY_DBNAME {
+			rel2, err = db.Relation(ctx, AUTO_INCR_TABLE)
+		} else {
+			rel2, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+		}
 		if err != nil {
 			return err
 		}
@@ -447,12 +463,21 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 }
 
 // for delete table operation, delete col in mo_increment_columns table
-func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, rel engine.Relation, proc *process.Process, dbName, tableID string) error {
+func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database, rel engine.Relation, proc *process.Process, dbName string, tableID uint64) error {
 	txn, err := NewTxn(eg, proc, ctx)
 	if err != nil {
 		return err
 	}
-	rel2, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+
+	var rel2 engine.Relation
+	// Essentially, temporary table is not an operation of a transaction.
+	// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
+	if dbName == defines.TEMPORARY_DBNAME {
+		rel2, err = db.Relation(ctx, AUTO_INCR_TABLE)
+	} else {
+		rel2, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -468,7 +493,8 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, rel engine.Relatio
 			if !d.Attr.AutoIncrement {
 				continue
 			}
-			bat, _ := GetDeleteBatch(rel2, ctx, tableID+"_"+d.Attr.Name, proc.Mp())
+			name := fmt.Sprintf("%d_%s", tableID, d.Attr.Name)
+			bat, _ := GetDeleteBatch(rel2, ctx, name, proc.Mp())
 			if bat == nil {
 				return moerr.NewInternalError(ctx, "the deleted batch is nil")
 			}
@@ -489,7 +515,7 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, rel engine.Relatio
 }
 
 // for delete table operation, move old col as new col in mo_increment_columns table
-func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, oldTableID, dbName string) error {
+func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, oldTableID, newId uint64, dbName string) error {
 	var err error
 	newRel, err := db.Relation(ctx, tblName)
 	if err != nil {
@@ -504,12 +530,21 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 	if err != nil {
 		return err
 	}
-	autoRel, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+
+	var autoRel engine.Relation
+	// Essentially, temporary table is not an operation of a transaction.
+	// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
+	if dbName == defines.TEMPORARY_DBNAME {
+		autoRel, err = db.Relation(ctx, AUTO_INCR_TABLE)
+	} else {
+		autoRel, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+	}
+
 	if err != nil {
 		return err
 	}
 
-	newName := newRel.GetTableID(ctx) + "_"
+	newName := fmt.Sprintf("%d_", newId)
 	for _, def := range defs {
 		switch d := def.(type) {
 		case *engine.AttributeDef:
@@ -517,7 +552,8 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 				continue
 			}
 
-			bat, currentNum := GetDeleteBatch(autoRel, ctx, oldTableID+"_"+d.Attr.Name, proc.Mp())
+			delName := fmt.Sprintf("%d_%s", oldTableID, d.Attr.Name)
+			bat, currentNum := GetDeleteBatch(autoRel, ctx, delName, proc.Mp())
 			if bat == nil {
 				return moerr.NewInternalError(ctx, "the deleted batch is nil")
 			}
@@ -544,7 +580,7 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 }
 
 // for truncate table operation, reset col in mo_increment_columns table
-func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, tableID, dbName string) error {
+func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, tableID, newId uint64, dbName string) error {
 	rel, err := db.Relation(ctx, tblName)
 	if err != nil {
 		return err
@@ -558,19 +594,28 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 	if err != nil {
 		return err
 	}
-	autoRel, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+
+	var autoRel engine.Relation
+	// Essentially, temporary table is not an operation of a transaction.
+	// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
+	if dbName == defines.TEMPORARY_DBNAME {
+		autoRel, err = db.Relation(ctx, AUTO_INCR_TABLE)
+	} else {
+		autoRel, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+	}
+
 	if err != nil {
 		return err
 	}
-
-	name := rel.GetTableID(ctx) + "_"
+	name := fmt.Sprintf("%d_", newId)
 	for _, def := range defs {
 		switch d := def.(type) {
 		case *engine.AttributeDef:
 			if !d.Attr.AutoIncrement {
 				continue
 			}
-			bat, _ := GetDeleteBatch(autoRel, ctx, tableID+"_"+d.Attr.Name, proc.Mp())
+			delName := fmt.Sprintf("%d_%s", tableID, d.Attr.Name)
+			bat, _ := GetDeleteBatch(autoRel, ctx, delName, proc.Mp())
 			if bat == nil {
 				return moerr.NewInternalError(ctx, "the deleted batch is nil")
 			}
@@ -596,11 +641,12 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 	return nil
 }
 
-func orderColDefs(attrs []string, ColDefs []*plan.ColDef) {
+func orderColDefs(attrs []string, ColDefs []*plan.ColDef, cols []*plan.Column) {
 	for i, name := range attrs {
 		for j, def := range ColDefs {
 			if name == def.Name {
 				ColDefs[i], ColDefs[j] = ColDefs[j], ColDefs[i]
+				cols[i], cols[j] = cols[j], cols[i]
 			}
 		}
 	}

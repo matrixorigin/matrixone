@@ -384,8 +384,8 @@ func (tbl *txnTable) CreateSegment(is1PC bool) (seg handle.Segment, err error) {
 	return tbl.createSegment(catalog.ES_Appendable, is1PC)
 }
 
-func (tbl *txnTable) CreateNonAppendableSegment() (seg handle.Segment, err error) {
-	return tbl.createSegment(catalog.ES_NotAppendable, false)
+func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool) (seg handle.Segment, err error) {
+	return tbl.createSegment(catalog.ES_NotAppendable, is1PC)
 }
 
 func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool) (seg handle.Segment, err error) {
@@ -460,11 +460,22 @@ func (tbl *txnTable) CreateNonAppendableBlock(sid uint64) (blk handle.Block, err
 	return tbl.createBlock(sid, catalog.ES_NotAppendable, false)
 }
 
+func (tbl *txnTable) CreateNonAppendableBlockWithMeta(
+	sid uint64,
+	metaLoc string,
+	deltaLoc string) (blk handle.Block, err error) {
+	return tbl.createBlockWithMeta(sid, catalog.ES_NotAppendable,
+		false, metaLoc, deltaLoc)
+}
+
 func (tbl *txnTable) CreateBlock(sid uint64, is1PC bool) (blk handle.Block, err error) {
 	return tbl.createBlock(sid, catalog.ES_Appendable, is1PC)
 }
 
-func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState, is1PC bool) (blk handle.Block, err error) {
+func (tbl *txnTable) createBlock(
+	sid uint64,
+	state catalog.EntryState,
+	is1PC bool) (blk handle.Block, err error) {
 	var seg *catalog.SegmentEntry
 	if seg, err = tbl.entry.GetSegmentByID(sid); err != nil {
 		return
@@ -478,6 +489,38 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState, is1PC boo
 		factory = tbl.store.dataFactory.MakeBlockFactory()
 	}
 	meta, err := seg.CreateBlock(tbl.store.txn, state, factory)
+	if err != nil {
+		return
+	}
+	if is1PC {
+		meta.Set1PC()
+	}
+	tbl.store.IncreateWriteCnt()
+	id := meta.AsCommonID()
+	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
+	tbl.txnEntries.Append(meta)
+	return buildBlock(tbl, meta), err
+}
+
+func (tbl *txnTable) createBlockWithMeta(
+	sid uint64,
+	state catalog.EntryState,
+	is1PC bool,
+	metaLoc string,
+	deltaLoc string) (blk handle.Block, err error) {
+	var seg *catalog.SegmentEntry
+	if seg, err = tbl.entry.GetSegmentByID(sid); err != nil {
+		return
+	}
+	if !seg.IsAppendable() && state == catalog.ES_Appendable {
+		err = moerr.NewInternalErrorNoCtx("not appendable")
+		return
+	}
+	var factory catalog.BlockDataFactory
+	if tbl.store.dataFactory != nil {
+		factory = tbl.store.dataFactory.MakeBlockFactory()
+	}
+	meta, err := seg.CreateBlockWithMeta(tbl.store.txn, state, factory, metaLoc, deltaLoc)
 	if err != nil {
 		return
 	}
@@ -565,6 +608,27 @@ func (tbl *txnTable) Append(data *containers.Batch) (err error) {
 		tbl.localSegment = newLocalSegment(tbl)
 	}
 	return tbl.localSegment.Append(data)
+}
+
+func (tbl *txnTable) AddBlksWithMetaLoc(
+	pkVecs []containers.Vector,
+	file string,
+	metaLocs []string,
+	flag int32) (err error) {
+	//TODO::If txn at CN had checked duplication against its snapshot and workspace,
+	// we should skip here.
+	if tbl.schema.HasPK() {
+		for _, v := range pkVecs {
+			if err = tbl.DoBatchDedup(v); err != nil {
+				return
+			}
+		}
+	}
+	if tbl.localSegment == nil {
+		//tbl.localSegment = newLocalSegmentWithID(tbl, sid)
+		tbl.localSegment = newLocalSegment(tbl)
+	}
+	return tbl.localSegment.AddBlksWithMetaLoc(pkVecs, file, metaLocs)
 }
 
 func (tbl *txnTable) RangeDeleteLocalRows(start, end uint32) (err error) {
@@ -740,6 +804,16 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc string) (err error) 
 	return
 }
 
+func (tbl *txnTable) UpdateConstraint(cstr []byte) (err error) {
+	tbl.store.IncreateWriteCnt()
+	tbl.store.txn.GetMemo().AddCatalogChange()
+	isNewNode, err := tbl.entry.UpdateConstraint(tbl.store.txn, cstr)
+	if isNewNode {
+		tbl.txnEntries.Append(tbl.entry)
+	}
+	return
+}
+
 func (tbl *txnTable) UncommittedRows() uint32 {
 	if tbl.localSegment == nil {
 		return 0
@@ -761,6 +835,9 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 	return
 }
 
+// Dedup 1. checks whether these primary keys are duplicated in all the blocks
+// which are visible and not dropped at txn's snapshot timestamp.
+// 2. It is called when appending data into this table.
 func (tbl *txnTable) Dedup(keys containers.Vector) (err error) {
 	h := newRelation(tbl)
 	it := newRelationBlockIt(h)
@@ -788,21 +865,28 @@ func (tbl *txnTable) Dedup(keys containers.Vector) (err error) {
 	return
 }
 
+// DoPrecommitDedup 1. it do deduplication by traversing all the segments/blocks, and
+// skipping over some blocks/segments which being active or drop-committed or aborted;
+//  2. it is called when txn dequeues from preparing queue.
+//  3. we should make this function run quickly as soon as possible.
+//     TODO::it would be used to do deduplication with the logtail.
 func (tbl *txnTable) DoPrecommitDedup(pks containers.Vector) (err error) {
 	segIt := tbl.entry.MakeSegmentIt(false)
 	for segIt.Valid() {
 		seg := segIt.Get().GetPayload()
+		//FIXME::Where is this tbl.maxSegId assigned, it always be zero?
 		if seg.GetID() < tbl.maxSegId {
 			return
 		}
 		{
 			seg.RLock()
-			needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
-			if needwait {
-				seg.RUnlock()
-				txnToWait.GetTxnState(true)
-				seg.RLock()
-			}
+			//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
+			//needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
+			//if needwait {
+			//	seg.RUnlock()
+			//	txnToWait.GetTxnState(true)
+			//	seg.RLock()
+			//}
 			shouldSkip := seg.HasDropCommittedLocked() || seg.IsCreatingOrAborted()
 			seg.RUnlock()
 			if shouldSkip {
@@ -860,6 +944,7 @@ func (tbl *txnTable) DoPrecommitDedup(pks containers.Vector) (err error) {
 
 func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 	index := NewSimpleTableIndex()
+	//Check whether primary key is duplicated.
 	if err = index.BatchInsert(
 		tbl.schema.GetSingleSortKey().Name,
 		key,
@@ -871,11 +956,12 @@ func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 	}
 
 	if tbl.localSegment != nil {
+		//Check whether primary key is duplicated with localSegment.
 		if err = tbl.localSegment.BatchDedup(key); err != nil {
 			return
 		}
 	}
-
+	//Check whether primary key is duplicated with all the blocks which are visible to txn.
 	err = tbl.Dedup(key)
 	return
 }

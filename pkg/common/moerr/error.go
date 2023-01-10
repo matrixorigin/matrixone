@@ -118,6 +118,10 @@ const (
 	ErrDragonboatShardNotFound      uint16 = 20437
 	ErrDragonboatOtherSystemError   uint16 = 20438
 	ErrDropNonExistsDB              uint16 = 20439
+	ErrQueryIdNotFound              uint16 = 20440
+	ErrFunctionAlreadyExists        uint16 = 20441
+	ErrDropNonExistsFunction        uint16 = 20442
+	ErrNoConfig                     uint16 = 20443
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -166,6 +170,11 @@ const (
 	ErrAppendableSegmentNotFound uint16 = 20624
 	ErrAppendableBlockNotFound   uint16 = 20625
 	ErrTAEDebug                  uint16 = 20626
+	ErrDuplicateKey              uint16 = 20626
+
+	// Group 7: lock service
+	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
+	ErrDeadLockDetected uint16 = 20701
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -237,6 +246,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrNotLeaseHolder:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not lease holder, current lease holder ID %d"},
 	ErrDBAlreadyExists:              {ER_DB_CREATE_EXISTS, []string{MySQLDefaultSqlState}, "database %s already exists"},
 	ErrTableAlreadyExists:           {ER_TABLE_EXISTS_ERROR, []string{MySQLDefaultSqlState}, "table %s already exists"},
+	ErrFunctionAlreadyExists:        {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "function %s already exists"},
+	ErrDropNonExistsFunction:        {ER_CANT_FIND_UDF, []string{MySQLDefaultSqlState}, "function %s doesn't exist"},
 	ErrNoService:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "service %s not found"},
 	ErrDupServiceName:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicate service name %s"},
 	ErrWrongService:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "wrong service, expecting %s, got %s"},
@@ -255,7 +266,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDragonboatShardNotFound:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDragonboatOtherSystemError:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDropNonExistsDB:              {ER_DB_DROP_EXISTS, []string{MySQLDefaultSqlState}, "Can't drop database '%s'; database doesn't exist"},
-
+	ErrQueryIdNotFound:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "query id %s is not found, or invalid tenant"},
+	ErrNoConfig:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
 	// Group 5: rpc timeout
 	ErrRPCTimeout:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
 	ErrClientClosed:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
@@ -290,6 +302,10 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrPrimaryKeyDuplicated:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicated primary key %v"},
 	ErrAppendableSegmentNotFound: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable segment not found"},
 	ErrAppendableBlockNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable block not found"},
+	ErrDuplicateKey:              {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
+
+	// Group 7: lock service
+	ErrDeadLockDetected: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -571,6 +587,14 @@ func NewEmptyVector(ctx context.Context) *Error {
 
 func NewFileNotFound(ctx context.Context, f string) *Error {
 	return newError(ctx, ErrFileNotFound, f)
+}
+
+func NewQueryIdNotFound(ctx context.Context, f string) *Error {
+	return newError(ctx, ErrQueryIdNotFound, f)
+}
+
+func NewNoConfig(ctx context.Context, f string) *Error {
+	return newError(ctx, ErrNoConfig, f)
 }
 
 func NewFileAlreadyExists(ctx context.Context, f string) *Error {
@@ -859,12 +883,20 @@ func NewPrimaryKeyDuplicated(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrPrimaryKeyDuplicated, k)
 }
 
+func NewDuplicateKey(ctx context.Context, k string) *Error {
+	return newError(ctx, ErrDuplicateKey, k)
+}
+
 func NewAppendableSegmentNotFound(ctx context.Context) *Error {
 	return newError(ctx, ErrAppendableSegmentNotFound)
 }
 
 func NewAppendableBlockNotFound(ctx context.Context) *Error {
 	return newError(ctx, ErrAppendableBlockNotFound)
+}
+
+func NewDeadLockDetected(ctx context.Context) *Error {
+	return newError(ctx, ErrDeadLockDetected)
 }
 
 var contextFunc atomic.Value

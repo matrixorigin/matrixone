@@ -40,3 +40,11 @@ create table t1 (str1 varchar(25),str2 char(25));
 insert into t1 values('a1','b1'),('a2', 'b2'),('%str1%', '%str2%');
 select * from t1 where str1 like "%\%";
 select * from t1 where str1 like "\%%";
+
+select json_extract('{"a":1}', '$.a') like '1' as result;
+select json_extract('{"a":1}', '$.a') like 1 as result;
+select json_extract('{"a":"1"}', '$.a') like '1' as result;
+select json_extract('{"a":"1"}', '$.a') like 1 as result;
+select json_extract('{"a":"1"}', '$.a') like '%1%' as result;
+select json_unquote(json_extract('{"a":"1"}', '$.a')) like '1' as result;
+select json_unquote(json_extract('{"a":"1"}', '$.a')) like 1 as result;

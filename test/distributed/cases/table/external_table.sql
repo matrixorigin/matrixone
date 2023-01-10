@@ -229,6 +229,13 @@ create table table_16(a int);
 insert into table_16 values(99);
 select * from table_16, ex_table_gzip;
 
+create external table ex_table_space(a varchar(200), b varchar(200), c varchar(200)) infile{"filepath"='$resources/external_table_file/ex_table_space.csv'} fields terminated by '|' enclosed by '\"' lines terminated by '\n';
+select length(a), length(b), length(c) from ex_table_space;
+
+create table t1(a varchar(100), b varchar(100), c varchar(100));
+load data infile '$resources/external_table_file/ex_table_space.csv' into table t1 fields terminated by '|' enclosed by '\"' lines terminated by '\n';
+select length(a), length(b), length(c) from t1;
+
 drop table if exists ex_table_1;
 drop table if exists ex_table_2_1;
 drop table if exists ex_table_2_2;
@@ -283,3 +290,5 @@ drop table if exists ex_table_15;
 drop table if exists ex_table_drop;
 drop table if exists table_15;
 drop table if exists ex_table_yccs;
+drop table if exists ex_table_space;
+drop table if exists t1;

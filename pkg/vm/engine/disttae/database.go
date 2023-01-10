@@ -20,70 +20,141 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 )
 
 var _ engine.Database = new(database)
 
 func (db *database) Relations(ctx context.Context) ([]string, error) {
-	tables, err := db.txn.getTableList(ctx, db.databaseId)
-	if err != nil {
-		return nil, err
+	var rels []string
+
+	db.txn.tableMap.Range(func(k, _ any) bool {
+		key := k.(tableKey)
+		if key.databaseId == db.databaseId {
+			rels = append(rels, key.name)
+		}
+		return true
+	})
+	tbls, _ := db.txn.catalog.Tables(getAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
+	rels = append(rels, tbls...)
+	return rels, nil
+}
+
+func (db *database) getTableNameById(ctx context.Context, id uint64) string {
+	tblName := ""
+	db.txn.tableMap.Range(func(k, _ any) bool {
+		key := k.(tableKey)
+		if key.databaseId == db.databaseId && key.tableId == id {
+			tblName = key.name
+			return false
+		}
+		return true
+	})
+
+	if tblName == "" {
+		tbls, tblIds := db.txn.catalog.Tables(getAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
+		for idx, tblId := range tblIds {
+			if tblId == id {
+				tblName = tbls[idx]
+				break
+			}
+		}
 	}
-	return tables, nil
+	return tblName
+}
+
+func (db *database) getRelationById(ctx context.Context, id uint64) (string, engine.Relation, error) {
+	tblName := db.getTableNameById(ctx, id)
+	if tblName == "" {
+		return "", nil, moerr.NewInternalError(ctx, "can not find table by id %d", id)
+	}
+	rel, err := db.Relation(ctx, tblName)
+	return tblName, rel, err
 }
 
 func (db *database) Relation(ctx context.Context, name string) (engine.Relation, error) {
-	key := genTableKey(ctx, name, db.databaseId)
-	if tbl, ok := db.txn.tableMap.Load(key); ok {
-		return tbl.(*table), nil
+	if v, ok := db.txn.tableMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
+		return v.(*table), nil
 	}
-	// for acceleration, and can work without these codes.
 	if name == catalog.MO_DATABASE {
 		id := uint64(catalog.MO_DATABASE_ID)
 		defs := catalog.MoDatabaseTableDefs
-		return db.openSysTable(key, id, name, defs), nil
+		return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
 	}
 	if name == catalog.MO_TABLES {
 		id := uint64(catalog.MO_TABLES_ID)
 		defs := catalog.MoTablesTableDefs
-		return db.openSysTable(key, id, name, defs), nil
+		return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
 	}
 	if name == catalog.MO_COLUMNS {
 		id := uint64(catalog.MO_COLUMNS_ID)
 		defs := catalog.MoColumnsTableDefs
-		return db.openSysTable(key, id, name, defs), nil
+		return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
 
 	}
-	tbl, defs, err := db.txn.getTableInfo(ctx, db.databaseId, name)
+	key := &cache.TableItem{
+		Name:       name,
+		DatabaseId: db.databaseId,
+		AccountId:  getAccountId(ctx),
+		Ts:         db.txn.meta.SnapshotTS,
+	}
+	if ok := db.txn.catalog.GetTable(key); !ok {
+		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
+	}
+	if tbl, ok := db.txn.syncMap.Load(key.Id); ok {
+		return tbl.(*table), nil
+	}
+	parts := db.txn.db.getPartitions(db.databaseId, key.Id)
+	tbl := &table{
+		db:           db,
+		parts:        parts,
+		tableId:      key.Id,
+		tableName:    key.Name,
+		defs:         key.Defs,
+		tableDef:     key.TableDef,
+		primaryIdx:   key.PrimaryIdx,
+		clusterByIdx: key.ClusterByIdx,
+		relKind:      key.Kind,
+		viewdef:      key.ViewDef,
+		comment:      key.Comment,
+		partition:    key.Partition,
+		createSql:    key.CreateSql,
+		constraint:   key.Constraint,
+	}
+	columnLength := len(key.TableDef.Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
+	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(key.Id),
+		true, columnLength, false)
 	if err != nil {
 		return nil, err
 	}
-	tbl.defs = defs
-	tbl.tableDef = nil
-	_, ok := db.txn.createTableMap[tbl.tableId]
-	columnLength := len(tbl.getTableDef().Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
-	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(tbl.tableId), !ok, columnLength)
-	if err != nil {
-		return nil, err
-	}
-	parts := db.txn.db.getPartitions(db.databaseId, tbl.tableId)
-	tbl.db = db
 	tbl.meta = meta
-	tbl.parts = parts
-	tbl.tableName = name
-	tbl.insertExpr = genInsertExpr(defs, len(parts))
-	db.txn.tableMap.Store(key, tbl)
+	tbl.updated = false
+	db.txn.syncMap.Store(key, tbl)
 	return tbl, nil
 }
 
 func (db *database) Delete(ctx context.Context, name string) error {
-	key := genTableKey(ctx, name, db.databaseId)
-	db.txn.tableMap.Delete(key)
-	id, err := db.txn.getTableId(ctx, db.databaseId, name)
-	if err != nil {
-		return err
+	var id uint64
+
+	k := genTableKey(ctx, name, db.databaseId)
+	if _, ok := db.txn.tableMap.Load(k); ok {
+		db.txn.tableMap.Delete(k)
+		return nil
+	} else {
+		key := &cache.TableItem{
+			Name:       name,
+			DatabaseId: db.databaseId,
+			AccountId:  getAccountId(ctx),
+			Ts:         db.txn.meta.SnapshotTS,
+		}
+		if ok := db.txn.catalog.GetTable(key); !ok {
+			return moerr.GetOkExpectedEOB()
+		}
+		id = key.Id
 	}
+	db.txn.syncMap.Delete(id)
 	bat, err := genDropTableTuple(id, db.databaseId, name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
 		return err
@@ -92,45 +163,44 @@ func (db *database) Delete(ctx context.Context, name string) error {
 		catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[0], -1); err != nil {
 		return err
 	}
-	metaName := genMetaTableName(id)
-	db.txn.deleteMetaTables = append(db.txn.deleteMetaTables, metaName)
 	return nil
 }
 
-func (db *database) Truncate(ctx context.Context, name string) error {
-	var tbl *table
+func (db *database) Truncate(ctx context.Context, name string) (uint64, error) {
 	var oldId uint64
 
 	newId, err := db.txn.allocateID(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	key := genTableKey(ctx, name, db.databaseId)
 	if v, ok := db.txn.tableMap.Load(key); ok {
-		tbl = v.(*table)
-	}
-
-	if tbl != nil {
-		oldId = tbl.tableId
-		tbl.tableId = newId
+		oldId = v.(*table).tableId
+		v.(*table).tableId = newId
 	} else {
-		if oldId, err = db.txn.getTableId(ctx, db.databaseId, name); err != nil {
-			return err
+		key := &cache.TableItem{
+			Name:       name,
+			DatabaseId: db.databaseId,
+			AccountId:  getAccountId(ctx),
+			Ts:         db.txn.meta.SnapshotTS,
 		}
+		if ok := db.txn.catalog.GetTable(key); !ok {
+			return 0, moerr.GetOkExpectedEOB()
+		}
+		oldId = key.Id
 	}
-
 	bat, err := genTruncateTableTuple(newId, db.databaseId,
 		genMetaTableName(oldId)+name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for i := range db.txn.dnStores {
 		if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[i], -1); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	return nil
+	return newId, nil
 }
 
 func (db *database) GetDatabaseId(ctx context.Context) string {
@@ -188,7 +258,9 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 			return err
 		}
 	}
-	for _, col := range cols {
+	tbl.primaryIdx = -1
+	tbl.clusterByIdx = -1
+	for i, col := range cols {
 		bat, err := genCreateColumnTuple(col, db.txn.proc.Mp())
 		if err != nil {
 			return err
@@ -197,8 +269,20 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, db.txn.dnStores[0], -1); err != nil {
 			return err
 		}
+		if col.constraintType == catalog.SystemColPKConstraint {
+			tbl.primaryIdx = i
+		}
+		if col.isClusterBy == 1 {
+			tbl.clusterByIdx = i
+		}
 	}
-	db.txn.createTableMap[tableId] = 0
+	tbl.db = db
+	tbl.defs = defs
+	tbl.tableName = name
+	tbl.tableId = tableId
+	tbl.parts = db.txn.db.getPartitions(db.databaseId, tableId)
+	tbl.getTableDef()
+	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return nil
 }
 
@@ -206,22 +290,14 @@ func (db *database) openSysTable(key tableKey, id uint64, name string,
 	defs []engine.TableDef) engine.Relation {
 	parts := db.txn.db.getPartitions(db.databaseId, id)
 	tbl := &table{
-		db:         db,
-		tableId:    id,
-		tableName:  name,
-		defs:       defs,
-		parts:      parts,
-		primaryIdx: -1,
+		db:           db,
+		tableId:      id,
+		tableName:    name,
+		defs:         defs,
+		parts:        parts,
+		primaryIdx:   -1,
+		clusterByIdx: -1,
 	}
-	// find primary idx
-	for i, def := range defs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			if attr.Attr.Primary {
-				tbl.primaryIdx = i
-				break
-			}
-		}
-	}
-	db.txn.tableMap.Store(key, tbl)
+	tbl.getTableDef()
 	return tbl
 }

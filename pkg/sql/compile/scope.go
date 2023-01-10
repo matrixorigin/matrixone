@@ -15,8 +15,12 @@
 package compile
 
 import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -31,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
@@ -47,6 +52,7 @@ func PrintScope(prefix []byte, ss []*Scope) {
 
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
+	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
 	if s.DataSource.Bat != nil {
 		if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
@@ -62,6 +68,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
+	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
@@ -140,6 +147,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	var rds []engine.Reader
 
+	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	if s.IsJoin {
 		return s.JoinRun(c)
 	}
@@ -147,26 +155,50 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		return s.MergeRun(c)
 	}
 	mcpu := s.NodeInfo.Mcpu
-	if remote {
+	switch {
+	case remote:
 		var err error
-
-		rds, err = c.e.NewBlockReader(c.ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
+		ctx := c.ctx
+		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		}
+		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
 			s.NodeInfo.Data, s.DataSource.TableDef)
 		if err != nil {
 			return err
 		}
-	} else {
+	case s.NodeInfo.Rel != nil:
 		var err error
 
-		db, err := c.e.Database(c.ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
+		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
+			return err
+		}
+	default:
+		var err error
+		var db engine.Database
+		var rel engine.Relation
+
+		ctx := c.ctx
+		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		}
+		db, err = c.e.Database(ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
 		if err != nil {
 			return err
 		}
-		rel, err := db.Relation(c.ctx, s.DataSource.RelationName)
+		rel, err = db.Relation(ctx, s.DataSource.RelationName)
 		if err != nil {
-			return err
+			var e error // avoid contamination of error messages
+			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
+			if e != nil {
+				return e
+			}
+			rel, e = db.Relation(c.ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName))
+			if e != nil {
+				return err
+			}
 		}
-		if rds, err = rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
+		if rds, err = rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
 		}
 	}
@@ -319,9 +351,10 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 					Op: vm.Group,
 					Arg: &group.Argument{
-						Aggs:  arg.Aggs,
-						Exprs: arg.Exprs,
-						Types: arg.Types,
+						Aggs:      arg.Aggs,
+						Exprs:     arg.Exprs,
+						Types:     arg.Types,
+						MultiAggs: arg.MultiAggs,
 					},
 				})
 			}
@@ -432,6 +465,7 @@ func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRe
 		PreScopes:    make([]*Scope, len(srcScope.PreScopes)),
 		Instructions: make([]vm.Instruction, len(srcScope.Instructions)),
 		NodeInfo: engine.Node{
+			Rel:  srcScope.NodeInfo.Rel,
 			Mcpu: srcScope.NodeInfo.Mcpu,
 			Id:   srcScope.NodeInfo.Id,
 			Addr: srcScope.NodeInfo.Addr,
@@ -461,7 +495,7 @@ func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRe
 
 		// IF const run.
 		if srcScope.DataSource.Bat != nil {
-			newScope.DataSource.Bat = constructValueScanBatch()
+			newScope.DataSource.Bat, _ = constructValueScanBatch(context.TODO(), nil, nil)
 		}
 	}
 

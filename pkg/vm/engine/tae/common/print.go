@@ -79,6 +79,9 @@ func TypeStringValue(t types.Type, v any, opts ...TypePrintOpt) string {
 			}
 		}
 		if printable {
+			if len(buf) > 500 {
+				buf = buf[:500]
+			}
 			return string(buf)
 		} else if opt.doNotPrintBinary {
 			return fmt.Sprintf("binary[%d]", len(buf))

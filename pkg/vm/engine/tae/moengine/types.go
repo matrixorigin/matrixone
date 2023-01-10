@@ -17,14 +17,15 @@ package moengine
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
@@ -50,9 +51,19 @@ type Txn interface {
 type Relation interface {
 	GetPrimaryKeys(context.Context) ([]*engine.Attribute, error)
 	GetHideKeys(context.Context) ([]*engine.Attribute, error)
+	GetSchema(ctx context.Context) *catalog.Schema
 
+	UpdateConstraintWithBin(context.Context, []byte) error
+	//Write just append data into txn's workspace, instead of applying data into state machine.
+	//TODO::Add flag parameter to indicate whether tae need to
+	//      do deduplication check with transaction's workspace and snapshot data.
 	Write(context.Context, *batch.Batch) error
 
+	//AddBlksWithMetaLoc just add  non-appendable blocks into txn's workspace.
+	AddBlksWithMetaLoc(ctx context.Context, pks []containers.Vector,
+		file string, metaloc []string, flag int32) error
+
+	//Delete by primary key or physical addr.
 	Delete(context.Context, *batch.Batch, string) error
 
 	DeleteByPhyAddrKeys(context.Context, *vector.Vector) error
@@ -101,6 +112,7 @@ type Engine interface {
 	GetTAE(ctx context.Context) *db.DB
 
 	FlushTable(ctx context.Context, tenantID uint32, databaseId, tableId uint64, ts types.TS) error
+	ForceCheckpoint(ctx context.Context, ts types.TS) error
 }
 
 type TxnEngine interface {

@@ -24,6 +24,8 @@ import (
 // TxnStorage In order for TxnService to implement distributed transactions based on Clock-SI on a stand-alone
 // storage engine, it requires a number of interfaces implemented by the storage engine.
 type TxnStorage interface {
+	// Start starts txnStorage if necessary.
+	Start() error
 	// StartRecovery start txnStorage recovery process. Use the incoming channel to send the Txn that needs to be
 	// recovered and close the channel when all the logs have been processed.
 	StartRecovery(context.Context, chan txn.TxnMeta)

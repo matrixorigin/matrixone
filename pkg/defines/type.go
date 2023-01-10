@@ -85,6 +85,8 @@ func (typ *MysqlType) GetLength(width int32) uint32 {
 		return uint32(width) * 3
 	case MYSQL_TYPE_DATE:
 		return 64
+	case MYSQL_TYPE_TIME:
+		return 64
 	case MYSQL_TYPE_DATETIME:
 		return 64
 	case MYSQL_TYPE_TIMESTAMP:
@@ -155,8 +157,14 @@ type TenantIDKey struct{}
 type UserIDKey struct{}
 type RoleIDKey struct{}
 
-// use SqlKey{} to get string value from Context
+// EngineKey use EngineKey{} to get engine from Context
+type EngineKey struct{}
+
+// SqlKey use SqlKey{} to get string value from Context
 type SqlKey struct{}
 
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
+
+// TemporaryDN use TemporaryDN to get temporary storage from Context
+type TemporaryDN struct{}

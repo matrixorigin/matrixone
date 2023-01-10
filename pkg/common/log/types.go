@@ -77,13 +77,9 @@ const (
 // rather MOLogger. MOLogger is compatible with the zap.logger log printing method
 // signature
 type MOLogger struct {
-	logger  *zap.Logger
-	options LogOptions
-	ctx     context.Context
-}
-
-func (l *MOLogger) SetOptions(options LogOptions) {
-	l.options = options
+	logger *zap.Logger
+	ctx    context.Context
+	m      map[int]*zap.Logger
 }
 
 // LogOptions log options
@@ -92,6 +88,7 @@ type LogOptions struct {
 	level      zapcore.Level
 	fields     []zap.Field
 	sampleType SampleType
+	callerSkip int
 }
 
 // logFilter used to filter the print log, returns false to abort this print

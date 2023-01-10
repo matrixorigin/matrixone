@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -169,7 +169,7 @@ func mustRegister(collector Collector) {
 }
 
 func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
-	initTables(ctx, ieFactory, trace.FileService)
+	initTables(ctx, ieFactory, motrace.FileService)
 	return nil
 }
 
@@ -344,13 +344,13 @@ func WithExportInterval(sec int) InitOption {
 }
 
 var (
-	metricNameColumn        = table.Column{Name: `metric_name`, Type: `VARCHAR(128)`, Default: `unknown`, Comment: `metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...`}
-	metricCollectTimeColumn = table.Column{Name: `collecttime`, Type: `DATETIME(6)`, Comment: `metric data collect time`}
-	metricValueColumn       = table.Column{Name: `value`, Type: `DOUBLE`, Default: `0.0`, Comment: `metric value`}
-	metricNodeColumn        = table.Column{Name: `node`, Type: `VARCHAR(36)`, Default: ALL_IN_ONE_MODE, Comment: `mo node uuid`}
-	metricRoleColumn        = table.Column{Name: `role`, Type: `VARCHAR(32)`, Default: ALL_IN_ONE_MODE, Comment: `mo node role, like: CN, DN, LOG`}
-	metricAccountColumn     = table.Column{Name: `account`, Type: `VARCHAR(128)`, Default: `sys`, Comment: `account name`}
-	metricTypeColumn        = table.Column{Name: `type`, Type: `VARCHAR(32)`, Comment: `sql type, like: insert, select, ...`}
+	metricNameColumn        = table.Column{Name: `metric_name`, Type: `VARCHAR(128)`, ColType: table.TVarchar, Default: `unknown`, Comment: `metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...`}
+	metricCollectTimeColumn = table.Column{Name: `collecttime`, Type: `DATETIME(6)`, ColType: table.TDatetime, Comment: `metric data collect time`}
+	metricValueColumn       = table.Column{Name: `value`, Type: `DOUBLE`, ColType: table.TFloat64, Default: `0.0`, Comment: `metric value`}
+	metricNodeColumn        = table.Column{Name: `node`, Type: `VARCHAR(36)`, ColType: table.TVarchar, Default: ALL_IN_ONE_MODE, Comment: `mo node uuid`}
+	metricRoleColumn        = table.Column{Name: `role`, Type: `VARCHAR(32)`, ColType: table.TVarchar, Default: ALL_IN_ONE_MODE, Comment: `mo node role, like: CN, DN, LOG`}
+	metricAccountColumn     = table.Column{Name: `account`, Type: `VARCHAR(128)`, ColType: table.TVarchar, Default: `sys`, Comment: `account name`}
+	metricTypeColumn        = table.Column{Name: `type`, Type: `VARCHAR(32)`, ColType: table.TVarchar, Comment: `sql type, like: insert, select, ...`}
 )
 
 var SingleMetricTable = &table.Table{

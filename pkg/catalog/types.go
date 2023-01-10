@@ -16,14 +16,25 @@ package catalog
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
 	Row_ID               = "__mo_rowid"
 	PrefixPriColName     = "__mo_cpkey_"
+	PrefixCBColName      = "__mo_cbkey_"
 	PrefixIndexTableName = "__mo_index_"
+	// IndexTable has two column at most, the first is idx col, the second is origin table primary col
+	IndexTableIndexColName   = "__mo_index_idx_col"
+	IndexTablePrimaryColName = "__mo_index_pri_col"
+	ExternalFilePath         = "__mo_filepath"
 )
+
+func ContainExternalHidenCol(col string) bool {
+	return col == ExternalFilePath
+}
 
 const (
 	Meta_Length = 6
@@ -108,6 +119,9 @@ const (
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
 	SystemExternalRel     = "e"
+	//the cluster table created by the sys account
+	//and read only by the general account
+	SystemClusterRel = "cluster"
 
 	SystemColPKConstraint = "p"
 	SystemColNoConstraint = "n"
@@ -119,6 +133,11 @@ const (
 	MO_DATABASE_ID = 1
 	MO_TABLES_ID   = 2
 	MO_COLUMNS_ID  = 3
+)
+
+// index use to update constraint
+const (
+	MO_TABLES_UPDATE_CONSTRAINT = 4
 )
 
 // column's index in catalog table
@@ -146,7 +165,7 @@ const (
 	MO_TABLES_ACCOUNT_ID_IDX     = 11
 	MO_TABLES_PARTITIONED_IDX    = 12
 	MO_TABLES_VIEWDEF_IDX        = 13
-	MO_TABLES_CONSTRAINT         = 14
+	MO_TABLES_CONSTRAINT_IDX     = 14
 
 	MO_COLUMNS_ATT_UNIQ_NAME_IDX         = 0
 	MO_COLUMNS_ACCOUNT_ID_IDX            = 1
@@ -223,6 +242,14 @@ type CreateTable struct {
 	Viewdef      string
 	Constraint   []byte
 	Defs         []engine.TableDef
+}
+
+type UpdateConstraint struct {
+	DatabaseId   uint64
+	TableId      uint64
+	TableName    string
+	DatabaseName string
+	Constraint   []byte
 }
 
 type DropOrTruncateTable struct {
@@ -306,21 +333,21 @@ var (
 		types.New(types.T_uint32, 0, 0, 0),     // account_id
 	}
 	MoTablesTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0),          // rel_id
-		types.New(types.T_varchar, 5000, 0, 0),      // relname
-		types.New(types.T_varchar, 5000, 0, 0),      // reldatabase
-		types.New(types.T_uint64, 0, 0, 0),          // reldatabase_id
-		types.New(types.T_varchar, 5000, 0, 0),      // relpersistence
-		types.New(types.T_varchar, 5000, 0, 0),      // relkind
-		types.New(types.T_varchar, 5000, 0, 0),      // rel_comment
-		types.New(types.T_varchar, 100000000, 0, 0), // rel_createsql
-		types.New(types.T_timestamp, 0, 0, 0),       // created_time
-		types.New(types.T_uint32, 0, 0, 0),          // creator
-		types.New(types.T_uint32, 0, 0, 0),          // owner
-		types.New(types.T_uint32, 0, 0, 0),          // account_id
-		types.New(types.T_blob, 0, 0, 0),            // partition
-		types.New(types.T_blob, 0, 0, 0),            // viewdef
-		types.New(types.T_varchar, 5000, 0, 0),      // constraint
+		types.New(types.T_uint64, 0, 0, 0),     // rel_id
+		types.New(types.T_varchar, 5000, 0, 0), // relname
+		types.New(types.T_varchar, 5000, 0, 0), // reldatabase
+		types.New(types.T_uint64, 0, 0, 0),     // reldatabase_id
+		types.New(types.T_varchar, 5000, 0, 0), // relpersistence
+		types.New(types.T_varchar, 5000, 0, 0), // relkind
+		types.New(types.T_varchar, 5000, 0, 0), // rel_comment
+		types.New(types.T_text, 0, 0, 0),       // rel_createsql
+		types.New(types.T_timestamp, 0, 0, 0),  // created_time
+		types.New(types.T_uint32, 0, 0, 0),     // creator
+		types.New(types.T_uint32, 0, 0, 0),     // owner
+		types.New(types.T_uint32, 0, 0, 0),     // account_id
+		types.New(types.T_blob, 0, 0, 0),       // partition
+		types.New(types.T_blob, 0, 0, 0),       // viewdef
+		types.New(types.T_varchar, 5000, 0, 0), // constraint
 	}
 	MoColumnsTypes = []types.Type{
 		types.New(types.T_varchar, 256, 0, 0),  // att_uniq_name
@@ -363,4 +390,73 @@ var (
 	MoColumnsTableDefs = []engine.TableDef{}
 	// used by memengine or tae or cn
 	MoTableMetaDefs = []engine.TableDef{}
+)
+
+var (
+	QueryResultPath     string
+	QueryResultMetaPath string
+	QueryResultMetaDir  string
+)
+
+func init() {
+	QueryResultPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result/%s_%s_%d.blk")
+	QueryResultMetaPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta/%s_%s.blk")
+	QueryResultMetaDir = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta")
+}
+
+const QueryResultName = "%s_%s_%d.blk"
+const QueryResultMetaName = "%s_%s.blk"
+
+type Meta struct {
+	QueryId    [16]byte
+	Statement  string
+	AccountId  uint32
+	RoleId     uint32
+	ResultPath string
+	CreateTime types.Timestamp
+	ResultSize float64
+	Columns    string
+	Tables     string
+	UserId     uint32
+}
+
+var (
+	MetaColTypes = []types.Type{
+		types.New(types.T_uuid, 0, 0, 0),      // query_id
+		types.New(types.T_text, 0, 0, 0),      // statement
+		types.New(types.T_uint32, 0, 0, 0),    // account_id
+		types.New(types.T_uint32, 0, 0, 0),    // role_id
+		types.New(types.T_text, 0, 0, 0),      // result_path
+		types.New(types.T_timestamp, 0, 0, 0), // create_time
+		types.New(types.T_float64, 0, 0, 0),   // result_size
+		types.New(types.T_text, 0, 0, 0),      // columns
+		types.New(types.T_text, 0, 0, 0),      // Tables
+		types.New(types.T_uint32, 0, 0, 0),    // user_id
+	}
+
+	MetaColNames = []string{
+		"query_id",
+		"statement",
+		"account_id",
+		"role_id",
+		"result_path",
+		"create_time",
+		"result_size",
+		"columns",
+		"tables",
+		"user_id",
+	}
+)
+
+const (
+	QUERY_ID_IDX    = 0
+	STATEMENT_IDX   = 1
+	ACCOUNT_ID_IDX  = 2
+	ROLE_ID_IDX     = 3
+	RESULT_PATH_IDX = 4
+	CREATE_TIME_IDX = 5
+	RESULT_SIZE_IDX = 6
+	COLUMNS_IDX     = 7
+	TABLES_IDX      = 8
+	USER_ID_IDX     = 9
 )

@@ -31,3 +31,6 @@ func (node *Declare) Format(ctx *FmtCtx) {
 	ctx.WriteString(" default ")
 	node.DefaultVal.Format(ctx)
 }
+
+func (node *Declare) GetStatementType() string { return "Declare" }
+func (node *Declare) GetQueryType() string     { return QueryTypeDCL }
