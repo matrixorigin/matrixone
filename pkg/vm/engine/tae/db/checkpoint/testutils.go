@@ -120,7 +120,7 @@ func (r *runner) ForceFlush(ts types.TS, ctx context.Context) (err error) {
 	err = common.RetryWithIntervalAndTimeout(
 		op,
 		r.options.forceFlushTimeout,
-		r.options.forceFlushCheckInterval)
+		r.options.forceFlushCheckInterval, false)
 	return
 }
 
