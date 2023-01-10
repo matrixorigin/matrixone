@@ -679,6 +679,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_C:
 		pc := &plan.Const{
 			Isnull: item.C.GetIsnull(),
+			Src:    item.C.Src,
 		}
 
 		switch c := item.C.Value.(type) {

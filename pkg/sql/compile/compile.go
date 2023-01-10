@@ -469,8 +469,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		} else {
 			ss = c.compileGroup(n, ss, ns)
 		}
-		rewriteExprListForAggNode(n.FilterList, int32(len(n.GroupBy)))
-		rewriteExprListForAggNode(n.ProjectList, int32(len(n.GroupBy)))
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_JOIN:
 		needSwap, joinTyp := joinType(ctx, n, ns)
@@ -1513,27 +1511,6 @@ func extraRegisters(ss []*Scope, i int) []*process.WaitRegister {
 		regs = append(regs, s.Proc.Reg.MergeReceivers[i])
 	}
 	return regs
-}
-
-func rewriteExprListForAggNode(es []*plan.Expr, groupSize int32) {
-	for i := range es {
-		rewriteExprForAggNode(es[i], groupSize)
-	}
-}
-
-func rewriteExprForAggNode(expr *plan.Expr, groupSize int32) {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if e.Col.RelPos == -2 {
-			e.Col.ColPos += groupSize
-		}
-	case *plan.Expr_F:
-		for i := range e.F.Args {
-			rewriteExprForAggNode(e.F.Args[i], groupSize)
-		}
-	default:
-		return
-	}
 }
 
 func joinType(ctx context.Context, n *plan.Node, ns []*plan.Node) (bool, plan.Node_JoinFlag) {

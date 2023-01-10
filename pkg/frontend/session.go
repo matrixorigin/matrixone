@@ -196,6 +196,8 @@ type Session struct {
 	QueryId []string
 
 	blockIdx int
+
+	planCache *planCache
 }
 
 const saveQueryIdCnt = 10
@@ -264,8 +266,9 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
 		},
-		cache:    &privilegeCache{},
-		blockIdx: 0,
+		cache:     &privilegeCache{},
+		blockIdx:  0,
+		planCache: newPlanCache(100),
 	}
 	if flag {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
@@ -360,6 +363,30 @@ func (ses *Session) IsBackgroundSession() bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.isBackgroundSession
+}
+
+func (ses *Session) cachePlan(sql string, stmts []*tree.Statement, plans []*plan.Plan) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.planCache.cache(sql, stmts, plans)
+}
+
+func (ses *Session) getCachedPlan(sql string) *cachedPlan {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.planCache.get(sql)
+}
+
+func (ses *Session) isCached(sql string) bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.planCache.isCached(sql)
+}
+
+func (ses *Session) cleanCache() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.planCache.clean()
 }
 
 func (ses *Session) setSkipCheckPrivilege(b bool) {
