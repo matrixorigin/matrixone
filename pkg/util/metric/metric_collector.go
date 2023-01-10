@@ -21,15 +21,13 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 )
 
 const CHAN_CAPACITY = 10000
@@ -246,7 +244,7 @@ func (s *mfset) GetBatch(ctx context.Context, buf *bytes.Buffer) string {
 var _ MetricCollector = (*metricFSCollector)(nil)
 
 type metricFSCollector struct {
-	*bp.BaseBatchPipe[*pb.MetricFamily, motrace.CSVRequests]
+	*bp.BaseBatchPipe[*pb.MetricFamily, table.ExportRequests]
 	writerFactory export.FSWriterFactory
 	opts          collectorOpts
 }
@@ -277,13 +275,13 @@ func newMetricFSCollector(writerFactory export.FSWriterFactory, opts ...collecto
 				return SingleMetricTable.GetName()
 			}))
 	}
-	base := bp.NewBaseBatchPipe[*pb.MetricFamily, motrace.CSVRequests](c, pipeOpts...)
+	base := bp.NewBaseBatchPipe[*pb.MetricFamily, table.ExportRequests](c, pipeOpts...)
 	c.BaseBatchPipe = base
 	return c
 }
 
-func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch motrace.CSVRequests) {
-	return func(batchs motrace.CSVRequests) {
+func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch table.ExportRequests) {
+	return func(batchs table.ExportRequests) {
 		for _, batch := range batchs {
 			if _, err := batch.Handle(); err != nil {
 				logutil.Errorf("[Metric] failed to write csv, err: %v", err)
@@ -292,7 +290,7 @@ func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch 
 	}
 }
 
-func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, motrace.CSVRequests] {
+func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, table.ExportRequests] {
 	return &mfsetETL{
 		mfset: mfset{
 			Reminder:        bp.NewConstantClock(c.opts.flushInterval),
@@ -308,7 +306,7 @@ type mfsetETL struct {
 	writerFactory export.FSWriterFactory
 }
 
-func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) motrace.CSVRequests {
+func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.ExportRequests {
 	buf.Reset()
 
 	ts := time.Now()
@@ -363,9 +361,9 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) motrace.CSVR
 		}
 	}
 
-	reqs := make([]motrace.WriteRequest, 0, len(buffer))
+	reqs := make([]table.WriteRequest, 0, len(buffer))
 	for _, w := range buffer {
-		reqs = append(reqs, motrace.NewRowRequest(w))
+		reqs = append(reqs, table.NewRowRequest(w))
 	}
 
 	return reqs

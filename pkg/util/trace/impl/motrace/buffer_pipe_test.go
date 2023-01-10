@@ -482,11 +482,11 @@ error_info,node_uuid,Standalone,0,,,0001-01-01 00:00:00.001001,,,,{},20101,test2
 		t.Run(tt.name, func(t *testing.T) {
 			got := genCsvData(context.TODO(), tt.args.in, tt.args.buf, genFactory())
 			require.NotEqual(t, nil, got)
-			req, ok := got.(CSVRequests)
+			req, ok := got.(table.ExportRequests)
 			require.Equal(t, true, ok)
 			require.Equal(t, 1, len(req))
-			batch := req[0].(*RowRequest)
-			content := batch.writer.GetContent()
+			batch := req[0].(*table.RowRequest)
+			content := batch.GetContent()
 			assert.Equalf(t, tt.want, content, "genCsvData(%v, %v)", content, tt.args.buf)
 			t.Logf("%s", tt.want)
 		})
@@ -570,20 +570,20 @@ func Test_genCsvData_diffAccount(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := genCsvData(DefaultContext(), tt.args.in, tt.args.buf, genFactory())
 			require.NotEqual(t, nil, got)
-			reqs, ok := got.(CSVRequests)
+			reqs, ok := got.(table.ExportRequests)
 			require.Equal(t, true, ok)
 			require.Equal(t, len(tt.args.in), len(reqs))
 			require.Equal(t, len(tt.args.in), len(tt.want))
 			for _, req := range reqs {
 				found := false
-				batch := req.(*RowRequest)
+				batch := req.(*table.RowRequest)
 				for idx, w := range tt.want {
-					if w == batch.writer.GetContent() {
+					if w == batch.GetContent() {
 						found = true
 						t.Logf("idx %d: %s", idx, w)
 					}
 				}
-				assert.Equalf(t, true, found, "genCsvData: %v", batch.writer.GetContent())
+				assert.Equalf(t, true, found, "genCsvData: %v", batch.GetContent())
 			}
 		})
 	}
@@ -667,11 +667,11 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 			GetTracerProvider().longQueryTime = tt.args.queryT
 			got := genCsvData(DefaultContext(), tt.args.in, tt.args.buf, genFactory())
 			require.NotEqual(t, nil, got)
-			req, ok := got.(CSVRequests)
+			req, ok := got.(table.ExportRequests)
 			require.Equal(t, true, ok)
 			require.Equal(t, 1, len(req))
-			batch := req[0].(*RowRequest)
-			content := batch.writer.GetContent()
+			batch := req[0].(*table.RowRequest)
+			content := batch.GetContent()
 			assert.Equalf(t, tt.want, content, "genCsvData(%v, %v)", content, tt.args.buf)
 			t.Logf("%s", tt.want)
 			GetTracerProvider().longQueryTime = 0

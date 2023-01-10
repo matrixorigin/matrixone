@@ -284,3 +284,41 @@ func String2Bytes(s string) (ret []byte) {
 	sliceHead.Cap = strHead.Len
 	return
 }
+
+type RowWriter interface {
+	WriteRow(row *Row) error
+	// GetContent get buffer content
+	GetContent() string
+	// FlushAndClose flush its buffer and close.
+	FlushAndClose() (int, error)
+}
+
+type RowField interface {
+	FillRow(context.Context, *Row)
+}
+
+type WriteRequest interface {
+	Handle() (int, error)
+	GetContent() string
+}
+
+type ExportRequests []WriteRequest
+
+type RowRequest struct {
+	writer RowWriter
+}
+
+func NewRowRequest(writer RowWriter) *RowRequest {
+	return &RowRequest{writer}
+}
+
+func (r *RowRequest) Handle() (int, error) {
+	if r.writer == nil {
+		return 0, nil
+	}
+	return r.writer.FlushAndClose()
+}
+
+func (r *RowRequest) GetContent() string {
+	return r.writer.GetContent()
+}

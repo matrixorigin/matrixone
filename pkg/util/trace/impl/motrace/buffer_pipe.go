@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"io"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -77,49 +76,11 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	return newItemBuffer(opts...)
 }
 
-type WriteRequest interface {
-	Handle() (int, error)
-}
-
-type CSVRequests []WriteRequest
-
-type CSVRequest struct {
-	writer  io.StringWriter
-	content string
-}
-
-func NewCSVRequest(writer io.StringWriter, content string) *CSVRequest {
-	return &CSVRequest{writer, content}
-}
-
-func (r *CSVRequest) Handle() (int, error) {
-	return r.writer.WriteString(r.content)
-}
-
-func (r *CSVRequest) Content() string {
-	return r.content
-}
-
-type RowRequest struct {
-	writer table.RowWriter
-}
-
-func NewRowRequest(writer table.RowWriter) *RowRequest {
-	return &RowRequest{writer}
-}
-
-func (r *RowRequest) Handle() (int, error) {
-	if r.writer == nil {
-		return 0, nil
-	}
-	return r.writer.FlushAndClose()
-}
-
 // NewItemBatchHandler implement batchpipe.PipeImpl
 func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 
 	handle := func(b any) {
-		req, ok := b.(WriteRequest) // see genCsvData
+		req, ok := b.(table.WriteRequest) // see genCsvData
 		if !ok {
 			panic(moerr.NewInternalError(ctx, "batchCSVHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
 		}
@@ -132,9 +93,9 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 		_, span := trace.Start(DefaultContext(), "batchCSVHandler")
 		defer span.End()
 		switch b := batch.(type) {
-		case WriteRequest:
+		case table.WriteRequest:
 			handle(b)
-		case CSVRequests:
+		case table.ExportRequests:
 			for _, req := range b {
 				handle(req)
 			}
@@ -162,7 +123,7 @@ type FSWriterFactory func(ctx context.Context, account string, tbl *table.Table,
 func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, factory FSWriterFactory) any {
 	buf.Reset()
 	if len(in) == 0 {
-		return NewRowRequest(nil)
+		return table.NewRowRequest(nil)
 	}
 
 	i, ok := in[0].(CsvFields)
@@ -195,9 +156,9 @@ func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 		writeValues(item, row)
 	}
 
-	reqs := make(CSVRequests, 0, len(writerMap))
+	reqs := make(table.ExportRequests, 0, len(writerMap))
 	for _, ww := range writerMap {
-		reqs = append(reqs, NewRowRequest(ww))
+		reqs = append(reqs, table.NewRowRequest(ww))
 	}
 
 	return reqs

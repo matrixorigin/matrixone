@@ -557,18 +557,6 @@ func (r *Row) Size() (size int64) {
 	return
 }
 
-type RowWriter interface {
-	WriteRow(row *Row) error
-	// GetContent get buffer content
-	GetContent() string
-	// FlushAndClose flush its buffer and close.
-	FlushAndClose() (int, error)
-}
-
-type RowField interface {
-	FillRow(context.Context, *Row)
-}
-
 var _ TableOptions = (*NoopTableOptions)(nil)
 
 type NoopTableOptions struct{}
