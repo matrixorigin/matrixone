@@ -109,7 +109,7 @@ func (w *ObjectWriter) WriteIndex(fd BlockObject, index IndexData) error {
 	return err
 }
 
-func (w *ObjectWriter) WriteEnd(ctx context.Context) ([]BlockObject, error) {
+func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]BlockObject, error) {
 	var err error
 	w.RLock()
 	defer w.RUnlock()
@@ -149,7 +149,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context) ([]BlockObject, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = w.Sync(ctx)
+	err = w.Sync(ctx, items...)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +162,8 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context) ([]BlockObject, error) {
 }
 
 // Sync is for testing
-func (w *ObjectWriter) Sync(ctx context.Context) error {
+func (w *ObjectWriter) Sync(ctx context.Context, items ...WriteOptions) error {
+	w.buffer.SetDataOptions(items...)
 	err := w.object.fs.Write(ctx, w.buffer.GetData())
 	if err != nil {
 		return err
