@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"encoding/binary"
+	"fmt"
 	"regexp"
 	"strconv"
 
@@ -413,4 +414,20 @@ func DecodeRowid(rowid types.Rowid) (blockId uint64, offset uint32) {
 	blockId = binary.BigEndian.Uint64(tempBuf)
 	offset = binary.BigEndian.Uint32(rowid[12:])
 	return
+}
+
+func BuildQueryResultPath(accountName, statementId string, blockIdx int) string {
+	return fmt.Sprintf(QueryResultPath, accountName, statementId, blockIdx)
+}
+
+func BuildQueryResultMetaPath(accountName, statementId string) string {
+	return fmt.Sprintf(QueryResultMetaPath, accountName, statementId)
+}
+
+func BuildQueryResultMetaName(accountName, statementId string) string {
+	return fmt.Sprintf(QueryResultMetaName, accountName, statementId)
+}
+
+func BuildQueryResultName(accountName, statementId string, blockIdx int) string {
+	return fmt.Sprintf(QueryResultName, accountName, statementId, blockIdx)
 }

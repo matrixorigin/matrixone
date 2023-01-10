@@ -16,9 +16,7 @@ package compile
 
 import (
 	"context"
-	"strconv"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -26,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -134,6 +133,18 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		return moerr.NewTableAlreadyExists(c.ctx, tblName)
 	}
+
+	// check in EntireEngine.TempEngine, notice that TempEngine may not init
+	tmpDBSource, err := c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+	if err == nil {
+		if _, err := tmpDBSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName)); err == nil {
+			if qry.GetIfNotExists() {
+				return nil
+			}
+			return moerr.NewTableAlreadyExists(c.ctx, fmt.Sprintf("temporary '%s'", tblName))
+		}
+	}
+
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
@@ -149,42 +160,42 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 		// for now ColumnId is equal ColumnIndex, and we have a bug to UpdateConstraint after created immediately
 		// so i comment these codes. if you want to remove these code, let @ouyuanning known.
-		// newTableDef, err := newRelation.TableDefs(c.ctx)
-		// if err != nil {
-		// 	return err
-		// }
-		// var colNameToId = make(map[string]uint64)
-		// for _, def := range newTableDef {
-		// 	if attr, ok := def.(*engine.AttributeDef); ok {
-		// 		colNameToId[attr.Attr.Name] = attr.Attr.ID
-		// 	}
-		// }
-		// newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
-		// for i, fkey := range qry.GetTableDef().Fkeys {
-		// 	newDef := &plan.ForeignKeyDef{
-		// 		Name:        fkey.Name,
-		// 		Cols:        make([]uint64, len(fkey.Cols)),
-		// 		ForeignTbl:  fkey.ForeignTbl,
-		// 		ForeignCols: make([]uint64, len(fkey.ForeignCols)),
-		// 		OnDelete:    fkey.OnDelete,
-		// 		OnUpdate:    fkey.OnUpdate,
-		// 	}
-		// 	copy(newDef.ForeignCols, fkey.ForeignCols)
-		// 	for idx, colName := range qry.GetFkCols()[i].Cols {
-		// 		newDef.Cols[idx] = colNameToId[colName]
-		// 	}
-		// 	newFkeys[i] = newDef
-		// }
-		// newCt, err := makeNewCreateConstraint(nil, &engine.ForeignKeyDef{
-		// 	Fkeys: newFkeys,
-		// })
-		// if err != nil {
-		// 	return err
-		// }
-		// err = newRelation.UpdateConstraint(c.ctx, newCt)
-		// if err != nil {
-		// 	return err
-		// }
+		newTableDef, err := newRelation.TableDefs(c.ctx)
+		if err != nil {
+			return err
+		}
+		var colNameToId = make(map[string]uint64)
+		for _, def := range newTableDef {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				colNameToId[attr.Attr.Name] = attr.Attr.ID
+			}
+		}
+		newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
+		for i, fkey := range qry.GetTableDef().Fkeys {
+			newDef := &plan.ForeignKeyDef{
+				Name:        fkey.Name,
+				Cols:        make([]uint64, len(fkey.Cols)),
+				ForeignTbl:  fkey.ForeignTbl,
+				ForeignCols: make([]uint64, len(fkey.ForeignCols)),
+				OnDelete:    fkey.OnDelete,
+				OnUpdate:    fkey.OnUpdate,
+			}
+			copy(newDef.ForeignCols, fkey.ForeignCols)
+			for idx, colName := range qry.GetFkCols()[i].Cols {
+				newDef.Cols[idx] = colNameToId[colName]
+			}
+			newFkeys[i] = newDef
+		}
+		newCt, err := makeNewCreateConstraint(nil, &engine.ForeignKeyDef{
+			Fkeys: newFkeys,
+		})
+		if err != nil {
+			return err
+		}
+		err = newRelation.UpdateConstraint(c.ctx, newCt)
+		if err != nil {
+			return err
+		}
 
 		// need to append TableId to parent's TableDef.RefChildTbls
 		for i, fkTableName := range fkTables {
@@ -238,6 +249,76 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 	return colexec.CreateAutoIncrCol(c.e, c.ctx, dbSource, c.proc, tableCols, dbName, tblName)
+}
+
+func (s *Scope) CreateTempTable(c *Compile) error {
+	qry := s.Plan.GetDdl().GetCreateTable()
+	// convert the plan's cols to the execution's cols
+	planCols := qry.GetTableDef().GetCols()
+	tableCols := planCols
+	exeCols := planColsToExeCols(planCols)
+
+	// convert the plan's defs to the execution's defs
+	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
+	if err != nil {
+		return err
+	}
+
+	// Temporary table names and persistent table names are not allowed to be duplicated
+	// So before create temporary table, need to check if it exists a table has same name
+	dbName := c.db
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
+
+	// check in EntireEngine.TempEngine
+	tmpDBSource, err := c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	tblName := qry.GetTableDef().GetName()
+	if _, err := tmpDBSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName)); err == nil {
+		if qry.GetIfNotExists() {
+			return nil
+		}
+		return moerr.NewTableAlreadyExists(c.ctx, fmt.Sprintf("temporary '%s'", tblName))
+	}
+
+	// check in EntireEngine.Engine
+	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	if _, err := dbSource.Relation(c.ctx, tblName); err == nil {
+		if qry.GetIfNotExists() {
+			return nil
+		}
+		return moerr.NewTableAlreadyExists(c.ctx, tblName)
+	}
+
+	// create temporary table
+	if err := tmpDBSource.Create(c.ctx, engine.GetTempTableName(dbName, tblName), append(exeCols, exeDefs...)); err != nil {
+		return err
+	}
+
+	// build index table
+	for _, def := range qry.IndexTables {
+		planCols = def.GetCols()
+		exeCols = planColsToExeCols(planCols)
+		exeDefs, err = planDefsToExeDefs(def)
+		if err != nil {
+			return err
+		}
+		if _, err := tmpDBSource.Relation(c.ctx, def.Name); err == nil {
+			return moerr.NewTableAlreadyExists(c.ctx, def.Name)
+		}
+
+		if err := tmpDBSource.Create(c.ctx, engine.GetTempTableName(dbName, def.Name), append(exeCols, exeDefs...)); err != nil {
+			return err
+		}
+	}
+
+	return colexec.CreateAutoIncrCol(c.e, c.ctx, tmpDBSource, c.proc, tableCols, defines.TEMPORARY_DBNAME, engine.GetTempTableName(dbName, tblName))
 }
 
 func (s *Scope) CreateIndex(c *Compile) error {
@@ -297,6 +378,8 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	// insert data into index table
 	switch t := qry.GetIndex().GetTableDef().Defs[0].Def.(type) {
 	case *plan.TableDef_DefType_UIdx:
+		targetAttrs := getIndexColsFromOriginTable(tblDefs, t.UIdx.Fields[0].Parts)
+
 		ret, err := r.Ranges(c.ctx, nil)
 		if err != nil {
 			return err
@@ -305,7 +388,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		bat, err := rds[0].Read(c.ctx, t.UIdx.Fields[0].Parts, nil, c.proc.Mp())
+		bat, err := rds[0].Read(c.ctx, targetAttrs, nil, c.proc.Mp())
 		if err != nil {
 			return err
 		}
@@ -314,17 +397,19 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			return err
 		}
 
-		indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, t.UIdx.Fields[0].Parts, t.UIdx.Fields[0].Parts, qry.OriginTablePrimaryKey, c.proc)
-		indexR, err := d.Relation(c.ctx, t.UIdx.TableNames[0])
-		if err != nil {
-			return err
-		}
-		if cnt != 0 {
-			if err := indexR.Write(c.ctx, indexBat); err != nil {
+		if bat != nil {
+			indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, targetAttrs, t.UIdx.Fields[0].Parts, qry.OriginTablePrimaryKey, c.proc)
+			indexR, err := d.Relation(c.ctx, t.UIdx.TableNames[0])
+			if err != nil {
 				return err
 			}
+			if cnt != 0 {
+				if err := indexR.Write(c.ctx, indexBat); err != nil {
+					return err
+				}
+			}
+			indexBat.Clean(c.proc.Mp())
 		}
-		indexBat.Clean(c.proc.Mp())
 		// other situation is not supported now and check in plan
 	}
 
@@ -387,29 +472,6 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 					for idx, fkDef := range def.Fkeys {
 						if fkDef.Name == dropName {
 							def.Fkeys = append(def.Fkeys[:idx], def.Fkeys[idx+1:]...)
-							break
-						}
-					}
-					break
-				}
-			}
-			if !ok {
-				oldCt.Cts = append(oldCt.Cts, c)
-			}
-
-		case *engine.RefChildTableDef:
-			ok := false
-			var def *engine.RefChildTableDef
-			tmpTableId, err := strconv.ParseInt(dropName, 10, 64)
-			if err != nil {
-				return nil, err
-			}
-			refTableId := uint64(tmpTableId)
-			for _, ct := range oldCt.Cts {
-				if def, ok = ct.(*engine.RefChildTableDef); ok {
-					for idx, refTable := range def.Tables {
-						if refTable == refTableId {
-							def.Tables = append(def.Tables[:idx], def.Tables[idx+1:]...)
 							break
 						}
 					}
@@ -528,35 +590,109 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 
 // Truncation operations cannot be performed if the session holds an active table lock.
 func (s *Scope) TruncateTable(c *Compile) error {
+	var dbSource engine.Database
+	var rel engine.Relation
+	var err error
+	var isTemp bool
+	var newId uint64
+
 	tqry := s.Plan.GetDdl().GetTruncateTable()
 	dbName := tqry.GetDatabase()
-	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	tblName := tqry.GetTable()
+	oldId := tqry.GetTableId()
+
+	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
-	tblName := tqry.GetTable()
-	var rel engine.Relation
+
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
-		return err
+		var e error // avoid contamination of error messages
+		dbSource, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		if e != nil {
+			return err
+		}
+		rel, e = dbSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName))
+		if e != nil {
+			return err
+		}
+		isTemp = true
 	}
-	id := rel.GetTableID(c.ctx)
-	newId, err := dbSource.Truncate(c.ctx, tblName)
+
+	if isTemp {
+		// memoryengine truncate always return 0, so for temporary table, just use origin tableId as newId
+		_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, tblName))
+		newId = rel.GetTableID(c.ctx)
+	} else {
+		newId, err = dbSource.Truncate(c.ctx, tblName)
+	}
+
 	if err != nil {
 		return err
 	}
 
 	// Truncate Index Tables if needed
 	for _, name := range tqry.IndexTableNames {
-		_, err := dbSource.Truncate(c.ctx, name)
+		var err error
+		if isTemp {
+			_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
+		} else {
+			_, err = dbSource.Truncate(c.ctx, name)
+		}
 		if err != nil {
 			return err
 		}
 	}
 
-	err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, newId, dbName)
+	// update tableDef of foreign key's table with new table id
+	for _, ftblId := range tqry.ForeignTbl {
+		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, ftblId)
+		if err != nil {
+			return err
+		}
+		fkTableDef, err := fkRelation.TableDefs(c.ctx)
+		if err != nil {
+			return err
+		}
+		var oldCt *engine.ConstraintDef
+		for _, def := range fkTableDef {
+			if ct, ok := def.(*engine.ConstraintDef); ok {
+				oldCt = ct
+				break
+			}
+		}
+		for _, ct := range oldCt.Cts {
+			if def, ok := ct.(*engine.RefChildTableDef); ok {
+				for idx, refTable := range def.Tables {
+					if refTable == oldId {
+						def.Tables[idx] = newId
+						break
+					}
+				}
+				break
+			}
+		}
+		if err != nil {
+			return err
+		}
+		err = fkRelation.UpdateConstraint(c.ctx, oldCt)
+		if err != nil {
+			return err
+		}
+
+	}
+
+	id := rel.GetTableID(c.ctx)
+
+	if isTemp {
+		err = colexec.ResetAutoInsrCol(c.e, c.ctx, engine.GetTempTableName(dbName, tblName), dbSource, c.proc, id, newId, defines.TEMPORARY_DBNAME)
+	} else {
+		err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, newId, dbName)
+	}
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -564,30 +700,99 @@ func (s *Scope) DropTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetDropTable()
 
 	dbName := qry.GetDatabase()
-	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	var dbSource engine.Database
+	var rel engine.Relation
+	var err error
+	var isTemp bool
+
+	tblName := qry.GetTable()
+	tblId := qry.GetTableId()
+
+	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if qry.GetIfExists() {
 			return nil
 		}
 		return err
 	}
-	tblName := qry.GetTable()
-	var rel engine.Relation
+
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
-		if qry.GetIfExists() {
+		var e error // avoid contamination of error messages
+		dbSource, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		if dbSource == nil && qry.GetIfExists() {
 			return nil
+		} else if e != nil {
+			return err
 		}
-		return err
+		rel, e = dbSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName))
+		if e != nil {
+			if qry.GetIfExists() {
+				return nil
+			} else {
+				return err
+			}
+		}
+		isTemp = true
 	}
-	if err := dbSource.Delete(c.ctx, tblName); err != nil {
-		return err
-	}
-	for _, name := range qry.IndexTableNames {
-		if err := dbSource.Delete(c.ctx, name); err != nil {
+
+	// update tableDef of foreign key's table
+	for _, ftblId := range qry.ForeignTbl {
+		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, ftblId)
+		if err != nil {
+			return err
+		}
+		fkTableDef, err := fkRelation.TableDefs(c.ctx)
+		if err != nil {
+			return err
+		}
+		var oldCt *engine.ConstraintDef
+		for _, def := range fkTableDef {
+			if ct, ok := def.(*engine.ConstraintDef); ok {
+				oldCt = ct
+				break
+			}
+		}
+		for _, ct := range oldCt.Cts {
+			if def, ok := ct.(*engine.RefChildTableDef); ok {
+				for idx, refTable := range def.Tables {
+					if refTable == tblId {
+						def.Tables = append(def.Tables[:idx], def.Tables[idx+1:]...)
+						break
+					}
+				}
+				break
+			}
+		}
+		if err != nil {
+			return err
+		}
+		err = fkRelation.UpdateConstraint(c.ctx, oldCt)
+		if err != nil {
 			return err
 		}
 	}
-	return colexec.DeleteAutoIncrCol(c.e, c.ctx, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+
+	if isTemp {
+		if err := dbSource.Delete(c.ctx, engine.GetTempTableName(dbName, tblName)); err != nil {
+			return err
+		}
+		for _, name := range qry.IndexTableNames {
+			if err := dbSource.Delete(c.ctx, name); err != nil {
+				return err
+			}
+		}
+		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
+	} else {
+		if err := dbSource.Delete(c.ctx, tblName); err != nil {
+			return err
+		}
+		for _, name := range qry.IndexTableNames {
+			if err := dbSource.Delete(c.ctx, name); err != nil {
+				return err
+			}
+		}
+		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+	}
 }
 
 func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
@@ -596,10 +801,6 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 	c := new(engine.ConstraintDef)
 	for _, def := range planDefs {
 		switch defVal := def.GetDef().(type) {
-		case *plan.TableDef_DefType_Cb:
-			exeDefs = append(exeDefs, &engine.ClusterByDef{
-				Name: defVal.Cb.Name,
-			})
 		case *plan.TableDef_DefType_Pk:
 			exeDefs = append(exeDefs, &engine.PrimaryIndexDef{
 				Names: defVal.Pk.GetNames(),
@@ -663,6 +864,12 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 	if len(c.Cts) > 0 {
 		exeDefs = append(exeDefs, c)
 	}
+
+	if tableDef.ClusterBy != nil {
+		exeDefs = append(exeDefs, &engine.ClusterByDef{
+			Name: tableDef.ClusterBy.Name,
+		})
+	}
 	return exeDefs, nil
 }
 
@@ -698,4 +905,36 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 		}
 	}
 	return exeCols
+}
+
+// Get the required columns of the index table from the original table
+func getIndexColsFromOriginTable(tblDefs []engine.TableDef, indexColumns []string) []string {
+	colNameMap := make(map[string]int)
+	for _, def := range tblDefs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			if attr.Attr.Primary {
+				colNameMap[attr.Attr.Name] = 1
+				break
+			}
+		} else if cpk, ok := def.(*engine.PrimaryIndexDef); ok {
+			for _, name := range cpk.Names {
+				colNameMap[name] = 1
+			}
+			break
+		} else {
+			continue
+		}
+	}
+
+	for _, column := range indexColumns {
+		colNameMap[column] = 1
+	}
+
+	j := 0
+	keys := make([]string, len(colNameMap))
+	for k := range colNameMap {
+		keys[j] = k
+		j++
+	}
+	return keys
 }

@@ -3220,8 +3220,8 @@ func TestUpdateAttr(t *testing.T) {
 
 type dummyCpkGetter struct{}
 
-func (c *dummyCpkGetter) CollectCheckpointsInRange(start, end types.TS) (string, types.TS) {
-	return "", types.TS{}
+func (c *dummyCpkGetter) CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error) {
+	return "", types.TS{}, nil
 }
 
 func (c *dummyCpkGetter) FlushTable(dbID, tableID uint64, ts types.TS) error { return nil }
@@ -3348,8 +3348,10 @@ func TestLogtailBasic(t *testing.T) {
 		}
 	}
 
+	ctx := context.Background()
+
 	// get db catalog change
-	resp, err := logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, err := logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_DATABASE_ID},
@@ -3370,7 +3372,7 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[1].Bat, 1) // 1 drop db
 
 	// get table catalog change
-	resp, err = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -3386,7 +3388,7 @@ func TestLogtailBasic(t *testing.T) {
 	assert.Equal(t, schema.Name, relname.GetString(1))
 
 	// get columns catalog change
-	resp, err = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
@@ -3399,7 +3401,7 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[0].Bat, len(schema.ColDefs)*2) // column count of 2 tables
 
 	// get user table change
-	resp, err = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(firstWriteTs.Next()), // skip the first write deliberately,
 		CnWant: tots(lastWriteTs),
 		Table:  &api.TableID{DbId: dbID, TbId: tableID},
@@ -4080,7 +4082,32 @@ func TestReadCheckpoint(t *testing.T) {
 		1000,
 	}
 
-	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	err := tae.BGCheckpointRunner.GCCheckpoint(gcTS)
+	assert.NoError(t, err)
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(time.Since(now))
+	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.BGCheckpointRunner.GetPenddingIncrementalCount() == 0
+	})
+	t.Log(time.Since(now))
+	assert.Equal(t, 0, tae.BGCheckpointRunner.GetPenddingIncrementalCount())
+
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+	testutils.WaitExpect(4000, func() bool {
+		tae.BGCheckpointRunner.ExistPendingEntryToGC()
+		return !tae.BGCheckpointRunner.ExistPendingEntryToGC()
+	})
+	assert.False(t, tae.BGCheckpointRunner.ExistPendingEntryToGC())
+	entries := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
+	for _, entry := range entries {
+		t.Log(entry.String())
+	}
 	for _, entry := range entries {
 		for _, tid := range tids {
 			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
@@ -4091,7 +4118,7 @@ func TestReadCheckpoint(t *testing.T) {
 		}
 	}
 	tae.restart()
-	entries = tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
 		for _, tid := range tids {
 			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
@@ -4768,7 +4795,8 @@ func TestUpdateCstr(t *testing.T) {
 		return &timestamp.Timestamp{PhysicalTime: types.DecodeInt64(ts[4:12]), LogicalTime: types.DecodeUint32(ts[:4])}
 	}
 
-	resp, _ := logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	ctx := context.Background()
+	resp, _ := logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -4783,7 +4811,7 @@ func TestUpdateCstr(t *testing.T) {
 
 	tae.restart()
 
-	resp, _ = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -4802,7 +4830,7 @@ func TestUpdateCstr(t *testing.T) {
 	assert.NoError(t, err)
 	txn.Commit()
 
-	resp, _ = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
@@ -4838,18 +4866,6 @@ func TestGlobalCheckpoint1(t *testing.T) {
 
 	tae.restart()
 	tae.checkRowsByScan(400, true)
-
-	checkpoints := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
-	for _, entry := range checkpoints {
-		assert.NoError(t, entry.GCEntry(tae.Fs))
-		assert.NoError(t, entry.GCMetadata(tae.Fs))
-	}
-
-	checkpoints = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
-	for _, entry := range checkpoints {
-		assert.NoError(t, entry.GCEntry(tae.Fs))
-		assert.NoError(t, entry.GCMetadata(tae.Fs))
-	}
 }
 
 func TestAppendAndGC(t *testing.T) {
@@ -4860,6 +4876,7 @@ func TestAppendAndGC(t *testing.T) {
 	opts.CacheCfg.InsertCapacity = common.M * 5
 	opts.CacheCfg.TxnCapacity = common.M
 	opts = config.WithQuickScanAndCKPOpts(opts)
+	options.WithDisableGCCheckpoint()(opts)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
 	db := tae.DB
@@ -5194,5 +5211,64 @@ func TestGlobalCheckpoint6(t *testing.T) {
 		tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 		t.Log(tae.Catalog.SimplePPString(3))
 		tae.checkRowsByScan(rows, true)
+	}
+}
+
+func TestGCCheckpoint1(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(18, 2)
+	schema.BlockMaxRows = 5
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 50)
+
+	tae.createRelAndAppend(bat, true)
+
+	testutils.WaitExpect(4000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+
+	testutils.WaitExpect(4000, func() bool {
+		return tae.BGCheckpointRunner.GetPenddingIncrementalCount() == 0
+	})
+	assert.Equal(t, 0, tae.BGCheckpointRunner.GetPenddingIncrementalCount())
+
+	testutils.WaitExpect(4000, func() bool {
+		return tae.BGCheckpointRunner.MaxGlobalCheckpoint().IsFinished()
+	})
+	assert.True(t, tae.BGCheckpointRunner.MaxGlobalCheckpoint().IsFinished())
+
+	tae.BGCheckpointRunner.DisableCheckpoint()
+
+	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	t.Log(gcTS.ToString())
+	tae.BGCheckpointRunner.GCCheckpoint(gcTS)
+
+	maxGlobal := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
+
+	testutils.WaitExpect(4000, func() bool {
+		tae.BGCheckpointRunner.ExistPendingEntryToGC()
+		return !tae.BGCheckpointRunner.ExistPendingEntryToGC()
+	})
+	assert.False(t, tae.BGCheckpointRunner.ExistPendingEntryToGC())
+
+	globals := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
+	assert.Equal(t, 1, len(globals))
+	assert.True(t, maxGlobal.GetEnd().Equal(globals[0].GetEnd()))
+	for _, global := range globals {
+		t.Log(global.String())
+	}
+
+	incrementals := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	prevEnd := maxGlobal.GetEnd().Prev()
+	for _, incremental := range incrementals {
+		assert.True(t, incremental.GetStart().Equal(prevEnd.Next()))
+		t.Log(incremental.String())
 	}
 }

@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -47,7 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -209,6 +209,12 @@ func InitS3Param(param *tree.ExternParam) error {
 			param.Filepath = param.Option[i+1]
 		case "compression":
 			param.CompressType = param.Option[i+1]
+		case "provider":
+			param.S3Param.Provider = param.Option[i+1]
+		case "role_arn":
+			param.S3Param.RoleArn = param.Option[i+1]
+		case "external_id":
+			param.S3Param.ExternalId = param.Option[i+1]
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
 			if format != tree.CSV && format != tree.JSONLINE {
@@ -359,15 +365,14 @@ func FliterFileList(node *plan.Node, proc *process.Process, fileList []string) (
 
 func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
 	if param.ScanType == tree.S3 {
-		var err error
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
-		if param.S3Param.APIKey == "" && param.S3Param.APISecret == "" {
-			err = w.Write([]string{"s3-no-key", param.S3Param.Endpoint, param.S3Param.Region, param.S3Param.Bucket, ""})
-		} else {
-			err = w.Write([]string{"s3", param.S3Param.Endpoint, param.S3Param.Region, param.S3Param.Bucket, param.S3Param.APIKey, param.S3Param.APISecret, ""})
+		opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
+			"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
+		if param.S3Param.Provider == "minio" {
+			opts = append(opts, "is-minio=true")
 		}
-		if err != nil {
+		if err = w.Write(opts); err != nil {
 			return nil, "", err
 		}
 		w.Flush()
@@ -730,7 +735,9 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 	for k := 0; k < n; k++ {
 		bat.Zs[k] = 1
 	}
-	param.Zoneparam.offset++
+	if !param.extern.QueryResult {
+		param.Zoneparam.offset++
+	}
 	return bat, nil
 }
 
@@ -795,7 +802,13 @@ func needRead(param *ExternalParam, proc *process.Process, objectReader objectio
 }
 
 func getZonemapBatch(param *ExternalParam, proc *process.Process, size int64, objectReader objectio.Reader) (*batch.Batch, error) {
-	if param.Zoneparam.bs == nil {
+	var err error
+	if param.extern.QueryResult {
+		param.Zoneparam.bs, err = objectReader.ReadAllMeta(param.Ctx, size, proc.GetMPool())
+		if err != nil {
+			return nil, err
+		}
+	} else if param.Zoneparam.bs == nil {
 		param.plh = &ParseLineHandler{}
 		var err error
 		param.Zoneparam.bs, err = objectReader.ReadAllMeta(param.Ctx, size, proc.GetMPool())
@@ -818,13 +831,18 @@ func getZonemapBatch(param *ExternalParam, proc *process.Process, size int64, ob
 }
 
 func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
-	if param.Filter.objectReader == nil {
+	if param.Filter.objectReader == nil || param.extern.QueryResult {
 		dir, _ := filepath.Split(param.extern.Filepath)
-		service, _, err := GetForETLWithType(param.extern, param.extern.Filepath)
-		if err != nil {
-			return nil, err
+		var service fileservice.FileService
+		var err error
+		if param.extern.QueryResult {
+			service = param.extern.FileService
+		} else {
+			service, _, err = GetForETLWithType(param.extern, param.extern.Filepath)
+			if err != nil {
+				return nil, err
+			}
 		}
-
 		_, ok := param.Filter.File2Size[param.extern.Filepath]
 		if !ok {
 			fs := objectio.NewObjectFS(service, dir)
@@ -866,7 +884,7 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 
 // ScanFileData read batch data from external file
 func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
-	if strings.HasSuffix(param.extern.Filepath, ".tae") {
+	if strings.HasSuffix(param.extern.Filepath, ".tae") || param.extern.QueryResult {
 		return ScanZonemapFile(param, proc)
 	} else {
 		return ScanCsvFile(param, proc)

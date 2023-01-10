@@ -23,9 +23,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"go.uber.org/zap"
@@ -41,10 +39,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 // TODO::GC the abandoned txn.
@@ -57,6 +58,8 @@ type Handle struct {
 	}
 	jobScheduler tasks.JobScheduler
 }
+
+var _ rpchandle.Handler = (*Handle)(nil)
 
 type txnContext struct {
 	//createAt is used to GC the abandoned txn.
@@ -314,6 +317,7 @@ func (h *Handle) HandleGetLogTail(
 	resp *apipb.SyncLogTailResp) (err error) {
 	tae := h.eng.GetTAE(context.Background())
 	res, err := logtail.HandleSyncLogTailReq(
+		ctx,
 		tae.BGCheckpointRunner,
 		tae.LogtailMgr,
 		tae.Catalog,
@@ -868,7 +872,7 @@ func moVec2String(v *vector.Vector, printN int) string {
 		return vec2Str(vector.MustTCols[types.Rowid](v)[:printN], *v.GetType(), v.Length())
 	}
 	if v.GetType().IsVarlen() {
-		return vec2Str(vector.MustBytesCols(v), types.T_varchar.ToType(), v.Length())
+		return vec2Str(vector.MustBytesCols(v)[:printN], types.T_varchar.ToType(), v.Length())
 	}
 	return fmt.Sprintf("unkown type vec... %v", *v.GetType())
 }

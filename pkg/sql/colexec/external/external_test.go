@@ -549,6 +549,7 @@ func Test_GetBatchData(t *testing.T) {
 
 func TestReadDirSymlink(t *testing.T) {
 	root := t.TempDir()
+	ctx := context.Background()
 
 	// create a/b/c
 	err := os.MkdirAll(filepath.Join(root, "a", "b", "c"), 0755)
@@ -569,7 +570,7 @@ func TestReadDirSymlink(t *testing.T) {
 	fooPathInB := filepath.Join(root, "a", "b", "d", "foo")
 	files, err := ReadDir(&tree.ExternParam{
 		Filepath: fooPathInB,
-		Ctx:      context.Background(),
+		Ctx:      ctx,
 	})
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(files))
@@ -578,6 +579,7 @@ func TestReadDirSymlink(t *testing.T) {
 	path1 := root + "/a//b/./../b/c/foo"
 	files1, err := ReadDir(&tree.ExternParam{
 		Filepath: path1,
+		Ctx:      ctx,
 	})
 	assert.Nil(t, err)
 	pathWant1 := root + "/a/b/c/foo"

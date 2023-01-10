@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -29,6 +30,7 @@ import (
 var (
 	defaultListenAddress    = "0.0.0.0:22000"
 	defaultServiceAddress   = "127.0.0.1:22000"
+	defaultLogtailAddress   = "127.0.0.1:22001"
 	defaultZombieTimeout    = time.Hour
 	defaultDiscoveryTimeout = time.Second * 30
 	defaultHeatbeatInterval = time.Second
@@ -41,6 +43,12 @@ var (
 	defaultGlobalMinCount      = int64(60)
 	defaultMinCount            = int64(100)
 	defaultLogBackend          = string(options.LogstoreLogservice)
+
+	defaultRpcMaxMsgSize              = 1024 * mpool.KB
+	defaultRpcPayloadCopyBufferSize   = 1024 * mpool.KB
+	defaultLogtailCollectInterval     = 50 * time.Millisecond
+	defaultLogtailResponseSendTimeout = 10 * time.Second
+	defaultMaxLogtailFetchFailure     = 5
 
 	storageDir     = "storage"
 	defaultDataDir = "./mo-data"
@@ -85,6 +93,16 @@ type Config struct {
 		MinCount            int64         `toml:"min-count"`
 		IncrementalInterval toml.Duration `toml:"incremental-interval"`
 		GlobalMinCount      int64         `toml:"global-min-count"`
+	}
+
+	LogtailServer struct {
+		ListenAddress              string        `toml:"listen-address"`
+		RpcMaxMessageSize          toml.ByteSize `toml:"rpc-max-message-size"`
+		RpcPayloadCopyBufferSize   toml.ByteSize `toml:"rpc-payload-copy-buffer-size"`
+		RpcEnableChecksum          bool          `toml:"rpc-enable-checksum"`
+		LogtailCollectInterval     toml.Duration `toml:"logtail-collect-interval"`
+		LogtailResponseSendTimeout toml.Duration `toml:"logtail-response-send-timeout"`
+		MaxLogtailFetchFailure     int           `toml:"max-logtail-fetch-failure"`
 	}
 
 	// Txn transactions configuration
@@ -160,5 +178,24 @@ func (c *Config) Validate() error {
 	if c.Ckp.GlobalMinCount == 0 {
 		c.Ckp.GlobalMinCount = defaultGlobalMinCount
 	}
+	if c.LogtailServer.ListenAddress == "" {
+		c.LogtailServer.ListenAddress = defaultLogtailAddress
+	}
+	if c.LogtailServer.RpcMaxMessageSize <= 0 {
+		c.LogtailServer.RpcMaxMessageSize = toml.ByteSize(defaultRpcMaxMsgSize)
+	}
+	if c.LogtailServer.RpcPayloadCopyBufferSize <= 0 {
+		c.LogtailServer.RpcPayloadCopyBufferSize = toml.ByteSize(defaultRpcPayloadCopyBufferSize)
+	}
+	if c.LogtailServer.LogtailCollectInterval.Duration <= 0 {
+		c.LogtailServer.LogtailCollectInterval.Duration = defaultLogtailCollectInterval
+	}
+	if c.LogtailServer.LogtailResponseSendTimeout.Duration <= 0 {
+		c.LogtailServer.LogtailResponseSendTimeout.Duration = defaultLogtailResponseSendTimeout
+	}
+	if c.LogtailServer.MaxLogtailFetchFailure <= 0 {
+		c.LogtailServer.MaxLogtailFetchFailure = defaultMaxLogtailFetchFailure
+	}
+
 	return nil
 }

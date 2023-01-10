@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -62,6 +63,30 @@ func New(addr, db string, sql string, uid string, ctx context.Context,
 		proc: proc,
 		stmt: stmt,
 	}
+}
+
+// helper function to judge if init temporary engine is needed
+func (c *Compile) NeedInitTempEngine(InitTempEngine bool) bool {
+	if InitTempEngine {
+		return false
+	}
+	ddl := c.scope.Plan.GetDdl()
+	if ddl != nil {
+		qry := ddl.GetCreateTable()
+		if qry != nil && qry.Temporary {
+			e := c.e.(*engine.EntireEngine).TempEngine
+			if e == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c *Compile) SetTempEngine(ctx context.Context, te engine.Engine) {
+	e := c.e.(*engine.EntireEngine)
+	e.TempEngine = te
+	c.ctx = ctx
 }
 
 // Compile is the entrance of the compute-layer, it compiles AST tree to scope list.
@@ -116,7 +141,12 @@ func (c *Compile) Run(_ uint64) (err error) {
 	case DropDatabase:
 		return c.scope.DropDatabase(c)
 	case CreateTable:
-		return c.scope.CreateTable(c)
+		qry := c.scope.Plan.GetDdl().GetCreateTable()
+		if qry.Temporary {
+			return c.scope.CreateTempTable(c)
+		} else {
+			return c.scope.CreateTable(c)
+		}
 	case AlterView:
 		return c.scope.AlterView(c)
 	case DropTable:
@@ -439,8 +469,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		} else {
 			ss = c.compileGroup(n, ss, ns)
 		}
-		rewriteExprListForAggNode(n.FilterList, int32(len(n.GroupBy)))
-		rewriteExprListForAggNode(n.ProjectList, int32(len(n.GroupBy)))
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_JOIN:
 		needSwap, joinTyp := joinType(ctx, n, ns)
@@ -570,11 +598,7 @@ func (c *Compile) ConstructScope() *Scope {
 }
 
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
-	mcpu := c.NumCPU()
-	if mcpu < 1 {
-		mcpu = 1
-	}
-	ss := make([]*Scope, mcpu)
+	mcpu := c.cnList[0].Mcpu
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
 	if err != nil {
@@ -592,9 +616,17 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 
 	param.FileService = c.proc.FileService
 	param.Ctx = c.ctx
-	fileList, err := external.ReadDir(param)
-	if err != nil {
-		return nil, err
+	var fileList []string
+	if param.QueryResult {
+		fileList = strings.Split(param.Filepath, ",")
+		for i := range fileList {
+			fileList[i] = strings.TrimSpace(fileList[i])
+		}
+	} else {
+		fileList, err = external.ReadDir(param)
+		if err != nil {
+			return nil, err
+		}
 	}
 	fileList, err = external.FliterFileList(n, c.proc, fileList)
 	if err != nil {
@@ -607,6 +639,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	tag := len(fileList) % mcpu
 	index := 0
 	currentFirstFlag := c.anal.isFirst
+	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.ConstructScope()
 		var fileListTmp []string
@@ -639,6 +672,7 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, err
 		})
 	}
 	c.anal.isFirst = false
+	c.anal.isFirst = false
 
 	return ss, nil
 }
@@ -659,6 +693,9 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 	var s *Scope
 	var tblDef *plan.TableDef
 	var ts timestamp.Timestamp
+	var db engine.Database
+	var rel engine.Relation
+	var err error
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
@@ -668,19 +705,26 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		ts = c.proc.TxnOperator.Txn().SnapshotTS
 	}
 	{
-		var err error
 		var cols []*plan.ColDef
 		ctx := c.ctx
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		}
-		db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
 			panic(err)
 		}
-		rel, err := db.Relation(ctx, n.TableDef.Name)
+		rel, err = db.Relation(ctx, n.TableDef.Name)
 		if err != nil {
-			panic(err)
+			var e error // avoid contamination of error messages
+			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+			if e != nil {
+				panic(e)
+			}
+			rel, e = db.Relation(c.ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
+			if e != nil {
+				panic(e)
+			}
 		}
 		defs, err := rel.TableDefs(ctx)
 		if err != nil {
@@ -1352,6 +1396,8 @@ func (c *Compile) fillAnalyzeInfo() {
 
 func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	var err error
+	var db engine.Database
+	var rel engine.Relation
 	var ranges [][]byte
 	var nodes engine.Nodes
 	ctx := c.ctx
@@ -1359,13 +1405,29 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
 
-	db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
 		return nil, err
 	}
-	rel, err := db.Relation(ctx, n.TableDef.Name)
+	rel, err = db.Relation(ctx, n.TableDef.Name)
 	if err != nil {
-		return nil, err
+		var e error // avoid contamination of error messages
+		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		if e != nil {
+			return nil, err
+		}
+
+		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
+		if e != nil {
+			return nil, err
+		}
+		c.isTemporaryScan = true
+	}
+	if c.isTemporaryScan {
+		c.isTemporaryScan = false
+		for i := 0; i < len(c.cnList); i++ {
+			c.cnList[i].Addr = ""
+		}
 	}
 	ranges, err = rel.Ranges(ctx, plan2.HandleFiltersForZM(n.FilterList, c.proc))
 	if err != nil {
@@ -1449,27 +1511,6 @@ func extraRegisters(ss []*Scope, i int) []*process.WaitRegister {
 		regs = append(regs, s.Proc.Reg.MergeReceivers[i])
 	}
 	return regs
-}
-
-func rewriteExprListForAggNode(es []*plan.Expr, groupSize int32) {
-	for i := range es {
-		rewriteExprForAggNode(es[i], groupSize)
-	}
-}
-
-func rewriteExprForAggNode(expr *plan.Expr, groupSize int32) {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if e.Col.RelPos == -2 {
-			e.Col.ColPos += groupSize
-		}
-	case *plan.Expr_F:
-		for i := range e.F.Args {
-			rewriteExprForAggNode(e.F.Args[i], groupSize)
-		}
-	default:
-		return
-	}
 }
 
 func joinType(ctx context.Context, n *plan.Node, ns []*plan.Node) (bool, plan.Node_JoinFlag) {

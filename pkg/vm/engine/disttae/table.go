@@ -239,7 +239,8 @@ func (tbl *table) getTableDef() *plan.TableDef {
 			if attr, ok := def.(*engine.AttributeDef); ok {
 				name2index[attr.Attr.Name] = i
 				cols = append(cols, &plan.ColDef{
-					Name: attr.Attr.Name,
+					Name:  attr.Attr.Name,
+					ColId: attr.Attr.ID,
 					Typ: &plan.Type{
 						Id:        int32(attr.Attr.Type.Oid),
 						Width:     attr.Attr.Type.Width,
