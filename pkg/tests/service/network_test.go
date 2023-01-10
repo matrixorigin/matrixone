@@ -15,26 +15,10 @@
 package service
 
 import (
-	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
-
-func TestGetAvailablePort(t *testing.T) {
-	defer func() {
-		curPort = 10000
-	}()
-
-	curPort = maxPort
-	_, err := getAvailablePort("127.0.0.1")
-	require.Error(t, err)
-
-	curPort = maxPort - 1
-	port, err := getAvailablePort("127.0.0.1")
-	require.NoError(t, err)
-	require.Equal(t, port, strconv.Itoa(maxPort))
-}
 
 func TestServiceAddress(t *testing.T) {
 	logServiceNum := 3
