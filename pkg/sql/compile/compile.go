@@ -872,7 +872,8 @@ func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) 
 }
 
 func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
-	rs := c.newJoinScopeList(ss, children)
+	// rs := c.newJoinScopeList(ss, children)
+	rs := c.newShuffleJoinScopeList(ss, children)
 	isEq := isEquiJoin(n.OnList)
 	typs := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
@@ -1303,6 +1304,39 @@ func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 		})
 		chp.IsEnd = true
 	}
+	return rs
+}
+
+func (c *Compile) newShuffleJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
+	len := len(ss)
+	rs := make([]*Scope, len)
+	for i := range ss {
+		if rs[i].IsEnd {
+			rs[i] = ss[i]
+			continue
+		}
+		rs[i] = new(Scope)
+		rs[i].Magic = Remote
+		rs[i].IsJoin = true
+		rs[i].NodeInfo = ss[i].NodeInfo
+		rs[i].PreScopes = []*Scope{ss[i]}
+		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+		ss[i].appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: rs[i].Proc.Reg.MergeReceivers[0],
+			},
+		})
+	}
+
+	// TODO: find a better place to put mergeChildren
+	mergeChildren := c.newMergeScope(children)
+	mergeChildren.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructDispatch(true, extraRegisters(rs, 1)),
+	})
+	rs[0].PreScopes = append(rs[0].PreScopes, mergeChildren)
+
 	return rs
 }
 
