@@ -98,6 +98,7 @@ func (s *DNState) Update(hb DNStoreHeartbeat, tick uint64) {
 	storeInfo.Tick = tick
 	storeInfo.Shards = hb.Shards
 	storeInfo.ServiceAddress = hb.ServiceAddress
+	storeInfo.LogtailServerAddress = hb.LogtailServerAddress
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
 	s.Stores[hb.UUID] = storeInfo
 }
