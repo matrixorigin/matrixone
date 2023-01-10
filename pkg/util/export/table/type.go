@@ -59,7 +59,7 @@ type PathBuilder interface {
 	// case "{timestamp_writedown}_{node_uuid}_{ndoe_type}.csv":
 	// case "{timestamp_start}_{timestamp_end}_merged.csv"
 	// }
-	ParsePath(ctx context.Context, path string) (CSVPath, error)
+	ParsePath(ctx context.Context, path string) (Path, error)
 	NewMergeFilename(timestampStart, timestampEnd, extension string) string
 	NewLogFilename(name, nodeUUID, nodeType string, ts time.Time, extension string) string
 	// SupportMergeSplit const. if false, not support SCV merge|split task
@@ -70,14 +70,14 @@ type PathBuilder interface {
 	GetName() string
 }
 
-type CSVPath interface {
+type Path interface {
 	Table() string
 	Timestamp() []string
 }
 
-var _ CSVPath = (*MetricLogPath)(nil)
+var _ Path = (*ETLPath)(nil)
 
-type MetricLogPath struct {
+type ETLPath struct {
 	// path raw data
 	path string
 	// table parsed from path
@@ -97,17 +97,17 @@ const PathIdxAccount = 0
 const FilenameElems = 3
 const FilenameIdxType = 2
 
-// NewMetricLogPath
+// NewETLPath
 //
 // path like: sys/[log|merged]/yyyy/mm/dd/table/***.csv
 // ##    idx: 0   1            2    3  4  5     6
 // filename like: {timestamp}_{node_uuid}_{node_type}.csv
 // ##         or: {timestamp_start}_{timestamp_end}_merged.csv
-func NewMetricLogPath(path string) *MetricLogPath {
-	return &MetricLogPath{path: path}
+func NewETLPath(path string) *ETLPath {
+	return &ETLPath{path: path}
 }
 
-func (p *MetricLogPath) Parse(ctx context.Context) error {
+func (p *ETLPath) Parse(ctx context.Context) error {
 	// parse path => filename, table
 	elems := strings.Split(p.path, "/")
 	if len(elems) != PathElems {
@@ -133,11 +133,11 @@ func (p *MetricLogPath) Parse(ctx context.Context) error {
 	return nil
 }
 
-func (p *MetricLogPath) Table() string {
+func (p *ETLPath) Table() string {
 	return p.table
 }
 
-func (p *MetricLogPath) Timestamp() []string {
+func (p *ETLPath) Timestamp() []string {
 	return p.timestamps
 }
 
@@ -199,8 +199,8 @@ func (b *AccountDatePathBuilder) BuildETLPath(db, name, account string) string {
 	return path.Join("/", etlDirectory, etlFilename)
 }
 
-func (b *AccountDatePathBuilder) ParsePath(ctx context.Context, path string) (CSVPath, error) {
-	p := NewMetricLogPath(path)
+func (b *AccountDatePathBuilder) ParsePath(ctx context.Context, path string) (Path, error) {
+	p := NewETLPath(path)
 	return p, p.Parse(ctx)
 }
 
@@ -235,7 +235,7 @@ func (m *DBTablePathBuilder) Build(account string, typ MergeLogType, ts time.Tim
 	return db
 }
 
-func (m *DBTablePathBuilder) ParsePath(ctx context.Context, path string) (CSVPath, error) {
+func (m *DBTablePathBuilder) ParsePath(ctx context.Context, path string) (Path, error) {
 	panic("not implement")
 }
 

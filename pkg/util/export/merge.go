@@ -275,7 +275,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 
 	// Step 1. group by node_uuid, find target timestamp
 	timestamps := make([]string, 0, len(files))
-	var p table.CSVPath
+	var p table.Path
 	for _, f := range files {
 		p, err = m.pathBuilder.ParsePath(ctx, f.FilePath)
 		if err != nil {
