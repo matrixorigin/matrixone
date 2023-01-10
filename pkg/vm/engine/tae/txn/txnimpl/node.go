@@ -117,7 +117,7 @@ func (n *node) AddApplyInfo(
 }
 
 func (n *node) RowsWithoutDeletes() uint32 {
-	panic("not supported ")
+	panic("not implemented yet ")
 }
 
 func (n *node) LengthWithDeletes(appended, toAppend uint32) uint32 {
