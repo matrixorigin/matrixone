@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"strconv"
 	"time"
 )
 
@@ -91,8 +92,42 @@ func (w *TAEWriter) WriteRow(row *table.Row) error {
 }
 
 // WriteStrings implement ETLWriter
-func (w *TAEWriter) WriteStrings(record []string) error {
-	panic("implement me")
+func (w *TAEWriter) WriteStrings(Line []string) error {
+	var elems = make([]any, len(Line))
+	for colIdx, typ := range w.columnsTypes {
+		field := Line[colIdx]
+		id := typ.Oid
+		switch id {
+		case types.T_int64:
+			val, err := strconv.ParseInt(field, 10, 64)
+			if err != nil {
+				// fixme: help merge to continue
+				return err
+			}
+			elems[colIdx] = val
+		case types.T_uint64:
+			val, err := strconv.ParseUint(field, 10, 64)
+			if err != nil {
+				return err
+			}
+			elems[colIdx] = val
+		case types.T_float64:
+			val, err := strconv.ParseFloat(field, 10)
+			if err != nil {
+				return err
+			}
+			elems[colIdx] = val
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+			elems[colIdx] = field
+		case types.T_json:
+			elems[colIdx] = field
+		case types.T_datetime:
+			elems[colIdx] = field
+		default:
+			elems[colIdx] = field
+		}
+	}
+	return w.WriteElems(elems)
 }
 
 func (w *TAEWriter) GetContent() string { return "" }
@@ -227,6 +262,14 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 					return moerr.NewInternalError(ctx, "the input value '%v' is not Datetime type for column %d", field, colIdx)
 				}
 				cols[rowIdx] = d
+			case string:
+				datetimeStr := field.(string)
+				d, err := types.ParseDatetime(datetimeStr, vec.Typ.Precision)
+				if err != nil {
+					logutil.Errorf("parse field[%v] err:%v", datetimeStr, err)
+					return moerr.NewInternalError(ctx, "the input value '%v' is not Datetime type for column %d", field, colIdx)
+				}
+				cols[rowIdx] = d
 			default:
 				panic(moerr.NewInternalError(ctx, "not Support datetime type %v", t))
 			}
@@ -238,24 +281,27 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 }
 
 type TAEReader struct {
-	typs     []types.Type
-	idxs     []uint16
-	batchs   []*batch.Batch
+	ctx      context.Context
 	filepath string
 	filesize int64
 	fs       fileservice.FileService
 	mp       *mpool.MPool
+	typs     []types.Type
+	idxs     []uint16
 
 	objectReader objectio.Reader
 
-	bs []objectio.BlockObject
+	bs       []objectio.BlockObject
+	batchs   []*batch.Batch
+	batchIdx int
+	rowIdx   int
 }
 
-func NewTaeReader(tbl *table.Table, filePath string, filesize int64, fs fileservice.FileService, mp *mpool.MPool) (*TAEReader, error) {
+func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesize int64, fs fileservice.FileService, mp *mpool.MPool) (*TAEReader, error) {
 	var err error
 	path := defines.ETLFileServiceName + fileservice.ServiceNameSeparator + filePath
 	r := &TAEReader{
-		batchs:   []*batch.Batch{},
+		ctx:      ctx,
 		filepath: path,
 		filesize: filesize,
 		fs:       fs,
@@ -301,13 +347,30 @@ func (r *TAEReader) ReadAll(ctx context.Context) ([]*batch.Batch, error) {
 		}
 		r.batchs = append(r.batchs, batch)
 	}
-
 	return r.batchs, nil
 }
 
 func (r *TAEReader) ReadLine() ([]string, error) {
-	//TODO implement me
-	panic("implement me")
+	var record = make([]string, len(r.idxs))
+	if r.batchIdx >= len(r.batchs) {
+		return nil, nil
+	}
+	if r.rowIdx >= r.batchs[r.batchIdx].Vecs[0].Length() {
+		r.batchIdx++
+		r.rowIdx = 0
+	}
+	if r.batchIdx >= len(r.batchs) || r.rowIdx >= r.batchs[r.batchIdx].Vecs[0].Length() {
+		return nil, nil
+	}
+	vecs := r.batchs[r.batchIdx].Vecs
+	for idx, vecIdx := range r.idxs {
+		val, err := ValToString(r.ctx, vecs[vecIdx], r.rowIdx)
+		if err != nil {
+			return nil, err
+		}
+		record[idx] = val
+	}
+	return record, nil
 }
 
 func (r *TAEReader) Close() {

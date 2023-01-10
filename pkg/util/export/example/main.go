@@ -199,8 +199,8 @@ func main() {
 
 func mergeTable(ctx context.Context, fs *fileservice.LocalETLFS, table *table.Table) {
 	var err error
-	merge := export.NewMerge(ctx, export.WithTable(table), export.WithFileService(fs))
-	logutil.Infof("[%v] create merge task", table.GetName())
+	merge, err := export.NewMerge(ctx, export.WithTable(table), export.WithFileService(fs))
+	logutil.Infof("[%v] create merge task, err: %v", table.GetName(), err)
 	ts, err := time.Parse("2006-01-02 15:04:05", "2022-11-03 00:00:00")
 	logutil.Infof("[%v] create ts: %v, err: %v", table.GetName(), ts, err)
 	err = merge.Main(ctx, ts)

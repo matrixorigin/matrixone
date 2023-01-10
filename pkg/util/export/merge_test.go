@@ -147,25 +147,25 @@ func initLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Ta
 	buf := make([]byte, 0, 4096)
 
 	ts1 := ts
-	writer, _ := newETLWriter(ctx, fs, newFilePath(tbl, ts1), buf)
+	writer, _ := newETLWriter(ctx, fs, newFilePath(tbl, ts1), buf, nil, nil)
 	writer.WriteStrings(dummyFillTable("row1", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts2 := ts.Add(time.Minute)
-	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts2), buf)
+	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts2), buf, nil, nil))
 	writer.WriteStrings(dummyFillTable("row3", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row4", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts3 := ts.Add(time.Hour)
-	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts3), buf)
+	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts3), buf, nil, nil))
 	writer.WriteStrings(dummyFillTable("row5", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row6", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts1New := ts.Add(time.Hour + time.Minute)
-	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts1New), buf)
+	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts1New), buf, nil, nil))
 	writer.WriteStrings(dummyFillTable("row1", 1, 11.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 22.0).ToStrings())
 	writer.FlushAndClose()
@@ -183,7 +183,7 @@ func initEmptyLogFile(ctx context.Context, fs fileservice.FileService, tbl *tabl
 	ts1 := ts
 	filePath := newFilePath(tbl, ts1)
 	files = append(files, filePath)
-	writer, err := newETLWriter(ctx, fs, filePath, buf)
+	writer, err := newETLWriter(ctx, fs, filePath, buf, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +254,8 @@ func TestNewMerge(t *testing.T) {
 			err := initLogsFile(tt.args.ctx, fs, dummyTable, ts)
 			require.Nil(t, err)
 
-			got := NewMerge(tt.args.ctx, tt.args.opts...)
+			got, err := NewMerge(tt.args.ctx, tt.args.opts...)
+			require.Nil(t, err)
 			require.NotNil(t, got)
 
 			err = got.Main(tt.args.ctx, ts)
@@ -330,10 +331,11 @@ func TestNewMergeWithContextDone(t *testing.T) {
 			files, err := initEmptyLogFile(ctx, fs, dummyTable, ts)
 			require.Nil(t, err)
 
-			got := NewMerge(ctx, tt.args.opts...)
+			got, err := NewMerge(ctx, tt.args.opts...)
+			require.Nil(t, err)
 			require.NotNil(t, got)
 
-			reader, err := newETLReader(got.ctx, dummyTable, got.FS, files[0], 0)
+			reader, err := newETLReader(got.ctx, dummyTable, got.FS, files[0], 0, nil)
 			require.Nil(t, err)
 
 			// trigger context.Done
@@ -385,10 +387,11 @@ func TestNewMergeNOFiles(t *testing.T) {
 			fm := &FileMeta{filePath, 0}
 			files := []*FileMeta{fm}
 
-			got := NewMerge(tt.args.ctx, tt.args.opts...)
+			got, err := NewMerge(tt.args.ctx, tt.args.opts...)
+			require.Nil(t, err)
 			require.NotNil(t, got)
 
-			err := got.doMergeFiles(ctx, dummyTable.Table, files, 0)
+			err = got.doMergeFiles(ctx, dummyTable.Table, files, 0)
 			require.Equal(t, true, strings.Contains(err.Error(), "is not found"))
 
 		})
@@ -531,7 +534,8 @@ func TestNewMergeService(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, got1 := NewMergeService(tt.args.ctx, tt.args.opts...)
+			got, got1, err := NewMergeService(tt.args.ctx, tt.args.opts...)
+			require.Nil(t, err)
 			require.NotNil(t, got)
 			require.Equal(t, tt.want1, got1)
 		})

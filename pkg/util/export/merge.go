@@ -80,6 +80,8 @@ type Merge struct {
 	// logger
 	logger *log.MOLogger
 
+	mp *mpool.MPool
+
 	// flow ctrl
 	ctx        context.Context
 	cancelFunc context.CancelFunc
@@ -128,15 +130,17 @@ func WithMinFilesMerge(files int) MergeOption {
 // serviceInited handle Merge as service
 var serviceInited uint32
 
-func NewMergeService(ctx context.Context, opts ...MergeOption) (*Merge, bool) {
+func NewMergeService(ctx context.Context, opts ...MergeOption) (*Merge, bool, error) {
 	// fix multi-init in standalone
 	if !atomic.CompareAndSwapUint32(&serviceInited, 0, 1) {
-		return nil, true
+		return nil, true, nil
 	}
-	return NewMerge(ctx, opts...), false
+	m, err := NewMerge(ctx, opts...)
+	return m, false, err
 }
 
-func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
+func NewMerge(ctx context.Context, opts ...MergeOption) (*Merge, error) {
+	var err error
 	m := &Merge{
 		FSName:        defines.ETLFileServiceName,
 		datetime:      time.Now(),
@@ -151,12 +155,15 @@ func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 	for _, opt := range opts {
 		opt(m)
 	}
-	if fs, err := fileservice.Get[fileservice.FileService](m.FS, m.FSName); err == nil {
-		m.FS = fs
+	if m.FS, err = fileservice.Get[fileservice.FileService](m.FS, m.FSName); err != nil {
+		return nil, err
+	}
+	if m.mp, err = mpool.NewMPool("etl_merge_task", 0, mpool.NoFixed); err != nil {
+		return nil, err
 	}
 	m.valid(ctx)
 	m.runningJobs = make(chan struct{}, m.MaxMergeJobs)
-	return m
+	return m, nil
 }
 
 // valid check missing init elems. Panic with has missing elems.
@@ -298,13 +305,16 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 	if bufferSize <= 0 {
 		bufferSize = m.MaxFileSize
 	}
-	buf := make([]byte, 0, bufferSize)
+	var buf []byte = nil
+	if mergedExtension == table.CsvExtension {
+		buf = make([]byte, 0, bufferSize)
+	}
 
 	// Step 2. new filename, file writer
 	prefix := m.pathBuilder.Build(account, table.MergeLogTypeMerged, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
 	mergeFilename := m.pathBuilder.NewMergeFilename(timestampStart, timestampEnd, mergedExtension)
 	mergeFilepath := path.Join(prefix, mergeFilename)
-	newFileWriter, _ := newETLWriter(m.ctx, m.FS, mergeFilepath, buf)
+	newFileWriter, _ := newETLWriter(m.ctx, m.FS, mergeFilepath, buf, m.Table, m.mp)
 
 	// Step 3. do simple merge
 	cacheFileData := newRowCache(m.Table)
@@ -313,7 +323,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 	var reader ETLReader
 	for _, path := range files {
 		// open reader
-		reader, err = newETLReader(m.ctx, m.Table, m.FS, path.FilePath, path.FileSize)
+		reader, err = newETLReader(m.ctx, m.Table, m.FS, path.FilePath, path.FileSize, m.mp)
 		if err != nil {
 			m.logger.Error(fmt.Sprintf("merge file meet read failed: %v", err))
 			return err
@@ -476,11 +486,11 @@ func (s *ContentReader) Close() {
 	}
 }
 
-func newETLReader(ctx context.Context, tbl *table.Table, fs fileservice.FileService, path string, size int64) (ETLReader, error) {
+func newETLReader(ctx context.Context, tbl *table.Table, fs fileservice.FileService, path string, size int64, mp *mpool.MPool) (ETLReader, error) {
 	if strings.LastIndex(path, table.CsvExtension) > 0 {
 		return NewCSVReader(ctx, fs, path)
 	} else if strings.LastIndex(path, table.TaeExtension) > 0 {
-		return writer.NewTaeReader(tbl, path, size, fs, nil)
+		return writer.NewTaeReader(ctx, tbl, path, size, fs, mp)
 	} else {
 		panic("NOT Implements")
 	}
@@ -552,11 +562,11 @@ func (w *ContentWriter) FlushAndClose() (int, error) {
 	return w.writer.WriteString(w.buf.String())
 }
 
-func newETLWriter(ctx context.Context, fs fileservice.FileService, filePath string, buf []byte) (ETLWriter, error) {
+func newETLWriter(ctx context.Context, fs fileservice.FileService, filePath string, buf []byte, tbl *table.Table, mp *mpool.MPool) (ETLWriter, error) {
 
 	var fsWriter io.StringWriter
 	if strings.LastIndex(filePath, table.TaeExtension) > 0 {
-		fsWriter = writer.NewTAEWriter(ctx /*tbl*/, nil /* mp*/, nil, filePath, fs)
+		fsWriter = writer.NewTAEWriter(ctx, tbl, mp, filePath, fs)
 	} else {
 		// CSV
 		fsWriter = writer.NewFSWriter(ctx, fs, writer.WithFilePath(filePath))
@@ -690,6 +700,9 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 		newOptions = append(newOptions, opts...)
 		newOptions = append(newOptions, WithTable(table))
 		merge := NewMerge(ctx, newOptions...)
+		if merge == nil {
+			return
+		}
 		if err := merge.Main(ctx, ts); err != nil {
 			logger.Error(fmt.Sprintf("merge metric failed: %v", err))
 			return err

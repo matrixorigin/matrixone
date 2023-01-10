@@ -97,7 +97,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 
 	// ----- reader ------
 
-	r, err := NewTaeReader(dummyAllTypeTable, filepath, file.Size, fs, mp)
+	r, err := NewTaeReader(context.TODO(), dummyAllTypeTable, filepath, file.Size, fs, mp)
 	require.Nil(t, err)
 
 	// read data
