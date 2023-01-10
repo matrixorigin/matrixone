@@ -160,9 +160,9 @@ func (l *Lexer) toBit(lval *yySymType, str string) int {
 		ival uint64
 		err  error
 	)
-	if len(str) <= 2 {
+	if len(str) < 2 {
 		ival, err = strconv.ParseUint(str, 2, 64)
-	} else if str[1] == 'x' {
+	} else if str[1] == 'b' {
 		ival, err = strconv.ParseUint(str[2:], 2, 64)
 	} else {
 		ival, err = strconv.ParseUint(str, 2, 64)
