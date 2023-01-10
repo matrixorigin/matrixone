@@ -120,14 +120,10 @@ func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 		return table.NewRowRequest(nil)
 	}
 
-	i, ok := in[0].(table.RowField)
-	if !ok {
-		panic("not MalCsv, dont support output CSV")
-	}
-
 	ts := time.Now()
 	writerMap := make(map[string]table.RowWriter, 2)
-	writeValues := func(item table.RowField, row *table.Row) {
+	writeValues := func(item table.RowField) {
+		row := item.GetTable().GetRow(ctx)
 		item.FillRow(ctx, row)
 		account := row.GetAccount()
 		w, exist := writerMap[account]
@@ -141,14 +137,12 @@ func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 		w.WriteRow(row)
 	}
 
-	row := i.GetTable().GetRow(ctx)
-	defer row.Free()
 	for _, i := range in {
 		item, ok := i.(table.RowField)
 		if !ok {
 			panic("not MalCsv, dont support output CSV")
 		}
-		writeValues(item, row)
+		writeValues(item)
 	}
 
 	reqs := make(table.ExportRequests, 0, len(writerMap))

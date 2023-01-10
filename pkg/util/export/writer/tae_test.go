@@ -243,3 +243,159 @@ func TestTAEWriter(t *testing.T) {
 		})
 	}
 }
+
+func TestTaeReadFile(t *testing.T) {
+	filePath := "rawlog.tae"
+
+	mp, err := mpool.NewMPool("TestTaeReadFile", 0, mpool.NoFixed)
+	require.Nil(t, err)
+	ctx := context.TODO()
+	configs := []fileservice.Config{{
+		Name:    defines.ETLFileServiceName,
+		Backend: "DISK-ETL",
+		DataDir: "mo-data/etl",
+	},
+	}
+	var services = make([]fileservice.FileService, 0, 1)
+	for _, config := range configs {
+		service, err := fileservice.NewFileService(config)
+		require.Nil(t, err)
+		services = append(services, service)
+	}
+	// create FileServices
+	fs, err := fileservice.NewFileServices(
+		defines.LocalFileServiceName,
+		services...,
+	)
+	require.Nil(t, err)
+
+	entrys, err := fs.List(context.TODO(), "etl:/")
+	require.Nil(t, err)
+	if len(entrys) == 0 {
+		t.Skip()
+	}
+	require.Equal(t, 1, len(entrys))
+	require.Equal(t, filePath, entrys[0].Name)
+
+	fileSize := entrys[0].Size
+
+	r, err := NewTaeReader(context.TODO(), motrace.SingleRowLogTable, filePath, fileSize, fs, mp)
+	require.Nil(t, err)
+
+	// read data
+	batchs, err := r.ReadAll(ctx)
+	require.Nil(t, err)
+
+	// read index
+	for _, bbs := range r.bs {
+		_, err = r.objectReader.ReadIndex(context.Background(), bbs.GetExtent(),
+			r.idxs, objectio.ZoneMapType, mp)
+		require.Nil(t, err)
+	}
+
+	readCnt := 0
+	for batIDX, bat := range batchs {
+		for _, vec := range bat.Vecs {
+			rows, err := GetVectorArrayLen(context.TODO(), vec)
+			require.Nil(t, err)
+			t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.Typ.String())
+		}
+		rows := bat.Vecs[0].Length()
+		ctn := strings.Builder{}
+		for rowId := 0; rowId < rows; rowId++ {
+			for _, vec := range bat.Vecs {
+				val, err := ValToString(context.TODO(), vec, rowId)
+				require.Nil(t, err)
+				ctn.WriteString(val)
+				ctn.WriteString(",")
+			}
+			ctn.WriteRune('\n')
+		}
+		t.Logf("batch %d: \n%s", batIDX, ctn.String())
+		//t.Logf("read batch %d", batIDX)
+		readCnt += rows
+	}
+}
+
+func TestTaeReadFile_ReadAll(t *testing.T) {
+
+	mp, err := mpool.NewMPool("TestTaeReadFile", 0, mpool.NoFixed)
+	require.Nil(t, err)
+	ctx := context.TODO()
+	configs := []fileservice.Config{{
+		Name:    defines.ETLFileServiceName,
+		Backend: "DISK-ETL",
+		DataDir: "mo-data/etl",
+	},
+	}
+	var services = make([]fileservice.FileService, 0, 1)
+	for _, config := range configs {
+		service, err := fileservice.NewFileService(config)
+		require.Nil(t, err)
+		services = append(services, service)
+	}
+	// create FileServices
+	fs, err := fileservice.NewFileServices(
+		defines.LocalFileServiceName,
+		services...,
+	)
+	require.Nil(t, err)
+
+	folder := "/sys/logs/2023/01/11/rawlog"
+	entrys, err := fs.List(context.TODO(), "etl:"+folder)
+	require.Nil(t, err)
+	if len(entrys) == 0 {
+		t.Skip()
+	}
+
+	itemsCnt := make(map[string]int, 2)
+	itemsCnt["span_info"] = 0
+	itemsCnt["log_info"] = 0
+	readCnt := 0
+	for _, e := range entrys {
+		t.Logf("file: %s, size: %d", e.Name, e.Size)
+
+		r, err := NewTaeReader(context.TODO(), motrace.SingleRowLogTable, path.Join(folder, e.Name), e.Size, fs, mp)
+		require.Nil(t, err)
+
+		// read data
+		batchs, err := r.ReadAll(ctx)
+		require.Nil(t, err)
+
+		// read index
+		for _, bbs := range r.bs {
+			_, err = r.objectReader.ReadIndex(context.Background(), bbs.GetExtent(),
+				r.idxs, objectio.ZoneMapType, mp)
+			require.Nil(t, err)
+		}
+
+		for batIDX, bat := range batchs {
+			for _, vec := range bat.Vecs {
+				rows, err := GetVectorArrayLen(context.TODO(), vec)
+				require.Nil(t, err)
+				t.Logf("calculate length: %d", rows)
+				break
+				//t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.Typ.String())
+			}
+			rows := bat.Vecs[0].Length()
+			ctn := strings.Builder{}
+			for rowId := 0; rowId < rows; rowId++ {
+				for idx, vec := range bat.Vecs {
+					val, err := ValToString(context.TODO(), vec, rowId)
+					require.Nil(t, err)
+					ctn.WriteString(val)
+					ctn.WriteString(",")
+					if idx == 0 {
+						itemsCnt[val]++
+					}
+				}
+				ctn.WriteRune('\n')
+			}
+			//t.Logf("batch %d: \n%s", batIDX, ctn.String())
+			t.Logf("read batch %d", batIDX)
+			readCnt += rows
+		}
+		t.Logf("cnt: %v", itemsCnt)
+	}
+	t.Logf("cnt: %v", itemsCnt)
+}

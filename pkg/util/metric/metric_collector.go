@@ -323,12 +323,10 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 		return nil
 	}
 
-	row := SingleMetricTable.GetRow(ctx)
-	defer row.Free()
 	for _, mf := range s.mfs {
 		for _, metric := range mf.Metric {
-
 			// reserved labels
+			row := SingleMetricTable.GetRow(ctx)
 			row.Reset()
 			row.SetColumnVal(metricNameColumn, mf.GetName())
 			row.SetColumnVal(metricNodeColumn, mf.GetNode())

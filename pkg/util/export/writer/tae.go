@@ -48,6 +48,7 @@ type TAEWriter struct {
 	objectFS *objectio.ObjectFS
 	writer   *blockio.Writer
 	buffer   [][]any
+	rows     []*table.Row
 }
 
 func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePath string, fs fileservice.FileService) *TAEWriter {
@@ -88,6 +89,7 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 
 // WriteRow implement ETLWriter
 func (w *TAEWriter) WriteRow(row *table.Row) error {
+	w.rows = append(w.rows, row)
 	return w.WriteElems(row.GetRawColumn())
 }
 
@@ -158,6 +160,15 @@ func (w *TAEWriter) writeBatch() error {
 	_, err := w.writer.WriteBlockAndZoneMap(batch, w.idxs)
 	if err != nil {
 		return err
+	}
+	// clean
+	for _, row := range w.rows {
+		row.Free()
+	}
+	for _, vals := range w.buffer {
+		for idx := range vals {
+			vals[idx] = nil
+		}
 	}
 	w.buffer = w.buffer[:0]
 	batch.Clean(w.mp)

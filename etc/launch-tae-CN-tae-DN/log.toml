@@ -28,6 +28,8 @@ backend = "DISK-ETL"
 statusPort = 7001
 enableTraceDebug = false
 logsExtension = "tae"
+mergedExtensio = "csv"
+mergeCycle = "5m"
 
 [hakeeper-client]
 service-addresses = [
