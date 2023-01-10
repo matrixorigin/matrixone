@@ -21,8 +21,10 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"go.uber.org/zap"
 )
 
 type RowT = *txnRow
@@ -185,6 +187,10 @@ func (table *TxnTable) ForeachRowInBetween(
 		pivot.bornTS = blk.bornTS
 		return false
 	})
+
+	if pivot.bornTS.Equal(from) && !from.IsEmpty() {
+		logutil.Warn("[logtail] fetch with too small ts", zap.String("ts", from.ToString()))
+	}
 	snapshot.Ascend(pivot, func(blk BlockT) bool {
 		if blk.bornTS.Greater(to) {
 			return false
