@@ -87,7 +87,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	// Done. write
 
 	folder := path.Dir(filepath)
-	files, err := fs.List(ctx, folder)
+	files, err := fs.List(ctx, defines.ETLFileServiceName+fileservice.ServiceNameSeparator+folder)
 	require.Nil(t, err)
 	require.Equal(t, 1, len(files))
 
@@ -148,7 +148,7 @@ func TestTAEWriter(t *testing.T) {
 	ctx := context.TODO()
 	configs := []fileservice.Config{{
 		Name:    defines.ETLFileServiceName,
-		Backend: "DISK_ETL",
+		Backend: "DISK-ETL",
 		DataDir: t.TempDir(),
 	},
 	}

@@ -73,7 +73,8 @@ func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePa
 func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch {
 	batch := batch.NewWithSize(len(typs))
 	for i, typ := range typs {
-		if typ.Oid == types.T_datetime {
+		switch typ.Oid {
+		case types.T_datetime:
 			typ.Precision = 6
 		}
 		vec := vector.NewOriginal(typ)

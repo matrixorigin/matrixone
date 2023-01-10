@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package export
+package writer
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/export/writer"
 	"os"
 	"path"
 	"path/filepath"
@@ -42,9 +41,9 @@ func TestLocalFSWriter(t *testing.T) {
 	fs, err := fileservice.NewLocalFS("test", path.Join(basedir, "system"), mpool.MB)
 	require.Equal(t, nil, err)
 	ctx := context.Background()
-	// fs_writer_test.go:23: whereami: /private/var/folders/lw/05zz3bq12djbnhv1wyzk2jgh0000gn/T/GoLand
-	// fs_writer_test.go:40: write statement file error: size not match
-	// fs_writer_test.go:50: write span file error: file existed
+	// csv_test.go:23: whereami: /private/var/folders/lw/05zz3bq12djbnhv1wyzk2jgh0000gn/T/GoLand
+	// csv_test.go:40: write statement file error: size not match
+	// csv_test.go:50: write span file error: file existed
 	// file result: (has checksum)
 	// 9a80 8760 3132 3334 3536 3738 0a         ...`12345678.
 	err = fs.Write(ctx, fileservice.IOVector{ // write-once-read-multi
@@ -170,7 +169,7 @@ func TestFSWriter_Write(t *testing.T) {
 			fields: fields{
 				ctx:      context.Background(),
 				fs:       localFs,
-				table:    newDummy(1).GetName(),
+				table:    "dummy",
 				database: "system",
 				nodeUUID: "node_uuid",
 				nodeType: "standalone",
@@ -186,8 +185,8 @@ func TestFSWriter_Write(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			w := writer.NewFSWriter(tt.fields.ctx, tt.fields.fs,
-				writer.WithFilePath("filepath"),
+			w := NewFSWriter(tt.fields.ctx, tt.fields.fs,
+				WithFilePath("filepath"),
 			)
 			gotN, err := w.Write(tt.args.p)
 			if (err != nil) != tt.wantErr {
