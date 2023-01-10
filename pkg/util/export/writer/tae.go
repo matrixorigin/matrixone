@@ -238,15 +238,20 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 }
 
 type TAEReader struct {
-	typs         []types.Type
-	batchs       []*batch.Batch
-	filepath     string
-	filesize     int64
-	fs           fileservice.FileService
+	typs     []types.Type
+	idxs     []uint16
+	batchs   []*batch.Batch
+	filepath string
+	filesize int64
+	fs       fileservice.FileService
+	mp       *mpool.MPool
+
 	objectReader objectio.Reader
+
+	bs []objectio.BlockObject
 }
 
-func NewTaeReader(tbl *table.Table, filePath string, filesize int64, fs fileservice.FileService) (*TAEReader, error) {
+func NewTaeReader(tbl *table.Table, filePath string, filesize int64, fs fileservice.FileService, mp *mpool.MPool) (*TAEReader, error) {
 	var err error
 	path := defines.ETLFileServiceName + fileservice.ServiceNameSeparator + filePath
 	r := &TAEReader{
@@ -254,9 +259,12 @@ func NewTaeReader(tbl *table.Table, filePath string, filesize int64, fs fileserv
 		filepath: path,
 		filesize: filesize,
 		fs:       fs,
+		mp:       mp,
 	}
-	for _, c := range tbl.Columns {
+	r.idxs = make([]uint16, len(tbl.Columns))
+	for idx, c := range tbl.Columns {
 		r.typs = append(r.typs, c.ColType.ToType())
+		r.idxs[idx] = uint16(idx)
 	}
 	r.objectReader, err = objectio.NewObjectReader(r.filepath, r.fs)
 	if err != nil {
@@ -265,18 +273,24 @@ func NewTaeReader(tbl *table.Table, filePath string, filesize int64, fs fileserv
 	return r, nil
 }
 
-func (r *TAEReader) ReadAll(ctx context.Context, pool *mpool.MPool) ([]*batch.Batch, error) {
+func (r *TAEReader) readAllMeta(ctx context.Context) error {
 	var err error
-	bs, err := r.objectReader.ReadAllMeta(context.Background(), r.filesize, pool)
-	if err != nil {
+	if len(r.bs) == 0 {
+		r.bs, err = r.objectReader.ReadAllMeta(ctx, r.filesize, r.mp)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *TAEReader) ReadAll(ctx context.Context) ([]*batch.Batch, error) {
+	var err error
+	if err = r.readAllMeta(ctx); err != nil {
 		return nil, err
 	}
-	columnIdx := make([]uint16, len(r.typs))
-	for idx := range columnIdx {
-		columnIdx[idx] = uint16(idx)
-	}
-	for _, bss := range bs {
-		ioVec, err := r.objectReader.Read(context.Background(), bss.GetExtent(), columnIdx, pool)
+	for _, bss := range r.bs {
+		ioVec, err := r.objectReader.Read(context.Background(), bss.GetExtent(), r.idxs, r.mp)
 		if err != nil {
 			return nil, err
 		}
@@ -296,7 +310,11 @@ func (r *TAEReader) ReadLine() ([]string, error) {
 	panic("implement me")
 }
 
-func (r *TAEReader) Close() {}
+func (r *TAEReader) Close() {
+	for _, b := range r.batchs {
+		b.Clean(r.mp)
+	}
+}
 
 func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
 	typ := vec.Typ

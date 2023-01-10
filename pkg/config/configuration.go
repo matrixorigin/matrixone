@@ -133,7 +133,7 @@ var (
 	defaultLogsExtension = "csv"
 
 	// defaultMergedExtension default: tae. Support val in [csv, tae]
-	defaultMergedExtension = "tae"
+	defaultMergedExtension = "csv"
 )
 
 // FrontendParameters of the frontend

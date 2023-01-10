@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -94,11 +95,22 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	file := files[0]
 	t.Logf("path: %s, size: %d", file.Name, file.Size)
 
-	r, err := NewTaeReader(dummyAllTypeTable, filepath, file.Size, fs)
+	// ----- reader ------
+
+	r, err := NewTaeReader(dummyAllTypeTable, filepath, file.Size, fs, mp)
 	require.Nil(t, err)
-	batchs, err := r.ReadAll(ctx, mp)
+
+	// read data
+	batchs, err := r.ReadAll(ctx)
 	require.Nil(t, err)
 	require.Equal(t, (cnt+BatchSize)/BatchSize, len(batchs))
+
+	// read index
+	for _, bbs := range r.bs {
+		_, err = r.objectReader.ReadIndex(context.Background(), bbs.GetExtent(),
+			r.idxs, objectio.ZoneMapType, mp)
+		require.Nil(t, err)
+	}
 
 	readCnt := 0
 	for batIDX, bat := range batchs {
