@@ -29,15 +29,12 @@ type lockTable struct {
 	// tableID -> LockStorage
 	//btrees [32]sync.Map
 	btrees map[uint64]LockStorage
-
-	stateChanged chan struct{}
 }
 
 func NewLockService() LockService {
 	return &lockTable{
-		locks:        make(map[string]map[uint64][][]byte),
-		btrees:       make(map[uint64]LockStorage),
-		stateChanged: make(chan struct{}),
+		locks:  make(map[string]map[uint64][][]byte),
+		btrees: make(map[uint64]LockStorage),
 	}
 }
 
@@ -100,11 +97,10 @@ func (l *lockTable) acquireRowLock(ctx context.Context, tableID uint64, row []by
 		if err := waiter.wait(ctx); err != nil {
 			return false
 		}
+		l.mu.Lock()
 	} else {
 		l.addRowLock(txnID, tableID, row, waiter)
-		l.mu.Unlock()
 	}
-	l.mu.Lock()
 	l.locks[string(txnID)][tableID] = append(l.locks[string(txnID)][tableID], row)
 	l.mu.Unlock()
 	return true
