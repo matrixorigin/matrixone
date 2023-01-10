@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"os"
 	"strings"
 	"testing"
@@ -951,7 +952,7 @@ func TestVisitRule(t *testing.T) {
 		makePlan2Int64ConstExprWithType(10),
 	}
 	resetParamRule := NewResetParamRefRule(ctx, params)
-	resetVarRule := NewResetVarRefRule(&mock.ctxt)
+	resetVarRule := NewResetVarRefRule(&mock.ctxt, &process.Process{})
 	constantFoldRule := NewConstantFoldRule(&mock.ctxt)
 	vp = NewVisitPlan(plan, []VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
 	err = vp.Visit(ctx)

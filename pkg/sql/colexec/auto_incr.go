@@ -71,7 +71,7 @@ func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Proce
 
 func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.Process, p *plan.InsertValues, bat *batch.Batch, dbName, tblName string) error {
 	ColDefs := p.ExplicitCols
-	orderColDefs(p.OrderAttrs, ColDefs)
+	orderColDefs(p.OrderAttrs, ColDefs, p.Columns)
 	db, err := e.Database(ctx, p.DbName, proc.TxnOperator)
 	if err != nil {
 		return err
@@ -299,30 +299,30 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 	}
 	switch {
 	case len(ret) == 0:
-		if rds, err = rel.NewReader(param.ctx, 1, nil, nil); err != nil {
+		if rds, err = rel.NewReader(param.ctx, 1, expr, nil); err != nil {
 			return 0, 0, nil, err
 		}
 	case len(ret) == 1 && len(ret[0]) == 0:
-		if rds, err = rel.NewReader(param.ctx, 1, nil, nil); err != nil {
+		if rds, err = rel.NewReader(param.ctx, 1, expr, nil); err != nil {
 			return 0, 0, nil, err
 		}
 	case len(ret[0]) == 0:
-		rds0, err := rel.NewReader(param.ctx, 1, nil, nil)
+		rds0, err := rel.NewReader(param.ctx, 1, expr, nil)
 		if err != nil {
 			return 0, 0, nil, err
 		}
-		rds1, err := rel.NewReader(param.ctx, 1, nil, ret[1:])
+		rds1, err := rel.NewReader(param.ctx, 1, expr, ret[1:])
 		if err != nil {
 			return 0, 0, nil, err
 		}
 		rds = append(rds, rds0...)
 		rds = append(rds, rds1...)
 	default:
-		rds, _ = rel.NewReader(param.ctx, 1, nil, ret)
+		rds, _ = rel.NewReader(param.ctx, 1, expr, ret)
 	}
 
 	for len(rds) > 0 {
-		bat, err := rds[0].Read(param.ctx, AUTO_INCR_TABLE_COLNAME, nil, param.proc.Mp())
+		bat, err := rds[0].Read(param.ctx, AUTO_INCR_TABLE_COLNAME, expr, param.proc.Mp())
 		if err != nil {
 			return 0, 0, nil, moerr.NewInvalidInput(param.ctx, "can not find the auto col")
 		}
@@ -409,9 +409,7 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 		rds, _ = rel.NewReader(ctx, 1, nil, ret)
 	}
 
-	retbat := &batch.Batch{
-		Vecs: []*vector.Vector{},
-	}
+	retbat := batch.NewWithSize(1)
 
 	for len(rds) > 0 {
 		bat, err := rds[0].Read(ctx, AUTO_INCR_TABLE_COLNAME, nil, mp)
@@ -677,11 +675,12 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 	return nil
 }
 
-func orderColDefs(attrs []string, ColDefs []*plan.ColDef) {
+func orderColDefs(attrs []string, ColDefs []*plan.ColDef, cols []*plan.Column) {
 	for i, name := range attrs {
 		for j, def := range ColDefs {
 			if name == def.Name {
 				ColDefs[i], ColDefs[j] = ColDefs[j], ColDefs[i]
+				cols[i], cols[j] = cols[j], cols[i]
 			}
 		}
 	}

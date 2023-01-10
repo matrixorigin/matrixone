@@ -1033,6 +1033,12 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 				U64Val: vec.Col.([]uint64)[0],
 			},
 		}
+	case types.T_float32:
+		return &plan.Const{
+			Value: &plan.Const_Fval{
+				Fval: vec.Col.([]float32)[0],
+			},
+		}
 	case types.T_float64:
 		return &plan.Const{
 			Value: &plan.Const_Dval{
@@ -1043,6 +1049,18 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 		return &plan.Const{
 			Value: &plan.Const_Sval{
 				Sval: vec.GetString(0),
+			},
+		}
+	case types.T_timestamp:
+		return &plan.Const{
+			Value: &plan.Const_Timestampval{
+				Timestampval: int64(vector.MustTCols[types.Timestamp](vec)[0]),
+			},
+		}
+	case types.T_date:
+		return &plan.Const{
+			Value: &plan.Const_Dateval{
+				Dateval: int32(vector.MustTCols[types.Date](vec)[0]),
 			},
 		}
 	default:

@@ -414,6 +414,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			})
 		}
 
+		groupSize := int32(len(node.GroupBy))
 		for idx, expr := range node.AggList {
 			decreaseRefCnt(expr, colRefCnt)
 			err := builder.remapExpr(expr, childRemapping.globalToLocal)
@@ -433,7 +434,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -2,
-						ColPos: int32(idx),
+						ColPos: int32(idx) + groupSize,
 						Name:   builder.nameByColRef[globalRef],
 					},
 				},
@@ -441,7 +442,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		if len(node.ProjectList) == 0 {
-			if len(node.GroupBy) > 0 {
+			if groupSize > 0 {
 				globalRef := [2]int32{groupTag, 0}
 				remapping.addColRef(globalRef)
 
