@@ -249,3 +249,28 @@ func TestTimestampPrev(t *testing.T) {
 		assert.Equal(t, tt.result, tt.ts.Prev())
 	}
 }
+
+func TestParseTimestamp(t *testing.T) {
+	tests := []struct {
+		value  string
+		result Timestamp
+		err    bool
+	}{
+		{"", Timestamp{}, true},
+		{"1", Timestamp{}, true},
+		{"a", Timestamp{}, true},
+		{"1-", Timestamp{}, true},
+		{"1-a", Timestamp{}, true},
+		{"1-2", Timestamp{PhysicalTime: 1, LogicalTime: 2}, false},
+	}
+
+	for _, tt := range tests {
+		ts, err := ParseTimestamp(tt.value)
+		if !tt.err {
+			assert.NoError(t, err)
+			assert.Equal(t, tt.result, ts)
+			continue
+		}
+		assert.Error(t, err)
+	}
+}
