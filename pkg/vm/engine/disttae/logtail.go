@@ -84,14 +84,14 @@ func consumeLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 		return
 	}
 	for _, e := range entries {
-		if err = consumeEntry(idx, primaryIdx, tbl, ts, ctx,
+		if err = consumeEntry(idx, primaryIdx, tbl, ctx,
 			db, mvcc, e); err != nil {
 			return
 		}
 	}
 
 	for i := 0; i < len(logTail.Commands); i++ {
-		if err = consumeEntry(idx, primaryIdx, tbl, ts, ctx,
+		if err = consumeEntry(idx, primaryIdx, tbl, ctx,
 			db, mvcc, logTail.Commands[i]); err != nil {
 			return
 		}
@@ -99,7 +99,7 @@ func consumeLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	return nil
 }
 
-func consumeEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
+func consumeEntry(idx, primaryIdx int, tbl *table,
 	ctx context.Context, db *DB, mvcc MVCC, e *api.Entry) error {
 	if e.EntryType == api.Entry_Insert {
 		if isMetaTable(e.TableName) {
