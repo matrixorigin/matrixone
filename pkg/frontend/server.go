@@ -116,4 +116,6 @@ func initVarByConfig(pu *config.ParameterUnit) {
 	if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
 		GSysVariables.sysVars["save_query_result"] = int8(1)
 	}
+	GSysVariables.sysVars["query_result_maxsize"] = pu.SV.QueryResultMaxsize
+	GSysVariables.sysVars["query_result_timeout"] = pu.SV.QueryResultTimeout
 }

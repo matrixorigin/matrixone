@@ -1,9 +1,14 @@
--- @bvt:issue#7357
-create table f1(a int primary key, b int);
+create table f1(b int, a int primary key);
+create table f2(b int, aa varchar primary key);
 create table c1 (a int, b int, foreign key f_a(a) references f1(c));
 create table c1 (a int, b int, foreign key f_a(a) references f1(b));
+create table c1 (a int, b int, foreign key f_a(a) references f2(aa));
 create table c1 (a int, b int, foreign key f_a(a) references f1(a));
 select * from f1;
 select * from c1;
 drop table f1;
--- @bvt:issue
+truncate f1;
+truncate c1;
+drop table f1;
+drop table c1;
+drop table f1;
