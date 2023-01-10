@@ -297,13 +297,13 @@ func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFami
 			metricThreshold: c.opts.metricThreshold,
 			sampleThreshold: c.opts.sampleThreshold,
 		},
-		writerFactory: c.writerFactory,
+		collector: c,
 	}
 }
 
 type mfsetETL struct {
 	mfset
-	writerFactory export.FSWriterFactory
+	collector *metricFSCollector
 }
 
 func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.ExportRequests {
@@ -314,7 +314,7 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 	writeValues := func(row *table.Row) error {
 		w, exist := buffer[row.GetAccount()]
 		if !exist {
-			w = s.writerFactory(ctx, row.GetAccount(), SingleMetricTable, ts)
+			w = s.collector.writerFactory(ctx, row.GetAccount(), SingleMetricTable, ts)
 			buffer[row.GetAccount()] = w
 		}
 		if err := w.WriteRow(row); err != nil {
