@@ -234,6 +234,30 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//t.FailNow()
 	err = handle.HandleCommit(context.TODO(), txn)
 	assert.Nil(t, err)
+	//check rows of "tbtest"
+	txnR, err := txnEngine.StartTxn(nil)
+	assert.NoError(t, err)
+	dbHandle, err := txnEngine.GetDatabase(context.TODO(), dbName, txnR)
+	assert.NoError(t, err)
+	tbHandle, err := dbHandle.GetRelation(context.TODO(), schema.Name)
+	assert.NoError(t, err)
+	blkReaders, _ := tbHandle.NewReader(context.TODO(), 1, nil, nil)
+	rows := 0
+	for i := 0; i < len(taeBats); i++ {
+		//read primary key column
+		bat, err := blkReaders[0].Read(
+			context.TODO(),
+			[]string{schema.ColDefs[1].Name},
+			nil,
+			handle.m)
+		assert.Nil(t, err)
+		if bat != nil {
+			rows += vector.Length(bat.Vecs[0])
+		}
+	}
+	assert.Equal(t, taeBat.Length(), rows)
+	err = txnR.Commit()
+	assert.Nil(t, err)
 
 }
 
