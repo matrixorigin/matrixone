@@ -36,6 +36,8 @@ enum CmdMethod {
     Checkpoint  = 3;
     // UseSnapshot use a spec snapshot timestamp, and all txn will use this ts as snapshot timestamp
     UseSnapshot = 4;
+    // GetSnapshot get current snapshot timestamp
+    GetSnapshot = 5;
 }
 
 // DNPingRequest ping request

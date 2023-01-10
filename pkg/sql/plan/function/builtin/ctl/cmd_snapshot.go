@@ -22,6 +22,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func handleGetSnapshotTS(proc *process.Process,
+	service serviceType,
+	parameter string,
+	sender requestSender) (pb.CtlResult, error) {
+	rt := runtime.ProcessLevelRuntime()
+	now, _ := rt.Clock().Now()
+	return pb.CtlResult{
+		Method: pb.CmdMethod_GetSnapshot.String(),
+		Data:   now.DebugString(),
+	}, nil
+}
+
 func handleUseSnapshotTS(proc *process.Process,
 	service serviceType,
 	parameter string,

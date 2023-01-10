@@ -43,6 +43,7 @@ var (
 		strings.ToUpper(pb.CmdMethod_Flush.String()):       handleFlush(),
 		strings.ToUpper(pb.CmdMethod_Task.String()):        handleTask,
 		strings.ToUpper(pb.CmdMethod_UseSnapshot.String()): handleUseSnapshotTS,
+		strings.ToUpper(pb.CmdMethod_GetSnapshot.String()): handleGetSnapshotTS,
 		strings.ToUpper(pb.CmdMethod_Checkpoint.String()):  handleCheckpoint(),
 	}
 )
