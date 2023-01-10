@@ -324,6 +324,7 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 	}
 
 	row := SingleMetricTable.GetRow(ctx)
+	defer row.Free()
 	for _, mf := range s.mfs {
 		for _, metric := range mf.Metric {
 

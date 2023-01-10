@@ -401,19 +401,16 @@ func (tbl *ViewSingleCondition) String() string {
 type Row struct {
 	Table          *Table
 	AccountIdx     int
-	Columns        []any
-	CsvColumns     []string
 	Name2ColumnIdx map[string]int
+
+	Columns    []any
+	CsvColumns []string
 }
 
 func (tbl *Table) GetRow(ctx context.Context) *Row {
-	row := &Row{
-		Table:          tbl,
-		AccountIdx:     -1,
-		Columns:        make([]any, len(tbl.Columns)),
-		CsvColumns:     nil,
-		Name2ColumnIdx: make(map[string]int),
-	}
+	row := gRowPool.Get().(*Row)
+	row.Table = tbl
+	row.AccountIdx = -1
 	for idx, col := range tbl.Columns {
 		row.Name2ColumnIdx[col.Name] = idx
 	}
@@ -424,11 +421,41 @@ func (tbl *Table) GetRow(ctx context.Context) *Row {
 		}
 		row.AccountIdx = idx
 	}
-	row.Reset()
+	if len(row.Name2ColumnIdx) != len(tbl.Columns) {
+		panic(moerr.NewInternalError(ctx, "%s table has duplicate column name", tbl.GetIdentify()))
+	}
 	return row
 }
 
+var gRowPool = sync.Pool{New: func() any {
+	return &Row{
+		Table:          nil,
+		AccountIdx:     -1,
+		Columns:        nil,
+		CsvColumns:     nil,
+		Name2ColumnIdx: make(map[string]int),
+	}
+}}
+
+func (r *Row) Free() {
+	r.clear()
+	gRowPool.Put(r)
+}
+
+func (r *Row) clear() {
+	r.Table = nil
+	r.AccountIdx = -1
+	r.Columns = nil
+	r.CsvColumns = nil
+	for k := range r.Name2ColumnIdx {
+		delete(r.Name2ColumnIdx, k)
+	}
+}
+
 func (r *Row) Reset() {
+	if len(r.Columns) == 0 {
+		r.Columns = make([]any, len(r.Name2ColumnIdx))
+	}
 	for idx, typ := range r.Table.Columns {
 		switch typ.ColType.ToType().Oid {
 		case types.T_int64:
@@ -462,7 +489,10 @@ func (r *Row) GetAccount() string {
 	return "sys"
 }
 
-func (r *Row) SetVal(col string, val string) {
+func (r *Row) SetVal(col string, val any) {
+	if len(r.Columns) == 0 {
+		r.Reset()
+	}
 	if idx, exist := r.Name2ColumnIdx[col]; !exist {
 		logutil.Fatalf("column(%s) not exist in table(%s)", col, r.Table.Table)
 	} else {
@@ -471,15 +501,14 @@ func (r *Row) SetVal(col string, val string) {
 }
 
 func (r *Row) SetColumnVal(col Column, val any) {
-	if idx, exist := r.Name2ColumnIdx[col.Name]; !exist {
-		logutil.Fatalf("column(%s) not exist in table(%s)", col.Name, r.Table.Table)
-	} else {
-		r.Columns[idx] = val
-	}
+	r.SetVal(col.Name, val)
 }
 
 // ToStrings output all column as string
 func (r *Row) ToStrings() []string {
+	if len(r.Columns) == 0 {
+		r.Reset()
+	}
 	col := make([]string, len(r.Table.Columns))
 	for idx, typ := range r.Table.Columns {
 		switch typ.ColType.ToType().Oid {

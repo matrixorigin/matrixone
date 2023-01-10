@@ -142,6 +142,7 @@ func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 	}
 
 	row := i.GetTable().GetRow(ctx)
+	defer row.Free()
 	for _, i := range in {
 		item, ok := i.(table.RowField)
 		if !ok {

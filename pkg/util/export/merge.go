@@ -309,6 +309,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 	// Step 3. do simple merge
 	cacheFileData := newRowCache(m.Table)
 	row := m.Table.GetRow(ctx)
+	defer row.Free()
 	var reader ETLReader
 	for _, path := range files {
 		// open reader

@@ -34,7 +34,7 @@ import (
 var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Precision: 32, Default: "", Comment: "str column"}
 var dummyInt64Column = table.Column{Name: "int64", ColType: table.TInt64, Default: "0", Comment: "int64 column"}
 var dummyFloat64Column = table.Column{Name: "float64", ColType: table.TFloat64, Default: "0.0", Comment: "float64 column"}
-var dummyUInt64Column = table.Column{Name: "int64", ColType: table.TUint64, Default: "0", Comment: "uint64 column"}
+var dummyUInt64Column = table.Column{Name: "uint64", ColType: table.TUint64, Default: "0", Comment: "uint64 column"}
 var dummyDatetimeColumn = table.Column{Name: "datetime_6", ColType: table.TDatetime, Default: "", Comment: "datetime.6 column"}
 var dummyJsonColumn = table.Column{Name: "json_col", ColType: table.TJson, Default: "{}", Comment: "json column"}
 
@@ -139,8 +139,10 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 
 func genLines(cnt int) (lines [][]any) {
 	lines = make([][]any, 0, cnt)
+	row := dummyAllTypeTable.GetRow(context.TODO())
+	defer row.Free()
 	for i := 0; i < cnt; i++ {
-		row := dummyAllTypeTable.GetRow(context.TODO())
+		row.Reset()
 		row.SetColumnVal(dummyStrColumn, fmt.Sprintf("str_val_%d", i))
 		row.SetColumnVal(dummyInt64Column, int64(i))
 		row.SetColumnVal(dummyFloat64Column, float64(i))

@@ -126,6 +126,7 @@ func TestRow_SetFloat64(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := tt.fields.Table.GetRow(context.TODO())
+			defer r.Free()
 			r.SetColumnVal(tt.args.col, tt.args.val)
 		})
 	}
@@ -160,6 +161,7 @@ func TestRow_ToStrings(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := tt.fields.Table.GetRow(context.TODO())
+			defer r.Free()
 			tt.fields.prepare(r)
 			assert.Equalf(t, tt.want, r.ToStrings(), "ToStrings()")
 		})
