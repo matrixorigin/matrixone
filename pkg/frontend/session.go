@@ -197,6 +197,12 @@ type Session struct {
 
 	blockIdx int
 
+	p *plan.Plan
+
+	limitResultSize float64 // MB
+
+	curResultSize float64 // MB
+
 	planCache *planCache
 }
 
@@ -344,7 +350,7 @@ func (bgs *BackgroundSession) Close() {
 	bgs = nil
 }
 
-func (ses *Session) GetBlockIdx() int {
+func (ses *Session) GetIncBlockIdx() int {
 	ses.blockIdx++
 	return ses.blockIdx
 }
