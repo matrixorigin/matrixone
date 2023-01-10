@@ -1427,9 +1427,12 @@ func (th *TxnHandler) TxnClientNew() error {
 
 	var opts []client.TxnOption
 	rt := moruntime.ProcessLevelRuntime()
-	if v, ok := rt.GetGlobalVariables(moruntime.TxnOptions); ok {
-		opts = v.([]client.TxnOption)
+	if rt != nil {
+		if v, ok := rt.GetGlobalVariables(moruntime.TxnOptions); ok {
+			opts = v.([]client.TxnOption)
+		}
 	}
+
 	th.txn, err = th.txnClient.New(opts...)
 	if err != nil {
 		return err
