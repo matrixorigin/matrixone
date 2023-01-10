@@ -111,11 +111,11 @@ func TestBuildUniqueKeyBatch(t *testing.T) {
 			vec, _ := multi.Serial(test.vecs, proc)
 			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f.Parts, "", test.proc)
 			require.Equal(t, b.Attrs[0], test.f.Cols[0].Name)
-			require.Equal(t, vec.Col, b.Vecs[0].Col)
+			require.Equal(t, vector.MustTCols[int64](vec), vector.MustTCols[int64](b.Vecs[0]))
 		} else {
 			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f.Parts, "", test.proc)
 			require.Equal(t, b.Attrs[0], test.f.Cols[0].Name)
-			require.Equal(t, test.vecs[0].Col, b.Vecs[0].Col)
+			require.Equal(t, vector.MustTCols[int64](test.vecs[0]), vector.MustTCols[int64](b.Vecs[0]))
 		}
 	}
 }

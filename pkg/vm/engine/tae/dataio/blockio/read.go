@@ -193,7 +193,7 @@ func readColumnBatchByMetaloc(
 			vec := vector.New(vector.FLAT, colTyps[i])
 			data := make([]byte, len(entry[0].Object.([]byte)))
 			copy(data, entry[0].Object.([]byte))
-			err := vec.Read(data)
+			err := vec.UnmarshalBinary(data)
 			if err != nil {
 				return nil, err
 			}
@@ -206,14 +206,14 @@ func readColumnBatchByMetaloc(
 	if info.EntryState {
 		t0 := time.Now()
 		v1 := vector.New(vector.FLAT, types.T_TS.ToType())
-		err := v1.Read(entry[0].Object.([]byte))
+		err := v1.UnmarshalBinary(entry[0].Object.([]byte))
 		if err != nil {
 			return nil, err
 		}
 		commits := containers.NewVectorWithSharedMemory(v1, false)
 		defer commits.Close()
 		v2 := vector.New(vector.FLAT, types.T_bool.ToType())
-		err = v2.Read(entry[1].Object.([]byte))
+		err = v2.UnmarshalBinary(entry[1].Object.([]byte))
 		if err != nil {
 			return nil, err
 		}
@@ -253,7 +253,7 @@ func readDeleteBatchByDeltaloc(ctx context.Context, deltaloc string, fs fileserv
 		vec := vector.New(vector.FLAT, colTypes[i])
 		data := make([]byte, len(entry.Object.([]byte)))
 		copy(data, entry.Object.([]byte))
-		err := vec.Read(data)
+		err := vec.UnmarshalBinary(data)
 		if err != nil {
 			return nil, err
 		}

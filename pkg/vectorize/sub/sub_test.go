@@ -469,7 +469,7 @@ func TestDatetimeDesc(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			DatetimeSub(c.vecs[0], c.vecs[1], c.vecs[2])
-			require.Equal(t, c.want, c.vecs[2].Col.([]int64)[0])
+			require.Equal(t, c.want, vector.MustTCols[int64](c.vecs[2])[0])
 		})
 	}
 }

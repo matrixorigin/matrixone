@@ -141,7 +141,7 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 				r.GetType().Width = input.GetType().Width
 				r.GetType().Scale = input.GetType().Scale
 				r.SetLength(1)
-				r.Col.([]T)[0] = cols[0]
+				vector.MustTCols[T](r)[0] = cols[0]
 				return r, nil
 			}
 		} else {

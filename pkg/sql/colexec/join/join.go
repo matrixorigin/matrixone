@@ -286,7 +286,7 @@ func (ctr *container) dictEncoding(m *mpool.MPool) (bool, error) {
 			}
 			col[i] = fixedMap[pos-1]
 		}
-		if err := vector.AppendFixed(encoded, col, m); err != nil {
+		if err := vector.AppendList(encoded, col, nil, m); err != nil {
 			encoded.Free(m)
 			return false, err
 		}

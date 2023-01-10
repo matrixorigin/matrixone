@@ -36,7 +36,8 @@ func IsNotNull(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		}
 	} else {
 		vlen := input.Length()
-		vec := vector.PreAllocType(retType, vlen, vlen, proc.Mp())
+		vec := vector.New(vector.FLAT, retType)
+		vec.PreExtend(vlen, proc.Mp())
 		vals := vector.MustTCols[bool](vec)
 		for i := range vals {
 			if nulls.Contains(input.GetNulls(), uint64(i)) {

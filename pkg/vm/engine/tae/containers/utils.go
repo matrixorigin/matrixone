@@ -89,7 +89,7 @@ func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 		mov.GetNulls().Np = bitmap.New(vec.Length())
 		mov.GetNulls().Np.AddMany(vec.NullMask().ToArray())
 	}
-	mov.SetOriginal(true)
+	//mov.SetOriginal(true)
 
 	return
 }
@@ -470,9 +470,9 @@ func AppendFixedValue[T types.FixedSizeT](vec *movec.Vector, v any) {
 func AppendBytes(vec *movec.Vector, v any) {
 	_, isNull := v.(types.Null)
 	if isNull {
-		vector.Append(vec, nil, true, mockMp)
+		vector.AppendBytes(vec, nil, true, mockMp)
 	} else {
-		vector.Append(vec, v.([]byte), false, mockMp)
+		vector.AppendBytes(vec, v.([]byte), false, mockMp)
 	}
 }
 

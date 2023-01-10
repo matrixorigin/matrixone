@@ -112,7 +112,7 @@ func (n *DeltaDataNode) fetchData() (containers.Vector, error) {
 	srcBuf := make([]byte, len(fsVector.Entries[0].Object.([]byte)))
 	copy(srcBuf, fsVector.Entries[0].Object.([]byte))
 	v := vector.New(vector.FLAT, n.typ)
-	v.Read(srcBuf)
+	v.UnmarshalBinary(srcBuf)
 	return containers.NewVectorWithSharedMemory(v, false /* rowid committs abort are all non-nullable */), nil
 }
 

@@ -133,6 +133,10 @@ func (v *Vector) SetClass(class int) {
 	v.class = class
 }
 
+func DecodeFixedCol[T types.FixedSizeT](v *Vector, sz int) []T {
+	return types.DecodeSlice[T](v.area)
+}
+
 func SetTAt[T types.FixedSizeT](v *Vector, idx int, t T) error {
 	// Let it panic if v is not a varlena vec
 	vacol := MustTCols[T](v)
@@ -273,7 +277,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 			ndata := make([]byte, length)
 			copy(ndata, data[:length])
 			v.area = ndata
-			data = data[:length]
+			//data = data[:length]
 		}
 	}
 	return nil
@@ -328,7 +332,7 @@ func (v *Vector) UnmarshalBinaryWithMpool(data []byte, mp *mpool.MPool) error {
 			}
 			copy(ndata, data[:length])
 			v.area = ndata
-			data = data[:length]
+			//data = data[:length]
 		}
 	}
 	return nil

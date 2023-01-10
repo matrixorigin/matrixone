@@ -137,7 +137,7 @@ func (r *Reader) LoadBlkColumnsByMeta(
 		pkgVec := vector.New(vector.FLAT, colTypes[i])
 		data := make([]byte, len(ioResult.Entries[i].Object.([]byte)))
 		copy(data, ioResult.Entries[i].Object.([]byte))
-		if err = pkgVec.Read(data); err != nil && !errors.Is(err, io.EOF) {
+		if err = pkgVec.UnmarshalBinary(data); err != nil && !errors.Is(err, io.EOF) {
 			return bat, err
 		}
 		var vec containers.Vector
@@ -175,7 +175,7 @@ func (r *Reader) LoadBlkColumnsByMetaAndIdx(
 	pkgVec := vector.New(vector.FLAT, colTypes[0])
 	v := make([]byte, len(data.Entries[0].Object.([]byte)))
 	copy(v, data.Entries[0].Object.([]byte))
-	if err = pkgVec.Read(v); err != nil && !errors.Is(err, io.EOF) {
+	if err = pkgVec.UnmarshalBinary(v); err != nil && !errors.Is(err, io.EOF) {
 		return bat, err
 	}
 	var vec containers.Vector

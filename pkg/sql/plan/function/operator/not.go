@@ -44,7 +44,7 @@ func Not(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	case c1:
 		vec := proc.AllocScalarVector(boolType)
 		vec.SetLength(1)
-		vec.Col.([]bool)[0] = !col1[0]
+		vector.MustTCols[bool](vec)[0] = !col1[0]
 		return vec, nil
 	}
 	length := v1.Length()

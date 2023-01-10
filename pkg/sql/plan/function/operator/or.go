@@ -30,7 +30,7 @@ func HandleOrNullCol(vs []*vector.Vector, proc *process.Process) (*vector.Vector
 			vec.SetLength(1)
 			value := vector.MustTCols[bool](v2)[0]
 			if value {
-				vec.Col.([]bool)[0] = true
+				vector.MustTCols[bool](vec)[0] = true
 			} else {
 				nulls.Add(vec.GetNulls(), 0)
 			}
@@ -55,7 +55,7 @@ func HandleOrNullCol(vs []*vector.Vector, proc *process.Process) (*vector.Vector
 			vec.SetLength(1)
 			value := vector.MustTCols[bool](v1)[0]
 			if value {
-				vec.Col.([]bool)[0] = true
+				vector.MustTCols[bool](vec)[0] = true
 			} else {
 				nulls.Add(vec.GetNulls(), 0)
 			}
@@ -104,7 +104,7 @@ func Or(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	case c1 && c2:
 		vec := proc.AllocScalarVector(boolType)
 		vec.SetLength(1)
-		vec.Col.([]bool)[0] = col1[0] || col2[0]
+		vector.MustTCols[bool](vec)[0] = col1[0] || col2[0]
 		return vec, nil
 	case c1 && !c2:
 		return ScalarOrNotScalar(v1, v2, col1, col2, proc)

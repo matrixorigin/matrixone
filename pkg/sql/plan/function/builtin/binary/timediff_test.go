@@ -100,7 +100,7 @@ func TestTimeDiffInTime(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want.Col, diff.Col)
+			require.Equal(t, vector.MustTCols[types.Time](c.want), vector.MustTCols[types.Time](diff))
 		})
 	}
 }
@@ -174,7 +174,7 @@ func TestTimeDiffInDateTime(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want.Col, diff.Col)
+			require.Equal(t, vector.MustTCols[types.Time](c.want), vector.MustTCols[types.Time](diff))
 		})
 	}
 }

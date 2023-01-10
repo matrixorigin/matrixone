@@ -44,7 +44,7 @@ func Xor(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	case c1 && c2:
 		vec := proc.AllocScalarVector(boolType)
 		vec.SetLength(1)
-		vec.Col.([]bool)[0] = (col1[0] || col2[0]) && !(col1[0] && col2[0])
+		vector.MustTCols[bool](vec)[0] = (col1[0] || col2[0]) && !(col1[0] && col2[0])
 		return vec, nil
 	case c1 && !c2:
 		return ScalarXorNotScalar(v1, v2, col1, col2, proc)

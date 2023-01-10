@@ -2041,7 +2041,7 @@ func TestCastSpecial4(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantValues, decimalres.Col)
+			require.Equal(t, c.wantValues, vector.MustTCols[types.Decimal128](decimalres))
 			require.Equal(t, c.wantType, decimalres.GetType())
 			require.Equal(t, c.wantScalar, decimalres.IsConst())
 		})
@@ -2415,7 +2415,7 @@ func TestCastDecimal64AsDecimal128(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, castRes.Col)
+			require.Equal(t, c.wantBytes, vector.MustTCols[types.Decimal64](castRes))
 			require.Equal(t, c.wantType, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
@@ -2476,7 +2476,7 @@ func TestCastDecimal64AsDecimal64(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, castRes.Col)
+			require.Equal(t, c.wantBytes, vector.MustTCols[types.Decimal64](castRes))
 			require.Equal(t, c.wantType.Oid, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
@@ -2535,7 +2535,7 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, castRes.Col)
+			require.Equal(t, c.wantBytes, vector.MustTCols[types.Decimal128](castRes))
 			require.Equal(t, c.wantType.Oid, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
@@ -4353,7 +4353,7 @@ func TestCastBoolAsString(t *testing.T) {
 			}
 			got := vector.MustStrCols(castRes)
 			require.Equal(t, c.wantValues, got)
-			require.Equal(t, c.wantType, castRes.Typ.Oid)
+			require.Equal(t, c.wantType, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
@@ -4423,7 +4423,7 @@ func TestCastDateAsDatetimeAndString(t *testing.T) {
 				got := vector.MustStrCols(castRes)
 				require.Equal(t, c.wantValues, got)
 			} else {
-				require.Equal(t, c.wantValues, castRes.Col)
+				require.Equal(t, c.wantValues, vector.MustStrCols(castRes))
 			}
 			require.Equal(t, c.wantType, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
@@ -4495,7 +4495,7 @@ func TestCastDatetimeAsDateAndString(t *testing.T) {
 				got := vector.MustStrCols(castRes)
 				require.Equal(t, c.wantValues, got)
 			} else {
-				require.Equal(t, c.wantValues, castRes.Col)
+				require.Equal(t, c.wantValues, vector.MustStrCols(castRes))
 			}
 			require.Equal(t, c.wantType, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
@@ -4679,7 +4679,7 @@ func TestCastTimeToString(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			// setting precision
-			c.vecs[0].Typ.Precision = c.precision
+			c.vecs[0].GetType().Precision = c.precision
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
 
@@ -4687,7 +4687,7 @@ func TestCastTimeToString(t *testing.T) {
 				got := vector.MustStrCols(castRes)
 				require.Equal(t, c.wantValues, got)
 			} else {
-				require.Equal(t, c.wantValues, castRes.Col)
+				require.Equal(t, c.wantValues, vector.MustStrCols(castRes))
 			}
 
 			require.Equal(t, c.wantType, castRes.GetType().Oid)
@@ -4776,7 +4776,7 @@ func TestCastStringToTime(t *testing.T) {
 			c.vecs[1].GetType().Precision = c.precision
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
-			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantValues, vector.MustTCols[types.Time](castRes))
 			require.Equal(t, c.wantType, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
@@ -4828,7 +4828,7 @@ func TestCastInt64ToTime(t *testing.T) {
 			c.vecs[1].GetType().Precision = c.precision
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
-			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantValues, vector.MustTCols[types.Time](castRes))
 			require.Equal(t, c.wantType, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
@@ -4888,7 +4888,7 @@ func TestCastDecimal128ToTime(t *testing.T) {
 			c.vecs[1].GetType().Precision = c.precision
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
-			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantValues, vector.MustTCols[types.Time](castRes))
 			require.Equal(t, c.wantType, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})

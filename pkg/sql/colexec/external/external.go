@@ -292,7 +292,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 				Scale: node.TableDef.Cols[i].Typ.Scale,
 			}
 			vec := vector.New(vector.FLAT, typ)
-			vector.PreAlloc(vec, len(fileList), len(fileList), proc.Mp())
+			vec.PreExtend(len(fileList), proc.Mp())
 			//vec.SetOriginal(false)
 			for j := 0; j < len(fileList); j++ {
 				vector.SetStringAt(vec, j, getAccountCol(fileList[j]), proc.Mp())
@@ -305,7 +305,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 				Scale: 0,
 			}
 			vec := vector.New(vector.FLAT, typ)
-			vector.PreAlloc(vec, len(fileList), len(fileList), proc.Mp())
+			vec.PreExtend(len(fileList), proc.Mp())
 			//vec.SetOriginal(false)
 			for j := 0; j < len(fileList); j++ {
 				vector.SetStringAt(vec, j, fileList[j], proc.Mp())
@@ -516,7 +516,7 @@ func makeBatch(param *ExternalParam, batchSize int, mp *mpool.MPool) *batch.Batc
 	for i := 0; i < len(param.Attrs); i++ {
 		typ := makeType(param.Cols, i)
 		vec := vector.New(vector.FLAT, typ)
-		vector.PreAlloc(vec, batchSize, batchSize, mp)
+		vec.PreExtend(batchSize, mp)
 		//vec.SetOriginal(false)
 		batchData.Vecs[i] = vec
 	}
@@ -698,7 +698,7 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 		var vecTmp *vector.Vector
 		if catalog.ContainExternalHidenCol(param.Attrs[i]) {
 			vecTmp = vector.New(vector.FLAT, makeType(param.Cols, i))
-			vector.PreAlloc(vecTmp, rows, rows, proc.GetMPool())
+			vecTmp.PreExtend(rows, proc.GetMPool())
 			for j := 0; j < rows; j++ {
 				err := vector.SetStringAt(vecTmp, j, param.extern.Filepath, proc.GetMPool())
 				if err != nil {

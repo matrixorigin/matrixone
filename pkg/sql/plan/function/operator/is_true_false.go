@@ -53,7 +53,8 @@ func funcIs(vectors []*vector.Vector, proc *process.Process, nullValue bool, eqB
 		}
 	} else {
 		vlen := input.Length()
-		vec := vector.PreAllocType(retType, vlen, vlen, proc.Mp())
+		vec := vector.New(vector.FLAT, retType)
+		vec.PreExtend(vlen, proc.Mp())
 		vals := vector.MustTCols[bool](vec)
 		olds := vector.MustTCols[bool](input)
 		for i := range vals {
