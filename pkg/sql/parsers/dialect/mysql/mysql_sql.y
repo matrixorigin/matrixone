@@ -608,6 +608,7 @@ import (
 %token <str> KILL
 %type <killOption> kill_opt
 %type <statementOption> statement_id_opt
+%token <str> QUERY_RESULT
 %start start_command
 
 %%
@@ -727,6 +728,7 @@ mo_dump_stmt:
     MODUMP DATABASE database_id INTO STRING max_file_size_opt
     {
 	$$ = &tree.MoDump{
+	    DumpDatabase: true,
 	    Database: tree.Identifier($3),
 	    OutFile: $5,
 	    MaxFileSize: int64($6),
@@ -735,11 +737,29 @@ mo_dump_stmt:
 |   MODUMP DATABASE database_id TABLES table_name_list INTO STRING max_file_size_opt
     {
 	$$ = &tree.MoDump{
+	    DumpDatabase: true,
 	    Database: tree.Identifier($3),
 	    Tables: $5,
 	    OutFile: $7,
 	    MaxFileSize: int64($8),
 	}
+    }
+|   MODUMP QUERY_RESULT STRING INTO STRING export_fields export_lines_opt header_opt max_file_size_opt force_quote_opt
+    {
+        ep := &tree.ExportParam{
+		Outfile:    true,
+		QueryId:    $3,
+		FilePath :  $5,
+		Fields:     $6,
+		Lines:      $7,
+		Header:     $8,
+		MaxFileSize:uint64($9)*1024,
+		ForceQuote: $10,
+	}
+        $$ = &tree.MoDump{
+            DumpDatabase: false,
+            ExportParams: ep,
+        }
     }
 
 

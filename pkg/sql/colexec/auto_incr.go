@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -70,7 +71,7 @@ func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Proce
 
 func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.Process, p *plan.InsertValues, bat *batch.Batch, dbName, tblName string) error {
 	ColDefs := p.ExplicitCols
-	orderColDefs(p.OrderAttrs, ColDefs)
+	orderColDefs(p.OrderAttrs, ColDefs, p.Columns)
 	db, err := e.Database(ctx, p.DbName, proc.TxnOperator)
 	if err != nil {
 		return err
@@ -436,7 +437,14 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 		if !attr.Typ.AutoIncr {
 			continue
 		}
-		rel2, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+		var rel2 engine.Relation
+		// Essentially, temporary table is not an operation of a transaction.
+		// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
+		if dbName == defines.TEMPORARY_DBNAME {
+			rel2, err = db.Relation(ctx, AUTO_INCR_TABLE)
+		} else {
+			rel2, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+		}
 		if err != nil {
 			return err
 		}
@@ -455,12 +463,21 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 }
 
 // for delete table operation, delete col in mo_increment_columns table
-func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, rel engine.Relation, proc *process.Process, dbName string, tableID uint64) error {
+func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database, rel engine.Relation, proc *process.Process, dbName string, tableID uint64) error {
 	txn, err := NewTxn(eg, proc, ctx)
 	if err != nil {
 		return err
 	}
-	rel2, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+
+	var rel2 engine.Relation
+	// Essentially, temporary table is not an operation of a transaction.
+	// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
+	if dbName == defines.TEMPORARY_DBNAME {
+		rel2, err = db.Relation(ctx, AUTO_INCR_TABLE)
+	} else {
+		rel2, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -513,7 +530,16 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 	if err != nil {
 		return err
 	}
-	autoRel, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+
+	var autoRel engine.Relation
+	// Essentially, temporary table is not an operation of a transaction.
+	// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
+	if dbName == defines.TEMPORARY_DBNAME {
+		autoRel, err = db.Relation(ctx, AUTO_INCR_TABLE)
+	} else {
+		autoRel, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -568,7 +594,16 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 	if err != nil {
 		return err
 	}
-	autoRel, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+
+	var autoRel engine.Relation
+	// Essentially, temporary table is not an operation of a transaction.
+	// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
+	if dbName == defines.TEMPORARY_DBNAME {
+		autoRel, err = db.Relation(ctx, AUTO_INCR_TABLE)
+	} else {
+		autoRel, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -606,11 +641,12 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 	return nil
 }
 
-func orderColDefs(attrs []string, ColDefs []*plan.ColDef) {
+func orderColDefs(attrs []string, ColDefs []*plan.ColDef, cols []*plan.Column) {
 	for i, name := range attrs {
 		for j, def := range ColDefs {
 			if name == def.Name {
 				ColDefs[i], ColDefs[j] = ColDefs[j], ColDefs[i]
+				cols[i], cols[j] = cols[j], cols[i]
 			}
 		}
 	}

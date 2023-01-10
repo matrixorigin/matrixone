@@ -134,6 +134,15 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		IncrementalInterval: s.cfg.Ckp.IncrementalInterval.Duration,
 		GlobalMinCount:      s.cfg.Ckp.GlobalMinCount,
 	}
+	logtailServerAddr := s.cfg.LogtailServer.ListenAddress
+	logtailServerCfg := &options.LogtailServerCfg{
+		RpcMaxMessageSize:        int64(s.cfg.LogtailServer.RpcMaxMessageSize),
+		RpcPayloadCopyBufferSize: int64(s.cfg.LogtailServer.RpcPayloadCopyBufferSize),
+		RpcEnableChecksum:        s.cfg.LogtailServer.RpcEnableChecksum,
+		LogtailCollectInterval:   s.cfg.LogtailServer.LogtailCollectInterval.Duration,
+		ResponseSendTimeout:      s.cfg.LogtailServer.LogtailResponseSendTimeout.Duration,
+		MaxLogtailFetchFailure:   s.cfg.LogtailServer.MaxLogtailFetchFailure,
+	}
 
 	// use s3 as main fs
 	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)
@@ -146,7 +155,9 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		shard,
 		factory,
 		fs,
-		s.rt.Clock(),
+		s.rt,
 		ckpcfg,
+		logtailServerAddr,
+		logtailServerCfg,
 		options.LogstoreType(s.cfg.Txn.Storage.LogBackend))
 }

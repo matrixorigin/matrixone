@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"syscall"
 
@@ -101,12 +102,18 @@ func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MO
 	if err != nil {
 		logutil.Infof("start server on unix domain socket %v failed with %+v", pu.SV.UAddr, err)
 	}
-
+	initVarByConfig(pu)
 	return &MOServer{
 		addr:     addr,
 		app:      app,
 		uaddr:    pu.SV.UAddr,
 		app_unix: app_unix,
 		rm:       rm,
+	}
+}
+
+func initVarByConfig(pu *config.ParameterUnit) {
+	if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
+		GSysVariables.sysVars["save_query_result"] = int8(1)
 	}
 }

@@ -219,9 +219,6 @@ Trigger    Event    Table    Statement    Timing    Created    sql_mode    Defin
 use mo_catalog;
 show tables;
 tables_in_mo_catalog
-mo_database
-mo_tables
-mo_columns
 mo_user
 mo_account
 mo_role
@@ -229,6 +226,10 @@ mo_user_grant
 mo_role_grant
 mo_role_privs
 mo_user_defined_function
+mo_mysql_compatbility_mode
+mo_database
+mo_columns
+mo_tables
 show table_number from mo_catalog;
 mo_catalog    Number of tables in mo_catalog
 mo_catalog    9

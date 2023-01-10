@@ -60,6 +60,12 @@ func (l *LocalETLFS) ensureTempDir() (err error) {
 }
 
 func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
@@ -106,7 +112,7 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 	if err != nil {
 		return err
 	}
-	n, err := io.Copy(f, newIOEntriesReader(vector.Entries))
+	n, err := io.Copy(f, newIOEntriesReader(ctx, vector.Entries))
 	if err != nil {
 		return err
 	}
@@ -146,6 +152,11 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 }
 
 func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
@@ -170,7 +181,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 			return moerr.NewEmptyRangeNoCtx(path.File)
 		}
 
-		if entry.ignore {
+		if entry.done {
 			continue
 		}
 
@@ -204,7 +215,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				}
 				vector.Entries[i].Object = obj
 				vector.Entries[i].ObjectSize = size
-				if cr.N != entry.Size {
+				if entry.Size > 0 && cr.N != entry.Size {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
 
@@ -213,7 +224,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				if err != nil {
 					return err
 				}
-				if n != int64(entry.Size) {
+				if entry.Size > 0 && n != int64(entry.Size) {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
 			}
@@ -284,6 +295,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 					return err
 				}
 				entry.Data = data
+				entry.Size = int64(len(data))
 
 			} else {
 				if int64(len(entry.Data)) < entry.Size {
@@ -312,6 +324,11 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 }
 
 func (l *LocalETLFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 
 	path, err := ParsePathAtService(dirPath, l.name)
 	if err != nil {
@@ -362,6 +379,12 @@ func (l *LocalETLFS) List(ctx context.Context, dirPath string) (ret []DirEntry, 
 }
 
 func (l *LocalETLFS) Delete(ctx context.Context, filePaths ...string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	for _, filePath := range filePaths {
 		if err := l.deleteSingle(ctx, filePath); err != nil {
 			return err
@@ -511,6 +534,11 @@ func (l *LocalETLFSMutator) Append(ctx context.Context, entries ...IOEntry) erro
 }
 
 func (l *LocalETLFSMutator) mutate(ctx context.Context, baseOffset int64, entries ...IOEntry) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	// write
 	for _, entry := range entries {

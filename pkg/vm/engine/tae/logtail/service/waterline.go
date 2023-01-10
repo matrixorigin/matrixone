@@ -18,34 +18,56 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
 
 // Waterliner maintains waterline for all subscribed tables.
 type Waterliner struct {
-	sync.RWMutex
+	sync.Mutex
+
+	initialized bool
+	clock       clock.Clock
+
 	waterline timestamp.Timestamp
-	// tables    map[TableID]*tableInfo
 }
 
-func NewWaterliner(current timestamp.Timestamp) *Waterliner {
+func NewWaterliner(clock clock.Clock) *Waterliner {
 	return &Waterliner{
-		waterline: current,
-		// tables:    make(map[TableID]*tableInfo),
+		initialized: false,
+		clock:       clock,
 	}
 }
 
 // Waterline returns waterline for subscribed table.
+//
+// it would be initialized on its first call.
 func (w *Waterliner) Waterline() timestamp.Timestamp {
-	w.RLock()
-	defer w.RUnlock()
+	w.Lock()
+	defer w.Unlock()
+
+	if !w.initialized {
+		now, _ := w.clock.Now()
+		w.waterline = now
+		w.initialized = true
+	}
 
 	return w.waterline
 }
 
 // Advance updates waterline.
+//
+// Caller should keep monotonous.
 func (w *Waterliner) Advance(update timestamp.Timestamp) {
 	w.Lock()
 	defer w.Unlock()
+
+	if !w.initialized {
+		panic("advance on uninitailized instance")
+	}
+
+	if update.Less(w.waterline) {
+		panic("timestamp rollback for waterline")
+	}
 
 	w.waterline = update
 }

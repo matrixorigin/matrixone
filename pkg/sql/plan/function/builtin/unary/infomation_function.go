@@ -209,17 +209,65 @@ func LastInsertID(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	)
 }
 
+func LastQueryIDWithoutParam(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return adapter(vectors, proc, types.T_varchar.ToType(), 0,
+		func(proc *process.Process, params ...interface{}) (int, error) {
+			return 0, nil
+		},
+		func(proc *process.Process, params ...interface{}) (interface{}, error) {
+			cnt := int64(len(proc.SessionInfo.QueryId))
+			if cnt == 0 {
+				return nil, nil
+			}
+			result := params[0].([]string)
+			// LAST_QUERY_ID(-1) returns the most recently-executed query (equivalent to LAST_QUERY_ID()).
+			idx, err := makeQueryIdIdx(-1, cnt, proc)
+			if err != nil {
+				return nil, err
+			}
+			result[0] = proc.SessionInfo.QueryId[idx]
+			return result, nil
+		},
+	)
+}
+
 func LastQueryID(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return adapter(vectors, proc, types.T_varchar.ToType(), 0,
 		func(proc *process.Process, params ...interface{}) (int, error) {
 			return 0, nil
 		},
 		func(proc *process.Process, params ...interface{}) (interface{}, error) {
+			cnt := int64(len(proc.SessionInfo.QueryId))
+			if cnt == 0 {
+				return nil, nil
+			}
 			result := params[0].([]string)
-			result[0] = proc.SessionInfo.QueryId
+			loc := vector.MustTCols[int64](vectors[0])[0]
+			idx, err := makeQueryIdIdx(loc, cnt, proc)
+			if err != nil {
+				return nil, err
+			}
+			result[0] = proc.SessionInfo.QueryId[idx]
 			return result, nil
 		},
 	)
+}
+
+func makeQueryIdIdx(loc, cnt int64, proc *process.Process) (int, error) {
+	// https://docs.snowflake.com/en/sql-reference/functions/last_query_id.html
+	var idx int
+	if loc < 0 {
+		if loc < -cnt {
+			return 0, moerr.NewInvalidInput(proc.Ctx, "index out of range: %d", loc)
+		}
+		idx = int(loc + cnt)
+	} else {
+		if loc > cnt {
+			return 0, moerr.NewInvalidInput(proc.Ctx, "index out of range: %d", loc)
+		}
+		idx = int(loc)
+	}
+	return idx, nil
 }
 
 // RolesGraphml returns a GraphML document representing memory role subgraphs

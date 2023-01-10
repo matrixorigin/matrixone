@@ -87,7 +87,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	rowCount := 0
 	var pkDefs []string
-	var cbDef string
 	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
 
 	for _, col := range tableDef.Cols {
@@ -141,9 +140,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		if col.Primary {
 			pkDefs = append(pkDefs, colName)
 		}
-		if col.ClusterBy {
-			cbDef = col.Name
-		}
 	}
 	if tableDef.CompositePkey != nil {
 		pkDefs = append(pkDefs, util.SplitCompositePrimaryKeyColumnName(tableDef.CompositePkey.Name)...)
@@ -190,9 +186,24 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	createStr += ")"
 
-	if len(cbDef) > 0 {
-		createStr += " CLUSTER BY "
-		createStr += fmt.Sprintf("`%s`", cbDef)
+	if tableDef.ClusterBy != nil {
+		clusterby := " CLUSTER BY ("
+		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+			//multi column clusterby
+			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
+			for i, cbName := range cbNames {
+				if i != 0 {
+					clusterby += fmt.Sprintf(", `%s`", cbName)
+				} else {
+					clusterby += fmt.Sprintf("`%s`", cbName)
+				}
+			}
+		} else {
+			//single column cluster by
+			clusterby += fmt.Sprintf("`%s`", tableDef.ClusterBy.Name)
+		}
+		clusterby += ")"
+		createStr += clusterby
 	}
 
 	var comment string
