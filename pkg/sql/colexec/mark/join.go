@@ -297,7 +297,7 @@ func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, conds []*plan.Exp
 				break
 			}
 		}
-		if ctr.evecs[i].needFree {
+		if ctr.evecs[i].needFree && vec != nil {
 			analyze.Alloc(int64(vec.Size()))
 		}
 	}

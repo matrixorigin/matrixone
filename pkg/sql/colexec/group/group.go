@@ -250,7 +250,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 				break
 			}
 		}
-		if ctr.groupVecs[i].needFree {
+		if ctr.groupVecs[i].needFree && vec != nil {
 			anal.Alloc(int64(vec.Size()))
 		}
 		ctr.vecs[i] = vec
@@ -500,7 +500,7 @@ func (ctr *container) evalAggVector(bat *batch.Batch, aggs []agg.Aggregate, proc
 				break
 			}
 		}
-		if ctr.aggVecs[i].needFree {
+		if ctr.aggVecs[i].needFree && vec != nil {
 			analyze.Alloc(int64(vec.Size()))
 		}
 	}
@@ -523,7 +523,7 @@ func (ctr *container) evalMultiAggs(bat *batch.Batch, multiAggs []group_concat.A
 					break
 				}
 			}
-			if ctr.multiVecs[i][j].needFree {
+			if ctr.multiVecs[i][j].needFree && vec != nil {
 				analyze.Alloc(int64(vec.Size()))
 			}
 		}

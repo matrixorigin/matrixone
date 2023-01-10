@@ -78,7 +78,10 @@ func (m *IntHashMap) AddGroups(rows uint64) {
 }
 
 func (m *IntHashMap) Size() int64 {
-	// TODO: add the other part size of IntHashMap
+	// TODO: add the size of the other IntHashMap parts
+	if m.hashMap == nil {
+		return 0
+	}
 	return m.hashMap.Size()
 }
 

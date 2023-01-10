@@ -111,7 +111,9 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 			ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
 			bat.Vecs = append(bat.Vecs, vec)
 		} else {
-			analyze.Alloc(int64(vec.Size()))
+			if vec != nil {
+				analyze.Alloc(int64(vec.Size()))
+			}
 		}
 	}
 	if ctr.bat == nil {

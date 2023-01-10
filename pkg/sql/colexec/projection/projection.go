@@ -72,7 +72,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				break
 			}
 		}
-		if !isSame {
+		if !isSame && vec != nil {
 			anal.Alloc(int64(vec.Size()))
 		}
 	}

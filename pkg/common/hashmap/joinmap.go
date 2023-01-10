@@ -87,6 +87,9 @@ func (jm *JoinMap) Free() {
 }
 
 func (jm *JoinMap) Size() int64 {
-	// TODO: add the other parts' size of jm
+	// TODO: add the size of the other JoinMap parts
+	if jm.mp == nil {
+		return 0
+	}
 	return jm.mp.Size()
 }

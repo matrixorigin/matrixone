@@ -65,7 +65,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 				ap.Free(proc, true)
 				return false, err
 			}
-			anal.Alloc(ap.ctr.mp.Size())
+			if ap.ctr.mp != nil {
+				anal.Alloc(ap.ctr.mp.Size())
+			}
 			ctr.state = End
 		default:
 			if ctr.bat != nil {
@@ -182,7 +184,7 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 				break
 			}
 		}
-		if ctr.evecs[i].needFree {
+		if ctr.evecs[i].needFree && vec != nil {
 			analyze.Alloc(int64(vec.Size()))
 		}
 

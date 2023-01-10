@@ -54,7 +54,9 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 				arg.Free(proc, true)
 				return false, err
 			}
-			analyze.Alloc(arg.ctr.hashTable.Size())
+			if arg.ctr.hashTable != nil {
+				analyze.Alloc(arg.ctr.hashTable.Size())
+			}
 			arg.ctr.state = probe
 
 		case probe:

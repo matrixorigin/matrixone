@@ -179,7 +179,7 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 				break
 			}
 		}
-		if ctr.evecs[i].needFree {
+		if ctr.evecs[i].needFree && vec != nil {
 			analyze.Alloc(int64(vec.Size()))
 		}
 	}
