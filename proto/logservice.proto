@@ -51,6 +51,9 @@ message DNStore {
   NodeState State          = 4;
 
   repeated DNShardInfo Shards = 5 [(gogoproto.nullable) = false];
+
+  // Server address for logtail push model
+  string LogtailServerAddress = 6;
 }
 
 message LogStore {
@@ -143,6 +146,9 @@ message DNStoreHeartbeat {
   // DN store. 
   repeated DNShardInfo Shards = 3 [(gogoproto.nullable) = false];
   bool            TaskServiceCreated = 4;
+
+  // Server address for logtail push model
+  string LogtailServerAddress = 5;
 };
 
 message RSMState {
@@ -398,6 +404,9 @@ message DNStoreInfo {
   repeated DNShardInfo Shards = 3 [(gogoproto.nullable) = false];
 
   bool TaskServiceCreated = 4;
+
+  // Server address for logtail push model
+  string LogtailServerAddress = 5;
 }
 
 // DNState contains all DN details known to the HAKeeper.

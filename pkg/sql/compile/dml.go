@@ -170,10 +170,6 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	bat := makeInsertBatch(p)
 	defer bat.Clean(c.proc.Mp())
 
-	if p.OtherCols != nil {
-		p.ExplicitCols = append(p.ExplicitCols, p.OtherCols...)
-	}
-
 	insertRows := stmt.Rows.Select.(*tree.ValuesClause).Rows
 	if err = fillBatch(ctx, bat, p, insertRows, c.proc); err != nil {
 		return 0, err
@@ -412,18 +408,11 @@ func makeInsertBatch(p *plan.InsertValues) *batch.Batch {
 	for _, col := range p.ExplicitCols {
 		attrs = append(attrs, col.Name)
 	}
-	for _, col := range p.OtherCols {
-		attrs = append(attrs, col.Name)
-	}
 
 	bat := batch.NewWithSize(len(attrs))
 	bat.SetAttributes(attrs)
 	idx := 0
 	for _, col := range p.ExplicitCols {
-		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
-		idx++
-	}
-	for _, col := range p.OtherCols {
 		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
 		idx++
 	}

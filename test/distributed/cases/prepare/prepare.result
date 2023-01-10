@@ -310,3 +310,11 @@ Duplicate entry '1' for key '__mo_index_idx_col'
 select * from t1;
 a    b    c
 1    2    3
+prepare stmt1 from 'update t1 set b = ? where a = ?';
+set @varb = 22;
+set @vara = 1;
+execute stmt1 using @varb,@vara;
+select * from t1;
+a    b    c
+1    22    3
+drop table t1;

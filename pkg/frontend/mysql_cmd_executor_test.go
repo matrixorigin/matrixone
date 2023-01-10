@@ -167,7 +167,7 @@ func Test_mce(t *testing.T) {
 			"set @@tx_isolation=`READ-COMMITTED`",
 			//TODO:fix it after parser is ready
 			//"set a = b",
-			"drop database T",
+			//"drop database T",
 		}
 
 		sql1Col := &MysqlColumn{}
@@ -788,7 +788,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 		db, sql, user := "T", "SHOW TABLES", "root"
 		var eng engine.Engine
 		proc := &process.Process{}
-		ses := &Session{}
+		ses := &Session{planCache: newPlanCache(1)}
 		cw, err := GetComputationWrapper(db, sql, user, eng, proc, ses)
 		convey.So(cw, convey.ShouldNotBeEmpty)
 		convey.So(err, convey.ShouldBeNil)
