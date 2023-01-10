@@ -16,37 +16,47 @@ package service
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/tests"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/stretchr/testify/require"
+	taelogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 func TestService(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	tableA := mockTable(1, 1, 1)
 	tableB := mockTable(2, 2, 2)
 	tableC := mockTable(3, 3, 3)
 
-	address := "127.0.0.1:9999"
+	addrs, err := tests.GetAddressBatch("127.0.0.1", 1)
+	require.NoError(t, err)
+
+	address := addrs[0]
 	logtailer := mockLocktailer(tableA, tableB, tableC)
-	clock := clock.NewUnixNanoHLCClock(ctx, 500*time.Millisecond)
+	rt := mockRuntime()
 
 	/* ---- construct logtail server ---- */
 	logtailServer, err := NewLogtailServer(
-		address, logtailer, clock,
+		address, options.NewDefaultLogtailServerCfg(), logtailer, rt,
 		WithServerCollectInterval(500*time.Millisecond),
 		WithServerSendTimeout(5*time.Second),
 		WithServerEnableChecksum(true),
-		WithServerMaxMessageSize(16*KiB),
-		WithServerPayloadCopyBufferSize(16*KiB),
+		WithServerMaxMessageSize(16*mpool.KB),
+		WithServerPayloadCopyBufferSize(16*mpool.KB),
+		WithServerMaxLogtailFetchFailure(5),
 	)
 	require.NoError(t, err)
 
@@ -60,9 +70,9 @@ func TestService(t *testing.T) {
 
 	/* ---- construct logtail client ---- */
 	codec := morpc.NewMessageCodec(func() morpc.Message { return &LogtailResponse{} },
-		morpc.WithCodecPayloadCopyBufferSize(16*KiB),
+		morpc.WithCodecPayloadCopyBufferSize(16*mpool.KB),
 		morpc.WithCodecEnableChecksum(),
-		morpc.WithCodecMaxBodySize(16*KiB),
+		morpc.WithCodecMaxBodySize(16*mpool.KB),
 	)
 	bf := morpc.NewGoettyBasedBackendFactory(codec)
 	rpcClient, err := morpc.NewClient(bf, morpc.WithClientMaxBackendPerHost(1))
@@ -142,19 +152,13 @@ type logtailer struct {
 	tables []api.TableID
 }
 
-func mockLocktailer(tables ...api.TableID) Logtailer {
+func mockLocktailer(tables ...api.TableID) taelogtail.Logtailer {
 	return &logtailer{
 		tables: tables,
 	}
 }
 
-func (m *logtailer) TableTotal(
-	ctx context.Context, table api.TableID, end timestamp.Timestamp,
-) (logtail.TableLogtail, error) {
-	return mockLogtail(table), nil
-}
-
-func (m *logtailer) RangeTotal(
+func (m *logtailer) RangeLogtail(
 	ctx context.Context, from, to timestamp.Timestamp,
 ) ([]logtail.TableLogtail, error) {
 	tails := make([]logtail.TableLogtail, 0, len(m.tables))
@@ -162,4 +166,29 @@ func (m *logtailer) RangeTotal(
 		tails = append(tails, mockLogtail(table))
 	}
 	return tails, nil
+}
+
+func (m *logtailer) TableLogtail(
+	ctx context.Context, table api.TableID, from, to timestamp.Timestamp,
+) (logtail.TableLogtail, error) {
+	for _, t := range m.tables {
+		if t.String() == table.String() {
+			return mockLogtail(table), nil
+		}
+	}
+	return logtail.TableLogtail{Table: &table, Ts: &to}, nil
+}
+
+func mockRuntime() runtime.Runtime {
+	return runtime.NewRuntime(
+		metadata.ServiceType_DN,
+		"uuid",
+		logutil.GetLogger(),
+		runtime.WithClock(
+			clock.NewHLCClock(
+				func() int64 { return time.Now().UTC().UnixNano() },
+				time.Duration(math.MaxInt64),
+			),
+		),
+	)
 }
