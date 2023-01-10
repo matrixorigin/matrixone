@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"sync"
+	"unsafe"
 )
 
 type lockTable struct {
@@ -27,14 +28,14 @@ type lockTable struct {
 	//locks sync.Map
 	locks map[string]map[uint64][][]byte
 	// tableID -> LockStorage
-	//btrees [32]sync.Map
-	btrees map[uint64]LockStorage
+	//seqStorage [32]sync.Map
+	seqStorage map[uint64]LockStorage
 }
 
 func NewLockService() LockService {
 	return &lockTable{
-		locks:  make(map[string]map[uint64][][]byte),
-		btrees: make(map[uint64]LockStorage),
+		locks:      make(map[string]map[uint64][][]byte),
+		seqStorage: make(map[uint64]LockStorage),
 	}
 }
 
@@ -49,31 +50,33 @@ func (l *lockTable) Lock(ctx context.Context, tableID uint64, rows [][]byte, txn
 func (l *lockTable) Unlock(ctx context.Context, txnID []byte) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	for tableID, keys := range l.locks[string(txnID)] {
+	for tableID, keys := range l.locks[unsafeByteSliceToString(txnID)] {
+		storage := l.seqStorage[tableID]
 		for _, key := range keys {
-			if lock, ok := l.btrees[tableID].Get(key); ok {
-				if waiter := lock.waiter.close(); waiter != nil {
-					lock.waiter = waiter
-					l.btrees[tableID].Add(key, lock)
+			if lock, ok := storage.Get(key); ok {
+				if w := lock.waiter.close(); w != nil {
+					lock.waiter = w
+					lock.txnID = w.txnID
+					storage.Add(key, lock)
 				} else {
-					l.btrees[tableID].Delete(key)
+					storage.Delete(key)
 				}
+
 			}
 		}
-		delete(l.locks[string(txnID)], tableID)
+		delete(l.locks[unsafeByteSliceToString(txnID)], tableID)
 	}
-	//delete(l.locks, string(txnID))
 	return nil
 }
 
 func (l *lockTable) acquireLock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) bool {
 	l.mu.Lock()
-	if _, ok := l.locks[string(txnID)]; !ok {
-		l.locks[string(txnID)] = make(map[uint64][][]byte)
+	if _, ok := l.locks[unsafeByteSliceToString(txnID)]; !ok {
+		l.locks[unsafeByteSliceToString(txnID)] = make(map[uint64][][]byte)
 	}
 
-	if _, ok := l.btrees[tableID]; !ok {
-		l.btrees[tableID] = newBtreeBasedStorage()
+	if _, ok := l.seqStorage[tableID]; !ok {
+		l.seqStorage[tableID] = newBtreeBasedStorage()
 	}
 	l.mu.Unlock()
 
@@ -87,21 +90,22 @@ func (l *lockTable) acquireLock(ctx context.Context, tableID uint64, rows [][]by
 func (l *lockTable) acquireRowLock(ctx context.Context, tableID uint64, row []byte, txnID []byte, options LockOptions) bool {
 	waiter := acquireWaiter(txnID)
 	l.mu.Lock()
-	key, lock, ok := l.btrees[tableID].Seek(row)
+	storage := l.seqStorage[tableID]
+	key, lock, ok := storage.Seek(row)
 	if ok && (bytes.Equal(key, row) || lock.isLockRangeEnd()) {
-		err := lock.add(waiter)
-		l.mu.Unlock()
-		if err != nil {
+		if err := lock.add(waiter); err != nil {
+			l.mu.Unlock()
 			return false
 		}
+		l.mu.Unlock()
 		if err := waiter.wait(ctx); err != nil {
 			return false
 		}
 		l.mu.Lock()
 	} else {
-		l.addRowLock(txnID, tableID, row, waiter)
+		addRowLock(storage, txnID, row, waiter, options)
 	}
-	l.locks[string(txnID)][tableID] = append(l.locks[string(txnID)][tableID], row)
+	l.locks[unsafeByteSliceToString(txnID)][tableID] = append(l.locks[unsafeByteSliceToString(txnID)][tableID], row)
 	l.mu.Unlock()
 	return true
 }
@@ -110,8 +114,12 @@ func (l *lockTable) acquireRangeLock(tableID uint64, start, end []byte, txnID []
 	return false
 }
 
-func (l *lockTable) addRowLock(txnID []byte, tableID uint64, row []byte, waiter *waiter) {
-	lock := newRowLock(txnID, Exclusive)
+func addRowLock(storage LockStorage, txnID []byte, row []byte, waiter *waiter, options LockOptions) {
+	lock := newRowLock(txnID, options.mode)
 	lock.waiter = waiter
-	l.btrees[tableID].Add(row, lock)
+	storage.Add(row, lock)
+}
+
+func unsafeByteSliceToString(key []byte) string {
+	return *(*string)(unsafe.Pointer(&key))
 }

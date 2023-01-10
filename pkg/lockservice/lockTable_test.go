@@ -16,7 +16,7 @@ package lockservice
 
 import (
 	"context"
-	"fmt"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -73,11 +73,11 @@ func TestMultipleLocks(t *testing.T) {
 	for i := 0; i < sum; i++ {
 		wg.Add(1)
 		go func(i int) {
-			ok, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte{byte(i)}, option)
+			ok, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte(strconv.Itoa(i)), option)
 			assert.NoError(t, err)
 			assert.Equal(t, true, ok)
 			iter++
-			err = l.Unlock(ctx, []byte{byte(i)})
+			err = l.Unlock(ctx, []byte(strconv.Itoa(i)))
 			assert.NoError(t, err)
 			wg.Done()
 		}(i)
@@ -96,27 +96,12 @@ func BenchmarkMultipleLock(b *testing.B) {
 	}
 	iter := 0
 
-	b.Run(fmt.Sprintf("lock-service"), func(b *testing.B) {
+	b.Run("lock-service", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			go func(i int) {
 				l.Lock(ctx, 0, [][]byte{{1}}, []byte{byte(i)}, option)
 				iter++
 				l.Unlock(ctx, []byte{byte(i)})
-			}(i)
-		}
-	})
-}
-
-func BenchmarkMutex(b *testing.B) {
-	iter := 0
-	mu := sync.Mutex{}
-
-	b.Run(fmt.Sprintf("mutex"), func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			go func(i int) {
-				mu.Lock()
-				iter++
-				mu.Unlock()
 			}(i)
 		}
 	})
