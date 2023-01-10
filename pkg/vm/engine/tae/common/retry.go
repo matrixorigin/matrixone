@@ -46,7 +46,7 @@ func DoRetry(op RetryOp, ctx context.Context) (err error) {
 func RetryWithIntervalAndTimeout(
 	op WaitOp,
 	timeout time.Duration,
-	interval time.Duration) (err error) {
+	interval time.Duration, suppressTimout bool) (err error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -63,6 +63,9 @@ func RetryWithIntervalAndTimeout(
 	for {
 		select {
 		case <-ctx.Done():
+			if suppressTimout {
+				return moerr.GetOkExpectedEOB()
+			}
 			return moerr.NewInternalError(ctx, "timeout")
 		case <-ticker.C:
 			ok, err = op()
