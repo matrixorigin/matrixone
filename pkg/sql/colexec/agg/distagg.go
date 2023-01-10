@@ -270,13 +270,14 @@ func (a *UnaryDistAgg[T1, T2]) Merge(b Agg[any], x, y int64) error {
 	if a.es[x] && !b0.es[y] {
 		a.otyp = b0.otyp
 	}
-	for _, v := range b0.srcs[y] {
+	for i, v := range b0.srcs[y] {
 		if ok, err = a.maps[x].InsertValue(v); err != nil {
 			return err
 		}
 		if ok {
 			a.vs[x], a.es[x] = a.fill(x, v, a.vs[x], 1, a.es[x], false)
 		}
+		a.srcs[y] = append(a.srcs[x], b0.srcs[y][i])
 	}
 	return nil
 }
@@ -298,13 +299,14 @@ func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, v
 		if a.es[j] && !b0.es[int64(i)+start] {
 			a.otyp = b0.otyp
 		}
-		for _, v := range b0.srcs[k] {
+		for h, v := range b0.srcs[k] {
 			if ok, err = a.maps[j].InsertValue(v); err != nil {
 				return err
 			}
 			if ok {
 				a.vs[j], a.es[j] = a.fill(int64(j), v, a.vs[j], 1, a.es[j], false)
 			}
+			a.srcs[j] = append(a.srcs[j], b0.srcs[k][h])
 		}
 	}
 	return nil

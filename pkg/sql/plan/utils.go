@@ -1039,6 +1039,12 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 				Fval: vector.MustTCols[float32](vec)[0],
 			},
 		}
+	case types.T_float32:
+		return &plan.Const{
+			Value: &plan.Const_Fval{
+				Fval: vec.Col.([]float32)[0],
+			},
+		}
 	case types.T_float64:
 		return &plan.Const{
 			Value: &plan.Const_Dval{

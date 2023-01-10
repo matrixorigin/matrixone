@@ -19,22 +19,19 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -64,6 +61,18 @@ func openSaveQueryResult(ses *Session) bool {
 		return false
 	}
 	if v, _ := val.(int8); v > 0 {
+		if ses.blockIdx == 0 {
+			val, err := ses.GetGlobalVar("query_result_maxsize")
+			if err != nil {
+				return false
+			}
+			switch v := val.(type) {
+			case uint64:
+				ses.limitResultSize = float64(v)
+			case float64:
+				ses.limitResultSize = v
+			}
+		}
 		return true
 	}
 	return false
@@ -117,9 +126,13 @@ func isSimpleResultQuery(ast tree.Statement) bool {
 }
 
 func saveQueryResult(ses *Session, bat *batch.Batch) error {
+	s := ses.curResultSize + float64(bat.Size())/(1024*1024)
+	if s > ses.limitResultSize {
+		return nil
+	}
 	fs := ses.GetParameterUnit().FileService
 	// write query result
-	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), ses.GetBlockIdx())
+	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), ses.GetIncBlockIdx())
 	writer, err := objectio.NewObjectWriter(path, fs)
 	if err != nil {
 		return err
@@ -132,16 +145,17 @@ func saveQueryResult(ses *Session, bat *batch.Batch) error {
 	if err != nil {
 		return err
 	}
+	ses.curResultSize = s
 	return nil
 }
 
 func saveQueryResultMeta(ses *Session) error {
 	defer func() {
 		ses.ResetBlockIdx()
+		ses.p = nil
+		ses.tStmt = nil
+		ses.curResultSize = 0
 	}()
-	if ses.blockIdx == 0 {
-		return nil
-	}
 	fs := ses.GetParameterUnit().FileService
 	// write query result meta
 	b, err := ses.rs.Marshal()
@@ -164,8 +178,10 @@ func saveQueryResultMeta(ses *Session) error {
 		RoleId:     ses.tStmt.RoleId,
 		ResultPath: buf.String(),
 		CreateTime: types.CurrentTimestamp(),
-		ResultSize: 100, // TODO: implement
+		ResultSize: ses.curResultSize,
 		Columns:    string(b),
+		Tables:     getTablesFromPlan(ses.p),
+		UserId:     ses.GetTenantInfo().GetUserID(),
 	}
 	metaBat, err := buildQueryResultMetaBatch(m, ses.mp)
 	if err != nil {
@@ -187,6 +203,26 @@ func saveQueryResultMeta(ses *Session) error {
 	return nil
 }
 
+func getTablesFromPlan(p *plan.Plan) string {
+	if p == nil {
+		return ""
+	}
+	buf := new(strings.Builder)
+	cnt := 0
+	if q, ok := p.Plan.(*plan.Plan_Query); ok {
+		for _, n := range q.Query.Nodes {
+			if n.NodeType == plan.Node_EXTERNAL_SCAN || n.NodeType == plan.Node_TABLE_SCAN {
+				if cnt > 0 {
+					buf.WriteString(", ")
+				}
+				buf.WriteString(n.TableDef.Name)
+				cnt++
+			}
+		}
+	}
+	return buf.String()
+}
+
 func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, error) {
 	var err error
 	bat := batch.NewWithSize(len(catalog.MetaColTypes))
@@ -197,7 +233,7 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	if err = vector.Append(bat.Vecs[catalog.QUERY_ID_IDX], types.Uuid(m.QueryId), false, mp); err != nil {
 		return nil, err
 	}
-	if err = vector.Append(bat.Vecs[catalog.STATEMENT_IDX], []byte(m.Statement), false, mp); err != nil {
+	if err = vector.AppendString(bat.Vecs[catalog.STATEMENT_IDX], m.Statement, false, mp); err != nil {
 		return nil, err
 	}
 	if err = vector.Append(bat.Vecs[catalog.ACCOUNT_ID_IDX], m.AccountId, false, mp); err != nil {
@@ -206,7 +242,7 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	if err = vector.Append(bat.Vecs[catalog.ROLE_ID_IDX], m.RoleId, false, mp); err != nil {
 		return nil, err
 	}
-	if err = vector.Append(bat.Vecs[catalog.RESULT_PATH_IDX], []byte(m.ResultPath), false, mp); err != nil {
+	if err = vector.AppendString(bat.Vecs[catalog.RESULT_PATH_IDX], m.ResultPath, false, mp); err != nil {
 		return nil, err
 	}
 	if err = vector.Append(bat.Vecs[catalog.CREATE_TIME_IDX], m.CreateTime, false, mp); err != nil {
@@ -215,7 +251,13 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	if err = vector.Append(bat.Vecs[catalog.RESULT_SIZE_IDX], m.ResultSize, false, mp); err != nil {
 		return nil, err
 	}
-	if err = vector.Append(bat.Vecs[catalog.COLUMNS_IDX], []byte(m.Columns), false, mp); err != nil {
+	if err = vector.AppendString(bat.Vecs[catalog.COLUMNS_IDX], m.Columns, false, mp); err != nil {
+		return nil, err
+	}
+	if err = vector.AppendString(bat.Vecs[catalog.TABLES_IDX], m.Tables, false, mp); err != nil {
+		return nil, err
+	}
+	if err = vector.Append(bat.Vecs[catalog.USER_ID_IDX], m.UserId, false, mp); err != nil {
 		return nil, err
 	}
 	return bat, nil

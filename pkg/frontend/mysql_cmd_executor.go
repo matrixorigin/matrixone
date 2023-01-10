@@ -2289,7 +2289,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if err != nil {
 		return nil, err
 	}
-
+	cwft.ses.p = cwft.plan
 	if _, ok := cwft.stmt.(*tree.Execute); ok {
 		executePlan := cwft.plan.GetDcl().GetExecute()
 		stmtName := executePlan.GetName()
@@ -3260,6 +3260,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
+		proc.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
 		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 	} else {

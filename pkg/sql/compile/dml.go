@@ -416,10 +416,6 @@ func makeInsertBatch(p *plan.InsertValues) *batch.Batch {
 		bat.Vecs[idx] = vector.New(vector.FLAT, types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
 		idx++
 	}
-	for _, col := range p.OtherCols {
-		bat.Vecs[idx] = vector.New(vector.FLAT, types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
-		idx++
-	}
 
 	return bat
 }

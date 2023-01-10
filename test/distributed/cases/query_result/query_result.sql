@@ -22,3 +22,12 @@ select * from result_scan(last_query_id()) as u;
 select c from tt, t2 where tt.a = t2.a;
 select * from result_scan(last_query_id()) as u, result_scan(last_query_id()) as v limit 1;
 set global save_query_result = off;
+
+set global save_query_result = on;
+select tt.a from tt, t2;
+select tables from meta_scan(last_query_id()) as u;
+set global query_result_maxsize = 0;
+select tt.a from tt, t2;
+select char_length(result_path) from meta_scan(last_query_id()) as u;
+select tt.a from tt, t2;
+select result_size = 0 from meta_scan(last_query_id()) as u;
