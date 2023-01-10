@@ -113,7 +113,7 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 		}
 		mov, _ = movec.BuildVarlenaVector(typ, header, storage)
 	} else if vec.GetType().IsTuple() {
-		mov = movec.NewOriginal(vec.GetType())
+		mov = movec.New(vector.FLAT, vec.GetType())
 		cnt := types.DecodeInt32(bs.Storage)
 		if cnt != 0 {
 			if err := types.Decode(bs.Storage, &mov.Col); err != nil {

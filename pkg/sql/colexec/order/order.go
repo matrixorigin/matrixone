@@ -83,7 +83,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 }
 
 func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Process) (bool, error) {
-	for i := 0; i < bat.VectorCount(); i++ {
+	/*for i := 0; i < bat.VectorCount(); i++ {
 		vec := bat.GetVector(int32(i))
 		if vec.IsOriginal() {
 			nvec, err := bat.Vecs[i].Dup(proc.Mp())
@@ -93,7 +93,7 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 			bat.SetVector(int32(i), nvec)
 
 		}
-	}
+	}*/
 	for i, f := range ap.Fs {
 		vec, err := colexec.EvalExpr(bat, proc, f.Expr)
 		if err != nil {

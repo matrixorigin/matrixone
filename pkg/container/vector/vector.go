@@ -338,6 +338,74 @@ func (v *Vector) UnmarshalBinaryWithMpool(data []byte, mp *mpool.MPool) error {
 	return nil
 }
 
+func (v *Vector) ToConst(row int, mp *mpool.MPool) *Vector {
+	if v.class == CONSTANT {
+		return v
+	}
+	switch v.typ.Oid {
+	case types.T_bool:
+		return toConstVector[bool](v, row, mp)
+	case types.T_int8:
+		return toConstVector[int8](v, row, mp)
+	case types.T_int16:
+		return toConstVector[int16](v, row, mp)
+	case types.T_int32:
+		return toConstVector[int32](v, row, mp)
+	case types.T_int64:
+		return toConstVector[int64](v, row, mp)
+	case types.T_uint8:
+		return toConstVector[uint8](v, row, mp)
+	case types.T_uint16:
+		return toConstVector[uint16](v, row, mp)
+	case types.T_uint32:
+		return toConstVector[uint32](v, row, mp)
+	case types.T_uint64:
+		return toConstVector[uint64](v, row, mp)
+	case types.T_float32:
+		return toConstVector[float32](v, row, mp)
+	case types.T_float64:
+		return toConstVector[float64](v, row, mp)
+	case types.T_date:
+		return toConstVector[types.Date](v, row, mp)
+	case types.T_datetime:
+		return toConstVector[types.Datetime](v, row, mp)
+	case types.T_time:
+		return toConstVector[types.Time](v, row, mp)
+	case types.T_timestamp:
+		return toConstVector[types.Timestamp](v, row, mp)
+	case types.T_decimal64:
+		return toConstVector[types.Decimal64](v, row, mp)
+	case types.T_decimal128:
+		return toConstVector[types.Decimal128](v, row, mp)
+	case types.T_uuid:
+		return toConstVector[types.Uuid](v, row, mp)
+	case types.T_TS:
+		return toConstVector[types.TS](v, row, mp)
+	case types.T_Rowid:
+		return toConstVector[types.Rowid](v, row, mp)
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+		if nulls.Contains(v.nsp, uint64(row)) {
+			return New(CONSTANT, v.typ)
+		}
+		bs := v.GetBytes(int64(row))
+		vec := New(CONSTANT, v.typ)
+		AppendBytes(vec, bs, false, mp)
+		return vec
+	}
+	return nil
+}
+
+func toConstVector[T types.FixedSizeT](v *Vector, row int, m *mpool.MPool) *Vector {
+	if nulls.Contains(v.nsp, uint64(row)) {
+		return New(CONSTANT, v.typ)
+	} else {
+		val := MustTCols[T](v)[int64(row)]
+		vec := New(CONSTANT, v.typ)
+		Append(vec, val, false, m)
+		return vec
+	}
+}
+
 // PreExtend use to expand the capacity of the vector
 func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 	if v.class == CONSTANT {
@@ -701,6 +769,23 @@ func UnionNull(v, _ *Vector, m *mpool.MPool) error {
 	pos := uint64(v.Length() - 1)
 	nulls.Add(v.GetNulls(), pos)
 	return nil
+}
+
+func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPool) (err error) {
+
+	if err = v.PreExtend(cnt, m); err != nil {
+		return err
+	}
+
+	for i := range flags {
+		if flags[i] > 0 {
+			err1 := v.UnionOne(w, offset+int64(i), false, m)
+			if err1 != nil {
+				err = err1
+			}
+		}
+	}
+	return err
 }
 
 // String function is used to visually display the vector,
