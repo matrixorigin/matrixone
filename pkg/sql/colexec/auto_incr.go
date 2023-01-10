@@ -71,7 +71,7 @@ func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Proce
 
 func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.Process, p *plan.InsertValues, bat *batch.Batch, dbName, tblName string) error {
 	ColDefs := p.ExplicitCols
-	orderColDefs(p.OrderAttrs, ColDefs)
+	orderColDefs(p.OrderAttrs, ColDefs, p.Columns)
 	db, err := e.Database(ctx, p.DbName, proc.TxnOperator)
 	if err != nil {
 		return err
@@ -641,11 +641,12 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 	return nil
 }
 
-func orderColDefs(attrs []string, ColDefs []*plan.ColDef) {
+func orderColDefs(attrs []string, ColDefs []*plan.ColDef, cols []*plan.Column) {
 	for i, name := range attrs {
 		for j, def := range ColDefs {
 			if name == def.Name {
 				ColDefs[i], ColDefs[j] = ColDefs[j], ColDefs[i]
+				cols[i], cols[j] = cols[j], cols[i]
 			}
 		}
 	}

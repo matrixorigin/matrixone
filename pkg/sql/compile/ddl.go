@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -161,42 +160,42 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 		// for now ColumnId is equal ColumnIndex, and we have a bug to UpdateConstraint after created immediately
 		// so i comment these codes. if you want to remove these code, let @ouyuanning known.
-		// newTableDef, err := newRelation.TableDefs(c.ctx)
-		// if err != nil {
-		// 	return err
-		// }
-		// var colNameToId = make(map[string]uint64)
-		// for _, def := range newTableDef {
-		// 	if attr, ok := def.(*engine.AttributeDef); ok {
-		// 		colNameToId[attr.Attr.Name] = attr.Attr.ID
-		// 	}
-		// }
-		// newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
-		// for i, fkey := range qry.GetTableDef().Fkeys {
-		// 	newDef := &plan.ForeignKeyDef{
-		// 		Name:        fkey.Name,
-		// 		Cols:        make([]uint64, len(fkey.Cols)),
-		// 		ForeignTbl:  fkey.ForeignTbl,
-		// 		ForeignCols: make([]uint64, len(fkey.ForeignCols)),
-		// 		OnDelete:    fkey.OnDelete,
-		// 		OnUpdate:    fkey.OnUpdate,
-		// 	}
-		// 	copy(newDef.ForeignCols, fkey.ForeignCols)
-		// 	for idx, colName := range qry.GetFkCols()[i].Cols {
-		// 		newDef.Cols[idx] = colNameToId[colName]
-		// 	}
-		// 	newFkeys[i] = newDef
-		// }
-		// newCt, err := makeNewCreateConstraint(nil, &engine.ForeignKeyDef{
-		// 	Fkeys: newFkeys,
-		// })
-		// if err != nil {
-		// 	return err
-		// }
-		// err = newRelation.UpdateConstraint(c.ctx, newCt)
-		// if err != nil {
-		// 	return err
-		// }
+		newTableDef, err := newRelation.TableDefs(c.ctx)
+		if err != nil {
+			return err
+		}
+		var colNameToId = make(map[string]uint64)
+		for _, def := range newTableDef {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				colNameToId[attr.Attr.Name] = attr.Attr.ID
+			}
+		}
+		newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
+		for i, fkey := range qry.GetTableDef().Fkeys {
+			newDef := &plan.ForeignKeyDef{
+				Name:        fkey.Name,
+				Cols:        make([]uint64, len(fkey.Cols)),
+				ForeignTbl:  fkey.ForeignTbl,
+				ForeignCols: make([]uint64, len(fkey.ForeignCols)),
+				OnDelete:    fkey.OnDelete,
+				OnUpdate:    fkey.OnUpdate,
+			}
+			copy(newDef.ForeignCols, fkey.ForeignCols)
+			for idx, colName := range qry.GetFkCols()[i].Cols {
+				newDef.Cols[idx] = colNameToId[colName]
+			}
+			newFkeys[i] = newDef
+		}
+		newCt, err := makeNewCreateConstraint(nil, &engine.ForeignKeyDef{
+			Fkeys: newFkeys,
+		})
+		if err != nil {
+			return err
+		}
+		err = newRelation.UpdateConstraint(c.ctx, newCt)
+		if err != nil {
+			return err
+		}
 
 		// need to append TableId to parent's TableDef.RefChildTbls
 		for i, fkTableName := range fkTables {
@@ -483,29 +482,6 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 				oldCt.Cts = append(oldCt.Cts, c)
 			}
 
-		case *engine.RefChildTableDef:
-			ok := false
-			var def *engine.RefChildTableDef
-			tmpTableId, err := strconv.ParseInt(dropName, 10, 64)
-			if err != nil {
-				return nil, err
-			}
-			refTableId := uint64(tmpTableId)
-			for _, ct := range oldCt.Cts {
-				if def, ok = ct.(*engine.RefChildTableDef); ok {
-					for idx, refTable := range def.Tables {
-						if refTable == refTableId {
-							def.Tables = append(def.Tables[:idx], def.Tables[idx+1:]...)
-							break
-						}
-					}
-					break
-				}
-			}
-			if !ok {
-				oldCt.Cts = append(oldCt.Cts, c)
-			}
-
 		case *engine.UniqueIndexDef:
 			u := &plan.UniqueIndexDef{}
 			err := u.UnMarshalUniqueIndexDef(([]byte)(c.UniqueIndex))
@@ -623,6 +599,8 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	tqry := s.Plan.GetDdl().GetTruncateTable()
 	dbName := tqry.GetDatabase()
 	tblName := tqry.GetTable()
+	oldId := tqry.GetTableId()
+
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
@@ -666,6 +644,44 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
+	// update tableDef of foreign key's table with new table id
+	for _, ftblId := range tqry.ForeignTbl {
+		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, ftblId)
+		if err != nil {
+			return err
+		}
+		fkTableDef, err := fkRelation.TableDefs(c.ctx)
+		if err != nil {
+			return err
+		}
+		var oldCt *engine.ConstraintDef
+		for _, def := range fkTableDef {
+			if ct, ok := def.(*engine.ConstraintDef); ok {
+				oldCt = ct
+				break
+			}
+		}
+		for _, ct := range oldCt.Cts {
+			if def, ok := ct.(*engine.RefChildTableDef); ok {
+				for idx, refTable := range def.Tables {
+					if refTable == oldId {
+						def.Tables[idx] = newId
+						break
+					}
+				}
+				break
+			}
+		}
+		if err != nil {
+			return err
+		}
+		err = fkRelation.UpdateConstraint(c.ctx, oldCt)
+		if err != nil {
+			return err
+		}
+
+	}
+
 	id := rel.GetTableID(c.ctx)
 
 	if isTemp {
@@ -688,6 +704,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	var rel engine.Relation
 	var err error
 	var isTemp bool
+
+	tblName := qry.GetTable()
+	tblId := qry.GetTableId()
+
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if qry.GetIfExists() {
@@ -695,7 +715,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 		return err
 	}
-	tblName := qry.GetTable()
+
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		var e error // avoid contamination of error messages
 		dbSource, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
@@ -714,6 +734,44 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 		isTemp = true
 	}
+
+	// update tableDef of foreign key's table
+	for _, ftblId := range qry.ForeignTbl {
+		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, ftblId)
+		if err != nil {
+			return err
+		}
+		fkTableDef, err := fkRelation.TableDefs(c.ctx)
+		if err != nil {
+			return err
+		}
+		var oldCt *engine.ConstraintDef
+		for _, def := range fkTableDef {
+			if ct, ok := def.(*engine.ConstraintDef); ok {
+				oldCt = ct
+				break
+			}
+		}
+		for _, ct := range oldCt.Cts {
+			if def, ok := ct.(*engine.RefChildTableDef); ok {
+				for idx, refTable := range def.Tables {
+					if refTable == tblId {
+						def.Tables = append(def.Tables[:idx], def.Tables[idx+1:]...)
+						break
+					}
+				}
+				break
+			}
+		}
+		if err != nil {
+			return err
+		}
+		err = fkRelation.UpdateConstraint(c.ctx, oldCt)
+		if err != nil {
+			return err
+		}
+	}
+
 	if isTemp {
 		if err := dbSource.Delete(c.ctx, engine.GetTempTableName(dbName, tblName)); err != nil {
 			return err
