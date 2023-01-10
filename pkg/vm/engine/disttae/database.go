@@ -101,7 +101,7 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 		Ts:         db.txn.meta.SnapshotTS,
 	}
 	if ok := db.txn.catalog.GetTable(key); !ok {
-		return nil, moerr.GetOkExpectedEOB()
+		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
 	if tbl, ok := db.txn.syncMap.Load(key.Id); ok {
 		return tbl.(*table), nil
