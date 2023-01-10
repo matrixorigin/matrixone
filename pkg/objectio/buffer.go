@@ -75,7 +75,7 @@ func (b *ObjectBuffer) SetDataOptions(items ...WriteOptions) {
 			ts := item.Val.(time.Time)
 			b.vector.ExpireAt = ts
 		default:
-			break
+			continue
 		}
 	}
 }
