@@ -55,7 +55,7 @@ func TestNoopTableOptions_FormatDdl(t *testing.T) {
 }
 
 var dummyStrColumn = Column{Name: "str", ColType: TVarchar, Precision: 32, Default: "", Comment: "str column"}
-var dummyStrCreateSql = "`str` varchar(32) NOT NULL COMMENT \"str column\""
+var dummyStrCreateSql = "`str` VARCHAR(32) NOT NULL COMMENT \"str column\""
 var dummyInt64Column = Column{Name: "int64", ColType: TInt64, Default: "0", Comment: "int64 column"}
 var dummyInt64CreateSql = "`int64` BIGINT DEFAULT \"0\" COMMENT \"int64 column\""
 var dummyFloat64Column = Column{Name: "float64", ColType: TFloat64, Default: "0.0", Comment: "float64 column"}
@@ -77,12 +77,12 @@ var dummyTableCreateExistsSql = "CREATE EXTERNAL TABLE IF NOT EXISTS `db_dummy`.
 	"\n" + dummyStrCreateSql +
 	",\n" + dummyInt64CreateSql +
 	",\n" + dummyFloat64CreateSql +
-	"\n) " + `infile{"filepath"="etl:/test/*/*/*/*/tbl_dummy/*.csv","compression"="none"} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
+	"\n) " + `infile{"filepath"="etl:/test/*/*/*/*/tbl_dummy/*","compression"="none"} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
 var dummyTableCreateSql = "CREATE EXTERNAL TABLE `db_dummy`.`tbl_dummy`(" +
 	"\n" + dummyStrCreateSql +
 	",\n" + dummyInt64CreateSql +
 	",\n" + dummyFloat64CreateSql +
-	"\n) " + `infile{"filepath"="etl:/test/*/*/*/*/tbl_dummy/*.csv","compression"="none"} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
+	"\n) " + `infile{"filepath"="etl:/test/*/*/*/*/tbl_dummy/*","compression"="none"} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
 
 type dummyCondition struct{}
 
@@ -220,7 +220,7 @@ func TestTable_ToCreateSql(t *testing.T) {
 			tbl := tt.fields.Table
 			got := tbl.ToCreateSql(ctx, tt.args.ifNotExists)
 			t.Logf("create sql: %s", got)
-			assert.Equalf(t, tt.want, got, "ToCreateSql(%v)", tt.args.ifNotExists)
+			require.Equalf(t, tt.want, got, "ToCreateSql(%v)", tt.args.ifNotExists)
 		})
 	}
 }

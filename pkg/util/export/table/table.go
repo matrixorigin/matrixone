@@ -531,7 +531,7 @@ func (r *Row) CsvPrimaryKey() string {
 	}
 	sb := strings.Builder{}
 	for _, col := range r.Table.PrimaryKeyColumn {
-		sb.WriteString(fmt.Sprintf("%s", r.CsvColumns[r.Name2ColumnIdx[col.Name]]))
+		sb.WriteString(r.CsvColumns[r.Name2ColumnIdx[col.Name]])
 		sb.WriteRune('-')
 	}
 	return sb.String()

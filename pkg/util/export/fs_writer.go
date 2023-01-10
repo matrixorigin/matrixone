@@ -152,8 +152,6 @@ func GetRowWriterFactory4Trace(fs fileservice.FileService, nodeUUID, nodeType st
 			panic(err)
 		}
 		factory = func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
-			var options []FSWriterOption
-			options = append(options)
 			filePath := cfg.LogsFilePathFactory(account, tbl, ts)
 			return writer.NewTAEWriter(ctx, tbl, mp, filePath, fs)
 		}

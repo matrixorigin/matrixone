@@ -70,7 +70,7 @@ func TestPathBuilder(t *testing.T) {
 				nodeType: "node",
 			},
 			wantDir:     `user/logs` + `/1970/01/01` + `/table`,
-			wantETLPath: `/*/*` + `/*/*/*` + `/table/*.csv`,
+			wantETLPath: `/*/*` + `/*/*/*` + `/table/*`,
 			wantLogFN:   `0_123456_node.csv`,
 		},
 	}
