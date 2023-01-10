@@ -17,6 +17,10 @@ package table_function
 import (
 	"bytes"
 	"context"
+	"math"
+	"strings"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,9 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"math"
-	"strings"
-	"testing"
 )
 
 type Kase[T int32 | int64] struct {
@@ -501,8 +502,8 @@ func TestGenerateSeriesCall(t *testing.T) {
 
 func makeGenerateSeriesBatch() *batch.Batch {
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
-	bat.Vecs[0].Col = make([]int64, 1)
+	bat.Vecs[0] = vector.New(vector.CONSTANT, types.Type{Oid: types.T_int64})
+	bat.Vecs[0].SetLength(1)
 	bat.InitZsOne(1)
 	return bat
 }

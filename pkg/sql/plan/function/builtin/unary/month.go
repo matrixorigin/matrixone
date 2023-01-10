@@ -25,15 +25,17 @@ func DateToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	inputVector := vectors[0]
 	resultType := types.T_uint8.ToType()
 	inputValues := vector.MustTCols[types.Date](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultValues := make([]uint8, 1)
 		month.DateToMonth(inputValues, resultValues)
-		return vector.NewConstFixed(resultType, inputVector.Length(), resultValues[0], proc.Mp()), nil
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.Append(vec, resultValues[0], false, proc.Mp())
+		return vec, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -47,16 +49,16 @@ func DatetimeToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.V
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, month.DatetimeToMonth(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -70,21 +72,21 @@ func DateStringToMonth(vectors []*vector.Vector, proc *process.Process) (*vector
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
 	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := make([]uint8, 1)
-		vector.SetCol(resultVector, month.DateStringToMonth(inputValues, resultVector.Nsp, resultValues))
+		vector.SetCol(resultVector, month.DateStringToMonth(inputValues, resultVector.GetNulls(), resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
 		resultValues := vector.MustTCols[uint8](resultVector)
-		month.DateStringToMonth(inputValues, resultVector.Nsp, resultValues)
+		month.DateStringToMonth(inputValues, resultVector.GetNulls(), resultValues)
 		return resultVector, nil
 	}
 }

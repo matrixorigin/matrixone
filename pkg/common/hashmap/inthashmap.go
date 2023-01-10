@@ -83,7 +83,7 @@ func (m *IntHashMap) Cardinality() uint64 {
 
 func (m *IntHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	for _, vec := range vecs {
-		switch vec.Typ.TypeSize() {
+		switch vec.GetType().TypeSize() {
 		case 1:
 			fillKeys[uint8](m, vec, 1, start, count)
 		case 2:

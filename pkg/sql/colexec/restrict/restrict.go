@@ -60,8 +60,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if !vec.GetType().IsBoolean() {
 		return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 	}
-	bs := vector.GetColumn[bool](vec)
-	if vec.IsScalar() {
+	bs := vector.MustTCols[bool](vec)
+	if vec.IsConst() {
 		if !bs[0] {
 			bat.Shrink(nil)
 		}

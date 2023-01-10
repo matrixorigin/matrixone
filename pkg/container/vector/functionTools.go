@@ -16,6 +16,7 @@ package vector
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -50,30 +51,30 @@ var _ FunctionParameterWrapper[int64] = &FunctionParameterScalarNull[int64]{}
 
 func GenerateFunctionFixedTypeParameter[T types.FixedSizeT](v *Vector) FunctionParameterWrapper[T] {
 	t := v.GetType()
-	if v.IsScalarNull() {
+	if v.IsConstNull() {
 		return &FunctionParameterScalarNull[T]{
-			typ:          t,
+			typ:          *t,
 			sourceVector: v,
 		}
 	}
 	cols := MustTCols[T](v)
-	if v.IsScalar() {
+	if v.IsConst() {
 		return &FunctionParameterScalar[T]{
-			typ:          t,
+			typ:          *t,
 			sourceVector: v,
 			scalarValue:  cols[0],
 		}
 	}
-	if v.Nsp != nil && v.Nsp.Np != nil && v.Nsp.Np.Len() > 0 {
+	if v.GetNulls() != nil && v.GetNulls().Np != nil && v.GetNulls().Np.Len() > 0 {
 		return &FunctionParameterNormal[T]{
-			typ:          t,
+			typ:          *t,
 			sourceVector: v,
 			values:       cols,
-			nullMap:      v.Nsp.Np,
+			nullMap:      v.GetNulls().Np,
 		}
 	}
 	return &FunctionParameterWithoutNull[T]{
-		typ:          t,
+		typ:          *t,
 		sourceVector: v,
 		values:       cols,
 	}
@@ -81,32 +82,32 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeT](v *Vector) FunctionP
 
 func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varlena] {
 	t := v.GetType()
-	if v.IsScalarNull() {
+	if v.IsConstNull() {
 		return &FunctionParameterScalarNull[types.Varlena]{
-			typ:          t,
+			typ:          *t,
 			sourceVector: v,
 		}
 	}
 	cols := MustTCols[types.Varlena](v)
-	if v.IsScalar() {
+	if v.IsConst() {
 		return &FunctionParameterScalar[types.Varlena]{
-			typ:          t,
+			typ:          *t,
 			sourceVector: v,
 			scalarValue:  cols[0],
 			scalarStr:    cols[0].GetByteSlice(v.area),
 		}
 	}
-	if v.Nsp != nil && v.Nsp.Np != nil && v.Nsp.Np.Len() > 0 {
+	if v.GetNulls() != nil && v.GetNulls().Np != nil && v.GetNulls().Np.Len() > 0 {
 		return &FunctionParameterNormal[types.Varlena]{
-			typ:          t,
+			typ:          *t,
 			sourceVector: v,
 			strValues:    cols,
 			area:         v.area,
-			nullMap:      v.Nsp.Np,
+			nullMap:      v.GetNulls().Np,
 		}
 	}
 	return &FunctionParameterWithoutNull[types.Varlena]{
-		typ:          t,
+		typ:          *t,
 		sourceVector: v,
 		strValues:    cols,
 		area:         v.area,
@@ -261,15 +262,15 @@ func newResultFunc[T types.FixedSizeT](v *Vector, mp *mpool.MPool) *FunctionResu
 }
 
 func (fr *FunctionResult[T]) Append(val T, isnull bool) error {
-	return fr.vec.Append(val, isnull, fr.mp)
+	return Append(fr.vec, val, isnull, fr.mp)
 }
 
 func (fr *FunctionResult[T]) AppendStr(val []byte, isnull bool) error {
-	return fr.vec.Append(val, isnull, fr.mp)
+	return Append(fr.vec, val, isnull, fr.mp)
 }
 
 func (fr *FunctionResult[T]) GetType() types.Type {
-	return fr.vec.Typ
+	return *fr.vec.GetType()
 }
 
 func (fr *FunctionResult[T]) SetFromParameter(fp FunctionParameterWrapper[T]) {
@@ -299,9 +300,9 @@ func (fr *FunctionResult[T]) Free() {
 func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool, isConst bool, length int) FunctionResultWrapper {
 	var v *Vector
 	if isConst {
-		v = NewConst(typ, length)
+		v = New(CONSTANT, typ)
 	} else {
-		v = New(typ)
+		v = New(FLAT, typ)
 	}
 
 	switch typ.Oid {

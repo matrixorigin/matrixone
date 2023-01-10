@@ -73,7 +73,8 @@ func TestHex(t *testing.T) {
 			var inVector *vector.Vector
 			if c.inputstr != nil {
 				if c.isScalar {
-					inVector = vector.NewConstString(types.T_varchar.ToType(), 1, c.inputstr[0], testutil.TestUtilMp)
+					inVector = vector.New(vector.CONSTANT, types.T_varchar.ToType())
+					vector.AppendString(inVector, c.inputstr[0], c.inputstr[0] == "", testutil.TestUtilMp)
 				} else {
 					inVector = testutil.MakeCharVector(c.inputstr, nil)
 				}
@@ -82,8 +83,8 @@ func TestHex(t *testing.T) {
 			}
 			result, err := HexString([]*vector.Vector{inVector}, c.proc)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(vector.GetStrVectorValues(result), convey.ShouldResemble, c.expected)
-			convey.So(result.IsScalar(), convey.ShouldEqual, c.isScalar)
+			convey.So(vector.MustStrCols(result), convey.ShouldResemble, c.expected)
+			convey.So(result.IsConst(), convey.ShouldEqual, c.isScalar)
 		})
 	}
 
@@ -131,7 +132,8 @@ func TestHex(t *testing.T) {
 			var inVector *vector.Vector
 			if c.inputnum != nil {
 				if c.isScalar {
-					inVector = vector.NewConstFixed(types.T_int64.ToType(), 1, c.inputnum[0], testutil.TestUtilMp)
+					inVector = vector.New(vector.CONSTANT, types.T_int64.ToType())
+					vector.Append(inVector, c.inputnum[0], false, testutil.TestUtilMp)
 				} else {
 					inVector = testutil.MakeInt64Vector(c.inputnum, nil)
 				}
@@ -140,8 +142,8 @@ func TestHex(t *testing.T) {
 			}
 			result, err := HexInt64([]*vector.Vector{inVector}, c.proc)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(vector.GetStrVectorValues(result), convey.ShouldResemble, c.expected)
-			convey.So(result.IsScalar(), convey.ShouldEqual, c.isScalar)
+			convey.So(vector.MustStrCols(result), convey.ShouldResemble, c.expected)
+			convey.So(result.IsConst(), convey.ShouldEqual, c.isScalar)
 		})
 	}
 

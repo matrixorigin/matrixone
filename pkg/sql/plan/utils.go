@@ -851,7 +851,7 @@ func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc
 		if err != nil {
 			return false, err
 		}
-		if vec.Typ.Oid != types.T_bool {
+		if vec.GetType().Oid != types.T_bool {
 			return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
 		}
 		cols := vector.MustTCols[bool](vec)
@@ -871,7 +871,7 @@ func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vect
 			exchangeVectors(datas, depth+1, tmpResult, result, mp)
 		} else {
 			for j, val := range tmpResult {
-				(*result)[j].Append(val, false, mp)
+				vector.Append((*result)[j], val, false, mp)
 			}
 		}
 	}
@@ -880,7 +880,7 @@ func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vect
 func BuildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*vector.Vector {
 	vectors := make([]*vector.Vector, len(dataTypes))
 	for i, typ := range dataTypes {
-		vectors[i] = vector.New(types.T(typ).ToType())
+		vectors[i] = vector.New(vector.FLAT, types.T(typ).ToType())
 	}
 
 	tmpResult := make([]any, len(datas))
@@ -975,68 +975,68 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 }
 
 func getConstantValue(vec *vector.Vector) *plan.Const {
-	if nulls.Any(vec.Nsp) {
+	if nulls.Any(vec.GetNulls()) {
 		return &plan.Const{Isnull: true}
 	}
-	switch vec.Typ.Oid {
+	switch vec.GetType().Oid {
 	case types.T_bool:
 		return &plan.Const{
 			Value: &plan.Const_Bval{
-				Bval: vec.Col.([]bool)[0],
+				Bval: vector.MustTCols[bool](vec)[0],
 			},
 		}
 	case types.T_int8:
 		return &plan.Const{
 			Value: &plan.Const_I8Val{
-				I8Val: int32(vec.Col.([]int8)[0]),
+				I8Val: int32(vector.MustTCols[int8](vec)[0]),
 			},
 		}
 	case types.T_int16:
 		return &plan.Const{
 			Value: &plan.Const_I16Val{
-				I16Val: int32(vec.Col.([]int16)[0]),
+				I16Val: int32(vector.MustTCols[int16](vec)[0]),
 			},
 		}
 	case types.T_int32:
 		return &plan.Const{
 			Value: &plan.Const_I32Val{
-				I32Val: vec.Col.([]int32)[0],
+				I32Val: vector.MustTCols[int32](vec)[0],
 			},
 		}
 	case types.T_int64:
 		return &plan.Const{
 			Value: &plan.Const_I64Val{
-				I64Val: vec.Col.([]int64)[0],
+				I64Val: vector.MustTCols[int64](vec)[0],
 			},
 		}
 	case types.T_uint8:
 		return &plan.Const{
 			Value: &plan.Const_U8Val{
-				U8Val: uint32(vec.Col.([]uint8)[0]),
+				U8Val: uint32(vector.MustTCols[uint8](vec)[0]),
 			},
 		}
 	case types.T_uint16:
 		return &plan.Const{
 			Value: &plan.Const_U16Val{
-				U16Val: uint32(vec.Col.([]uint16)[0]),
+				U16Val: uint32(vector.MustTCols[uint16](vec)[0]),
 			},
 		}
 	case types.T_uint32:
 		return &plan.Const{
 			Value: &plan.Const_U32Val{
-				U32Val: vec.Col.([]uint32)[0],
+				U32Val: vector.MustTCols[uint32](vec)[0],
 			},
 		}
 	case types.T_uint64:
 		return &plan.Const{
 			Value: &plan.Const_U64Val{
-				U64Val: vec.Col.([]uint64)[0],
+				U64Val: vector.MustTCols[uint64](vec)[0],
 			},
 		}
 	case types.T_float64:
 		return &plan.Const{
 			Value: &plan.Const_Dval{
-				Dval: vec.Col.([]float64)[0],
+				Dval: vector.MustTCols[float64](vec)[0],
 			},
 		}
 	case types.T_varchar, types.T_char, types.T_text:

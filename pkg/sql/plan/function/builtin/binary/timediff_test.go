@@ -185,8 +185,10 @@ func makeDateTimeVectors(firstStr, secondStr string, mp *mpool.MPool) []*vector.
 	firstDate, _ := types.ParseDatetime(firstStr, 0)
 	secondDate, _ := types.ParseDatetime(secondStr, 0)
 
-	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, firstDate, mp)
-	vec[1] = vector.NewConstFixed(types.T_datetime.ToType(), 1, secondDate, mp)
+	vec[0] = vector.New(vector.FLAT, types.T_datetime.ToType())
+	vector.Append(vec[0], firstDate, false, mp)
+	vec[1] = vector.New(vector.FLAT, types.T_datetime.ToType())
+	vector.Append(vec[1], secondDate, false, mp)
 	return vec
 }
 
@@ -196,13 +198,17 @@ func makeTimeVectors(firstStr, secondStr string, mp *mpool.MPool) []*vector.Vect
 	firstDate, _ := types.ParseTime(firstStr, 0)
 	secondDate, _ := types.ParseTime(secondStr, 0)
 
-	vec[0] = vector.NewConstFixed(types.T_time.ToType(), 1, firstDate, mp)
-	vec[1] = vector.NewConstFixed(types.T_time.ToType(), 1, secondDate, mp)
+	vec[0] = vector.New(vector.FLAT, types.T_datetime.ToType())
+	vector.Append(vec[0], firstDate, false, mp)
+	vec[1] = vector.New(vector.FLAT, types.T_datetime.ToType())
+	vector.Append(vec[1], secondDate, false, mp)
 	return vec
 }
 
 func makeResultVector(res string, proc *process.Process) *vector.Vector {
 
 	resData, _ := types.ParseTime(res, 0)
-	return vector.NewConstFixed(types.T_time.ToType(), 1, resData, proc.Mp())
+	vec := vector.New(vector.FLAT, types.T_time.ToType())
+	vector.Append(vec, resData, false, proc.Mp())
+	return vec
 }

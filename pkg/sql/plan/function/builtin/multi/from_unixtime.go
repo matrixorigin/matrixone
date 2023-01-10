@@ -32,30 +32,32 @@ const (
 func FromUnixTimeInt64(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inVec := lv[0]
 	times := vector.MustTCols[int64](inVec)
-	if inVec.IsScalarNull() {
+	if inVec.IsConstNull() {
 		return proc.AllocScalarNullVector(types.T_datetime.ToType()), nil
 	}
 
-	if inVec.IsScalar() {
+	if inVec.IsConst() {
 		rs := make([]types.Datetime, 1)
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs)
 
-		vec := vector.NewConstFixed(types.T_datetime.ToType(), 1, rs[0], proc.Mp())
+		vec := vector.New(vector.FLAT, types.T_datetime.ToType())
+		vector.Append(vec, rs[0], false, proc.Mp())
 		if times[0] < 0 || times[0] > max_unix_timestamp_int {
-			nulls.Add(vec.Nsp, 0)
+			nulls.Add(vec.GetNulls(), 0)
 		}
-		nulls.Set(vec.Nsp, inVec.Nsp)
+		nulls.Set(vec.GetNulls(), inVec.GetNulls())
 		return vec, nil
 	} else {
 		rs := make([]types.Datetime, len(times))
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs)
-		vec := vector.NewWithFixed(types.T_datetime.ToType(), rs, nulls.NewWithSize(len(rs)), proc.Mp())
+		vec := vector.New(vector.FLAT, types.T_datetime.ToType())
+		vector.Append(vec, rs[0], false, proc.Mp())
 		for i := 0; i < len(times); i++ {
 			if times[i] < 0 || times[i] > max_unix_timestamp_int {
-				nulls.Add(vec.Nsp, uint64(i))
+				nulls.Add(vec.GetNulls(), uint64(i))
 			}
 		}
-		nulls.Set(vec.Nsp, inVec.Nsp)
+		nulls.Set(vec.GetNulls(), inVec.GetNulls())
 		return vec, nil
 	}
 }
@@ -64,33 +66,35 @@ func FromUnixTimeFloat64(lv []*vector.Vector, proc *process.Process) (*vector.Ve
 	inVec := lv[0]
 	times := vector.MustTCols[float64](inVec)
 	size := types.T(types.T_datetime).TypeLen()
-	if inVec.IsScalarNull() {
+	if inVec.IsConstNull() {
 		return proc.AllocScalarNullVector(types.T_datetime.ToType()), nil
 	}
-	if inVec.IsScalar() {
+	if inVec.IsConst() {
 		rs := make([]types.Datetime, 1)
 		ints, fracs := splitDecimalToIntAndFrac(times)
 		fromunixtime.UnixToDateTimeWithNsec(proc.SessionInfo.TimeZone, ints, fracs, rs)
 
 		t := types.Type{Oid: types.T_datetime, Size: int32(size), Precision: 6}
-		vec := vector.NewConstFixed(t, 1, rs[0], proc.Mp())
+		vec := vector.New(vector.FLAT, t)
+		vector.Append(vec, rs[0], false, proc.Mp())
 		if times[0] < 0 || times[0] > max_unix_timestamp_int {
-			nulls.Add(vec.Nsp, 0)
+			nulls.Add(vec.GetNulls(), 0)
 		}
-		nulls.Set(vec.Nsp, inVec.Nsp)
+		nulls.Set(vec.GetNulls(), inVec.GetNulls())
 		return vec, nil
 	} else {
 		rs := make([]types.Datetime, len(times))
 		ints, fracs := splitDecimalToIntAndFrac(times)
 		fromunixtime.UnixToDateTimeWithNsec(proc.SessionInfo.TimeZone, ints, fracs, rs)
 		t := types.Type{Oid: types.T_datetime, Size: int32(size), Precision: 6}
-		vec := vector.NewWithFixed(t, rs, nulls.NewWithSize(len(rs)), proc.Mp())
+		vec := vector.New(vector.FLAT, t)
+		vector.Append(vec, rs[0], false, proc.Mp())
 		for i := 0; i < len(times); i++ {
 			if times[i] < 0 || times[i] > max_unix_timestamp_int {
-				nulls.Add(vec.Nsp, uint64(i))
+				nulls.Add(vec.GetNulls(), uint64(i))
 			}
 		}
-		nulls.Set(vec.Nsp, inVec.Nsp)
+		nulls.Set(vec.GetNulls(), inVec.GetNulls())
 		return vec, nil
 	}
 }
@@ -99,43 +103,45 @@ func FromUnixTimeInt64Format(vs []*vector.Vector, proc *process.Process) (*vecto
 	inVec := vs[0]
 	formatVec := vs[1]
 	resultType := types.T_varchar.ToType()
-	if !formatVec.IsScalar() {
+	if !formatVec.IsConst() {
 		return nil, moerr.NewInvalidArg(proc.Ctx, "from_unixtime format", "not constant")
 	}
-	if inVec.IsScalarNull() || formatVec.IsScalarNull() {
+	if inVec.IsConstNull() || formatVec.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 
 	formatMask := formatVec.GetString(0)
-	if inVec.IsScalar() {
+	if inVec.IsConst() {
 		times := vector.MustTCols[int64](inVec)
 		rs := make([]types.Datetime, 1)
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs)
-		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.Nsp)
+		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		vec := vector.NewConstString(resultType, 1, resCol[0], proc.Mp())
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.AppendString(vec, resCol[0], resCol[0] == "", proc.Mp())
 		if times[0] < 0 || times[0] > max_unix_timestamp_int {
-			nulls.Add(vec.Nsp, 0)
+			nulls.Add(vec.GetNulls(), 0)
 		}
-		nulls.Set(vec.Nsp, inVec.Nsp)
+		nulls.Set(vec.GetNulls(), inVec.GetNulls())
 		return vec, nil
 	} else {
 		times := vector.MustTCols[int64](inVec)
 		rs := make([]types.Datetime, len(times))
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs)
-		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.Nsp)
+		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		vec := vector.NewWithStrings(resultType, resCol, inVec.Nsp, proc.Mp())
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.AppendStringList(vec, resCol, nil, proc.Mp())
 		for i := 0; i < len(times); i++ {
 			if times[i] < 0 || times[i] > max_unix_timestamp_int {
-				nulls.Add(vec.Nsp, uint64(i))
+				nulls.Add(vec.GetNulls(), uint64(i))
 			}
 		}
-		nulls.Set(vec.Nsp, inVec.Nsp)
+		nulls.Set(vec.GetNulls(), inVec.GetNulls())
 		return vec, nil
 	}
 }
@@ -144,46 +150,48 @@ func FromUnixTimeFloat64Format(vs []*vector.Vector, proc *process.Process) (*vec
 	inVec := vs[0]
 	formatVec := vs[1]
 	resultType := types.T_varchar.ToType()
-	if !formatVec.IsScalar() {
+	if !formatVec.IsConst() {
 		return nil, moerr.NewInvalidArg(proc.Ctx, "from_unixtime format", "not constant")
 	}
-	if inVec.IsScalarNull() || formatVec.IsScalarNull() {
+	if inVec.IsConstNull() || formatVec.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 
 	formatMask := formatVec.GetString(0)
-	if inVec.IsScalar() {
+	if inVec.IsConst() {
 		times := vector.MustTCols[float64](inVec)
 		rs := make([]types.Datetime, 1)
 		ints, fracs := splitDecimalToIntAndFrac(times)
 		fromunixtime.UnixToDateTimeWithNsec(proc.SessionInfo.TimeZone, ints, fracs, rs)
-		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.Nsp)
+		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		vec := vector.NewConstString(resultType, 1, resCol[0], proc.Mp())
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.AppendString(vec, resCol[0], resCol[0] == "", proc.Mp())
 		if times[0] < 0 || times[0] > max_unix_timestamp_int {
-			nulls.Add(vec.Nsp, 0)
+			nulls.Add(vec.GetNulls(), 0)
 		}
-		nulls.Set(vec.Nsp, inVec.Nsp)
+		nulls.Set(vec.GetNulls(), inVec.GetNulls())
 		return vec, nil
 	} else {
 		times := vector.MustTCols[float64](inVec)
 		rs := make([]types.Datetime, len(times))
 		ints, fracs := splitDecimalToIntAndFrac(times)
 		fromunixtime.UnixToDateTimeWithNsec(proc.SessionInfo.TimeZone, ints, fracs, rs)
-		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.Nsp)
+		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.GetNulls())
 		if err != nil {
 			return nil, err
 		}
 
-		vec := vector.NewWithStrings(resultType, resCol, inVec.Nsp, proc.Mp())
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.AppendStringList(vec, resCol, nil, proc.Mp())
 		for i := 0; i < len(times); i++ {
 			if times[i] < 0 || times[i] > max_unix_timestamp_int {
-				nulls.Add(vec.Nsp, uint64(i))
+				nulls.Add(vec.GetNulls(), uint64(i))
 			}
 		}
-		nulls.Set(vec.Nsp, inVec.Nsp)
+		nulls.Set(vec.GetNulls(), inVec.GetNulls())
 		return vec, nil
 	}
 }
@@ -211,30 +219,32 @@ func FromUnixTimeUint64(lv []*vector.Vector, proc *process.Process) (*vector.Vec
 	}
 	inVec := lv[0]
 	times := vector.MustTCols[uint64](inVec)
-	if inVec.IsScalarNull() {
+	if inVec.IsConstNull() {
 		return proc.AllocScalarNullVector(types.T_datetime.ToType()), nil
 	}
-	if inVec.IsScalar() {
+	if inVec.IsConst() {
 		rs := make([]types.Datetime, 1)
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, uint64ToInt64(times), rs)
-		vec := vector.NewConstFixed(types.T_datetime.ToType(), 1, rs[0], proc.Mp())
+		vec := vector.New(vector.CONSTANT, types.T_datetime.ToType())
+		vector.Append(vec, rs[0], false, proc.Mp())
 
 		if times[0] > max_unix_timestamp_int {
-			nulls.Add(vec.Nsp, 0)
+			nulls.Add(vec.GetNulls(), 0)
 		}
-		nulls.Set(vec.Nsp, inVec.Nsp)
+		nulls.Set(vec.GetNulls(), inVec.GetNulls())
 		return vec, nil
 	} else {
 		rs := make([]types.Datetime, len(times))
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, uint64ToInt64(times), rs)
-		vec := vector.NewWithFixed(types.T_datetime.ToType(), rs, nulls.NewWithSize(len(rs)), proc.Mp())
+		vec := vector.New(vector.CONSTANT, types.T_datetime.ToType())
+		vector.AppendList(vec, rs, nil, proc.Mp())
 
 		for i := 0; i < len(times); i++ {
 			if times[i] > max_unix_timestamp_int {
-				nulls.Add(vec.Nsp, uint64(i))
+				nulls.Add(vec.GetNulls(), uint64(i))
 			}
 		}
-		nulls.Set(vec.Nsp, inVec.Nsp)
+		nulls.Set(vec.GetNulls(), inVec.GetNulls())
 		return vec, nil
 	}
 }
@@ -251,43 +261,45 @@ func FromUnixTimeUint64Format(vs []*vector.Vector, proc *process.Process) (*vect
 	inVec := vs[0]
 	formatVec := vs[1]
 	resultType := types.T_varchar.ToType()
-	if !formatVec.IsScalar() {
+	if !formatVec.IsConst() {
 		return nil, moerr.NewInvalidArg(proc.Ctx, "from_unixtime format", "not constant")
 	}
-	if inVec.IsScalarNull() || formatVec.IsScalarNull() {
+	if inVec.IsConstNull() || formatVec.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 
 	formatMask := formatVec.GetString(0)
-	if inVec.IsScalar() {
+	if inVec.IsConst() {
 		times := vector.MustTCols[uint64](inVec)
 		rs := make([]types.Datetime, 1)
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, uint64ToInt64(times), rs)
-		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.Nsp)
+		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		vec := vector.NewConstString(resultType, 1, resCol[0], proc.Mp())
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.AppendString(vec, resCol[0], resCol[0] == "", proc.Mp())
 		if times[0] > max_unix_timestamp_int {
-			nulls.Add(vec.Nsp, 0)
+			nulls.Add(vec.GetNulls(), 0)
 		}
-		nulls.Set(vec.Nsp, inVec.Nsp)
+		nulls.Set(vec.GetNulls(), inVec.GetNulls())
 		return vec, nil
 	} else {
 		times := vector.MustTCols[uint64](inVec)
 		rs := make([]types.Datetime, len(times))
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, uint64ToInt64(times), rs)
-		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.Nsp)
+		resCol, err := binary.CalcDateFromat(proc.Ctx, rs, formatMask, inVec.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		vec := vector.NewWithStrings(resultType, resCol, inVec.Nsp, proc.Mp())
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.AppendStringList(vec, resCol, nil, proc.Mp())
 		for i := 0; i < len(times); i++ {
 			if times[i] > max_unix_timestamp_int {
-				nulls.Add(vec.Nsp, uint64(i))
+				nulls.Add(vec.GetNulls(), uint64(i))
 			}
 		}
-		nulls.Set(vec.Nsp, inVec.Nsp)
+		nulls.Set(vec.GetNulls(), inVec.GetNulls())
 		return vec, nil
 	}
 }

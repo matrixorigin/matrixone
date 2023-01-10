@@ -15,10 +15,11 @@
 package multi
 
 import (
-	"github.com/smartystreets/goconvey/convey"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/smartystreets/goconvey/convey"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -64,15 +65,16 @@ func UnixtimeCase(t *testing.T, typ types.T, src types.Timestamp, res int64, isN
 			if !reflect.DeepEqual(c.wantBytes, plus.Col) {
 				t.Errorf("unixtimestamp() want %v but got %v", c.wantBytes, plus.Col)
 			}
-			require.Equal(t, c.wantNull, plus.ConstVectorIsNull())
-			require.Equal(t, c.wantScalar, plus.IsScalar())
+			require.Equal(t, c.wantNull, plus.IsConstNull())
+			require.Equal(t, c.wantScalar, plus.IsConst())
 		})
 	}
 }
 
 func makeVector2(src types.Timestamp, srcScalar bool, t types.T) []*vector.Vector {
 	vectors := make([]*vector.Vector, 1)
-	vectors[0] = vector.NewConstFixed(types.T_timestamp.ToType(), 1, src, testutil.TestUtilMp)
+	vectors[0] = vector.New(vector.CONSTANT, types.T_timestamp.ToType())
+	vector.Append(vectors[0], src, false, testutil.TestUtilMp)
 	return vectors
 }
 

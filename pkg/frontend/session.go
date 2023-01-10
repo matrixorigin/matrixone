@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -2056,7 +2055,7 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 
 	ses := handle.(*Session)
 	oq := newFakeOutputQueue(ses.GetMysqlResultSet())
-	n := vector.Length(dataSet.Vecs[0])
+	n := dataSet.Vecs[0].Length()
 	for j := 0; j < n; j++ { //row index
 		if dataSet.Zs[j] <= 0 {
 			continue

@@ -117,11 +117,11 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool, catalogCache *cache.Cata
 			}
 			if bat.Vecs[0] == nil {
 				for i, vec := range bat0.Vecs {
-					bat.Vecs[i] = vector.New(vec.GetType())
+					bat.Vecs[i] = vector.New(vector.FLAT, *vec.GetType())
 				}
 			}
 			for i, vec := range bat0.Vecs {
-				if err := vector.UnionOne(bat.Vecs[i], vec, 0, m); err != nil {
+				if err := bat.Vecs[i].UnionOne(vec, 0, false, m); err != nil {
 					bat.Clean(m)
 					bat0.Clean(m)
 					return err
@@ -176,11 +176,11 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool, catalogCache *cache.Cata
 			}
 			if bat.Vecs[0] == nil {
 				for i, vec := range bat0.Vecs {
-					bat.Vecs[i] = vector.New(vec.GetType())
+					bat.Vecs[i] = vector.New(vector.FLAT, *vec.GetType())
 				}
 			}
 			for i, vec := range bat0.Vecs {
-				if err := vector.UnionOne(bat.Vecs[i], vec, 0, m); err != nil {
+				if err := bat.Vecs[i].UnionOne(vec, 0, false, m); err != nil {
 					bat.Clean(m)
 					bat0.Clean(m)
 					return err
@@ -235,11 +235,11 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool, catalogCache *cache.Cata
 			}
 			if bat.Vecs[0] == nil {
 				for i, vec := range bat0.Vecs {
-					bat.Vecs[i] = vector.New(vec.GetType())
+					bat.Vecs[i] = vector.New(vector.FLAT, *vec.GetType())
 				}
 			}
 			for i, vec := range bat0.Vecs {
-				if err := vector.UnionOne(bat.Vecs[i], vec, 0, m); err != nil {
+				if err := bat.Vecs[i].UnionOne(vec, 0, false, m); err != nil {
 					bat.Clean(m)
 					bat0.Clean(m)
 					return err

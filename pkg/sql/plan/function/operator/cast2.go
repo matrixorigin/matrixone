@@ -287,76 +287,76 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	from := parameters[0]
 	switch fromType.Oid {
 	case types.T_any: // scalar null
-		err = scalarNullToOthers(proc.Ctx, toType, result, length)
+		err = scalarNullToOthers(proc.Ctx, *toType, result, length)
 	case types.T_bool:
 		s := vector.GenerateFunctionFixedTypeParameter[bool](from)
-		err = boolToOthers(proc.Ctx, s, toType, result, length)
+		err = boolToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_int8:
 		s := vector.GenerateFunctionFixedTypeParameter[int8](from)
-		err = int8ToOthers(proc.Ctx, s, toType, result, length)
+		err = int8ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_int16:
 		s := vector.GenerateFunctionFixedTypeParameter[int16](from)
-		err = int16ToOthers(proc.Ctx, s, toType, result, length)
+		err = int16ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_int32:
 		s := vector.GenerateFunctionFixedTypeParameter[int32](from)
-		err = int32ToOthers(proc.Ctx, s, toType, result, length)
+		err = int32ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_int64:
 		s := vector.GenerateFunctionFixedTypeParameter[int64](from)
-		err = int64ToOthers(proc.Ctx, s, toType, result, length)
+		err = int64ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_uint8:
 		s := vector.GenerateFunctionFixedTypeParameter[uint8](from)
-		err = uint8ToOthers(proc.Ctx, s, toType, result, length)
+		err = uint8ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_uint16:
 		s := vector.GenerateFunctionFixedTypeParameter[uint16](from)
-		err = uint16ToOthers(proc.Ctx, s, toType, result, length)
+		err = uint16ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_uint32:
 		s := vector.GenerateFunctionFixedTypeParameter[uint32](from)
-		err = uint32ToOthers(proc.Ctx, s, toType, result, length)
+		err = uint32ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_uint64:
 		s := vector.GenerateFunctionFixedTypeParameter[uint64](from)
-		err = uint64ToOthers(proc.Ctx, s, toType, result, length)
+		err = uint64ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_float32:
 		s := vector.GenerateFunctionFixedTypeParameter[float32](from)
-		err = float32ToOthers(proc.Ctx, s, toType, result, length)
+		err = float32ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_float64:
 		s := vector.GenerateFunctionFixedTypeParameter[float64](from)
-		err = float64ToOthers(proc.Ctx, s, toType, result, length)
+		err = float64ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_decimal64:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from)
-		err = decimal64ToOthers(proc.Ctx, s, toType, result, length)
+		err = decimal64ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_decimal128:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
-		err = decimal128ToOthers(proc.Ctx, s, toType, result, length)
+		err = decimal128ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_date:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Date](from)
-		err = dateToOthers(proc, s, toType, result, length)
+		err = dateToOthers(proc, s, *toType, result, length)
 	case types.T_datetime:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Datetime](from)
-		err = datetimeToOthers(proc, s, toType, result, length)
+		err = datetimeToOthers(proc, s, *toType, result, length)
 	case types.T_time:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Time](from)
-		err = timeToOthers(proc.Ctx, s, toType, result, length)
+		err = timeToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_timestamp:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from)
-		err = timestampToOthers(proc, s, toType, result, length)
+		err = timestampToOthers(proc, s, *toType, result, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		s := vector.GenerateFunctionStrParameter(from)
-		err = strTypeToOthers(proc, s, toType, result, length)
+		err = strTypeToOthers(proc, s, *toType, result, length)
 	case types.T_uuid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Uuid](from)
-		err = uuidToOthers(proc.Ctx, s, toType, result, length)
+		err = uuidToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_TS:
 		s := vector.GenerateFunctionFixedTypeParameter[types.TS](from)
-		err = tsToOthers(proc.Ctx, s, toType, result, length)
+		err = tsToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_Rowid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Rowid](from)
-		err = rowidToOthers(proc.Ctx, s, toType, result, length)
+		err = rowidToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_json:
 		s := vector.GenerateFunctionStrParameter(from)
-		err = jsonToOthers(proc.Ctx, s, toType, result, length)
+		err = jsonToOthers(proc.Ctx, s, *toType, result, length)
 	default:
 		// XXX we set the function here to adapt to the BVT cases.
-		err = formatCastError(proc.Ctx, from, toType, "")
+		err = formatCastError(proc.Ctx, from, *toType, "")
 	}
 	return err
 }
@@ -1066,7 +1066,7 @@ func datetimeToOthers(proc *process.Process,
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
 		v := source.GetSourceVector()
-		v.Typ = toType
+		v.SetType(toType)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_time:
@@ -1103,7 +1103,7 @@ func timestampToOthers(proc *process.Process,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		v := source.GetSourceVector()
-		v.Typ = toType
+		v.SetType(toType)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
@@ -1150,7 +1150,7 @@ func timeToOthers(ctx context.Context,
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		v := source.GetSourceVector()
-		v.Typ = toType
+		v.SetType(toType)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
@@ -1185,7 +1185,7 @@ func decimal64ToOthers(ctx context.Context,
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		v := source.GetSourceVector()
-		v.Typ = toType
+		v.SetType(toType)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_decimal128:
@@ -1223,7 +1223,7 @@ func decimal128ToOthers(ctx context.Context,
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		v := source.GetSourceVector()
-		v.Typ = toType
+		v.SetType(toType)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_float32:
@@ -2543,7 +2543,7 @@ func decimal64ToDecimal128(
 	totype := to.GetType()
 	{
 		v := to.GetResultVector()
-		v.Typ.Scale = from.GetType().Scale
+		v.GetType().Scale = from.GetType().Scale
 	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)

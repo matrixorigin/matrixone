@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
+
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"sync"
 )
 
 // GCTable is a data structure in memory after consuming checkpoint
@@ -313,7 +314,7 @@ func (t *GCTable) replayData(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		pkgVec := vector.New(types[i])
+		pkgVec := vector.New(vector.FLAT, types[i])
 		v := make([]byte, len(colData.Entries[0].Object.([]byte)))
 		copy(v, colData.Entries[0].Object.([]byte))
 		if err = pkgVec.Read(v); err != nil {

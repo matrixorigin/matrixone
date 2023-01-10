@@ -228,7 +228,7 @@ func (h *HashShard) Vector(
 		shard := shards[n%len(shards)]
 		shardVec, ok := m[shard]
 		if !ok {
-			shardVec = vector.New(shardAttr.Type)
+			shardVec = vector.New(vector.FLAT, shardAttr.Type)
 			m[shard] = shardVec
 		}
 		v := getNullableValueFromVector(vec, i)
@@ -259,9 +259,9 @@ func getBytesFromPrimaryVectorForHash(ctx context.Context, vec *vector.Vector, i
 		return nil, moerr.NewDuplicate(ctx)
 		//panic("primary value vector should not contain nulls")
 	}
-	if vec.Typ.IsFixedLen() {
+	if vec.GetType().IsFixedLen() {
 		// is slice
-		size := vec.Typ.TypeSize()
+		size := vec.GetType().TypeSize()
 		l := vec.Length() * size
 		data := unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), l)
 		end := (i + 1) * size
@@ -271,8 +271,8 @@ func getBytesFromPrimaryVectorForHash(ctx context.Context, vec *vector.Vector, i
 			//return nil, moerr.NewInvalidInput("vector size not match")
 		}
 		return data[i*size : (i+1)*size], nil
-	} else if vec.Typ.IsVarlen() {
-		slice := vector.GetBytesVectorValues(vec)
+	} else if vec.GetType().IsVarlen() {
+		slice := vector.MustBytesCols(vec)
 		if i >= len(slice) {
 			return []byte{}, nil
 		}
@@ -290,10 +290,10 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 	if vec.IsConst() {
 		i = 0
 	}
-	switch vec.Typ.Oid {
+	switch vec.GetType().Oid {
 
 	case types.T_bool:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,
 				Value:  false,
@@ -302,12 +302,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]bool)[i],
+			Value:  vector.MustTCols[bool](vec)[i],
 		}
 		return
 
 	case types.T_int8:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,
 				Value:  int8(0),
@@ -316,12 +316,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]int8)[i],
+			Value:  vector.MustTCols[int8](vec)[i],
 		}
 		return
 
 	case types.T_int16:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,
 				Value:  int16(0),
@@ -330,12 +330,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]int16)[i],
+			Value:  vector.MustTCols[int16](vec)[i],
 		}
 		return
 
 	case types.T_int32:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,
 				Value:  int32(0),
@@ -344,12 +344,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]int32)[i],
+			Value:  vector.MustTCols[int32](vec)[i],
 		}
 		return
 
 	case types.T_int64:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,
 				Value:  int64(0),
@@ -358,12 +358,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]int64)[i],
+			Value:  vector.MustTCols[int64](vec)[i],
 		}
 		return
 
 	case types.T_uint8:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,
 				Value:  uint8(0),
@@ -372,12 +372,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]uint8)[i],
+			Value:  vector.MustTCols[uint8](vec)[i],
 		}
 		return
 
 	case types.T_uint16:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,
 				Value:  uint16(0),
@@ -386,12 +386,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]uint16)[i],
+			Value:  vector.MustTCols[uint16](vec)[i],
 		}
 		return
 
 	case types.T_uint32:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,
 				Value:  uint32(0),
@@ -400,12 +400,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]uint32)[i],
+			Value:  vector.MustTCols[uint32](vec)[i],
 		}
 		return
 
 	case types.T_uint64:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,
 				Value:  uint64(0),
@@ -414,12 +414,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]uint64)[i],
+			Value:  vector.MustTCols[uint64](vec)[i],
 		}
 		return
 
 	case types.T_float32:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,
 				Value:  float32(0),
@@ -428,12 +428,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]float32)[i],
+			Value:  vector.MustTCols[float32](vec)[i],
 		}
 		return
 
 	case types.T_float64:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,
 				Value:  float64(0),
@@ -442,12 +442,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]float64)[i],
+			Value:  vector.MustTCols[float64](vec)[i],
 		}
 		return
 
 	case types.T_tuple:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,
 				Value:  []any{},
@@ -456,12 +456,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([][]any)[i],
+			Value:  vector.MustTCols[[]any](vec)[i],
 		}
 		return
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,
 				Value:  []byte{},
@@ -475,7 +475,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		return
 
 	case types.T_date:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			var zero types.Date
 			value = Nullable{
 				IsNull: true,
@@ -485,12 +485,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]types.Date)[i],
+			Value:  vector.MustTCols[types.Date](vec)[i],
 		}
 		return
 
 	case types.T_time:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			var zero types.Time
 			value = Nullable{
 				IsNull: true,
@@ -500,12 +500,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]types.Time)[i],
+			Value:  vector.MustTCols[types.Time](vec)[i],
 		}
 		return
 
 	case types.T_datetime:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			var zero types.Datetime
 			value = Nullable{
 				IsNull: true,
@@ -515,12 +515,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]types.Datetime)[i],
+			Value:  vector.MustTCols[types.Datetime](vec)[i],
 		}
 		return
 
 	case types.T_timestamp:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			var zero types.Timestamp
 			value = Nullable{
 				IsNull: true,
@@ -530,12 +530,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]types.Timestamp)[i],
+			Value:  vector.MustTCols[types.Timestamp](vec)[i],
 		}
 		return
 
 	case types.T_decimal64:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			var zero types.Decimal64
 			value = Nullable{
 				IsNull: true,
@@ -545,12 +545,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]types.Decimal64)[i],
+			Value:  vector.MustTCols[types.Decimal64](vec)[i],
 		}
 		return
 
 	case types.T_decimal128:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			var zero types.Decimal128
 			value = Nullable{
 				IsNull: true,
@@ -560,12 +560,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]types.Decimal128)[i],
+			Value:  vector.MustTCols[types.Decimal128](vec)[i],
 		}
 		return
 
 	case types.T_Rowid:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			var zero types.Rowid
 			value = Nullable{
 				IsNull: true,
@@ -575,12 +575,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]types.Rowid)[i],
+			Value:  vector.MustTCols[types.Rowid](vec)[i],
 		}
 		return
 
 	case types.T_uuid:
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			var zero types.Uuid
 			value = Nullable{
 				IsNull: true,
@@ -590,13 +590,13 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]types.Uuid)[i],
+			Value:  vector.MustTCols[types.Uuid](vec)[i],
 		}
 		return
 
 	}
 
-	panic(fmt.Sprintf("unknown column type: %v", vec.Typ))
+	panic(fmt.Sprintf("unknown column type: %v", *vec.GetType()))
 }
 
 func appendNullableValueToVector(vec *vector.Vector, value Nullable, mp *mpool.MPool) {
@@ -604,7 +604,7 @@ func appendNullableValueToVector(vec *vector.Vector, value Nullable, mp *mpool.M
 	if ok {
 		value.Value = []byte(str)
 	}
-	vec.Append(value.Value, false, mp)
+	vector.Append(vec, value.Value, false, mp)
 	if value.IsNull {
 		vec.GetNulls().Set(uint64(vec.Length() - 1))
 	}

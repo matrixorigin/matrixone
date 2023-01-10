@@ -95,7 +95,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
+		rbat.Vecs[i] = vector.New(vector.FLAT, *bat.Vecs[pos].GetType())
 	}
 	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
@@ -126,7 +126,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						rbat.Clean(proc.Mp())
 						return err
 					}
-					bs := vec.Col.([]bool)
+					bs := vector.MustTCols[bool](vec)
 					if bs[0] {
 						matched = true
 						vec.Free(proc.Mp())

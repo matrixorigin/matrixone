@@ -480,8 +480,10 @@ func makeDatetimeSubVectors(firstStr, secondStr string, proc *process.Process) [
 	firstDate, _ := types.ParseDatetime(firstStr, 0)
 	secondDate, _ := types.ParseDatetime(secondStr, 0)
 
-	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, firstDate, proc.Mp())
-	vec[1] = vector.NewConstFixed(types.T_datetime.ToType(), 1, secondDate, proc.Mp())
+	vec[0] = vector.New(vector.CONSTANT, types.T_datetime.ToType())
+	vector.Append(vec[0], firstDate, false, proc.Mp())
+	vec[1] = vector.New(vector.CONSTANT, types.T_datetime.ToType())
+	vector.Append(vec[1], secondDate, false, proc.Mp())
 	vec[2] = proc.AllocScalarVector(types.T_int64.ToType())
 
 	return vec

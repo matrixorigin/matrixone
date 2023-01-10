@@ -93,7 +93,7 @@ func TestCoalesceGeneral(t *testing.T) {
 			{
 				inputTypes := make([]types.T, len(tc.vs))
 				for i := range inputTypes {
-					inputTypes[i] = tc.vs[i].Typ.Oid
+					inputTypes[i] = tc.vs[i].GetType().Oid
 				}
 				b := CoalesceTypeCheckFn(inputTypes, nil, types.T_int64)
 				if !tc.match {
@@ -183,7 +183,7 @@ func TestCoalesceString(t *testing.T) {
 			{
 				inputTypes := make([]types.T, len(tc.vs))
 				for i := range inputTypes {
-					inputTypes[i] = tc.vs[i].Typ.Oid
+					inputTypes[i] = tc.vs[i].GetType().Oid
 				}
 				b := CoalesceTypeCheckFn(inputTypes, nil, types.T_varchar)
 				if !tc.match {

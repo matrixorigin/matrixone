@@ -95,13 +95,13 @@ var (
 
 func makeTestVector1(json, path string) []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
-	vec[0] = vector.New(types.T_varchar.ToType())
-	vec[1] = vector.New(types.T_varchar.ToType())
-	err := vec[0].Append([]byte(json), false, procs.Mp())
+	vec[0] = vector.New(vector.FLAT, types.T_varchar.ToType())
+	vec[1] = vector.New(vector.FLAT, types.T_varchar.ToType())
+	err := vector.Append(vec[0], []byte(json), false, procs.Mp())
 	if err != nil {
 		panic(err)
 	}
-	err = vec[1].Append([]byte(path), false, procs.Mp())
+	err = vector.Append(vec[1], []byte(path), false, procs.Mp())
 	if err != nil {
 		panic(err)
 	}
@@ -109,8 +109,8 @@ func makeTestVector1(json, path string) []*vector.Vector {
 }
 func makeTestVector2(json, path string) []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
-	vec[0] = vector.New(types.T_json.ToType())
-	vec[1] = vector.New(types.T_varchar.ToType())
+	vec[0] = vector.New(vector.FLAT, types.T_json.ToType())
+	vec[1] = vector.New(vector.FLAT, types.T_varchar.ToType())
 	bjson, err := types.ParseStringToByteJson(json)
 	if err != nil {
 		panic(err)
@@ -119,11 +119,11 @@ func makeTestVector2(json, path string) []*vector.Vector {
 	if err != nil {
 		panic(err)
 	}
-	err = vec[0].Append(bjsonSlice, false, procs.Mp())
+	err = vector.Append(vec[0], bjsonSlice, false, procs.Mp())
 	if err != nil {
 		panic(err)
 	}
-	err = vec[1].Append([]byte(path), false, procs.Mp())
+	err = vector.Append(vec[1], []byte(path), false, procs.Mp())
 	if err != nil {
 		panic(err)
 	}
@@ -137,7 +137,7 @@ func TestJsonExtractByString(t *testing.T) {
 			vec := makeTestVector1(kase.json, kase.path)
 			gotvec, err := JsonExtract(vec, procs)
 			require.Nil(t, err)
-			got := vector.GetBytesVectorValues(gotvec)
+			got := vector.MustBytesCols(gotvec)
 			switch value := kase.want.(type) {
 			case []string:
 				for i := range value {
@@ -152,13 +152,15 @@ func TestJsonExtractByString(t *testing.T) {
 				bjson := types.DecodeJson(got[0])
 				require.JSONEq(t, kase.want.(string), bjson.String())
 			}
-			vec[0].MakeScalar(1)
+			vec[0].SetClass(vector.CONSTANT)
+			vec[0].SetLength(1)
 			_, err = JsonExtract(vec, procs)
 			require.NoError(t, err)
-			vec[1].MakeScalar(1)
+			vec[1].SetClass(vector.CONSTANT)
+			vec[1].SetLength(1)
 			_, err = JsonExtract(vec, procs)
 			require.NoError(t, err)
-			vec[0].Nsp.Set(0)
+			vec[0].GetNulls().Set(0)
 			_, err = JsonExtract(vec, procs)
 			require.NoError(t, err)
 		})

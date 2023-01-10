@@ -42,8 +42,8 @@ func SplitPart(vectors []*vector.Vector, proc *process.Process) (vec *vector.Vec
 	v1, v2, v3 := vectors[0], vectors[1], vectors[2]
 	resultType := types.T_varchar.ToType()
 	maxLen := findMaxLen(vectors)
-	if v1.IsScalarNull() || v2.IsScalarNull() || v3.IsScalarNull() {
-		vec = proc.AllocConstNullVector(resultType, maxLen)
+	if v1.IsConstNull() || v2.IsConstNull() || v3.IsConstNull() {
+		vec = proc.AllocConstNullVector(resultType)
 		return
 	}
 	if !validCount(v3) {
@@ -51,14 +51,14 @@ func SplitPart(vectors []*vector.Vector, proc *process.Process) (vec *vector.Vec
 		return
 	}
 	s1, s2, s3 := vector.MustStrCols(v1), vector.MustStrCols(v2), vector.MustTCols[uint32](v3)
-	if v1.IsScalar() && v2.IsScalar() && v3.IsScalar() {
+	if v1.IsConst() && v2.IsConst() && v3.IsConst() {
 		vec = proc.AllocScalarVector(resultType)
 		ret, isNull := split_part.SplitSingle(s1[0], s2[0], s3[0])
 		if isNull {
-			vec.Nsp.Set(0)
+			vec.GetNulls().Set(0)
 			return
 		}
-		err = vec.Append([]byte(ret), false, proc.Mp())
+		err = vector.Append(vec, []byte(ret), false, proc.Mp())
 		return
 	}
 	vec, err = proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
@@ -68,9 +68,9 @@ func SplitPart(vectors []*vector.Vector, proc *process.Process) (vec *vector.Vec
 	fnIdx := determineFn(vectors)
 
 	rs := make([]string, maxLen)
-	fnMap[fnIdx](s1, s2, s3, []*nulls.Nulls{v1.Nsp, v2.Nsp, v3.Nsp}, rs, vec.Nsp)
+	fnMap[fnIdx](s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, vec.GetNulls())
 	for i, r := range rs {
-		if vec.Nsp.Contains(uint64(i)) {
+		if vec.GetNulls().Contains(uint64(i)) {
 			continue
 		}
 		err = vector.SetStringAt(vec, i, r, proc.Mp())
@@ -95,7 +95,7 @@ func determineFn(vecs []*vector.Vector) int {
 	ret := 0
 	vecCnt := 3
 	for i, vec := range vecs {
-		if !vec.IsScalar() {
+		if !vec.IsConst() {
 			ret |= 1 << (vecCnt - i - 1)
 		}
 	}
@@ -105,7 +105,7 @@ func determineFn(vecs []*vector.Vector) int {
 func validCount(v *vector.Vector) bool {
 	s := vector.MustTCols[uint32](v)
 	for i, x := range s {
-		if v.Nsp.Contains(uint64(i)) {
+		if v.GetNulls().Contains(uint64(i)) {
 			continue
 		}
 		if x == 0 {

@@ -53,7 +53,7 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 		cvec := containers.NewVectorWithSharedMemory(vec, true)
 
 		// create zone map
-		zm := index.NewZoneMap(vec.Typ)
+		zm := index.NewZoneMap(*vec.GetType())
 		ctx := new(index.KeysCtx)
 		ctx.Keys = cvec
 		ctx.Count = vec.Length()
@@ -702,7 +702,7 @@ func checkIfDataInBlock(data any, meta BlockMeta, colIdx int, typ types.Type) (b
 }
 
 func findRowByPkValue(vec *vector.Vector, v any) int {
-	switch vec.Typ.Oid {
+	switch vec.GetType().Oid {
 	case types.T_int8:
 		rows := vector.MustTCols[int8](vec)
 		val := v.(int8)

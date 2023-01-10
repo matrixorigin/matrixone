@@ -25,20 +25,23 @@ import (
 )
 
 func makeInt64Vector(values []int64, nsp []uint64) *vector.Vector {
-	ns := nulls.Build(len(values), nsp...)
-	vec := vector.NewWithFixed(types.T_int64.ToType(), values, ns, testutil.TestUtilMp)
+	//ns := nulls.Build(len(values), nsp...)
+	vec := vector.New(vector.FLAT, types.T_int64.ToType())
+	vector.AppendList(vec, values, nil, testutil.TestUtilMp)
 	return vec
 }
 
 func makeUint64Vector(values []uint64, nsp []uint64) *vector.Vector {
-	ns := nulls.Build(len(values), nsp...)
-	vec := vector.NewWithFixed(types.T_uint64.ToType(), values, ns, testutil.TestUtilMp)
+	//ns := nulls.Build(len(values), nsp...)
+	vec := vector.New(vector.FLAT, types.T_uint64.ToType())
+	vector.AppendList(vec, values, nil, testutil.TestUtilMp)
 	return vec
 }
 
 func makeFloat64Vector(values []float64, nsp []uint64) *vector.Vector {
-	ns := nulls.Build(len(values), nsp...)
-	vec := vector.NewWithFixed(types.T_float64.ToType(), values, ns, testutil.TestUtilMp)
+	//ns := nulls.Build(len(values), nsp...)
+	vec := vector.New(vector.FLAT, types.T_float64.ToType())
+	vector.AppendList(vec, values, nil, testutil.TestUtilMp)
 	return vec
 }
 
@@ -51,7 +54,7 @@ func TestSpaceUint64(t *testing.T) {
 	require.Equal(t, output.GetString(1), "  ")
 	require.Equal(t, output.GetString(2), "   ")
 	require.Equal(t, output.GetString(3), "")
-	require.True(t, nulls.Contains(output.Nsp, 4))
+	require.True(t, nulls.Contains(output.GetNulls(), 4))
 }
 
 func TestSpaceInt64(t *testing.T) {
@@ -64,7 +67,7 @@ func TestSpaceInt64(t *testing.T) {
 	require.Equal(t, output.GetString(2), "   ")
 	require.Equal(t, output.GetString(3), "")
 	// XXX should have failed instead returning null
-	require.True(t, nulls.Contains(output.Nsp, 4))
+	require.True(t, nulls.Contains(output.GetNulls(), 4))
 }
 
 func TestSpaceFloat64(t *testing.T) {
@@ -77,5 +80,5 @@ func TestSpaceFloat64(t *testing.T) {
 	require.Equal(t, output.GetString(2), "   ")
 	require.Equal(t, output.GetString(3), "")
 	// XXX should have failed instead returning null
-	require.True(t, nulls.Contains(output.Nsp, 4))
+	require.True(t, nulls.Contains(output.GetNulls(), 4))
 }

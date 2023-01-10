@@ -31,20 +31,21 @@ func (c *strCompare) Set(idx int, v *vector.Vector) {
 }
 
 func (c *strCompare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Process) error {
-	if nulls.Contains(c.vs[vecSrc].Nsp, uint64(src)) {
-		nulls.Add(c.vs[vecDst].Nsp, uint64(dst))
+	if nulls.Contains(c.vs[vecSrc].GetNulls(), uint64(src)) {
+		nulls.Add(c.vs[vecDst].GetNulls(), uint64(dst))
 		return nil
 	}
-	nulls.Del(c.vs[vecDst].Nsp, uint64(dst))
-	return vector.Copy(c.vs[vecDst], c.vs[vecSrc], dst, src, proc.Mp())
+	nulls.Del(c.vs[vecDst].GetNulls(), uint64(dst))
+
+	return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
 }
 
 func (c *strCompare) Compare(veci, vecj int, vi, vj int64) int {
-	cmp := nullsCompare(c.vs[veci].Nsp, c.vs[vecj].Nsp, vi, vj, c.nullsLast)
+	cmp := nullsCompare(c.vs[veci].GetNulls(), c.vs[vecj].GetNulls(), vi, vj, c.nullsLast)
 	if cmp != 0 {
 		return cmp
 	}
-	if nulls.Contains(c.vs[veci].Nsp, uint64(vi)) && nulls.Contains(c.vs[veci].Nsp, uint64(vj)) {
+	if nulls.Contains(c.vs[veci].GetNulls(), uint64(vi)) && nulls.Contains(c.vs[veci].GetNulls(), uint64(vj)) {
 		return 0
 	}
 	x := c.vs[veci].GetBytes(vi)

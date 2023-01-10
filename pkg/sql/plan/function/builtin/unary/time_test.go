@@ -211,7 +211,7 @@ func TestTime(t *testing.T) {
 				result, err = DateStringToTime(vec, c.proc)
 			}
 			require.NoError(t, err)
-			require.Equal(t, c.want, result.Col.([]types.Time))
+			require.Equal(t, c.want, vector.MustTCols[types.Time](result))
 		})
 	}
 
@@ -226,28 +226,33 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
-			vec[0] = vector.NewConstFixed(types.T_int64.ToType(), 1, data, testutil.TestUtilMp)
+			vec[0] = vector.New(vector.CONSTANT, types.T_int64.ToType())
+			vector.Append(vec[0], data, false, testutil.TestUtilMp)
 		case types.T_decimal128:
 			data, err := types.ParseStringToDecimal128(str, 34, precision, false)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
-			vec[0] = vector.NewConstFixed(types.T_decimal128.ToType(), 1, data, testutil.TestUtilMp)
+			vec[0] = vector.New(vector.CONSTANT, types.T_int128.ToType())
+			vector.Append(vec[0], data, false, testutil.TestUtilMp)
 		case types.T_date:
 			data, err := types.ParseDateCast(str)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
-			vec[0] = vector.NewConstFixed(types.T_date.ToType(), 1, data, testutil.TestUtilMp)
+			vec[0] = vector.New(vector.CONSTANT, types.T_date.ToType())
+			vector.Append(vec[0], data, false, testutil.TestUtilMp)
 		case types.T_datetime:
 			data, err := types.ParseDatetime(str, precision)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
-			vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, data, testutil.TestUtilMp)
-			vec[0].Typ.Precision = precision
+			vec[0] = vector.New(vector.CONSTANT, types.T_date.ToType())
+			vector.Append(vec[0], data, false, testutil.TestUtilMp)
+			vec[0].GetType().Precision = precision
 		case types.T_char, types.T_varchar:
-			vec[0] = vector.NewConstString(types.Type{Oid: types.T_varchar, Size: 26}, 1, str, testutil.TestUtilMp)
+			vec[0] = vector.New(vector.CONSTANT, types.Type{Oid: types.T_varchar, Size: 26})
+			vector.Append(vec[0], str, false, testutil.TestUtilMp)
 		}
 	} else {
 		input := make([]string, 0)
@@ -268,13 +273,14 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 				return nil, moerr.ErrInvalidInput
 			}
 			input = append(input, tmp)
-			vec[0] = vector.NewWithFixed(typ, input, nil, testutil.TestUtilMp)
+			vec[0] = vector.New(vector.FLAT, typ)
+			vector.AppendList(vec[0], input, nil, testutil.TestUtilMp)
 
 		case types.T_date:
 			vec[0] = testutil.MakeDateVector(input, nil)
 		case types.T_datetime:
 			vec[0] = testutil.MakeDateTimeVector(input, nil)
-			vec[0].Typ.Precision = precision
+			vec[0].GetType().Precision = precision
 		case types.T_char:
 			vec[0] = testutil.MakeCharVector(input, nil)
 		case types.T_varchar:

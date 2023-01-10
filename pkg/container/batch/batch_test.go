@@ -50,7 +50,7 @@ func TestBatch(t *testing.T) {
 		err = types.Decode(data, rbat)
 		require.NoError(t, err)
 		for i, vec := range rbat.Vecs {
-			require.Equal(t, tc.bat.Vecs[i].Col, vec.Col)
+			require.Equal(t, vector.MustTCols[int8](tc.bat.Vecs[i]), vector.MustTCols[int8](vec))
 		}
 	}
 }
@@ -69,7 +69,7 @@ func newBatch(ts []types.Type, rows int) *Batch {
 	for i, typ := range ts {
 		switch typ.Oid {
 		case types.T_int8:
-			vec := vector.New(typ)
+			vec := vector.New(vector.FLAT, typ)
 			vs := make([]int8, Rows)
 			for j := range vs {
 				vs[j] = int8(j)

@@ -26,30 +26,30 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	resultType := types.T_float64.ToType()
 	leftValues, rightValues := vector.MustTCols[float64](left), vector.MustTCols[float64](right)
 	switch {
-	case left.IsScalar() && right.IsScalar():
-		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
+	case left.IsConst() && right.IsConst():
+		if left.IsConstNull() || right.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := make([]float64, 1)
 		vector.SetCol(resultVector, power.Power(leftValues, rightValues, resultValues))
 		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
-		if left.ConstVectorIsNull() {
+	case left.IsConst() && !right.IsConst():
+		if left.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.GetNulls())
 		if err != nil {
 			return nil, err
 		}
 		resultValues := vector.MustTCols[float64](resultVector)
 		power.PowerScalarLeftConst(leftValues[0], rightValues, resultValues)
 		return resultVector, nil
-	case !left.IsScalar() && right.IsScalar():
-		if right.ConstVectorIsNull() {
+	case !left.IsConst() && right.IsConst():
+		if right.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.GetNulls())
 		if err != nil {
 			return nil, err
 		}

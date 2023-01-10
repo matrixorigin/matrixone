@@ -27,17 +27,21 @@ func HexString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	inputVector := vectors[0]
 	resultType := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
 	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultValues := make([]string, 1)
 		HexEncodeString(inputValues, resultValues)
-		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0], proc.Mp()), nil
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.AppendString(vec, resultValues[0], resultValues[0] == "", proc.Mp())
+		return vec, nil
 	} else {
 		resultValues := make([]string, len(inputValues))
 		HexEncodeString(inputValues, resultValues)
-		return vector.NewWithStrings(resultType, resultValues, inputVector.Nsp, proc.Mp()), nil
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.AppendStringList(vec, resultValues, nil, proc.Mp())
+		return vec, nil
 	}
 }
 
@@ -45,17 +49,21 @@ func HexInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	inputVector := vectors[0]
 	resultType := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
 	inputValues := vector.MustTCols[int64](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultValues := make([]string, 1)
 		HexEncodeInt64(inputValues, resultValues)
-		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0], proc.Mp()), nil
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.AppendString(vec, resultValues[0], resultValues[0] == "", proc.Mp())
+		return vec, nil
 	} else {
 		resultValues := make([]string, len(inputValues))
 		HexEncodeInt64(inputValues, resultValues)
-		return vector.NewWithStrings(resultType, resultValues, inputVector.Nsp, proc.Mp()), nil
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.AppendStringList(vec, resultValues, nil, proc.Mp())
+		return vec, nil
 	}
 }
 

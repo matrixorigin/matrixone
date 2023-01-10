@@ -16,11 +16,12 @@ package vector
 
 import (
 	"context"
+	"reflect"
 	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -28,48 +29,49 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-// CheckInsertVector  vector.data will not be nil when insert rows
-func CheckInsertVector(v *Vector, m *mpool.MPool) *Vector {
-	if v.data == nil && v.Typ.Oid != types.T_any && v.Length() > 0 {
-		newVec := New(v.Typ)
-		newVec.isConst = v.isConst
-		val := GetInitConstVal(v.Typ)
-		for i := 0; i < v.Length(); i++ {
-			newVec.Append(val, true, m)
-		}
-		newVec.length = v.length
-		return newVec
-	}
-	return v
-}
-
-func MustTCols[T types.FixedSizeT](v *Vector) []T {
+func MustTCols[T any](v *Vector) []T {
 	// XXX hack.   Sometimes we generate an t_any, for untyped const null.
 	// This should be handled more carefully and gracefully.
 	if v.GetType().Oid == types.T_any {
 		return nil
 	}
-
-	if t, ok := v.Col.([]T); ok {
-		return t
+	if v.class == CONSTANT {
+		vs := (*(*[]T)(unsafe.Pointer(v.col)))[:v.length]
+		rs := make([]T, v.length)
+		for i := range rs {
+			rs[i] = vs[0]
+		}
+		return rs
 	}
-	panic("unexpected parameter types were received")
+	return (*(*[]T)(unsafe.Pointer(v.col)))[:v.length]
 }
 
 func MustBytesCols(v *Vector) [][]byte {
+	ret := make([][]byte, v.length)
 	varcol := MustTCols[types.Varlena](v)
-	ret := make([][]byte, len(varcol))
-	for i := range varcol {
-		ret[i] = (&varcol[i]).GetByteSlice(v.area)
+	if v.class == CONSTANT {
+		for i := range varcol {
+			ret[i] = (&varcol[0]).GetByteSlice(v.area)
+		}
+	} else {
+		for i := range varcol {
+			ret[i] = (&varcol[i]).GetByteSlice(v.area)
+		}
 	}
 	return ret
 }
 
 func MustStrCols(v *Vector) []string {
+	ret := make([]string, v.length)
 	varcol := MustTCols[types.Varlena](v)
-	ret := make([]string, len(varcol))
-	for i := range varcol {
-		ret[i] = (&varcol[i]).GetString(v.area)
+	if v.class == CONSTANT {
+		for i := range varcol {
+			ret[i] = (&varcol[0]).GetString(v.area)
+		}
+	} else {
+		for i := range varcol {
+			ret[i] = (&varcol[i]).GetString(v.area)
+		}
 	}
 	return ret
 }
@@ -80,44 +82,54 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 	return
 }
 
-func BuildVarlenaVector(typ types.Type, data []types.Varlena, area []byte) (vec *Vector, err error) {
-	vec = NewOriginal(typ)
-	vec.data = types.EncodeSlice(data)
-	vec.area = area
-	vec.colFromData()
-	return
+// XXX extend will extend the vector's Data to accommodate rows more entry.
+func extend[T any](v *Vector, rows int, m *mpool.MPool) error {
+	sz := v.typ.TypeSize()
+	if length := v.length + rows; length >= v.col.Cap/sz {
+		data := (*(*[]byte)(unsafe.Pointer(v.col)))[:v.length*sz]
+		ndata, err := m.Grow(data, length*sz)
+		if err != nil {
+			return err
+		}
+		*(*[]byte)(unsafe.Pointer(v.col)) = ndata
+	}
+	return nil
 }
 
 func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
-	nsp, err := vec.Nsp.Show()
+	nsp, err := vec.nsp.Show()
 	if err != nil {
 		return nil, err
 	}
+	sz := vec.typ.TypeSize()
 	return &api.Vector{
 		Nsp:      nsp,
 		Nullable: true,
 		Area:     vec.area,
-		IsConst:  vec.isConst,
+		IsConst:  vec.IsConst(),
 		Len:      uint32(vec.length),
-		Type:     TypeToProtoType(vec.Typ),
-		Data:     vec.encodeColToByteSlice(),
+		Type:     TypeToProtoType(vec.typ),
+		Data:     (*(*[]byte)(unsafe.Pointer(vec.col)))[:vec.length*sz],
 	}, nil
 }
 
 func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 	rvec := &Vector{
-		original: true,
-		data:     vec.Data,
-		area:     vec.Area,
-		isConst:  vec.IsConst,
-		length:   int(vec.Len),
-		Typ:      ProtoTypeToType(vec.Type),
+		col:    new(reflect.SliceHeader),
+		area:   vec.Area,
+		length: int(vec.Len),
+		typ:    ProtoTypeToType(vec.Type),
 	}
-	rvec.Nsp = &nulls.Nulls{}
-	if err := rvec.Nsp.Read(vec.Nsp); err != nil {
+	if vec.IsConst {
+		rvec.class = CONSTANT
+	} else {
+		rvec.class = FLAT
+	}
+	rvec.nsp = &nulls.Nulls{}
+	if err := rvec.nsp.Read(vec.Nsp); err != nil {
 		return nil, err
 	}
-	rvec.colFromData()
+	*(*[]byte)(unsafe.Pointer(rvec.col)) = vec.Data
 	return rvec, nil
 }
 
@@ -141,212 +153,9 @@ func ProtoTypeToType(typ *plan.Type) types.Type {
 	}
 }
 
-func (v *Vector) colFromData() {
-	if v.data == nil {
-		v.Col = nil
-	}
-
-	if v.Typ.Oid == types.T_tuple || v.Typ.Oid == types.T_any {
-		// No op
-	} else if v.GetType().IsVarlen() {
-		v.Col = DecodeFixedCol[types.Varlena](v, types.VarlenaSize)
-	} else {
-		// The followng switch attach the correct type to v.Col
-		// even though v.Col is only an interface.
-		tlen := v.GetType().TypeSize()
-		switch v.Typ.Oid {
-		case types.T_bool:
-			v.Col = DecodeFixedCol[bool](v, tlen)
-		case types.T_int8:
-			v.Col = DecodeFixedCol[int8](v, tlen)
-		case types.T_int16:
-			v.Col = DecodeFixedCol[int16](v, tlen)
-		case types.T_int32:
-			v.Col = DecodeFixedCol[int32](v, tlen)
-		case types.T_int64:
-			v.Col = DecodeFixedCol[int64](v, tlen)
-		case types.T_uint8:
-			v.Col = DecodeFixedCol[uint8](v, tlen)
-		case types.T_uint16:
-			v.Col = DecodeFixedCol[uint16](v, tlen)
-		case types.T_uint32:
-			v.Col = DecodeFixedCol[uint32](v, tlen)
-		case types.T_uint64:
-			v.Col = DecodeFixedCol[uint64](v, tlen)
-		case types.T_float32:
-			v.Col = DecodeFixedCol[float32](v, tlen)
-		case types.T_float64:
-			v.Col = DecodeFixedCol[float64](v, tlen)
-		case types.T_decimal64:
-			v.Col = DecodeFixedCol[types.Decimal64](v, tlen)
-		case types.T_decimal128:
-			v.Col = DecodeFixedCol[types.Decimal128](v, tlen)
-		case types.T_uuid:
-			v.Col = DecodeFixedCol[types.Uuid](v, tlen)
-		case types.T_date:
-			v.Col = DecodeFixedCol[types.Date](v, tlen)
-		case types.T_time:
-			v.Col = DecodeFixedCol[types.Time](v, tlen)
-		case types.T_datetime:
-			v.Col = DecodeFixedCol[types.Datetime](v, tlen)
-		case types.T_timestamp:
-			v.Col = DecodeFixedCol[types.Timestamp](v, tlen)
-		case types.T_TS:
-			v.Col = DecodeFixedCol[types.TS](v, tlen)
-		case types.T_Rowid:
-			v.Col = DecodeFixedCol[types.Rowid](v, tlen)
-		default:
-			panic("unknown type")
-		}
-	}
-}
-
-func (v *Vector) setupColFromData(start, end int) {
-	if v.Typ.Oid == types.T_tuple {
-		vec := v.Col.([][]interface{})
-		v.Col = vec[start:end]
-	} else if v.GetType().IsVarlen() {
-		v.Col = DecodeFixedCol[types.Varlena](v, types.VarlenaSize)[start:end]
-	} else {
-		// The followng switch attach the correct type to v.Col
-		// even though v.Col is only an interface.
-		tlen := v.GetType().TypeSize()
-		switch v.Typ.Oid {
-		case types.T_bool:
-			v.Col = DecodeFixedCol[bool](v, tlen)[start:end]
-		case types.T_int8:
-			v.Col = DecodeFixedCol[int8](v, tlen)[start:end]
-		case types.T_int16:
-			v.Col = DecodeFixedCol[int16](v, tlen)[start:end]
-		case types.T_int32:
-			v.Col = DecodeFixedCol[int32](v, tlen)[start:end]
-		case types.T_int64:
-			v.Col = DecodeFixedCol[int64](v, tlen)[start:end]
-		case types.T_uint8:
-			v.Col = DecodeFixedCol[uint8](v, tlen)[start:end]
-		case types.T_uint16:
-			v.Col = DecodeFixedCol[uint16](v, tlen)[start:end]
-		case types.T_uint32:
-			v.Col = DecodeFixedCol[uint32](v, tlen)[start:end]
-		case types.T_uint64:
-			v.Col = DecodeFixedCol[uint64](v, tlen)[start:end]
-		case types.T_float32:
-			v.Col = DecodeFixedCol[float32](v, tlen)[start:end]
-		case types.T_float64:
-			v.Col = DecodeFixedCol[float64](v, tlen)[start:end]
-		case types.T_decimal64:
-			v.Col = DecodeFixedCol[types.Decimal64](v, tlen)[start:end]
-		case types.T_decimal128:
-			v.Col = DecodeFixedCol[types.Decimal128](v, tlen)[start:end]
-		case types.T_uuid:
-			v.Col = DecodeFixedCol[types.Uuid](v, tlen)[start:end]
-		case types.T_date:
-			v.Col = DecodeFixedCol[types.Date](v, tlen)[start:end]
-		case types.T_time:
-			v.Col = DecodeFixedCol[types.Time](v, tlen)[start:end]
-		case types.T_datetime:
-			v.Col = DecodeFixedCol[types.Datetime](v, tlen)[start:end]
-		case types.T_timestamp:
-			v.Col = DecodeFixedCol[types.Timestamp](v, tlen)[start:end]
-		case types.T_TS:
-			v.Col = DecodeFixedCol[types.TS](v, tlen)[start:end]
-		case types.T_Rowid:
-			v.Col = DecodeFixedCol[types.Rowid](v, tlen)[start:end]
-		default:
-			panic("unknown type")
-		}
-	}
-}
-
-func (v *Vector) encodeColToByteSlice() []byte {
-	if v.Col == nil {
-		return nil
-	}
-	switch v.GetType().Oid {
-	case types.T_bool:
-		return types.EncodeSlice(v.Col.([]bool))
-	case types.T_int8:
-		return types.EncodeSlice(v.Col.([]int8))
-	case types.T_int16:
-		return types.EncodeSlice(v.Col.([]int16))
-	case types.T_int32:
-		return types.EncodeSlice(v.Col.([]int32))
-	case types.T_int64:
-		return types.EncodeSlice(v.Col.([]int64))
-	case types.T_uint8:
-		return types.EncodeSlice(v.Col.([]uint8))
-	case types.T_uint16:
-		return types.EncodeSlice(v.Col.([]uint16))
-	case types.T_uint32:
-		return types.EncodeSlice(v.Col.([]uint32))
-	case types.T_uint64:
-		return types.EncodeSlice(v.Col.([]uint64))
-	case types.T_float32:
-		return types.EncodeSlice(v.Col.([]float32))
-	case types.T_float64:
-		return types.EncodeSlice(v.Col.([]float64))
-	case types.T_decimal64:
-		return types.EncodeSlice(v.Col.([]types.Decimal64))
-	case types.T_decimal128:
-		return types.EncodeSlice(v.Col.([]types.Decimal128))
-	case types.T_uuid:
-		return types.EncodeSlice(v.Col.([]types.Uuid))
-	case types.T_date:
-		return types.EncodeSlice(v.Col.([]types.Date))
-	case types.T_time:
-		return types.EncodeSlice(v.Col.([]types.Time))
-	case types.T_datetime:
-		return types.EncodeSlice(v.Col.([]types.Datetime))
-	case types.T_timestamp:
-		return types.EncodeSlice(v.Col.([]types.Timestamp))
-	case types.T_TS:
-		return types.EncodeSlice(v.Col.([]types.TS))
-	case types.T_Rowid:
-		return types.EncodeSlice(v.Col.([]types.Rowid))
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
-		return types.EncodeSlice(v.Col.([]types.Varlena))
-	case types.T_tuple:
-		bs, _ := types.Encode(v.Col.([][]interface{}))
-		return bs
-	default:
-		panic("unknow type when encode vector column")
-	}
-}
-
-// XXX extend will extend the vector's Data to accommodate rows more entry.
-func (v *Vector) extend(rows int, m *mpool.MPool) error {
-	origSz := len(v.data)
-	growSz := rows * v.GetType().TypeSize()
-	tgtSz := origSz + growSz
-	if tgtSz <= cap(v.data) {
-		// XXX v.data can hold data, just grow.
-		// XXX do not use Grow, because this case it will still malloc and copy
-		v.data = v.data[:tgtSz]
-	} else if v.data == nil {
-		// XXX mheap Relloc is broken, cannot handle nil, so we Alloc here.
-		// XXX The interface on size, int/int64 u, FUBAR.
-		data, err := m.Alloc(tgtSz)
-		if err != nil {
-			return err
-		}
-		v.data = data[:tgtSz]
-	} else {
-		data, err := m.Grow(v.data, tgtSz)
-		if err != nil {
-			return err
-		}
-		v.data = data[:tgtSz]
-	}
-
-	newRows := int(tgtSz / v.GetType().TypeSize())
-	// Setup v.Col
-	v.setupColFromData(0, newRows)
-	return nil
-}
-
 // CompareAndCheckIntersect  we use this method for eval expr by zonemap
-func (v *Vector) CompareAndCheckIntersect(ctx context.Context, vec *Vector) (bool, error) {
-	switch v.Typ.Oid {
+func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
+	switch v.typ.Oid {
 	case types.T_int8:
 		return checkNumberIntersect[int8](v, vec)
 	case types.T_int16:
@@ -400,7 +209,7 @@ func (v *Vector) CompareAndCheckIntersect(ctx context.Context, vec *Vector) (boo
 			return strings.Compare(t1, t2) <= 0
 		})
 	}
-	return false, moerr.NewInternalError(ctx, "unsupport type to check intersect")
+	return false, moerr.NewInternalErrorNoCtx("unsupport type to check intersect")
 }
 
 func checkNumberIntersect[T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp](v1, v2 *Vector) (bool, error) {
@@ -453,23 +262,23 @@ func checkIntersect[T compT](cols1, cols2 []T, gtFun compFn[T], ltFun compFn[T])
 // CompareAndCheckAnyResultIsTrue  we use this method for eval expr by zonemap
 // funName must be ">,<,>=,<="
 func (v *Vector) CompareAndCheckAnyResultIsTrue(ctx context.Context, vec *Vector, funName string) (bool, error) {
-	if v.Typ.Oid != vec.Typ.Oid {
-		return false, moerr.NewInternalError(ctx, "can not compare two vector because their type is not match")
+	if v.typ.Oid != vec.typ.Oid {
+		return false, moerr.NewInternalErrorNoCtx("can not compare two vector because their type is not match")
 	}
 	if v.Length() != vec.Length() {
-		return false, moerr.NewInternalError(ctx, "can not compare two vector because their length is not match")
+		return false, moerr.NewInternalErrorNoCtx("can not compare two vector because their length is not match")
 	}
 	if v.Length() == 0 {
-		return false, moerr.NewInternalError(ctx, "can not compare two vector because their length is zero")
+		return false, moerr.NewInternalErrorNoCtx("can not compare two vector because their length is zero")
 	}
 
 	switch funName {
 	case ">", "<", ">=", "<=":
 	default:
-		return false, moerr.NewInternalError(ctx, "unsupport compare function")
+		return false, moerr.NewInternalErrorNoCtx("unsupport compare function")
 	}
 
-	switch v.Typ.Oid {
+	switch v.typ.Oid {
 	case types.T_int8:
 		return compareNumber[int8](ctx, v, vec, funName)
 	case types.T_int16:
@@ -575,10 +384,10 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(ctx context.Context, vec *Vector
 			}), nil
 		}
 	default:
-		return false, moerr.NewInternalError(ctx, "unsupport compare type")
+		return false, moerr.NewInternalErrorNoCtx("unsupport compare type")
 	}
 
-	return false, moerr.NewInternalError(ctx, "unsupport compare function")
+	return false, moerr.NewInternalErrorNoCtx("unsupport compare function")
 }
 
 type compT interface {
@@ -610,17 +419,17 @@ func compareNumber[T numberType](ctx context.Context, v1, v2 *Vector, fnName str
 			return t1 <= t2
 		}), nil
 	default:
-		return false, moerr.NewInternalError(ctx, "unsupport compare function")
+		return false, moerr.NewInternalErrorNoCtx("unsupport compare function")
 	}
 }
 
 func runCompareCheckAnyResultIsTrue[T compT](vec1, vec2 *Vector, fn compFn[T]) bool {
 	// column_a operator column_b  -> return true
 	// that means we don't known the return, just readBlock
-	if vec1.IsScalarNull() || vec2.IsScalarNull() {
+	if vec1.IsConstNull() || vec2.IsConstNull() {
 		return true
 	}
-	if nulls.Any(vec1.Nsp) || nulls.Any(vec2.Nsp) {
+	if nulls.Any(vec1.nsp) || nulls.Any(vec2.nsp) {
 		return true
 	}
 	cols1 := MustTCols[T](vec1)
@@ -631,10 +440,10 @@ func runCompareCheckAnyResultIsTrue[T compT](vec1, vec2 *Vector, fn compFn[T]) b
 func runStrCompareCheckAnyResultIsTrue(vec1, vec2 *Vector, fn compFn[string]) bool {
 	// column_a operator column_b  -> return true
 	// that means we don't known the return, just readBlock
-	if vec1.IsScalarNull() || vec2.IsScalarNull() {
+	if vec1.IsConstNull() || vec2.IsConstNull() {
 		return true
 	}
-	if nulls.Any(vec1.Nsp) || nulls.Any(vec2.Nsp) {
+	if nulls.Any(vec1.nsp) || nulls.Any(vec2.nsp) {
 		return true
 	}
 

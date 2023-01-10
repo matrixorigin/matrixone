@@ -44,25 +44,25 @@ func AsciiInt[T types.Ints](vecs []*vector.Vector, proc *process.Process) (ret *
 			ret.Free(proc.Mp())
 		}
 	}()
-	if vec.IsScalarNull() {
+	if vec.IsConstNull() {
 		ret = proc.AllocScalarNullVector(resultType)
 		return
 	}
-	start := intStartMap[vec.Typ.Oid]
-	if vec.IsScalar() {
+	start := intStartMap[vec.GetType().Oid]
+	if vec.IsConst() {
 		ret = proc.AllocScalarVector(resultType)
 		rs := vector.MustTCols[uint8](ret)
 		v := vector.MustTCols[T](vec)[0]
 		rs[0] = ascii.IntSingle(int64(v), start)
 		return
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.Nsp)
+	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.GetNulls())
 	if err != nil {
 		return
 	}
 	rs := vector.MustTCols[uint8](ret)
 	vs := vector.MustTCols[T](vec)
-	ascii.IntBatch(vs, start, rs, ret.Nsp)
+	ascii.IntBatch(vs, start, rs, ret.GetNulls())
 	return
 }
 
@@ -74,25 +74,25 @@ func AsciiUint[T types.UInts](vecs []*vector.Vector, proc *process.Process) (ret
 			ret.Free(proc.Mp())
 		}
 	}()
-	if vec.IsScalarNull() {
+	if vec.IsConstNull() {
 		ret = proc.AllocScalarNullVector(resultType)
 		return
 	}
-	start := uintStartMap[vec.Typ.Oid]
-	if vec.IsScalar() {
+	start := uintStartMap[vec.GetType().Oid]
+	if vec.IsConst() {
 		ret = proc.AllocScalarVector(resultType)
 		rs := vector.MustTCols[uint8](ret)
 		v := vector.MustTCols[T](vec)[0]
 		rs[0] = ascii.UintSingle(uint64(v), start)
 		return
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.Nsp)
+	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.GetNulls())
 	if err != nil {
 		return
 	}
 	rs := vector.MustTCols[uint8](ret)
 	vs := vector.MustTCols[T](vec)
-	ascii.UintBatch(vs, start, rs, ret.Nsp)
+	ascii.UintBatch(vs, start, rs, ret.GetNulls())
 	return
 }
 
@@ -104,23 +104,23 @@ func AsciiString(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vect
 			ret.Free(proc.Mp())
 		}
 	}()
-	if vec.IsScalarNull() {
+	if vec.IsConstNull() {
 		ret = proc.AllocScalarNullVector(resultType)
 		return
 	}
-	if vec.IsScalar() {
+	if vec.IsConst() {
 		ret = proc.AllocScalarVector(resultType)
 		rs := vector.MustTCols[uint8](ret)
 		v := vector.MustBytesCols(vec)[0]
 		rs[0] = ascii.StringSingle(v)
 		return
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.Nsp)
+	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.GetNulls())
 	if err != nil {
 		return
 	}
 	rs := vector.MustTCols[uint8](ret)
 	vs := vector.MustBytesCols(vec)
-	ascii.StringBatch(vs, rs, ret.Nsp)
+	ascii.StringBatch(vs, rs, ret.GetNulls())
 	return
 }

@@ -116,8 +116,8 @@ func TestIsNullScalarNull(t *testing.T) {
 }
 
 func checkIsNullResult(t *testing.T, result *vector.Vector, expected []bool, isScalar bool) {
-	col := result.Col.([]bool)
+	col := vector.MustTCols[bool](result)
 
 	require.Equal(t, expected, col)
-	require.Equal(t, isScalar, result.IsScalar())
+	require.Equal(t, isScalar, result.IsConst())
 }

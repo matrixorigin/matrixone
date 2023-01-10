@@ -29,12 +29,12 @@ func JsonQuote(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector
 		}
 	}()
 	resultType := types.T_json.ToType()
-	if vec.IsScalarNull() {
+	if vec.IsConstNull() {
 		ret = proc.AllocScalarNullVector(resultType)
 		return
 	}
 	vs := vector.MustStrCols(vec)
-	if vec.IsScalar() {
+	if vec.IsConst() {
 		var dt []byte
 		dt, err = json_quote.Single(vs[0])
 		if err != nil {
@@ -44,12 +44,12 @@ func JsonQuote(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector
 		err = vector.SetBytesAt(ret, 0, dt, proc.Mp())
 		return
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.Nsp)
+	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.GetNulls())
 	if err != nil {
 		return
 	}
 	rs := vector.MustBytesCols(ret)
-	rs, err = json_quote.Batch(vs, rs, ret.Nsp)
+	rs, err = json_quote.Batch(vs, rs, ret.GetNulls())
 	if err != nil {
 		return
 	}

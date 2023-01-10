@@ -16,12 +16,13 @@ package binary
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestShowVisibleBin(t *testing.T) {
@@ -75,9 +76,9 @@ func TestShowVisibleBin(t *testing.T) {
 
 }
 func makeVec(buf []byte, toCode uint8) []*vector.Vector {
-	vec := vector.New(types.T_varchar.ToType())
-	_ = vec.Append(buf, len(buf) == 0, testutil.TestUtilMp)
-	vec2 := vector.NewConst(types.T_uint8.ToType(), 1)
-	_ = vec2.Append(toCode, false, testutil.TestUtilMp)
+	vec := vector.New(vector.FLAT, types.T_varchar.ToType())
+	_ = vector.Append(vec, buf, len(buf) == 0, testutil.TestUtilMp)
+	vec2 := vector.New(vector.CONSTANT, types.T_uint8.ToType())
+	_ = vector.Append(vec2, toCode, false, testutil.TestUtilMp)
 	return []*vector.Vector{vec, vec2}
 }

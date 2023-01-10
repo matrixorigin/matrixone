@@ -63,7 +63,7 @@ func TestCastStringToJson(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.JSONEq(t, c.wantValues.(string), types.DecodeJson(castRes.GetBytes(0)).String())
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 }
@@ -233,7 +233,7 @@ func TestCastSameType(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantValues, castRes.Col)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 }
@@ -312,7 +312,7 @@ func TestCastSameType2(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantValues, castRes.Col)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 }
@@ -1054,7 +1054,7 @@ func TestCastLeftToRight(t *testing.T) {
 			}
 
 			require.Equal(t, c.wantValues, castRes.Col)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 }
@@ -1423,7 +1423,7 @@ func TestCastSpecials1Int(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantValues, castRes.Col)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 
@@ -1567,7 +1567,7 @@ func TestCastSpecials1Float(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantValues, castRes.Col)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 
@@ -1711,7 +1711,7 @@ func TestCastSpecials2Float(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantBytes, castRes.GetBytes(0))
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 }
@@ -1876,7 +1876,7 @@ func TestCastSpecials3(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantBytes, castRes.GetBytes(0))
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 
@@ -1890,8 +1890,8 @@ func TestCastSpecial4(t *testing.T) {
 		vectors := make([]*vector.Vector, 2)
 		vectors[0] = makeVector(src, srcIsConst)
 		vectors[1] = makeTypeVector(destType)
-		vectors[1].Typ.Width = 64
-		vectors[1].Typ.Scale = 0
+		vectors[1].GetType().Width = 64
+		vectors[1].GetType().Scale = 0
 		return vectors
 	}
 	resType := types.T_decimal128.ToType()
@@ -2042,8 +2042,8 @@ func TestCastSpecial4(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantValues, decimalres.Col)
-			require.Equal(t, c.wantType, decimalres.Typ)
-			require.Equal(t, c.wantScalar, decimalres.IsScalar())
+			require.Equal(t, c.wantType, decimalres.GetType())
+			require.Equal(t, c.wantScalar, decimalres.IsConst())
 		})
 	}
 
@@ -2261,12 +2261,9 @@ func TestCastVarcharAsDate(t *testing.T) {
 func TestCastFloatAsDecimal(t *testing.T) {
 	makeTempVectors := func(leftVal []float32, leftType types.Type, rightType types.Type) []*vector.Vector {
 		vecs := make([]*vector.Vector, 2)
-		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0], testutil.TestUtilMp)
-		vecs[1] = &vector.Vector{
-			Col: nil,
-			Typ: rightType,
-			Nsp: &nulls.Nulls{},
-		}
+		vecs[0] = vector.New(vector.CONSTANT, leftType)
+		vector.Append(vecs[0], leftVal[0], false, testutil.TestUtilMp)
+		vecs[1] = vector.New(vector.FLAT, rightType)
 		return vecs
 	}
 	leftType := types.Type{Oid: types.T_float32, Size: 8}
@@ -2290,7 +2287,7 @@ func TestCastFloatAsDecimal(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			result, _ := Cast(c.vecs, c.proc)
-			require.Equal(t, c.wantBytes, result.Col.([]types.Decimal64))
+			require.Equal(t, c.wantBytes, vector.MustTCols[types.Decimal128](result))
 		})
 	}
 }
@@ -2298,8 +2295,9 @@ func TestCastFloatAsDecimal(t *testing.T) {
 func TestCastDecimalAsString(t *testing.T) {
 	makeTempVectors := func(leftVal []types.Decimal64, leftType types.Type, rightType types.Type) []*vector.Vector {
 		vecs := make([]*vector.Vector, 2)
-		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0], testutil.TestUtilMp)
-		vecs[1] = vector.New(rightType)
+		vecs[0] = vector.New(vector.CONSTANT, leftType)
+		vector.Append(vecs[0], leftVal[0], false, testutil.TestUtilMp)
+		vecs[1] = vector.New(vector.FLAT, rightType)
 		return vecs
 	}
 	leftType := types.Type{Oid: types.T_decimal64, Size: 8}
@@ -2324,7 +2322,7 @@ func TestCastDecimalAsString(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			result, _ := Cast(c.vecs, c.proc)
-			require.Equal(t, c.wantBytes, vector.GetBytesVectorValues(result))
+			require.Equal(t, c.wantBytes, vector.MustBytesCols(result))
 		})
 	}
 }
@@ -2332,12 +2330,9 @@ func TestCastDecimalAsString(t *testing.T) {
 func TestCastTimestampAsDate(t *testing.T) {
 	makeTempVectors := func(leftVal []types.Timestamp, leftType types.Type, rightType types.Type) []*vector.Vector {
 		vecs := make([]*vector.Vector, 2)
-		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0], testutil.TestUtilMp)
-		vecs[1] = &vector.Vector{
-			Col: nil,
-			Typ: rightType,
-			Nsp: &nulls.Nulls{},
-		}
+		vecs[0] = vector.New(vector.CONSTANT, leftType)
+		vector.Append(vecs[0], leftVal[0], false, testutil.TestUtilMp)
+		vecs[1] = vector.New(vector.FLAT, rightType)
 		return vecs
 	}
 	leftType := types.Type{Oid: types.T_timestamp, Size: 8}
@@ -2360,7 +2355,7 @@ func TestCastTimestampAsDate(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			result, _ := Cast(c.vecs, c.proc)
-			require.Equal(t, c.wantBytes, result.Col.([]types.Date))
+			require.Equal(t, c.wantBytes, vector.MustTCols[types.Date](result))
 		})
 	}
 }
@@ -2370,11 +2365,13 @@ func TestCastDecimal64AsDecimal128(t *testing.T) {
 	makeTempVector := func(left types.Decimal64, leftType types.Type, leftScalar bool, destType types.Type) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
 		if leftScalar {
-			vectors[0] = vector.NewConstFixed(leftType, 1, left, testutil.TestUtilMp)
+			vectors[0] = vector.New(vector.CONSTANT, leftType)
+			vector.Append(vectors[0], left, false, testutil.TestUtilMp)
 		} else {
-			vectors[0] = vector.NewWithFixed(leftType, []types.Decimal64{left}, nil, testutil.TestUtilMp)
+			vectors[0] = vector.New(vector.FLAT, leftType)
+			vector.AppendList(vectors[0], []types.Decimal64{left}, nil, testutil.TestUtilMp)
 		}
-		vectors[1] = vector.New(destType)
+		vectors[1] = vector.New(vector.FLAT, destType)
 		return vectors
 	}
 	// decimal(10,5)
@@ -2419,8 +2416,8 @@ func TestCastDecimal64AsDecimal128(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantBytes, castRes.Col)
-			require.Equal(t, c.wantType, castRes.Typ.Oid)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantType, castRes.GetType().Oid)
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 
@@ -2431,12 +2428,14 @@ func TestCastDecimal64AsDecimal64(t *testing.T) {
 	makeTempVector := func(left types.Decimal64, leftType types.Type, leftScalar bool, destType types.Type) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
 		if leftScalar {
-			vectors[0] = vector.NewConstFixed(leftType, 1, left, testutil.TestUtilMp)
+			vectors[0] = vector.New(vector.CONSTANT, leftType)
+			vector.Append(vectors[0], left, false, testutil.TestUtilMp)
 		} else {
-			vectors[0] = vector.NewWithFixed(leftType, []types.Decimal64{left}, nil, testutil.TestUtilMp)
+			vectors[0] = vector.New(vector.FLAT, leftType)
+			vector.AppendList(vectors[0], []types.Decimal64{left}, nil, testutil.TestUtilMp)
 		}
 
-		vectors[1] = vector.New(destType)
+		vectors[1] = vector.New(vector.FLAT, destType)
 		return vectors
 	}
 	// decimal(10,5)
@@ -2478,8 +2477,8 @@ func TestCastDecimal64AsDecimal64(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantBytes, castRes.Col)
-			require.Equal(t, c.wantType.Oid, castRes.Typ.Oid)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantType.Oid, castRes.GetType().Oid)
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 }
@@ -2489,12 +2488,14 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 	makeTempVector := func(left types.Decimal128, leftType types.Type, leftScalar bool, destType types.Type) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
 		if leftScalar {
-			vectors[0] = vector.NewConstFixed(leftType, 1, left, testutil.TestUtilMp)
+			vectors[0] = vector.New(vector.CONSTANT, leftType)
+			vector.Append(vectors[0], left, false, testutil.TestUtilMp)
 		} else {
-			vectors[0] = vector.NewWithFixed(leftType, []types.Decimal128{left}, nil, testutil.TestUtilMp)
+			vectors[0] = vector.New(vector.FLAT, leftType)
+			vector.AppendList(vectors[0], []types.Decimal128{left}, nil, testutil.TestUtilMp)
 		}
 
-		vectors[1] = vector.New(destType)
+		vectors[1] = vector.New(vector.FLAT, destType)
 		return vectors
 	}
 
@@ -2535,8 +2536,8 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantBytes, castRes.Col)
-			require.Equal(t, c.wantType.Oid, castRes.Typ.Oid)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantType.Oid, castRes.GetType().Oid)
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 }
@@ -4286,7 +4287,7 @@ func TestCastNullAsAllType(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 }
@@ -4350,10 +4351,10 @@ func TestCastBoolAsString(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := vector.GetStrVectorValues(castRes)
+			got := vector.MustStrCols(castRes)
 			require.Equal(t, c.wantValues, got)
 			require.Equal(t, c.wantType, castRes.Typ.Oid)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 
@@ -4419,13 +4420,13 @@ func TestCastDateAsDatetimeAndString(t *testing.T) {
 				t.Fatal(err)
 			}
 			if castRes.GetType().IsVarlen() {
-				got := vector.GetStrVectorValues(castRes)
+				got := vector.MustStrCols(castRes)
 				require.Equal(t, c.wantValues, got)
 			} else {
 				require.Equal(t, c.wantValues, castRes.Col)
 			}
-			require.Equal(t, c.wantType, castRes.Typ.Oid)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantType, castRes.GetType().Oid)
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 
@@ -4491,13 +4492,13 @@ func TestCastDatetimeAsDateAndString(t *testing.T) {
 				t.Fatal(err)
 			}
 			if castRes.GetType().IsVarlen() {
-				got := vector.GetStrVectorValues(castRes)
+				got := vector.MustStrCols(castRes)
 				require.Equal(t, c.wantValues, got)
 			} else {
 				require.Equal(t, c.wantValues, castRes.Col)
 			}
-			require.Equal(t, c.wantType, castRes.Typ.Oid)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantType, castRes.GetType().Oid)
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 
@@ -4683,14 +4684,14 @@ func TestCastTimeToString(t *testing.T) {
 			require.NoError(t, err)
 
 			if castRes.GetType().IsVarlen() {
-				got := vector.GetStrVectorValues(castRes)
+				got := vector.MustStrCols(castRes)
 				require.Equal(t, c.wantValues, got)
 			} else {
 				require.Equal(t, c.wantValues, castRes.Col)
 			}
 
-			require.Equal(t, c.wantType, castRes.Typ.Oid)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantType, castRes.GetType().Oid)
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 
@@ -4772,12 +4773,12 @@ func TestCastStringToTime(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			// setting precision
-			c.vecs[1].Typ.Precision = c.precision
+			c.vecs[1].GetType().Precision = c.precision
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
 			require.Equal(t, c.wantValues, castRes.Col)
-			require.Equal(t, c.wantType, castRes.Typ.Oid)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantType, castRes.GetType().Oid)
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 
@@ -4824,12 +4825,12 @@ func TestCastInt64ToTime(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			// setting precision
-			c.vecs[1].Typ.Precision = c.precision
+			c.vecs[1].GetType().Precision = c.precision
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
 			require.Equal(t, c.wantValues, castRes.Col)
-			require.Equal(t, c.wantType, castRes.Typ.Oid)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantType, castRes.GetType().Oid)
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 }
@@ -4841,9 +4842,11 @@ func TestCastDecimal128ToTime(t *testing.T) {
 		dcmType := types.Type{Oid: types.T_decimal128, Size: 8, Width: 34, Scale: 6}
 
 		if isScalar {
-			vectors[0] = vector.NewConstFixed(dcmType, 1, dcm, testutil.TestUtilMp)
+			vectors[0] = vector.New(vector.CONSTANT, dcmType)
+			vector.Append(vectors[0], dcm, false, testutil.TestUtilMp)
 		} else {
-			vectors[0] = vector.NewWithFixed(dcmType, []types.Decimal128{dcm}, nil, testutil.TestUtilMp)
+			vectors[0] = vector.New(vector.FLAT, dcmType)
+			vector.AppendList(vectors[0], []types.Decimal128{dcm}, nil, testutil.TestUtilMp)
 		}
 		vectors[1] = makeTypeVector(destType)
 		return vectors
@@ -4882,12 +4885,12 @@ func TestCastDecimal128ToTime(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			// setting precision
-			c.vecs[1].Typ.Precision = c.precision
+			c.vecs[1].GetType().Precision = c.precision
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
 			require.Equal(t, c.wantValues, castRes.Col)
-			require.Equal(t, c.wantType, castRes.Typ.Oid)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantType, castRes.GetType().Oid)
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 }
@@ -4908,7 +4911,7 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 			panic("wrong input test type")
 		}
 		vectors[1] = makeTypeVector(types.T_time)
-		vectors[1].Typ.Precision = precision
+		vectors[1].GetType().Precision = precision
 		return vectors
 	}
 
@@ -4950,12 +4953,12 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			// setting precision
-			c.vecs[1].Typ.Precision = c.precision
+			c.vecs[1].GetType().Precision = c.precision
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
 			require.Equal(t, c.wantValues, castRes.Col)
-			require.Equal(t, types.T_time, castRes.Typ.Oid)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, types.T_time, castRes.GetType().Oid)
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 
@@ -5021,7 +5024,7 @@ func TestCastDateAndDatetimeToInt(t *testing.T) {
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
 			require.Equal(t, c.wantValues, castRes.Col)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 
@@ -5072,165 +5075,204 @@ func TestCastJsonToString(t *testing.T) {
 			require.NoError(t, err)
 			got := vector.MustStrCols(castRes)
 			require.Equal(t, c.wantValues, got)
-			require.Equal(t, types.T_varchar, castRes.Typ.Oid)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, types.T_varchar, castRes.GetType().Oid)
+			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
 }
 
 func makeTypeVector(t types.T) *vector.Vector {
-	return vector.New(t.ToType())
+	return vector.New(vector.FLAT, t.ToType())
 }
 
 // make vector for type of int8,int16,int32,int64,uint8,uint16,uint32,uint64,date,datetime,timestamp,bool
 func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 	var typeOid types.T
 	var vec *vector.Vector
-	mp := testutil.TestUtilMp
+	//mp := testutil.TestUtilMp
 
 	switch val := src.(type) {
 	case int8:
 		typeOid = types.T_int8
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
+			vec = vector.New(vector.CONSTANT, typeOid.ToType())
+			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []int8{val}, nil, mp)
+			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vector.AppendList(vec, []int8{val}, nil, testutil.TestUtilMp)
 		}
 
 	case int16:
 		typeOid = types.T_int16
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
+			vec = vector.New(vector.CONSTANT, typeOid.ToType())
+			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []int16{val}, nil, mp)
+			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vector.AppendList(vec, []int16{val}, nil, testutil.TestUtilMp)
 		}
 
 	case int32:
 		typeOid = types.T_int32
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
+			vec = vector.New(vector.CONSTANT, typeOid.ToType())
+			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []int32{val}, nil, mp)
+			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vector.AppendList(vec, []int32{val}, nil, testutil.TestUtilMp)
 		}
 
 	case int64:
 		typeOid = types.T_int64
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
+			vec = vector.New(vector.CONSTANT, typeOid.ToType())
+			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []int64{val}, nil, mp)
+			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vector.AppendList(vec, []int64{val}, nil, testutil.TestUtilMp)
 		}
 
 	case uint8:
 		typeOid = types.T_uint8
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
+			vec = vector.New(vector.CONSTANT, typeOid.ToType())
+			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []uint8{val}, nil, mp)
+			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vector.AppendList(vec, []uint8{val}, nil, testutil.TestUtilMp)
 		}
 
 	case uint16:
 		typeOid = types.T_uint16
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
+			vec = vector.New(vector.CONSTANT, typeOid.ToType())
+			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []uint16{val}, nil, mp)
+			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vector.AppendList(vec, []uint16{val}, nil, testutil.TestUtilMp)
 		}
 
 	case uint32:
 		typeOid = types.T_uint32
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
+			vec = vector.New(vector.CONSTANT, typeOid.ToType())
+			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []uint32{val}, nil, mp)
+			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vector.AppendList(vec, []uint32{val}, nil, testutil.TestUtilMp)
 		}
 
 	case uint64:
 		typeOid = types.T_uint64
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, testutil.TestUtilMp)
+			vec = vector.New(vector.CONSTANT, typeOid.ToType())
+			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []uint64{val}, nil, testutil.TestUtilMp)
+			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vector.AppendList(vec, []uint64{val}, nil, testutil.TestUtilMp)
 		}
 
 	case float32:
 		typeOid = types.T_float32
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
+			vec = vector.New(vector.CONSTANT, typeOid.ToType())
+			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []float32{val}, nil, mp)
+			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vector.AppendList(vec, []float32{val}, nil, testutil.TestUtilMp)
 		}
 
 	case float64:
 		typeOid = types.T_float64
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
+			vec = vector.New(vector.CONSTANT, typeOid.ToType())
+			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []float64{val}, nil, mp)
+			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vector.AppendList(vec, []float64{val}, nil, testutil.TestUtilMp)
 		}
 
 	case types.Date:
 		typeOid = types.T_date
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
+			vec = vector.New(vector.CONSTANT, typeOid.ToType())
+			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []types.Date{val}, nil, mp)
+			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vector.AppendList(vec, []types.Date{val}, nil, testutil.TestUtilMp)
 		}
 
 	case types.Time:
 		typeOid = types.T_time
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
+			vec = vector.New(vector.CONSTANT, typeOid.ToType())
+			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []types.Time{val}, nil, mp)
+			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vector.AppendList(vec, []types.Time{val}, nil, testutil.TestUtilMp)
 		}
 
 	case types.Datetime:
 		typeOid = types.T_datetime
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
+			vec = vector.New(vector.CONSTANT, typeOid.ToType())
+			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []types.Datetime{val}, nil, mp)
+			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vector.AppendList(vec, []types.Datetime{val}, nil, testutil.TestUtilMp)
 		}
 
 	case types.Timestamp:
 		typeOid = types.T_timestamp
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
+			vec = vector.New(vector.CONSTANT, typeOid.ToType())
+			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []types.Timestamp{val}, nil, mp)
+			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vector.AppendList(vec, []types.Timestamp{val}, nil, testutil.TestUtilMp)
 		}
 
 	case bool:
 		typeOid = types.T_bool
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
+			vec = vector.New(vector.CONSTANT, typeOid.ToType())
+			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []bool{val}, nil, mp)
+			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vector.AppendList(vec, []bool{val}, nil, testutil.TestUtilMp)
 		}
 	}
 	return vec
 }
 
 func makeScalarNullVector(srcType types.T) *vector.Vector {
-	nullVector := vector.NewConstNull(srcType.ToType(), 1)
+	nullVector := vector.New(vector.CONSTANT, srcType.ToType())
+	nulls.Add(nullVector.GetNulls(), 0)
 	return nullVector
 }
 
 // make vector for type of char and varchar
 func makeStringVector(src string, t types.T, isConst bool) *vector.Vector {
 	if isConst {
-		return vector.NewConstString(t.ToType(), 1, src, testutil.TestUtilMp)
+		vec := vector.New(vector.CONSTANT, t.ToType())
+		vector.AppendString(vec, src, false, testutil.TestUtilMp)
+		return vec
 	} else {
-		return vector.NewWithStrings(t.ToType(), []string{src}, nil, testutil.TestUtilMp)
+		vec := vector.New(vector.FLAT, t.ToType())
+		vector.AppendStringList(vec, []string{src}, nil, testutil.TestUtilMp)
+		return vec
 	}
 }
 func makeJsonVectors(src string, isConst bool, t types.T) []*vector.Vector {
 	dt, _ := types.ParseStringToByteJson(src)
 	r, _ := dt.Marshal()
 	if isConst {
-		return []*vector.Vector{vector.NewConstBytes(types.T_json.ToType(), 1, r, testutil.TestUtilMp), makeTypeVector(t)}
+		vec := vector.New(vector.CONSTANT, types.T_json.ToType())
+		vector.AppendBytes(vec, r, false, testutil.TestUtilMp)
+		return []*vector.Vector{vec, makeTypeVector(t)}
 	} else {
-		return []*vector.Vector{vector.NewWithBytes(types.T_json.ToType(), [][]byte{r}, nil, testutil.TestUtilMp), makeTypeVector(t)}
+		vec := vector.New(vector.CONSTANT, types.T_json.ToType())
+		vector.AppendBytesList(vec, [][]byte{r}, nil, testutil.TestUtilMp)
+		return []*vector.Vector{vec, makeTypeVector(t)}
 	}
 }

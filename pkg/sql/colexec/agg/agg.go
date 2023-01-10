@@ -122,10 +122,10 @@ func (a *UnaryAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) error {
 	vec := vecs[0]
 	hasNull := vec.GetNulls().Contains(uint64(sel))
-	if vec.Typ.IsString() {
+	if vec.GetType().IsString() {
 		a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytes(sel)).(T1), a.vs[i], z, a.es[i], hasNull)
 	} else {
-		a.vs[i], a.es[i] = a.fill(i, vector.GetColumn[T1](vec)[sel], a.vs[i], z, a.es[i], hasNull)
+		a.vs[i], a.es[i] = a.fill(i, vector.MustTCols[T1](vec)[sel], a.vs[i], z, a.es[i], hasNull)
 	}
 	return nil
 }
@@ -148,7 +148,7 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 		}
 		return nil
 	}
-	vs := vector.GetColumn[T1](vec)
+	vs := vector.MustTCols[T1](vec)
 	if a.batchFill != nil {
 		if err := a.batchFill(a.vs, vs, start, int64(len(os)), vps, zs, vec.GetNulls()); err != nil {
 			return err
@@ -199,7 +199,7 @@ func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) 
 
 		return nil
 	}
-	vs := vector.GetColumn[T1](vec)
+	vs := vector.MustTCols[T1](vec)
 	for j, v := range vs {
 		hasNull := vec.GetNulls().Contains(uint64(j))
 		a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
@@ -248,19 +248,22 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 		}
 	}
 	if a.otyp.IsString() {
-		vec := vector.New(a.otyp)
-		vec.Nsp = nsp
+		vec := vector.New(vector.FLAT, a.otyp)
+		vec.SetNulls(nsp)
 		a.vs = a.eval(a.vs)
 		vs := (any)(a.vs).([][]byte)
 		for _, v := range vs {
-			if err := vec.Append(v, false, m); err != nil {
+			if err := vector.Append(vec, v, false, m); err != nil {
 				vec.Free(m)
 				return nil, err
 			}
 		}
 		return vec, nil
 	}
-	return vector.NewWithFixed(a.otyp, a.eval(a.vs), nsp, m), nil
+	vec := vector.New(vector.FLAT, a.otyp)
+	vector.AppendList(vec, a.eval(a.vs), nil, m)
+	vec.SetNulls(nsp)
+	return vec, nil
 }
 
 func (a *UnaryAgg[T1, T2]) WildAggReAlloc(m *mpool.MPool) error {

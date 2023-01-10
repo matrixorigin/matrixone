@@ -26,17 +26,17 @@ func DateToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_date, Size: 4}
 	inputValues := vector.MustTCols[types.Date](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := make([]types.Date, 1)
 		copy(resultValues, inputValues)
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -50,16 +50,16 @@ func DatetimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_date, Size: 4}
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := make([]types.Date, 1)
 		vector.SetCol(resultVector, date.DatetimeToDate(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -73,16 +73,16 @@ func TimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_date, Size: 4}
 	inputValues := vector.MustTCols[types.Time](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := make([]types.Date, 1)
 		vector.SetCol(resultVector, date.TimeToDate(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -97,17 +97,17 @@ func DateStringToDate(vectors []*vector.Vector, proc *process.Process) (*vector.
 	resultType := types.Type{Oid: types.T_date, Size: 4}
 	inputValues := vector.MustStrCols(inputVector)
 
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := make([]types.Date, 1)
 		result, err := date.DateStringToDate(inputValues, resultValues)
 		vector.SetCol(resultVector, result)
 		return resultVector, err
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -122,17 +122,17 @@ func TimesToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	resultType := types.Type{Oid: types.T_date, Size: 4}
 	inputValues := vector.MustStrCols(inputVector)
 
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := make([]types.Date, 1)
 		result, err := date.DateStringToDate(inputValues, resultValues)
 		vector.SetCol(resultVector, result)
 		return resultVector, err
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

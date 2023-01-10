@@ -98,7 +98,7 @@ func Bin[T constraints.Unsigned | constraints.Signed](intputVector, resultVector
 		res := uintToBinary(uint64(xs[idx]))
 		rs[idx] = res
 	}
-	vector.AppendString(resultVector, rs, proc.Mp())
+	vector.AppendStringList(resultVector, rs, nil, proc.Mp())
 	return nil
 }
 
@@ -112,6 +112,6 @@ func BinFloat[T constraints.Float](intputVector, resultVector *vector.Vector, pr
 	for idx, v := range xs {
 		rs[idx] = uintToBinary(uint64(int64(v)))
 	}
-	vector.AppendString(resultVector, rs, proc.Mp())
+	vector.AppendStringList(resultVector, rs, nil, proc.Mp())
 	return nil
 }

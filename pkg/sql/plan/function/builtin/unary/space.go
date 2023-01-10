@@ -25,21 +25,25 @@ func SpaceNumber[T types.BuiltinNumber](vectors []*vector.Vector, proc *process.
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
 	inputValues := vector.MustTCols[T](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocConstNullVector(resultType, inputVector.Length()), nil
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return proc.AllocConstNullVector(resultType), nil
 		}
 		results := make([]string, 1)
 		_, err := space.FillSpacesNumber(inputValues, results)
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewConstString(resultType, inputVector.Length(), results[0], proc.Mp()), nil
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.AppendString(vec, results[0], false, proc.Mp())
+		return vec, nil
 	}
 
 	results := make([]string, len(inputValues))
 	if _, err := space.FillSpacesNumber(inputValues, results); err != nil {
 		return nil, err
 	}
-	return vector.NewWithStrings(resultType, results, inputVector.Nsp, proc.Mp()), nil
+	vec := vector.New(vector.FLAT, resultType)
+	vector.AppendStringList(vec, results, nil, proc.Mp())
+	return vec, nil
 }

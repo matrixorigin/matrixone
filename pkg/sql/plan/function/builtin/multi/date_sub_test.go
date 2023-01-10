@@ -46,7 +46,7 @@ func TestDateSub(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, date.Col.([]types.Date)[0].String())
+			require.Equal(t, c.want, vector.MustTCols[types.Date](date)[0].String())
 		})
 	}
 
@@ -73,7 +73,7 @@ func TestDatetimeSub(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, date.Col.([]types.Datetime)[0].String())
+			require.Equal(t, c.want, vector.MustTCols[types.Datetime](date)[0].String())
 		})
 	}
 
@@ -120,7 +120,7 @@ func TestDateStringSub(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			date, err := DateStringSub(c.vecs, c.proc)
-			require.Equal(t, c.want, date.Col.([]types.Datetime)[0].String())
+			require.Equal(t, c.want, vector.MustTCols[types.Datetime](date)[0].String())
 			require.True(t, moerr.IsMoErrCode(err, c.err))
 		})
 	}
@@ -132,9 +132,12 @@ func makeDateSubVectors(str string, isConst bool, num int64, unit types.Interval
 
 	date, _ := types.ParseDateCast(str)
 
-	vec[0] = vector.NewConstFixed(types.T_date.ToType(), 1, date, testutil.TestUtilMp)
-	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, num, testutil.TestUtilMp)
-	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(unit), testutil.TestUtilMp)
+	vec[0] = vector.New(vector.FLAT, types.T_date.ToType())
+	vector.Append(vec[0], date, false, testutil.TestUtilMp)
+	vec[1] = vector.New(vector.FLAT, types.T_int64.ToType())
+	vector.Append(vec[1], num, false, testutil.TestUtilMp)
+	vec[2] = vector.New(vector.FLAT, types.T_int64.ToType())
+	vector.Append(vec[2], int64(unit), false, testutil.TestUtilMp)
 	return vec
 }
 
@@ -143,16 +146,22 @@ func makeDatetimeSubVectors(str string, isConst bool, num int64, unit types.Inte
 
 	datetime, _ := types.ParseDatetime(str, 0)
 
-	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, datetime, testutil.TestUtilMp)
-	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, num, testutil.TestUtilMp)
-	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(unit), testutil.TestUtilMp)
+	vec[0] = vector.New(vector.FLAT, types.T_date.ToType())
+	vector.Append(vec[0], datetime, false, testutil.TestUtilMp)
+	vec[1] = vector.New(vector.FLAT, types.T_int64.ToType())
+	vector.Append(vec[1], num, false, testutil.TestUtilMp)
+	vec[2] = vector.New(vector.FLAT, types.T_int64.ToType())
+	vector.Append(vec[2], int64(unit), false, testutil.TestUtilMp)
 	return vec
 }
 
 func makeDateStringSubVectors(str string, isConst bool, num int64, unit types.IntervalType) []*vector.Vector {
 	vec := make([]*vector.Vector, 3)
-	vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, str, testutil.TestUtilMp)
-	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, num, testutil.TestUtilMp)
-	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(unit), testutil.TestUtilMp)
+	vec[0] = vector.New(vector.FLAT, types.T_varchar.ToType())
+	vector.AppendString(vec[0], str, false, testutil.TestUtilMp)
+	vec[1] = vector.New(vector.FLAT, types.T_int64.ToType())
+	vector.Append(vec[1], num, false, testutil.TestUtilMp)
+	vec[2] = vector.New(vector.FLAT, types.T_int64.ToType())
+	vector.Append(vec[2], int64(unit), false, testutil.TestUtilMp)
 	return vec
 }

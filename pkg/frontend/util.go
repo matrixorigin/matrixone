@@ -394,61 +394,61 @@ func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 }
 
 func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
-	if nulls.Any(vec.Nsp) {
+	if nulls.Any(vec.GetNulls()) {
 		return nil, nil
 	}
-	switch vec.Typ.Oid {
+	switch vec.GetType().Oid {
 	case types.T_bool:
-		return vector.GetValueAt[bool](vec, 0), nil
+		return vector.MustTCols[bool](vec)[0], nil
 	case types.T_int8:
-		return vector.GetValueAt[int8](vec, 0), nil
+		return vector.MustTCols[int8](vec)[0], nil
 	case types.T_int16:
-		return vector.GetValueAt[int16](vec, 0), nil
+		return vector.MustTCols[int16](vec)[0], nil
 	case types.T_int32:
-		return vector.GetValueAt[int32](vec, 0), nil
+		return vector.MustTCols[int32](vec)[0], nil
 	case types.T_int64:
-		return vector.GetValueAt[int64](vec, 0), nil
+		return vector.MustTCols[int64](vec)[0], nil
 	case types.T_uint8:
-		return vector.GetValueAt[uint8](vec, 0), nil
+		return vector.MustTCols[uint8](vec)[0], nil
 	case types.T_uint16:
-		return vector.GetValueAt[uint16](vec, 0), nil
+		return vector.MustTCols[uint16](vec)[0], nil
 	case types.T_uint32:
-		return vector.GetValueAt[uint32](vec, 0), nil
+		return vector.MustTCols[uint32](vec)[0], nil
 	case types.T_uint64:
-		return vector.GetValueAt[uint64](vec, 0), nil
+		return vector.MustTCols[uint64](vec)[0], nil
 	case types.T_float32:
-		return vector.GetValueAt[float32](vec, 0), nil
+		return vector.MustTCols[float32](vec)[0], nil
 	case types.T_float64:
-		return vector.GetValueAt[float64](vec, 0), nil
+		return vector.MustTCols[float64](vec)[0], nil
 	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
-		return vec.GetString(0), nil
+		return vec.String(), nil
 	case types.T_decimal64:
-		val := vector.GetValueAt[types.Decimal64](vec, 0)
+		val := vector.MustTCols[types.Decimal64](vec)[0]
 		return val.String(), nil
 	case types.T_decimal128:
-		val := vector.GetValueAt[types.Decimal128](vec, 0)
+		val := vector.MustTCols[types.Decimal128](vec)[0]
 		return val.String(), nil
 	case types.T_json:
 		val := vec.GetBytes(0)
 		byteJson := types.DecodeJson(val)
 		return byteJson.String(), nil
 	case types.T_uuid:
-		val := vector.GetValueAt[types.Uuid](vec, 0)
+		val := vector.MustTCols[types.Uuid](vec)[0]
 		return val.ToString(), nil
 	case types.T_date:
-		val := vector.GetValueAt[types.Date](vec, 0)
+		val := vector.MustTCols[types.Date](vec)[0]
 		return val.String(), nil
 	case types.T_time:
-		val := vector.GetValueAt[types.Time](vec, 0)
+		val := vector.MustTCols[types.Time](vec)[0]
 		return val.String(), nil
 	case types.T_datetime:
-		val := vector.GetValueAt[types.Datetime](vec, 0)
+		val := vector.MustTCols[types.Datetime](vec)[0]
 		return val.String(), nil
 	case types.T_timestamp:
-		val := vector.GetValueAt[types.Timestamp](vec, 0)
-		return val.String2(ses.GetTimeZone(), vec.Typ.Precision), nil
+		val := vector.MustTCols[types.Timestamp](vec)[0]
+		return val.String2(ses.GetTimeZone(), vec.GetType().Precision), nil
 	default:
-		return nil, moerr.NewInvalidArg(ses.GetRequestContext(), "variable type", vec.Typ.Oid.String())
+		return nil, moerr.NewInvalidArg(ses.GetRequestContext(), "variable type", vec.GetType().Oid.String())
 	}
 }
 
@@ -570,9 +570,9 @@ func convertValueBat2Str(ctx context.Context, bat *batch.Batch, mp *mpool.MPool,
 	rbat := batch.NewWithSize(bat.VectorCount())
 	rbat.InitZsOne(bat.Length())
 	for i := 0; i < rbat.VectorCount(); i++ {
-		rbat.Vecs[i] = vector.New(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}) //TODO: check size
+		rbat.Vecs[i] = vector.New(vector.FLAT, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}) //TODO: check size
 		rs := make([]string, bat.Length())
-		switch bat.Vecs[i].Typ.Oid {
+		switch bat.Vecs[i].GetType().Oid {
 		case types.T_bool:
 			xs := vector.MustTCols[bool](bat.Vecs[i])
 			rs, err = dumpUtils.ParseBool(xs, bat.GetVector(int32(i)).GetNulls(), rs)
@@ -623,7 +623,7 @@ func convertValueBat2Str(ctx context.Context, bat *batch.Batch, mp *mpool.MPool,
 
 		case types.T_timestamp:
 			xs := vector.MustTCols[types.Timestamp](bat.Vecs[i])
-			rs, err = dumpUtils.ParseTimeStamp(xs, bat.GetVector(int32(i)).GetNulls(), rs, loc, bat.GetVector(int32(i)).Typ.Precision)
+			rs, err = dumpUtils.ParseTimeStamp(xs, bat.GetVector(int32(i)).GetNulls(), rs, loc, bat.GetVector(int32(i)).GetType().Precision)
 		case types.T_datetime:
 			xs := vector.MustTCols[types.Datetime](bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Datetime])
@@ -634,13 +634,13 @@ func convertValueBat2Str(ctx context.Context, bat *batch.Batch, mp *mpool.MPool,
 			xs := vector.MustTCols[types.Uuid](bat.Vecs[i])
 			rs, err = dumpUtils.ParseUuid(xs, bat.GetVector(int32(i)).GetNulls(), rs)
 		default:
-			err = moerr.NewNotSupported(ctx, "type %v", bat.Vecs[i].Typ.String())
+			err = moerr.NewNotSupported(ctx, "type %v", bat.Vecs[i].GetType().String())
 		}
 		if err != nil {
 			return nil, err
 		}
 		for j := 0; j < len(rs); j++ {
-			err = rbat.Vecs[i].Append([]byte(rs[j]), false, mp)
+			err = vector.Append(rbat.Vecs[i], []byte(rs[j]), false, mp)
 			if err != nil {
 				return nil, err
 			}

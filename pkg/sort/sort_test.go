@@ -93,7 +93,7 @@ func init() {
 
 func TestSort(t *testing.T) {
 	for _, tc := range tcs {
-		os := make([]int64, vector.Length(tc.vec))
+		os := make([]int64, tc.vec.Length())
 		for i := range os {
 			os[i] = int64(i)
 		}
@@ -119,7 +119,7 @@ func BenchmarkSortInt(b *testing.B) {
 func BenchmarkSortIntVector(b *testing.B) {
 	m := mpool.MustNewZero()
 	vec := testutil.NewInt32Vector(BenchmarkRows, types.New(types.T_int32, 0, 0, 0), m, true, nil)
-	os := make([]int64, vector.Length(vec))
+	os := make([]int64, vec.Length())
 	for i := range os {
 		os[i] = int64(i)
 	}
@@ -129,10 +129,10 @@ func BenchmarkSortIntVector(b *testing.B) {
 }
 
 func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
-	switch vec.Typ.Oid {
+	switch vec.GetType().Oid {
 	case types.T_int32:
 		vs := make([]int, len(os))
-		col := vector.GetFixedVectorValues[int32](vec)
+		col := vector.MustTCols[int32](vec)
 		for i := range vs {
 			vs[i] = int(col[i])
 		}
@@ -150,7 +150,7 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 		}
 	case types.T_int64:
 		vs := make([]int, len(os))
-		col := vector.GetFixedVectorValues[int64](vec)
+		col := vector.MustTCols[int64](vec)
 		for i := range vs {
 			vs[i] = int(col[i])
 		}
@@ -168,7 +168,7 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 		}
 	case types.T_float32:
 		vs := make([]float64, len(os))
-		col := vector.GetFixedVectorValues[float32](vec)
+		col := vector.MustTCols[float32](vec)
 		for i := range vs {
 			vs[i] = float64(col[i])
 		}
@@ -186,7 +186,7 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 		}
 	case types.T_float64:
 		vs := make([]float64, len(os))
-		col := vector.GetFixedVectorValues[float64](vec)
+		col := vector.MustTCols[float64](vec)
 		for i := range vs {
 			vs[i] = float64(col[i])
 		}

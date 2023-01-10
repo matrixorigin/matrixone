@@ -15,9 +15,10 @@
 package util
 
 import (
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"strconv"
 
 	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -89,7 +90,7 @@ func FillCompositePKeyBatch(bat *batch.Batch, p *plan.ColDef, proc *process.Proc
 		vs = append(vs, v)
 	}
 	for _, v := range vs {
-		if nulls.Any(v.Nsp) {
+		if nulls.Any(v.GetNulls()) {
 			return moerr.NewConstraintViolation(proc.Ctx, "composite pkey don't support null value")
 		}
 	}

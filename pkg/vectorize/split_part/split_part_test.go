@@ -15,11 +15,12 @@
 package split_part
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"testing"
 )
 
 var (
@@ -64,24 +65,24 @@ func TestSplitSingle(t *testing.T) {
 func TestSplitPart(t *testing.T) {
 	rs := make([]string, len(s1))
 	nsp := nulls.NewWithSize(len(s1))
-	SplitPart1(s1, s2, s3, []*nulls.Nulls{v1.Nsp, v2.Nsp, v3.Nsp}, rs, nsp)
-	SplitPart2(s1, s2, s3, []*nulls.Nulls{v1.Nsp, v2.Nsp, v3.Nsp}, rs, nsp)
-	SplitPart3(s1, s2, s3, []*nulls.Nulls{v1.Nsp, v2.Nsp, v3.Nsp}, rs, nsp)
-	SplitPart4(s1, s2, s3, []*nulls.Nulls{v1.Nsp, v2.Nsp, v3.Nsp}, rs, nsp)
-	SplitPart5(s1, s2, s3, []*nulls.Nulls{v1.Nsp, v2.Nsp, v3.Nsp}, rs, nsp)
-	SplitPart6(s1, s2, s3, []*nulls.Nulls{v1.Nsp, v2.Nsp, v3.Nsp}, rs, nsp)
-	SplitPart7(s1, s2, s3, []*nulls.Nulls{v1.Nsp, v2.Nsp, v3.Nsp}, rs, nsp)
-	v1.Nsp.Set(0)
-	v2.Nsp.Set(0)
-	v3.Nsp.Set(0)
-	v1.Nsp.Set(5)
-	v2.Nsp.Set(5)
-	v3.Nsp.Set(5)
-	SplitPart1(s1, s2, s3, []*nulls.Nulls{v1.Nsp, v2.Nsp, v3.Nsp}, rs, nsp)
-	SplitPart2(s1, s2, s3, []*nulls.Nulls{v1.Nsp, v2.Nsp, v3.Nsp}, rs, nsp)
-	SplitPart3(s1, s2, s3, []*nulls.Nulls{v1.Nsp, v2.Nsp, v3.Nsp}, rs, nsp)
-	SplitPart4(s1, s2, s3, []*nulls.Nulls{v1.Nsp, v2.Nsp, v3.Nsp}, rs, nsp)
-	SplitPart5(s1, s2, s3, []*nulls.Nulls{v1.Nsp, v2.Nsp, v3.Nsp}, rs, nsp)
-	SplitPart6(s1, s2, s3, []*nulls.Nulls{v1.Nsp, v2.Nsp, v3.Nsp}, rs, nsp)
-	SplitPart7(s1, s2, s3, []*nulls.Nulls{v1.Nsp, v2.Nsp, v3.Nsp}, rs, nsp)
+	SplitPart1(s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, nsp)
+	SplitPart2(s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, nsp)
+	SplitPart3(s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, nsp)
+	SplitPart4(s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, nsp)
+	SplitPart5(s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, nsp)
+	SplitPart6(s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, nsp)
+	SplitPart7(s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, nsp)
+	v1.GetNulls().Set(0)
+	v2.GetNulls().Set(0)
+	v3.GetNulls().Set(0)
+	v1.GetNulls().Set(5)
+	v2.GetNulls().Set(5)
+	v3.GetNulls().Set(5)
+	SplitPart1(s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, nsp)
+	SplitPart2(s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, nsp)
+	SplitPart3(s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, nsp)
+	SplitPart4(s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, nsp)
+	SplitPart5(s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, nsp)
+	SplitPart6(s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, nsp)
+	SplitPart7(s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, nsp)
 }

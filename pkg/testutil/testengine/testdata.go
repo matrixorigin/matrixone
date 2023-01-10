@@ -76,7 +76,7 @@ func CreateR(db engine.Database) {
 		bat := batch.New(true, []string{"orderid", "uid", "price"})
 		{
 			{
-				vec := vector.New(types.Type{
+				vec := vector.New(vector.FLAT, types.Type{
 					Size: 24,
 					Oid:  types.T(types.T_varchar),
 				})
@@ -85,13 +85,13 @@ func CreateR(db engine.Database) {
 					vs[i] = []byte(fmt.Sprintf("%v", i))
 				}
 				// XXX MPOOL
-				if err := vector.AppendBytes(vec, vs, testEngineMp); err != nil {
+				if err := vector.AppendBytesList(vec, vs, nil, testEngineMp); err != nil {
 					log.Fatal(err)
 				}
 				bat.Vecs[0] = vec
 			}
 			{
-				vec := vector.New(types.Type{
+				vec := vector.New(vector.FLAT, types.Type{
 					Size: 4,
 					Oid:  types.T(types.T_uint32),
 				})
@@ -99,13 +99,13 @@ func CreateR(db engine.Database) {
 				for i := 0; i < 10; i++ {
 					vs[i] = uint32(i % 4)
 				}
-				if err := vector.AppendFixed(vec, vs, testEngineMp); err != nil {
+				if err := vector.AppendList(vec, vs, nil, testEngineMp); err != nil {
 					log.Fatal(err)
 				}
 				bat.Vecs[1] = vec
 			}
 			{
-				vec := vector.New(types.Type{
+				vec := vector.New(vector.FLAT, types.Type{
 					Size: 8,
 					Oid:  types.T(types.T_float64),
 				})
@@ -113,7 +113,7 @@ func CreateR(db engine.Database) {
 				for i := 0; i < 10; i++ {
 					vs[i] = float64(i)
 				}
-				if err := vector.AppendFixed(vec, vs, testEngineMp); err != nil {
+				if err := vector.AppendList(vec, vs, nil, testEngineMp); err != nil {
 					log.Fatal(err)
 				}
 				bat.Vecs[2] = vec
@@ -126,7 +126,7 @@ func CreateR(db engine.Database) {
 	{
 		bat := batch.New(true, []string{"orderid", "uid", "price"})
 		{
-			vec := vector.New(types.Type{
+			vec := vector.New(vector.FLAT, types.Type{
 				Size: 24,
 				Oid:  types.T(types.T_varchar),
 			})
@@ -134,13 +134,13 @@ func CreateR(db engine.Database) {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = []byte(fmt.Sprintf("%v", i))
 			}
-			if err := vector.AppendBytes(vec, vs, testEngineMp); err != nil {
+			if err := vector.AppendBytesList(vec, vs, nil, testEngineMp); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[0] = vec
 		}
 		{
-			vec := vector.New(types.Type{
+			vec := vector.New(vector.FLAT, types.Type{
 				Size: 4,
 				Oid:  types.T(types.T_uint32),
 			})
@@ -148,13 +148,13 @@ func CreateR(db engine.Database) {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = uint32(i % 4)
 			}
-			if err := vector.AppendFixed(vec, vs, testEngineMp); err != nil {
+			if err := vector.AppendList(vec, vs, nil, testEngineMp); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[1] = vec
 		}
 		{
-			vec := vector.New(types.Type{
+			vec := vector.New(vector.FLAT, types.Type{
 				Size: 8,
 				Oid:  types.T(types.T_float64),
 			})
@@ -162,7 +162,7 @@ func CreateR(db engine.Database) {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = float64(i)
 			}
-			if err := vector.AppendFixed(vec, vs, testEngineMp); err != nil {
+			if err := vector.AppendList(vec, vs, nil, testEngineMp); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[2] = vec
@@ -220,7 +220,7 @@ func CreateS(db engine.Database) {
 		bat := batch.New(true, []string{"orderid", "uid", "price"})
 		{
 			{
-				vec := vector.New(types.Type{
+				vec := vector.New(vector.FLAT, types.Type{
 					Size: 24,
 					Oid:  types.T(types.T_varchar),
 				})
@@ -228,13 +228,13 @@ func CreateS(db engine.Database) {
 				for i := 0; i < 10; i++ {
 					vs[i] = []byte(fmt.Sprintf("%v", i*2))
 				}
-				if err := vector.AppendBytes(vec, vs, testEngineMp); err != nil {
+				if err := vector.AppendBytesList(vec, vs, nil, testEngineMp); err != nil {
 					log.Fatal(err)
 				}
 				bat.Vecs[0] = vec
 			}
 			{
-				vec := vector.New(types.Type{
+				vec := vector.New(vector.FLAT, types.Type{
 					Size: 4,
 					Oid:  types.T(types.T_uint32),
 				})
@@ -242,13 +242,13 @@ func CreateS(db engine.Database) {
 				for i := 0; i < 10; i++ {
 					vs[i] = uint32(i % 2)
 				}
-				if err := vector.AppendFixed(vec, vs, testEngineMp); err != nil {
+				if err := vector.AppendList(vec, vs, nil, testEngineMp); err != nil {
 					log.Fatal(err)
 				}
 				bat.Vecs[1] = vec
 			}
 			{
-				vec := vector.New(types.Type{
+				vec := vector.New(vector.FLAT, types.Type{
 					Size: 8,
 					Oid:  types.T(types.T_float64),
 				})
@@ -256,7 +256,7 @@ func CreateS(db engine.Database) {
 				for i := 0; i < 10; i++ {
 					vs[i] = float64(i)
 				}
-				if err := vector.AppendFixed(vec, vs, testEngineMp); err != nil {
+				if err := vector.AppendList(vec, vs, nil, testEngineMp); err != nil {
 					log.Fatal(err)
 				}
 				bat.Vecs[2] = vec
@@ -269,7 +269,7 @@ func CreateS(db engine.Database) {
 	{
 		bat := batch.New(true, []string{"orderid", "uid", "price"})
 		{
-			vec := vector.New(types.Type{
+			vec := vector.New(vector.FLAT, types.Type{
 				Size: 24,
 				Oid:  types.T(types.T_varchar),
 			})
@@ -277,13 +277,13 @@ func CreateS(db engine.Database) {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = []byte(fmt.Sprintf("%v", i*2))
 			}
-			if err := vector.AppendBytes(vec, vs, testEngineMp); err != nil {
+			if err := vector.AppendBytesList(vec, vs, nil, testEngineMp); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[0] = vec
 		}
 		{
-			vec := vector.New(types.Type{
+			vec := vector.New(vector.FLAT, types.Type{
 				Size: 4,
 				Oid:  types.T(types.T_uint32),
 			})
@@ -291,13 +291,13 @@ func CreateS(db engine.Database) {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = uint32(i % 2)
 			}
-			if err := vector.AppendFixed(vec, vs, testEngineMp); err != nil {
+			if err := vector.AppendList(vec, vs, nil, testEngineMp); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[1] = vec
 		}
 		{
-			vec := vector.New(types.Type{
+			vec := vector.New(vector.FLAT, types.Type{
 				Size: 8,
 				Oid:  types.T(types.T_float64),
 			})
@@ -305,7 +305,7 @@ func CreateS(db engine.Database) {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = float64(i)
 			}
-			if err := vector.AppendFixed(vec, vs, testEngineMp); err != nil {
+			if err := vector.AppendList(vec, vs, nil, testEngineMp); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[2] = vec
@@ -378,40 +378,40 @@ func CreateT1(db engine.Database) {
 	{
 		bat := batch.New(true, []string{"spid", "userid", "score"})
 		{
-			vec := vector.New(types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
+			vec := vector.New(vector.FLAT, types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
 			vs := make([]int32, 5)
 			vs[0] = 1
 			vs[1] = 2
 			vs[2] = 2
 			vs[3] = 3
 			vs[4] = 1
-			if err := vector.AppendFixed(vec, vs, testEngineMp); err != nil {
+			if err := vector.AppendList(vec, vs, nil, testEngineMp); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[0] = vec
 		}
 		{
-			vec := vector.New(types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
+			vec := vector.New(vector.FLAT, types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
 			vs := make([]int32, 5)
 			vs[0] = 1
 			vs[1] = 2
 			vs[2] = 1
 			vs[3] = 3
 			vs[4] = 1
-			if err := vector.AppendFixed(vec, vs, testEngineMp); err != nil {
+			if err := vector.AppendList(vec, vs, nil, testEngineMp); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[1] = vec
 		}
 		{
-			vec := vector.New(types.Type{Oid: types.T(types.T_int8), Size: 1, Width: 1, Precision: 0})
+			vec := vector.New(vector.FLAT, types.Type{Oid: types.T(types.T_int8), Size: 1, Width: 1, Precision: 0})
 			vs := make([]int8, 5)
 			vs[0] = 1
 			vs[1] = 2
 			vs[2] = 4
 			vs[3] = 3
 			vs[4] = 5
-			if err := vector.AppendFixed(vec, vs, testEngineMp); err != nil {
+			if err := vector.AppendList(vec, vs, nil, testEngineMp); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[2] = vec
@@ -423,31 +423,31 @@ func CreateT1(db engine.Database) {
 	{
 		bat := batch.New(true, []string{"spid", "userid", "score"})
 		{
-			vec := vector.New(types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
+			vec := vector.New(vector.FLAT, types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
 			vs := make([]int32, 2)
 			vs[0] = 4
 			vs[1] = 5
-			if err := vector.AppendFixed(vec, vs, testEngineMp); err != nil {
+			if err := vector.AppendList(vec, vs, nil, testEngineMp); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[0] = vec
 		}
 		{
-			vec := vector.New(types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
+			vec := vector.New(vector.FLAT, types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
 			vs := make([]int32, 2)
 			vs[0] = 6
 			vs[1] = 11
-			if err := vector.AppendFixed(vec, vs, testEngineMp); err != nil {
+			if err := vector.AppendList(vec, vs, nil, testEngineMp); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[1] = vec
 		}
 		{
-			vec := vector.New(types.Type{Oid: types.T(types.T_int8), Size: 1, Width: 1, Precision: 0})
+			vec := vector.New(vector.FLAT, types.Type{Oid: types.T(types.T_int8), Size: 1, Width: 1, Precision: 0})
 			vs := make([]int8, 2)
 			vs[0] = 10
 			vs[1] = 99
-			if err := vector.AppendFixed(vec, vs, testEngineMp); err != nil {
+			if err := vector.AppendList(vec, vs, nil, testEngineMp); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[2] = vec

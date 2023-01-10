@@ -28,17 +28,17 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	lvs, rvs := vector.MustStrCols(lv), vector.MustBytesCols(rv)
 	rtyp := types.T_bool.ToType()
 
-	if lv.IsScalarNull() || rv.IsScalarNull() {
-		return proc.AllocConstNullVector(rtyp, lv.Length()), nil
+	if lv.IsConstNull() || rv.IsConstNull() {
+		return proc.AllocConstNullVector(rtyp), nil
 	}
 
 	var err error
 	rs := make([]bool, lv.Length())
 
 	switch {
-	case !lv.IsScalar() && rv.IsScalar():
-		if nulls.Any(lv.Nsp) {
-			rs, err = like.BtSliceNullAndConst(lvs, rvs[0], lv.Nsp, rs)
+	case !lv.IsConst() && rv.IsConst():
+		if nulls.Any(lv.GetNulls()) {
+			rs, err = like.BtSliceNullAndConst(lvs, rvs[0], lv.GetNulls(), rs)
 			if err != nil {
 				return nil, err
 			}
@@ -48,35 +48,41 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 				return nil, err
 			}
 		}
-		return vector.NewWithFixed(rtyp, rs, lv.Nsp, proc.Mp()), nil
-	case lv.IsScalar() && rv.IsScalar(): // in our design, this case should deal while pruning extends.
+		vec := vector.New(vector.FLAT, rtyp)
+		vector.AppendList(vec, rs, nil, proc.Mp())
+		return vec, nil
+	case lv.IsConst() && rv.IsConst(): // in our design, this case should deal while pruning extends.
 		ok, err := like.BtConstAndConst(lvs[0], rvs[0])
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewConstFixed(rtyp, lv.Length(), ok, proc.Mp()), nil
-	case lv.IsScalar() && !rv.IsScalar():
-		rs, err = like.BtConstAndSliceNull(lvs[0], rvs, rv.Nsp, rs)
+		vec := vector.New(vector.CONSTANT, rtyp)
+		vector.Append(vec, ok, false, proc.Mp())
+		return vec, nil
+	case lv.IsConst() && !rv.IsConst():
+		rs, err = like.BtConstAndSliceNull(lvs[0], rvs, rv.GetNulls(), rs)
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewWithFixed(rtyp, rs, lv.Nsp, proc.Mp()), nil
-	case !lv.IsScalar() && !rv.IsScalar():
+		vec := vector.New(vector.FLAT, rtyp)
+		vector.AppendList(vec, rs, nil, proc.Mp())
+		return vec, nil
+	case !lv.IsConst() && !rv.IsConst():
 		var nsp *nulls.Nulls
-		if nulls.Any(rv.Nsp) && nulls.Any(lv.Nsp) {
-			nsp = lv.Nsp.Or(rv.Nsp)
+		if nulls.Any(rv.GetNulls()) && nulls.Any(lv.GetNulls()) {
+			nsp = lv.GetNulls().Or(rv.GetNulls())
 			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, nsp, rs)
 			if err != nil {
 				return nil, err
 			}
-		} else if nulls.Any(rv.Nsp) && !nulls.Any(lv.Nsp) {
-			nsp = rv.Nsp
+		} else if nulls.Any(rv.GetNulls()) && !nulls.Any(lv.GetNulls()) {
+			nsp = rv.GetNulls()
 			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, nsp, rs)
 			if err != nil {
 				return nil, err
 			}
-		} else if !nulls.Any(rv.Nsp) && nulls.Any(lv.Nsp) {
-			nsp = lv.Nsp
+		} else if !nulls.Any(rv.GetNulls()) && nulls.Any(lv.GetNulls()) {
+			nsp = lv.GetNulls()
 			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, nsp, rs)
 			if err != nil {
 				return nil, err
@@ -87,7 +93,9 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 				return nil, err
 			}
 		}
-		return vector.NewWithFixed(rtyp, rs, nsp, proc.Mp()), nil
+		vec := vector.New(vector.FLAT, rtyp)
+		vector.AppendList(vec, rs, nil, proc.Mp())
+		return vec, nil
 	}
 	return nil, moerr.NewInternalError(proc.Ctx, "unexpected case for LIKE operator")
 }

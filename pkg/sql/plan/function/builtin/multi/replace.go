@@ -31,15 +31,15 @@ func Replace(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	resultType := types.T_varchar.ToType()
 
 	//maxLen
-	maxLen := vector.Length(vectors[0])
+	maxLen := vectors[0].Length()
 	for i := range vectors {
-		val := vector.Length(vectors[i])
+		val := vectors[i].Length()
 		if val > maxLen {
 			maxLen = val
 		}
 	}
 
-	if firstVector.IsScalarNull() || secondVector.IsScalarNull() || thirdVector.IsScalarNull() {
+	if firstVector.IsConstNull() || secondVector.IsConstNull() || thirdVector.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 
@@ -47,7 +47,7 @@ func Replace(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	if err != nil {
 		return nil, err
 	}
-	err = regular.ReplaceWithArrays(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, thirdVector.Nsp, resultVector, proc, maxLen)
+	err = regular.ReplaceWithArrays(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), thirdVector.GetNulls(), resultVector, proc, maxLen)
 	if err != nil {
 		return nil, err
 	}

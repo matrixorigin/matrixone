@@ -52,7 +52,7 @@ func (n Nullable) AppendVector(
 	if ok {
 		value = []byte(str)
 	}
-	vec.Append(value, false, mp)
+	vector.Append(vec, value, false, mp)
 	if n.IsNull {
 		vec.GetNulls().Set(uint64(vec.Length() - 1))
 	}

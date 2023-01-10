@@ -91,8 +91,8 @@ func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 		return nil, err
 	}
 
-	value := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
-	if err := value.Append(json.Pretty(result), false, proc.Mp()); err != nil {
+	value := vector.New(vector.FLAT, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	if err := vector.Append(value, json.Pretty(result), false, proc.Mp()); err != nil {
 		return nil, err
 	}
 	return value, nil

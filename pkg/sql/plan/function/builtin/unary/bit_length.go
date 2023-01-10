@@ -25,15 +25,17 @@ func BitLengthFunc(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
 	inputValues := vector.MustBytesCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultValues := make([]int64, 1)
 		bit_length.StrBitLength(inputValues, resultValues)
-		return vector.NewConstFixed(resultType, inputVector.Length(), resultValues[0], proc.Mp()), nil
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.Append(vec, resultValues[0], false, proc.Mp())
+		return vec, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

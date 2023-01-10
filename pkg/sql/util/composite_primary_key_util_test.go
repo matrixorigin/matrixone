@@ -55,7 +55,7 @@ func TestFillCompositePKeyBatch(t *testing.T) {
 	bat, col, valueCount := MakeBatch(columnSi, rowCount, proc.Mp())
 	err := FillCompositePKeyBatch(bat, col, proc)
 	require.Equal(t, err, nil)
-	bs := vector.GetBytesVectorValues(bat.Vecs[len(bat.Vecs)-1])
+	bs := vector.MustBytesCols(bat.Vecs[len(bat.Vecs)-1])
 	tuples := make([]types.Tuple, 0)
 	for i := 0; i < len(bs); i++ {
 		tuple, err := types.Unpack(bs[i])
@@ -92,11 +92,11 @@ func MakeBatch(columnSi int, rowCount int, mp *mpool.MPool) (*batch.Batch, *plan
 	valueCount := make(map[int]interface{})
 
 	for i := 0; i < idx; i++ {
-		bat.Vecs[i] = vector.New(types.Type{Oid: randType()})
-		randInsertValues(bat.Vecs[i], bat.Vecs[i].Typ.Oid, rowCount, valueCount, i*rowCount, mp)
+		bat.Vecs[i] = vector.New(vector.FLAT, types.Type{Oid: randType()})
+		randInsertValues(bat.Vecs[i], bat.Vecs[i].GetType().Oid, rowCount, valueCount, i*rowCount, mp)
 	}
 
-	bat.Vecs[idx] = vector.New(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
+	bat.Vecs[idx] = vector.New(vector.FLAT, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 
 	colDef := &plan.ColDef{
 		Name: cPkeyName,
@@ -159,126 +159,126 @@ func randInsertValues(v *vector.Vector, t types.T, rowCount int, valueCount map[
 				valueCount[valueBegin+i] = false
 			}
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_int8:
 		vs := make([]int8, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randPositiveInt8()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_int16:
 		vs := make([]int16, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randPositiveInt16()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_int32:
 		vs := make([]int32, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randPositiveInt32()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_int64:
 		vs := make([]int64, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randPositiveInt64()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_uint8:
 		vs := make([]uint8, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randUint8()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_uint16:
 		vs := make([]uint16, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randUint16()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_uint32:
 		vs := make([]uint32, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randUint32()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_uint64:
 		vs := make([]uint64, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randUint64()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_date:
 		vs := make([]types.Date, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randDate()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_time:
 		vs := make([]types.Time, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randTime()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_datetime:
 		vs := make([]types.Datetime, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randDatetime()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_timestamp:
 		vs := make([]types.Timestamp, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randTimestamp()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_float32:
 		vs := make([]float32, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = rand.Float32()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_float64:
 		vs := make([]float64, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = rand.Float64()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_decimal64:
 		vs := make([]types.Decimal64, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randDecimal64()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_decimal128:
 		vs := make([]types.Decimal128, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randDecimal128()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed(v, vs, mp)
+		vector.AppendList(v, vs, nil, mp)
 	case types.T_varchar:
 		vs := make([][]byte, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randStringType()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendBytes(v, vs, mp)
+		vector.AppendBytesList(v, vs, nil, mp)
 	}
 
 }

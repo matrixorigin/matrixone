@@ -19,6 +19,7 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -32,11 +33,13 @@ const (
 func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.New(types.T_text, 0, 0, 0)
-	resultVector := vector.New(resultType)
-	if inputVector.ConstVectorIsNull() {
-		return vector.NewConstNull(resultType, 1), nil
+	resultVector := vector.New(vector.FLAT, resultType)
+	if inputVector.IsConstNull() {
+		vec := vector.New(vector.CONSTANT, resultType)
+		nulls.Add(vec.GetNulls(), 0)
+		return vec, nil
 	}
-	Filepath := vector.GetStrColumn(inputVector)[0]
+	Filepath := vector.MustStrCols(inputVector)[0]
 	fs := proc.FileService
 	r, err := ReadFromFile(Filepath, fs)
 	if err != nil {
@@ -51,7 +54,7 @@ func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	if len(ctx) == 0 {
 		isNull = true
 	}
-	if err := resultVector.Append(ctx, isNull, proc.Mp()); err != nil {
+	if err := vector.Append(resultVector, ctx, isNull, proc.Mp()); err != nil {
 		return nil, err
 	}
 	return resultVector, nil

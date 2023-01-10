@@ -25,16 +25,16 @@ func DateToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
 	inputValues := vector.MustTCols[types.Date](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := make([]int64, 1)
 		vector.SetCol(resultVector, weekday.DateToWeekday(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -48,16 +48,16 @@ func DatetimeToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := make([]int64, 1)
 		vector.SetCol(resultVector, weekday.DatetimeToWeekday(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

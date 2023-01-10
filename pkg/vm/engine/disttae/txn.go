@@ -235,9 +235,9 @@ func (txn *Transaction) WriteBatch(
 	bat.Cnt = 1
 	if typ == INSERT {
 		len := bat.Length()
-		vec := vector.New(types.New(types.T_Rowid, 0, 0, 0))
+		vec := vector.New(vector.FLAT, types.New(types.T_Rowid, 0, 0, 0))
 		for i := 0; i < len; i++ {
-			if err := vec.Append(txn.genRowId(), false,
+			if err := vector.Append(vec, txn.genRowId(), false,
 				txn.proc.Mp()); err != nil {
 				return err
 			}
@@ -316,7 +316,7 @@ func (txn *Transaction) checkPrimaryKey(
 			if len(entries) > 0 {
 				return moerr.NewDuplicateEntry(
 					txn.proc.Ctx,
-					common.TypeStringValue(bat.Vecs[idx].Typ, tuple[idx].Value),
+					common.TypeStringValue(*bat.Vecs[idx].GetType(), tuple[idx].Value),
 					bat.Attrs[idx],
 				)
 			}
@@ -476,7 +476,7 @@ func (txn *Transaction) getRowsByIndex(databaseId, tableId uint64, name string,
 							return nil, err
 						}
 						bs := vector.GetColumn[bool](vec)
-						if vec.IsScalar() {
+						if vec.IsConst() {
 							if !bs[0] {
 								bat.Shrink(nil)
 							}
@@ -583,8 +583,8 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 		if err != nil {
 			return nil, err
 		}
-		bs := vector.GetColumn[bool](vec)
-		if vec.IsScalar() {
+		bs := vector.MustTCols[bool](vec)
+		if vec.IsConst() {
 			if !bs[0] {
 				bat.Shrink(nil)
 			}

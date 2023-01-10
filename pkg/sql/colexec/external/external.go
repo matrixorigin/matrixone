@@ -291,9 +291,9 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 				Width: node.TableDef.Cols[i].Typ.Width,
 				Scale: node.TableDef.Cols[i].Typ.Scale,
 			}
-			vec := vector.NewOriginal(typ)
+			vec := vector.New(vector.FLAT, typ)
 			vector.PreAlloc(vec, len(fileList), len(fileList), proc.Mp())
-			vec.SetOriginal(false)
+			//vec.SetOriginal(false)
 			for j := 0; j < len(fileList); j++ {
 				vector.SetStringAt(vec, j, getAccountCol(fileList[j]), proc.Mp())
 			}
@@ -304,9 +304,9 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 				Width: types.MaxVarcharLen,
 				Scale: 0,
 			}
-			vec := vector.NewOriginal(typ)
+			vec := vector.New(vector.FLAT, typ)
 			vector.PreAlloc(vec, len(fileList), len(fileList), proc.Mp())
-			vec.SetOriginal(false)
+			//vec.SetOriginal(false)
 			for j := 0; j < len(fileList); j++ {
 				vector.SetStringAt(vec, j, fileList[j], proc.Mp())
 			}
@@ -339,7 +339,7 @@ func fliterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList
 		return nil, err
 	}
 	ret := make([]string, 0)
-	bs := vector.GetColumn[bool](vec)
+	bs := vector.MustTCols[bool](vec)
 	for i := 0; i < len(bs); i++ {
 		if bs[i] {
 			ret = append(ret, fileList[i])
@@ -515,9 +515,9 @@ func makeBatch(param *ExternalParam, batchSize int, mp *mpool.MPool) *batch.Batc
 	//alloc space for vector
 	for i := 0; i < len(param.Attrs); i++ {
 		typ := makeType(param.Cols, i)
-		vec := vector.NewOriginal(typ)
+		vec := vector.New(vector.FLAT, typ)
 		vector.PreAlloc(vec, batchSize, batchSize, mp)
-		vec.SetOriginal(false)
+		//vec.SetOriginal(false)
 		batchData.Vecs[i] = vec
 	}
 	return batchData
@@ -584,7 +584,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 		}
 	}
 
-	n := vector.Length(bat.Vecs[0])
+	n := bat.Vecs[0].Length()
 	sels := proc.Mp().GetSels()
 	if n > cap(sels) {
 		proc.Mp().PutSels(sels)
@@ -697,7 +697,7 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 	for i := 0; i < len(param.Attrs); i++ {
 		var vecTmp *vector.Vector
 		if catalog.ContainExternalHidenCol(param.Attrs[i]) {
-			vecTmp = vector.New(makeType(param.Cols, i))
+			vecTmp = vector.New(vector.FLAT, makeType(param.Cols, i))
 			vector.PreAlloc(vecTmp, rows, rows, proc.GetMPool())
 			for j := 0; j < rows; j++ {
 				err := vector.SetStringAt(vecTmp, j, param.extern.Filepath, proc.GetMPool())
@@ -706,8 +706,8 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 				}
 			}
 		} else {
-			vecTmp = vector.New(bat.Vecs[i].Typ)
-			err = vecTmp.Read(vec.Entries[i].Object.([]byte))
+			vecTmp = vector.New(vector.FLAT, *bat.Vecs[i].GetType())
+			err = vecTmp.UnmarshalBinary(vec.Entries[i].Object.([]byte))
 			if err != nil {
 				return nil, err
 			}
@@ -720,7 +720,7 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 		vector.Union(bat.Vecs[i], vecTmp, sels, true, proc.GetMPool())
 	}
 
-	n := vector.Length(bat.Vecs[0])
+	n := bat.Vecs[0].Length()
 	sels := proc.Mp().GetSels()
 	if n > cap(sels) {
 		proc.Mp().PutSels(sels)
@@ -1029,7 +1029,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_bool:
 			cols := vector.MustTCols[bool](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
 				if field == "true" || field == "1" {
 					cols[rowIdx] = true
@@ -1042,7 +1042,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_int8:
 			cols := vector.MustTCols[int8](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
 				if judgeInteger(field) {
 					d, err := strconv.ParseInt(field, 10, 8)
@@ -1063,7 +1063,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_int16:
 			cols := vector.MustTCols[int16](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
 				if judgeInteger(field) {
 					d, err := strconv.ParseInt(field, 10, 16)
@@ -1084,7 +1084,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_int32:
 			cols := vector.MustTCols[int32](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
 				if judgeInteger(field) {
 					d, err := strconv.ParseInt(field, 10, 32)
@@ -1105,7 +1105,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_int64:
 			cols := vector.MustTCols[int64](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
 				if judgeInteger(field) {
 					d, err := strconv.ParseInt(field, 10, 64)
@@ -1126,7 +1126,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_uint8:
 			cols := vector.MustTCols[uint8](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
 				if judgeInteger(field) {
 					d, err := strconv.ParseUint(field, 10, 8)
@@ -1147,7 +1147,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_uint16:
 			cols := vector.MustTCols[uint16](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
 				if judgeInteger(field) {
 					d, err := strconv.ParseUint(field, 10, 16)
@@ -1168,7 +1168,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_uint32:
 			cols := vector.MustTCols[uint32](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
 				if judgeInteger(field) {
 					d, err := strconv.ParseUint(field, 10, 32)
@@ -1189,7 +1189,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_uint64:
 			cols := vector.MustTCols[uint64](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
 				if judgeInteger(field) {
 					d, err := strconv.ParseUint(field, 10, 64)
@@ -1210,10 +1210,10 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_float32:
 			cols := vector.MustTCols[float32](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
 				// origin float32 data type
-				if vec.Typ.Precision < 0 {
+				if vec.GetType().Precision < 0 {
 					d, err := strconv.ParseFloat(field, 32)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
@@ -1222,7 +1222,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 					cols[rowIdx] = float32(d)
 					continue
 				}
-				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Precision)
+				d, err := types.Decimal128_FromStringWithScale(field, vec.GetType().Width, vec.GetType().Precision)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float32 type for column %d", field, colIdx)
@@ -1232,10 +1232,10 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_float64:
 			cols := vector.MustTCols[float64](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
 				// origin float64 data type
-				if vec.Typ.Precision < 0 {
+				if vec.GetType().Precision < 0 {
 					d, err := strconv.ParseFloat(field, 64)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
@@ -1244,7 +1244,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 					cols[rowIdx] = d
 					continue
 				}
-				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Precision)
+				d, err := types.Decimal128_FromStringWithScale(field, vec.GetType().Width, vec.GetType().Precision)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float64 type for column %d", field, colIdx)
@@ -1253,7 +1253,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 			}
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
 				// XXX Memory accounting?
 				err := vector.SetStringAt(vec, rowIdx, field, mp)
@@ -1263,7 +1263,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 			}
 		case types.T_json:
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
 				var (
 					byteJson  bytejson.ByteJson
@@ -1292,7 +1292,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_date:
 			cols := vector.MustTCols[types.Date](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
 				d, err := types.ParseDateCast(field)
 				if err != nil {
@@ -1304,9 +1304,9 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_time:
 			cols := vector.MustTCols[types.Time](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
-				d, err := types.ParseTime(field, vec.Typ.Precision)
+				d, err := types.ParseTime(field, vec.GetType().Precision)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Time type for column %d", field, colIdx)
@@ -1316,9 +1316,9 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_datetime:
 			cols := vector.MustTCols[types.Datetime](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
-				d, err := types.ParseDatetime(field, vec.Typ.Precision)
+				d, err := types.ParseDatetime(field, vec.GetType().Precision)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Datetime type for column %d", field, colIdx)
@@ -1328,9 +1328,9 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_decimal64:
 			cols := vector.MustTCols[types.Decimal64](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
-				d, err := types.Decimal64_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Scale)
+				d, err := types.Decimal64_FromStringWithScale(field, vec.GetType().Width, vec.GetType().Scale)
 				if err != nil {
 					// we tolerate loss of digits.
 					if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
@@ -1343,9 +1343,9 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_decimal128:
 			cols := vector.MustTCols[types.Decimal128](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
-				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Scale)
+				d, err := types.Decimal128_FromStringWithScale(field, vec.GetType().Width, vec.GetType().Scale)
 				if err != nil {
 					// we tolerate loss of digits.
 					if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
@@ -1358,10 +1358,10 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_timestamp:
 			cols := vector.MustTCols[types.Timestamp](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
 				t := time.Local
-				d, err := types.ParseTimestamp(t, field, vec.Typ.Precision)
+				d, err := types.ParseTimestamp(t, field, vec.GetType().Precision)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Timestamp type for column %d", field, colIdx)
@@ -1371,7 +1371,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		case types.T_uuid:
 			cols := vector.MustTCols[types.Uuid](vec)
 			if isNullOrEmpty {
-				nulls.Add(vec.Nsp, uint64(rowIdx))
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
 				d, err := types.ParseUuid(field)
 				if err != nil {

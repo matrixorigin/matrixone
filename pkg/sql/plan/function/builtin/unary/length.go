@@ -23,15 +23,16 @@ import (
 func Length(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	if inputVector.IsScalarNull() {
+	if inputVector.IsConstNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
-		ret := vector.NewConstFixed(resultType, inputVector.Length(), int64(len(inputValues[0])), proc.Mp())
+	if inputVector.IsConst() {
+		ret := vector.New(vector.CONSTANT, resultType)
+		vector.Append(ret, int64(len(inputValues[0])), false, proc.Mp())
 		return ret, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

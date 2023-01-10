@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strconv"
 )
 
 func genFilterMap(filters []string) map[string]struct{} {
@@ -117,27 +118,27 @@ func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if jsonVec.Typ.Oid != types.T_json && jsonVec.Typ.Oid != types.T_varchar {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: first argument must be json or string, but got %s", jsonVec.Typ.String()))
+	if jsonVec.GetType().Oid != types.T_json && jsonVec.GetType().Oid != types.T_varchar {
+		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: first argument must be json or string, but got %s", jsonVec.GetType().String()))
 	}
 	pathVec, err = colexec.EvalExpr(bat, proc, arg.Args[1])
 	if err != nil {
 		return false, err
 	}
-	if pathVec.Typ.Oid != types.T_varchar {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: second argument must be string, but got %s", pathVec.Typ.String()))
+	if pathVec.GetType().Oid != types.T_varchar {
+		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: second argument must be string, but got %s", pathVec.GetType().String()))
 	}
 	outerVec, err = colexec.EvalExpr(bat, proc, arg.Args[2])
 	if err != nil {
 		return false, err
 	}
-	if outerVec.Typ.Oid != types.T_bool {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: third argument must be bool, but got %s", outerVec.Typ.String()))
+	if outerVec.GetType().Oid != types.T_bool {
+		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: third argument must be bool, but got %s", outerVec.GetType().String()))
 	}
-	if !pathVec.IsScalar() || !outerVec.IsScalar() {
+	if !pathVec.IsConst() || !outerVec.IsConst() {
 		return false, moerr.NewInvalidInput(proc.Ctx, "unnest: second and third arguments must be scalar")
 	}
-	path, err = types.ParseStringToPath(pathVec.GetString(0))
+	path, err = types.ParseStringToPath(pathVec.String())
 	if err != nil {
 		return false, err
 	}
@@ -146,7 +147,7 @@ func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if err = json.Unmarshal(arg.Params, &param); err != nil {
 		return false, err
 	}
-	switch jsonVec.Typ.Oid {
+	switch jsonVec.GetType().Oid {
 	case types.T_json:
 		rbat, err = handle(jsonVec, &path, outer, &param, arg, proc, parseJson)
 	case types.T_varchar:
@@ -170,10 +171,10 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unne
 	rbat = batch.New(false, arg.Attrs)
 	rbat.Cnt = 1
 	for i := range arg.Rets {
-		rbat.Vecs[i] = vector.New(dupType(arg.Rets[i].Typ))
+		rbat.Vecs[i] = vector.New(vector.FLAT, dupType(arg.Rets[i].Typ))
 	}
 
-	if jsonVec.IsScalar() {
+	if jsonVec.IsConst() {
 		json, err = fn(jsonVec.GetBytes(0))
 		if err != nil {
 			return nil, err
@@ -217,20 +218,20 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestPara
 			var err error
 			switch arg.Attrs[j] {
 			case "col":
-				err = vec.Append([]byte(param.ColName), false, proc.Mp())
+				err = vector.Append(vec, []byte(param.ColName), false, proc.Mp())
 			case "seq":
-				err = vec.Append(int32(i), false, proc.Mp())
+				err = vector.Append(vec, int32(i), false, proc.Mp())
 			case "index":
 				val, ok := ures[i][arg.Attrs[j]]
 				if !ok || val == nil {
-					err = vec.Append(int32(0), true, proc.Mp())
+					err = vector.Append(vec, int32(0), true, proc.Mp())
 				} else {
 					intVal, _ := strconv.ParseInt(string(val), 10, 32)
-					err = vec.Append(int32(intVal), false, proc.Mp())
+					err = vector.Append(vec, int32(intVal), false, proc.Mp())
 				}
 			case "key", "path", "value", "this":
 				val, ok := ures[i][arg.Attrs[j]]
-				err = vec.Append(val, !ok || val == nil, proc.Mp())
+				err = vector.Append(vec, val, !ok || val == nil, proc.Mp())
 			default:
 				err = moerr.NewInvalidArg(proc.Ctx, "unnest: invalid column name:%s", arg.Attrs[j])
 			}

@@ -15,10 +15,11 @@
 package unary
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestJsonUnquote(t *testing.T) {
@@ -26,7 +27,7 @@ func TestJsonUnquote(t *testing.T) {
 	v1 := testutil.MakeScalarVarchar(`"hello"`, 1)
 	_, err := JsonUnquote([]*vector.Vector{v1}, proc)
 	require.NoError(t, err)
-	v1.Nsp.Set(0)
+	v1.GetNulls().Set(0)
 	_, err = JsonUnquote([]*vector.Vector{v1}, proc)
 	require.NoError(t, err)
 	v1 = testutil.MakeScalarVarchar(`hello`, 1)

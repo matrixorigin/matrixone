@@ -224,7 +224,7 @@ func TestSubStr(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantBytes, substr.GetBytes(0))
-			require.Equal(t, c.wantScalar, substr.IsScalar())
+			require.Equal(t, c.wantScalar, substr.IsConst())
 		})
 	}
 }
@@ -429,7 +429,7 @@ func TestSubStrUTF(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantBytes, substr.GetBytes(0))
-			require.Equal(t, c.wantScalar, substr.IsScalar())
+			require.Equal(t, c.wantScalar, substr.IsConst())
 		})
 	}
 }
@@ -634,7 +634,7 @@ func TestSubStrBlob(t *testing.T) {
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantBytes, substr.GetBytes(0))
-			require.Equal(t, c.wantScalar, substr.IsScalar())
+			require.Equal(t, c.wantScalar, substr.IsConst())
 		})
 	}
 }
@@ -642,10 +642,13 @@ func TestSubStrBlob(t *testing.T) {
 // Construct vector parameter of substring function
 func makeSubStrVectors(src string, start int64, length int64, withLength bool) []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
-	vec[0] = vector.NewConstString(types.T_varchar.ToType(), 10, src, testutil.TestUtilMp)
-	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 10, start, testutil.TestUtilMp)
+	vec[0] = vector.New(vector.CONSTANT, types.T_varchar.ToType())
+	vector.AppendString(vec[0], src, false, testutil.TestUtilMp)
+	vec[1] = vector.New(vector.CONSTANT, types.T_int64.ToType())
+	vector.Append(vec[1], start, false, testutil.TestUtilMp)
 	if withLength {
-		lvec := vector.NewConstFixed(types.T_int64.ToType(), 10, length, testutil.TestUtilMp)
+		lvec := vector.New(vector.CONSTANT, types.T_int64.ToType())
+		vector.Append(lvec, length, false, testutil.TestUtilMp)
 		vec = append(vec, lvec)
 	}
 	return vec
@@ -654,11 +657,13 @@ func makeSubStrVectors(src string, start int64, length int64, withLength bool) [
 func makeSubStrBlobVectors(src []byte, start int64, length int64, withLength bool, procs *process.Process) []*vector.Vector {
 	inputVector := make([]*vector.Vector, 2)
 	inputType := types.New(types.T_blob, 0, 0, 0)
-	inputVector[0] = vector.NewConst(inputType, 1)
-	inputVector[0].Append(src, false, procs.Mp())
-	inputVector[1] = vector.NewConstFixed(types.T_int64.ToType(), 10, start, testutil.TestUtilMp)
+	inputVector[0] = vector.New(vector.CONSTANT, inputType)
+	vector.Append(inputVector[0], src, false, procs.Mp())
+	inputVector[1] = vector.New(vector.CONSTANT, types.T_int64.ToType())
+	vector.Append(inputVector[1], start, false, testutil.TestUtilMp)
 	if withLength {
-		lvec := vector.NewConstFixed(types.T_int64.ToType(), 10, length, testutil.TestUtilMp)
+		lvec := vector.New(vector.CONSTANT, types.T_int64.ToType())
+		vector.Append(lvec, length, false, testutil.TestUtilMp)
 		inputVector = append(inputVector, lvec)
 	}
 	return inputVector

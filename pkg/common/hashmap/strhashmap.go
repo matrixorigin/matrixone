@@ -239,10 +239,10 @@ func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, s
 	if !vec.IsConst() {
 		data = unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), (n+start)*sz)
 	} else {
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			data = make([]byte, (n+start)*sz)
 		} else {
-			vec = vec.ConstExpand(false, m.m)
+			//vec = vec.ConstExpand(false, m.m)
 			data = unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), (n+start)*sz)
 		}
 	}

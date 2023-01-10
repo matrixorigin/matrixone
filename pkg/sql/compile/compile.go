@@ -363,8 +363,8 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 func constructValueScanBatch(ctx context.Context, m *mpool.MPool, node *plan.Node) (*batch.Batch, error) {
 	if node == nil || node.TableDef == nil { // like : select 1, 2
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
-		bat.Vecs[0].Col = make([]int64, 1)
+		bat.Vecs[0] = vector.New(vector.CONSTANT, types.Type{Oid: types.T_int64})
+		bat.Vecs[0].SetLength(1)
 		bat.InitZsOne(1)
 		return bat, nil
 	}
@@ -561,8 +561,8 @@ func (c *Compile) ConstructScope() *Scope {
 	ds.Proc.LoadTag = true
 	bat := batch.NewWithSize(1)
 	{
-		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
-		bat.Vecs[0].Col = make([]int64, 1)
+		bat.Vecs[0] = vector.New(vector.CONSTANT, types.Type{Oid: types.T_int64})
+		bat.Vecs[0].SetLength(1)
 		bat.InitZsOne(1)
 	}
 	ds.DataSource = &Source{Bat: bat}
@@ -940,7 +940,7 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			panic(err)
 		}
 		defer vec.Free(c.proc.Mp())
-		return c.compileTop(n, vec.Col.([]int64)[0], ss)
+		return c.compileTop(n, vector.MustTCols[int64](vec)[0], ss)
 	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileOrder(n, ss)
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0:
@@ -954,7 +954,7 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			panic(err)
 		}
 		defer vec2.Free(c.proc.Mp())
-		limit, offset := vec1.Col.([]int64)[0], vec2.Col.([]int64)[0]
+		limit, offset := vector.MustTCols[int64](vec1)[0], vector.MustTCols[int64](vec2)[0]
 		topN := limit + offset
 		if topN <= 8192*2 {
 			// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
@@ -1527,44 +1527,44 @@ func rowsetDataToVector(ctx context.Context, m *mpool.MPool, exprs []*plan.Expr)
 		return nil, moerr.NewInternalError(ctx, "rowsetData do not have rows")
 	}
 	typ := plan2.MakeTypeByPlan2Type(exprs[0].Typ)
-	vec := vector.New(typ)
+	vec := vector.New(vector.FLAT, typ)
 
 	for _, e := range exprs {
 		t := e.Expr.(*plan.Expr_C)
 		if t.C.GetIsnull() {
-			vec.Append(0, true, m)
+			vector.Append(vec, 0, true, m)
 			continue
 		}
 
 		switch t.C.GetValue().(type) {
 		case *plan.Const_Bval:
-			vec.Append(t.C.GetBval(), false, m)
+			vector.Append(vec, t.C.GetBval(), false, m)
 		case *plan.Const_I8Val:
-			vec.Append(t.C.GetI8Val(), false, m)
+			vector.Append(vec, t.C.GetI8Val(), false, m)
 		case *plan.Const_I16Val:
-			vec.Append(t.C.GetI16Val(), false, m)
+			vector.Append(vec, t.C.GetI16Val(), false, m)
 		case *plan.Const_I32Val:
-			vec.Append(t.C.GetI32Val(), false, m)
+			vector.Append(vec, t.C.GetI32Val(), false, m)
 		case *plan.Const_I64Val:
-			vec.Append(t.C.GetI64Val(), false, m)
+			vector.Append(vec, t.C.GetI64Val(), false, m)
 		case *plan.Const_U8Val:
-			vec.Append(t.C.GetU8Val(), false, m)
+			vector.Append(vec, t.C.GetU8Val(), false, m)
 		case *plan.Const_U16Val:
-			vec.Append(t.C.GetU16Val(), false, m)
+			vector.Append(vec, t.C.GetU16Val(), false, m)
 		case *plan.Const_U32Val:
-			vec.Append(t.C.GetU32Val(), false, m)
+			vector.Append(vec, t.C.GetU32Val(), false, m)
 		case *plan.Const_U64Val:
-			vec.Append(t.C.GetU64Val(), false, m)
+			vector.Append(vec, t.C.GetU64Val(), false, m)
 		case *plan.Const_Fval:
-			vec.Append(t.C.GetFval(), false, m)
+			vector.Append(vec, t.C.GetFval(), false, m)
 		case *plan.Const_Dval:
-			vec.Append(t.C.GetDval(), false, m)
+			vector.Append(vec, t.C.GetDval(), false, m)
 		case *plan.Const_Dateval:
-			vec.Append(t.C.GetDateval(), false, m)
+			vector.Append(vec, t.C.GetDateval(), false, m)
 		case *plan.Const_Timeval:
-			vec.Append(t.C.GetTimeval(), false, m)
+			vector.Append(vec, t.C.GetTimeval(), false, m)
 		case *plan.Const_Sval:
-			vec.Append(t.C.GetSval(), false, m)
+			vector.Append(vec, t.C.GetSval(), false, m)
 		default:
 			return nil, moerr.NewNYI(ctx, fmt.Sprintf("const expression %v in rowsetData", t.C.GetValue()))
 		}

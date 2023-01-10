@@ -62,7 +62,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 		p.inserts = p.inserts[1:]
 		b := batch.New(false, colNames)
 		for i, name := range colNames {
-			b.Vecs[i] = vector.New(p.typsMap[name])
+			b.Vecs[i] = vector.New(vector.FLAT, p.typsMap[name])
 		}
 		if _, err := b.Append(ctx, mp, bat); err != nil {
 			return nil, err
@@ -71,7 +71,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	}
 	b := batch.New(false, colNames)
 	for i, name := range colNames {
-		b.Vecs[i] = vector.New(p.typsMap[name])
+		b.Vecs[i] = vector.New(vector.FLAT, p.typsMap[name])
 	}
 	rows := 0
 	if len(p.index) > 0 {
@@ -98,7 +98,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			}
 			for i, name := range b.Attrs {
 				if name == catalog.Row_ID {
-					b.Vecs[i].Append(types.Rowid(entry.Key), false, mp)
+					vector.Append(b.Vecs[i], types.Rowid(entry.Key), false, mp)
 					continue
 				}
 				value, ok := dataValue.value[name]
@@ -152,7 +152,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 
 		for i, name := range b.Attrs {
 			if name == catalog.Row_ID {
-				b.Vecs[i].Append(types.Rowid(dataKey), false, mp)
+				vector.Append(b.Vecs[i], types.Rowid(dataKey), false, mp)
 				continue
 			}
 			value, ok := dataValue.value[name]

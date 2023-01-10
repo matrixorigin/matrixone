@@ -27,39 +27,39 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	resultType := types.Type{Oid: types.T_uint64, Size: 8}
 	leftValues, rightValues := vector.MustStrCols(left), vector.MustStrCols(right)
 	switch {
-	case left.IsScalar() && right.IsScalar():
-		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
+	case left.IsConst() && right.IsConst():
+		if left.IsConstNull() || right.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := vector.MustTCols[uint64](resultVector)
 		findinset.FindInSetWithAllConst(leftValues[0], rightValues[0], resultValues)
 		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
-		if left.ConstVectorIsNull() {
+	case left.IsConst() && !right.IsConst():
+		if left.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		rlen := len(rightValues)
 		resultVector := vector.PreAllocType(resultType, rlen, rlen, proc.Mp())
 		resultValues := vector.MustTCols[uint64](resultVector)
-		nulls.Set(resultVector.Nsp, right.Nsp)
+		nulls.Set(resultVector.GetNulls, right.GetNulls())
 		findinset.FindInSetWithLeftConst(leftValues[0], rightValues, resultValues)
 		return resultVector, nil
-	case !left.IsScalar() && right.IsScalar():
-		if right.ConstVectorIsNull() {
+	case !left.IsConst() && right.IsConst():
+		if right.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resLen := len(leftValues)
 		resultVector := vector.PreAllocType(resultType, resLen, resLen, proc.Mp())
 		resultValues := vector.MustTCols[uint64](resultVector)
-		nulls.Set(resultVector.Nsp, left.Nsp)
+		nulls.Set(resultVector.Nsp, left.GetNulls())
 		findinset.FindInSetWithRightConst(leftValues, rightValues[0], resultValues)
 		return resultVector, nil
 	}
 	resLen := len(leftValues)
 	resultVector := vector.PreAllocType(resultType, resLen, resLen, proc.Mp())
 	resultValues := vector.MustTCols[uint64](resultVector)
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
+	nulls.Or(left.GetNulls(), right.GetNulls(), resultVector.Nsp)
 	vector.SetCol(resultVector, findinset.FindInSet(leftValues, rightValues, resultValues))
 	return resultVector, nil
 }

@@ -24,7 +24,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -55,7 +54,7 @@ func Reorder(bat *Batch, attrs []string) {
 
 func SetLength(bat *Batch, n int) {
 	for _, vec := range bat.Vecs {
-		vector.SetLength(vec, n)
+		vec.SetLength(n)
 	}
 	bat.Zs = bat.Zs[:n]
 }
@@ -155,7 +154,7 @@ func (bat *Batch) Shrink(sels []int64) {
 			continue
 		}
 		mp[vec]++
-		vector.Shrink(vec, sels)
+		vec.Shrink(sels)
 	}
 	vs := bat.Zs
 	for i, sel := range sels {
@@ -172,7 +171,7 @@ func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
 				continue
 			}
 			mp[vec]++
-			if err := vector.Shuffle(vec, sels, m); err != nil {
+			if err := vec.Shuffle(sels, m); err != nil {
 				return err
 			}
 		}
@@ -238,9 +237,9 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	for _, vec := range bat.Vecs {
 		if vec != nil {
 			vec.Free(m)
-			if vec.IsLowCardinality() {
+			/*if vec.IsLowCardinality() {
 				vec.Index().(*index.LowCardinalityIndex).Free()
-			}
+			}*/
 		}
 	}
 	for _, agg := range bat.Aggs {
@@ -282,26 +281,26 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 	// fault.AddFaultPoint("panic_in_batch_append", ":::", "PANIC", 0, "")
 	fault.TriggerFault("panic_in_batch_append")
 
-	flags := make([]uint8, vector.Length(b.Vecs[0]))
+	flags := make([]uint8, b.Vecs[0].Length())
 	for i := range flags {
 		flags[i]++
 	}
 	for i := range bat.Vecs {
-		if err := vector.UnionBatch(bat.Vecs[i], b.Vecs[i], 0, vector.Length(b.Vecs[i]), flags[:vector.Length(b.Vecs[i])], mh); err != nil {
+		if err := vector.UnionBatch(bat.Vecs[i], b.Vecs[i], 0, b.Vecs[i].Length(), flags[:b.Vecs[i].Length()], mh); err != nil {
 			return bat, err
 		}
-		if b.Vecs[i].IsLowCardinality() {
+		/*if b.Vecs[i].IsLowCardinality() {
 			idx := b.Vecs[i].Index().(*index.LowCardinalityIndex)
 			if bat.Vecs[i].Index() == nil {
 				bat.Vecs[i].SetIndex(idx.Dup())
 			} else {
 				appendIdx := bat.Vecs[i].Index().(*index.LowCardinalityIndex)
 				dst, src := appendIdx.GetPoses(), idx.GetPoses()
-				if err := vector.UnionBatch(dst, src, 0, vector.Length(src), flags[:vector.Length(src)], mh); err != nil {
+				if err := vector.UnionBatch(dst, src, 0, src.Length(), flags[:src.Length()], mh); err != nil {
 					return bat, err
 				}
 			}
-		}
+		}*/
 	}
 	bat.Zs = append(bat.Zs, b.Zs...)
 	return bat, nil

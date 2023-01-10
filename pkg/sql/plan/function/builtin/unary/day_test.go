@@ -70,7 +70,8 @@ func TestDateToDayFunc(t *testing.T) {
 			if c.inputstr != nil {
 				vecs[0] = testutil.MakeDateVector(c.inputstr, c.inputNsp)
 				if c.isScalar {
-					vecs[0].MakeScalar(1)
+					vecs[0].SetClass(vector.CONSTANT)
+					vecs[0].SetLength(1)
 				}
 			} else {
 				vecs[0] = testutil.MakeScalarNull(types.T_date, 0)
@@ -80,9 +81,9 @@ func TestDateToDayFunc(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := result.Col.([]uint8)
+			col := vector.MustTCols[uint8](result)
 			require.Equal(t, c.expected, col)
-			require.Equal(t, c.isScalar, result.IsScalar())
+			require.Equal(t, c.isScalar, result.IsConst())
 		})
 	}
 }
@@ -133,7 +134,8 @@ func TestDatetimeToDayFunc(t *testing.T) {
 			if c.inputstr != nil {
 				vecs[0] = testutil.MakeDateTimeVector(c.inputstr, c.inputNsp)
 				if c.isScalar {
-					vecs[0].MakeScalar(1)
+					vecs[0].SetClass(vector.CONSTANT)
+					vecs[0].SetLength(1)
 				}
 			} else {
 				vecs[0] = testutil.MakeScalarNull(types.T_datetime, 0)
@@ -143,9 +145,9 @@ func TestDatetimeToDayFunc(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := result.Col.([]uint8)
+			col := vector.MustTCols[uint8](result)
 			require.Equal(t, c.expected, col)
-			require.Equal(t, c.isScalar, result.IsScalar())
+			require.Equal(t, c.isScalar, result.IsConst())
 		})
 	}
 }

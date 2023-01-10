@@ -16,6 +16,8 @@ package util
 
 import (
 	"context"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"testing"
 
 	"github.com/stretchr/testify/require"
 )
@@ -169,7 +170,7 @@ func TestCompactUniqueKeyBatch(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		nulls.Add(test.vecs[1].Nsp, 1)
+		nulls.Add(test.vecs[1].GetNulls(), 1)
 		if JudgeIsCompositeIndexColumn(test.f) {
 			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f.Parts, "", test.proc)
 			require.Equal(t, 2, b.Vecs[0].Length())

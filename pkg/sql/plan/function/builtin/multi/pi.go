@@ -23,7 +23,7 @@ import (
 
 func Pi(_ []*vector.Vector, _ *process.Process) (*vector.Vector, error) {
 	resultType := types.Type{Oid: types.T_float64, Size: 8}
-	resultVector := vector.NewConst(resultType, 1)
+	resultVector := vector.New(vector.CONSTANT, resultType)
 	result := make([]float64, 1)
 	result[0] = pi.GetPi()
 	vector.SetCol(resultVector, result)

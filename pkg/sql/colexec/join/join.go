@@ -99,9 +99,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].Typ)
+			rbat.Vecs[i] = vector.New(vector.FLAT, *bat.Vecs[rp.Pos].GetType())
 		} else {
-			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].Typ)
+			rbat.Vecs[i] = vector.New(vector.FLAT, *ctr.bat.Vecs[rp.Pos].GetType())
 		}
 	}
 
@@ -145,7 +145,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						rbat.Clean(proc.Mp())
 						return err
 					}
-					bs := vec.Col.([]bool)
+					bs := vector.MustTCols[bool](vec)
 					if !bs[0] {
 						vec.Free(proc.Mp())
 						continue
@@ -153,12 +153,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					vec.Free(proc.Mp())
 					for j, rp := range ap.Result {
 						if rp.Rel == 0 {
-							if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
+							if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), bat.Vecs[rp.Pos].Length() == 0, proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
 								return err
 							}
 						} else {
-							if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
+							if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], sel, bat.Vecs[rp.Pos].Length() == 0, proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
 								return err
 							}
@@ -214,14 +214,14 @@ func (ctr *container) indexProbe(ap *Argument, bat, rbat *batch.Batch, mSels [][
 			}
 			for j, rp := range ap.Result {
 				if rp.Rel == 0 {
-					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+					if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i), bat.Vecs[rp.Pos].Length() == 0, proc.Mp()); err != nil {
 						return err
 					}
 					if err := populateIndex(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
 						return err
 					}
 				} else {
-					if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
+					if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], sel, bat.Vecs[rp.Pos].Length() == 0, proc.Mp()); err != nil {
 						return err
 					}
 					if err := populateIndex(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
@@ -268,7 +268,7 @@ func (ctr *container) dictEncoding(m *mpool.MPool) (bool, error) {
 	}
 
 	vec := ctr.vecs[0]
-	encoded := vector.New(types.Type{Oid: types.T_uint16})
+	encoded := vector.New(vector.FLAT, types.Type{Oid: types.T_uint16})
 	// case 1
 	// 1. the join columns of both left table and right table are indexed
 	// 2. left condition is not an expression
@@ -321,5 +321,5 @@ func populateIndex(result, selected *vector.Vector, row int64, m *mpool.MPool) e
 
 	resultIdx := result.Index().(*index.LowCardinalityIndex)
 	dst, src := resultIdx.GetPoses(), idx.GetPoses()
-	return vector.UnionOne(dst, src, row, m)
+	return dst.UnionOne(src, row, src.Length() == 0, m)
 }

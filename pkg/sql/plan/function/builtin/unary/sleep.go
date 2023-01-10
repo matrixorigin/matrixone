@@ -15,11 +15,12 @@
 package unary
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"time"
 )
 
 type number interface {
@@ -34,7 +35,7 @@ func Sleep[T number](vs []*vector.Vector, proc *process.Process) (rs *vector.Vec
 	}()
 	resultType := types.T_uint8.ToType()
 	inputs := vs[0]
-	if inputs.Nsp.Any() {
+	if inputs.GetNulls().Any() {
 		err = moerr.NewInvalidArg(proc.Ctx, "sleep", "input contains null")
 		return
 	}
@@ -43,7 +44,7 @@ func Sleep[T number](vs []*vector.Vector, proc *process.Process) (rs *vector.Vec
 		err = moerr.NewInvalidArg(proc.Ctx, "sleep", "input contains negative")
 		return
 	}
-	if inputs.IsScalar() {
+	if inputs.IsConst() {
 		sleepSeconds := sleepSlice[0]
 		sleepNano := time.Nanosecond * time.Duration(sleepSeconds*1e9)
 		rs = proc.AllocScalarVector(resultType)
@@ -56,7 +57,7 @@ func Sleep[T number](vs []*vector.Vector, proc *process.Process) (rs *vector.Vec
 		}
 		return
 	}
-	rs, err = proc.AllocVectorOfRows(resultType, int64(len(sleepSlice)), inputs.Nsp)
+	rs, err = proc.AllocVectorOfRows(resultType, int64(len(sleepSlice)), inputs.GetNulls())
 	if err != nil {
 		return
 	}

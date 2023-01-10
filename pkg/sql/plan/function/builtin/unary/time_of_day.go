@@ -24,23 +24,24 @@ func DatetimeToHour(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 	inputVector := vectors[0]
 	resultType := types.T_uint8.ToType()
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConstFixed(resultType, 1, uint8(inputValues[0].Hour()), proc.Mp())
+		resultVector := vector.New(vector.FLAT, resultType)
+		vector.Append(resultVector, uint8(inputValues[0].Hour()), false, proc.Mp())
 		return resultVector, nil
 	} else {
-		resultVector := vector.New(resultType)
+		resultVector := vector.New(vector.FLAT, resultType)
 		for i, v := range inputValues {
 			if inputVector.GetNulls().Contains(uint64(i)) {
 				resultVector.GetNulls().Set(uint64(i))
-				if err := resultVector.Append(uint8(0), true, proc.Mp()); err != nil {
+				if err := vector.Append(resultVector, uint8(0), true, proc.Mp()); err != nil {
 					return nil, err
 				}
 				continue
 			}
-			if err := resultVector.Append(uint8(v.Hour()), false, proc.Mp()); err != nil {
+			if err := vector.Append(resultVector, uint8(v.Hour()), false, proc.Mp()); err != nil {
 				return nil, err
 			}
 		}
@@ -56,23 +57,24 @@ func TimestampToHour(vectors []*vector.Vector, proc *process.Process) (*vector.V
 	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, inputValues, convertedInputValues); err != nil {
 		return nil, err
 	}
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConstFixed(resultType, 1, uint8(convertedInputValues[0].Hour()), proc.Mp())
+		resultVector := vector.New(vector.CONSTANT, resultType)
+		vector.Append(resultVector, uint8(convertedInputValues[0].Hour()), false, proc.Mp())
 		return resultVector, nil
 	} else {
-		resultVector := vector.New(resultType)
+		resultVector := vector.New(vector.FLAT, resultType)
 		for i, v := range convertedInputValues {
 			if inputVector.GetNulls().Contains(uint64(i)) {
 				resultVector.GetNulls().Set(uint64(i))
-				if err := resultVector.Append(uint8(0), true, proc.Mp()); err != nil {
+				if err := vector.Append(resultVector, uint8(0), true, proc.Mp()); err != nil {
 					return nil, err
 				}
 				continue
 			}
-			if err := resultVector.Append(uint8(v.Hour()), false, proc.Mp()); err != nil {
+			if err := vector.Append(resultVector, uint8(v.Hour()), false, proc.Mp()); err != nil {
 				return nil, err
 			}
 		}
@@ -85,23 +87,24 @@ func DatetimeToMinute(vectors []*vector.Vector, proc *process.Process) (*vector.
 	resultType := types.T_uint8.ToType()
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
 
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConstFixed(resultType, 1, uint8(inputValues[0].Minute()), proc.Mp())
+		resultVector := vector.New(vector.CONSTANT, resultType)
+		vector.Append(resultVector, uint8(inputValues[0].Minute()), false, proc.Mp())
 		return resultVector, nil
 	} else {
-		resultVector := vector.New(resultType)
+		resultVector := vector.New(vector.FLAT, resultType)
 		for i, v := range inputValues {
 			if inputVector.GetNulls().Contains(uint64(i)) {
 				resultVector.GetNulls().Set(uint64(i))
-				if err := resultVector.Append(uint8(0), true, proc.Mp()); err != nil {
+				if err := vector.Append(resultVector, uint8(0), true, proc.Mp()); err != nil {
 					return nil, err
 				}
 				continue
 			}
-			if err := resultVector.Append(uint8(v.Minute()), false, proc.Mp()); err != nil {
+			if err := vector.Append(resultVector, uint8(v.Minute()), false, proc.Mp()); err != nil {
 				return nil, err
 			}
 		}
@@ -117,23 +120,24 @@ func TimestampToMinute(vectors []*vector.Vector, proc *process.Process) (*vector
 	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, inputValues, convertedInputValues); err != nil {
 		return nil, err
 	}
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConstFixed(resultType, 1, uint8(convertedInputValues[0].Minute()), proc.Mp())
+		resultVector := vector.New(vector.CONSTANT, resultType)
+		vector.Append(resultVector, uint8(convertedInputValues[0].Minute()), false, proc.Mp())
 		return resultVector, nil
 	} else {
-		resultVector := vector.New(resultType)
+		resultVector := vector.New(vector.FLAT, resultType)
 		for i, v := range convertedInputValues {
 			if inputVector.GetNulls().Contains(uint64(i)) {
 				resultVector.GetNulls().Set(uint64(i))
-				if err := resultVector.Append(uint8(0), true, proc.Mp()); err != nil {
+				if err := vector.Append(resultVector, uint8(0), true, proc.Mp()); err != nil {
 					return nil, err
 				}
 				continue
 			}
-			if err := resultVector.Append(uint8(v.Minute()), false, proc.Mp()); err != nil {
+			if err := vector.Append(resultVector, uint8(v.Minute()), false, proc.Mp()); err != nil {
 				return nil, err
 			}
 		}
@@ -145,23 +149,24 @@ func DatetimeToSecond(vectors []*vector.Vector, proc *process.Process) (*vector.
 	inputVector := vectors[0]
 	resultType := types.T_uint8.ToType()
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConstFixed(resultType, 1, uint8(inputValues[0].Sec()), proc.Mp())
+		resultVector := vector.New(vector.CONSTANT, resultType)
+		vector.Append(resultVector, uint8(inputValues[0].Sec()), false, proc.Mp())
 		return resultVector, nil
 	} else {
-		resultVector := vector.New(resultType)
+		resultVector := vector.New(vector.FLAT, resultType)
 		for i, v := range inputValues {
 			if inputVector.GetNulls().Contains(uint64(i)) {
 				resultVector.GetNulls().Set(uint64(i))
-				if err := resultVector.Append(uint8(0), true, proc.Mp()); err != nil {
+				if err := vector.Append(resultVector, uint8(0), true, proc.Mp()); err != nil {
 					return nil, err
 				}
 				continue
 			}
-			if err := resultVector.Append(uint8(v.Sec()), false, proc.Mp()); err != nil {
+			if err := vector.Append(resultVector, uint8(v.Sec()), false, proc.Mp()); err != nil {
 				return nil, err
 			}
 		}
@@ -177,23 +182,24 @@ func TimestampToSecond(vectors []*vector.Vector, proc *process.Process) (*vector
 	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, inputValues, convertedInputValues); err != nil {
 		return nil, err
 	}
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConstFixed(resultType, 1, uint8(convertedInputValues[0].Sec()), proc.Mp())
+		resultVector := vector.New(vector.CONSTANT, resultType)
+		vector.Append(resultVector, uint8(convertedInputValues[0].Sec()), false, proc.Mp())
 		return resultVector, nil
 	} else {
-		resultVector := vector.New(resultType)
+		resultVector := vector.New(vector.FLAT, resultType)
 		for i, v := range convertedInputValues {
 			if inputVector.GetNulls().Contains(uint64(i)) {
 				resultVector.GetNulls().Set(uint64(i))
-				if err := resultVector.Append(uint8(0), true, proc.Mp()); err != nil {
+				if err := vector.Append(resultVector, uint8(0), true, proc.Mp()); err != nil {
 					return nil, err
 				}
 				continue
 			}
-			if err := resultVector.Append(uint8(v.Sec()), false, proc.Mp()); err != nil {
+			if err := vector.Append(resultVector, uint8(v.Sec()), false, proc.Mp()); err != nil {
 				return nil, err
 			}
 		}

@@ -23,8 +23,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 
@@ -1340,7 +1338,7 @@ func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
 	err := types.Decode(data, bat)
 	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
-		bat.Vecs[i], err = vector.Dup(bat.Vecs[i], mp)
+		bat.Vecs[i], err = bat.Vecs[i].Dup(mp)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				bat.Vecs[j].Free(mp)

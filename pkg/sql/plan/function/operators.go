@@ -2900,8 +2900,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint8},
 				ReturnTyp: types.T_uint8,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]uint8)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[uint8](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
+					vector.Append(vec, data[0], false, proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2910,8 +2911,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint16},
 				ReturnTyp: types.T_uint16,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]uint16)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[uint16](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
+					vector.Append(vec, data[0], false, proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2920,8 +2922,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint32},
 				ReturnTyp: types.T_uint32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]uint32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[uint32](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
+					vector.Append(vec, data[0], false, proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2930,8 +2933,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint64},
 				ReturnTyp: types.T_uint64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]uint64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[uint64](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
+					vector.Append(vec, data[0], false, proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2940,8 +2944,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int8},
 				ReturnTyp: types.T_int8,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]int8)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[int8](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
+					vector.Append(vec, data[0], false, proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2950,8 +2955,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int16},
 				ReturnTyp: types.T_int16,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]int16)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[int16](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
+					vector.Append(vec, data[0], false, proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2960,8 +2966,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int32},
 				ReturnTyp: types.T_int32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]int32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[int32](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
+					vector.Append(vec, data[0], false, proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2970,8 +2977,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_int64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]int64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[int64](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
+					vector.Append(vec, data[0], false, proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2980,8 +2988,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_float32},
 				ReturnTyp: types.T_float32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]float32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[float32](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
+					vector.Append(vec, data[0], false, proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2990,8 +2999,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]float64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[float64](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
+					vector.Append(vec, data[0], false, proc.Mp())
 					return vec, nil
 				},
 			},
@@ -3000,8 +3010,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_decimal64},
 				ReturnTyp: types.T_decimal64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]types.Decimal64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[types.Decimal64](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
+					vector.Append(vec, data[0], false, proc.Mp())
 					return vec, nil
 				},
 			},
@@ -3010,8 +3021,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_decimal128},
 				ReturnTyp: types.T_decimal128,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]types.Decimal128)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
+					data := vector.MustTCols[types.Decimal128](vs[0])
+					vec := vector.New(vector.CONSTANT, *vs[0].GetType())
+					vector.Append(vec, data[0], false, proc.Mp())
 					return vec, nil
 				},
 			},

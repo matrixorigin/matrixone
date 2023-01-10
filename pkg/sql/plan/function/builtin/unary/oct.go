@@ -27,11 +27,11 @@ func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_decimal128, Size: 16}
 	inputValues := vector.MustTCols[T](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := make([]types.Decimal128, 1)
 		col, err := oct.Oct(inputValues, resultValues)
 		if err != nil {
@@ -40,7 +40,7 @@ func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 		vector.SetCol(resultVector, col)
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -57,11 +57,11 @@ func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_decimal128, Size: 16}
 	inputValues := vector.MustTCols[T](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := make([]types.Decimal128, 1)
 		col, err := oct.OctFloat(inputValues, resultValues)
 		if err != nil {
@@ -70,7 +70,7 @@ func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		vector.SetCol(resultVector, col)
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

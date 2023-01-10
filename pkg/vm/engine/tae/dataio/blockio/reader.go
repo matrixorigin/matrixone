@@ -134,7 +134,7 @@ func (r *Reader) LoadBlkColumnsByMeta(
 	}
 
 	for i := range colNames {
-		pkgVec := vector.New(colTypes[i])
+		pkgVec := vector.New(vector.FLAT, colTypes[i])
 		data := make([]byte, len(ioResult.Entries[i].Object.([]byte)))
 		copy(data, ioResult.Entries[i].Object.([]byte))
 		if err = pkgVec.Read(data); err != nil && !errors.Is(err, io.EOF) {
@@ -172,7 +172,7 @@ func (r *Reader) LoadBlkColumnsByMetaAndIdx(
 	if err != nil {
 		return bat, err
 	}
-	pkgVec := vector.New(colTypes[0])
+	pkgVec := vector.New(vector.FLAT, colTypes[0])
 	v := make([]byte, len(data.Entries[0].Object.([]byte)))
 	copy(v, data.Entries[0].Object.([]byte))
 	if err = pkgVec.Read(v); err != nil && !errors.Is(err, io.EOF) {

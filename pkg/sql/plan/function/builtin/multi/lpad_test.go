@@ -155,7 +155,7 @@ func TestLpadVarchar(t *testing.T) {
 				t.Fatal(err)
 			}
 			if c.wantBytes == nil {
-				ret := nulls.Contains(lpad.Nsp, 0)
+				ret := nulls.Contains(lpad.GetNulls(), 0)
 				require.Equal(t, ret, true)
 			} else {
 				require.Equal(t, c.wantBytes, lpad.GetBytes(0))
@@ -168,12 +168,15 @@ func TestLpadVarchar(t *testing.T) {
 
 func makeLpadVectors(src string, length int64, pad string, nils []int) []*vector.Vector {
 	vec := make([]*vector.Vector, 3)
-	vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, src, testutil.TestUtilMp)
-	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, length, testutil.TestUtilMp)
-	vec[2] = vector.NewConstString(types.T_varchar.ToType(), 1, pad, testutil.TestUtilMp)
+	vec[0] = vector.New(vector.CONSTANT, types.T_varchar.ToType())
+	vector.AppendString(vec[0], src, src == "", testutil.TestUtilMp)
+	vec[1] = vector.New(vector.CONSTANT, types.T_int64.ToType())
+	vector.Append(vec[1], length, false, testutil.TestUtilMp)
+	vec[2] = vector.New(vector.CONSTANT, types.T_varchar.ToType())
+	vector.AppendString(vec[2], pad, pad == "", testutil.TestUtilMp)
 	for i, n := range nils {
 		if n == 0 {
-			nulls.Add(vec[i].Nsp, uint64(i))
+			nulls.Add(vec[i].GetNulls(), uint64(i))
 		}
 	}
 	return vec

@@ -29,13 +29,15 @@ func MoMemUsage(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
 	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 
 		memUsage := mpool.ReportMemUsage(inputValues[0])
-		return vector.NewConstString(resultType, inputVector.Length(), memUsage, proc.Mp()), nil
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.AppendString(vec, memUsage, false, proc.Mp())
+		return vec, nil
 	} else {
 		panic(moerr.NewInvalidInput(proc.Ctx, "mo mem usage can only take scalar input"))
 	}
@@ -48,13 +50,15 @@ func moMemUsageCmd(cmd string, vectors []*vector.Vector, proc *process.Process) 
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
 	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 
 		ok := mpool.MPoolControl(inputValues[0], cmd)
-		return vector.NewConstString(resultType, inputVector.Length(), ok, proc.Mp()), nil
+		vec := vector.New(vector.CONSTANT, resultType)
+		vector.AppendString(vec, ok, false, proc.Mp())
+		return vec, nil
 	} else {
 		panic(moerr.NewInvalidInput(proc.Ctx, "mo mem usage can only take scalar input"))
 	}

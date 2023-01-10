@@ -165,15 +165,15 @@ type NormalType interface {
 // cwGeneral is a general evaluate function for case-when operator
 // whose return type is uint / int / float / bool / date / datetime
 func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
-	l := vector.Length(vs[0])
+	l := vs[0].Length()
 
 	rs, err := proc.AllocVector(t, int64(l*t.Oid.TypeLen()))
 	if err != nil {
 		return nil, err
 	}
 	rs.Col = vector.DecodeFixedCol[T](rs, t.Oid.TypeLen())
-	rs.Col = rs.Col.([]T)[:l]
-	rscols := rs.Col.([]T)
+	rs.Col = vector.MustTCols[T](rs)[:l]
+	rscols := vector.MustTCols[T](rs)
 
 	flag := make([]bool, l) // if flag[i] is false, it couldn't adapt to any case
 
@@ -183,34 +183,34 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 		whencols := vector.MustTCols[bool](whenv)
 		thencols := vector.MustTCols[T](thenv)
 		switch {
-		case whenv.IsScalar() && thenv.IsScalar():
-			if !whenv.IsScalarNull() && whencols[0] {
-				if thenv.IsScalarNull() {
+		case whenv.IsConst() && thenv.IsConst():
+			if !whenv.IsConstNull() && whencols[0] {
+				if thenv.IsConstNull() {
 					return proc.AllocScalarNullVector(t), nil
 				} else {
 					r := proc.AllocScalarVector(t)
-					r.Typ.Precision = thenv.Typ.Precision
-					r.Typ.Width = thenv.Typ.Width
-					r.Typ.Scale = thenv.Typ.Scale
-					r.Col = make([]T, 1)
+					r.GetType().Precision = thenv.GetType().Precision
+					r.GetType().Width = thenv.GetType().Width
+					r.GetType().Scale = thenv.GetType().Scale
+					r.SetLength(1)
 					r.Col.([]T)[0] = thencols[0]
 					return r, nil
 				}
 			}
-		case whenv.IsScalar() && !thenv.IsScalar():
-			rs.Typ.Precision = thenv.Typ.Precision
-			rs.Typ.Width = thenv.Typ.Width
-			rs.Typ.Scale = thenv.Typ.Scale
-			if !whenv.IsScalarNull() && whencols[0] {
+		case whenv.IsConst() && !thenv.IsConst():
+			rs.GetType().Precision = thenv.GetType().Precision
+			rs.GetType().Width = thenv.GetType().Width
+			rs.GetType().Scale = thenv.GetType().Scale
+			if !whenv.IsConstNull() && whencols[0] {
 				copy(rscols, thencols)
-				rs.Nsp.Or(thenv.Nsp)
+				rs.GetNulls().Or(thenv.GetNulls())
 				return rs, nil
 			}
-		case !whenv.IsScalar() && thenv.IsScalar():
-			rs.Typ.Precision = thenv.Typ.Precision
-			rs.Typ.Width = thenv.Typ.Width
-			rs.Typ.Scale = thenv.Typ.Scale
-			if thenv.IsScalarNull() {
+		case !whenv.IsConst() && thenv.IsConst():
+			rs.GetType().Precision = thenv.GetType().Precision
+			rs.GetType().Width = thenv.GetType().Width
+			rs.GetType().Scale = thenv.GetType().Scale
+			if thenv.IsConstNull() {
 				var j uint64
 				temp := make([]uint64, 0, l)
 				for j = 0; j < uint64(l); j++ {
@@ -222,7 +222,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 						flag[j] = true
 					}
 				}
-				nulls.Add(rs.Nsp, temp...)
+				nulls.Add(rs.GetNulls(), temp...)
 			} else {
 				for j := 0; j < l; j++ {
 					if flag[j] {
@@ -234,11 +234,11 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 					}
 				}
 			}
-		case !whenv.IsScalar() && !thenv.IsScalar():
-			rs.Typ.Precision = thenv.Typ.Precision
-			rs.Typ.Width = thenv.Typ.Width
-			rs.Typ.Scale = thenv.Typ.Scale
-			if nulls.Any(thenv.Nsp) {
+		case !whenv.IsConst() && !thenv.IsConst():
+			rs.GetType().Precision = thenv.GetType().Precision
+			rs.GetType().Width = thenv.GetType().Width
+			rs.GetType().Scale = thenv.GetType().Scale
+			if nulls.Any(thenv.GetNulls()) {
 				var j uint64
 				temp := make([]uint64, 0, l)
 				for j = 0; j < uint64(l); j++ {
@@ -246,7 +246,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 						if flag[j] {
 							continue
 						}
-						if nulls.Contains(thenv.Nsp, j) {
+						if nulls.Contains(thenv.GetNulls(), j) {
 							temp = append(temp, j)
 						} else {
 							rscols[j] = thencols[j]
@@ -254,7 +254,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 						flag[j] = true
 					}
 				}
-				nulls.Add(rs.Nsp, temp...)
+				nulls.Add(rs.GetNulls(), temp...)
 			} else {
 				for j := 0; j < l; j++ {
 					if whencols[j] {
@@ -270,7 +270,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 	}
 
 	// deal the ELSE part
-	if len(vs)%2 == 0 || vs[len(vs)-1].IsScalarNull() {
+	if len(vs)%2 == 0 || vs[len(vs)-1].IsConstNull() {
 		var i uint64
 		temp := make([]uint64, 0, l)
 		for i = 0; i < uint64(l); i++ {
@@ -278,30 +278,30 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 				temp = append(temp, i)
 			}
 		}
-		nulls.Add(rs.Nsp, temp...)
+		nulls.Add(rs.GetNulls(), temp...)
 	} else {
 		ev := vs[len(vs)-1]
-		ecols := ev.Col.([]T)
-		if ev.IsScalar() {
+		ecols := vector.MustTCols[T](ev)
+		if ev.IsConst() {
 			for i := 0; i < l; i++ {
 				if !flag[i] {
 					rscols[i] = ecols[0]
 				}
 			}
 		} else {
-			if nulls.Any(ev.Nsp) {
+			if nulls.Any(ev.GetNulls()) {
 				var i uint64
 				temp := make([]uint64, 0, l)
 				for i = 0; i < uint64(l); i++ {
 					if !flag[i] {
-						if nulls.Contains(ev.Nsp, i) {
+						if nulls.Contains(ev.GetNulls(), i) {
 							temp = append(temp, i)
 						} else {
 							rscols[i] = ecols[i]
 						}
 					}
 				}
-				nulls.Add(rs.Nsp, temp...)
+				nulls.Add(rs.GetNulls(), temp...)
 			} else {
 				for i := 0; i < l; i++ {
 					if !flag[i] {
@@ -318,7 +318,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 // cwString is an evaluate function for case-when operator
 // whose return type is char / varchar
 func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vector.Vector, error) {
-	nres := vector.Length(vs[0])
+	nres := vs[0].Length()
 	results := make([]string, nres)
 	nsp := nulls.NewWithSize(nres)
 	flag := make([]bool, nres)
@@ -329,9 +329,9 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 		whencols := vector.MustTCols[bool](whenv)
 		thencols := vector.MustStrCols(thenv)
 		switch {
-		case whenv.IsScalar() && thenv.IsScalar():
-			if !whenv.IsScalarNull() && whencols[0] {
-				if thenv.IsScalarNull() {
+		case whenv.IsConst() && thenv.IsConst():
+			if !whenv.IsConstNull() && whencols[0] {
+				if thenv.IsConstNull() {
 					for idx := range results {
 						if !flag[idx] {
 							nsp.Np.Add(uint64(idx))
@@ -347,11 +347,11 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 					}
 				}
 			}
-		case whenv.IsScalar() && !thenv.IsScalar():
-			if !whenv.IsScalarNull() && whencols[0] {
+		case whenv.IsConst() && !thenv.IsConst():
+			if !whenv.IsConstNull() && whencols[0] {
 				for idx := range results {
 					if !flag[idx] {
-						if nulls.Contains(thenv.Nsp, uint64(idx)) {
+						if nulls.Contains(thenv.GetNulls(), uint64(idx)) {
 							nsp.Np.Add(uint64(idx))
 						} else {
 							results[idx] = thencols[idx]
@@ -360,11 +360,11 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 					}
 				}
 			}
-		case !whenv.IsScalar() && thenv.IsScalar():
-			if thenv.IsScalarNull() {
+		case !whenv.IsConst() && thenv.IsConst():
+			if thenv.IsConstNull() {
 				for idx := range results {
 					if !flag[idx] {
-						if !nulls.Contains(whenv.Nsp, uint64(idx)) && whencols[idx] {
+						if !nulls.Contains(whenv.GetNulls(), uint64(idx)) && whencols[idx] {
 							nsp.Np.Add(uint64(idx))
 							flag[idx] = true
 						}
@@ -373,18 +373,18 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 			} else {
 				for idx := range results {
 					if !flag[idx] {
-						if !nulls.Contains(whenv.Nsp, uint64(idx)) && whencols[idx] {
+						if !nulls.Contains(whenv.GetNulls(), uint64(idx)) && whencols[idx] {
 							results[idx] = thencols[0]
 							flag[idx] = true
 						}
 					}
 				}
 			}
-		case !whenv.IsScalar() && !thenv.IsScalar():
+		case !whenv.IsConst() && !thenv.IsConst():
 			for idx := range results {
 				if !flag[idx] {
-					if !nulls.Contains(whenv.Nsp, uint64(idx)) && whencols[idx] {
-						if nulls.Contains(thenv.Nsp, uint64(idx)) {
+					if !nulls.Contains(whenv.GetNulls(), uint64(idx)) && whencols[idx] {
+						if nulls.Contains(thenv.GetNulls(), uint64(idx)) {
 							nsp.Np.Add(uint64(idx))
 						} else {
 							results[idx] = thencols[idx]
@@ -397,7 +397,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 	}
 
 	// deal the ELSE part
-	if len(vs)%2 == 0 || vs[len(vs)-1].IsScalarNull() {
+	if len(vs)%2 == 0 || vs[len(vs)-1].IsConstNull() {
 		for idx := range results {
 			if !flag[idx] {
 				nulls.Add(nsp, uint64(idx))
@@ -407,7 +407,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 	} else {
 		ev := vs[len(vs)-1]
 		ecols := vector.MustStrCols(ev)
-		if ev.IsScalar() {
+		if ev.IsConst() {
 			for idx := range results {
 				if !flag[idx] {
 					results[idx] = ecols[0]
@@ -417,7 +417,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 		} else {
 			for idx := range results {
 				if !flag[idx] {
-					if nulls.Contains(ev.Nsp, uint64(idx)) {
+					if nulls.Contains(ev.GetNulls(), uint64(idx)) {
 						nulls.Add(nsp, uint64(idx))
 					} else {
 						results[idx] = ecols[idx]
@@ -427,6 +427,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 			}
 		}
 	}
-
-	return vector.NewWithStrings(typ, results, nsp, proc.Mp()), nil
+	vec := vector.New(vector.FLAT, typ)
+	vector.AppendStringList(vec, results, nil, proc.Mp())
+	return vec, nil
 }

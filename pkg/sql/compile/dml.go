@@ -157,12 +157,12 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		savedAutoIncrVectors := make([]*vector.Vector, 0)
 		defer func() {
 			for _, vec := range savedAutoIncrVectors {
-				vector.Clean(vec, c.proc.Mp())
+				vec.Free(c.proc.Mp())
 			}
 		}()
 		for i, colDef := range p.GetExplicitCols() {
 			if colDef.GetTyp().GetAutoIncr() {
-				vec2, err := vector.Dup(bat.Vecs[i], c.proc.Mp())
+				vec2, err := bat.Vecs[i].Dup(c.proc.Mp())
 				if err != nil {
 					return 0, err
 				}
@@ -173,7 +173,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 			//update accountId in the accountIdExpr
 			accountIdConst.Value = &plan.Const_U32Val{U32Val: accountId}
 			//clean vector before fill it
-			vector.Clean(accountIdVec, c.proc.Mp())
+			accountIdVec.Free(c.proc.Mp())
 			//the j th row
 			for j := 0; j < len(accountIdRows); j++ {
 				err = fillRow(ctx, tmpBat,
@@ -190,13 +190,13 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 
 			if idx != 0 { //refill the auto_increment column vector
 				j := 0
-				vecLen := vector.Length(bat.Vecs[0])
+				vecLen := bat.Vecs[0].Length()
 				for colIdx, colDef := range p.GetExplicitCols() {
 					if colDef.GetTyp().GetAutoIncr() {
 						targetVec := bat.Vecs[colIdx]
-						vector.Clean(targetVec, c.proc.Mp())
+						targetVec.Free(c.proc.Mp())
 						for k := int64(0); k < int64(vecLen); k++ {
-							err = vector.UnionOne(targetVec, savedAutoIncrVectors[j], k, c.proc.Mp())
+							err = targetVec.UnionOne(savedAutoIncrVectors[j], k, savedAutoIncrVectors[j].Length() == 0, c.proc.Mp())
 							if err != nil {
 								return 0, err
 							}
@@ -241,7 +241,7 @@ func writeBatch(ctx context.Context,
 	for i := range bat.Vecs {
 		// check for case 1 and case 2
 		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].Typ.AutoIncr) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].Typ.AutoIncr) {
-			if nulls.Any(bat.Vecs[i].Nsp) {
+			if nulls.Any(bat.Vecs[i].GetNulls()) {
 				return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
 			}
 		}
@@ -260,7 +260,7 @@ func writeBatch(ctx context.Context,
 			for i := range bat.Vecs {
 				for _, name := range names {
 					if p.OrderAttrs[i] == name {
-						if nulls.Any(bat.Vecs[i].Nsp) {
+						if nulls.Any(bat.Vecs[i].GetNulls()) {
 							return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", p.OrderAttrs[i]))
 						}
 					}
@@ -310,12 +310,12 @@ func fillRow(ctx context.Context,
 	proc *process.Process) error {
 	vec, err := colexec.EvalExpr(tmpBat, proc, expr)
 	if err != nil {
-		return y.MakeInsertError(ctx, targetVec.Typ.Oid, colDef, rows, colIdx, rowIdx, err)
+		return y.MakeInsertError(ctx, targetVec.GetType().Oid, colDef, rows, colIdx, rowIdx, err)
 	}
 	if vec.Size() == 0 {
 		vec = vec.ConstExpand(false, proc.Mp())
 	}
-	if err := vector.UnionOne(targetVec, vec, 0, proc.Mp()); err != nil {
+	if err := targetVec.UnionOne(vec, 0, vec.Length() == 0, proc.Mp()); err != nil {
 		vec.Free(proc.Mp())
 		return err
 	}
@@ -367,11 +367,11 @@ func makeInsertBatch(p *plan.InsertValues) *batch.Batch {
 	bat.SetAttributes(attrs)
 	idx := 0
 	for _, col := range p.ExplicitCols {
-		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
+		bat.Vecs[idx] = vector.New(vector.FLAT, types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
 		idx++
 	}
 	for _, col := range p.OtherCols {
-		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
+		bat.Vecs[idx] = vector.New(vector.FLAT, types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
 		idx++
 	}
 

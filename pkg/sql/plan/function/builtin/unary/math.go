@@ -16,6 +16,7 @@ package unary
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
@@ -32,8 +33,8 @@ func math1(vs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vecto
 	//	1.1 if it's not a null value
 	//  1.2 if it's a null value
 	//2 common scene
-	if origVec.IsScalar() {
-		if origVec.IsScalarNull() {
+	if origVec.IsConst() {
+		if origVec.IsConstNull() {
 			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
 		} else {
 			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
@@ -45,8 +46,8 @@ func math1(vs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vecto
 			return resultVector, nil
 		}
 	} else {
-		vecLen := int64(vector.Length(origVec))
-		resultVector, err := proc.AllocVectorOfRows(types.T_float64.ToType(), vecLen, origVec.Nsp)
+		vecLen := int64(origVec.Length())
+		resultVector, err := proc.AllocVectorOfRows(types.T_float64.ToType(), vecLen, origVec.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -66,7 +67,7 @@ func Atan(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if len(vs) == 1 {
 		return math1(vs, proc, momath.Atan)
 	} else {
-		return operator.Arith[float64, float64](vs, proc, vs[0].GetType(), momath.AtanWithTwoArg)
+		return operator.Arith[float64, float64](vs, proc, *vs[0].GetType(), momath.AtanWithTwoArg)
 	}
 
 }
@@ -91,10 +92,12 @@ func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if len(vs) == 1 {
 		return math1(vs, proc, momath.Ln)
 	}
-	if vs[0].IsScalarNull() {
-		return vector.NewConstNull(vs[0].Typ, vs[1].Length()), nil
+	if vs[0].IsConstNull() {
+		vec := vector.New(vector.CONSTANT, *vs[0].GetType())
+		nulls.Add(vec.GetNulls(), 0)
+		return vec, nil
 	}
-	vals := vs[0].Col.([]float64)
+	vals := vector.MustTCols[float64](vs[0])
 	for i := range vals {
 		if vals[i] == float64(1) {
 			return nil, moerr.NewInvalidArg(proc.Ctx, "log base", 1)

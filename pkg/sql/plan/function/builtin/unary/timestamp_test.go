@@ -47,7 +47,7 @@ func TestDateToTimestamp(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, result.Col.([]types.Timestamp))
+			require.Equal(t, c.want, vector.MustTCols[types.Timestamp](result))
 		})
 	}
 
@@ -74,7 +74,7 @@ func TestDatetimeToTimestamp(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, date.Col.([]types.Timestamp))
+			require.Equal(t, c.want, vector.MustTCols[types.Timestamp](date))
 		})
 	}
 
@@ -117,8 +117,8 @@ func TestDateStringAdd(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, date.Col.([]types.Timestamp))
-			require.Equal(t, c.contain, nulls.Contains(date.Nsp, 0))
+			require.Equal(t, c.want, vector.MustTCols[types.Timestamp](date))
+			require.Equal(t, c.contain, nulls.Contains(date.GetNulls(), 0))
 		})
 	}
 
@@ -129,7 +129,8 @@ func makeDateToTimestampVectors(str string, isConst bool) []*vector.Vector {
 
 	date, _ := types.ParseDateCast(str)
 
-	vec[0] = vector.NewConstFixed(types.T_date.ToType(), 1, date, testutil.TestUtilMp)
+	vec[0] = vector.New(vector.CONSTANT, types.T_date.ToType())
+	vector.Append(vec[0], date, false, testutil.TestUtilMp)
 	return vec
 }
 
@@ -137,7 +138,8 @@ func makeDatetimeToTimestampVectors(str string, isConst bool) []*vector.Vector {
 	vec := make([]*vector.Vector, 1)
 
 	datetime, _ := types.ParseDatetime(str, 0)
-	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, datetime, testutil.TestUtilMp)
+	vec[0] = vector.New(vector.CONSTANT, types.T_datetime.ToType())
+	vector.Append(vec[0], datetime, false, testutil.TestUtilMp)
 
 	return vec
 }
@@ -145,6 +147,7 @@ func makeDatetimeToTimestampVectors(str string, isConst bool) []*vector.Vector {
 func makeDateStringToTimestampVectors(str string, isConst bool) []*vector.Vector {
 	typ := types.Type{Oid: types.T_varchar, Size: 26}
 	vec := make([]*vector.Vector, 1)
-	vec[0] = vector.NewConstString(typ, 1, str, testutil.TestUtilMp)
+	vec[0] = vector.New(vector.CONSTANT, typ)
+	vector.AppendString(vec[0], str, false, testutil.TestUtilMp)
 	return vec
 }

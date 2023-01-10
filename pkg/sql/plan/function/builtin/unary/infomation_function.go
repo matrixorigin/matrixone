@@ -16,6 +16,7 @@ package unary
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -54,11 +55,17 @@ func adapter(vectors []*vector.Vector,
 		}
 		//step 4: fill the result vector
 		if result == nil {
-			return vector.NewConstNull(resultType, 1), nil
+			vec := vector.New(vector.CONSTANT, resultType)
+			nulls.Add(vec.GetNulls(), 0)
+			return vec, nil
 		} else if resultType.IsString() {
-			return vector.NewConstString(resultType, 1, svals[0], proc.Mp()), nil
+			vec := vector.New(vector.CONSTANT, resultType)
+			vector.AppendString(vec, svals[0], false, proc.Mp())
+			return vec, nil
 		} else {
-			return vector.NewConstFixed(resultType, 1, uvals[0], proc.Mp()), nil
+			vec := vector.New(vector.CONSTANT, resultType)
+			vector.Append(vec, uvals[0], false, proc.Mp())
+			return vec, nil
 		}
 	}
 	return nil, moerr.NewInternalError(proc.Ctx, "the parameter is invalid")

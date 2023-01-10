@@ -46,7 +46,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
-		ap.ctr.bat.Vecs[i] = vector.New(typ)
+		ap.ctr.bat.Vecs[i] = vector.New(vector.FLAT, typ)
 	}
 
 	return nil

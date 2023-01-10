@@ -28,14 +28,14 @@ func Is(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 	retType := types.T_bool.ToType()
 
 	lefts := vector.MustTCols[bool](lv)
-	if !rv.IsScalar() || rv.IsScalarNull() {
+	if !rv.IsConst() || rv.IsConstNull() {
 		return nil, moerr.NewInternalError(proc.Ctx, "second parameter of IS must be TRUE or FALSE")
 	}
 	right := vector.MustTCols[bool](rv)[0]
 
-	if lv.IsScalar() {
+	if lv.IsConst() {
 		vec := proc.AllocScalarVector(retType)
-		if lv.IsScalarNull() {
+		if lv.IsConstNull() {
 			vector.SetCol(vec, []bool{false})
 		} else {
 			vector.SetCol(vec, []bool{lefts[0] == right})
@@ -44,12 +44,12 @@ func Is(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 	} else {
 		l := int64(len(lefts))
 		col := make([]bool, l)
-		vec, err := proc.AllocVector(lv.Typ, l*1)
+		vec, err := proc.AllocVector(*lv.GetType(), l*1)
 		if err != nil {
 			return nil, err
 		}
 		for i := range lefts {
-			if nulls.Contains(lv.Nsp, uint64(i)) {
+			if nulls.Contains(lv.GetNulls(), uint64(i)) {
 				col[i] = false
 			} else {
 				col[i] = (lefts[i] == right)

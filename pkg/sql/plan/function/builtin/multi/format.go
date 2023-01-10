@@ -24,8 +24,8 @@ import (
 
 func Format(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var paramNum = len(vecs)
-	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() {
-		return proc.AllocScalarNullVector(vecs[0].Typ), nil
+	if vecs[0].IsConstNull() || vecs[1].IsConstNull() {
+		return proc.AllocScalarNullVector(*vecs[0].GetType()), nil
 	}
 
 	//get the first arg number
@@ -34,27 +34,27 @@ func Format(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	precisionCols := vector.MustStrCols(vecs[1])
 	//get the third arg locale
 	var localeCols []string
-	if paramNum == 2 || vecs[2].IsScalarNull() {
+	if paramNum == 2 || vecs[2].IsConstNull() {
 		localeCols = []string{"en_US"}
 	} else {
 		localeCols = vector.MustStrCols(vecs[2])
 	}
 
 	//calcute rows
-	rowCount := vector.Length(vecs[0])
+	rowCount := vecs[0].Length()
 
 	var resultVec *vector.Vector = nil
 	resultValues := make([]string, rowCount)
 	resultNsp := nulls.NewWithSize(rowCount)
 
 	// set null row
-	nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
+	nulls.Or(vecs[0].GetNulls(), vecs[1].GetNulls(), resultNsp)
 
 	var constVectors []bool
-	if paramNum == 2 || vecs[2].IsScalarNull() {
-		constVectors = []bool{vecs[0].IsScalar(), vecs[1].IsScalar(), true}
+	if paramNum == 2 || vecs[2].IsConstNull() {
+		constVectors = []bool{vecs[0].IsConst(), vecs[1].IsConst(), true}
 	} else {
-		constVectors = []bool{vecs[0].IsScalar(), vecs[1].IsScalar(), vecs[2].IsScalar()}
+		constVectors = []bool{vecs[0].IsConst(), vecs[1].IsConst(), vecs[2].IsConst()}
 	}
 
 	//get result values
@@ -62,7 +62,8 @@ func Format(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	if err != nil {
 		return nil, err
 	}
-	resultVec = vector.NewWithStrings(types.T_varchar.ToType(), resultValues, resultNsp, proc.Mp())
+	resultVec = vector.New(vector.FLAT, types.T_varchar.ToType())
+	vector.AppendStringList(resultVec, resultValues, nil, proc.Mp())
 
 	return resultVec, nil
 }

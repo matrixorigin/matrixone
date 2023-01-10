@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -67,16 +66,16 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	}
 
 	// source vectors should be cloned and instead before it was sent.
-	for i, vec := range bat.Vecs {
+	/*for i, vec := range bat.Vecs {
 		if vec.IsOriginal() {
-			cloneVec, err := vector.Dup(vec, proc.Mp())
+			cloneVec, err := vec.Dup(proc.Mp())
 			if err != nil {
 				bat.Clean(proc.Mp())
 				return false, err
 			}
 			bat.Vecs[i] = cloneVec
 		}
-	}
+	}*/
 
 	// send to each one
 	if ap.All {

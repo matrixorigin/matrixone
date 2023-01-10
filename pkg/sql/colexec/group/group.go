@@ -99,7 +99,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		if len(ctr.aggVecs) == 0 && len(ctr.multiVecs) == 0 {
 			b := batch.NewWithSize(len(ap.Types))
 			for i := range b.Vecs {
-				b.Vecs[i] = vector.New(ap.Types[i])
+				b.Vecs[i] = vector.New(vector.FLAT, ap.Types[i])
 			}
 			proc.SetInputBatch(b)
 			if _, err := ctr.process(ap, proc, anal, isFirst, isLast); err != nil {
@@ -150,7 +150,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		ctr.bat.Zs = append(ctr.bat.Zs, 0)
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
 		for i, ag := range ap.Aggs {
-			if ctr.bat.Aggs[i], err = agg.New(ag.Op, ag.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
+			if ctr.bat.Aggs[i], err = agg.New(ag.Op, ag.Dist, *ctr.aggVecs[i].vec.GetType()); err != nil {
 				ctr.bat = nil
 				return false, err
 			}
@@ -263,8 +263,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		ctr.bat.Zs = proc.Mp().GetSels()
 		for i := range ctr.groupVecs {
 			vec := ctr.groupVecs[i].vec
-			ctr.bat.Vecs[i] = vector.New(vec.Typ)
-			switch vec.Typ.TypeSize() {
+			ctr.bat.Vecs[i] = vector.New(vector.FLAT, *vec.GetType())
+			switch vec.GetType().TypeSize() {
 			case 1:
 				size += 1 + 1
 			case 2:
@@ -281,7 +281,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		}
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
 		for i, ag := range ap.Aggs {
-			if ctr.bat.Aggs[i], err = agg.New(ag.Op, ag.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
+			if ctr.bat.Aggs[i], err = agg.New(ag.Op, ag.Dist, *ctr.aggVecs[i].vec.GetType()); err != nil {
 				return false, err
 			}
 		}

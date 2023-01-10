@@ -60,7 +60,7 @@ func New(typ types.Type, m *mpool.MPool) (*LowCardinalityIndex, error) {
 		typ:   typ,
 		m:     m,
 		dict:  d,
-		poses: vector.New(types.T_uint16.ToType()),
+		poses: vector.New(vector.FLAT, types.T_uint16.ToType()),
 		ref:   1,
 	}, nil
 }
@@ -83,7 +83,7 @@ func (idx *LowCardinalityIndex) DupEmpty() *LowCardinalityIndex {
 		typ:   idx.typ,
 		m:     idx.m,
 		dict:  idx.dict.Dup(),
-		poses: vector.New(types.T_uint16.ToType()),
+		poses: vector.New(vector.FLAT, types.T_uint16.ToType()),
 		ref:   1,
 	}
 }
@@ -91,10 +91,10 @@ func (idx *LowCardinalityIndex) DupEmpty() *LowCardinalityIndex {
 func (idx *LowCardinalityIndex) InsertBatch(data *vector.Vector) error {
 	originalLen := data.Length()
 	var sels []int64
-	if nulls.Any(data.Nsp) {
+	if nulls.Any(data.GetNulls()) {
 		sels = make([]int64, 0, originalLen)
 		for i := 0; i < originalLen; i++ {
-			if !nulls.Contains(data.Nsp, uint64(i)) {
+			if !nulls.Contains(data.GetNulls(), uint64(i)) {
 				sels = append(sels, int64(i))
 			}
 		}
@@ -103,7 +103,7 @@ func (idx *LowCardinalityIndex) InsertBatch(data *vector.Vector) error {
 	var ips []uint16
 	var err error
 	if sels != nil {
-		if err = vector.Shuffle(data, sels, idx.m); err != nil {
+		if err = data.Shuffle(sels, idx.m); err != nil {
 			return err
 		}
 
@@ -128,13 +128,13 @@ func (idx *LowCardinalityIndex) InsertBatch(data *vector.Vector) error {
 		}
 	}
 
-	return vector.AppendFixed(idx.poses, ips, idx.m)
+	return vector.AppendList(idx.poses, ips, nil, idx.m)
 }
 
 // Encode uses the dictionary of the current index to encode the original data.
 func (idx *LowCardinalityIndex) Encode(dst, src *vector.Vector) error {
 	poses := idx.dict.FindBatch(src)
-	return vector.AppendFixed(dst, poses, idx.m)
+	return vector.AppendList(dst, poses, nil, idx.m)
 }
 
 func (idx *LowCardinalityIndex) Free() {

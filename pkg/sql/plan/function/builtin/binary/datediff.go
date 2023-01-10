@@ -30,30 +30,30 @@ func DateDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 
 	resultType := types.T_int64.ToType()
 	switch {
-	case left.IsScalar() && right.IsScalar():
-		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+	case left.IsConst() && right.IsConst():
+		if left.IsConstNull() || right.IsConstNull() {
+			return proc.AllocConstNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := vector.MustTCols[int64](resultVector)
 		datediff.DateDiff(leftValues, rightValues, resultValues)
 		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
-		if left.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+	case left.IsConst() && !right.IsConst():
+		if left.IsConstNull() {
+			return proc.AllocConstNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.GetNulls())
 		if err != nil {
 			return nil, err
 		}
 		resultValues := vector.MustTCols[int64](resultVector)
 		datediff.DateDiffLeftConst(leftValues[0], rightValues, resultValues)
 		return resultVector, nil
-	case !left.IsScalar() && right.IsScalar():
-		if right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+	case !left.IsConst() && right.IsConst():
+		if right.IsConstNull() {
+			return proc.AllocConstNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -66,7 +66,7 @@ func DateDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		return nil, err
 	}
 	resultValues := vector.MustTCols[int64](resultVector)
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
+	nulls.Or(left.GetNulls(), right.GetNulls(), resultVector.GetNulls())
 	datediff.DateDiff(leftValues, rightValues, resultValues)
 	return resultVector, nil
 }

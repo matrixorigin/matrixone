@@ -214,7 +214,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		for i := range bat.Vecs {
 			// Not-null check, for more information, please refer to the comments in func InsertValues
 			if (n.TargetColDefs[i].Primary && !n.TargetColDefs[i].Typ.AutoIncr) || (n.TargetColDefs[i].Default != nil && !n.TargetColDefs[i].Default.NullAbility && !n.TargetColDefs[i].Typ.AutoIncr) {
-				if nulls.Any(bat.Vecs[i].Nsp) {
+				if nulls.Any(bat.Vecs[i].GetNulls()) {
 					return false, moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 				}
 			}
@@ -227,7 +227,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		for i := range bat.Vecs {
 			bat.Attrs[i] = n.TargetColDefs[i].GetName()
 			bat.Vecs[i] = bat.Vecs[i].ConstExpand(false, proc.Mp())
-			if bat.Vecs[i].IsScalarNull() && n.TargetColDefs[i].GetTyp().GetAutoIncr() {
+			if bat.Vecs[i].IsConstNull() && n.TargetColDefs[i].GetTyp().GetAutoIncr() {
 				bat.Vecs[i].ConstExpand(true, proc.Mp())
 			}
 		}
@@ -237,19 +237,19 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		accountIdExpr := accountIdColumnDef.GetDefault().GetExpr()
 		accountIdConst := accountIdExpr.GetC()
 
-		vecLen := vector.Length(bat.Vecs[0])
+		vecLen := bat.Vecs[0].Length()
 		tmpBat := batch.NewWithSize(0)
 		tmpBat.Zs = []int64{1}
 		//save auto_increment column if necessary
 		savedAutoIncrVectors := make([]*vector.Vector, 0)
 		defer func() {
 			for _, vec := range savedAutoIncrVectors {
-				vector.Clean(vec, proc.Mp())
+				vec.Free(proc.Mp())
 			}
 		}()
 		for i, colDef := range n.TargetColDefs {
 			if colDef.GetTyp().GetAutoIncr() {
-				vec2, err := vector.Dup(bat.Vecs[i], proc.Mp())
+				vec2, err := bat.Vecs[i].Dup(proc.Mp())
 				if err != nil {
 					return false, err
 				}
@@ -261,7 +261,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 			accountIdConst.Value = &plan.Const_U32Val{U32Val: accountId}
 			accountIdVec := bat.Vecs[clusterTable.GetColumnIndexOfAccountId()]
 			//clean vector before fill it
-			vector.Clean(accountIdVec, proc.Mp())
+			accountIdVec.Free(proc.Mp())
 			//the i th row
 			for i := 0; i < vecLen; i++ {
 				err := fillRow(tmpBat, accountIdExpr, accountIdVec, proc)
@@ -274,9 +274,9 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 				for colIdx, colDef := range n.TargetColDefs {
 					if colDef.GetTyp().GetAutoIncr() {
 						targetVec := bat.Vecs[colIdx]
-						vector.Clean(targetVec, proc.Mp())
+						targetVec.Free(proc.Mp())
 						for k := int64(0); k < int64(vecLen); k++ {
-							err := vector.UnionOne(targetVec, savedAutoIncrVectors[j], k, proc.Mp())
+							err := targetVec.UnionOne(savedAutoIncrVectors[j], k, savedAutoIncrVectors[j].Length() == 0, proc.Mp())
 							if err != nil {
 								return false, err
 							}
@@ -313,7 +313,7 @@ func fillRow(tmpBat *batch.Batch,
 	if vec.Size() == 0 {
 		vec = vec.ConstExpand(false, proc.Mp())
 	}
-	if err := vector.UnionOne(targetVec, vec, 0, proc.Mp()); err != nil {
+	if err := targetVec.UnionOne(vec, 0, vec.Length() == 0, proc.Mp()); err != nil {
 		vec.Free(proc.Mp())
 		return err
 	}
@@ -337,7 +337,7 @@ func writeBatch(ctx context.Context,
 			for _, name := range names {
 				for i := range bat.Vecs {
 					if n.TargetColDefs[i].Name == name {
-						if nulls.Any(bat.Vecs[i].Nsp) {
+						if nulls.Any(bat.Vecs[i].GetNulls()) {
 							return false, moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 						}
 					}

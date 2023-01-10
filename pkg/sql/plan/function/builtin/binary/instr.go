@@ -34,15 +34,15 @@ func Instr(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, er
 		maxLen = v2.Length()
 	}
 	resultType := types.T_int64.ToType()
-	if v1.IsScalarNull() || v2.IsScalarNull() {
-		ret = proc.AllocConstNullVector(resultType, maxLen)
+	if v1.IsConstNull() || v2.IsConstNull() {
+		ret = proc.AllocConstNullVector(resultType)
 		return
 	}
 	s1, s2 := vector.MustStrCols(v1), vector.MustStrCols(v2)
-	if v1.IsScalar() && v2.IsScalar() {
+	if v1.IsConst() && v2.IsConst() {
 		ret = proc.AllocScalarVector(resultType)
 		str, substr := s1[0], s2[0]
-		err = ret.Append(instr.Single(str, substr), false, proc.Mp())
+		err = vector.Append(ret, instr.Single(str, substr), false, proc.Mp())
 		return
 	}
 	ret, err = proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
@@ -50,6 +50,6 @@ func Instr(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, er
 		return
 	}
 	rs := vector.MustTCols[int64](ret)
-	instr.Instr(s1, s2, []*nulls.Nulls{v1.Nsp, v2.Nsp}, rs, ret.Nsp)
+	instr.Instr(s1, s2, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls()}, rs, ret.GetNulls())
 	return
 }

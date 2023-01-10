@@ -17,6 +17,10 @@ package table_function
 import (
 	"bytes"
 	"context"
+	"math"
+	"strconv"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,9 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
-	"strconv"
-	"strings"
 )
 
 func generateSeriesString(arg any, buf *bytes.Buffer) {
@@ -79,7 +80,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 	rbat = batch.New(false, arg.Attrs)
 	rbat.Cnt = 1
 	for i := range arg.Attrs {
-		rbat.Vecs[i] = vector.New(dupType(plan.MakePlan2Type(&startVec.Typ)))
+		rbat.Vecs[i] = vector.New(vector.FLAT, dupType(plan.MakePlan2Type(startVec.GetType())))
 	}
 	if len(arg.Args) == 3 {
 		stepVec, err = colexec.EvalExpr(bat, proc, arg.Args[2])
@@ -87,29 +88,29 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 			return false, err
 		}
 	}
-	if !startVec.IsScalar() || !endVec.IsScalar() || (stepVec != nil && !stepVec.IsScalar()) {
+	if !startVec.IsConst() || !endVec.IsConst() || (stepVec != nil && !stepVec.IsConst()) {
 		return false, moerr.NewInvalidInput(proc.Ctx, "generate_series only support scalar")
 	}
 	switch startVec.GetType().Oid {
 	case types.T_int32:
-		if endVec.Typ.Oid != types.T_int32 || (stepVec != nil && stepVec.Typ.Oid != types.T_int32) {
-			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.Typ.Oid.String(), endVec.Typ.Oid.String())
+		if endVec.GetType().Oid != types.T_int32 || (stepVec != nil && stepVec.GetType().Oid != types.T_int32) {
+			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
 		}
 		err = handleInt[int32](startVec, endVec, stepVec, generateInt32, false, proc, rbat)
 		if err != nil {
 			return false, err
 		}
 	case types.T_int64:
-		if endVec.Typ.Oid != types.T_int64 || (stepVec != nil && stepVec.Typ.Oid != types.T_int64) {
-			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.Typ.Oid.String(), endVec.Typ.Oid.String())
+		if endVec.GetType().Oid != types.T_int64 || (stepVec != nil && stepVec.GetType().Oid != types.T_int64) {
+			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
 		}
 		err = handleInt[int64](startVec, endVec, stepVec, generateInt64, false, proc, rbat)
 		if err != nil {
 			return false, err
 		}
 	case types.T_datetime:
-		if endVec.Typ.Oid != types.T_datetime || (stepVec != nil && stepVec.Typ.Oid != types.T_varchar) {
-			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.Typ.Oid.String(), endVec.Typ.Oid.String())
+		if endVec.GetType().Oid != types.T_datetime || (stepVec != nil && stepVec.GetType().Oid != types.T_varchar) {
+			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
 		}
 		err = handleDatetime(startVec, endVec, stepVec, false, proc, rbat)
 	case types.T_varchar:
@@ -123,7 +124,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		endStr := endSlice[0]
 		stepStr := stepSlice[0]
 		precision := int32(findPrecision(startStr, endStr))
-		rbat.Vecs[0].Typ.Precision = precision
+		rbat.Vecs[0].GetType().Precision = precision
 		start, err := types.ParseDatetime(startStr, precision)
 		if err != nil {
 			err = tryInt(startStr, endStr, stepStr, proc, rbat)
@@ -151,7 +152,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		}
 
 	default:
-		return false, moerr.NewNotSupported(proc.Ctx, "generate_series not support type %s", startVec.Typ.Oid.String())
+		return false, moerr.NewNotSupported(proc.Ctx, "generate_series not support type %s", startVec.GetType().Oid.String())
 
 	}
 	proc.SetInputBatch(rbat)
@@ -307,9 +308,9 @@ func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn 
 	}
 	for i := range res {
 		if toString {
-			err = rbat.Vecs[0].Append([]byte(strconv.FormatInt(int64(res[i]), 10)), false, proc.Mp())
+			err = vector.Append(rbat.Vecs[0], []byte(strconv.FormatInt(int64(res[i]), 10)), false, proc.Mp())
 		} else {
-			err = rbat.Vecs[0].Append(res[i], false, proc.Mp())
+			err = vector.Append(rbat.Vecs[0], res[i], false, proc.Mp())
 		}
 		if err != nil {
 			return err
@@ -333,15 +334,15 @@ func handleDatetime(startVec, endVec, stepVec *vector.Vector, toString bool, pro
 	}
 	stepSlice := vector.MustStrCols(stepVec)
 	step = stepSlice[0]
-	res, err := generateDatetime(proc.Ctx, start, end, step, startVec.Typ.Precision)
+	res, err := generateDatetime(proc.Ctx, start, end, step, startVec.GetType().Precision)
 	if err != nil {
 		return err
 	}
 	for i := range res {
 		if toString {
-			err = rbat.Vecs[0].Append([]byte(res[i].String2(rbat.Vecs[0].Typ.Precision)), false, proc.Mp())
+			err = vector.Append(rbat.Vecs[0], []byte(res[i].String2(rbat.Vecs[0].GetType().Precision)), false, proc.Mp())
 		} else {
-			err = rbat.Vecs[0].Append(res[i], false, proc.Mp())
+			err = vector.Append(rbat.Vecs[0], res[i], false, proc.Mp())
 		}
 		if err != nil {
 			return err
@@ -369,8 +370,8 @@ func findPrecision(s1, s2 string) int {
 	return p1
 }
 func makeVector(p types.Type, v interface{}, mp *mpool.MPool) (*vector.Vector, error) {
-	vec := vector.NewConst(p, 1)
-	err := vec.Append(v, false, mp)
+	vec := vector.New(vector.CONSTANT, p)
+	err := vector.Append(vec, v, false, mp)
 	if err != nil {
 		vec.Free(mp)
 		return nil, err

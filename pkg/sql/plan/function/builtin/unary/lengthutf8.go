@@ -25,16 +25,16 @@ func LengthUTF8(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint64, Size: 8}
 	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
+		resultVector := vector.New(vector.CONSTANT, resultType)
 		resultValues := vector.MustTCols[uint64](resultVector)
 		lengthutf8.StrLengthUTF8(inputValues, resultValues)
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

@@ -49,13 +49,13 @@ func JsonExtract(vectors []*vector.Vector, proc *process.Process) (ret *vector.V
 		maxLen = pathBytes.Length()
 	}
 	resultType := types.T_json.ToType()
-	if jsonBytes.IsScalarNull() || pathBytes.IsScalarNull() {
-		ret = proc.AllocConstNullVector(resultType, maxLen)
+	if jsonBytes.IsConstNull() || pathBytes.IsConstNull() {
+		ret = proc.AllocConstNullVector(resultType)
 		return
 	}
 
 	var fn computeFn
-	switch jsonBytes.Typ.Oid {
+	switch jsonBytes.GetType().Oid {
 	case types.T_json:
 		fn = computeJson
 	default:
@@ -63,14 +63,14 @@ func JsonExtract(vectors []*vector.Vector, proc *process.Process) (ret *vector.V
 	}
 
 	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
-	if jsonBytes.IsScalar() && pathBytes.IsScalar() {
+	if jsonBytes.IsConst() && pathBytes.IsConst() {
 		ret = proc.AllocScalarVector(resultType)
 		resultValues := make([]*bytejson.ByteJson, 1)
-		resultValues, err = json_extract.JsonExtract(json, path, []*nulls.Nulls{jsonBytes.Nsp, pathBytes.Nsp}, resultValues, ret.Nsp, fn)
+		resultValues, err = json_extract.JsonExtract(json, path, []*nulls.Nulls{jsonBytes.GetNulls(), pathBytes.GetNulls()}, resultValues, ret.GetNulls(), fn)
 		if err != nil {
 			return
 		}
-		if ret.Nsp.Contains(0) {
+		if ret.GetNulls().Contains(0) {
 			return
 		}
 		dt, _ := resultValues[0].Marshal()
@@ -82,12 +82,12 @@ func JsonExtract(vectors []*vector.Vector, proc *process.Process) (ret *vector.V
 		return
 	}
 	resultValues := make([]*bytejson.ByteJson, maxLen)
-	resultValues, err = json_extract.JsonExtract(json, path, []*nulls.Nulls{jsonBytes.Nsp, pathBytes.Nsp}, resultValues, ret.Nsp, fn)
+	resultValues, err = json_extract.JsonExtract(json, path, []*nulls.Nulls{jsonBytes.GetNulls(), pathBytes.GetNulls()}, resultValues, ret.GetNulls(), fn)
 	if err != nil {
 		return
 	}
 	for idx, v := range resultValues {
-		if ret.Nsp.Contains(uint64(idx)) {
+		if ret.GetNulls().Contains(uint64(idx)) {
 			continue
 		}
 		dt, _ := v.Marshal()

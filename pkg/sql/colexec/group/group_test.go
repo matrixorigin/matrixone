@@ -145,7 +145,7 @@ func TestLowCardinalityGroup(t *testing.T) {
 		require.NoError(t, err)
 
 		rbat := tc.proc.Reg.InputBatch
-		require.Equal(t, []string{"a", "b", "c", "d"}, vector.GetStrVectorValues(rbat.Vecs[0]))
+		require.Equal(t, []string{"a", "b", "c", "d"}, vector.MustStrCols(rbat.Vecs[0]))
 		require.Equal(t, []int64{4, 3, 3, 2}, vector.MustTCols[int64](rbat.Vecs[1]))
 
 		if tc.proc.Reg.InputBatch != nil {
@@ -241,7 +241,7 @@ func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process,
 }
 
 func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
-	idx, err := index.New(v.Typ, m)
+	idx, err := index.New(*v.GetType(), m)
 	require.NoError(t, err)
 
 	err = idx.InsertBatch(v)

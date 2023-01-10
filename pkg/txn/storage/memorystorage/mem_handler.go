@@ -1077,7 +1077,7 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req memor
 	b := batch.New(false, req.ColNames)
 
 	for i, name := range req.ColNames {
-		b.Vecs[i] = vector.New(iter.AttrsMap[name].Type)
+		b.Vecs[i] = vector.New(vector.FLAT, iter.AttrsMap[name].Type)
 	}
 
 	fn := iter.TableIter.Next

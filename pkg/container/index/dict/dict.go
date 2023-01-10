@@ -43,12 +43,12 @@ func New(typ types.Type, m *mpool.MPool) (*Dict, error) {
 		if idx, err = newFixedReverseIndex(m); err != nil {
 			return nil, err
 		}
-		d.unique = vector.New(types.T_uint64.ToType())
+		d.unique = vector.New(vector.FLAT, types.T_uint64.ToType())
 	} else {
 		if idx, err = newVarReverseIndex(m); err != nil {
 			return nil, err
 		}
-		d.unique = vector.New(types.T_varchar.ToType())
+		d.unique = vector.New(vector.FLAT, types.T_varchar.ToType())
 	}
 
 	d.idx = idx
@@ -85,9 +85,9 @@ func (d *Dict) InsertBatch(data *vector.Vector) ([]uint16, error) {
 	for i, v := range values {
 		if int(v) > d.unique.Length() {
 			if d.fixed() {
-				err = d.unique.Append(ks.([]uint64)[i], false, d.m)
+				err = vector.Append(d.unique, ks.([]uint64)[i], false, d.m)
 			} else {
-				err = d.unique.Append(ks.([][]byte)[i], false, d.m)
+				err = vector.AppendList(d.unique, ks.([][]byte)[i], nil, d.m)
 			}
 			if err != nil {
 				return nil, err
@@ -203,11 +203,11 @@ func (d *Dict) encodeFixedData(data *vector.Vector) []uint64 {
 }
 
 func (d *Dict) encodeVarData(data *vector.Vector) [][]byte {
-	return vector.GetBytesVectorValues(data)
+	return vector.MustBytesCols(data)
 }
 
 func (d *Dict) findFixedData(pos int) *vector.Vector {
-	v := vector.NewConst(d.typ, 1)
+	v := vector.New(vector.CONSTANT, d.typ)
 	data := d.getFixedData(pos)
 	switch d.typ.Oid {
 	case types.T_bool:
@@ -242,7 +242,9 @@ func (d *Dict) findFixedData(pos int) *vector.Vector {
 }
 
 func (d *Dict) findVarData(pos int) *vector.Vector {
-	return vector.NewConstBytes(d.typ, 1, d.getVarData(pos), d.m)
+	vec := vector.New(vector.CONSTANT, d.typ)
+	vector.AppendBytes(vec, d.getVarData(pos), false, d.m)
+	return vec
 }
 
 func (d *Dict) getFixedData(n int) uint64 {
