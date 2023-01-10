@@ -441,7 +441,13 @@ var functionIdRegister = map[string]int32{
 	"current_user":                   USER,
 	"connection_id":                  CONNECTION_ID,
 	"charset":                        CHARSET,
+	"current_account_id":             CURRENT_ACCOUNT_ID,
+	"current_account_name":           CURRENT_ACCOUNT_NAME,
 	"current_role":                   CURRENT_ROLE,
+	"current_role_id":                CURRENT_ROLE_ID,
+	"current_role_name":              CURRENT_ROLE_NAME,
+	"current_user_id":                CURRENT_USER_ID,
+	"current_user_name":              CURRENT_USER_NAME,
 	"found_rows":                     FOUND_ROWS,
 	"icu_version":                    ICULIBVERSION,
 	"last_insert_id":                 LAST_INSERT_ID,
@@ -491,12 +497,6 @@ var functionIdRegister = map[string]int32{
 	"replace":                        REPLACE,
 	"mo_table_rows":                  MO_TABLE_ROWS,
 	"mo_table_size":                  MO_TABLE_SIZE,
-	"current_account_id":             CURRENT_ACCOUNT_ID,
-	"current_account_name":           CURRENT_ACCOUNT_NAME,
-	"current_role_id":                CURRENT_ROLE_ID,
-	"current_role_name":              CURRENT_ROLE_NAME,
-	"current_user_id":                CURRENT_USER_ID,
-	"current_user_name":              CURRENT_USER_NAME,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
