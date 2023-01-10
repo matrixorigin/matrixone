@@ -153,19 +153,19 @@ func initLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Ta
 	writer.FlushAndClose()
 
 	ts2 := ts.Add(time.Minute)
-	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts2), buf, nil, nil))
+	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts2), buf, nil, nil)
 	writer.WriteStrings(dummyFillTable("row3", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row4", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts3 := ts.Add(time.Hour)
-	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts3), buf, nil, nil))
+	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts3), buf, nil, nil)
 	writer.WriteStrings(dummyFillTable("row5", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row6", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts1New := ts.Add(time.Hour + time.Minute)
-	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts1New), buf, nil, nil))
+	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts1New), buf, nil, nil)
 	writer.WriteStrings(dummyFillTable("row1", 1, 11.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 22.0).ToStrings())
 	writer.FlushAndClose()
@@ -209,7 +209,7 @@ func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *ta
 	buf := make([]byte, 0, 4096)
 
 	ts1 := ts
-	writer, _ := newETLWriter(ctx, fs, newFilePath(ts1), buf)
+	writer, _ := newETLWriter(ctx, fs, newFilePath(ts1), buf, nil, nil)
 	writer.WriteStrings(dummyFillTable("row1", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 2.0).ToStrings())
 	writer.FlushAndClose()

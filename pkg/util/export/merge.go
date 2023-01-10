@@ -699,11 +699,11 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 		newOptions := []MergeOption{WithMaxFileSize(maxFileSize.Load())}
 		newOptions = append(newOptions, opts...)
 		newOptions = append(newOptions, WithTable(table))
-		merge := NewMerge(ctx, newOptions...)
-		if merge == nil {
-			return
+		merge, err := NewMerge(ctx, newOptions...)
+		if err != nil {
+			return err
 		}
-		if err := merge.Main(ctx, ts); err != nil {
+		if err = merge.Main(ctx, ts); err != nil {
 			logger.Error(fmt.Sprintf("merge metric failed: %v", err))
 			return err
 		}
