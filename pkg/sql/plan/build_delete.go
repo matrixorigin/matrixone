@@ -36,7 +36,10 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 
 // link ref: https://dev.mysql.com/doc/refman/8.0/en/delete.html
 func buildSingleTableDelete2(ctx CompilerContext, stmt *tree.Delete) (*Plan, error) {
-	aliasMap := getAliasToName(ctx, stmt.TableRefs)
+	aliasMap := make(map[string][2]string)
+	for _, tbl := range stmt.TableRefs {
+		getAliasToName(ctx, tbl, "", aliasMap)
+	}
 	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, aliasMap)
 	if err != nil {
 		return nil, err
@@ -50,27 +53,22 @@ func buildSingleTableDelete2(ctx CompilerContext, stmt *tree.Delete) (*Plan, err
 	rewriteInfo := &deleteSelectInfo{
 		rootId:  -1,
 		tblInfo: tblInfo,
-		stmt:    stmt,
-	}
-	for _, tableDef := range tblInfo.tableDefs {
-		err := rewriteDeleteSelectInfo(builder, bindCtx, tableDef, rewriteInfo)
-		if err != nil {
-			return nil, err
-		}
 	}
 
-	// if delete table have no constraint
-	if rewriteInfo.rootId == -1 {
-		sql := deleteToSelect(stmt, dialect.MYSQL, false)
-		stmts, err := mysql.Parse(builder.GetContext(), sql)
+	if checkIfStmtHaveRewriteConstraint(tblInfo) {
+		// if delete table have constraint
+		err = initDeleteStmt(builder, bindCtx, rewriteInfo, stmt)
 		if err != nil {
 			return nil, err
 		}
-		rewriteInfo.rootId, err = builder.buildSelect(stmts[0].(*tree.Select), bindCtx, false)
-		if err != nil {
-			return nil, err
+
+		for _, tableDef := range tblInfo.tableDefs {
+			err = rewriteDeleteSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId)
+			if err != nil {
+				return nil, err
+			}
 		}
-	} else {
+
 		// append ProjectNode
 		rewriteInfo.rootId = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_PROJECT,
@@ -80,6 +78,17 @@ func buildSingleTableDelete2(ctx CompilerContext, stmt *tree.Delete) (*Plan, err
 		}, bindCtx)
 		bindCtx.results = rewriteInfo.projectList
 		// builder.qry.Headings =
+	} else {
+		// if delete table have no constraint
+		sql := deleteToSelect(stmt, dialect.MYSQL, false)
+		stmts, err := mysql.Parse(builder.GetContext(), sql)
+		if err != nil {
+			return nil, err
+		}
+		rewriteInfo.rootId, err = builder.buildSelect(stmts[0].(*tree.Select), bindCtx, false)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	builder.qry.Steps = append(builder.qry.Steps, rewriteInfo.rootId)
