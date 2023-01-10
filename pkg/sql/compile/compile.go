@@ -1619,54 +1619,6 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 		default:
 			return nil, moerr.NewNYI(ctx, fmt.Sprintf("expression %v can not eval to constant and append to rowsetData", e))
 		}
-
-		// t := e.Expr.(*plan.Expr_C)
-		// if t.C.GetIsnull() {
-		// 	vec.Append(0, true, m)
-		// 	continue
-		// }
-
-		// switch t.C.GetValue().(type) {
-		// case *plan.Const_Bval:
-		// 	vec.Append(t.C.GetBval(), false, m)
-		// case *plan.Const_I8Val:
-		// 	vec.Append(t.C.GetI8Val(), false, m)
-		// case *plan.Const_I16Val:
-		// 	vec.Append(t.C.GetI16Val(), false, m)
-		// case *plan.Const_I32Val:
-		// 	vec.Append(t.C.GetI32Val(), false, m)
-		// case *plan.Const_I64Val:
-		// 	vec.Append(t.C.GetI64Val(), false, m)
-		// case *plan.Const_U8Val:
-		// 	vec.Append(t.C.GetU8Val(), false, m)
-		// case *plan.Const_U16Val:
-		// 	vec.Append(t.C.GetU16Val(), false, m)
-		// case *plan.Const_U32Val:
-		// 	vec.Append(t.C.GetU32Val(), false, m)
-		// case *plan.Const_U64Val:
-		// 	vec.Append(t.C.GetU64Val(), false, m)
-		// case *plan.Const_Fval:
-		// 	vec.Append(t.C.GetFval(), false, m)
-		// case *plan.Const_Dval:
-		// 	vec.Append(t.C.GetDval(), false, m)
-		// case *plan.Const_Dateval:
-		// 	vec.Append(t.C.GetDateval(), false, m)
-		// case *plan.Const_Timeval:
-		// 	vec.Append(t.C.GetTimeval(), false, m)
-		// case *plan.Const_Sval:
-		// 	vec.Append([]byte(t.C.GetSval()), false, m)
-		// case *plan.Const_Decimal64Val:
-		// 	cd64 := t.C.GetDecimal64Val()
-		// 	d64 := types.Decimal64FromInt64Raw(cd64.A)
-		// 	vec.Append(d64, false, m)
-		// case *plan.Const_Decimal128Val:
-		// 	cd128 := t.C.GetDecimal128Val()
-		// 	d128 := types.Decimal128FromInt64Raw(cd128.A, cd128.B)
-		// 	vec.Append(d128, false, m)
-		// default:
-		// 	return nil, moerr.NewNYI(ctx, fmt.Sprintf("const expression %v in rowsetData", t.C.GetValue()))
-		// }
 	}
-	// vec.SetIsBin(t.C.IsBin)
 	return vec, nil
 }
