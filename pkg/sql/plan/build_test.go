@@ -44,8 +44,9 @@ func TestSingleSQL(t *testing.T) {
 	// }
 	// t.Logf("%+v", string(getJSON(stmts[0], t)))
 	// sql := "SELECT UNIX_TIMESTAMP('2000-01-01 12:00:00.159')"
-	sql := "select * from (values row(1,1), row(2,2), row(3,3)) a(c1,c2);"
+	//sql := "select * from (values row(1,1), row(2,2), row(3,3)) a(c1,c2);"
 	// sql := "select -1"
+	sql := "select * from nation where account_id = 1 or (account_id = 0 and datname in ('mo_catalog'))"
 
 	mock := NewMockOptimizer()
 	logicPlan, err := runOneStmt(mock, t, sql)

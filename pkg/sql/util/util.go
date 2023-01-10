@@ -17,7 +17,10 @@ package util
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"go/constant"
+	"strconv"
 	"strings"
 )
 
@@ -43,6 +46,130 @@ func SplitTableAndColumn(name string) (string, string) {
 // TableIsClusterTable check the table type is cluster table
 func TableIsClusterTable(tableType string) bool {
 	return tableType == catalog.SystemClusterRel
+}
+
+// Check whether it is three system tables 'mo_database, mo_tables , mo_columns' in the mo_catalog database
+// If yes, return the name of the tenant id field of the corresponding system table
+func IsMoSystemTable(obj *plan.ObjectRef, tableDef *plan.TableDef) (bool, string) {
+	dbName := obj.SchemaName
+	tableName := tableDef.Name
+	if dbName == catalog.MO_CATALOG {
+		if tableName == catalog.MO_DATABASE {
+			return true, catalog.SystemDBAttr_AccID
+		} else if tableName == catalog.MO_TABLES {
+			return true, catalog.SystemRelAttr_AccID
+		} else if tableName == catalog.MO_COLUMNS {
+			return true, catalog.SystemColAttr_AccID
+		}
+	}
+	return false, ""
+}
+
+// account_id = cur_accountId or (account_id = 0 and datname in ('mo_catalog'))
+func IsMoDataBase(curAccountId uint64) tree.Expr {
+	// left is: account_id = cur_accountId
+	left := makeAccountIdEqualAst(curAccountId)
+
+	datnameColName := &tree.UnresolvedName{
+		NumParts: 1,
+		Parts:    tree.NameParts{"datname"},
+	}
+
+	mo_catalogConst := tree.NewNumValWithType(constant.MakeString("mo_catalog"), "mo_catalog", false, tree.P_char)
+	inValues := tree.NewTuple(tree.Exprs{mo_catalogConst})
+	// datname in ('mo_catalog')
+	inExpr := tree.NewComparisonExpr(tree.IN, datnameColName, inValues)
+
+	// account_id = 0
+	accountIdEqulZero := makeAccountIdEqualAst(0)
+	// andExpr is:account_id = 0 and datname in ('mo_catalog')
+	andExpr := tree.NewAndExpr(accountIdEqulZero, inExpr)
+
+	// right is:(account_id = 0 and datname in ('mo_catalog'))
+	right := tree.NewParenExpr(andExpr)
+	// return is: account_id = cur_accountId or (account_id = 0 and datname in ('mo_catalog'))
+	return tree.NewOrExpr(left, right)
+}
+
+// account_id = cur_account_id or (account_id = 0 and (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster'));
+func IsMoTables(curAccountId uint64) tree.Expr {
+	// left is: account_id = cur_accountId
+	left := makeAccountIdEqualAst(curAccountId)
+
+	relnameColName := &tree.UnresolvedName{
+		NumParts: 1,
+		Parts:    tree.NameParts{"relname"},
+	}
+	mo_databaseConst := tree.NewNumValWithType(constant.MakeString("mo_database"), "mo_database", false, tree.P_char)
+	mo_tablesConst := tree.NewNumValWithType(constant.MakeString("mo_tables"), "mo_tables", false, tree.P_char)
+	mo_columnsConst := tree.NewNumValWithType(constant.MakeString("mo_columns"), "mo_columns", false, tree.P_char)
+	inValues := tree.NewTuple(tree.Exprs{mo_databaseConst, mo_tablesConst, mo_columnsConst})
+
+	// relname in ('mo_tables','mo_database','mo_columns')
+	inExpr := tree.NewComparisonExpr(tree.IN, relnameColName, inValues)
+	relkindEqualAst := makeRelkindEqualAst("cluster")
+
+	// (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster')
+	tempExpr := tree.NewOrExpr(inExpr, relkindEqualAst)
+
+	// account_id = 0
+	accountIdEqulZero := makeAccountIdEqualAst(0)
+	// andExpr is: account_id = 0 and (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster')
+	andExpr := tree.NewAndExpr(accountIdEqulZero, tempExpr)
+
+	// right is: (account_id = 0 and (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster'))
+	right := tree.NewParenExpr(andExpr)
+
+	// return is: account_id = cur_account_id or (account_id = 0 and (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster'));
+	return tree.NewOrExpr(left, right)
+}
+
+// account_id = current_id or (account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns')))
+func IsMoColumns(curAccountId uint64) tree.Expr {
+	// left is: account_id = cur_accountId
+	left := makeAccountIdEqualAst(curAccountId)
+
+	att_relnameColName := &tree.UnresolvedName{
+		NumParts: 1,
+		Parts:    tree.NameParts{"att_relname"},
+	}
+
+	mo_databaseConst := tree.NewNumValWithType(constant.MakeString("mo_database"), "mo_database", false, tree.P_char)
+	mo_tablesConst := tree.NewNumValWithType(constant.MakeString("mo_tables"), "mo_tables", false, tree.P_char)
+	mo_columnsConst := tree.NewNumValWithType(constant.MakeString("mo_columns"), "mo_columns", false, tree.P_char)
+	inValues := tree.NewTuple(tree.Exprs{mo_databaseConst, mo_tablesConst, mo_columnsConst})
+	// att_relname in ('mo_database','mo_tables','mo_columns')
+	inExpr := tree.NewComparisonExpr(tree.IN, att_relnameColName, inValues)
+
+	// account_id = 0
+	accountIdEqulZero := makeAccountIdEqualAst(0)
+	// andExpr is: account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns'))
+	andExpr := tree.NewAndExpr(accountIdEqulZero, inExpr)
+
+	// right is: (account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns')))
+	right := tree.NewParenExpr(andExpr)
+	// return is: account_id = current_id or (account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns')))
+	return tree.NewOrExpr(left, right)
+}
+
+// build ast expr: account_id = cur_accountId
+func makeRelkindEqualAst(kindName string) tree.Expr {
+	relkindColName := &tree.UnresolvedName{
+		NumParts: 1,
+		Parts:    tree.NameParts{"relkind"},
+	}
+	clusterConst := tree.NewNumValWithType(constant.MakeString(kindName), kindName, false, tree.P_char)
+	return tree.NewComparisonExpr(tree.EQUAL, relkindColName, clusterConst)
+}
+
+// build ast expr: account_id = cur_accountId
+func makeAccountIdEqualAst(curAccountId uint64) tree.Expr {
+	accountIdColName := &tree.UnresolvedName{
+		NumParts: 1,
+		Parts:    tree.NameParts{"account_id"},
+	}
+	curAccountIdConst := tree.NewNumVal(constant.MakeUint64(uint64(curAccountId)), strconv.Itoa(int(curAccountId)), false)
+	return tree.NewComparisonExpr(tree.EQUAL, accountIdColName, curAccountIdConst)
 }
 
 var (
