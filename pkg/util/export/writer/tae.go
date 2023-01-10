@@ -119,7 +119,10 @@ func (w *TAEWriter) writeBatch() error {
 			return err
 		}
 	}
-	w.writer.WriteBlockAndZoneMap(batch, w.idxs)
+	_, err := w.writer.WriteBlockAndZoneMap(batch, w.idxs)
+	if err != nil {
+		return err
+	}
 	w.buffer = w.buffer[:0]
 	batch.Clean(w.mp)
 	return nil
@@ -242,11 +245,12 @@ type TAEReader struct {
 	objectReader objectio.Reader
 }
 
-func NewTaeReader(tbl *table.Table, filepath string, filesize int64, fs fileservice.FileService) (*TAEReader, error) {
+func NewTaeReader(tbl *table.Table, filePath string, filesize int64, fs fileservice.FileService) (*TAEReader, error) {
 	var err error
+	path := defines.ETLFileServiceName + fileservice.ServiceNameSeparator + filePath
 	r := &TAEReader{
 		batchs:   []*batch.Batch{},
-		filepath: filepath,
+		filepath: path,
 		filesize: filesize,
 		fs:       fs,
 	}

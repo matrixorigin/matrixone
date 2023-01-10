@@ -15,9 +15,11 @@
 package table
 
 import (
-	"github.com/stretchr/testify/require"
+	"reflect"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestPathBuilder(t *testing.T) {
@@ -83,6 +85,32 @@ func TestPathBuilder(t *testing.T) {
 			require.Equal(t, tt.wantETLPath, gotETLPath)
 			gotLogFN := m.NewLogFilename(tt.args.name, tt.args.nodeUUID, tt.args.nodeType, tt.args.ts, CsvExtension)
 			require.Equal(t, tt.wantLogFN, gotLogFN)
+		})
+	}
+}
+
+func TestString2Bytes(t *testing.T) {
+	type args struct {
+		s string
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantRet []byte
+	}{
+		{
+			name: "normal",
+			args: args{
+				s: "12345a",
+			},
+			wantRet: []byte{'1', '2', '3', '4', '5', 'a'},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if gotRet := String2Bytes(tt.args.s); !reflect.DeepEqual(gotRet, tt.wantRet) {
+				t.Errorf("String2Bytes() = %v, want %v", gotRet, tt.wantRet)
+			}
 		})
 	}
 }

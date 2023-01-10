@@ -309,7 +309,7 @@ func Test_genCsvData(t *testing.T) {
 				in: []IBuffer2SqlItem{
 					&MOSpan{
 						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _1SpanID}, Parent: trace.NoopSpan{}},
-						Name:       *bytes.NewBuffer([]byte("span1")),
+						Name:       "span1",
 						StartTime:  zeroTime,
 						EndTime:    zeroTime.Add(time.Microsecond),
 						tracer:     gTracer.(*MOTracer),
@@ -326,14 +326,14 @@ func Test_genCsvData(t *testing.T) {
 				in: []IBuffer2SqlItem{
 					&MOSpan{
 						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _1SpanID, Kind: trace.SpanKindStatement}, Parent: trace.NoopSpan{}},
-						Name:       *bytes.NewBuffer([]byte("span1")),
+						Name:       "span1",
 						StartTime:  zeroTime,
 						EndTime:    zeroTime.Add(time.Microsecond),
 						tracer:     gTracer.(*MOTracer),
 					},
 					&MOSpan{
 						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _2SpanID, Kind: trace.SpanKindRemote}, Parent: trace.NoopSpan{}},
-						Name:       *bytes.NewBuffer([]byte("span2")),
+						Name:       "span2",
 						StartTime:  zeroTime.Add(time.Microsecond),
 						EndTime:    zeroTime.Add(time.Millisecond),
 						tracer:     gTracer.(*MOTracer),

@@ -21,6 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/stretchr/testify/require"
 	"path"
 	"strings"
@@ -52,7 +54,6 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.Nil(t, err)
 	ctx := context.TODO()
-	filepath := defines.ETLFileServiceName + ":" + path.Join(t.TempDir(), "file.tae")
 	configs := []fileservice.Config{{
 		Name:    defines.ETLFileServiceName,
 		Backend: "DISK",
@@ -72,8 +73,8 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	)
 	require.Nil(t, err)
 
+	filepath := path.Join(t.TempDir(), "file.tae")
 	writer := NewTAEWriter(ctx, dummyAllTypeTable, mp, filepath, fs)
-	require.Nil(t, err)
 
 	cnt := 10240
 	lines := genLines(cnt)
@@ -138,4 +139,93 @@ func genLines(cnt int) (lines [][]any) {
 	}
 
 	return
+}
+
+func TestTAEWriter(t *testing.T) {
+	t.Logf("local timezone: %v", time.Local.String())
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.Nil(t, err)
+	ctx := context.TODO()
+	configs := []fileservice.Config{{
+		Name:    defines.ETLFileServiceName,
+		Backend: "DISK_ETL",
+		DataDir: t.TempDir(),
+	},
+	}
+	var services = make([]fileservice.FileService, 0, 1)
+	for _, config := range configs {
+		service, err := fileservice.NewFileService(config)
+		require.Nil(t, err)
+		services = append(services, service)
+	}
+	// create FileServices
+	fs, err := fileservice.NewFileServices(
+		defines.LocalFileServiceName,
+		services...,
+	)
+	require.Nil(t, err)
+
+	type fields struct {
+		ctx context.Context
+		fs  fileservice.FileService
+	}
+	type args struct {
+		tbl   *table.Table
+		items func() []table.RowField
+	}
+
+	var genSpanData = func() []table.RowField {
+		arr := make([]table.RowField, 0, 128)
+		arr = append(arr, &motrace.MOSpan{
+			SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{
+				TraceID: trace.NilTraceID,
+				SpanID:  trace.NilSpanID,
+				Kind:    trace.SpanKindInternal,
+			}},
+			Name:      "span1",
+			StartTime: time.Time{},
+			EndTime:   time.Time{},
+			Duration:  0,
+		})
+		arr = append(arr, &motrace.MOSpan{
+			SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{
+				TraceID: trace.NilTraceID,
+				SpanID:  trace.NilSpanID,
+				Kind:    trace.SpanKindStatement,
+			}},
+			Name:      "span2",
+			StartTime: time.Time{},
+			EndTime:   time.Time{},
+			Duration:  100,
+		})
+
+		return arr
+	}
+
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+	}{
+		{
+			name: "span",
+			fields: fields{
+				ctx: ctx,
+				fs:  fs,
+			},
+			args: args{
+				tbl:   motrace.SingleRowLogTable,
+				items: genSpanData,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			filepath := "NOT_SET"
+			_ = NewTAEWriter(tt.fields.ctx, tt.args.tbl, mp, filepath, tt.fields.fs)
+
+		})
+	}
 }

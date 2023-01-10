@@ -24,7 +24,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/prometheus/common/model"
@@ -72,7 +71,7 @@ func (m *Metric) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(observability.MetricLabelsColumn, string(labels))
 	// calculate md5
 	hash := md5.New()
-	if _, err := hash.Write(export.String2Bytes(m.Name)); err != nil {
+	if _, err := hash.Write(table.String2Bytes(m.Name)); err != nil {
 		panic(err)
 	}
 	if _, err := hash.Write(labels); err != nil {

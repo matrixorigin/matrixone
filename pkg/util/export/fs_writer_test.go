@@ -16,6 +16,7 @@ package export
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/export/writer"
 	"os"
 	"path"
 	"path/filepath"
@@ -185,8 +186,8 @@ func TestFSWriter_Write(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			w := NewFSWriter(tt.fields.ctx, tt.fields.fs,
-				WithFilePath("filepath"),
+			w := writer.NewFSWriter(tt.fields.ctx, tt.fields.fs,
+				writer.WithFilePath("filepath"),
 			)
 			gotN, err := w.Write(tt.args.p)
 			if (err != nil) != tt.wantErr {

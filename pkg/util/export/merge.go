@@ -558,7 +558,7 @@ func newETLWriter(ctx context.Context, fs fileservice.FileService, filePath stri
 		fsWriter = writer.NewTAEWriter(ctx /*tbl*/, nil /* mp*/, nil, filePath, fs)
 	} else {
 		// CSV
-		fsWriter = NewFSWriter(ctx, fs, WithFilePath(filePath))
+		fsWriter = writer.NewFSWriter(ctx, fs, writer.WithFilePath(filePath))
 	}
 
 	return NewContentWriter(fsWriter, buf), nil

@@ -16,17 +16,7 @@ package export
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"io"
-	"reflect"
-	"unsafe"
 )
-
-// stringWriter same as io.stringWriter
-type stringWriter interface {
-	io.Writer
-	io.StringWriter
-	//WriteRune(rune) (int, error)
-}
 
 type ETLWriter interface {
 	WriteRow(row *table.Row) error
@@ -34,14 +24,4 @@ type ETLWriter interface {
 	WriteStrings(record []string) error
 	// FlushAndClose flush its buffer and close.
 	FlushAndClose() (int, error)
-}
-
-func String2Bytes(s string) (ret []byte) {
-	sliceHead := (*reflect.SliceHeader)(unsafe.Pointer(&ret))
-	strHead := (*reflect.StringHeader)(unsafe.Pointer(&s))
-
-	sliceHead.Data = strHead.Data
-	sliceHead.Len = strHead.Len
-	sliceHead.Cap = strHead.Len
-	return
 }
