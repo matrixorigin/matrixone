@@ -17,6 +17,7 @@ package objectio
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"os"
 	"path"
@@ -94,7 +95,12 @@ func TestNewObjectWriter(t *testing.T) {
 	}
 	_, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
-	blocks, err := objectWriter.WriteEnd(context.Background())
+	ts := time.Now()
+	option := WriteOptions{
+		Type: WriteTS,
+		Val:  ts,
+	}
+	blocks, err := objectWriter.WriteEnd(context.Background(), option)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(blocks))
 	assert.Nil(t, objectWriter.(*ObjectWriter).buffer)
