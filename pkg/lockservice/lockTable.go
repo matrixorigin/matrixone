@@ -54,14 +54,17 @@ func (l *lockTable) Unlock(ctx context.Context, txnID []byte) error {
 		storage := l.seqStorage[tableID]
 		for _, key := range keys {
 			if lock, ok := storage.Get(key); ok {
-				if w := lock.waiter.close(); w != nil {
-					lock.waiter = w
-					lock.txnID = w.txnID
-					storage.Add(key, lock)
-				} else {
-					storage.Delete(key)
-				}
-
+				lock.waiter.close()
+				storage.Delete(key)
+				/*
+					if w := lock.waiter.close(); w != nil {
+						lock.waiter = w
+						lock.txnID = w.txnID
+						storage.Add(key, lock)
+					} else {
+						storage.Delete(key)
+					}
+				*/
 			}
 		}
 		delete(l.locks[unsafeByteSliceToString(txnID)], tableID)
@@ -102,6 +105,7 @@ func (l *lockTable) acquireRowLock(ctx context.Context, tableID uint64, row []by
 			return false
 		}
 		l.mu.Lock()
+		addRowLock(storage, txnID, row, waiter, options)
 	} else {
 		addRowLock(storage, txnID, row, waiter, options)
 	}
