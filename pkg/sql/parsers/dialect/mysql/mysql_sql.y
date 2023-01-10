@@ -2129,13 +2129,13 @@ alter_view_stmt:
 alter_account_stmt:
     ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
     {
-    $$ = &tree.AlterAccount{
-        IfExists:$3,
-        Name:$4,
-        AuthOption:$5,
-        StatusOption:$6,
-        Comment:$7,
-    }
+        $$ = &tree.AlterAccount{
+            IfExists:$3,
+            Name:$4,
+            AuthOption:$5,
+            StatusOption:$6,
+            Comment:$7,
+        }
     }
 
 alter_account_auth_option:
