@@ -1883,6 +1883,10 @@ var (
 			input:  "show accounts like '%dafgda_'",
 			output: "show accounts like %dafgda_",
 		},
+		{
+			input:  "create table test (`col` varchar(255) DEFAULT b'0')",
+			output: "create table test (col varchar(255) default 0)",
+		},
 	}
 )
 

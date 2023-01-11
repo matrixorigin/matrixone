@@ -15,9 +15,11 @@
 package checkpoint
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -26,7 +28,7 @@ type RunnerReader interface {
 	GetAllGlobalCheckpoints() []*CheckpointEntry
 	GetPenddingIncrementalCount() int
 	GetGlobalCheckpointCount() int
-	CollectCheckpointsInRange(start, end types.TS) (ckpLoc string, lastEnd types.TS)
+	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
 	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
 	MaxLSN() uint64
 }
@@ -138,4 +140,74 @@ func (r *runner) GetGlobalCheckpointCount() int {
 	r.storage.RLock()
 	defer r.storage.RUnlock()
 	return r.storage.globals.Len()
+}
+
+func (r *runner) GCCheckpoint(ts types.TS) error {
+	prev := r.gcTS.Load()
+	if prev == nil {
+		r.gcTS.Store(ts)
+	} else {
+		prevTS := prev.(types.TS)
+		if prevTS.Less(ts) {
+			r.gcTS.Store(ts)
+		}
+	}
+	logutil.Infof("GC %v", ts.ToString())
+	r.gcCheckpointQueue.Enqueue(struct{}{})
+	return nil
+}
+
+func (r *runner) getGCTS() types.TS {
+	prev := r.gcTS.Load()
+	if prev == nil {
+		return types.TS{}
+	}
+	return prev.(types.TS)
+}
+
+func (r *runner) getGCedTS() types.TS {
+	r.storage.RLock()
+	minGlobal, _ := r.storage.globals.Min()
+	minIncremental, _ := r.storage.entries.Min()
+	r.storage.RUnlock()
+	if minGlobal == nil {
+		return types.TS{}
+	}
+	if minIncremental == nil {
+		return minGlobal.end
+	}
+	if minIncremental.start.GreaterEq(minGlobal.end) {
+		return minGlobal.end
+	}
+	return minIncremental.start
+}
+
+func (r *runner) getTSToGC() types.TS {
+	maxGlobal := r.MaxGlobalCheckpoint()
+	if maxGlobal == nil {
+		return types.TS{}
+	}
+	if maxGlobal.IsFinished() {
+		return maxGlobal.end.Prev()
+	}
+	globals := r.GetAllGlobalCheckpoints()
+	if len(globals) == 1 {
+		return types.TS{}
+	}
+	maxGlobal = globals[len(globals)-1]
+	return maxGlobal.end.Prev()
+}
+
+func (r *runner) ExistPendingEntryToGC() bool {
+	_, needGC := r.getTSTOGC()
+	return needGC
+}
+
+func (r *runner) IsTSStale(ts types.TS) bool {
+	gcts := r.getGCTS()
+	if gcts.IsEmpty() {
+		return false
+	}
+	minValidTS := gcts.Physical() - r.options.globalVersionInterval.Nanoseconds()
+	return ts.Physical() < minValidTS
 }

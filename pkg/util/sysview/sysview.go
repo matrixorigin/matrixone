@@ -21,7 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
 const (
@@ -299,7 +299,11 @@ var (
 			"SELECT 'def' AS TABLE_CATALOG," +
 			"reldatabase AS TABLE_SCHEMA," +
 			"relname AS TABLE_NAME," +
-			"'' AS TABLE_TYPE," +
+			"(case when relkind = 'v' and (reldatabase='mo_catalog' or reldatabase='information_schema') then 'SYSTEM VIEW' " +
+			"when relkind = 'v'  then 'VIEW' " +
+			"when relkind = 'e' then 'EXTERNAL TABLE' " +
+			"when relkind = 'r' then 'BASE TABLE' " +
+			"else 'UNKNOWN TABLE TYPE' end) AS TABLE_TYPE," +
 			"'' AS ENGINE," +
 			"0 AS VERSION," +
 			"'' AS ROW_FORMAT," +
@@ -411,8 +415,8 @@ var (
 )
 
 func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
-	initMysqlTables(ctx, ieFactory, trace.FileService)
-	initInformationSchemaTables(ctx, ieFactory, trace.FileService)
+	initMysqlTables(ctx, ieFactory, motrace.FileService)
+	initInformationSchemaTables(ctx, ieFactory, motrace.FileService)
 	return nil
 }
 

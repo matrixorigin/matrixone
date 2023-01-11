@@ -576,6 +576,154 @@ func TestCompactBlock1(t *testing.T) {
 	}
 }
 
+func TestAddBlksWithMetaLoc(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	db := initDB(t, opts)
+	defer db.Close()
+
+	worker := ops.NewOpWorker("xx")
+	worker.Start()
+	defer worker.Stop()
+	schema := catalog.MockSchemaAll(13, 2)
+	schema.Name = "tb-0"
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 2
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*4))
+	defer bat.Close()
+	bats := bat.Split(4)
+	{
+		txn, _, rel := createRelationNoCommit(t, db, "db", schema, true)
+		err := rel.Append(bats[0])
+		assert.NoError(t, err)
+		err = rel.Append(bats[1])
+		assert.NoError(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+	//compact blocks
+	var newBlockFp1 *common.ID
+	var metaLoc1 string
+	var newBlockFp2 *common.ID
+	var metaLoc2 string
+	{
+		txn, rel := getRelation(t, 0, db, "db", schema.Name)
+		it := rel.MakeBlockIt()
+		blkMeta1 := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+		it.Next()
+		blkMeta2 := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+		task1, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta1, db.Scheduler)
+		assert.NoError(t, err)
+		task2, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta2, db.Scheduler)
+		assert.NoError(t, err)
+		worker.SendOp(task1)
+		worker.SendOp(task2)
+		err = task1.WaitDone()
+		assert.NoError(t, err)
+		err = task2.WaitDone()
+		assert.NoError(t, err)
+		newBlockFp1 = task1.GetNewBlock().Fingerprint()
+		metaLoc1 = task1.GetNewBlock().GetMetaLoc()
+		newBlockFp2 = task2.GetNewBlock().Fingerprint()
+		metaLoc2 = task2.GetNewBlock().GetMetaLoc()
+		assert.Nil(t, txn.Commit())
+	}
+	//read new non-appendable block data and check
+	{
+		txn, rel := getRelation(t, 0, db, "db", schema.Name)
+		assert.Equal(t, newBlockFp2.SegmentID, newBlockFp1.SegmentID)
+		seg, err := rel.GetSegment(newBlockFp1.SegmentID)
+		assert.Nil(t, err)
+		blk1, err := seg.GetBlock(newBlockFp1.BlockID)
+		assert.Nil(t, err)
+		blk2, err := seg.GetBlock(newBlockFp2.BlockID)
+		assert.Nil(t, err)
+
+		view1, err := blk1.GetColumnDataById(2, nil)
+		assert.NoError(t, err)
+		defer view1.Close()
+		assert.True(t, view1.GetData().Equals(bats[0].Vecs[2]))
+		assert.Equal(t, blk1.Rows(), bats[0].Vecs[2].Length())
+
+		view2, err := blk2.GetColumnDataById(2, nil)
+		assert.NoError(t, err)
+		defer view2.Close()
+		assert.True(t, view2.GetData().Equals(bats[1].Vecs[2]))
+		assert.Equal(t, blk2.Rows(), bats[1].Vecs[2].Length())
+		assert.Nil(t, txn.Commit())
+	}
+
+	{
+		schema.Name = "tb-1"
+		txn, _, rel := createRelationNoCommit(t, db, "db", schema, false)
+		var pks []containers.Vector
+		var metaLocs []string
+		pks = append(pks, bats[0].Vecs[2])
+		pks = append(pks, bats[1].Vecs[2])
+		metaLocs = append(metaLocs, metaLoc1)
+		metaLocs = append(metaLocs, metaLoc2)
+		err := rel.AddBlksWithMetaLoc(pks, "", metaLocs, 0)
+		assert.Nil(t, err)
+		//local deduplication check
+		err = rel.Append(bats[2])
+		assert.Nil(t, err)
+		err = rel.Append(bats[0])
+		assert.NotNil(t, err)
+		err = rel.Append(bats[1])
+		assert.NotNil(t, err)
+		//err = rel.RangeDeleteLocal(start, end)
+		//assert.Nil(t, err)
+		//assert.True(t, rel.IsLocalDeleted(start, end))
+		err = txn.Commit()
+		assert.Nil(t, err)
+
+		//"tb" table now has one non-appendable segment
+		//which contains two non-appendable blocks, and one
+		// appendable segment which contains one appendable block.
+
+		//do deduplication check
+		txn, rel = getRelation(t, 0, db, "db", schema.Name)
+		err = rel.Append(bats[0])
+		assert.NotNil(t, err)
+		err = rel.Append(bats[1])
+		assert.NotNil(t, err)
+		err = rel.Append(bats[3])
+		assert.Nil(t, err)
+
+		cntOfAblk := 0
+		cntOfblk := 0
+		forEachBlock(rel, func(blk handle.Block) (err error) {
+			if blk.IsAppendableBlock() {
+				view, err := blk.GetColumnDataById(3, nil)
+				assert.NoError(t, err)
+				defer view.Close()
+				//assert.True(t, view.GetData().Equals(bats[2].Vecs[3]))
+				cntOfAblk++
+				return nil
+			}
+			metaLoc := blk.GetMetaLoc()
+			assert.True(t, metaLoc != "")
+			if metaLoc == metaLoc1 {
+				view, err := blk.GetColumnDataById(2, nil)
+				assert.NoError(t, err)
+				defer view.Close()
+				assert.True(t, view.GetData().Equals(bats[0].Vecs[2]))
+			} else {
+				view, err := blk.GetColumnDataById(3, nil)
+				assert.NoError(t, err)
+				defer view.Close()
+				assert.True(t, view.GetData().Equals(bats[1].Vecs[3]))
+
+			}
+			cntOfblk++
+			return
+		})
+		assert.True(t, cntOfblk == 2)
+		assert.True(t, cntOfAblk == 2)
+		assert.Nil(t, txn.Commit())
+	}
+}
+
 func TestCompactBlock2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -3220,8 +3368,8 @@ func TestUpdateAttr(t *testing.T) {
 
 type dummyCpkGetter struct{}
 
-func (c *dummyCpkGetter) CollectCheckpointsInRange(start, end types.TS) (string, types.TS) {
-	return "", types.TS{}
+func (c *dummyCpkGetter) CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error) {
+	return "", types.TS{}, nil
 }
 
 func (c *dummyCpkGetter) FlushTable(dbID, tableID uint64, ts types.TS) error { return nil }
@@ -3348,8 +3496,10 @@ func TestLogtailBasic(t *testing.T) {
 		}
 	}
 
+	ctx := context.Background()
+
 	// get db catalog change
-	resp, err := logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, err := logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_DATABASE_ID},
@@ -3370,7 +3520,7 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[1].Bat, 1) // 1 drop db
 
 	// get table catalog change
-	resp, err = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -3386,7 +3536,7 @@ func TestLogtailBasic(t *testing.T) {
 	assert.Equal(t, schema.Name, relname.GetString(1))
 
 	// get columns catalog change
-	resp, err = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
@@ -3399,7 +3549,7 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[0].Bat, len(schema.ColDefs)*2) // column count of 2 tables
 
 	// get user table change
-	resp, err = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(firstWriteTs.Next()), // skip the first write deliberately,
 		CnWant: tots(lastWriteTs),
 		Table:  &api.TableID{DbId: dbID, TbId: tableID},
@@ -4080,7 +4230,32 @@ func TestReadCheckpoint(t *testing.T) {
 		1000,
 	}
 
-	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	err := tae.BGCheckpointRunner.GCCheckpoint(gcTS)
+	assert.NoError(t, err)
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(time.Since(now))
+	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.BGCheckpointRunner.GetPenddingIncrementalCount() == 0
+	})
+	t.Log(time.Since(now))
+	assert.Equal(t, 0, tae.BGCheckpointRunner.GetPenddingIncrementalCount())
+
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+	testutils.WaitExpect(4000, func() bool {
+		tae.BGCheckpointRunner.ExistPendingEntryToGC()
+		return !tae.BGCheckpointRunner.ExistPendingEntryToGC()
+	})
+	assert.False(t, tae.BGCheckpointRunner.ExistPendingEntryToGC())
+	entries := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
+	for _, entry := range entries {
+		t.Log(entry.String())
+	}
 	for _, entry := range entries {
 		for _, tid := range tids {
 			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
@@ -4091,7 +4266,7 @@ func TestReadCheckpoint(t *testing.T) {
 		}
 	}
 	tae.restart()
-	entries = tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
 		for _, tid := range tids {
 			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
@@ -4768,7 +4943,8 @@ func TestUpdateCstr(t *testing.T) {
 		return &timestamp.Timestamp{PhysicalTime: types.DecodeInt64(ts[4:12]), LogicalTime: types.DecodeUint32(ts[:4])}
 	}
 
-	resp, _ := logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	ctx := context.Background()
+	resp, _ := logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -4783,7 +4959,7 @@ func TestUpdateCstr(t *testing.T) {
 
 	tae.restart()
 
-	resp, _ = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -4802,7 +4978,7 @@ func TestUpdateCstr(t *testing.T) {
 	assert.NoError(t, err)
 	txn.Commit()
 
-	resp, _ = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
@@ -4838,18 +5014,6 @@ func TestGlobalCheckpoint1(t *testing.T) {
 
 	tae.restart()
 	tae.checkRowsByScan(400, true)
-
-	checkpoints := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
-	for _, entry := range checkpoints {
-		assert.NoError(t, entry.GCEntry(tae.Fs))
-		assert.NoError(t, entry.GCMetadata(tae.Fs))
-	}
-
-	checkpoints = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
-	for _, entry := range checkpoints {
-		assert.NoError(t, entry.GCEntry(tae.Fs))
-		assert.NoError(t, entry.GCMetadata(tae.Fs))
-	}
 }
 
 func TestAppendAndGC(t *testing.T) {
@@ -4860,6 +5024,7 @@ func TestAppendAndGC(t *testing.T) {
 	opts.CacheCfg.InsertCapacity = common.M * 5
 	opts.CacheCfg.TxnCapacity = common.M
 	opts = config.WithQuickScanAndCKPOpts(opts)
+	options.WithDisableGCCheckpoint()(opts)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
 	db := tae.DB
@@ -5194,5 +5359,64 @@ func TestGlobalCheckpoint6(t *testing.T) {
 		tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 		t.Log(tae.Catalog.SimplePPString(3))
 		tae.checkRowsByScan(rows, true)
+	}
+}
+
+func TestGCCheckpoint1(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(18, 2)
+	schema.BlockMaxRows = 5
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 50)
+
+	tae.createRelAndAppend(bat, true)
+
+	testutils.WaitExpect(4000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+
+	testutils.WaitExpect(4000, func() bool {
+		return tae.BGCheckpointRunner.GetPenddingIncrementalCount() == 0
+	})
+	assert.Equal(t, 0, tae.BGCheckpointRunner.GetPenddingIncrementalCount())
+
+	testutils.WaitExpect(4000, func() bool {
+		return tae.BGCheckpointRunner.MaxGlobalCheckpoint().IsFinished()
+	})
+	assert.True(t, tae.BGCheckpointRunner.MaxGlobalCheckpoint().IsFinished())
+
+	tae.BGCheckpointRunner.DisableCheckpoint()
+
+	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	t.Log(gcTS.ToString())
+	tae.BGCheckpointRunner.GCCheckpoint(gcTS)
+
+	maxGlobal := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
+
+	testutils.WaitExpect(4000, func() bool {
+		tae.BGCheckpointRunner.ExistPendingEntryToGC()
+		return !tae.BGCheckpointRunner.ExistPendingEntryToGC()
+	})
+	assert.False(t, tae.BGCheckpointRunner.ExistPendingEntryToGC())
+
+	globals := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
+	assert.Equal(t, 1, len(globals))
+	assert.True(t, maxGlobal.GetEnd().Equal(globals[0].GetEnd()))
+	for _, global := range globals {
+		t.Log(global.String())
+	}
+
+	incrementals := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	prevEnd := maxGlobal.GetEnd().Prev()
+	for _, incremental := range incrementals {
+		assert.True(t, incremental.GetStart().Equal(prevEnd.Next()))
+		t.Log(incremental.String())
 	}
 }

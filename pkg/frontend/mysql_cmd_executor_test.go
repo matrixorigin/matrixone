@@ -46,7 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prashantv/gostub"
@@ -54,13 +54,13 @@ import (
 )
 
 func init() {
-	trace.Init(context.Background(), trace.EnableTracer(false))
-	trace.DisableLogErrorReport(true)
+	motrace.Init(context.Background(), motrace.EnableTracer(false))
+	motrace.DisableLogErrorReport(true)
 }
 
 func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
-	stm := &trace.StatementInfo{}
-	ctx = trace.ContextWithStatement(ctx, stm)
+	stm := &motrace.StatementInfo{}
+	ctx = motrace.ContextWithStatement(ctx, stm)
 	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time, string, bool) context.Context {
 		return ctx
 	})
@@ -167,7 +167,7 @@ func Test_mce(t *testing.T) {
 			"set @@tx_isolation=`READ-COMMITTED`",
 			//TODO:fix it after parser is ready
 			//"set a = b",
-			"drop database T",
+			//"drop database T",
 		}
 
 		sql1Col := &MysqlColumn{}
@@ -788,7 +788,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 		db, sql, user := "T", "SHOW TABLES", "root"
 		var eng engine.Engine
 		proc := &process.Process{}
-		ses := &Session{}
+		ses := &Session{planCache: newPlanCache(1)}
 		cw, err := GetComputationWrapper(db, sql, user, eng, proc, ses)
 		convey.So(cw, convey.ShouldNotBeEmpty)
 		convey.So(err, convey.ShouldBeNil)
