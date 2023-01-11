@@ -42,6 +42,79 @@ import (
 func (s *Scope) Delete(c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
+
+	if arg.DeleteCtx.CanTruncate {
+		var err error
+		var affectRows int64
+
+		for i, rel := range arg.DeleteCtx.DelSource {
+			_, err = rel.Ranges(c.ctx, nil)
+			if err != nil {
+				return 0, err
+			}
+			affectRow, err := rel.Rows(s.Proc.Ctx)
+			if err != nil {
+				return 0, err
+			}
+			affectRows = affectRows + affectRow
+
+			dbName := arg.DeleteCtx.DelRef[i].SchemaName
+			tblName := arg.DeleteCtx.DelRef[i].ObjName
+			oldId := uint64(arg.DeleteCtx.DelRef[i].Obj)
+			dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+			if err != nil {
+				return 0, err
+			}
+
+			// truncate origin table
+			newId, err := dbSource.Truncate(c.ctx, tblName)
+			if err != nil {
+				return 0, err
+			}
+
+			// truncate autoIncr table
+			err = colexec.MoveAutoIncrCol(c.e, c.ctx, tblName, dbSource, c.proc, oldId, newId, dbName)
+			if err != nil {
+				return 0, err
+			}
+
+			// reset constraint
+			for _, fkRel := range arg.DeleteCtx.ParentSource[i] {
+				fkTableDef, err := fkRel.TableDefs(c.ctx)
+				if err != nil {
+					return 0, err
+				}
+				var oldCt *engine.ConstraintDef
+				for _, def := range fkTableDef {
+					if ct, ok := def.(*engine.ConstraintDef); ok {
+						oldCt = ct
+						break
+					}
+				}
+				for _, ct := range oldCt.Cts {
+					if def, ok := ct.(*engine.RefChildTableDef); ok {
+						for idx, refTable := range def.Tables {
+							if refTable == oldId {
+								def.Tables[idx] = newId
+								break
+							}
+						}
+						break
+					}
+				}
+				if err != nil {
+					return 0, err
+				}
+				err = fkRel.UpdateConstraint(c.ctx, oldCt)
+				if err != nil {
+					return 0, err
+				}
+			}
+		}
+
+		return uint64(affectRows), nil
+	}
+
 	// var err error
 	// var dbSource engine.Database
 	// var rel engine.Relation

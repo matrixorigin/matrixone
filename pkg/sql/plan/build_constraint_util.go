@@ -38,7 +38,7 @@ type deleteSelectInfo struct {
 	onDeleteIdxTbl      []*ObjectRef
 	onDeleteRestrict    []int32
 	onDeleteRestrictTbl []*ObjectRef
-	onDeleteSet         [][]int32
+	onDeleteSet         [][]int64
 	onDeleteSetTbl      []*ObjectRef
 	onDeleteCascade     []int32
 	onDeleteCascadeTbl  []*ObjectRef
@@ -482,7 +482,7 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 					for _, colId := range fk.Cols {
 						fkIdMap[colId] = struct{}{}
 					}
-					var setIdxs []int32
+					var setIdxs []int64
 					for j, col := range childTableDef.Cols {
 						if _, ok := fkIdMap[col.ColId]; ok {
 							info.projectList = append(info.projectList, makePlan2NullConstExprWithType())
@@ -497,7 +497,7 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 								},
 							})
 						}
-						setIdxs = append(setIdxs, info.idx)
+						setIdxs = append(setIdxs, int64(info.idx))
 						info.idx = info.idx + 1
 					}
 					info.onDeleteSet = append(info.onDeleteSet, setIdxs)

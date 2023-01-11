@@ -16,8 +16,8 @@ package deletion
 
 import (
 	"bytes"
+	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -48,6 +48,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 
 	defer bat.Clean(proc.Mp())
 	var affectedRows uint64
+	var err error
 	delCtx := p.DeleteCtx
 
 	// check OnRestrict, if is not all null, throw error
@@ -58,81 +59,33 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	}
 
 	// delete unique index
-	for i, idx := range delCtx.DelIdxIdx {
-		delBatch := colexec.FilterRowIdForDel(proc, bat, int(idx))
-		if delBatch.Length() > 0 {
-			err := delCtx.DelIdxSource[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
-			if err != nil {
-				return false, err
-			}
-		}
+	_, err = colexec.FilterAndDelByRowId(proc, bat, delCtx.DelIdxIdx, delCtx.DelIdxSource)
+	if err != nil {
+		return false, err
 	}
 
 	// delete child table(which ref on delete cascade)
-	for i, idx := range delCtx.OnCascadeIdx {
-		delBatch := colexec.FilterRowIdForDel(proc, bat, int(idx))
-		if delBatch.Length() > 0 {
-			err := delCtx.OnCascadeSource[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
-			if err != nil {
-				return false, err
-			}
-		}
+	_, err = colexec.FilterAndDelByRowId(proc, bat, delCtx.OnCascadeIdx, delCtx.OnCascadeSource)
+	if err != nil {
+		return false, err
 	}
 
 	// update child table(which ref on delete set null)
-	for i, idxList := range delCtx.OnSetIdx {
-		delBatch, updateBatch, err := colexec.FilterRowIdForUpdate(proc, bat, idxList)
-		if err != nil {
-			return false, err
-		}
-		if delBatch.Length() > 0 {
-			err = delCtx.OnSetSource[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
-			if err != nil {
-				return false, err
-			}
-			err = delCtx.OnSetSource[i].Write(proc.Ctx, updateBatch)
-			if err != nil {
-				return false, err
-			}
-		}
+	_, err = colexec.FilterAndUpdateByRowId(proc, bat, delCtx.OnSetIdx, delCtx.OnSetSource)
+	if err != nil {
+		return false, err
 	}
 
 	// delete origin table
+	idxList := make([]int32, len(delCtx.DelSource))
 	for i := 0; i < len(delCtx.DelSource); i++ {
-		delBatch := colexec.FilterRowIdForDel(proc, bat, i)
-		affectedRows = affectedRows + uint64(delBatch.Length())
-		if delBatch.Length() > 0 {
-			err := delCtx.DelSource[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
-			if err != nil {
-				return false, err
-			}
-		}
+		idxList[i] = int32(i)
+	}
+	affectedRows, err = colexec.FilterAndDelByRowId(proc, bat, idxList, delCtx.DelSource)
+	if err != nil {
+		return false, err
 	}
 
-	// for i := range p.DeleteCtxs {
-	// 	filterColIndex := p.DeleteCtxs[i].ColIndex
-
-	// 	var cnt uint64
-	// 	tmpBat := &batch.Batch{}
-	// 	tmpBat.Vecs = []*vector.Vector{bat.Vecs[filterColIndex]}
-	// 	tmpBat, cnt = update.FilterBatch(tmpBat, batLen, proc)
-
-	// 	length := tmpBat.GetVector(0).Length()
-	// 	if length > 0 {
-	// 		tmpBat.SetZs(length, proc.Mp())
-	// 		err := p.DeleteCtxs[i].TableSource.Delete(proc.Ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
-	// 		if err != nil {
-	// 			tmpBat.Clean(proc.Mp())
-	// 			return false, err
-	// 		}
-	// 		affectedRows += cnt
-	// 	}
-
-	// 	tmpBat.Clean(proc.Mp())
-	// 	if !p.DeleteCtxs[i].IsIndexTableDelete {
-	// 		atomic.AddUint64(&p.AffectedRows, affectedRows)
-	// 	}
-	// }
-
+	atomic.AddUint64(&p.AffectedRows, affectedRows)
 	return false, nil
 }

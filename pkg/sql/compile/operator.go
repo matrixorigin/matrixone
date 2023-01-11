@@ -358,11 +358,16 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			if err == nil {
 				return
 			}
+
 			dbSource, err = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
 			if err != nil {
 				return nil, err
 			}
-			return dbSource.Relation(proc.Ctx, engine.GetTempTableName(ref.SchemaName, ref.ObjName))
+			newObjeName := engine.GetTempTableName(ref.SchemaName, ref.ObjName)
+			newSchemaName := defines.TEMPORARY_DBNAME
+			ref.SchemaName = newSchemaName
+			ref.ObjName = newObjeName
+			return dbSource.Relation(proc.Ctx, newObjeName)
 		} else {
 			_, _, rel, err = eg.GetRelationById(proc.Ctx, proc.TxnOperator, uint64(ref.Obj))
 			return
@@ -372,6 +377,9 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 	oldCtx := n.DeleteCtx
 	delCtx := &deletion.DeleteCtx{
 		DelSource: make([]engine.Relation, len(oldCtx.DelRef)),
+		DelRef:    oldCtx.DelRef,
+
+		ParentSource: make([][]engine.Relation, len(oldCtx.ParentIds)),
 
 		DelIdxSource: make([]engine.Relation, len(oldCtx.DelIdxRef)),
 		DelIdxIdx:    make([]int32, len(oldCtx.DelIdxIdx)),
@@ -385,41 +393,68 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 
 		CanTruncate: oldCtx.CanTruncate,
 	}
-	copy(delCtx.DelIdxIdx, oldCtx.DelIdxIdx)
-	copy(delCtx.OnRestrictIdx, oldCtx.OnRestrictIdx)
-	copy(delCtx.OnCascadeIdx, oldCtx.OnCascadeIdx)
+
 	for i, list := range oldCtx.OnSetIdx {
 		delCtx.OnSetIdx[i] = make([]int32, len(list.List))
-		copy(delCtx.OnSetIdx[i], list.List)
+		for j, id := range list.List {
+			delCtx.OnSetIdx[i][j] = int32(id)
+		}
 	}
 
-	for i, ref := range oldCtx.DelRef {
-		rel, err := getRel(ref)
-		if err != nil {
-			return nil, err
+	if delCtx.CanTruncate {
+		for i, ref := range oldCtx.DelRef {
+			rel, err := getRel(ref)
+			if err != nil {
+				return nil, err
+			}
+			delCtx.DelSource[i] = rel
 		}
-		delCtx.DelSource[i] = rel
-	}
-	for i, ref := range oldCtx.DelIdxRef {
-		rel, err := getRel(ref)
-		if err != nil {
-			return nil, err
+		for i, idList := range oldCtx.ParentIds {
+			rels := make([]engine.Relation, len(idList.List))
+			for j, id := range idList.List {
+				ref := &plan.ObjectRef{
+					Obj: id,
+				}
+				rel, err := getRel(ref)
+				if err != nil {
+					return nil, err
+				}
+				rels[j] = rel
+			}
+			delCtx.ParentSource[i] = rels
 		}
-		delCtx.DelIdxSource[i] = rel
-	}
-	for i, ref := range oldCtx.OnCascadeRef {
-		rel, err := getRel(ref)
-		if err != nil {
-			return nil, err
+	} else {
+		copy(delCtx.DelIdxIdx, oldCtx.DelIdxIdx)
+		copy(delCtx.OnRestrictIdx, oldCtx.OnRestrictIdx)
+		copy(delCtx.OnCascadeIdx, oldCtx.OnCascadeIdx)
+		for i, ref := range oldCtx.DelRef {
+			rel, err := getRel(ref)
+			if err != nil {
+				return nil, err
+			}
+			delCtx.DelSource[i] = rel
 		}
-		delCtx.OnCascadeSource[i] = rel
-	}
-	for i, ref := range oldCtx.OnSetRef {
-		rel, err := getRel(ref)
-		if err != nil {
-			return nil, err
+		for i, ref := range oldCtx.DelIdxRef {
+			rel, err := getRel(ref)
+			if err != nil {
+				return nil, err
+			}
+			delCtx.DelIdxSource[i] = rel
 		}
-		delCtx.OnSetSource[i] = rel
+		for i, ref := range oldCtx.OnCascadeRef {
+			rel, err := getRel(ref)
+			if err != nil {
+				return nil, err
+			}
+			delCtx.OnCascadeSource[i] = rel
+		}
+		for i, ref := range oldCtx.OnSetRef {
+			rel, err := getRel(ref)
+			if err != nil {
+				return nil, err
+			}
+			delCtx.OnSetSource[i] = rel
+		}
 	}
 
 	return &deletion.Argument{

@@ -631,8 +631,8 @@ message Node {
 }
 
 message DeleteTableCtx {
-	message idxList {
-		repeated int32 list = 1;
+	message idList {
+		repeated int64 list = 1;
 	}
 	repeated ObjectRef del_ref = 1;
 	repeated ObjectRef del_idx_ref = 2;
@@ -642,8 +642,9 @@ message DeleteTableCtx {
 	repeated ObjectRef on_cascade_ref = 6;
 	repeated int32 on_cascade_idx = 7;
 	repeated ObjectRef on_set_ref = 8;
-	repeated idxList on_set_idx = 9;
+	repeated idList on_set_idx = 9;
 	bool can_truncate = 10;
+	repeated idList parent_ids = 11;
 }
 
 message Query {

@@ -20,10 +20,51 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.Batch {
+func FilterAndDelByRowId(proc *process.Process, bat *batch.Batch, idxList []int32, rels []engine.Relation) (uint64, error) {
+	var affectedRows uint64
+	for i, idx := range idxList {
+		delBatch := filterRowIdForDel(proc, bat, int(idx))
+		affectedRows = affectedRows + uint64(delBatch.Length())
+		if delBatch.Length() > 0 {
+			err := rels[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
+			if err != nil {
+				delBatch.Clean(proc.Mp())
+				return 0, err
+			}
+		}
+		delBatch.Clean(proc.Mp())
+	}
+	return affectedRows, nil
+}
+
+func FilterAndUpdateByRowId(proc *process.Process, bat *batch.Batch, idxList [][]int32, rels []engine.Relation) (uint64, error) {
+	var affectedRows uint64
+	for i, setIdxList := range idxList {
+		delBatch, updateBatch, err := filterRowIdForUpdate(proc, bat, setIdxList)
+		if err != nil {
+			return 0, err
+		}
+		affectedRows = affectedRows + uint64(delBatch.Length())
+		if delBatch.Length() > 0 {
+			err = rels[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
+			if err != nil {
+				delBatch.Clean(proc.Mp())
+				return 0, err
+			}
+			err = rels[i].Write(proc.Ctx, updateBatch)
+			if err != nil {
+				return 0, err
+			}
+		}
+	}
+	return affectedRows, nil
+}
+
+func filterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.Batch {
 	retVec := vector.New(types.T_Rowid.ToType())
 	rowIdMap := make(map[types.Rowid]struct{})
 	for i, r := range vector.MustTCols[types.Rowid](bat.Vecs[idx]) {
@@ -44,7 +85,7 @@ func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.
 	return retBatch
 }
 
-func FilterRowIdForUpdate(proc *process.Process, bat *batch.Batch, idxList []int32) (*batch.Batch, *batch.Batch, error) {
+func filterRowIdForUpdate(proc *process.Process, bat *batch.Batch, idxList []int32) (*batch.Batch, *batch.Batch, error) {
 	rowIdMap := make(map[types.Rowid]struct{})
 	var rowSkip []bool
 	rowIdIdx := -1

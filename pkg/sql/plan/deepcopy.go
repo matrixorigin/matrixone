@@ -66,7 +66,8 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteTableCtx) *plan.DeleteTableCtx {
 		OnRestrictRef: make([]*plan.ObjectRef, len(ctx.OnRestrictRef)),
 		OnCascadeRef:  make([]*plan.ObjectRef, len(ctx.OnCascadeRef)),
 		OnSetRef:      make([]*plan.ObjectRef, len(ctx.OnSetRef)),
-		OnSetIdx:      make([]*plan.DeleteTableCtxIdxList, len(ctx.OnSetIdx)),
+		OnSetIdx:      make([]*plan.DeleteTableCtxIdList, len(ctx.OnSetIdx)),
+		ParentIds:     make([]*plan.DeleteTableCtxIdList, len(ctx.ParentIds)),
 	}
 	copy(newCtx.OnRestrictIdx, ctx.OnRestrictIdx)
 	copy(newCtx.DelIdxIdx, ctx.DelIdxIdx)
@@ -87,10 +88,20 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteTableCtx) *plan.DeleteTableCtx {
 		newCtx.OnSetRef[i] = DeepCopyObjectRef(ref)
 	}
 	for i, list := range ctx.OnSetIdx {
-		newCtx.OnSetIdx[i] = &plan.DeleteTableCtxIdxList{
-			List: make([]int32, len(list.List)),
+		if list != nil {
+			newCtx.OnSetIdx[i] = &plan.DeleteTableCtxIdList{
+				List: make([]int64, len(list.List)),
+			}
+			copy(newCtx.OnSetIdx[i].List, list.List)
 		}
-		copy(newCtx.OnSetIdx[i].List, list.List)
+	}
+	for i, list := range ctx.ParentIds {
+		if list != nil {
+			newCtx.ParentIds[i] = &plan.DeleteTableCtxIdList{
+				List: make([]int64, len(list.List)),
+			}
+			copy(newCtx.ParentIds[i].List, list.List)
+		}
 	}
 	return newCtx
 }
