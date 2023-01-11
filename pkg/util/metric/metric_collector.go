@@ -350,10 +350,12 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 			case pb.MetricType_RAWHIST:
 				for _, sample := range metric.RawHist.Samples {
 					time := localTime(sample.GetDatetime())
-					row.SetColumnVal(metricCollectTimeColumn, time)
-					row.SetColumnVal(metricValueColumn, sample.GetValue())
-					_ = writeValues(row.Clone())
+					r := row.Clone()
+					r.SetColumnVal(metricCollectTimeColumn, time)
+					r.SetColumnVal(metricValueColumn, sample.GetValue())
+					_ = writeValues(r)
 				}
+				row.Free()
 			default:
 				panic(moerr.NewInternalError(ctx, "unsupported metric type %v", mf.GetType()))
 			}
