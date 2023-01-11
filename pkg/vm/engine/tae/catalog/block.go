@@ -72,10 +72,10 @@ func NewBlockEntryWithMeta(
 		segment:       segment,
 		state:         state,
 	}
+	e.MetaBaseEntry.CreateWithTxnAndMeta(txn, metaLoc, deltaLoc)
 	if dataFactory != nil {
 		e.blkData = dataFactory(e)
 	}
-	e.MetaBaseEntry.CreateWithTxnAndMeta(txn, metaLoc, deltaLoc)
 	return e
 }
 
@@ -98,7 +98,7 @@ func NewStandaloneBlockWithLoc(
 	e := &BlockEntry{
 		MetaBaseEntry: NewMetaBaseEntry(id),
 		segment:       segment,
-		state:         ES_Appendable,
+		state:         ES_NotAppendable,
 	}
 	e.MetaBaseEntry.CreateWithLoc(ts, metaLoc, delLoc)
 	return e
