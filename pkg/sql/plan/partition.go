@@ -16,10 +16,12 @@ package plan
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"go/constant"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -817,7 +819,7 @@ func checkPartitionFuncType(partitionBinder *PartitionBinder, tableDef *TableDef
 		expr := partitionInfo.Expr
 		// expr must return a nonconstant, nonrandom integer value (in other words, it should be varying but deterministic)
 		// XXX Why?   I may want to use a const to force partition into one dn.
-		if isConstant(expr) {
+		if rule.IsConstant(expr) {
 			return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition functin is not const")
 		}
 
