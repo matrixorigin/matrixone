@@ -1,181 +1,133 @@
 show table_number from mo_task;
-mo_task    Number of tables in mo_task
-mo_task    2
+[unknown result because it is related to issue#7564]
 show table_number from information_schema;
-information_schema    Number of tables in information_schema
-information_schema    104
+[unknown result because it is related to issue#7564]
 show table_number from mysql;
-mysql    Number of tables in mysql
-mysql    40
+[unknown result because it is related to issue#7564]
 show table_number from mo_catalog;
-mo_catalog    Number of tables in mo_catalog
-mo_catalog    32
+[unknown result because it is related to issue#7564]
 show table_number from system_metrics;
-system_metrics    Number of tables in system_metrics
-system_metrics    59
+[unknown result because it is related to issue#7564]
 show table_number from system;
-system    Number of tables in system
-system    12
+[unknown result because it is related to issue#7564]
 use mo_task;
+[unknown result because it is related to issue#7564]
 show column_number from sys_async_task;
-sys_async_task    Number of columns in sys_async_task
-sys_async_task    15
+[unknown result because it is related to issue#7564]
 show column_number from sys_cron_task;
-sys_cron_task    Number of columns in sys_cron_task
-sys_cron_task    11
+[unknown result because it is related to issue#7564]
 use information_schema;
+[unknown result because it is related to issue#7564]
 show column_number from key_column_usage;
-key_column_usage    Number of columns in key_column_usage
-key_column_usage    104
+[unknown result because it is related to issue#7564]
 show column_number from columns;
-columns    Number of columns in columns
-columns    184
+[unknown result because it is related to issue#7564]
 show column_number from profiling;
-profiling    Number of columns in profiling
-profiling    152
+[unknown result because it is related to issue#7564]
 show column_number from PROCESSLIST;
 [unknown result because it is related to issue#7520]
 show column_number from schemata;
-schemata    Number of columns in schemata
-schemata    56
+[unknown result because it is related to issue#7564]
 show column_number from character_sets;
-character_sets    Number of columns in character_sets
-character_sets    40
+[unknown result because it is related to issue#7564]
 show column_number from triggers;
-triggers    Number of columns in triggers
-triggers    184
+[unknown result because it is related to issue#7564]
 show column_number from tables;
-tables    Number of columns in tables
-tables    176
+[unknown result because it is related to issue#7564]
 show column_number from engines;
-engines    Number of columns in engines
-engines    56
+[unknown result because it is related to issue#7564]
 show column_number from routines;
-routines    Number of columns in routines
-routines    256
+[unknown result because it is related to issue#7564]
 show column_number from parameters;
-parameters    Number of columns in parameters
-parameters    136
+[unknown result because it is related to issue#7564]
 show column_number from keywords;
-keywords    Number of columns in keywords
-keywords    24
+[unknown result because it is related to issue#7564]
 use mysql;
+[unknown result because it is related to issue#7564]
 show column_number from user;
-user    Number of columns in user
-user    424
+[unknown result because it is related to issue#7564]
 show column_number from db;
-db    Number of columns in db
-db    192
+[unknown result because it is related to issue#7564]
 show column_number from procs_priv;
-procs_priv    Number of columns in procs_priv
-procs_priv    80
+[unknown result because it is related to issue#7564]
 show column_number from columns_priv;
-columns_priv    Number of columns in columns_priv
-columns_priv    72
+[unknown result because it is related to issue#7564]
 show column_number from tables_priv;
-tables_priv    Number of columns in tables_priv
-tables_priv    80
+[unknown result because it is related to issue#7564]
 use mo_catalog;
+[unknown result because it is related to issue#7564]
 show column_number from mo_user;
-mo_user    Number of columns in mo_user
-mo_user    36
+[unknown result because it is related to issue#7564]
 show column_number from mo_account;
-mo_account    Number of columns in mo_account
-mo_account    7
+[unknown result because it is related to issue#7564]
 show column_number from mo_role;
-mo_role    Number of columns in mo_role
-mo_role    21
+[unknown result because it is related to issue#7564]
 show column_number from mo_user_grant;
-mo_user_grant    Number of columns in mo_user_grant
-mo_user_grant    15
+[unknown result because it is related to issue#7564]
 show column_number from mo_role_grant;
-mo_role_grant    Number of columns in mo_role_grant
-mo_role_grant    21
+[unknown result because it is related to issue#7564]
 show column_number from mo_role_privs;
-mo_role_privs    Number of columns in mo_role_privs
-mo_role_privs    33
+[unknown result because it is related to issue#7564]
 show column_number from mo_user_defined_function;
-mo_user_defined_function    Number of columns in mo_user_defined_function
-mo_user_defined_function    136
+[unknown result because it is related to issue#7564]
 show column_number from mo_tables;
-mo_tables    Number of columns in mo_tables
-mo_tables    15
+[unknown result because it is related to issue#7564]
 show column_number from mo_database;
-mo_database    Number of columns in mo_database
-mo_database    8
+[unknown result because it is related to issue#7564]
 show column_number from mo_columns;
-mo_columns    Number of columns in mo_columns
-mo_columns    22
+[unknown result because it is related to issue#7564]
 use system_metrics;
+[unknown result because it is related to issue#7564]
 show column_number from metric;
-metric    Number of columns in metric
-metric    64
+[unknown result because it is related to issue#7564]
 show column_number from sql_statement_total;
-sql_statement_total    Number of columns in sql_statement_total
-sql_statement_total    64
+[unknown result because it is related to issue#7564]
 show column_number from sql_statement_errors;
-sql_statement_errors    Number of columns in sql_statement_errors
-sql_statement_errors    64
+[unknown result because it is related to issue#7564]
 show column_number from sql_transaction_total;
-sql_transaction_total    Number of columns in sql_transaction_total
-sql_transaction_total    56
+[unknown result because it is related to issue#7564]
 show column_number from sql_transaction_errors;
-sql_transaction_errors    Number of columns in sql_transaction_errors
-sql_transaction_errors    64
+[unknown result because it is related to issue#7564]
 show column_number from server_connections;
-server_connections    Number of columns in server_connections
-server_connections    56
+[unknown result because it is related to issue#7564]
 show column_number from process_cpu_percent;
-process_cpu_percent    Number of columns in process_cpu_percent
-process_cpu_percent    7
+[unknown result because it is related to issue#7564]
 show column_number from process_resident_memory_bytes;
-process_resident_memory_bytes    Number of columns in process_resident_memory_bytes
-process_resident_memory_bytes    7
+[unknown result because it is related to issue#7564]
 show column_number from process_open_fds;
-process_open_fds    Number of columns in process_open_fds
-process_open_fds    7
+[unknown result because it is related to issue#7564]
 show column_number from sys_cpu_seconds_total;
-sys_cpu_seconds_total    Number of columns in sys_cpu_seconds_total
-sys_cpu_seconds_total    7
+[unknown result because it is related to issue#7564]
 show column_number from sys_cpu_combined_percent;
-sys_cpu_combined_percent    Number of columns in sys_cpu_combined_percent
-sys_cpu_combined_percent    7
+[unknown result because it is related to issue#7564]
 show column_number from sys_memory_used;
-sys_memory_used    Number of columns in sys_memory_used
-sys_memory_used    7
+[unknown result because it is related to issue#7564]
 show column_number from sys_memory_available;
-sys_memory_available    Number of columns in sys_memory_available
-sys_memory_available    7
+[unknown result because it is related to issue#7564]
 show column_number from sys_disk_read_bytes;
-sys_disk_read_bytes    Number of columns in sys_disk_read_bytes
-sys_disk_read_bytes    7
+[unknown result because it is related to issue#7564]
 show column_number from sys_disk_write_bytes;
-sys_disk_write_bytes    Number of columns in sys_disk_write_bytes
-sys_disk_write_bytes    7
+[unknown result because it is related to issue#7564]
 show column_number from sys_net_recv_bytes;
-sys_net_recv_bytes    Number of columns in sys_net_recv_bytes
-sys_net_recv_bytes    7
+[unknown result because it is related to issue#7564]
 show column_number from sys_net_sent_bytes;
-sys_net_sent_bytes    Number of columns in sys_net_sent_bytes
-sys_net_sent_bytes    7
+[unknown result because it is related to issue#7564]
 use system;
+[unknown result because it is related to issue#7564]
 show column_number from statement_info;
-statement_info    Number of columns in statement_info
-statement_info    216
+[unknown result because it is related to issue#7564]
 show column_number from rawlog;
-rawlog    Number of columns in rawlog
-rawlog    22
+[unknown result because it is related to issue#7564]
 show column_number from log_info;
-log_info    Number of columns in log_info
-log_info    14
+[unknown result because it is related to issue#7564]
 show column_number from error_info;
-error_info    Number of columns in error_info
-error_info    11
+[unknown result because it is related to issue#7564]
 show column_number from span_info;
-span_info    Number of columns in span_info
-span_info    13
+[unknown result because it is related to issue#7564]
 drop database if exists test_db;
 create database test_db;
+show table_number from test_db;
+[unknown result because it is related to issue#7564]
 use test_db;
 drop table if exists t1;
 create table t1(
@@ -186,13 +138,14 @@ col4 blob,
 col6 date,
 col7 bool
 );
+show table_number from test_db;
+[unknown result because it is related to issue#7564]
 show table_values from t1;
 max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
 null    null    null    null    null    null    null    null    null    null    null    null
-insert into t1 values();
-show table_values from t1;
-max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
-null    null    null    null    null    null    null    null    null    null    null    null
+select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
+mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
+0    0
 insert into t1 values(100,10.34,"你好",'aaa','2011-10-10',0);
 show table_values from t1;
 max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
@@ -201,6 +154,54 @@ insert into t1 values(10,1.34,"你",'aa','2011-10-11',1);
 show table_values from t1;
 max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
 100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
+select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
+mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
+2    154
+drop table if exists t11;
+create table t11(
+col1 int primary key,
+col2 float,
+col3 varchar,
+col4 blob,
+col6 date,
+col7 bool
+);
+show table_number from test_db;
+[unknown result because it is related to issue#7564]
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+null    null    null    null    null    null    null    null    null    null    null    null
+select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
+mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
+0    0
+insert into t11 values(100,10.34,"你好",'aaa','2011-10-10',0);
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    100    10.34    10.34    你好    你好    aaa    aaa    2011-10-10    2011-10-10    false    false
+insert into t11 values(10,1.34,"你",'aa','2011-10-11',1);
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
+select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
+mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
+2    154
+create external table external_table(
+col1 int,
+col2 float,
+col3 varchar,
+col4 blob,
+col6 date,
+col7 bool
+)infile{"filepath"='$resources/external_table_file/external_table.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+select * from external_table;
+col1    col2    col3    col4    col6    col7
+null    null            null    null
+100    10.34    你好    aaa    2011-10-10    false
+10    1.34    你    aa    2011-10-11    true
+show table_number from test_db;
+[unknown result because it is related to issue#7564]
+show table_values from external_table;
+[unknown result because it is related to issue#7568]
 create table t2(
 col1 json
 );
@@ -239,106 +240,81 @@ drop database test_db;
 drop account if exists test_account;
 create account test_account admin_name = 'test_user' identified by '111';
 show table_number from information_schema;
-information_schema    Number of tables in information_schema
-information_schema    117
+[unknown result because it is related to issue#7564]
 show table_number from mysql;
-mysql    Number of tables in mysql
-mysql    45
+[unknown result because it is related to issue#7564]
 show table_number from mo_catalog;
-mo_catalog    Number of tables in mo_catalog
-mo_catalog    34
+[unknown result because it is related to issue#7564]
 show table_number from system_metrics;
-system_metrics    Number of tables in system_metrics
-system_metrics    65
+[unknown result because it is related to issue#7564]
 show table_number from system;
-system    Number of tables in system
-system    13
+[unknown result because it is related to issue#7564]
 use information_schema;
+[unknown result because it is related to issue#7564]
 show column_number from key_column_usage;
-key_column_usage    Number of columns in key_column_usage
-key_column_usage    117
+[unknown result because it is related to issue#7564]
 show column_number from columns;
-columns    Number of columns in columns
-columns    207
+[unknown result because it is related to issue#7564]
 show column_number from profiling;
-profiling    Number of columns in profiling
-profiling    171
+[unknown result because it is related to issue#7564]
 show column_number from PROCESSLIST;
 [unknown result because it is related to issue#7520]
 show column_number from schemata;
-schemata    Number of columns in schemata
-schemata    63
+[unknown result because it is related to issue#7564]
 show column_number from character_sets;
-character_sets    Number of columns in character_sets
-character_sets    45
+[unknown result because it is related to issue#7564]
 show column_number from triggers;
-triggers    Number of columns in triggers
-triggers    207
+[unknown result because it is related to issue#7564]
 show column_number from tables;
-tables    Number of columns in tables
-tables    198
+[unknown result because it is related to issue#7564]
 show column_number from engines;
-engines    Number of columns in engines
-engines    63
+[unknown result because it is related to issue#7564]
 show column_number from routines;
-routines    Number of columns in routines
-routines    288
+[unknown result because it is related to issue#7564]
 show column_number from parameters;
-parameters    Number of columns in parameters
-parameters    153
+[unknown result because it is related to issue#7564]
 show column_number from keywords;
-keywords    Number of columns in keywords
-keywords    27
+[unknown result because it is related to issue#7564]
 use mysql;
+[unknown result because it is related to issue#7564]
 show column_number from user;
-user    Number of columns in user
-user    477
+[unknown result because it is related to issue#7564]
 show column_number from db;
-db    Number of columns in db
-db    216
+[unknown result because it is related to issue#7564]
 show column_number from procs_priv;
-procs_priv    Number of columns in procs_priv
-procs_priv    90
+[unknown result because it is related to issue#7564]
 show column_number from columns_priv;
-columns_priv    Number of columns in columns_priv
-columns_priv    81
+[unknown result because it is related to issue#7564]
 show column_number from tables_priv;
-tables_priv    Number of columns in tables_priv
-tables_priv    90
+[unknown result because it is related to issue#7564]
 use mo_catalog;
+[unknown result because it is related to issue#7564]
 show column_number from mo_user;
-mo_user    Number of columns in mo_user
-mo_user    36
+[unknown result because it is related to issue#7564]
 show column_number from mo_role;
-mo_role    Number of columns in mo_role
-mo_role    21
+[unknown result because it is related to issue#7564]
 show column_number from mo_user_grant;
-mo_user_grant    Number of columns in mo_user_grant
-mo_user_grant    15
+[unknown result because it is related to issue#7564]
 show column_number from mo_role_grant;
-mo_role_grant    Number of columns in mo_role_grant
-mo_role_grant    21
+[unknown result because it is related to issue#7564]
 show column_number from mo_role_privs;
-mo_role_privs    Number of columns in mo_role_privs
-mo_role_privs    33
+[unknown result because it is related to issue#7564]
 show column_number from mo_user_defined_function;
-mo_user_defined_function    Number of columns in mo_user_defined_function
-mo_user_defined_function    153
+[unknown result because it is related to issue#7564]
 show column_number from mo_tables;
-mo_tables    Number of columns in mo_tables
-mo_tables    15
+[unknown result because it is related to issue#7564]
 show column_number from mo_database;
-mo_database    Number of columns in mo_database
-mo_database    8
+[unknown result because it is related to issue#7564]
 show column_number from mo_columns;
-mo_columns    Number of columns in mo_columns
-mo_columns    22
+[unknown result because it is related to issue#7564]
 use system;
+[unknown result because it is related to issue#7564]
 show column_number from statement_info;
-statement_info    Number of columns in statement_info
-statement_info    243
+[unknown result because it is related to issue#7564]
 drop database if exists test_db;
 create database test_db;
+show table_number from test_db;
+[unknown result because it is related to issue#7564]
 use test_db;
 drop table if exists t1;
 create table t1(
@@ -349,13 +325,14 @@ col4 blob,
 col6 date,
 col7 bool
 );
+show table_number from test_db;
+[unknown result because it is related to issue#7564]
 show table_values from t1;
 max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
 null    null    null    null    null    null    null    null    null    null    null    null
-insert into t1 values();
-show table_values from t1;
-max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
-null    null    null    null    null    null    null    null    null    null    null    null
+select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
+mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
+0    0
 insert into t1 values(100,10.34,"你好",'aaa','2011-10-10',0);
 show table_values from t1;
 max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
@@ -364,6 +341,54 @@ insert into t1 values(10,1.34,"你",'aa','2011-10-11',1);
 show table_values from t1;
 max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
 100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
+select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
+mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
+2    154
+drop table if exists t11;
+create table t11(
+col1 int primary key,
+col2 float,
+col3 varchar,
+col4 blob,
+col6 date,
+col7 bool
+);
+show table_number from test_db;
+[unknown result because it is related to issue#7564]
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+null    null    null    null    null    null    null    null    null    null    null    null
+select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
+mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
+0    0
+insert into t11 values(100,10.34,"你好",'aaa','2011-10-10',0);
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    100    10.34    10.34    你好    你好    aaa    aaa    2011-10-10    2011-10-10    false    false
+insert into t11 values(10,1.34,"你",'aa','2011-10-11',1);
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
+select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
+mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
+2    154
+create external table external_table(
+col1 int,
+col2 float,
+col3 varchar,
+col4 blob,
+col6 date,
+col7 bool
+)infile{"filepath"='$resources/external_table_file/external_table.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+select * from external_table;
+col1    col2    col3    col4    col6    col7
+null    null            null    null
+100    10.34    你好    aaa    2011-10-10    false
+10    1.34    你    aa    2011-10-11    true
+show table_number from test_db;
+[unknown result because it is related to issue#7564]
+show table_values from external_table;
+[unknown result because it is related to issue#7568]
 create table t2(
 col1 json
 );
