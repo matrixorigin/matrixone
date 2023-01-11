@@ -114,7 +114,7 @@ func (w *TAEWriter) WriteStrings(Line []string) error {
 			}
 			elems[colIdx] = val
 		case types.T_float64:
-			val, err := strconv.ParseFloat(field, 10)
+			val, err := strconv.ParseFloat(field, 64)
 			if err != nil {
 				return err
 			}

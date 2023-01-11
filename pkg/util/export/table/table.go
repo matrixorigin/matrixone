@@ -438,11 +438,11 @@ var gRowPool = sync.Pool{New: func() any {
 }}
 
 func (r *Row) Free() {
-	r.clear()
+	r.clean()
 	gRowPool.Put(r)
 }
 
-func (r *Row) clear() {
+func (r *Row) clean() {
 	r.Table = nil
 	r.AccountIdx = -1
 	r.Columns = nil
@@ -450,6 +450,24 @@ func (r *Row) clear() {
 	for k := range r.Name2ColumnIdx {
 		delete(r.Name2ColumnIdx, k)
 	}
+}
+
+func (r *Row) Clone() *Row {
+	n := gRowPool.Get().(*Row)
+	n.Table = r.Table
+	n.AccountIdx = r.AccountIdx
+	if len(r.Columns) > 0 {
+		n.Columns = make([]any, len(r.Columns))
+		copy(n.Columns, r.Columns[:])
+	}
+	if len(r.CsvColumns) > 0 {
+		n.CsvColumns = make([]string, len(r.CsvColumns))
+		n.CsvColumns = r.CsvColumns[:]
+	}
+	for k, v := range r.Name2ColumnIdx {
+		n.Name2ColumnIdx[k] = v
+	}
+	return n
 }
 
 func (r *Row) Reset() {
@@ -567,6 +585,12 @@ func (r *Row) CsvPrimaryKey() string {
 }
 
 func (r *Row) Size() (size int64) {
+	if len(r.Columns) == 0 {
+		for _, v := range r.CsvColumns {
+			size += int64(len(v))
+		}
+		return size
+	}
 	for idx, typ := range r.Table.Columns {
 		switch typ.ColType.ToType().Oid {
 		case types.T_int64:

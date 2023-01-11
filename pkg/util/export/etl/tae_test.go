@@ -80,11 +80,14 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	cnt := 10240
 	lines := genLines(cnt)
 	for _, line := range lines {
-		err = writer.WriteElems(line)
+		err = writer.WriteElems(line.GetRawColumn())
 		require.Nil(t, err)
 	}
 	_, err = writer.FlushAndClose()
 	require.Nil(t, err)
+	for _, row := range lines {
+		row.Free()
+	}
 	// Done. write
 
 	folder := path.Dir(filepath)
@@ -137,19 +140,19 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	require.Equal(t, cnt, readCnt)
 }
 
-func genLines(cnt int) (lines [][]any) {
-	lines = make([][]any, 0, cnt)
-	row := dummyAllTypeTable.GetRow(context.TODO())
-	defer row.Free()
+func genLines(cnt int) (lines []*table.Row) {
+	lines = make([]*table.Row, 0, cnt)
+	r := dummyAllTypeTable.GetRow(context.TODO())
+	defer r.Free()
 	for i := 0; i < cnt; i++ {
-		row.Reset()
+		row := r.Clone()
 		row.SetColumnVal(dummyStrColumn, fmt.Sprintf("str_val_%d", i))
 		row.SetColumnVal(dummyInt64Column, int64(i))
 		row.SetColumnVal(dummyFloat64Column, float64(i))
 		row.SetColumnVal(dummyUInt64Column, uint64(i))
 		row.SetColumnVal(dummyDatetimeColumn, time.Now())
 		row.SetColumnVal(dummyJsonColumn, fmt.Sprintf(`{"cnt":"%d"}`, i))
-		lines = append(lines, row.GetRawColumn())
+		lines = append(lines, row)
 	}
 
 	return

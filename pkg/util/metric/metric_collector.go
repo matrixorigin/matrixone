@@ -352,7 +352,7 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 					time := localTime(sample.GetDatetime())
 					row.SetColumnVal(metricCollectTimeColumn, time)
 					row.SetColumnVal(metricValueColumn, sample.GetValue())
-					_ = writeValues(row)
+					_ = writeValues(row.Clone())
 				}
 			default:
 				panic(moerr.NewInternalError(ctx, "unsupported metric type %v", mf.GetType()))
