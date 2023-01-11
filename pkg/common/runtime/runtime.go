@@ -30,6 +30,13 @@ var (
 	processLevel atomic.Value
 )
 
+type LoggerName int
+
+const (
+	Default LoggerName = iota
+	SystemInit
+)
+
 // ProcessLevelRuntime returns a process-lelve runtime
 func ProcessLevelRuntime() Runtime {
 	v := processLevel.Load()
@@ -64,6 +71,7 @@ func NewRuntime(service metadata.ServiceType, uuid string, logger *zap.Logger, o
 		opt(rt)
 	}
 	rt.global.logger = log.GetServiceLogger(logutil.Adjust(logger), service, uuid)
+	rt.initSystemInitLogger()
 	return rt
 }
 
@@ -75,11 +83,22 @@ type runtime struct {
 		clock     clock.Clock
 		logger    *log.MOLogger
 		variables sync.Map
+
+		systemInitLogger *log.MOLogger
 	}
 }
 
 func (r *runtime) Logger() *log.MOLogger {
 	return r.global.logger
+}
+
+func (r *runtime) SubLogger(name LoggerName) *log.MOLogger {
+	switch name {
+	case SystemInit:
+		return r.global.systemInitLogger
+	default:
+		return r.Logger()
+	}
 }
 
 func (r *runtime) Clock() clock.Clock {
@@ -111,4 +130,11 @@ func DefaultRuntime() Runtime {
 		WithClock(clock.NewHLCClock(func() int64 {
 			return time.Now().UTC().UnixNano()
 		}, 0)))
+}
+
+func (r *runtime) initSystemInitLogger() {
+	if r.global.logger == nil {
+		r.global.logger = log.GetServiceLogger(logutil.Adjust(nil), r.serviceType, r.serviceUUID)
+	}
+	r.global.systemInitLogger = r.Logger().WithProcess(log.SystemInit)
 }

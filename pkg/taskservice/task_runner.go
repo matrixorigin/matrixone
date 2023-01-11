@@ -122,7 +122,7 @@ type taskRunner struct {
 	mu struct {
 		sync.RWMutex
 		started      bool
-		executors    map[uint32]TaskExecutor
+		executors    map[task.TaskCode]TaskExecutor
 		runningTasks map[uint64]runningTask
 		retryTasks   []runningTask
 	}
@@ -145,7 +145,7 @@ func NewTaskRunner(runnerID string, service TaskService, opts ...RunnerOption) T
 		runnerID: runnerID,
 		service:  service,
 	}
-	r.mu.executors = make(map[uint32]TaskExecutor)
+	r.mu.executors = make(map[task.TaskCode]TaskExecutor)
 	for _, opt := range opts {
 		opt(r)
 	}
@@ -239,12 +239,12 @@ func (r *taskRunner) Parallelism() int {
 	return r.options.parallelism
 }
 
-func (r *taskRunner) RegisterExecutor(code uint32, executor TaskExecutor) {
+func (r *taskRunner) RegisterExecutor(code task.TaskCode, executor TaskExecutor) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if _, ok := r.mu.executors[code]; !ok {
-		r.logger.Debug("executor registered", zap.Uint32("code", code))
+		r.logger.Debug("executor registered", zap.Any("code", code))
 		r.mu.executors[code] = executor
 	}
 }
@@ -534,7 +534,7 @@ func (r *taskRunner) removeRunningTask(id uint64) {
 	delete(r.mu.runningTasks, id)
 }
 
-func (r *taskRunner) getExecutor(code uint32) (TaskExecutor, error) {
+func (r *taskRunner) getExecutor(code task.TaskCode) (TaskExecutor, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
