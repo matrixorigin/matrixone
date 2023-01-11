@@ -373,9 +373,12 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 		rds, _ = rel.NewReader(ctx, 1, nil, ret)
 	}
 
+	retbat := batch.NewWithSize(1)
+	/* XXX dangerous operation
 	retbat := &batch.Batch{
 		Vecs: []*vector.Vector{},
 	}
+	*/
 
 	for len(rds) > 0 {
 		bat, err := rds[0].Read(ctx, AUTO_INCR_TABLE_COLNAME, nil, mp)
@@ -396,8 +399,16 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 			str := bat.Vecs[1].GetString(rowIndex)
 			if str == colName {
 				currentNum := vector.MustTCols[uint64](bat.Vecs[2])[rowIndex : rowIndex+1]
+				/* XXX dangerous operation
 				retbat.Vecs = append(retbat.Vecs, bat.Vecs[0])
 				retbat.Vecs[0].Col = retbat.Vecs[0].Col.([]types.Rowid)[rowIndex : rowIndex+1]
+				*/
+				vec := vector.New(bat.GetVector(0).Typ)
+				rowid := vector.MustTCols[types.Rowid](bat.GetVector(0))[rowIndex]
+				if err := vec.Append(rowid, false, mp); err != nil {
+					panic(err)
+				}
+				retbat.SetVector(0, vec)
 				retbat.SetZs(1, mp)
 				bat.Clean(mp)
 				return retbat, currentNum[0]

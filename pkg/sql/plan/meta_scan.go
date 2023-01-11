@@ -74,6 +74,20 @@ var (
 				NotNullable: false,
 			},
 		},
+		{
+			Name: catalog.MetaColNames[catalog.TABLES_IDX],
+			Typ: &plan.Type{
+				Id:          int32(catalog.MetaColTypes[catalog.TABLES_IDX].Oid),
+				NotNullable: false,
+			},
+		},
+		{
+			Name: catalog.MetaColNames[catalog.USER_ID_IDX],
+			Typ: &plan.Type{
+				Id:          int32(catalog.MetaColTypes[catalog.USER_ID_IDX].Oid),
+				NotNullable: false,
+			},
+		},
 	}
 )
 
