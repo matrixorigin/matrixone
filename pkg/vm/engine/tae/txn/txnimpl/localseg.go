@@ -57,6 +57,7 @@ type localSegment struct {
 	rows        uint32
 	appends     []*appendCtx
 	tableHandle data.TableHandle
+	nseg        handle.Segment
 	//sched  tasks.TaskScheduler
 }
 
@@ -231,13 +232,17 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		}
 		return
 	}
-	//For each persisted insertNode, create a non-appendable segment
-	//and a non-appendable block.
-	nseg, err := seg.table.CreateNonAppendableSegment(true)
-	if err != nil {
-		return
+	//handle persisted insertNode.
+	if seg.nseg == nil ||
+		seg.nseg.GetMeta().(*catalog.SegmentEntry).BlockCnt() ==
+			int(seg.nseg.GetMeta().(*catalog.SegmentEntry).GetTable().
+				GetSchema().SegmentMaxBlocks) {
+		seg.nseg, err = seg.table.CreateNonAppendableSegment(true)
+		if err != nil {
+			return
+		}
 	}
-	_, err = nseg.CreateNonAppendableBlockWithMeta(node.GetMetaLoc())
+	_, err = seg.nseg.CreateNonAppendableBlockWithMeta(node.GetMetaLoc())
 	if err != nil {
 		return
 	}

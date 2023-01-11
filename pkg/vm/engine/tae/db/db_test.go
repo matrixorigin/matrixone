@@ -677,8 +677,8 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		err = txn.Commit()
 		assert.Nil(t, err)
 
-		//"tb-1" table now has two committed non-appendable segments, each of them contains
-		//one non-appendable block; and one committed appendable segment which contains one appendable block.
+		//"tb-1" table now has one committed non-appendable segment which contains
+		//two non-appendable block, and one committed appendable segment which contains one appendable block.
 
 		//do deduplication check
 		txn, rel = getRelation(t, 0, db, "db", schema.Name)
@@ -730,7 +730,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 			cntOfseg++
 			return
 		})
-		assert.True(t, cntOfseg == 2)
+		assert.True(t, cntOfseg == 1)
 		assert.True(t, cntOfAseg == 1)
 		assert.Nil(t, txn.Commit())
 	}
