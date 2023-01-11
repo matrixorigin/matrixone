@@ -16,6 +16,8 @@ package function
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -2923,6 +2925,108 @@ var builtins = map[int]Functions{
 				Volatile:        true,
 				RealTimeRelated: true,
 				Fn:              ctl.MoTableSize,
+			},
+		},
+	},
+	CURRENT_ACCOUNT_ID: {
+		Id:     CURRENT_ACCOUNT_ID,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_uint32,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[uint32](result)
+					return res.Append(proc.SessionInfo.AccountId, false)
+				},
+			},
+		},
+	},
+	CURRENT_ACCOUNT_NAME: {
+		Id:     CURRENT_ACCOUNT_NAME,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_varchar,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[types.Varlena](result)
+					return res.AppendStr([]byte(proc.SessionInfo.Account), false)
+				},
+			},
+		},
+	},
+	CURRENT_ROLE_ID: {
+		Id:     CURRENT_ROLE_ID,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_uint32,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[uint32](result)
+					return res.Append(proc.SessionInfo.RoleId, false)
+				},
+			},
+		},
+	},
+	CURRENT_ROLE_NAME: {
+		Id:     CURRENT_ROLE_NAME,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_varchar,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[types.Varlena](result)
+					return res.AppendStr([]byte(proc.SessionInfo.Role), false)
+				},
+			},
+		},
+	},
+	CURRENT_USER_ID: {
+		Id:     CURRENT_USER_ID,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_uint32,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[uint32](result)
+					return res.Append(proc.SessionInfo.UserId, false)
+				},
+			},
+		},
+	},
+	CURRENT_USER_NAME: {
+		Id:     CURRENT_USER_NAME,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_varchar,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[types.Varlena](result)
+					return res.AppendStr([]byte(proc.SessionInfo.User), false)
+				},
 			},
 		},
 	},

@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
@@ -40,7 +41,7 @@ func NewObjectBuffer(name string) *ObjectBuffer {
 	return buffer
 }
 
-func (b *ObjectBuffer) Write(buf []byte) (int, int, error) {
+func (b *ObjectBuffer) Write(buf []byte, items ...WriteOptions) (int, int, error) {
 	offset := int64(0)
 	le := len(b.vector.Entries)
 	if len(b.vector.Entries) > 0 {
@@ -62,4 +63,19 @@ func (b *ObjectBuffer) Length() int {
 
 func (b *ObjectBuffer) GetData() fileservice.IOVector {
 	return b.vector
+}
+
+func (b *ObjectBuffer) SetDataOptions(items ...WriteOptions) {
+	if len(items) == 0 {
+		return
+	}
+	for _, item := range items {
+		switch item.Type {
+		case WriteTS:
+			ts := item.Val.(time.Time)
+			b.vector.ExpireAt = ts
+		default:
+			continue
+		}
+	}
 }
