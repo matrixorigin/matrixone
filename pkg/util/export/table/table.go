@@ -411,7 +411,7 @@ type Row struct {
 }
 
 func (tbl *Table) GetRow(ctx context.Context) *Row {
-	row := newRow()
+	row := NewRow()
 	row.Table = tbl
 	row.Columns = make([]any, len(tbl.Columns))
 
@@ -436,7 +436,7 @@ func (tbl *Table) GetRow(ctx context.Context) *Row {
 	return row
 }
 
-func newRow() *Row {
+func NewRow() *Row {
 	return gRowPool.Get().(*Row)
 }
 
@@ -460,7 +460,7 @@ func (r *Row) clean() {
 }
 
 func (r *Row) Clone() *Row {
-	n := gRowPool.Get().(*Row)
+	n := NewRow()
 	n.Table = r.Table
 	if len(r.Columns) > 0 {
 		n.Columns = make([]any, len(r.Columns))

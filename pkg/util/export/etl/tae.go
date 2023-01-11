@@ -46,7 +46,6 @@ type TAEWriter struct {
 	//writer       objectio.Writer
 	objectFS *objectio.ObjectFS
 	writer   *blockio.Writer
-	buffer   [][]any
 	rows     []*table.Row
 }
 
@@ -58,7 +57,7 @@ func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePa
 		mp:        mp,
 		filename:  filename,
 		fs:        fs,
-		buffer:    make([][]any, 0, BatchSize),
+		rows:      make([]*table.Row, 0, BatchSize),
 	}
 
 	w.idxs = make([]uint16, len(tbl.Columns))
@@ -124,19 +123,20 @@ func (w *TAEWriter) WriteStrings(Line []string) error {
 			elems[colIdx] = field
 		}
 	}
-	return w.WriteElems(elems)
+	row := table.NewRow()
+	row.Columns = elems
+	w.rows = append(w.rows, row)
+	return w.writeRows()
 }
 
 // WriteRow implement ETLWriter
 func (w *TAEWriter) WriteRow(row *table.Row) error {
-	r := row.Clone()
-	w.rows = append(w.rows, r)
-	return w.WriteElems(r.GetRawColumn())
+	w.rows = append(w.rows, row.Clone())
+	return w.writeRows()
 }
 
-func (w *TAEWriter) WriteElems(line []any) error {
-	w.buffer = append(w.buffer, line)
-	if len(w.buffer) >= w.batchSize {
+func (w *TAEWriter) writeRows() error {
+	if len(w.rows) >= w.batchSize {
 		if err := w.writeBatch(); err != nil {
 			return err
 		}
@@ -145,9 +145,12 @@ func (w *TAEWriter) WriteElems(line []any) error {
 }
 
 func (w *TAEWriter) writeBatch() error {
-	batch := newBatch(len(w.buffer), w.columnsTypes, w.mp)
-	for rowId, line := range w.buffer {
-		err := getOneRowData(w.ctx, batch, line, rowId, w.columnsTypes, w.mp)
+	if len(w.rows) == 0 {
+		return nil
+	}
+	batch := newBatch(len(w.rows), w.columnsTypes, w.mp)
+	for rowId, row := range w.rows {
+		err := getOneRowData(w.ctx, batch, row.GetRawColumn(), rowId, w.columnsTypes, w.mp)
 		if err != nil {
 			return err
 		}
@@ -157,23 +160,16 @@ func (w *TAEWriter) writeBatch() error {
 		return err
 	}
 	// clean
-	for _, vals := range w.buffer {
-		for idx := range vals {
-			vals[idx] = nil
-		}
-	}
 	for _, row := range w.rows {
 		row.Free()
 	}
-	w.buffer = w.buffer[:0]
+	w.rows = w.rows[:0]
 	batch.Clean(w.mp)
 	return nil
 }
 
 func (w *TAEWriter) flush() error {
-	if len(w.buffer) > 0 {
-		w.writeBatch()
-	}
+	w.writeBatch()
 	_, err := w.writer.Sync()
 	if err != nil {
 		return err

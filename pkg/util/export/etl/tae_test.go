@@ -79,8 +79,8 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 
 	cnt := 10240
 	lines := genLines(cnt)
-	for _, line := range lines {
-		err = writer.WriteElems(line.GetRawColumn())
+	for _, row := range lines {
+		err = writer.WriteRow(row)
 		require.Nil(t, err)
 	}
 	_, err = writer.FlushAndClose()
