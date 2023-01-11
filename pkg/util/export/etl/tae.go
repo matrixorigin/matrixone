@@ -86,11 +86,7 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 	return batch
 }
 
-// WriteRow implement ETLWriter
-func (w *TAEWriter) WriteRow(row *table.Row) error {
-	w.rows = append(w.rows, row)
-	return w.WriteElems(row.GetRawColumn())
-}
+func (w *TAEWriter) GetContent() string { return "" }
 
 // WriteStrings implement ETLWriter
 func (w *TAEWriter) WriteStrings(Line []string) error {
@@ -131,11 +127,10 @@ func (w *TAEWriter) WriteStrings(Line []string) error {
 	return w.WriteElems(elems)
 }
 
-func (w *TAEWriter) GetContent() string { return "" }
-
-// FlushAndClose implement ETLWriter
-func (w *TAEWriter) FlushAndClose() (int, error) {
-	return 0, w.flush()
+// WriteRow implement ETLWriter
+func (w *TAEWriter) WriteRow(row *table.Row) error {
+	w.rows = append(w.rows, row)
+	return w.WriteElems(row.GetRawColumn())
 }
 
 func (w *TAEWriter) WriteElems(line []any) error {
@@ -183,6 +178,11 @@ func (w *TAEWriter) flush() error {
 		return err
 	}
 	return nil
+}
+
+// FlushAndClose implement ETLWriter
+func (w *TAEWriter) FlushAndClose() (int, error) {
+	return 0, w.flush()
 }
 
 func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int, typs []types.Type, mp *mpool.MPool) error {
