@@ -188,8 +188,14 @@ func (table *TxnTable) ForeachRowInBetween(
 		return false
 	})
 
-	if pivot.bornTS.Equal(from) && !from.IsEmpty() {
-		logutil.Warn("[logtail] fetch with too small ts", zap.String("ts", from.ToString()))
+	// from is smaller than the very first block and it is not special like 0-0, 0-1, 1-0
+	if pivot.bornTS.Equal(from) && from.Greater(types.BuildTS(1, 1)) {
+		minTs := types.TS{}
+		snapshot.Ascend(&txnBlock{}, func(blk *txnBlock) bool {
+			minTs = blk.bornTS
+			return false
+		})
+		logutil.Warn("[logtail] fetch with too small ts", zap.String("ts", from.ToString()), zap.String("minTs", minTs.ToString()))
 	}
 	snapshot.Ascend(pivot, func(blk BlockT) bool {
 		if blk.bornTS.Greater(to) {
