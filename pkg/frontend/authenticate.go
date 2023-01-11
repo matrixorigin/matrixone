@@ -6090,7 +6090,7 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	var deleteSql string
 	var insertSql string
 	datname := ad.DbName
-	update_config := "'" + ad.UpdateConfig.Expr.String() + "'"
+	update_config := "'" + ad.UpdateConfig.String() + "'"
 
 	//verify the update_config
 	if !isInvalidConfigInput(update_config) {

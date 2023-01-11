@@ -2144,7 +2144,7 @@ alter_database_config_stmt:
      {
         $$ = &tree.AlterDataBaseConfig{
             DbName:$3,
-            UpdateConfig: tree.UpdateExpr{Expr: $7,},
+            UpdateConfig: $7,
         }
      }
 alter_account_auth_option:

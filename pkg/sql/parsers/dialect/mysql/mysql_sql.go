@@ -9060,7 +9060,7 @@ yydefault:
 		{
 			yyLOCAL = &tree.AlterDataBaseConfig{
 				DbName:       yyDollar[3].str,
-				UpdateConfig: tree.UpdateExpr{Expr: yyDollar[7].exprUnion()},
+				UpdateConfig: yyDollar[7].exprUnion(),
 			}
 		}
 		yyVAL.union = yyLOCAL

@@ -148,7 +148,7 @@ func (node *AlterView) GetQueryType() string     { return "QueryTypeDDL" }
 type AlterDataBaseConfig struct {
 	statementImpl
 	DbName       string
-	UpdateConfig UpdateExpr
+	UpdateConfig Expr
 }
 
 func (node *AlterDataBaseConfig) Format(ctx *FmtCtx) {
@@ -159,7 +159,7 @@ func (node *AlterDataBaseConfig) Format(ctx *FmtCtx) {
 	ctx.WriteString(fmt.Sprintf("%s ", node.DbName))
 
 	ctx.WriteString("as ")
-	ctx.WriteString(fmt.Sprintf("%s ", node.UpdateConfig.Expr.String()))
+	ctx.WriteString(fmt.Sprintf("%s ", node.UpdateConfig.String()))
 }
 
 func (node *AlterDataBaseConfig) GetStatementType() string { return "Alter DataBase config" }
