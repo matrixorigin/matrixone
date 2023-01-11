@@ -16,7 +16,6 @@ package colexec
 
 import (
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type ResultPos struct {
@@ -29,8 +28,8 @@ func NewResultPos(rel int32, pos int32) ResultPos {
 }
 
 // WrapperNode used to spec which node,
-// and which register you need
+// and which registers you need
 type WrapperNode struct {
-	Node engine.Node
-	Uuid uuid.UUID
+	NodeAddr string
+	Uuids    []uuid.UUID
 }

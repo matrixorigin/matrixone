@@ -872,8 +872,8 @@ func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) 
 }
 
 func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
-	// rs := c.newJoinScopeList(ss, children)
-	rs := c.newShuffleJoinScopeList(ss, children)
+	rs := c.newJoinScopeList(ss, children)
+	//rs := c.newShuffleJoinScopeList(ss, children)
 	isEq := isEquiJoin(n.OnList)
 	typs := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
@@ -1333,7 +1333,7 @@ func (c *Compile) newShuffleJoinScopeList(ss []*Scope, children []*Scope) []*Sco
 	mergeChildren := c.newMergeScope(children)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructDispatch(true, extraRegisters(rs, 1)),
+		Arg: constructShuffleJoinDispatch(1, rs),
 	})
 	rs[0].PreScopes = append(rs[0].PreScopes, mergeChildren)
 

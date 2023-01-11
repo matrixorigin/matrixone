@@ -33,18 +33,15 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	if ap.crossCN {
-		ap.ctr.streams = make([]*WrapperStream, 0, len(ap.nodes))
+	if ap.CrossCN {
+		ap.ctr.streams = make([]*WrapperStream, 0, len(ap.RemoteRegs))
 		for i := range ap.ctr.streams {
-			if ap.nodes[i].Node.Addr == "" {
-				ap.ctr.streams = append(ap.ctr.streams, nil)
-				continue
-			}
-			stream, errStream := cnclient.GetStreamSender(ap.nodes[i].Node.Addr)
+
+			stream, errStream := cnclient.GetStreamSender(ap.RemoteRegs[i].NodeAddr)
 			if errStream != nil {
 				return errStream
 			}
-			ap.ctr.streams = append(ap.ctr.streams, &WrapperStream{stream, ap.nodes[i].Uuid})
+			ap.ctr.streams = append(ap.ctr.streams, &WrapperStream{stream, ap.RemoteRegs[i].Uuids})
 		}
 	}
 	return nil
@@ -53,17 +50,15 @@ func Prepare(proc *process.Process, arg any) error {
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	ap := arg.(*Argument)
 	bat := proc.InputBatch()
-	if ap.crossCN {
-		if bat == nil {
-			return true, nil
-		}
-		if err := ap.sendFunc(ap.ctr.streams, ap.localIndex, bat, ap.Regs[ap.localIndex], proc); err != nil {
+	if bat == nil {
+		return true, nil
+	}
+
+	if ap.CrossCN {
+		if err := ap.SendFunc(ap.ctr.streams, bat, ap.Regs, proc); err != nil {
 			return false, err
 		}
 		return false, nil
-	}
-	if bat == nil {
-		return true, nil
 	}
 
 	// source vectors should be cloned and instead before it was sent.
@@ -123,28 +118,26 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	return true, nil
 }
 
-func CloseStreams(streams []*WrapperStream, localIndex uint64, proc *process.Process) error {
-	for i := range streams {
-		if i == int(localIndex) {
-			continue
-		} else {
+func CloseStreams(streams []*WrapperStream, proc *process.Process) error {
+	for i, stream := range streams {
+		for _, uuid := range stream.Uuids {
 			message := cnclient.AcquireMessage()
-			message.Id = streams[i].Stream.ID()
-			message.Cmd = 1
-			message.Sid = pipeline.MessageEnd
-			message.Uuid = streams[i].Uuid[:]
+			{
+				message.Id = streams[i].Stream.ID()
+				message.Cmd = 1
+				message.Sid = pipeline.MessageEnd
+				message.Uuid = uuid[:]
+			}
 			if err := streams[i].Stream.Send(proc.Ctx, message); err != nil {
 				return err
 			}
 		}
 	}
 	for i := range streams {
-		if streams[i] == nil {
-			continue
-		}
 		if err := streams[i].Stream.Close(); err != nil {
 			return err
 		}
 	}
+
 	return nil
 }

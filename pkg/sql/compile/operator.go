@@ -17,8 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -47,6 +51,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -843,7 +848,118 @@ func constructIntersect(n *plan.Node, proc *process.Process, ibucket, nbucket in
 func constructDispatch(all bool, regs []*process.WaitRegister) *dispatch.Argument {
 	arg := new(dispatch.Argument)
 	arg.All = all
+	arg.CrossCN = false
 	arg.Regs = regs
+	return arg
+}
+
+// ShuffleJoinDispatch is a cross-cn dispath
+// and it will send same batch to all register
+func constructShuffleJoinDispatch(idx int, ss []*Scope) *dispatch.Argument {
+	arg := new(dispatch.Argument)
+	arg.All = true
+	arg.CrossCN = true
+
+	scopeLen := len(ss)
+	arg.RemoteRegs = make([]colexec.WrapperNode, 0, scopeLen)
+	arg.Regs = make([]*process.WaitRegister, 0, scopeLen)
+
+	for _, s := range ss {
+		if s.IsEnd {
+			continue
+		}
+		if s.NodeInfo.Addr == "" {
+			// Local reg.
+			// Put them into arg.Regs
+			arg.Regs = append(arg.Regs, s.Proc.Reg.MergeReceivers[idx])
+		} else {
+			// Remote reg.
+			// Generate uuid for them and put them into arg.RemoteRegs
+			// len of RemoteRegs must be very small, so find the same NodeAddr with traversal
+			found := false
+			newUuid := uuid.New()
+			for _, reg := range arg.RemoteRegs {
+				if reg.NodeAddr == s.NodeInfo.Addr {
+					reg.Uuids = append(reg.Uuids, newUuid)
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				uuids := make([]uuid.UUID, 0, scopeLen)
+				uuids = append(uuids, newUuid)
+				arg.RemoteRegs = append(arg.RemoteRegs, colexec.WrapperNode{
+					NodeAddr: s.NodeInfo.Addr,
+					Uuids:    uuids,
+				})
+			}
+
+			s.uuids = append(s.uuids, newUuid)
+		}
+	}
+
+	sendFunc := func(streams []*dispatch.WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, proc *process.Process) error {
+		// TODO: seperate to different goroutine?
+		// send bat to streams
+		{
+			// TODO: handle refCountAdd of batch's hashmap and batch?
+			encodeBatch, err := bat.MarshalBinary()
+			if err != nil {
+				return err
+			}
+			for _, stream := range streams {
+				// seperate different uuid into different message
+				// TODO: gather them in same message and handle in receiver?
+				for _, uuid := range stream.Uuids {
+					message := cnclient.AcquireMessage()
+					{
+						message.Id = stream.Stream.ID()
+						message.Cmd = 1
+						message.Data = encodeBatch
+						message.Uuid = uuid[:]
+					}
+					// TODO: handle Send's first parameter
+					errSend := stream.Stream.Send(nil, message)
+					if errSend != nil {
+						return errSend
+					}
+				}
+			}
+		}
+
+		// send bat to localChans
+		{
+			for i, vec := range bat.Vecs {
+				if vec.IsOriginal() {
+					cloneVec, err := vector.Dup(vec, proc.Mp())
+					if err != nil {
+						bat.Clean(proc.Mp())
+						return err
+					}
+					bat.Vecs[i] = cloneVec
+				}
+			}
+
+			refCountAdd := int64(len(localChans) - 1)
+			atomic.AddInt64(&bat.Cnt, refCountAdd)
+			if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
+				jm.IncRef(refCountAdd)
+			}
+
+			for _, reg := range localChans {
+				select {
+				case <-reg.Ctx.Done():
+					return moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+				case reg.Ch <- bat:
+				}
+			}
+		}
+
+		return nil
+	}
+	arg.SendFunc = sendFunc
+
 	return arg
 }
 

@@ -24,7 +24,7 @@ import (
 
 type WrapperStream struct {
 	Stream morpc.Stream
-	Uuid   uuid.UUID
+	Uuids  []uuid.UUID
 }
 type container struct {
 	i       int
@@ -32,25 +32,25 @@ type container struct {
 }
 
 type Argument struct {
-	ctr  *container
-	All  bool // dispatch batch to each consumer
+	ctr *container
+	All bool // dispatch batch to each consumer
+	// regs means the local register you need to send to.
 	Regs []*process.WaitRegister
 
-	// crossCN is used to treat dispatch operator as a distributed operator
-	crossCN bool
-	// nodes[IBucket].Node.Address == ""
-	nodes      []colexec.WrapperNode
-	localIndex uint64
-	// streams is the stream which connect local CN with remote CN, so
-	// but streams[localIndex] is nil, because you need to send batch locally
-	// by localChan
-	sendFunc func(streams []*WrapperStream, localIndex uint64, bat *batch.Batch, localChan *process.WaitRegister, proc *process.Process) error
+	// CrossCN is used to treat dispatch operator as a distributed operator
+	CrossCN bool
+
+	// RemoteRegs specific the remote reg you need to send to.
+	// RemoteRegs[IBucket].Node.Address == ""
+	RemoteRegs []colexec.WrapperNode
+
+	// streams is the stream which connect local CN with remote CN.
+	SendFunc func(streams []*WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, proc *process.Process) error
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.crossCN {
-		arg.FreeCrossCN(proc, pipelineFailed)
-		return
+	if arg.CrossCN {
+		CloseStreams(arg.ctr.streams, proc)
 	}
 
 	if pipelineFailed {
@@ -70,35 +70,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		case <-arg.Regs[i].Ctx.Done():
 		case arg.Regs[i].Ch <- nil:
 		}
-		close(arg.Regs[i].Ch)
-	}
-}
-
-func (arg *Argument) FreeCrossCN(proc *process.Process, pipelineFailed bool) {
-	// closeStreams will send nil to reciever and close streams
-	// but it won't send nil to localChan, because when pipelineFailed,
-	// and our chan buffer size is only one, if we send a nil,it will result dead lock.
-	CloseStreams(arg.ctr.streams, arg.localIndex, proc)
-	if pipelineFailed {
-		for len(arg.Regs[arg.localIndex].Ch) > 0 {
-			bat := <-arg.Regs[arg.localIndex].Ch
-			if bat == nil {
-				break
-			}
-			bat.Clean(proc.Mp())
-		}
-	}
-
-	for i := range arg.Regs {
-		// only localChan need to send nil, other chans will never be used,
-		// so ignore them
-		if i == int(arg.localIndex) {
-			select {
-			case <-arg.Regs[i].Ctx.Done():
-			case arg.Regs[i].Ch <- nil:
-			}
-		}
-		// every chan need to close no matter whether it will be used
 		close(arg.Regs[i].Ch)
 	}
 }
