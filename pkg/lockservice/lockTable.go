@@ -55,15 +55,6 @@ func (l *lockTable) Unlock(ctx context.Context, txnID []byte) error {
 			if lock, ok := storage.Get(key); ok {
 				lock.waiter.close()
 				storage.Delete(key)
-				/*
-					if w := lock.waiter.close(); w != nil {
-						lock.waiter = w
-						lock.txnID = w.txnID
-						storage.Add(key, lock)
-					} else {
-						storage.Delete(key)
-					}
-				*/
 			}
 		}
 		delete(l.locks[unsafeByteSliceToString(txnID)], tableID)

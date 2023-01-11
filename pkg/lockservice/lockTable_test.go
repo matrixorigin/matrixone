@@ -68,7 +68,7 @@ func TestMultipleLocks(t *testing.T) {
 		policy:      Wait,
 	}
 	iter := 0
-	sum := 100
+	sum := 1000
 	var wg sync.WaitGroup
 
 	for i := 0; i < sum; i++ {
