@@ -400,7 +400,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	return rs, nil
 }
 
-func constructValueScanBatch(ctx context.Context, m *mpool.MPool, node *plan.Node) (*batch.Batch, error) {
+func constructValueScanBatch(ctx context.Context, proc *process.Process, node *plan.Node) (*batch.Batch, error) {
 	if node == nil || node.TableDef == nil { // like : select 1, 2
 		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
@@ -415,13 +415,13 @@ func constructValueScanBatch(ctx context.Context, m *mpool.MPool, node *plan.Nod
 	rowCount := len(colsData[0].Data)
 	bat := batch.NewWithSize(colCount)
 	for i := 0; i < colCount; i++ {
-		vec, err := rowsetDataToVector(ctx, m, colsData[i].Data)
+		vec, err := rowsetDataToVector(ctx, proc, colsData[i].Data)
 		if err != nil {
 			return nil, err
 		}
 		bat.Vecs[i] = vec
 	}
-	bat.SetZs(rowCount, m)
+	bat.SetZs(rowCount, proc.Mp())
 	return bat, nil
 }
 
@@ -430,7 +430,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 	case plan.Node_VALUE_SCAN:
 		ds := &Scope{Magic: Normal}
 		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
-		bat, err := constructValueScanBatch(ctx, c.proc.Mp(), n)
+		bat, err := constructValueScanBatch(ctx, c.proc, n)
 		if err != nil {
 			return nil, err
 		}
@@ -1572,54 +1572,63 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 	}
 }
 
-func rowsetDataToVector(ctx context.Context, m *mpool.MPool, exprs []*plan.Expr) (*vector.Vector, error) {
+func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
 	rowCount := len(exprs)
 	if rowCount == 0 {
 		return nil, moerr.NewInternalError(ctx, "rowsetData do not have rows")
 	}
 	typ := plan2.MakeTypeByPlan2Type(exprs[0].Typ)
 	vec := vector.New(typ)
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
 
 	for _, e := range exprs {
-		t := e.Expr.(*plan.Expr_C)
-		if t.C.GetIsnull() {
-			vec.Append(0, true, m)
-			continue
+		tmp, err := colexec.EvalExpr(bat, proc, e)
+		if err != nil {
+			return nil, err
 		}
-
-		switch t.C.GetValue().(type) {
-		case *plan.Const_Bval:
-			vec.Append(t.C.GetBval(), false, m)
-		case *plan.Const_I8Val:
-			vec.Append(t.C.GetI8Val(), false, m)
-		case *plan.Const_I16Val:
-			vec.Append(t.C.GetI16Val(), false, m)
-		case *plan.Const_I32Val:
-			vec.Append(t.C.GetI32Val(), false, m)
-		case *plan.Const_I64Val:
-			vec.Append(t.C.GetI64Val(), false, m)
-		case *plan.Const_U8Val:
-			vec.Append(t.C.GetU8Val(), false, m)
-		case *plan.Const_U16Val:
-			vec.Append(t.C.GetU16Val(), false, m)
-		case *plan.Const_U32Val:
-			vec.Append(t.C.GetU32Val(), false, m)
-		case *plan.Const_U64Val:
-			vec.Append(t.C.GetU64Val(), false, m)
-		case *plan.Const_Fval:
-			vec.Append(t.C.GetFval(), false, m)
-		case *plan.Const_Dval:
-			vec.Append(t.C.GetDval(), false, m)
-		case *plan.Const_Dateval:
-			vec.Append(t.C.GetDateval(), false, m)
-		case *plan.Const_Timeval:
-			vec.Append(t.C.GetTimeval(), false, m)
-		case *plan.Const_Sval:
-			vec.Append(t.C.GetSval(), false, m)
+		switch typ.Oid {
+		case types.T_bool:
+			vec.Append(vector.MustTCols[bool](tmp)[0], false, proc.Mp())
+		case types.T_int8:
+			vec.Append(vector.MustTCols[int8](tmp)[0], false, proc.Mp())
+		case types.T_int16:
+			vec.Append(vector.MustTCols[int16](tmp)[0], false, proc.Mp())
+		case types.T_int32:
+			vec.Append(vector.MustTCols[int32](tmp)[0], false, proc.Mp())
+		case types.T_int64:
+			vec.Append(vector.MustTCols[int64](tmp)[0], false, proc.Mp())
+		case types.T_uint8:
+			vec.Append(vector.MustTCols[uint8](tmp)[0], false, proc.Mp())
+		case types.T_uint16:
+			vec.Append(vector.MustTCols[uint16](tmp)[0], false, proc.Mp())
+		case types.T_uint32:
+			vec.Append(vector.MustTCols[uint32](tmp)[0], false, proc.Mp())
+		case types.T_uint64:
+			vec.Append(vector.MustTCols[uint64](tmp)[0], false, proc.Mp())
+		case types.T_float32:
+			vec.Append(vector.MustTCols[float32](tmp)[0], false, proc.Mp())
+		case types.T_float64:
+			vec.Append(vector.MustTCols[float64](tmp)[0], false, proc.Mp())
+		case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+			vec.Append(vector.MustBytesCols(tmp)[0], false, proc.Mp())
+		case types.T_date:
+			vec.Append(vector.MustTCols[types.Date](tmp)[0], false, proc.Mp())
+		case types.T_datetime:
+			vec.Append(vector.MustTCols[types.Datetime](tmp)[0], false, proc.Mp())
+		case types.T_time:
+			vec.Append(vector.MustTCols[types.Time](tmp)[0], false, proc.Mp())
+		case types.T_timestamp:
+			vec.Append(vector.MustTCols[types.Timestamp](tmp)[0], false, proc.Mp())
+		case types.T_decimal64:
+			vec.Append(vector.MustTCols[types.Decimal64](tmp)[0], false, proc.Mp())
+		case types.T_decimal128:
+			vec.Append(vector.MustTCols[types.Decimal128](tmp)[0], false, proc.Mp())
+		case types.T_uuid:
+			vec.Append(vector.MustTCols[types.Uuid](tmp)[0], false, proc.Mp())
 		default:
-			return nil, moerr.NewNYI(ctx, fmt.Sprintf("const expression %v in rowsetData", t.C.GetValue()))
+			return nil, moerr.NewNYI(ctx, fmt.Sprintf("expression %v can not eval to constant and append to rowsetData", e))
 		}
 	}
-	// vec.SetIsBin(t.C.IsBin)
 	return vec, nil
 }
