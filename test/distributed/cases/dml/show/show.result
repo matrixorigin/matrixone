@@ -277,3 +277,12 @@ show table_number from test01;
 test01    Number of tables in test01
 test01    1
 drop table t1;
+drop database if exists test01;
+create database test01;
+use test01;
+create table t(a int, b int, c json);
+insert into t values(1, 1, '{"a":1,"b":2,"c":3}'), (2, 2, '{"a":1,"b":2,"c":3}'), (3, 3, '{"a":1,"b":2,"c":3}'), (4, 4, '{"a":1,"b":2,"c":3}'), (5, 5, '{"a":1,"b":2,"c":3}'), (6, 6, '{"a":1,"b":2,"c":3}');
+show table_values from t;
+max(a)    min(a)    max(b)    min(b)    max(c)    min(c)
+6    1    6    1    null    null
+drop table t;

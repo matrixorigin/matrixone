@@ -16,7 +16,6 @@ package lockservice
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"sync"
 	"testing"
@@ -97,7 +96,7 @@ func BenchmarkMultipleLock(b *testing.B) {
 	}
 	iter := 0
 
-	b.Run(fmt.Sprintf("lock-service"), func(b *testing.B) {
+	b.Run("lock-service", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			go func(i int) {
 				l.Lock(ctx, 0, [][]byte{{1}}, []byte{byte(i)}, option)

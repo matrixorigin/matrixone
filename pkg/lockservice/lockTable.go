@@ -83,7 +83,6 @@ func (l *lockTable) acquireLock(ctx context.Context, tableID uint64, rows [][]by
 func (l *lockTable) doAcquireLock(ctx context.Context, waiter *waiter, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) (bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
 	if _, ok := l.locks[unsafeByteSliceToString(txnID)]; !ok {
 		l.locks[unsafeByteSliceToString(txnID)] = make(map[uint64][][]byte)
 	}

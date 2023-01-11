@@ -437,12 +437,17 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 	sql := "SELECT"
 	tableCols := tableDef.Cols
 	for i := range tableCols {
-		sql += " max(%s), min(%s),"
 		colName := tableCols[i].Name
-		sql = fmt.Sprintf(sql, colName, colName)
+		if types.T(tableCols[i].GetTyp().Id) == types.T_json {
+			sql += " null as `max(%s)`, null as `min(%s)`,"
+			sql = fmt.Sprintf(sql, colName, colName)
+		} else {
+			sql += " max(%s), min(%s),"
+			sql = fmt.Sprintf(sql, colName, colName)
+		}
 	}
 	sql = sql[:len(sql)-1]
-	sql += "FROM %s"
+	sql += " FROM %s"
 	sql = fmt.Sprintf(sql, tblName)
 
 	return returnByRewriteSQL(ctx, sql, ddlType)
