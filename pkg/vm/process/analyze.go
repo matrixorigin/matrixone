@@ -32,7 +32,8 @@ func NewAnalyzeInfo(nodeId int32) *AnalyzeInfo {
 		OutputSize:       0,
 		MemorySize:       0,
 		DiskIO:           0,
-		S3IO:             0,
+		S3IOByte:         0,
+		S3IOCount:        0,
 		NetworkIO:        0,
 	}
 }
@@ -80,12 +81,12 @@ func (a *analyze) DiskIO(bat *batch.Batch) {
 
 func (a *analyze) S3IO(bat *batch.Batch) {
 	if a.analInfo != nil && bat != nil {
-		atomic.AddInt64(&a.analInfo.S3IO, int64(bat.Size()))
+		atomic.AddInt64(&a.analInfo.S3IOByte, int64(bat.Size()))
 	}
 }
 
 func (a *analyze) Network(bat *batch.Batch) {
 	if a.analInfo != nil && bat != nil {
-		atomic.AddInt64(&a.analInfo.S3IO, int64(bat.Size()))
+		atomic.AddInt64(&a.analInfo.S3IOByte, int64(bat.Size()))
 	}
 }

@@ -95,10 +95,10 @@ func ExampleMOLogger_LogAction() {
 	// 2022/11/17 15:28:16.600754 +0800 INFO cn-service log/example_log_test.go:127 do action {"uuid": "cn0", "cost": "1.001430792s"}
 }
 
-func ExampleLogOptions_WithProcess() {
-	processStep1InCN("txn uuid")
-	processStep2InDN("txn uuid")
-	processStep3InLOG("txn uuid")
+func ExampleMOLogger_WithProcess() {
+	processStep1InCNWithoutID()
+	processStep2InDNWithoutID()
+	processStep3InLOGWithoutID()
 
 	// Output logs:
 	// 2022/11/17 15:36:04.724470 +0800 INFO cn-service log/example_log_test.go:131 step 1 {"uuid": "cn0", "process": "txn", "process-id": "txn uuid"}
@@ -118,10 +118,36 @@ func ExampleLogOptions_WithSample() {
 	// 2022/11/17 15:43:14.645242 +0800 INFO cn-service log/example_log_test.go:116 example sample log {"uuid": "cn0"}
 }
 
+func ExampleLogOptions_WithProcess() {
+	processStep1InCN("txn uuid")
+	processStep2InDN("txn uuid")
+	processStep3InLOG("txn uuid")
+
+	// Output logs:
+	// 2022/11/17 15:36:04.724470 +0800 INFO cn-service log/logger.go:51 step 1 {"uuid": "cn0", "process": "txn", "process-id": "txn uuid"}
+	// 2022/11/17 15:36:04.724797 +0800 INFO dn-service log/logger.go:51 step 2 {"uuid": "dn0", "process": "txn", "process-id": "txn uuid"}
+	// 2022/11/17 15:36:04.724812 +0800 INFO log-service log/logger.go:51 step 3 {"uuid": "log0", "process": "txn", "process-id": "txn uuid"}
+}
+
 func someAction() {
 	logger := getServiceLogger(metadata.ServiceType_CN, "cn0")
 	defer logger.InfoAction("do action")()
 	time.Sleep(time.Second)
+}
+
+func processStep1InCNWithoutID() {
+	logger := getServiceLogger(metadata.ServiceType_CN, "cn0").WithProcess(log.Txn)
+	logger.Log("step 1", log.DefaultLogOptions())
+}
+
+func processStep2InDNWithoutID() {
+	logger := getServiceLogger(metadata.ServiceType_DN, "dn0").WithProcess(log.Txn)
+	logger.Log("step 2", log.DefaultLogOptions())
+}
+
+func processStep3InLOGWithoutID() {
+	logger := getServiceLogger(metadata.ServiceType_LOG, "log0").WithProcess(log.Txn)
+	logger.Log("step 3", log.DefaultLogOptions())
 }
 
 func processStep1InCN(id string) {
