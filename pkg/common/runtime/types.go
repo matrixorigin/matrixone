@@ -21,7 +21,10 @@ import (
 )
 
 // The names of all global variables should be defined here.
-const ()
+const (
+	// TxnOptions options used to create txn
+	TxnOptions = "txn-options"
+)
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service
 // needs to receive a Runtime and will pass the Runtime to all components of the service.

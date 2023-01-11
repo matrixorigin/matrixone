@@ -230,8 +230,6 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 	if err != nil {
 		return
 	}
-	//TODO:: call RangeDelete()?
-	//blkH.RangeDelete()
 	return
 }
 
