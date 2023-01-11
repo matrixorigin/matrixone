@@ -126,6 +126,8 @@ func (c *Compile) Run(_ uint64) (err error) {
 
 	// XXX PrintScope has a none-trivial amount of logging
 	// PrintScope(nil, []*Scope{c.scope})
+	fmt.Printf("%s\n", DebugShowScopes([]*Scope{c.scope}))
+
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -872,8 +874,8 @@ func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) 
 }
 
 func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
-	rs := c.newJoinScopeList(ss, children)
-	//rs := c.newShuffleJoinScopeList(ss, children)
+	//rs := c.newJoinScopeList(ss, children)
+	rs := c.newShuffleJoinScopeList(ss, children)
 	isEq := isEquiJoin(n.OnList)
 	typs := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
@@ -1311,7 +1313,7 @@ func (c *Compile) newShuffleJoinScopeList(ss []*Scope, children []*Scope) []*Sco
 	len := len(ss)
 	rs := make([]*Scope, len)
 	for i := range ss {
-		if rs[i].IsEnd {
+		if ss[i].IsEnd {
 			rs[i] = ss[i]
 			continue
 		}

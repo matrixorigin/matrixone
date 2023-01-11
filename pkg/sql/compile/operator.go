@@ -868,14 +868,14 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope) *dispatch.Argument {
 		if s.IsEnd {
 			continue
 		}
-		if s.NodeInfo.Addr == "" {
+		if len(s.NodeInfo.Addr) == 0 {
 			// Local reg.
 			// Put them into arg.Regs
 			arg.Regs = append(arg.Regs, s.Proc.Reg.MergeReceivers[idx])
 		} else {
 			// Remote reg.
 			// Generate uuid for them and put them into arg.RemoteRegs
-			// len of RemoteRegs must be very small, so find the same NodeAddr with traversal
+			// Length of RemoteRegs must be very small, so find the same NodeAddr with traversal
 			found := false
 			newUuid := uuid.New()
 			for _, reg := range arg.RemoteRegs {
@@ -895,13 +895,17 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope) *dispatch.Argument {
 				})
 			}
 
-			s.uuids = append(s.uuids, newUuid)
+			s.UuidToRegIdx = append(s.UuidToRegIdx, UuidToRegIdx{
+				Uuid: newUuid,
+				Idx:  idx,
+			})
 		}
 	}
 
 	sendFunc := func(streams []*dispatch.WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, proc *process.Process) error {
 		// TODO: seperate to different goroutine?
 		// send bat to streams
+		fmt.Printf("[dispatch.SendFunc]\n")
 		{
 			// TODO: handle refCountAdd of batch's hashmap and batch?
 			encodeBatch, err := bat.MarshalBinary()
@@ -919,8 +923,8 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope) *dispatch.Argument {
 						message.Data = encodeBatch
 						message.Uuid = uuid[:]
 					}
-					// TODO: handle Send's first parameter
-					errSend := stream.Stream.Send(nil, message)
+					// TODO: change the ctx
+					errSend := stream.Stream.Send(proc.Ctx, message)
 					if errSend != nil {
 						return errSend
 					}

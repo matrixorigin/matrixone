@@ -36,7 +36,6 @@ func Prepare(proc *process.Process, arg any) error {
 	if ap.CrossCN {
 		ap.ctr.streams = make([]*WrapperStream, 0, len(ap.RemoteRegs))
 		for i := range ap.ctr.streams {
-
 			stream, errStream := cnclient.GetStreamSender(ap.RemoteRegs[i].NodeAddr)
 			if errStream != nil {
 				return errStream
