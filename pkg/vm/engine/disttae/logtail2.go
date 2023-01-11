@@ -17,6 +17,8 @@ package disttae
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -33,9 +35,16 @@ import (
 )
 
 const (
-	// we check if txn is legal in a period of gapToCheckTxnTimestamp when we
+	// we check if txn is legal in a period of periodToCheckTxnTimestamp when we
 	// open a new transaction.
-	gapToCheckTxnTimestamp = 10 * time.Millisecond
+	periodToCheckTxnTimestamp = 10 * time.Millisecond
+
+	// we check if log tail is ready in a period of periodToCheckLogTailReady when we first time
+	// subscribe a table.
+	periodToCheckLogTailReady = 10 * time.Millisecond
+
+	// periodToReconnectDnLogServer is a period of reconnect to log tail server if lost server message for a long time.
+	periodToReconnectDnLogServer = 20 * time.Second
 
 	// maxTimeToCheckTxnTimestamp is the max duration we check the txn timestamp.
 	// if over, return an error message.
@@ -47,9 +56,8 @@ const (
 	// reconnectDeadTime if the time of losing response with dn reaches reconnectDeadTime, we will reconnect.
 	reconnectDeadTime = 5 * time.Minute
 
-	// we check if log tail is ready in a period of gapToCheckIfLogTailReady when we first time
-	// subscribe a table.
-	gapToCheckIfLogTailReady = 10 * time.Millisecond
+	// defaultPeriodToSubscribeTable if ctx without a dead time. we will set it 2 minute to send a subscribe-table message.
+	defaultPeriodToSubscribeTable = 2 * time.Minute
 )
 
 // cnLogTailTimestamp each cn-node will hold one global log time.
@@ -70,6 +78,13 @@ func initCnLogTailTimestamp() {
 	UpdateCnLogTimestamp(zeroT)
 }
 
+func getCnLogTimestamp() timestamp.Timestamp {
+	cnLogTailTimestamp.Lock()
+	t := cnLogTailTimestamp.t
+	cnLogTailTimestamp.Unlock()
+	return t
+}
+
 func UpdateCnLogTimestamp(newTimestamp timestamp.Timestamp) {
 	cnLogTailTimestamp.Lock()
 	cnLogTailTimestamp.t = newTimestamp
@@ -78,19 +93,19 @@ func UpdateCnLogTimestamp(newTimestamp timestamp.Timestamp) {
 
 // WaitUntilTxnTimeIsLegal check if txnTime is legal periodically. and return if legal.
 func WaitUntilTxnTimeIsLegal(ctx context.Context,
-	txnTime *timestamp.Timestamp, level sql.IsolationLevel) error {
+	txnTime timestamp.Timestamp, level sql.IsolationLevel) error {
 	// if we support the ReadCommit level, we should set the txnTime as cnLogTailTimestamp.
 	t := maxTimeToCheckTxnTimestamp
 	for {
 		if t <= 0 {
-			// XXX I'm not sure it is a good error info.
+			// XXX I'm not sure if it is a good error info.
 			return moerr.NewTxnError(ctx, "start txn failed due to txn timestamp. please retry.")
 		}
-		if txnTimeIsLegal(*txnTime) {
+		if txnTimeIsLegal(txnTime) {
 			return nil
 		}
-		time.Sleep(gapToCheckTxnTimestamp)
-		t -= gapToCheckTxnTimestamp
+		time.Sleep(periodToCheckTxnTimestamp)
+		t -= periodToCheckTxnTimestamp
 	}
 }
 
@@ -103,7 +118,7 @@ func txnTimeIsLegal(txnTime timestamp.Timestamp) bool {
 
 // tableSubscribeRecord is records this cn node's table subscription
 // the key is table-id, value is true or false.
-var tableSubscribeRecord *sync.Map
+var tableSubscribeRecord = &sync.Map{}
 
 type subscribeID struct {
 	db  uint64
@@ -136,46 +151,103 @@ type TableLogTailSubscriber struct {
 	deadTime timestamp.Timestamp
 }
 
+// if we support multi dn next day. cnLogTailSubscriber should be cnLogTailSubscribers.
+// and each one will be related to one dn node.
 var cnLogTailSubscriber *TableLogTailSubscriber
 
-func initCnLogTailSubscriber(
+func InitCnLogTailSubscriber(
+	ctx context.Context,
 	engine *Engine) error {
+	initCnLogTailTimestamp()
+	initTableSubscribeRecord()
+
+	cnLogTailSubscriber = &TableLogTailSubscriber{
+		dnNodeID: 0,
+		engine:   engine,
+	}
+	if err := cnLogTailSubscriber.connectToLogTailServer(ctx); err != nil {
+		return err
+	}
+	cnLogTailSubscriber.StartReceiveTableLogTail()
+	return nil
+}
+
+func (logSub *TableLogTailSubscriber) connectToLogTailServer(
+	ctx context.Context) error {
 	var logTailClient *service.LogtailClient
-	// clean the old subscriber if it's a reconnect action.
-	if old := cnLogTailSubscriber; old != nil {
-		_ = cnLogTailSubscriber.logTailClient.Close()
+	var s morpc.Stream
+
+	// if reconnected, close the old rpc client.
+	if logSub.logTailClient != nil {
+		err := logSub.logTailClient.Close()
+		if err != nil {
+			return err
+		}
 	}
 
+	engine := logSub.engine
 	cluster, err := engine.getClusterDetails()
 	if err != nil {
 		return err
 	}
 	// XXX we assume that we have only 1 DN now.
 	dnLogTailServerBackend := cluster.DNStores[0].LogtailServerAddress
-	s, err := cnclient.GetStreamSender(dnLogTailServerBackend)
+	{
+		// If cn client is not ready, init it here.
+		if !cnclient.IsCNClientReady() {
+			if err = cnclient.NewCNClient(&cnclient.ClientConfig{}); err != nil {
+				return err
+			}
+		}
+	}
+	s, err = cnclient.GetStreamSender(dnLogTailServerBackend)
 	if err != nil {
 		return err
 	}
 	logTailClient, err = service.NewLogtailClient(s,
-		service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
+		service.WithClientRequestPerSecond(100))
 	if err != nil {
 		return err
 	}
-	cnLogTailSubscriber = &TableLogTailSubscriber{
-		logTailClient: logTailClient,
-		streamSender:  s,
-		engine:        engine,
+	logSub.logTailClient = logTailClient
+	logSub.streamSender = s
+
+	// push subscription to Table `mo_database`, `mo_table`, `mo_column` of mo_catalog.
+	dIds := uint64(catalog.MO_CATALOG_ID)
+	tIds := []uint64{catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID}
+	txnT := getCnLogTimestamp()
+
+	ch := make(chan error)
+	go func() {
+		for _, ti := range tIds {
+			err = TryToGetTableLogTail(ctx, txnT, dIds, ti)
+			if err != nil {
+				ch <- err
+				return
+			}
+		}
+		ch <- nil
+	}()
+
+	select {
+	case <-ctx.Done():
+		return moerr.NewInternalError(ctx, "init the cn log tail client failed")
+	case <-ch:
+		return err
 	}
-	cnLogTailSubscriber.startReceiveTableLogTail()
-	return nil
 }
 
 func (logSub *TableLogTailSubscriber) subscribeTable(
 	ctx context.Context, tblId api.TableID) error {
+	if _, ok := ctx.Deadline(); !ok {
+		nctx, cancel := context.WithTimeout(ctx, defaultPeriodToSubscribeTable)
+		defer cancel()
+		return logSub.logTailClient.Subscribe(nctx, tblId)
+	}
 	return logSub.logTailClient.Subscribe(ctx, tblId)
 }
 
-func (logSub *TableLogTailSubscriber) startReceiveTableLogTail() {
+func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 	// start a background routine to receive table log tail and update related structure.
 	go func() {
 		type response struct {
@@ -188,10 +260,8 @@ func (logSub *TableLogTailSubscriber) startReceiveTableLogTail() {
 
 		ctx := context.TODO()
 		for {
-			initCnLogTailTimestamp()
-			initTableSubscribeRecord()
-
 			ch := make(chan response)
+			reconnect := false
 			for {
 				deadLine, cf := context.WithTimeout(ctx, reconnectDeadTime)
 				select {
@@ -199,9 +269,13 @@ func (logSub *TableLogTailSubscriber) startReceiveTableLogTail() {
 					// should log some information about log client restart.
 					// and how to do the restart work is a question.
 					cf()
-					break
+					reconnect = true
 				case ch <- generateResponse(logSub.logTailClient.Receive()):
 					cf()
+				}
+
+				if reconnect {
+					break
 				}
 				resp := <-ch
 				if resp.err == nil {
@@ -211,7 +285,7 @@ func (logSub *TableLogTailSubscriber) startReceiveTableLogTail() {
 						lt := resp.r.GetSubscribeResponse().GetLogtail()
 						logTs := lt.GetTs()
 						if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &lt); err != nil {
-
+							println("cms that error happens 1")
 						}
 						UpdateCnLogTimestamp(*logTs)
 
@@ -219,6 +293,7 @@ func (logSub *TableLogTailSubscriber) startReceiveTableLogTail() {
 						logLists := resp.r.GetUpdateResponse().GetLogtailList()
 						for _, l := range logLists {
 							if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &l); err != nil {
+								println("cms that error happens 2")
 								break
 							}
 							UpdateCnLogTimestamp(*l.Ts)
@@ -227,14 +302,28 @@ func (logSub *TableLogTailSubscriber) startReceiveTableLogTail() {
 					case resp.r.GetError() != nil:
 					case resp.r.GetUnsubscribeResponse() != nil:
 					}
+				} else {
+					println(fmt.Sprintf("cms that, err is %s", resp.err))
 				}
+			}
+
+			initCnLogTailTimestamp()
+			initTableSubscribeRecord()
+			logutil.Warn("cn log tail client may lost connect to dn log tail server, and try to reconnect")
+			for {
+				if err := logSub.connectToLogTailServer(ctx); err == nil {
+					logutil.Info("reconnect to dn log tail server success.")
+					break
+				}
+				logutil.Error("reconnect to dn log tail server failed.")
+				time.Sleep(periodToReconnectDnLogServer)
 			}
 		}
 	}()
 }
 
 // TryToGetTableLogTail will check if table was subscribed or not.
-// if yes, just return.
+// if subscribed already, just return.
 // if not, subscribe the table and wait until receive the log.
 func TryToGetTableLogTail(
 	ctx context.Context,
@@ -253,10 +342,12 @@ func TryToGetTableLogTail(
 	for i := 0; i < len(partitions); i++ {
 		partition := partitions[i]
 		for {
+			partition.Lock()
 			if partition.ts.GreaterEq(txnTimestamp) {
 				break
 			}
-			time.Sleep(gapToCheckIfLogTailReady)
+			partition.Unlock()
+			time.Sleep(periodToCheckLogTailReady)
 			continue
 		}
 	}

@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 )
 
@@ -292,30 +291,6 @@ func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
 	return parts
 }
 
-func (db *DB) Update(ctx context.Context, dnList []DNStore, tbl *table, op client.TxnOperator,
-	primaryIdx int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
-	db.Lock()
-	parts, ok := db.tables[[2]uint64{databaseId, tableId}]
-	if !ok { // create a new table
-		parts = make(Partitions, len(db.dnMap))
-		for i := range parts {
-			parts[i] = NewPartition(nil)
-		}
-		db.tables[[2]uint64{databaseId, tableId}] = parts
-	}
-	db.Unlock()
-	for i, dn := range dnList {
-		part := parts[db.dnMap[dn.UUID]]
-		part.Lock()
-		if part.ts.Less(ts) {
-			if err := updatePartition(i, primaryIdx, tbl, ts, ctx, op, db, part, dn,
-				genSyncLogTailReq(part.ts, ts, databaseId, tableId)); err != nil {
-				part.Unlock()
-				return err
-			}
-			part.ts = ts
-		}
-		part.Unlock()
-	}
-	return nil
+func (db *DB) Update(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {
+	return TryToGetTableLogTail(ctx, ts, databaseId, tableId)
 }

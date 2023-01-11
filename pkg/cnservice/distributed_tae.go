@@ -16,7 +16,6 @@ package cnservice
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -63,6 +62,12 @@ func (s *service) initDistributedTAE(
 		hakeeper,
 		pu.GetClusterDetails,
 	)
+
+	// log tail client to subscribe table and receive table log.
+	err = disttae.InitCnLogTailSubscriber(ctx, pu.StorageEngine.(*disttae.Engine))
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
