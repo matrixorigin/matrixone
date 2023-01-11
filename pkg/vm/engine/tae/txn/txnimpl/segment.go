@@ -177,6 +177,9 @@ func (seg *txnSegment) CreateNonAppendableBlockWithMeta(
 func (seg *txnSegment) IsUncommitted() bool {
 	return isLocalSegmentByID(seg.entry.GetID())
 }
+
+func (seg *txnSegment) IsAppendable() bool { return seg.entry.IsAppendable() }
+
 func (seg *txnSegment) SoftDeleteBlock(id uint64) (err error) {
 	fp := seg.entry.AsCommonID()
 	fp.BlockID = id

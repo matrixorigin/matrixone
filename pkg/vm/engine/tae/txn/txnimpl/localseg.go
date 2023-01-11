@@ -57,13 +57,14 @@ type localSegment struct {
 	rows        uint32
 	appends     []*appendCtx
 	tableHandle data.TableHandle
-	//non-appendable segment
-	nseg handle.Segment
 	//sched  tasks.TaskScheduler
 }
 
 func newLocalSegment(table *txnTable) *localSegment {
-	entry := catalog.NewStandaloneSegment(table.entry, localSegmentIdAlloc.Alloc(), table.store.txn.GetStartTS())
+	entry := catalog.NewStandaloneSegment(
+		table.entry,
+		localSegmentIdAlloc.Alloc(),
+		table.store.txn.GetStartTS())
 	return &localSegment{
 		entry:   entry,
 		nodes:   make([]InsertNode, 0),
@@ -106,7 +107,10 @@ func (seg *localSegment) registerNode(metaLoc string, deltaLoc string) {
 
 // register an appendable insertNode.
 func (seg *localSegment) registerANode() {
-	meta := catalog.NewStandaloneBlock(seg.entry, uint64(len(seg.nodes)), seg.table.store.txn.GetStartTS())
+	meta := catalog.NewStandaloneBlock(
+		seg.entry,
+		uint64(len(seg.nodes)),
+		seg.table.store.txn.GetStartTS())
 	seg.entry.AddEntryLocked(meta)
 	n := NewANode(
 		seg.table,
@@ -138,7 +142,12 @@ func (seg *localSegment) ApplyAppend() (err error) {
 			return
 		}
 		id := ctx.driver.GetID()
-		ctx.node.AddApplyInfo(ctx.start, ctx.count, uint32(destOff), ctx.count, seg.table.entry.GetDB().ID, id)
+		ctx.node.AddApplyInfo(
+			ctx.start,
+			ctx.count,
+			uint32(destOff),
+			ctx.count,
+			seg.table.entry.GetDB().ID, id)
 	}
 	if seg.tableHandle != nil {
 		seg.table.entry.GetTableData().ApplyHandle(seg.tableHandle)
@@ -210,9 +219,11 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			}
 			id := appender.GetID()
 			seg.table.store.warChecker.Insert(appender.GetMeta().(*catalog.BlockEntry))
-			seg.table.store.txn.GetMemo().AddBlock(seg.table.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
+			seg.table.store.txn.GetMemo().AddBlock(seg.table.entry.GetDB().ID,
+				id.TableID, id.SegmentID, id.BlockID)
 			seg.appends = append(seg.appends, ctx)
-			logutil.Debugf("%s: toAppend %d, appended %d, blks=%d", id.String(), toAppend, appended, len(seg.appends))
+			logutil.Debugf("%s: toAppend %d, appended %d, blks=%d",
+				id.String(), toAppend, appended, len(seg.appends))
 			appended += toAppend
 			if appended == node.Rows() {
 				break
@@ -220,13 +231,13 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		}
 		return
 	}
-	if seg.nseg == nil {
-		seg.nseg, err = seg.table.CreateNonAppendableSegment(true)
-		if err != nil {
-			return
-		}
+	//For each persisted insertNode, create a non-appendable segment
+	//and a non-appendable block.
+	nseg, err := seg.table.CreateNonAppendableSegment(true)
+	if err != nil {
+		return
 	}
-	_, err = seg.nseg.CreateNonAppendableBlockWithMeta(node.GetMetaLoc())
+	_, err = nseg.CreateNonAppendableBlockWithMeta(node.GetMetaLoc())
 	if err != nil {
 		return
 	}
@@ -355,11 +366,9 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 	if last > first+1 {
 		for i := first + 1; i < last; i++ {
 			node = seg.nodes[i]
-			//if err = node.RangeDelete(0, txnbase.MaxNodeRows); err != nil {
 			if err = node.RangeDelete(0, node.Rows()-1); err != nil {
 				break
 			}
-			//if err = seg.DeleteFromIndex(0, txnbase.MaxNodeRows, node); err != nil {
 			if err = seg.DeleteFromIndex(0, node.Rows()-1, node); err != nil {
 				break
 			}
