@@ -143,24 +143,3 @@ func (node *AlterView) Format(ctx *FmtCtx) {
 
 func (node *AlterView) GetStatementType() string { return "Alter View" }
 func (node *AlterView) GetQueryType() string     { return "QueryTypeDDL" }
-
-//Alter database mysql_compatbility_mode configuration 
-type AlterConfiguration struct{
-	statementImpl
-	DbName string
-	NewConfig string
-}
-
-func (node *AlterConfiguration) Format(ctx *FmtCtx) {
-	ctx.WriteString("alter ")
-	ctx.WriteString("configuration ")
-
-	ctx.WriteString("for ")
-	ctx.WriteString(fmt.Sprintf("%s ", node.DbName))
-
-	ctx.WriteString("as ")
-	ctx.WriteString(fmt.Sprintf("%s ", node.NewConfig))
-}
-
-func (node *AlterConfiguration) GetStatementType() string { return "Alter Configuration" }
-func (node *AlterConfiguration) GetQueryType() string     { return "QueryTypeDDL" }

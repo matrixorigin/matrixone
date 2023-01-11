@@ -28,6 +28,7 @@ import (
 )
 
 type MetaBaseEntry struct {
+	//chain of MetadataMVCCNode
 	*txnbase.MVCCChain
 	ID uint64
 }
