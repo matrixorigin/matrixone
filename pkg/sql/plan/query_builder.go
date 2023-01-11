@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/constant"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -1882,37 +1883,63 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 		err = builder.addBinding(nodeID, tbl.As, ctx)
 
-		tableDef := builder.qry.Nodes[nodeID].GetTableDef()
+		//tableDef := builder.qry.Nodes[nodeID].GetTableDef()
+		midNode := builder.qry.Nodes[nodeID]
 		//if it is the non-sys account and reads the cluster table,
 		//we add an account_id filter to make sure that the non-sys account
 		//can only read its own data.
-		if tableDef != nil &&
-			builder.compCtx.GetAccountId() != catalog.System_Account &&
-			util.TableIsClusterTable(tableDef.GetTableType()) {
-			var accountFilterExprs []*plan.Expr
-			ctx.binder = NewWhereBinder(builder, ctx)
-			left := &tree.UnresolvedName{
-				NumParts: 1,
-				Parts:    tree.NameParts{},
+		if midNode.NodeType == plan.Node_TABLE_SCAN && builder.compCtx.GetAccountId() != catalog.System_Account {
+			// add account filter for system table scan
+			dbName := midNode.ObjRef.SchemaName
+			tableName := midNode.TableDef.Name
+			currentAccountId := builder.compCtx.GetAccountId()
+			if dbName == catalog.MO_CATALOG && tableName == catalog.MO_DATABASE {
+				modatabaseFilter := util.BuildMoDataBaseFilter(uint64(currentAccountId))
+				ctx.binder = NewWhereBinder(builder, ctx)
+				accountFilterExprs, err := splitAndBindCondition(modatabaseFilter, ctx)
+				if err != nil {
+					return 0, err
+				}
+				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+			} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
+				motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountId))
+				ctx.binder = NewWhereBinder(builder, ctx)
+				accountFilterExprs, err := splitAndBindCondition(motablesFilter, ctx)
+				if err != nil {
+					return 0, err
+				}
+				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+			} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_COLUMNS {
+				moColumnsFilter := util.BuildMoColumnsFilter(uint64(currentAccountId))
+				ctx.binder = NewWhereBinder(builder, ctx)
+				accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, ctx)
+				if err != nil {
+					return 0, err
+				}
+				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+			} else if util.TableIsClusterTable(midNode.GetTableDef().GetTableType()) {
+				ctx.binder = NewWhereBinder(builder, ctx)
+				left := &tree.UnresolvedName{
+					NumParts: 1,
+					Parts:    tree.NameParts{util.GetClusterTableAttributeName()},
+				}
+				currentAccountId := builder.compCtx.GetAccountId()
+				right := tree.NewNumVal(constant.MakeUint64(uint64(currentAccountId)), strconv.Itoa(int(currentAccountId)), false)
+				right.ValType = tree.P_uint64
+				//account_id = the accountId of the non-sys account
+				accountFilter := &tree.ComparisonExpr{
+					Op:    tree.EQUAL,
+					Left:  left,
+					Right: right,
+				}
+				accountFilterExprs, err := splitAndBindCondition(accountFilter, ctx)
+				if err != nil {
+					return 0, err
+				}
+				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 			}
-			left.Parts[0] = util.GetClusterTableAttributeName()
-			right := tree.NewNumVal(constant.MakeUint64(uint64(builder.compCtx.GetAccountId())), "", false)
-			right.ValType = tree.P_uint64
-			//account_id = the accountId of the non-sys account
-			accountFilter := &tree.ComparisonExpr{
-				Op:    tree.EQUAL,
-				Left:  left,
-				Right: right,
-			}
-			accountFilterExprs, err = splitAndBindCondition(accountFilter, ctx)
-			if err != nil {
-				return 0, err
-			}
-			builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 		}
-
 		return
-
 	case *tree.StatementSource:
 		return 0, moerr.NewParseError(builder.GetContext(), "unsupport table expr: %T", stmt)
 
