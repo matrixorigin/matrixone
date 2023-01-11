@@ -424,3 +424,4 @@ insert into t3 values(3.2);
 show table_values from t3;
 [unknown result because it is related to issue#7562]
 drop database test_db;
+drop account if exists test_account;

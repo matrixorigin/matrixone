@@ -368,3 +368,6 @@ show table_values from t3;
 -- @bvt:issue
 drop database test_db;
 -- @session
+
+
+drop account if exists test_account;
