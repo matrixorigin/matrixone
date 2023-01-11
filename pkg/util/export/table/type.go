@@ -20,6 +20,7 @@ import (
 	"path"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -95,6 +96,7 @@ const PathIdxFilename = 6
 const PathIdxTable = 5
 const PathIdxAccount = 0
 const FilenameElems = 3
+const FilenameElemsV2 = 4
 const FilenameIdxType = 2
 
 // NewETLPath
@@ -119,7 +121,7 @@ func (p *ETLPath) Parse(ctx context.Context) error {
 	// parse filename => fileType, timestamps
 	filename := strings.Trim(p.filename, CsvExtension)
 	fnElems := strings.Split(filename, FilenameSeparator)
-	if len(fnElems) != FilenameElems {
+	if len(fnElems) != FilenameElems && len(fnElems) != FilenameElemsV2 {
 		return moerr.NewInternalError(ctx, "metric/log invalid filename: %s", p.path)
 	}
 	if fnElems[FilenameIdxType] == string(MergeLogTypeMerged) {
@@ -204,12 +206,23 @@ func (b *AccountDatePathBuilder) ParsePath(ctx context.Context, path string) (Pa
 	return p, p.Parse(ctx)
 }
 
+var timeMu sync.Mutex
+
+func NSecString() string {
+	timeMu.Lock()
+	nsec := time.Now().Nanosecond()
+	timeMu.Unlock()
+	return fmt.Sprintf("%09d", nsec)
+}
+
 func (b *AccountDatePathBuilder) NewMergeFilename(timestampStart, timestampEnd, extension string) string {
-	return strings.Join([]string{timestampStart, timestampEnd, string(MergeLogTypeMerged)}, FilenameSeparator) + extension
+	seq := NSecString()
+	return strings.Join([]string{timestampStart, timestampEnd, string(MergeLogTypeMerged), seq}, FilenameSeparator) + extension
 }
 
 func (b *AccountDatePathBuilder) NewLogFilename(name, nodeUUID, nodeType string, ts time.Time, extension string) string {
-	return strings.Join([]string{fmt.Sprintf("%d", ts.Unix()), nodeUUID, nodeType}, FilenameSeparator) + extension
+	seq := NSecString()
+	return strings.Join([]string{fmt.Sprintf("%d", ts.Unix()), nodeUUID, nodeType, seq}, FilenameSeparator) + extension
 }
 
 func (b *AccountDatePathBuilder) SupportMergeSplit() bool      { return true }
