@@ -679,7 +679,6 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-
 	}
 
 	id := rel.GetTableID(c.ctx)

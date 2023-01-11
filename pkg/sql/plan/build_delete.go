@@ -98,6 +98,34 @@ func buildSingleTableDelete2(ctx CompilerContext, stmt *tree.Delete) (*Plan, err
 	}
 
 	// append delete node
+	deleteCtx := &plan.DeleteTableCtx2{
+		DelRef:        rewriteInfo.tblInfo.objRef,
+		DelIdxRef:     rewriteInfo.onDeleteIdxTbl,
+		DelIdxIdx:     rewriteInfo.onDeleteIdx,
+		OnRestrictRef: rewriteInfo.onDeleteRestrictTbl,
+		OnRestrictIdx: rewriteInfo.onDeleteRestrict,
+		OnCascadeRef:  rewriteInfo.onDeleteCascadeTbl,
+		OnCascadeIdx:  rewriteInfo.onDeleteCascade,
+		OnSetRef:      rewriteInfo.onDeleteSetTbl,
+		OnSetIdx:      make([]*plan.DeleteTableCtx2IdxList, len(rewriteInfo.onDeleteSet)),
+	}
+	for i, setList := range rewriteInfo.onDeleteSet {
+		deleteCtx.OnSetIdx[i] = &plan.DeleteTableCtx2IdxList{
+			List: setList,
+		}
+	}
+
+	node := &Node{
+		NodeType: plan.Node_DELETE,
+		ObjRef:   nil,
+		TableDef: nil,
+		Children: []int32{query.Steps[len(query.Steps)-1]},
+		NodeId:   int32(len(query.Nodes)),
+		// DeleteTablesCtx: delCtxs,
+		DeleteCtx: deleteCtx,
+	}
+	query.Nodes = append(query.Nodes, node)
+	query.Steps[len(query.Steps)-1] = node.NodeId
 
 	return &Plan{
 		Plan: &plan.Plan_Query{
@@ -275,9 +303,9 @@ func buildSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (*Plan, erro
 	}
 
 	// optimize to truncate,
-	if stmt.Where == nil && stmt.Limit == nil {
-		return buildDelete2Truncate(ctx, objRef, tableDef)
-	}
+	// if stmt.Where == nil && stmt.Limit == nil {
+	// return buildDelete2Truncate(ctx, objRef, tableDef)
+	// }
 
 	// 1.build select list exprs
 	deleteTableList := NewDeleteTableList()
@@ -455,54 +483,54 @@ func buildJoinOnCond(tbinfo *tableInfo, originTableName string, indexTableName s
 
 // Perform the truncation operation of the table, When performing a delete operation,
 // if the original table can be truncated, its index table also needs to be truncated
-func buildDelete2Truncate(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef) (*Plan, error) {
-	deleteTablesCtx := make([]*plan.DeleteTableCtx, 0)
+// func buildDelete2Truncate(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef) (*Plan, error) {
+// 	deleteTablesCtx := make([]*plan.DeleteTableCtx, 0)
 
-	// Build the context for deleting the original table
-	d := &plan.DeleteTableCtx{
-		DbName:             objRef.SchemaName,
-		TblName:            tableDef.Name,
-		CanTruncate:        true,
-		IsIndexTableDelete: false,
-	}
-	deleteTablesCtx = append(deleteTablesCtx, d)
+// 	// Build the context for deleting the original table
+// 	d := &plan.DeleteTableCtx{
+// 		DbName:             objRef.SchemaName,
+// 		TblName:            tableDef.Name,
+// 		CanTruncate:        true,
+// 		IsIndexTableDelete: false,
+// 	}
+// 	deleteTablesCtx = append(deleteTablesCtx, d)
 
-	// Build the context for deleting the index table
-	uDef, _ := buildIndexDefs(tableDef.Defs)
-	if uDef != nil {
-		for i, indexTblName := range uDef.TableNames {
-			if uDef.TableExists[i] {
-				idxObjRef, idxTblDef := ctx.Resolve(objRef.SchemaName, indexTblName)
-				delIndex := &plan.DeleteTableCtx{
-					DbName:             idxObjRef.SchemaName,
-					TblName:            idxTblDef.Name,
-					CanTruncate:        true,
-					IsIndexTableDelete: true,
-				}
-				deleteTablesCtx = append(deleteTablesCtx, delIndex)
-			} else {
-				continue
-			}
-		}
-	}
+// 	// Build the context for deleting the index table
+// 	uDef, _ := buildIndexDefs(tableDef.Defs)
+// 	if uDef != nil {
+// 		for i, indexTblName := range uDef.TableNames {
+// 			if uDef.TableExists[i] {
+// 				idxObjRef, idxTblDef := ctx.Resolve(objRef.SchemaName, indexTblName)
+// 				delIndex := &plan.DeleteTableCtx{
+// 					DbName:             idxObjRef.SchemaName,
+// 					TblName:            idxTblDef.Name,
+// 					CanTruncate:        true,
+// 					IsIndexTableDelete: true,
+// 				}
+// 				deleteTablesCtx = append(deleteTablesCtx, delIndex)
+// 			} else {
+// 				continue
+// 			}
+// 		}
+// 	}
 
-	// build delete node
-	node := &Node{
-		NodeType:        plan.Node_DELETE,
-		ObjRef:          objRef,
-		TableDef:        tableDef,
-		DeleteTablesCtx: deleteTablesCtx,
-	}
-	return &Plan{
-		Plan: &plan.Plan_Query{
-			Query: &Query{
-				StmtType: plan.Query_DELETE,
-				Steps:    []int32{0},
-				Nodes:    []*Node{node},
-			},
-		},
-	}, nil
-}
+// 	// build delete node
+// 	node := &Node{
+// 		NodeType:        plan.Node_DELETE,
+// 		ObjRef:          objRef,
+// 		TableDef:        tableDef,
+// 		DeleteTablesCtx: deleteTablesCtx,
+// 	}
+// 	return &Plan{
+// 		Plan: &plan.Plan_Query{
+// 			Query: &Query{
+// 				StmtType: plan.Query_DELETE,
+// 				Steps:    []int32{0},
+// 				Nodes:    []*Node{node},
+// 			},
+// 		},
+// 	}, nil
+// }
 
 func extractAliasTable(aliasTable *tree.AliasedTableExpr, tf *tableInfo, ctx CompilerContext) {
 	dbName := string(aliasTable.Expr.(*tree.TableName).SchemaName)

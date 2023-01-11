@@ -361,6 +361,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			return nil, err
 		}
 		relation, err = dbSource.Relation(proc.Ctx, n.DeleteTablesCtx[i].TblName)
+
 		if err != nil {
 			var e error
 			dbSource, e = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)

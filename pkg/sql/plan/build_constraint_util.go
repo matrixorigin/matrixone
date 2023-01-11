@@ -28,26 +28,25 @@ import (
 const derivedTableName = "_t"
 
 type deleteSelectInfo struct {
-	projectList           []*Expr
-	tblInfo               *dmlTableInfo
-	idx                   int
-	rootId                int32
-	derivedTableId        int32
-	onDeleteIdx           []int
-	onDeleteIdxTblName    [][2]string
-	onDeleteRestrict      []int
-	onDeleteRestrictTblId []uint64
-	onDeleteSet           []int
-	onDeleteSetTblId      []uint64
-	onDeleteCascade       []int
-	onDeleteCascadeTblId  []uint64
+	projectList         []*Expr
+	tblInfo             *dmlTableInfo
+	idx                 int32
+	rootId              int32
+	derivedTableId      int32
+	onDeleteIdx         []int32
+	onDeleteIdxTbl      []*ObjectRef
+	onDeleteRestrict    []int32
+	onDeleteRestrictTbl []*ObjectRef
+	onDeleteSet         [][]int32
+	onDeleteSetTbl      []*ObjectRef
+	onDeleteCascade     []int32
+	onDeleteCascadeTbl  []*ObjectRef
 }
 
 type dmlTableInfo struct {
-	dbNames    []string
-	tableNames []string
-	tableDefs  []*TableDef
-	nameMap    map[string]int
+	objRef    []*ObjectRef
+	tableDefs []*TableDef
+	nameMap   map[string]int
 }
 
 func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, aliasMap map[string][2]string) {
@@ -71,10 +70,9 @@ func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, alia
 func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, aliasMap map[string][2]string) (*dmlTableInfo, error) {
 	tblLen := len(tableExprs)
 	tblInfo := &dmlTableInfo{
-		dbNames:    make([]string, tblLen),
-		tableNames: make([]string, tblLen),
-		tableDefs:  make([]*plan.TableDef, tblLen),
-		nameMap:    make(map[string]int),
+		objRef:    make([]*ObjectRef, tblLen),
+		tableDefs: make([]*plan.TableDef, tblLen),
+		nameMap:   make(map[string]int),
 	}
 
 	for idx, tbl := range tableExprs {
@@ -109,8 +107,11 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, aliasMap m
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can delete the cluster table %s", tableDef.GetName())
 		}
 
-		tblInfo.dbNames[idx] = dbName
-		tblInfo.tableNames[idx] = tblName
+		tblInfo.objRef[idx] = &ObjectRef{
+			Obj:        int64(tableDef.TblId),
+			SchemaName: dbName,
+			ObjName:    tblName,
+		}
 		tblInfo.tableDefs[idx] = tableDef
 		tblInfo.nameMap[tblName] = idx
 	}
@@ -212,7 +213,7 @@ func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *deleteSel
 		return err
 	}
 
-	info.idx = len(info.tblInfo.tableNames)
+	info.idx = int32(len(info.tblInfo.objRef))
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
 	info.derivedTableId = info.rootId
 	for idx, expr := range builder.qry.Nodes[info.rootId].ProjectList {
@@ -232,13 +233,13 @@ func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *deleteSel
 	return nil
 }
 
-func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *deleteSelectInfo, tableDef *TableDef, leftId int32) error {
+func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *deleteSelectInfo, tableDef *TableDef, baseNodeId int32) error {
 	posMap := make(map[string]int32)
 	typMap := make(map[string]*plan.Type)
 	id2name := make(map[uint64]string)
 	beginPos := 0
 	//use origin query as left, we need add prefix pos
-	if leftId == info.derivedTableId {
+	if baseNodeId == info.derivedTableId {
 		for _, d := range info.tblInfo.tableDefs {
 			if d.Name == tableDef.Name {
 				break
@@ -253,6 +254,7 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 	}
 
 	// rewrite index
+	leftId := baseNodeId
 	for _, def := range tableDef.Defs {
 		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
 			for idx, tblName := range idxDef.UIdx.TableNames {
@@ -265,7 +267,7 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 					return err
 				}
 				rightTag := builder.qry.Nodes[rightId].BindingTags[0]
-				leftTag := builder.qry.Nodes[leftId].BindingTags[0]
+				leftTag := builder.qry.Nodes[baseNodeId].BindingTags[0]
 				rightTableDef := builder.qry.Nodes[rightId].TableDef
 
 				// append projection
@@ -331,22 +333,26 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 				}
 				joinConds = []*Expr{condExpr}
 
-				leftCtx := builder.ctxByNode[leftId]
+				leftCtx := builder.ctxByNode[baseNodeId]
 				err = bindCtx.mergeContexts(leftCtx, rightCtx)
 				if err != nil {
 					return err
 				}
 				newRootId := builder.appendNode(&plan.Node{
 					NodeType: plan.Node_JOIN,
-					Children: []int32{leftId, rightId},
+					Children: []int32{baseNodeId, rightId},
 					JoinType: plan.Node_LEFT,
 				}, bindCtx)
 				node := builder.qry.Nodes[newRootId]
 				bindCtx.binder = NewTableBinder(builder, bindCtx)
 				node.OnList = joinConds
 				info.rootId = newRootId
+				leftId = newRootId
 
-				info.onDeleteIdxTblName = append(info.onDeleteIdxTblName, [2]string{builder.compCtx.DefaultDatabase(), tblName})
+				info.onDeleteIdxTbl = append(info.onDeleteIdxTbl, &plan.ObjectRef{
+					SchemaName: builder.compCtx.DefaultDatabase(),
+					ObjName:    tblName,
+				})
 				info.onDeleteIdx = append(info.onDeleteIdx, info.idx)
 				info.idx = info.idx + 1
 			}
@@ -360,10 +366,16 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 		childPosMap := make(map[string]int32)
 		childTypMap := make(map[string]*plan.Type)
 		childId2name := make(map[uint64]string)
-		for idx, col := range tableDef.Cols {
+		for idx, col := range childTableDef.Cols {
 			childPosMap[col.Name] = int32(idx)
 			childTypMap[col.Name] = col.Typ
 			childId2name[col.ColId] = col.Name
+		}
+
+		objRef := &plan.ObjectRef{
+			Obj:        int64(childTableDef.TblId),
+			SchemaName: builder.compCtx.DefaultDatabase(),
+			ObjName:    childTableDef.Name,
 		}
 
 		for _, fk := range childTableDef.Fkeys {
@@ -376,7 +388,7 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 					return err
 				}
 				rightTag := builder.qry.Nodes[rightId].BindingTags[0]
-				leftTag := builder.qry.Nodes[leftId].BindingTags[0]
+				baseNodeTag := builder.qry.Nodes[baseNodeId].BindingTags[0]
 				needRecursionCall := false
 
 				// build join conds
@@ -391,7 +403,7 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 								Typ: typMap[originColumnName],
 								Expr: &plan.Expr_Col{
 									Col: &plan.ColRef{
-										RelPos: leftTag,
+										RelPos: baseNodeTag,
 										ColPos: posMap[originColumnName],
 									},
 								},
@@ -427,9 +439,9 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 							},
 						},
 					})
-					info.onDeleteRestrict = append(info.onDeleteIdx, info.idx)
+					info.onDeleteRestrict = append(info.onDeleteRestrict, info.idx)
 					info.idx = info.idx + 1
-					info.onDeleteRestrictTblId = append(info.onDeleteRestrictTblId, childTableDef.TblId)
+					info.onDeleteRestrictTbl = append(info.onDeleteRestrictTbl, objRef)
 
 				case plan.ForeignKeyDef_CASCADE:
 					info.projectList = append(info.projectList, &plan.Expr{
@@ -441,9 +453,9 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 							},
 						},
 					})
-					info.onDeleteCascade = append(info.onDeleteIdx, info.idx)
+					info.onDeleteCascade = append(info.onDeleteCascade, info.idx)
 					info.idx = info.idx + 1
-					info.onDeleteCascadeTblId = append(info.onDeleteCascadeTblId, childTableDef.TblId)
+					info.onDeleteCascadeTbl = append(info.onDeleteCascadeTbl, objRef)
 
 					needRecursionCall = true
 
@@ -452,6 +464,7 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 					for _, colId := range fk.Cols {
 						fkIdMap[colId] = struct{}{}
 					}
+					var setIdxs []int32
 					for j, col := range childTableDef.Cols {
 						if _, ok := fkIdMap[col.ColId]; ok {
 							info.projectList = append(info.projectList, makePlan2NullConstExprWithType())
@@ -466,10 +479,11 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 								},
 							})
 						}
-						info.onDeleteSet = append(info.onDeleteIdx, info.idx)
+						setIdxs = append(setIdxs, info.idx)
 						info.idx = info.idx + 1
 					}
-					info.onDeleteSetTblId = append(info.onDeleteSetTblId, childTableDef.TblId)
+					info.onDeleteSet = append(info.onDeleteSet, setIdxs)
+					info.onDeleteSetTbl = append(info.onDeleteSetTbl, objRef)
 					needRecursionCall = true
 				}
 
@@ -498,9 +512,6 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 			}
 		}
 	}
-
-	// projectBegin = projectBegin + len(tableDef.Cols)
-
 	return nil
 }
 
