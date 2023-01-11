@@ -185,11 +185,6 @@ func (w *TAEWriter) flush() error {
 	return nil
 }
 
-// WriteString implement io.StringWriter
-func (w *TAEWriter) WriteString(s string) (n int, err error) {
-	panic("NOT implement")
-}
-
 func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int, typs []types.Type, mp *mpool.MPool) error {
 
 	for colIdx, typ := range typs {
