@@ -16,7 +16,6 @@ package process
 
 import (
 	"context"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -120,11 +119,6 @@ type AnalyzeInfo struct {
 	NetworkIO int64
 }
 
-type ElapseInfo struct {
-	ScanTime   atomic.Int64
-	InsertTime atomic.Int64
-}
-
 // Process contains context used in query execution
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.
@@ -158,8 +152,6 @@ type Process struct {
 	LoadTag bool
 
 	LastInsertID *uint64
-
-	Elapse *ElapseInfo
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

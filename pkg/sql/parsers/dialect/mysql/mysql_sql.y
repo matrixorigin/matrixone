@@ -557,7 +557,7 @@ import (
 %type <duplicateKey> duplicate_opt
 %type <fields> load_fields field_item export_fields
 %type <fieldsList> field_item_list
-%type <str> field_terminator starting_opt lines_terminated_opt
+%type <str> field_terminator starting_opt lines_terminated_opt starting lines_terminated
 %type <lines> load_lines export_lines_opt
 %type <int64Val> ignore_lines
 %type <varExpr> user_variable variable system_variable
@@ -970,14 +970,14 @@ load_lines:
     {
         $$ = nil
     }
-|   LINES starting_opt lines_terminated_opt
+|   LINES starting lines_terminated_opt
     {
         $$ = &tree.Lines{
             StartingBy: $2,
             TerminatedBy: $3,
         }
     }
-|   LINES lines_terminated_opt starting_opt
+|   LINES lines_terminated starting_opt
     {
         $$ = &tree.Lines{
             StartingBy: $3,
@@ -989,7 +989,10 @@ starting_opt:
     {
         $$ = ""
     }
-|   STARTING BY STRING
+|   starting
+
+starting:
+    STARTING BY STRING
     {
         $$ = $3
     }
@@ -998,7 +1001,10 @@ lines_terminated_opt:
     {
         $$ = "\n"
     }
-|   TERMINATED BY STRING
+|   lines_terminated
+
+lines_terminated:
+    TERMINATED BY STRING
     {
         $$ = $3
     }

@@ -125,8 +125,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Start()
 	defer func(){
 		anal.Stop()
-		t2 := time.Since(t1)
-		proc.Elapse.ScanTime.Add(int64(t2.Microseconds()))
+		time.Since(t1)
 	}()
 	anal.Input(nil, isFirst)
 	param := arg.(*Argument).Es

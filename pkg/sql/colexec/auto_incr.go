@@ -71,7 +71,7 @@ func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Proce
 
 func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.Process, p *plan.InsertValues, bat *batch.Batch, dbName, tblName string) error {
 	ColDefs := p.ExplicitCols
-	orderColDefs(p.OrderAttrs, ColDefs)
+	orderColDefs(p.OrderAttrs, ColDefs, p.Columns)
 	db, err := e.Database(ctx, p.DbName, proc.TxnOperator)
 	if err != nil {
 		return err
@@ -373,9 +373,12 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 		rds, _ = rel.NewReader(ctx, 1, nil, ret)
 	}
 
+	retbat := batch.NewWithSize(1)
+	/* XXX dangerous operation
 	retbat := &batch.Batch{
 		Vecs: []*vector.Vector{},
 	}
+	*/
 
 	for len(rds) > 0 {
 		bat, err := rds[0].Read(ctx, AUTO_INCR_TABLE_COLNAME, nil, mp)
@@ -396,8 +399,16 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 			str := bat.Vecs[1].GetString(rowIndex)
 			if str == colName {
 				currentNum := vector.MustTCols[uint64](bat.Vecs[2])[rowIndex : rowIndex+1]
+				/* XXX dangerous operation
 				retbat.Vecs = append(retbat.Vecs, bat.Vecs[0])
 				retbat.Vecs[0].Col = retbat.Vecs[0].Col.([]types.Rowid)[rowIndex : rowIndex+1]
+				*/
+				vec := vector.New(bat.GetVector(0).Typ)
+				rowid := vector.MustTCols[types.Rowid](bat.GetVector(0))[rowIndex]
+				if err := vec.Append(rowid, false, mp); err != nil {
+					panic(err)
+				}
+				retbat.SetVector(0, vec)
 				retbat.SetZs(1, mp)
 				bat.Clean(mp)
 				return retbat, currentNum[0]
@@ -641,11 +652,12 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 	return nil
 }
 
-func orderColDefs(attrs []string, ColDefs []*plan.ColDef) {
+func orderColDefs(attrs []string, ColDefs []*plan.ColDef, cols []*plan.Column) {
 	for i, name := range attrs {
 		for j, def := range ColDefs {
 			if name == def.Name {
 				ColDefs[i], ColDefs[j] = ColDefs[j], ColDefs[i]
+				cols[i], cols[j] = cols[j], cols[i]
 			}
 		}
 	}

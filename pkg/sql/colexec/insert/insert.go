@@ -214,8 +214,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	}
 	defer func() {
 		bat.Clean(proc.Mp())
-		t2 := time.Since(t1)
-		proc.Elapse.InsertTime.Add(int64(t2.Microseconds()))
+		time.Since(t1)
 	}()
 	{
 		for i := range bat.Vecs {
