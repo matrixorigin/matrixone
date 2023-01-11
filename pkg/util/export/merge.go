@@ -253,7 +253,7 @@ func (m *Merge) Main(ctx context.Context, ts time.Time) error {
 
 		if len(files) > 0 {
 			if err = m.doMergeFiles(ctx, account.Name, files, 0); err != nil {
-				m.logger.Error(fmt.Sprintf("merge task meet error: %v", err))
+				m.logger.Warn(fmt.Sprintf("merge task meet error: %v", err))
 			}
 		}
 	}
@@ -344,6 +344,8 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 			cacheFileData.Put(row)
 		}
 		if err != nil {
+			m.logger.Warn("failed to read file",
+				logutil.PathField(path.FilePath), zap.Error(err))
 			reader.Close()
 			return err
 		}
@@ -351,8 +353,9 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 		// flush cache data
 		if cacheFileData.Size() > m.FileCacheSize {
 			if err = cacheFileData.Flush(newFileWriter); err != nil {
+				m.logger.Warn("failed to write merged etl file",
+					logutil.PathField(mergeFilepath), zap.Error(err))
 				reader.Close()
-				m.logger.Error(fmt.Sprintf("merge file meet flush failed: %v", err))
 				return err
 			}
 		}
@@ -361,13 +364,15 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 	// flush cache data
 	if !cacheFileData.IsEmpty() {
 		if err = cacheFileData.Flush(newFileWriter); err != nil {
-			m.logger.Error(fmt.Sprintf("merge file meet flush failed: %v", err))
+			m.logger.Warn("failed to write merged etl file",
+				logutil.PathField(mergeFilepath), zap.Error(err))
 			return err
 		}
 	}
 	// close writer
 	if _, err = newFileWriter.FlushAndClose(); err != nil {
-		m.logger.Error(fmt.Sprintf("merge file meet write failed: %v", err))
+		m.logger.Warn("failed to write merged file",
+			logutil.PathField(mergeFilepath), zap.Error(err))
 		return err
 	}
 
@@ -377,7 +382,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 		paths[idx] = f.FilePath
 	}
 	if err = m.FS.Delete(m.ctx, paths...); err != nil {
-		m.logger.Error(fmt.Sprintf("merge file meet delete failed: %v", err))
+		m.logger.Warn("failed to delete input files", zap.Error(err))
 		return err
 	}
 

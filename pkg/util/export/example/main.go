@@ -22,6 +22,9 @@ package main
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"go.uber.org/zap/zapcore"
 	"net/http"
 	"os"
 	"runtime"
@@ -38,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
@@ -45,6 +49,16 @@ import (
 func main() {
 
 	ctx := context.Background()
+	logutil.SetupMOLogger(&logutil.LogConfig{
+		Level:      zapcore.InfoLevel.String(),
+		Format:     "console",
+		Filename:   "",
+		MaxSize:    512,
+		MaxDays:    0,
+		MaxBackups: 0,
+
+		DisableStore: true,
+	})
 
 	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, "mo-data/etl")
 	if err != nil {
@@ -73,10 +87,17 @@ func main() {
 	ctx, cancel := context.WithCancel(ctx)
 	go traceMemStats(ctx)
 
-	if err := export.InitMerge(ctx, 5*time.Minute, 128*mpool.MB, "csv"); err != nil {
+	if err := export.InitMerge(ctx, 5*time.Minute, 128*mpool.MB, "tae"); err != nil {
 		panic(err)
 	}
-	morun.SetupProcessLevelRuntime(morun.DefaultRuntime())
+	dr := morun.NewRuntime(
+		metadata.ServiceType_CN,
+		"",
+		logutil.GetGlobalLogger(),
+		morun.WithClock(clock.NewHLCClock(func() int64 {
+			return time.Now().UTC().UnixNano()
+		}, 0)))
+	morun.SetupProcessLevelRuntime(dr)
 	ctx, err = motrace.Init(ctx, motrace.EnableTracer(true))
 	if err != nil {
 		panic(err)
@@ -84,6 +105,7 @@ func main() {
 
 	mergeTable(ctx, fs, motrace.SingleStatementTable)
 	mergeTable(ctx, fs, motrace.SingleRowLogTable)
+	mergeTable(ctx, fs, metric.SingleMetricTable)
 
 	logutil.Infof("all done, run sleep(5)")
 	time.Sleep(5 * time.Second)
@@ -96,7 +118,7 @@ func mergeTable(ctx context.Context, fs *fileservice.LocalETLFS, table *table.Ta
 	defer span.End()
 	merge, err := export.NewMerge(ctx, export.WithTable(table), export.WithFileService(fs))
 	logutil.Infof("[%v] create merge task, err: %v", table.GetName(), err)
-	ts, err := time.Parse("2006-01-02 15:04:05", "2023-01-11 00:00:00")
+	ts, err := time.Parse("2006-01-02 15:04:05", "2023-01-03 00:00:00")
 	logutil.Infof("[%v] create ts: %v, err: %v", table.GetName(), ts, err)
 	err = merge.Main(ctx, ts)
 	if err != nil {

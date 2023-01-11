@@ -94,7 +94,7 @@ func (w *TAEWriter) WriteRow(row *table.Row) error {
 
 // WriteStrings implement ETLWriter
 func (w *TAEWriter) WriteStrings(Line []string) error {
-	var elems = make([]any, len(Line))
+	var elems = make([]any, len(w.columnsTypes))
 	for colIdx, typ := range w.columnsTypes {
 		field := Line[colIdx]
 		id := typ.Oid
@@ -103,19 +103,19 @@ func (w *TAEWriter) WriteStrings(Line []string) error {
 			val, err := strconv.ParseInt(field, 10, 64)
 			if err != nil {
 				// fixme: help merge to continue
-				return err
+				return moerr.NewInternalError(w.ctx, "the input value is not int64 type for column %d: %v, err: %s", colIdx, field, err)
 			}
 			elems[colIdx] = val
 		case types.T_uint64:
 			val, err := strconv.ParseUint(field, 10, 64)
 			if err != nil {
-				return err
+				return moerr.NewInternalError(w.ctx, "the input value is not uint64 type for column %d: %v, err: %s", colIdx, field, err)
 			}
 			elems[colIdx] = val
 		case types.T_float64:
 			val, err := strconv.ParseFloat(field, 64)
 			if err != nil {
-				return err
+				return moerr.NewInternalError(w.ctx, "the input value is not float64 type for column %d: %v, err: %s", colIdx, field, err)
 			}
 			elems[colIdx] = val
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
@@ -266,11 +266,15 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 				cols[rowIdx] = d
 			case string:
 				datetimeStr := field.(string)
-				d, err := types.ParseDatetime(datetimeStr, vec.Typ.Precision)
-				if err != nil {
-					return moerr.NewInternalError(ctx, "the input value is not Datetime type for column %d: %v", colIdx, field)
+				if len(datetimeStr) == 0 {
+					cols[rowIdx] = types.Datetime(0)
+				} else {
+					d, err := types.ParseDatetime(datetimeStr, vec.Typ.Precision)
+					if err != nil {
+						return moerr.NewInternalError(ctx, "the input value is not Datetime type for column %d: %v", colIdx, field)
+					}
+					cols[rowIdx] = d
 				}
-				cols[rowIdx] = d
 			default:
 				panic(moerr.NewInternalError(ctx, "not Support datetime type %v", t))
 			}
