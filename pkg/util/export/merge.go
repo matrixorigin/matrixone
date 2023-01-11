@@ -564,15 +564,15 @@ func (w *ContentWriter) FlushAndClose() (int, error) {
 
 func newETLWriter(ctx context.Context, fs fileservice.FileService, filePath string, buf []byte, tbl *table.Table, mp *mpool.MPool) (ETLWriter, error) {
 
-	var fsWriter io.StringWriter
 	if strings.LastIndex(filePath, table.TaeExtension) > 0 {
-		fsWriter = etl.NewTAEWriter(ctx, tbl, mp, filePath, fs)
+		writer := etl.NewTAEWriter(ctx, tbl, mp, filePath, fs)
+		return writer, nil
 	} else {
 		// CSV
-		fsWriter = etl.NewFSWriter(ctx, fs, etl.WithFilePath(filePath))
+		fsWriter := etl.NewFSWriter(ctx, fs, etl.WithFilePath(filePath))
+		return NewContentWriter(fsWriter, buf), nil
 	}
 
-	return NewContentWriter(fsWriter, buf), nil
 }
 
 type Cache interface {

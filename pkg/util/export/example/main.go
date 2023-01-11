@@ -22,7 +22,6 @@ package main
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"net/http"
 	"os"
 	"runtime"
@@ -32,9 +31,14 @@ import (
 	_ "net/http/pprof"
 	"runtime/pprof"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	morun "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
 // following variables is copy code from "github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -186,11 +190,20 @@ func main() {
 	httpWG.Wait()
 	time.Sleep(time.Second)
 
-	cctx, cancel := context.WithCancel(ctx)
-	go traceMemStats(cctx)
+	ctx, cancel := context.WithCancel(ctx)
+	go traceMemStats(ctx)
 
-	mergeTable(ctx, fs, dummyStatementTable)
-	mergeTable(ctx, fs, dummyRawlogTable)
+	if err := export.InitMerge(ctx, 5*time.Minute, 128*mpool.MB, "tae"); err != nil {
+		panic(err)
+	}
+	morun.SetupProcessLevelRuntime(morun.DefaultRuntime())
+	ctx, err = motrace.Init(ctx, motrace.EnableTracer(true))
+	if err != nil {
+		panic(err)
+	}
+
+	mergeTable(ctx, fs, motrace.SingleStatementTable)
+	mergeTable(ctx, fs, motrace.SingleRowLogTable)
 
 	logutil.Infof("all done, run sleep(5)")
 	time.Sleep(5 * time.Second)
@@ -199,9 +212,11 @@ func main() {
 
 func mergeTable(ctx context.Context, fs *fileservice.LocalETLFS, table *table.Table) {
 	var err error
+	ctx, span := trace.Start(ctx, "mergeTable")
+	defer span.End()
 	merge, err := export.NewMerge(ctx, export.WithTable(table), export.WithFileService(fs))
 	logutil.Infof("[%v] create merge task, err: %v", table.GetName(), err)
-	ts, err := time.Parse("2006-01-02 15:04:05", "2022-11-03 00:00:00")
+	ts, err := time.Parse("2006-01-02 15:04:05", "2023-01-11 00:00:00")
 	logutil.Infof("[%v] create ts: %v, err: %v", table.GetName(), ts, err)
 	err = merge.Main(ctx, ts)
 	if err != nil {
