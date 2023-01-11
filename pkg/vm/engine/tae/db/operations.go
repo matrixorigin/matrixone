@@ -16,6 +16,7 @@ package db
 
 import (
 	"encoding/gob"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -168,14 +169,15 @@ const (
 	EntryDelete EntryType = 1
 )
 
+type LocationKey struct{}
+
 type WriteReq struct {
-	Type       EntryType
-	DatabaseId uint64
-	TableID    uint64
-	//transient segment id.
-	//SegID        uint64
+	Type         EntryType
+	DatabaseId   uint64
+	TableID      uint64
 	DatabaseName string
 	TableName    string
+	Schema       *catalog2.Schema
 	Batch        *batch.Batch
 	//S3 object file name
 	FileName string

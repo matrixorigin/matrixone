@@ -576,6 +576,154 @@ func TestCompactBlock1(t *testing.T) {
 	}
 }
 
+func TestAddBlksWithMetaLoc(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	db := initDB(t, opts)
+	defer db.Close()
+
+	worker := ops.NewOpWorker("xx")
+	worker.Start()
+	defer worker.Stop()
+	schema := catalog.MockSchemaAll(13, 2)
+	schema.Name = "tb-0"
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 2
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*4))
+	defer bat.Close()
+	bats := bat.Split(4)
+	{
+		txn, _, rel := createRelationNoCommit(t, db, "db", schema, true)
+		err := rel.Append(bats[0])
+		assert.NoError(t, err)
+		err = rel.Append(bats[1])
+		assert.NoError(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+	//compact blocks
+	var newBlockFp1 *common.ID
+	var metaLoc1 string
+	var newBlockFp2 *common.ID
+	var metaLoc2 string
+	{
+		txn, rel := getRelation(t, 0, db, "db", schema.Name)
+		it := rel.MakeBlockIt()
+		blkMeta1 := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+		it.Next()
+		blkMeta2 := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+		task1, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta1, db.Scheduler)
+		assert.NoError(t, err)
+		task2, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta2, db.Scheduler)
+		assert.NoError(t, err)
+		worker.SendOp(task1)
+		worker.SendOp(task2)
+		err = task1.WaitDone()
+		assert.NoError(t, err)
+		err = task2.WaitDone()
+		assert.NoError(t, err)
+		newBlockFp1 = task1.GetNewBlock().Fingerprint()
+		metaLoc1 = task1.GetNewBlock().GetMetaLoc()
+		newBlockFp2 = task2.GetNewBlock().Fingerprint()
+		metaLoc2 = task2.GetNewBlock().GetMetaLoc()
+		assert.Nil(t, txn.Commit())
+	}
+	//read new non-appendable block data and check
+	{
+		txn, rel := getRelation(t, 0, db, "db", schema.Name)
+		assert.Equal(t, newBlockFp2.SegmentID, newBlockFp1.SegmentID)
+		seg, err := rel.GetSegment(newBlockFp1.SegmentID)
+		assert.Nil(t, err)
+		blk1, err := seg.GetBlock(newBlockFp1.BlockID)
+		assert.Nil(t, err)
+		blk2, err := seg.GetBlock(newBlockFp2.BlockID)
+		assert.Nil(t, err)
+
+		view1, err := blk1.GetColumnDataById(2, nil)
+		assert.NoError(t, err)
+		defer view1.Close()
+		assert.True(t, view1.GetData().Equals(bats[0].Vecs[2]))
+		assert.Equal(t, blk1.Rows(), bats[0].Vecs[2].Length())
+
+		view2, err := blk2.GetColumnDataById(2, nil)
+		assert.NoError(t, err)
+		defer view2.Close()
+		assert.True(t, view2.GetData().Equals(bats[1].Vecs[2]))
+		assert.Equal(t, blk2.Rows(), bats[1].Vecs[2].Length())
+		assert.Nil(t, txn.Commit())
+	}
+
+	{
+		schema.Name = "tb-1"
+		txn, _, rel := createRelationNoCommit(t, db, "db", schema, false)
+		var pks []containers.Vector
+		var metaLocs []string
+		pks = append(pks, bats[0].Vecs[2])
+		pks = append(pks, bats[1].Vecs[2])
+		metaLocs = append(metaLocs, metaLoc1)
+		metaLocs = append(metaLocs, metaLoc2)
+		err := rel.AddBlksWithMetaLoc(pks, "", metaLocs, 0)
+		assert.Nil(t, err)
+		//local deduplication check
+		err = rel.Append(bats[2])
+		assert.Nil(t, err)
+		err = rel.Append(bats[0])
+		assert.NotNil(t, err)
+		err = rel.Append(bats[1])
+		assert.NotNil(t, err)
+		//err = rel.RangeDeleteLocal(start, end)
+		//assert.Nil(t, err)
+		//assert.True(t, rel.IsLocalDeleted(start, end))
+		err = txn.Commit()
+		assert.Nil(t, err)
+
+		//"tb" table now has one non-appendable segment
+		//which contains two non-appendable blocks, and one
+		// appendable segment which contains one appendable block.
+
+		//do deduplication check
+		txn, rel = getRelation(t, 0, db, "db", schema.Name)
+		err = rel.Append(bats[0])
+		assert.NotNil(t, err)
+		err = rel.Append(bats[1])
+		assert.NotNil(t, err)
+		err = rel.Append(bats[3])
+		assert.Nil(t, err)
+
+		cntOfAblk := 0
+		cntOfblk := 0
+		forEachBlock(rel, func(blk handle.Block) (err error) {
+			if blk.IsAppendableBlock() {
+				view, err := blk.GetColumnDataById(3, nil)
+				assert.NoError(t, err)
+				defer view.Close()
+				//assert.True(t, view.GetData().Equals(bats[2].Vecs[3]))
+				cntOfAblk++
+				return nil
+			}
+			metaLoc := blk.GetMetaLoc()
+			assert.True(t, metaLoc != "")
+			if metaLoc == metaLoc1 {
+				view, err := blk.GetColumnDataById(2, nil)
+				assert.NoError(t, err)
+				defer view.Close()
+				assert.True(t, view.GetData().Equals(bats[0].Vecs[2]))
+			} else {
+				view, err := blk.GetColumnDataById(3, nil)
+				assert.NoError(t, err)
+				defer view.Close()
+				assert.True(t, view.GetData().Equals(bats[1].Vecs[3]))
+
+			}
+			cntOfblk++
+			return
+		})
+		assert.True(t, cntOfblk == 2)
+		assert.True(t, cntOfAblk == 2)
+		assert.Nil(t, txn.Commit())
+	}
+}
+
 func TestCompactBlock2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)

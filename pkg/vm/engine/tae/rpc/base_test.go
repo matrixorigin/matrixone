@@ -17,6 +17,9 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"testing"
 	"time"
 
@@ -320,7 +323,8 @@ func makePBEntry(
 	dbId,
 	tableId uint64,
 	dbName,
-	tbName string,
+	tbName,
+	file string,
 	bat *batch.Batch) (pe *api.Entry, err error) {
 	e := Entry{
 		typ:          typ,
@@ -328,6 +332,7 @@ func makePBEntry(
 		databaseId:   dbId,
 		tableName:    tbName,
 		tableId:      tableId,
+		fileName:     file,
 		bat:          bat,
 	}
 	return toPBEntry(e)
@@ -552,6 +557,7 @@ func makeCreateDatabaseEntries(
 		catalog.MO_DATABASE_ID,
 		catalog.MO_CATALOG,
 		catalog.MO_DATABASE,
+		"",
 		createDbBat,
 	)
 	if err != nil {
@@ -589,7 +595,7 @@ func makeCreateTableEntries(
 		}
 		createTbEntry, err := makePBEntry(INSERT,
 			catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat)
+			catalog.MO_CATALOG, catalog.MO_TABLES, "", bat)
 		if err != nil {
 			return nil, err
 		}
@@ -600,8 +606,10 @@ func makeCreateTableEntries(
 		if err != nil {
 			return nil, err
 		}
-		createColumnEntry, err := makePBEntry(INSERT, catalog.MO_CATALOG_ID,
-			catalog.MO_COLUMNS_ID, catalog.MO_CATALOG, catalog.MO_COLUMNS, bat)
+		createColumnEntry, err := makePBEntry(
+			INSERT, catalog.MO_CATALOG_ID,
+			catalog.MO_COLUMNS_ID, catalog.MO_CATALOG,
+			catalog.MO_COLUMNS, "", bat)
 		if err != nil {
 			return nil, err
 		}
@@ -737,6 +745,51 @@ func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
 		rbat.Vecs = append(rbat.Vecs, pbVector)
 	}
 	return rbat, nil
+}
+
+func getIndexDataFromVec(
+	idx uint16,
+	vec *vector.Vector,
+) (objectio.IndexData, objectio.IndexData, error) {
+	var bloomFilter, zoneMap objectio.IndexData
+
+	// get min/max from  vector
+	if vec.Length() > 0 {
+		cvec := containers.NewVectorWithSharedMemory(vec, true)
+
+		// create zone map
+		zm := index.NewZoneMap(vec.Typ)
+		ctx := new(index.KeysCtx)
+		ctx.Keys = cvec
+		ctx.Count = vec.Length()
+		defer ctx.Keys.Close()
+		err := zm.BatchUpdate(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		buf, err := zm.Marshal()
+		if err != nil {
+			return nil, nil, err
+		}
+		zoneMap, err = objectio.NewZoneMap(idx, buf)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// create bloomfilter
+		sf, err := index.NewBinaryFuseFilter(cvec)
+		if err != nil {
+			return nil, nil, err
+		}
+		bf, err := sf.Marshal()
+		if err != nil {
+			return nil, nil, err
+		}
+		alg := uint8(0)
+		bloomFilter = objectio.NewBloomFilter(idx, alg, bf)
+	}
+
+	return bloomFilter, zoneMap, nil
 }
 
 //gen LogTail

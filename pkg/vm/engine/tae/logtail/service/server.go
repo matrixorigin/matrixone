@@ -447,7 +447,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				return
 			}
 
-			logger.Debug("publish additional logtail", zap.Any("From", pub.from.String()), zap.Any("To", pub.to.String()))
+			// logger.Debug("publish additional logtail", zap.Any("From", pub.from.String()), zap.Any("To", pub.to.String()))
 
 			// publish additional logtail for all subscribed tables
 			for _, session := range s.ssmgr.ListSession() {

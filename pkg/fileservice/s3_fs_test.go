@@ -97,8 +97,8 @@ func TestS3FS(t *testing.T) {
 				config.Endpoint,
 				config.Bucket,
 				time.Now().Format("2006-01-02.15:04:05.000000"),
-				128*1024,
-				128*1024,
+				-1,
+				-1,
 				cacheDir,
 			)
 			assert.Nil(t, err)
@@ -115,8 +115,8 @@ func TestS3FS(t *testing.T) {
 			config.Endpoint,
 			config.Bucket,
 			"",
-			128*1024,
-			128*1024,
+			-1,
+			-1,
 			cacheDir,
 		)
 		assert.Nil(t, err)
@@ -319,8 +319,8 @@ func TestS3FSMinioServer(t *testing.T) {
 				endpoint,
 				"test",
 				time.Now().Format("2006-01-02.15:04:05.000000"),
-				128*1024,
-				128*1024,
+				-1,
+				-1,
 				cacheDir,
 			)
 			assert.Nil(t, err)
@@ -354,8 +354,8 @@ func BenchmarkS3FS(b *testing.B) {
 			config.Endpoint,
 			config.Bucket,
 			time.Now().Format("2006-01-02.15:04:05.000000"),
-			128*1024,
-			128*1024,
+			-1,
+			-1,
 			cacheDir,
 		)
 		assert.Nil(b, err)

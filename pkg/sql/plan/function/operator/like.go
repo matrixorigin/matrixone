@@ -70,7 +70,7 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	case !lv.IsConst() && !rv.IsConst():
 		var nsp *nulls.Nulls
 		if nulls.Any(rv.GetNulls()) && nulls.Any(lv.GetNulls()) {
-			nsp = lv.GetNulls().Or(rv.GetNulls())
+			nulls.Or(lv.GetNulls(), rv.GetNulls(), nsp)
 			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, nsp, rs)
 			if err != nil {
 				return nil, err

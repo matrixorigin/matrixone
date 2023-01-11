@@ -18,3 +18,7 @@ a    b
 1    1
 2    2
 3    3
+select * from (values row(1,"1",1.0), row(abs(-2),"2",2.0)) a;
+column_0    column_1    column_2
+1    1    1.0
+2    2    2.0
