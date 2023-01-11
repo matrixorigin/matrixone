@@ -137,5 +137,4 @@ func (r *runtime) initSystemInitLogger() {
 		r.global.logger = log.GetServiceLogger(logutil.Adjust(nil), r.serviceType, r.serviceUUID)
 	}
 	r.global.systemInitLogger = r.Logger().WithProcess(log.SystemInit)
-	r.global.systemInitLogger.SetOptions(log.DefaultLogOptions().WithSample(log.SystemInitSample))
 }
