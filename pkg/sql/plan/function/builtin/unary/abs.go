@@ -30,9 +30,9 @@ func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]uint64, 1)
-		vector.SetCol(resultVector, abs.AbsUint64(inputValues, resultValues))
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[uint64](resultVector)
+		abs.AbsUint64(inputValues, resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
@@ -54,9 +54,9 @@ func AbsInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]int64, 1)
-		vector.SetCol(resultVector, abs.AbsInt64(inputValues, resultValues))
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[int64](resultVector)
+		abs.AbsInt64(inputValues, resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
@@ -78,9 +78,9 @@ func AbsFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]float64, 1)
-		vector.SetCol(resultVector, abs.AbsFloat64(inputValues, resultValues))
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[float64](resultVector)
+		abs.AbsFloat64(inputValues, resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
@@ -101,9 +101,9 @@ func AbsDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]types.Decimal128, 1)
-		vector.SetCol(resultVector, abs.AbsDecimal128(inputValues, resultValues))
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[types.Decimal128](resultVector)
+		abs.AbsDecimal128(inputValues, resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())

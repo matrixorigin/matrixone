@@ -144,7 +144,7 @@ func TestDateDiff(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			date, err := TimeStampDiff(c.vecs, c.proc)
+			date, err := TimestampDiff(c.vecs, c.proc)
 			if err != nil {
 				t.Fatal(err)
 			}

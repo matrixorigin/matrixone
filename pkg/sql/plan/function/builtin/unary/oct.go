@@ -31,13 +31,12 @@ func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]types.Decimal128, 1)
-		col, err := oct.Oct(inputValues, resultValues)
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[types.Decimal128](resultVector)
+		_, err := oct.Oct(inputValues, resultValues)
 		if err != nil {
 			return nil, err
 		}
-		vector.SetCol(resultVector, col)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
@@ -61,13 +60,12 @@ func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]types.Decimal128, 1)
-		col, err := oct.OctFloat(inputValues, resultValues)
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[types.Decimal128](resultVector)
+		_, err := oct.OctFloat(inputValues, resultValues)
 		if err != nil {
 			return nil, moerr.NewInternalError(proc.Ctx, "the input value is out of integer range")
 		}
-		vector.SetCol(resultVector, col)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())

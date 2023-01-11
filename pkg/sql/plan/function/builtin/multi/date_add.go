@@ -34,9 +34,8 @@ func DateAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := proc.AllocScalarVector(resultType)
-		rs := make([]types.Date, 1)
-		res, err := date_add.DateAdd(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), rs)
-		vector.SetCol(resultVector, res)
+		rs := vector.MustTCols[types.Date](resultVector)
+		_, err := date_add.DateAdd(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), rs)
 		return resultVector, err
 	} else {
 		var maxLen int
@@ -75,9 +74,8 @@ func TimeAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := proc.AllocScalarVector(resultType)
-		rs := make([]types.Time, 1)
-		res, err := date_add.TimeAdd(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), rs)
-		vector.SetCol(resultVector, res)
+		rs := vector.MustTCols[types.Time](resultVector)
+		_, err := date_add.TimeAdd(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), rs)
 		return resultVector, err
 	} else {
 		var maxLen int
@@ -117,9 +115,8 @@ func DatetimeAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := proc.AllocScalarVector(resultType)
-		rs := make([]types.Datetime, 1)
-		res, err := date_add.DatetimeAdd(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), rs)
-		vector.SetCol(resultVector, res)
+		rs := vector.MustTCols[types.Datetime](resultVector)
+		_, err := date_add.DatetimeAdd(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), rs)
 		return resultVector, err
 	} else {
 		var maxLen int
@@ -152,9 +149,8 @@ func DateStringAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := proc.AllocScalarVector(resultType)
-		rs := make([]types.Datetime, 1)
-		res, err := date_add.DateStringAdd(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), rs)
-		vector.SetCol(resultVector, res)
+		rs := vector.MustTCols[types.Datetime](resultVector)
+		_, err := date_add.DateStringAdd(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), rs)
 		return resultVector, err
 	} else {
 		var maxLen int
@@ -174,7 +170,7 @@ func DateStringAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	}
 }
 
-func TimeStampAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func TimestampAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := vectors[0]
 	secondVector := vectors[1]
 	firstValues := vector.MustTCols[types.Timestamp](vectors[0])
@@ -194,9 +190,8 @@ func TimeStampAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := proc.AllocScalarVector(resultType)
-		rs := make([]types.Timestamp, 1)
-		res, err := date_add.TimestampAdd(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), rs)
-		vector.SetCol(resultVector, res)
+		rs := vector.MustTCols[types.Timestamp](resultVector)
+		_, err := date_add.TimestampAdd(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), rs)
 		return resultVector, err
 	} else {
 		var maxLen int

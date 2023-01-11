@@ -29,11 +29,10 @@ func DateToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultValues := make([]int64, 1)
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[int64](resultVector)
 		DateToYearPlan2(inputValues, resultValues)
-		vec := vector.New(vector.CONSTANT, resultType)
-		vector.Append(vec, resultValues[0], false, proc.Mp())
-		return vec, nil
+		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
@@ -57,10 +56,9 @@ func DatetimeToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]int64, 1)
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[int64](resultVector)
 		DatetimeToYearPlan2(inputValues, resultValues)
-		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
@@ -81,11 +79,10 @@ func DateStringToYear(vectors []*vector.Vector, proc *process.Process) (*vector.
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultValues := make([]int64, 1)
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[int64](resultVector)
 		DateStringToYearPlan2(inputValues, nil, resultValues)
-		vec := vector.New(vector.CONSTANT, resultType)
-		vector.Append(vec, resultValues[0], false, proc.Mp())
-		return vec, nil
+		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {

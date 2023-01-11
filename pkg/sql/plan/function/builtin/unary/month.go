@@ -29,11 +29,10 @@ func DateToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultValues := make([]uint8, 1)
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[uint8](resultVector)
 		month.DateToMonth(inputValues, resultValues)
-		vec := vector.New(vector.CONSTANT, resultType)
-		vector.Append(vec, resultValues[0], false, proc.Mp())
-		return vec, nil
+		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
@@ -53,9 +52,9 @@ func DatetimeToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]uint8, 1)
-		vector.SetCol(resultVector, month.DatetimeToMonth(inputValues, resultValues))
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[uint8](resultVector)
+		month.DatetimeToMonth(inputValues, resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
@@ -76,9 +75,9 @@ func DateStringToMonth(vectors []*vector.Vector, proc *process.Process) (*vector
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]uint8, 1)
-		vector.SetCol(resultVector, month.DateStringToMonth(inputValues, resultVector.GetNulls(), resultValues))
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[uint8](resultVector)
+		month.DateStringToMonth(inputValues, resultVector.GetNulls(), resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())

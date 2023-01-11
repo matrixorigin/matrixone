@@ -30,9 +30,9 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		if left.IsConstNull() || right.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]float64, 1)
-		vector.SetCol(resultVector, power.Power(leftValues, rightValues, resultValues))
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[float64](resultVector)
+		power.Power(leftValues, rightValues, resultValues)
 		return resultVector, nil
 	case left.IsConst() && !right.IsConst():
 		if left.IsConstNull() {

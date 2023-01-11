@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func TimeStampDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func TimestampDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	//input vectors
 	firstVector := vectors[0]
 	secondVector := vectors[1]
@@ -49,7 +49,7 @@ func TimeStampDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		return nil, err
 	}
 	resultValues := vector.MustTCols[int64](resultVector)
-	err = datediff.TimeStampDiffWithCols(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), thirdVector.GetNulls(), resultVector.GetNulls(), resultValues, maxLen)
+	err = datediff.TimestampDiffWithCols(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), thirdVector.GetNulls(), resultVector.GetNulls(), resultValues, maxLen)
 	if err != nil {
 		return nil, err
 	}

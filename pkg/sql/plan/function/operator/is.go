@@ -35,27 +35,28 @@ func Is(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 
 	if lv.IsConst() {
 		vec := proc.AllocScalarVector(retType)
+		col := vector.MustTCols[bool](vec)
 		if lv.IsConstNull() {
-			vector.SetCol(vec, []bool{false})
+			col[0] = false
 		} else {
-			vector.SetCol(vec, []bool{lefts[0] == right})
+			lefts := vector.MustTCols[bool](lv)
+			col[0] = lefts[0] == right
 		}
 		return vec, nil
 	} else {
 		l := int64(len(lefts))
-		col := make([]bool, l)
-		vec, err := proc.AllocVector(*lv.GetType(), l*1)
+		vec, err := proc.AllocVectorOfRows(*lv.GetType(), l*1, lv.GetNulls())
 		if err != nil {
 			return nil, err
 		}
+		col := vector.MustTCols[bool](vec)
 		for i := range lefts {
 			if nulls.Contains(lv.GetNulls(), uint64(i)) {
 				col[i] = false
 			} else {
-				col[i] = (lefts[i] == right)
+				col[i] = lefts[i] == right
 			}
 		}
-		vector.SetCol(vec, col)
 		return vec, nil
 	}
 }

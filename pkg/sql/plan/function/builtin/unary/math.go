@@ -38,8 +38,6 @@ func math1(vs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vecto
 			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
 		} else {
 			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
-			resultValues := make([]float64, 1)
-			vector.SetCol(resultVector, resultValues)
 			if err := fn(origVec, resultVector); err != nil {
 				return nil, err
 			}

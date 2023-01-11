@@ -29,9 +29,9 @@ func DateToWeek(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]uint8, 1)
-		vector.SetCol(resultVector, week.DateToWeek(inputValues, resultValues))
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[uint8](resultVector)
+		week.DateToWeek(inputValues, resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
@@ -52,9 +52,9 @@ func DatetimeToWeek(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]uint8, 1)
-		vector.SetCol(resultVector, week.DatetimeToWeek(inputValues, resultValues))
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[uint8](resultVector)
+		week.DatetimeToWeek(inputValues, resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())

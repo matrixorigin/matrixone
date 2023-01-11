@@ -29,10 +29,9 @@ func TimeToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]types.Time, 1)
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[types.Time](resultVector)
 		copy(resultValues, inputValues)
-		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
@@ -54,9 +53,9 @@ func DatetimeToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]types.Time, 1)
-		vector.SetCol(resultVector, time.DatetimeToTime(inputValues, resultValues, inputPrecision))
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[types.Time](resultVector)
+		time.DatetimeToTime(inputValues, resultValues, inputPrecision)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
@@ -77,9 +76,9 @@ func DateToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]types.Time, 1)
-		vector.SetCol(resultVector, time.DateToTime(inputValues, resultValues))
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[types.Time](resultVector)
+		time.DateToTime(inputValues, resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
@@ -101,10 +100,9 @@ func DateStringToTime(vectors []*vector.Vector, proc *process.Process) (*vector.
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]types.Time, 1)
-		result, err := time.DateStringToTime(inputValues, resultValues)
-		vector.SetCol(resultVector, result)
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[types.Time](resultVector)
+		_, err := time.DateStringToTime(inputValues, resultValues)
 		return resultVector, err
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
@@ -126,10 +124,9 @@ func Int64ToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]types.Time, 1)
-		result, err := time.Int64ToTime(inputValues, resultValues)
-		vector.SetCol(resultVector, result)
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[types.Time](resultVector)
+		_, err := time.Int64ToTime(inputValues, resultValues)
 		return resultVector, err
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
@@ -151,10 +148,9 @@ func Decimal128ToTime(vectors []*vector.Vector, proc *process.Process) (*vector.
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]types.Time, 1)
-		result, err := time.Decimal128ToTime(inputValues, resultValues)
-		vector.SetCol(resultVector, result)
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[types.Time](resultVector)
+		_, err := time.Decimal128ToTime(inputValues, resultValues)
 		return resultVector, err
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())

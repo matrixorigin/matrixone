@@ -36,10 +36,9 @@ func UnaryTilde[T constraints.Integer](vectors []*vector.Vector, proc *process.P
 			return proc.AllocScalarNullVector(returnType), nil
 		}
 		resVector := proc.AllocScalarVector(returnType)
-		resValues := make([]uint64, 1)
+		resValues := vector.MustTCols[uint64](resVector)
 		nulls.Set(resVector.GetNulls(), srcVector.GetNulls())
 		resValues[0] = funcBitInversion(srcValues[0])
-		vector.SetCol(resVector, resValues)
 		return resVector, nil
 	} else {
 		resVector, err := proc.AllocVectorOfRows(returnType, int64(len(srcValues)), srcVector.GetNulls())
@@ -84,9 +83,9 @@ func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vect
 			return proc.AllocScalarNullVector(*srcVector.GetType()), nil
 		}
 		resVector := proc.AllocScalarVector(*srcVector.GetType())
-		resValues := make([]T, 1)
+		resValues := vector.MustTCols[T](resVector)
 		nulls.Set(resVector.GetNulls(), srcVector.GetNulls())
-		vector.SetCol(resVector, neg.NumericNeg(srcValues, resValues))
+		neg.NumericNeg(srcValues, resValues)
 		return resVector, nil
 	} else {
 		resVector, err := proc.AllocVectorOfRows(*srcVector.GetType(), int64(len(srcValues)), srcVector.GetNulls())
@@ -108,9 +107,9 @@ func UnaryMinusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vect
 			return proc.AllocScalarNullVector(*srcVector.GetType()), nil
 		}
 		resVector := proc.AllocScalarVector(*srcVector.GetType())
-		resValues := make([]types.Decimal64, 1)
+		resValues := vector.MustTCols[types.Decimal64](resVector)
 		nulls.Set(resVector.GetNulls(), srcVector.GetNulls())
-		vector.SetCol(resVector, neg.Decimal64Neg(srcValues, resValues))
+		neg.Decimal64Neg(srcValues, resValues)
 		return resVector, nil
 	} else {
 		resVector, err := proc.AllocVectorOfRows(*srcVector.GetType(), int64(len(srcValues)), srcVector.GetNulls())
@@ -132,8 +131,8 @@ func UnaryMinusDecimal128(vectors []*vector.Vector, proc *process.Process) (*vec
 			return proc.AllocScalarNullVector(*srcVector.GetType()), nil
 		}
 		resVector := proc.AllocScalarVector(*srcVector.GetType())
-		resValues := make([]types.Decimal128, 1)
-		vector.SetCol(resVector, neg.Decimal128Neg(srcValues, resValues))
+		resValues := vector.MustTCols[types.Decimal128](resVector)
+		neg.Decimal128Neg(srcValues, resValues)
 		return resVector, nil
 	} else {
 		resVector, err := proc.AllocVectorOfRows(*srcVector.GetType(), int64(len(srcValues)), srcVector.GetNulls())

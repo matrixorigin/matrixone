@@ -163,7 +163,9 @@ func (proc *Process) AllocVectorOfRows(typ types.Type, nele int64, nsp *nulls.Nu
 }
 
 func (proc *Process) AllocScalarVector(typ types.Type) *vector.Vector {
-	return vector.New(vector.CONSTANT, typ)
+	vec := vector.New(vector.CONSTANT, typ)
+	vec.PreExtend(1, proc.Mp())
+	return vec
 }
 
 func (proc *Process) AllocScalarNullVector(typ types.Type) *vector.Vector {

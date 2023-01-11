@@ -48,7 +48,7 @@ func TimeStampDiff(unit string, expr1, expr2 types.Datetime) (int64, error) {
 	return expr2.DateTimeDiffWithUnit(unit, expr1)
 }
 
-func TimeStampDiffWithCols(units []string, expr1, expr2 []types.Datetime, unitNs, firstNs, secondNs, rsNs *nulls.Nulls, rs []int64, maxLen int) error {
+func TimestampDiffWithCols(units []string, expr1, expr2 []types.Datetime, unitNs, firstNs, secondNs, rsNs *nulls.Nulls, rs []int64, maxLen int) error {
 	var unit string
 	if len(expr1) == 1 && len(expr2) == 1 {
 		unitsLen := len(units)

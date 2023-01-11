@@ -63,6 +63,6 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	resultVector.PreExtend(resLen, proc.Mp())
 	resultValues := vector.MustTCols[uint64](resultVector)
 	nulls.Or(left.GetNulls(), right.GetNulls(), resultVector.GetNulls())
-	vector.SetCol(resultVector, findinset.FindInSet(leftValues, rightValues, resultValues))
+	findinset.FindInSet(leftValues, rightValues, resultValues)
 	return resultVector, nil
 }

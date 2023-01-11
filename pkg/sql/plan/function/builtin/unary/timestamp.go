@@ -29,10 +29,9 @@ func DateToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]types.Timestamp, 1)
-		vector.SetCol(resultVector, timestamp.DateToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.GetNulls(), resultValues))
-		vector.SetCol(resultVector, resultValues)
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[types.Timestamp](resultVector)
+		timestamp.DateToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.GetNulls(), resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
@@ -53,9 +52,9 @@ func DatetimeToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vect
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]types.Timestamp, 1)
-		vector.SetCol(resultVector, timestamp.DatetimeToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.GetNulls(), resultValues))
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[types.Timestamp](resultVector)
+		timestamp.DatetimeToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.GetNulls(), resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
@@ -77,10 +76,9 @@ func TimestampToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vec
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]types.Timestamp, 1)
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[types.Timestamp](resultVector)
 		copy(resultValues, inputValues)
-		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
@@ -102,9 +100,9 @@ func DateStringToTimestamp(vectors []*vector.Vector, proc *process.Process) (*ve
 		if inputVector.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]types.Timestamp, 1)
-		vector.SetCol(resultVector, timestamp.DateStringToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.GetNulls(), resultValues))
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[types.Timestamp](resultVector)
+		timestamp.DateStringToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.GetNulls(), resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())

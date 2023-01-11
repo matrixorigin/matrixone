@@ -32,10 +32,9 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if left.IsConstNull() || right.IsConstNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := make([]uint8, 1)
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := vector.MustTCols[uint8](resultVector)
 		endswith.EndsWithAllConst(leftValues, rightValues, resultValues)
-		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	case left.IsConst() && !right.IsConst():
 		if left.IsConstNull() {
