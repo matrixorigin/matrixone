@@ -282,9 +282,7 @@ func getRangeExpr(colName string) *plan.Expr {
 
 func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperator, mp *mpool.MPool) (uint64, uint64, *batch.Batch, error) {
 	var rds []engine.Reader
-	retbat := &batch.Batch{
-		Vecs: []*vector.Vector{},
-	}
+	retbat := batch.NewWithSize(1)
 
 	rel, err := GetNewRelation(param.eg, param.dbName, AUTO_INCR_TABLE, txn, param.ctx)
 	if err != nil {
@@ -345,8 +343,12 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 			}
 		}
 		if rowIndex < int64(bat.Length()) {
-			retbat.Vecs = append(retbat.Vecs, bat.Vecs[0])
-			retbat.Vecs[0].Col = retbat.Vecs[0].Col.([]types.Rowid)[rowIndex : rowIndex+1]
+			vec := vector.New(bat.GetVector(0).Typ)
+			rowid := vector.MustTCols[types.Rowid](bat.GetVector(0))[rowIndex]
+			if err := vec.Append(rowid, false, mp); err != nil {
+				panic(err)
+			}
+			retbat.SetVector(0, vec)
 			retbat.SetZs(1, mp)
 			bat.Clean(mp)
 			return vs2[rowIndex], vs3[rowIndex], retbat, nil
@@ -380,10 +382,11 @@ func makeAutoIncrBatch(name string, num, step uint64, mp *mpool.MPool) *batch.Ba
 	vec := vector.NewWithStrings(types.T_varchar.ToType(), []string{name}, nil, mp)
 	vec2 := vector.NewWithFixed(types.T_uint64.ToType(), []uint64{num}, nil, mp)
 	vec3 := vector.NewWithFixed(types.T_uint64.ToType(), []uint64{step}, nil, mp)
-	bat := &batch.Batch{
-		Attrs: AUTO_INCR_TABLE_COLNAME[1:],
-		Vecs:  []*vector.Vector{vec, vec2, vec3},
-	}
+	bat := batch.NewWithSize(3)
+	bat.SetAttributes(AUTO_INCR_TABLE_COLNAME[1:])
+	bat.SetVector(0, vec)
+	bat.SetVector(1, vec2)
+	bat.SetVector(2, vec3)
 	bat.SetZs(1, mp)
 	return bat
 }
@@ -410,7 +413,6 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 	}
 
 	retbat := batch.NewWithSize(1)
-
 	for len(rds) > 0 {
 		bat, err := rds[0].Read(ctx, AUTO_INCR_TABLE_COLNAME, nil, mp)
 		if err != nil {
@@ -430,8 +432,12 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 			str := bat.Vecs[1].GetString(rowIndex)
 			if str == colName {
 				currentNum := vector.MustTCols[uint64](bat.Vecs[2])[rowIndex : rowIndex+1]
-				retbat.Vecs = append(retbat.Vecs, bat.Vecs[0])
-				retbat.Vecs[0].Col = retbat.Vecs[0].Col.([]types.Rowid)[rowIndex : rowIndex+1]
+				vec := vector.New(bat.GetVector(0).Typ)
+				rowid := vector.MustTCols[types.Rowid](bat.GetVector(0))[rowIndex]
+				if err := vec.Append(rowid, false, mp); err != nil {
+					panic(err)
+				}
+				retbat.SetVector(0, vec)
 				retbat.SetZs(1, mp)
 				bat.Clean(mp)
 				return retbat, currentNum[0]
