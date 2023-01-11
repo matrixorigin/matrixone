@@ -247,6 +247,11 @@ type Table struct {
 	SupportUserAccess bool
 	// SupportConstAccess default false. if true, use Table.Account
 	SupportConstAccess bool
+
+	// name2ColumnIdx used in Row
+	name2ColumnIdx map[string]int
+	// accessIdx used in Row
+	accountIdx int
 }
 
 func (tbl *Table) Clone() *Table {
@@ -399,9 +404,7 @@ func (tbl *ViewSingleCondition) String() string {
 }
 
 type Row struct {
-	Table          *Table
-	AccountIdx     int
-	Name2ColumnIdx map[string]int
+	Table *Table
 
 	Columns    []any
 	CsvColumns []string
@@ -410,30 +413,33 @@ type Row struct {
 func (tbl *Table) GetRow(ctx context.Context) *Row {
 	row := gRowPool.Get().(*Row)
 	row.Table = tbl
-	row.AccountIdx = -1
-	for idx, col := range tbl.Columns {
-		if _, exist := row.Name2ColumnIdx[col.Name]; exist {
-			panic(moerr.NewInternalError(ctx, "%s table has duplicate column name: %s", tbl.GetIdentify(), col.Name))
+
+	if len(tbl.name2ColumnIdx) == 0 {
+		tbl.name2ColumnIdx = make(map[string]int, len(tbl.Columns))
+		for idx, col := range tbl.Columns {
+			if _, exist := tbl.name2ColumnIdx[col.Name]; exist {
+				panic(moerr.NewInternalError(ctx, "%s table has duplicate column name: %s", tbl.GetIdentify(), col.Name))
+			}
+			tbl.name2ColumnIdx[col.Name] = idx
 		}
-		row.Name2ColumnIdx[col.Name] = idx
-	}
-	if tbl.AccountColumn != nil {
-		idx, exist := row.Name2ColumnIdx[tbl.AccountColumn.Name]
-		if !exist {
-			panic(moerr.NewInternalError(ctx, "%s table missing %s column", tbl.GetName(), tbl.AccountColumn.Name))
+		if tbl.AccountColumn != nil {
+			idx, exist := tbl.name2ColumnIdx[tbl.AccountColumn.Name]
+			if !exist {
+				panic(moerr.NewInternalError(ctx, "%s table missing %s column", tbl.GetName(), tbl.AccountColumn.Name))
+			}
+			tbl.accountIdx = idx
+		} else {
+			tbl.accountIdx = -1
 		}
-		row.AccountIdx = idx
 	}
 	return row
 }
 
 var gRowPool = sync.Pool{New: func() any {
 	return &Row{
-		Table:          nil,
-		AccountIdx:     -1,
-		Columns:        nil,
-		CsvColumns:     nil,
-		Name2ColumnIdx: make(map[string]int),
+		Table:      nil,
+		Columns:    nil,
+		CsvColumns: nil,
 	}
 }}
 
@@ -444,18 +450,13 @@ func (r *Row) Free() {
 
 func (r *Row) clean() {
 	r.Table = nil
-	r.AccountIdx = -1
 	r.Columns = nil
 	r.CsvColumns = nil
-	for k := range r.Name2ColumnIdx {
-		delete(r.Name2ColumnIdx, k)
-	}
 }
 
 func (r *Row) Clone() *Row {
 	n := gRowPool.Get().(*Row)
 	n.Table = r.Table
-	n.AccountIdx = r.AccountIdx
 	if len(r.Columns) > 0 {
 		n.Columns = make([]any, len(r.Columns))
 		copy(n.Columns, r.Columns[:])
@@ -464,15 +465,12 @@ func (r *Row) Clone() *Row {
 		n.CsvColumns = make([]string, len(r.CsvColumns))
 		n.CsvColumns = r.CsvColumns[:]
 	}
-	for k, v := range r.Name2ColumnIdx {
-		n.Name2ColumnIdx[k] = v
-	}
 	return n
 }
 
 func (r *Row) Reset() {
 	if len(r.Columns) == 0 {
-		r.Columns = make([]any, len(r.Name2ColumnIdx))
+		r.Columns = make([]any, len(r.Table.Columns))
 	}
 	for idx, typ := range r.Table.Columns {
 		switch typ.ColType.ToType().Oid {
@@ -498,8 +496,8 @@ func (r *Row) Reset() {
 // GetAccount return r.Columns[r.AccountIdx] if r.AccountIdx >= 0 and r.Table.PathBuilder.SupportAccountStrategy,
 // else return "sys"
 func (r *Row) GetAccount() string {
-	if r.Table.PathBuilder.SupportAccountStrategy() && r.AccountIdx >= 0 {
-		return r.Columns[r.AccountIdx].(string)
+	if r.Table.PathBuilder.SupportAccountStrategy() && r.Table.accountIdx >= 0 {
+		return r.Columns[r.Table.accountIdx].(string)
 	}
 	if r.Table.SupportConstAccess && len(r.Table.Account) > 0 {
 		return r.Table.Account
@@ -511,7 +509,7 @@ func (r *Row) SetVal(col string, val any) {
 	if len(r.Columns) == 0 {
 		r.Reset()
 	}
-	if idx, exist := r.Name2ColumnIdx[col]; !exist {
+	if idx, exist := r.Table.name2ColumnIdx[col]; !exist {
 		logutil.Fatalf("column(%s) not exist in table(%s)", col, r.Table.Table)
 	} else {
 		r.Columns[idx] = val
@@ -574,11 +572,11 @@ func (r *Row) CsvPrimaryKey() string {
 		return ""
 	}
 	if len(r.Table.PrimaryKeyColumn) == 1 {
-		return r.CsvColumns[r.Name2ColumnIdx[r.Table.PrimaryKeyColumn[0].Name]]
+		return r.CsvColumns[r.Table.name2ColumnIdx[r.Table.PrimaryKeyColumn[0].Name]]
 	}
 	sb := strings.Builder{}
 	for _, col := range r.Table.PrimaryKeyColumn {
-		sb.WriteString(r.CsvColumns[r.Name2ColumnIdx[col.Name]])
+		sb.WriteString(r.CsvColumns[r.Table.name2ColumnIdx[col.Name]])
 		sb.WriteRune('-')
 	}
 	return sb.String()

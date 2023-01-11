@@ -254,7 +254,6 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	instant := time.Now()
 
 	for _, tbl := range tables {
-		_ = tbl.GetRow(ctx)
 		if err := mustExec(tbl.ToCreateSql(ctx, true)); err != nil {
 			return err
 		}
@@ -290,6 +289,7 @@ func GetSchemaForAccount(ctx context.Context, account string) []string {
 
 func init() {
 	for _, tbl := range tables {
+		tbl.GetRow(context.Background()).Free()
 		if old := table.RegisterTableDefine(tbl); old != nil {
 			panic(moerr.NewInternalError(context.Background(), "table already registered: %s", old.GetIdentify()))
 		}

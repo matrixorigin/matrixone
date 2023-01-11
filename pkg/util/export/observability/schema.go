@@ -15,6 +15,9 @@
 package observability
 
 import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
@@ -123,4 +126,14 @@ var SpansTable = &table.Table{
 	// SupportUserAccess
 	SupportUserAccess:  false,
 	SupportConstAccess: true,
+}
+
+func init() {
+	var tables = []*table.Table{MetricTable, LogsTable, SpansTable}
+	for _, tbl := range tables {
+		tbl.GetRow(context.Background()).Free()
+		if old := table.RegisterTableDefine(tbl); old != nil {
+			panic(moerr.NewInternalError(context.Background(), "table already registered: %s", old.GetIdentify()))
+		}
+	}
 }
