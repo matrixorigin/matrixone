@@ -376,6 +376,7 @@ func (r *TAEReader) ReadLine() ([]string, error) {
 		}
 		record[idx] = val
 	}
+	r.rowIdx++
 	return record, nil
 }
 

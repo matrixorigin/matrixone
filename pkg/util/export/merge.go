@@ -490,7 +490,17 @@ func newETLReader(ctx context.Context, tbl *table.Table, fs fileservice.FileServ
 	if strings.LastIndex(path, table.CsvExtension) > 0 {
 		return NewCSVReader(ctx, fs, path)
 	} else if strings.LastIndex(path, table.TaeExtension) > 0 {
-		return etl.NewTaeReader(ctx, tbl, path, size, fs, mp)
+		r, err := etl.NewTaeReader(ctx, tbl, path, size, fs, mp)
+		if err != nil {
+			r.Close()
+			return nil, err
+		}
+		_, err = r.ReadAll(ctx)
+		if err != nil {
+			r.Close()
+			return nil, err
+		}
+		return r, nil
 	} else {
 		panic("NOT Implements")
 	}

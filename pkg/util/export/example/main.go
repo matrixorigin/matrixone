@@ -193,7 +193,7 @@ func main() {
 	ctx, cancel := context.WithCancel(ctx)
 	go traceMemStats(ctx)
 
-	if err := export.InitMerge(ctx, 5*time.Minute, 128*mpool.MB, "tae"); err != nil {
+	if err := export.InitMerge(ctx, 5*time.Minute, 128*mpool.MB, "csv"); err != nil {
 		panic(err)
 	}
 	morun.SetupProcessLevelRuntime(morun.DefaultRuntime())
