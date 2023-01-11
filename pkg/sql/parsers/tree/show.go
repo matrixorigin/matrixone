@@ -696,3 +696,6 @@ func (node *ShowAccounts) Format(ctx *FmtCtx) {
 		node.Like.Format(ctx)
 	}
 }
+
+func (node *ShowAccounts) GetStatementType() string { return "Show Accounts" }
+func (node *ShowAccounts) GetQueryType() string     { return QueryTypeDQL }

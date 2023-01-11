@@ -3669,8 +3669,11 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
-		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
-		*tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowLocks, *tree.ShowFunctionStatus:
+		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus,
+		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
+		*tree.ShowTableNumber, *tree.ShowColumnNumber,
+		*tree.ShowTableValues, *tree.ShowNodeList,
+		*tree.ShowLocks, *tree.ShowFunctionStatus, *tree.ShowAccounts:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
