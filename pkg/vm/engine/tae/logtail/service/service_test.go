@@ -54,8 +54,8 @@ func TestService(t *testing.T) {
 		WithServerCollectInterval(500*time.Millisecond),
 		WithServerSendTimeout(5*time.Second),
 		WithServerEnableChecksum(true),
-		WithServerMaxMessageSize(16*mpool.KB),
-		WithServerPayloadCopyBufferSize(7),
+		WithServerMaxMessageSize(32+96+7),
+		WithServerPayloadCopyBufferSize(16*mpool.KB),
 		WithServerMaxLogtailFetchFailure(5),
 	)
 	require.NoError(t, err)

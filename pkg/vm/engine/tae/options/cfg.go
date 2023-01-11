@@ -67,8 +67,8 @@ type LogtailCfg struct {
 }
 
 type LogtailServerCfg struct {
-	RpcMaxMessageSize        int
-	RpcPayloadCopyBufferSize int
+	RpcMaxMessageSize        int64
+	RpcPayloadCopyBufferSize int64
 	RpcEnableChecksum        bool
 	LogtailCollectInterval   time.Duration
 	ResponseSendTimeout      time.Duration

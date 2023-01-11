@@ -39,7 +39,7 @@ func TestSessionManger(t *testing.T) {
 
 	// constructs mocker
 	logger := mockMOLogger()
-	pooler := mockResponsePooler()
+	pooler := NewResponsePool()
 	notifier := mockSessionErrorNotifier(logger.RawLogger())
 	sendTimeout := 5 * time.Second
 	poisionTime := 10 * time.Millisecond
@@ -72,7 +72,7 @@ func TestSessionError(t *testing.T) {
 
 	// constructs mocker
 	logger := mockMOLogger()
-	pooler := mockResponsePooler()
+	pooler := NewResponsePool()
 	notifier := mockSessionErrorNotifier(logger.RawLogger())
 	cs := mockBrokenClientSession()
 	stream := mockMorpcStream(cs, 10, 1024)
@@ -110,7 +110,7 @@ func TestPoisionSession(t *testing.T) {
 
 	// constructs mocker
 	logger := mockMOLogger()
-	pooler := mockResponsePooler()
+	pooler := NewResponsePool()
 	notifier := mockSessionErrorNotifier(logger.RawLogger())
 	cs := mockBlockStream()
 	stream := mockMorpcStream(cs, 10, 1024)
@@ -143,7 +143,7 @@ func TestSession(t *testing.T) {
 
 	// constructs mocker
 	logger := mockMOLogger()
-	pooler := mockResponsePooler()
+	pooler := NewResponsePool()
 	notifier := mockSessionErrorNotifier(logger.RawLogger())
 	cs := mockNormalClientSession(logger.RawLogger())
 	stream := mockMorpcStream(cs, 10, 1024)
@@ -320,58 +320,6 @@ func (m *notifySessionError) NotifySessionError(ss *Session, err error) {
 	}
 }
 
-type respPooler struct {
-	pool *sync.Pool
-}
-
-func mockResponsePooler() ResponsePooler {
-	return &respPooler{
-		pool: &sync.Pool{
-			New: func() any {
-				return &LogtailResponse{}
-			},
-		},
-	}
-}
-
-func (m *respPooler) AcquireResponse() *LogtailResponse {
-	return m.pool.Get().(*LogtailResponse)
-}
-
-func (m *respPooler) ReleaseResponse(resp *LogtailResponse) {
-	resp.Reset()
-	m.pool.Put(resp)
-}
-
-type segmentPooler struct {
-	chunkSize int
-	pool      *sync.Pool
-}
-
-func mockSegmentPooler(size int) SegmentPooler {
-	return &segmentPooler{
-		chunkSize: size,
-		pool: &sync.Pool{
-			New: func() any {
-				seg := &LogtailResponseSegment{}
-				seg.Payload = make([]byte, size)
-				return seg
-			},
-		},
-	}
-}
-
-func (m *segmentPooler) AcquireResponseSegment() *LogtailResponseSegment {
-	return m.pool.Get().(*LogtailResponseSegment)
-}
-
-func (m *segmentPooler) ReleaseResponseSegment(seg *LogtailResponseSegment) {
-	buf := seg.Payload
-	seg.Reset()
-	seg.Payload = buf[:cap(buf)]
-	m.pool.Put(seg)
-}
-
 func mockWrapLogtail(table api.TableID) wrapLogtail {
 	return wrapLogtail{
 		id: TableID(table.String()),
@@ -388,13 +336,16 @@ func mockLogtail(table api.TableID) logtail.TableLogtail {
 }
 
 func mockMorpcStream(
-	cs morpc.ClientSession, id uint64, size int,
+	cs morpc.ClientSession, id uint64, maxMessageSize int,
 ) morpcStream {
+	segments := NewSegmentPool(maxMessageSize)
+
 	return morpcStream{
-		streamID:  id,
-		chunkSize: size,
-		cs:        cs,
-		pool:      mockSegmentPooler(size),
+		streamID: id,
+		limit:    segments.LeastEffectiveCapacity(),
+		logger:   mockMOLogger(),
+		cs:       cs,
+		segments: segments,
 	}
 }
 

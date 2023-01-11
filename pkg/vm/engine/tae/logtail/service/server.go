@@ -16,7 +16,6 @@ package service
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -46,14 +45,14 @@ type TableID string
 type ServerOption func(*LogtailServer)
 
 // WithServerMaxMessageSize sets max rpc message size
-func WithServerMaxMessageSize(maxMessageSize int) ServerOption {
+func WithServerMaxMessageSize(maxMessageSize int64) ServerOption {
 	return func(s *LogtailServer) {
 		s.cfg.RpcMaxMessageSize = maxMessageSize
 	}
 }
 
 // WithServerPayloadCopyBufferSize sets payload copy buffer size
-func WithServerPayloadCopyBufferSize(size int) ServerOption {
+func WithServerPayloadCopyBufferSize(size int64) ServerOption {
 	return func(s *LogtailServer) {
 		s.cfg.RpcPayloadCopyBufferSize = size
 	}
@@ -114,10 +113,11 @@ type subscription struct {
 // LogtailServer handles logtail push logic.
 type LogtailServer struct {
 	pool struct {
-		requests  *sync.Pool
-		responses *sync.Pool
-		segments  *sync.Pool
+		requests  RequestPool
+		responses ResponsePool
+		segments  SegmentPool
 	}
+	maxChunkSize int
 
 	rt     runtime.Runtime
 	logger *log.MOLogger
@@ -160,24 +160,6 @@ func NewLogtailServer(
 		logtail:    logtail,
 	}
 
-	s.pool.requests = &sync.Pool{
-		New: func() any {
-			return &LogtailRequest{}
-		},
-	}
-	s.pool.responses = &sync.Pool{
-		New: func() any {
-			return &LogtailResponse{}
-		},
-	}
-	s.pool.segments = &sync.Pool{
-		New: func() any {
-			seg := &LogtailResponseSegment{}
-			seg.Payload = make([]byte, s.cfg.RpcPayloadCopyBufferSize)
-			return seg
-		},
-	}
-
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -185,20 +167,30 @@ func NewLogtailServer(
 	s.logger = s.logger.Named(LogtailServiceRPCName).
 		With(zap.String("server-id", uuid.NewString()))
 
+	s.pool.requests = NewRequestPool()
+	s.pool.responses = NewResponsePool()
+	s.pool.segments = NewSegmentPool(int(s.cfg.RpcMaxMessageSize))
+	s.maxChunkSize = s.pool.segments.LeastEffectiveCapacity()
+	if s.maxChunkSize <= 0 {
+		panic("rpc max message size isn't enough")
+	}
+
+	s.logger.Debug("max data chunk size for segment", zap.Int("value", s.maxChunkSize))
+
 	codecOpts := []morpc.CodecOption{
-		morpc.WithCodecMaxBodySize(s.cfg.RpcMaxMessageSize),
+		morpc.WithCodecMaxBodySize(int(s.cfg.RpcMaxMessageSize)),
 	}
 	if s.cfg.RpcEnableChecksum {
 		codecOpts = append(codecOpts, morpc.WithCodecEnableChecksum())
 	}
-	codec := morpc.NewMessageCodec(s.acquireRequest, codecOpts...)
+	codec := morpc.NewMessageCodec(s.pool.requests.Acquire, codecOpts...)
 
 	rpc, err := morpc.NewRPCServer(LogtailServiceRPCName, address, codec,
 		morpc.WithServerLogger(s.logger.RawLogger()),
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 				m := v.(morpc.RPCMessage)
-				s.ReleaseResponseSegment(m.Message.(*LogtailResponseSegment))
+				s.pool.segments.Release(m.Message.(*LogtailResponseSegment))
 			}),
 		),
 	)
@@ -220,41 +212,6 @@ func NewLogtailServer(
 	return s, nil
 }
 
-// AcquireResponseSegment fetches LogtailResponseSegment from pool.
-func (s *LogtailServer) AcquireResponseSegment() *LogtailResponseSegment {
-	return s.pool.segments.Get().(*LogtailResponseSegment)
-}
-
-// ReleaseResponseSegment gives LogtailResponseSegment back to pool.
-func (s *LogtailServer) ReleaseResponseSegment(seg *LogtailResponseSegment) {
-	buf := seg.Payload
-	seg.Reset()
-	seg.Payload = buf[:cap(buf)]
-	s.pool.segments.Put(seg)
-}
-
-// AcquireResponse fetches LogtailResponse from pool.
-func (s *LogtailServer) AcquireResponse() *LogtailResponse {
-	return s.pool.responses.Get().(*LogtailResponse)
-}
-
-// ReleaseResponse gives LogtailResponse back to pool.
-func (s *LogtailServer) ReleaseResponse(resp *LogtailResponse) {
-	resp.Reset()
-	s.pool.responses.Put(resp)
-}
-
-// acquireRequest fetches LogtailRequest from pool.
-func (s *LogtailServer) acquireRequest() morpc.Message {
-	return s.pool.requests.Get().(*LogtailRequest)
-}
-
-// releaseRequest gives LogtailRequest back to pool.
-func (s *LogtailServer) releaseRequest(req *LogtailRequest) {
-	req.Reset()
-	s.pool.requests.Put(req)
-}
-
 // onMessage is the handler for morpc client session.
 func (s *LogtailServer) onMessage(
 	ctx context.Context, request morpc.Message, seq uint64, cs morpc.ClientSession,
@@ -268,7 +225,7 @@ func (s *LogtailServer) onMessage(
 	if !ok {
 		logger.Fatal("receive invalid message", zap.Any("message", request))
 	}
-	defer s.releaseRequest(msg)
+	defer s.pool.requests.Release(msg)
 
 	select {
 	case <-ctx.Done():
@@ -277,10 +234,11 @@ func (s *LogtailServer) onMessage(
 	}
 
 	stream := morpcStream{
-		streamID:  msg.RequestId,
-		chunkSize: s.cfg.RpcPayloadCopyBufferSize,
-		cs:        cs,
-		pool:      s,
+		streamID: msg.RequestId,
+		limit:    s.maxChunkSize,
+		logger:   s.logger,
+		cs:       cs,
+		segments: s.pool.segments,
 	}
 
 	if req := msg.GetSubscribeTable(); req != nil {
@@ -304,7 +262,7 @@ func (s *LogtailServer) onSubscription(
 
 	tableID := TableID(req.Table.String())
 	session := s.ssmgr.GetSession(
-		s.rootCtx, logger, s.cfg.ResponseSendTimeout, s, s, stream, s.streamPoisionTime(),
+		s.rootCtx, logger, s.cfg.ResponseSendTimeout, s.pool.responses, s, stream, s.streamPoisionTime(),
 	)
 
 	repeated := session.Register(tableID, *req.Table)
@@ -343,7 +301,7 @@ func (s *LogtailServer) onUnsubscription(
 ) error {
 	tableID := TableID(req.Table.String())
 	session := s.ssmgr.GetSession(
-		s.rootCtx, s.logger, s.cfg.ResponseSendTimeout, s, s, stream, s.streamPoisionTime(),
+		s.rootCtx, s.logger, s.cfg.ResponseSendTimeout, s.pool.responses, s, stream, s.streamPoisionTime(),
 	)
 
 	state := session.Unregister(tableID)
