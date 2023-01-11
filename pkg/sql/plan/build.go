@@ -47,6 +47,9 @@ func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze) (*Plan,
 	if err != nil {
 		return nil, err
 	}
+	if plan.GetQuery() == nil {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "the sql query plan does not support explain.")
+	}
 	return plan, nil
 }
 

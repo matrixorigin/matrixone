@@ -299,7 +299,11 @@ var (
 			"SELECT 'def' AS TABLE_CATALOG," +
 			"reldatabase AS TABLE_SCHEMA," +
 			"relname AS TABLE_NAME," +
-			"'' AS TABLE_TYPE," +
+			"(case when relkind = 'v' and (reldatabase='mo_catalog' or reldatabase='information_schema') then 'SYSTEM VIEW' " +
+			"when relkind = 'v'  then 'VIEW' " +
+			"when relkind = 'e' then 'EXTERNAL TABLE' " +
+			"when relkind = 'r' then 'BASE TABLE' " +
+			"else 'UNKNOWN TABLE TYPE' end) AS TABLE_TYPE," +
 			"'' AS ENGINE," +
 			"0 AS VERSION," +
 			"'' AS ROW_FORMAT," +

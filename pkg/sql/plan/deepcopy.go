@@ -543,6 +543,7 @@ func DeepCopyInsertValues(insert *plan.InsertValues) *plan.InsertValues {
 		UniqueIndexDef:    DeepCopyUniqueIndexDef(insert.UniqueIndexDef),
 		SecondaryIndexDef: DeepCopySecondaryIndexDef(insert.SecondaryIndexDef),
 		ClusterTable:      DeepCopyClusterTable(insert.GetClusterTable()),
+		HasAutoCol:        insert.HasAutoCol,
 	}
 
 	for idx, col := range insert.ExplicitCols {
