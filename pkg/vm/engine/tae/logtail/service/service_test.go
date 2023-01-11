@@ -55,7 +55,7 @@ func TestService(t *testing.T) {
 		WithServerSendTimeout(5*time.Second),
 		WithServerEnableChecksum(true),
 		WithServerMaxMessageSize(16*mpool.KB),
-		WithServerPayloadCopyBufferSize(16*mpool.KB),
+		WithServerPayloadCopyBufferSize(7),
 		WithServerMaxLogtailFetchFailure(5),
 	)
 	require.NoError(t, err)
@@ -69,7 +69,7 @@ func TestService(t *testing.T) {
 	}()
 
 	/* ---- construct logtail client ---- */
-	codec := morpc.NewMessageCodec(func() morpc.Message { return &LogtailResponse{} },
+	codec := morpc.NewMessageCodec(func() morpc.Message { return &LogtailResponseSegment{} },
 		morpc.WithCodecPayloadCopyBufferSize(16*mpool.KB),
 		morpc.WithCodecEnableChecksum(),
 		morpc.WithCodecMaxBodySize(16*mpool.KB),

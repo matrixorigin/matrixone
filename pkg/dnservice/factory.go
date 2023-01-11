@@ -136,8 +136,8 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 	}
 	logtailServerAddr := s.cfg.LogtailServer.ListenAddress
 	logtailServerCfg := &options.LogtailServerCfg{
-		RpcMaxMessageSize:        int64(s.cfg.LogtailServer.RpcMaxMessageSize),
-		RpcPayloadCopyBufferSize: int64(s.cfg.LogtailServer.RpcPayloadCopyBufferSize),
+		RpcMaxMessageSize:        int(s.cfg.LogtailServer.RpcMaxMessageSize),
+		RpcPayloadCopyBufferSize: int(s.cfg.LogtailServer.RpcPayloadCopyBufferSize),
 		RpcEnableChecksum:        s.cfg.LogtailServer.RpcEnableChecksum,
 		LogtailCollectInterval:   s.cfg.LogtailServer.LogtailCollectInterval.Duration,
 		ResponseSendTimeout:      s.cfg.LogtailServer.LogtailResponseSendTimeout.Duration,

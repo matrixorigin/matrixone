@@ -39,3 +39,25 @@ func (r *LogtailResponse) DebugString() string {
 func (r *LogtailResponse) Size() int {
 	return r.ProtoSize()
 }
+
+type LogtailResponseSegment struct {
+	logtail.MessageSegment
+}
+
+var _ morpc.Message = (*LogtailResponseSegment)(nil)
+
+func (s *LogtailResponseSegment) SetID(id uint64) {
+	s.StreamID = id
+}
+
+func (s *LogtailResponseSegment) GetID() uint64 {
+	return s.StreamID
+}
+
+func (s *LogtailResponseSegment) DebugString() string {
+	return s.String()
+}
+
+func (s *LogtailResponseSegment) Size() int {
+	return s.ProtoSize()
+}
