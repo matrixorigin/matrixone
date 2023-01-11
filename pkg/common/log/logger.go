@@ -29,7 +29,9 @@ import (
 // GetServiceLogger returns service logger, it will using the service as the logger name, and
 // append FieldNameServiceUUID field to the logger
 func GetServiceLogger(logger *zap.Logger, service metadata.ServiceType, uuid string) *MOLogger {
-	return wrap(logger.Named(fmt.Sprintf("%s-service", strings.ToLower(service.String()))).With(zap.String(FieldNameServiceUUID, uuid)))
+	return wrap(logger.
+		Named(fmt.Sprintf("%s-service", strings.ToLower(service.String()))).
+		With(zap.String(FieldNameServiceUUID, uuid)))
 }
 
 // GetModuleLogger returns the module logger, it will add ".module" to logger name.
@@ -71,6 +73,13 @@ func newMOLogger(logger *zap.Logger, ctx context.Context) *MOLogger {
 			3: logger.WithOptions(zap.AddCallerSkip(3)),
 		},
 	}
+}
+
+// WithProcess if the current log belongs to a certain process, the process name and process ID
+// can be recorded. When analyzing the log, all related logs can be retrieved according to the
+// process ID.
+func (l *MOLogger) WithProcess(process Process) *MOLogger {
+	return l.With(zap.String(FieldNameProcess, string(process)))
 }
 
 // Enabled returns true if the level is enabled
