@@ -129,11 +129,11 @@ var (
 	// defaultSessionTimeout default: 10 minutes
 	defaultSessionTimeout = 24 * time.Hour
 
-	// defaultLogsExtension default: csv. Support val in [csv, tae]
-	defaultLogsExtension = "csv"
+	// defaultLogsExtension default: tae. Support val in [csv, tae]
+	defaultLogsExtension = "tae"
 
 	// defaultMergedExtension default: tae. Support val in [csv, tae]
-	defaultMergedExtension = "csv"
+	defaultMergedExtension = "tae"
 )
 
 // FrontendParameters of the frontend
@@ -450,7 +450,7 @@ type ObservabilityParameters struct {
 	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]
 	PathBuilder string `toml:"pathBuilder"`
 
-	// LogsExtension default: csv. Support val in [csv, tae]
+	// LogsExtension default: tae. Support val in [csv, tae]
 	LogsExtension string `toml:"logsExtension"`
 
 	// MergedExtension default: tae. Support val in [csv, tae]
