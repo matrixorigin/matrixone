@@ -67,7 +67,7 @@ select * from test04;
 a    b    c
 11    3    bb
 1    2    a
-2    2
+2    2    
 3    2    null
 create table test06(a int, b int, c varchar(10)) cluster by (b,a,c);
 insert into test06 select * from test04;
@@ -75,25 +75,25 @@ select * from test06;
 a    b    c
 11    3    bb
 1    2    a
-2    2
+2    2    
 3    2    null
 update test06 set c=null where a=11;
 select * from test06;
 a    b    c
 1    2    a
-2    2
+2    2    
 3    2    null
 11    3    null
 insert into test06 select * from test04;
 select * from test06;
 a    b    c
 1    2    a
-2    2
+2    2    
 3    2    null
 11    3    null
 11    3    bb
 1    2    a
-2    2
+2    2    
 3    2    null
 update test06 set c=a where b=2;
 select * from test06;
@@ -122,24 +122,24 @@ Table    Create Table
 test06    CREATE TABLE `test06` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\n`c` VARCHAR(10) DEFAULT NULL\n) CLUSTER BY (`b`, `a`, `c`)
 desc test01;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT    YES        NULL
-b    INT    YES        NULL
+a    INT    YES        NULL        
+b    INT    YES        NULL        
 desc test02;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT    YES        NULL
-b    INT    YES        NULL
+a    INT    YES        NULL        
+b    INT    YES        NULL        
 desc test04;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT    YES        NULL
-b    INT    YES        NULL
-c    VARCHAR(10)    YES        NULL
-__mo_cbkey_001b001c001a    VARCHAR(65535)    YES        NULL
+a    INT    YES        NULL        
+b    INT    YES        NULL        
+c    VARCHAR(10)    YES        NULL        
+__mo_cbkey_001b001c001a    VARCHAR(65535)    YES        NULL        
 desc test06;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT    YES        NULL
-b    INT    YES        NULL
-c    VARCHAR(10)    YES        NULL
-__mo_cbkey_001b001a001c    VARCHAR(65535)    YES        NULL
+__mo_cbkey_001b001a001c    VARCHAR(65535)    YES        NULL        
+a    INT    YES        NULL        
+b    INT    YES        NULL        
+c    VARCHAR(10)    YES        NULL        
 drop table test01;
 drop table test02;
 drop table test04;
@@ -155,3 +155,9 @@ show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY`a`(`a`),\nUNIQUE KEY`b`(`b`),\nUNIQUE KEY`a_2`(`a`)\n)
 drop table t1;
+create table test (`a` varchar(255) DEFAULT b'0');
+insert into test values (), ();
+select * from test;
+a
+0
+0

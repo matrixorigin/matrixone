@@ -62,3 +62,7 @@ drop table if exists t1;
 create table t1(a int unique, b int unique key, unique key(a));
 show create table t1;
 drop table t1;
+
+create table test (`a` varchar(255) DEFAULT b'0');
+insert into test values (), ();
+select * from test;
