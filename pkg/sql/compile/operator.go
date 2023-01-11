@@ -474,6 +474,14 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		tblName = n.TableDef.Name
 	}
 
+	hasAutoCol := false
+	for i := 0; i < len(n.TableDef.Cols); i++ {
+		if n.TableDef.Cols[i].Typ.AutoIncr {
+			hasAutoCol = true
+			break
+		}
+	}
+
 	return &insert.Argument{
 		TargetTable:          relation,
 		TargetColDefs:        n.TableDef.Cols,
@@ -489,6 +497,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		SecondaryIndexDef:    sDef,
 		ClusterByDef:         n.TableDef.ClusterBy,
 		ClusterTable:         n.GetClusterTable(),
+		HasAutoCol:           hasAutoCol,
 	}, nil
 }
 
@@ -498,6 +507,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 	dbs := make([]engine.Database, len(n.UpdateCtxs))
 	dbNames := make([]string, len(n.UpdateCtxs))
 	tblNames := make([]string, len(n.UpdateCtxs))
+	hasAtuoCol := make([]bool, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {
 		var dbSource engine.Database
 		var relation engine.Relation
@@ -563,6 +573,12 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 				}
 			}
 		}
+		for j := 0; j < len(n.TableDefVec[i].Cols); j++ {
+			if n.TableDefVec[i].Cols[j].Typ.AutoIncr {
+				hasAtuoCol[i] = true
+				break
+			}
+		}
 
 	}
 
@@ -574,6 +590,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 		DBName:      dbNames,
 		TblName:     tblNames,
 		TableDefVec: n.TableDefVec,
+		HasAutoCol:  hasAtuoCol,
 	}, nil
 }
 

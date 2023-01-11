@@ -265,13 +265,7 @@ func judgeContainColname(expr *plan.Expr) bool {
 	if !ok || !containColname(expr_Col.Col.Name) {
 		return false
 	}
-	_, ok = expr_F.F.Args[1].Expr.(*plan.Expr_C)
-	if !ok {
-		return false
-	}
-
-	str := expr_F.F.Args[1].Expr.(*plan.Expr_C).C.GetSval()
-	return str != ""
+	return true
 }
 
 func getAccountCol(filepath string) string {
@@ -742,6 +736,9 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 }
 
 func needRead(param *ExternalParam, proc *process.Process, objectReader objectio.Reader) bool {
+	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
+		return true
+	}
 	indexes, err := objectReader.ReadIndex(context.Background(), param.Zoneparam.bs[param.Zoneparam.offset].GetExtent(),
 		param.Filter.columns, objectio.ZoneMapType, proc.GetMPool())
 	if err != nil {
