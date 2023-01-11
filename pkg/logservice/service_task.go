@@ -71,7 +71,7 @@ func (s *Service) createTaskService(command *logservicepb.CreateTaskService) {
 		return
 	}
 	if err := s.task.holder.Create(*command); err != nil {
-		s.logger.Error("create task service failed",
+		s.runtime.Logger().Error("create task service failed",
 			zap.Error(err))
 		return
 	}

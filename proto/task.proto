@@ -47,7 +47,7 @@
      // ID task id, global unique
      string      ID       = 1;
      // Executor used to select a particular task executor to run a task
-     uint32      Executor = 2;
+     TaskCode    Executor = 2;
      // Context context needed to run the task
      bytes       Context  = 3;
      // Options options for execute task
