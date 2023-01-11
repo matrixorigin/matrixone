@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
@@ -246,13 +245,11 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 			case string:
 				byteJson, err := types.ParseStringToByteJson(field.(string))
 				if err != nil {
-					logutil.Errorf("parse field[%v] err:%v", field, err)
-					return moerr.NewInternalError(ctx, "the input value '%v' is not json type for column %d", field, colIdx)
+					return moerr.NewInternalError(ctx, "the input value is not json type for column %d: %v", colIdx, field)
 				}
 				jsonBytes, err := types.EncodeJson(byteJson)
 				if err != nil {
-					logutil.Errorf("encode json[%v] err:%v", field, err)
-					return moerr.NewInternalError(ctx, "the input value '%v' is not json type for column %d", field, colIdx)
+					return moerr.NewInternalError(ctx, "the input value is not json type for column %d: %v", colIdx, field)
 				}
 				err = vector.SetBytesAt(vec, rowIdx, jsonBytes, mp)
 				if err != nil {
@@ -269,16 +266,14 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 				datetimeStr := Time2DatetimeString(field.(time.Time))
 				d, err := types.ParseDatetime(datetimeStr, vec.Typ.Precision)
 				if err != nil {
-					logutil.Errorf("parse field[%v] err:%v", datetimeStr, err)
-					return moerr.NewInternalError(ctx, "the input value '%v' is not Datetime type for column %d", field, colIdx)
+					return moerr.NewInternalError(ctx, "the input value is not Datetime type for column %d: %v", colIdx, field)
 				}
 				cols[rowIdx] = d
 			case string:
 				datetimeStr := field.(string)
 				d, err := types.ParseDatetime(datetimeStr, vec.Typ.Precision)
 				if err != nil {
-					logutil.Errorf("parse field[%v] err:%v", datetimeStr, err)
-					return moerr.NewInternalError(ctx, "the input value '%v' is not Datetime type for column %d", field, colIdx)
+					return moerr.NewInternalError(ctx, "the input value is not Datetime type for column %d: %v", colIdx, field)
 				}
 				cols[rowIdx] = d
 			default:

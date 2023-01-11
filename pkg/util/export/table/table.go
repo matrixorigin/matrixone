@@ -412,6 +412,9 @@ func (tbl *Table) GetRow(ctx context.Context) *Row {
 	row.Table = tbl
 	row.AccountIdx = -1
 	for idx, col := range tbl.Columns {
+		if _, exist := row.Name2ColumnIdx[col.Name]; exist {
+			panic(moerr.NewInternalError(ctx, "%s table has duplicate column name: %s", tbl.GetIdentify(), col.Name))
+		}
 		row.Name2ColumnIdx[col.Name] = idx
 	}
 	if tbl.AccountColumn != nil {
@@ -420,9 +423,6 @@ func (tbl *Table) GetRow(ctx context.Context) *Row {
 			panic(moerr.NewInternalError(ctx, "%s table missing %s column", tbl.GetName(), tbl.AccountColumn.Name))
 		}
 		row.AccountIdx = idx
-	}
-	if len(row.Name2ColumnIdx) != len(tbl.Columns) {
-		panic(moerr.NewInternalError(ctx, "%s table has duplicate column name", tbl.GetIdentify()))
 	}
 	return row
 }

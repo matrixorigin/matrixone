@@ -254,6 +254,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	instant := time.Now()
 
 	for _, tbl := range tables {
+		_ = tbl.GetRow(ctx)
 		if err := mustExec(tbl.ToCreateSql(ctx, true)); err != nil {
 			return err
 		}
