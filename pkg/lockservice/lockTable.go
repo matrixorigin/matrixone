@@ -40,11 +40,10 @@ func NewLockService() LockService {
 }
 
 func (l *lockTable) Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) (bool, error) {
-	if ok := l.acquireLock(ctx, tableID, rows, txnID, options); ok {
-		return ok, nil
-	} else {
-		return false, l.Unlock(ctx, txnID)
+	if err := l.acquireLock(ctx, tableID, rows, txnID, options); err != nil {
+		return false, err
 	}
+	return true, nil
 }
 
 func (l *lockTable) Unlock(ctx context.Context, txnID []byte) error {
@@ -54,14 +53,8 @@ func (l *lockTable) Unlock(ctx context.Context, txnID []byte) error {
 		storage := l.seqStorage[tableID]
 		for _, key := range keys {
 			if lock, ok := storage.Get(key); ok {
-				if w := lock.waiter.close(); w != nil {
-					lock.waiter = w
-					lock.txnID = w.txnID
-					storage.Add(key, lock)
-				} else {
-					storage.Delete(key)
-				}
-
+				lock.waiter.close()
+				storage.Delete(key)
 			}
 		}
 		delete(l.locks[unsafeByteSliceToString(txnID)], tableID)
@@ -69,8 +62,27 @@ func (l *lockTable) Unlock(ctx context.Context, txnID []byte) error {
 	return nil
 }
 
-func (l *lockTable) acquireLock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) bool {
+func (l *lockTable) acquireLock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) error {
+	waiter := acquireWaiter(txnID)
+	for {
+		ok, err := l.doAcquireLock(ctx, waiter, tableID, rows, txnID, options)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
+
+		// TODO: if wait timeout, need make this waiter invalid, and prev waiter can skip this waiter.
+		if err := waiter.wait(ctx); err != nil {
+			return err
+		}
+	}
+}
+
+func (l *lockTable) doAcquireLock(ctx context.Context, waiter *waiter, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) (bool, error) {
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	if _, ok := l.locks[unsafeByteSliceToString(txnID)]; !ok {
 		l.locks[unsafeByteSliceToString(txnID)] = make(map[uint64][][]byte)
 	}
@@ -78,40 +90,31 @@ func (l *lockTable) acquireLock(ctx context.Context, tableID uint64, rows [][]by
 	if _, ok := l.seqStorage[tableID]; !ok {
 		l.seqStorage[tableID] = newBtreeBasedStorage()
 	}
-	l.mu.Unlock()
 
 	if options.granularity == Row {
-		return l.acquireRowLock(ctx, tableID, rows[0], txnID, options)
+		return l.acquireRowLock(ctx, waiter, tableID, rows[0], txnID, options)
 	} else {
-		return l.acquireRangeLock(tableID, rows[0], rows[1], txnID, options)
+		return l.acquireRangeLock(waiter, tableID, rows[0], rows[1], txnID, options)
 	}
 }
 
-func (l *lockTable) acquireRowLock(ctx context.Context, tableID uint64, row []byte, txnID []byte, options LockOptions) bool {
-	waiter := acquireWaiter(txnID)
-	l.mu.Lock()
+func (l *lockTable) acquireRowLock(ctx context.Context, waiter *waiter, tableID uint64, row []byte, txnID []byte, options LockOptions) (bool, error) {
 	storage := l.seqStorage[tableID]
 	key, lock, ok := storage.Seek(row)
 	if ok && (bytes.Equal(key, row) || lock.isLockRangeEnd()) {
 		if err := lock.add(waiter); err != nil {
-			l.mu.Unlock()
-			return false
+			return false, err
 		}
-		l.mu.Unlock()
-		if err := waiter.wait(ctx); err != nil {
-			return false
-		}
-		l.mu.Lock()
+		return false, nil
 	} else {
 		addRowLock(storage, txnID, row, waiter, options)
 	}
 	l.locks[unsafeByteSliceToString(txnID)][tableID] = append(l.locks[unsafeByteSliceToString(txnID)][tableID], row)
-	l.mu.Unlock()
-	return true
+	return true, nil
 }
 
-func (l *lockTable) acquireRangeLock(tableID uint64, start, end []byte, txnID []byte, options LockOptions) bool {
-	return false
+func (l *lockTable) acquireRangeLock(waiter *waiter, tableID uint64, start, end []byte, txnID []byte, options LockOptions) (bool, error) {
+	panic("not supported")
 }
 
 func addRowLock(storage LockStorage, txnID []byte, row []byte, waiter *waiter, options LockOptions) {
