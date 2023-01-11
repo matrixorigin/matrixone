@@ -1,0 +1,48 @@
+select current_account_name();
+current_account_name()
+sys
+select current_account_id();
+current_account_id()
+0
+select current_user_name();
+current_user_name()
+dump
+select current_user_id();
+current_user_id()
+1
+select current_role_name();
+current_role_name()
+moadmin
+select current_role_id();
+current_role_id()
+0
+select * from current_account() as t;
+account_name    account_id    user_name    user_id    role_name    role_id
+sys    0    dump    1    moadmin    0
+drop account if exists abc;
+create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+drop role if exists test_role;
+create role test_role;
+grant test_role to admin;
+set role test_role;
+select current_account_name();
+current_account_name()
+abc
+select current_account_id();
+current_account_id()
+1
+select current_user_name();
+current_user_name()
+abc:admin
+select current_user_id();
+current_user_id()
+2
+select current_role_name();
+current_role_name()
+test_role
+select current_role_id();
+current_role_id()
+3
+select * from current_account() as t;
+account_name    account_id    user_name    user_id    role_name    role_id
+abc    1    abc:admin    2    test_role    3
