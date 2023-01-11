@@ -17,14 +17,13 @@ package compile
 import (
 	"context"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -376,7 +375,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 
 	// TODO: implement by insert ... select ...
 	// insert data into index table
-	switch t := qry.GetIndex().GetTableDef().Defs[0].Def.(type) {
+	/*switch t := qry.GetIndex().GetTableDef().Defs[0].Def.(type) {
 	case *plan.TableDef_DefType_UIdx:
 		targetAttrs := getIndexColsFromOriginTable(tblDefs, t.UIdx.Fields[0].Parts)
 
@@ -411,9 +410,21 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			indexBat.Clean(c.proc.Mp())
 		}
 		// other situation is not supported now and check in plan
-	}
+	}*/
 
-	return nil
+	// compile insert plan
+	c.info = plan2.GetExecTypeFromPlan(qry.DataInsertion)
+	insertScope, err := c.compileScope(c.ctx, qry.DataInsertion)
+	if err != nil {
+		return err
+	}
+	c.scope = insertScope
+	c.scope.Plan = qry.DataInsertion
+
+	// start insert data into index
+	err = c.Run(0)
+
+	return err
 }
 
 func (s *Scope) DropIndex(c *Compile) error {

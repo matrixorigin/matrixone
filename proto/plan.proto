@@ -873,6 +873,7 @@ message CreateIndex {
 	string table = 2;
 	string	origin_table_primary_key = 3;
 	CreateTable index = 4;
+	Plan data_insertion = 5;
 }
 
 message AlterIndex {

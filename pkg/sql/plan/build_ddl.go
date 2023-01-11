@@ -1095,6 +1095,83 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	createIndex.Index = index
 	createIndex.Table = tableName
 
+	// use "insert into `index table` select serial(`index keys`) from table" to fill data
+
+	// build select plan
+	indexCols := make(tree.Exprs, len(stmt.KeyParts))
+	for i, key := range stmt.KeyParts {
+		indexCols[i] = key.ColName
+	}
+
+	serialFunc := &tree.FuncExpr{
+		Func: tree.ResolvableFunctionReference{
+			FunctionReference: &tree.UnresolvedName{
+				NumParts: 1,
+				Star:     false,
+				Parts:    tree.NameParts{"serial"},
+			},
+		},
+		Type:  tree.FUNC_TYPE_DEFAULT,
+		Exprs: indexCols,
+	}
+
+	selectTable := &tree.JoinTableExpr{
+		JoinType: "CROSS",
+		Left: &tree.AliasedTableExpr{
+			Expr: &stmt.Table,
+		},
+	}
+
+	selectStmt := &tree.Select{
+		Select: &tree.SelectClause{
+			Exprs: []tree.SelectExpr{{Expr: serialFunc}},
+			From:  &tree.From{Tables: []tree.TableExpr{selectTable}},
+		},
+	}
+
+	selectPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
+	if err != nil {
+		return nil, err
+	}
+
+	// build insert plan
+	indexTableDef := index.IndexTables[0]
+	indexObjRef := &plan.ObjectRef{
+		SchemaName: createIndex.Database,
+		ObjName:    indexTableDef.Name,
+	}
+	sourceColDefs := GetResultColumnsFromPlan(selectPlan)
+
+	insertExprs := make([]*Expr, len(sourceColDefs))
+	for i := range insertExprs {
+		insertExprs[i] = &plan.Expr{
+			Typ: sourceColDefs[i].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					ColPos: int32(i),
+				},
+			},
+		}
+	}
+
+	qry := selectPlan.Plan.(*plan.Plan_Query).Query
+	insertNode := &Node{
+		ObjRef:      indexObjRef,
+		TableDef:    tableDef,
+		NodeType:    plan.Node_INSERT,
+		NodeId:      int32(len(qry.Nodes)),
+		Children:    []int32{qry.Steps[len(qry.Steps)-1]},
+		ProjectList: insertExprs,
+		ClusterTable: &plan.ClusterTable{
+			IsClusterTable:         false,
+			ColumnIndexOfAccountId: -1,
+		},
+	}
+	appendQueryNode(qry, insertNode)
+	qry.Steps[len(qry.Steps)-1] = insertNode.NodeId
+
+	createIndex.DataInsertion = selectPlan
+
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
