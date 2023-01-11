@@ -315,8 +315,6 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 	//accountId := ctx.GetAccountId()
 	ddlType := plan.DataDefinition_SHOW_DATABASES
 	// Any account should shows database MO_CATALOG_DB_NAME
-	//accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
-	//sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where (%s)", MO_CATALOG_DB_NAME, accountClause)
 	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database", MO_CATALOG_DB_NAME)
 
 	if stmt.Where != nil {
@@ -342,7 +340,6 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewNYI(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
 
-	//accountId := ctx.GetAccountId()
 	dbName := stmt.DBName
 	if stmt.DBName == "" {
 		dbName = ctx.DefaultDatabase()
@@ -358,11 +355,6 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	if stmt.Full {
 		tableType = fmt.Sprintf(", case relkind when 'v' then 'VIEW' when '%s' then 'CLUSTER TABLE' else 'BASE TABLE' end as Table_type", catalog.SystemClusterRel)
 	}
-	//mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
-	//clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
-	//accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-	//sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
-	//	dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%", accountClause)
 
 	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'",
 		dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%")
@@ -457,7 +449,6 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
-	//accountId := ctx.GetAccountId()
 	dbName := stmt.Table.GetDBName()
 	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
@@ -472,12 +463,6 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
-	//mustShowTable := "att_relname = 'mo_database' or att_relname = 'mo_tables' or att_relname = 'mo_columns'"
-	//clusterTable := ""
-	//if util.TableIsClusterTable(tableDef.GetTableType()) {
-	//	clusterTable = fmt.Sprintf(" or att_relname = '%s'", tblName)
-	//}
-	//accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
 	sql := "SELECT attname `Field`, atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
 	if stmt.Full {
 		sql = "SELECT attname `Field`, atttyp `Type`, null `Collation`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"

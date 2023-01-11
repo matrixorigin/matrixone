@@ -1890,29 +1890,28 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		//can only read its own data.
 		if midNode.NodeType == plan.Node_TABLE_SCAN && builder.compCtx.GetAccountId() != catalog.System_Account {
 			// add account filter for system table scan
-			//-----------------------------------------------------------------------------
 			dbName := midNode.ObjRef.SchemaName
 			tableName := midNode.TableDef.Name
 			currentAccountId := builder.compCtx.GetAccountId()
 			if dbName == catalog.MO_CATALOG && tableName == catalog.MO_DATABASE {
-				modatabaseFilter := util.IsMoDataBase(uint64(currentAccountId))
-				fmt.Printf("-------------wuxiliang----------------->mo_database filter condition: %s \n", tree.String(modatabaseFilter, dialect.MYSQL))
+				modatabaseFilter := util.BuildMoDataBaseFilter(uint64(currentAccountId))
+				ctx.binder = NewWhereBinder(builder, ctx)
 				accountFilterExprs, err := splitAndBindCondition(modatabaseFilter, ctx)
 				if err != nil {
 					return 0, err
 				}
 				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 			} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
-				motablesFilter := util.IsMoTables(uint64(currentAccountId))
-				fmt.Printf("-------------wuxiliang----------------->mo_tables filter condition: %s \n", tree.String(motablesFilter, dialect.MYSQL))
+				motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountId))
+				ctx.binder = NewWhereBinder(builder, ctx)
 				accountFilterExprs, err := splitAndBindCondition(motablesFilter, ctx)
 				if err != nil {
 					return 0, err
 				}
 				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 			} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_COLUMNS {
-				moColumnsFilter := util.IsMoColumns(uint64(currentAccountId))
-				fmt.Printf("-------------wuxiliang----------------->mo_column filter condition: %s \n", tree.String(moColumnsFilter, dialect.MYSQL))
+				moColumnsFilter := util.BuildMoColumnsFilter(uint64(currentAccountId))
+				ctx.binder = NewWhereBinder(builder, ctx)
 				accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, ctx)
 				if err != nil {
 					return 0, err
@@ -1939,30 +1938,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 				}
 				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 			}
-			/*
-				//------------------------------------------------------------------------------------------
-				if ok, accColumnName := util.IsMoSystemTable(midNode.ObjRef, midNode.TableDef); ok {
-					ctx.binder = NewWhereBinder(builder, ctx)
-					left := &tree.UnresolvedName{
-						NumParts: 1,
-						Parts:    tree.NameParts{accColumnName},
-					}
-					currentAccountId := builder.compCtx.GetAccountId()
-					right := tree.NewNumVal(constant.MakeUint64(uint64(currentAccountId)), strconv.Itoa(int(currentAccountId)), false)
-					right.ValType = tree.P_uint64
-					//account_id = the accountId of current account_id
-					accountFilter := &tree.ComparisonExpr{
-						Op:    tree.EQUAL,
-						Left:  left,
-						Right: right,
-					}
-					accountFilterExprs, err := splitAndBindCondition(accountFilter, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} */
-
 		}
 		return
 	case *tree.StatementSource:

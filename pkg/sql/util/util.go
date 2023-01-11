@@ -65,17 +65,18 @@ func IsMoSystemTable(obj *plan.ObjectRef, tableDef *plan.TableDef) (bool, string
 	return false, ""
 }
 
+// Build the filter condition AST expression for mo_database, as follows:
 // account_id = cur_accountId or (account_id = 0 and datname in ('mo_catalog'))
-func IsMoDataBase(curAccountId uint64) tree.Expr {
+func BuildMoDataBaseFilter(curAccountId uint64) tree.Expr {
 	// left is: account_id = cur_accountId
 	left := makeAccountIdEqualAst(curAccountId)
 
 	datnameColName := &tree.UnresolvedName{
 		NumParts: 1,
-		Parts:    tree.NameParts{"datname"},
+		Parts:    tree.NameParts{catalog.SystemDBAttr_Name},
 	}
 
-	mo_catalogConst := tree.NewNumValWithType(constant.MakeString("mo_catalog"), "mo_catalog", false, tree.P_char)
+	mo_catalogConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_CATALOG), catalog.MO_CATALOG, false, tree.P_char)
 	inValues := tree.NewTuple(tree.Exprs{mo_catalogConst})
 	// datname in ('mo_catalog')
 	inExpr := tree.NewComparisonExpr(tree.IN, datnameColName, inValues)
@@ -91,31 +92,35 @@ func IsMoDataBase(curAccountId uint64) tree.Expr {
 	return tree.NewOrExpr(left, right)
 }
 
-// account_id = cur_account_id or (account_id = 0 and (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster'));
-func IsMoTables(curAccountId uint64) tree.Expr {
+// Build the filter condition AST expression for mo_tables, as follows:
+// account_id = cur_account_id or (account_id = 0 and (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster'))
+func BuildMoTablesFilter(curAccountId uint64) tree.Expr {
 	// left is: account_id = cur_accountId
 	left := makeAccountIdEqualAst(curAccountId)
 
 	relnameColName := &tree.UnresolvedName{
 		NumParts: 1,
-		Parts:    tree.NameParts{"relname"},
+		Parts:    tree.NameParts{catalog.SystemRelAttr_Name},
 	}
-	mo_databaseConst := tree.NewNumValWithType(constant.MakeString("mo_database"), "mo_database", false, tree.P_char)
-	mo_tablesConst := tree.NewNumValWithType(constant.MakeString("mo_tables"), "mo_tables", false, tree.P_char)
-	mo_columnsConst := tree.NewNumValWithType(constant.MakeString("mo_columns"), "mo_columns", false, tree.P_char)
+
+	mo_databaseConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_DATABASE), catalog.MO_DATABASE, false, tree.P_char)
+	mo_tablesConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_TABLES), catalog.MO_TABLES, false, tree.P_char)
+	mo_columnsConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_COLUMNS), catalog.MO_COLUMNS, false, tree.P_char)
 	inValues := tree.NewTuple(tree.Exprs{mo_databaseConst, mo_tablesConst, mo_columnsConst})
 
 	// relname in ('mo_tables','mo_database','mo_columns')
 	inExpr := tree.NewComparisonExpr(tree.IN, relnameColName, inValues)
-	relkindEqualAst := makeRelkindEqualAst("cluster")
+	//relkindEqualAst := makeRelkindEqualAst("cluster")
+
+	relkindEqualAst := makeStringEqualAst(catalog.SystemRelAttr_Kind, "cluster")
 
 	// (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster')
 	tempExpr := tree.NewOrExpr(inExpr, relkindEqualAst)
-
+	tempExpr2 := tree.NewParenExpr(tempExpr)
 	// account_id = 0
 	accountIdEqulZero := makeAccountIdEqualAst(0)
 	// andExpr is: account_id = 0 and (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster')
-	andExpr := tree.NewAndExpr(accountIdEqulZero, tempExpr)
+	andExpr := tree.NewAndExpr(accountIdEqulZero, tempExpr2)
 
 	// right is: (account_id = 0 and (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster'))
 	right := tree.NewParenExpr(andExpr)
@@ -124,19 +129,21 @@ func IsMoTables(curAccountId uint64) tree.Expr {
 	return tree.NewOrExpr(left, right)
 }
 
+// Build the filter condition AST expression for mo_columns, as follows:
 // account_id = current_id or (account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns')))
-func IsMoColumns(curAccountId uint64) tree.Expr {
+func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	// left is: account_id = cur_accountId
 	left := makeAccountIdEqualAst(curAccountId)
 
 	att_relnameColName := &tree.UnresolvedName{
 		NumParts: 1,
-		Parts:    tree.NameParts{"att_relname"},
+		Parts:    tree.NameParts{catalog.SystemColAttr_RelName},
 	}
 
-	mo_databaseConst := tree.NewNumValWithType(constant.MakeString("mo_database"), "mo_database", false, tree.P_char)
-	mo_tablesConst := tree.NewNumValWithType(constant.MakeString("mo_tables"), "mo_tables", false, tree.P_char)
-	mo_columnsConst := tree.NewNumValWithType(constant.MakeString("mo_columns"), "mo_columns", false, tree.P_char)
+	mo_databaseConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_DATABASE), catalog.MO_DATABASE, false, tree.P_char)
+	mo_tablesConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_TABLES), catalog.MO_TABLES, false, tree.P_char)
+	mo_columnsConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_COLUMNS), catalog.MO_COLUMNS, false, tree.P_char)
+
 	inValues := tree.NewTuple(tree.Exprs{mo_databaseConst, mo_tablesConst, mo_columnsConst})
 	// att_relname in ('mo_database','mo_tables','mo_columns')
 	inExpr := tree.NewComparisonExpr(tree.IN, att_relnameColName, inValues)
@@ -152,13 +159,13 @@ func IsMoColumns(curAccountId uint64) tree.Expr {
 	return tree.NewOrExpr(left, right)
 }
 
-// build ast expr: account_id = cur_accountId
-func makeRelkindEqualAst(kindName string) tree.Expr {
+// build equal ast expr: colName = 'xxx'
+func makeStringEqualAst(lColName, rValue string) tree.Expr {
 	relkindColName := &tree.UnresolvedName{
 		NumParts: 1,
-		Parts:    tree.NameParts{"relkind"},
+		Parts:    tree.NameParts{lColName},
 	}
-	clusterConst := tree.NewNumValWithType(constant.MakeString(kindName), kindName, false, tree.P_char)
+	clusterConst := tree.NewNumValWithType(constant.MakeString(rValue), rValue, false, tree.P_char)
 	return tree.NewComparisonExpr(tree.EQUAL, relkindColName, clusterConst)
 }
 
@@ -168,7 +175,7 @@ func makeAccountIdEqualAst(curAccountId uint64) tree.Expr {
 		NumParts: 1,
 		Parts:    tree.NameParts{"account_id"},
 	}
-	curAccountIdConst := tree.NewNumVal(constant.MakeUint64(uint64(curAccountId)), strconv.Itoa(int(curAccountId)), false)
+	curAccountIdConst := tree.NewNumValWithType(constant.MakeUint64(uint64(curAccountId)), strconv.Itoa(int(curAccountId)), false, tree.P_int64)
 	return tree.NewComparisonExpr(tree.EQUAL, accountIdColName, curAccountIdConst)
 }
 
