@@ -473,6 +473,12 @@ func (r *Row) Clone() *Row {
 }
 
 func (r *Row) Reset() {
+	defer func() {
+		if err := recover(); err != nil {
+			logutil.Errorf("r.Columns len: %d, r.Table.Columns len: %d, err: %s, table: %s", len(r.Columns), len(r.Table.Columns), err, r.Table.GetIdentify())
+			panic(err)
+		}
+	}()
 	if len(r.Columns) == 0 {
 		r.Columns = make([]any, len(r.Table.Columns))
 	}
