@@ -101,5 +101,6 @@ func TestTxnTable1(t *testing.T) {
 
 	ckp = timestamps[2]
 	cnt = table.TruncateByTimeStamp(ckp)
-	assert.Equal(t, 2, cnt)
+	// 2 blocks left and skip deleting only one block
+	assert.Equal(t, 0, cnt)
 }
