@@ -323,10 +323,11 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 		return nil
 	}
 
+	row := SingleMetricTable.GetRow(ctx)
+	defer row.Free()
 	for _, mf := range s.mfs {
 		for _, metric := range mf.Metric {
 			// reserved labels
-			row := SingleMetricTable.GetRow(ctx)
 			row.Reset()
 			row.SetColumnVal(metricNameColumn, mf.GetName())
 			row.SetColumnVal(metricNodeColumn, mf.GetNode())
@@ -350,12 +351,10 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 			case pb.MetricType_RAWHIST:
 				for _, sample := range metric.RawHist.Samples {
 					time := localTime(sample.GetDatetime())
-					r := row.Clone()
-					r.SetColumnVal(metricCollectTimeColumn, time)
-					r.SetColumnVal(metricValueColumn, sample.GetValue())
-					_ = writeValues(r)
+					row.SetColumnVal(metricCollectTimeColumn, time)
+					row.SetColumnVal(metricValueColumn, sample.GetValue())
+					_ = writeValues(row)
 				}
-				row.Free()
 			default:
 				panic(moerr.NewInternalError(ctx, "unsupported metric type %v", mf.GetType()))
 			}

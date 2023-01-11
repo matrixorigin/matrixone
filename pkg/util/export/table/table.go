@@ -413,6 +413,7 @@ type Row struct {
 func (tbl *Table) GetRow(ctx context.Context) *Row {
 	row := newRow()
 	row.Table = tbl
+	row.Columns = make([]any, len(tbl.Columns))
 
 	if len(tbl.name2ColumnIdx) == 0 {
 		tbl.name2ColumnIdx = make(map[string]int, len(tbl.Columns))
@@ -463,19 +464,16 @@ func (r *Row) Clone() *Row {
 	n.Table = r.Table
 	if len(r.Columns) > 0 {
 		n.Columns = make([]any, len(r.Columns))
-		copy(n.Columns, r.Columns[:])
+		copy(n.Columns[:], r.Columns[:])
 	}
 	if len(r.CsvColumns) > 0 {
 		n.CsvColumns = make([]string, len(r.CsvColumns))
-		n.CsvColumns = r.CsvColumns[:]
+		copy(n.CsvColumns[:], r.CsvColumns[:])
 	}
 	return n
 }
 
 func (r *Row) Reset() {
-	if len(r.Columns) == 0 {
-		r.Columns = make([]any, len(r.Table.Columns))
-	}
 	for idx, typ := range r.Table.Columns {
 		switch typ.ColType.ToType().Oid {
 		case types.T_int64:
@@ -510,9 +508,6 @@ func (r *Row) GetAccount() string {
 }
 
 func (r *Row) SetVal(col string, val any) {
-	if len(r.Columns) == 0 {
-		r.Reset()
-	}
 	if idx, exist := r.Table.name2ColumnIdx[col]; !exist {
 		logutil.Fatalf("column(%s) not exist in table(%s)", col, r.Table.Table)
 	} else {
@@ -526,9 +521,6 @@ func (r *Row) SetColumnVal(col Column, val any) {
 
 // ToStrings output all column as string
 func (r *Row) ToStrings() []string {
-	if len(r.Columns) == 0 {
-		r.Reset()
-	}
 	col := make([]string, len(r.Table.Columns))
 	for idx, typ := range r.Table.Columns {
 		switch typ.ColType.ToType().Oid {
@@ -587,7 +579,7 @@ func (r *Row) CsvPrimaryKey() string {
 }
 
 func (r *Row) Size() (size int64) {
-	if len(r.Columns) == 0 {
+	if len(r.CsvColumns) > 0 {
 		for _, v := range r.CsvColumns {
 			size += int64(len(v))
 		}

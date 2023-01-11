@@ -129,8 +129,9 @@ func (w *TAEWriter) WriteStrings(Line []string) error {
 
 // WriteRow implement ETLWriter
 func (w *TAEWriter) WriteRow(row *table.Row) error {
-	w.rows = append(w.rows, row)
-	return w.WriteElems(row.GetRawColumn())
+	r := row.Clone()
+	w.rows = append(w.rows, r)
+	return w.WriteElems(r.GetRawColumn())
 }
 
 func (w *TAEWriter) WriteElems(line []any) error {

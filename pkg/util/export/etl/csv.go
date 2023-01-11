@@ -46,7 +46,6 @@ func NewCSVWriter(ctx context.Context, buf *bytes.Buffer, writer io.StringWriter
 
 func (w *CSVWriter) WriteRow(row *table.Row) error {
 	writeCsvOneLine(w.ctx, w.buf, row.ToStrings())
-	row.Free()
 	return nil
 }
 
