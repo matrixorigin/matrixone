@@ -411,7 +411,7 @@ type Row struct {
 }
 
 func (tbl *Table) GetRow(ctx context.Context) *Row {
-	row := gRowPool.Get().(*Row)
+	row := newRow()
 	row.Table = tbl
 
 	if len(tbl.name2ColumnIdx) == 0 {
@@ -433,6 +433,10 @@ func (tbl *Table) GetRow(ctx context.Context) *Row {
 		}
 	}
 	return row
+}
+
+func newRow() *Row {
+	return gRowPool.Get().(*Row)
 }
 
 var gRowPool = sync.Pool{New: func() any {
