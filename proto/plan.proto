@@ -733,6 +733,7 @@ message InsertValues {
 	SecondaryIndexDef secondary_index_def = 9;
 	ClusterTable cluster_table = 10;
 	ClusterByDef cb=11;
+	bool has_auto_col = 12;
 }
 
 message column{

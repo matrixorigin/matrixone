@@ -1,0 +1,3 @@
+select message from system.log_info where extra like '%system-init%' and message="HAKeeper Timeout Configs";
+message
+HAKeeper Timeout Configs
