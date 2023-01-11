@@ -35,6 +35,66 @@ func DeepCopyOrderBy(orderBy *plan.OrderBySpec) *plan.OrderBySpec {
 	}
 }
 
+func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
+	if ref == nil {
+		return nil
+	}
+	return &plan.ObjectRef{
+		Server:     ref.Server,
+		Db:         ref.Db,
+		Schema:     ref.Schema,
+		Obj:        ref.Obj,
+		ServerName: ref.ServerName,
+		DbName:     ref.DbName,
+		SchemaName: ref.SchemaName,
+		ObjName:    ref.ObjName,
+	}
+}
+
+func DeepCopyDeleteCtx(ctx *plan.DeleteTableCtx) *plan.DeleteTableCtx {
+	if ctx == nil {
+		return nil
+	}
+	newCtx := &plan.DeleteTableCtx{
+		CanTruncate:   ctx.CanTruncate,
+		OnRestrictIdx: make([]int32, len(ctx.OnRestrictIdx)),
+		DelIdxIdx:     make([]int32, len(ctx.DelIdxIdx)),
+		OnCascadeIdx:  make([]int32, len(ctx.OnCascadeIdx)),
+
+		DelRef:        make([]*plan.ObjectRef, len(ctx.DelRef)),
+		DelIdxRef:     make([]*plan.ObjectRef, len(ctx.DelIdxRef)),
+		OnRestrictRef: make([]*plan.ObjectRef, len(ctx.OnRestrictRef)),
+		OnCascadeRef:  make([]*plan.ObjectRef, len(ctx.OnCascadeRef)),
+		OnSetRef:      make([]*plan.ObjectRef, len(ctx.OnSetRef)),
+		OnSetIdx:      make([]*plan.DeleteTableCtxIdxList, len(ctx.OnSetIdx)),
+	}
+	copy(newCtx.OnRestrictIdx, ctx.OnRestrictIdx)
+	copy(newCtx.DelIdxIdx, ctx.DelIdxIdx)
+	copy(newCtx.OnCascadeIdx, ctx.OnCascadeIdx)
+	for i, ref := range ctx.DelRef {
+		newCtx.DelRef[i] = DeepCopyObjectRef(ref)
+	}
+	for i, ref := range ctx.DelIdxRef {
+		newCtx.DelIdxRef[i] = DeepCopyObjectRef(ref)
+	}
+	for i, ref := range ctx.OnRestrictRef {
+		newCtx.OnRestrictRef[i] = DeepCopyObjectRef(ref)
+	}
+	for i, ref := range ctx.OnCascadeRef {
+		newCtx.OnCascadeRef[i] = DeepCopyObjectRef(ref)
+	}
+	for i, ref := range ctx.OnSetRef {
+		newCtx.OnSetRef[i] = DeepCopyObjectRef(ref)
+	}
+	for i, list := range ctx.OnSetIdx {
+		newCtx.OnSetIdx[i] = &plan.DeleteTableCtxIdxList{
+			List: make([]int32, len(list.List)),
+		}
+		copy(newCtx.OnSetIdx[i].List, list.List)
+	}
+	return newCtx
+}
+
 func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode := &Node{
 		NodeType:        node.NodeType,
@@ -52,7 +112,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		GroupingSet:     make([]*plan.Expr, len(node.GroupingSet)),
 		AggList:         make([]*plan.Expr, len(node.AggList)),
 		OrderBy:         make([]*plan.OrderBySpec, len(node.OrderBy)),
-		DeleteTablesCtx: make([]*plan.DeleteTableCtx, len(node.DeleteTablesCtx)),
+		DeleteCtx:       DeepCopyDeleteCtx(node.DeleteCtx),
 		UpdateCtxs:      make([]*plan.UpdateCtx, len(node.UpdateCtxs)),
 		TableDefVec:     make([]*plan.TableDef, len(node.TableDefVec)),
 		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
@@ -88,17 +148,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 
 	for idx, orderBy := range node.OrderBy {
 		newNode.OrderBy[idx] = DeepCopyOrderBy(orderBy)
-	}
-
-	for idx, deleteTablesCtx := range node.DeleteTablesCtx {
-		newNode.DeleteTablesCtx[idx] = &plan.DeleteTableCtx{
-			DbName:             deleteTablesCtx.DbName,
-			TblName:            deleteTablesCtx.TblName,
-			UseDeleteKey:       deleteTablesCtx.UseDeleteKey,
-			CanTruncate:        deleteTablesCtx.CanTruncate,
-			ColIndex:           deleteTablesCtx.ColIndex,
-			IsIndexTableDelete: deleteTablesCtx.IsIndexTableDelete,
-		}
 	}
 
 	for i, updateCtx := range node.UpdateCtxs {
@@ -140,18 +189,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		}
 	}
 
-	if node.ObjRef != nil {
-		newNode.ObjRef = &plan.ObjectRef{
-			Server:     node.ObjRef.Server,
-			Db:         node.ObjRef.Db,
-			Schema:     node.ObjRef.Schema,
-			Obj:        node.ObjRef.Obj,
-			ServerName: node.ObjRef.ServerName,
-			DbName:     node.ObjRef.DbName,
-			SchemaName: node.ObjRef.SchemaName,
-			ObjName:    node.ObjRef.ObjName,
-		}
-	}
+	newNode.ObjRef = DeepCopyObjectRef(node.ObjRef)
 
 	if node.WinSpec != nil {
 		newNode.WinSpec = &plan.WindowSpec{
@@ -761,16 +799,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		}
 		newExpr.Expr = &plan.Expr_F{
 			F: &plan.Function{
-				Func: &plan.ObjectRef{
-					Server:     item.F.Func.GetServer(),
-					Db:         item.F.Func.GetDb(),
-					Schema:     item.F.Func.GetSchema(),
-					Obj:        item.F.Func.GetObj(),
-					ServerName: item.F.Func.GetServerName(),
-					DbName:     item.F.Func.GetDbName(),
-					SchemaName: item.F.Func.GetSchemaName(),
-					ObjName:    item.F.Func.GetObjName(),
-				},
+				Func: DeepCopyObjectRef(item.F.Func),
 				Args: newArgs,
 			},
 		}

@@ -347,58 +347,139 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 }
 
 func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*deletion.Argument, error) {
-	count := len(n.DeleteTablesCtx)
-	ds := make([]*deletion.DeleteCtx, count)
-	for i := 0; i < count; i++ {
+	getRel := func(ref *plan.ObjectRef) (rel engine.Relation, err error) {
 		var dbSource engine.Database
-		var relation engine.Relation
-		var err error
-		var isTemp bool
-		var tblName string
-		var dbName string
-		dbSource, err = eg.Database(proc.Ctx, n.DeleteTablesCtx[i].DbName, proc.TxnOperator)
-		if err != nil {
-			return nil, err
-		}
-		relation, err = dbSource.Relation(proc.Ctx, n.DeleteTablesCtx[i].TblName)
-
-		if err != nil {
-			var e error
-			dbSource, e = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
-			if e != nil {
+		if ref.SchemaName != "" {
+			dbSource, err = eg.Database(proc.Ctx, ref.SchemaName, proc.TxnOperator)
+			if err != nil {
 				return nil, err
 			}
-
-			relation, e = dbSource.Relation(proc.Ctx, engine.GetTempTableName(n.DeleteTablesCtx[i].DbName, n.DeleteTablesCtx[i].TblName))
-			if e != nil {
+			rel, err = dbSource.Relation(proc.Ctx, ref.ObjName)
+			if err == nil {
+				return
+			}
+			dbSource, err = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
+			if err != nil {
 				return nil, err
 			}
-			isTemp = true
-		}
-
-		if isTemp {
-			dbName = defines.TEMPORARY_DBNAME
-			tblName = engine.GetTempTableName(n.DeleteTablesCtx[i].DbName, n.DeleteTablesCtx[i].TblName)
+			return dbSource.Relation(proc.Ctx, engine.GetTempTableName(ref.SchemaName, ref.ObjName))
 		} else {
-			dbName = n.DeleteTablesCtx[i].DbName
-			tblName = n.DeleteTablesCtx[i].TblName
-		}
-
-		ds[i] = &deletion.DeleteCtx{
-			TableSource:        relation,
-			TableName:          tblName,
-			DbName:             dbName,
-			UseDeleteKey:       n.DeleteTablesCtx[i].UseDeleteKey,
-			CanTruncate:        n.DeleteTablesCtx[i].CanTruncate,
-			ColIndex:           n.DeleteTablesCtx[i].ColIndex,
-			IsIndexTableDelete: n.DeleteTablesCtx[i].IsIndexTableDelete,
+			_, _, rel, err = eg.GetRelationById(proc.Ctx, proc.TxnOperator, uint64(ref.Obj))
+			return
 		}
 	}
 
+	oldCtx := n.DeleteCtx
+	delCtx := &deletion.DeleteCtx{
+		DelSource: make([]engine.Relation, len(oldCtx.DelRef)),
+
+		DelIdxSource: make([]engine.Relation, len(oldCtx.DelIdxRef)),
+		DelIdxIdx:    make([]int32, len(oldCtx.DelIdxIdx)),
+
+		OnRestrictIdx: make([]int32, len(oldCtx.OnRestrictIdx)),
+
+		OnCascadeIdx: make([]int32, len(oldCtx.OnCascadeIdx)),
+
+		OnSetSource: make([]engine.Relation, len(oldCtx.OnSetRef)),
+		OnSetIdx:    make([][]int32, len(oldCtx.OnSetIdx)),
+
+		CanTruncate: oldCtx.CanTruncate,
+	}
+	copy(delCtx.DelIdxIdx, oldCtx.DelIdxIdx)
+	copy(delCtx.OnRestrictIdx, oldCtx.OnRestrictIdx)
+	copy(delCtx.OnCascadeIdx, oldCtx.OnCascadeIdx)
+	for i, list := range oldCtx.OnSetIdx {
+		delCtx.OnSetIdx[i] = make([]int32, len(list.List))
+		copy(delCtx.OnSetIdx[i], list.List)
+	}
+
+	for i, ref := range oldCtx.DelRef {
+		rel, err := getRel(ref)
+		if err != nil {
+			return nil, err
+		}
+		delCtx.DelSource[i] = rel
+	}
+	for i, ref := range oldCtx.DelIdxRef {
+		rel, err := getRel(ref)
+		if err != nil {
+			return nil, err
+		}
+		delCtx.DelIdxSource[i] = rel
+	}
+	for i, ref := range oldCtx.OnCascadeRef {
+		rel, err := getRel(ref)
+		if err != nil {
+			return nil, err
+		}
+		delCtx.OnCascadeSource[i] = rel
+	}
+	for i, ref := range oldCtx.OnSetRef {
+		rel, err := getRel(ref)
+		if err != nil {
+			return nil, err
+		}
+		delCtx.OnSetSource[i] = rel
+	}
+
 	return &deletion.Argument{
-		DeleteCtxs: ds,
+		DeleteCtx: delCtx,
 	}, nil
 }
+
+// func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*deletion.Argument, error) {
+// 	count := len(n.DeleteTablesCtx)
+// 	ds := make([]*deletion.DeleteCtx, count)
+// 	for i := 0; i < count; i++ {
+// 		var dbSource engine.Database
+// 		var relation engine.Relation
+// 		var err error
+// 		var isTemp bool
+// 		var tblName string
+// 		var dbName string
+// 		dbSource, err = eg.Database(proc.Ctx, n.DeleteTablesCtx[i].DbName, proc.TxnOperator)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		relation, err = dbSource.Relation(proc.Ctx, n.DeleteTablesCtx[i].TblName)
+
+// 		if err != nil {
+// 			var e error
+// 			dbSource, e = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
+// 			if e != nil {
+// 				return nil, err
+// 			}
+
+// 			relation, e = dbSource.Relation(proc.Ctx, engine.GetTempTableName(n.DeleteTablesCtx[i].DbName, n.DeleteTablesCtx[i].TblName))
+// 			if e != nil {
+// 				return nil, err
+// 			}
+// 			isTemp = true
+// 		}
+
+// 		if isTemp {
+// 			dbName = defines.TEMPORARY_DBNAME
+// 			tblName = engine.GetTempTableName(n.DeleteTablesCtx[i].DbName, n.DeleteTablesCtx[i].TblName)
+// 		} else {
+// 			dbName = n.DeleteTablesCtx[i].DbName
+// 			tblName = n.DeleteTablesCtx[i].TblName
+// 		}
+
+// 		ds[i] = &deletion.DeleteCtx{
+// 			TableSource:        relation,
+// 			TableName:          tblName,
+// 			DbName:             dbName,
+// 			UseDeleteKey:       n.DeleteTablesCtx[i].UseDeleteKey,
+// 			CanTruncate:        n.DeleteTablesCtx[i].CanTruncate,
+// 			ColIndex:           n.DeleteTablesCtx[i].ColIndex,
+// 			IsIndexTableDelete: n.DeleteTablesCtx[i].IsIndexTableDelete,
+// 		}
+// 	}
+
+// 	return &deletion.Argument{
+// 		DeleteCtxs: ds,
+// 	}, nil
+// }
 
 func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
 	var db engine.Database

@@ -42,75 +42,75 @@ import (
 func (s *Scope) Delete(c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
-	var err error
-	var dbSource engine.Database
-	var rel engine.Relation
-	var isTemp bool
+	// var err error
+	// var dbSource engine.Database
+	// var rel engine.Relation
+	// var isTemp bool
 
 	// If the first table (original table) in the deletion context can be truncated,
 	// subsequent index tables also need to be truncated
-	if arg.DeleteCtxs[0].CanTruncate {
-		var affectRows int64
-		for _, deleteCtx := range arg.DeleteCtxs {
-			if deleteCtx.CanTruncate {
-				dbSource, err = c.e.Database(c.ctx, deleteCtx.DbName, c.proc.TxnOperator)
-				if err != nil {
-					return 0, err
-				}
+	// if arg.DeleteCtxs[0].CanTruncate {
+	// 	var affectRows int64
+	// 	for _, deleteCtx := range arg.DeleteCtxs {
+	// 		if deleteCtx.CanTruncate {
+	// 			dbSource, err = c.e.Database(c.ctx, deleteCtx.DbName, c.proc.TxnOperator)
+	// 			if err != nil {
+	// 				return 0, err
+	// 			}
 
-				if rel, err = dbSource.Relation(c.ctx, deleteCtx.TableName); err != nil {
-					var e error // avoid contamination of error messages
-					dbSource, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
-					if e != nil {
-						return 0, e
-					}
-					rel, e = dbSource.Relation(c.ctx, engine.GetTempTableName(deleteCtx.DbName, deleteCtx.TableName))
-					if e != nil {
-						return 0, err
-					}
-					isTemp = true
-				}
+	// 			if rel, err = dbSource.Relation(c.ctx, deleteCtx.TableName); err != nil {
+	// 				var e error // avoid contamination of error messages
+	// 				dbSource, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+	// 				if e != nil {
+	// 					return 0, e
+	// 				}
+	// 				rel, e = dbSource.Relation(c.ctx, engine.GetTempTableName(deleteCtx.DbName, deleteCtx.TableName))
+	// 				if e != nil {
+	// 					return 0, err
+	// 				}
+	// 				isTemp = true
+	// 			}
 
-				_, err = rel.Ranges(c.ctx, nil)
-				if err != nil {
-					return 0, err
-				}
-				affectRow, err := rel.Rows(s.Proc.Ctx)
-				if err != nil {
-					return 0, err
-				}
+	// 			_, err = rel.Ranges(c.ctx, nil)
+	// 			if err != nil {
+	// 				return 0, err
+	// 			}
+	// 			affectRow, err := rel.Rows(s.Proc.Ctx)
+	// 			if err != nil {
+	// 				return 0, err
+	// 			}
 
-				tableID := rel.GetTableID(c.ctx)
-				var newId uint64
+	// 			tableID := rel.GetTableID(c.ctx)
+	// 			var newId uint64
 
-				if isTemp {
-					newId, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(deleteCtx.DbName, deleteCtx.TableName))
-					if err != nil {
-						return 0, err
-					}
-					err = colexec.MoveAutoIncrCol(c.e, c.ctx, engine.GetTempTableName(deleteCtx.DbName, deleteCtx.TableName), dbSource, c.proc, tableID, newId, defines.TEMPORARY_DBNAME)
-				} else {
-					newId, err = dbSource.Truncate(c.ctx, deleteCtx.TableName)
-					if err != nil {
-						return 0, err
-					}
-					err = colexec.MoveAutoIncrCol(c.e, c.ctx, deleteCtx.TableName, dbSource, c.proc, tableID, newId, deleteCtx.DbName)
-				}
+	// 			if isTemp {
+	// 				newId, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(deleteCtx.DbName, deleteCtx.TableName))
+	// 				if err != nil {
+	// 					return 0, err
+	// 				}
+	// 				err = colexec.MoveAutoIncrCol(c.e, c.ctx, engine.GetTempTableName(deleteCtx.DbName, deleteCtx.TableName), dbSource, c.proc, tableID, newId, defines.TEMPORARY_DBNAME)
+	// 			} else {
+	// 				newId, err = dbSource.Truncate(c.ctx, deleteCtx.TableName)
+	// 				if err != nil {
+	// 					return 0, err
+	// 				}
+	// 				err = colexec.MoveAutoIncrCol(c.e, c.ctx, deleteCtx.TableName, dbSource, c.proc, tableID, newId, deleteCtx.DbName)
+	// 			}
 
-				if err != nil {
-					return 0, err
-				}
+	// 			if err != nil {
+	// 				return 0, err
+	// 			}
 
-				if deleteCtx.IsIndexTableDelete {
-					continue
-				} else {
-					affectRows += affectRow
-				}
+	// 			if deleteCtx.IsIndexTableDelete {
+	// 				continue
+	// 			} else {
+	// 				affectRows += affectRow
+	// 			}
 
-			}
-		}
-		return uint64(affectRows), nil
-	}
+	// 		}
+	// 	}
+	// 	return uint64(affectRows), nil
+	// }
 
 	if err := s.MergeRun(c); err != nil {
 		return 0, err

@@ -15,15 +15,17 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func buildReplace(stmt *tree.Replace, ctx CompilerContext) (p *Plan, err error) {
-	insertStmt := &tree.Insert{
-		Table:          stmt.Table,
-		PartitionNames: stmt.PartitionNames,
-		Columns:        stmt.Columns,
-		Rows:           stmt.Rows,
-	}
-	return buildInsert(insertStmt, ctx, true)
+	return nil, moerr.NewNotSupported(ctx.GetContext(), "Not support replace statement")
+	// insertStmt := &tree.Insert{
+	// 	Table:          stmt.Table,
+	// 	PartitionNames: stmt.PartitionNames,
+	// 	Columns:        stmt.Columns,
+	// 	Rows:           stmt.Rows,
+	// }
+	// return buildInsert(insertStmt, ctx, true)
 }

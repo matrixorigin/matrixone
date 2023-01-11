@@ -15,12 +15,13 @@
 package plan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -46,7 +47,8 @@ type deleteSelectInfo struct {
 type dmlTableInfo struct {
 	objRef    []*ObjectRef
 	tableDefs []*TableDef
-	nameMap   map[string]int
+	nameToIdx map[string]int
+	idToName  map[uint64]string
 }
 
 func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, aliasMap map[string][2]string) {
@@ -57,7 +59,9 @@ func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, alia
 			dbName = ctx.DefaultDatabase()
 		}
 		tblName := string(t.ObjectName)
-		aliasMap[alias] = [2]string{dbName, tblName}
+		if alias != "" {
+			aliasMap[alias] = [2]string{dbName, tblName}
+		}
 	case *tree.AliasedTableExpr:
 		alias := string(t.As.Alias)
 		getAliasToName(ctx, t.Expr, alias, aliasMap)
@@ -72,7 +76,8 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, aliasMap m
 	tblInfo := &dmlTableInfo{
 		objRef:    make([]*ObjectRef, tblLen),
 		tableDefs: make([]*plan.TableDef, tblLen),
-		nameMap:   make(map[string]int),
+		nameToIdx: make(map[string]int),
+		idToName:  make(map[uint64]string),
 	}
 
 	for idx, tbl := range tableExprs {
@@ -80,18 +85,24 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, aliasMap m
 
 		if aliasTbl, ok := tbl.(*tree.AliasedTableExpr); ok {
 			if baseTbl, ok := aliasTbl.Expr.(*tree.TableName); ok {
+				dbName = string(baseTbl.SchemaName)
+				if dbName == "" {
+					dbName = ctx.DefaultDatabase()
+				}
 				tblName = string(baseTbl.ObjectName)
 			} else {
 				return nil, moerr.NewInternalError(ctx.GetContext(), "%v is not a normal table", tree.String(tbl, dialect.MYSQL))
 			}
 		} else if baseTbl, ok := tbl.(*tree.TableName); ok {
 			tblName = string(baseTbl.ObjectName)
+			dbName = string(baseTbl.SchemaName)
+			if dbName == "" {
+				dbName = ctx.DefaultDatabase()
+			}
 		}
 		if aliasNames, exist := aliasMap[tblName]; exist {
 			dbName = aliasNames[0]
 			tblName = aliasNames[1]
-		} else {
-			dbName = ctx.DefaultDatabase()
 		}
 
 		_, tableDef := ctx.Resolve(dbName, tblName)
@@ -113,72 +124,68 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, aliasMap m
 			ObjName:    tblName,
 		}
 		tblInfo.tableDefs[idx] = tableDef
-		tblInfo.nameMap[tblName] = idx
+		key := dbName + "." + tblName
+		tblInfo.nameToIdx[key] = idx
+		tblInfo.idToName[tableDef.TblId] = key
 	}
 
 	return tblInfo, nil
 }
 
-// delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id
-// select a1.row_id, a2.row_id from t1 as a1 inner join t2 as a2 where a1.id = a2.id
-// select _t.* from (select a1.row_id, a2.row_id from t1 as a1 inner join t2 as a2 where a1.id = a2.id) _t
-func deleteToSelect(node *tree.Delete, dialectType dialect.DialectType, haveConstraint bool) string {
-	ctx := tree.NewFmtCtx(dialectType)
-	if node.With != nil {
-		node.With.Format(ctx)
-		ctx.WriteByte(' ')
-	}
-	ctx.WriteString("select ")
-	prefix := ""
-	for _, tbl := range node.Tables {
-		ctx.WriteString(prefix)
-		tbl.Format(ctx)
+func deleteToSelect(ctx context.Context, node *tree.Delete, haveConstraint bool) *tree.Select {
+	var selectList []tree.SelectExpr
+	fromTables := &tree.From{}
+
+	getResolveExpr := func(tblName string) tree.SelectExpr {
+		var ret *tree.UnresolvedName
 		if haveConstraint {
-			ctx.WriteString(".*")
+			ret, _ = tree.NewUnresolvedNameWithStar(ctx, tblName)
 		} else {
-			ctx.WriteByte('.')
-			ctx.WriteString(catalog.Row_ID)
+			ret, _ = tree.NewUnresolvedName(ctx, tblName, catalog.Row_ID)
 		}
-		prefix = ", "
+		return tree.SelectExpr{
+			Expr: ret,
+		}
 	}
 
-	// if node.PartitionNames != nil {
-	// 	ctx.WriteString(" partition(")
-	// 	node.PartitionNames.Format(ctx)
-	// 	ctx.WriteByte(')')
-	// }
+	for _, tbl := range node.Tables {
+		if aliasTbl, ok := tbl.(*tree.AliasedTableExpr); ok {
+			alias := string(aliasTbl.As.Alias)
+			if alias != "" {
+				selectList = append(selectList, getResolveExpr(alias))
+			} else {
+				astTbl := aliasTbl.Expr.(*tree.TableName)
+				selectList = append(selectList, getResolveExpr(string(astTbl.ObjectName)))
+			}
+		} else if astTbl, ok := tbl.(*tree.TableName); ok {
+			selectList = append(selectList, getResolveExpr(string(astTbl.ObjectName)))
+		}
+	}
 
 	if node.TableRefs != nil {
-		ctx.WriteString(" from ")
-		node.TableRefs.Format(ctx)
+		fromTables.Tables = node.TableRefs
 	} else {
-		ctx.WriteString(" from ")
-		prefix := ""
-		for _, tbl := range node.Tables {
-			ctx.WriteString(prefix)
-			tbl.Format(ctx)
-			prefix = ", "
-		}
+		fromTables.Tables = node.Tables
 	}
 
-	if node.Where != nil {
-		ctx.WriteByte(' ')
-		node.Where.Format(ctx)
+	astSelect := &tree.Select{
+		Select: &tree.SelectClause{
+			Distinct: false,
+			Exprs:    selectList,
+			From:     fromTables,
+			Where:    node.Where,
+		},
+		OrderBy: node.OrderBy,
+		Limit:   node.Limit,
+		With:    node.With,
 	}
-	if len(node.OrderBy) > 0 {
-		ctx.WriteByte(' ')
-		node.OrderBy.Format(ctx)
-	}
-	if node.Limit != nil {
-		ctx.WriteByte(' ')
-		node.Limit.Format(ctx)
-	}
-	return ctx.String()
+
+	// ftCtx := tree.NewFmtCtx(dialectType)
+	// astSelect.Format(ftCtx)
+	// sql := ftCtx.String()
+	// fmt.Print(sql)
+	return astSelect
 }
-
-// columns in index_table: idx_col = 0; pri_col = 1; rowid =2
-const INDEX_TABLE_IDX_POS = 0
-const INDEX_TABLE_ROWID_POS = 2
 
 func checkIfStmtHaveRewriteConstraint(tblInfo *dmlTableInfo) bool {
 	for _, tableDef := range tblInfo.tableDefs {
@@ -195,13 +202,17 @@ func checkIfStmtHaveRewriteConstraint(tblInfo *dmlTableInfo) bool {
 }
 
 func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *deleteSelectInfo, stmt *tree.Delete) error {
-	sql := deleteToSelect(stmt, dialect.MYSQL, true)
-	stmts, err := mysql.Parse(builder.GetContext(), sql)
-	if err != nil {
-		return err
-	}
+	// sql := deleteToSelect(stmt, dialect.MYSQL, true)
+	// stmts, err := mysql.Parse(builder.GetContext(), sql)
+	// if err != nil {
+	// 	return err
+	// }
+	// subCtx := NewBindContext(builder, bindCtx)
+	// info.rootId, err = builder.buildSelect(stmts[0].(*tree.Select), subCtx, false)
+	var err error
+	selectStmt := deleteToSelect(builder.GetContext(), stmt, true)
 	subCtx := NewBindContext(builder, bindCtx)
-	info.rootId, err = builder.buildSelect(stmts[0].(*tree.Select), subCtx, false)
+	info.rootId, err = builder.buildSelect(selectStmt, subCtx, false)
 	if err != nil {
 		return err
 	}
@@ -227,7 +238,6 @@ func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *deleteSel
 					},
 				},
 			})
-			break
 		}
 	}
 	return nil
@@ -254,39 +264,45 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 	}
 
 	// rewrite index
-	leftId := baseNodeId
 	for _, def := range tableDef.Defs {
 		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
 			for idx, tblName := range idxDef.UIdx.TableNames {
+				idxRef := &plan.ObjectRef{
+					SchemaName: builder.compCtx.DefaultDatabase(),
+					ObjName:    tblName,
+				}
+
 				// append table_scan node
 				rightCtx := NewBindContext(builder, bindCtx)
 				astTblName := tree.NewTableName(tree.Identifier(tblName), tree.ObjectNamePrefix{})
-				// here we get columns: idx_col = 0; pri_col = 1; rowid =2
+				// here we get columns: idx_col = 0; rowid = 1
 				rightId, err := builder.buildTable(astTblName, rightCtx)
 				if err != nil {
 					return err
 				}
 				rightTag := builder.qry.Nodes[rightId].BindingTags[0]
-				leftTag := builder.qry.Nodes[baseNodeId].BindingTags[0]
+				baseTag := builder.qry.Nodes[baseNodeId].BindingTags[0]
 				rightTableDef := builder.qry.Nodes[rightId].TableDef
+				rightRowIdPos := int32(len(rightTableDef.Cols)) - 1
+				rightIdxPos := int32(0)
 
 				// append projection
 				info.projectList = append(info.projectList, &plan.Expr{
-					Typ: rightTableDef.Cols[INDEX_TABLE_ROWID_POS].Typ,
+					Typ: rightTableDef.Cols[rightRowIdPos].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: rightTag,
-							ColPos: INDEX_TABLE_ROWID_POS,
+							ColPos: rightRowIdPos,
 						},
 					},
 				})
 
 				rightExpr := &plan.Expr{
-					Typ: rightTableDef.Cols[INDEX_TABLE_IDX_POS].Typ,
+					Typ: rightTableDef.Cols[rightIdxPos].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: rightTag,
-							ColPos: INDEX_TABLE_IDX_POS,
+							ColPos: rightIdxPos,
 						},
 					},
 				}
@@ -302,7 +318,7 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 						Typ: typ,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
-								RelPos: leftTag,
+								RelPos: baseTag,
 								ColPos: int32(posMap[orginIndexColumnName]),
 							},
 						},
@@ -315,7 +331,7 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 							Typ: typ,
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
-									RelPos: leftTag,
+									RelPos: baseTag,
 									ColPos: int32(posMap[column]),
 								},
 							},
@@ -333,26 +349,22 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 				}
 				joinConds = []*Expr{condExpr}
 
-				leftCtx := builder.ctxByNode[baseNodeId]
-				err = bindCtx.mergeContexts(leftCtx, rightCtx)
+				leftCtx := builder.ctxByNode[info.rootId]
+				joinCtx := NewBindContext(builder, bindCtx)
+				err = joinCtx.mergeContexts(leftCtx, rightCtx)
 				if err != nil {
 					return err
 				}
 				newRootId := builder.appendNode(&plan.Node{
 					NodeType: plan.Node_JOIN,
-					Children: []int32{baseNodeId, rightId},
+					Children: []int32{info.rootId, rightId},
 					JoinType: plan.Node_LEFT,
-				}, bindCtx)
-				node := builder.qry.Nodes[newRootId]
+					OnList:   joinConds,
+				}, joinCtx)
 				bindCtx.binder = NewTableBinder(builder, bindCtx)
-				node.OnList = joinConds
 				info.rootId = newRootId
-				leftId = newRootId
 
-				info.onDeleteIdxTbl = append(info.onDeleteIdxTbl, &plan.ObjectRef{
-					SchemaName: builder.compCtx.DefaultDatabase(),
-					ObjName:    tblName,
-				})
+				info.onDeleteIdxTbl = append(info.onDeleteIdxTbl, idxRef)
 				info.onDeleteIdx = append(info.onDeleteIdx, info.idx)
 				info.idx = info.idx + 1
 			}
@@ -361,6 +373,12 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 
 	// rewrite foreign key
 	for _, tableId := range tableDef.RefChildTbls {
+		if _, existInDelTable := info.tblInfo.idToName[tableId]; existInDelTable {
+			// delete parent_tbl, child_tbl from parent_tbl join child_tbl xxxxxx
+			// we will skip child_tbl here.
+			continue
+		}
+
 		_, childTableDef := builder.compCtx.ResolveById(tableId) //opt: actionRef是否也记录到RefChildTbls里？
 
 		childPosMap := make(map[string]int32)
@@ -488,19 +506,19 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 				}
 
 				// append join node
-				leftCtx := builder.ctxByNode[leftId]
-				err = bindCtx.mergeContexts(leftCtx, rightCtx)
+				leftCtx := builder.ctxByNode[info.rootId]
+				joinCtx := NewBindContext(builder, bindCtx)
+				err = joinCtx.mergeContexts(leftCtx, rightCtx)
 				if err != nil {
 					return err
 				}
 				newRootId := builder.appendNode(&plan.Node{
 					NodeType: plan.Node_JOIN,
-					Children: []int32{leftId, rightId},
+					Children: []int32{info.rootId, rightId},
 					JoinType: plan.Node_LEFT,
-				}, bindCtx)
-				node := builder.qry.Nodes[newRootId]
+					OnList:   joinConds,
+				}, joinCtx)
 				bindCtx.binder = NewTableBinder(builder, bindCtx)
-				node.OnList = joinConds
 				info.rootId = newRootId
 
 				if needRecursionCall {

@@ -20,18 +20,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
-	buildSingleTableDelete2(ctx, stmt)
-	if len(stmt.Tables) == 1 && stmt.TableRefs == nil {
-		return buildSingleTableDelete(ctx, stmt)
-	}
-	return buildMultTableDelete(ctx, stmt)
+	return buildSingleTableDelete2(ctx, stmt)
+	// if len(stmt.Tables) == 1 && stmt.TableRefs == nil {
+	// 	return buildSingleTableDelete(ctx, stmt)
+	// }
+	// return buildMultTableDelete(ctx, stmt)
 }
 
 // link ref: https://dev.mysql.com/doc/refman/8.0/en/delete.html
@@ -80,12 +77,13 @@ func buildSingleTableDelete2(ctx CompilerContext, stmt *tree.Delete) (*Plan, err
 		// builder.qry.Headings =
 	} else {
 		// if delete table have no constraint
-		sql := deleteToSelect(stmt, dialect.MYSQL, false)
-		stmts, err := mysql.Parse(builder.GetContext(), sql)
-		if err != nil {
-			return nil, err
-		}
-		rewriteInfo.rootId, err = builder.buildSelect(stmts[0].(*tree.Select), bindCtx, false)
+		// sql := deleteToSelect(stmt, dialect.MYSQL, false)
+		// stmts, err := mysql.Parse(builder.GetContext(), sql)
+		// if err != nil {
+		// 	return nil, err
+		// }
+		selectStmt := deleteToSelect(builder.GetContext(), stmt, false)
+		rewriteInfo.rootId, err = builder.buildSelect(selectStmt, bindCtx, false)
 		if err != nil {
 			return nil, err
 		}
@@ -98,7 +96,7 @@ func buildSingleTableDelete2(ctx CompilerContext, stmt *tree.Delete) (*Plan, err
 	}
 
 	// append delete node
-	deleteCtx := &plan.DeleteTableCtx2{
+	deleteCtx := &plan.DeleteTableCtx{
 		DelRef:        rewriteInfo.tblInfo.objRef,
 		DelIdxRef:     rewriteInfo.onDeleteIdxTbl,
 		DelIdxIdx:     rewriteInfo.onDeleteIdx,
@@ -107,10 +105,10 @@ func buildSingleTableDelete2(ctx CompilerContext, stmt *tree.Delete) (*Plan, err
 		OnCascadeRef:  rewriteInfo.onDeleteCascadeTbl,
 		OnCascadeIdx:  rewriteInfo.onDeleteCascade,
 		OnSetRef:      rewriteInfo.onDeleteSetTbl,
-		OnSetIdx:      make([]*plan.DeleteTableCtx2IdxList, len(rewriteInfo.onDeleteSet)),
+		OnSetIdx:      make([]*plan.DeleteTableCtxIdxList, len(rewriteInfo.onDeleteSet)),
 	}
 	for i, setList := range rewriteInfo.onDeleteSet {
-		deleteCtx.OnSetIdx[i] = &plan.DeleteTableCtx2IdxList{
+		deleteCtx.OnSetIdx[i] = &plan.DeleteTableCtxIdxList{
 			List: setList,
 		}
 	}
@@ -126,6 +124,7 @@ func buildSingleTableDelete2(ctx CompilerContext, stmt *tree.Delete) (*Plan, err
 	}
 	query.Nodes = append(query.Nodes, node)
 	query.Steps[len(query.Steps)-1] = node.NodeId
+	query.StmtType = plan.Query_DELETE
 
 	return &Plan{
 		Plan: &plan.Plan_Query{
@@ -137,260 +136,260 @@ func buildSingleTableDelete2(ctx CompilerContext, stmt *tree.Delete) (*Plan, err
 // When the original table contains an index table of multi table deletion statement, build a multi table join query
 // execution plan to query the rowid of the original table and the index table respectively
 // link ref: https://dev.mysql.com/doc/refman/8.0/en/delete.html
-func buildMultTableDelete(ctx CompilerContext, stmt *tree.Delete) (*Plan, error) {
-	// build map between base table and alias table
-	tbinfo := &tableInfo{
-		alias2BaseNameMap: make(map[string]string),
-		baseName2AliasMap: make(map[string]string),
-	}
+// func buildMultTableDelete(ctx CompilerContext, stmt *tree.Delete) (*Plan, error) {
+// 	// build map between base table and alias table
+// 	tbinfo := &tableInfo{
+// 		alias2BaseNameMap: make(map[string]string),
+// 		baseName2AliasMap: make(map[string]string),
+// 	}
 
-	for _, expr := range stmt.TableRefs {
-		if err := extractExprTable(expr, tbinfo, ctx); err != nil {
-			return nil, err
-		}
-	}
+// 	for _, expr := range stmt.TableRefs {
+// 		if err := extractExprTable(expr, tbinfo, ctx); err != nil {
+// 			return nil, err
+// 		}
+// 	}
 
-	// check database's name and table's name
-	tbs := getTableNames(stmt.Tables)
-	// get deleted origin table count
-	tableCount := len(tbs)
-	objRefs := make([]*ObjectRef, tableCount)
-	tableDefs := make([]*TableDef, tableCount)
-	for i, t := range tbs {
-		dbName := string(t.SchemaName)
-		if dbName == "" {
-			dbName = ctx.DefaultDatabase()
-		}
-		tblName := string(t.ObjectName)
-		if _, ok := tbinfo.alias2BaseNameMap[tblName]; ok {
-			tblName = tbinfo.alias2BaseNameMap[tblName]
-		}
-		objRefs[i], tableDefs[i] = ctx.Resolve(dbName, tblName)
-		if tableDefs[i] == nil {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "delete has no table ref")
-		}
-		if tableDefs[i].TableType == catalog.SystemExternalRel {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from external table")
-		} else if tableDefs[i].TableType == catalog.SystemViewRel {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from view")
-		}
-		if util.TableIsClusterTable(tableDefs[i].GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can delete the cluster table %s", tableDefs[i].GetName())
-		}
-	}
+// 	// check database's name and table's name
+// 	tbs := getTableNames(stmt.Tables)
+// 	// get deleted origin table count
+// 	tableCount := len(tbs)
+// 	objRefs := make([]*ObjectRef, tableCount)
+// 	tableDefs := make([]*TableDef, tableCount)
+// 	for i, t := range tbs {
+// 		dbName := string(t.SchemaName)
+// 		if dbName == "" {
+// 			dbName = ctx.DefaultDatabase()
+// 		}
+// 		tblName := string(t.ObjectName)
+// 		if _, ok := tbinfo.alias2BaseNameMap[tblName]; ok {
+// 			tblName = tbinfo.alias2BaseNameMap[tblName]
+// 		}
+// 		objRefs[i], tableDefs[i] = ctx.Resolve(dbName, tblName)
+// 		if tableDefs[i] == nil {
+// 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "delete has no table ref")
+// 		}
+// 		if tableDefs[i].TableType == catalog.SystemExternalRel {
+// 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from external table")
+// 		} else if tableDefs[i].TableType == catalog.SystemViewRel {
+// 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from view")
+// 		}
+// 		if util.TableIsClusterTable(tableDefs[i].GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
+// 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can delete the cluster table %s", tableDefs[i].GetName())
+// 		}
+// 	}
 
-	// Reverse the mapping of aliases to table names
-	tbinfo.reverseAliasMap()
-	for _, t := range tbs {
-		tblName := string(t.ObjectName)
-		if _, ok := tbinfo.baseName2AliasMap[tblName]; !ok {
-			if _, ok := tbinfo.alias2BaseNameMap[tblName]; !ok {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Unknown table '%v' in MULTI DELETE", tblName)
-			}
-		}
-	}
+// 	// Reverse the mapping of aliases to table names
+// 	tbinfo.reverseAliasMap()
+// 	for _, t := range tbs {
+// 		tblName := string(t.ObjectName)
+// 		if _, ok := tbinfo.baseName2AliasMap[tblName]; !ok {
+// 			if _, ok := tbinfo.alias2BaseNameMap[tblName]; !ok {
+// 				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Unknown table '%v' in MULTI DELETE", tblName)
+// 			}
+// 		}
+// 	}
 
-	leftJoinTableExpr := stmt.TableRefs[0]
+// 	leftJoinTableExpr := stmt.TableRefs[0]
 
-	deleteTableList := NewDeleteTableList()
+// 	deleteTableList := NewDeleteTableList()
 
-	for i := 0; i < tableCount; i++ {
-		// 1.build select list exprs
-		objRef := objRefs[i]
-		tableDef := tableDefs[i]
-		err := buildDeleteProjection(objRef, tableDef, tbinfo, deleteTableList, ctx)
-		if err != nil {
-			return nil, err
-		}
+// 	for i := 0; i < tableCount; i++ {
+// 		// 1.build select list exprs
+// 		objRef := objRefs[i]
+// 		tableDef := tableDefs[i]
+// 		err := buildDeleteProjection(objRef, tableDef, tbinfo, deleteTableList, ctx)
+// 		if err != nil {
+// 			return nil, err
+// 		}
 
-		// 2.get origin table Name
-		originTableName := tbinfo.alias2BaseNameMap[string(tbs[i].ObjectName)]
+// 		// 2.get origin table Name
+// 		originTableName := tbinfo.alias2BaseNameMap[string(tbs[i].ObjectName)]
 
-		// 3.get the definition of the unique index of the original table
-		unqiueIndexDef, _ := buildIndexDefs(tableDef.Defs)
+// 		// 3.get the definition of the unique index of the original table
+// 		unqiueIndexDef, _ := buildIndexDefs(tableDef.Defs)
 
-		if unqiueIndexDef != nil {
-			for j := 0; j < len(unqiueIndexDef.TableNames); j++ {
-				// build left join with origin table and index table
-				indexTableExpr := buildIndexTableExpr(unqiueIndexDef.TableNames[j])
-				joinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[j], unqiueIndexDef.Fields[j])
-				leftJoinTableExpr = &tree.JoinTableExpr{
-					JoinType: tree.JOIN_TYPE_LEFT,
-					Left:     leftJoinTableExpr,
-					Right:    indexTableExpr,
-					Cond:     joinCond,
-				}
-			}
-		} else {
-			continue
-		}
-	}
+// 		if unqiueIndexDef != nil {
+// 			for j := 0; j < len(unqiueIndexDef.TableNames); j++ {
+// 				// build left join with origin table and index table
+// 				indexTableExpr := buildIndexTableExpr(unqiueIndexDef.TableNames[j])
+// 				joinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[j], unqiueIndexDef.Fields[j])
+// 				leftJoinTableExpr = &tree.JoinTableExpr{
+// 					JoinType: tree.JOIN_TYPE_LEFT,
+// 					Left:     leftJoinTableExpr,
+// 					Right:    indexTableExpr,
+// 					Cond:     joinCond,
+// 				}
+// 			}
+// 		} else {
+// 			continue
+// 		}
+// 	}
 
-	// 4.build FromClause
-	fromClause := &tree.From{Tables: tree.TableExprs{leftJoinTableExpr}}
+// 	// 4.build FromClause
+// 	fromClause := &tree.From{Tables: tree.TableExprs{leftJoinTableExpr}}
 
-	// 5.build complete query clause abstract syntax tree for delete
-	selectStmt := &tree.Select{
-		Select: &tree.SelectClause{
-			Exprs: deleteTableList.selectList, // select list
-			From:  fromClause,                 // table and left join
-			Where: stmt.Where,                 //append where clause
-		},
-		OrderBy: stmt.OrderBy,
-		Limit:   stmt.Limit,
-		With:    stmt.With,
-	}
+// 	// 5.build complete query clause abstract syntax tree for delete
+// 	selectStmt := &tree.Select{
+// 		Select: &tree.SelectClause{
+// 			Exprs: deleteTableList.selectList, // select list
+// 			From:  fromClause,                 // table and left join
+// 			Where: stmt.Where,                 //append where clause
+// 		},
+// 		OrderBy: stmt.OrderBy,
+// 		Limit:   stmt.Limit,
+// 		With:    stmt.With,
+// 	}
 
-	// 6.build query sub plan corresponding to delete statement
-	subplan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
-	if err != nil {
-		return nil, err
-	}
-	subplan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_DELETE
-	qry := subplan.Plan.(*plan.Plan_Query).Query
+// 	// 6.build query sub plan corresponding to delete statement
+// 	subplan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	subplan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_DELETE
+// 	qry := subplan.Plan.(*plan.Plan_Query).Query
 
-	// build multi table delete Context
-	delCtxs := make([]*plan.DeleteTableCtx, len(deleteTableList.delTables))
-	for i := 0; i < len(deleteTableList.delTables); i++ {
-		delCtxs[i] = &plan.DeleteTableCtx{
-			DbName:             deleteTableList.delTables[i].objRefs.SchemaName,
-			TblName:            deleteTableList.delTables[i].tblDefs.Name,
-			UseDeleteKey:       catalog.Row_ID, // Confirm whether this field is useful
-			CanTruncate:        false,
-			ColIndex:           deleteTableList.delTables[i].colIndex,
-			IsIndexTableDelete: deleteTableList.delTables[i].isIndexTableDelete,
-		}
-	}
+// 	// build multi table delete Context
+// 	delCtxs := make([]*plan.DeleteTableCtx, len(deleteTableList.delTables))
+// 	for i := 0; i < len(deleteTableList.delTables); i++ {
+// 		delCtxs[i] = &plan.DeleteTableCtx{
+// 			DbName:             deleteTableList.delTables[i].objRefs.SchemaName,
+// 			TblName:            deleteTableList.delTables[i].tblDefs.Name,
+// 			UseDeleteKey:       catalog.Row_ID, // Confirm whether this field is useful
+// 			CanTruncate:        false,
+// 			ColIndex:           deleteTableList.delTables[i].colIndex,
+// 			IsIndexTableDelete: deleteTableList.delTables[i].isIndexTableDelete,
+// 		}
+// 	}
 
-	// build delete node
-	node := &Node{
-		NodeType:        plan.Node_DELETE,
-		ObjRef:          nil,
-		TableDef:        nil,
-		Children:        []int32{qry.Steps[len(qry.Steps)-1]},
-		NodeId:          int32(len(qry.Nodes)),
-		DeleteTablesCtx: delCtxs,
-	}
-	qry.Nodes = append(qry.Nodes, node)
-	qry.Steps[len(qry.Steps)-1] = node.NodeId
-	return subplan, nil
-}
+// 	// build delete node
+// 	node := &Node{
+// 		NodeType:        plan.Node_DELETE,
+// 		ObjRef:          nil,
+// 		TableDef:        nil,
+// 		Children:        []int32{qry.Steps[len(qry.Steps)-1]},
+// 		NodeId:          int32(len(qry.Nodes)),
+// 		DeleteTablesCtx: delCtxs,
+// 	}
+// 	qry.Nodes = append(qry.Nodes, node)
+// 	qry.Steps[len(qry.Steps)-1] = node.NodeId
+// 	return subplan, nil
+// }
 
 // When the original table contains an index table of single table deletion statement, build a multi table join query
 // execution plan to query the rowid of the original table and the index table respectively
 // link ref: https://dev.mysql.com/doc/refman/8.0/en/delete.html
-func buildSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (*Plan, error) {
-	tbinfo := &tableInfo{
-		alias2BaseNameMap: make(map[string]string),
-		baseName2AliasMap: make(map[string]string),
-		dbNames:           make([]string, 1),
-		tableNames:        make([]string, 1),
-	}
-	extractAliasTable(stmt.Tables[0].(*tree.AliasedTableExpr), tbinfo, ctx)
-	tbinfo.reverseAliasMap()
+// func buildSingleTableDelete(ctx CompilerContext, stmt *tree.Delete) (*Plan, error) {
+// 	tbinfo := &tableInfo{
+// 		alias2BaseNameMap: make(map[string]string),
+// 		baseName2AliasMap: make(map[string]string),
+// 		dbNames:           make([]string, 1),
+// 		tableNames:        make([]string, 1),
+// 	}
+// 	extractAliasTable(stmt.Tables[0].(*tree.AliasedTableExpr), tbinfo, ctx)
+// 	tbinfo.reverseAliasMap()
 
-	objRef, tableDef := ctx.Resolve(tbinfo.dbNames[0], tbinfo.tableNames[0])
-	if tableDef == nil {
-		return nil, moerr.NewInvalidInput(ctx.GetContext(), "delete has no table def")
-	}
-	if tableDef.TableType == catalog.SystemExternalRel {
-		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from external table")
-	} else if tableDef.TableType == catalog.SystemViewRel {
-		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from view")
-	}
-	if util.TableIsClusterTable(tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can delete the cluster table %s", tableDef.GetName())
-	}
+// 	objRef, tableDef := ctx.Resolve(tbinfo.dbNames[0], tbinfo.tableNames[0])
+// 	if tableDef == nil {
+// 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "delete has no table def")
+// 	}
+// 	if tableDef.TableType == catalog.SystemExternalRel {
+// 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from external table")
+// 	} else if tableDef.TableType == catalog.SystemViewRel {
+// 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot delete from view")
+// 	}
+// 	if util.TableIsClusterTable(tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
+// 		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can delete the cluster table %s", tableDef.GetName())
+// 	}
 
-	// optimize to truncate,
-	// if stmt.Where == nil && stmt.Limit == nil {
-	// return buildDelete2Truncate(ctx, objRef, tableDef)
-	// }
+// 	// optimize to truncate,
+// 	// if stmt.Where == nil && stmt.Limit == nil {
+// 	// return buildDelete2Truncate(ctx, objRef, tableDef)
+// 	// }
 
-	// 1.build select list exprs
-	deleteTableList := NewDeleteTableList()
-	err := buildDeleteProjection(objRef, tableDef, tbinfo, deleteTableList, ctx)
-	if err != nil {
-		return nil, err
-	}
+// 	// 1.build select list exprs
+// 	deleteTableList := NewDeleteTableList()
+// 	err := buildDeleteProjection(objRef, tableDef, tbinfo, deleteTableList, ctx)
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-	// 2.get origin table Expr, only one table
-	originTableExpr := stmt.Tables[0]
-	aliasTable := originTableExpr.(*tree.AliasedTableExpr)
-	originTableName := string(aliasTable.Expr.(*tree.TableName).ObjectName)
+// 	// 2.get origin table Expr, only one table
+// 	originTableExpr := stmt.Tables[0]
+// 	aliasTable := originTableExpr.(*tree.AliasedTableExpr)
+// 	originTableName := string(aliasTable.Expr.(*tree.TableName).ObjectName)
 
-	// 3.build FromClause
-	var fromClause *tree.From
+// 	// 3.build FromClause
+// 	var fromClause *tree.From
 
-	// 4.get the definition of the unique index of the original table
-	unqiueIndexDef, _ := buildIndexDefs(tableDef.Defs)
+// 	// 4.get the definition of the unique index of the original table
+// 	unqiueIndexDef, _ := buildIndexDefs(tableDef.Defs)
 
-	if unqiueIndexDef != nil {
-		var leftJoinTableExpr tree.TableExpr
-		for i := 0; i < len(unqiueIndexDef.TableNames); i++ {
-			// build left join with origin table and index table
-			indexTableExpr := buildIndexTableExpr(unqiueIndexDef.TableNames[i])
-			joinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[i], unqiueIndexDef.Fields[i])
-			leftJoinTableExpr = &tree.JoinTableExpr{
-				JoinType: tree.JOIN_TYPE_LEFT,
-				Left:     originTableExpr,
-				Right:    indexTableExpr,
-				Cond:     joinCond,
-			}
-			originTableExpr = leftJoinTableExpr
-		}
-		// 4.build FromClause
-		fromClause = &tree.From{Tables: tree.TableExprs{leftJoinTableExpr}}
-	} else {
-		fromClause = &tree.From{Tables: stmt.Tables}
-	}
+// 	if unqiueIndexDef != nil {
+// 		var leftJoinTableExpr tree.TableExpr
+// 		for i := 0; i < len(unqiueIndexDef.TableNames); i++ {
+// 			// build left join with origin table and index table
+// 			indexTableExpr := buildIndexTableExpr(unqiueIndexDef.TableNames[i])
+// 			joinCond := buildJoinOnCond(tbinfo, originTableName, unqiueIndexDef.TableNames[i], unqiueIndexDef.Fields[i])
+// 			leftJoinTableExpr = &tree.JoinTableExpr{
+// 				JoinType: tree.JOIN_TYPE_LEFT,
+// 				Left:     originTableExpr,
+// 				Right:    indexTableExpr,
+// 				Cond:     joinCond,
+// 			}
+// 			originTableExpr = leftJoinTableExpr
+// 		}
+// 		// 4.build FromClause
+// 		fromClause = &tree.From{Tables: tree.TableExprs{leftJoinTableExpr}}
+// 	} else {
+// 		fromClause = &tree.From{Tables: stmt.Tables}
+// 	}
 
-	// 5.build complete query clause abstract syntax tree for delete
-	selectStmt := &tree.Select{
-		Select: &tree.SelectClause{
-			Exprs: deleteTableList.selectList, // select list
-			From:  fromClause,                 // table and left join
-			Where: stmt.Where,                 // append where clause
-		},
-		OrderBy: stmt.OrderBy,
-		Limit:   stmt.Limit,
-		With:    stmt.With,
-	}
+// 	// 5.build complete query clause abstract syntax tree for delete
+// 	selectStmt := &tree.Select{
+// 		Select: &tree.SelectClause{
+// 			Exprs: deleteTableList.selectList, // select list
+// 			From:  fromClause,                 // table and left join
+// 			Where: stmt.Where,                 // append where clause
+// 		},
+// 		OrderBy: stmt.OrderBy,
+// 		Limit:   stmt.Limit,
+// 		With:    stmt.With,
+// 	}
 
-	// 6.build query sub plan corresponding to delete statement
-	subplan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
-	if err != nil {
-		return nil, err
-	}
-	subplan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_DELETE
-	qry := subplan.Plan.(*plan.Plan_Query).Query
+// 	// 6.build query sub plan corresponding to delete statement
+// 	subplan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	subplan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_DELETE
+// 	qry := subplan.Plan.(*plan.Plan_Query).Query
 
-	// build multi table delete Context
-	delCtxs := make([]*plan.DeleteTableCtx, len(deleteTableList.delTables))
-	for i := 0; i < len(deleteTableList.delTables); i++ {
-		delCtxs[i] = &plan.DeleteTableCtx{
-			DbName:             deleteTableList.delTables[i].objRefs.SchemaName,
-			TblName:            deleteTableList.delTables[i].tblDefs.Name,
-			UseDeleteKey:       catalog.Row_ID,
-			CanTruncate:        false,
-			ColIndex:           deleteTableList.delTables[i].colIndex,
-			IsIndexTableDelete: deleteTableList.delTables[i].isIndexTableDelete,
-		}
-	}
+// 	// build multi table delete Context
+// 	delCtxs := make([]*plan.DeleteTableCtx, len(deleteTableList.delTables))
+// 	for i := 0; i < len(deleteTableList.delTables); i++ {
+// 		delCtxs[i] = &plan.DeleteTableCtx{
+// 			DbName:             deleteTableList.delTables[i].objRefs.SchemaName,
+// 			TblName:            deleteTableList.delTables[i].tblDefs.Name,
+// 			UseDeleteKey:       catalog.Row_ID,
+// 			CanTruncate:        false,
+// 			ColIndex:           deleteTableList.delTables[i].colIndex,
+// 			IsIndexTableDelete: deleteTableList.delTables[i].isIndexTableDelete,
+// 		}
+// 	}
 
-	// build delete node
-	node := &Node{
-		NodeType:        plan.Node_DELETE,
-		ObjRef:          nil,
-		TableDef:        nil,
-		Children:        []int32{qry.Steps[len(qry.Steps)-1]},
-		NodeId:          int32(len(qry.Nodes)),
-		DeleteTablesCtx: delCtxs,
-	}
-	qry.Nodes = append(qry.Nodes, node)
-	qry.Steps[len(qry.Steps)-1] = node.NodeId
-	return subplan, nil
-}
+// 	// build delete node
+// 	node := &Node{
+// 		NodeType:        plan.Node_DELETE,
+// 		ObjRef:          nil,
+// 		TableDef:        nil,
+// 		Children:        []int32{qry.Steps[len(qry.Steps)-1]},
+// 		NodeId:          int32(len(qry.Nodes)),
+// 		DeleteTablesCtx: delCtxs,
+// 	}
+// 	qry.Nodes = append(qry.Nodes, node)
+// 	qry.Steps[len(qry.Steps)-1] = node.NodeId
+// 	return subplan, nil
+// }
 
 // Build delete projection of delete node
 func buildDeleteProjection(objRef *ObjectRef, tableDef *TableDef, tbinfo *tableInfo, delTablelist *DeleteTableList, ctx CompilerContext) error {

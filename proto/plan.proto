@@ -615,7 +615,7 @@ message Node {
 	ObjectRef obj_ref = 19;
 	RowsetData rowset_data = 20;
 	string extra_options = 21;
-	repeated DeleteTableCtx delete_tables_ctx = 22;
+	DeleteTableCtx delete_ctx = 22;
 
 	repeated int32 binding_tags = 23;
 
@@ -628,14 +628,12 @@ message Node {
     int32   parallelism = 26;
 
 	ClusterTable cluster_table = 27;
-	DeleteTableCtx2 delete_ctx = 28;
 }
 
-message DeleteTableCtx2 {
+message DeleteTableCtx {
 	message idxList {
 		repeated int32 list = 1;
 	}
-
 	repeated ObjectRef del_ref = 1;
 	repeated ObjectRef del_idx_ref = 2;
 	repeated int32 del_idx_idx = 3;
@@ -645,15 +643,7 @@ message DeleteTableCtx2 {
 	repeated int32 on_cascade_idx = 7;
 	repeated ObjectRef on_set_ref = 8;
 	repeated idxList on_set_idx = 9;
-}
-
-message DeleteTableCtx {
-	string db_name = 1;
-	string tbl_name = 2;
-	string use_delete_key = 3;
-	bool can_truncate = 4;
-	int32 col_index = 5;
-	bool is_index_table_delete = 6;
+	bool can_truncate = 10;
 }
 
 message Query {

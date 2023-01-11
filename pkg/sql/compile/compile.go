@@ -541,7 +541,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		c.SetAnalyzeCurrent(children, curr)
 		return c.compileSort(n, c.compileUnionAll(n, ss, children)), nil
 	case plan.Node_DELETE:
-		if n.DeleteTablesCtx[0].CanTruncate {
+		if n.DeleteCtx.CanTruncate {
 			return nil, nil
 		}
 		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)

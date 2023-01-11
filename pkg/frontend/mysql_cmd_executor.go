@@ -1002,6 +1002,18 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 				row[i] = vs[rowIndex].ToString()
 			}
 		}
+	case types.T_Rowid:
+		if !nulls.Any(vec.Nsp) {
+			vs := vec.Col.([]types.Rowid)
+			row[i] = vs[rowIndex]
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]types.Rowid)
+				row[i] = vs[rowIndex]
+			}
+		}
 	default:
 		logErrorf(ses.GetConciseProfile(), "extractRowFromVector : unsupported type %d", vec.Typ.Oid)
 		return moerr.NewInternalError(ses.requestCtx, "extractRowFromVector : unsupported type %d", vec.Typ.Oid)

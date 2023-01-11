@@ -21,20 +21,41 @@ import (
 
 type Argument struct {
 	Ts           uint64
-	DeleteCtxs   []*DeleteCtx
+	DeleteCtx    *DeleteCtx
 	AffectedRows uint64
 	IsRemote     bool
 }
 
 type DeleteCtx struct {
-	TableName          string
-	DbName             string
-	TableSource        engine.Relation
-	UseDeleteKey       string // The column used when deletion(dml), Currently, it is based on '__row_id' column
-	CanTruncate        bool
-	ColIndex           int32
-	IsIndexTableDelete bool
+	CanTruncate bool
+
+	DelSource []engine.Relation
+	// DelRef    []*plan.ObjectRef
+
+	DelIdxSource []engine.Relation
+	// DelIdxRef    []*plan.ObjectRef
+	DelIdxIdx []int32
+
+	// OnRestrictSource []engine.Relation
+	// OnRestrictRef    []*plan.ObjectRef
+	OnRestrictIdx []int32
+
+	OnCascadeSource []engine.Relation
+	// OnCascadeRef    []*plan.ObjectRef
+	OnCascadeIdx []int32
+
+	OnSetSource []engine.Relation
+	// OnSetRef    []*plan.ObjectRef
+	OnSetIdx [][]int32
 }
+
+// type DeleteCtx struct {
+// 	TableSource        engine.Relation
+// 	UseDeleteKey       string // The column used when deletion(dml), Currently, it is based on '__row_id' column
+// 	CanTruncate        bool
+// 	ColIndex           int32
+// 	IsIndexTableDelete bool
+// }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
