@@ -242,7 +242,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			return
 		}
 	}
-	_, err = seg.nseg.CreateNonAppendableBlockWithMeta(node.GetMetaLoc())
+	_, err = seg.nseg.CreateNonAppendableBlockWithMeta(node.GetPersistedLoc())
 	if err != nil {
 		return
 	}
