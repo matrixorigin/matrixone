@@ -17,27 +17,17 @@ package export
 import (
 	"bytes"
 	"context"
-	"io"
 	"path"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/export/writer"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
-type FSWriterFactory0 func(ctx context.Context, account string, tbl *table.Table, ts time.Time) io.StringWriter
 type FSWriterFactory func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter
-
-func GetFSWriterFactory(fs fileservice.FileService, nodeUUID, nodeType, ext string) FSWriterFactory0 {
-	var extension = table.GetExtension(ext)
-	var cfg = FilePathCfg{NodeUUID: nodeUUID, NodeType: nodeType, Extension: extension}
-	return func(ctx context.Context, account string, tbl *table.Table, ts time.Time) io.StringWriter {
-		return writer.NewFSWriter(ctx, fs, writer.WithFilePath(cfg.LogsFilePathFactory(account, tbl, ts)))
-	}
-}
 
 type FilePathCfg struct {
 	NodeUUID  string
@@ -59,13 +49,13 @@ func GetRowWriterFactory4Trace(fs fileservice.FileService, nodeUUID, nodeType st
 	switch extension {
 	case table.CsvExtension:
 		factory = func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
-			options := []writer.FSWriterOption{
-				writer.WithFilePath(cfg.LogsFilePathFactory(account, tbl, ts)),
+			options := []etl.FSWriterOption{
+				etl.WithFilePath(cfg.LogsFilePathFactory(account, tbl, ts)),
 			}
 			//if name != nil {
 			//	options = append(options, WithName(name))
 			//}
-			return writer.NewCSVWriter(ctx, bytes.NewBuffer(nil), writer.NewFSWriter(ctx, fs, options...))
+			return etl.NewCSVWriter(ctx, bytes.NewBuffer(nil), etl.NewFSWriter(ctx, fs, options...))
 		}
 	case table.TaeExtension:
 		mp, err := mpool.NewMPool("etl_fs_writer", 0, mpool.NoFixed)
@@ -74,7 +64,7 @@ func GetRowWriterFactory4Trace(fs fileservice.FileService, nodeUUID, nodeType st
 		}
 		factory = func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 			filePath := cfg.LogsFilePathFactory(account, tbl, ts)
-			return writer.NewTAEWriter(ctx, tbl, mp, filePath, fs)
+			return etl.NewTAEWriter(ctx, tbl, mp, filePath, fs)
 		}
 	}
 

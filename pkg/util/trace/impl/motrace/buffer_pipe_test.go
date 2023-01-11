@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/export/writer"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"testing"
 	"time"
@@ -286,7 +286,7 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 var genFactory = func() FSWriterFactory {
 	return func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 		buf := bytes.NewBuffer(nil)
-		return writer.NewCSVWriter(ctx, buf, &dummyStringWriter{})
+		return etl.NewCSVWriter(ctx, buf, &dummyStringWriter{})
 	}
 }
 

@@ -35,8 +35,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/export/writer"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/matrixorigin/simdcsv"
@@ -490,7 +490,7 @@ func newETLReader(ctx context.Context, tbl *table.Table, fs fileservice.FileServ
 	if strings.LastIndex(path, table.CsvExtension) > 0 {
 		return NewCSVReader(ctx, fs, path)
 	} else if strings.LastIndex(path, table.TaeExtension) > 0 {
-		return writer.NewTaeReader(ctx, tbl, path, size, fs, mp)
+		return etl.NewTaeReader(ctx, tbl, path, size, fs, mp)
 	} else {
 		panic("NOT Implements")
 	}
@@ -566,10 +566,10 @@ func newETLWriter(ctx context.Context, fs fileservice.FileService, filePath stri
 
 	var fsWriter io.StringWriter
 	if strings.LastIndex(filePath, table.TaeExtension) > 0 {
-		fsWriter = writer.NewTAEWriter(ctx, tbl, mp, filePath, fs)
+		fsWriter = etl.NewTAEWriter(ctx, tbl, mp, filePath, fs)
 	} else {
 		// CSV
-		fsWriter = writer.NewFSWriter(ctx, fs, writer.WithFilePath(filePath))
+		fsWriter = etl.NewFSWriter(ctx, fs, etl.WithFilePath(filePath))
 	}
 
 	return NewContentWriter(fsWriter, buf), nil
