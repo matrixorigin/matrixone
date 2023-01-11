@@ -65,10 +65,11 @@ var (
 // need to sample the output.
 type SampleType int
 
-var (
-	noneSample = SampleType(0)
+const (
+	noneSample SampleType = iota
+	SystemInitSample
 	// ExampleSample used in examples
-	ExampleSample = SampleType(math.MaxInt)
+	ExampleSample = math.MaxInt
 )
 
 // MOLogger mo logger based zap.logger. To standardize and standardize the logging

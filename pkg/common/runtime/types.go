@@ -56,6 +56,8 @@ type Runtime interface {
 	// the service type and unique ID of the service; all subsequent loggers must be
 	// built on this logger.
 	Logger() *log.MOLogger
+	// SubLogger returns sub-loggers used for different purposes.
+	SubLogger(LoggerName) *log.MOLogger
 	// Clock returns the Clock instance of the current runtime environment
 	Clock() clock.Clock
 	// SetGlobalVariables set global variables which scope based in runtime.
