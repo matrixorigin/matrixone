@@ -156,13 +156,13 @@ func (w *TAEWriter) writeBatch() error {
 		return err
 	}
 	// clean
-	for _, row := range w.rows {
-		row.Free()
-	}
 	for _, vals := range w.buffer {
 		for idx := range vals {
 			vals[idx] = nil
 		}
+	}
+	for _, row := range w.rows {
+		row.Free()
 	}
 	w.buffer = w.buffer[:0]
 	batch.Clean(w.mp)
