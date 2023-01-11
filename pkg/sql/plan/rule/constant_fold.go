@@ -97,7 +97,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	for i := range ef.F.Args {
 		ef.F.Args[i] = r.constantFold(ef.F.Args[i], proc)
 	}
-	if !isConstant(e) {
+	if !IsConstant(e) {
 		return e
 	}
 	vec, err := colexec.EvalExpr(r.bat, proc, e)
@@ -266,7 +266,7 @@ func GetConstantValue(vec *vector.Vector) *plan.Const {
 	}
 }
 
-func isConstant(e *plan.Expr) bool {
+func IsConstant(e *plan.Expr) bool {
 	switch ef := e.Expr.(type) {
 	case *plan.Expr_C, *plan.Expr_T:
 		return true
@@ -280,7 +280,7 @@ func isConstant(e *plan.Expr) bool {
 			return false
 		}
 		for i := range ef.F.Args {
-			if !isConstant(ef.F.Args[i]) {
+			if !IsConstant(ef.F.Args[i]) {
 				return false
 			}
 		}

@@ -108,6 +108,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		}
 		if ctr.bat != nil {
 			ctr.bat.ExpandNulls()
+			anal.Alloc(int64(ctr.bat.Size()))
 			anal.Output(ctr.bat, isLast)
 			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil
@@ -126,7 +127,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
 	}
 
-	if err := ctr.evalAggVector(bat, ap.Aggs, proc); err != nil {
+	if err := ctr.evalAggVector(bat, ap.Aggs, proc, anal); err != nil {
 		return false, err
 	}
 	defer ctr.cleanAggVectors(proc.Mp())
@@ -137,7 +138,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 			ctr.multiVecs[i] = make([]evalVector, len(agg.GroupExpr))
 		}
 	}
-	if err := ctr.evalMultiAggs(bat, ap.MultiAggs, proc); err != nil {
+	if err := ctr.evalMultiAggs(bat, ap.MultiAggs, proc, anal); err != nil {
 		return false, err
 	}
 	defer ctr.cleanMultiAggVecs(proc.Mp())
@@ -189,6 +190,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 					}
 					ctr.bat.Aggs[i] = nil
 					ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
+					anal.Alloc(int64(vec.Size()))
 				}
 				ctr.bat.Aggs = nil
 				for i := range ctr.bat.Zs { // reset zs
@@ -214,7 +216,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
 	}
 
-	if err := ctr.evalAggVector(bat, ap.Aggs, proc); err != nil {
+	if err := ctr.evalAggVector(bat, ap.Aggs, proc, anal); err != nil {
 		return false, err
 	}
 	defer ctr.cleanAggVectors(proc.Mp())
@@ -225,7 +227,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			ctr.multiVecs[i] = make([]evalVector, len(agg.GroupExpr))
 		}
 	}
-	if err := ctr.evalMultiAggs(bat, ap.MultiAggs, proc); err != nil {
+	if err := ctr.evalMultiAggs(bat, ap.MultiAggs, proc, anal); err != nil {
 		return false, err
 	}
 	defer ctr.cleanMultiAggVecs(proc.Mp())
@@ -247,6 +249,9 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 				ctr.groupVecs[i].needFree = false
 				break
 			}
+		}
+		if ctr.groupVecs[i].needFree && vec != nil {
+			anal.Alloc(int64(vec.Size()))
 		}
 		ctr.vecs[i] = vec
 	}
@@ -480,7 +485,7 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 	return nil
 }
 
-func (ctr *container) evalAggVector(bat *batch.Batch, aggs []agg.Aggregate, proc *process.Process) error {
+func (ctr *container) evalAggVector(bat *batch.Batch, aggs []agg.Aggregate, proc *process.Process, analyze process.Analyze) error {
 	for i, ag := range aggs {
 		vec, err := colexec.EvalExpr(bat, proc, ag.E)
 		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
@@ -495,11 +500,14 @@ func (ctr *container) evalAggVector(bat *batch.Batch, aggs []agg.Aggregate, proc
 				break
 			}
 		}
+		if ctr.aggVecs[i].needFree && vec != nil {
+			analyze.Alloc(int64(vec.Size()))
+		}
 	}
 	return nil
 }
 
-func (ctr *container) evalMultiAggs(bat *batch.Batch, multiAggs []group_concat.Argument, proc *process.Process) error {
+func (ctr *container) evalMultiAggs(bat *batch.Batch, multiAggs []group_concat.Argument, proc *process.Process, analyze process.Analyze) error {
 	for i := range multiAggs {
 		for j, expr := range multiAggs[i].GroupExpr {
 			vec, err := colexec.EvalExpr(bat, proc, expr)
@@ -514,6 +522,9 @@ func (ctr *container) evalMultiAggs(bat *batch.Batch, multiAggs []group_concat.A
 					ctr.multiVecs[i][j].needFree = false
 					break
 				}
+			}
+			if ctr.multiVecs[i][j].needFree && vec != nil {
+				analyze.Alloc(int64(vec.Size()))
 			}
 		}
 	}
