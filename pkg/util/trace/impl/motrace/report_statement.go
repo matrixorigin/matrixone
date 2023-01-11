@@ -171,6 +171,9 @@ func (s *StatementInfo) ExecPlan2Json(ctx context.Context) (string, string) {
 			jsonByte, _, _ = s.SerializeExecPlan(ctx, nil, uuid.UUID(s.StatementID))
 		}
 	}
+	if len(statsJsonByte) == 0 {
+		statsJsonByte = []byte("{}")
+	}
 	return string(jsonByte), string(statsJsonByte)
 }
 

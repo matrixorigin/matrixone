@@ -158,7 +158,19 @@ func genLines(cnt int) (lines []*table.Row) {
 	return
 }
 
-func TestTAEWriter(t *testing.T) {
+type dummyFilePathCfg struct {
+	NodeUUID  string
+	NodeType  string
+	Extension string
+}
+
+func (c *dummyFilePathCfg) LogsFilePathFactory(account string, tbl *table.Table, ts time.Time) string {
+	filename := tbl.PathBuilder.NewLogFilename(tbl.Table, c.NodeUUID, c.NodeType, ts, c.Extension)
+	dir := tbl.PathBuilder.Build(account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.Table)
+	return path.Join(dir, filename)
+}
+
+func TestTAEWriter_WriteRow(t *testing.T) {
 	t.Logf("local timezone: %v", time.Local.String())
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.Nil(t, err)
@@ -219,11 +231,43 @@ func TestTAEWriter(t *testing.T) {
 		return arr
 	}
 
+	var _1TxnID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
+	var _1SesID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
+	var genStmtData = func() []table.RowField {
+		arr := make([]table.RowField, 0, 128)
+		arr = append(arr,
+			&motrace.StatementInfo{
+				StatementID:          trace.NilTraceID,
+				TransactionID:        _1TxnID,
+				SessionID:            _1SesID,
+				Account:              "MO",
+				User:                 "moroot",
+				Database:             "system",
+				Statement:            "show tables",
+				StatementFingerprint: "show tables",
+				StatementTag:         "",
+				ExecPlan:             nil,
+			},
+		)
+		return arr
+	}
+
 	tests := []struct {
 		name   string
 		fields fields
 		args   args
 	}{
+		{
+			name: "statement",
+			fields: fields{
+				ctx: ctx,
+				fs:  fs,
+			},
+			args: args{
+				tbl:   motrace.SingleStatementTable,
+				items: genStmtData,
+			},
+		},
 		{
 			name: "span",
 			fields: fields{
@@ -240,9 +284,29 @@ func TestTAEWriter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			filepath := "NOT_SET"
-			_ = NewTAEWriter(tt.fields.ctx, tt.args.tbl, mp, filepath, tt.fields.fs)
+			if tt.name == "span" {
+				return
+			}
 
+			cfg := dummyFilePathCfg{NodeUUID: "uuid", NodeType: "type", Extension: table.TaeExtension}
+			filePath := cfg.LogsFilePathFactory("sys", tt.args.tbl, time.Now())
+			writer := NewTAEWriter(tt.fields.ctx, tt.args.tbl, mp, filePath, tt.fields.fs)
+			items := tt.args.items()
+			for _, item := range items {
+				row := item.GetTable().GetRow(tt.fields.ctx)
+				item.FillRow(tt.fields.ctx, row)
+				writer.WriteRow(row)
+			}
+			writer.FlushAndClose()
+
+			folder := path.Dir(filePath)
+			entrys, err := fs.List(ctx, defines.ETLFileServiceName+fileservice.ServiceNameSeparator+folder)
+			require.Nil(t, err)
+			require.NotEqual(t, 0, len(entrys))
+			for _, e := range entrys {
+				t.Logf("file: %s, size: %d, is_dir: %v", e.Name, e.Size, e.IsDir)
+				require.NotEqual(t, 44, e.Size)
+			}
 		})
 	}
 }
