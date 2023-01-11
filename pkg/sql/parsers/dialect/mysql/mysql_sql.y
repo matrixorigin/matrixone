@@ -2140,7 +2140,7 @@ alter_account_stmt:
     }
 
 alter_database_config_stmt:
-     ALTER DATABASE db_name SET MYSQL_COMPATBILITY_MODE '=' expr_or_default
+     ALTER DATABASE db_name SET MYSQL_COMPATBILITY_MODE '=' expression
      {
         $$ = &tree.AlterDataBaseConfig{
             DbName:$3,
