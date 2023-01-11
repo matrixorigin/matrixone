@@ -142,7 +142,7 @@ func (node *AlterView) Format(ctx *FmtCtx) {
 }
 
 func (node *AlterView) GetStatementType() string { return "Alter View" }
-func (node *AlterView) GetQueryType() string     { return "QueryTypeDDL" }
+func (node *AlterView) GetQueryType() string     { return QueryTypeDDL }
 
 // alter configuration for mo_mysql_compatbility_mode
 type AlterDataBaseConfig struct {
@@ -163,4 +163,4 @@ func (node *AlterDataBaseConfig) Format(ctx *FmtCtx) {
 }
 
 func (node *AlterDataBaseConfig) GetStatementType() string { return "Alter DataBase config" }
-func (node *AlterDataBaseConfig) GetQueryType() string     { return "QueryTypeDDL" }
+func (node *AlterDataBaseConfig) GetQueryType() string     { return QueryTypeDDL }
