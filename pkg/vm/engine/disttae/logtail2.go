@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -202,7 +203,30 @@ func (logSub *TableLogTailSubscriber) newCnLogTailClient() error {
 			}
 		}
 	}
-	s, err = cnclient.GetStreamSender(dnLogTailServerBackend)
+
+	// XXX test code.
+	codec := morpc.NewMessageCodec(func() morpc.Message {
+		return &service.LogtailRequest{}
+	})
+	factory := morpc.NewGoettyBasedBackendFactory(codec,
+		morpc.WithBackendGoettyOptions(
+			goetty.WithSessionRWBUfferSize(1<<10, 1<<10),
+			goetty.WithSessionReleaseMsgFunc(func(v any) {
+				m := v.(morpc.RPCMessage)
+				request := m.Message.(*service.LogtailRequest)
+				request.Reset()
+			}),
+		),
+		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("cn-log-tail-client-backend")),
+	)
+
+	c, err := morpc.NewClient(factory,
+		morpc.WithClientMaxBackendPerHost(10000),
+		morpc.WithClientTag("cn-log-tail-client"),
+	)
+
+	s, err = c.NewStream(dnLogTailServerBackend, false)
+	//s, err = cnclient.GetStreamSender(dnLogTailServerBackend)
 	if err != nil {
 		return err
 	}
@@ -252,6 +276,7 @@ func (logSub *TableLogTailSubscriber) subscribeTable(
 		defer cancel()
 		return logSub.logTailClient.Subscribe(nctx, tblId)
 	}
+	println("cms that, subscribe")
 	return logSub.logTailClient.Subscribe(ctx, tblId)
 }
 
