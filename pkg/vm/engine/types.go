@@ -326,6 +326,9 @@ type Relation interface {
 	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]Reader, error)
 
 	TableColumns(ctx context.Context) ([]*Attribute, error)
+
+	//max and min values
+	MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error)
 }
 
 type Reader interface {

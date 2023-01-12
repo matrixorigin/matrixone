@@ -628,34 +628,6 @@ func NewShowColumnNumber(table *UnresolvedObjectName, dbname string) *ShowColumn
 	}
 }
 
-// show table size
-type ShowTableSize struct {
-	showImpl
-	Table  *UnresolvedObjectName
-	DbName string
-}
-
-func (node *ShowTableSize) Format(ctx *FmtCtx) {
-	ctx.WriteString("show table size")
-	if node.Table != nil {
-		ctx.WriteString(" from ")
-		node.Table.Format(ctx)
-	}
-	if node.DbName != "" {
-		ctx.WriteString(" from ")
-		ctx.WriteString(node.DbName)
-	}
-}
-func (node *ShowTableSize) GetStatementType() string { return "Show Table Size" }
-func (node *ShowTableSize) GetQueryType() string     { return QueryTypeDQL }
-
-func NewShowTableSize(table *UnresolvedObjectName, dbname string) *ShowTableSize {
-	return &ShowTableSize{
-		Table:  table,
-		DbName: dbname,
-	}
-}
-
 // show table values
 type ShowTableValues struct {
 	showImpl
@@ -683,3 +655,19 @@ func NewShowTableValues(table *UnresolvedObjectName, dbname string) *ShowTableVa
 		DbName: dbname,
 	}
 }
+
+type ShowAccounts struct {
+	showImpl
+	Like *ComparisonExpr
+}
+
+func (node *ShowAccounts) Format(ctx *FmtCtx) {
+	ctx.WriteString("show accounts")
+	if node.Like != nil {
+		ctx.WriteByte(' ')
+		node.Like.Format(ctx)
+	}
+}
+
+func (node *ShowAccounts) GetStatementType() string { return "Show Accounts" }
+func (node *ShowAccounts) GetQueryType() string     { return QueryTypeDQL }

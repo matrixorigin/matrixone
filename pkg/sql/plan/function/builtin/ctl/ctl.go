@@ -63,6 +63,9 @@ func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 					return nil, err
 				}
 				txnOp = v
+				defer func() {
+					_ = txnOp.Commit(proc.Ctx)
+				}()
 			}
 			op, ok := txnOp.(client.DebugableTxnOperator)
 			if !ok {
