@@ -182,7 +182,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		}
 	}
 	for idx, expr := range node.TblFuncExprList {
-		node.TblFuncExprList[idx] = DeepCopyExpr(expr)
+		newNode.TblFuncExprList[idx] = DeepCopyExpr(expr)
 	}
 
 	return newNode
@@ -494,6 +494,7 @@ func DeepCopyInsertValues(insert *plan.InsertValues) *plan.InsertValues {
 		UniqueIndexDef:    DeepCopyUniqueIndexDef(insert.UniqueIndexDef),
 		SecondaryIndexDef: DeepCopySecondaryIndexDef(insert.SecondaryIndexDef),
 		ClusterTable:      DeepCopyClusterTable(insert.GetClusterTable()),
+		HasAutoCol:        insert.HasAutoCol,
 	}
 
 	for idx, col := range insert.ExplicitCols {
@@ -679,6 +680,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_C:
 		pc := &plan.Const{
 			Isnull: item.C.GetIsnull(),
+			Src:    item.C.Src,
 		}
 
 		switch c := item.C.Value.(type) {
@@ -848,7 +850,8 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		MemorySize:       analyzeinfo.GetMemorySize(),
 		WaitTimeConsumed: analyzeinfo.GetWaitTimeConsumed(),
 		DiskIO:           analyzeinfo.GetDiskIO(),
-		S3IO:             analyzeinfo.GetS3IO(),
+		S3IOByte:         analyzeinfo.GetS3IOByte(),
+		S3IOCount:        analyzeinfo.GetS3IOCount(),
 		NetworkIO:        analyzeinfo.GetNetworkIO(),
 	}
 }

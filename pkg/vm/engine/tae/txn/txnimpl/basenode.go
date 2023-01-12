@@ -168,11 +168,6 @@ func (info *appendInfo) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 type memoryNode struct {
-	//*buffer.Node
-	//driver wal.Driver
-	//lsn    uint64
-	//typ    txnbase.NodeState
-
 	common.RefHelper
 	bnode *baseNode
 	//data resides in.
@@ -257,7 +252,6 @@ type persistedNode struct {
 func newPersistedNode(bnode *baseNode) *persistedNode {
 	node := &persistedNode{
 		bnode: bnode,
-		rows:  bnode.Rows(),
 	}
 	node.OnZeroCB = node.close
 	if bnode.meta.HasPersistedData() {
@@ -296,11 +290,13 @@ func (n *persistedNode) init() {
 			n.pkIndex = index
 		}
 	}
+	location := n.bnode.meta.GetMetaLoc()
+	n.rows = uint32(tables.ReadPersistedBlockRow(location))
+
 }
 
 func (n *persistedNode) Rows() uint32 {
-	location := n.bnode.meta.GetMetaLoc()
-	return uint32(tables.ReadPersistedBlockRow(location))
+	return n.rows
 }
 
 type baseNode struct {

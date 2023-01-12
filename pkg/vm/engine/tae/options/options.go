@@ -80,6 +80,24 @@ func WithGlobalVersionInterval(interval time.Duration) func(*Options) {
 	}
 }
 
+func WithGCCheckpointInterval(interval time.Duration) func(*Options) {
+	return func(opts *Options) {
+		if opts.CheckpointCfg == nil {
+			opts.CheckpointCfg = new(CheckpointCfg)
+		}
+		opts.CheckpointCfg.GCCheckpointInterval = interval
+	}
+}
+
+func WithDisableGCCheckpoint() func(*Options) {
+	return func(opts *Options) {
+		if opts.CheckpointCfg == nil {
+			opts.CheckpointCfg = new(CheckpointCfg)
+		}
+		opts.CheckpointCfg.DisableGCCheckpoint = true
+	}
+}
+
 func (o *Options) FillDefaults(dirname string) *Options {
 	if o == nil {
 		o = &Options{}
@@ -124,6 +142,9 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 	if o.CheckpointCfg.GlobalVersionInterval <= 0 {
 		o.CheckpointCfg.GlobalVersionInterval = DefaultGlobalVersionInterval
+	}
+	if o.CheckpointCfg.GCCheckpointInterval <= 0 {
+		o.CheckpointCfg.GCCheckpointInterval = DefaultGCCheckpointInterval
 	}
 
 	if o.GCCfg == nil {

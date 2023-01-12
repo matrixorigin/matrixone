@@ -46,20 +46,20 @@ func benchmarkFileService(b *testing.B, newFS func() FileService) {
 		assert.Nil(b, err)
 
 		parts2 := fixedSplit(content, 4*1024)
-		readVector := &IOVector{
-			FilePath: "foo",
-		}
-		offset = int64(0)
-		for _, part := range parts2 {
-			readVector.Entries = append(readVector.Entries, IOEntry{
-				Offset: offset,
-				Size:   int64(len(part)),
-			})
-			offset += int64(len(part))
-		}
 
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
+			readVector := &IOVector{
+				FilePath: "foo",
+			}
+			offset = int64(0)
+			for _, part := range parts2 {
+				readVector.Entries = append(readVector.Entries, IOEntry{
+					Offset: offset,
+					Size:   int64(len(part)),
+				})
+				offset += int64(len(part))
+			}
 			err = fs.Read(ctx, readVector)
 			b.SetBytes(int64(len(content)))
 			assert.Nil(b, err)

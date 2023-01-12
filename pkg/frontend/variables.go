@@ -1243,11 +1243,11 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Default:           uint64(24),
 	},
 	"query_result_maxsize": {
-		Name:              "sql_select_limit",
+		Name:              "query_result_maxsize",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableUintType("query_result_maxsize", 1, 18446744073709551615),
+		Type:              InitSystemVariableUintType("query_result_maxsize", 0, 18446744073709551615),
 		Default:           uint64(100),
 	},
 }
