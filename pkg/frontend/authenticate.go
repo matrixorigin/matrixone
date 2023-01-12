@@ -3629,6 +3629,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
+	case *tree.AlterDataBaseConfig:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	case *tree.CreateFunction:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -3689,10 +3692,17 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
-		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
-		*tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowLocks, *tree.ShowFunctionStatus:
+		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus,
+		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
+		*tree.ShowTableNumber, *tree.ShowColumnNumber,
+		*tree.ShowTableValues, *tree.ShowNodeList,
+		*tree.ShowLocks, *tree.ShowFunctionStatus:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *tree.ShowAccounts:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -5027,6 +5037,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return tenant.IsAdminRole(), nil
 		}
 
+		checkShowAccountsPrivilege := func() (bool, error) {
+			//only the moAdmin and accountAdmin can execute the show accounts.
+			return tenant.IsAdminRole(), nil
+		}
+
 		switch gp := stmt.(type) {
 		case *tree.Grant:
 			if gp.Typ == tree.GrantTypePrivilege {
@@ -5052,6 +5067,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			}
 		case *tree.RevokePrivilege:
 			return checkRevokePrivilege()
+		case *tree.ShowAccounts:
+			return checkShowAccountsPrivilege()
 		}
 	}
 
@@ -6073,6 +6090,55 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	}
 
 	return err
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
+func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {
+	var err error
+	var deleteSql string
+	var insertSql string
+	datname := ad.DbName
+	update_config := "'" + ad.UpdateConfig.String() + "'"
+
+	//verify the update_config
+	if !isInvalidConfigInput(update_config) {
+		return moerr.NewInvalidInput(ctx, "invalid input %s for alter database config", update_config)
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//first delete the record
+	deleteSql = getSqlForDeleteMysqlCompatbilityMode(datname)
+	err = bh.Exec(ctx, deleteSql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	//second insert a new record
+	insertSql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, datname, update_config)
+	err = bh.Exec(ctx, insertSql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return err
+
 handleFailed:
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")

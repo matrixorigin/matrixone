@@ -100,6 +100,15 @@ message LogtailResponse {
     }
 };
 
+// message segment
+message MessageSegment {
+    uint64 StreamID   = 1;
+    int32 MessageSize = 2;
+    int32 Sequence    = 3;
+    int32 MaxSequence = 4;
+    bytes Payload     = 5;
+}
+
 service Logtail {
     rpc Logtail(stream LogtailRequest) returns (stream LogtailResponse) {}
 }
