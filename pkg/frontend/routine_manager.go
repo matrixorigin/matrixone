@@ -107,7 +107,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
 	if err != nil {
-		logError(pro.GetConciseProfile(), "failed to handshake with server, quiting routine...")
+		logErrorf(pro.GetConciseProfile(), "failed to handshake with server, quiting routine... %s", err)
 		routine.killConnection(true)
 		return
 	}
