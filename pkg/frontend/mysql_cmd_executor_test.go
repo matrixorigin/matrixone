@@ -1180,7 +1180,7 @@ func TestSerializePlanToJson(t *testing.T) {
 	}
 
 	for _, sql := range sqls {
-		mock := plan.NewMockOptimizer()
+		mock := plan.NewMockOptimizer(false)
 		plan, err := buildSingleSql(mock, t, sql)
 		if err != nil {
 			t.Fatalf("%+v", err)
