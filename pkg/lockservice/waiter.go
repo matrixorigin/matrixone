@@ -142,6 +142,12 @@ func (w *waiter) mustGetNotifiedValue() error {
 	}
 }
 
+func (w *waiter) resetWait() {
+	if !atomic.CompareAndSwapInt32(&w.status, waitCompletedStatus, waitNotifyStatus) {
+		panic("invalid reset wait")
+	}
+}
+
 func (w *waiter) wait(ctx context.Context) error {
 	status := w.getStatus()
 	switch status {

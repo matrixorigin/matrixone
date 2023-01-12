@@ -63,8 +63,8 @@ func (l *lockTable) Unlock(ctx context.Context, txnID []byte) error {
 }
 
 func (l *lockTable) acquireLock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) error {
+	waiter := acquireWaiter(txnID)
 	for {
-		waiter := acquireWaiter(txnID)
 		ok, err := l.doAcquireLock(ctx, waiter, tableID, rows, txnID, options)
 		if err != nil {
 			waiter.close()
@@ -78,7 +78,7 @@ func (l *lockTable) acquireLock(ctx context.Context, tableID uint64, rows [][]by
 			waiter.close()
 			return err
 		}
-		waiter.close()
+		waiter.resetWait()
 	}
 }
 

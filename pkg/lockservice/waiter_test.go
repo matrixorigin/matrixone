@@ -117,6 +117,26 @@ func TestWaitAndNotifyConcurrent(t *testing.T) {
 	assert.NoError(t, w.wait(ctx))
 }
 
+func TestWaitMultiTimes(t *testing.T) {
+	w := acquireWaiter([]byte("w"))
+	w1 := acquireWaiter([]byte("w1"))
+	w2 := acquireWaiter([]byte("w2"))
+	defer w2.close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+	defer cancel()
+
+	w.add(w2)
+	w.close()
+	assert.NoError(t, w2.wait(ctx))
+	w2.resetWait()
+
+	w1.add(w2)
+	w1.close()
+	assert.NoError(t, w2.wait(ctx))
+
+}
+
 func TestSkipCompletedWaiters(t *testing.T) {
 	w := acquireWaiter([]byte("w"))
 	w1 := acquireWaiter([]byte("w1"))
