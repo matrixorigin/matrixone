@@ -112,8 +112,10 @@ type AnalyzeInfo struct {
 	MemorySize int64
 	// DiskIO, data size read from disk
 	DiskIO int64
-	// S3IO, data size read from s3
-	S3IO int64
+	// S3IOByte, data size read from s3
+	S3IOByte int64
+	// S3IOCount, query count that read from s3
+	S3IOCount int64
 	// NetworkIO, message size send between CN node
 	NetworkIO int64
 }

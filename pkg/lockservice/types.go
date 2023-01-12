@@ -110,4 +110,6 @@ type Lock struct {
 	txnID []byte
 	// all lock info will encode into this field to save memory overhead
 	value byte
+
+	*waiter
 }
