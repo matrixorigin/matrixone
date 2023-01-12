@@ -165,15 +165,17 @@ func InitCnLogTailSubscriber(
 		dnNodeID: 0,
 		engine:   engine,
 	}
-	if err := cnLogTailSubscriber.connectToLogTailServer(ctx); err != nil {
+	if err := cnLogTailSubscriber.newCnLogTailClient(); err != nil {
 		return err
 	}
 	cnLogTailSubscriber.StartReceiveTableLogTail()
+	if err := cnLogTailSubscriber.connectToLogTailServer(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
-func (logSub *TableLogTailSubscriber) connectToLogTailServer(
-	ctx context.Context) error {
+func (logSub *TableLogTailSubscriber) newCnLogTailClient() error {
 	var logTailClient *service.LogtailClient
 	var s morpc.Stream
 
@@ -205,12 +207,18 @@ func (logSub *TableLogTailSubscriber) connectToLogTailServer(
 		return err
 	}
 	logTailClient, err = service.NewLogtailClient(s,
-		service.WithClientRequestPerSecond(100))
+		service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
 	if err != nil {
 		return err
 	}
 	logSub.logTailClient = logTailClient
 	logSub.streamSender = s
+	return nil
+}
+
+func (logSub *TableLogTailSubscriber) connectToLogTailServer(
+	ctx context.Context) error {
+	var err error
 
 	// push subscription to Table `mo_database`, `mo_table`, `mo_column` of mo_catalog.
 	dIds := uint64(catalog.MO_CATALOG_ID)
@@ -231,7 +239,7 @@ func (logSub *TableLogTailSubscriber) connectToLogTailServer(
 
 	select {
 	case <-ctx.Done():
-		return moerr.NewInternalError(ctx, "init the cn log tail client failed")
+		return moerr.NewInternalError(ctx, "connect to dn log tail server failed")
 	case <-ch:
 		return err
 	}
@@ -261,7 +269,8 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 		ctx := context.TODO()
 		for {
 			ch := make(chan response)
-			reconnect := false
+			needReconnect := false
+			// receive the log from dn log tail server.
 			for {
 				deadLine, cf := context.WithTimeout(ctx, reconnectDeadTime)
 				select {
@@ -269,12 +278,12 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 					// should log some information about log client restart.
 					// and how to do the restart work is a question.
 					cf()
-					reconnect = true
+					needReconnect = true
 				case ch <- generateResponse(logSub.logTailClient.Receive()):
 					cf()
 				}
 
-				if reconnect {
+				if needReconnect {
 					break
 				}
 				resp := <-ch
@@ -285,7 +294,9 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 						lt := resp.r.GetSubscribeResponse().GetLogtail()
 						logTs := lt.GetTs()
 						if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &lt); err != nil {
-							println("cms that error happens 1")
+							logutil.Error("cnLogTailClient : update table partition failed.")
+							needReconnect = true
+							break
 						}
 						UpdateCnLogTimestamp(*logTs)
 
@@ -293,24 +304,32 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 						logLists := resp.r.GetUpdateResponse().GetLogtailList()
 						for _, l := range logLists {
 							if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &l); err != nil {
-								println("cms that error happens 2")
+								logutil.Error("cnLogTailClient : update table partition failed.")
+								needReconnect = true
 								break
 							}
 							UpdateCnLogTimestamp(*l.Ts)
 						}
-
+					// XXX we do not handle these message now.
 					case resp.r.GetError() != nil:
 					case resp.r.GetUnsubscribeResponse() != nil:
 					}
 				} else {
-					println(fmt.Sprintf("cms that, err is %s", resp.err))
+					logutil.Info(fmt.Sprintf("receive a error from dn log tail server, err is %s", resp.err.Error()))
+				}
+				if needReconnect {
+					break
 				}
 			}
-
+			// init related structure again and reconnect to log tail server.
 			initCnLogTailTimestamp()
 			initTableSubscribeRecord()
-			logutil.Warn("cn log tail client may lost connect to dn log tail server, and try to reconnect")
+			logutil.Error("cn log tail client may lost connect to dn log tail server, and try to reconnect")
 			for {
+				if err := logSub.newCnLogTailClient(); err != nil {
+					logutil.Error("rebuild the cn log tail client failed")
+					continue
+				}
 				if err := logSub.connectToLogTailServer(ctx); err == nil {
 					logutil.Info("reconnect to dn log tail server success.")
 					break
