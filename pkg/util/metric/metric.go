@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -304,7 +303,7 @@ var allSubSystem = map[string]*SubSystem{
 }
 
 type InitOptions struct {
-	writerFactory export.WriterFactory // see WithWriterFactory
+	writerFactory table.WriterFactory // see WithWriterFactory
 	// needInitTable control to do the initTables
 	needInitTable bool // see WithInitAction
 	// initSingleTable
@@ -319,7 +318,7 @@ func (f InitOption) ApplyTo(opts *InitOptions) {
 	f(opts)
 }
 
-func WithWriterFactory(factory export.WriterFactory) InitOption {
+func WithWriterFactory(factory table.WriterFactory) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.writerFactory = factory
 	})

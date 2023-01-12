@@ -336,3 +336,17 @@ func (r *RowRequest) Handle() (int, error) {
 func (r *RowRequest) GetContent() string {
 	return r.writer.GetContent()
 }
+
+type WriterFactory func(ctx context.Context, account string, tbl *Table, ts time.Time) RowWriter
+
+type FilePathCfg struct {
+	NodeUUID  string
+	NodeType  string
+	Extension string
+}
+
+func (c *FilePathCfg) LogsFilePathFactory(account string, tbl *Table, ts time.Time) string {
+	filename := tbl.PathBuilder.NewLogFilename(tbl.Table, c.NodeUUID, c.NodeType, ts, c.Extension)
+	dir := tbl.PathBuilder.Build(account, MergeLogTypeLogs, ts, tbl.Database, tbl.Table)
+	return path.Join(dir, filename)
+}

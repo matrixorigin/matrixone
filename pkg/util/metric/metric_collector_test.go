@@ -22,7 +22,6 @@ import (
 	"time"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -168,8 +167,8 @@ func (w *dummyStringWriter) FlushAndClose() (int, error) {
 
 func (w *dummyStringWriter) GetContent() string { return "" }
 
-func newDummyFSWriterFactory(csvCh chan string) export.WriterFactory {
-	return export.WriterFactory(func(_ context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
+func newDummyFSWriterFactory(csvCh chan string) table.WriterFactory {
+	return table.WriterFactory(func(_ context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 		w := &dummyStringWriter{name: tbl.Table, ch: csvCh}
 		w.writer = etl.NewCSVWriter(context.TODO(), bytes.NewBuffer(nil), w)
 		return w

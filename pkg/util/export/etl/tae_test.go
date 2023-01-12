@@ -158,18 +158,6 @@ func genLines(cnt int) (lines []*table.Row) {
 	return
 }
 
-type dummyFilePathCfg struct {
-	NodeUUID  string
-	NodeType  string
-	Extension string
-}
-
-func (c *dummyFilePathCfg) LogsFilePathFactory(account string, tbl *table.Table, ts time.Time) string {
-	filename := tbl.PathBuilder.NewLogFilename(tbl.Table, c.NodeUUID, c.NodeType, ts, c.Extension)
-	dir := tbl.PathBuilder.Build(account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.Table)
-	return path.Join(dir, filename)
-}
-
 func TestTAEWriter_WriteRow(t *testing.T) {
 	t.Logf("local timezone: %v", time.Local.String())
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
@@ -288,7 +276,7 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 				return
 			}
 
-			cfg := dummyFilePathCfg{NodeUUID: "uuid", NodeType: "type", Extension: table.TaeExtension}
+			cfg := table.FilePathCfg{NodeUUID: "uuid", NodeType: "type", Extension: table.TaeExtension}
 			filePath := cfg.LogsFilePathFactory("sys", tt.args.tbl, time.Now())
 			writer := NewTAEWriter(tt.fields.ctx, tt.args.tbl, mp, filePath, tt.fields.fs)
 			items := tt.args.items()

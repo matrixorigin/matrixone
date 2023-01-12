@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
@@ -245,7 +244,7 @@ var _ MetricCollector = (*metricFSCollector)(nil)
 
 type metricFSCollector struct {
 	*bp.BaseBatchPipe[*pb.MetricFamily, table.ExportRequests]
-	writerFactory export.WriterFactory
+	writerFactory table.WriterFactory
 	opts          collectorOpts
 }
 
@@ -258,7 +257,7 @@ func (c *metricFSCollector) SendMetrics(ctx context.Context, mfs []*pb.MetricFam
 	return nil
 }
 
-func newMetricFSCollector(writerFactory export.WriterFactory, opts ...collectorOpt) MetricCollector {
+func newMetricFSCollector(writerFactory table.WriterFactory, opts ...collectorOpt) MetricCollector {
 	initOpts := defaultCollectorOpts()
 	for _, o := range opts {
 		o.ApplyTo(&initOpts)

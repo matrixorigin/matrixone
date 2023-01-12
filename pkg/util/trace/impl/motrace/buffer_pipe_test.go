@@ -18,13 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
@@ -283,7 +283,7 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 	<-gCtrlSqlCh
 }*/
 
-var genFactory = func() WriterFactory {
+var genFactory = func() table.WriterFactory {
 	return func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 		buf := bytes.NewBuffer(nil)
 		return etl.NewCSVWriter(ctx, buf, &dummyStringWriter{})

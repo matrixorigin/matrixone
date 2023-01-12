@@ -17,7 +17,6 @@ package export
 import (
 	"bytes"
 	"context"
-	"path"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -26,24 +25,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
-type WriterFactory func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter
-
-type FilePathCfg struct {
-	NodeUUID  string
-	NodeType  string
-	Extension string
-}
-
-func (c *FilePathCfg) LogsFilePathFactory(account string, tbl *table.Table, ts time.Time) string {
-	filename := tbl.PathBuilder.NewLogFilename(tbl.Table, c.NodeUUID, c.NodeType, ts, c.Extension)
-	dir := tbl.PathBuilder.Build(account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.Table)
-	return path.Join(dir, filename)
-}
-
-func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext string) (factory WriterFactory) {
+func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext string) (factory table.WriterFactory) {
 
 	var extension = table.GetExtension(ext)
-	var cfg = FilePathCfg{NodeUUID: nodeUUID, NodeType: nodeType, Extension: extension}
+	var cfg = table.FilePathCfg{NodeUUID: nodeUUID, NodeType: nodeType, Extension: extension}
 
 	switch extension {
 	case table.CsvExtension:

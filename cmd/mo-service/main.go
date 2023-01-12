@@ -252,7 +252,7 @@ func startLogService(
 }
 
 func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, stopper *stopper.Stopper, fs fileservice.FileService) error {
-	var writerFactory export.WriterFactory
+	var writerFactory table.WriterFactory
 	var err error
 	var UUID string
 	var initWG sync.WaitGroup
@@ -294,7 +294,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 				motrace.EnableTracer(!SV.DisableTrace),
 				motrace.WithBatchProcessMode(SV.BatchProcessor),
 				motrace.WithBatchProcessor(export.NewMOCollector(ctx)),
-				motrace.WithFSWriterFactory(motrace.WriterFactory(export.GetWriterFactory(fs, UUID, nodeRole, SV.LogsExtension))),
+				motrace.WithFSWriterFactory(writerFactory),
 				motrace.WithExportInterval(SV.TraceExportInterval),
 				motrace.WithLongQueryTime(SV.LongQueryTime),
 				motrace.WithSQLExecutor(nil),
