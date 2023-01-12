@@ -145,11 +145,20 @@ func filterRowIdForUpdate(proc *process.Process, bat *batch.Batch, idxList []int
 		if fromVec.IsConst() {
 			if fromVec.IsScalarNull() {
 				toVec = vector.New(types.T_int32.ToType())
-				toVec.Append(int32(0), true, proc.Mp())
+				for j := 0; j < batLen; j++ {
+					err := toVec.Append(int32(0), true, proc.Mp())
+					if err != nil {
+						delBatch.Clean(proc.Mp())
+						updateBatch.Clean(proc.Mp())
+						return nil, nil, err
+					}
+				}
 			} else {
 				toVec = vector.New(bat.Vecs[idx].Typ)
-				err := vector.CopyConst(toVec, fromVec, proc.Mp())
+				err := vector.CopyConst(toVec, fromVec, batLen, proc.Mp())
 				if err != nil {
+					delBatch.Clean(proc.Mp())
+					updateBatch.Clean(proc.Mp())
 					return nil, nil, err
 				}
 			}
