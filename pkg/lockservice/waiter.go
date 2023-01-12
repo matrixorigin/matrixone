@@ -154,17 +154,10 @@ func (w *waiter) wait(ctx context.Context) error {
 	}
 
 	var err error
-	getNotifiedValue := false
 	select {
 	case <-ctx.Done():
 		err = ctx.Err()
 	case err = <-w.c:
-		getNotifiedValue = true
-		return err
-	}
-
-	// get notified value, no concurrent happen
-	if getNotifiedValue {
 		w.setCompleted()
 		return err
 	}
