@@ -284,7 +284,7 @@ import (
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN
 
 // Alter
-%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP
+%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATBILITY_MODE
 
 // Time
 %token <str> SECOND ASCII COALESCE COLLATION HOUR MICROSECOND MINUTE MONTH QUARTER REPEAT
@@ -378,7 +378,7 @@ import (
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt
@@ -2111,6 +2111,7 @@ analyze_stmt:
 alter_stmt:
     alter_user_stmt
 |   alter_account_stmt
+|   alter_database_config_stmt
 |   alter_view_stmt
 // |    alter_ddl_stmt
 
@@ -2129,15 +2130,23 @@ alter_view_stmt:
 alter_account_stmt:
     ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
     {
-    $$ = &tree.AlterAccount{
-        IfExists:$3,
-        Name:$4,
-        AuthOption:$5,
-        StatusOption:$6,
-        Comment:$7,
-    }
+        $$ = &tree.AlterAccount{
+            IfExists:$3,
+            Name:$4,
+            AuthOption:$5,
+            StatusOption:$6,
+            Comment:$7,
+        }
     }
 
+alter_database_config_stmt:
+     ALTER DATABASE db_name SET MYSQL_COMPATBILITY_MODE '=' expression
+     {
+        $$ = &tree.AlterDataBaseConfig{
+            DbName:$3,
+            UpdateConfig: $7,
+        }
+     }
 alter_account_auth_option:
 {
     $$ = tree.AlterAccountAuthOption{
@@ -8135,6 +8144,7 @@ reserved_keyword:
 |   COLUMN_NUMBER
 |   TABLE_VALUES
 |   RETURNS
+|   MYSQL_COMPATBILITY_MODE
 
 non_reserved_keyword:
     ACCOUNT
