@@ -206,16 +206,11 @@ func (logSub *TableLogTailSubscriber) newCnLogTailClient() error {
 
 	// XXX test code.
 	codec := morpc.NewMessageCodec(func() morpc.Message {
-		return &service.LogtailRequest{}
+		return &service.LogtailResponse{}
 	})
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendGoettyOptions(
 			goetty.WithSessionRWBUfferSize(1<<10, 1<<10),
-			goetty.WithSessionReleaseMsgFunc(func(v any) {
-				m := v.(morpc.RPCMessage)
-				request := m.Message.(*service.LogtailRequest)
-				request.Reset()
-			}),
 		),
 		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("cn-log-tail-client-backend")),
 	)
@@ -225,8 +220,7 @@ func (logSub *TableLogTailSubscriber) newCnLogTailClient() error {
 		morpc.WithClientTag("cn-log-tail-client"),
 	)
 
-	s, err = c.NewStream(dnLogTailServerBackend, false)
-	//s, err = cnclient.GetStreamSender(dnLogTailServerBackend)
+	s, err = c.NewStream(dnLogTailServerBackend, true)
 	if err != nil {
 		return err
 	}
@@ -252,9 +246,9 @@ func (logSub *TableLogTailSubscriber) connectToLogTailServer(
 	ch := make(chan error)
 	go func() {
 		for _, ti := range tIds {
-			err = TryToGetTableLogTail(ctx, txnT, dIds, ti)
-			if err != nil {
-				ch <- err
+			er := TryToGetTableLogTail(ctx, txnT, dIds, ti)
+			if er != nil {
+				ch <- er
 				return
 			}
 		}
@@ -264,7 +258,7 @@ func (logSub *TableLogTailSubscriber) connectToLogTailServer(
 	select {
 	case <-ctx.Done():
 		return moerr.NewInternalError(ctx, "connect to dn log tail server failed")
-	case <-ch:
+	case err = <-ch:
 		return err
 	}
 }
@@ -272,11 +266,9 @@ func (logSub *TableLogTailSubscriber) connectToLogTailServer(
 func (logSub *TableLogTailSubscriber) subscribeTable(
 	ctx context.Context, tblId api.TableID) error {
 	if _, ok := ctx.Deadline(); !ok {
-		nctx, cancel := context.WithTimeout(ctx, defaultPeriodToSubscribeTable)
-		defer cancel()
+		nctx, _ := context.WithTimeout(ctx, defaultPeriodToSubscribeTable)
 		return logSub.logTailClient.Subscribe(nctx, tblId)
 	}
-	println("cms that, subscribe")
 	return logSub.logTailClient.Subscribe(ctx, tblId)
 }
 
@@ -293,24 +285,25 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 
 		ctx := context.TODO()
 		for {
-			ch := make(chan response)
+
+			ch := make(chan response, 1)
 			needReconnect := false
 			// receive the log from dn log tail server.
 			for {
-				deadLine, cf := context.WithTimeout(ctx, reconnectDeadTime)
+				deadLine, cancel := context.WithTimeout(ctx, reconnectDeadTime)
 				select {
 				case <-deadLine.Done():
 					// should log some information about log client restart.
 					// and how to do the restart work is a question.
-					cf()
 					needReconnect = true
-				case ch <- generateResponse(logSub.logTailClient.Receive()):
-					cf()
+				case ch <- generateResponse(cnLogTailSubscriber.logTailClient.Receive()):
+					cancel()
 				}
 
 				if needReconnect {
 					break
 				}
+
 				resp := <-ch
 				if resp.err == nil {
 					// if we receive the response, update the partition and global timestamp.
@@ -319,7 +312,6 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 						lt := resp.r.GetSubscribeResponse().GetLogtail()
 						logTs := lt.GetTs()
 						if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &lt); err != nil {
-							logutil.Error("cnLogTailClient : update table partition failed.")
 							needReconnect = true
 							break
 						}
@@ -327,20 +319,23 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 
 					case resp.r.GetUpdateResponse() != nil:
 						logLists := resp.r.GetUpdateResponse().GetLogtailList()
+						to := resp.r.GetUpdateResponse().GetTo()
 						for _, l := range logLists {
 							if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &l); err != nil {
 								logutil.Error("cnLogTailClient : update table partition failed.")
 								needReconnect = true
 								break
 							}
-							UpdateCnLogTimestamp(*l.Ts)
 						}
+						UpdateCnLogTimestamp(*to)
+
 					// XXX we do not handle these message now.
 					case resp.r.GetError() != nil:
+
 					case resp.r.GetUnsubscribeResponse() != nil:
 					}
 				} else {
-					logutil.Info(fmt.Sprintf("receive a error from dn log tail server, err is %s", resp.err.Error()))
+					logutil.Error(fmt.Sprintf("receive a error from dn log tail server, err is %s", resp.err.Error()))
 				}
 				if needReconnect {
 					break
@@ -388,6 +383,7 @@ func TryToGetTableLogTail(
 		for {
 			partition.Lock()
 			if partition.ts.GreaterEq(txnTimestamp) {
+				partition.Unlock()
 				break
 			}
 			partition.Unlock()
@@ -402,18 +398,38 @@ func TryToGetTableLogTail(
 func updatePartition2(
 	ctx context.Context,
 	dnId int,
-	e *Engine, tl *logtail.TableLogtail) error {
+	e *Engine, tl *logtail.TableLogtail) (err error) {
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
-	partition := e.db.getPartitions(dbId, tblId)[dnId]
 
-	txnOp, _ := e.cli.New()
-	_, _, rel, err := e.GetRelationById(ctx, txnOp, tblId)
-	if err != nil {
-		return err
+	partitions := e.db.getPartitions(dbId, tblId)
+	partition := partitions[dnId]
+
+	key := e.catalog.GetTableById(dbId, tblId, *tl.Ts)
+	tbl := &table{
+		db: &database{
+			databaseId:   dbId,
+			databaseName: "",
+			txn: &Transaction{
+				catalog: e.catalog,
+			},
+			fs: e.fs,
+		},
+		parts:        partitions,
+		tableId:      key.Id,
+		tableName:    key.Name,
+		defs:         key.Defs,
+		tableDef:     key.TableDef,
+		primaryIdx:   key.PrimaryIdx,
+		clusterByIdx: key.ClusterByIdx,
+		relKind:      key.Kind,
+		viewdef:      key.ViewDef,
+		comment:      key.Comment,
+		partition:    key.Partition,
+		createSql:    key.CreateSql,
+		constraint:   key.Constraint,
 	}
 
-	tbl := rel.(*table)
 	if err = consumeLogTail2(ctx,
 		dnId, tbl, e.db, partition, tl); err != nil {
 		logutil.Errorf("consume %d-%s log tail error: %v\n", tbl.tableId, tbl.tableName, err)

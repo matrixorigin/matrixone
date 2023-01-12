@@ -113,6 +113,28 @@ func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 	return rs, rids
 }
 
+func (cc *CatalogCache) GetTableById(databaseId, tblId uint64, ts timestamp.Timestamp) *TableItem {
+	var rel *TableItem
+
+	key := &TableItem{
+		DatabaseId: databaseId,
+	}
+	cc.tables.data.Ascend(key, func(item *TableItem) bool {
+		if item.DatabaseId != databaseId {
+			return false
+		}
+		if item.Ts.Greater(ts) {
+			return true
+		}
+		if item.Id == tblId {
+			rel = item
+			return true
+		}
+		return true
+	})
+	return rel
+}
+
 func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []string {
 	var rs []string
 
