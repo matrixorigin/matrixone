@@ -224,7 +224,7 @@ func TestDMLToJson(t *testing.T) {
 		"DELETE FROM NATION WHERE N_NATIONKEY > 10",
 		"DELETE FROM a1, a2 USING NATION AS a1 INNER JOIN NATION2 AS a2 WHERE a1.N_NATIONKEY=a2.N_NATIONKEY",
 	}
-	mock := plan.NewMockOptimizer(false)
+	mock := plan.NewMockOptimizer(true)
 	buildPlanMarshalTest(mock, t, sqls)
 }
 
@@ -232,8 +232,7 @@ func buildPlanMarshalTest(opt plan.Optimizer, t *testing.T, sqls []string) {
 	ctx := context.TODO()
 	for _, sql := range sqls {
 		t.Logf("sql: %s \n", sql)
-		mock := plan.NewMockOptimizer(false)
-		plan, err := runSingleSql(mock, t, sql)
+		plan, err := runSingleSql(opt, t, sql)
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}

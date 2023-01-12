@@ -27,7 +27,7 @@ import (
 )
 
 func TestSingleSql(t *testing.T) {
-	// input := "explain verbose SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20"
+	input := "explain verbose SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20"
 	//input := "explain verbose SELECT N_REGIONKEY + 2 as a FROM NATION WHERE -N_NATIONKEY < -20"
 	// input := "explain verbose select c_custkey from (select c_custkey from CUSTOMER group by c_custkey ) a"
 	// input := "explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE N_REGIONKEY > 0 AND N_NAME LIKE '%AA'"
@@ -36,7 +36,7 @@ func TestSingleSql(t *testing.T) {
 	//input := "explain verbose select * from part where p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')"
 	//input := "explain select abs(N_REGIONKEY) from NATION"
 	//input := "explain verbose SELECT l.L_ORDERKEY a FROM CUSTOMER c, ORDERS o, LINEITEM l WHERE c.C_CUSTKEY = o.O_CUSTKEY and l.L_ORDERKEY = o.O_ORDERKEY and o.O_ORDERKEY < 10"
-	input := "explain verbose update emp set sal = sal + 500, comm = 1200 where deptno = 10"
+	// input := "explain verbose update emp set sal = sal + 500, comm = 1200 where deptno = 10"
 	mock := plan.NewMockOptimizer(false)
 	err := runOneStmt(mock, t, input)
 	if err != nil {
@@ -222,7 +222,7 @@ func TestDMLUpdate(t *testing.T) {
 		"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 	}
-	mockOptimizer := plan.NewMockOptimizer(false)
+	mockOptimizer := plan.NewMockOptimizer(true)
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -239,7 +239,7 @@ func TestDMLDelete(t *testing.T) {
 		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 		"explain verbose UPDATE NATION,NATION2 SET NATION.N_NAME ='U1',NATION2.N_NATIONKEY=15 WHERE NATION.N_NATIONKEY = NATION2.N_NATIONKEY",
 	}
-	mockOptimizer := plan.NewMockOptimizer(false)
+	mockOptimizer := plan.NewMockOptimizer(true)
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -274,7 +274,7 @@ func TestSingleTableDeleteSQL(t *testing.T) {
 		"explain verbose delete from emp where deptno = 20 order by sal limit 2",
 		"explain verbose delete from emp where empno > 7800 order by empno limit 2",
 	}
-	mockOptimizer := plan.NewMockOptimizer(false)
+	mockOptimizer := plan.NewMockOptimizer(true)
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -292,7 +292,7 @@ func TestCompositeUniqueIndexTableDeleteSQL(t *testing.T) {
 		"explain verbose delete employees, dept from employees, dept where employees.deptno = dept.deptno and sal > 2000",
 		"explain verbose DELETE FROM employees, dept USING employees INNER JOIN dept WHERE employees.deptno = dept.deptno",
 	}
-	mockOptimizer := plan.NewMockOptimizer(false)
+	mockOptimizer := plan.NewMockOptimizer(true)
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -306,7 +306,7 @@ func TestMultiTableDeleteSQL(t *testing.T) {
 		"explain verbose delete emp,dept from emp ,dept where emp.deptno = dept.deptno and empno = 7839",
 		"explain verbose DELETE FROM emp, dept USING emp INNER JOIN dept WHERE emp.deptno = dept.deptno",
 	}
-	mockOptimizer := plan.NewMockOptimizer(false)
+	mockOptimizer := plan.NewMockOptimizer(true)
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
