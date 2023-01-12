@@ -601,6 +601,7 @@ col1    col2    col3    col4
 2    chart    2    11
 truncate table create_index_19;
 insert into create_index_19(col2,col3,col4) values ('apple',1,'10'),('store',2,'11'),('apple',3,'12');
+
 select * from create_index_19;
 col1    col2    col3    col4
 drop table create_index_19;
@@ -629,6 +630,7 @@ col2    col4
 null    23
 drop index varchar_index on create_index_01;
 drop database testdb;
+drop account if exists unique_test_account;
 use unique_secondary_index;
 create table trans_index_01 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50));
 start transaction;

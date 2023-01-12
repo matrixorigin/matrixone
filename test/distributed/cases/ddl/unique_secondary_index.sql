@@ -384,6 +384,7 @@ select col2,col4 from create_index_01;
 drop index varchar_index on create_index_01;
 drop database testdb;
 -- @session
+drop account if exists unique_test_account;
 
 --transaction conflict
 use unique_secondary_index;

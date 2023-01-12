@@ -62,6 +62,18 @@ func openSaveQueryResult(ses *Session) bool {
 		return false
 	}
 	if v, _ := val.(int8); v > 0 {
+		if ses.blockIdx == 0 {
+			val, err := ses.GetGlobalVar("query_result_maxsize")
+			if err != nil {
+				return false
+			}
+			switch v := val.(type) {
+			case uint64:
+				ses.limitResultSize = float64(v)
+			case float64:
+				ses.limitResultSize = v
+			}
+		}
 		return true
 	}
 	return false
@@ -115,9 +127,13 @@ func isSimpleResultQuery(ast tree.Statement) bool {
 }
 
 func saveQueryResult(ses *Session, bat *batch.Batch) error {
+	s := ses.curResultSize + float64(bat.Size())/(1024*1024)
+	if s > ses.limitResultSize {
+		return nil
+	}
 	fs := ses.GetParameterUnit().FileService
 	// write query result
-	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), ses.GetBlockIdx())
+	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), ses.GetIncBlockIdx())
 	writer, err := objectio.NewObjectWriter(path, fs)
 	if err != nil {
 		return err
@@ -130,16 +146,17 @@ func saveQueryResult(ses *Session, bat *batch.Batch) error {
 	if err != nil {
 		return err
 	}
+	ses.curResultSize = s
 	return nil
 }
 
 func saveQueryResultMeta(ses *Session) error {
 	defer func() {
 		ses.ResetBlockIdx()
+		ses.p = nil
+		ses.tStmt = nil
+		ses.curResultSize = 0
 	}()
-	if ses.blockIdx == 0 {
-		return nil
-	}
 	fs := ses.GetParameterUnit().FileService
 	// write query result meta
 	b, err := ses.rs.Marshal()
@@ -162,8 +179,10 @@ func saveQueryResultMeta(ses *Session) error {
 		RoleId:     ses.tStmt.RoleId,
 		ResultPath: buf.String(),
 		CreateTime: types.CurrentTimestamp(),
-		ResultSize: 100, // TODO: implement
+		ResultSize: ses.curResultSize,
 		Columns:    string(b),
+		Tables:     getTablesFromPlan(ses.p),
+		UserId:     ses.GetTenantInfo().GetUserID(),
 	}
 	metaBat, err := buildQueryResultMetaBatch(m, ses.mp)
 	if err != nil {
@@ -183,6 +202,26 @@ func saveQueryResultMeta(ses *Session) error {
 		return err
 	}
 	return nil
+}
+
+func getTablesFromPlan(p *plan.Plan) string {
+	if p == nil {
+		return ""
+	}
+	buf := new(strings.Builder)
+	cnt := 0
+	if q, ok := p.Plan.(*plan.Plan_Query); ok {
+		for _, n := range q.Query.Nodes {
+			if n.NodeType == plan.Node_EXTERNAL_SCAN || n.NodeType == plan.Node_TABLE_SCAN {
+				if cnt > 0 {
+					buf.WriteString(", ")
+				}
+				buf.WriteString(n.TableDef.Name)
+				cnt++
+			}
+		}
+	}
+	return buf.String()
 }
 
 func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, error) {
@@ -214,6 +253,12 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 		return nil, err
 	}
 	if err = bat.Vecs[catalog.COLUMNS_IDX].Append([]byte(m.Columns), false, mp); err != nil {
+		return nil, err
+	}
+	if err = bat.Vecs[catalog.TABLES_IDX].Append([]byte(m.Tables), false, mp); err != nil {
+		return nil, err
+	}
+	if err = bat.Vecs[catalog.USER_ID_IDX].Append(m.UserId, false, mp); err != nil {
 		return nil, err
 	}
 	return bat, nil

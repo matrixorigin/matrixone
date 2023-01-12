@@ -19,11 +19,12 @@
 //
 // Modified the behavior and the interface of the step.
 
-package trace
+package motrace
 
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"reflect"
 	"testing"
 
@@ -33,7 +34,7 @@ import (
 
 var _ batchpipe.HasName = &namedNoopSpan{}
 
-type namedNoopSpan struct{ noopSpan }
+type namedNoopSpan struct{ trace.NoopSpan }
 
 func (n namedNoopSpan) GetName() string { return "NamedNopSpan" }
 
@@ -44,13 +45,13 @@ func TestNewBatchSpanProcessor(t *testing.T) {
 	tests := []struct {
 		name string
 		args args
-		want SpanProcessor
+		want trace.SpanProcessor
 	}{
 		{
 			name: "normal",
-			args: args{exporter: &noopBatchProcessor{}},
+			args: args{exporter: &NoopBatchProcessor{}},
 			want: &batchSpanProcessor{
-				e:      &noopBatchProcessor{},
+				e:      &NoopBatchProcessor{},
 				stopCh: make(chan struct{}),
 			},
 		},
@@ -70,7 +71,7 @@ func Test_batchSpanProcessor_OnEnd(t *testing.T) {
 	}
 	type args struct {
 		c context.Context
-		s Span
+		s trace.Span
 	}
 	tests := []struct {
 		name   string
@@ -79,7 +80,7 @@ func Test_batchSpanProcessor_OnEnd(t *testing.T) {
 	}{
 		{
 			name:   "normal",
-			fields: fields{noopBatchProcessor{}},
+			fields: fields{NoopBatchProcessor{}},
 			args:   args{context.Background(), namedNoopSpan{}},
 		},
 	}
@@ -109,7 +110,7 @@ func Test_batchSpanProcessor_Shutdown(t *testing.T) {
 		{
 			name: "normal",
 			fields: fields{
-				e:      noopBatchProcessor{},
+				e:      NoopBatchProcessor{},
 				stopCh: make(chan struct{}),
 			},
 			args: args{context.Background()},

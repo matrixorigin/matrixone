@@ -26,13 +26,25 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
+
+func TestMain(m *testing.M) {
+	logutil.SetupMOLogger(&logutil.LogConfig{
+		Level:  "debug",
+		Format: "console",
+	})
+
+	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
+	m.Run()
+}
 
 var (
 	testIOTimeout = 5 * time.Second
@@ -74,17 +86,17 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := newLogStore(cfg, nil, testLogger)
+	store, err := newLogStore(cfg, nil, runtime.DefaultRuntime())
 	assert.NoError(t, err)
-	testLogger.Info("1")
+	runtime.DefaultRuntime().Logger().Info("1")
 	defer func() {
 		assert.NoError(t, store.close())
 	}()
-	testLogger.Info("2")
+	runtime.DefaultRuntime().Logger().Info("2")
 }
 
 func getTestStore(cfg Config, startLogReplica bool, taskService taskservice.TaskService) (*store, error) {
-	store, err := newLogStore(cfg, func() taskservice.TaskService { return taskService }, testLogger)
+	store, err := newLogStore(cfg, func() taskservice.TaskService { return taskService }, runtime.DefaultRuntime())
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +115,7 @@ func TestHAKeeperCanBeStarted(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := newLogStore(cfg, nil, nil)
+	store, err := newLogStore(cfg, nil, runtime.DefaultRuntime())
 	assert.NoError(t, err)
 	peers := make(map[uint64]dragonboat.Target)
 	peers[2] = store.nh.ID()
@@ -429,7 +441,7 @@ func getTestStores() (*store, *store, error) {
 		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9012"},
 	}
 	cfg1.Fill()
-	store1, err := newLogStore(cfg1, nil, testLogger.With(zap.String("store", cfg1.DataDir)))
+	store1, err := newLogStore(cfg1, nil, runtime.DefaultRuntime())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -444,7 +456,7 @@ func getTestStores() (*store, *store, error) {
 		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9012"},
 	}
 	cfg2.Fill()
-	store2, err := newLogStore(cfg2, nil, testLogger.With(zap.String("store", cfg2.DataDir)))
+	store2, err := newLogStore(cfg2, nil, runtime.DefaultRuntime())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -472,7 +484,7 @@ func getTestStores() (*store, *store, error) {
 		}
 		if ok && leaderID != 1 {
 			if err := store1.requestLeaderTransfer(1, 1); err != nil {
-				testLogger.Error("failed to transfer leader")
+				runtime.DefaultRuntime().Logger().Error("failed to transfer leader")
 			}
 		}
 		time.Sleep(time.Millisecond)

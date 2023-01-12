@@ -35,6 +35,8 @@ type TestRunner interface {
 	IsAllChangesFlushed(start, end types.TS, printTree bool) bool
 	MaxLSNInRange(end types.TS) uint64
 
+	ExistPendingEntryToGC() bool
+	MaxGlobalCheckpoint() *CheckpointEntry
 	ForceFlush(ts types.TS, ctx context.Context) (err error)
 }
 
@@ -118,7 +120,7 @@ func (r *runner) ForceFlush(ts types.TS, ctx context.Context) (err error) {
 	err = common.RetryWithIntervalAndTimeout(
 		op,
 		r.options.forceFlushTimeout,
-		r.options.forceFlushCheckInterval)
+		r.options.forceFlushCheckInterval, false)
 	return
 }
 

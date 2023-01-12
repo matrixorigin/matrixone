@@ -87,7 +87,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	rowCount := 0
 	var pkDefs []string
-	var cbDef string
 	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
 
 	for _, col := range tableDef.Cols {
@@ -141,9 +140,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		if col.Primary {
 			pkDefs = append(pkDefs, colName)
 		}
-		if col.ClusterBy {
-			cbDef = col.Name
-		}
 	}
 	if tableDef.CompositePkey != nil {
 		pkDefs = append(pkDefs, util.SplitCompositePrimaryKeyColumnName(tableDef.CompositePkey.Name)...)
@@ -190,9 +186,24 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	createStr += ")"
 
-	if len(cbDef) > 0 {
-		createStr += " CLUSTER BY "
-		createStr += fmt.Sprintf("`%s`", cbDef)
+	if tableDef.ClusterBy != nil {
+		clusterby := " CLUSTER BY ("
+		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+			//multi column clusterby
+			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
+			for i, cbName := range cbNames {
+				if i != 0 {
+					clusterby += fmt.Sprintf(", `%s`", cbName)
+				} else {
+					clusterby += fmt.Sprintf("`%s`", cbName)
+				}
+			}
+		} else {
+			//single column cluster by
+			clusterby += fmt.Sprintf("`%s`", tableDef.ClusterBy.Name)
+		}
+		clusterby += ")"
+		createStr += clusterby
 	}
 
 	var comment string
@@ -301,15 +312,17 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
+
 	accountId := ctx.GetAccountId()
 	ddlType := plan.DataDefinition_SHOW_DATABASES
-	// Any account should shows database MO_CATALOG_DB_NAME
-	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
+
 	var sql string
+	// Any account should shows database MO_CATALOG_DB_NAME
 	if accountId == catalog.System_Account {
+		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
 		sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where (%s)", MO_CATALOG_DB_NAME, accountClause)
 	} else {
-		sql = fmt.Sprintf("select 'mo_catalog' union SELECT datname `Database` FROM %s.mo_database where (%s)", MO_CATALOG_DB_NAME, accountClause)
+		sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database", MO_CATALOG_DB_NAME)
 	}
 
 	if stmt.Where != nil {
@@ -351,17 +364,17 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	if stmt.Full {
 		tableType = fmt.Sprintf(", case relkind when 'v' then 'VIEW' when '%s' then 'CLUSTER TABLE' else 'BASE TABLE' end as Table_type", catalog.SystemClusterRel)
 	}
-	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
-	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
-	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
 
 	var sql string
 	if accountId == catalog.System_Account {
+		mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
+		clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
+		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
 		sql = fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
 			dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%", accountClause)
 	} else {
-		sql = fmt.Sprintf("select 'mo_database' union select 'mo_tables' union select 'mo_columns' union SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
-			dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%", accountClause)
+		sql = fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'",
+			dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%")
 	}
 
 	if stmt.Where != nil {
@@ -438,12 +451,17 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 	sql := "SELECT"
 	tableCols := tableDef.Cols
 	for i := range tableCols {
-		sql += " max(%s), min(%s),"
 		colName := tableCols[i].Name
-		sql = fmt.Sprintf(sql, colName, colName)
+		if types.T(tableCols[i].GetTyp().Id) == types.T_json {
+			sql += " null as `max(%s)`, null as `min(%s)`,"
+			sql = fmt.Sprintf(sql, colName, colName)
+		} else {
+			sql += " max(%s), min(%s),"
+			sql = fmt.Sprintf(sql, colName, colName)
+		}
 	}
 	sql = sql[:len(sql)-1]
-	sql += "FROM %s"
+	sql += " FROM %s"
 	sql = fmt.Sprintf(sql, tblName)
 
 	return returnByRewriteSQL(ctx, sql, ddlType)
@@ -469,18 +487,27 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
-	mustShowTable := "att_relname = 'mo_database' or att_relname = 'mo_tables' or att_relname = 'mo_columns'"
-	clusterTable := ""
-	if util.TableIsClusterTable(tableDef.GetTableType()) {
-		clusterTable = fmt.Sprintf(" or att_relname = '%s'", tblName)
-	}
-	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-	sql := "SELECT attname `Field`, atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
-	if stmt.Full {
-		sql = "SELECT attname `Field`, atttyp `Type`, null `Collation`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
-	}
 
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
+	var sql string
+	if accountId == catalog.System_Account {
+		mustShowTable := "att_relname = 'mo_database' or att_relname = 'mo_tables' or att_relname = 'mo_columns'"
+		clusterTable := ""
+		if util.TableIsClusterTable(tableDef.GetTableType()) {
+			clusterTable = fmt.Sprintf(" or att_relname = '%s'", tblName)
+		}
+		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
+		sql = "SELECT attname `Field`, atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
+		if stmt.Full {
+			sql = "SELECT attname `Field`, atttyp `Type`, null `Collation`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
+		}
+		sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
+	} else {
+		sql = "SELECT attname `Field`, atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+		if stmt.Full {
+			sql = "SELECT attname `Field`, atttyp `Type`, null `Collation`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+		}
+		sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName)
+	}
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)

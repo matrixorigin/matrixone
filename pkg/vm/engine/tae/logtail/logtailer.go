@@ -70,7 +70,7 @@ func (l *LogtailerImpl) TableLogtail(
 		CnWant: &to,
 		Table:  &table,
 	}
-	resp, err := HandleSyncLogTailReq(l.ckpClient, l.mgr, l.c, req, true)
+	resp, err := HandleSyncLogTailReq(ctx, l.ckpClient, l.mgr, l.c, req, true)
 	ret := logtail.TableLogtail{}
 	if err != nil {
 		return ret, err
@@ -89,7 +89,10 @@ func (l *LogtailerImpl) RangeLogtail(
 	start := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	end := types.BuildTS(to.PhysicalTime, to.LogicalTime)
 
-	ckpLoc, checkpointed := l.ckpClient.CollectCheckpointsInRange(start, end)
+	ckpLoc, checkpointed, err := l.ckpClient.CollectCheckpointsInRange(ctx, start, end)
+	if err != nil {
+		return nil, err
+	}
 
 	if checkpointed.GreaterEq(end) {
 		u64Max := uint64(0)

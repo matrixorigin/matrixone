@@ -24,7 +24,8 @@ var (
 
 	// all SampleType register here.
 	samples = map[SampleType]*sampleValue{
-		ExampleSample: {frequency: 3},
+		ExampleSample:    {frequency: 3},
+		SystemInitSample: {frequency: 5},
 	}
 )
 

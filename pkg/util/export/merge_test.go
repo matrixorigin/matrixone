@@ -50,9 +50,9 @@ func init() {
 
 var mux sync.Mutex
 
-var dummyStrColumn = table.Column{Name: "str", Type: "varchar(32)", Default: "", Comment: "str column"}
-var dummyInt64Column = table.Column{Name: "int64", Type: "BIGINT", Default: "0", Comment: "int64 column"}
-var dummyFloat64Column = table.Column{Name: "float64", Type: "DOUBLE", Default: "0.0", Comment: "float64 column"}
+var dummyStrColumn = table.Column{Name: "str", Type: "varchar(32)", ColType: table.TVarchar, Default: "", Comment: "str column"}
+var dummyInt64Column = table.Column{Name: "int64", Type: "BIGINT", ColType: table.TInt64, Default: "0", Comment: "int64 column"}
+var dummyFloat64Column = table.Column{Name: "float64", Type: "DOUBLE", ColType: table.TFloat64, Default: "0.0", Comment: "float64 column"}
 
 var dummyTable = &table.Table{
 	Account:          "test",
@@ -183,8 +183,14 @@ func initEmptyLogFile(ctx context.Context, fs fileservice.FileService, tbl *tabl
 	ts1 := ts
 	filePath := newFilePath(tbl, ts1)
 	files = append(files, filePath)
-	writer, _ := newETLWriter(ctx, fs, filePath, buf)
-	writer.FlushAndClose()
+	writer, err := newETLWriter(ctx, fs, filePath, buf)
+	if err != nil {
+		return nil, err
+	}
+	err = writer.FlushAndClose()
+	if err != nil {
+		return nil, err
+	}
 
 	return files, nil
 }
@@ -296,12 +302,10 @@ func TestNewMergeWithContextDone(t *testing.T) {
 	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
 
 	ctx := trace.Generate(context.Background())
-	ctx, cancel := context.WithCancel(ctx)
 
 	type args struct {
-		ctx    context.Context
-		cancel context.CancelFunc
-		opts   []MergeOption
+		ctx  context.Context
+		opts []MergeOption
 	}
 	tests := []struct {
 		name string
@@ -311,8 +315,7 @@ func TestNewMergeWithContextDone(t *testing.T) {
 		{
 			name: "normal",
 			args: args{
-				ctx:    ctx,
-				cancel: cancel,
+				ctx: ctx,
 				opts: []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
 					WithFileService(fs), WithTable(dummyTable),
 					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)},
@@ -322,25 +325,20 @@ func TestNewMergeWithContextDone(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(tt.args.ctx)
 
-			files, err := initEmptyLogFile(tt.args.ctx, fs, dummyTable, ts)
+			files, err := initEmptyLogFile(ctx, fs, dummyTable, ts)
 			require.Nil(t, err)
 
-			got := NewMerge(tt.args.ctx, tt.args.opts...)
+			got := NewMerge(ctx, tt.args.opts...)
 			require.NotNil(t, got)
 
 			reader, err := newETLReader(got.ctx, got.FS, files[0])
-			if err != nil {
-				t.Logf("newETLReader err: %s", err)
-				if strings.Contains(err.Error(), "not found") {
-					t.Skip()
-				}
-			}
 			require.Nil(t, err)
 
-			tt.args.cancel()
+			// trigger context.Done
+			cancel()
 			_, err = reader.ReadLine()
-			//err = got.doMergeFiles(ctx, dummyTable.Table, files, 0)
 			t.Logf("doMergeFiles meet err: %s", err)
 			require.Equal(t, err.Error(), "internal error: read files meet context Done")
 		})
@@ -359,11 +357,11 @@ func TestNewMergeNOFiles(t *testing.T) {
 
 	ctx := trace.Generate(context.Background())
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	type args struct {
-		ctx    context.Context
-		cancel context.CancelFunc
-		opts   []MergeOption
+		ctx  context.Context
+		opts []MergeOption
 	}
 	tests := []struct {
 		name string
@@ -373,8 +371,7 @@ func TestNewMergeNOFiles(t *testing.T) {
 		{
 			name: "normal",
 			args: args{
-				ctx:    ctx,
-				cancel: cancel,
+				ctx: ctx,
 				opts: []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
 					WithFileService(fs), WithTable(dummyTable),
 					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)},
@@ -384,8 +381,6 @@ func TestNewMergeNOFiles(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer tt.args.cancel()
-
 			filePath := newFilePath(dummyTable, ts)
 			files := []string{filePath}
 

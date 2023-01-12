@@ -415,6 +415,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			})
 		}
 
+		groupSize := int32(len(node.GroupBy))
 		for idx, expr := range node.AggList {
 			decreaseRefCnt(expr, colRefCnt)
 			err := builder.remapExpr(expr, childRemapping.globalToLocal)
@@ -434,7 +435,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -2,
-						ColPos: int32(idx),
+						ColPos: int32(idx) + groupSize,
 						Name:   builder.nameByColRef[globalRef],
 					},
 				},
@@ -442,7 +443,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		if len(node.ProjectList) == 0 {
-			if len(node.GroupBy) > 0 {
+			if groupSize > 0 {
 				globalRef := [2]int32{groupTag, 0}
 				remapping.addColRef(globalRef)
 
@@ -1882,28 +1883,36 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 		err = builder.addBinding(nodeID, tbl.As, ctx)
 
+		//tableDef := builder.qry.Nodes[nodeID].GetTableDef()
 		midNode := builder.qry.Nodes[nodeID]
 		//if it is the non-sys account and reads the cluster table,
 		//we add an account_id filter to make sure that the non-sys account
 		//can only read its own data.
 		if midNode.NodeType == plan.Node_TABLE_SCAN && builder.compCtx.GetAccountId() != catalog.System_Account {
 			// add account filter for system table scan
-			if ok, accColumnName := util.IsMoSystemTable(midNode.ObjRef, midNode.TableDef); ok {
+			dbName := midNode.ObjRef.SchemaName
+			tableName := midNode.TableDef.Name
+			currentAccountId := builder.compCtx.GetAccountId()
+			if dbName == catalog.MO_CATALOG && tableName == catalog.MO_DATABASE {
+				modatabaseFilter := util.BuildMoDataBaseFilter(uint64(currentAccountId))
 				ctx.binder = NewWhereBinder(builder, ctx)
-				left := &tree.UnresolvedName{
-					NumParts: 1,
-					Parts:    tree.NameParts{accColumnName},
+				accountFilterExprs, err := splitAndBindCondition(modatabaseFilter, ctx)
+				if err != nil {
+					return 0, err
 				}
-				currentAccountId := builder.compCtx.GetAccountId()
-				right := tree.NewNumVal(constant.MakeUint64(uint64(currentAccountId)), strconv.Itoa(int(currentAccountId)), false)
-				right.ValType = tree.P_uint64
-				//account_id = the accountId of current account_id
-				accountFilter := &tree.ComparisonExpr{
-					Op:    tree.EQUAL,
-					Left:  left,
-					Right: right,
+				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+			} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
+				motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountId))
+				ctx.binder = NewWhereBinder(builder, ctx)
+				accountFilterExprs, err := splitAndBindCondition(motablesFilter, ctx)
+				if err != nil {
+					return 0, err
 				}
-				accountFilterExprs, err := splitAndBindCondition(accountFilter, ctx)
+				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+			} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_COLUMNS {
+				moColumnsFilter := util.BuildMoColumnsFilter(uint64(currentAccountId))
+				ctx.binder = NewWhereBinder(builder, ctx)
+				accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, ctx)
 				if err != nil {
 					return 0, err
 				}
@@ -2494,6 +2503,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId = builder.buildGenerateSeries(tbl, ctx, exprs, childId)
 	case "meta_scan":
 		nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, childId)
+	case "current_account":
+		nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupported(builder.GetContext(), "table function '%s' not supported", id)
 	}
