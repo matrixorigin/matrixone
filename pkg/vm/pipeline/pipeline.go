@@ -71,7 +71,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 
 		analyzeIdx := p.instructions[0].Idx
 		a := proc.GetAnalyze(analyzeIdx)
-		a.S3IO(bat)
+		a.S3IOByte(bat)
 
 		proc.SetInputBatch(bat)
 		end, err = vm.Run(p.instructions, proc)
