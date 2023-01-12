@@ -152,10 +152,10 @@ func (db *txnDatabase) TruncateWithID(name string, newTableId uint64) (rel handl
 	}
 	meta := oldRel.GetMeta().(*catalog.TableEntry)
 	schema := meta.GetSchema().Clone()
-	// latest := meta.MVCCChain.GetLatestCommittedNode()
-	// if latest != nil {
-	// 	schema.Constraint = []byte(latest.(*catalog.TableMVCCNode).SchemaConstraints)
-	// }
+	latest := meta.MVCCChain.GetLatestCommittedNode()
+	if latest != nil {
+		schema.Constraint = []byte(latest.(*catalog.TableMVCCNode).SchemaConstraints)
+	}
 	db.Txn.BindAccessInfo(schema.AcInfo.TenantID, schema.AcInfo.UserID, schema.AcInfo.RoleID)
 	rel, err = db.CreateRelationWithID(schema, newTableId)
 	if err != nil {
