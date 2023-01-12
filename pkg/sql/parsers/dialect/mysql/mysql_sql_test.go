@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "show accounts like '%dafgda_'",
-		output: "show accounts like %dafgda_",
+		input:  "show accounts",
+		output: "show accounts",
 	}
 )
 

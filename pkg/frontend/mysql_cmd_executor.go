@@ -4305,7 +4305,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 		//show
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowDatabases,
 		*tree.ShowVariables, *tree.ShowColumns, *tree.ShowErrors, *tree.ShowIndex, *tree.ShowProcessList,
-		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowWarnings:
+		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowWarnings, *tree.ShowAccounts:
 		return true, nil
 		//others
 	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
