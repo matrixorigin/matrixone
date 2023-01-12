@@ -376,6 +376,10 @@ func (r *TAEReader) ReadLine() ([]string, error) {
 	return record, nil
 }
 
+func (r *TAEReader) ReadRow(row *table.Row) error {
+	panic("NOT implement")
+}
+
 func (r *TAEReader) Close() {
 	for _, b := range r.batchs {
 		b.Clean(r.mp)

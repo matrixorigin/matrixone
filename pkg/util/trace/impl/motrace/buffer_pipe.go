@@ -112,9 +112,9 @@ type WriteFactoryConfig struct {
 	PathBuilder table.PathBuilder
 }
 
-type FSWriterFactory func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter
+type WriterFactory func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter
 
-func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, factory FSWriterFactory) any {
+func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, factory WriterFactory) any {
 	buf.Reset()
 	if len(in) == 0 {
 		return table.NewRowRequest(nil)
@@ -169,10 +169,10 @@ type itemBuffer struct {
 }
 
 type filterItemFunc func(IBuffer2SqlItem)
-type genBatchFunc func(context.Context, []IBuffer2SqlItem, *bytes.Buffer, FSWriterFactory) any
+type genBatchFunc func(context.Context, []IBuffer2SqlItem, *bytes.Buffer, WriterFactory) any
 
 var noopFilterItemFunc = func(IBuffer2SqlItem) {}
-var noopGenBatchSQL = genBatchFunc(func(context.Context, []IBuffer2SqlItem, *bytes.Buffer, FSWriterFactory) any { return "" })
+var noopGenBatchSQL = genBatchFunc(func(context.Context, []IBuffer2SqlItem, *bytes.Buffer, WriterFactory) any { return "" })
 
 func newItemBuffer(opts ...BufferOption) *itemBuffer {
 	b := &itemBuffer{

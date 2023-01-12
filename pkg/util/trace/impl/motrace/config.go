@@ -61,7 +61,7 @@ type tracerProviderConfig struct {
 	batchProcessor   BatchProcessor // WithBatchProcessor
 
 	// writerFactory gen writer for CSV output
-	writerFactory FSWriterFactory // WithFSWriterFactory, default from export.GetFSWriterFactory4Trace
+	writerFactory WriterFactory // WithFSWriterFactory, default from export.GetFSWriterFactory4Trace
 
 	sqlExecutor func() ie.InternalExecutor // WithSQLExecutor
 	// needInit control table schema create
@@ -135,7 +135,7 @@ func EnableTracer(enable bool) tracerProviderOption {
 	}
 }
 
-func WithFSWriterFactory(f FSWriterFactory) tracerProviderOption {
+func WithFSWriterFactory(f WriterFactory) tracerProviderOption {
 	return tracerProviderOption(func(cfg *tracerProviderConfig) {
 		cfg.writerFactory = f
 	})

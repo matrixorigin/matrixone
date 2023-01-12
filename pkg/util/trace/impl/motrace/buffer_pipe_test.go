@@ -283,7 +283,7 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 	<-gCtrlSqlCh
 }*/
 
-var genFactory = func() FSWriterFactory {
+var genFactory = func() WriterFactory {
 	return func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 		buf := bytes.NewBuffer(nil)
 		return etl.NewCSVWriter(ctx, buf, &dummyStringWriter{})

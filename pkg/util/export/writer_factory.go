@@ -24,10 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
-type FSWriterFactory func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter
+type WriterFactory func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter
 
 type FilePathCfg struct {
 	NodeUUID  string
@@ -41,7 +40,7 @@ func (c *FilePathCfg) LogsFilePathFactory(account string, tbl *table.Table, ts t
 	return path.Join(dir, filename)
 }
 
-func GetRowWriterFactory4Trace(fs fileservice.FileService, nodeUUID, nodeType string, ext string) (factory motrace.FSWriterFactory) {
+func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext string) (factory WriterFactory) {
 
 	var extension = table.GetExtension(ext)
 	var cfg = FilePathCfg{NodeUUID: nodeUUID, NodeType: nodeType, Extension: extension}
@@ -52,9 +51,6 @@ func GetRowWriterFactory4Trace(fs fileservice.FileService, nodeUUID, nodeType st
 			options := []etl.FSWriterOption{
 				etl.WithFilePath(cfg.LogsFilePathFactory(account, tbl, ts)),
 			}
-			//if name != nil {
-			//	options = append(options, WithName(name))
-			//}
 			return etl.NewCSVWriter(ctx, bytes.NewBuffer(nil), etl.NewFSWriter(ctx, fs, options...))
 		}
 	case table.TaeExtension:

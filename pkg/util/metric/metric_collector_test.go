@@ -168,8 +168,8 @@ func (w *dummyStringWriter) FlushAndClose() (int, error) {
 
 func (w *dummyStringWriter) GetContent() string { return "" }
 
-func newDummyFSWriterFactory(csvCh chan string) export.FSWriterFactory {
-	return export.FSWriterFactory(func(_ context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
+func newDummyFSWriterFactory(csvCh chan string) export.WriterFactory {
+	return export.WriterFactory(func(_ context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 		w := &dummyStringWriter{name: tbl.Table, ch: csvCh}
 		w.writer = etl.NewCSVWriter(context.TODO(), bytes.NewBuffer(nil), w)
 		return w

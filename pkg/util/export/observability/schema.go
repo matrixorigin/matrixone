@@ -26,7 +26,7 @@ const DatabaseUnset = "unset"
 
 const MetricsTableName = "metrics"
 const LogsTableName = "logs"
-const SpansTableName = "logs"
+const SpansTableName = "spans"
 
 const DATETIME = "DATETIME(6)"
 const STRING = "VARCHAR(1024)"

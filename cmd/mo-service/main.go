@@ -252,7 +252,7 @@ func startLogService(
 }
 
 func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, stopper *stopper.Stopper, fs fileservice.FileService) error {
-	var writerFactory export.FSWriterFactory
+	var writerFactory export.WriterFactory
 	var err error
 	var UUID string
 	var initWG sync.WaitGroup
@@ -282,7 +282,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	UUID = strings.ReplaceAll(UUID, " ", "_") // remove space in UUID for filename
 
 	if !SV.DisableTrace || !SV.DisableMetric {
-		writerFactory = export.FSWriterFactory(export.GetRowWriterFactory4Trace(fs, UUID, nodeRole, SV.LogsExtension))
+		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, SV.LogsExtension)
 		_ = table.SetPathBuilder(ctx, SV.PathBuilder)
 	}
 	if !SV.DisableTrace {
@@ -294,7 +294,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 				motrace.EnableTracer(!SV.DisableTrace),
 				motrace.WithBatchProcessMode(SV.BatchProcessor),
 				motrace.WithBatchProcessor(export.NewMOCollector(ctx)),
-				motrace.WithFSWriterFactory(export.GetRowWriterFactory4Trace(fs, UUID, nodeRole, SV.LogsExtension)),
+				motrace.WithFSWriterFactory(motrace.WriterFactory(export.GetWriterFactory(fs, UUID, nodeRole, SV.LogsExtension))),
 				motrace.WithExportInterval(SV.TraceExportInterval),
 				motrace.WithLongQueryTime(SV.LongQueryTime),
 				motrace.WithSQLExecutor(nil),

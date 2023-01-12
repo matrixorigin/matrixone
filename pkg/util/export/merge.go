@@ -401,11 +401,6 @@ func SubStringPrefixLimit(str string, length int) string {
 	}
 }
 
-type ETLReader interface {
-	ReadLine() ([]string, error)
-	Close()
-}
-
 type ContentReader struct {
 	ctx     context.Context
 	path    string
@@ -477,6 +472,10 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 		return s.content[idx], nil
 	}
 	return nil, nil
+}
+
+func (s *ContentReader) ReadRow(row *table.Row) error {
+	panic("NOT implement")
 }
 
 func (s *ContentReader) Close() {
@@ -552,8 +551,7 @@ type ContentWriter struct {
 }
 
 func (w *ContentWriter) WriteRow(row *table.Row) error {
-	//TODO implement me
-	panic("implement me")
+	panic("not implement")
 }
 
 func NewContentWriter(writer io.StringWriter, buffer []byte) *ContentWriter {

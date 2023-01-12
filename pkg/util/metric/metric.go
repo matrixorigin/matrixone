@@ -304,7 +304,7 @@ var allSubSystem = map[string]*SubSystem{
 }
 
 type InitOptions struct {
-	writerFactory export.FSWriterFactory // see WithWriterFactory
+	writerFactory export.WriterFactory // see WithWriterFactory
 	// needInitTable control to do the initTables
 	needInitTable bool // see WithInitAction
 	// initSingleTable
@@ -319,7 +319,7 @@ func (f InitOption) ApplyTo(opts *InitOptions) {
 	f(opts)
 }
 
-func WithWriterFactory(factory export.FSWriterFactory) InitOption {
+func WithWriterFactory(factory export.WriterFactory) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.writerFactory = factory
 	})

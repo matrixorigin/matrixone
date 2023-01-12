@@ -18,10 +18,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
+// ETLWriter handle serialize logic, like csv file and tae file.
 type ETLWriter interface {
+	// WriteRow write table.Row as one line info file.
 	WriteRow(row *table.Row) error
-	// WriteStrings write record as one line into csv file
+	// WriteStrings write record as one line into file.
 	WriteStrings(record []string) error
-	// FlushAndClose flush its buffer and close.
+	// FlushAndClose flush its buffer and close the writer.
 	FlushAndClose() (int, error)
+}
+
+type ETLReader interface {
+	// ReadRow read one line as table.Row
+	ReadRow(row *table.Row) error
+	// ReadLine read raw data from file.
+	ReadLine() ([]string, error)
+	// Close files and release all content.
+	Close()
 }

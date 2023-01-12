@@ -245,7 +245,7 @@ var _ MetricCollector = (*metricFSCollector)(nil)
 
 type metricFSCollector struct {
 	*bp.BaseBatchPipe[*pb.MetricFamily, table.ExportRequests]
-	writerFactory export.FSWriterFactory
+	writerFactory export.WriterFactory
 	opts          collectorOpts
 }
 
@@ -258,7 +258,7 @@ func (c *metricFSCollector) SendMetrics(ctx context.Context, mfs []*pb.MetricFam
 	return nil
 }
 
-func newMetricFSCollector(writerFactory export.FSWriterFactory, opts ...collectorOpt) MetricCollector {
+func newMetricFSCollector(writerFactory export.WriterFactory, opts ...collectorOpt) MetricCollector {
 	initOpts := defaultCollectorOpts()
 	for _, o := range opts {
 		o.ApplyTo(&initOpts)
