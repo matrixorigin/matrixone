@@ -456,3 +456,14 @@ select mo_table_rows(db_name,'t1'),mo_table_size(db_name,'t1') from (select data
 
 -- @teardown
 drop table if exists t1;
+
+drop database if exists test01;
+create database test01;
+use test01;
+create table t(a int, b varchar(10));
+insert into t values(1, 'h'), (2, 'b'), (3, 'c'), (4, 'q'), (5, 'd'), (6, 'b'), (7, 's'), (8, 'a'), (9, 'z'), (10, 'm');
+-- @separator:table
+select mo_ctl('dn', 'flush', 'test01.t');
+select mo_table_col_max('test01', 't', 'a'), mo_table_col_min('test01', 't', 'a');
+drop table t;
+drop database test01;

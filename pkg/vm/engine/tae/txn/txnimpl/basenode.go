@@ -66,7 +66,7 @@ type InsertNode interface {
 	OffsetWithDeletes(count uint32) uint32
 	GetAppends() []*appendInfo
 	GetTxn() txnif.AsyncTxn
-	GetMetaLoc() (string, string)
+	GetPersistedLoc() (string, string)
 }
 
 type appendInfo struct {
@@ -337,7 +337,7 @@ func (n *baseNode) GetTxn() txnif.AsyncTxn {
 	return n.table.store.txn
 }
 
-func (n *baseNode) GetMetaLoc() (string, string) {
+func (n *baseNode) GetPersistedLoc() (string, string) {
 	return n.meta.GetMetaLoc(), n.meta.GetDeltaLoc()
 }
 
