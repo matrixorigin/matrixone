@@ -29,6 +29,7 @@ type SegmentReader interface {
 	io.Closer
 	GetID() uint64
 	IsUncommitted() bool
+	IsAppendable() bool
 	MakeBlockIt() BlockIt
 	// GetByFilter(filter Filter, offsetOnly bool) (map[uint64]*batch.Batch, error)
 	String() string
@@ -51,6 +52,7 @@ type SegmentWriter interface {
 
 	CreateBlock(bool) (Block, error)
 	CreateNonAppendableBlock() (Block, error)
+	CreateNonAppendableBlockWithMeta(string, string) (Block, error)
 
 	SoftDeleteBlock(id uint64) (err error)
 }

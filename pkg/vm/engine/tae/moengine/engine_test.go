@@ -264,7 +264,7 @@ func TestEngineAllType(t *testing.T) {
 		}
 	}
 	//delRows, err := rel.Truncate(ctx)
-	err = dbase.Truncate(ctx, schema.Name)
+	_, err = dbase.Truncate(ctx, schema.Name)
 	assert.Nil(t, err)
 	//assert.Equal(t, rows, int64(delRows))
 	assert.Nil(t, txn.Commit())

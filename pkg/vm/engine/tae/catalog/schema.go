@@ -360,17 +360,18 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	return
 }
 
-func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
+func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint64) (next int) {
 	nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
 	tidVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelID)
-	tid := tidVec.Get(offset).(uint64)
+	seenRowid := false
 	for {
 		if offset >= nameVec.Length() {
 			break
 		}
 		name := string(nameVec.Get(offset).([]byte))
 		id := tidVec.Get(offset).(uint64)
-		if name != s.Name || id != tid {
+		// every schema has 1 rowid column as last column, if have one, break
+		if name != s.Name || targetTid != id || seenRowid {
 			break
 		}
 		def := new(ColDef)
@@ -392,6 +393,7 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
 		s.NameIndex[def.Name] = def.Idx
 		s.ColDefs = append(s.ColDefs, def)
 		if def.Name == PhyAddrColumnName {
+			seenRowid = true
 			def.PhyAddr = true
 		}
 		constraint := string(bat.GetVectorByName(pkgcatalog.SystemColAttr_ConstraintType).Get(offset).([]byte))
@@ -598,10 +600,6 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 		if err = s.AppendColDef(phyAddrDef); err != nil {
 			return
 		}
-	}
-	if len(s.ColDefs) == 0 {
-		err = moerr.NewConstraintViolationNoCtx("empty column defs")
-		return
 	}
 
 	// sortColIdx is sort key index list. as of now, sort key is pk

@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -51,7 +52,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -60,9 +61,12 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(ap, proc, anal); err != nil {
+			if err := ctr.build(ap, proc, anal, isFirst); err != nil {
 				ap.Free(proc, true)
 				return false, err
+			}
+			if ap.ctr.mp != nil {
+				anal.Alloc(ap.ctr.mp.Size())
 			}
 			ctr.state = End
 		default:
@@ -81,18 +85,21 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	}
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var err error
 
 	for {
+		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[0].Ch
+		anal.WaitStop(start)
+
 		if bat == nil {
 			break
 		}
 		if bat.Length() == 0 {
 			continue
 		}
-		anal.Input(bat)
+		anal.Input(bat, isFirst)
 		anal.Alloc(int64(bat.Size()))
 		if ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat); err != nil {
 			return err
@@ -103,7 +110,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return nil
 	}
 	ctr.cleanEvalVectors(proc.Mp())
-	if err = ctr.evalJoinCondition(ctr.bat, ap.Conditions, proc); err != nil {
+	if err = ctr.evalJoinCondition(ctr.bat, ap.Conditions, proc, anal); err != nil {
 		return err
 	}
 
@@ -161,10 +168,10 @@ func (ctr *container) indexBuild() error {
 	return nil
 }
 
-func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
+func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, analyze process.Analyze) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
+		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
 			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
@@ -176,6 +183,9 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 				ctr.evecs[i].needFree = false
 				break
 			}
+		}
+		if ctr.evecs[i].needFree && vec != nil {
+			analyze.Alloc(int64(vec.Size()))
 		}
 
 		// 1. multiple equivalent conditions are not considered currently

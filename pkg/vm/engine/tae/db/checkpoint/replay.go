@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -115,26 +116,35 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	jobScheduler := tasks.NewParallelJobScheduler(200)
 	defer jobScheduler.Stop()
 	entries := make([]*CheckpointEntry, bat.Length())
-	var errMu sync.RWMutex
+	emptyFile := make([]*CheckpointEntry, 0)
+	var emptyFileMu sync.RWMutex
 	var wg sync.WaitGroup
 	readfn := func(i int) {
 		defer wg.Done()
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
 		metaloc := string(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
+		isIncremental := bat.GetVectorByName(CheckpointAttr_EntryType).Get(i).(bool)
+		typ := ET_Global
+		if isIncremental {
+			typ = ET_Incremental
+		}
 		checkpointEntry := &CheckpointEntry{
-			start:    start,
-			end:      end,
-			location: metaloc,
-			state:    ST_Finished,
+			start:     start,
+			end:       end,
+			location:  metaloc,
+			state:     ST_Finished,
+			entryType: typ,
 		}
 		var err2 error
 		if datas[i], err2 = checkpointEntry.Read(ctx, jobScheduler, r.fs); err2 != nil {
-			errMu.Lock()
-			err = err2
-			errMu.Unlock()
+			logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
+			emptyFileMu.Lock()
+			emptyFile = append(emptyFile, checkpointEntry)
+			emptyFileMu.Unlock()
+		} else {
+			entries[i] = checkpointEntry
 		}
-		entries[i] = checkpointEntry
 	}
 	wg.Add(bat.Length())
 	t0 = time.Now()
@@ -147,9 +157,47 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		return
 	}
 	t0 = time.Now()
+	globalIdx := 0
 	for i := 0; i < bat.Length(); i++ {
 		checkpointEntry := entries[i]
-		r.tryAddNewCheckpointEntry(checkpointEntry)
+		if checkpointEntry == nil {
+			continue
+		}
+		if !checkpointEntry.IsIncremental() {
+			globalIdx = i
+			r.tryAddNewGlobalCheckpointEntry(checkpointEntry)
+		} else {
+			r.tryAddNewIncrementalCheckpointEntry(checkpointEntry)
+		}
+	}
+	maxGlobal := r.MaxGlobalCheckpoint()
+	if maxGlobal != nil {
+		logutil.Infof("replay checkpoint %v", maxGlobal)
+		err = datas[globalIdx].ApplyReplayTo(r.catalog, dataFactory)
+		if err != nil {
+			return
+		}
+		if maxTs.Less(maxGlobal.end) {
+			maxTs = maxGlobal.end
+		}
+	}
+	for _, e := range emptyFile {
+		if e.end.GreaterEq(maxTs) {
+			return types.TS{},
+				moerr.NewInternalError(ctx,
+					"read checkpoint %v failed",
+					e.String())
+		}
+	}
+	for i := 0; i < bat.Length(); i++ {
+		checkpointEntry := entries[i]
+		if checkpointEntry == nil {
+			continue
+		}
+		if checkpointEntry.end.LessEq(maxTs) {
+			continue
+		}
+		logutil.Infof("replay checkpoint %v", checkpointEntry)
 		err = datas[i].ApplyReplayTo(r.catalog, dataFactory)
 		if err != nil {
 			return

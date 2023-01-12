@@ -63,4 +63,9 @@ func testReplaceableFileService(
 
 	assert.Equal(t, 2, len(vec.Entries[0].Data))
 
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = fs.Replace(ctx, IOVector{})
+	assert.ErrorIs(t, err, context.Canceled)
+
 }

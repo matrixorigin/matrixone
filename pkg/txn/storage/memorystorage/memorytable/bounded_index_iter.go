@@ -21,7 +21,7 @@ type BoundedIndexIter[
 	K Ordered[K],
 	V any,
 ] struct {
-	iter IndexIter[K, V]
+	iter TreeIter[K, V]
 	min  Tuple
 	max  Tuple
 }
@@ -29,7 +29,7 @@ type BoundedIndexIter[
 func NewBoundedIndexIter[
 	K Ordered[K],
 	V any,
-](iter IndexIter[K, V], min Tuple, max Tuple) *BoundedIndexIter[K, V] {
+](iter TreeIter[K, V], min Tuple, max Tuple) *BoundedIndexIter[K, V] {
 	if max.Less(min) {
 		panic(fmt.Sprintf("%v is less than %v", max, min))
 	}
@@ -40,26 +40,31 @@ func NewBoundedIndexIter[
 	}
 }
 
-var _ IndexIter[Int, int] = new(BoundedIndexIter[Int, int])
+var _ Iter[*IndexEntry[Int, int]] = new(BoundedIndexIter[Int, int])
 
 // First sets the cursor to the first index entry
 func (i *BoundedIndexIter[K, V]) First() bool {
 	if !i.iter.First() {
 		return false
 	}
-	if !i.iter.Seek(&IndexEntry[K, V]{
-		Index: i.min,
+	if !i.iter.Seek(TreeNode[K, V]{
+		IndexEntry: &IndexEntry[K, V]{
+			Index: i.min,
+		},
 	}) {
 		return false
 	}
-	entry, err := i.iter.Read()
+	node, err := i.iter.Read()
 	if err != nil {
 		panic(err)
 	}
-	if entry.Index.Less(i.min) {
+	if node.IndexEntry == nil {
 		return false
 	}
-	if i.max.Less(entry.Index) {
+	if node.IndexEntry.Index.Less(i.min) {
+		return false
+	}
+	if i.max.Less(node.IndexEntry.Index) {
 		return false
 	}
 	return true
@@ -70,14 +75,17 @@ func (i *BoundedIndexIter[K, V]) Next() bool {
 	if !i.iter.Next() {
 		return false
 	}
-	entry, err := i.iter.Read()
+	node, err := i.iter.Read()
 	if err != nil {
 		panic(err)
 	}
-	if entry.Index.Less(i.min) {
+	if node.IndexEntry == nil {
 		return false
 	}
-	if i.max.Less(entry.Index) {
+	if node.IndexEntry.Index.Less(i.min) {
+		return false
+	}
+	if i.max.Less(node.IndexEntry.Index) {
 		return false
 	}
 	return true
@@ -90,10 +98,16 @@ func (i *BoundedIndexIter[K, V]) Close() error {
 
 // Read returns the current entry
 func (i *BoundedIndexIter[K, V]) Read() (*IndexEntry[K, V], error) {
-	return i.iter.Read()
+	node, err := i.iter.Read()
+	if err != nil {
+		return nil, err
+	}
+	return node.IndexEntry, nil
 }
 
 // Seek seeks to the pivot
 func (i *BoundedIndexIter[K, V]) Seek(pivot *IndexEntry[K, V]) bool {
-	return i.iter.Seek(pivot)
+	return i.iter.Seek(TreeNode[K, V]{
+		IndexEntry: pivot,
+	})
 }

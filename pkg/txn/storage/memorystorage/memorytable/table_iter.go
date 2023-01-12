@@ -20,7 +20,7 @@ type TableIter[
 	V any,
 ] struct {
 	tx   *Transaction
-	iter RowsIter[K, V]
+	iter TreeIter[K, V]
 }
 
 // NewIter creates a new iter
@@ -32,40 +32,64 @@ func (t *Table[K, V, R]) NewIter(tx *Transaction) (*TableIter[K, V], error) {
 	state := txTable.state.Load().(*tableState[K, V])
 	ret := &TableIter[K, V]{
 		tx:   tx,
-		iter: state.rows.Copy().Iter(),
+		iter: state.tree.Copy().Iter(),
 	}
 	return ret, nil
 }
 
-var _ KVIter[Int, int] = new(TableIter[Int, int])
-
 // Read reads current key and value
 func (t *TableIter[K, V]) Read() (key K, value V, err error) {
-	var pair *KVPair[K, V]
-	pair, err = t.iter.Read()
+	var node TreeNode[K, V]
+	node, err = t.iter.Read()
 	if err != nil {
 		return
 	}
-	key = pair.Key
-	value = pair.Value
+	if node.KVPair == nil {
+		panic("should not call Read on nil KVPair node")
+	}
+	key = node.KVPair.Key
+	value = node.KVPair.Value
 	return
 }
 
 // Next moves the cursor to next entry
 func (t *TableIter[K, V]) Next() bool {
-	return t.iter.Next()
+	if !t.iter.Next() {
+		return false
+	}
+	node, err := t.iter.Read()
+	if err != nil {
+		panic(err)
+	}
+	return node.KVPair != nil
 }
 
 // First moves the cursor to first entry
 func (t *TableIter[K, V]) First() bool {
-	return t.iter.First()
+	if !t.iter.First() {
+		return false
+	}
+	node, err := t.iter.Read()
+	if err != nil {
+		panic(err)
+	}
+	return node.KVPair != nil
 }
 
 // Seek moves the cursor to or before the key
 func (t *TableIter[K, V]) Seek(key K) bool {
-	return t.iter.Seek(&KVPair[K, V]{
-		Key: key,
-	})
+	if !t.iter.Seek(TreeNode[K, V]{
+		KVPair: &KVPair[K, V]{
+			Key: key,
+		},
+	}) {
+		return false
+	}
+	node, err := t.iter.Read()
+	if err != nil {
+		panic(err)
+	}
+	return node.KVPair != nil
 }
 
 // Close closes the iter

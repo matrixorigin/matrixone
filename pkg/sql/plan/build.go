@@ -47,6 +47,9 @@ func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze) (*Plan,
 	if err != nil {
 		return nil, err
 	}
+	if plan.GetQuery() == nil {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "the sql query plan does not support explain.")
+	}
 	return plan, nil
 }
 
@@ -63,7 +66,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	case *tree.Replace:
 		return buildReplace(stmt, ctx)
 	case *tree.Update:
-		return buildUpdate(stmt, ctx)
+		return buildTableUpdate(stmt, ctx)
 	case *tree.Delete:
 		return buildDelete(stmt, ctx)
 	case *tree.BeginTransaction:
@@ -86,6 +89,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildDropView(stmt, ctx)
 	case *tree.CreateView:
 		return buildCreateView(stmt, ctx)
+	case *tree.AlterView:
+		return buildAlterView(stmt, ctx)
 	case *tree.CreateIndex:
 		return buildCreateIndex(stmt, ctx)
 	case *tree.DropIndex:
@@ -118,6 +123,18 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildShowStatus(stmt, ctx)
 	case *tree.ShowProcessList:
 		return buildShowProcessList(stmt, ctx)
+	case *tree.ShowLocks:
+		return buildShowLocks(stmt, ctx)
+	case *tree.ShowNodeList:
+		return buildShowNodeList(stmt, ctx)
+	case *tree.ShowFunctionStatus:
+		return buildShowFunctionStatus(stmt, ctx)
+	case *tree.ShowTableNumber:
+		return buildShowTableNumber(stmt, ctx)
+	case *tree.ShowColumnNumber:
+		return buildShowColumnNumber(stmt, ctx)
+	case *tree.ShowTableValues:
+		return buildShowTableValues(stmt, ctx)
 	case *tree.SetVar:
 		return buildSetVariables(stmt, ctx)
 	case *tree.Execute:
@@ -198,24 +215,6 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			return []*ColDef{
 				{Typ: typ, Name: "Variable_name"},
 				{Typ: typ, Name: "Value"},
-			}
-		case plan.DataDefinition_SHOW_CREATEDATABASE:
-			typ := &plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: 1024,
-			}
-			return []*ColDef{
-				{Typ: typ, Name: "Database"},
-				{Typ: typ, Name: "Create Database"},
-			}
-		case plan.DataDefinition_SHOW_CREATETABLE:
-			typ := &plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: 1024,
-			}
-			return []*ColDef{
-				{Typ: typ, Name: "Table"},
-				{Typ: typ, Name: "Create Table"},
 			}
 		default:
 			// show statement(except show variables) will return a query

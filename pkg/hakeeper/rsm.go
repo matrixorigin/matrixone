@@ -531,11 +531,12 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			state = pb.TimeoutState
 		}
 		n := pb.DNStore{
-			UUID:           uuid,
-			Tick:           info.Tick,
-			State:          state,
-			ServiceAddress: info.ServiceAddress,
-			Shards:         info.Shards,
+			UUID:                 uuid,
+			Tick:                 info.Tick,
+			State:                state,
+			ServiceAddress:       info.ServiceAddress,
+			Shards:               info.Shards,
+			LogtailServerAddress: info.LogtailServerAddress,
 		}
 		cd.DNStores = append(cd.DNStores, n)
 	}

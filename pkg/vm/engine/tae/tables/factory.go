@@ -23,10 +23,10 @@ import (
 )
 
 type DataFactory struct {
-	appendBufMgr base.INodeManager
-	scheduler    tasks.TaskScheduler
+	AppendBufMgr base.INodeManager
+	Scheduler    tasks.TaskScheduler
 	dir          string
-	fs           *objectio.ObjectFS
+	Fs           *objectio.ObjectFS
 }
 
 func NewDataFactory(fs *objectio.ObjectFS,
@@ -34,31 +34,31 @@ func NewDataFactory(fs *objectio.ObjectFS,
 	scheduler tasks.TaskScheduler,
 	dir string) *DataFactory {
 	return &DataFactory{
-		appendBufMgr: appendBufMgr,
-		scheduler:    scheduler,
+		AppendBufMgr: appendBufMgr,
+		Scheduler:    scheduler,
 		dir:          dir,
-		fs:           fs,
+		Fs:           fs,
 	}
 }
 
 func (factory *DataFactory) MakeTableFactory() catalog.TableDataFactory {
 	return func(meta *catalog.TableEntry) data.Table {
-		return newTable(meta, factory.appendBufMgr)
+		return newTable(meta, factory.AppendBufMgr)
 	}
 }
 
 func (factory *DataFactory) MakeSegmentFactory() catalog.SegmentDataFactory {
 	return func(meta *catalog.SegmentEntry) data.Segment {
-		return newSegment(meta, factory.appendBufMgr, factory.dir)
+		return newSegment(meta, factory.AppendBufMgr, factory.dir)
 	}
 }
 
 func (factory *DataFactory) MakeBlockFactory() catalog.BlockDataFactory {
 	return func(meta *catalog.BlockEntry) data.Block {
 		if meta.IsAppendable() {
-			return newABlock(meta, factory.fs, factory.appendBufMgr, factory.scheduler)
+			return newABlock(meta, factory.Fs, factory.AppendBufMgr, factory.Scheduler)
 		} else {
-			return newBlock(meta, factory.fs, factory.appendBufMgr, factory.scheduler)
+			return newBlock(meta, factory.Fs, factory.AppendBufMgr, factory.Scheduler)
 		}
 	}
 }

@@ -164,9 +164,22 @@ func (seg *txnSegment) CreateNonAppendableBlock() (blk handle.Block, err error) 
 	return seg.Txn.GetStore().CreateNonAppendableBlock(seg.getDBID(), seg.entry.AsCommonID())
 }
 
+func (seg *txnSegment) CreateNonAppendableBlockWithMeta(
+	metaLoc string,
+	deltaLoc string) (blk handle.Block, err error) {
+	return seg.Txn.GetStore().CreateNonAppendableBlockWithMeta(
+		seg.getDBID(),
+		seg.entry.AsCommonID(),
+		metaLoc,
+		deltaLoc)
+}
+
 func (seg *txnSegment) IsUncommitted() bool {
 	return isLocalSegmentByID(seg.entry.GetID())
 }
+
+func (seg *txnSegment) IsAppendable() bool { return seg.entry.IsAppendable() }
+
 func (seg *txnSegment) SoftDeleteBlock(id uint64) (err error) {
 	fp := seg.entry.AsCommonID()
 	fp.BlockID = id

@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/fagongzi/goetty/v2/buf"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -52,6 +53,15 @@ func TestGetTenantInfo(t *testing.T) {
 			{"tenant1:    :r1", "{account tenant1::r1 -- 0:0:0}", true},
 			{"     : :r1", "{account tenant1::r1 -- 0:0:0}", true},
 			{"   tenant1   :   u1   :   r1    ", "{account tenant1:u1:r1 -- 0:0:0}", false},
+			{"u1", "{account sys:u1: -- 0:0:0}", false},
+			{"tenant1#u1", "{account tenant1#u1# -- 0#0#0}", false},
+			{"tenant1#u1#r1", "{account tenant1#u1#r1 -- 0#0#0}", false},
+			{"#u1#r1", "{account tenant1#u1#r1 -- 0#0#0}", true},
+			{"tenant1#u1#", "{account tenant1#u1#moadmin -- 0#0#0}", true},
+			{"tenant1##r1", "{account tenant1##r1 -- 0#0#0}", true},
+			{"tenant1#    #r1", "{account tenant1##r1 -- 0#0#0}", true},
+			{"     # #r1", "{account tenant1##r1 -- 0#0#0}", true},
+			{"   tenant1   #   u1   #   r1    ", "{account tenant1#u1#r1 -- 0#0#0}", false},
 		}
 
 		for _, arg := range args {
@@ -375,6 +385,67 @@ func Test_checkUserExistsOrNot(t *testing.T) {
 		ses := &Session{}
 
 		err = InitUser(ctx, ses, tenant, &tree.CreateUser{IfNotExists: true, Users: []*tree.User{{Username: "test"}}})
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_initFunction(t *testing.T) {
+	convey.Convey("init function", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().AnyTimes()
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		rs := mock_frontend.NewMockExecResult(ctrl)
+		rs.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{rs}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		locale := ""
+
+		cu := &tree.CreateFunction{
+			Name: tree.NewFuncName("testFunc",
+				tree.ObjectNamePrefix{
+					SchemaName:      tree.Identifier("db"),
+					CatalogName:     tree.Identifier(""),
+					ExplicitSchema:  true,
+					ExplicitCatalog: false,
+				},
+			),
+			Args: nil,
+			ReturnType: tree.NewReturnType(&tree.T{
+				InternalType: tree.InternalType{
+					Family:       tree.IntFamily,
+					FamilyString: "INT",
+					Width:        24,
+					Locale:       &locale,
+					Oid:          uint32(defines.MYSQL_TYPE_INT24),
+				},
+			}),
+			Body:     "",
+			Language: "sql",
+		}
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+
+		ses := &Session{}
+		err := InitFunction(ctx, ses, tenant, cu)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -3514,7 +3585,7 @@ func Test_determineDML(t *testing.T) {
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 			defer bhStub.Reset()
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetRequestContext(), ses, a.stmt, a.p)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -3612,7 +3683,7 @@ func Test_determineDML(t *testing.T) {
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 			defer bhStub.Reset()
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetRequestContext(), ses, a.stmt, a.p)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -3702,7 +3773,7 @@ func Test_determineDML(t *testing.T) {
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 			defer bhStub.Reset()
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetRequestContext(), ses, a.stmt, a.p)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeFalse)
 		}
@@ -5452,6 +5523,45 @@ func Test_doRevokePrivilege(t *testing.T) {
 	})
 }
 
+func Test_doDropFunction(t *testing.T) {
+	convey.Convey("drop function", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().AnyTimes()
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		rs := mock_frontend.NewMockExecResult(ctrl)
+		rs.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{rs}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		cu := &tree.DropFunction{
+			Name: tree.NewFuncName("testFunc",
+				tree.ObjectNamePrefix{
+					SchemaName:      tree.Identifier("db"),
+					CatalogName:     tree.Identifier(""),
+					ExplicitSchema:  true,
+					ExplicitCatalog: false,
+				},
+			),
+			Args: nil,
+		}
+
+		ses := &Session{}
+		err := doDropFunction(ctx, ses, cu)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
 func Test_doDropRole(t *testing.T) {
 	convey.Convey("drop role succ", t, func() {
 		ctrl := gomock.NewController(t)
@@ -6191,6 +6301,21 @@ func Test_doAlterAccount(t *testing.T) {
 	})
 }
 
+func newMrsForShowTables(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col2 := &MysqlColumn{}
+	col2.SetName("table")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col2)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func Test_doDropAccount(t *testing.T) {
 	convey.Convey("drop account", t, func() {
 		ctrl := gomock.NewController(t)
@@ -6229,6 +6354,8 @@ func Test_doDropAccount(t *testing.T) {
 		sql = "show databases;"
 		bh.sql2result[sql] = newMrsForSqlForShowDatabases([][]interface{}{})
 
+		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+
 		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
@@ -6264,6 +6391,8 @@ func Test_doDropAccount(t *testing.T) {
 		for _, sql = range getSqlForDropAccount() {
 			bh.sql2result[sql] = nil
 		}
+
+		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
 		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
@@ -6485,7 +6614,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	ioses.EXPECT().Ref().AnyTimes()
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-	ses := NewSession(proto, nil, pu, gSysVariables, false)
+	ses := NewSession(proto, nil, pu, GSysVariables, false)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,

@@ -53,6 +53,21 @@ func TestNewTxn(t *testing.T) {
 	assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
 }
 
+func TestNewTxnWithSnapshotTS(t *testing.T) {
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 {
+			return 1
+		}, 0)))
+	c := NewTxnClient(rt, newTestTxnSender())
+	tx, err := c.New(WithSnapshotTS(timestamp.Timestamp{PhysicalTime: 10}))
+	assert.Nil(t, err)
+	txnMeta := tx.(*txnOperator).mu.txn
+	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, txnMeta.SnapshotTS)
+	assert.NotEmpty(t, txnMeta.ID)
+	assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
+}
+
 func newTestTxnSender() *testTxnSender {
 	return &testTxnSender{auto: true}
 }

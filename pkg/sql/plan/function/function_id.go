@@ -144,6 +144,7 @@ const (
 	LIKE_ALL // LIKE_ALL
 	LIKE_ANY // LIKE_ANY
 	LN       // LN
+	NOT_IN   // NOT_IN
 	LOG      // LOG
 	LOWER    // LOWER
 	LPAD     // LPAD
@@ -184,13 +185,15 @@ const (
 	SINH       //SINH
 	SPACE
 	SPLIT         // SPLIT
+	SPLIT_PART    // SPLIT_PART
 	STARCOUNT     // STARTCOUNT
 	STARTSWITH    // STARTSWITH
 	STDDEV_POP    // STDDEV_POP
 	STDDEV_SAMPLE // STDDEV_SAMPLE
 	SUBSTR        // SUBSTR
 	SUM           // SUM
-	TAN           // TAN
+	GROUP_CONCAT
+	TAN // TAN
 	TO_DATE
 	STR_TO_DATE
 	TO_INTERVAL // TO_INTERVAL
@@ -240,16 +243,27 @@ const (
 	FOUND_ROWS
 	ICULIBVERSION
 	LAST_INSERT_ID
+	LAST_QUERY_ID
+	LAST_UUID
 	ROLES_GRAPHML
 	ROW_COUNT
 	VERSION
 	COLLATION
+	CURRENT_ACCOUNT_ID
+	CURRENT_ACCOUNT_NAME
+	CURRENT_ROLE_ID
+	CURRENT_ROLE_NAME
+	CURRENT_USER_ID
+	CURRENT_USER_NAME
 
 	TIMESTAMP    // TIMESTAMP
 	DATE_FORMAT  // DATE_FORMAT
 	JSON_EXTRACT // JSON_EXTRACT
+	JSON_QUOTE   // JSON_QUOTE
+	JSON_UNQUOTE // JSON_UNQUOTE
 	FORMAT       // FORMAT
 	SLEEP        // sleep for a while
+	INSTR
 
 	UUID
 	SERIAL
@@ -270,6 +284,9 @@ const (
 	MO_CTL
 
 	MO_SHOW_VISIBLE_BIN // parse type/onUpdate/default []byte to visible string
+
+	MO_TABLE_ROWS // table rows
+	MO_TABLE_SIZE // table size
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -293,6 +310,7 @@ var functionIdRegister = map[string]int32{
 	"like":         LIKE,
 	"between":      BETWEEN,
 	"in":           IN,
+	"not_in":       NOT_IN,
 	"exists":       EXISTS,
 	"+":            PLUS,
 	"-":            MINUS,
@@ -330,6 +348,7 @@ var functionIdRegister = map[string]int32{
 	"max":                   MAX,
 	"min":                   MIN,
 	"sum":                   SUM,
+	"group_concat":          GROUP_CONCAT,
 	"avg":                   AVG,
 	"count":                 COUNT,
 	"starcount":             STARCOUNT,
@@ -341,6 +360,7 @@ var functionIdRegister = map[string]int32{
 	"variance":              VAR_POP,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
 	"any_value":             ANY_VALUE,
+	"median":                MEDIAN,
 	// builtin
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// binary functions
@@ -394,6 +414,7 @@ var functionIdRegister = map[string]int32{
 	"ltrim":                          LTRIM,
 	"month":                          MONTH,
 	"oct":                            OCT,
+	"rand":                           RANDOM,
 	"reverse":                        REVERSE,
 	"rtrim":                          RTRIM,
 	"sin":                            SIN,
@@ -420,15 +441,24 @@ var functionIdRegister = map[string]int32{
 	"current_user":                   USER,
 	"connection_id":                  CONNECTION_ID,
 	"charset":                        CHARSET,
+	"current_account_id":             CURRENT_ACCOUNT_ID,
+	"current_account_name":           CURRENT_ACCOUNT_NAME,
 	"current_role":                   CURRENT_ROLE,
+	"current_role_id":                CURRENT_ROLE_ID,
+	"current_role_name":              CURRENT_ROLE_NAME,
+	"current_user_id":                CURRENT_USER_ID,
+	"current_user_name":              CURRENT_USER_NAME,
 	"found_rows":                     FOUND_ROWS,
 	"icu_version":                    ICULIBVERSION,
 	"last_insert_id":                 LAST_INSERT_ID,
+	"last_query_id":                  LAST_QUERY_ID,
+	"last_uuid":                      LAST_QUERY_ID,
 	"roles_graphml":                  ROLES_GRAPHML,
 	"row_count":                      ROW_COUNT,
 	"version":                        VERSION,
 	"collation":                      COLLATION,
 	"json_extract":                   JSON_EXTRACT,
+	"json_quote":                     JSON_QUOTE,
 	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
 	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
 	"add_fault_point":                ADD_FAULT_POINT,
@@ -458,6 +488,15 @@ var functionIdRegister = map[string]int32{
 	"field":                          FIELD,
 	"format":                         FORMAT,
 	"sleep":                          SLEEP,
+	"split_part":                     SPLIT_PART,
+	"instr":                          INSTR,
+	"curdate":                        CURRENT_DATE,
+	"current_date":                   CURRENT_DATE,
+	"json_unquote":                   JSON_UNQUOTE,
+	"ascii":                          ASCII,
+	"replace":                        REPLACE,
+	"mo_table_rows":                  MO_TABLE_ROWS,
+	"mo_table_size":                  MO_TABLE_SIZE,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

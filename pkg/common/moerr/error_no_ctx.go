@@ -271,3 +271,15 @@ func NewAppendableSegmentNotFoundNoCtx() *Error {
 func NewAppendableBlockNotFoundNoCtx() *Error {
 	return newError(Context(), ErrAppendableBlockNotFound)
 }
+
+func NewDeadLockDetectedNoCtx() *Error {
+	return newError(Context(), ErrDeadLockDetected)
+}
+
+func NewUDFAlreadyExistsNoCtx(f string) *Error {
+	return newError(Context(), ErrFunctionAlreadyExists, f)
+}
+
+func NewNoUDFNoCtx(f string) *Error {
+	return newError(Context(), ErrDropNonExistsFunction, f)
+}

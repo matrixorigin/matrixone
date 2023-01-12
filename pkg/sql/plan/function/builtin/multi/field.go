@@ -87,7 +87,7 @@ func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 				}
 			} else {
 				for j := 0; j < vecLen; j++ {
-					if rs[j] == 0 && firstValues[0] == cols[j] {
+					if !nulls.Contains(input.Nsp, uint64(j)) && rs[j] == 0 && firstValues[0] == cols[j] {
 						rs[j] = uint64(i)
 						shouldReturn--
 					}
@@ -124,7 +124,7 @@ func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 				}
 			} else {
 				for j := 0; j < vecLen; j++ {
-					if rs[j] == 0 && firstValues[j] == cols[j] {
+					if !nulls.Contains(input.Nsp, uint64(j)) && rs[j] == 0 && firstValues[j] == cols[j] {
 						rs[j] = uint64(i)
 						shouldReturn--
 					}
@@ -202,7 +202,7 @@ func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.
 				}
 			} else {
 				for j := 0; j < vecLen; j++ {
-					if rs[j] == 0 && firstValues[0] == cols[j] {
+					if !nulls.Contains(input.Nsp, uint64(j)) && rs[j] == 0 && firstValues[0] == cols[j] {
 						rs[j] = uint64(i)
 						shouldReturn--
 					}
@@ -239,7 +239,7 @@ func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.
 				}
 			} else {
 				for j := 0; j < vecLen; j++ {
-					if rs[j] == 0 && firstValues[j] == cols[j] {
+					if !nulls.Contains(input.Nsp, uint64(j)) && rs[j] == 0 && firstValues[j] == cols[j] {
 						rs[j] = uint64(i)
 						shouldReturn--
 					}

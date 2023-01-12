@@ -17,8 +17,6 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"database/sql"
-	"errors"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -94,7 +92,12 @@ func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp,
 	}
 	ids := make([]uint64, len(blocks))
 	for i := range blocks {
-		ids[i] = blocks[i].Info.BlockID
+		// if cn can see a appendable block, this block must contain all updates
+		// in cache, no need to do merge read, BlockRead will filter out
+		// invisible and deleted rows with respect to the timestamp
+		if !blocks[i].Info.EntryState {
+			ids[i] = blocks[i].Info.BlockID
+		}
 	}
 	p.IterDeletedRowIDs(ctx, ids, ts, func(rowID RowID) bool {
 		id, offset := catalog.DecodeRowid(types.Rowid(rowID))
@@ -282,26 +285,21 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			indexes = append(indexes, index)
 		}
 
-		_, err := p.data.Get(tx, rowID)
-		if errors.Is(err, sql.ErrNoRows) {
-			err = p.data.Upsert(tx, &DataRow{
-				rowID:   rowID,
-				value:   dataValue,
-				indexes: indexes,
-			})
-			// if conflict comes up here,  probably the checkpoint from dn
-			// has duplicated history versions. As txn write conflict has been
-			// checked in dn, so it is safe to ignore this error
-			if moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
-				continue
-			}
-			if err != nil {
-				return err
-			}
-			if err := tx.Commit(t); err != nil {
-				return err
-			}
-		} else if err != nil {
+		err = p.data.Upsert(tx, &DataRow{
+			rowID:   rowID,
+			value:   dataValue,
+			indexes: indexes,
+		})
+		// if conflict comes up here,  probably the checkpoint from dn
+		// has duplicated history versions. As txn write conflict has been
+		// checked in dn, so it is safe to ignore this error
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := tx.Commit(t); err != nil {
 			return err
 		}
 	}

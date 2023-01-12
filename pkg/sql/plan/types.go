@@ -16,8 +16,9 @@ package plan
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -48,7 +49,6 @@ type Type = plan.Type
 type Plan_Query = plan.Plan_Query
 type Property = plan.Property
 type TableDef_DefType_Properties = plan.TableDef_DefType_Properties
-type TableDef_DefType_View = plan.TableDef_DefType_View
 type TableDef_DefType_Partition = plan.TableDef_DefType_Partition
 type PropertiesDef = plan.PropertiesDef
 type ViewDef = plan.ViewDef
@@ -56,8 +56,12 @@ type PartitionInfo = plan.PartitionInfo
 type TableDef_DefType_UIdx = plan.TableDef_DefType_UIdx
 type TableDef_DefType_SIdx = plan.TableDef_DefType_SIdx
 type UniqueIndexDef = plan.UniqueIndexDef
+type ClusterByDef = plan.ClusterByDef
 type SecondaryIndexDef = plan.SecondaryIndexDef
 type OrderBySpec = plan.OrderBySpec
+type CreateTable_FkColName = plan.CreateTable_FkColName
+type ForeignKeyDef = plan.ForeignKeyDef
+type ClusterTable = plan.ClusterTable
 
 type CompilerContext interface {
 	// Default database/schema in context
@@ -66,8 +70,12 @@ type CompilerContext interface {
 	DatabaseExists(name string) bool
 	// get table definition by database/schema
 	Resolve(schemaName string, tableName string) (*ObjectRef, *TableDef)
+	// get table definition by table id
+	ResolveById(tableId uint64) (*ObjectRef, *TableDef)
 	// get the value of variable
 	ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	// get the list of the account id
+	ResolveAccountIds(accountNames []string) ([]uint32, error)
 	// get the definition of primary key
 	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
 	// get the definition of hide key
@@ -83,6 +91,8 @@ type CompilerContext interface {
 	GetContext() context.Context
 
 	GetProcess() *process.Process
+
+	GetQueryResultMeta(uuid string) ([]*ColDef, string, error)
 }
 
 type Optimizer interface {
@@ -133,6 +143,8 @@ type QueryBuilder struct {
 	nameByColRef map[[2]int32]string
 
 	nextTag int32
+
+	mysqlCompatible bool
 }
 
 type CTERef struct {
@@ -205,9 +217,11 @@ type Binder interface {
 	BindAggFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
 	BindWinFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
 	BindSubquery(*tree.Subquery, bool) (*plan.Expr, error)
+	GetContext() context.Context
 }
 
 type baseBinder struct {
+	sysCtx    context.Context
 	builder   *QueryBuilder
 	ctx       *BindContext
 	impl      Binder
@@ -269,13 +283,14 @@ const (
 )
 
 type Binding struct {
-	tag         int32
-	nodeId      int32
-	table       string
-	cols        []string
-	types       []*plan.Type
-	refCnts     []uint
-	colIdByName map[string]int32
+	tag            int32
+	nodeId         int32
+	table          string
+	cols           []string
+	types          []*plan.Type
+	refCnts        []uint
+	colIdByName    map[string]int32
+	isClusterTable bool
 }
 
 const (

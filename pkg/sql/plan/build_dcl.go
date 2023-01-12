@@ -33,7 +33,7 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		*tree.Update, *tree.Delete, *tree.Insert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
-		opt := NewBaseOptimizer(ctx)
+		opt := NewPrepareOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt)
 		if err != nil {
 			return nil, err
@@ -88,7 +88,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		if pp.Ddl.Query != nil {
 			getParamRule := NewGetParamRule()
 			VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
-			err = VisitQuery.Visit()
+			err = VisitQuery.Visit(ctx.GetContext())
 			if err != nil {
 				return nil, err
 			}
@@ -102,7 +102,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		// collect args
 		getParamRule := NewGetParamRule()
 		VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
-		err = VisitQuery.Visit()
+		err = VisitQuery.Visit(ctx.GetContext())
 		if err != nil {
 			return nil, err
 		}
@@ -116,7 +116,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		// reset arg order
 		resetParamRule := NewResetParamOrderRule(args)
 		VisitQuery = NewVisitPlan(preparePlan, []VisitPlanRule{resetParamRule})
-		err = VisitQuery.Visit()
+		err = VisitQuery.Visit(ctx.GetContext())
 		if err != nil {
 			return nil, err
 		}

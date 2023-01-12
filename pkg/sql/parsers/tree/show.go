@@ -263,27 +263,44 @@ func (node *ShowTableStatus) GetQueryType() string     { return QueryTypeDQL }
 
 type ShowGrants struct {
 	showImpl
-	Username string
-	Hostname string
-	Roles    []*Role
+	Username      string
+	Hostname      string
+	Roles         []*Role
+	ShowGrantType ShowGrantType
 }
 
+type ShowGrantType int
+
+const (
+	GrantForUser = iota
+	GrantForRole
+)
+
 func (node *ShowGrants) Format(ctx *FmtCtx) {
-	ctx.WriteString("show grants")
-	if node.Username != "" {
-		ctx.WriteString(" for ")
-		ctx.WriteString(node.Username)
-		if node.Hostname != "" {
-			ctx.WriteString("@")
-			ctx.WriteString(node.Hostname)
+	if node.ShowGrantType == GrantForRole {
+		ctx.WriteString("show grants")
+		if node.Roles != nil {
+			ctx.WriteString("for")
+			ctx.WriteString(" ")
+			ctx.WriteString(node.Roles[0].UserName)
 		}
-	}
-	if node.Roles != nil {
-		prefix := ""
-		for _, r := range node.Roles {
-			ctx.WriteString(prefix)
-			r.Format(ctx)
-			prefix = ", "
+	} else {
+		ctx.WriteString("show grants")
+		if node.Username != "" {
+			ctx.WriteString(" for ")
+			ctx.WriteString(node.Username)
+			if node.Hostname != "" {
+				ctx.WriteString("@")
+				ctx.WriteString(node.Hostname)
+			}
+		}
+		if node.Roles != nil {
+			prefix := ""
+			for _, r := range node.Roles {
+				ctx.WriteString(prefix)
+				r.Format(ctx)
+				prefix = ", "
+			}
 		}
 	}
 }
@@ -519,6 +536,9 @@ func (node *ShowFunctionStatus) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *ShowFunctionStatus) GetStatementType() string { return "Show Function Status" }
+func (node *ShowFunctionStatus) GetQueryType() string     { return QueryTypeDQL }
+
 func NewShowFunctionStatus(l *ComparisonExpr, w *Where) *ShowFunctionStatus {
 	return &ShowFunctionStatus{
 		Like:  l,
@@ -535,6 +555,9 @@ func (node *ShowNodeList) Format(ctx *FmtCtx) {
 	ctx.WriteString("show node list")
 }
 
+func (node *ShowNodeList) GetStatementType() string { return "Show Node List" }
+func (node *ShowNodeList) GetQueryType() string     { return QueryTypeDQL }
+
 func NewShowNodeList() *ShowNodeList {
 	return &ShowNodeList{}
 }
@@ -548,6 +571,131 @@ func (node *ShowLocks) Format(ctx *FmtCtx) {
 	ctx.WriteString("show locks")
 }
 
+func (node *ShowLocks) GetStatementType() string { return "Show Locks" }
+func (node *ShowLocks) GetQueryType() string     { return QueryTypeDQL }
+
 func NewShowLocks() *ShowLocks {
 	return &ShowLocks{}
 }
+
+// show table number
+type ShowTableNumber struct {
+	showImpl
+	DbName string
+}
+
+func (node *ShowTableNumber) Format(ctx *FmtCtx) {
+	ctx.WriteString("show table number")
+	if node.DbName != "" {
+		ctx.WriteString(" from ")
+		ctx.WriteString(node.DbName)
+	}
+}
+func (node *ShowTableNumber) GetStatementType() string { return "Show Table Number" }
+func (node *ShowTableNumber) GetQueryType() string     { return QueryTypeDQL }
+
+func NewShowTableNumber(dbname string) *ShowTableNumber {
+	return &ShowTableNumber{
+		DbName: dbname,
+	}
+}
+
+// show column number
+type ShowColumnNumber struct {
+	showImpl
+	Table  *UnresolvedObjectName
+	DbName string
+}
+
+func (node *ShowColumnNumber) Format(ctx *FmtCtx) {
+	ctx.WriteString("show column number")
+	if node.Table != nil {
+		ctx.WriteString(" from ")
+		node.Table.Format(ctx)
+	}
+	if node.DbName != "" {
+		ctx.WriteString(" from ")
+		ctx.WriteString(node.DbName)
+	}
+}
+func (node *ShowColumnNumber) GetStatementType() string { return "Show Column Number" }
+func (node *ShowColumnNumber) GetQueryType() string     { return QueryTypeDQL }
+
+func NewShowColumnNumber(table *UnresolvedObjectName, dbname string) *ShowColumnNumber {
+	return &ShowColumnNumber{
+		Table:  table,
+		DbName: dbname,
+	}
+}
+
+// show table size
+type ShowTableSize struct {
+	showImpl
+	Table  *UnresolvedObjectName
+	DbName string
+}
+
+func (node *ShowTableSize) Format(ctx *FmtCtx) {
+	ctx.WriteString("show table size")
+	if node.Table != nil {
+		ctx.WriteString(" from ")
+		node.Table.Format(ctx)
+	}
+	if node.DbName != "" {
+		ctx.WriteString(" from ")
+		ctx.WriteString(node.DbName)
+	}
+}
+func (node *ShowTableSize) GetStatementType() string { return "Show Table Size" }
+func (node *ShowTableSize) GetQueryType() string     { return QueryTypeDQL }
+
+func NewShowTableSize(table *UnresolvedObjectName, dbname string) *ShowTableSize {
+	return &ShowTableSize{
+		Table:  table,
+		DbName: dbname,
+	}
+}
+
+// show table values
+type ShowTableValues struct {
+	showImpl
+	Table  *UnresolvedObjectName
+	DbName string
+}
+
+func (node *ShowTableValues) Format(ctx *FmtCtx) {
+	ctx.WriteString("show table values")
+	if node.Table != nil {
+		ctx.WriteString(" from ")
+		node.Table.Format(ctx)
+	}
+	if node.DbName != "" {
+		ctx.WriteString(" from ")
+		ctx.WriteString(node.DbName)
+	}
+}
+func (node *ShowTableValues) GetStatementType() string { return "Show Table Values" }
+func (node *ShowTableValues) GetQueryType() string     { return QueryTypeDQL }
+
+func NewShowTableValues(table *UnresolvedObjectName, dbname string) *ShowTableValues {
+	return &ShowTableValues{
+		Table:  table,
+		DbName: dbname,
+	}
+}
+
+type ShowAccounts struct {
+	showImpl
+	Like *ComparisonExpr
+}
+
+func (node *ShowAccounts) Format(ctx *FmtCtx) {
+	ctx.WriteString("show accounts")
+	if node.Like != nil {
+		ctx.WriteByte(' ')
+		node.Like.Format(ctx)
+	}
+}
+
+func (node *ShowAccounts) GetStatementType() string { return "Show Accounts" }
+func (node *ShowAccounts) GetQueryType() string     { return QueryTypeDQL }

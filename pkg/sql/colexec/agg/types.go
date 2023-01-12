@@ -40,6 +40,8 @@ const (
 	AggregateBitOr
 	AggregateStdDevPop
 	AggregateAnyValue
+	AggregateMedian
+	AggregateGroupConcat
 )
 
 var Names = [...]string{
@@ -56,6 +58,8 @@ var Names = [...]string{
 	AggregateBitOr:               "bit_or",
 	AggregateStdDevPop:           "stddev_pop",
 	AggregateAnyValue:            "any",
+	AggregateMedian:              "median",
+	AggregateGroupConcat:         "group_concat",
 }
 
 type Aggregate struct {

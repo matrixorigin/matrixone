@@ -65,10 +65,11 @@ var (
 // need to sample the output.
 type SampleType int
 
-var (
-	noneSample = SampleType(0)
+const (
+	noneSample SampleType = iota
+	SystemInitSample
 	// ExampleSample used in examples
-	ExampleSample = SampleType(math.MaxInt)
+	ExampleSample = math.MaxInt
 )
 
 // MOLogger mo logger based zap.logger. To standardize and standardize the logging
@@ -78,6 +79,7 @@ var (
 type MOLogger struct {
 	logger *zap.Logger
 	ctx    context.Context
+	m      map[int]*zap.Logger
 }
 
 // LogOptions log options
@@ -86,6 +88,7 @@ type LogOptions struct {
 	level      zapcore.Level
 	fields     []zap.Field
 	sampleType SampleType
+	callerSkip int
 }
 
 // logFilter used to filter the print log, returns false to abort this print

@@ -16,11 +16,16 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"math"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -549,6 +554,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table.EXPECT().FilteredStats(gomock.Any(), gomock.Any()).Return(int32(100), int64(1000000), nil).AnyTimes()
 		table.EXPECT().Stats(gomock.Any()).Return(int32(100), int64(1000000), nil).AnyTimes()
 		table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 
@@ -564,7 +570,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		convey.So(defDBName, convey.ShouldEqual, "")
 		convey.So(tcc.DatabaseExists("abc"), convey.ShouldBeTrue)
 
-		_, err := tcc.getRelation("abc", "t1")
+		_, _, err := tcc.getRelation("abc", "t1")
 		convey.So(err, convey.ShouldBeNil)
 
 		object, tableRef := tcc.Resolve("abc", "t1")
@@ -580,4 +586,96 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		stats := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Expr{})
 		convey.So(stats, convey.ShouldNotBeNil)
 	})
+}
+
+func TestSession_GetTempTableStorage(t *testing.T) {
+	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioses.EXPECT().Ref().AnyTimes()
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		session := NewSession(proto, nil, pu, gSysVars, false)
+		session.SetRequestContext(context.Background())
+		return session
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil, nil)
+	gSysVars := &GlobalSystemVariables{}
+
+	ses := genSession(ctrl, pu, gSysVars)
+	assert.Panics(t, func() {
+		_ = ses.GetTempTableStorage()
+	})
+}
+
+func TestIfInitedTempEngine(t *testing.T) {
+	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioses.EXPECT().Ref().AnyTimes()
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		session := NewSession(proto, nil, pu, gSysVars, false)
+		session.SetRequestContext(context.Background())
+		return session
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil, nil)
+	gSysVars := &GlobalSystemVariables{}
+
+	ses := genSession(ctrl, pu, gSysVars)
+	assert.False(t, ses.IfInitedTempEngine())
+}
+
+func TestSetTempTableStorage(t *testing.T) {
+	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioses.EXPECT().Ref().AnyTimes()
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		session := NewSession(proto, nil, pu, gSysVars, false)
+		session.SetRequestContext(context.Background())
+		return session
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil, nil)
+	gSysVars := &GlobalSystemVariables{}
+
+	ses := genSession(ctrl, pu, gSysVars)
+
+	ck := clock.NewHLCClock(func() int64 {
+		return time.Now().Unix()
+	}, math.MaxInt)
+	dnStore, _ := ses.SetTempTableStorage(ck)
+
+	assert.Equal(t, defines.TEMPORARY_TABLE_DN_ADDR, dnStore.ServiceAddress)
 }

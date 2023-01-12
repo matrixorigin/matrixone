@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -117,6 +118,9 @@ type Function struct {
 	// Volatile function cannot be fold
 	Volatile bool
 
+	// RealTimeRelate function cannot be folded when in prepare statement
+	RealTimeRelated bool
+
 	// whether the function needs to append a hidden parameter, such as 'uuid'
 	AppendHideArg bool
 
@@ -137,6 +141,12 @@ type Function struct {
 
 	// Layout adapt to plan/function.go, used for `explain SQL`.
 	layout FuncExplainLayout
+
+	UseNewFramework     bool
+	ResultWillNotNull   bool
+	FlexibleReturnType  func(parameters []types.Type) types.Type
+	ParameterMustScalar []bool
+	NewFn               func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error
 }
 
 func (f *Function) TestFlag(funcFlag plan.Function_FuncFlag) bool {
@@ -149,13 +159,16 @@ func (f *Function) GetLayout() FuncExplainLayout {
 
 // ReturnType return result-type of function, and the result is nullable
 // if nullable is false, function won't return a vector with null value.
-func (f Function) ReturnType() (typ types.T, nullable bool) {
-	return f.ReturnTyp, true
+func (f Function) ReturnType(args []types.Type) (typ types.Type, nullable bool) {
+	if f.FlexibleReturnType != nil {
+		return f.FlexibleReturnType(args), !f.ResultWillNotNull
+	}
+	return f.ReturnTyp.ToType(), !f.ResultWillNotNull
 }
 
 func (f Function) VecFn(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if f.Fn == nil {
-		return nil, moerr.NewInternalErrorNoCtx("no function")
+		return nil, moerr.NewInternalError(proc.Ctx, "no function")
 	}
 	return f.Fn(vs, proc)
 }
@@ -183,11 +196,11 @@ func fromNameToFunctionIdWithoutError(name string) (int32, bool) {
 }
 
 // get function id from map functionIdRegister, see functionIds.go
-func fromNameToFunctionId(name string) (int32, error) {
+func fromNameToFunctionId(ctx context.Context, name string) (int32, error) {
 	if fid, ok := functionIdRegister[name]; ok {
 		return fid, nil
 	}
-	return -1, moerr.NewNotSupportedNoCtx("function or operator '%s'", name)
+	return -1, moerr.NewNotSupported(ctx, "function or operator '%s'", name)
 }
 
 // EncodeOverloadID convert function-id and overload-index to be an overloadID
@@ -219,13 +232,13 @@ func GetFunctionByIDWithoutError(overloadID int64) (*Function, bool) {
 }
 
 // GetFunctionByID get function structure by its index id.
-func GetFunctionByID(overloadID int64) (*Function, error) {
+func GetFunctionByID(ctx context.Context, overloadID int64) (*Function, error) {
 	fid, overloadIndex := DecodeOverloadID(overloadID)
 	if int(fid) < len(functionRegister) {
 		fs := functionRegister[fid].Overloads
 		return &fs[overloadIndex], nil
 	} else {
-		return nil, moerr.NewInvalidInputNoCtx("function overload id not found")
+		return nil, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 }
 
@@ -269,8 +282,8 @@ func GetFunctionAppendHideArgByID(overloadID int64) bool {
 	return function.AppendHideArg
 }
 
-func GetFunctionIsMonotonicById(overloadID int64) (bool, error) {
-	function, err := GetFunctionByID(overloadID)
+func GetFunctionIsMonotonicById(ctx context.Context, overloadID int64) (bool, error) {
+	function, err := GetFunctionByID(ctx, overloadID)
 	if err != nil {
 		return false, err
 	}
@@ -286,8 +299,8 @@ func GetFunctionIsMonotonicById(overloadID int64) (bool, error) {
 // if matches,
 // return the encoded overload id and the overload's return type
 // and final converted argument types( it will be nil if there's no need to do type level-up work).
-func GetFunctionByName(name string, args []types.Type) (int64, types.Type, []types.Type, error) {
-	fid, err := fromNameToFunctionId(name)
+func GetFunctionByName(ctx context.Context, name string, args []types.Type) (int64, types.Type, []types.Type, error) {
+	fid, err := fromNameToFunctionId(ctx, name)
 	if err != nil {
 		return -1, emptyType, nil, err
 	}
@@ -312,14 +325,14 @@ func GetFunctionByName(name string, args []types.Type) (int64, types.Type, []typ
 	case wrongFunctionParameters:
 		ArgsToPrint := getOidSlice(finalTypes) // arg information to print for error message
 		if len(fs.Overloads) > 0 && fs.Overloads[0].isFunction() {
-			return -1, emptyType, nil, moerr.NewInvalidArgNoCtx("function "+name, ArgsToPrint)
+			return -1, emptyType, nil, moerr.NewInvalidArg(ctx, "function "+name, ArgsToPrint)
 		}
-		return -1, emptyType, nil, moerr.NewInvalidArgNoCtx("operator "+name, ArgsToPrint)
+		return -1, emptyType, nil, moerr.NewInvalidArg(ctx, "operator "+name, ArgsToPrint)
 	case tooManyFunctionsMatched:
-		return -1, emptyType, nil, moerr.NewInvalidArgNoCtx("too many overloads matched "+name, args)
+		return -1, emptyType, nil, moerr.NewInvalidArg(ctx, "too many overloads matched "+name, args)
 	case wrongFuncParamForAgg:
 		ArgsToPrint := getOidSlice(finalTypes)
-		return -1, emptyType, nil, moerr.NewInvalidArgNoCtx("aggregate function "+name, ArgsToPrint)
+		return -1, emptyType, nil, moerr.NewInvalidArg(ctx, "aggregate function "+name, ArgsToPrint)
 	}
 
 	// make the real return type of function overload.
@@ -407,10 +420,14 @@ func getRealReturnType(fid int32, f Function, realArgs []types.Type) types.Type 
 			}
 		}
 	}
+	if f.FlexibleReturnType != nil {
+		return f.FlexibleReturnType(realArgs)
+	}
 	rt := f.ReturnTyp.ToType()
 	for i := range realArgs {
 		if realArgs[i].Oid == rt.Oid {
 			copyType(&rt, &realArgs[i])
+			checkTypeWidth(realArgs, &rt)
 			break
 		}
 		if types.T(rt.Oid) == types.T_decimal128 && types.T(realArgs[i].Oid) == types.T_decimal64 {
@@ -418,6 +435,14 @@ func getRealReturnType(fid int32, f Function, realArgs []types.Type) types.Type 
 		}
 	}
 	return rt
+}
+
+func checkTypeWidth(realArgs []types.Type, rt *types.Type) {
+	for i := range realArgs {
+		if realArgs[i].Oid == rt.Oid && rt.Width < realArgs[i].Width {
+			rt.Width = realArgs[i].Width
+		}
+	}
 }
 
 func copyType(dst, src *types.Type) {

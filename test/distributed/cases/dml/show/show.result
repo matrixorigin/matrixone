@@ -212,3 +212,77 @@ create table t1(c1 int primary key auto_increment,c2 tinyint not null default 4,
 show create table t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (\n`c1` INT NOT NULL AUTO_INCREMENT,\n`c2` TINYINT DEFAULT 4,\n`c3` SMALLINT DEFAULT NULL,\n`c4` BIGINT DEFAULT NULL,\n`c5` TINYINT UNSIGNED DEFAULT NULL,\n`c6` SMALLINT UNSIGNED DEFAULT NULL,\n`c7` INT UNSIGNED DEFAULT NULL,\n`c8` BIGINT UNSIGNED DEFAULT NULL,\n`c9` FLOAT DEFAULT NULL,\n`c10` DOUBLE DEFAULT NULL,\n`c11` DATE DEFAULT NULL,\n`c12` DATETIME DEFAULT NULL,\n`c13` TIMESTAMP DEFAULT NULL ON UPDATE current_timestamp(),\n`c14` CHAR(1) DEFAULT NULL,\n`c15` VARCHAR(65535) DEFAULT 'q',\n`c16` JSON DEFAULT NULL,\n`c17` DECIMAL(34,0) DEFAULT NULL,\n`c18` TEXT DEFAULT NULL,\n`c19` BLOB DEFAULT NULL,\n`c20` UUID DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
+SHOW TRIGGERS;
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+SHOW TRIGGERS like '*%';
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+use mo_catalog;
+show tables;
+tables_in_mo_catalog
+mo_user
+mo_account
+mo_role
+mo_user_grant
+mo_role_grant
+mo_role_privs
+mo_user_defined_function
+mo_mysql_compatbility_mode
+mo_database
+mo_columns
+mo_tables
+show table_number from mo_catalog;
+mo_catalog    Number of tables in mo_catalog
+mo_catalog    9
+show column_number from mo_database;
+mo_database    Number of columns in mo_database
+mo_database    8
+show column_number from hdjshdj;
+no such table mo_catalog.hdjshdj
+drop database if exists test01;
+create database test01;
+use test01;
+create table t(a int, b int);
+insert into t values(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6);
+show table_values from t;
+max(a)    min(a)    max(b)    min(b)
+6    1    6    1
+drop table t;
+show node list;
+null
+show locks;
+null
+create role role1;
+grant all on table *.* to role1;
+grant create table, drop table on database *.* to role1;
+create user user1 identified by 'pass1';
+grant role1 to user1;
+show grants for 'user1'@'localhost';
+Grants for user1@localhost
+GRANT connect ON account  `user1`@`localhost`
+GRANT table all ON table *.* `user1`@`localhost`
+GRANT create table ON database *.* `user1`@`localhost`
+GRANT drop table ON database *.* `user1`@`localhost`
+show grants for ROLE role1;
+Grants for role1
+GRANT table all ON table *.* `role1`
+GRANT create table ON database *.* `role1`
+GRANT drop table ON database *.* `role1`
+drop user user1;
+drop role role1;
+drop database if exists test01;
+create database test01;
+use test01;
+create table t1(a int unique key, b int, c int);
+show table_number from test01;
+test01    Number of tables in test01
+test01    1
+drop table t1;
+drop database if exists test01;
+create database test01;
+use test01;
+create table t(a int, b int, c json);
+insert into t values(1, 1, '{"a":1,"b":2,"c":3}'), (2, 2, '{"a":1,"b":2,"c":3}'), (3, 3, '{"a":1,"b":2,"c":3}'), (4, 4, '{"a":1,"b":2,"c":3}'), (5, 5, '{"a":1,"b":2,"c":3}'), (6, 6, '{"a":1,"b":2,"c":3}');
+show table_values from t;
+max(a)    min(a)    max(b)    min(b)    max(c)    min(c)
+6    1    6    1    null    null
+drop table t;

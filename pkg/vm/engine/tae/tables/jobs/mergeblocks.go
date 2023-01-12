@@ -36,6 +36,8 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// CompactSegmentTaskFactory merge non-appendable blocks of an appendable-segment
+// into a new non-appendable segment.
 var CompactSegmentTaskFactory = func(mergedBlks []*catalog.BlockEntry, scheduler tasks.TaskScheduler) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		mergedSegs := make([]*catalog.SegmentEntry, 1)
@@ -78,13 +80,13 @@ func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*ca
 		scheduler:   scheduler,
 		toSegEntry:  toSegEntry,
 	}
-	dbName := mergedBlks[0].GetSegment().GetTable().GetDB().GetName()
-	database, err := txn.GetDatabase(dbName)
+	dbId := mergedBlks[0].GetSegment().GetTable().GetDB().ID
+	database, err := txn.GetDatabaseByID(dbId)
 	if err != nil {
 		return
 	}
-	relName := mergedBlks[0].GetSchema().Name
-	task.rel, err = database.GetRelationByName(relName)
+	relId := mergedBlks[0].GetSegment().GetTable().ID
+	task.rel, err = database.GetRelationByID(relId)
 	if err != nil {
 		return
 	}
@@ -180,7 +182,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	now := time.Now()
 	var toSegEntry handle.Segment
 	if task.toSegEntry == nil {
-		if toSegEntry, err = task.rel.CreateNonAppendableSegment(); err != nil {
+		if toSegEntry, err = task.rel.CreateNonAppendableSegment(false); err != nil {
 			return err
 		}
 		task.toSegEntry = toSegEntry.GetMeta().(*catalog.SegmentEntry)

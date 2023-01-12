@@ -1,0 +1,49 @@
+drop table if exists t1;
+create temporary table t1(
+a bigint primary key auto_increment,
+b varchar(10)
+);
+insert into t1(b) values ('bbb');
+insert into t1 values (1, 'ccc');
+tae data: duplicate
+insert into t1 values (3, 'ccc');
+insert into t1(b) values ('bbb1111');
+select * from t1 order by a;
+a    b
+1    bbb
+3    ccc
+4    bbb1111
+drop table if exists t1;
+create temporary table t1(
+a int,
+b varchar(10)
+);
+insert into t1 values (111, 'a'),(110, 'a'),(100, 'a'),(000, 'b'),(001, 'b'),(011,'b');
+select distinct b from t1;
+b
+a
+b
+select distinct b, a from t1;
+b    a
+a    111
+a    110
+a    100
+b    0
+b    1
+b    11
+select count(distinct a) from t1;
+count(distinct a)
+6
+select sum(distinct a) from t1;
+sum(distinct a)
+333
+select avg(distinct a) from t1;
+avg(distinct a)
+55.5
+select min(distinct a) from t1;
+min(distinct a)
+0
+select max(distinct a) from t1;
+max(distinct a)
+111
+drop table t1;
