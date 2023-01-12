@@ -50,7 +50,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.
 
 	metas := &fileservice.IOVector{
 		FilePath: r.name,
-		Entries:  make([]fileservice.IOEntry, 1),
+		Entries:  make([]fileservice.IOEntry, 1, l),
 	}
 
 	metas.Entries[0] = fileservice.IOEntry{

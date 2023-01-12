@@ -141,7 +141,7 @@ func (b *Block) UnMarshalMeta(data []byte) (uint32, error) {
 	if err = binary.Read(cache, endian, &b.header.checksum); err != nil {
 		return 0, err
 	}
-	size += 64
+	size += HeaderSize
 	b.columns = make([]ColumnObject, b.header.columnCount)
 	for i := range b.columns {
 		b.columns[i] = NewColumnBlock(uint16(i), b.object)
@@ -150,6 +150,6 @@ func (b *Block) UnMarshalMeta(data []byte) (uint32, error) {
 			return 0, err
 		}
 	}
-	size += 128 * uint32(b.header.columnCount)
+	size += ColumnMetaSize * uint32(b.header.columnCount)
 	return size, err
 }
