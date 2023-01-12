@@ -129,11 +129,11 @@ var (
 	// defaultSessionTimeout default: 10 minutes
 	defaultSessionTimeout = 24 * time.Hour
 
-	// defaultLogsExtension default: tae. Support val in [csv, tae]
-	defaultLogsExtension = "tae"
+	// defaultLogsExtension default: csv. Support val in [csv, tae]
+	defaultLogsExtension = "csv"
 
-	// defaultMergedExtension default: tae. Support val in [csv, tae]
-	defaultMergedExtension = "tae"
+	// defaultMergedExtension default: csv. Support val in [csv, tae]
+	defaultMergedExtension = "csv"
 )
 
 // FrontendParameters of the frontend
