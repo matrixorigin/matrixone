@@ -16,6 +16,7 @@ package dispatch
 
 import (
 	"bytes"
+	"fmt"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -34,12 +35,14 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	if ap.CrossCN {
+		fmt.Printf("Prepare cross-cn, length of RemoteReg = %d\n", len(ap.RemoteRegs))
 		ap.ctr.streams = make([]*WrapperStream, 0, len(ap.RemoteRegs))
 		for i := range ap.ctr.streams {
 			stream, errStream := cnclient.GetStreamSender(ap.RemoteRegs[i].NodeAddr)
 			if errStream != nil {
 				return errStream
 			}
+			fmt.Printf("stream[%d] get success.\n", i)
 			ap.ctr.streams = append(ap.ctr.streams, &WrapperStream{stream, ap.RemoteRegs[i].Uuids})
 		}
 	}

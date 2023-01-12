@@ -137,12 +137,13 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	if !ok {
 		panic("unexpected message type for cn-server")
 	}
+	fmt.Printf("received msg ... begin to handle\n")
 	// it's a Batch
 	if m.GetCmd() == 1 {
 		var v any
 		var dataBuffer []byte
 		var ok bool
-		fmt.Printf("get message from uuid - %s\n", string(m.GetUuid()))
+		fmt.Printf("get a batch message from uuid - %s\n", string(m.GetUuid()))
 		for {
 			v, ok = srv.chanBufMp.Load(m.GetUuid())
 			if !ok {
