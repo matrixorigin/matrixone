@@ -208,7 +208,7 @@ func (b *AccountDatePathBuilder) ParsePath(ctx context.Context, path string) (Pa
 
 var timeMu sync.Mutex
 
-func NSecString() string {
+var NSecString = func() string {
 	timeMu.Lock()
 	nsec := time.Now().Nanosecond()
 	timeMu.Unlock()
@@ -257,7 +257,7 @@ func (m *DBTablePathBuilder) NewMergeFilename(timestampStart, timestampEnd, exte
 }
 
 func (m *DBTablePathBuilder) NewLogFilename(name, nodeUUID, nodeType string, ts time.Time, extension string) string {
-	return fmt.Sprintf(`%s_%s_%s_%s`, name, nodeUUID, nodeType, ts.Format("20060102.150405.000000")) + CsvExtension
+	return fmt.Sprintf(`%s_%s_%s_%s`, name, nodeUUID, nodeType, ts.Format("20060102.150405.000000")) + extension
 }
 
 func (m *DBTablePathBuilder) SupportMergeSplit() bool      { return false }

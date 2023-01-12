@@ -228,9 +228,15 @@ func TestNewMerge(t *testing.T) {
 
 	ctx := trace.Generate(context.Background())
 
+	defaultOpts := []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
+		WithFileService(fs), WithTable(dummyTable),
+		WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)}
+
 	type args struct {
 		ctx  context.Context
 		opts []MergeOption
+		// extension
+		logsExt, mergedExt string
 	}
 	tests := []struct {
 		name string
@@ -238,12 +244,12 @@ func TestNewMerge(t *testing.T) {
 		want *Merge
 	}{
 		{
-			name: "normal",
+			name: "csv",
 			args: args{
-				ctx: ctx,
-				opts: []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
-					WithFileService(fs), WithTable(dummyTable),
-					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)},
+				ctx:       ctx,
+				opts:      defaultOpts,
+				logsExt:   table.CsvExtension,
+				mergedExt: table.CsvExtension,
 			},
 			want: nil,
 		},
@@ -278,6 +284,7 @@ func TestNewMerge(t *testing.T) {
 			require.Equal(t, 1, len(files))
 			t.Logf("%v", files)
 
+			//r, err = newETLReader(tt.args.ctx, m.Table, m.FS, path.FilePath, path.FileSize, m.mp)
 			r, err := NewCSVReader(tt.args.ctx, fs, files[0])
 			require.Nil(t, err)
 			lines := 0
