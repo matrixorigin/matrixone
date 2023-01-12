@@ -178,7 +178,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			mock := plan2.NewMockOptimizer()
+			mock := plan2.NewMockOptimizer(false)
 			logicPlan, err := buildOneStmt(mock, t, c.sql)
 			if err != nil {
 				t.Fatalf("%+v", err)
@@ -382,7 +382,7 @@ func TestJoinQueryPrune(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			mock := plan2.NewMockOptimizer()
+			mock := plan2.NewMockOptimizer(false)
 			logicPlan, err := buildOneStmt(mock, t, c.sql)
 			if err != nil {
 				t.Fatalf("%+v", err)
@@ -453,7 +453,7 @@ func TestNestedQueryPrune(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			mock := plan2.NewMockOptimizer()
+			mock := plan2.NewMockOptimizer(false)
 			logicPlan, err := buildOneStmt(mock, t, c.sql)
 			if err != nil {
 				t.Fatalf("%+v", err)
@@ -540,7 +540,7 @@ func TestDerivedTableQueryPrune(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			mock := plan2.NewMockOptimizer()
+			mock := plan2.NewMockOptimizer(false)
 			logicPlan, err := buildOneStmt(mock, t, c.sql)
 			if err != nil {
 				t.Fatalf("%+v", err)

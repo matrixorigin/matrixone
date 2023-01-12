@@ -1858,7 +1858,9 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *p
 	if err != nil {
 		return nil, nil
 	}
-	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(ctx, txn, tableId)
+
+	e := tcc.GetTxnHandler().GetStorage()
+	dbName, tableName, table, err := e.GetRelationById(ctx, txn, tableId)
 	if err != nil {
 		return nil, nil
 	}
