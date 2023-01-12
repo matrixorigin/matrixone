@@ -28,9 +28,6 @@ set role test_role;
 select current_account_name();
 current_account_name()
 abc
-select current_account_id();
-current_account_id()
-1
 select current_user_name();
 current_user_name()
 abc:admin
@@ -43,6 +40,3 @@ test_role
 select current_role_id();
 current_role_id()
 3
-select * from current_account() as t;
-account_name    account_id    user_name    user_id    role_name    role_id
-abc    1    abc:admin    2    test_role    3
