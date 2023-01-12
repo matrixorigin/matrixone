@@ -166,12 +166,6 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	// Because the outside may hold this writer
 	// After WriteEnd is called, no more data can be written
 	w.buffer = nil
-
-	w.object.metaLoc = Extent{
-		offset:     w.blocks[0].GetExtent().Offset(),
-		length:     uint32(metaLen),
-		originSize: uint32(metaLen),
-	}
 	return w.blocks, err
 }
 
