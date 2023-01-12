@@ -504,9 +504,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.PipelineId = ctx.id
 	p.IsEnd = s.IsEnd
 	p.IsJoin = s.IsJoin
-	if len(s.UuidToRegIdx) != 0 {
-		p.UuidsToRegIdx = convertScopeUuids(s)
-	}
+	p.UuidsToRegIdx = convertScopeUuids(s)
 
 	// Plan
 	if ctxId == 1 {
@@ -592,26 +590,26 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 
 func convertPipelineUuid(p *pipeline.Pipeline) ([]UuidToRegIdx, error) {
 	ret := make([]UuidToRegIdx, len(p.UuidsToRegIdx))
-	for _, u := range p.UuidsToRegIdx {
+	for i, u := range p.UuidsToRegIdx {
 		uid, err := uuid.FromBytes(u.GetUuid())
 		if err != nil {
 			return nil, moerr.NewInvalidInputNoCtx("decode scope failed: %s", err)
 		}
-		ret = append(ret, UuidToRegIdx{
+		ret[i] = UuidToRegIdx{
 			Uuid: uid,
 			Idx:  int(u.GetIdx()),
-		})
+		}
 	}
 	return ret, nil
 }
 
 func convertScopeUuids(s *Scope) (ret []*pipeline.UuidToRegIdx) {
 	ret = make([]*pipeline.UuidToRegIdx, len(s.UuidToRegIdx))
-	for _, u := range s.UuidToRegIdx {
-		ret = append(ret, &pipeline.UuidToRegIdx{
+	for i, u := range s.UuidToRegIdx {
+		ret[i] = &pipeline.UuidToRegIdx{
 			Uuid: u.Uuid[:],
 			Idx:  int32(u.Idx),
-		})
+		}
 	}
 	return ret
 }
