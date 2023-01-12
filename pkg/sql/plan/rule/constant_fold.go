@@ -104,7 +104,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	if err != nil {
 		return e
 	}
-	c := GetConstantValue(vec)
+	c := GetConstantValue(vec, false)
 	if c == nil {
 		return e
 	}
@@ -172,7 +172,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	return e
 }
 
-func GetConstantValue(vec *vector.Vector) *plan.Const {
+func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
 	if nulls.Any(vec.Nsp) {
 		return &plan.Const{Isnull: true}
 	}
@@ -274,20 +274,21 @@ func GetConstantValue(vec *vector.Vector) *plan.Const {
 			},
 		}
 	case types.T_decimal64:
+		if !transAll {
+			return nil
+		}
 		return &plan.Const{
 			Value: &plan.Const_Decimal64Val{
-				Decimal64Val: &plan.Decimal64{A: vector.MustTCols[int64](vec)[0]},
+				Decimal64Val: &plan.Decimal64{A: types.Decimal64ToInt64Raw(vector.MustTCols[types.Decimal64](vec)[0])},
 			},
 		}
 	case types.T_decimal128:
-		return &plan.Const{
-			Value: &plan.Const_Decimal128Val{
-				Decimal128Val: &plan.Decimal128{
-					A: vector.MustTCols[int64](vec)[0],
-					B: vector.MustTCols[int64](vec)[1],
-				},
-			},
+		if !transAll {
+			return nil
 		}
+		decimalValue := &plan.Decimal128{}
+		decimalValue.A, decimalValue.B = types.Decimal128ToInt64Raw(vector.MustTCols[types.Decimal128](vec)[0])
+		return &plan.Const{Value: &plan.Const_Decimal128Val{Decimal128Val: decimalValue}}
 	default:
 		return nil
 	}
