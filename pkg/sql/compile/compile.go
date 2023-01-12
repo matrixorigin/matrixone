@@ -62,6 +62,7 @@ func New(addr, db string, sql string, uid string, ctx context.Context,
 		sql:  sql,
 		proc: proc,
 		stmt: stmt,
+		addr: addr,
 	}
 }
 
@@ -690,6 +691,7 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, err
 
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 	nodes, err := c.generateNodes(n)
+	//fmt.Printf("[compile table scan] node nums = %d \n", len(nodes))
 	if err != nil {
 		return nil, err
 	}
@@ -1346,7 +1348,7 @@ func (c *Compile) newShuffleJoinScopeList(ss []*Scope, children []*Scope) []*Sco
 	mergeChildren := c.newMergeScope(children)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructShuffleJoinDispatch(1, rs),
+		Arg: constructShuffleJoinDispatch(1, rs, c.addr),
 	})
 	rs[0].PreScopes = append(rs[0].PreScopes, mergeChildren)
 
@@ -1493,6 +1495,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 		return nodes, nil
 	}
+	fmt.Printf("ranges's length = %d, cnList's length = %d\n", len(ranges), len(c.cnList))
+	// ranges[0] means memtable
 	if len(ranges[0]) == 0 {
 		if c.info.Typ == plan2.ExecTypeTP {
 			nodes = append(nodes, engine.Node{

@@ -328,12 +328,12 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		if regMap != nil {
 			sourceArg := sourceIns.Arg.(*dispatch.Argument)
 			arg := &dispatch.Argument{
-				All:  sourceArg.All,
-				Regs: make([]*process.WaitRegister, len(sourceArg.Regs)),
+				All:       sourceArg.All,
+				LocalRegs: make([]*process.WaitRegister, len(sourceArg.LocalRegs)),
 			}
-			for j := range arg.Regs {
-				sourceReg := sourceArg.Regs[j]
-				if arg.Regs[j], ok = regMap[sourceReg]; !ok {
+			for j := range arg.LocalRegs {
+				sourceReg := sourceArg.LocalRegs[j]
+				if arg.LocalRegs[j], ok = regMap[sourceReg]; !ok {
 					panic("nonexistent wait register")
 				}
 			}
@@ -866,31 +866,32 @@ func constructDispatch(all bool, regs []*process.WaitRegister) *dispatch.Argumen
 	arg := new(dispatch.Argument)
 	arg.All = all
 	arg.CrossCN = false
-	arg.Regs = regs
+	arg.LocalRegs = regs
 	return arg
 }
 
 // ShuffleJoinDispatch is a cross-cn dispath
 // and it will send same batch to all register
-func constructShuffleJoinDispatch(idx int, ss []*Scope) *dispatch.Argument {
+func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *dispatch.Argument {
+	fmt.Printf("[constructShuffleJoinDispatch] currentCNAddr = %s\n", currentCNAddr)
 	arg := new(dispatch.Argument)
 	arg.All = true
 	arg.CrossCN = true
 
 	scopeLen := len(ss)
 	arg.RemoteRegs = make([]colexec.WrapperNode, 0, scopeLen)
-	arg.Regs = make([]*process.WaitRegister, 0, scopeLen)
+	arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
 
 	for i, s := range ss {
 		if s.IsEnd {
 			fmt.Printf("s[%d] IsEnd = true, continue ...\n", i)
 			continue
 		}
-		if len(s.NodeInfo.Addr) == 0 {
+		if len(s.NodeInfo.Addr) == 0 || s.NodeInfo.Addr == currentCNAddr {
 			fmt.Printf("s[%d] is local\n", i)
 			// Local reg.
 			// Put them into arg.Regs
-			arg.Regs = append(arg.Regs, s.Proc.Reg.MergeReceivers[idx])
+			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 		} else {
 			fmt.Printf("s[%d] is remote\n", i)
 			// Remote reg.

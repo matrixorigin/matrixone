@@ -57,7 +57,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	}
 
 	if ap.CrossCN {
-		if err := ap.SendFunc(ap.ctr.streams, bat, ap.Regs, proc); err != nil {
+		if err := ap.SendFunc(ap.ctr.streams, bat, ap.LocalRegs, proc); err != nil {
 			return false, err
 		}
 		return false, nil
@@ -77,13 +77,13 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 	// send to each one
 	if ap.All {
-		refCountAdd := int64(len(ap.Regs) - 1)
+		refCountAdd := int64(len(ap.LocalRegs) - 1)
 		atomic.AddInt64(&bat.Cnt, refCountAdd)
 		if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
 			jm.IncRef(refCountAdd)
 		}
 
-		for _, reg := range ap.Regs {
+		for _, reg := range ap.LocalRegs {
 			select {
 			case <-reg.Ctx.Done():
 				return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
@@ -93,11 +93,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return false, nil
 	}
 	// send to any one
-	for len(ap.Regs) > 0 {
-		if ap.ctr.i == len(ap.Regs) {
+	for len(ap.LocalRegs) > 0 {
+		if ap.ctr.i == len(ap.LocalRegs) {
 			ap.ctr.i = 0
 		}
-		reg := ap.Regs[ap.ctr.i]
+		reg := ap.LocalRegs[ap.ctr.i]
 		select {
 		case <-reg.Ctx.Done():
 			for len(reg.Ch) > 0 { // free memory
@@ -107,8 +107,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				}
 				bat.Clean(proc.Mp())
 			}
-			ap.Regs = append(ap.Regs[:ap.ctr.i], ap.Regs[ap.ctr.i+1:]...)
-			if ap.ctr.i >= len(ap.Regs) {
+			ap.LocalRegs = append(ap.LocalRegs[:ap.ctr.i], ap.LocalRegs[ap.ctr.i+1:]...)
+			if ap.ctr.i >= len(ap.LocalRegs) {
 				ap.ctr.i = 0
 			}
 		case reg.Ch <- bat:

@@ -137,6 +137,9 @@ type Server struct {
 	sync.Mutex
 	id uint64
 	mp map[uint64]*process.WaitRegister // k = id, v = reg
+
+	uuidMap map[uuid.UUID]*process.WaitRegister
+
 	// chanMp will be used in two ways
 	// 1. uuid --> WaitRegister, we need to know the batch which is recieved from
 	// remote CN should be filled into which chan

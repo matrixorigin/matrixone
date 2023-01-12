@@ -185,11 +185,11 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 			if id == vm.Dispatch {
 				arg := instruction.Arg.(*dispatch.Argument)
 				chs := ""
-				for i := range arg.Regs {
+				for i := range arg.LocalRegs {
 					if i != 0 {
 						chs += ", "
 					}
-					if receiverId, okk := mp[arg.Regs[i]]; okk {
+					if receiverId, okk := mp[arg.LocalRegs[i]]; okk {
 						chs += fmt.Sprintf("%d", receiverId)
 					} else {
 						chs += "unknown"

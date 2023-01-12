@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -143,8 +144,20 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		var v any
 		var dataBuffer []byte
 		var ok bool
-		fmt.Printf("get a batch message from uuid - %s\n", string(m.GetUuid()))
+		fmt.Printf("get a batch message for uuid - %s\n", string(m.GetUuid()))
 		for {
+			if srv == nil {
+				fmt.Printf("[handle pipeline] srv = nil !!!!!!")
+			}
+			if srv.chanBufMp == nil {
+				fmt.Printf("[handle pipeline] warning!!! srv.chanBufM is nil\n")
+				srv.Lock()
+				if srv.chanBufMp == nil {
+					fmt.Printf("[handle pipeline] srv.chanBufM is still nil, new a sync.Map for it.\n")
+					srv.chanBufMp = new(sync.Map)
+				}
+				srv.Unlock()
+			}
 			v, ok = srv.chanBufMp.Load(m.GetUuid())
 			if !ok {
 				runtime.Gosched()
@@ -152,6 +165,7 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 				break
 			}
 		}
+
 		if dataBuffer, ok := srv.chanBufMp.Load(m.GetID()); !ok {
 			srv.chanBufMp.Store(m.GetID(), dataBuffer)
 		}
@@ -490,7 +504,10 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.PipelineId = ctx.id
 	p.IsEnd = s.IsEnd
 	p.IsJoin = s.IsJoin
-	p.UuidsToRegIdx = convertScopeUuids(s)
+	if len(s.UuidToRegIdx) != 0 {
+		p.UuidsToRegIdx = convertScopeUuids(s)
+	}
+
 	// Plan
 	if ctxId == 1 {
 		// encode and decode cost is too large for it.
@@ -650,7 +667,17 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	}
 	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
 	for _, u := range s.UuidToRegIdx {
+		if srv.chanBufMp == nil {
+			fmt.Printf("[decode scope] swarning!!! srv.chanBufM is nil\n")
+			srv.Lock()
+			if srv.chanBufMp == nil {
+				fmt.Printf("[decode scope] srv.chanBufM is still nil, new a sycn.Map for it.\n")
+				srv.chanBufMp = new(sync.Map)
+			}
+			srv.Unlock()
+		}
 		v, ok := srv.chanBufMp.Load(u.Uuid)
+
 		if !ok {
 			srv.chanBufMp.Store(u.Uuid, s.Proc.Reg.MergeReceivers[u.Idx])
 		} else {
@@ -658,6 +685,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			wg.Ctx = s.Proc.Ctx
 			srv.chanBufMp.Store(u.Uuid, wg)
 		}
+		fmt.Printf("uuid 2 register mapping success! uuid = %s\n", string(u.Uuid[:]))
 	}
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
@@ -716,13 +744,14 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{
-			All: t.All,
+			All:     t.All,
+			CrossCn: t.CrossCN,
 		}
-		in.Dispatch.Connector = make([]*pipeline.Connector, len(t.Regs))
-		for i := range t.Regs {
-			idx, ctx0 := ctx.root.findRegister(t.Regs[i])
+		in.Dispatch.Connector = make([]*pipeline.Connector, len(t.LocalRegs))
+		for i := range t.LocalRegs {
+			idx, ctx0 := ctx.root.findRegister(t.LocalRegs[i])
 			if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
-				id := srv.RegistConnector(t.Regs[i])
+				id := srv.RegistConnector(t.LocalRegs[i])
 				if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
 					return ctxId, nil, err
 				}
@@ -730,6 +759,20 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			in.Dispatch.Connector[i] = &pipeline.Connector{
 				ConnectorIndex: idx,
 				PipelineId:     ctx0.id,
+			}
+		}
+		if t.CrossCN {
+			in.Dispatch.RemoteConnector = make([]*pipeline.WrapNodes, len(t.RemoteRegs))
+			for i, r := range t.RemoteRegs {
+				udata := make([][]byte, len(r.Uuids))
+				for j, u := range r.Uuids {
+					udata[j] = u[:]
+				}
+				wn := &pipeline.WrapNodes{
+					NodeAddr: r.NodeAddr,
+					Uuids:    udata,
+				}
+				in.Dispatch.RemoteConnector[i] = wn
 			}
 		}
 	case *group.Argument:
@@ -955,9 +998,29 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		for i, cp := range t.Connector {
 			regs[i] = ctx.root.getRegister(cp.PipelineId, cp.ConnectorIndex)
 		}
+		rrs := make([]colexec.WrapperNode, 0)
+		if t.CrossCn {
+			for _, rc := range t.RemoteConnector {
+				n := colexec.WrapperNode{
+					NodeAddr: rc.NodeAddr,
+					Uuids:    make([]uuid.UUID, len(rc.Uuids)),
+				}
+				for j, u := range rc.Uuids {
+					uuid, err := uuid.FromBytes(u)
+					if err != nil {
+						return v, err
+					}
+					n.Uuids[j] = uuid
+				}
+				rrs = append(rrs, n)
+			}
+		}
+
 		v.Arg = &dispatch.Argument{
-			Regs: regs,
-			All:  t.All,
+			All:        t.All,
+			CrossCN:    t.CrossCn,
+			LocalRegs:  regs,
+			RemoteRegs: rrs,
 		}
 	case vm.Group:
 		t := opr.GetAgg()
@@ -1164,6 +1227,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 }
 
 // newCompile generates a new compile for remote run.
+// TODO: give addr to compile?
 func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelper, mHelper *messageHandleHelper, cs morpc.ClientSession) *Compile {
 	// compile is almost surely wanting a small or mid pool.  Later.
 	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)

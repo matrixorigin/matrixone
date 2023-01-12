@@ -18,6 +18,8 @@ import (
 	"context"
 	"sync"
 
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -49,6 +51,36 @@ func (srv *Server) RegistConnector(reg *process.WaitRegister) uint64 {
 	srv.mp[srv.id] = reg
 	defer func() { srv.id++ }()
 	return srv.id
+}
+
+func (srv *Server) GetRegFromUuidMap(u uuid.UUID) (*process.WaitRegister, bool) {
+	srv.Lock()
+	defer srv.Unlock()
+	defer func() { delete(srv.uuidMap, u) }()
+	r, ok := srv.uuidMap[u]
+	if !ok {
+		return nil, false
+	}
+	return r, true
+}
+
+func (srv *Server) PutRegFromUuidMap(u uuid.UUID, reg *process.WaitRegister) error {
+	srv.Lock()
+	defer srv.Unlock()
+	if r, ok := srv.uuidMap[u]; ok {
+		if reg != r {
+			return moerr.NewInternalErrorNoCtx("PutRegFromUuidMap error! the uuid has exsit with different reg!")
+		}
+		return nil
+	}
+	srv.uuidMap[u] = reg
+	return nil
+}
+
+func (srv *Server) UpdateRegFromUuidMap(u uuid.UUID, reg *process.WaitRegister) {
+	srv.Lock()
+	defer srv.Unlock()
+	srv.uuidMap[u] = reg
 }
 
 func (srv *Server) HandleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
