@@ -16,6 +16,7 @@ package minus
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -61,6 +62,9 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 				arg.Free(proc, true)
 				return false, err
 			}
+			if arg.ctr.hashTable != nil {
+				analyze.Alloc(arg.ctr.hashTable.Size())
+			}
 			arg.ctr.state = probingHashMap
 
 		case probingHashMap:
@@ -92,7 +96,9 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 // buildHashTable use all batches from proc.Reg.MergeReceiver[index] to build the hash map.
 func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze, index int, isFirst bool) error {
 	for {
+		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[index].Ch
+		ana.WaitStop(start)
 		// the last batch of pipeline.
 		if bat == nil {
 			break
@@ -130,7 +136,10 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 	restoreInserted := make([]uint8, hashmap.UnitLimit)
 
 	for {
+		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[index].Ch
+		ana.WaitStop(start)
+
 		// the last batch of block.
 		if bat == nil {
 			return true, nil

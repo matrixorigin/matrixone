@@ -54,48 +54,24 @@ message TableID {
     uint64 partition_id = 3;
 }
 
-// CN pull the tail of redo logs from DN.
+// CN pull the log tail of table from DN.
 message SyncLogTailReq {
-    //timestamp.Timestamp checkpoint_ts = 1;
     timestamp.Timestamp cn_have = 1;
     timestamp.Timestamp cn_want = 2;
     TableID   table = 3;
 };
 
 message SyncLogTailResp {
-  // location of catalog or metadata checkpoint for a table.
-  //TODO:: how to get checkpoint on S3 by the ckp_location ,pls ref to ...
+  // ckp_location is a checkpoint location list.
+  // How to get checkpoint data on S3 by the ckp_location ,
+  // pls ref to disttae/logtail.go/consumeLogTail function.
   string     ckp_location = 1;
-  // log tail for a table
+  // commands is log tail for a system or user table,
+  // pls ref to tae/logtail/handle.go/HandleSyncLogTailReq function.
   repeated Entry commands = 2;
-
-  //// Append batch of data into table : 
-  //      Entry {
-  //          entry_type = Insert
-  //          table_id =  tid
-  //          database_id = dbId
-  //          table_name =  xxx
-  //          database_name = xxx
-  //          file_name = "" 
-  //          block_id = 0
-  //          bat.attrs = {"rowid", "commit timestamp", "primary column value",  "column1 value", ...}
-  //      }
-
-  //// delete a batch of data from a block : 
-  //      Entry {
-  //          entry_type = Delte
-  //          table_id =  tid
-  //          database_id = dbId
-  //          table_name =  xxx
-  //          database_name = xxx
-  //          file_name = "" 
-  //         // transient block id when bulk loading.
-  //          block_id = 0
-  //          bat.attrs = {"rowid", "commit timestamp"}
-  //      }
-
 };
 
+//How to parse and handle PrecommiWriteCmd , pls ref to tae/rpc/handle.go/HandlePreCommit function
 message PrecommitWriteCmd {
     uint32 user_id = 1;
     uint32 role_id = 2;
@@ -112,8 +88,7 @@ message PrecommitWriteCmd {
 //          table_name = mo_database
 //          database_name = mo_catalog
 //          file_name = "" 
-//          block_id = 0
-//          bat = "test, 0, ..." 
+//          bat = "test, 0, ..."
 //      }
 // drop database test:
 //      Entry {
@@ -123,8 +98,7 @@ message PrecommitWriteCmd {
 //          table_name = mo_database
 //          database_name = mo_catalog
 //          file_name = "" 
-//          block_id = 0
-//          bat= "test, 0, ..." 
+//          bat= "test, 0, ..."
 //      }
 
 // create a user table: 
@@ -136,7 +110,6 @@ message PrecommitWriteCmd {
 //          table_name =  mo_tables
 //          database_name = mo_catalog
 //          file_name = "" 
-//          block_id = 0
 //          bat.attrs = {"relid", "relname", "reldatabase", ...}
 //      }
 
@@ -149,7 +122,6 @@ message PrecommitWriteCmd {
 //          table_name =  mo_tables
 //          database_name = mo_catalog
 //          file_name = "" 
-//          block_id = 0
 //          bat.attrs = {"relid", "relname",...}
 //      }
 
@@ -161,13 +133,29 @@ message PrecommitWriteCmd {
 //          database_id = dbId
 //          table_name =  xxx
 //          database_name = xxx
-//          file_name = "s3 file name" 
-//          //transient block id;
-//          block_id = "xxx" 
-
-//          //block meta info and colunm meta info
-//          bat.attrs = {"clounm index", "min", "max", "bf location", "data location",...}
+//          // one S3 object file can hold many blocks.
+//          file_name = "s3 file name"
+//
+//          //  bat holds meta locations for many blocks.
+//          //  "meta_loc" : the location of block data which contains BF and ZM index and be sorted by primary key.
+//          bat.attrs = {"meta_loc"}
 //      }
+
+// deletes/updates involves many rows need to write S3.
+//      Entry {
+//          entry_type = Delete
+//          table_id = tid
+//          database_id = dbId
+//          table_name =  xxx
+//          database_name = xxx
+//
+//          // one S3 object file can contains many blocks
+//          file_name = "s3 file name"
+
+//          // "delta_loc" : the location of deleted row-ids for a block
+//          bat.attrs = {"delta_loc"}
+//      }
+
 
 //  DML:
 // append a batch of data into table;
@@ -178,20 +166,19 @@ message PrecommitWriteCmd {
     //          table_name =  xxx
     //          database_name = xxx
     //          file_name = "" 
-    //          block_id = 0
     //          bat.attrs = {"primary column value",  "column1 value", ...}
     //      }
 
+
 //  delete batch of data from table;
 //            Entry {
-    //          entry_type = Insert
+    //          entry_type = Delete
     //          table_id =  tid
     //          database_id = dbId
     //          table_name =  xxx
     //          database_name = xxx
-    //          file_name = "" 
-    //          block_id = 0
-    //          bat.attrs = {"rowid", "primary column value",  "column1 value", ...}
+    //          file_name = ""
+    //          bat.attrs = {"rowid"}
     //      }
 
 
@@ -207,12 +194,12 @@ message Entry {
     string    table_name = 4;
     string    database_name = 5;
     string    file_name = 6;
-    uint64    block_id = 7;
     Batch     bat = 8;
 };
 
-// Checkpint is a snapshot at a timestamp for catalog and block meta.
-// it contains CatalogCkp and MetadataCkp.
+// There are two kinds of checkpoint: delta checkpoint and base checkpoint,
+// base checkpoint is a snapshot at a timestamp for catalog and block meta.
+// delta checkpoint is a mini checkpoint represents changes during a period.
 
 // CatalogCkp contains information about database and tables in the system,and
 // MetadataCkp contains information about blocks.
@@ -247,49 +234,3 @@ message MetadataCkp {
     Batch      bat = 3;
 };
 
-// block meta data :
-// type Block struct {
-//    ID                    uint64
-//    SegmentID             uint64
-//    TableID               uint64
-//    DbID                  uint64
-//    CreatedAt, DeletedAt  timestamp.Timestamp
-//    MetaLoc points to BlockMetadata below; Deltaloc points to DeleteInfo below.
-//    TODO::How to get the detailed meta data for a block by MetaLoc and DeltaLoc? pls ref to ...
-//    MetaLoc, DeltaLoc     string
-//    StartTS, PrepareTS    timestamp.Timestamp
-//    CommitTS             timestamp.Timestamp
-//    Aborted               bool
-//    LogIndex              []byte
-//    Flag                  uint8
-//};
-
-// BlockMetadata is a detailed meta data for a block.
-//type BlockMetadata struct {
-	//header  *BlockHeader
-	//columns []*ColumnMeta
-//}
-
-//type ColumnMeta struct {
-	//typ         uint8
-	//idx         uint16
-	//alg         uint8
-	//location    *Extent
-	//zoneMap     *index.ZoneMap
-	//bloomFilter *Extent
-	//checksum    uint32
-//}
-
-//type BlockHeader struct {
-	//tableId     uint64
-	//segmentId   uint64
-	//blockId     uint64
-	//columnCount uint16
-	//checksum    uint32
-//}
-
-//Deletes info for rows 
-// bat.attrs = {"rowid", "DeletedAt",...}
-// type DeleteInfo struct {
-//      bat batch.Batch
-//};

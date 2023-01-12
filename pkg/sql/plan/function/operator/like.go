@@ -64,7 +64,7 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	case !lv.IsScalar() && !rv.IsScalar():
 		var nsp *nulls.Nulls
 		if nulls.Any(rv.Nsp) && nulls.Any(lv.Nsp) {
-			nsp = lv.Nsp.Or(rv.Nsp)
+			nulls.Or(lv.Nsp, rv.Nsp, nsp)
 			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, nsp, rs)
 			if err != nil {
 				return nil, err
