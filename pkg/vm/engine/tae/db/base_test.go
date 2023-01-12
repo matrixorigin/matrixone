@@ -463,6 +463,21 @@ func forEachBlock(rel handle.Relation, fn func(blk handle.Block) error) {
 	}
 }
 
+func forEachSegment(rel handle.Relation, fn func(seg handle.Segment) error) {
+	it := rel.MakeSegmentIt()
+	var err error
+	for it.Valid() {
+		if err = fn(it.GetSegment()); err != nil {
+			if errors.Is(err, handle.ErrIteratorEnd) {
+				return
+			} else {
+				panic(err)
+			}
+		}
+		it.Next()
+	}
+}
+
 func appendFailClosure(t *testing.T, data *containers.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
 	return func() {
 		if wg != nil {

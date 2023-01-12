@@ -51,16 +51,16 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//dir := testutils.GetDefaultTestPath(ModuleName, t)
 	dir := "/tmp/s3"
 	dir = path.Join(dir, "/local")
+	//if dir exists, remove it.
+	os.RemoveAll(dir)
 	c := fileservice.Config{
 		Name:    defines.LocalFileServiceName,
 		Backend: "DISK",
 		DataDir: dir,
 	}
+	//create dir;
 	service, err := fileservice.NewFileService(c)
 	assert.Nil(t, err)
-	defer func() {
-		os.RemoveAll(dir)
-	}()
 	opts.Fs = service
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
