@@ -501,8 +501,8 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 					if err != nil {
 						return nil, err
 					}
-					oldCt.Cts = append(oldCt.Cts, &engine.SecondaryIndexDef{
-						SecondaryIndex: string(b),
+					oldCt.Cts = append(oldCt.Cts, &engine.UniqueIndexDef{
+						UniqueIndex: string(b),
 					})
 					break
 				}
