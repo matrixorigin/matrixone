@@ -110,9 +110,33 @@ func (c *LogtailClient) Unsubscribe(
 // 3. response for unsubscription: *LogtailResponse.GetUnsubscribeResponse() != nil
 // 3. response for additional logtail: *LogtailResponse.GetUpdateResponse() != nil
 func (c *LogtailClient) Receive() (*LogtailResponse, error) {
-	message, ok := <-c.recvChan
-	if !ok || message == nil {
-		return nil, moerr.NewStreamClosedNoCtx()
+	recvFunc := func() (*LogtailResponseSegment, error) {
+		message, ok := <-c.recvChan
+		if !ok || message == nil {
+			return nil, moerr.NewStreamClosedNoCtx()
+		}
+		return message.(*LogtailResponseSegment), nil
 	}
-	return message.(*LogtailResponse), nil
+
+	prev, err := recvFunc()
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 0, prev.MessageSize)
+	buf = AppendChunk(buf, prev.GetPayload())
+
+	for prev.Sequence < prev.MaxSequence {
+		segment, err := recvFunc()
+		if err != nil {
+			return nil, err
+		}
+		buf = AppendChunk(buf, segment.GetPayload())
+		prev = segment
+	}
+
+	resp := &LogtailResponse{}
+	if err := resp.Unmarshal(buf); err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
