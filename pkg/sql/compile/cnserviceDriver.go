@@ -1335,8 +1335,8 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 		S3IOByte:         info.S3IOByte,
 		S3IOCount:        info.S3IOCount,
 		NetworkIO:        info.NetworkIO,
-		ScanTime: info.ScanTime,
-		InsertTime: info.InsertTime,
+		ScanTime:         info.ScanTime,
+		InsertTime:       info.InsertTime,
 	}
 }
 

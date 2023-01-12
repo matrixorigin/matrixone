@@ -1167,8 +1167,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemSystemEnumType("transaction_isolation", "SNAPSHOT-ISOLATION"),
-		Default:           "SNAPSHOT-ISOLATION",
+		Type:              InitSystemSystemEnumType("transaction_isolation", "READ-UNCOMMITTED", "READ-COMMITTED", "REPEATABLE-READ", "SERIALIZABLE"),
+		Default:           "REPEATABLE-READ",
 	},
 	"wait_timeout": {
 		Name:              "wait_timeout",
