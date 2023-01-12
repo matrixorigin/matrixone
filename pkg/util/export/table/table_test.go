@@ -144,7 +144,7 @@ func TestRow_ToStrings(t *testing.T) {
 	}{
 		{
 			name:   "nil",
-			fields: fields{Table: dummyTable, prepare: func(*Row) {}},
+			fields: fields{Table: dummyTable, prepare: func(r *Row) { r.Reset() }},
 			want:   []string{"", "0", "0.0"},
 		},
 		{
