@@ -18,39 +18,37 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
-
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const MaxPrepareNumberInOneSession = 64
@@ -187,7 +185,7 @@ type Session struct {
 
 	isBackgroundSession bool
 
-	tStmt *trace.StatementInfo
+	tStmt *motrace.StatementInfo
 
 	ast tree.Statement
 
@@ -196,6 +194,14 @@ type Session struct {
 	QueryId []string
 
 	blockIdx int
+
+	p *plan.Plan
+
+	limitResultSize float64 // MB
+
+	curResultSize float64 // MB
+
+	planCache *planCache
 }
 
 const saveQueryIdCnt = 10
@@ -264,8 +270,9 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
 		},
-		cache:    &privilegeCache{},
-		blockIdx: 0,
+		cache:     &privilegeCache{},
+		blockIdx:  0,
+		planCache: newPlanCache(100),
 	}
 	if flag {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
@@ -309,7 +316,7 @@ type BackgroundSession struct {
 func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *BackgroundSession {
 	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars, false)
 	ses.SetOutputCallback(fakeDataSetFetcher)
-	if stmt := trace.StatementFromContext(ctx); stmt != nil {
+	if stmt := motrace.StatementFromContext(ctx); stmt != nil {
 		logutil.Infof("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
 	}
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(ctx)
@@ -341,7 +348,7 @@ func (bgs *BackgroundSession) Close() {
 	bgs = nil
 }
 
-func (ses *Session) GetBlockIdx() int {
+func (ses *Session) GetIncBlockIdx() int {
 	ses.blockIdx++
 	return ses.blockIdx
 }
@@ -360,6 +367,30 @@ func (ses *Session) IsBackgroundSession() bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.isBackgroundSession
+}
+
+func (ses *Session) cachePlan(sql string, stmts []*tree.Statement, plans []*plan.Plan) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.planCache.cache(sql, stmts, plans)
+}
+
+func (ses *Session) getCachedPlan(sql string) *cachedPlan {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.planCache.get(sql)
+}
+
+func (ses *Session) isCached(sql string) bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.planCache.isCached(sql)
+}
+
+func (ses *Session) cleanCache() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.planCache.clean()
 }
 
 func (ses *Session) setSkipCheckPrivilege(b bool) {
@@ -1426,7 +1457,16 @@ func (th *TxnHandler) TxnClientNew() error {
 	if th.txnClient == nil {
 		panic("must set txn client")
 	}
-	th.txn, err = th.txnClient.New()
+
+	var opts []client.TxnOption
+	rt := moruntime.ProcessLevelRuntime()
+	if rt != nil {
+		if v, ok := rt.GetGlobalVariables(moruntime.TxnOptions); ok {
+			opts = v.([]client.TxnOption)
+		}
+	}
+
+	th.txn, err = th.txnClient.New(opts...)
 	if err != nil {
 		return err
 	}
@@ -1844,6 +1884,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		return nil, nil
 	}
 
+	var clusterByDef *plan2.ClusterByDef
 	var cols []*plan2.ColDef
 	var defs []*plan2.TableDefType
 	var properties []*plan2.Property
@@ -1876,6 +1917,14 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 			if isCPkey {
 				CompositePkey = col
 				continue
+			}
+			if attr.Attr.ClusterBy {
+				clusterByDef = &plan.ClusterByDef{
+					Name: attr.Attr.Name,
+				}
+				if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
+					continue
+				}
 			}
 			cols = append(cols, col)
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
@@ -1990,6 +2039,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		ViewSql:       viewSql,
 		Fkeys:         foreignKeys,
 		RefChildTbls:  refChildTbls,
+		ClusterBy:     clusterByDef,
 	}
 	return obj, tableDef
 }

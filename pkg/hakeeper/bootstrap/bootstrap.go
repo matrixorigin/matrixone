@@ -50,10 +50,11 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 
 	commands := append(logCommands, dnCommands...)
 	for _, command := range commands {
-		runtime.ProcessLevelRuntime().Logger().Info("schedule command generated", zap.String("command", command.LogString()))
+		runtime.ProcessLevelRuntime().SubLogger(runtime.SystemInit).Info("schedule command generated",
+			zap.String("command", command.LogString()))
 	}
 	if len(commands) != 0 {
-		runtime.ProcessLevelRuntime().Logger().Info("bootstrap commands generated")
+		runtime.ProcessLevelRuntime().SubLogger(runtime.SystemInit).Info("schedule command generated")
 	}
 	return commands, nil
 }

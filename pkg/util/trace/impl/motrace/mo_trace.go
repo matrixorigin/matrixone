@@ -19,13 +19,13 @@
 //
 // Modified the behavior and the interface of the step.
 
-package trace
+package motrace
 
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 	"time"
 	"unsafe"
@@ -33,94 +33,54 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
-// TracerConfig is a group of options for a Tracer.
-type TracerConfig struct {
-	Name string
-}
+//nolint:revive // revive complains about stutter of `trace.TraceFlags`.
 
-// TracerOption applies an option to a TracerConfig.
-type TracerOption interface {
-	apply(*TracerConfig)
-}
-
-var _ TracerOption = tracerOptionFunc(nil)
-
-type tracerOptionFunc func(*TracerConfig)
-
-func (f tracerOptionFunc) apply(cfg *TracerConfig) {
-	f(cfg)
-}
-
-const (
-	// FlagsSampled is a bitmask with the sampled bit set. A SpanContext
-	// with the sampling bit set means the span is sampled.
-	FlagsSampled = TraceFlags(0x01)
-)
-
-// TraceFlags contains flags that can be set on a SpanContext.
-type TraceFlags byte //nolint:revive // revive complains about stutter of `trace.TraceFlags`.
-
-// IsSampled returns if the sampling bit is set in the TraceFlags.
-func (tf TraceFlags) IsSampled() bool {
-	return tf&FlagsSampled == FlagsSampled
-}
-
-// WithSampled sets the sampling bit in a new copy of the TraceFlags.
-func (tf TraceFlags) WithSampled(sampled bool) TraceFlags { // nolint:revive  // sampled is not a control flag.
-	if sampled {
-		return tf | FlagsSampled
-	}
-
-	return tf &^ FlagsSampled
-}
-
-// String returns the hex string representation form of TraceFlags.
-func (tf TraceFlags) String() string {
-	return hex.EncodeToString([]byte{byte(tf)}[:])
-}
-
-var _ Tracer = &MOTracer{}
+var _ trace.Tracer = &MOTracer{}
 
 // MOTracer is the creator of Spans.
 type MOTracer struct {
-	TracerConfig
+	trace.TracerConfig
 	provider *MOTracerProvider
 }
 
-func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
+func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanOption) (context.Context, trace.Span) {
 	if !t.provider.IsEnable() {
-		return ctx, noopSpan{}
+		return ctx, trace.NoopSpan{}
 	}
 	span := newMOSpan()
 	span.init(name, opts...)
 	span.tracer = t
 
-	parent := SpanFromContext(ctx)
+	parent := trace.SpanFromContext(ctx)
 	psc := parent.SpanContext()
 
 	if span.NewRoot || psc.IsEmpty() {
 		span.TraceID, span.SpanID = t.provider.idGenerator.NewIDs()
-		span.parent = noopSpan{}
+		span.Parent = trace.NoopSpan{}
 	} else {
 		span.TraceID, span.SpanID, span.Kind = psc.TraceID, t.provider.idGenerator.NewSpanID(), psc.Kind
-		span.parent = parent
+		span.Parent = parent
 	}
 
-	return ContextWithSpan(ctx, span), span
+	return trace.ContextWithSpan(ctx, span), span
 }
 
-func (t *MOTracer) Debug(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
+func (t *MOTracer) Debug(ctx context.Context, name string, opts ...trace.SpanOption) (context.Context, trace.Span) {
 	if !t.provider.debugMode {
-		return ctx, noopSpan{}
+		return ctx, trace.NoopSpan{}
 	}
 	return t.Start(ctx, name, opts...)
 }
 
-var _ Span = (*MOSpan)(nil)
+func (t *MOTracer) IsEnable() bool {
+	return t.provider.IsEnable()
+}
+
+var _ trace.Span = (*MOSpan)(nil)
 
 // MOSpan implement export.IBuffer2SqlItem and export.CsvFields
 type MOSpan struct {
-	SpanConfig
+	trace.SpanConfig
 	Name      bytes.Buffer `json:"name"`
 	StartTime time.Time    `json:"start_time"`
 	EndTime   time.Time    `jons:"end_time"`
@@ -137,11 +97,11 @@ func newMOSpan() *MOSpan {
 	return spanPool.Get().(*MOSpan)
 }
 
-func (s *MOSpan) init(name string, opts ...SpanOption) {
+func (s *MOSpan) init(name string, opts ...trace.SpanOption) {
 	s.Name.WriteString(name)
 	s.StartTime = time.Now()
 	for _, opt := range opts {
-		opt.applySpanStart(&s.SpanConfig)
+		opt.ApplySpanStart(&s.SpanConfig)
 	}
 }
 
@@ -153,7 +113,7 @@ var zeroTime = time.Time{}
 
 func (s *MOSpan) Free() {
 	s.SpanConfig.Reset()
-	s.parent = nil
+	s.Parent = nil
 	s.Name.Reset()
 	s.tracer = nil
 	s.StartTime = zeroTime
@@ -173,7 +133,7 @@ func (s *MOSpan) CsvFields(ctx context.Context, row *table.Row) []string {
 	row.SetColumnVal(spanIDCol, s.SpanID.String())
 	row.SetColumnVal(traceIDCol, s.TraceID.String())
 	row.SetColumnVal(spanKindCol, s.Kind.String())
-	row.SetColumnVal(parentSpanIDCol, s.parent.SpanContext().SpanID.String())
+	row.SetColumnVal(parentSpanIDCol, s.Parent.SpanContext().SpanID.String())
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
 	row.SetColumnVal(spanNameCol, s.Name.String())
@@ -184,9 +144,9 @@ func (s *MOSpan) CsvFields(ctx context.Context, row *table.Row) []string {
 	return row.ToStrings()
 }
 
-func (s *MOSpan) End(options ...SpanEndOption) {
+func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	for _, opt := range options {
-		opt.applySpanEnd(&s.SpanConfig)
+		opt.ApplySpanEnd(&s.SpanConfig)
 	}
 	if s.EndTime.IsZero() {
 		s.EndTime = time.Now()
@@ -196,10 +156,16 @@ func (s *MOSpan) End(options ...SpanEndOption) {
 	}
 }
 
-func (s *MOSpan) SpanContext() SpanContext {
+func (s *MOSpan) SpanContext() trace.SpanContext {
 	return s.SpanConfig.SpanContext
 }
 
-func (s *MOSpan) ParentSpanContext() SpanContext {
-	return s.SpanConfig.parent.SpanContext()
+func (s *MOSpan) ParentSpanContext() trace.SpanContext {
+	return s.SpanConfig.Parent.SpanContext()
+}
+
+const timestampFormatter = "2006-01-02 15:04:05.000000"
+
+func Time2DatetimeString(t time.Time) string {
+	return t.Format(timestampFormatter)
 }

@@ -251,33 +251,6 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 	bindContext := NewBindContext(builder, nil)
 
-	if stmt.ClusterByOption != nil {
-		if util.FindPrimaryKey(createTable.TableDef) {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
-		}
-		if len(stmt.ClusterByOption.ColumnList) > 1 {
-			return nil, moerr.NewNYI(ctx.GetContext(), "cluster by multi columns")
-		}
-		colName := stmt.ClusterByOption.ColumnList[0].Parts[0]
-		var found bool
-		for _, col := range createTable.TableDef.Cols {
-			if col.Name == colName {
-				found = true
-				col.ClusterBy = true
-			}
-		}
-		if !found {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", colName)
-		}
-		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Cb{
-				Cb: &plan.ClusterByDef{
-					Name: colName,
-				},
-			},
-		})
-	}
-
 	// set partition(unsupport now)
 	if stmt.PartitionOption != nil {
 		nodeID := builder.appendNode(&plan.Node{
@@ -454,15 +427,18 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			fkCols := &plan.CreateTable_FkColName{
 				Cols: make([]string, len(def.KeyParts)),
 			}
+			fkColTyp := make(map[int]*plan.Type)
+			fkColName := make(map[int]string)
 			for i, keyPart := range def.KeyParts {
 				getCol := false
 				colName := keyPart.ColName.Parts[0]
-				for idx, col := range createTable.TableDef.Cols {
+				for _, col := range createTable.TableDef.Cols {
 					if col.Name == colName {
-						// for now ColumnId is equal ColumnIndex in creating
-						// if rule change, you need to reset to ColId after created.
-						fkDef.Cols[i] = uint64(idx)
+						// need to reset to ColId after created.
+						fkDef.Cols[i] = 0
 						fkCols.Cols[i] = colName
+						fkColTyp[i] = col.Typ
+						fkColName[i] = colName
 						getCol = true
 						break
 					}
@@ -486,7 +462,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if tableRef == nil {
 				return moerr.NewNoSuchTable(ctx.GetContext(), ctx.DefaultDatabase(), fkTableName)
 			}
-			// TODO check circular reference. need new interface CompilerContext.ResolveByTblId
 
 			fkDef.ForeignTbl = tableRef.TblId
 			columnNames := make(map[string]uint64)
@@ -497,6 +472,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					uniqueColumn[col.ColId] = true
 				}
 			}
+
 			/// now tableRef.Indices is empty, you can not test it
 			for _, index := range tableRef.Indices {
 				if index.Unique {
@@ -513,6 +489,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				for _, col := range tableRef.Cols {
 					if col.Name == colName {
 						if _, ok := uniqueColumn[col.ColId]; ok {
+							// check column type
+							if col.Typ.Id != fkColTyp[i].Id {
+								return moerr.NewInternalError(ctx.GetContext(), "type of reference column '%v' is not match for column '%v'", colName, fkColName[i])
+							}
 							fkDef.ForeignCols[i] = col.ColId
 							getCol = true
 						} else {
@@ -611,6 +591,53 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					},
 				},
 			})
+		}
+	}
+
+	//handle cluster by keys
+	if stmt.ClusterByOption != nil {
+		if len(primaryKeys) > 0 {
+			return moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
+		}
+		lenClusterBy := len(stmt.ClusterByOption.ColumnList)
+		var clusterByKeys []string
+		for i := 0; i < lenClusterBy; i++ {
+			colName := stmt.ClusterByOption.ColumnList[i].Parts[0]
+			if _, ok := colMap[colName]; !ok {
+				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", colName)
+			}
+			clusterByKeys = append(clusterByKeys, colName)
+		}
+
+		clusterByColName := clusterByKeys[0]
+		if lenClusterBy == 1 {
+			for _, col := range createTable.TableDef.Cols {
+				if col.Name == clusterByColName {
+					col.ClusterBy = true
+				}
+			}
+		} else {
+			clusterByColName = util.BuildCompositeClusterByColumnName(clusterByKeys)
+			colDef := &ColDef{
+				Name:      clusterByColName,
+				Alg:       plan.CompressType_Lz4,
+				ClusterBy: true,
+				Typ: &Type{
+					Id:    int32(types.T_varchar),
+					Size:  types.VarlenaSize,
+					Width: types.MaxVarcharLen,
+				},
+				Default: &plan.Default{
+					NullAbility:  true,
+					Expr:         nil,
+					OriginString: "",
+				},
+			}
+			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
+			colMap[clusterByColName] = colDef
+		}
+		createTable.TableDef.ClusterBy = &plan.ClusterByDef{
+			Name: clusterByColName,
 		}
 	}
 
@@ -801,8 +828,19 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 	} else {
+		if len(tableDef.RefChildTbls) > 0 {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "can not truncate table '%v' referenced by some foreign key constraint", truncateTable.Table)
+		}
+
 		if tableDef.ViewSql != nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
+		}
+
+		truncateTable.TableId = tableDef.TblId
+		if tableDef.Fkeys != nil {
+			for _, fk := range tableDef.Fkeys {
+				truncateTable.ForeignTbl = append(truncateTable.ForeignTbl, fk.ForeignTbl)
+			}
 		}
 
 		truncateTable.ClusterTable = &plan.ClusterTable{
@@ -884,6 +922,13 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		//non-sys account can not drop the cluster table
 		if dropTable.GetClusterTable().GetIsClusterTable() && ctx.GetAccountId() != catalog.System_Account {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
+		}
+
+		dropTable.TableId = tableDef.TblId
+		if tableDef.Fkeys != nil {
+			for _, fk := range tableDef.Fkeys {
+				dropTable.ForeignTbl = append(dropTable.ForeignTbl, fk.ForeignTbl)
+			}
 		}
 
 		uDef, sDef := buildIndexDefs(tableDef.Defs)

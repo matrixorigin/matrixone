@@ -15,11 +15,76 @@ role_id    role_name    owner
 1    public    0
 show databases;
 Database
-mo_catalog
 system
 system_metrics
 information_schema
 mysql
+mo_catalog
+show grants;
+Grants for account1:admin@localhost
+use system;
+show triggers;
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+use mo_catalog;
+show columns from mo_tables;
+Field    Type    Null    Key    Default    Extra    Comment
+creator    INT UNSIGNED    NO        NULL        
+account_id    INT UNSIGNED    NO        NULL        
+owner    INT UNSIGNED    NO        NULL        
+rel_comment    VARCHAR(5000)    NO        NULL        
+relkind    VARCHAR(5000)    NO        NULL        
+reldatabase    VARCHAR(5000)    NO        NULL        
+rel_createsql    TEXT    NO        NULL        
+viewdef    BLOB    NO        NULL        
+relname    VARCHAR(5000)    NO        NULL        
+reldatabase_id    BIGINT UNSIGNED    NO        NULL        
+rel_id    BIGINT UNSIGNED    NO    PRI    NULL        
+created_time    TIMESTAMP    NO        NULL        
+constraint    VARCHAR(5000)    NO        NULL        
+relpersistence    VARCHAR(5000)    NO        NULL        
+partitioned    BLOB    NO        NULL        
+select datname, dat_createsql from mo_database;
+datname    dat_createsql
+system    create database system;
+system_metrics    create database system_metrics;
+information_schema    create database information_schema;
+mysql    create database mysql;
+mo_catalog    
+select relname from mo_tables where relname="sql_statement_total";
+relname
+sql_statement_total
+select relname from mo_tables where relname="mo_user";
+relname
+mo_user
+select relname from mo_tables where relname="tables";
+relname
+tables
+select user_name,authentication_string from mo_user;
+user_name    authentication_string
+admin    123456
+select role_name from mo_role;
+role_name
+accountadmin
+public
+create database account_db;
+use account_db;
+show tables;
+tables_in_account_db
+create table a(col int);
+show create table a;
+Table    Create Table
+a    CREATE TABLE `a` (\n`col` INT DEFAULT NULL\n)
+show tables;
+tables_in_account_db
+a
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+account_db
+mo_catalog
 update mo_catalog.mo_tables set relname='mo_aaaa';
 internal error: do not have privilege to execute the statement
 insert into mo_catalog.mo_role values (1763,'apple',0,1,'2022-09-22 06:53:34','');

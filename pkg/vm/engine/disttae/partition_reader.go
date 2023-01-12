@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -60,7 +59,8 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	if len(p.inserts) > 0 {
 		bat := p.inserts[0].GetSubBatch(colNames)
 		p.inserts = p.inserts[1:]
-		b := batch.New(false, colNames)
+		b := batch.NewWithSize(len(colNames))
+		b.SetAttributes(colNames)
 		for i, name := range colNames {
 			b.Vecs[i] = vector.New(p.typsMap[name])
 		}
@@ -69,7 +69,8 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 		}
 		return b, nil
 	}
-	b := batch.New(false, colNames)
+	b := batch.NewWithSize(len(colNames))
+	b.SetAttributes(colNames)
 	for i, name := range colNames {
 		b.Vecs[i] = vector.New(p.typsMap[name])
 	}
@@ -98,22 +99,23 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			}
 			for i, name := range b.Attrs {
 				if name == catalog.Row_ID {
-					b.Vecs[i].Append(types.Rowid(entry.Key), false, mp)
+					if err := b.Vecs[i].Append(types.Rowid(entry.Key), false, mp); err != nil {
+						return nil, err
+					}
 					continue
 				}
 				value, ok := dataValue.value[name]
 				if !ok {
 					panic(fmt.Sprintf("invalid column name: %v", name))
 				}
-				value.AppendVector(b.Vecs[i], mp)
+				if err := value.AppendVector(b.Vecs[i], mp); err != nil {
+					return nil, err
+				}
 			}
 			rows++
 		}
 		if rows > 0 {
-			b.InitZsOne(rows)
-			for _, vec := range b.Vecs {
-				nulls.TryExpand(vec.GetNulls(), rows)
-			}
+			b.SetZs(rows, mp)
 		}
 		itr.Close()
 		p.end = true
@@ -152,14 +154,18 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 
 		for i, name := range b.Attrs {
 			if name == catalog.Row_ID {
-				b.Vecs[i].Append(types.Rowid(dataKey), false, mp)
+				if err := b.Vecs[i].Append(types.Rowid(dataKey), false, mp); err != nil {
+					return nil, err
+				}
 				continue
 			}
 			value, ok := dataValue.value[name]
 			if !ok {
 				panic(fmt.Sprintf("invalid column name: %v", name))
 			}
-			value.AppendVector(b.Vecs[i], mp)
+			if err := value.AppendVector(b.Vecs[i], mp); err != nil {
+				return nil, err
+			}
 		}
 
 		rows++
@@ -169,10 +175,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	}
 
 	if rows > 0 {
-		b.InitZsOne(rows)
-		for _, vec := range b.Vecs {
-			nulls.TryExpand(vec.GetNulls(), rows)
-		}
+		b.SetZs(rows, mp)
 	}
 	if rows == 0 {
 		return nil, nil

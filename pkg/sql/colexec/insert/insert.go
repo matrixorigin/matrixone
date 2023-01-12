@@ -53,7 +53,9 @@ type Argument struct {
 	UniqueIndexDef       *plan.UniqueIndexDef
 	SecondaryIndexTables []engine.Relation
 	SecondaryIndexDef    *plan.SecondaryIndexDef
+	ClusterByDef         *plan.ClusterByDef
 	ClusterTable         *plan.ClusterTable
+	HasAutoCol           bool
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -327,8 +329,11 @@ func writeBatch(ctx context.Context,
 	n *Argument,
 	proc *process.Process,
 	bat *batch.Batch) (bool, error) {
-	if err := colexec.UpdateInsertBatch(n.Engine, ctx, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
-		return false, err
+
+	if n.HasAutoCol {
+		if err := colexec.UpdateInsertBatch(n.Engine, ctx, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
+			return false, err
+		}
 	}
 	if n.CPkeyColDef != nil {
 		err := util.FillCompositePKeyBatch(bat, n.CPkeyColDef, proc)
@@ -345,6 +350,8 @@ func writeBatch(ctx context.Context,
 			}
 
 		}
+	} else if n.ClusterByDef != nil && util.JudgeIsCompositeClusterByColumn(n.ClusterByDef.Name) {
+		util.FillCompositeClusterByBatch(bat, n.ClusterByDef.Name, proc)
 	}
 	// set null value's data
 	for i := range bat.Vecs {

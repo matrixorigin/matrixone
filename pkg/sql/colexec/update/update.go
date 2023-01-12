@@ -105,9 +105,11 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 				return false, err
 			}
 
-			if err := colexec.UpdateInsertBatch(p.Engine, proc.Ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i], p.DBName[i], p.TblName[i]); err != nil {
-				tmpBat.Clean(proc.Mp())
-				return false, err
+			if p.HasAutoCol[i] {
+				if err := colexec.UpdateInsertBatch(p.Engine, proc.Ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i], p.DBName[i], p.TblName[i]); err != nil {
+					tmpBat.Clean(proc.Mp())
+					return false, err
+				}
 			}
 
 			// fill cpkey column
@@ -117,6 +119,8 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 					tmpBat.Clean(proc.Mp())
 					return false, err
 				}
+			} else if updateCtx.ClusterByDef != nil && util.JudgeIsCompositeClusterByColumn(updateCtx.ClusterByDef.Name) {
+				util.FillCompositeClusterByBatch(tmpBat, updateCtx.ClusterByDef.Name, proc)
 			}
 			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 
