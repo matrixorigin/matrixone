@@ -143,3 +143,24 @@ func (node *AlterView) Format(ctx *FmtCtx) {
 
 func (node *AlterView) GetStatementType() string { return "Alter View" }
 func (node *AlterView) GetQueryType() string     { return QueryTypeDDL }
+
+// alter configuration for mo_mysql_compatbility_mode
+type AlterDataBaseConfig struct {
+	statementImpl
+	DbName       string
+	UpdateConfig Expr
+}
+
+func (node *AlterDataBaseConfig) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter ")
+	ctx.WriteString("database configuration ")
+
+	ctx.WriteString("for ")
+	ctx.WriteString(fmt.Sprintf("%s ", node.DbName))
+
+	ctx.WriteString("as ")
+	ctx.WriteString(fmt.Sprintf("%s ", node.UpdateConfig.String()))
+}
+
+func (node *AlterDataBaseConfig) GetStatementType() string { return "Alter DataBase config" }
+func (node *AlterDataBaseConfig) GetQueryType() string     { return QueryTypeDDL }
