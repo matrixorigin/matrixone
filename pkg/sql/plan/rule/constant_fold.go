@@ -243,7 +243,7 @@ func GetConstantValue(vec *vector.Vector) *plan.Const {
 				Dval: vec.Col.([]float64)[0],
 			},
 		}
-	case types.T_varchar, types.T_char, types.T_text:
+	case types.T_varchar, types.T_char, types.T_text, types.T_blob, types.T_json:
 		return &plan.Const{
 			Value: &plan.Const_Sval{
 				Sval: vec.GetString(0),
@@ -259,6 +259,33 @@ func GetConstantValue(vec *vector.Vector) *plan.Const {
 		return &plan.Const{
 			Value: &plan.Const_Dateval{
 				Dateval: int32(vector.MustTCols[types.Date](vec)[0]),
+			},
+		}
+	case types.T_time:
+		return &plan.Const{
+			Value: &plan.Const_Timeval{
+				Timeval: int64(vector.MustTCols[types.Time](vec)[0]),
+			},
+		}
+	case types.T_datetime:
+		return &plan.Const{
+			Value: &plan.Const_Datetimeval{
+				Datetimeval: int64(vector.MustTCols[types.Datetime](vec)[0]),
+			},
+		}
+	case types.T_decimal64:
+		return &plan.Const{
+			Value: &plan.Const_Decimal64Val{
+				Decimal64Val: &plan.Decimal64{A: vector.MustTCols[int64](vec)[0]},
+			},
+		}
+	case types.T_decimal128:
+		return &plan.Const{
+			Value: &plan.Const_Decimal128Val{
+				Decimal128Val: &plan.Decimal128{
+					A: vector.MustTCols[int64](vec)[0],
+					B: vector.MustTCols[int64](vec)[1],
+				},
 			},
 		}
 	default:
