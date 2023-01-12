@@ -373,7 +373,7 @@ import (
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_size_stmt show_table_values_stmt
@@ -608,6 +608,7 @@ import (
 %token <str> KILL
 %type <killOption> kill_opt
 %type <statementOption> statement_id_opt
+%token <str> QUERY_RESULT
 %start start_command
 
 %%
@@ -727,6 +728,7 @@ mo_dump_stmt:
     MODUMP DATABASE database_id INTO STRING max_file_size_opt
     {
 	$$ = &tree.MoDump{
+	    DumpDatabase: true,
 	    Database: tree.Identifier($3),
 	    OutFile: $5,
 	    MaxFileSize: int64($6),
@@ -735,11 +737,29 @@ mo_dump_stmt:
 |   MODUMP DATABASE database_id TABLES table_name_list INTO STRING max_file_size_opt
     {
 	$$ = &tree.MoDump{
+	    DumpDatabase: true,
 	    Database: tree.Identifier($3),
 	    Tables: $5,
 	    OutFile: $7,
 	    MaxFileSize: int64($8),
 	}
+    }
+|   MODUMP QUERY_RESULT STRING INTO STRING export_fields export_lines_opt header_opt max_file_size_opt force_quote_opt
+    {
+        ep := &tree.ExportParam{
+		Outfile:    true,
+		QueryId:    $3,
+		FilePath :  $5,
+		Fields:     $6,
+		Lines:      $7,
+		Header:     $8,
+		MaxFileSize:uint64($9)*1024,
+		ForceQuote: $10,
+	}
+        $$ = &tree.MoDump{
+            DumpDatabase: false,
+            ExportParams: ep,
+        }
     }
 
 
@@ -2285,6 +2305,7 @@ show_stmt:
 |   show_column_num_stmt
 |   show_table_size_stmt
 |   show_table_values_stmt
+|   show_accounts_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -2294,11 +2315,19 @@ show_collation_stmt:
 show_grants_stmt:
     SHOW GRANTS
     {
-        $$ = &tree.ShowGrants{}
+        $$ = &tree.ShowGrants{ShowGrantType: tree.GrantForUser}
     }
-|    SHOW GRANTS    FOR user_name using_roles_opt
+|    SHOW GRANTS FOR user_name using_roles_opt
     {
-        $$ = &tree.ShowGrants{Username: $4.Username, Hostname: $4.Hostname, Roles: $5}
+        $$ = &tree.ShowGrants{Username: $4.Username, Hostname: $4.Hostname, Roles: $5, ShowGrantType: tree.GrantForUser}
+    }
+|    SHOW GRANTS FOR ROLE role_name
+    {
+        s := &tree.ShowGrants{}
+        roles := []*tree.Role{tree.NewRole($5)}
+        s.Roles = roles
+        s.ShowGrantType = tree.GrantForRole
+        $$ = s
     }
 
 using_roles_opt:
@@ -2551,6 +2580,12 @@ show_columns_stmt:
             Like: $7,
             Where: $8,
         }
+    }
+
+show_accounts_stmt:
+    SHOW ACCOUNTS like_opt
+    {
+        $$ = &tree.ShowAccounts{Like: $3}
     }
 
 like_opt:
@@ -3439,6 +3474,18 @@ select_with_parens:
     {
         $$ = &tree.ParenSelect{Select: &tree.Select{Select: $2}}
     }
+|   '(' values_stmt ')'
+    {
+        valuesStmt := $2.(*tree.ValuesStatement);
+        $$ = &tree.ParenSelect{Select: &tree.Select {
+            Select: &tree.ValuesClause {
+                Rows: valuesStmt.Rows,
+                RowWord: true,
+            },
+            OrderBy: valuesStmt.OrderBy,
+            Limit:   valuesStmt.Limit,
+        }}
+    }
 
 simple_select:
     simple_select_clause
@@ -4135,7 +4182,13 @@ create_function_stmt:
 func_name:
     ident
     {
-        $$ = tree.NewFuncName(tree.Identifier($1))
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        $$ = tree.NewFuncName(tree.Identifier($1), prefix)
+    }
+|   ident '.' ident
+    {
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1), ExplicitSchema: true}
+        $$ = tree.NewFuncName(tree.Identifier($3), prefix)
     }
 
 func_args_list_opt:

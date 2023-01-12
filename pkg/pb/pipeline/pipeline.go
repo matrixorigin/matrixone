@@ -17,6 +17,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 

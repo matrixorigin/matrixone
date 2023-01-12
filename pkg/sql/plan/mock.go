@@ -34,6 +34,7 @@ type MockCompilerContext struct {
 	tables  map[string]*TableDef
 	stats   map[string]*Stats
 	pks     map[string][]int
+	id2name map[uint64]string
 
 	mysqlCompatible bool
 
@@ -293,6 +294,42 @@ func NewMockCompilerContext() *MockCompilerContext {
 		},
 	}
 
+	moSchema["mo_role_privs"] = &Schema{
+		cols: []col{
+			{"privilege_level", types.T_varchar, false, 100, 0},
+			{"obj_id", types.T_uint64, false, 100, 0},
+			{"obj_type", types.T_varchar, false, 16, 0},
+			{"role_id", types.T_int32, false, 50, 0},
+			{"role_name", types.T_varchar, false, 100, 0},
+			{"granted_time", types.T_timestamp, false, 0, 0},
+			{"operation_user_id", types.T_uint32, false, 50, 0},
+			{"privilege_name", types.T_varchar, false, 100, 0},
+			{"with_grant_option", types.T_bool, false, 0, 0},
+			{"privilege_id", types.T_int32, false, 50, 0},
+		},
+	}
+
+	moSchema["mo_user_defined_function"] = &Schema{
+		cols: []col{
+			{"function_id", types.T_int32, false, 50, 0},
+			{"name", types.T_varchar, false, 100, 0},
+			{"args", types.T_text, false, 1000, 0},
+			{"retType", types.T_varchar, false, 20, 0},
+			{"body", types.T_text, false, 1000, 0},
+			{"language", types.T_varchar, false, 20, 0},
+			{"db", types.T_varchar, false, 100, 0},
+			{"definer", types.T_varchar, false, 50, 0},
+			{"modified_time", types.T_timestamp, false, 0, 0},
+			{"created_time", types.T_timestamp, false, 0, 0},
+			{"type", types.T_varchar, false, 10, 0},
+			{"security_type", types.T_varchar, false, 10, 0},
+			{"comment", types.T_varchar, false, 5000, 0},
+			{"character_set_client", types.T_varchar, false, 64, 0},
+			{"collation_connection", types.T_varchar, false, 64, 0},
+			{"database_collation", types.T_varchar, false, 64, 0},
+		},
+	}
+
 	//---------------------------------------------index test schema---------------------------------------------------------
 
 	//+----------+--------------+------+------+---------+-------+--------------------------------+
@@ -449,6 +486,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 	tables := make(map[string]*TableDef)
 	stats := make(map[string]*Stats)
 	pks := make(map[string][]int)
+	id2name := make(map[uint64]string)
 	// build tpch/mo context data(schema)
 	for db, schema := range schemas {
 		tableIdx := 0
@@ -594,6 +632,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			}
 
 			tables[tableName] = tableDef
+			id2name[tableDef.TblId] = tableName
 			tableIdx++
 
 			if table.outcnt == 0 {
@@ -610,6 +649,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 	return &MockCompilerContext{
 		objects: objects,
 		tables:  tables,
+		id2name: id2name,
 		stats:   stats,
 		pks:     pks,
 		ctx:     context.TODO(),
@@ -634,6 +674,11 @@ func (m *MockCompilerContext) GetUserName() string {
 
 func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectRef, *TableDef) {
 	name := strings.ToLower(tableName)
+	return m.objects[name], m.tables[name]
+}
+
+func (m *MockCompilerContext) ResolveById(tableId uint64) (*ObjectRef, *TableDef) {
+	name := m.id2name[tableId]
 	return m.objects[name], m.tables[name]
 }
 
@@ -663,6 +708,10 @@ func (m *MockCompilerContext) GetContext() context.Context {
 
 func (m *MockCompilerContext) GetProcess() *process.Process {
 	return testutil.NewProc()
+}
+
+func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {
+	return nil, "", nil
 }
 
 type MockOptimizer struct {

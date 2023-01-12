@@ -47,6 +47,9 @@ func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze) (*Plan,
 	if err != nil {
 		return nil, err
 	}
+	if plan.GetQuery() == nil {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "the sql query plan does not support explain.")
+	}
 	return plan, nil
 }
 
@@ -120,6 +123,12 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildShowStatus(stmt, ctx)
 	case *tree.ShowProcessList:
 		return buildShowProcessList(stmt, ctx)
+	case *tree.ShowLocks:
+		return buildShowLocks(stmt, ctx)
+	case *tree.ShowNodeList:
+		return buildShowNodeList(stmt, ctx)
+	case *tree.ShowFunctionStatus:
+		return buildShowFunctionStatus(stmt, ctx)
 	case *tree.ShowTableNumber:
 		return buildShowTableNumber(stmt, ctx)
 	case *tree.ShowColumnNumber:

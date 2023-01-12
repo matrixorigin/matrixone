@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "load data infile 'data.txt' into table db.a accounts(a1, a2) fields terminated by '\t' escaped by '\t'",
-		output: "load data infile data.txt into table db.a accounts(a1, a2) fields terminated by \t escaped by \t",
+		input:  "show accounts like '%dafgda_'",
+		output: "show accounts like %dafgda_",
 	}
 )
 
@@ -53,6 +53,12 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select * from result_scan(query_id)",
+		output: "select * from result_scan(query_id)",
+	}, {
+		input:  "select * from meta_scan('query_id');",
+		output: "select * from meta_scan(query_id)",
+	}, {
 		input:  "show variables like 'sql_mode'",
 		output: "show variables like sql_mode",
 	}, {
@@ -81,7 +87,7 @@ var (
 		output: "select id, name, view_type, attribute, attribute_filed, size, created_at, updated_at from view_warehouse limit 10 offset 0",
 	}, {
 		input:  "select algo_alarm_record.* from algo_alarm_record inner join (SELECT id FROM algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) WHERE first_id = 0 AND created_at >= '2022-09-18 00:00:00' AND created_at <= '2022-10-18 00:00:00' and algo_id not in (9808,9809) order by id desc limit 0,10 ) e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc;",
-		output: "select algo_alarm_record* from algo_alarm_record inner join (select id from algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) where first_id = 0 and created_at >= 2022-09-18 00:00:00 and created_at <= 2022-10-18 00:00:00 and algo_id not in (9808, 9809) order by id desc limit 10 offset 0) as e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc",
+		output: "select algo_alarm_record.* from algo_alarm_record inner join (select id from algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) where first_id = 0 and created_at >= 2022-09-18 00:00:00 and created_at <= 2022-10-18 00:00:00 and algo_id not in (9808, 9809) order by id desc limit 10 offset 0) as e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc",
 	}, {
 		input: "select a from t1 use index(b)",
 	}, {
@@ -1809,6 +1815,10 @@ var (
 			output: `create function charat (x int default 15) returns char language sql as 'select $1'`,
 		},
 		{
+			input:  `create function t.increment (x float) returns float language sql as 'select $1 + 1'`,
+			output: `create function t.increment (x float) returns float language sql as 'select $1 + 1'`,
+		},
+		{
 			input:  `drop function helloworld ()`,
 			output: `drop function helloworld ()`,
 		},
@@ -1821,12 +1831,61 @@ var (
 			output: `drop function twosum (int, int)`,
 		},
 		{
+			input:  `drop function t.increment (float)`,
+			output: `drop function t.increment (float)`,
+		},
+		{
 			input:  `create extension python as strutil file 'stringutils.whl'`,
 			output: `create extension python as strutil file stringutils.whl`,
 		},
 		{
 			input:  `load strutil`,
 			output: `load strutil`,
+		},
+		{
+			input: `select * from (values row(1, 2), row(3, 3)) as a`,
+		},
+		{
+			input: `select t1.* from (values row(1, 1), row(3, 3)) as a(c1, c2) inner join t1 on a.c1 = t1.b`,
+		},
+		{
+			input:  "modump query_result '0adaxg' into '/Users/tmp/test'",
+			output: "modump query_result 0adaxg into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
+		},
+		{
+			input:  `modump query_result "queryId" into '/Users/tmp/test' FIELDS TERMINATED BY ','`,
+			output: "modump query_result queryId into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
+		},
+		{
+			input:  "modump query_result 'abcx' into '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'",
+			output: "modump query_result abcx into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
+		},
+		{
+			input:  "modump query_result '098e32' into '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'TRUE'",
+			output: "modump query_result 098e32 into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
+		},
+		{
+			input:  "modump query_result '09eqr' into '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE'",
+			output: "modump query_result 09eqr into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false",
+		},
+		{
+			input:  "modump query_result 'd097i7' into '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100",
+			output: "modump query_result d097i7 into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false max_file_size 102400",
+		},
+		{
+			input:  "modump query_result '09eqrteq' into '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100 FORCE_QUOTE (a, b)",
+			output: "modump query_result 09eqrteq into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false max_file_size 102400 force_quote a, b",
+		},
+		{
+			input: "show accounts",
+		},
+		{
+			input:  "show accounts like '%dafgda_'",
+			output: "show accounts like %dafgda_",
+		},
+		{
+			input:  "create table test (`col` varchar(255) DEFAULT b'0')",
+			output: "create table test (col varchar(255) default 0)",
 		},
 	}
 )

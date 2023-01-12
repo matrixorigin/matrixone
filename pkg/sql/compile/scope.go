@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -51,6 +52,7 @@ func PrintScope(prefix []byte, ss []*Scope) {
 
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
+	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
 	if s.DataSource.Bat != nil {
 		if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
@@ -66,6 +68,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
+	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
@@ -144,6 +147,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	var rds []engine.Reader
 
+	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	if s.IsJoin {
 		return s.JoinRun(c)
 	}
@@ -151,7 +155,8 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		return s.MergeRun(c)
 	}
 	mcpu := s.NodeInfo.Mcpu
-	if remote {
+	switch {
+	case remote:
 		var err error
 		ctx := c.ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
@@ -162,20 +167,36 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if err != nil {
 			return err
 		}
-	} else {
+	case s.NodeInfo.Rel != nil:
 		var err error
+
+		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
+			return err
+		}
+	default:
+		var err error
+		var db engine.Database
+		var rel engine.Relation
 
 		ctx := c.ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		}
-		db, err := c.e.Database(ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
+		db, err = c.e.Database(ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
 		if err != nil {
 			return err
 		}
-		rel, err := db.Relation(ctx, s.DataSource.RelationName)
+		rel, err = db.Relation(ctx, s.DataSource.RelationName)
 		if err != nil {
-			return err
+			var e error // avoid contamination of error messages
+			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
+			if e != nil {
+				return e
+			}
+			rel, e = db.Relation(c.ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName))
+			if e != nil {
+				return err
+			}
 		}
 		if rds, err = rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
@@ -268,8 +289,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			}
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-					Op:  vm.Top,
-					Idx: in.Idx,
+					Op:      vm.Top,
+					Idx:     in.Idx,
+					IsFirst: in.IsFirst,
 					Arg: &top.Argument{
 						Fs:    arg.Fs,
 						Limit: arg.Limit,
@@ -289,8 +311,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			}
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-					Op:  vm.Order,
-					Idx: in.Idx,
+					Op:      vm.Order,
+					Idx:     in.Idx,
+					IsFirst: in.IsFirst,
 					Arg: &order.Argument{
 						Fs: arg.Fs,
 					},
@@ -309,8 +332,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			}
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-					Op:  vm.Limit,
-					Idx: in.Idx,
+					Op:      vm.Limit,
+					Idx:     in.Idx,
+					IsFirst: in.IsFirst,
 					Arg: &limit.Argument{
 						Limit: arg.Limit,
 					},
@@ -321,14 +345,17 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			arg := in.Arg.(*group.Argument)
 			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
 			s.Instructions[0] = vm.Instruction{
-				Op: vm.MergeGroup,
+				Op:  vm.MergeGroup,
+				Idx: in.Idx,
 				Arg: &mergegroup.Argument{
 					NeedEval: false,
 				},
 			}
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-					Op: vm.Group,
+					Op:      vm.Group,
+					Idx:     in.Idx,
+					IsFirst: in.IsFirst,
 					Arg: &group.Argument{
 						Aggs:      arg.Aggs,
 						Exprs:     arg.Exprs,
@@ -342,14 +369,17 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			arg := in.Arg.(*offset.Argument)
 			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
 			s.Instructions[0] = vm.Instruction{
-				Op: vm.MergeOffset,
+				Op:  vm.MergeOffset,
+				Idx: in.Idx,
 				Arg: &mergeoffset.Argument{
 					Offset: arg.Offset,
 				},
 			}
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-					Op: vm.Offset,
+					Op:      vm.Offset,
+					Idx:     in.Idx,
+					IsFirst: in.IsFirst,
 					Arg: &offset.Argument{
 						Offset: arg.Offset,
 					},
@@ -444,6 +474,7 @@ func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRe
 		PreScopes:    make([]*Scope, len(srcScope.PreScopes)),
 		Instructions: make([]vm.Instruction, len(srcScope.Instructions)),
 		NodeInfo: engine.Node{
+			Rel:  srcScope.NodeInfo.Rel,
 			Mcpu: srcScope.NodeInfo.Mcpu,
 			Id:   srcScope.NodeInfo.Id,
 			Addr: srcScope.NodeInfo.Addr,
@@ -473,7 +504,7 @@ func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRe
 
 		// IF const run.
 		if srcScope.DataSource.Bat != nil {
-			newScope.DataSource.Bat = constructValueScanBatch()
+			newScope.DataSource.Bat, _ = constructValueScanBatch(context.TODO(), nil, nil)
 		}
 	}
 

@@ -17,8 +17,8 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"math"
 	"math/bits"
 	"os"
@@ -26,8 +26,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 
@@ -36,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/tidwall/btree"
@@ -55,10 +60,14 @@ type TenantInfo struct {
 	// true: use secondary role all
 	// false: use secondary role none
 	useAllSecondaryRole bool
+
+	delimiter byte
 }
 
 func (ti *TenantInfo) String() string {
-	return fmt.Sprintf("{account %s:%s:%s -- %d:%d:%d}", ti.Tenant, ti.User, ti.DefaultRole, ti.TenantID, ti.UserID, ti.DefaultRoleID)
+	return fmt.Sprintf("{account %s%c%s%c%s -- %d%c%d%c%d}",
+		ti.Tenant, ti.delimiter, ti.User, ti.delimiter, ti.DefaultRole,
+		ti.TenantID, ti.delimiter, ti.UserID, ti.delimiter, ti.DefaultRoleID)
 }
 
 func (ti *TenantInfo) GetTenant() string {
@@ -167,19 +176,14 @@ func isSysTenant(n string) bool {
 	return isCaseInsensitiveEqual(n, sysAccountName)
 }
 
-//GetTenantInfo extract tenant info from the input of the user.
-/**
-The format of the user
-1. tenant:user:role
-2. tenant:user
-3. user
-*/
-func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
-	p := strings.IndexByte(userInput, ':')
+// splitUserInput splits user input into account info
+func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*TenantInfo, error) {
+	p := strings.IndexByte(userInput, delimiter)
 	if p == -1 {
 		return &TenantInfo{
-			Tenant: GetDefaultTenant(),
-			User:   userInput,
+			Tenant:    GetDefaultTenant(),
+			User:      userInput,
+			delimiter: delimiter,
 		}, nil
 	} else {
 		tenant := userInput[:p]
@@ -188,7 +192,7 @@ func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
 			return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid tenant name '%s'", tenant)
 		}
 		userRole := userInput[p+1:]
-		p2 := strings.IndexByte(userRole, ':')
+		p2 := strings.IndexByte(userRole, delimiter)
 		if p2 == -1 {
 			//tenant:user
 			user := userRole
@@ -197,8 +201,9 @@ func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
 				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid user name '%s'", user)
 			}
 			return &TenantInfo{
-				Tenant: tenant,
-				User:   user,
+				Tenant:    tenant,
+				User:      user,
+				delimiter: delimiter,
 			}, nil
 		} else {
 			user := userRole[:p2]
@@ -215,9 +220,30 @@ func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
 				Tenant:      tenant,
 				User:        user,
 				DefaultRole: role,
+				delimiter:   delimiter,
 			}, nil
 		}
 	}
+}
+
+//GetTenantInfo extract tenant info from the input of the user.
+/**
+The format of the user
+1. tenant:user:role
+2. tenant:user
+3. user
+
+a new format:
+1. tenant#user#role
+2. tenant#user
+*/
+func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
+	if strings.IndexByte(userInput, ':') != -1 {
+		return splitUserInput(ctx, userInput, ':')
+	} else if strings.IndexByte(userInput, '#') != -1 {
+		return splitUserInput(ctx, userInput, '#')
+	}
+	return splitUserInput(ctx, userInput, ':')
 }
 
 // initUser for initialization or something special
@@ -666,26 +692,30 @@ var (
 		"system_metrics":     0,
 	}
 	sysWantedTables = map[string]int8{
-		"mo_user":                 0,
-		"mo_account":              0,
-		"mo_role":                 0,
-		"mo_user_grant":           0,
-		"mo_role_grant":           0,
-		"mo_role_privs":           0,
-		`%!%mo_increment_columns`: 0,
+		"mo_user":                    0,
+		"mo_account":                 0,
+		"mo_role":                    0,
+		"mo_user_grant":              0,
+		"mo_role_grant":              0,
+		"mo_role_privs":              0,
+		"mo_user_defined_function":   0,
+		"mo_mysql_compatbility_mode": 0,
+		`%!%mo_increment_columns`:    0,
 	}
 	//predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
-		"mo_database":             0,
-		"mo_tables":               0,
-		"mo_columns":              0,
-		"mo_account":              0,
-		"mo_user":                 0,
-		"mo_role":                 0,
-		"mo_user_grant":           0,
-		"mo_role_grant":           0,
-		"mo_role_privs":           0,
-		"%!%mo_increment_columns": 0,
+		"mo_database":                0,
+		"mo_tables":                  0,
+		"mo_columns":                 0,
+		"mo_account":                 0,
+		"mo_user":                    0,
+		"mo_role":                    0,
+		"mo_user_grant":              0,
+		"mo_role_grant":              0,
+		"mo_role_privs":              0,
+		"mo_user_defined_function":   0,
+		"mo_mysql_compatbility_mode": 0,
+		"%!%mo_increment_columns":    0,
 	}
 	createAutoTableSql = "create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);"
 	//the sqls creating many tables for the tenant.
@@ -746,6 +776,31 @@ var (
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
+		`create table mo_user_defined_function(
+				function_id int auto_increment,
+				name     varchar(100),
+				args     text,
+				retType  varchar(20),
+				body     text,
+				language varchar(20),
+				db       varchar(100),
+				definer  varchar(50),
+				modified_time timestamp,
+				created_time  timestamp,
+				type    varchar(10),
+				security_type varchar(10), 
+				comment  varchar(5000),
+				character_set_client varchar(64),
+				collation_connection varchar(64),
+				database_collation varchar(64),
+				primary key(function_id)
+			);`,
+		`create table mo_mysql_compatbility_mode(
+				configuration_id int auto_increment,
+				dat_name     varchar(5000),
+				configuration  json,
+				primary key(configuration_id)
+			);`,
 	}
 
 	//drop tables for the tenant
@@ -757,6 +812,27 @@ var (
 		`drop table if exists mo_catalog.mo_role_privs;`,
 		//"drop table if exists mo_catalog.`%!%mo_increment_columns`;",
 	}
+
+	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatbility_mode(
+		dat_name,
+		configuration) values ("%s",%s);`
+
+	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
+			name,
+			args,
+			retType,
+			body,
+			language,
+			db,
+			definer,
+			modified_time,
+			created_time,
+			type,
+			security_type,
+			comment,
+			character_set_client,
+			collation_connection,
+			database_collation) values ("%s",'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
 				account_id,
@@ -1049,6 +1125,10 @@ const (
 					and rp.privilege_id = %d
 					and rp.privilege_level = "%s";`
 
+	checkUdfArgs = `select args,function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`
+
+	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and args = '%s';`
+
 	//delete role from mo_role,mo_user_grant,mo_role_grant,mo_role_privs
 	deleteRoleFromMoRoleFormat = `delete from mo_catalog.mo_role where role_id = %d;`
 
@@ -1062,6 +1142,12 @@ const (
 	deleteUserFromMoUserFormat = `delete from mo_catalog.mo_user where user_id = %d;`
 
 	deleteUserFromMoUserGrantFormat = `delete from mo_catalog.mo_user_grant where user_id = %d;`
+
+	// delete user defined function from mo_user_defined_function
+	deleteUserDefinedFunctionFormat = `delete from mo_catalog.mo_user_defined_function where function_id = %d;`
+
+	// delete a tuple from mo_mysql_compatbility_mode when drop a database
+	deleteMysqlCompatbilityModeFormat = `delete from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s";`
 )
 
 var (
@@ -1287,12 +1373,21 @@ func getSqlForDeleteUser(userId int64) []string {
 	}
 }
 
+func getSqlForDeleteMysqlCompatbilityMode(dtname string) string {
+	return fmt.Sprintf(deleteMysqlCompatbilityModeFormat, dtname)
+}
+
+// isClusterTable decides a table is the index table or not
+func isIndexTable(name string) bool {
+	return strings.HasPrefix(name, "__mo_index_unique")
+}
+
 // isClusterTable decides a table is the cluster table or not
 func isClusterTable(dbName, name string) bool {
 	if dbName == moCatalog {
 		//if it is neither among the tables nor the index table,
 		//it is the cluster table.
-		if _, ok := predefinedTables[name]; !ok && !strings.HasPrefix(name, "__mo_index_unique") {
+		if _, ok := predefinedTables[name]; !ok && !isIndexTable(name) {
 			return true
 		}
 	}
@@ -1808,7 +1903,7 @@ func nameIsInvalid(name string) bool {
 	if len(s) == 0 {
 		return true
 	}
-	return strings.Contains(s, ":")
+	return strings.Contains(s, ":") || strings.Contains(s, "#")
 }
 
 // normalizeName normalizes and checks the name
@@ -1901,6 +1996,11 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 		}
 		if aa.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
 			return moerr.NewInternalError(ctx, "only support identified by password")
+		}
+
+		if len(aa.AuthOption.IdentifiedType.Str) == 0 {
+			err = moerr.NewInternalError(ctx, "password is empty string")
+			return err
 		}
 	}
 
@@ -2465,7 +2565,103 @@ handleFailed:
 }
 
 func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) error {
-	return nil
+	var err error
+	var sql string
+	var argstr string
+	var checkDatabase string
+	var dbName string
+	var funcId int64
+	var fmtctx *tree.FmtCtx
+	var erArray []ExecResult
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// a database must be selected or specified as qualifier when create a function
+	if df.Name.HasNoNameQualifier() {
+		if ses.DatabaseNameIsEmpty() {
+			return moerr.NewNoDBNoCtx()
+		}
+		dbName = ses.GetDatabaseName()
+	} else {
+		dbName = string(df.Name.Name.SchemaName)
+	}
+
+	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+
+	// validate database name and signature (name + args)
+	bh.ClearExecResultSet()
+	checkDatabase = fmt.Sprintf(checkUdfArgs, string(df.Name.Name.ObjectName), dbName)
+	err = bh.Exec(ctx, checkDatabase)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if execResultArrayHasData(erArray) {
+		// function with provided name and db exists, now check arguments
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			argstr, err = erArray[0].GetString(ctx, i, 0)
+			if err != nil {
+				goto handleFailed
+			}
+			funcId, err = erArray[0].GetInt64(ctx, i, 1)
+			if err != nil {
+				goto handleFailed
+			}
+			logutil.Debug("argstr: " + argstr)
+			argMap := make(map[string]string)
+			json.Unmarshal([]byte(argstr), &argMap)
+			argCount := 0
+			if len(argMap) == len(df.Args) {
+				for _, v := range argMap {
+					if v != (df.Args[argCount].GetType(fmtctx)) {
+						goto handleFailed
+					}
+					argCount++
+					fmtctx.Reset()
+				}
+				goto handleArgMatch
+			}
+		}
+		goto handleFailed
+	} else {
+		// no such function
+		return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
+	}
+
+handleArgMatch:
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
+
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
 }
 
 // doRevokePrivilege accomplishes the RevokePrivilege statement
@@ -3331,8 +3527,6 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeDropAccount)
 	case *tree.AlterAccount:
 		typs = append(typs, PrivilegeTypeAlterAccount)
-	case *tree.AlterView:
-		typs = append(typs, PrivilegeTypeAlterView)
 	case *tree.CreateUser:
 		if st.Role == nil {
 			typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
@@ -3428,6 +3622,13 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
+	case *tree.AlterView:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeAlterView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		if st.Name != nil {
+			dbName = string(st.Name.SchemaName)
+		}
 	case *tree.CreateFunction:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -3488,10 +3689,17 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
-		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
-		*tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues:
+		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus,
+		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
+		*tree.ShowTableNumber, *tree.ShowColumnNumber,
+		*tree.ShowTableValues, *tree.ShowNodeList,
+		*tree.ShowLocks, *tree.ShowFunctionStatus:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *tree.ShowAccounts:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -3610,13 +3818,16 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					} else {
 						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
 					}
-					appendPt(privilegeTips{
-						typ:                   t,
-						databaseName:          node.ObjRef.GetSchemaName(),
-						tableName:             node.ObjRef.GetObjName(),
-						isClusterTable:        clusterTable,
-						clusterTableOperation: clusterTableOperation,
-					})
+					//do not check the privilege of the index table
+					if !isIndexTable(node.ObjRef.GetObjName()) {
+						appendPt(privilegeTips{
+							typ:                   t,
+							databaseName:          node.ObjRef.GetSchemaName(),
+							tableName:             node.ObjRef.GetObjName(),
+							isClusterTable:        clusterTable,
+							clusterTableOperation: clusterTableOperation,
+						})
+					}
 				}
 			} else if node.NodeType == plan.Node_INSERT { //insert select
 				if node.ObjRef != nil {
@@ -3625,13 +3836,16 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					} else {
 						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
 					}
-					appendPt(privilegeTips{
-						typ:                   PrivilegeTypeInsert,
-						databaseName:          node.ObjRef.GetSchemaName(),
-						tableName:             node.ObjRef.GetObjName(),
-						isClusterTable:        clusterTable,
-						clusterTableOperation: clusterTableModify,
-					})
+					//do not check the privilege of the index table
+					if !isIndexTable(node.ObjRef.GetObjName()) {
+						appendPt(privilegeTips{
+							typ:                   PrivilegeTypeInsert,
+							databaseName:          node.ObjRef.GetSchemaName(),
+							tableName:             node.ObjRef.GetObjName(),
+							isClusterTable:        clusterTable,
+							clusterTableOperation: clusterTableModify,
+						})
+					}
 				}
 			} else if node.NodeType == plan.Node_DELETE {
 				if node.ObjRef != nil {
@@ -3640,13 +3854,16 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					} else {
 						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
 					}
-					appendPt(privilegeTips{
-						typ:                   PrivilegeTypeDelete,
-						databaseName:          node.ObjRef.GetSchemaName(),
-						tableName:             node.ObjRef.GetObjName(),
-						isClusterTable:        clusterTable,
-						clusterTableOperation: clusterTableModify,
-					})
+					//do not check the privilege of the index table
+					if !isIndexTable(node.ObjRef.GetObjName()) {
+						appendPt(privilegeTips{
+							typ:                   PrivilegeTypeDelete,
+							databaseName:          node.ObjRef.GetSchemaName(),
+							tableName:             node.ObjRef.GetObjName(),
+							isClusterTable:        clusterTable,
+							clusterTableOperation: clusterTableModify,
+						})
+					}
 				}
 			}
 		}
@@ -4817,6 +5034,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return tenant.IsAdminRole(), nil
 		}
 
+		checkShowAccountsPrivilege := func() (bool, error) {
+			//only the moAdmin and accountAdmin can execute the show accounts.
+			return tenant.IsAdminRole(), nil
+		}
+
 		switch gp := stmt.(type) {
 		case *tree.Grant:
 			if gp.Typ == tree.GrantTypePrivilege {
@@ -4842,6 +5064,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			}
 		case *tree.RevokePrivilege:
 			return checkRevokePrivilege()
+		case *tree.ShowAccounts:
+			return checkShowAccountsPrivilege()
 		}
 	}
 
@@ -5401,9 +5625,9 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 
 	var err error
 	sqls := make([]string, 0)
-	sqls = append(sqls, "create database "+trace.SystemDBConst+";")
-	sqls = append(sqls, "use "+trace.SystemDBConst+";")
-	traceTables := trace.GetSchemaForAccount(ctx, newTenant.GetTenant())
+	sqls = append(sqls, "create database "+motrace.SystemDBConst+";")
+	sqls = append(sqls, "use "+motrace.SystemDBConst+";")
+	traceTables := motrace.GetSchemaForAccount(ctx, newTenant.GetTenant())
 	sqls = append(sqls, traceTables...)
 	sqls = append(sqls, "create database "+metric.MetricDBConst+";")
 	sqls = append(sqls, "use "+metric.MetricDBConst+";")
@@ -5782,5 +6006,92 @@ handleFailed:
 }
 
 func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) error {
-	return nil
+	var err error
+	var initMoUdf string
+	var retTypeStr string
+	var dbName string
+	var checkExistence string
+	var argsJson []byte
+	var fmtctx *tree.FmtCtx
+	var argMap map[string]string
+	var erArray []ExecResult
+
+	// a database must be selected or specified as qualifier when create a function
+	if cf.Name.HasNoNameQualifier() {
+		if ses.DatabaseNameIsEmpty() {
+			return moerr.NewNoDBNoCtx()
+		}
+		dbName = ses.GetDatabaseName()
+	} else {
+		dbName = string(cf.Name.Name.SchemaName)
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// format return type
+	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+	cf.ReturnType.Format(fmtctx)
+	retTypeStr = fmtctx.String()
+	fmtctx.Reset()
+
+	// build argmap and marshal as json
+	argMap = make(map[string]string)
+	for i := 0; i < len(cf.Args); i++ {
+		curName := cf.Args[i].GetName(fmtctx)
+		fmtctx.Reset()
+		argMap[curName] = cf.Args[i].GetType(fmtctx)
+		fmtctx.Reset()
+	}
+	argsJson, err = json.Marshal(argMap)
+	if err != nil {
+		goto handleFailed
+	}
+
+	// validate duplicate function declaration
+	bh.ClearExecResultSet()
+	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, string(argsJson))
+	logutil.Debug("Exist: " + checkExistence)
+	err = bh.Exec(ctx, checkExistence)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if execResultArrayHasData(erArray) {
+		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
+	}
+
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
+		string(cf.Name.Name.ObjectName),
+		string(argsJson),
+		retTypeStr, cf.Body, cf.Language, dbName,
+		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+	err = bh.Exec(ctx, initMoUdf)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return err
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
 }

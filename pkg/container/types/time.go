@@ -203,7 +203,7 @@ func ParseTime(s string, precision int32) (Time, error) {
 		}
 	}
 
-	return FromTimeClock(isNegative, hour, uint8(minute), uint8(sec+uint64(carry)), msec), nil
+	return TimeFromClock(isNegative, hour, uint8(minute), uint8(sec+uint64(carry)), msec), nil
 }
 
 // Numeric 112233/112233.4444 should be treate like string and then
@@ -226,12 +226,12 @@ func ParseInt64ToTime(input int64, precision int32) (Time, error) {
 	return ParseTime(s, precision)
 }
 
-func ParseDecima64lToTime(input Decimal64, precision int32) (Time, error) {
+func ParseDecimal64lToTime(input Decimal64, precision int32) (Time, error) {
 	s := input.ToStringWithScale(precision)
 	return ParseTime(s, precision)
 }
 
-func ParseDecima128lToTime(input Decimal128, precision int32) (Time, error) {
+func ParseDecimal128lToTime(input Decimal128, precision int32) (Time, error) {
 	s := input.ToStringWithScale(precision)
 	return ParseTime(s, precision)
 }
@@ -266,7 +266,7 @@ func (t Time) ToDecimal128(ctx context.Context, width, precision int32) (Decimal
 	return ret, nil
 }
 
-func FromTimeClock(isNegative bool, hour uint64, minute, sec uint8, msec uint32) Time {
+func TimeFromClock(isNegative bool, hour uint64, minute, sec uint8, msec uint32) Time {
 	secs := int64(hour)*secsPerHour + int64(minute)*secsPerMinute + int64(sec)
 	t := secs*microSecsPerSec + int64(msec)
 	if isNegative {

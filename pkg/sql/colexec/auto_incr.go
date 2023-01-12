@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -38,8 +39,8 @@ var AUTO_INCR_TABLE = "%!%mo_increment_columns"
 var AUTO_INCR_TABLE_COLNAME []string = []string{catalog.Row_ID, "name", "offset", "step"}
 
 type AutoIncrParam struct {
-	eg      engine.Engine
-	rel     engine.Relation
+	eg engine.Engine
+	//	rel     engine.Relation
 	ctx     context.Context
 	proc    *process.Process
 	dbName  string
@@ -57,7 +58,7 @@ func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Proce
 		tblName: tblName,
 	}
 
-	offset, step, err := getRangeFromAutoIncrTable(ctx, incrParam, bat, tableID)
+	offset, step, err := getRangeFromAutoIncrTable(incrParam, bat, tableID)
 	if err != nil {
 		return err
 	}
@@ -70,7 +71,7 @@ func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Proce
 
 func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.Process, p *plan.InsertValues, bat *batch.Batch, dbName, tblName string) error {
 	ColDefs := p.ExplicitCols
-	orderColDefs(p.OrderAttrs, ColDefs)
+	orderColDefs(p.OrderAttrs, ColDefs, p.Columns)
 	db, err := e.Database(ctx, p.DbName, proc.TxnOperator)
 	if err != nil {
 		return err
@@ -84,7 +85,7 @@ func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.
 
 // get autoincr columns values.  This function updates the auto incr table.
 // multiple txn may cause a conflicts, but we retry off band transactions.
-func getRangeFromAutoIncrTable(ctx context.Context, param *AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
+func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
 	var err error
 	loopCnt := 0
 loop:
@@ -105,12 +106,8 @@ loop:
 			continue
 		}
 		var d, s uint64
-		param.rel, err = GetNewRelation(param.eg, param.dbName, AUTO_INCR_TABLE, txn, param.ctx)
-		if err != nil {
-			goto loop
-		}
 		name := fmt.Sprintf("%d_%s", tableID, col.Name)
-		if d, s, err = getOneColRangeFromAutoIncrTable(ctx, param, bat, name, i); err != nil {
+		if d, s, err = getOneColRangeFromAutoIncrTable(param, bat, name, i, txn); err != nil {
 			RolllbackTxn(param.eg, txn, param.ctx)
 			goto loop
 		}
@@ -161,8 +158,8 @@ func updateVector[T constraints.Integer](vec *vector.Vector, length, curNum, ste
 	}
 }
 
-func getOneColRangeFromAutoIncrTable(ctx context.Context, param *AutoIncrParam, bat *batch.Batch, name string, pos int) (uint64, uint64, error) {
-	oriNum, step, err := getCurrentIndex(ctx, param, name, param.proc.Mp())
+func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, name string, pos int, txn client.TxnOperator) (uint64, uint64, error) {
+	oriNum, step, delBat, err := getCurrentIndex(param, name, txn, param.proc.Mp())
 	if err != nil {
 		return 0, 0, err
 	}
@@ -172,47 +169,47 @@ func getOneColRangeFromAutoIncrTable(ctx context.Context, param *AutoIncrParam, 
 	case types.T_int8:
 		maxNum = getMaxnum[int8](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxInt8 {
-			return 0, 0, moerr.NewOutOfRange(ctx, "tinyint", "value %v", maxNum)
+			return 0, 0, moerr.NewOutOfRange(param.ctx, "tinyint", "value %v", maxNum)
 		}
 	case types.T_int16:
 		maxNum = getMaxnum[int16](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxInt16 {
-			return 0, 0, moerr.NewOutOfRange(ctx, "smallint", "value %v", maxNum)
+			return 0, 0, moerr.NewOutOfRange(param.ctx, "smallint", "value %v", maxNum)
 		}
 	case types.T_int32:
 		maxNum = getMaxnum[int32](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxInt32 {
-			return 0, 0, moerr.NewOutOfRange(ctx, "int", "value %v", maxNum)
+			return 0, 0, moerr.NewOutOfRange(param.ctx, "int", "value %v", maxNum)
 		}
 	case types.T_int64:
 		maxNum = getMaxnum[int64](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxInt64 {
-			return 0, 0, moerr.NewOutOfRange(ctx, "bigint", "value %v", maxNum)
+			return 0, 0, moerr.NewOutOfRange(param.ctx, "bigint", "value %v", maxNum)
 		}
 	case types.T_uint8:
 		maxNum = getMaxnum[uint8](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxUint8 {
-			return 0, 0, moerr.NewOutOfRange(ctx, "tinyint unsigned", "value %v", maxNum)
+			return 0, 0, moerr.NewOutOfRange(param.ctx, "tinyint unsigned", "value %v", maxNum)
 		}
 	case types.T_uint16:
 		maxNum = getMaxnum[uint16](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxUint16 {
-			return 0, 0, moerr.NewOutOfRange(ctx, "smallint unsigned", "value %v", maxNum)
+			return 0, 0, moerr.NewOutOfRange(param.ctx, "smallint unsigned", "value %v", maxNum)
 		}
 	case types.T_uint32:
 		maxNum = getMaxnum[uint32](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxUint32 {
-			return 0, 0, moerr.NewOutOfRange(ctx, "int unsigned", "value %v", maxNum)
+			return 0, 0, moerr.NewOutOfRange(param.ctx, "int unsigned", "value %v", maxNum)
 		}
 	case types.T_uint64:
 		maxNum = getMaxnum[uint64](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum < oriNum {
-			return 0, 0, moerr.NewOutOfRange(ctx, "bigint unsigned", "auto_incrment column constant value overflows bigint unsigned")
+			return 0, 0, moerr.NewOutOfRange(param.ctx, "bigint unsigned", "auto_incrment column constant value overflows bigint unsigned")
 		}
 	default:
-		return 0, 0, moerr.NewInvalidInput(ctx, "the auto_incr col is not integer type")
+		return 0, 0, moerr.NewInvalidInput(param.ctx, "the auto_incr col is not integer type")
 	}
-	if err := updateAutoIncrTable(ctx, param, maxNum, name, param.proc.Mp()); err != nil {
+	if err := updateAutoIncrTable(param, delBat, maxNum, name, txn, param.proc.Mp()); err != nil {
 		return 0, 0, err
 	}
 	return oriNum, step, nil
@@ -252,41 +249,80 @@ func updateBatchImpl(ctx context.Context, ColDefs []*plan.ColDef, bat *batch.Bat
 	return nil
 }
 
-func getCurrentIndex(ctx context.Context, param *AutoIncrParam, colName string, mp *mpool.MPool) (uint64, uint64, error) {
-	var rds []engine.Reader
+func getRangeExpr(colName string) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     10,
+					ObjName: "=",
+				},
+				Args: []*plan.Expr{
+					{
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								Name: AUTO_INCR_TABLE_COLNAME[1],
+							},
+						},
+					},
+					{
+						Expr: &plan.Expr_C{
+							C: &plan.Const{
+								Value: &plan.Const_Sval{
+									Sval: colName,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
 
-	ret, err := param.rel.Ranges(param.ctx, nil)
+func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperator, mp *mpool.MPool) (uint64, uint64, *batch.Batch, error) {
+	var rds []engine.Reader
+	retbat := batch.NewWithSize(1)
+
+	rel, err := GetNewRelation(param.eg, param.dbName, AUTO_INCR_TABLE, txn, param.ctx)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
+	}
+
+	expr := getRangeExpr(colName)
+	// 存入表达式
+	ret, err := rel.Ranges(param.ctx, expr)
+	if err != nil {
+		return 0, 0, nil, err
 	}
 	switch {
 	case len(ret) == 0:
-		if rds, err = param.rel.NewReader(param.ctx, 1, nil, nil); err != nil {
-			return 0, 0, err
+		if rds, err = rel.NewReader(param.ctx, 1, expr, nil); err != nil {
+			return 0, 0, nil, err
 		}
 	case len(ret) == 1 && len(ret[0]) == 0:
-		if rds, err = param.rel.NewReader(param.ctx, 1, nil, nil); err != nil {
-			return 0, 0, err
+		if rds, err = rel.NewReader(param.ctx, 1, expr, nil); err != nil {
+			return 0, 0, nil, err
 		}
 	case len(ret[0]) == 0:
-		rds0, err := param.rel.NewReader(param.ctx, 1, nil, nil)
+		rds0, err := rel.NewReader(param.ctx, 1, expr, nil)
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, nil, err
 		}
-		rds1, err := param.rel.NewReader(param.ctx, 1, nil, ret[1:])
+		rds1, err := rel.NewReader(param.ctx, 1, expr, ret[1:])
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, nil, err
 		}
 		rds = append(rds, rds0...)
 		rds = append(rds, rds1...)
 	default:
-		rds, _ = param.rel.NewReader(param.ctx, 1, nil, ret)
+		rds, _ = rel.NewReader(param.ctx, 1, expr, ret)
 	}
 
 	for len(rds) > 0 {
-		bat, err := rds[0].Read(ctx, AUTO_INCR_TABLE_COLNAME, nil, param.proc.Mp())
+		bat, err := rds[0].Read(param.ctx, AUTO_INCR_TABLE_COLNAME, expr, param.proc.Mp())
 		if err != nil {
-			return 0, 0, moerr.NewInvalidInput(ctx, "can not find the auto col")
+			return 0, 0, nil, moerr.NewInvalidInput(param.ctx, "can not find the auto col")
 		}
 		if bat == nil {
 			rds[0].Close()
@@ -294,8 +330,9 @@ func getCurrentIndex(ctx context.Context, param *AutoIncrParam, colName string, 
 			continue
 		}
 		if len(bat.Vecs) < 2 {
-			return 0, 0, moerr.NewInternalError(ctx, "the mo_increment_columns col num is not two")
+			return 0, 0, nil, moerr.NewInternalError(param.ctx, "the mo_increment_columns col num is not two")
 		}
+
 		vs2 := vector.MustTCols[uint64](bat.Vecs[2])
 		vs3 := vector.MustTCols[uint64](bat.Vecs[3])
 		var rowIndex int64
@@ -306,27 +343,34 @@ func getCurrentIndex(ctx context.Context, param *AutoIncrParam, colName string, 
 			}
 		}
 		if rowIndex < int64(bat.Length()) {
+			vec := vector.New(bat.GetVector(0).Typ)
+			rowid := vector.MustTCols[types.Rowid](bat.GetVector(0))[rowIndex]
+			if err := vec.Append(rowid, false, mp); err != nil {
+				panic(err)
+			}
+			retbat.SetVector(0, vec)
+			retbat.SetZs(1, mp)
 			bat.Clean(mp)
-			return vs2[rowIndex], vs3[rowIndex], nil
+			return vs2[rowIndex], vs3[rowIndex], retbat, nil
 		}
 		bat.Clean(mp)
 	}
-	return 0, 0, nil
+	return 0, 0, nil, nil
 }
 
-func updateAutoIncrTable(ctx context.Context, param *AutoIncrParam, curNum uint64, name string, mp *mpool.MPool) error {
-	bat, _ := GetDeleteBatch(param.rel, param.ctx, name, mp)
-	if bat == nil {
-		return moerr.NewInternalError(ctx, "the deleted batch is nil")
-	}
-	bat.SetZs(bat.GetVector(0).Length(), mp)
-	err := param.rel.Delete(param.ctx, bat, AUTO_INCR_TABLE_COLNAME[0])
+func updateAutoIncrTable(param *AutoIncrParam, delBat *batch.Batch, curNum uint64, name string, txn client.TxnOperator, mp *mpool.MPool) error {
+	rel, err := GetNewRelation(param.eg, param.dbName, AUTO_INCR_TABLE, txn, param.ctx)
 	if err != nil {
-		bat.Clean(mp)
 		return err
 	}
-	bat = makeAutoIncrBatch(name, curNum, 1, mp)
-	if err = param.rel.Write(param.ctx, bat); err != nil {
+
+	err = rel.Delete(param.ctx, delBat, AUTO_INCR_TABLE_COLNAME[0])
+	if err != nil {
+		delBat.Clean(mp)
+		return err
+	}
+	bat := makeAutoIncrBatch(name, curNum, 1, mp)
+	if err = rel.Write(param.ctx, bat); err != nil {
 		bat.Clean(mp)
 		return err
 	}
@@ -338,10 +382,12 @@ func makeAutoIncrBatch(name string, num, step uint64, mp *mpool.MPool) *batch.Ba
 	vec := vector.NewWithStrings(types.T_varchar.ToType(), []string{name}, nil, mp)
 	vec2 := vector.NewWithFixed(types.T_uint64.ToType(), []uint64{num}, nil, mp)
 	vec3 := vector.NewWithFixed(types.T_uint64.ToType(), []uint64{step}, nil, mp)
-	bat := &batch.Batch{
-		Attrs: AUTO_INCR_TABLE_COLNAME[1:],
-		Vecs:  []*vector.Vector{vec, vec2, vec3},
-	}
+	bat := batch.NewWithSize(3)
+	bat.SetAttributes(AUTO_INCR_TABLE_COLNAME[1:])
+	bat.SetVector(0, vec)
+	bat.SetVector(1, vec2)
+	bat.SetVector(2, vec3)
+	bat.SetZs(1, mp)
 	return bat
 }
 
@@ -366,10 +412,7 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 		rds, _ = rel.NewReader(ctx, 1, nil, ret)
 	}
 
-	retbat := &batch.Batch{
-		Vecs: []*vector.Vector{},
-	}
-
+	retbat := batch.NewWithSize(1)
 	for len(rds) > 0 {
 		bat, err := rds[0].Read(ctx, AUTO_INCR_TABLE_COLNAME, nil, mp)
 		if err != nil {
@@ -389,8 +432,12 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 			str := bat.Vecs[1].GetString(rowIndex)
 			if str == colName {
 				currentNum := vector.MustTCols[uint64](bat.Vecs[2])[rowIndex : rowIndex+1]
-				retbat.Vecs = append(retbat.Vecs, bat.Vecs[0])
-				retbat.Vecs[0].Col = retbat.Vecs[0].Col.([]types.Rowid)[rowIndex : rowIndex+1]
+				vec := vector.New(bat.GetVector(0).Typ)
+				rowid := vector.MustTCols[types.Rowid](bat.GetVector(0))[rowIndex]
+				if err := vec.Append(rowid, false, mp); err != nil {
+					panic(err)
+				}
+				retbat.SetVector(0, vec)
 				retbat.SetZs(1, mp)
 				bat.Clean(mp)
 				return retbat, currentNum[0]
@@ -430,7 +477,14 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 		if !attr.Typ.AutoIncr {
 			continue
 		}
-		rel2, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+		var rel2 engine.Relation
+		// Essentially, temporary table is not an operation of a transaction.
+		// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
+		if dbName == defines.TEMPORARY_DBNAME {
+			rel2, err = db.Relation(ctx, AUTO_INCR_TABLE)
+		} else {
+			rel2, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+		}
 		if err != nil {
 			return err
 		}
@@ -449,12 +503,21 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 }
 
 // for delete table operation, delete col in mo_increment_columns table
-func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, rel engine.Relation, proc *process.Process, dbName string, tableID uint64) error {
+func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database, rel engine.Relation, proc *process.Process, dbName string, tableID uint64) error {
 	txn, err := NewTxn(eg, proc, ctx)
 	if err != nil {
 		return err
 	}
-	rel2, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+
+	var rel2 engine.Relation
+	// Essentially, temporary table is not an operation of a transaction.
+	// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
+	if dbName == defines.TEMPORARY_DBNAME {
+		rel2, err = db.Relation(ctx, AUTO_INCR_TABLE)
+	} else {
+		rel2, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -492,7 +555,7 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, rel engine.Relatio
 }
 
 // for delete table operation, move old col as new col in mo_increment_columns table
-func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, oldTableID uint64, dbName string) error {
+func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, oldTableID, newId uint64, dbName string) error {
 	var err error
 	newRel, err := db.Relation(ctx, tblName)
 	if err != nil {
@@ -507,12 +570,21 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 	if err != nil {
 		return err
 	}
-	autoRel, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+
+	var autoRel engine.Relation
+	// Essentially, temporary table is not an operation of a transaction.
+	// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
+	if dbName == defines.TEMPORARY_DBNAME {
+		autoRel, err = db.Relation(ctx, AUTO_INCR_TABLE)
+	} else {
+		autoRel, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+	}
+
 	if err != nil {
 		return err
 	}
 
-	newName := fmt.Sprintf("%d_", newRel.GetTableID(ctx))
+	newName := fmt.Sprintf("%d_", newId)
 	for _, def := range defs {
 		switch d := def.(type) {
 		case *engine.AttributeDef:
@@ -548,7 +620,7 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 }
 
 // for truncate table operation, reset col in mo_increment_columns table
-func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, tableID uint64, dbName string) error {
+func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, tableID, newId uint64, dbName string) error {
 	rel, err := db.Relation(ctx, tblName)
 	if err != nil {
 		return err
@@ -562,12 +634,20 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 	if err != nil {
 		return err
 	}
-	autoRel, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+
+	var autoRel engine.Relation
+	// Essentially, temporary table is not an operation of a transaction.
+	// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
+	if dbName == defines.TEMPORARY_DBNAME {
+		autoRel, err = db.Relation(ctx, AUTO_INCR_TABLE)
+	} else {
+		autoRel, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+	}
+
 	if err != nil {
 		return err
 	}
-
-	name := fmt.Sprintf("%d_", rel.GetTableID(ctx))
+	name := fmt.Sprintf("%d_", newId)
 	for _, def := range defs {
 		switch d := def.(type) {
 		case *engine.AttributeDef:
@@ -601,11 +681,12 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 	return nil
 }
 
-func orderColDefs(attrs []string, ColDefs []*plan.ColDef) {
+func orderColDefs(attrs []string, ColDefs []*plan.ColDef, cols []*plan.Column) {
 	for i, name := range attrs {
 		for j, def := range ColDefs {
 			if name == def.Name {
 				ColDefs[i], ColDefs[j] = ColDefs[j], ColDefs[i]
+				cols[i], cols[j] = cols[j], cols[i]
 			}
 		}
 	}

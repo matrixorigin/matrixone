@@ -17,12 +17,13 @@ package plan
 import (
 	"context"
 	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
 
 func GetBindings(expr *plan.Expr) []int32 {
@@ -792,6 +794,101 @@ func containsParamRef(expr *plan.Expr) bool {
 	return ret
 }
 
+func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
+	if expr == nil {
+		return
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			getColumnMapByExpr(arg, tableDef, columnMap)
+		}
+
+	case *plan.Expr_Col:
+		idx := exprImpl.Col.ColPos
+		colName := exprImpl.Col.Name
+		dotIdx := strings.Index(colName, ".")
+		colName = colName[dotIdx+1:]
+		colIdx := tableDef.Name2ColIndex[colName]
+		(*columnMap)[int(idx)] = int(colIdx)
+	}
+}
+
+func GetColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) (map[int]int, []int, int) {
+	columnMap := make(map[int]int)
+	// key = expr's ColPos,  value = tableDef's ColPos
+	getColumnMapByExpr(expr, tableDef, &columnMap)
+
+	maxCol := 0
+	useColumn := len(columnMap)
+	columns := make([]int, useColumn)
+	i := 0
+	for k, v := range columnMap {
+		if k > maxCol {
+			maxCol = k
+		}
+		columns[i] = v //tableDef's ColPos
+		i = i + 1
+	}
+	return columnMap, columns, maxCol
+}
+
+func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
+	if len(bat.Vecs) == 0 { //that's constant expr
+		e, err := ConstantFold(bat, expr, proc)
+		if err != nil {
+			return false, err
+		}
+
+		if cExpr, ok := e.Expr.(*plan.Expr_C); ok {
+			if bVal, bOk := cExpr.C.Value.(*plan.Const_Bval); bOk {
+				return bVal.Bval, nil
+			}
+		}
+		return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
+	} else {
+		vec, err := colexec.EvalExprByZonemapBat(ctx, bat, proc, expr)
+		if err != nil {
+			return false, err
+		}
+		if vec.Typ.Oid != types.T_bool {
+			return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
+		}
+		cols := vector.MustTCols[bool](vec)
+		for _, isNeed := range cols {
+			if isNeed {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+}
+
+func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vector.Vector, mp *mpool.MPool) {
+	for i := 0; i < len(datas[depth]); i++ {
+		tmpResult[depth] = datas[depth][i]
+		if depth != len(datas)-1 {
+			exchangeVectors(datas, depth+1, tmpResult, result, mp)
+		} else {
+			for j, val := range tmpResult {
+				(*result)[j].Append(val, false, mp)
+			}
+		}
+	}
+}
+
+func BuildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*vector.Vector {
+	vectors := make([]*vector.Vector, len(dataTypes))
+	for i, typ := range dataTypes {
+		vectors[i] = vector.New(types.T(typ).ToType())
+	}
+
+	tmpResult := make([]any, len(datas))
+	exchangeVectors(datas, 0, tmpResult, &vectors, mp)
+
+	return vectors
+}
+
 func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 	if expr == nil {
 		return false
@@ -858,17 +955,15 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 			return nil, err
 		}
 	}
-	if !isConstant(e) {
+	if !rule.IsConstant(e) {
 		return e, nil
 	}
-	// XXX MPOOL
-	// This is a bug -- colexec EvalExpr need to eval, therefore, could potentially need
-	// a mpool.  proc is passed in a nil, where do I get a mpool?   Session?
 	vec, err := colexec.EvalExpr(bat, proc, e)
 	if err != nil {
 		return nil, err
 	}
-	c := getConstantValue(vec)
+	c := rule.GetConstantValue(vec)
+	vec.Free(proc.Mp())
 	if c == nil {
 		return e, nil
 	}
@@ -877,106 +972,6 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	}
 	e.Expr = ec
 	return e, nil
-}
-
-func getConstantValue(vec *vector.Vector) *plan.Const {
-	if nulls.Any(vec.Nsp) {
-		return &plan.Const{Isnull: true}
-	}
-	switch vec.Typ.Oid {
-	case types.T_bool:
-		return &plan.Const{
-			Value: &plan.Const_Bval{
-				Bval: vec.Col.([]bool)[0],
-			},
-		}
-	case types.T_int8:
-		return &plan.Const{
-			Value: &plan.Const_I8Val{
-				I8Val: int32(vec.Col.([]int8)[0]),
-			},
-		}
-	case types.T_int16:
-		return &plan.Const{
-			Value: &plan.Const_I16Val{
-				I16Val: int32(vec.Col.([]int16)[0]),
-			},
-		}
-	case types.T_int32:
-		return &plan.Const{
-			Value: &plan.Const_I32Val{
-				I32Val: vec.Col.([]int32)[0],
-			},
-		}
-	case types.T_int64:
-		return &plan.Const{
-			Value: &plan.Const_I64Val{
-				I64Val: vec.Col.([]int64)[0],
-			},
-		}
-	case types.T_uint8:
-		return &plan.Const{
-			Value: &plan.Const_U8Val{
-				U8Val: uint32(vec.Col.([]uint8)[0]),
-			},
-		}
-	case types.T_uint16:
-		return &plan.Const{
-			Value: &plan.Const_U16Val{
-				U16Val: uint32(vec.Col.([]uint16)[0]),
-			},
-		}
-	case types.T_uint32:
-		return &plan.Const{
-			Value: &plan.Const_U32Val{
-				U32Val: vec.Col.([]uint32)[0],
-			},
-		}
-	case types.T_uint64:
-		return &plan.Const{
-			Value: &plan.Const_U64Val{
-				U64Val: vec.Col.([]uint64)[0],
-			},
-		}
-	case types.T_float64:
-		return &plan.Const{
-			Value: &plan.Const_Dval{
-				Dval: vec.Col.([]float64)[0],
-			},
-		}
-	case types.T_varchar, types.T_char, types.T_text:
-		return &plan.Const{
-			Value: &plan.Const_Sval{
-				Sval: vec.GetString(0),
-			},
-		}
-	default:
-		return nil
-	}
-}
-
-func isConstant(e *plan.Expr) bool {
-	switch ef := e.Expr.(type) {
-	case *plan.Expr_C, *plan.Expr_T:
-		return true
-	case *plan.Expr_F:
-		overloadID := ef.F.Func.GetObj()
-		f, exists := function.GetFunctionByIDWithoutError(overloadID)
-		if !exists {
-			return false
-		}
-		if f.Volatile { // function cannot be fold
-			return false
-		}
-		for i := range ef.F.Args {
-			if !isConstant(ef.F.Args[i]) {
-				return false
-			}
-		}
-		return true
-	default:
-		return false
-	}
 }
 
 func rewriteTableFunction(tblFunc *tree.TableFunction, leftCtx *BindContext) error {
@@ -1174,6 +1169,8 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return constVal <= math.MaxUint32 && constVal >= 0
 		case types.T_uint64:
 			return constVal >= 0
+		case types.T_varchar:
+			return true
 		default:
 			return false
 		}

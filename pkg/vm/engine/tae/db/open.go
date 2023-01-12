@@ -20,6 +20,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
@@ -149,8 +152,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
-	calibrationOp := newCalibrationOp(db)
-	scanner.RegisterOp(calibrationOp)
+	mergeOp := newMergeTaskBuiler(db)
+	scanner.RegisterOp(mergeOp)
 	db.Wal.Start()
 	db.BGCheckpointRunner.Start()
 
@@ -158,8 +161,17 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		opts.CheckpointCfg.ScanInterval,
 		scanner)
 	db.BGScanner.Start()
-
+	// TODO: WithGCInterval requires configuration parameters
+	db.DiskCleaner = gc2.NewDiskCleaner(db.Fs, db.BGCheckpointRunner, db.Catalog)
+	db.DiskCleaner.Start()
+	db.DiskCleaner.AddChecker(
+		func(item any) bool {
+			checkpoint := item.(*checkpoint.CheckpointEntry)
+			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(opts.GCCfg.GCTTL), 0)
+			return !checkpoint.GetEnd().GreaterEq(ts)
+		})
 	// Init gc manager at last
+	// TODO: clean-try-gc requires configuration parameters
 	db.GCManager = gc.NewManager(
 		gc.WithCronJob(
 			"clean-transfer-table",
@@ -168,6 +180,38 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 				db.TransferTable.RunTTL(time.Now())
 				return
 			}),
+
+		gc.WithCronJob(
+			"disk-gc",
+			opts.GCCfg.ScanGCInterval,
+			func(ctx context.Context) (err error) {
+				db.DiskCleaner.JobFactory(ctx)
+				return
+			}),
+		gc.WithCronJob(
+			"checkpoint-gc",
+			opts.CheckpointCfg.GCCheckpointInterval,
+			func(ctx context.Context) error {
+				if opts.CheckpointCfg.DisableGCCheckpoint {
+					return nil
+				}
+				consumed := db.DiskCleaner.GetMaxConsumed()
+				if consumed == nil {
+					return nil
+				}
+				return db.BGCheckpointRunner.GCCheckpoint(consumed.GetEnd())
+			}),
+		gc.WithCronJob(
+			"logtail-gc",
+			opts.CheckpointCfg.GCCheckpointInterval,
+			func(ctx context.Context) error {
+				global := db.BGCheckpointRunner.MaxGlobalCheckpoint()
+				if global != nil {
+					db.LogtailMgr.GCTruncate(global.GetEnd())
+				}
+				return nil
+			},
+		),
 	)
 
 	db.GCManager.Start()

@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -45,7 +46,7 @@ func Prepare(_ *process.Process, _ any) error {
 }
 
 // the bool return value means whether it completed its work or not
-func Call(_ int, proc *process.Process, arg any) (bool, error) {
+func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	p := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 
@@ -104,9 +105,11 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 				return false, err
 			}
 
-			if err := colexec.UpdateInsertBatch(p.Engine, proc.Ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i], p.DBName[i], p.TblName[i]); err != nil {
-				tmpBat.Clean(proc.Mp())
-				return false, err
+			if p.HasAutoCol[i] {
+				if err := colexec.UpdateInsertBatch(p.Engine, proc.Ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i], p.DBName[i], p.TblName[i]); err != nil {
+					tmpBat.Clean(proc.Mp())
+					return false, err
+				}
 			}
 
 			// fill cpkey column
@@ -116,6 +119,8 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 					tmpBat.Clean(proc.Mp())
 					return false, err
 				}
+			} else if updateCtx.ClusterByDef != nil && util.JudgeIsCompositeClusterByColumn(updateCtx.ClusterByDef.Name) {
+				util.FillCompositeClusterByBatch(tmpBat, updateCtx.ClusterByDef.Name, proc)
 			}
 			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 
@@ -518,6 +523,7 @@ func updateIndexTable(indexTableUpdateCtx *UpdateCtx, originTableBatch *batch.Ba
 	// insert new rows
 	insertBat, rowNum := util.BuildUniqueKeyBatch(originTableBatch.Vecs, originTableBatch.Attrs, indexTableUpdateCtx.IndexParts, originTablePriKey, proc)
 	if rowNum != 0 {
+		insertBat.SetZs(rowNum, proc.Mp())
 		err := indexTableUpdateCtx.TableSource.Write(proc.Ctx, insertBat)
 		if err != nil {
 			insertBat.Clean(proc.Mp())

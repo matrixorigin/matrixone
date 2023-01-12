@@ -42,6 +42,10 @@ const (
 	DefaultCheckpointIncremetalInterval = time.Minute
 	DefaultCheckpointGlobalMinCount     = 10
 	DefaultGlobalVersionInterval        = time.Hour
+	DefaultGCCheckpointInterval         = time.Minute
+
+	DefaultScanGCInterval = time.Minute * 30
+	DefaultGCTTL          = time.Hour
 
 	DefaultIOWorkers    = int(8)
 	DefaultAsyncWorkers = int(16)
@@ -63,6 +67,7 @@ type Options struct {
 	StorageCfg    *StorageCfg    `toml:"storage-cfg"`
 	CheckpointCfg *CheckpointCfg `toml:"checkpoint-cfg"`
 	SchedulerCfg  *SchedulerCfg  `toml:"scheduler-cfg"`
+	GCCfg         *GCCfg
 	LogtailCfg    *LogtailCfg
 	Catalog       *catalog.Catalog
 

@@ -17,8 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"runtime"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
@@ -113,6 +116,10 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	if err != nil {
 		errData = pipeline.EncodedMessageError(ctx, err)
 	}
+	// batch data, not scope
+	if analysis == nil {
+		return nil
+	}
 	backMessage := messageAcquirer().(*pipeline.Message)
 	backMessage.Id = message.GetID()
 	backMessage.Sid = pipeline.MessageEnd
@@ -130,7 +137,45 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	if !ok {
 		panic("unexpected message type for cn-server")
 	}
-
+	// it's a Batch
+	if m.GetCmd() == 1 {
+		var v any
+		var dataBuffer []byte
+		var ok bool
+		for {
+			v, ok = srv.chanBufMp.Load(m.GetUuid())
+			if !ok {
+				runtime.Gosched()
+			} else {
+				break
+			}
+		}
+		if dataBuffer, ok := srv.chanBufMp.Load(m.GetID()); !ok {
+			srv.chanBufMp.Store(m.GetID(), dataBuffer)
+		}
+		wg := v.(*process.WaitRegister)
+		if m.IsEndMessage() {
+			wg.Ch <- nil
+			srv.chanBufMp.Delete(m.GetID())
+			return nil, err
+		} else {
+			if len(dataBuffer) == 0 {
+				dataBuffer = m.Data
+			} else {
+				dataBuffer = append(dataBuffer, m.Data...)
+			}
+			if m.WaitingNextToMerge() {
+				return nil, nil
+			}
+			bat, err := decodeBatch(c.proc, dataBuffer)
+			if err != nil {
+				return nil, err
+			}
+			wg.Ch <- bat
+			srv.chanBufMp.Store(m.GetID(), []byte{})
+			return nil, nil
+		}
+	}
 	// generate Compile-structure to run scope.
 	procHelper, err = generateProcessHelper(m.GetProcInfoData(), cli)
 	if err != nil {
@@ -196,7 +241,7 @@ func sendBackBatchToCnClient(ctx context.Context, b *batch.Batch, messageId uint
 }
 
 // receiveMessageFromCnServer deal the back message from cn-server.
-func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextOperator *connector.Argument) error {
+func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
 	var val morpc.Message
 	var dataBuffer []byte
 	for {
@@ -236,6 +281,7 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextOperat
 			if err != nil {
 				return err
 			}
+			nextAnalyze.Network(bat)
 			sendToConnectOperator(nextOperator, bat)
 			dataBuffer = nil
 		}
@@ -296,7 +342,10 @@ func (s *Scope) remoteRun(c *Compile) error {
 	if errReceive != nil {
 		return errReceive
 	}
-	return receiveMessageFromCnServer(c, messagesReceive, s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument))
+	nextInstruction := s.Instructions[len(s.Instructions)-1]
+	nextAnalyze := c.proc.GetAnalyze(nextInstruction.Idx)
+	nextArg := nextInstruction.Arg.(*connector.Argument)
+	return receiveMessageFromCnServer(c, messagesReceive, nextAnalyze, nextArg)
 }
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
@@ -434,6 +483,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.PipelineId = ctx.id
 	p.IsEnd = s.IsEnd
 	p.IsJoin = s.IsJoin
+	p.Uuids = convertScopeUuids(s)
 	// Plan
 	if ctxId == 1 {
 		// encode and decode cost is too large for it.
@@ -516,6 +566,24 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 	return ctxId, nil
 }
 
+func convertPipelineUuid(p *pipeline.Pipeline) (res []uuid.UUID) {
+	res = make([]uuid.UUID, len(p.Uuids))
+	for i := range p.Uuids {
+		res = append(res, uuid.UUID{})
+		copy(res[i][:], p.Uuids[i])
+	}
+	return
+}
+
+func convertScopeUuids(s *Scope) (res [][]byte) {
+	res = make([][]byte, len(s.uuids))
+	for i := range s.uuids {
+		res = append(res, nil)
+		res[i] = s.uuids[i][:]
+	}
+	return
+}
+
 // generateScope generate a scope from scope context and pipeline.
 func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContext,
 	analNodes []*process.AnalyzeInfo, isRemote bool) (*Scope, error) {
@@ -530,6 +598,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		IsJoin:   p.IsJoin,
 		Plan:     ctx.plan,
 		IsRemote: isRemote,
+		uuids:    convertPipelineUuid(p),
 	}
 	dsc := p.GetDataSource()
 	if dsc != nil {
@@ -561,6 +630,19 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		}
 	}
 	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
+	for i := range s.uuids {
+		if len(s.uuids[i]) == 0 {
+			continue
+		}
+		v, ok := srv.chanBufMp.Load(s.uuids[i])
+		if !ok {
+			srv.chanBufMp.Store(s.uuids[i], s.Proc.Reg.MergeReceivers[i])
+		} else {
+			wg := v.(*process.WaitRegister)
+			wg.Ctx = s.Proc.Ctx
+			srv.chanBufMp.Store(s.uuids[i], wg)
+		}
+	}
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
@@ -604,7 +686,7 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline)
 func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
 	var err error
 
-	in := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx)}
+	in := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
 	switch t := opr.Arg.(type) {
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
@@ -837,7 +919,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 
 // convert pipeline.Instruction to vm.Instruction
 func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.Instruction, error) {
-	v := vm.Instruction{Op: int(opr.Op), Idx: int(opr.Idx)}
+	v := vm.Instruction{Op: int(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
 	switch opr.Op {
 	case vm.Anti:
 		t := opr.GetAnti()
@@ -1114,6 +1196,11 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 		target.analInfos[i].InputSize += n.InputSize
 		target.analInfos[i].MemorySize += n.MemorySize
 		target.analInfos[i].TimeConsumed += n.TimeConsumed
+		target.analInfos[i].WaitTimeConsumed += n.WaitTimeConsumed
+		target.analInfos[i].DiskIO += n.DiskIO
+		target.analInfos[i].S3IOByte += n.S3IOByte
+		target.analInfos[i].S3IOCount += n.S3IOCount
+		target.analInfos[i].NetworkIO += n.NetworkIO
 	}
 }
 
@@ -1235,12 +1322,17 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 
 func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 	return &plan.AnalyzeInfo{
-		InputRows:    info.InputRows,
-		OutputRows:   info.OutputRows,
-		InputSize:    info.InputSize,
-		OutputSize:   info.OutputSize,
-		TimeConsumed: info.TimeConsumed,
-		MemorySize:   info.MemorySize,
+		InputRows:        info.InputRows,
+		OutputRows:       info.OutputRows,
+		InputSize:        info.InputSize,
+		OutputSize:       info.OutputSize,
+		TimeConsumed:     info.TimeConsumed,
+		MemorySize:       info.MemorySize,
+		WaitTimeConsumed: info.WaitTimeConsumed,
+		DiskIO:           info.DiskIO,
+		S3IOByte:         info.S3IOByte,
+		S3IOCount:        info.S3IOCount,
+		NetworkIO:        info.NetworkIO,
 	}
 }
 

@@ -15,21 +15,12 @@
 package service
 
 import (
-	"net"
-	"strconv"
-	"sync"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/tests"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-)
-
-var (
-	maxPort   = 65535
-	curPort   = 10000 // curPort indicates allocated port.
-	curPortMu sync.Mutex
 )
 
 // serviceAddresses contains addresses of all services.
@@ -102,7 +93,7 @@ func (a serviceAddresses) assertCnService() {
 	assert.Equal(a.t, a.cnServiceNum, len(a.cnAddresses))
 }
 
-// getDnListenAddress gets dn service address by its index.
+// getDnListenAddress gets dn listen address by its index.
 func (a serviceAddresses) getDnListenAddress(index int) string {
 	a.assertDNService()
 
@@ -110,6 +101,16 @@ func (a serviceAddresses) getDnListenAddress(index int) string {
 		return ""
 	}
 	return a.dnAddresses[index].listenAddr
+}
+
+// getDnLogtailAddress gets logtail server address by its index.
+func (a serviceAddresses) getDnLogtailAddress(index int) string {
+	a.assertDNService()
+
+	if index >= len(a.dnAddresses) || index < 0 {
+		return ""
+	}
+	return a.dnAddresses[index].logtailAddr
 }
 
 // getLogListenAddress gets log service address by its index.
@@ -248,7 +249,7 @@ type logServiceAddress struct {
 }
 
 func newLogServiceAddress(host string) (logServiceAddress, error) {
-	addrs, err := getAddressBatch(host, 3)
+	addrs, err := tests.GetAddressBatch(host, 3)
 	if err != nil {
 		return logServiceAddress{}, err
 	}
@@ -267,22 +268,24 @@ func (la logServiceAddress) listAddresses() []string {
 
 // dnServiceAddress contains address for dn service.
 type dnServiceAddress struct {
-	listenAddr string
+	listenAddr  string
+	logtailAddr string
 }
 
 func newDNServiceAddress(host string) (dnServiceAddress, error) {
-	addrs, err := getAddressBatch(host, 1)
+	addrs, err := tests.GetAddressBatch(host, 2)
 	if err != nil {
 		return dnServiceAddress{}, err
 	}
 	return dnServiceAddress{
-		listenAddr: addrs[0],
+		listenAddr:  addrs[0],
+		logtailAddr: addrs[1],
 	}, nil
 }
 
 // listAddresses returns all addresses for single dn service.
 func (da dnServiceAddress) listAddresses() []string {
-	return []string{da.listenAddr}
+	return []string{da.listenAddr, da.logtailAddr}
 }
 
 type cnServiceAddress struct {
@@ -290,7 +293,7 @@ type cnServiceAddress struct {
 }
 
 func newCNServiceAddress(host string) (cnServiceAddress, error) {
-	addrs, err := getAddressBatch(host, 1)
+	addrs, err := tests.GetAddressBatch(host, 1)
 	if err != nil {
 		return cnServiceAddress{}, err
 	}
@@ -299,44 +302,6 @@ func newCNServiceAddress(host string) (cnServiceAddress, error) {
 
 func (ca cnServiceAddress) listAddresses() []string {
 	return []string{ca.listenAddr}
-}
-
-// getAddressBatch generates service addresses by batch.
-func getAddressBatch(host string, batch int) ([]string, error) {
-	addrs := make([]string, batch)
-	for i := 0; i < batch; i++ {
-		port, err := getAvailablePort(host)
-		if err != nil {
-			return nil, err
-		}
-		addrs[i] = net.JoinHostPort(host, port)
-	}
-	return addrs, nil
-}
-
-// getAvailablePort gets available port on host address.
-func getAvailablePort(host string) (string, error) {
-	curPortMu.Lock()
-	defer curPortMu.Unlock()
-
-	port := 0
-	for curPort < maxPort {
-		curPort++
-
-		ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP(host), Port: curPort})
-		if err != nil {
-			continue
-		}
-		ln.Close()
-
-		port = curPort
-		break
-	}
-
-	if port == 0 {
-		return "", moerr.NewInternalErrorNoCtx("failed to allocate")
-	}
-	return strconv.Itoa(port), nil
 }
 
 // addressSet records addresses for services within the same partition.

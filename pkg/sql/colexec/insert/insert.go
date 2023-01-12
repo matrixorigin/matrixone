@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -52,7 +53,9 @@ type Argument struct {
 	UniqueIndexDef       *plan.UniqueIndexDef
 	SecondaryIndexTables []engine.Relation
 	SecondaryIndexDef    *plan.SecondaryIndexDef
+	ClusterByDef         *plan.ClusterByDef
 	ClusterTable         *plan.ClusterTable
+	HasAutoCol           bool
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -80,6 +83,7 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 			if n.UniqueIndexDef.TableExists[i] {
 				b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, n.UniqueIndexDef.Fields[i].Parts, primaryKeyName, proc)
 				if rowNum != 0 {
+					b.SetZs(rowNum, proc.Mp())
 					err := n.UniqueIndexTables[idx].Write(ctx, b)
 					if err != nil {
 						return err
@@ -193,7 +197,7 @@ func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, ba
 	return false, nil
 }
 
-func Call(_ int, proc *process.Process, arg any) (bool, error) {
+func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	n := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 	if bat == nil {
@@ -325,8 +329,11 @@ func writeBatch(ctx context.Context,
 	n *Argument,
 	proc *process.Process,
 	bat *batch.Batch) (bool, error) {
-	if err := colexec.UpdateInsertBatch(n.Engine, ctx, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
-		return false, err
+
+	if n.HasAutoCol {
+		if err := colexec.UpdateInsertBatch(n.Engine, ctx, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
+			return false, err
+		}
 	}
 	if n.CPkeyColDef != nil {
 		err := util.FillCompositePKeyBatch(bat, n.CPkeyColDef, proc)
@@ -343,6 +350,8 @@ func writeBatch(ctx context.Context,
 			}
 
 		}
+	} else if n.ClusterByDef != nil && util.JudgeIsCompositeClusterByColumn(n.ClusterByDef.Name) {
+		util.FillCompositeClusterByBatch(bat, n.ClusterByDef.Name, proc)
 	}
 	// set null value's data
 	for i := range bat.Vecs {

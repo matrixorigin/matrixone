@@ -205,6 +205,10 @@ func newTestClientSession(c chan morpc.Message) *testClientSession {
 	}
 }
 
+func (cs *testClientSession) Close() error {
+	return nil
+}
+
 func (cs *testClientSession) Write(ctx context.Context, response morpc.Message) error {
 	cs.c <- response
 	return nil

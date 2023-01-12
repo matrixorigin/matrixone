@@ -17,13 +17,17 @@ package table
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
+
+const ExternalFilePath = "__mo_filepath"
 
 type CsvOptions struct {
 	FieldTerminator rune // like: ','
@@ -37,12 +41,48 @@ var CommonCsvOptions = &CsvOptions{
 	Terminator:      '\n',
 }
 
+type ColType int
+
+const (
+	TDatetime ColType = iota
+	TUint64
+	TInt64
+	TFloat64
+	TJson
+	TText
+	TVarchar
+)
+
+func (c *ColType) ToType() types.Type {
+	switch *c {
+	case TDatetime:
+		typ := types.T_datetime.ToType()
+		typ.Precision = 6
+		return typ
+	case TUint64:
+		return types.T_uint64.ToType()
+	case TInt64:
+		return types.T_int64.ToType()
+	case TFloat64:
+		return types.T_float64.ToType()
+	case TJson:
+		return types.T_json.ToType()
+	case TText:
+		return types.T_text.ToType()
+	case TVarchar:
+		return types.T_varchar.ToType()
+	default:
+		panic("not support ColType")
+	}
+}
+
 type Column struct {
 	Name    string
 	Type    string
 	Default string
 	Comment string
 	Alias   string // only use in view
+	ColType ColType
 }
 
 // ToCreateSql return column scheme in create sql
@@ -51,7 +91,7 @@ type Column struct {
 func (col *Column) ToCreateSql(ctx context.Context) string {
 	sb := strings.Builder{}
 	sb.WriteString(fmt.Sprintf("`%s` %s ", col.Name, col.Type))
-	if col.Type == "JSON" {
+	if strings.ToUpper(col.Type) == "JSON" {
 		sb.WriteString("NOT NULL ")
 		if len(col.Default) == 0 {
 			panic(moerr.NewNotSupported(ctx, "json column need default in csv, but not in schema"))
@@ -86,6 +126,8 @@ type Table struct {
 	TableOptions TableOptions
 	// SupportUserAccess default false. if true, user account can access.
 	SupportUserAccess bool
+	// SupportConstAccess default false. if true, use Table.Account
+	SupportConstAccess bool
 }
 
 func (tbl *Table) Clone() *Table {
@@ -101,6 +143,7 @@ func (tbl *Table) GetDatabase() string {
 	return tbl.Database
 }
 
+// GetIdentify return identify like database.table
 func (tbl *Table) GetIdentify() string {
 	return fmt.Sprintf("%s.%s", tbl.Database, tbl.Table)
 }
@@ -218,6 +261,9 @@ func (tbl *View) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 			sb.WriteString(fmt.Sprintf(" as `%s`", col.Alias))
 		}
 	}
+	if tbl.OriginTable.Engine == ExternalTableEngine {
+		sb.WriteString(fmt.Sprintf(", `%s`", ExternalFilePath))
+	}
 	sb.WriteString(fmt.Sprintf(" from `%s`.`%s` where ", tbl.OriginTable.Database, tbl.OriginTable.Table))
 	sb.WriteString(tbl.Condition.String())
 
@@ -237,6 +283,7 @@ type Row struct {
 	Table          *Table
 	AccountIdx     int
 	Columns        []string
+	RawColumns     []any
 	Name2ColumnIdx map[string]int
 }
 
@@ -245,6 +292,7 @@ func (tbl *Table) GetRow(ctx context.Context) *Row {
 		Table:          tbl,
 		AccountIdx:     -1,
 		Columns:        make([]string, len(tbl.Columns)),
+		RawColumns:     make([]any, len(tbl.Columns)),
 		Name2ColumnIdx: make(map[string]int),
 	}
 	for idx, col := range tbl.Columns {
@@ -257,12 +305,32 @@ func (tbl *Table) GetRow(ctx context.Context) *Row {
 		}
 		row.AccountIdx = idx
 	}
+	row.Reset()
 	return row
 }
 
 func (r *Row) Reset() {
 	for idx := 0; idx < len(r.Columns); idx++ {
 		r.Columns[idx] = ""
+	}
+	for idx, typ := range r.Table.Columns {
+		switch typ.ColType.ToType().Oid {
+		case types.T_int64:
+			r.RawColumns[idx] = int64(0)
+		case types.T_uint64:
+			r.RawColumns[idx] = uint64(0)
+		case types.T_float64:
+			r.RawColumns[idx] = float64(0)
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+			r.RawColumns[idx] = typ.Default
+		case types.T_json:
+			r.RawColumns[idx] = typ.Default
+		case types.T_datetime:
+			r.RawColumns[idx] = time.Time{}
+		default:
+			logutil.Errorf("the value type %v is not SUPPORT", typ.ColType.ToType().String())
+			panic("the value type is not support now")
+		}
 	}
 }
 
@@ -271,6 +339,9 @@ func (r *Row) Reset() {
 func (r *Row) GetAccount() string {
 	if r.Table.PathBuilder.SupportAccountStrategy() && r.AccountIdx >= 0 {
 		return r.Columns[r.AccountIdx]
+	}
+	if r.Table.SupportConstAccess && len(r.Table.Account) > 0 {
+		return r.Table.Account
 	}
 	return "sys"
 }
@@ -299,6 +370,14 @@ func (r *Row) SetInt64(col string, val int64) {
 	r.SetVal(col, fmt.Sprintf("%d", val))
 }
 
+func (r *Row) SetRawColumnVal(col Column, val any) {
+	if idx, exist := r.Name2ColumnIdx[col.Name]; !exist {
+		logutil.Fatalf("column(%s) not exist in table(%s)", col.Name, r.Table.Table)
+	} else {
+		r.RawColumns[idx] = val
+	}
+}
+
 // ToStrings output all column as string
 func (r *Row) ToStrings() []string {
 	for idx, col := range r.Columns {
@@ -309,12 +388,17 @@ func (r *Row) ToStrings() []string {
 	return r.Columns
 }
 
+func (r *Row) GetRawColumn() []any {
+	return r.RawColumns
+}
+
 // ToRawStrings not format
 func (r *Row) ToRawStrings() []string {
 	return r.Columns
 }
 
 func (r *Row) ParseRow(cols []string) error {
+	// fixme: check len(r.Name2ColumnIdx) != len(cols)
 	r.Columns = cols
 	return nil
 }

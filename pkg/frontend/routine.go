@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,6 +23,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 

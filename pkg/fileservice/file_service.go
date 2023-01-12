@@ -87,6 +87,8 @@ type IOEntry struct {
 	ReadCloserForRead *io.ReadCloser
 
 	// when writing, if Reader is not nil, read data from it instead of reading Data field
+	// number of bytes to be read is specified by Size field
+	// if number of bytes is unknown, set Size field to -1
 	ReaderForWrite io.Reader
 
 	// when reading, if the ToObject field is not nil, the returning object will be set to this field
@@ -109,10 +111,9 @@ type IOEntry struct {
 	// used in capacity limited caches
 	ObjectSize int64
 
-	// ignore indicates the entry should be ignored
-	// if true, implementations must not change any field
-	// for caches to skip individual IOEntry without using another IOVector
-	ignore bool
+	// done indicates whether the entry is filled with data
+	// for implementing cascade cache
+	done bool
 }
 
 // DirEntry is a file or dir

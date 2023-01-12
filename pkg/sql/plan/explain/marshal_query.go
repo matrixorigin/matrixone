@@ -16,10 +16,11 @@ package explain
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func ConvertNode(ctx context.Context, node *plan.Node, options *ExplainOptions) (*Node, error) {
@@ -528,13 +529,35 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	return labels, nil
 }
 
+const TimeConsumed = "Time Consumed"
+const WaitTime = "Wait Time"
+
 const InputRows = "Input Rows"
+const OutputRows = "Output Rows"
 const InputSize = "Input Size"
+const OutputSize = "Output Size"
+const MemorySize = "Memory Size"
+const DiskIO = "Disk IO"
+const S3IOByte = "S3 IO Byte"
+const S3IOCount = "S3 IO Count"
+const Network = "Network"
 
 func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOptions) Statistics {
 	statistics := NewStatistics()
 	if options.Analyze && m.node.AnalyzeInfo != nil {
 		analyzeInfo := m.node.AnalyzeInfo
+		times := []StatisticValue{
+			{
+				Name:  TimeConsumed,
+				Value: analyzeInfo.TimeConsumed,
+				Unit:  "us",
+			},
+			{
+				Name:  WaitTime,
+				Value: analyzeInfo.WaitTimeConsumed,
+				Unit:  "us",
+			},
+		}
 		mbps := []StatisticValue{
 			{
 				Name:  InputRows,
@@ -542,7 +565,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Unit:  "count",
 			},
 			{
-				Name:  "Output Rows",
+				Name:  OutputRows,
 				Value: analyzeInfo.OutputRows,
 				Unit:  "count",
 			},
@@ -552,7 +575,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Unit:  "byte",
 			},
 			{
-				Name:  "Output Size",
+				Name:  OutputSize,
 				Value: analyzeInfo.OutputSize,
 				Unit:  "byte",
 			},
@@ -560,13 +583,43 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 
 		mems := []StatisticValue{
 			{
-				Name:  "Memory Size",
+				Name:  MemorySize,
 				Value: analyzeInfo.MemorySize,
 				Unit:  "byte",
 			},
 		}
+
+		io := []StatisticValue{
+			{
+				Name:  DiskIO,
+				Value: analyzeInfo.DiskIO,
+				Unit:  "byte",
+			},
+			{
+				Name:  S3IOByte,
+				Value: analyzeInfo.S3IOByte,
+				Unit:  "byte",
+			},
+			{
+				Name:  S3IOCount,
+				Value: analyzeInfo.S3IOCount,
+				Unit:  "count",
+			},
+		}
+
+		nw := []StatisticValue{
+			{
+				Name:  Network,
+				Value: analyzeInfo.NetworkIO,
+				Unit:  "byte",
+			},
+		}
+
+		statistics.Time = append(statistics.Time, times...)
 		statistics.Throughput = append(statistics.Throughput, mbps...)
 		statistics.Memory = append(statistics.Memory, mems...)
+		statistics.IO = append(statistics.IO, io...)
+		statistics.Network = append(statistics.Network, nw...)
 	}
 	return *statistics
 }

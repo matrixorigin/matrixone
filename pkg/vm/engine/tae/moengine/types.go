@@ -55,6 +55,8 @@ type Relation interface {
 
 	UpdateConstraintWithBin(context.Context, []byte) error
 	//Write just append data into txn's workspace, instead of applying data into state machine.
+	//TODO::Add flag parameter to indicate whether tae need to
+	//      do deduplication check with transaction's workspace and snapshot data.
 	Write(context.Context, *batch.Batch) error
 
 	//AddBlksWithMetaLoc just add  non-appendable blocks into txn's workspace.
@@ -110,6 +112,7 @@ type Engine interface {
 	GetTAE(ctx context.Context) *db.DB
 
 	FlushTable(ctx context.Context, tenantID uint32, databaseId, tableId uint64, ts types.TS) error
+	ForceCheckpoint(ctx context.Context, ts types.TS) error
 }
 
 type TxnEngine interface {
