@@ -12,11 +12,145 @@ select sleep(-1);
 invalid argument sleep, bad value input contains negative
 select sleep(-1.5);
 invalid argument sleep, bad value input contains negative
-
 create table t1 (a int,b int);
 insert into t1 values (1,1),(1,null);
 select sleep(a) from t1;
 sleep(a)
+0
+0
+select sleep(b) from t1;
+invalid argument sleep, bad value input contains null
+SELECT sleep(0);
+sleep(0)
+0
+SELECT sleep(1);
+sleep(1)
+0
+SELECT sleep(0.33);
+sleep(0.33)
+0
+SELECT sleep(-2);
+invalid argument sleep, bad value input contains negative
+SELECT sleep(-23.1);
+invalid argument sleep, bad value input contains negative
+DROP TABLE IF EXISTS sleep_01;
+CREATE TABLE sleep_01 (id int);
+SELECT * ,sleep(0.2) from sleep_01;
+id    sleep(0.2)
+INSERT INTO sleep_01 VALUES(273);
+SELECT *, sleep(1.2) FROM sleep_01;
+id    sleep(1.2)
+273    0
+SELECT *, sleep(0) FROM sleep_01;
+id    sleep(0)
+273    0
+INSERT INTO sleep_01 VALUES(-32783);
+SELECT *,sleep(0.2) FROM sleep_01;
+id    sleep(0.2)
+273    0
+-32783    0
+SELECT *,sleep(0) FROM sleep_01;
+id    sleep(0)
+273    0
+-32783    0
+INSERT INTO sleep_01 VALUES(0);
+SELECT * ,sleep(0.2) FROM sleep_01;
+id    sleep(0.2)
+273    0
+-32783    0
+0    0
+SELECT *, sleep(0) FROM sleep_01;
+id    sleep(0)
+273    0
+-32783    0
+0    0
+DROP TABLE IF EXISTS sleep_02;
+CREATE TABLE sleep_02 (id int, name VARCHAR(10), province VARCHAR(100) NOT NULL, address VARCHAR(100));
+INSERT INTO sleep_02 VALUES(1, '张三', '陕西', '大头村二组');
+INSERT INTO sleep_02 VALUES(2, '李四', '北京', '快乐村三组');
+INSERT INTO sleep_02 VALUES(3, '王五', '陕西', '美丽村四组');
+SELECT province, address, sleep(2) FROM sleep_02 WHERE name = '张三';
+province    address    sleep(2)
+陕西    大头村二组    0
+SELECT name, sleep(0.3) FROM sleep_02 WHERE address = '大头村二组' AND province = '陕西';
+name    sleep(0.3)
+张三    0
+SELECT *, sleep(0.2) FROM sleep_02 WHERE id = COS(0) + TAN(45);
+id    name    province    address    sleep(0.2)
+SELECT name, province, sleep(0.2) FROM sleep_02;
+name    province    sleep(0.2)
+张三    陕西    0
+李四    北京    0
+王五    陕西    0
+DROP TABLE IF EXISTS sleep_03;
+DROP TABLE IF EXISTS sleep_04;
+CREATE TABLE sleep_03(d INT,d1 VARCHAR(20), d2 BIGINT,PRIMARY KEY (d));
+CREATE TABLE sleep_04( d INT,d1 CHAR(20),d2 DATE,PRIMARY KEY (d));
+INSERT INTO sleep_03 VALUES (1,'lijklnfdsalj',19290988);
+INSERT INTO sleep_03 VALUES (2,'xlziblkfdi',1949100132);
+INSERT INTO sleep_03 VALUES (3,'ixioklakmaria',69456486);
+INSERT INTO sleep_03 VALUES (4,'brzilaiusd',6448781575);
+INSERT INTO sleep_04 VALUES (1,'usaisagoodnat','1970-01-02');
+INSERT INTO sleep_04 VALUES (2,'chanialfakbjap','1971-11-12');
+INSERT INTO sleep_04 VALUES (3,'indiaisashit','1972-09-09');
+INSERT INTO sleep_04 VALUES (4,'xingoporelka','1973-12-07');
+SELECT sleep_03.d, sleep(0) FROM sleep_03,sleep_04 WHERE sleep_03.d = sleep_04.d;
+d    sleep(0)
+1    0
+2    0
+3    0
+4    0
+SELECT sleep_03.d, sleep(0.1) FROM sleep_03;
+d    sleep(0.1)
+1    0
+2    0
+3    0
+4    0
+SELECT sleep_03.d, sleep_03.d1, sleep(0.4) FROM sleep_03 JOIN sleep_04 ON sleep_03.d = sleep_04.d;
+d    d1    sleep(0.4)
+1    lijklnfdsalj    0
+2    xlziblkfdi    0
+3    ixioklakmaria    0
+4    brzilaiusd    0
+SELECT sleep_03.d, sleep(1) FROM sleep_03 join sleep_04 on sleep_03.d=sleep_04.d;
+d    sleep(1)
+1    0
+2    0
+3    0
+4    0
+SELECT sleep_03.d, sleep(0.432)FROM sleep_03 right join sleep_04 on sleep_03.d=sleep_04.d;
+d    sleep(0.432)
+1    0
+2    0
+3    0
+4    0
+SELECT d, sleep(0.5) FROM sleep_03 ORDER BY d2 desc;
+d    sleep(0.5)
+4    0
+2    0
+3    0
+1    0
+select sleep();
+invalid argument function sleep, bad value []
+select sleep(1);
+sleep(1)
+0
+select sleep(1.5);
+sleep(1.5)
+0
+select sleep(null);
+invalid argument sleep, bad value input contains null
+select sleep(-1);
+invalid argument sleep, bad value input contains negative
+select sleep(-1.5);
+invalid argument sleep, bad value input contains negative
+create table t1 (a int,b int);
+table t1 already exists
+insert into t1 values (1,1),(1,null);
+select sleep(a) from t1;
+sleep(a)
+0
+0
 0
 0
 select sleep(b) from t1;
