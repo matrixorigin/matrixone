@@ -508,8 +508,9 @@ message AnalyzeInfo {
     int64 memory_size = 6;
     int64 wait_time_consumed = 7;
     int64 diskIO = 8;
-    int64 s3IO = 9;
-    int64 networkIO = 10;
+    int64 s3IO_byte = 9;
+    int64 s3IO_count = 10;
+    int64 networkIO = 11;
 }
 
 message Node {
