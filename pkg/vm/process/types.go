@@ -16,8 +16,9 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -35,7 +36,8 @@ type Analyze interface {
 	Output(*batch.Batch, bool)
 	WaitStop(time.Time)
 	DiskIO(*batch.Batch)
-	S3IO(*batch.Batch)
+	S3IOByte(*batch.Batch)
+	S3IOCount(int)
 	Network(*batch.Batch)
 }
 
