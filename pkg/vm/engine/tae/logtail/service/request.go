@@ -14,10 +14,13 @@
 package service
 
 import (
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 )
 
+// LogtailRequest wraps logtail.LogtailRequest.
 type LogtailRequest struct {
 	logtail.LogtailRequest
 }
@@ -38,4 +41,36 @@ func (r *LogtailRequest) DebugString() string {
 
 func (r *LogtailRequest) Size() int {
 	return r.ProtoSize()
+}
+
+// RequestPool acquires or releases LogtailRequest.
+type RequestPool interface {
+	// Acquire fetches item from pool.
+	Acquire() morpc.Message
+
+	// Release puts item back to pool.
+	Release(*LogtailRequest)
+}
+
+type requestPool struct {
+	pool *sync.Pool
+}
+
+func NewRequestPool() RequestPool {
+	return &requestPool{
+		pool: &sync.Pool{
+			New: func() any {
+				return &LogtailRequest{}
+			},
+		},
+	}
+}
+
+func (p *requestPool) Acquire() morpc.Message {
+	return p.pool.Get().(*LogtailRequest)
+}
+
+func (p *requestPool) Release(req *LogtailRequest) {
+	req.Reset()
+	p.pool.Put(req)
 }

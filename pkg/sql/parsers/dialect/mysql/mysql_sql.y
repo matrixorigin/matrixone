@@ -318,7 +318,7 @@ import (
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS
-%token <str> TABLE_NUMBER TABLE_SIZE COLUMN_NUMBER TABLE_VALUES
+%token <str> TABLE_NUMBER COLUMN_NUMBER TABLE_VALUES
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
@@ -373,10 +373,10 @@ import (
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
-%type <statement> show_table_num_stmt show_column_num_stmt show_table_size_stmt show_table_values_stmt
+%type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
@@ -2303,8 +2303,8 @@ show_stmt:
 |   show_locks_stmt
 |   show_table_num_stmt
 |   show_column_num_stmt
-|   show_table_size_stmt
 |   show_table_values_stmt
+|   show_accounts_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -2383,12 +2383,6 @@ show_column_num_stmt:
     SHOW COLUMN_NUMBER table_column_name database_name_opt
     {
        $$ = &tree.ShowColumnNumber{Table: $3, DbName: $4}
-    }
-
-show_table_size_stmt:
-    SHOW TABLE_SIZE table_column_name database_name_opt
-    {
-       $$ = &tree.ShowTableSize{Table: $3, DbName: $4}
     }
 
 show_table_values_stmt:
@@ -2579,6 +2573,12 @@ show_columns_stmt:
             Like: $7,
             Where: $8,
         }
+    }
+
+show_accounts_stmt:
+    SHOW ACCOUNTS like_opt
+    {
+        $$ = &tree.ShowAccounts{Like: $3}
     }
 
 like_opt:
@@ -8132,7 +8132,6 @@ reserved_keyword:
 |   NODE
 |   LOCKS
 |   TABLE_NUMBER
-|   TABLE_SIZE
 |   COLUMN_NUMBER
 |   TABLE_VALUES
 |   RETURNS
