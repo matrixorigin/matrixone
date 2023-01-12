@@ -2002,6 +2002,11 @@ func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, aa *tree.Al
 	return doAlterAccount(ctx, mce.GetSession(), aa)
 }
 
+// handleAlterDatabaseConfig alter a database's mysql_compatbility_mode
+func (mce *MysqlCmdExecutor) handleAlterDataBaseConfig(ctx context.Context, ad *tree.AlterDataBaseConfig) error {
+	return doAlterDatabaseConfig(ctx, mce.GetSession(), ad)
+}
+
 // handleCreateUser creates the user for the tenant
 func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.CreateUser) error {
 	ses := mce.GetSession()
@@ -3533,6 +3538,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleAlterAccount(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.AlterDataBaseConfig:
+			ses.InvalidatePrivilegeCache()
+			selfHandle = true
+			if err = mce.handleAlterDataBaseConfig(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.CreateUser:
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
@@ -3900,7 +3911,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CreateTable, *tree.DropTable,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.Load, *tree.MoDump,
-			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
+			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig,
 			*tree.CreateFunction, *tree.DropFunction,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
