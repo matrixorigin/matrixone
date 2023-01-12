@@ -386,7 +386,8 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 
 		OnRestrictIdx: make([]int32, len(oldCtx.OnRestrictIdx)),
 
-		OnCascadeIdx: make([]int32, len(oldCtx.OnCascadeIdx)),
+		OnCascadeIdx:    make([]int32, len(oldCtx.OnCascadeIdx)),
+		OnCascadeSource: make([]engine.Relation, len(oldCtx.OnCascadeRef)),
 
 		OnSetSource: make([]engine.Relation, len(oldCtx.OnSetRef)),
 		OnSetIdx:    make([][]int32, len(oldCtx.OnSetIdx)),
