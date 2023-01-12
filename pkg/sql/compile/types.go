@@ -142,7 +142,7 @@ type Server struct {
 	// remote CN should be filled into which chan
 	// 2. messgage.Id --> dataBuf (when a batch is too large, it will be split into small ones in the source
 	// CN, and the target CN need to recieve them all and then merge them into one batch)
-	chanBufMp sync.Map
+	chanBufMp *sync.Map
 }
 
 // Compile contains all the information needed for compilation.

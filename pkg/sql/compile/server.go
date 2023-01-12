@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -29,7 +30,8 @@ func NewServer() *Server {
 		return srv
 	}
 	srv = &Server{
-		mp: make(map[uint64]*process.WaitRegister),
+		mp:        make(map[uint64]*process.WaitRegister),
+		chanBufMp: new(sync.Map),
 	}
 	return srv
 }
