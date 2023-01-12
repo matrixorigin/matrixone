@@ -373,7 +373,7 @@ import (
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_size_stmt show_table_values_stmt
@@ -2305,6 +2305,7 @@ show_stmt:
 |   show_column_num_stmt
 |   show_table_size_stmt
 |   show_table_values_stmt
+|   show_accounts_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -2579,6 +2580,12 @@ show_columns_stmt:
             Like: $7,
             Where: $8,
         }
+    }
+
+show_accounts_stmt:
+    SHOW ACCOUNTS like_opt
+    {
+        $$ = &tree.ShowAccounts{Like: $3}
     }
 
 like_opt:

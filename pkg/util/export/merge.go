@@ -703,7 +703,7 @@ const ParamSeparator = " "
 func MergeTaskMetadata(id task.TaskCode, args ...string) task.TaskMetadata {
 	return task.TaskMetadata{
 		ID:       path.Join("ETL_merge_task", path.Join(args...)),
-		Executor: uint32(id),
+		Executor: id,
 		Context:  []byte(strings.Join(args, ParamSeparator)),
 	}
 }
