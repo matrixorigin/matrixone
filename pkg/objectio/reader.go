@@ -70,9 +70,6 @@ func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.
 			size := uint32(0)
 			i := uint32(0)
 			for {
-				if size > uint32(dataLen) {
-					logutil.Infof("sfsdfsdfsd")
-				}
 				if size == uint32(dataLen) {
 					break
 				}
