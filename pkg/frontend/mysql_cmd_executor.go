@@ -2095,6 +2095,24 @@ func (mce *MysqlCmdExecutor) handleKill(ctx context.Context, k *tree.Kill) error
 	return err
 }
 
+// handleShowAccounts lists the info of accounts
+func (mce *MysqlCmdExecutor) handleShowAccounts(ctx context.Context, sa *tree.ShowAccounts) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = doShowAccounts(ctx, ses, sa)
+	if err != nil {
+		return err
+	}
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err = proto.SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
 func GetExplainColumns(ctx context.Context, explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
 		{Typ: &plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
@@ -3587,6 +3605,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleKill(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.ShowAccounts:
+			selfHandle = true
+			if err = mce.handleShowAccounts(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		}
 
 		if selfHandle {
@@ -4002,6 +4025,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 		ses.cachePlan(sql, stmts, plans)
 	}
+
 	return nil
 }
 

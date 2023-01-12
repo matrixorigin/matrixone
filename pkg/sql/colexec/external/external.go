@@ -123,9 +123,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	t1 := time.Now()
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
-	defer func(){
+	defer func() {
 		anal.Stop()
-		time.Since(t1)
+		anal.AddScanTime(t1)
 	}()
 	anal.Input(nil, isFirst)
 	param := arg.(*Argument).Es
@@ -264,13 +264,7 @@ func judgeContainColname(expr *plan.Expr) bool {
 	if !ok || !containColname(expr_Col.Col.Name) {
 		return false
 	}
-	_, ok = expr_F.F.Args[1].Expr.(*plan.Expr_C)
-	if !ok {
-		return false
-	}
-
-	str := expr_F.F.Args[1].Expr.(*plan.Expr_C).C.GetSval()
-	return str != ""
+	return true
 }
 
 func getAccountCol(filepath string) string {
@@ -325,18 +319,15 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 }
 
 func fliterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList []string) ([]string, error) {
-	filterList, restList := make([]*plan.Expr, 0), make([]*plan.Expr, 0)
+	filterList := make([]*plan.Expr, 0)
 	for i := 0; i < len(node.FilterList); i++ {
 		if judgeContainColname(node.FilterList[i]) {
 			filterList = append(filterList, node.FilterList[i])
-		} else {
-			restList = append(restList, node.FilterList[i])
 		}
 	}
 	if len(filterList) == 0 {
 		return fileList, nil
 	}
-	node.FilterList = restList
 	bat := makeFilepathBatch(node, proc, filterList, fileList)
 	filter := colexec.RewriteFilterExprList(filterList)
 	vec, err := colexec.EvalExpr(bat, proc, filter)
@@ -762,6 +753,9 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 }
 
 func needRead(param *ExternalParam, proc *process.Process, objectReader objectio.Reader) bool {
+	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
+		return true
+	}
 	indexes, err := objectReader.ReadIndex(context.Background(), param.Zoneparam.bs[param.Zoneparam.offset].GetExtent(),
 		param.Filter.columns, objectio.ZoneMapType, proc.GetMPool())
 	if err != nil {

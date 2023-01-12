@@ -494,6 +494,7 @@ func DeepCopyInsertValues(insert *plan.InsertValues) *plan.InsertValues {
 		UniqueIndexDef:    DeepCopyUniqueIndexDef(insert.UniqueIndexDef),
 		SecondaryIndexDef: DeepCopySecondaryIndexDef(insert.SecondaryIndexDef),
 		ClusterTable:      DeepCopyClusterTable(insert.GetClusterTable()),
+		HasAutoCol:        insert.HasAutoCol,
 	}
 
 	for idx, col := range insert.ExplicitCols {
@@ -849,7 +850,10 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		MemorySize:       analyzeinfo.GetMemorySize(),
 		WaitTimeConsumed: analyzeinfo.GetWaitTimeConsumed(),
 		DiskIO:           analyzeinfo.GetDiskIO(),
-		S3IO:             analyzeinfo.GetS3IO(),
+		S3IOByte:         analyzeinfo.GetS3IOByte(),
+		S3IOCount:        analyzeinfo.GetS3IOCount(),
 		NetworkIO:        analyzeinfo.GetNetworkIO(),
+		ScanTime: analyzeinfo.GetScanTime(),
+		InsertTime: analyzeinfo.GetInsertTime(),
 	}
 }
