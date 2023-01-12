@@ -15,8 +15,6 @@
 package plan
 
 import (
-	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,6 +37,7 @@ type deleteSelectInfo struct {
 	onDeleteRestrict    []int32
 	onDeleteRestrictTbl []*ObjectRef
 	onDeleteSet         [][]int64
+	onDeleteSetAttr     [][]string
 	onDeleteSetTbl      []*ObjectRef
 	onDeleteCascade     []int32
 	onDeleteCascadeTbl  []*ObjectRef
@@ -132,16 +131,24 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, aliasMap m
 	return tblInfo, nil
 }
 
-func deleteToSelect(ctx context.Context, node *tree.Delete, haveConstraint bool) *tree.Select {
+func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Update, haveConstraint bool) (int32, error) {
+	return 0, nil
+}
+
+func insertToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Insert, haveConstraint bool) (int32, error) {
+	return 0, nil
+}
+
+func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool) (int32, error) {
 	var selectList []tree.SelectExpr
 	fromTables := &tree.From{}
 
 	getResolveExpr := func(tblName string) tree.SelectExpr {
 		var ret *tree.UnresolvedName
 		if haveConstraint {
-			ret, _ = tree.NewUnresolvedNameWithStar(ctx, tblName)
+			ret, _ = tree.NewUnresolvedNameWithStar(builder.GetContext(), tblName)
 		} else {
-			ret, _ = tree.NewUnresolvedName(ctx, tblName, catalog.Row_ID)
+			ret, _ = tree.NewUnresolvedName(builder.GetContext(), tblName, catalog.Row_ID)
 		}
 		return tree.SelectExpr{
 			Expr: ret,
@@ -179,12 +186,12 @@ func deleteToSelect(ctx context.Context, node *tree.Delete, haveConstraint bool)
 		Limit:   node.Limit,
 		With:    node.With,
 	}
-
 	// ftCtx := tree.NewFmtCtx(dialectType)
 	// astSelect.Format(ftCtx)
 	// sql := ftCtx.String()
 	// fmt.Print(sql)
-	return astSelect
+
+	return builder.buildSelect(astSelect, bindCtx, false)
 }
 
 func checkIfStmtHaveRewriteConstraint(tblInfo *dmlTableInfo) bool {
@@ -202,17 +209,9 @@ func checkIfStmtHaveRewriteConstraint(tblInfo *dmlTableInfo) bool {
 }
 
 func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *deleteSelectInfo, stmt *tree.Delete) error {
-	// sql := deleteToSelect(stmt, dialect.MYSQL, true)
-	// stmts, err := mysql.Parse(builder.GetContext(), sql)
-	// if err != nil {
-	// 	return err
-	// }
-	// subCtx := NewBindContext(builder, bindCtx)
-	// info.rootId, err = builder.buildSelect(stmts[0].(*tree.Select), subCtx, false)
 	var err error
-	selectStmt := deleteToSelect(builder.GetContext(), stmt, true)
 	subCtx := NewBindContext(builder, bindCtx)
-	info.rootId, err = builder.buildSelect(selectStmt, subCtx, false)
+	info.rootId, err = deleteToSelect(builder, subCtx, stmt, true)
 	if err != nil {
 		return err
 	}
@@ -384,10 +383,14 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 		childPosMap := make(map[string]int32)
 		childTypMap := make(map[string]*plan.Type)
 		childId2name := make(map[uint64]string)
+		var childAttrs []string
 		for idx, col := range childTableDef.Cols {
 			childPosMap[col.Name] = int32(idx)
 			childTypMap[col.Name] = col.Typ
 			childId2name[col.ColId] = col.Name
+			if col.Name != catalog.Row_ID {
+				childAttrs = append(childAttrs, col.Name)
+			}
 		}
 
 		objRef := &plan.ObjectRef{
@@ -502,6 +505,7 @@ func rewriteDeleteSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *
 					}
 					info.onDeleteSet = append(info.onDeleteSet, setIdxs)
 					info.onDeleteSetTbl = append(info.onDeleteSetTbl, objRef)
+					info.onDeleteSetAttr = append(info.onDeleteSetAttr, childAttrs)
 					needRecursionCall = true
 				}
 

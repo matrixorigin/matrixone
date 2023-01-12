@@ -1256,6 +1256,57 @@ func (v *Vector) Read(data []byte) error {
 	return nil
 }
 
+func CopyConst(toVec, fromVec *Vector, m *mpool.MPool) error {
+	if !toVec.isConst || !fromVec.isConst {
+		return moerr.NewInternalErrorNoCtx("toVec & fromVec must be const")
+	}
+	typ := fromVec.Typ
+
+	switch typ.Oid {
+	case types.T_bool:
+		toVec.Append(MustTCols[bool](fromVec)[0], false, m)
+	case types.T_int8:
+		toVec.Append(MustTCols[int8](fromVec)[0], false, m)
+	case types.T_int16:
+		toVec.Append(MustTCols[int16](fromVec)[0], false, m)
+	case types.T_int32:
+		toVec.Append(MustTCols[int32](fromVec)[0], false, m)
+	case types.T_int64:
+		toVec.Append(MustTCols[int64](fromVec)[0], false, m)
+	case types.T_uint8:
+		toVec.Append(MustTCols[uint8](fromVec)[0], false, m)
+	case types.T_uint16:
+		toVec.Append(MustTCols[uint16](fromVec)[0], false, m)
+	case types.T_uint32:
+		toVec.Append(MustTCols[uint32](fromVec)[0], false, m)
+	case types.T_uint64:
+		toVec.Append(MustTCols[uint64](fromVec)[0], false, m)
+	case types.T_float32:
+		toVec.Append(MustTCols[float32](fromVec)[0], false, m)
+	case types.T_float64:
+		toVec.Append(MustTCols[float64](fromVec)[0], false, m)
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+		toVec.Append(MustBytesCols(fromVec)[0], false, m)
+	case types.T_date:
+		toVec.Append(MustTCols[types.Date](fromVec)[0], false, m)
+	case types.T_datetime:
+		toVec.Append(MustTCols[types.Datetime](fromVec)[0], false, m)
+	case types.T_time:
+		toVec.Append(MustTCols[types.Time](fromVec)[0], false, m)
+	case types.T_timestamp:
+		toVec.Append(MustTCols[types.Timestamp](fromVec)[0], false, m)
+	case types.T_decimal64:
+		toVec.Append(MustTCols[types.Decimal64](fromVec)[0], false, m)
+	case types.T_decimal128:
+		toVec.Append(MustTCols[types.Decimal128](fromVec)[0], false, m)
+	case types.T_uuid:
+		toVec.Append(MustTCols[types.Uuid](fromVec)[0], false, m)
+	default:
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("vec %v can not copy", fromVec))
+	}
+	return nil
+}
+
 // XXX Old Copy is FUBAR.
 // Copy simply does v[vi] = w[wi]
 func Copy(v, w *Vector, vi, wi int64, m *mpool.MPool) error {

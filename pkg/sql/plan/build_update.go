@@ -76,6 +76,8 @@ type updateTableInfo struct {
 }
 
 func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
+	buildTableUpdate2(stmt, ctx)
+
 	// build map between base table and alias table
 	tbinfo := newTableInfo()
 	extractWithTable(stmt.With, tbinfo, ctx)
@@ -194,6 +196,16 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	qry.Steps[len(qry.Steps)-1] = node.NodeId
 
 	return usePlan, nil
+}
+
+func buildTableUpdate2(stmt *tree.Update, ctx CompilerContext) (p *Plan, err error) {
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	bindCtx := NewBindContext(builder, nil)
+	_, err = updateToSelect(builder, bindCtx, stmt, false)
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 // Align the projection column expression to the target column type

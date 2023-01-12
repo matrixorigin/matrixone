@@ -27,6 +27,7 @@ import (
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Plan, err error) {
+	buildInsert2(stmt, ctx, isReplace)
 	if stmt.OnDuplicateUpdate != nil {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ...")
 	}
@@ -39,6 +40,16 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	default:
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert has unknown select statement")
 	}
+}
+
+func buildInsert2(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Plan, err error) {
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	bindCtx := NewBindContext(builder, nil)
+	_, err = insertToSelect(builder, bindCtx, stmt, false)
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {

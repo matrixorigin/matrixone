@@ -390,15 +390,9 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 
 		OnSetSource: make([]engine.Relation, len(oldCtx.OnSetRef)),
 		OnSetIdx:    make([][]int32, len(oldCtx.OnSetIdx)),
+		OnSetAttrs:  make([][]string, len(oldCtx.OnSetAttrs)),
 
 		CanTruncate: oldCtx.CanTruncate,
-	}
-
-	for i, list := range oldCtx.OnSetIdx {
-		delCtx.OnSetIdx[i] = make([]int32, len(list.List))
-		for j, id := range list.List {
-			delCtx.OnSetIdx[i][j] = int32(id)
-		}
 	}
 
 	if delCtx.CanTruncate {
@@ -427,6 +421,16 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 		copy(delCtx.DelIdxIdx, oldCtx.DelIdxIdx)
 		copy(delCtx.OnRestrictIdx, oldCtx.OnRestrictIdx)
 		copy(delCtx.OnCascadeIdx, oldCtx.OnCascadeIdx)
+		for i, list := range oldCtx.OnSetIdx {
+			delCtx.OnSetIdx[i] = make([]int32, len(list.List))
+			for j, id := range list.List {
+				delCtx.OnSetIdx[i][j] = int32(id)
+			}
+		}
+		for i, list := range oldCtx.OnSetAttrs {
+			delCtx.OnSetAttrs[i] = make([]string, len(list.List))
+			copy(delCtx.OnSetAttrs[i], list.List)
+		}
 		for i, ref := range oldCtx.DelRef {
 			rel, err := getRel(ref)
 			if err != nil {

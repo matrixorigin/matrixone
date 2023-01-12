@@ -635,6 +635,9 @@ message DeleteTableCtx {
 	message idList {
 		repeated int64 list = 1;
 	}
+	message attrs {
+		repeated string list = 1;
+	}
 	repeated ObjectRef del_ref = 1;
 	repeated ObjectRef del_idx_ref = 2;
 	repeated int32 del_idx_idx = 3;
@@ -643,9 +646,10 @@ message DeleteTableCtx {
 	repeated ObjectRef on_cascade_ref = 6;
 	repeated int32 on_cascade_idx = 7;
 	repeated ObjectRef on_set_ref = 8;
-	repeated idList on_set_idx = 9;
-	bool can_truncate = 10;
-	repeated idList parent_ids = 11;
+	repeated attrs on_set_attrs = 9;
+	repeated idList on_set_idx = 10;
+	bool can_truncate = 11;
+	repeated idList parent_ids = 12;
 }
 
 message Query {

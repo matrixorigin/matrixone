@@ -45,6 +45,7 @@ type DeleteCtx struct {
 
 	OnSetSource []engine.Relation
 	OnSetIdx    [][]int32
+	OnSetAttrs  [][]string
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

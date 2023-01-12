@@ -34,9 +34,6 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	}
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 	bindCtx := NewBindContext(builder, nil)
-	bindCtx.groupTag = builder.genNewTag()
-	bindCtx.aggregateTag = builder.genNewTag()
-	bindCtx.projectTag = builder.genNewTag()
 
 	rewriteInfo := &deleteSelectInfo{
 		rootId:  -1,
@@ -46,6 +43,10 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	canTruncate := false
 	parentIds := make([]*plan.DeleteTableCtxIdList, len(tblInfo.tableDefs))
 	if checkIfStmtHaveRewriteConstraint(tblInfo) {
+		bindCtx.groupTag = builder.genNewTag()
+		bindCtx.aggregateTag = builder.genNewTag()
+		bindCtx.projectTag = builder.genNewTag()
+
 		// if delete table have constraint
 		err = initDeleteStmt(builder, bindCtx, rewriteInfo, stmt)
 		if err != nil {
@@ -83,8 +84,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 				}
 			}
 		}
-		selectStmt := deleteToSelect(builder.GetContext(), stmt, false)
-		rewriteInfo.rootId, err = builder.buildSelect(selectStmt, bindCtx, false)
+		rewriteInfo.rootId, err = deleteToSelect(builder, bindCtx, stmt, false)
 		if err != nil {
 			return nil, err
 		}
@@ -109,20 +109,25 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 		OnCascadeIdx:  rewriteInfo.onDeleteCascade,
 		OnSetRef:      rewriteInfo.onDeleteSetTbl,
 		OnSetIdx:      make([]*plan.DeleteTableCtxIdList, len(rewriteInfo.onDeleteSet)),
+		OnSetAttrs:    make([]*plan.DeleteTableCtxAttrs, len(rewriteInfo.onDeleteSetAttr)),
 	}
 	for i, setList := range rewriteInfo.onDeleteSet {
 		deleteCtx.OnSetIdx[i] = &plan.DeleteTableCtxIdList{
 			List: setList,
 		}
 	}
+	for i, attrs := range rewriteInfo.onDeleteSetAttr {
+		deleteCtx.OnSetAttrs[i] = &plan.DeleteTableCtxAttrs{
+			List: attrs,
+		}
+	}
 
 	node := &Node{
-		NodeType: plan.Node_DELETE,
-		ObjRef:   nil,
-		TableDef: nil,
-		Children: []int32{query.Steps[len(query.Steps)-1]},
-		NodeId:   int32(len(query.Nodes)),
-		// DeleteTablesCtx: delCtxs,
+		NodeType:  plan.Node_DELETE,
+		ObjRef:    nil,
+		TableDef:  nil,
+		Children:  []int32{query.Steps[len(query.Steps)-1]},
+		NodeId:    int32(len(query.Nodes)),
 		DeleteCtx: deleteCtx,
 	}
 	query.Nodes = append(query.Nodes, node)
