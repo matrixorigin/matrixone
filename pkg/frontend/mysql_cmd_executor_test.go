@@ -788,7 +788,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 		db, sql, user := "T", "SHOW TABLES", "root"
 		var eng engine.Engine
 		proc := &process.Process{}
-		ses := &Session{}
+		ses := &Session{planCache: newPlanCache(1)}
 		cw, err := GetComputationWrapper(db, sql, user, eng, proc, ses)
 		convey.So(cw, convey.ShouldNotBeEmpty)
 		convey.So(err, convey.ShouldBeNil)

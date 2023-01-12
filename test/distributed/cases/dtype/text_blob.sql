@@ -62,7 +62,9 @@ select t1,t2 from text_01 minus select t1,t2 from text_05;
 -- subquery
 select * from (select * from text_01 where t1 like '%123%');
 select * from text_01 where t1 in (select t1 from text_05);
+-- @bvt:issue#7589
 select * from text_01 where t2 > (select t2 from text_05 where t1='789');
+-- @bvt:issue
 select t1,t2,t3 from text_01 where t1 < any(select t2 from text_05);
 select t1,t2,t3 from text_01 where t1 >= all(select t2 from text_05);
 select t1,t2,t3 from text_01 where t1 >= some(select t2 from text_05);

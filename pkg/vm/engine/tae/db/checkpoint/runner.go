@@ -422,8 +422,8 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 	err = common.RetryWithIntervalAndTimeout(
 		op,
 		r.options.forceFlushTimeout,
-		r.options.forceFlushCheckInterval)
-	if moerr.IsMoErrCode(err, moerr.ErrInternal) {
+		r.options.forceFlushCheckInterval, true)
+	if moerr.IsMoErrCode(err, moerr.ErrInternal) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 		logutil.Warnf("Flush %d-%d :%v", dbID, tableID, err)
 		return nil
 	}

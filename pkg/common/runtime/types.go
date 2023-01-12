@@ -21,7 +21,10 @@ import (
 )
 
 // The names of all global variables should be defined here.
-const ()
+const (
+	// TxnOptions options used to create txn
+	TxnOptions = "txn-options"
+)
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service
 // needs to receive a Runtime and will pass the Runtime to all components of the service.
@@ -53,6 +56,8 @@ type Runtime interface {
 	// the service type and unique ID of the service; all subsequent loggers must be
 	// built on this logger.
 	Logger() *log.MOLogger
+	// SubLogger returns sub-loggers used for different purposes.
+	SubLogger(LoggerName) *log.MOLogger
 	// Clock returns the Clock instance of the current runtime environment
 	Clock() clock.Clock
 	// SetGlobalVariables set global variables which scope based in runtime.

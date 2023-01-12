@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -114,8 +115,10 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	}
 	explicitCount := len(explicitCols)
 
+	hasAutoCol := false
 	orderAttrs := make([]string, 0, colCount)
 	for _, col := range tblRef.Cols {
+		hasAutoCol = hasAutoCol || col.Typ.AutoIncr
 		orderAttrs = append(orderAttrs, col.Name)
 	}
 
@@ -234,6 +237,10 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 
 	uDef, sDef := buildIndexDefs(tblRef.Defs)
 
+	if otherCols != nil {
+		explicitCols = append(explicitCols, otherCols...)
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Ins{
 			Ins: &plan.InsertValues{
@@ -248,6 +255,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 				UniqueIndexDef:    uDef,
 				SecondaryIndexDef: sDef,
 				ClusterTable:      clusterTable,
+				HasAutoCol:        hasAutoCol,
 			},
 		},
 	}, nil

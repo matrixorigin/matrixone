@@ -342,6 +342,10 @@ func (mr *MockRelationMockRecorder) Rows(ctx interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Rows", reflect.TypeOf((*MockRelation)(nil).Rows), ctx)
 }
 
+func (rel *MockRelation) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
+	return nil, nil, nil
+}
+
 // Size mocks base method.
 func (m *MockRelation) Size(ctx context.Context, columnName string) (int64, error) {
 	m.ctrl.T.Helper()
