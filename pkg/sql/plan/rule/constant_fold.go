@@ -243,7 +243,16 @@ func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
 				Dval: vec.Col.([]float64)[0],
 			},
 		}
-	case types.T_varchar, types.T_char, types.T_text, types.T_blob, types.T_json:
+	case types.T_varchar, types.T_char, types.T_text, types.T_blob:
+		return &plan.Const{
+			Value: &plan.Const_Sval{
+				Sval: vec.GetString(0),
+			},
+		}
+	case types.T_json:
+		if !transAll {
+			return nil
+		}
 		return &plan.Const{
 			Value: &plan.Const_Sval{
 				Sval: vec.GetString(0),
@@ -262,12 +271,18 @@ func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
 			},
 		}
 	case types.T_time:
+		if !transAll {
+			return nil
+		}
 		return &plan.Const{
 			Value: &plan.Const_Timeval{
 				Timeval: int64(vector.MustTCols[types.Time](vec)[0]),
 			},
 		}
 	case types.T_datetime:
+		if !transAll {
+			return nil
+		}
 		return &plan.Const{
 			Value: &plan.Const_Datetimeval{
 				Datetimeval: int64(vector.MustTCols[types.Datetime](vec)[0]),
