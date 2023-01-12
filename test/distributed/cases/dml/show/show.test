@@ -120,9 +120,9 @@ SHOW TRIGGERS like '*%';
 
 use mo_catalog;
 show tables;
--- @bvt:issue#7564
+
 show table_number from mo_catalog;
--- @bvt:issue
+
 show column_number from mo_database;
 show column_number from hdjshdj;
 

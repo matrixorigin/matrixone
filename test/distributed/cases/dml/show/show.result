@@ -232,7 +232,7 @@ mo_columns
 mo_tables
 show table_number from mo_catalog;
 mo_catalog    Number of tables in mo_catalog
-mo_catalog    9
+mo_catalog    11
 show column_number from mo_database;
 mo_database    Number of columns in mo_database
 mo_database    8
