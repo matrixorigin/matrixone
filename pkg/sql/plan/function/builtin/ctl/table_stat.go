@@ -15,6 +15,10 @@
 package ctl
 
 import (
+	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -105,4 +109,191 @@ func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	}
 	return vec, nil
 
+}
+
+// MoTableColMax return the max value of the column
+func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	count := vecs[0].Length()
+	dbs := vector.MustStrCols(vecs[0])
+	tbls := vector.MustStrCols(vecs[1])
+	cols := vector.MustStrCols(vecs[2])
+
+	returnType := types.T_varchar.ToType()
+	var resultVec *vector.Vector = nil
+	resultValues := make([]string, count)
+	resultNsp := nulls.NewWithSize(count)
+
+	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() || vecs[2].IsScalarNull() {
+		return proc.AllocScalarNullVector(returnType), nil
+	}
+
+	// set null row
+	nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
+	nulls.Or(vecs[2].Nsp, resultNsp, resultNsp)
+
+	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	txn, err := proc.TxnClient.New()
+	if err != nil {
+		return nil, err
+	}
+	defer txn.Rollback(proc.Ctx)
+	if err := e.New(proc.Ctx, txn); err != nil {
+		return nil, err
+	}
+	defer e.Rollback(proc.Ctx, txn)
+
+	for i := 0; i < count; i++ {
+		db, err := e.Database(proc.Ctx, dbs[i], txn)
+		if err != nil {
+			return nil, err
+		}
+		rel, err := db.Relation(proc.Ctx, tbls[i])
+		if err != nil {
+			return nil, err
+		}
+		rel.Ranges(proc.Ctx, nil)
+
+		col := cols[i]
+
+		tableColumns, err := rel.TableColumns(proc.Ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		//Get table max and min value from zonemap
+		tableVal, _, err := rel.MaxAndMinValues(proc.Ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		for j := 0; j < len(tableColumns); j++ {
+			if tableColumns[j].Name == col {
+				resultValues[i] = getVlaueInStr(tableVal[j][1])
+			}
+		}
+	}
+	resultVec = vector.NewWithStrings(types.T_varchar.ToType(), resultValues, resultNsp, proc.Mp())
+	return resultVec, nil
+}
+
+// MoTableColMax return the max value of the column
+func MoTableColMin(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	count := vecs[0].Length()
+	dbs := vector.MustStrCols(vecs[0])
+	tbls := vector.MustStrCols(vecs[1])
+	cols := vector.MustStrCols(vecs[2])
+
+	returnType := types.T_varchar.ToType()
+	var resultVec *vector.Vector = nil
+	resultValues := make([]string, count)
+	resultNsp := nulls.NewWithSize(count)
+
+	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() || vecs[2].IsScalarNull() {
+		return proc.AllocScalarNullVector(returnType), nil
+	}
+
+	// set null row
+	nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
+	nulls.Or(vecs[2].Nsp, resultNsp, resultNsp)
+
+	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	txn, err := proc.TxnClient.New()
+	if err != nil {
+		return nil, err
+	}
+	defer txn.Rollback(proc.Ctx)
+	if err := e.New(proc.Ctx, txn); err != nil {
+		return nil, err
+	}
+	defer e.Rollback(proc.Ctx, txn)
+
+	for i := 0; i < count; i++ {
+		db, err := e.Database(proc.Ctx, dbs[i], txn)
+		if err != nil {
+			return nil, err
+		}
+		rel, err := db.Relation(proc.Ctx, tbls[i])
+		if err != nil {
+			return nil, err
+		}
+		rel.Ranges(proc.Ctx, nil)
+
+		col := cols[i]
+
+		tableColumns, err := rel.TableColumns(proc.Ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		//Get table max and min value from zonemap
+		tableVal, _, err := rel.MaxAndMinValues(proc.Ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		for j := 0; j < len(tableColumns); j++ {
+			if tableColumns[j].Name == col {
+				resultValues[i] = getVlaueInStr(tableVal[j][0])
+			}
+		}
+	}
+	resultVec = vector.NewWithStrings(types.T_varchar.ToType(), resultValues, resultNsp, proc.Mp())
+	return resultVec, nil
+}
+
+func getVlaueInStr(value any) string {
+	switch v := value.(type) {
+	case bool:
+		if v {
+			return "true"
+		} else {
+			return "false"
+		}
+	case uint8:
+		return strconv.FormatUint(uint64(v), 10)
+	case uint16:
+		return strconv.FormatUint(uint64(v), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(v), 10)
+	case uint64:
+		return strconv.FormatUint(uint64(v), 10)
+	case int8:
+		return strconv.FormatInt(int64(v), 10)
+	case int16:
+		return strconv.FormatInt(int64(v), 10)
+	case int32:
+		return strconv.FormatInt(int64(v), 10)
+	case int64:
+		return strconv.FormatInt(int64(v), 10)
+	case float32:
+		return strconv.FormatFloat(float64(v), 'f', -1, 32)
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 32)
+	case string:
+		return v
+	case []byte:
+		return string(v)
+	case int:
+		return strconv.FormatInt(int64(v), 10)
+	case uint:
+		return strconv.FormatUint(uint64(v), 10)
+	case types.Date:
+		return v.String()
+	case types.Time:
+		return v.String()
+	case types.Datetime:
+		return v.String()
+	case types.Timestamp:
+		return v.String()
+	case bytejson.ByteJson:
+		return v.String()
+	case types.Uuid:
+		return v.ToString()
+	case types.Decimal64:
+		return v.String()
+	case types.Decimal128:
+		return v.String()
+	default:
+		return ""
+	}
 }
