@@ -16,6 +16,7 @@ package mark
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -81,7 +82,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 		case Probe:
 			var err error
+			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch
+			anal.WaitStop(start)
+
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -107,7 +111,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
 	var err error
+	start := time.Now()
 	bat := <-proc.Reg.MergeReceivers[1].Ch
+	anal.WaitStop(start)
+
 	if bat != nil {
 		joinMap := bat.Ht.(*hashmap.JoinMap)
 		ctr.evalNullSels(bat)
@@ -180,7 +187,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	ctr.joinFlags = make([]bool, bat.Length())
 	ctr.Nsp = nulls.NewWithSize(bat.Length())
 	ctr.cleanEvalVectors(proc.Mp())
-	if err := ctr.evalJoinProbeCondition(bat, ap.Conditions[0], proc); err != nil {
+	if err := ctr.evalJoinProbeCondition(bat, ap.Conditions[0], proc, anal); err != nil {
 		return err
 	}
 	count := bat.Length()
@@ -274,7 +281,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 }
 
 // store the results of the calculation on the probe side of the equation condition
-func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
+func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, analyze process.Analyze) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
@@ -289,6 +296,9 @@ func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, conds []*plan.Exp
 				ctr.evecs[i].needFree = false
 				break
 			}
+		}
+		if ctr.evecs[i].needFree && vec != nil {
+			analyze.Alloc(int64(vec.Size()))
 		}
 	}
 	return nil

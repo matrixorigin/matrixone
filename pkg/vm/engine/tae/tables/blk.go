@@ -46,8 +46,8 @@ func newBlock(
 	blk := &block{}
 	blk.baseBlock = newBaseBlock(blk, meta, bufMgr, fs, scheduler)
 	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
-	mnode := newPersistedNode(blk.baseBlock)
-	node := NewNode(mnode)
+	pnode := newPersistedNode(blk.baseBlock)
+	node := NewNode(pnode)
 	node.Ref()
 	blk.node.Store(node)
 	return blk

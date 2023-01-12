@@ -129,7 +129,8 @@ func (w *waiter) mustNotifyFirstWaiter() *waiter {
 
 func (w *waiter) changeWaitersToWaitNew(newWaiter *waiter) {
 	// make all waiters to waiting newWaiter
-	for i := uint64(0); i < w.waiters.Len(); i++ {
+	l := w.waiters.Len()
+	for i := uint64(0); i < l; i++ {
 		newWaiter.add(w.waiters.MustGet())
 	}
 }
@@ -139,7 +140,7 @@ func (w *waiter) reset() {
 		panic("invalid waiters")
 	}
 	if len(w.c) > 0 {
-		panic("invalid notify channal")
+		panic("invalid notify channel")
 	}
 	w.waiters.Reset()
 	waiterPool.Put(w)

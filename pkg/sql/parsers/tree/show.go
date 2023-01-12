@@ -683,3 +683,19 @@ func NewShowTableValues(table *UnresolvedObjectName, dbname string) *ShowTableVa
 		DbName: dbname,
 	}
 }
+
+type ShowAccounts struct {
+	showImpl
+	Like *ComparisonExpr
+}
+
+func (node *ShowAccounts) Format(ctx *FmtCtx) {
+	ctx.WriteString("show accounts")
+	if node.Like != nil {
+		ctx.WriteByte(' ')
+		node.Like.Format(ctx)
+	}
+}
+
+func (node *ShowAccounts) GetStatementType() string { return "Show Accounts" }
+func (node *ShowAccounts) GetQueryType() string     { return QueryTypeDQL }
