@@ -181,7 +181,6 @@ type WriteReq struct {
 	Batch        *batch.Batch
 	//S3 object file name
 	FileName string
-	//Blks     []uint64
 	MetaLocs []string
 	//for delete on S3
 	DeltaLocs []string

@@ -29,6 +29,7 @@ type SegmentReader interface {
 	io.Closer
 	GetID() uint64
 	IsUncommitted() bool
+	IsAppendable() bool
 	MakeBlockIt() BlockIt
 	// GetByFilter(filter Filter, offsetOnly bool) (map[uint64]*batch.Batch, error)
 	String() string
