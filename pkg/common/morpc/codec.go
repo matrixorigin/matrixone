@@ -390,10 +390,10 @@ func (c *baseCodec) writeBody(
 	maxCanWrite := c.maxBodySize - writtenSize
 	size := msg.Size()
 	if size > maxCanWrite {
-		//return nil,
-		//	moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
-		//		size+writtenSize,
-		//		c.maxBodySize)
+		return nil,
+			moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
+				size+writtenSize,
+				c.maxBodySize)
 	}
 
 	if !c.compressEnabled {

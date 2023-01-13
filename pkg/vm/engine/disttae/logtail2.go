@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	logtail2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -206,11 +207,11 @@ func (logSub *TableLogTailSubscriber) newCnLogTailClient() error {
 
 	// XXX test code.
 	codec := morpc.NewMessageCodec(func() morpc.Message {
-		return &service.LogtailResponse{}
+		return &service.LogtailResponseSegment{}
 	})
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendGoettyOptions(
-			goetty.WithSessionRWBUfferSize(1<<10, 1<<10),
+			goetty.WithSessionRWBUfferSize(1<<15, 1<<15),
 		),
 		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("cn-log-tail-client-backend")),
 	)
@@ -305,19 +306,12 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 				}
 
 				resp := <-ch
-				fmt.Printf("receive a log tail\n")
 				if resp.err == nil {
 					// if we receive the response, update the partition and global timestamp.
 					switch {
 					case resp.r.GetSubscribeResponse() != nil:
 						lt := resp.r.GetSubscribeResponse().GetLogtail()
 						logTs := lt.GetTs()
-
-						str := fmt.Sprintf("get a sub response, ts : %v", logTs)
-						for j := 0; j < len(lt.Commands); j++ {
-							str += fmt.Sprintf("\thas tbl %s.%s\n", lt.Commands[j].DatabaseName, lt.Commands[j].TableName)
-						}
-						fmt.Printf("%s\n", str)
 
 						if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &lt); err != nil {
 							needReconnect = true
@@ -327,19 +321,11 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 
 					case resp.r.GetUpdateResponse() != nil:
 						logLists := resp.r.GetUpdateResponse().GetLogtailList()
-						from := resp.r.GetUpdateResponse().GetFrom()
 						to := resp.r.GetUpdateResponse().GetTo()
 
-						fmt.Printf("get a update response, start: %v, end: %v\n", from, to)
+						logList(logLists).Sort()
+
 						for _, l := range logLists {
-
-							str := fmt.Sprintf("get a update log tail, ts : %v", l.Ts)
-							for j := 0; j < len(l.Commands); j++ {
-								str += fmt.Sprintf("\thas tbl %s.%s\n", l.Commands[j].DatabaseName, l.Commands[j].TableName)
-							}
-							str += "\n"
-							fmt.Printf("%s\n", str)
-
 							if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &l); err != nil {
 								logutil.Error("cnLogTailClient : update table partition failed.")
 								needReconnect = true
@@ -350,8 +336,6 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 
 					// XXX we do not handle these message now.
 					case resp.r.GetError() != nil:
-						fmt.Printf("log tail err is %v", resp.r.GetError().Status.Message)
-
 					case resp.r.GetUnsubscribeResponse() != nil:
 					}
 				} else {
@@ -488,4 +472,50 @@ func consumeLogTail2(
 		}
 	}
 	return nil
+}
+
+type logList []logtail.TableLogtail
+
+func (ls logList) Len() int { return len(ls) }
+func (ls logList) Less(i, j int) bool {
+	if ls[i].Ts.Less(*ls[j].Ts) {
+		return true
+	}
+	if ls[i].Ts.Equal(*ls[j].Ts) {
+		return compareTableIdLess(ls[i].Table.TbId, ls[j].Table.TbId)
+	}
+	return false
+}
+func (ls logList) Swap(i, j int) { ls[i], ls[j] = ls[j], ls[i] }
+func (ls logList) Sort() {
+	// if contains at least 2 type of update of mo_database, mo_table, mo_column
+	// ids of Mo_database, Mo_table, Mo_column are 1, 2, 3
+	occurAny := false
+	tableOccurs := [4]bool{false, false, false, false}
+	needSort := false
+	for _, l := range ls {
+		id := l.Table.TbId
+		if id < 4 {
+			if tableOccurs[id] {
+				continue
+			}
+			if occurAny {
+				needSort = true
+				break
+			}
+			occurAny = true
+			tableOccurs[id] = true
+		}
+	}
+	if needSort {
+		sort.Sort(ls)
+	}
+	return
+}
+
+func compareTableIdLess(i1, i2 uint64) bool {
+	if i1 > 4 || i2 > 4 {
+		return false
+	}
+	return i1 < i2
 }
