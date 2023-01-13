@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -34,25 +35,25 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/simdcsv"
 	"github.com/pierrec/lz4"
@@ -436,7 +437,10 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 	return fileList, err
 }
 
-func ReadFile(param *tree.ExternParam) (io.ReadCloser, error) {
+func ReadFile(param *tree.ExternParam, proc *process.Process) (io.ReadCloser, error) {
+	if param.Local {
+		return io.NopCloser(proc.LoadLocalReader), nil
+	}
 	fs, readPath, err := GetForETLWithType(param, param.Filepath)
 	if err != nil {
 		return nil, err
@@ -563,11 +567,17 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 		err  error
 	)
 	deleteEnclosed(param, plh)
+	unexpectEOF := false
 	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
 		Line = plh.simdCsvLineArray[rowIdx]
 		if param.Extern.Format == tree.JSONLINE {
-			Line, err = transJson2Lines(proc.Ctx, Line[0], param.Attrs, param.Cols, param.Extern.JsonData)
+			Line, err = transJson2Lines(proc.Ctx, Line[0], param.Attrs, param.Cols, param.Extern.JsonData, param)
 			if err != nil {
+				if errors.Is(err, io.ErrUnexpectedEOF) {
+					logutil.Infof("unexpected EOF, wait for next batch")
+					unexpectEOF = true
+					continue
+				}
 				return nil, err
 			}
 			plh.simdCsvLineArray[rowIdx] = Line
@@ -589,6 +599,25 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	}
 
 	n := vector.Length(bat.Vecs[0])
+	if unexpectEOF && n > 0 {
+		n--
+		for i := 0; i < len(bat.Vecs); i++ {
+			newVec := vector.NewOriginal(bat.Vecs[i].Typ)
+			vector.PreAlloc(newVec, n, n, proc.Mp())
+			newVec.Nsp = bat.Vecs[i].Nsp
+			for j := int64(0); j < int64(n); j++ {
+				if newVec.Nsp.Contains(uint64(j)) {
+					continue
+				}
+				err := vector.Copy(newVec, bat.Vecs[i], j, j, proc.Mp())
+				if err != nil {
+					return nil, err
+				}
+			}
+			bat.Vecs[i].Free(proc.Mp())
+			bat.Vecs[i] = newVec
+		}
+	}
 	sels := proc.Mp().GetSels()
 	if n > cap(sels) {
 		proc.Mp().PutSels(sels)
@@ -602,9 +631,9 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 }
 
 // GetSimdcsvReader get file reader from external file
-func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
+func GetSimdcsvReader(param *ExternalParam, proc *process.Process) (*ParseLineHandler, error) {
 	var err error
-	param.reader, err = ReadFile(param.Extern)
+	param.reader, err = ReadFile(param.Extern, proc)
 	if err != nil {
 		return nil, err
 	}
@@ -638,7 +667,7 @@ func ScanCsvFile(param *ExternalParam, proc *process.Process) (*batch.Batch, err
 	var cnt int
 	if param.plh == nil {
 		param.IgnoreLine = param.IgnoreLineTag
-		param.plh, err = GetSimdcsvReader(param)
+		param.plh, err = GetSimdcsvReader(param, proc)
 		if err != nil {
 			return nil, err
 		}
@@ -905,28 +934,33 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 	}
 }
 
-func transJson2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, jsonData string) ([]string, error) {
+func transJson2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, jsonData string, param *ExternalParam) ([]string, error) {
 	switch jsonData {
 	case tree.OBJECT:
-		return transJsonObject2Lines(ctx, str, attrs, cols)
+		return transJsonObject2Lines(ctx, str, attrs, cols, param)
 	case tree.ARRAY:
-		return transJsonArray2Lines(ctx, str, attrs, cols)
+		return transJsonArray2Lines(ctx, str, attrs, cols, param)
 	default:
 		return nil, moerr.NewNotSupported(ctx, "the jsonline format '%s' is not support now", jsonData)
 	}
 }
 
-func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef) ([]string, error) {
+func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, param *ExternalParam) ([]string, error) {
 	var (
 		err error
 		res = make([]string, 0, len(attrs))
 	)
+	if param.prevStr != "" {
+		str = param.prevStr + str
+		param.prevStr = ""
+	}
 	var jsonMap map[string]interface{}
 	var decoder = json.NewDecoder(bytes.NewReader([]byte(str)))
 	decoder.UseNumber()
 	err = decoder.Decode(&jsonMap)
 	if err != nil {
 		logutil.Errorf("json unmarshal err:%v", err)
+		param.prevStr = str
 		return nil, err
 	}
 	if len(jsonMap) < len(attrs) {
@@ -960,17 +994,21 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols
 	return res, nil
 }
 
-func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef) ([]string, error) {
+func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, param *ExternalParam) ([]string, error) {
 	var (
 		err error
 		res = make([]string, 0, len(attrs))
 	)
+	if param.prevStr != "" {
+		str = param.prevStr + str
+		param.prevStr = ""
+	}
 	var jsonArray []interface{}
 	var decoder = json.NewDecoder(bytes.NewReader([]byte(str)))
 	decoder.UseNumber()
 	err = decoder.Decode(&jsonArray)
 	if err != nil {
-		logutil.Errorf("json unmarshal err:%v", err)
+		param.prevStr = str
 		return nil, err
 	}
 	if len(jsonArray) < len(attrs) {

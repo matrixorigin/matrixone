@@ -51,6 +51,7 @@ type ExternalParam struct {
 	maxBatchSize uint64
 	tableDef     *plan.TableDef
 	ClusterTable *plan.ClusterTable
+	prevStr      string
 }
 
 type ExternalFileparam struct {
