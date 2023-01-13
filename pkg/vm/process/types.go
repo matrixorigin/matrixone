@@ -156,9 +156,8 @@ type Process struct {
 
 	LastInsertID *uint64
 
-	//default tp
-	ExecType int32
-	
+	ExecType int32 //default tp
+
 	LoadLocalReader io.Reader
 }
 
