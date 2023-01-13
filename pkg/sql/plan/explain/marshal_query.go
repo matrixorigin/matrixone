@@ -538,7 +538,8 @@ const InputSize = "Input Size"
 const OutputSize = "Output Size"
 const MemorySize = "Memory Size"
 const DiskIO = "Disk IO"
-const S3IO = "S3 IO"
+const S3IOByte = "S3 IO Byte"
+const S3IOCount = "S3 IO Count"
 const Network = "Network"
 
 func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOptions) Statistics {
@@ -595,9 +596,14 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Unit:  "byte",
 			},
 			{
-				Name:  S3IO,
-				Value: analyzeInfo.S3IO,
+				Name:  S3IOByte,
+				Value: analyzeInfo.S3IOByte,
 				Unit:  "byte",
+			},
+			{
+				Name:  S3IOCount,
+				Value: analyzeInfo.S3IOCount,
+				Unit:  "count",
 			},
 		}
 

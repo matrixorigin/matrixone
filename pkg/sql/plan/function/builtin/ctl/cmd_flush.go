@@ -46,7 +46,13 @@ func handleFlush() handleFunc {
 					return nil, err
 				}
 
-				defer txnOp.Commit(proc.Ctx)
+				defer func() {
+					if err := proc.SessionInfo.StorageEngine.Commit(proc.Ctx, txnOp); err != nil {
+						_ = txnOp.Rollback(proc.Ctx)
+					} else {
+						_ = txnOp.Commit(proc.Ctx)
+					}
+				}()
 			}
 			database, err := proc.SessionInfo.StorageEngine.Database(proc.Ctx, parameters[0], txnOp)
 			if err != nil {

@@ -80,7 +80,7 @@ func (s shardSnapshotInfo) getSnapshotIndex(shardID uint64) uint64 {
 
 func (l *store) truncationWorker(ctx context.Context) {
 	defer func() {
-		l.logger.Info("truncation worker stopped")
+		l.runtime.Logger().Info("truncation worker stopped")
 	}()
 
 	if l.cfg.TruncateInterval.Duration == 0 {
@@ -95,7 +95,7 @@ func (l *store) truncationWorker(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := l.processTruncateLog(ctx); err != nil {
-				l.logger.Error("truncate failed", zap.Error(err))
+				l.runtime.Logger().Error("truncate failed", zap.Error(err))
 			}
 			select {
 			case <-ctx.Done():
@@ -114,7 +114,7 @@ func (l *store) processTruncateLog(ctx context.Context) error {
 			continue
 		}
 		if err := l.processShardTruncateLog(ctx, shard.ShardID); err != nil {
-			l.logger.Error("process truncate log failed", zap.Error(err))
+			l.runtime.Logger().Error("process truncate log failed", zap.Error(err))
 		}
 	}
 	return nil
@@ -130,12 +130,12 @@ func (l *store) exportSnapshot(ctx context.Context, shardID uint64, replicaID ui
 	// Just take a snapshot and export it. This snapshot is invisible to system.
 	idx, err := l.nh.SyncRequestSnapshot(ctx, shardID, opts)
 	if err != nil {
-		l.logger.Error("request export snapshot failed", zap.Error(err))
+		l.runtime.Logger().Error("request export snapshot failed", zap.Error(err))
 		return err
 	}
 	// Add the exported snapshot to snapshot manager.
 	if err := l.snapshotMgr.Add(shardID, replicaID, idx); err != nil {
-		l.logger.Error("add exported snapshot failed", zap.Error(err))
+		l.runtime.Logger().Error("add exported snapshot failed", zap.Error(err))
 		return err
 	}
 	// forward the snapshot index.
@@ -148,12 +148,12 @@ func (l *store) importSnapshot(
 ) error {
 	// Import a snapshot to override the snapshot in system.
 	if err := l.nh.SyncRequestImportSnapshot(ctx, shardID, replicaID, dir); err != nil {
-		l.logger.Error("import snapshot failed", zap.Error(err))
+		l.runtime.Logger().Error("import snapshot failed", zap.Error(err))
 		return err
 	}
 	// Then remove the exported snapshot in manager.
 	if err := l.snapshotMgr.Remove(shardID, replicaID, lsn); err != nil {
-		l.logger.Error("remove exported snapshots failed")
+		l.runtime.Logger().Error("remove exported snapshots failed")
 		return err
 	}
 	// forward the truncate lsn.
@@ -200,7 +200,7 @@ func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) err
 
 	lsnInSM, err := l.getTruncatedLsn(ctx, shardID)
 	if err != nil {
-		l.logger.Error("get truncated lsn in state machine failed",
+		l.runtime.Logger().Error("get truncated lsn in state machine failed",
 			zap.Uint64("shard ID", shardID), zap.Error(err))
 		return err
 	}
@@ -213,7 +213,7 @@ func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) err
 	dir, lsn := l.snapshotMgr.EvalImportSnapshot(shardID, replicaID, lsnInSM)
 	if l.shouldDoImport(shardID, lsn, dir) {
 		if err := l.importSnapshot(ctx, shardID, replicaID, lsn, dir); err != nil {
-			l.logger.Error("do truncate log failed",
+			l.runtime.Logger().Error("do truncate log failed",
 				zap.Uint64("shard ID", shardID),
 				zap.Uint64("replica ID", replicaID),
 				zap.Uint64("lsn", lsn),
@@ -226,7 +226,7 @@ func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) err
 
 	if l.shouldDoExport(ctx, shardID, replicaID) {
 		if err := l.exportSnapshot(ctx, shardID, replicaID); err != nil {
-			l.logger.Error("export snapshot failed",
+			l.runtime.Logger().Error("export snapshot failed",
 				zap.Uint64("shard ID", shardID),
 				zap.Uint64("replica ID", replicaID),
 				zap.Uint64("lsn", lsn),

@@ -288,9 +288,11 @@ func writeBatch(ctx context.Context,
 		p.DbName = defines.TEMPORARY_DBNAME
 	}
 
-	//update the auto increment table
-	if err = colexec.UpdateInsertValueBatch(c.e, ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
-		return err
+	if p.HasAutoCol {
+		//update the auto increment table
+		if err = colexec.UpdateInsertValueBatch(c.e, ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
+			return err
+		}
 	}
 
 	//complement composite primary key

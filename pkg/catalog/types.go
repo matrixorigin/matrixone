@@ -53,6 +53,7 @@ const (
 	MO_TABLES   = "mo_tables"
 	MO_COLUMNS  = "mo_columns"
 
+	// 'mo_database' table
 	SystemDBAttr_ID          = "dat_id"
 	SystemDBAttr_Name        = "datname"
 	SystemDBAttr_CatalogName = "dat_catalog_name"
@@ -62,6 +63,7 @@ const (
 	SystemDBAttr_CreateAt    = "created_time"
 	SystemDBAttr_AccID       = "account_id"
 
+	// 'mo_tables' table
 	SystemRelAttr_ID          = "rel_id"
 	SystemRelAttr_Name        = "relname"
 	SystemRelAttr_DBName      = "reldatabase"
@@ -78,6 +80,7 @@ const (
 	SystemRelAttr_ViewDef     = "viewdef"
 	SystemRelAttr_Constraint  = "constraint"
 
+	// 'mo_columns' table
 	SystemColAttr_UniqName        = "att_uniq_name"
 	SystemColAttr_AccID           = "account_id"
 	SystemColAttr_Name            = "attname"
@@ -408,16 +411,19 @@ const QueryResultName = "%s_%s_%d.blk"
 const QueryResultMetaName = "%s_%s.blk"
 
 type Meta struct {
-	QueryId    [16]byte
-	Statement  string
-	AccountId  uint32
-	RoleId     uint32
-	ResultPath string
-	CreateTime types.Timestamp
-	ResultSize float64
-	Columns    string
-	Tables     string
-	UserId     uint32
+	QueryId     [16]byte
+	Statement   string
+	AccountId   uint32
+	RoleId      uint32
+	ResultPath  string
+	CreateTime  types.Timestamp
+	ResultSize  float64
+	Columns     string
+	Tables      string
+	UserId      uint32
+	ExpiredTime types.Timestamp
+	Plan        string
+	Ast         string
 }
 
 var (
@@ -432,6 +438,9 @@ var (
 		types.New(types.T_text, 0, 0, 0),      // columns
 		types.New(types.T_text, 0, 0, 0),      // Tables
 		types.New(types.T_uint32, 0, 0, 0),    // user_id
+		types.New(types.T_timestamp, 0, 0, 0), // expired_time
+		types.New(types.T_text, 0, 0, 0),      // Plan
+		types.New(types.T_text, 0, 0, 0),      // Ast
 	}
 
 	MetaColNames = []string{
@@ -445,18 +454,24 @@ var (
 		"columns",
 		"tables",
 		"user_id",
+		"expired_time",
+		"plan",
+		"Ast",
 	}
 )
 
 const (
-	QUERY_ID_IDX    = 0
-	STATEMENT_IDX   = 1
-	ACCOUNT_ID_IDX  = 2
-	ROLE_ID_IDX     = 3
-	RESULT_PATH_IDX = 4
-	CREATE_TIME_IDX = 5
-	RESULT_SIZE_IDX = 6
-	COLUMNS_IDX     = 7
-	TABLES_IDX      = 8
-	USER_ID_IDX     = 9
+	QUERY_ID_IDX     = 0
+	STATEMENT_IDX    = 1
+	ACCOUNT_ID_IDX   = 2
+	ROLE_ID_IDX      = 3
+	RESULT_PATH_IDX  = 4
+	CREATE_TIME_IDX  = 5
+	RESULT_SIZE_IDX  = 6
+	COLUMNS_IDX      = 7
+	TABLES_IDX       = 8
+	USER_ID_IDX      = 9
+	EXPIRED_TIME_IDX = 10
+	PLAN_IDX         = 11
+	AST_IDX          = 12
 )

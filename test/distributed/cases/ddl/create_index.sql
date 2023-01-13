@@ -36,3 +36,45 @@ insert into t3 values(4,"Dora", 29,'zbcvdf');
 select * from t3;
 insert into t3 values(4,"Dora", 29,'zbcvdf');
 drop table t3;
+
+create table t4(a int, b int, key(c));
+
+create table t5(a int, b int, unique key(a));
+show create table t5;
+create index b on t5(b);
+show create table t5;
+drop index b on t5;
+show create table t5;
+drop table t5;
+
+create table t6(a int, b int, unique key(a));
+show create table t6;
+create index b on t6(a, b);
+show create table t6;
+drop index b on t6;
+show create table t6;
+drop table t6;
+
+create table t7(a int, b int);
+create unique index x ON t7(a) comment 'x';
+show create table t7;
+drop table t7;
+
+create table t8(a int, b int);
+create index x ON t8(a) comment 'x';
+show create table t8;
+drop table t8;
+
+create table t9(a int, b int, unique key(a) comment 'a');
+show create table t9;
+drop table t9;
+
+create table t10(a int, b int, key(a) comment 'a');
+show create table t10;
+drop table t10;
+
+create table t11(a int, b int, unique key(a) comment 'a');
+create unique index x ON t11(a) comment 'x';
+create index xx ON t11(a) comment 'xx';
+show create table t11;
+drop table t11;

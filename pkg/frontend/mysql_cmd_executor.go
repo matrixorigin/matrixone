@@ -2002,6 +2002,11 @@ func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, aa *tree.Al
 	return doAlterAccount(ctx, mce.GetSession(), aa)
 }
 
+// handleAlterDatabaseConfig alter a database's mysql_compatbility_mode
+func (mce *MysqlCmdExecutor) handleAlterDataBaseConfig(ctx context.Context, ad *tree.AlterDataBaseConfig) error {
+	return doAlterDatabaseConfig(ctx, mce.GetSession(), ad)
+}
+
 // handleCreateUser creates the user for the tenant
 func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.CreateUser) error {
 	ses := mce.GetSession()
@@ -2089,6 +2094,24 @@ func (mce *MysqlCmdExecutor) handleKill(ctx context.Context, k *tree.Kill) error
 		return err
 	}
 	resp := NewGeneralOkResponse(COM_QUERY)
+	if err = proto.SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
+// handleShowAccounts lists the info of accounts
+func (mce *MysqlCmdExecutor) handleShowAccounts(ctx context.Context, sa *tree.ShowAccounts) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = doShowAccounts(ctx, ses, sa)
+	if err != nil {
+		return err
+	}
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
 	if err = proto.SendResponse(ctx, resp); err != nil {
 		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
 	}
@@ -2287,6 +2310,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		return nil, err
 	}
 	cwft.ses.p = cwft.plan
+	if ids := isResultQuery(cwft.plan); ids != nil {
+		if err = checkPrivilege(ids, requestCtx, cwft.ses); err != nil {
+			return nil, err
+		}
+	}
 	if _, ok := cwft.stmt.(*tree.Execute); ok {
 		executePlan := cwft.plan.GetDcl().GetExecute()
 		stmtName := executePlan.GetName()
@@ -3515,6 +3543,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleAlterAccount(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.AlterDataBaseConfig:
+			ses.InvalidatePrivilegeCache()
+			selfHandle = true
+			if err = mce.handleAlterDataBaseConfig(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.CreateUser:
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
@@ -3583,6 +3617,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
 			if err = mce.handleKill(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.ShowAccounts:
+			selfHandle = true
+			if err = mce.handleShowAccounts(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		}
@@ -3877,7 +3916,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CreateTable, *tree.DropTable,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.Load, *tree.MoDump,
-			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
+			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig,
 			*tree.CreateFunction, *tree.DropFunction,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
@@ -4282,7 +4321,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 		//show
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowDatabases,
 		*tree.ShowVariables, *tree.ShowColumns, *tree.ShowErrors, *tree.ShowIndex, *tree.ShowProcessList,
-		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowWarnings:
+		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowWarnings, *tree.ShowAccounts:
 		return true, nil
 		//others
 	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:

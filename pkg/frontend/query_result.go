@@ -16,12 +16,14 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -63,20 +65,40 @@ func openSaveQueryResult(ses *Session) bool {
 	}
 	if v, _ := val.(int8); v > 0 {
 		if ses.blockIdx == 0 {
-			val, err := ses.GetGlobalVar("query_result_maxsize")
-			if err != nil {
+			if err = initQueryResulConfig(ses); err != nil {
 				return false
-			}
-			switch v := val.(type) {
-			case uint64:
-				ses.limitResultSize = float64(v)
-			case float64:
-				ses.limitResultSize = v
 			}
 		}
 		return true
 	}
 	return false
+}
+
+func initQueryResulConfig(ses *Session) error {
+	val, err := ses.GetGlobalVar("query_result_maxsize")
+	if err != nil {
+		return err
+	}
+	switch v := val.(type) {
+	case uint64:
+		ses.limitResultSize = float64(v)
+	case float64:
+		ses.limitResultSize = v
+	}
+	var p uint64
+	val, err = ses.GetGlobalVar("query_result_timeout")
+	if err != nil {
+		return err
+	}
+	switch v := val.(type) {
+	case uint64:
+		p = v
+	case float64:
+		p = uint64(v)
+	}
+	ses.createdTime = time.Now()
+	ses.expiredTime = ses.createdTime.Add(time.Hour * time.Duration(p))
+	return nil
 }
 
 func isSimpleResultQuery(ast tree.Statement) bool {
@@ -142,7 +164,11 @@ func saveQueryResult(ses *Session, bat *batch.Batch) error {
 	if err != nil {
 		return err
 	}
-	_, err = writer.WriteEnd(ses.requestCtx)
+	option := objectio.WriteOptions{
+		Type: objectio.WriteTS,
+		Val:  ses.expiredTime,
+	}
+	_, err = writer.WriteEnd(ses.requestCtx, option)
 	if err != nil {
 		return err
 	}
@@ -172,17 +198,28 @@ func saveQueryResultMeta(ses *Session) error {
 		buf.WriteString(catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), i))
 	}
 
+	sp, err := ses.p.Marshal()
+	if err != nil {
+		return err
+	}
+	st, err := simpleAstMarshal(ses.ast)
+	if err != nil {
+		return nil
+	}
 	m := &catalog.Meta{
-		QueryId:    ses.tStmt.StatementID,
-		Statement:  ses.tStmt.Statement,
-		AccountId:  ses.GetTenantInfo().GetTenantID(),
-		RoleId:     ses.tStmt.RoleId,
-		ResultPath: buf.String(),
-		CreateTime: types.CurrentTimestamp(),
-		ResultSize: ses.curResultSize,
-		Columns:    string(b),
-		Tables:     getTablesFromPlan(ses.p),
-		UserId:     ses.GetTenantInfo().GetUserID(),
+		QueryId:     ses.tStmt.StatementID,
+		Statement:   ses.tStmt.Statement,
+		AccountId:   ses.GetTenantInfo().GetTenantID(),
+		RoleId:      ses.tStmt.RoleId,
+		ResultPath:  buf.String(),
+		CreateTime:  types.UnixToTimestamp(ses.createdTime.Unix()),
+		ResultSize:  ses.curResultSize,
+		Columns:     string(b),
+		Tables:      getTablesFromPlan(ses.p),
+		UserId:      ses.GetTenantInfo().GetUserID(),
+		ExpiredTime: types.UnixToTimestamp(ses.expiredTime.Unix()),
+		Plan:        string(sp),
+		Ast:         string(st),
 	}
 	metaBat, err := buildQueryResultMetaBatch(m, ses.mp)
 	if err != nil {
@@ -197,11 +234,154 @@ func saveQueryResultMeta(ses *Session) error {
 	if err != nil {
 		return err
 	}
-	_, err = metaWriter.WriteEnd(ses.requestCtx)
+	option := objectio.WriteOptions{
+		Type: objectio.WriteTS,
+		Val:  ses.expiredTime,
+	}
+	_, err = metaWriter.WriteEnd(ses.requestCtx, option)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func isResultQuery(p *plan.Plan) []string {
+	var uuids []string = nil
+	if q, ok := p.Plan.(*plan.Plan_Query); ok {
+		for _, n := range q.Query.Nodes {
+			if n.NodeType == plan.Node_EXTERNAL_SCAN {
+				if n.TableDef.TableType == "query_result" {
+					uuids = append(uuids, n.TableDef.Name)
+				}
+			} else if n.NodeType == plan.Node_FUNCTION_SCAN {
+				if n.TableDef.TblFunc.Name == "meta_scan" {
+					uuids = append(uuids, n.TableDef.Name)
+				}
+			}
+		}
+	}
+	return uuids
+}
+
+func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) error {
+	f := ses.GetParameterUnit().FileService
+	fs := objectio.NewObjectFS(f, catalog.QueryResultMetaDir)
+	dirs, err := fs.ListDir(catalog.QueryResultMetaDir)
+	if err != nil {
+		return err
+	}
+	for _, id := range uuids {
+		var size int64 = -1
+		name := catalog.BuildQueryResultMetaName(ses.GetTenantInfo().GetTenant(), id)
+		for _, d := range dirs {
+			if d.Name == name {
+				size = d.Size
+			}
+		}
+		if size == -1 {
+			return moerr.NewQueryIdNotFound(requestCtx, id)
+		}
+		path := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), id)
+		reader, err := objectio.NewObjectReader(path, f)
+		if err != nil {
+			return err
+		}
+		bs, err := reader.ReadAllMeta(requestCtx, size, ses.mp)
+		if err != nil {
+			return err
+		}
+		idxs := []uint16{catalog.PLAN_IDX, catalog.AST_IDX}
+		iov, err := reader.Read(requestCtx, bs[0].GetExtent(), idxs, ses.mp)
+		if err != nil {
+			return err
+		}
+		bat := batch.NewWithSize(len(idxs))
+		for i, e := range iov.Entries {
+			bat.Vecs[i] = vector.New(catalog.MetaColTypes[idxs[i]])
+			if err = bat.Vecs[i].Read(e.Object.([]byte)); err != nil {
+				return err
+			}
+		}
+		p := vector.MustStrCols(bat.Vecs[0])[0]
+		pn := &plan.Plan{}
+		if err = pn.Unmarshal([]byte(p)); err != nil {
+			return err
+		}
+		a := vector.MustStrCols(bat.Vecs[1])[0]
+		var ast tree.Statement
+		if ast, err = simpleAstUnmarshal([]byte(a)); err != nil {
+			return err
+		}
+		if err = authenticateCanExecuteStatementAndPlan(requestCtx, ses, ast, pn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type simpleAst struct {
+	Typ int `json:"age"`
+	// opt which fun of determinePrivilegeSetOfStatement need
+}
+
+type astType int
+
+const (
+	astShowNone astType = iota
+	astSelect
+	astShowAboutTable
+	astExplain
+	astValues
+	astExecute
+)
+
+func simpleAstMarshal(stmt tree.Statement) ([]byte, error) {
+	s := simpleAst{}
+	switch stmt.(type) {
+	case *tree.Select:
+		s.Typ = int(astSelect)
+	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase:
+		s.Typ = int(astShowAboutTable)
+	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
+		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus,
+		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
+		*tree.ShowTableNumber, *tree.ShowColumnNumber,
+		*tree.ShowTableValues, *tree.ShowNodeList,
+		*tree.ShowLocks, *tree.ShowFunctionStatus:
+		s.Typ = int(astShowNone)
+	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
+		s.Typ = int(astExplain)
+	case *tree.Execute:
+		s.Typ = int(astExecute)
+	case *tree.ValuesStatement:
+		s.Typ = int(astValues)
+	default:
+		s.Typ = int(astShowNone)
+	}
+	return json.Marshal(s)
+}
+
+func simpleAstUnmarshal(b []byte) (tree.Statement, error) {
+	s := &simpleAst{}
+	if err := json.Unmarshal(b, s); err != nil {
+		return nil, err
+	}
+	var stmt tree.Statement
+	switch astType(s.Typ) {
+	case astSelect:
+		stmt = &tree.Select{}
+	case astShowAboutTable:
+		stmt = &tree.ShowTables{}
+	case astShowNone:
+		stmt = &tree.ShowStatus{}
+	case astExplain:
+		stmt = &tree.ExplainFor{}
+	case astExecute:
+		stmt = &tree.Execute{}
+	case astValues:
+		stmt = &tree.ValuesStatement{}
+	}
+	return stmt, nil
 }
 
 func getTablesFromPlan(p *plan.Plan) string {
@@ -259,6 +439,15 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 		return nil, err
 	}
 	if err = bat.Vecs[catalog.USER_ID_IDX].Append(m.UserId, false, mp); err != nil {
+		return nil, err
+	}
+	if err = bat.Vecs[catalog.EXPIRED_TIME_IDX].Append(m.ExpiredTime, false, mp); err != nil {
+		return nil, err
+	}
+	if err = bat.Vecs[catalog.PLAN_IDX].Append([]byte(m.Plan), false, mp); err != nil {
+		return nil, err
+	}
+	if err = bat.Vecs[catalog.AST_IDX].Append([]byte(m.Ast), false, mp); err != nil {
 		return nil, err
 	}
 	return bat, nil
