@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -214,6 +215,8 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 	if err != nil {
 		return err
 	}
+	fmt.Printf("mo create table, account: %d, db: %d, name: %s, id: %d\n",
+		accountId, db.databaseId, name, tableId)
 	tbl := new(table)
 	{
 		for _, def := range defs { // copy from tae

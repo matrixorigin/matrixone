@@ -313,7 +313,14 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 						lt := resp.r.GetSubscribeResponse().GetLogtail()
 						logTs := lt.GetTs()
 
-						if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &lt); err != nil {
+						str := fmt.Sprintf("get a subscribe response, ts: %v\n", logTs)
+						for j := 0; j < len(lt.Commands); j++ {
+							str += fmt.Sprintf("\t\t tbl: %s.%s",
+								lt.Commands[j].DatabaseName, lt.Commands[j].TableName)
+						}
+						fmt.Printf("%s\n", str)
+
+						if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &lt, logTs); err != nil {
 							needReconnect = true
 							break
 						}
@@ -322,11 +329,24 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 					case resp.r.GetUpdateResponse() != nil:
 						logLists := resp.r.GetUpdateResponse().GetLogtailList()
 						to := resp.r.GetUpdateResponse().GetTo()
+						from := resp.r.GetUpdateResponse().GetFrom()
 
 						logList(logLists).Sort()
 
+						str := fmt.Sprintf("get a update response, from: %v, to: %v\n",
+							from, to)
 						for _, l := range logLists {
-							if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &l); err != nil {
+							for j := 0; j < len(l.Commands); j++ {
+								str += fmt.Sprintf("\t\t tbl: %s.%s, tblid:%d, ts: %v\n",
+									l.Commands[j].DatabaseName, l.Commands[j].TableName,
+									l.Commands[j].TableId,
+									l.GetTs())
+							}
+						}
+						fmt.Printf("%s\n", str)
+
+						for _, l := range logLists {
+							if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &l, from); err != nil {
 								logutil.Error("cnLogTailClient : update table partition failed.")
 								needReconnect = true
 								break
@@ -402,14 +422,14 @@ func TryToGetTableLogTail(
 func updatePartition2(
 	ctx context.Context,
 	dnId int,
-	e *Engine, tl *logtail.TableLogtail) (err error) {
+	e *Engine, tl *logtail.TableLogtail, ts *timestamp.Timestamp) (err error) {
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
 	partitions := e.db.getPartitions(dbId, tblId)
 	partition := partitions[dnId]
 
-	key := e.catalog.GetTableById(dbId, tblId, *tl.Ts)
+	key := e.catalog.GetTableById(dbId, tblId, *ts)
 	tbl := &table{
 		db: &database{
 			databaseId:   dbId,
@@ -490,6 +510,8 @@ func (ls logList) Swap(i, j int) { ls[i], ls[j] = ls[j], ls[i] }
 func (ls logList) Sort() {
 	// if contains at least 2 type of update of mo_database, mo_table, mo_column
 	// ids of Mo_database, Mo_table, Mo_column are 1, 2, 3
+	sort.Sort(ls)
+	return
 	occurAny := false
 	tableOccurs := [4]bool{false, false, false, false}
 	needSort := false
@@ -514,8 +536,5 @@ func (ls logList) Sort() {
 }
 
 func compareTableIdLess(i1, i2 uint64) bool {
-	if i1 > 4 || i2 > 4 {
-		return false
-	}
 	return i1 < i2
 }
