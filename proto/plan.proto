@@ -380,6 +380,7 @@ message UniqueIndexDef {
 	repeated string table_names = 2;
 	repeated Field fields = 3;
 	repeated bool table_exists = 4;
+	repeated string comments = 5;
 }
 
 message SecondaryIndexDef {
@@ -387,6 +388,7 @@ message SecondaryIndexDef {
 	repeated string table_names = 2;
 	repeated Field fields = 3;
 	repeated bool table_exists = 4;
+	repeated string comments = 5;
 }
 
 message Field {
@@ -875,6 +877,7 @@ message CreateIndex {
 	string table = 2;
 	string	origin_table_primary_key = 3;
 	CreateTable index = 4;
+	bool table_exist = 5;
 }
 
 message AlterIndex {
