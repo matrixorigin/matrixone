@@ -907,6 +907,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	if strings.Contains(ses.GetSql(),
 		"select * from text_01 where t2 > (select t2 from text_05 where t1='789')") {
 		oq.needDebug = true
+		logutil.Infof("batch Zs : %v", bat.Zs)
 	}
 
 	row2colTime := time.Duration(0)
@@ -999,6 +1000,9 @@ func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int64, oq o
 	}
 	//duplicate rows
 	for i := int64(0); i < dataSet.Zs[j]-1; i++ {
+		if xoq, ok := oq.(*outputQueue); ok && xoq.needDebug {
+			logutil.Info("duplicate row")
+		}
 		erow, rr := oq.getEmptyRow()
 		if rr != nil {
 			return nil, rr
