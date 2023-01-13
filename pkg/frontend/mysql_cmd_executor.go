@@ -2310,6 +2310,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		return nil, err
 	}
 	cwft.ses.p = cwft.plan
+	if ids := isResultQuery(cwft.plan); ids != nil {
+		if err = checkPrivilege(ids, requestCtx, cwft.ses); err != nil {
+			return nil, err
+		}
+	}
 	if _, ok := cwft.stmt.(*tree.Execute); ok {
 		executePlan := cwft.plan.GetDcl().GetExecute()
 		stmtName := executePlan.GetName()
