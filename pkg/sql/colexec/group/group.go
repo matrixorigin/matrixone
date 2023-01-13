@@ -268,7 +268,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		ctr.bat.Zs = proc.Mp().GetSels()
 		for i := range ctr.groupVecs {
 			vec := ctr.groupVecs[i].vec
-			ctr.bat.Vecs[i] = vector.New(vec.Typ)
+			preAllocLen := bat.Length()
+			ctr.bat.Vecs[i] = vector.PreAllocEmpty(vec.Typ, 0, preAllocLen, proc.Mp())
 			switch vec.Typ.TypeSize() {
 			case 1:
 				size += 1 + 1
