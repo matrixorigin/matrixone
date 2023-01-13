@@ -67,16 +67,18 @@ func (l *lockTable) acquireLock(ctx context.Context, tableID uint64, rows [][]by
 	for {
 		ok, err := l.doAcquireLock(ctx, waiter, tableID, rows, txnID, options)
 		if err != nil {
+			waiter.close()
 			return err
 		}
 		if ok {
 			return nil
 		}
 
-		// TODO: if wait timeout, need make this waiter invalid, and prev waiter can skip this waiter.
 		if err := waiter.wait(ctx); err != nil {
+			waiter.close()
 			return err
 		}
+		waiter.resetWait()
 	}
 }
 
