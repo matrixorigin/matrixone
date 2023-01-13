@@ -333,20 +333,22 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 
 	// build and create index table
-	def := qry.GetIndex().GetIndexTables()[0]
-	planCols := def.GetCols()
-	exeCols := planColsToExeCols(planCols)
-	exeDefs, err := planDefsToExeDefs(def)
-	if err != nil {
-		return err
-	}
-	if _, err := d.Relation(c.ctx, def.Name); err == nil {
-		return moerr.NewTableAlreadyExists(c.ctx, def.Name)
-	}
-	if err := d.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
-		return err
-	}
+	if qry.TableExist {
+		def := qry.GetIndex().GetIndexTables()[0]
+		planCols := def.GetCols()
+		exeCols := planColsToExeCols(planCols)
+		exeDefs, err := planDefsToExeDefs(def)
+		if err != nil {
+			return err
+		}
+		if _, err := d.Relation(c.ctx, def.Name); err == nil {
+			return moerr.NewTableAlreadyExists(c.ctx, def.Name)
+		}
+		if err := d.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+			return err
+		}
 
+	}
 	// build and update constraint def
 	defs, err := planDefsToExeDefs(qry.GetIndex().GetTableDef())
 	if err != nil {
@@ -449,11 +451,13 @@ func (s *Scope) DropIndex(c *Compile) error {
 	}
 
 	// drop index table
-	if _, err = d.Relation(c.ctx, qry.IndexTableName); err != nil {
-		return err
-	}
-	if err = d.Delete(c.ctx, qry.IndexTableName); err != nil {
-		return err
+	if qry.IndexTableName != "" {
+		if _, err = d.Relation(c.ctx, qry.IndexTableName); err != nil {
+			return err
+		}
+		if err = d.Delete(c.ctx, qry.IndexTableName); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -495,6 +499,7 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 					u.TableNames = append(u.TableNames[:i], u.TableNames[i+1:]...)
 					u.Fields = append(u.Fields[:i], u.Fields[i+1:]...)
 					u.TableExists = append(u.TableExists[:i], u.TableExists[i+1:]...)
+					u.Comments = append(u.Comments[:i], u.Comments[i+1:]...)
 
 					oldCt.Cts = append(oldCt.Cts[:j], oldCt.Cts[j+1:]...)
 					b, err := u.MarshalUniqueIndexDef()
@@ -507,7 +512,32 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 					break
 				}
 			}
+		case *engine.SecondaryIndexDef:
+			u := &plan.SecondaryIndexDef{}
+			err := u.UnMarshalSecondaryIndexDef(([]byte)(c.SecondaryIndex))
+			if err != nil {
+				return nil, err
+			}
+			for i, name := range u.IndexNames {
+				if dropName == name {
+					// If all indexes of a table are not defined in plan.UniqueIndexDef, the code will be much simpler
+					u.IndexNames = append(u.IndexNames[:i], u.IndexNames[i+1:]...)
+					u.TableNames = append(u.TableNames[:i], u.TableNames[i+1:]...)
+					u.Fields = append(u.Fields[:i], u.Fields[i+1:]...)
+					u.TableExists = append(u.TableExists[:i], u.TableExists[i+1:]...)
+					u.Comments = append(u.Comments[:i], u.Comments[i+1:]...)
 
+					oldCt.Cts = append(oldCt.Cts[:j], oldCt.Cts[j+1:]...)
+					b, err := u.MarshalSecondaryIndexDef()
+					if err != nil {
+						return nil, err
+					}
+					oldCt.Cts = append(oldCt.Cts, &engine.SecondaryIndexDef{
+						SecondaryIndex: string(b),
+					})
+					break
+				}
+			}
 		}
 	}
 	return oldCt, nil
@@ -568,6 +598,7 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 				u.TableNames = append(u.TableNames, d.TableNames[0])
 				u.TableExists = append(u.TableExists, d.TableExists[0])
 				u.Fields = append(u.Fields, d.Fields[0])
+				u.Comments = append(u.Comments, d.Comments[0])
 
 				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
 
@@ -577,6 +608,43 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 				}
 				oldCt.Cts = append(oldCt.Cts, &engine.UniqueIndexDef{
 					UniqueIndex: string(bytes),
+				})
+				break
+			}
+		}
+		if !ok {
+			oldCt.Cts = append(oldCt.Cts, c)
+		}
+	case *engine.SecondaryIndexDef:
+		d := &plan.SecondaryIndexDef{}
+		err := d.UnMarshalSecondaryIndexDef([]byte(t.SecondaryIndex))
+		if err != nil {
+			return nil, err
+		}
+
+		ok := false
+		var idx *engine.SecondaryIndexDef
+		for i, ct := range oldCt.Cts {
+			if idx, ok = ct.(*engine.SecondaryIndexDef); ok {
+				u := &plan.SecondaryIndexDef{}
+				err := u.UnMarshalSecondaryIndexDef([]byte(idx.SecondaryIndex))
+				if err != nil {
+					return nil, err
+				}
+				u.IndexNames = append(u.IndexNames, d.IndexNames[0])
+				u.TableNames = append(u.TableNames, d.TableNames[0])
+				u.TableExists = append(u.TableExists, d.TableExists[0])
+				u.Fields = append(u.Fields, d.Fields[0])
+				u.Comments = append(u.Comments, d.Comments[0])
+
+				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
+
+				bytes, err := u.MarshalSecondaryIndexDef()
+				if err != nil {
+					return nil, err
+				}
+				oldCt.Cts = append(oldCt.Cts, &engine.SecondaryIndexDef{
+					SecondaryIndex: string(bytes),
 				})
 				break
 			}
