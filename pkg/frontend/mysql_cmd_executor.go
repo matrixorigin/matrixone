@@ -20,10 +20,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"golang.org/x/sync/errgroup"
 	"io"
 	"math"
 	"net"
@@ -35,17 +31,15 @@ import (
 	"sync"
 	"time"
 
-<<<<<<< HEAD
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-
-=======
->>>>>>> main
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
