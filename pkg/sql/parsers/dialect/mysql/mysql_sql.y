@@ -8151,7 +8151,6 @@ reserved_keyword:
 |   PRECEDING
 |   FOLLOWING
 |   GROUPS
-|   NODE
 |   LOCKS
 |   TABLE_NUMBER
 |   COLUMN_NUMBER
@@ -8340,6 +8339,8 @@ non_reserved_keyword:
 |   LOW_CARDINALITY
 |   S3OPTION
 |   EXTENSION
+|   NODE
+|   UUID
 
 func_not_keyword:
     DATE_ADD

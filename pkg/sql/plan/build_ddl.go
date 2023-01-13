@@ -200,7 +200,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
-			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata":
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider":
 			default:
 				return nil, moerr.NewBadConfig(ctx.GetContext(), "the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
 			}
