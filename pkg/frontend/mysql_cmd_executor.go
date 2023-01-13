@@ -20,6 +20,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"golang.org/x/sync/errgroup"
+	"io"
 	"math"
 	"os"
 	"reflect"
@@ -28,8 +33,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -3249,6 +3252,86 @@ func (ses *Session) getSqlType(sql string) {
 	}
 }
 
+func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
+	defer func() {
+		err2 := writer.Close()
+		if err == nil {
+			err = err2
+		}
+	}()
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = external.InitInfileParam(param)
+	if err != nil {
+		return
+	}
+	err = proto.sendLocalInfileRequest(param.Filepath)
+	if err != nil {
+		return
+	}
+	start := time.Now()
+	var msg interface{}
+	msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+			err = moerr.NewFileNotFound(ctx, param.Filepath)
+		}
+		proto.SetSequenceID(proto.GetSequenceId() + 1)
+		return
+	}
+
+	packet, ok := msg.(*Packet)
+	if !ok {
+		proto.SetSequenceID(proto.GetSequenceId() + 1)
+		err = moerr.NewInvalidInput(ctx, "invalid packet")
+		return
+	}
+
+	proto.SetSequenceID(uint8(packet.SequenceID + 1))
+	seq := uint8(packet.SequenceID + 1)
+	length := packet.Length
+	if length == 0 {
+		return
+	}
+	_, err = writer.Write(packet.Payload)
+	if err != nil {
+		return
+	}
+	nowStart := time.Now()
+	for {
+		logutil.Infof("last time cost %f seconds", time.Since(nowStart).Seconds())
+		nowStart = time.Now()
+		msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
+		logutil.Infof("read tcp cost %f seconds", time.Since(nowStart).Seconds())
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+				seq += 1
+				proto.SetSequenceID(seq)
+				err = nil
+			}
+			break
+		}
+		packet, ok = msg.(*Packet)
+		if !ok {
+			err = moerr.NewInvalidInput(ctx, "invalid packet")
+			seq += 1
+			proto.SetSequenceID(seq)
+			break
+		}
+		seq = uint8(packet.SequenceID + 1)
+		proto.SetSequenceID(seq)
+
+		writeStart := time.Now()
+		_, err = writer.Write(packet.Payload)
+		logutil.Infof("write pipe cost %f seconds", time.Since(writeStart).Seconds())
+		if err != nil {
+			return
+		}
+	}
+	logutil.Infof("processLocalInfile cost:%f seconds", time.Since(start).Seconds())
+	return
+}
+
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) (retErr error) {
 	beginInstant := time.Now()
@@ -3327,6 +3410,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var columns []interface{}
 	var mrs *MysqlResultSet
 	canCache := true
+	var loadLocalErrGroup *errgroup.Group
+	var loadLocalWriter *io.PipeWriter
 
 	singleStatement := len(cws) == 1
 	for i, cw := range cws {
@@ -3625,6 +3710,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleShowAccounts(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.Load:
+			if st.Local {
+				proc.LoadLocalReader, loadLocalWriter = io.Pipe()
+			}
 		}
 
 		if selfHandle {
@@ -3803,8 +3892,24 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			/*
 				Step 1: Start
 			*/
+
+			if st, ok := cw.GetAst().(*tree.Load); ok {
+				if st.Local {
+					loadLocalErrGroup = new(errgroup.Group)
+					loadLocalErrGroup.Go(func() error {
+						return mce.processLoadLocal(proc.Ctx, st.Param, loadLocalWriter)
+					})
+				}
+			}
+
 			if err = runner.Run(0); err != nil {
 				goto handleFailed
+			}
+
+			if loadLocalErrGroup != nil {
+				if err = loadLocalErrGroup.Wait(); err != nil {
+					goto handleFailed
+				}
 			}
 
 			logInfof(ses.GetConciseProfile(), "time of Exec.Run : %s", time.Since(runBegin).String())

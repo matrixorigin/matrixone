@@ -524,7 +524,17 @@ func Test_GetBatchData(t *testing.T) {
 
 		param.extern.Format = tree.JSONLINE
 		param.extern.JsonData = tree.ARRAY
+		param.prevStr = ""
 		plh.simdCsvLineArray = [][]string{jsonline_array}
+		_, err = GetBatchData(param, plh, proc)
+		convey.So(err, convey.ShouldBeNil)
+		prevStr, str := jsonline_array[0][:len(jsonline_array[0])-2], jsonline_array[0][len(jsonline_array[0])-2:]
+		plh.simdCsvLineArray = [][]string{{prevStr}}
+		_, err = GetBatchData(param, plh, proc)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(param.prevStr, convey.ShouldEqual, prevStr)
+
+		plh.simdCsvLineArray = [][]string{{str}}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 
