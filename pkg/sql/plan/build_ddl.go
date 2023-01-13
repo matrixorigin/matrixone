@@ -1210,6 +1210,8 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	if err != nil {
 		return nil, err
 	}
+	selectPlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_INSERT
+	SetPlanLoadTag(selectPlan)
 
 	// build insert plan
 	indexTableDef := index.IndexTables[0]

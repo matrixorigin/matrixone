@@ -381,11 +381,10 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	c.scope = insertScope
-	c.scope.Plan = qry.DataInsertion
 
 	// start insert data into index
-	err = c.Run(0)
+	insertScope.Magic = Merge
+	err = insertScope.MergeRun(c)
 
 	return err
 }
