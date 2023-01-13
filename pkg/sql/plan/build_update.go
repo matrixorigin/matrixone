@@ -76,7 +76,7 @@ type updateTableInfo struct {
 }
 
 func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
-	buildTableUpdate2(stmt, ctx)
+	// buildTableUpdate2(stmt, ctx)
 
 	// build map between base table and alias table
 	tbinfo := newTableInfo()
@@ -199,13 +199,79 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 }
 
 func buildTableUpdate2(stmt *tree.Update, ctx CompilerContext) (p *Plan, err error) {
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
-	bindCtx := NewBindContext(builder, nil)
-	_, err = updateToSelect(builder, bindCtx, stmt, false)
+	tblInfo, err := getUpdateTableInfo(ctx, stmt)
 	if err != nil {
 		return nil, err
 	}
-	return nil, nil
+	rewriteInfo := &dmlSelectInfo{
+		typ:     "update",
+		rootId:  -1,
+		tblInfo: tblInfo,
+	}
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	bindCtx := NewBindContext(builder, nil)
+
+	if checkIfStmtHaveRewriteConstraint(tblInfo) {
+		bindCtx.groupTag = builder.genNewTag()
+		bindCtx.aggregateTag = builder.genNewTag()
+		bindCtx.projectTag = builder.genNewTag()
+
+		err = initUpdateStmt(builder, bindCtx, rewriteInfo, stmt)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, tableDef := range tblInfo.tableDefs {
+			err = rewriteDmlSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		// append ProjectNode
+		rewriteInfo.rootId = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: rewriteInfo.projectList,
+			Children:    []int32{rewriteInfo.rootId},
+			BindingTags: []int32{bindCtx.projectTag},
+		}, bindCtx)
+		bindCtx.results = rewriteInfo.projectList
+
+	} else {
+		rewriteInfo.rootId, err = updateToSelect(builder, bindCtx, stmt, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// builder.qry.Steps = append(builder.qry.Steps, rewriteInfo.rootId)
+	// query, err := builder.createQuery()
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// // append delete node
+	// deleteCtx := &plan.DeleteTableCtx{
+	// 	DelRef: rewriteInfo.tblInfo.objRef,
+	// }
+
+	// node := &Node{
+	// 	NodeType:  plan.Node_UPDATE,
+	// 	ObjRef:    nil,
+	// 	TableDef:  nil,
+	// 	Children:  []int32{query.Steps[len(query.Steps)-1]},
+	// 	NodeId:    int32(len(query.Nodes)),
+	// 	DeleteCtx: deleteCtx,
+	// }
+	// query.Nodes = append(query.Nodes, node)
+	// query.Steps[len(query.Steps)-1] = node.NodeId
+	// query.StmtType = plan.Query_DELETE
+
+	return &Plan{
+		Plan: &plan.Plan_Query{
+			Query: builder.qry,
+		},
+	}, err
 }
 
 // Align the projection column expression to the target column type

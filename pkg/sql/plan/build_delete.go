@@ -35,7 +35,8 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 	bindCtx := NewBindContext(builder, nil)
 
-	rewriteInfo := &deleteSelectInfo{
+	rewriteInfo := &dmlSelectInfo{
+		typ:     "delete",
 		rootId:  -1,
 		tblInfo: tblInfo,
 	}
@@ -54,7 +55,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 		}
 
 		for _, tableDef := range tblInfo.tableDefs {
-			err = rewriteDeleteSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId)
+			err = rewriteDmlSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId)
 			if err != nil {
 				return nil, err
 			}
@@ -101,22 +102,25 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 		CanTruncate:   canTruncate,
 		ParentIds:     parentIds,
 		DelRef:        rewriteInfo.tblInfo.objRef,
-		DelIdxRef:     rewriteInfo.onDeleteIdxTbl,
-		DelIdxIdx:     rewriteInfo.onDeleteIdx,
-		OnRestrictRef: rewriteInfo.onDeleteRestrictTbl,
-		OnRestrictIdx: rewriteInfo.onDeleteRestrict,
-		OnCascadeRef:  rewriteInfo.onDeleteCascadeTbl,
-		OnCascadeIdx:  rewriteInfo.onDeleteCascade,
-		OnSetRef:      rewriteInfo.onDeleteSetTbl,
-		OnSetIdx:      make([]*plan.DeleteTableCtxIdList, len(rewriteInfo.onDeleteSet)),
-		OnSetAttrs:    make([]*plan.DeleteTableCtxAttrs, len(rewriteInfo.onDeleteSetAttr)),
+		DelIdxRef:     rewriteInfo.onIdxTbl,
+		DelIdxIdx:     rewriteInfo.onIdx,
+		OnRestrictRef: rewriteInfo.onRestrictTbl,
+		OnRestrictIdx: rewriteInfo.onRestrict,
+		OnCascadeRef:  rewriteInfo.onCascadeTbl,
+		OnCascadeIdx:  make([]int32, len(rewriteInfo.onCascade)),
+		OnSetRef:      rewriteInfo.onSetTbl,
+		OnSetIdx:      make([]*plan.DeleteTableCtxIdList, len(rewriteInfo.onSet)),
+		OnSetAttrs:    make([]*plan.DeleteTableCtxAttrs, len(rewriteInfo.onSetAttr)),
 	}
-	for i, setList := range rewriteInfo.onDeleteSet {
+	for i, idxList := range rewriteInfo.onCascade {
+		deleteCtx.OnCascadeIdx[i] = int32(idxList[0])
+	}
+	for i, setList := range rewriteInfo.onSet {
 		deleteCtx.OnSetIdx[i] = &plan.DeleteTableCtxIdList{
 			List: setList,
 		}
 	}
-	for i, attrs := range rewriteInfo.onDeleteSetAttr {
+	for i, attrs := range rewriteInfo.onSetAttr {
 		deleteCtx.OnSetAttrs[i] = &plan.DeleteTableCtxAttrs{
 			List: attrs,
 		}

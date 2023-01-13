@@ -30,9 +30,9 @@ import (
 
 // only use in developing
 func TestSingleSQL(t *testing.T) {
-	sql := "SELECT n_name FROM (select n_name from NATION) a"
+	sql := "update NATION a set a.N_NAME ='U1', N_REGIONKEY=2"
 
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(true)
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
