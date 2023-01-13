@@ -116,7 +116,7 @@ Table    Create Table
 test02    CREATE TABLE `test02` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL\n) CLUSTER BY (`b`)
 show create table test04;
 Table    Create Table
-test04    CREATE TABLE `test04` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\n`c` VARCHAR(10) DEFAULT NULL,\nUNIQUE KEY`a`(`a`)\n) CLUSTER BY (`b`, `c`, `a`)
+test04    CREATE TABLE `test04` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\n`c` VARCHAR(10) DEFAULT NULL,\nUNIQUE KEY `a` (`a`)\n) CLUSTER BY (`b`, `c`, `a`)
 show create table test06;
 Table    Create Table
 test06    CREATE TABLE `test06` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\n`c` VARCHAR(10) DEFAULT NULL\n) CLUSTER BY (`b`, `a`, `c`)
@@ -148,12 +148,12 @@ drop table if exists t1;
 create table t1(a int, b int, unique key(a), unique key(a, b));
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY`a`(`a`),\nUNIQUE KEY`a_2`(`a`,`b`)\n)
+t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `a` (`a`),\nUNIQUE KEY `a_2` (`a`,`b`)\n)
 drop table if exists t1;
 create table t1(a int unique, b int unique key, unique key(a));
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY`a`(`a`),\nUNIQUE KEY`b`(`b`),\nUNIQUE KEY`a_2`(`a`)\n)
+t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `a` (`a`),\nUNIQUE KEY `b` (`b`),\nUNIQUE KEY `a_2` (`a`)\n)
 drop table t1;
 create table test (`a` varchar(255) DEFAULT b'0');
 insert into test values (), ();
