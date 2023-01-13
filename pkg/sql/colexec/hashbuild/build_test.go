@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -101,7 +100,7 @@ func TestLowCardinalityBuild(t *testing.T) {
 
 	values := []string{"a", "b", "a", "c", "b", "c", "a", "a"}
 	v := testutil.NewVector(len(values), types.T_varchar.ToType(), tc.proc.Mp(), false, values)
-	constructIndex(t, v, tc.proc.Mp())
+	//constructIndex(t, v, tc.proc.Mp())
 
 	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
 	tc.proc.Reg.MergeReceivers[0].Ch <- nil
@@ -191,6 +190,7 @@ func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process,
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
+/*
 func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
 	idx, err := index.New(*v.GetType(), m)
 	require.NoError(t, err)
@@ -200,3 +200,4 @@ func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
 
 	v.SetIndex(idx)
 }
+*/

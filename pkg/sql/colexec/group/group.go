@@ -236,7 +236,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 
 	for i, expr := range ap.Exprs {
 		vec, err := colexec.EvalExpr(bat, proc, expr)
-		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
+		if err != nil {
 			ctr.cleanGroupVectors(proc.Mp())
 			return false, err
 		}
@@ -251,11 +251,11 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		ctr.vecs[i] = vec
 	}
 
-	if len(ctr.groupVecs) == 1 && !ctr.groupVecs[0].needFree {
-		if ctr.groupVecs[0].vec.IsLowCardinality() {
-			ctr.idx = ctr.groupVecs[0].vec.Index().(*index.LowCardinalityIndex).Dup()
-		}
-	}
+	//if len(ctr.groupVecs) == 1 && !ctr.groupVecs[0].needFree {
+	//	if ctr.groupVecs[0].vec.IsLowCardinality() {
+	//		ctr.idx = ctr.groupVecs[0].vec.Index().(*index.LowCardinalityIndex).Dup()
+	//	}
+	//}
 
 	if ctr.bat == nil {
 		size := 0
@@ -483,7 +483,7 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 func (ctr *container) evalAggVector(bat *batch.Batch, aggs []agg.Aggregate, proc *process.Process) error {
 	for i, ag := range aggs {
 		vec, err := colexec.EvalExpr(bat, proc, ag.E)
-		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
+		if err != nil {
 			ctr.cleanAggVectors(proc.Mp())
 			return err
 		}
@@ -503,7 +503,7 @@ func (ctr *container) evalMultiAggs(bat *batch.Batch, multiAggs []group_concat.A
 	for i := range multiAggs {
 		for j, expr := range multiAggs[i].GroupExpr {
 			vec, err := colexec.EvalExpr(bat, proc, expr)
-			if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
+			if err != nil {
 				ctr.cleanMultiAggVecs(proc.Mp())
 				return err
 			}

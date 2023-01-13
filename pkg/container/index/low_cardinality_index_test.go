@@ -29,16 +29,16 @@ func TestInsertWithNulls(t *testing.T) {
 
 	// test data = ["a", "b", NULL, "a", "c", NULL, "c", "b", "a", NULL]
 	v := vector.New(vector.FLAT, types.T_varchar.ToType())
-	require.NoError(t, vector.Append(v, []byte("a"), false, idx.m))
-	require.NoError(t, vector.Append(v, []byte("b"), false, idx.m))
-	require.NoError(t, vector.Append(v, []byte(""), true, idx.m))
-	require.NoError(t, vector.Append(v, []byte("a"), false, idx.m))
-	require.NoError(t, vector.Append(v, []byte("c"), false, idx.m))
-	require.NoError(t, vector.Append(v, []byte(""), true, idx.m))
-	require.NoError(t, vector.Append(v, []byte("c"), false, idx.m))
-	require.NoError(t, vector.Append(v, []byte("b"), false, idx.m))
-	require.NoError(t, vector.Append(v, []byte("a"), false, idx.m))
-	require.NoError(t, vector.Append(v, []byte(""), true, idx.m))
+	require.NoError(t, vector.AppendBytes(v, []byte("a"), false, idx.m))
+	require.NoError(t, vector.AppendBytes(v, []byte("b"), false, idx.m))
+	require.NoError(t, vector.AppendBytes(v, []byte(""), true, idx.m))
+	require.NoError(t, vector.AppendBytes(v, []byte("a"), false, idx.m))
+	require.NoError(t, vector.AppendBytes(v, []byte("c"), false, idx.m))
+	require.NoError(t, vector.AppendBytes(v, []byte(""), true, idx.m))
+	require.NoError(t, vector.AppendBytes(v, []byte("c"), false, idx.m))
+	require.NoError(t, vector.AppendBytes(v, []byte("b"), false, idx.m))
+	require.NoError(t, vector.AppendBytes(v, []byte("a"), false, idx.m))
+	require.NoError(t, vector.AppendBytes(v, []byte(""), true, idx.m))
 
 	// dict = ["a"->1, "b"->2, "c"->3]
 	require.NoError(t, idx.InsertBatch(v))

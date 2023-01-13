@@ -227,10 +227,10 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		// scalar vector's extension
 		for i := range bat.Vecs {
 			bat.Attrs[i] = n.TargetColDefs[i].GetName()
-			bat.Vecs[i] = bat.Vecs[i].ConstExpand(false, proc.Mp())
-			if bat.Vecs[i].IsConstNull() && n.TargetColDefs[i].GetTyp().GetAutoIncr() {
-				bat.Vecs[i].ConstExpand(true, proc.Mp())
-			}
+			//bat.Vecs[i] = bat.Vecs[i].ConstExpand(false, proc.Mp())
+			//if bat.Vecs[i].IsConstNull() && n.TargetColDefs[i].GetTyp().GetAutoIncr() {
+			//	bat.Vecs[i].ConstExpand(true, proc.Mp())
+			//}
 		}
 	}
 	if clusterTable.GetIsClusterTable() {
@@ -311,9 +311,9 @@ func fillRow(tmpBat *batch.Batch,
 	if err != nil {
 		return err
 	}
-	if vec.Size() == 0 {
-		vec = vec.ConstExpand(false, proc.Mp())
-	}
+	//if vec.Size() == 0 {
+	//	vec = vec.ConstExpand(false, proc.Mp())
+	//}
 	if err := targetVec.UnionOne(vec, 0, vec.Length() == 0, proc.Mp()); err != nil {
 		vec.Free(proc.Mp())
 		return err

@@ -18,10 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -217,16 +214,18 @@ func (ctr *container) indexProbe(ap *Argument, bat, rbat *batch.Batch, mSels [][
 					if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i), bat.Vecs[rp.Pos].Length() == 0, proc.Mp()); err != nil {
 						return err
 					}
-					if err := populateIndex(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-						return err
-					}
+
+					//if err := populateIndex(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+					//	return err
+					//}
 				} else {
 					if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], sel, bat.Vecs[rp.Pos].Length() == 0, proc.Mp()); err != nil {
 						return err
 					}
-					if err := populateIndex(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
-						return err
-					}
+
+					//if err := populateIndex(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
+					//	return err
+					//}
 				}
 			}
 			rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
@@ -238,7 +237,7 @@ func (ctr *container) indexProbe(ap *Argument, bat, rbat *batch.Batch, mSels [][
 func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, flg *bool) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
+		if err != nil {
 			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
@@ -252,14 +251,15 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 			}
 		}
 
-		if *flg, err = ctr.dictEncoding(proc.Mp()); err != nil {
-			ctr.cleanEvalVectors(proc.Mp())
-			return err
-		}
+		//if *flg, err = ctr.dictEncoding(proc.Mp()); err != nil {
+		//	ctr.cleanEvalVectors(proc.Mp())
+		//	return err
+		//}
 	}
 	return nil
 }
 
+/*
 func (ctr *container) dictEncoding(m *mpool.MPool) (bool, error) {
 	// find out whether hashbuild is built by low cardinality index
 	idx := ctr.mp.Index()
@@ -323,3 +323,4 @@ func populateIndex(result, selected *vector.Vector, row int64, m *mpool.MPool) e
 	dst, src := resultIdx.GetPoses(), idx.GetPoses()
 	return dst.UnionOne(src, row, src.Length() == 0, m)
 }
+*/

@@ -17,25 +17,26 @@ package rpc
 import (
 	"context"
 	"fmt"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"os"
 	"path"
 	"sync"
 	"testing"
 	"time"
 
+	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
@@ -212,8 +213,8 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	addS3BlkEntry, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, objName, metaLocMoBat)
 	assert.NoError(t, err)
-	loc1 := vector.GetStrVectorValues(metaLocMoBat.GetVector(0))[0]
-	loc2 := vector.GetStrVectorValues(metaLocMoBat.GetVector(0))[1]
+	loc1 := vector.MustStrCols(metaLocMoBat.GetVector(0))[0]
+	loc2 := vector.MustStrCols(metaLocMoBat.GetVector(0))[1]
 	assert.Equal(t, metaLoc1, loc1)
 	assert.Equal(t, metaLoc2, loc2)
 	entries = append(entries, addS3BlkEntry)
@@ -254,7 +255,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 			handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			rows += vector.Length(bat.Vecs[0])
+			rows += bat.Vecs[0].Length()
 		}
 	}
 	assert.Equal(t, taeBat.Length(), rows)
@@ -360,7 +361,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 			handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			rows += vector.Length(bat.Vecs[0])
+			rows += bat.Vecs[0].Length()
 		}
 	}
 	assert.Equal(t, 15, rows)

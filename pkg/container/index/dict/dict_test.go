@@ -28,7 +28,7 @@ func TestCardinality(t *testing.T) {
 	require.NoError(t, err)
 	defer dict.Free()
 
-	dict.unique.Col = []int64{5, 2, 3, 7}
+	vector.AppendList(dict.unique, []int64{5, 2, 3, 7}, nil, dict.m)
 	require.Equal(t, uint64(4), dict.Cardinality())
 }
 
@@ -38,7 +38,7 @@ func TestInsertBatchFixedLen(t *testing.T) {
 	defer dict.Free()
 
 	v0 := vector.New(vector.FLAT, types.Type{Oid: types.T_int64})
-	v0.Col = []int64{5, 2, 3, 7, 3, 2}
+	vector.AppendList(v0, []int64{5, 2, 3, 7, 3, 2}, nil, dict.m)
 
 	ips, err := dict.InsertBatch(v0)
 	require.NoError(t, err)
@@ -50,7 +50,7 @@ func TestInsertBatchFixedLen(t *testing.T) {
 	require.Equal(t, uint16(2), ips[5])
 
 	v1 := vector.New(vector.FLAT, types.Type{Oid: types.T_int64})
-	v1.Col = []int64{4, 2, 1, 5}
+	vector.AppendList(v1, []int64{4, 2, 1, 5}, nil, dict.m)
 
 	ips, err = dict.InsertBatch(v1)
 	require.NoError(t, err)
@@ -66,7 +66,7 @@ func TestFindBatchFixedLen(t *testing.T) {
 	defer dict.Free()
 
 	v0 := vector.New(vector.FLAT, types.Type{Oid: types.T_int32})
-	v0.Col = []int32{5, 2, 3, 7, 1, 4}
+	vector.AppendList(v0, []int32{5, 2, 3, 7, 1, 4}, nil, dict.m)
 
 	ips, err := dict.InsertBatch(v0)
 	require.NoError(t, err)
@@ -78,7 +78,7 @@ func TestFindBatchFixedLen(t *testing.T) {
 	require.Equal(t, uint16(6), ips[5])
 
 	v1 := vector.New(vector.FLAT, types.Type{Oid: types.T_int32})
-	v1.Col = []int32{7, 3, 8, 4, 6, 3}
+	vector.AppendList(v1, []int32{7, 3, 8, 4, 6, 3}, nil, dict.m)
 
 	poses := dict.FindBatch(v1)
 	require.Equal(t, uint16(4), poses[0])
@@ -95,7 +95,7 @@ func TestFindDataFixedLen(t *testing.T) {
 	defer dict.Free()
 
 	v0 := vector.New(vector.FLAT, types.Type{Oid: types.T_int32})
-	v0.Col = []int32{5, 3, 1, 7, 1, 3}
+	vector.AppendList(v0, []int32{5, 3, 1, 7, 1, 3}, nil, dict.m)
 
 	ips, err := dict.InsertBatch(v0)
 	require.NoError(t, err)
@@ -125,7 +125,8 @@ func TestInsertLargeDataFixedLen(t *testing.T) {
 	defer dict.Free()
 
 	v0 := vector.New(vector.FLAT, types.Type{Oid: types.T_int32})
-	v0.Col = make([]int32, 100000)
+	v0.PreExtend(100000, dict.m)
+	v0.SetLength(100000)
 
 	i := 0
 	for j := 1; j <= 10000; j++ {

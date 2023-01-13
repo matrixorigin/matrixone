@@ -168,7 +168,7 @@ func (ctr *container) indexBuild() error {
 func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
+		if err != nil {
 			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
@@ -184,11 +184,11 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 
 		// 1. multiple equivalent conditions are not considered currently
 		// 2. do not want the condition to be an expression
-		if len(conds) == 1 && !ctr.evecs[i].needFree {
-			if idx, ok := ctr.vecs[i].Index().(*index.LowCardinalityIndex); ok {
-				ctr.idx = idx.Dup()
-			}
-		}
+		//if len(conds) == 1 && !ctr.evecs[i].needFree {
+		//	if idx, ok := ctr.vecs[i].Index().(*index.LowCardinalityIndex); ok {
+		//		ctr.idx = idx.Dup()
+		//	}
+		//}
 	}
 	return nil
 }

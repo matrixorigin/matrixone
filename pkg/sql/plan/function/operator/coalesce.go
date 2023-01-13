@@ -150,12 +150,10 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 		}
 	}
 
-	rs, err := proc.AllocVector(t, int64(vecLen*t.Oid.TypeLen()))
+	rs, err := proc.AllocVectorOfRows(t, int64(vecLen), nil)
 	if err != nil {
 		return nil, err
 	}
-	rs.Col = vector.DecodeFixedCol[T](rs, t.Oid.TypeLen())
-	rs.SetLength(vecLen)
 	rsCols := vector.MustTCols[T](rs)
 
 	rs.SetNulls(nulls.NewWithSize(vecLen))

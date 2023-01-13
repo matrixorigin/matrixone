@@ -361,9 +361,6 @@ func fillRow(ctx context.Context,
 	if err != nil {
 		return y.MakeInsertError(ctx, targetVec.GetType().Oid, colDef, rows, colIdx, rowIdx, err)
 	}
-	if vec.Size() == 0 {
-		vec = vec.ConstExpand(false, proc.Mp())
-	}
 	if err := targetVec.UnionOne(vec, 0, vec.Length() == 0, proc.Mp()); err != nil {
 		vec.Free(proc.Mp())
 		return err

@@ -858,10 +858,7 @@ func AppendBytes(v *Vector, w []byte, isNull bool, m *mpool.MPool) error {
 	if m == nil {
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
-	if isNull {
-		return appendOneBytes(v, nil, true, m)
-	}
-	return appendOneBytes(v, w, false, m)
+	return appendOneBytes(v, w, isNull, m)
 }
 
 func AppendList[T any](v *Vector, ws []T, isNulls []bool, m *mpool.MPool) error {
@@ -875,10 +872,7 @@ func AppendString(v *Vector, w string, isNull bool, m *mpool.MPool) error {
 	if m == nil {
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
-	if isNull {
-		return appendOneString(v, w, true, m)
-	}
-	return appendOneString(v, w, false, m)
+	return appendOneString(v, w, isNull, m)
 }
 
 func AppendBytesList(v *Vector, ws [][]byte, isNulls []bool, m *mpool.MPool) error {
@@ -903,7 +897,7 @@ func appendOne[T any](v *Vector, w T, isNull bool, m *mpool.MPool) error {
 	v.length++
 	col := MustTCols[T](v)
 	if isNull {
-		nulls.Add(v.nsp, uint64(v.length))
+		nulls.Add(v.nsp, uint64(length))
 	} else {
 		col[length] = w
 	}

@@ -30,42 +30,39 @@ func currentAccountPrepare(proc *process.Process, arg *Argument) error {
 }
 
 func getAccountName(proc *process.Process) *vector.Vector {
-	return vector.NewConstString(
-		types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen},
-		1,
-		proc.SessionInfo.Account,
-		proc.Mp(),
-	)
+	vec := vector.New(vector.CONSTANT, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
+	vector.AppendString(vec, proc.SessionInfo.Account, false, proc.Mp())
+	return vec
 }
 
 func getRoleName(proc *process.Process) *vector.Vector {
-	return vector.NewConstString(
-		types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen},
-		1,
-		proc.SessionInfo.Role,
-		proc.Mp(),
-	)
+	vec := vector.New(vector.CONSTANT, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
+	vector.AppendString(vec, proc.SessionInfo.Role, false, proc.Mp())
+	return vec
 }
 
 func getUserName(proc *process.Process) *vector.Vector {
-	return vector.NewConstString(
-		types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen},
-		1,
-		proc.SessionInfo.User,
-		proc.Mp(),
-	)
+	vec := vector.New(vector.CONSTANT, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
+	vector.AppendString(vec, proc.SessionInfo.User, false, proc.Mp())
+	return vec
 }
 
 func getAccountId(proc *process.Process) *vector.Vector {
-	return vector.NewConstFixed[uint32](types.Type{Oid: types.T_uint32}, 1, proc.SessionInfo.AccountId, proc.Mp())
+	vec := vector.New(vector.CONSTANT, types.Type{Oid: types.T_uint32})
+	vector.Append(vec, proc.SessionInfo.AccountId, false, proc.Mp())
+	return vec
 }
 
 func getRoleId(proc *process.Process) *vector.Vector {
-	return vector.NewConstFixed[uint32](types.Type{Oid: types.T_uint32}, 1, proc.SessionInfo.RoleId, proc.Mp())
+	vec := vector.New(vector.CONSTANT, types.Type{Oid: types.T_uint32})
+	vector.Append(vec, proc.SessionInfo.RoleId, false, proc.Mp())
+	return vec
 }
 
 func getUserId(proc *process.Process) *vector.Vector {
-	return vector.NewConstFixed[uint32](types.Type{Oid: types.T_uint32}, 1, proc.SessionInfo.UserId, proc.Mp())
+	vec := vector.New(vector.CONSTANT, types.Type{Oid: types.T_uint32})
+	vector.Append(vec, proc.SessionInfo.UserId, false, proc.Mp())
+	return vec
 }
 
 func currentAccountCall(_ int, proc *process.Process, arg *Argument) (bool, error) {

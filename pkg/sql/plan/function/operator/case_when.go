@@ -167,12 +167,10 @@ type NormalType interface {
 func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
 	l := vs[0].Length()
 
-	rs, err := proc.AllocVector(t, int64(l*t.Oid.TypeLen()))
+	rs, err := proc.AllocVectorOfRows(t, int64(l), nil)
 	if err != nil {
 		return nil, err
 	}
-	rs.Col = vector.DecodeFixedCol[T](rs, t.Oid.TypeLen())
-	rs.Col = vector.MustTCols[T](rs)[:l]
 	rscols := vector.MustTCols[T](rs)
 
 	flag := make([]bool, l) // if flag[i] is false, it couldn't adapt to any case

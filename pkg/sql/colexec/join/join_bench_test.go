@@ -180,7 +180,7 @@ func mockTimingCase(t *testing.T, metricMp map[string][]int64, pos int, probeIdx
 	constructBuildDataStart := time.Now().UnixNano()
 	v0 := testutil.NewVector(len(benchBuildData), types.T_varchar.ToType(), tc.proc.Mp(), false, benchBuildData)
 	if buildIdx != nil {
-		v0.SetIndex(buildIdx)
+		//v0.SetIndex(buildIdx)
 	}
 	constructBuildDataEnd := time.Now().UnixNano()
 	metricMp["constructBuildDataCost"][pos] = constructBuildDataEnd - constructBuildDataStart
@@ -195,7 +195,7 @@ func mockTimingCase(t *testing.T, metricMp map[string][]int64, pos int, probeIdx
 	constructProbeDataStart := time.Now().UnixNano()
 	v1 := testutil.NewVector(len(benchProbeData), types.T_varchar.ToType(), tc.proc.Mp(), false, benchProbeData)
 	if probeIdx != nil {
-		v1.SetIndex(probeIdx)
+		//v1.SetIndex(probeIdx)
 	}
 	constructProbeDataEnd := time.Now().UnixNano()
 	metricMp["constructProbeDataCost"][pos] = constructProbeDataEnd - constructProbeDataStart

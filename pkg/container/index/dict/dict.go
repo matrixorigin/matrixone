@@ -87,7 +87,7 @@ func (d *Dict) InsertBatch(data *vector.Vector) ([]uint16, error) {
 			if d.fixed() {
 				err = vector.Append(d.unique, ks.([]uint64)[i], false, d.m)
 			} else {
-				err = vector.AppendList(d.unique, ks.([][]byte)[i], nil, d.m)
+				err = vector.AppendBytes(d.unique, ks.([][]byte)[i], false, d.m)
 			}
 			if err != nil {
 				return nil, err
@@ -215,28 +215,28 @@ func (d *Dict) findFixedData(pos int) *vector.Vector {
 		if data == 1 {
 			val = true
 		}
-		vector.MustTCols[bool](v)[0] = val
+		vector.Append(v, val, false, d.m)
 	case types.T_int32:
-		vector.MustTCols[int32](v)[0] = int32(data)
+		vector.Append(v, int32(data), false, d.m)
 	case types.T_int64:
-		vector.MustTCols[int64](v)[0] = int64(data)
+		vector.Append(v, int64(data), false, d.m)
 	case types.T_uint32:
-		vector.MustTCols[uint32](v)[0] = uint32(data)
+		vector.Append(v, uint32(data), false, d.m)
 	case types.T_uint64:
-		vector.MustTCols[uint64](v)[0] = uint64(data)
+		vector.Append(v, uint64(data), false, d.m)
 	case types.T_float32:
-		vector.MustTCols[float32](v)[0] = float32(data)
+		vector.Append(v, float32(data), false, d.m)
 	case types.T_float64:
-		vector.MustTCols[float64](v)[0] = float64(data)
+		vector.Append(v, float64(data), false, d.m)
 	case types.T_decimal64:
 		val := types.DecodeDecimal64(types.EncodeUint64(&data))
-		vector.MustTCols[types.Decimal64](v)[0] = val
+		vector.Append(v, val, false, d.m)
 	case types.T_date:
-		vector.MustTCols[types.Date](v)[0] = types.Date(data)
+		vector.Append(v, types.Date(data), false, d.m)
 	case types.T_datetime:
-		vector.MustTCols[types.Datetime](v)[0] = types.Datetime(data)
+		vector.Append(v, types.Datetime(data), false, d.m)
 	case types.T_timestamp:
-		vector.MustTCols[types.Timestamp](v)[0] = types.Timestamp(data)
+		vector.Append(v, types.Timestamp(data), false, d.m)
 	}
 	return v
 }

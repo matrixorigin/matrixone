@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
@@ -113,7 +112,7 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 		}
 		mov, _ = movec.BuildVarlenaVector(typ, header, storage)
 	} else if vec.GetType().IsTuple() {
-		mov = movec.New(vector.FLAT, vec.GetType())
+		mov = movec.New(movec.FLAT, vec.GetType())
 		cnt := types.DecodeInt32(bs.Storage)
 		if cnt != 0 {
 			if err := types.Decode(bs.Storage, &mov.Col); err != nil {
@@ -255,7 +254,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 		for i := 0; i < cnt; i++ {
 			newBat := batch.New(true, bat.Attrs)
 			for j := 0; j < len(bat.Vecs); j++ {
-				window := movec.New(vector.FLAT, *bat.Vecs[j].GetType())
+				window := movec.New(movec.FLAT, *bat.Vecs[j].GetType())
 				movec.Window(bat.Vecs[j], i*rows, (i+1)*rows, window)
 				newBat.Vecs[j] = window
 			}
@@ -284,7 +283,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	for _, row := range rowArray {
 		newBat := batch.New(true, bat.Attrs)
 		for j := 0; j < len(bat.Vecs); j++ {
-			window := movec.New(vector.FLAT, *bat.Vecs[j].GetType())
+			window := movec.New(movec.FLAT, *bat.Vecs[j].GetType())
 			movec.Window(bat.Vecs[j], start, start+row, window)
 			newBat.Vecs[j] = window
 		}
@@ -297,7 +296,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 var mockMp = common.DefaultAllocator
 
 func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
-	vec := movec.New(vector.FLAT, typ)
+	vec := movec.New(movec.FLAT, typ)
 	switch typ.Oid {
 	case types.T_bool:
 		data := make([]bool, 0)
@@ -461,18 +460,18 @@ func AppendFixedValue[T types.FixedSizeT](vec *movec.Vector, v any) {
 	_, isNull := v.(types.Null)
 	if isNull {
 		zt := types.DefaultVal[T]()
-		vector.Append(vec, zt, isNull, mockMp)
+		movec.Append(vec, zt, isNull, mockMp)
 	} else {
-		vector.Append(vec, v.(T), false, mockMp)
+		movec.Append(vec, v.(T), false, mockMp)
 	}
 }
 
 func AppendBytes(vec *movec.Vector, v any) {
 	_, isNull := v.(types.Null)
 	if isNull {
-		vector.AppendBytes(vec, nil, true, mockMp)
+		movec.AppendBytes(vec, nil, true, mockMp)
 	} else {
-		vector.AppendBytes(vec, v.([]byte), false, mockMp)
+		movec.AppendBytes(vec, v.([]byte), false, mockMp)
 	}
 }
 
@@ -651,7 +650,7 @@ func BatchWindow(bat *batch.Batch, start, end int) *batch.Batch {
 	window := batch.New(true, bat.Attrs)
 	window.Vecs = make([]*movec.Vector, len(bat.Vecs))
 	for i := range window.Vecs {
-		vec := movec.New(vector.FLAT, *bat.Vecs[i].GetType())
+		vec := movec.New(movec.FLAT, *bat.Vecs[i].GetType())
 		movec.Window(bat.Vecs[i], start, end, vec)
 		window.Vecs[i] = vec
 	}

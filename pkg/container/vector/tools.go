@@ -36,7 +36,7 @@ func MustTCols[T any](v *Vector) []T {
 		return nil
 	}
 	if v.class == CONSTANT {
-		vs := (*(*[]T)(unsafe.Pointer(v.col)))[:v.length]
+		vs := (*(*[]T)(unsafe.Pointer(v.col)))[:1]
 		rs := make([]T, v.length)
 		for i := range rs {
 			rs[i] = vs[0]
