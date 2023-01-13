@@ -375,45 +375,6 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		return err
 	}
 
-	// TODO: implement by insert ... select ...
-	// insert data into index table
-	/*switch t := qry.GetIndex().GetTableDef().Defs[0].Def.(type) {
-	case *plan.TableDef_DefType_UIdx:
-		targetAttrs := getIndexColsFromOriginTable(tblDefs, t.UIdx.Fields[0].Parts)
-
-		ret, err := r.Ranges(c.ctx, nil)
-		if err != nil {
-			return err
-		}
-		rds, err := r.NewReader(c.ctx, 1, nil, ret)
-		if err != nil {
-			return err
-		}
-		bat, err := rds[0].Read(c.ctx, targetAttrs, nil, c.proc.Mp())
-		if err != nil {
-			return err
-		}
-		err = rds[0].Close()
-		if err != nil {
-			return err
-		}
-
-		if bat != nil {
-			indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, targetAttrs, t.UIdx.Fields[0].Parts, qry.OriginTablePrimaryKey, c.proc)
-			indexR, err := d.Relation(c.ctx, t.UIdx.TableNames[0])
-			if err != nil {
-				return err
-			}
-			if cnt != 0 {
-				if err := indexR.Write(c.ctx, indexBat); err != nil {
-					return err
-				}
-			}
-			indexBat.Clean(c.proc.Mp())
-		}
-		// other situation is not supported now and check in plan
-	}*/
-
 	// compile insert plan
 	c.info = plan2.GetExecTypeFromPlan(qry.DataInsertion)
 	insertScope, err := c.compileScope(c.ctx, qry.DataInsertion)
