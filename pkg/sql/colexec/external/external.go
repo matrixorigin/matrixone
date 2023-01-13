@@ -479,13 +479,13 @@ func getUnCompressReader(param *tree.ExternParam, r io.ReadCloser) (io.ReadClose
 	switch strings.ToLower(getCompressType(param)) {
 	case tree.NOCOMPRESS:
 		return r, nil
-	case tree.GZIP:
+	case tree.GZIP, tree.GZ:
 		r, err := gzip.NewReader(r)
 		if err != nil {
 			return nil, err
 		}
 		return r, nil
-	case tree.BZIP2:
+	case tree.BZIP2, tree.BZ2:
 		return io.NopCloser(bzip2.NewReader(r)), nil
 	case tree.FLATE:
 		r = flate.NewReader(r)
