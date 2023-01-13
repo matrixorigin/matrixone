@@ -51,11 +51,11 @@ func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
 	}
 }
 
-func DeepCopyDeleteCtx(ctx *plan.DeleteTableCtx) *plan.DeleteTableCtx {
+func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 	if ctx == nil {
 		return nil
 	}
-	newCtx := &plan.DeleteTableCtx{
+	newCtx := &plan.DeleteCtx{
 		CanTruncate:   ctx.CanTruncate,
 		OnRestrictIdx: make([]int32, len(ctx.OnRestrictIdx)),
 		DelIdxIdx:     make([]int32, len(ctx.DelIdxIdx)),
@@ -66,8 +66,8 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteTableCtx) *plan.DeleteTableCtx {
 		OnRestrictRef: make([]*plan.ObjectRef, len(ctx.OnRestrictRef)),
 		OnCascadeRef:  make([]*plan.ObjectRef, len(ctx.OnCascadeRef)),
 		OnSetRef:      make([]*plan.ObjectRef, len(ctx.OnSetRef)),
-		OnSetIdx:      make([]*plan.DeleteTableCtxIdList, len(ctx.OnSetIdx)),
-		ParentIds:     make([]*plan.DeleteTableCtxIdList, len(ctx.ParentIds)),
+		OnSetIdx:      make([]*plan.DeleteCtxIdList, len(ctx.OnSetIdx)),
+		ParentIds:     make([]*plan.DeleteCtxIdList, len(ctx.ParentIds)),
 	}
 	copy(newCtx.OnRestrictIdx, ctx.OnRestrictIdx)
 	copy(newCtx.DelIdxIdx, ctx.DelIdxIdx)
@@ -89,7 +89,7 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteTableCtx) *plan.DeleteTableCtx {
 	}
 	for i, list := range ctx.OnSetIdx {
 		if list != nil {
-			newCtx.OnSetIdx[i] = &plan.DeleteTableCtxIdList{
+			newCtx.OnSetIdx[i] = &plan.DeleteCtxIdList{
 				List: make([]int64, len(list.List)),
 			}
 			copy(newCtx.OnSetIdx[i].List, list.List)
@@ -97,10 +97,77 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteTableCtx) *plan.DeleteTableCtx {
 	}
 	for i, list := range ctx.ParentIds {
 		if list != nil {
-			newCtx.ParentIds[i] = &plan.DeleteTableCtxIdList{
+			newCtx.ParentIds[i] = &plan.DeleteCtxIdList{
 				List: make([]int64, len(list.List)),
 			}
 			copy(newCtx.ParentIds[i].List, list.List)
+		}
+	}
+	return newCtx
+}
+
+func DeepCopyUpdateCtx(ctx *plan.UpdateCtx) *plan.UpdateCtx {
+	if ctx == nil {
+		return nil
+	}
+	newCtx := &plan.UpdateCtx{
+		OnRestrictIdx: make([]int32, len(ctx.OnRestrictIdx)),
+		IdxIdx:        make([]int32, len(ctx.IdxIdx)),
+
+		Ref:           make([]*plan.ObjectRef, len(ctx.Ref)),
+		IdxRef:        make([]*plan.ObjectRef, len(ctx.IdxRef)),
+		OnRestrictRef: make([]*plan.ObjectRef, len(ctx.OnRestrictRef)),
+		OnCascadeRef:  make([]*plan.ObjectRef, len(ctx.OnCascadeRef)),
+		OnSetRef:      make([]*plan.ObjectRef, len(ctx.OnSetRef)),
+
+		OnSetIdx: make([]*plan.UpdateCtxIdList, len(ctx.OnSetIdx)),
+		IdxVal:   make([]*plan.UpdateCtxIdList, len(ctx.IdxVal)),
+
+		OnSetAttrs:     make([]*plan.UpdateCtxAttrs, len(ctx.OnSetAttrs)),
+		OnCascadeAttrs: make([]*plan.UpdateCtxAttrs, len(ctx.OnCascadeAttrs)),
+	}
+	copy(newCtx.OnRestrictIdx, ctx.OnRestrictIdx)
+	for i, ref := range ctx.Ref {
+		newCtx.Ref[i] = DeepCopyObjectRef(ref)
+	}
+	for i, ref := range ctx.IdxRef {
+		newCtx.IdxRef[i] = DeepCopyObjectRef(ref)
+	}
+	for i, ref := range ctx.OnRestrictRef {
+		newCtx.OnRestrictRef[i] = DeepCopyObjectRef(ref)
+	}
+	for i, ref := range ctx.OnCascadeRef {
+		newCtx.OnCascadeRef[i] = DeepCopyObjectRef(ref)
+	}
+	for i, ref := range ctx.OnSetRef {
+		newCtx.OnSetRef[i] = DeepCopyObjectRef(ref)
+	}
+	for i, list := range ctx.OnSetAttrs {
+		newCtx.OnSetAttrs[i] = &plan.UpdateCtxAttrs{
+			List: make([]string, len(list.List)),
+		}
+		copy(newCtx.OnSetAttrs[i].List, list.List)
+	}
+	for i, list := range ctx.OnCascadeAttrs {
+		newCtx.OnCascadeAttrs[i] = &plan.UpdateCtxAttrs{
+			List: make([]string, len(list.List)),
+		}
+		copy(newCtx.OnCascadeAttrs[i].List, list.List)
+	}
+	for i, list := range ctx.OnSetIdx {
+		if list != nil {
+			newCtx.OnSetIdx[i] = &plan.UpdateCtxIdList{
+				List: make([]int64, len(list.List)),
+			}
+			copy(newCtx.OnSetIdx[i].List, list.List)
+		}
+	}
+	for i, list := range ctx.IdxVal {
+		if list != nil {
+			newCtx.IdxVal[i] = &plan.UpdateCtxIdList{
+				List: make([]int64, len(list.List)),
+			}
+			copy(newCtx.IdxVal[i].List, list.List)
 		}
 	}
 	return newCtx
@@ -124,7 +191,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		AggList:         make([]*plan.Expr, len(node.AggList)),
 		OrderBy:         make([]*plan.OrderBySpec, len(node.OrderBy)),
 		DeleteCtx:       DeepCopyDeleteCtx(node.DeleteCtx),
-		UpdateCtxs:      make([]*plan.UpdateCtx, len(node.UpdateCtxs)),
+		UpdateCtx:       DeepCopyUpdateCtx(node.UpdateCtx),
 		TableDefVec:     make([]*plan.TableDef, len(node.TableDefVec)),
 		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
 		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
@@ -161,30 +228,30 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		newNode.OrderBy[idx] = DeepCopyOrderBy(orderBy)
 	}
 
-	for i, updateCtx := range node.UpdateCtxs {
-		newNode.UpdateCtxs[i] = &plan.UpdateCtx{
-			DbName:             updateCtx.DbName,
-			TblName:            updateCtx.TblName,
-			HideKey:            updateCtx.HideKey,
-			HideKeyIdx:         updateCtx.HideKeyIdx,
-			UpdateCols:         make([]*ColDef, len(updateCtx.UpdateCols)),
-			OtherAttrs:         make([]string, len(updateCtx.OtherAttrs)),
-			OrderAttrs:         make([]string, len(updateCtx.OrderAttrs)),
-			CompositePkey:      DeepCopyColDef(updateCtx.GetCompositePkey()),
-			IsIndexTableUpdate: updateCtx.IsIndexTableUpdate,
-			UniqueIndexPos:     make([]int32, len(updateCtx.UniqueIndexPos)),
-			SecondaryIndexPos:  make([]int32, len(updateCtx.SecondaryIndexPos)),
-			IndexParts:         make([]string, len(updateCtx.IndexParts)),
-		}
-		for j, col := range updateCtx.UpdateCols {
-			newNode.UpdateCtxs[i].UpdateCols[j] = DeepCopyColDef(col)
-		}
-		copy(newNode.UpdateCtxs[i].OtherAttrs, updateCtx.OtherAttrs)
-		copy(newNode.UpdateCtxs[i].OrderAttrs, updateCtx.OrderAttrs)
-		copy(newNode.UpdateCtxs[i].UniqueIndexPos, updateCtx.UniqueIndexPos)
-		copy(newNode.UpdateCtxs[i].SecondaryIndexPos, updateCtx.SecondaryIndexPos)
-		copy(newNode.UpdateCtxs[i].IndexParts, updateCtx.IndexParts)
-	}
+	// for i, updateCtx := range node.UpdateCtxs {
+	// 	newNode.UpdateCtxs[i] = &plan.UpdateCtx{
+	// 		DbName:             updateCtx.DbName,
+	// 		TblName:            updateCtx.TblName,
+	// 		HideKey:            updateCtx.HideKey,
+	// 		HideKeyIdx:         updateCtx.HideKeyIdx,
+	// 		UpdateCols:         make([]*ColDef, len(updateCtx.UpdateCols)),
+	// 		OtherAttrs:         make([]string, len(updateCtx.OtherAttrs)),
+	// 		OrderAttrs:         make([]string, len(updateCtx.OrderAttrs)),
+	// 		CompositePkey:      DeepCopyColDef(updateCtx.GetCompositePkey()),
+	// 		IsIndexTableUpdate: updateCtx.IsIndexTableUpdate,
+	// 		UniqueIndexPos:     make([]int32, len(updateCtx.UniqueIndexPos)),
+	// 		SecondaryIndexPos:  make([]int32, len(updateCtx.SecondaryIndexPos)),
+	// 		IndexParts:         make([]string, len(updateCtx.IndexParts)),
+	// 	}
+	// 	for j, col := range updateCtx.UpdateCols {
+	// 		newNode.UpdateCtxs[i].UpdateCols[j] = DeepCopyColDef(col)
+	// 	}
+	// 	copy(newNode.UpdateCtxs[i].OtherAttrs, updateCtx.OtherAttrs)
+	// 	copy(newNode.UpdateCtxs[i].OrderAttrs, updateCtx.OrderAttrs)
+	// 	copy(newNode.UpdateCtxs[i].UniqueIndexPos, updateCtx.UniqueIndexPos)
+	// 	copy(newNode.UpdateCtxs[i].SecondaryIndexPos, updateCtx.SecondaryIndexPos)
+	// 	copy(newNode.UpdateCtxs[i].IndexParts, updateCtx.IndexParts)
+	// }
 
 	for i, tbl := range node.TableDefVec {
 		newNode.TableDefVec[i] = DeepCopyTableDef(tbl)

@@ -483,22 +483,6 @@ message WindowSpec {
 	int32 lag  = 4;
 }
 
-message UpdateCtx {
-	string db_name = 1;
-	string tbl_name = 2;
-	string hide_key = 3;
-	int32 hide_key_idx = 4;
-	repeated ColDef update_cols = 5;
-	repeated string other_attrs = 6;
-	repeated string order_attrs = 7;
-	ColDef composite_pkey = 8;
-	bool is_index_table_update = 9;
-	repeated int32 uniqueIndexPos = 10;
-	repeated int32	secondaryIndexPos = 11;
-	repeated string indexParts = 12;
-	ClusterByDef clusterByDef = 13;
-}
-
 message AnalyzeInfo {
     int64 input_rows = 1;
     int64 output_rows = 2;
@@ -607,7 +591,7 @@ message Node {
 	repeated Expr grouping_set = 10;
 	repeated Expr agg_list = 11;
 	repeated OrderBySpec order_by = 12;
-	repeated UpdateCtx update_ctxs = 13;
+	UpdateCtx update_ctx = 13;
 	WindowSpec win_spec = 14;
 	Expr limit = 15;
 	Expr offset = 16;
@@ -616,7 +600,7 @@ message Node {
 	ObjectRef obj_ref = 19;
 	RowsetData rowset_data = 20;
 	string extra_options = 21;
-	DeleteTableCtx delete_ctx = 22;
+	DeleteCtx delete_ctx = 22;
 
 	repeated int32 binding_tags = 23;
 
@@ -631,25 +615,47 @@ message Node {
 	ClusterTable cluster_table = 27;
 }
 
-message DeleteTableCtx {
+message DeleteCtx {
 	message idList {
 		repeated int64 list = 1;
 	}
 	message attrs {
 		repeated string list = 1;
 	}
-	repeated ObjectRef del_ref = 1;
-	repeated ObjectRef del_idx_ref = 2;
-	repeated int32 del_idx_idx = 3;
-	repeated ObjectRef on_restrict_ref = 4;
-	repeated int32 on_restrict_idx = 5;
-	repeated ObjectRef on_cascade_ref = 6;
-	repeated int32 on_cascade_idx = 7;
-	repeated ObjectRef on_set_ref = 8;
-	repeated attrs on_set_attrs = 9;
-	repeated idList on_set_idx = 10;
-	bool can_truncate = 11;
-	repeated idList parent_ids = 12;
+	repeated ObjectRef del_ref 			= 1;
+	repeated ObjectRef del_idx_ref 		= 2;
+	repeated int32 del_idx_idx 			= 3;
+	repeated ObjectRef on_restrict_ref 	= 4;
+	repeated int32 on_restrict_idx 		= 5;
+	repeated ObjectRef on_cascade_ref 	= 6;
+	repeated int32 on_cascade_idx 		= 7;
+	repeated ObjectRef on_set_ref 		= 8;
+	repeated attrs on_set_attrs 		= 9;
+	repeated idList on_set_idx 			= 10;
+	bool can_truncate 					= 11;
+	repeated idList parent_ids 			= 12;
+}
+
+
+message UpdateCtx {
+	message idList {
+		repeated int64 list = 1;
+	}
+	message attrs {
+		repeated string list = 1;
+	}
+	repeated ObjectRef ref 				= 1;
+	repeated ObjectRef idx_ref 			= 2;
+	repeated int32 idx_idx 				= 3;
+	repeated idList idx_val 			= 4;
+	repeated ObjectRef on_restrict_ref 	= 5;
+	repeated int32 on_restrict_idx 		= 6;
+	repeated ObjectRef on_cascade_ref 	= 7;
+	repeated attrs on_cascade_attrs 	= 8;
+	repeated idList on_cascade_idx 		= 9;
+	repeated ObjectRef on_set_ref 		= 10;
+	repeated attrs on_set_attrs 		= 11;
+	repeated idList on_set_idx 			= 12;
 }
 
 message Query {

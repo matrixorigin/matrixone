@@ -240,11 +240,17 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, aliasMap m
 	return tblInfo, nil
 }
 
-func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableinfo *dmlTableInfo, haveConstraint bool) (int32, error) {
+func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableInfo *dmlTableInfo, haveConstraint bool) (int32, error) {
 	fromTables := &tree.From{
 		Tables: stmt.Tables,
 	}
-	selectList := expandTableColumns(builder, tableinfo)
+	selectList := make([]tree.SelectExpr, len(tableInfo.tableDefs))
+	for alias, i := range tableInfo.alias {
+		e, _ := tree.NewUnresolvedNameWithStar(builder.GetContext(), alias)
+		selectList[i] = tree.SelectExpr{
+			Expr: e,
+		}
+	}
 
 	selectAst := &tree.Select{
 		Select: &tree.SelectClause{
@@ -264,30 +270,30 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 	return builder.buildSelect(selectAst, bindCtx, false)
 }
 
-func expandTableColumns(builder *QueryBuilder, tableInfo *dmlTableInfo) []tree.SelectExpr {
-	var selectExprs []tree.SelectExpr
-	for alias, i := range tableInfo.alias {
-		tableDef := tableInfo.tableDefs[i]
-		//objRef := tableInfo.objRef[i]
-		updateCols := tableInfo.updateKeys[i]
+// func expandTableColumns(builder *QueryBuilder, tableInfo *dmlTableInfo) []tree.SelectExpr {
+// 	var selectExprs []tree.SelectExpr
+// 	for alias, i := range tableInfo.alias {
+// 		tableDef := tableInfo.tableDefs[i]
+// 		//objRef := tableInfo.objRef[i]
+// 		updateCols := tableInfo.updateKeys[i]
 
-		for _, col := range tableDef.Cols {
-			if v, ok := updateCols[col.Name]; ok {
-				expr := tree.SelectExpr{
-					Expr: v,
-				}
-				selectExprs = append(selectExprs, expr)
-			} else {
-				ret, _ := tree.NewUnresolvedName(builder.GetContext(), alias, col.Name)
-				expr := tree.SelectExpr{
-					Expr: ret,
-				}
-				selectExprs = append(selectExprs, expr)
-			}
-		}
-	}
-	return selectExprs
-}
+// 		for _, col := range tableDef.Cols {
+// 			if v, ok := updateCols[col.Name]; ok {
+// 				expr := tree.SelectExpr{
+// 					Expr: v,
+// 				}
+// 				selectExprs = append(selectExprs, expr)
+// 			} else {
+// 				ret, _ := tree.NewUnresolvedName(builder.GetContext(), alias, col.Name)
+// 				expr := tree.SelectExpr{
+// 					Expr: ret,
+// 				}
+// 				selectExprs = append(selectExprs, expr)
+// 			}
+// 		}
+// 	}
+// 	return selectExprs
+// }
 
 func insertToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Insert, haveConstraint bool) (int32, error) {
 	return 0, nil
@@ -415,6 +421,8 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
 	info.derivedTableId = info.rootId
 	for idx, expr := range builder.qry.Nodes[info.rootId].ProjectList {
+		// reset project with update value
+		// reset project with hidden column
 		info.projectList = append(info.projectList, &plan.Expr{
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Col{

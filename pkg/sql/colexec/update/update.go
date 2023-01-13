@@ -45,6 +45,70 @@ func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
+func Call2(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+
+	p := arg.(*Argument)
+	bat := proc.Reg.InputBatch
+
+	// last batch of block
+	if bat == nil {
+		return true, nil
+	}
+
+	// empty batch
+	if len(bat.Zs) == 0 {
+		return false, nil
+	}
+
+	defer bat.Clean(proc.Mp())
+	var affectedRows uint64
+	var err error
+	updateCtx := p.UpdateCtx2
+
+	// check OnRestrict, if is not all null, throw error
+	for _, idx := range updateCtx.OnRestrictIdx {
+		if bat.Vecs[idx].Length() != bat.Vecs[idx].Nsp.Np.Count() {
+			return false, moerr.NewInternalError(proc.Ctx, "Cannot delete or update a parent row: a foreign key constraint fails")
+		}
+	}
+
+	// insert unique index
+	// delete unique index
+	_, err = colexec.FilterAndDelByRowId(proc, bat, updateCtx.IdxIdx, updateCtx.IdxSource)
+	if err != nil {
+		return false, err
+	}
+
+	// update child table(which ref on delete cascade)
+	_, err = colexec.FilterAndUpdateByRowId(proc, bat, updateCtx.OnCascadeIdx, updateCtx.OnCascadeSource, updateCtx.OnCascadeAttrs)
+	if err != nil {
+		return false, err
+	}
+
+	// update child table(which ref on delete set null)
+	_, err = colexec.FilterAndUpdateByRowId(proc, bat, updateCtx.OnSetIdx, updateCtx.OnSetSource, updateCtx.OnSetAttrs)
+	if err != nil {
+		return false, err
+	}
+
+	// delete origin table
+	beginIdx := int32(0)
+	for i := 0; i < len(updateCtx.Source); i++ {
+		idxList := make([]int32, updateCtx.ColCount[i])
+		for j := int32(0); j < updateCtx.ColCount[i]; j++ {
+			idxList[j] = beginIdx
+			beginIdx = beginIdx + 1
+		}
+		affectedRow, err := colexec.FilterAndUpdateByRowId(proc, bat, updateCtx.OnSetIdx, updateCtx.OnSetSource, updateCtx.OnSetAttrs)
+		if err != nil {
+			return false, err
+		}
+		affectedRows = affectedRows + affectedRow
+	}
+	atomic.AddUint64(&p.AffectedRows, affectedRows)
+	return false, nil
+}
+
 // the bool return value means whether it completed its work or not
 func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	p := arg.(*Argument)

@@ -23,14 +23,18 @@ import (
 type Argument struct {
 	Ts           uint64
 	AffectedRows uint64
-	UpdateCtxs   []*UpdateCtx
-	TableDefVec  []*plan.TableDef
-	Engine       engine.Engine
-	DB           []engine.Database
-	TableID      []uint64
-	DBName       []string
-	TblName      []string
-	HasAutoCol   []bool
+
+	UpdateCtxs  []*UpdateCtx
+	TableDefVec []*plan.TableDef
+
+	Engine     engine.Engine
+	DB         []engine.Database
+	TableID    []uint64
+	DBName     []string
+	TblName    []string
+	HasAutoCol []bool
+
+	UpdateCtx2 *UpdateCtx2
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -51,4 +55,24 @@ type UpdateCtx struct {
 	SecondaryIndexPos []int
 	IndexParts        []string
 	ClusterByDef      *plan.ClusterByDef
+}
+
+type UpdateCtx2 struct {
+	Source   []engine.Relation
+	Ref      []*plan.ObjectRef
+	ColCount []int32
+
+	IdxSource []engine.Relation
+	IdxIdx    []int32
+	IdxVal    [][]int32
+
+	OnRestrictIdx []int32
+
+	OnCascadeSource []engine.Relation
+	OnCascadeIdx    [][]int32
+	OnCascadeAttrs  [][]string
+
+	OnSetSource []engine.Relation
+	OnSetIdx    [][]int32
+	OnSetAttrs  [][]string
 }
