@@ -1,0 +1,427 @@
+show table_number from mo_task;
+[unknown result because it is related to issue#7564]
+show table_number from information_schema;
+[unknown result because it is related to issue#7564]
+show table_number from mysql;
+[unknown result because it is related to issue#7564]
+show table_number from mo_catalog;
+[unknown result because it is related to issue#7564]
+show table_number from system_metrics;
+[unknown result because it is related to issue#7564]
+show table_number from system;
+[unknown result because it is related to issue#7564]
+use mo_task;
+[unknown result because it is related to issue#7564]
+show column_number from sys_async_task;
+[unknown result because it is related to issue#7564]
+show column_number from sys_cron_task;
+[unknown result because it is related to issue#7564]
+use information_schema;
+[unknown result because it is related to issue#7564]
+show column_number from key_column_usage;
+[unknown result because it is related to issue#7564]
+show column_number from columns;
+[unknown result because it is related to issue#7564]
+show column_number from profiling;
+[unknown result because it is related to issue#7564]
+show column_number from PROCESSLIST;
+[unknown result because it is related to issue#7520]
+show column_number from schemata;
+[unknown result because it is related to issue#7564]
+show column_number from character_sets;
+[unknown result because it is related to issue#7564]
+show column_number from triggers;
+[unknown result because it is related to issue#7564]
+show column_number from tables;
+[unknown result because it is related to issue#7564]
+show column_number from engines;
+[unknown result because it is related to issue#7564]
+show column_number from routines;
+[unknown result because it is related to issue#7564]
+show column_number from parameters;
+[unknown result because it is related to issue#7564]
+show column_number from keywords;
+[unknown result because it is related to issue#7564]
+use mysql;
+[unknown result because it is related to issue#7564]
+show column_number from user;
+[unknown result because it is related to issue#7564]
+show column_number from db;
+[unknown result because it is related to issue#7564]
+show column_number from procs_priv;
+[unknown result because it is related to issue#7564]
+show column_number from columns_priv;
+[unknown result because it is related to issue#7564]
+show column_number from tables_priv;
+[unknown result because it is related to issue#7564]
+use mo_catalog;
+[unknown result because it is related to issue#7564]
+show column_number from mo_user;
+[unknown result because it is related to issue#7564]
+show column_number from mo_account;
+[unknown result because it is related to issue#7564]
+show column_number from mo_role;
+[unknown result because it is related to issue#7564]
+show column_number from mo_user_grant;
+[unknown result because it is related to issue#7564]
+show column_number from mo_role_grant;
+[unknown result because it is related to issue#7564]
+show column_number from mo_role_privs;
+[unknown result because it is related to issue#7564]
+show column_number from mo_user_defined_function;
+[unknown result because it is related to issue#7564]
+show column_number from mo_tables;
+[unknown result because it is related to issue#7564]
+show column_number from mo_database;
+[unknown result because it is related to issue#7564]
+show column_number from mo_columns;
+[unknown result because it is related to issue#7564]
+use system_metrics;
+[unknown result because it is related to issue#7564]
+show column_number from metric;
+[unknown result because it is related to issue#7564]
+show column_number from sql_statement_total;
+[unknown result because it is related to issue#7564]
+show column_number from sql_statement_errors;
+[unknown result because it is related to issue#7564]
+show column_number from sql_transaction_total;
+[unknown result because it is related to issue#7564]
+show column_number from sql_transaction_errors;
+[unknown result because it is related to issue#7564]
+show column_number from server_connections;
+[unknown result because it is related to issue#7564]
+show column_number from process_cpu_percent;
+[unknown result because it is related to issue#7564]
+show column_number from process_resident_memory_bytes;
+[unknown result because it is related to issue#7564]
+show column_number from process_open_fds;
+[unknown result because it is related to issue#7564]
+show column_number from sys_cpu_seconds_total;
+[unknown result because it is related to issue#7564]
+show column_number from sys_cpu_combined_percent;
+[unknown result because it is related to issue#7564]
+show column_number from sys_memory_used;
+[unknown result because it is related to issue#7564]
+show column_number from sys_memory_available;
+[unknown result because it is related to issue#7564]
+show column_number from sys_disk_read_bytes;
+[unknown result because it is related to issue#7564]
+show column_number from sys_disk_write_bytes;
+[unknown result because it is related to issue#7564]
+show column_number from sys_net_recv_bytes;
+[unknown result because it is related to issue#7564]
+show column_number from sys_net_sent_bytes;
+[unknown result because it is related to issue#7564]
+use system;
+[unknown result because it is related to issue#7564]
+show column_number from statement_info;
+[unknown result because it is related to issue#7564]
+show column_number from rawlog;
+[unknown result because it is related to issue#7564]
+show column_number from log_info;
+[unknown result because it is related to issue#7564]
+show column_number from error_info;
+[unknown result because it is related to issue#7564]
+show column_number from span_info;
+[unknown result because it is related to issue#7564]
+drop database if exists test_db;
+create database test_db;
+show table_number from test_db;
+[unknown result because it is related to issue#7564]
+use test_db;
+drop table if exists t1;
+create table t1(
+col1 int,
+col2 float,
+col3 varchar,
+col4 blob,
+col6 date,
+col7 bool
+);
+show table_number from test_db;
+[unknown result because it is related to issue#7564]
+show table_values from t1;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+null    null    null    null    null    null    null    null    null    null    null    null
+select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
+mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
+0    0
+insert into t1 values(100,10.34,"你好",'aaa','2011-10-10',0);
+show table_values from t1;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    100    10.34    10.34    你好    你好    aaa    aaa    2011-10-10    2011-10-10    false    false
+insert into t1 values(10,1.34,"你",'aa','2011-10-11',1);
+show table_values from t1;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
+select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
+mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
+2    154
+drop table if exists t11;
+create table t11(
+col1 int primary key,
+col2 float,
+col3 varchar,
+col4 blob,
+col6 date,
+col7 bool
+);
+show table_number from test_db;
+[unknown result because it is related to issue#7564]
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+null    null    null    null    null    null    null    null    null    null    null    null
+select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
+mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
+0    0
+insert into t11 values(100,10.34,"你好",'aaa','2011-10-10',0);
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    100    10.34    10.34    你好    你好    aaa    aaa    2011-10-10    2011-10-10    false    false
+insert into t11 values(10,1.34,"你",'aa','2011-10-11',1);
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
+select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
+mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
+2    154
+create external table external_table(
+col1 int,
+col2 float,
+col3 varchar,
+col4 blob,
+col6 date,
+col7 bool
+)infile{"filepath"='$resources/external_table_file/external_table.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+select * from external_table;
+col1    col2    col3    col4    col6    col7
+null    null            null    null
+100    10.34    你好    aaa    2011-10-10    false
+10    1.34    你    aa    2011-10-11    true
+show table_number from test_db;
+[unknown result because it is related to issue#7564]
+show table_values from external_table;
+[unknown result because it is related to issue#7568]
+create table t2(
+col1 json
+);
+show table_values from t2;
+[unknown result because it is related to issue#7527]
+insert into t2 values();
+[unknown result because it is related to issue#7527]
+show table_values from t2;
+[unknown result because it is related to issue#7527]
+insert into t2 values(('{"x": 17}'));
+[unknown result because it is related to issue#7527]
+show table_values from t2;
+[unknown result because it is related to issue#7527]
+insert into t2 values (('{"x": [18]}'));
+[unknown result because it is related to issue#7527]
+show table_values from t2;
+[unknown result because it is related to issue#7527]
+create table t3(
+col1 decimal
+);
+show table_values from t3;
+[unknown result because it is related to issue#7562]
+insert into t3 values();
+[unknown result because it is related to issue#7562]
+show table_values from t3;
+[unknown result because it is related to issue#7562]
+insert into t3 values(3.3);
+[unknown result because it is related to issue#7562]
+show table_values from t3;
+[unknown result because it is related to issue#7562]
+insert into t3 values(3.2);
+[unknown result because it is related to issue#7562]
+show table_values from t3;
+[unknown result because it is related to issue#7562]
+drop database test_db;
+drop account if exists test_account;
+create account test_account admin_name = 'test_user' identified by '111';
+show table_number from information_schema;
+[unknown result because it is related to issue#7564]
+show table_number from mysql;
+[unknown result because it is related to issue#7564]
+show table_number from mo_catalog;
+[unknown result because it is related to issue#7564]
+show table_number from system_metrics;
+[unknown result because it is related to issue#7564]
+show table_number from system;
+[unknown result because it is related to issue#7564]
+use information_schema;
+[unknown result because it is related to issue#7564]
+show column_number from key_column_usage;
+[unknown result because it is related to issue#7564]
+show column_number from columns;
+[unknown result because it is related to issue#7564]
+show column_number from profiling;
+[unknown result because it is related to issue#7564]
+show column_number from PROCESSLIST;
+[unknown result because it is related to issue#7520]
+show column_number from schemata;
+[unknown result because it is related to issue#7564]
+show column_number from character_sets;
+[unknown result because it is related to issue#7564]
+show column_number from triggers;
+[unknown result because it is related to issue#7564]
+show column_number from tables;
+[unknown result because it is related to issue#7564]
+show column_number from engines;
+[unknown result because it is related to issue#7564]
+show column_number from routines;
+[unknown result because it is related to issue#7564]
+show column_number from parameters;
+[unknown result because it is related to issue#7564]
+show column_number from keywords;
+[unknown result because it is related to issue#7564]
+use mysql;
+[unknown result because it is related to issue#7564]
+show column_number from user;
+[unknown result because it is related to issue#7564]
+show column_number from db;
+[unknown result because it is related to issue#7564]
+show column_number from procs_priv;
+[unknown result because it is related to issue#7564]
+show column_number from columns_priv;
+[unknown result because it is related to issue#7564]
+show column_number from tables_priv;
+[unknown result because it is related to issue#7564]
+use mo_catalog;
+[unknown result because it is related to issue#7564]
+show column_number from mo_user;
+[unknown result because it is related to issue#7564]
+show column_number from mo_role;
+[unknown result because it is related to issue#7564]
+show column_number from mo_user_grant;
+[unknown result because it is related to issue#7564]
+show column_number from mo_role_grant;
+[unknown result because it is related to issue#7564]
+show column_number from mo_role_privs;
+[unknown result because it is related to issue#7564]
+show column_number from mo_user_defined_function;
+[unknown result because it is related to issue#7564]
+show column_number from mo_tables;
+[unknown result because it is related to issue#7564]
+show column_number from mo_database;
+[unknown result because it is related to issue#7564]
+show column_number from mo_columns;
+[unknown result because it is related to issue#7564]
+use system;
+[unknown result because it is related to issue#7564]
+show column_number from statement_info;
+[unknown result because it is related to issue#7564]
+drop database if exists test_db;
+create database test_db;
+show table_number from test_db;
+[unknown result because it is related to issue#7564]
+use test_db;
+drop table if exists t1;
+create table t1(
+col1 int,
+col2 float,
+col3 varchar,
+col4 blob,
+col6 date,
+col7 bool
+);
+show table_number from test_db;
+[unknown result because it is related to issue#7564]
+show table_values from t1;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+null    null    null    null    null    null    null    null    null    null    null    null
+select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
+mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
+0    0
+insert into t1 values(100,10.34,"你好",'aaa','2011-10-10',0);
+show table_values from t1;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    100    10.34    10.34    你好    你好    aaa    aaa    2011-10-10    2011-10-10    false    false
+insert into t1 values(10,1.34,"你",'aa','2011-10-11',1);
+show table_values from t1;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
+select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
+mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
+2    154
+drop table if exists t11;
+create table t11(
+col1 int primary key,
+col2 float,
+col3 varchar,
+col4 blob,
+col6 date,
+col7 bool
+);
+show table_number from test_db;
+[unknown result because it is related to issue#7564]
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+null    null    null    null    null    null    null    null    null    null    null    null
+select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
+mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
+0    0
+insert into t11 values(100,10.34,"你好",'aaa','2011-10-10',0);
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    100    10.34    10.34    你好    你好    aaa    aaa    2011-10-10    2011-10-10    false    false
+insert into t11 values(10,1.34,"你",'aa','2011-10-11',1);
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
+select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
+mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
+2    154
+create external table external_table(
+col1 int,
+col2 float,
+col3 varchar,
+col4 blob,
+col6 date,
+col7 bool
+)infile{"filepath"='$resources/external_table_file/external_table.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+select * from external_table;
+col1    col2    col3    col4    col6    col7
+null    null            null    null
+100    10.34    你好    aaa    2011-10-10    false
+10    1.34    你    aa    2011-10-11    true
+show table_number from test_db;
+[unknown result because it is related to issue#7564]
+show table_values from external_table;
+[unknown result because it is related to issue#7568]
+create table t2(
+col1 json
+);
+show table_values from t2;
+[unknown result because it is related to issue#7527]
+insert into t2 values();
+[unknown result because it is related to issue#7527]
+show table_values from t2;
+[unknown result because it is related to issue#7527]
+insert into t2 values(('{"x": 17}'));
+[unknown result because it is related to issue#7527]
+show table_values from t2;
+[unknown result because it is related to issue#7527]
+insert into t2 values (('{"x": [18]}'));
+[unknown result because it is related to issue#7527]
+show table_values from t2;
+[unknown result because it is related to issue#7527]
+create table t3(
+col1 decimal
+);
+show table_values from t3;
+[unknown result because it is related to issue#7562]
+insert into t3 values();
+[unknown result because it is related to issue#7562]
+show table_values from t3;
+[unknown result because it is related to issue#7562]
+insert into t3 values(3.3);
+[unknown result because it is related to issue#7562]
+show table_values from t3;
+[unknown result because it is related to issue#7562]
+insert into t3 values(3.2);
+[unknown result because it is related to issue#7562]
+show table_values from t3;
+[unknown result because it is related to issue#7562]
+drop database test_db;
+drop account if exists test_account;
