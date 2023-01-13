@@ -104,7 +104,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	if err != nil {
 		return e
 	}
-	c := GetConstantValue(vec)
+	c := GetConstantValue(vec, false)
 	if c == nil {
 		return e
 	}
@@ -172,7 +172,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	return e
 }
 
-func GetConstantValue(vec *vector.Vector) *plan.Const {
+func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
 	if nulls.Any(vec.Nsp) {
 		return &plan.Const{Isnull: true}
 	}
@@ -243,7 +243,16 @@ func GetConstantValue(vec *vector.Vector) *plan.Const {
 				Dval: vec.Col.([]float64)[0],
 			},
 		}
-	case types.T_varchar, types.T_char, types.T_text:
+	case types.T_varchar, types.T_char, types.T_text, types.T_blob:
+		return &plan.Const{
+			Value: &plan.Const_Sval{
+				Sval: vec.GetString(0),
+			},
+		}
+	case types.T_json:
+		if !transAll {
+			return nil
+		}
 		return &plan.Const{
 			Value: &plan.Const_Sval{
 				Sval: vec.GetString(0),
@@ -261,6 +270,40 @@ func GetConstantValue(vec *vector.Vector) *plan.Const {
 				Dateval: int32(vector.MustTCols[types.Date](vec)[0]),
 			},
 		}
+	case types.T_time:
+		if !transAll {
+			return nil
+		}
+		return &plan.Const{
+			Value: &plan.Const_Timeval{
+				Timeval: int64(vector.MustTCols[types.Time](vec)[0]),
+			},
+		}
+	case types.T_datetime:
+		if !transAll {
+			return nil
+		}
+		return &plan.Const{
+			Value: &plan.Const_Datetimeval{
+				Datetimeval: int64(vector.MustTCols[types.Datetime](vec)[0]),
+			},
+		}
+	case types.T_decimal64:
+		if !transAll {
+			return nil
+		}
+		return &plan.Const{
+			Value: &plan.Const_Decimal64Val{
+				Decimal64Val: &plan.Decimal64{A: types.Decimal64ToInt64Raw(vector.MustTCols[types.Decimal64](vec)[0])},
+			},
+		}
+	case types.T_decimal128:
+		if !transAll {
+			return nil
+		}
+		decimalValue := &plan.Decimal128{}
+		decimalValue.A, decimalValue.B = types.Decimal128ToInt64Raw(vector.MustTCols[types.Decimal128](vec)[0])
+		return &plan.Const{Value: &plan.Const_Decimal128Val{Decimal128Val: decimalValue}}
 	default:
 		return nil
 	}

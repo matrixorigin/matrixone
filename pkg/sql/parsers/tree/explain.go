@@ -70,7 +70,7 @@ func (node *ExplainStmt) Format(ctx *FmtCtx) {
 }
 
 func (node *ExplainStmt) GetStatementType() string { return "Explain" }
-func (node *ExplainStmt) GetQueryType() string     { return QueryTypeDQL }
+func (node *ExplainStmt) GetQueryType() string     { return QueryTypeOth }
 
 func NewExplainStmt(stmt Statement, f string) *ExplainStmt {
 	return &ExplainStmt{explainImpl{Statement: stmt, Format: f}}
@@ -116,7 +116,7 @@ func (node *ExplainAnalyze) Format(ctx *FmtCtx) {
 }
 
 func (node *ExplainAnalyze) GetStatementType() string { return "Explain Analyze" }
-func (node *ExplainAnalyze) GetQueryType() string     { return QueryTypeDQL }
+func (node *ExplainAnalyze) GetQueryType() string     { return QueryTypeOth }
 
 func NewExplainAnalyze(stmt Statement, f string) *ExplainAnalyze {
 	return &ExplainAnalyze{explainImpl{Statement: stmt, Format: f}}
@@ -136,7 +136,7 @@ func (node *ExplainFor) Format(ctx *FmtCtx) {
 }
 
 func (node *ExplainFor) GetStatementType() string { return "Explain Format" }
-func (node *ExplainFor) GetQueryType() string     { return QueryTypeDQL }
+func (node *ExplainFor) GetQueryType() string     { return QueryTypeOth }
 
 func NewExplainFor(f string, id uint64) *ExplainFor {
 	return &ExplainFor{

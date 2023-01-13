@@ -242,6 +242,9 @@ func (node *SelectClause) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *SelectClause) GetStatementType() string { return "Select" }
+func (node *SelectClause) GetQueryType() string     { return QueryTypeDQL }
+
 // WHERE or HAVING clause.
 type Where struct {
 	Type string

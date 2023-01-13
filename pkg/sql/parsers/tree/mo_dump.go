@@ -54,5 +54,5 @@ func (node *MoDump) Format(ctx *FmtCtx) {
 	}
 }
 
-func (node *MoDump) GetStatementType() string { return "Modump" }
+func (node *MoDump) GetStatementType() string { return "MoDump" }
 func (node *MoDump) GetQueryType() string     { return QueryTypeDQL }

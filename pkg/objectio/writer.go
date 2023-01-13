@@ -88,7 +88,7 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 			return nil, err
 		}
 		block.(*Block).columns[i].(*ColumnBlock).meta.location = Extent{
-			id:         block.GetMeta().header.blockId,
+			id:         uint32(block.GetMeta().header.blockId),
 			offset:     uint32(offset),
 			length:     uint32(length),
 			originSize: uint32(originSize),
@@ -114,7 +114,9 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	w.RLock()
 	defer w.RUnlock()
 	var buf bytes.Buffer
-	for i, block := range w.blocks {
+	metaLen := 0
+	start := 0
+	for _, block := range w.blocks {
 		meta, err := block.(*Block).MarshalMeta()
 		if err != nil {
 			return nil, err
@@ -123,19 +125,17 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 		if err != nil {
 			return nil, err
 		}
-		w.blocks[i].(*Block).extent = Extent{
-			id:         block.(*Block).header.blockId,
-			offset:     uint32(offset),
-			length:     uint32(length),
-			originSize: uint32(length),
+		if start == 0 {
+			start = offset
 		}
-		if err = binary.Write(&buf, endian, w.blocks[i].(*Block).extent.Offset()); err != nil {
+		metaLen += length
+		if err = binary.Write(&buf, endian, uint32(offset)); err != nil {
 			return nil, err
 		}
-		if err = binary.Write(&buf, endian, w.blocks[i].(*Block).extent.Length()); err != nil {
+		if err = binary.Write(&buf, endian, uint32(length)); err != nil {
 			return nil, err
 		}
-		if err = binary.Write(&buf, endian, w.blocks[i].(*Block).extent.OriginSize()); err != nil {
+		if err = binary.Write(&buf, endian, uint32(length)); err != nil {
 			return nil, err
 		}
 	}
@@ -152,6 +152,14 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	err = w.Sync(ctx, items...)
 	if err != nil {
 		return nil, err
+	}
+	for i := range w.blocks {
+		w.blocks[i].(*Block).extent = Extent{
+			id:         uint32(i),
+			offset:     uint32(start),
+			length:     uint32(metaLen),
+			originSize: uint32(metaLen),
+		}
 	}
 
 	// The buffer needs to be released at the end of WriteEnd
