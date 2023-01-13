@@ -120,8 +120,8 @@ type ViewData struct {
 type ExecType int
 
 const (
-	ExecTypeAP ExecType = iota
-	ExecTypeTP
+	ExecTypeTP ExecType = iota
+	ExecTypeAP
 )
 
 type ExecInfo struct {

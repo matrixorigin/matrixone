@@ -155,6 +155,9 @@ type Process struct {
 	LoadTag bool
 
 	LastInsertID *uint64
+
+	//default tp
+	ExecType int
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
