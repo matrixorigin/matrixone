@@ -20,6 +20,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
+const HeaderSize = 64
+const ColumnMetaSize = 128
+
 // +---------------------------------------------------------------------------------------------+
 // |                                           Header                                            |
 // +-------------+---------------+--------------+---------------+---------------+----------------+
@@ -163,7 +166,9 @@ func (f *Footer) UnMarshalFooter(data []byte) error {
 	}
 	extents := data[len(data)-int(FooterSize+f.blockCount*ExtentTypeSize):]
 	ExtentsCache := bytes.NewBuffer(extents)
+	size := uint32(0)
 	for i := 0; i < int(f.blockCount); i++ {
+		f.extents[i].id = uint32(i)
 		if err = binary.Read(ExtentsCache, endian, &f.extents[i].offset); err != nil {
 			return err
 		}
@@ -173,6 +178,13 @@ func (f *Footer) UnMarshalFooter(data []byte) error {
 		if err = binary.Read(ExtentsCache, endian, &f.extents[i].originSize); err != nil {
 			return err
 		}
+		size += f.extents[i].originSize
+	}
+
+	for i := 0; i < int(f.blockCount); i++ {
+		f.extents[i].offset = f.extents[0].offset
+		f.extents[i].length = size
+		f.extents[i].originSize = size
 	}
 
 	return err

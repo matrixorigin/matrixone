@@ -1,10 +1,9 @@
 // Copyright 2021 Matrix Origin
-//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//	http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,23 +11,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tree
+package service
 
-// truncate table statement
-type TruncateTable struct {
-	statementImpl
-	Name *TableName
+type Bytes = []byte
+
+func AppendChunk(b []byte, chunks ...Bytes) []byte {
+	for _, chunk := range chunks {
+		b = append(b, chunk...)
+	}
+	return b
 }
 
-func NewTruncateTable(name *TableName) *TruncateTable {
-	return &TruncateTable{Name: name}
-}
+func Split(b []byte, limit int) []Bytes {
+	chunks := make([]Bytes, 0, (len(b)/limit)+1)
 
-func (node *TruncateTable) Format(ctx *FmtCtx) {
-	ctx.WriteString("truncate table")
-	ctx.WriteByte(' ')
-	node.Name.Format(ctx)
-}
+	var chunk Bytes
+	for len(b) >= limit {
+		chunk, b = b[:limit], b[limit:]
+		chunks = append(chunks, chunk)
+	}
+	if len(b) > 0 {
+		chunks = append(chunks, b[:])
+	}
 
-func (node *TruncateTable) GetStatementType() string { return "Truncate" }
-func (node *TruncateTable) GetQueryType() string     { return QueryTypeDDL }
+	return chunks
+}
