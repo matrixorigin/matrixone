@@ -464,9 +464,9 @@ func getCompressType(param *tree.ExternParam) string {
 	}
 	tail := string([]byte(param.Filepath)[index+1:])
 	switch tail {
-	case "gz":
+	case "gz", "gzip":
 		return tree.GZIP
-	case "bz2":
+	case "bz2", "bzip2":
 		return tree.BZIP2
 	case "lz4":
 		return tree.LZ4

@@ -109,7 +109,7 @@ const (
 	AUTO       = "auto"
 	NOCOMPRESS = "none"
 	GZIP       = "gzip"
-	BZIP2      = "bz2"
+	BZIP2      = "bzip2"
 	FLATE      = "flate"
 	LZW        = "lzw"
 	ZLIB       = "zlib"
