@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -645,7 +644,7 @@ func (o *outputQueue) flush() error {
 		}
 		dis, ok := o.debugProto.GetTcpConnection().(*debugIOSession)
 		if !ok {
-			return errors.New("it is not debugIOSession")
+			return moerr.NewInternalError(o.ctx, "it is not debugIOSession")
 		}
 		fmt.Printf("encoded result row %d : ", oidx)
 		printHexSlice(dis.GetOutputBuffer())
