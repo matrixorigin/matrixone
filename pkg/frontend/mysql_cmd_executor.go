@@ -613,13 +613,13 @@ func (o *outputQueue) makeResultSetTextRow(data []byte, mrs *MysqlResultSet, r u
 }
 
 func printHexSlice(d []byte) {
-	fmt.Printf("[")
+	bb := &bytes.Buffer{}
+	bb.WriteByte('[')
 	for _, v := range d {
-		fmt.Printf("%02x", v)
-		fmt.Printf(" ")
+		bb.WriteString(fmt.Sprintf("%02x ", v))
 	}
-	fmt.Printf("]")
-	fmt.Println()
+	bb.WriteByte(']')
+	logutil.Infof("%s", bb.String())
 }
 
 /*
