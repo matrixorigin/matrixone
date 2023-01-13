@@ -17,15 +17,18 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"sort"
-	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 const queryResultPrefix = "%s_%s_"
@@ -324,7 +326,8 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 		ExportParam: eParam,
 	}
 	//prepare output queue
-	oq := NewOutputQueue(ctx, nil, mrs, 1, exportParam, ses.GetShowStmtType())
+
+	oq := NewOutputQueue(ctx, nil, mrs, 1, exportParam, ses.GetShowStmtType(), ses, ses.GetParameterUnit().SV)
 	oq.reset()
 	//prepare export param
 	exportParam.DefaultBufSize = ses.GetParameterUnit().SV.ExportDataDefaultFlushSize

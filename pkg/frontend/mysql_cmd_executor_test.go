@@ -1235,3 +1235,7 @@ func Test_getSqlType(t *testing.T) {
 		convey.So(ses.sqlSourceType, convey.ShouldEqual, externSql)
 	})
 }
+
+func Test_printHex(t *testing.T) {
+	printHexSlice([]byte{20, 0, 0, 0, 8, 121, 101, 102, 38, 38, 49, 57, 48, 6, 32, 119, 119, 119, 119, 32, 3, 57, 56, 51})
+}

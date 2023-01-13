@@ -19,8 +19,10 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	"net"
 	"os"
 	"reflect"
 	"sort"
@@ -29,6 +31,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fagongzi/goetty/v2"
+	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -306,6 +311,93 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 	}
 }
 
+var _ goetty.IOSession = &debugIOSession{}
+
+type debugIOSession struct {
+	outputBuffer *buf.ByteBuf
+}
+
+func (dis *debugIOSession) ResetOutputBuffer() {
+	dis.outputBuffer.Reset()
+}
+
+func (dis *debugIOSession) GetOutputBuffer() []byte {
+	bb := &bytes.Buffer{}
+	dis.outputBuffer.WriteTo(bb)
+	return bb.Bytes()
+}
+
+// ID session id
+func (dis *debugIOSession) ID() uint64 {
+	return 0
+}
+
+// Connect connect to address, only used at client-side
+func (dis *debugIOSession) Connect(addr string, timeout time.Duration) error {
+	return nil
+}
+
+// Connected returns true if connection is ok
+func (dis *debugIOSession) Connected() bool {
+	return true
+}
+
+// Disconnect disconnect the connection
+func (dis *debugIOSession) Disconnect() error {
+	return nil
+}
+
+// Close close the session, the read and write buffer will closed, and cannot Connect
+// again. IOSession reference count minus 1.
+func (dis *debugIOSession) Close() error {
+	return nil
+}
+
+// Ref for IOSessions, held by several goroutines, several references are needed. Each
+// concurrent process holding an IOSession can Close the IOSession and release the resource
+// when the reference count reaches 0.
+func (dis *debugIOSession) Ref() {
+
+}
+
+// Read read packet from connection
+func (dis *debugIOSession) Read(option goetty.ReadOptions) (any, error) {
+	return nil, nil
+}
+
+// Write encodes the msg into a []byte into the buffer according to the codec.Encode.
+// If flush is set to flase, the data will not be written to the underlying socket.
+func (dis *debugIOSession) Write(msg any, options goetty.WriteOptions) error {
+	dis.outputBuffer.Write(msg.([]byte))
+	return nil
+}
+
+// Flush flush the out buffer
+func (dis *debugIOSession) Flush(timeout time.Duration) error {
+	return nil
+}
+
+// RemoteAddress returns remote address, include ip and port
+func (dis *debugIOSession) RemoteAddress() string {
+	return ""
+}
+
+// RawConn return raw tcp conn
+func (dis *debugIOSession) RawConn() net.Conn {
+	return nil
+}
+
+// UseConn use the specified conn to handle reads and writes. Note that conn reads and
+// writes cannot be handled in other goroutines until UseConn is called.
+func (dis *debugIOSession) UseConn(net.Conn) {
+
+}
+
+// OutBuf returns bytebuf which used to encode message into bytes
+func (dis *debugIOSession) OutBuf() *buf.ByteBuf {
+	return dis.outputBuffer
+}
+
 // outputPool outputs the data
 type outputPool interface {
 	resetLineStr()
@@ -332,20 +424,28 @@ type outputQueue struct {
 
 	getEmptyRowTime time.Duration
 	flushTime       time.Duration
+	needDebug       bool
 	outputIdx       uint64
-	lenEncBuffer    []byte
-	rowBuffer       []byte
+	debugProto      *MysqlProtocolImpl
 }
 
 func (o *outputQueue) resetLineStr() {
 	o.lineStr = o.lineStr[:0]
 }
 
-func (o *outputQueue) resetRowBuffer() {
-	o.rowBuffer = o.rowBuffer[:0]
-}
-
-func NewOutputQueue(ctx context.Context, proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *ExportParam, showStatementType ShowStatementType) *outputQueue {
+func NewOutputQueue(ctx context.Context,
+	proto MysqlProtocol,
+	mrs *MysqlResultSet,
+	length uint64,
+	ep *ExportParam,
+	showStatementType ShowStatementType,
+	ses *Session,
+	SV *config.FrontendParameters) *outputQueue {
+	dis := &debugIOSession{
+		outputBuffer: buf.NewByteBuf(1024),
+	}
+	dproto := NewMysqlClientProtocol(0, dis, 1024, SV)
+	dproto.SetSession(ses)
 	return &outputQueue{
 		ctx:          ctx,
 		proto:        proto,
@@ -355,7 +455,7 @@ func NewOutputQueue(ctx context.Context, proto MysqlProtocol, mrs *MysqlResultSe
 		ep:           ep,
 		showStmtType: showStatementType,
 		outputIdx:    0,
-		lenEncBuffer: make([]byte, 0, 10),
+		debugProto:   dproto,
 	}
 }
 
@@ -387,69 +487,11 @@ func (o *outputQueue) getOutputIdx() uint64 {
 	return i
 }
 
-func (o *outputQueue) writeIntLenEnc(data []byte, pos int, value uint64) int {
-	switch {
-	case value < 251:
-		data[pos] = byte(value)
-		return pos + 1
-	case value < (1 << 16):
-		data[pos] = 0xfc
-		data[pos+1] = byte(value)
-		data[pos+2] = byte(value >> 8)
-		return pos + 3
-	case value < (1 << 24):
-		data[pos] = 0xfd
-		data[pos+1] = byte(value)
-		data[pos+2] = byte(value >> 8)
-		data[pos+3] = byte(value >> 16)
-		return pos + 4
-	default:
-		data[pos] = 0xfe
-		data[pos+1] = byte(value)
-		data[pos+2] = byte(value >> 8)
-		data[pos+3] = byte(value >> 16)
-		data[pos+4] = byte(value >> 24)
-		data[pos+5] = byte(value >> 32)
-		data[pos+6] = byte(value >> 40)
-		data[pos+7] = byte(value >> 48)
-		data[pos+8] = byte(value >> 56)
-		return pos + 9
-	}
-}
-
-func (o *outputQueue) append(_ []byte, elems ...byte) []byte {
-	o.rowBuffer = append(o.rowBuffer, elems...)
-	return o.rowBuffer
-}
-
-func (o *outputQueue) appendIntLenEnc(data []byte, value uint64) []byte {
-	o.lenEncBuffer = o.lenEncBuffer[:9]
-	pos := o.writeIntLenEnc(o.lenEncBuffer, 0, value)
-	return o.append(data, o.lenEncBuffer[:pos]...)
-}
-
-func (o *outputQueue) appendStringFix(data []byte, value string, length int) []byte {
-	return o.append(data, []byte(value[:length])...)
-}
-
-func (o *outputQueue) appendStringLenEnc(data []byte, value string) []byte {
-	data = o.appendIntLenEnc(data, uint64(len(value)))
-	return o.appendStringFix(data, value, len(value))
-}
-
-func (o *outputQueue) appendUint8(data []byte, e uint8) []byte {
-	return o.append(data, e)
-}
-
-func (o *outputQueue) makeResultSetTextRow(data []byte, mrs *MysqlResultSet, r uint64) ([]byte, error) {
+func (o *outputQueue) makeResultSetTextRow(data []byte, mrs *MysqlResultSet, r uint64) ([]interface{}, error) {
 	ctx := o.ctx
 	textRow := make([]interface{}, 0, mrs.GetColumnCount())
 	appendText := func(v interface{}) {
 		textRow = append(textRow, v)
-	}
-	encodedRow := make([][]byte, 0, mrs.GetColumnCount())
-	appendEncoded := func(v []byte) {
-		encodedRow = append(encodedRow, v)
 	}
 	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
 		column, err := mrs.GetColumn(ctx, i)
@@ -465,9 +507,7 @@ func (o *outputQueue) makeResultSetTextRow(data []byte, mrs *MysqlResultSet, r u
 			return nil, err1
 		} else if isNil {
 			//NULL is sent as 0xfb
-			data = o.appendUint8(data, 0xFB)
 			appendText(nil)
-			appendEncoded([]byte{0xFB})
 			continue
 		}
 
@@ -476,25 +516,25 @@ func (o *outputQueue) makeResultSetTextRow(data []byte, mrs *MysqlResultSet, r u
 			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
-				data = o.appendStringLenEnc(data, value)
+				appendText(value)
 			}
 		case defines.MYSQL_TYPE_BOOL:
 			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
-				data = o.appendStringLenEnc(data, value)
+				appendText(value)
 			}
 		case defines.MYSQL_TYPE_DECIMAL:
 			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
-				data = o.appendStringLenEnc(data, value)
+				appendText(value)
 			}
 		case defines.MYSQL_TYPE_UUID:
 			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
-				data = o.appendStringLenEnc(data, value)
+				appendText(value)
 			}
 		case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
 			if value, err2 := mrs.GetInt64(ctx, r, i); err2 != nil {
@@ -502,75 +542,85 @@ func (o *outputQueue) makeResultSetTextRow(data []byte, mrs *MysqlResultSet, r u
 			} else {
 				if mysqlColumn.ColumnType() == defines.MYSQL_TYPE_YEAR {
 					if value == 0 {
-						data = o.appendStringLenEnc(data, "0000")
+						appendText("0000")
 					} else {
-						data = o.appendStringLenEncOfInt64(data, value)
+						appendText(value)
 					}
 				} else {
-					data = o.appendStringLenEncOfInt64(data, value)
+					appendText(value)
 				}
 			}
 		case defines.MYSQL_TYPE_FLOAT:
 			if value, err2 := mrs.GetFloat64(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
-				data = o.appendStringLenEncOfFloat64(data, value, 32)
+				appendText(value)
 			}
 		case defines.MYSQL_TYPE_DOUBLE:
 			if value, err2 := mrs.GetFloat64(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
-				data = o.appendStringLenEncOfFloat64(data, value, 64)
+				appendText(value)
 			}
 		case defines.MYSQL_TYPE_LONGLONG:
 			if uint32(mysqlColumn.Flag())&defines.UNSIGNED_FLAG != 0 {
 				if value, err2 := mrs.GetUint64(ctx, r, i); err2 != nil {
 					return nil, err2
 				} else {
-					data = o.appendStringLenEncOfUint64(data, value)
+					appendText(value)
 				}
 			} else {
 				if value, err2 := mrs.GetInt64(ctx, r, i); err2 != nil {
 					return nil, err2
 				} else {
-					data = o.appendStringLenEncOfInt64(data, value)
+					appendText(value)
 				}
 			}
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
 			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
-				data = o.appendStringLenEnc(data, value)
+				appendText(value)
 			}
 		case defines.MYSQL_TYPE_DATE:
 			if value, err2 := mrs.GetValue(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
-				data = o.appendStringLenEnc(data, value.(types.Date).String())
+				appendText(value)
 			}
 		case defines.MYSQL_TYPE_DATETIME:
 			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
-				data = o.appendStringLenEnc(data, value)
+				appendText(value)
 			}
 		case defines.MYSQL_TYPE_TIME:
 			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
-				data = o.appendStringLenEnc(data, value)
+				appendText(value)
 			}
 		case defines.MYSQL_TYPE_TIMESTAMP:
 			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
-				data = o.appendStringLenEnc(data, value)
+				appendText(value)
 			}
 		default:
 			return nil, moerr.NewInternalError(ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
 		}
 	}
-	return data, nil
+	return textRow, nil
+}
+
+func printHexSlice(d []byte) {
+	fmt.Printf("[")
+	for _, v := range d {
+		fmt.Printf("%02x", v)
+		fmt.Printf(" ")
+	}
+	fmt.Printf("]")
+	fmt.Println()
 }
 
 /*
@@ -580,7 +630,27 @@ func (o *outputQueue) flush() error {
 	if o.rowIdx <= 0 {
 		return nil
 	}
-	logutil.Infof("result row %d : %v", o.getOutputIdx(), o.mrs.Data[0])
+	if o.needDebug {
+		oidx := o.getOutputIdx()
+		resultRow, err := o.makeResultSetTextRow(nil, o.mrs, 0)
+		if err != nil {
+			return err
+		}
+		logutil.Infof("raw result row %d : %v",
+			oidx,
+			resultRow)
+		if err := o.debugProto.SendResultSetTextBatchRowSpeedup(o.mrs, o.rowIdx); err != nil {
+			logutil.Errorf("flush error %v", err)
+			return err
+		}
+		dis, ok := o.debugProto.GetTcpConnection().(*debugIOSession)
+		if !ok {
+			return errors.New("it is not debugIOSession")
+		}
+		fmt.Printf("encoded result row %d : ", oidx)
+		printHexSlice(dis.GetOutputBuffer())
+	}
+
 	if o.ep.Outfile {
 		if err := exportDataToCSVFile(o); err != nil {
 			logutil.Errorf("export to csv file error %v", err)
@@ -832,8 +902,13 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	}
 	allocateOutBufferTime := time.Since(begin3)
 
-	oq := NewOutputQueue(ses.GetRequestContext(), proto, mrs, uint64(countOfResultSet), ses.GetExportParam(), ses.GetShowStmtType())
+	oq := NewOutputQueue(ses.GetRequestContext(), proto, mrs, uint64(countOfResultSet), ses.GetExportParam(), ses.GetShowStmtType(), ses, ses.GetParameterUnit().SV)
 	oq.reset()
+
+	if strings.Contains(ses.GetSql(),
+		"select * from text_01 where t2 > (select t2 from text_05 where t1='789')") {
+		oq.needDebug = true
+	}
 
 	row2colTime := time.Duration(0)
 
