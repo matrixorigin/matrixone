@@ -305,12 +305,20 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 				}
 
 				resp := <-ch
+				fmt.Printf("receive a log tail\n")
 				if resp.err == nil {
 					// if we receive the response, update the partition and global timestamp.
 					switch {
 					case resp.r.GetSubscribeResponse() != nil:
 						lt := resp.r.GetSubscribeResponse().GetLogtail()
 						logTs := lt.GetTs()
+
+						str := fmt.Sprintf("get a sub response, ts : %v", logTs)
+						for j := 0; j < len(lt.Commands); j++ {
+							str += fmt.Sprintf("\thas tbl %s.%s\n", lt.Commands[j].DatabaseName, lt.Commands[j].TableName)
+						}
+						fmt.Printf("%s\n", str)
+
 						if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &lt); err != nil {
 							needReconnect = true
 							break
@@ -319,8 +327,19 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 
 					case resp.r.GetUpdateResponse() != nil:
 						logLists := resp.r.GetUpdateResponse().GetLogtailList()
+						from := resp.r.GetUpdateResponse().GetFrom()
 						to := resp.r.GetUpdateResponse().GetTo()
+
+						fmt.Printf("get a update response, start: %v, end: %v\n", from, to)
 						for _, l := range logLists {
+
+							str := fmt.Sprintf("get a update log tail, ts : %v", l.Ts)
+							for j := 0; j < len(l.Commands); j++ {
+								str += fmt.Sprintf("\thas tbl %s.%s\n", l.Commands[j].DatabaseName, l.Commands[j].TableName)
+							}
+							str += "\n"
+							fmt.Printf("%s\n", str)
+
 							if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &l); err != nil {
 								logutil.Error("cnLogTailClient : update table partition failed.")
 								needReconnect = true
@@ -331,6 +350,7 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 
 					// XXX we do not handle these message now.
 					case resp.r.GetError() != nil:
+						fmt.Printf("log tail err is %v", resp.r.GetError().Status.Message)
 
 					case resp.r.GetUnsubscribeResponse() != nil:
 					}
