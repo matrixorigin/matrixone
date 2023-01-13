@@ -76,7 +76,7 @@ type updateTableInfo struct {
 }
 
 func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
-	// buildTableUpdate2(stmt, ctx)
+	buildTableUpdate2(stmt, ctx)
 
 	// build map between base table and alias table
 	tbinfo := newTableInfo()
@@ -238,17 +238,17 @@ func buildTableUpdate2(stmt *tree.Update, ctx CompilerContext) (p *Plan, err err
 		bindCtx.results = rewriteInfo.projectList
 
 	} else {
-		rewriteInfo.rootId, err = updateToSelect(builder, bindCtx, stmt, false)
+		rewriteInfo.rootId, err = updateToSelect(builder, bindCtx, stmt, tblInfo, false)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	// builder.qry.Steps = append(builder.qry.Steps, rewriteInfo.rootId)
-	// query, err := builder.createQuery()
-	// if err != nil {
-	// 	return nil, err
-	// }
+	builder.qry.Steps = append(builder.qry.Steps, rewriteInfo.rootId)
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, err
+	}
 
 	// // append delete node
 	// deleteCtx := &plan.DeleteTableCtx{
@@ -269,7 +269,7 @@ func buildTableUpdate2(stmt *tree.Update, ctx CompilerContext) (p *Plan, err err
 
 	return &Plan{
 		Plan: &plan.Plan_Query{
-			Query: builder.qry,
+			Query: query,
 		},
 	}, err
 }

@@ -241,8 +241,9 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, aliasMap m
 }
 
 func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableinfo *dmlTableInfo, haveConstraint bool) (int32, error) {
-	var fromTables *tree.From
-	fromTables.Tables = stmt.Tables
+	fromTables := &tree.From{
+		Tables: stmt.Tables,
+	}
 	selectList := expandTableColumns(builder, tableinfo)
 
 	selectAst := &tree.Select{
@@ -256,12 +257,16 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 		Limit:   stmt.Limit,
 		With:    stmt.With,
 	}
-	return builder.buildSelect(selectAst, bindCtx, true)
+	// ftCtx := tree.NewFmtCtx(dialect.MYSQL)
+	// selectAst.Format(ftCtx)
+	// sql := ftCtx.String()
+	// fmt.Print(sql)
+	return builder.buildSelect(selectAst, bindCtx, false)
 }
 
 func expandTableColumns(builder *QueryBuilder, tableInfo *dmlTableInfo) []tree.SelectExpr {
-	selectExprs := make([]tree.SelectExpr, 0)
-	for i := 0; i < len(tableInfo.tableDefs); i++ {
+	var selectExprs []tree.SelectExpr
+	for alias, i := range tableInfo.alias {
 		tableDef := tableInfo.tableDefs[i]
 		//objRef := tableInfo.objRef[i]
 		updateCols := tableInfo.updateKeys[i]
@@ -273,7 +278,7 @@ func expandTableColumns(builder *QueryBuilder, tableInfo *dmlTableInfo) []tree.S
 				}
 				selectExprs = append(selectExprs, expr)
 			} else {
-				ret, _ := tree.NewUnresolvedName(builder.GetContext(), tableDef.Name, col.Name)
+				ret, _ := tree.NewUnresolvedName(builder.GetContext(), alias, col.Name)
 				expr := tree.SelectExpr{
 					Expr: ret,
 				}
