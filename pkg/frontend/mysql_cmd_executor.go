@@ -332,10 +332,17 @@ type outputQueue struct {
 
 	getEmptyRowTime time.Duration
 	flushTime       time.Duration
+	outputIdx       uint64
+	lenEncBuffer    []byte
+	rowBuffer       []byte
 }
 
 func (o *outputQueue) resetLineStr() {
 	o.lineStr = o.lineStr[:0]
+}
+
+func (o *outputQueue) resetRowBuffer() {
+	o.rowBuffer = o.rowBuffer[:0]
 }
 
 func NewOutputQueue(ctx context.Context, proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *ExportParam, showStatementType ShowStatementType) *outputQueue {
@@ -347,6 +354,8 @@ func NewOutputQueue(ctx context.Context, proto MysqlProtocol, mrs *MysqlResultSe
 		length:       length,
 		ep:           ep,
 		showStmtType: showStatementType,
+		outputIdx:    0,
+		lenEncBuffer: make([]byte, 0, 10),
 	}
 }
 
@@ -372,6 +381,198 @@ func (o *outputQueue) getEmptyRow() ([]interface{}, error) {
 	return row, nil
 }
 
+func (o *outputQueue) getOutputIdx() uint64 {
+	i := o.outputIdx
+	o.outputIdx++
+	return i
+}
+
+func (o *outputQueue) writeIntLenEnc(data []byte, pos int, value uint64) int {
+	switch {
+	case value < 251:
+		data[pos] = byte(value)
+		return pos + 1
+	case value < (1 << 16):
+		data[pos] = 0xfc
+		data[pos+1] = byte(value)
+		data[pos+2] = byte(value >> 8)
+		return pos + 3
+	case value < (1 << 24):
+		data[pos] = 0xfd
+		data[pos+1] = byte(value)
+		data[pos+2] = byte(value >> 8)
+		data[pos+3] = byte(value >> 16)
+		return pos + 4
+	default:
+		data[pos] = 0xfe
+		data[pos+1] = byte(value)
+		data[pos+2] = byte(value >> 8)
+		data[pos+3] = byte(value >> 16)
+		data[pos+4] = byte(value >> 24)
+		data[pos+5] = byte(value >> 32)
+		data[pos+6] = byte(value >> 40)
+		data[pos+7] = byte(value >> 48)
+		data[pos+8] = byte(value >> 56)
+		return pos + 9
+	}
+}
+
+func (o *outputQueue) append(_ []byte, elems ...byte) []byte {
+	o.rowBuffer = append(o.rowBuffer, elems...)
+	return o.rowBuffer
+}
+
+func (o *outputQueue) appendIntLenEnc(data []byte, value uint64) []byte {
+	o.lenEncBuffer = o.lenEncBuffer[:9]
+	pos := o.writeIntLenEnc(o.lenEncBuffer, 0, value)
+	return o.append(data, o.lenEncBuffer[:pos]...)
+}
+
+func (o *outputQueue) appendStringFix(data []byte, value string, length int) []byte {
+	return o.append(data, []byte(value[:length])...)
+}
+
+func (o *outputQueue) appendStringLenEnc(data []byte, value string) []byte {
+	data = o.appendIntLenEnc(data, uint64(len(value)))
+	return o.appendStringFix(data, value, len(value))
+}
+
+func (o *outputQueue) appendUint8(data []byte, e uint8) []byte {
+	return o.append(data, e)
+}
+
+func (o *outputQueue) makeResultSetTextRow(data []byte, mrs *MysqlResultSet, r uint64) ([]byte, error) {
+	ctx := o.ctx
+	textRow := make([]interface{}, 0, mrs.GetColumnCount())
+	appendText := func(v interface{}) {
+		textRow = append(textRow, v)
+	}
+	encodedRow := make([][]byte, 0, mrs.GetColumnCount())
+	appendEncoded := func(v []byte) {
+		encodedRow = append(encodedRow, v)
+	}
+	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
+		column, err := mrs.GetColumn(ctx, i)
+		if err != nil {
+			return nil, err
+		}
+		mysqlColumn, ok := column.(*MysqlColumn)
+		if !ok {
+			return nil, moerr.NewInternalError(ctx, "sendColumn need MysqlColumn")
+		}
+
+		if isNil, err1 := mrs.ColumnIsNull(ctx, r, i); err1 != nil {
+			return nil, err1
+		} else if isNil {
+			//NULL is sent as 0xfb
+			data = o.appendUint8(data, 0xFB)
+			appendText(nil)
+			appendEncoded([]byte{0xFB})
+			continue
+		}
+
+		switch mysqlColumn.ColumnType() {
+		case defines.MYSQL_TYPE_JSON:
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = o.appendStringLenEnc(data, value)
+			}
+		case defines.MYSQL_TYPE_BOOL:
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = o.appendStringLenEnc(data, value)
+			}
+		case defines.MYSQL_TYPE_DECIMAL:
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = o.appendStringLenEnc(data, value)
+			}
+		case defines.MYSQL_TYPE_UUID:
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = o.appendStringLenEnc(data, value)
+			}
+		case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
+			if value, err2 := mrs.GetInt64(ctx, r, i); err2 != nil {
+				return nil, err2
+			} else {
+				if mysqlColumn.ColumnType() == defines.MYSQL_TYPE_YEAR {
+					if value == 0 {
+						data = o.appendStringLenEnc(data, "0000")
+					} else {
+						data = o.appendStringLenEncOfInt64(data, value)
+					}
+				} else {
+					data = o.appendStringLenEncOfInt64(data, value)
+				}
+			}
+		case defines.MYSQL_TYPE_FLOAT:
+			if value, err2 := mrs.GetFloat64(ctx, r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = o.appendStringLenEncOfFloat64(data, value, 32)
+			}
+		case defines.MYSQL_TYPE_DOUBLE:
+			if value, err2 := mrs.GetFloat64(ctx, r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = o.appendStringLenEncOfFloat64(data, value, 64)
+			}
+		case defines.MYSQL_TYPE_LONGLONG:
+			if uint32(mysqlColumn.Flag())&defines.UNSIGNED_FLAG != 0 {
+				if value, err2 := mrs.GetUint64(ctx, r, i); err2 != nil {
+					return nil, err2
+				} else {
+					data = o.appendStringLenEncOfUint64(data, value)
+				}
+			} else {
+				if value, err2 := mrs.GetInt64(ctx, r, i); err2 != nil {
+					return nil, err2
+				} else {
+					data = o.appendStringLenEncOfInt64(data, value)
+				}
+			}
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = o.appendStringLenEnc(data, value)
+			}
+		case defines.MYSQL_TYPE_DATE:
+			if value, err2 := mrs.GetValue(ctx, r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = o.appendStringLenEnc(data, value.(types.Date).String())
+			}
+		case defines.MYSQL_TYPE_DATETIME:
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = o.appendStringLenEnc(data, value)
+			}
+		case defines.MYSQL_TYPE_TIME:
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = o.appendStringLenEnc(data, value)
+			}
+		case defines.MYSQL_TYPE_TIMESTAMP:
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = o.appendStringLenEnc(data, value)
+			}
+		default:
+			return nil, moerr.NewInternalError(ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
+		}
+	}
+	return data, nil
+}
+
 /*
 flush will force the data flushed into the protocol.
 */
@@ -379,6 +580,7 @@ func (o *outputQueue) flush() error {
 	if o.rowIdx <= 0 {
 		return nil
 	}
+	logutil.Infof("result row %d : %v", o.getOutputIdx(), o.mrs.Data[0])
 	if o.ep.Outfile {
 		if err := exportDataToCSVFile(o); err != nil {
 			logutil.Errorf("export to csv file error %v", err)
