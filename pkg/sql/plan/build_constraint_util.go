@@ -240,8 +240,48 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, aliasMap m
 	return tblInfo, nil
 }
 
-func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Update, haveConstraint bool) (int32, error) {
-	return 0, nil
+func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableinfo *dmlTableInfo, haveConstraint bool) (int32, error) {
+	var fromTables *tree.From
+	fromTables.Tables = stmt.Tables
+	selectList := expandTableColumns(builder, tableinfo)
+
+	selectAst := &tree.Select{
+		Select: &tree.SelectClause{
+			Distinct: false,
+			Exprs:    selectList,
+			From:     fromTables,
+			Where:    stmt.Where,
+		},
+		OrderBy: stmt.OrderBy,
+		Limit:   stmt.Limit,
+		With:    stmt.With,
+	}
+	return builder.buildSelect(selectAst, bindCtx, true)
+}
+
+func expandTableColumns(builder *QueryBuilder, tableInfo *dmlTableInfo) []tree.SelectExpr {
+	selectExprs := make([]tree.SelectExpr, 0)
+	for i := 0; i < len(tableInfo.tableDefs); i++ {
+		tableDef := tableInfo.tableDefs[i]
+		//objRef := tableInfo.objRef[i]
+		updateCols := tableInfo.updateKeys[i]
+
+		for _, col := range tableDef.Cols {
+			if v, ok := updateCols[col.Name]; ok {
+				expr := tree.SelectExpr{
+					Expr: v,
+				}
+				selectExprs = append(selectExprs, expr)
+			} else {
+				ret, _ := tree.NewUnresolvedName(builder.GetContext(), tableDef.Name, col.Name)
+				expr := tree.SelectExpr{
+					Expr: ret,
+				}
+				selectExprs = append(selectExprs, expr)
+			}
+		}
+	}
+	return selectExprs
 }
 
 func insertToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Insert, haveConstraint bool) (int32, error) {
@@ -354,7 +394,7 @@ func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, stmt *tree.Update) error {
 	var err error
 	subCtx := NewBindContext(builder, bindCtx)
-	info.rootId, err = updateToSelect(builder, subCtx, stmt, true)
+	info.rootId, err = updateToSelect(builder, subCtx, stmt, nil, true)
 	if err != nil {
 		return err
 	}
