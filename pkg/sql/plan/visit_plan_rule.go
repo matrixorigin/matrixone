@@ -339,7 +339,7 @@ func getVarValue(e *plan.Expr, r *ResetVarRefRule) (*plan.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		constValue := rule.GetConstantValue(vec)
+		constValue := rule.GetConstantValue(vec, true)
 		constValue.Src = e
 		expr.Typ = &plan.Type{Id: int32(vec.Typ.Oid), Precision: vec.Typ.Precision, Scale: vec.Typ.Scale, Width: vec.Typ.Width, Size: vec.Typ.Size}
 		expr.Expr = &plan.Expr_C{
@@ -419,7 +419,7 @@ func (r *RecomputeRealTimeRelatedFuncRule) ApplyExpr(e *plan.Expr) (*plan.Expr, 
 				if err != nil {
 					return nil, err
 				}
-				constValue := rule.GetConstantValue(vec)
+				constValue := rule.GetConstantValue(vec, false)
 				constValue.Src = exprImpl.C.Src
 				exprImpl.C = constValue
 			}
