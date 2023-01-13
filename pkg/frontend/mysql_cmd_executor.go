@@ -20,7 +20,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"os"
 	"reflect"
@@ -29,6 +28,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -2094,6 +2095,24 @@ func (mce *MysqlCmdExecutor) handleKill(ctx context.Context, k *tree.Kill) error
 	return err
 }
 
+// handleShowAccounts lists the info of accounts
+func (mce *MysqlCmdExecutor) handleShowAccounts(ctx context.Context, sa *tree.ShowAccounts) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = doShowAccounts(ctx, ses, sa)
+	if err != nil {
+		return err
+	}
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err = proto.SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
 func GetExplainColumns(ctx context.Context, explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
 		{Typ: &plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
@@ -2275,11 +2294,17 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.ses.SetRequestContext(requestCtx)
 		cwft.proc.Ctx = context.WithValue(cwft.proc.Ctx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
 	}
-	cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+	cacheHit := cwft.plan != nil
+	if !cacheHit {
+		cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+	} else if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil {
+		cwft.ses.accountId = getAccountId(requestCtx)
+		err = authenticateCanExecuteStatementAndPlan(requestCtx, cwft.ses, cwft.stmt, cwft.plan)
+	}
 	if err != nil {
 		return nil, err
 	}
-
+	cwft.ses.p = cwft.plan
 	if _, ok := cwft.stmt.(*tree.Execute); ok {
 		executePlan := cwft.plan.GetDcl().GetExecute()
 		stmtName := executePlan.GetName()
@@ -2304,7 +2329,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 		// replace ? and @var with their values
 		resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
-		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
+		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())
 		constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
 		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
 		err = vp.Visit(requestCtx)
@@ -2333,9 +2358,12 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 			return nil, err
 		}
 	} else {
-		// replace @var with their values
-		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
-		vp := plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{resetVarRule})
+		var vp *plan2.VisitPlan
+		if cacheHit {
+			vp = plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess()), plan2.NewRecomputeRealTimeRelatedFuncRule(cwft.ses.GetTxnCompileCtx().GetProcess())})
+		} else {
+			vp = plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())})
+		}
 		err = vp.Visit(requestCtx)
 		if err != nil {
 			return nil, err
@@ -2343,7 +2371,12 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	}
 
 	txnHandler := cwft.ses.GetTxnHandler()
-	if cwft.plan.GetQuery().GetLoadTag() {
+	if cacheHit && cwft.plan.NeedImplicitTxn() {
+		cwft.proc.TxnOperator, err = txnHandler.GetTxn()
+		if err != nil {
+			return nil, err
+		}
+	} else if cwft.plan.GetQuery().GetLoadTag() {
 		cwft.proc.TxnOperator = txnHandler.GetTxnOnly()
 	} else if cwft.plan.NeedImplicitTxn() {
 		cwft.proc.TxnOperator, err = txnHandler.GetTxn()
@@ -2536,6 +2569,15 @@ GetComputationWrapper gets the execs from the computation engine
 */
 var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cw []ComputationWrapper = nil
+	if cached := ses.getCachedPlan(sql); cached != nil {
+		for i, stmt := range cached.stmts {
+			tcw := InitTxnComputationWrapper(ses, *stmt, proc)
+			tcw.plan = cached.plans[i]
+			cw = append(cw, tcw)
+		}
+		return cw, nil
+	}
+
 	var stmts []tree.Statement = nil
 	var cmdFieldStmt *InternalCmdFieldList
 	var err error
@@ -3233,6 +3275,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
+		proc.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
 		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 	} else {
@@ -3273,9 +3316,20 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var err2 error
 	var columns []interface{}
 	var mrs *MysqlResultSet
+	canCache := true
 
 	singleStatement := len(cws) == 1
 	for i, cw := range cws {
+		if cwft, ok := cw.(*TxnComputationWrapper); ok {
+			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL ||
+				cwft.stmt.GetQueryType() == tree.QueryTypeTCL {
+				if _, ok := cwft.stmt.(*tree.SetVar); !ok {
+					ses.cleanCache()
+				}
+				canCache = false
+			}
+		}
+
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sql, singleStatement)
@@ -3547,6 +3601,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
 			if err = mce.handleKill(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.ShowAccounts:
+			selfHandle = true
+			if err = mce.handleShowAccounts(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		}
@@ -3838,7 +3897,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		}
 		switch stmt.(type) {
-		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
+		case *tree.CreateTable, *tree.DropTable,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.Load, *tree.MoDump,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
@@ -3854,6 +3913,24 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					ses.SetLastInsertID(proc.GetLastInsertID())
 				}
 			}
+			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
+				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
+				return retErr
+			}
+
+		case *tree.CreateDatabase:
+			insertRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
+			resp := mce.setResponse(i, len(cws), rspLen)
+			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
+				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
+				return retErr
+			}
+
+		case *tree.DropDatabase:
+			deleteRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
+			resp := mce.setResponse(i, len(cws), rspLen)
 			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
 				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
@@ -3917,6 +3994,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			update error message in Case1,Case3,Case4.
 		*/
 		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
+			ses.cleanCache()
 			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
 		logError(ses.GetConciseProfile(), err.Error())
@@ -3932,7 +4010,35 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	handleNext:
 	} // end of for
 
+	if canCache && !ses.isCached(sql) {
+		plans := make([]*plan.Plan, len(cws))
+		stmts := make([]*tree.Statement, len(cws))
+		for i, cw := range cws {
+			if cwft, ok := cw.(*TxnComputationWrapper); ok && checkNodeCanCache(cwft.plan) {
+				plans[i] = cwft.plan
+				stmts[i] = &cwft.stmt
+			} else {
+				return nil
+			}
+		}
+		ses.cachePlan(sql, stmts, plans)
+	}
+
 	return nil
+}
+
+func checkNodeCanCache(p *plan2.Plan) bool {
+	if p == nil {
+		return true
+	}
+	if q, ok := p.Plan.(*plan2.Plan_Query); ok {
+		for _, node := range q.Query.Nodes {
+			if node.NodeType == plan.Node_EXTERNAL_SCAN && node.TableDef.TableType == "query_result" {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // execute query. Currently, it is developing. Finally, it will replace the doComQuery.
@@ -4460,4 +4566,38 @@ func getAccountId(ctx context.Context) uint32 {
 		accountId = v.(uint32)
 	}
 	return accountId
+}
+
+func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
+	var datname string
+	var configuration string
+
+	if createDatabaseStmt, ok := stmt.(*tree.CreateDatabase); ok {
+		datname = string(createDatabaseStmt.Name)
+		configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+","+"%q"+":"+"0"+"}"+"'", "transaction_ioslation", "SNAPSHOT_ISOLATION", "lower_case_table_names")
+		insertSql := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, datname, configuration)
+
+		bh := ses.GetBackgroundExec(ctx)
+		err := bh.Exec(ctx, insertSql)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
+	var datname string
+
+	if deleteDatabaseStmt, ok := stmt.(*tree.DropDatabase); ok {
+		datname = string(deleteDatabaseStmt.Name)
+		deletesql := getSqlForDeleteMysqlCompatbilityMode(datname)
+
+		bh := ses.GetBackgroundExec(ctx)
+		err := bh.Exec(ctx, deletesql)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

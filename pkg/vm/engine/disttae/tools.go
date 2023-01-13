@@ -721,7 +721,6 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		TableName:    e.tableName,
 		DatabaseName: e.databaseName,
 		FileName:     e.fileName,
-		BlockId:      e.blockId,
 	}, nil
 }
 
@@ -854,6 +853,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			num:          num,
 			comment:      attrDef.Attr.Comment,
 		}
+		attrDef.Attr.ID = uint64(num)
 		col.hasDef = 0
 		if attrDef.Attr.Default != nil {
 			defaultExpr, err := types.Encode(attrDef.Attr.Default)

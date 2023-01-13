@@ -1198,7 +1198,8 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 		target.analInfos[i].TimeConsumed += n.TimeConsumed
 		target.analInfos[i].WaitTimeConsumed += n.WaitTimeConsumed
 		target.analInfos[i].DiskIO += n.DiskIO
-		target.analInfos[i].S3IO += n.S3IO
+		target.analInfos[i].S3IOByte += n.S3IOByte
+		target.analInfos[i].S3IOCount += n.S3IOCount
 		target.analInfos[i].NetworkIO += n.NetworkIO
 	}
 }
@@ -1329,7 +1330,8 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 		MemorySize:       info.MemorySize,
 		WaitTimeConsumed: info.WaitTimeConsumed,
 		DiskIO:           info.DiskIO,
-		S3IO:             info.S3IO,
+		S3IOByte:         info.S3IOByte,
+		S3IOCount:        info.S3IOCount,
 		NetworkIO:        info.NetworkIO,
 	}
 }

@@ -159,6 +159,9 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 
 func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
 	txn := e.getTransaction(op)
+	if txn == nil {
+		return "", "", moerr.NewTxnClosed(ctx, op.Txn().ID)
+	}
 	accountId := getAccountId(ctx)
 	var db engine.Database
 	noRepCtx := errutil.ContextWithNoReport(ctx, true)
@@ -178,11 +181,35 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 		}
 		return true
 	})
+
+	if tblName == "" {
+		dbNames := e.catalog.Databases(accountId, txn.meta.SnapshotTS)
+		for _, dbName := range dbNames {
+			db, err = e.Database(noRepCtx, dbName, op)
+			if err != nil {
+				return "", "", err
+			}
+			distDb := db.(*database)
+			tableName, rel, _ := distDb.getRelationById(noRepCtx, tableId)
+			if rel != nil {
+				tblName = tableName
+				break
+			}
+		}
+	}
+
+	if tblName == "" {
+		return "", "", moerr.NewInternalError(ctx, "can not find table name by id %d", tableId)
+	}
+
 	return
 }
 
 func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
 	txn := e.getTransaction(op)
+	if txn == nil {
+		return "", "", nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
+	}
 	accountId := getAccountId(ctx)
 	var db engine.Database
 	noRepCtx := errutil.ContextWithNoReport(ctx, true)
@@ -196,12 +223,28 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			}
 			distDb := db.(*database)
 			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
-			if err != nil || rel != nil {
+			if rel != nil {
 				return false
 			}
 		}
 		return true
 	})
+
+	if rel == nil {
+		dbNames := e.catalog.Databases(accountId, txn.meta.SnapshotTS)
+		for _, dbName := range dbNames {
+			db, err = e.Database(noRepCtx, dbName, op)
+			if err != nil {
+				return "", "", nil, err
+			}
+			distDb := db.(*database)
+			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
+			if rel != nil {
+				break
+			}
+		}
+	}
+
 	if rel == nil {
 		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d", tableId)
 	}
