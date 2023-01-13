@@ -148,7 +148,6 @@ func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 		if col == "__mo_rowid" {
 			return nil, moerr.NewInvalidArg(proc.Ctx, "mo_table_col_max has bad input column", col)
 		}
-
 		if tbls[i] == "mo_database" || tbls[i] == "mo_tables" || tbls[i] == "mo_columns" || tbls[i] == "sys_async_task" {
 			return nil, moerr.NewInvalidArg(proc.Ctx, "mo_table_col_max has bad input table", tbls[i])
 		}
@@ -221,7 +220,6 @@ func MoTableColMin(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 		if col == "__mo_rowid" {
 			return nil, moerr.NewInvalidArg(proc.Ctx, "mo_table_col_min has bad input column", col)
 		}
-
 		if tbls[i] == "mo_database" || tbls[i] == "mo_tables" || tbls[i] == "mo_columns" || tbls[i] == "sys_async_task" {
 			return nil, moerr.NewInvalidArg(proc.Ctx, "mo_table_col_min has bad input table:", tbls[i])
 		}
