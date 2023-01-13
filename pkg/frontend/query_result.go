@@ -21,15 +21,11 @@ import (
 	"sort"
 	"strconv"
 
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-<<<<<<< HEAD
-=======
-	"sort"
-	"strconv"
-	"time"
->>>>>>> main
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
