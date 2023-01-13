@@ -73,6 +73,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 		name2ColIndex[cols[i].Name] = int32(i)
 	}
 	tableDef := &plan.TableDef{
+		Name:          uuid.ToString(),
 		TableType:     "query_result",
 		Cols:          cols,
 		Name2ColIndex: name2ColIndex,
