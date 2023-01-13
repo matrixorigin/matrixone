@@ -646,7 +646,7 @@ func (o *outputQueue) flush() error {
 		if !ok {
 			return moerr.NewInternalError(o.ctx, "it is not debugIOSession")
 		}
-		fmt.Printf("encoded result row %d : ", oidx)
+		logutil.Infof("encoded result row %d : ", oidx)
 		printHexSlice(dis.GetOutputBuffer())
 	}
 
