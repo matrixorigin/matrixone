@@ -14,12 +14,12 @@
 
 package lockservice
 
-var (
-	flagLockRow           byte = 1
-	flagLockRangeStart    byte = 2
-	flagLockRangeEnd      byte = 4
-	flagLockExclusiveMode byte = 8
-	flagLockSharedMode    byte = 16
+const (
+	flagLockRow byte = 1 << iota
+	flagLockRangeStart
+	flagLockRangeEnd
+	flagLockExclusiveMode
+	flagLockSharedMode
 )
 
 func newRangeLock(txnID []byte, mode LockMode) (Lock, Lock) {
