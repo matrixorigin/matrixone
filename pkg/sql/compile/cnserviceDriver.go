@@ -94,6 +94,7 @@ type processHelper struct {
 	txnClient        client.TxnClient
 	sessionInfo      process.SessionInfo
 	analysisNodeList []int32
+	ExecType         int32
 }
 
 // CnServerMessageHandler deal the client message that received at cn-server.
@@ -394,6 +395,7 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 		for i := range procInfo.AnalysisNodeList {
 			procInfo.AnalysisNodeList[i] = proc.AnalInfos[i].NodeId
 		}
+		procInfo.ExecType = int32(proc.ExecType)
 	}
 	{ // session info
 		timeBytes, err := time.Time{}.In(proc.SessionInfo.TimeZone).MarshalBinary()
@@ -428,6 +430,7 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (*processHelper, e
 		unixTime:         procInfo.UnixTime,
 		txnClient:        cli,
 		analysisNodeList: procInfo.GetAnalysisNodeList(),
+		ExecType:         procInfo.ExecType,
 	}
 	result.txnOperator, err = cli.NewWithSnapshot([]byte(procInfo.Snapshot))
 	if err != nil {
@@ -1169,6 +1172,7 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 	for i := range proc.AnalInfos {
 		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
 	}
+	proc.ExecType = pHelper.ExecType
 
 	c := &Compile{
 		ctx:  ctx,

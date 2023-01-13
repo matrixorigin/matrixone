@@ -106,6 +106,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	preAllocLen := bat.Length()
+	if proc.ExecType == int32(plan.ExecTypeTP) {
+		preAllocLen = 16
+	}
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
 			rbat.Vecs[i] = vector.PreAllocEmpty(bat.Vecs[rp.Pos].Typ, 0, preAllocLen, proc.Mp())

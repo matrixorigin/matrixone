@@ -157,7 +157,7 @@ type Process struct {
 	LastInsertID *uint64
 
 	//default tp
-	ExecType int
+	ExecType int32
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

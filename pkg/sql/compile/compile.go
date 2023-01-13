@@ -100,7 +100,7 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	c.u = u
 	c.fill = fill
 	c.info = plan2.GetExecTypeFromPlan(pn)
-	c.proc.ExecType = int(c.info.Typ)
+	c.proc.ExecType = int32(c.info.Typ)
 	// build scope for a single sql
 	s, err := c.compileScope(ctx, pn)
 	if err != nil {

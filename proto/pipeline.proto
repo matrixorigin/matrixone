@@ -244,6 +244,7 @@ message ProcessInfo {
   string snapshot = 4;
   SessionInfo session_info = 5;
   repeated int32 analysis_node_list = 6;
+  int32 execType = 7;
 }
 
 message SessionInfo {

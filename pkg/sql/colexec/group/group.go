@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -269,6 +270,9 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		for i := range ctr.groupVecs {
 			vec := ctr.groupVecs[i].vec
 			preAllocLen := bat.Length()
+			if proc.ExecType == int32(plan.ExecTypeTP) {
+				preAllocLen = 16
+			}
 			ctr.bat.Vecs[i] = vector.PreAllocEmpty(vec.Typ, 0, preAllocLen, proc.Mp())
 			switch vec.Typ.TypeSize() {
 			case 1:
