@@ -217,6 +217,6 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.GCManager.Start()
 
 	// For debug or test
-	logutil.Info(db.Catalog.SimplePPString(common.PPL2))
+	// logutil.Info(db.Catalog.SimplePPString(common.PPL2))
 	return
 }
