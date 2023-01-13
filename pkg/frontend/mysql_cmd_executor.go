@@ -2310,6 +2310,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		return nil, err
 	}
 	cwft.ses.p = cwft.plan
+	if ids := isResultQuery(cwft.plan); ids != nil {
+		if err = checkPrivilege(ids, requestCtx, cwft.ses); err != nil {
+			return nil, err
+		}
+	}
 	if _, ok := cwft.stmt.(*tree.Execute); ok {
 		executePlan := cwft.plan.GetDcl().GetExecute()
 		stmtName := executePlan.GetName()
@@ -3327,6 +3332,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	for i, cw := range cws {
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {
 			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL ||
+				cwft.stmt.GetQueryType() == tree.QueryTypeOth ||
 				cwft.stmt.GetQueryType() == tree.QueryTypeTCL {
 				if _, ok := cwft.stmt.(*tree.SetVar); !ok {
 					ses.cleanCache()

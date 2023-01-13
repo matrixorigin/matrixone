@@ -38,19 +38,18 @@ func TestBuildIndexTableName(t *testing.T) {
 		{
 			indexNames:     "a",
 			uniques:        true,
-			indexTableName: catalog.PrefixIndexTableName + "unique_a_",
+			indexTableName: catalog.PrefixIndexTableName + "unique_",
 		},
 		{
 			indexNames:     "b",
 			uniques:        false,
-			indexTableName: catalog.PrefixIndexTableName + "secondary_b_",
+			indexTableName: catalog.PrefixIndexTableName + "secondary_",
 		},
 	}
 	for _, test := range tests {
-		indexName := test.indexNames
 		unique := test.uniques
 		ctx := context.TODO()
-		indexTableName, err := BuildIndexTableName(ctx, unique, indexName)
+		indexTableName, err := BuildIndexTableName(ctx, unique)
 		require.Equal(t, indexTableName[:len(test.indexTableName)], test.indexTableName)
 		require.Equal(t, err, nil)
 	}
