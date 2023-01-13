@@ -17,12 +17,13 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/fagongzi/goetty/v2"
 	"io"
 	"os"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/fagongzi/goetty/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -1238,10 +1239,10 @@ func Test_getSqlType(t *testing.T) {
 	})
 }
 
-<<<<<<< HEAD
 func Test_printHex(t *testing.T) {
 	printHexSlice([]byte{20, 0, 0, 0, 8, 121, 101, 102, 38, 38, 49, 57, 48, 6, 32, 119, 119, 119, 119, 32, 3, 57, 56, 51})
-=======
+}
+
 func TestProcessLoadLocal(t *testing.T) {
 	convey.Convey("call processLoadLocal func", t, func() {
 		param := &tree.ExternParam{Filepath: "test.csv"}
@@ -1288,5 +1289,4 @@ func TestProcessLoadLocal(t *testing.T) {
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
 	})
->>>>>>> main
 }
