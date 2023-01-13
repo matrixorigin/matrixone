@@ -32,4 +32,4 @@ func (t TableFunction) Id() string {
 }
 
 func (t *TableFunction) GetStatementType() string { return "Table Function" }
-func (t *TableFunction) GetQueryType() string     { return QueryTypeDCL }
+func (t *TableFunction) GetQueryType() string     { return QueryTypeOth }

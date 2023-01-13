@@ -144,6 +144,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	assert.Nil(t, err)
 
 	ses.ast = asts[0]
+	ses.p = &plan.Plan{}
 
 	yes := openSaveQueryResult(ses)
 	assert.True(t, yes)
