@@ -592,6 +592,7 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 					TableDef:    DeepCopyTableDef(df.CreateIndex.Index.TableDef),
 				},
 				OriginTablePrimaryKey: df.CreateIndex.OriginTablePrimaryKey,
+				DataInsertion:         DeepCopyPlan(df.CreateIndex.DataInsertion),
 			},
 		}
 
