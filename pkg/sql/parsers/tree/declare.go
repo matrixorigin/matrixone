@@ -33,4 +33,4 @@ func (node *Declare) Format(ctx *FmtCtx) {
 }
 
 func (node *Declare) GetStatementType() string { return "Declare" }
-func (node *Declare) GetQueryType() string     { return QueryTypeDCL }
+func (node *Declare) GetQueryType() string     { return QueryTypeOth }
