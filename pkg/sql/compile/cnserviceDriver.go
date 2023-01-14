@@ -449,7 +449,7 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (*processHelper, e
 
 func refactorScope(c *Compile, _ context.Context, s *Scope) *Scope {
 	rs := c.newMergeScope([]*Scope{s})
-	rs.Instructions = append(s.Instructions, vm.Instruction{
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  vm.Output,
 		Idx: -1, // useless
 		Arg: &output.Argument{Data: nil, Func: c.fill},
