@@ -48,6 +48,10 @@ func (e *Engine) NewCompilerContext(
 
 var _ plan.CompilerContext = new(CompilerContext)
 
+func (c *CompilerContext) GetEngine() engine.Engine {
+	return nil
+}
+
 func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
 	return []uint32{catalog.System_Account}, nil
 }
