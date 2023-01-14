@@ -449,7 +449,7 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 		sql = "SELECT count(attname) `Number of columns in %s` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
 		sql = fmt.Sprintf(sql, tblName, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
 	} else {
-		sql = "SELECT counr(attname) `Number of columns in %s` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+		sql = "SELECT count(attname) `Number of columns in %s` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
 		sql = fmt.Sprintf(sql, tblName, MO_CATALOG_DB_NAME, dbName, tblName)
 	}
 
