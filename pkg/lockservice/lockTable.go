@@ -115,14 +115,14 @@ func (l *lockTable) acquireRowLock(w *waiter, tableID uint64, row []byte, txnID 
 	storage := l.seqStorage[tableID]
 	key, lock, ok := storage.Seek(row)
 	if ok && (bytes.Equal(key, row) || lock.isLockRangeEnd()) {
-		if err := lock.add(w); err != nil {
+		if err := lock.waiter.add(w); err != nil {
 			return false, err
 		}
 		// add txn's waiting lock
 		l.waitingLocks[txnKey] = w
 
 		// add to deadlock detector to check dead lock
-		if err := l.deadlockDetector.check(lock.txnID); err != nil {
+		if err := l.deadlockDetector.check(txnID); err != nil {
 			panic(err)
 		}
 		return false, nil
@@ -140,7 +140,7 @@ func (l *lockTable) acquireRangeLock(waiter *waiter, tableID uint64, start, end,
 	storage := l.seqStorage[tableID]
 	key, lock, ok := storage.Seek(start)
 	if ok && bytes.Compare(key, end) <= 0 {
-		if err := lock.add(waiter); err != nil {
+		if err := lock.waiter.add(waiter); err != nil {
 			return false, err
 		}
 		return false, nil

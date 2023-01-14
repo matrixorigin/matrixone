@@ -33,8 +33,8 @@ type detector struct {
 	waitTxnsFetchFunc func([]byte, *waiters) bool
 	waitTxnAbortFunc  func([]byte)
 	stopper           *stopper.Stopper
-
-	mu struct {
+	checkAddedFunc    func(txnID []byte)
+	mu                struct {
 		sync.RWMutex
 		closed bool
 	}
@@ -75,6 +75,9 @@ func (d *detector) check(txnID []byte) error {
 	}
 
 	d.c <- txnID
+	if d.checkAddedFunc != nil {
+		d.checkAddedFunc(txnID)
+	}
 	return nil
 }
 
