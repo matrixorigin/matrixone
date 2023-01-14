@@ -33,7 +33,7 @@ func (node *With) Format(ctx *FmtCtx) {
 	}
 }
 func (node *With) GetStatementType() string { return "With" }
-func (node *With) GetQueryType() string     { return QueryTypeDML }
+func (node *With) GetQueryType() string     { return QueryTypeDQL }
 
 type CTE struct {
 	Name *AliasClause

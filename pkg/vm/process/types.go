@@ -16,9 +16,9 @@ package process
 
 import (
 	"context"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"io"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -155,6 +155,8 @@ type Process struct {
 	LoadTag bool
 
 	LastInsertID *uint64
+
+	LoadLocalReader io.Reader
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

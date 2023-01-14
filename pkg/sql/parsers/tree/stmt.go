@@ -33,13 +33,22 @@ type statementImpl struct {
 	Statement
 }
 
-type QueryType string
-
 const (
-	QueryTypeDQL = "DQL"   // (Data Query Language): Select, modump, AnalyzeStmt, Explain, ExplainAnalyze, ShowCreateTable, ...
-	QueryTypeDDL = "DDL"   // (Data Definition Language): Create/Drop/Alter/Rename Database/Table/View/Index, TruncateTable,
-	QueryTypeDML = "DML"   // (Data Manipulation Language): Insert, Update, Delete, Load, Import, ValuesStatement?, With?
-	QueryTypeDCL = "DCL"   // (Data Control Language): Grant, Revoke, Drop account, Set, Declare, Do, TableFunction?, Use?, Prepare, Execute, Deallocate, Kill
-	QueryTypeTCL = "TCL"   // (Transaction Control Language): Begin, Savepoint, Rollback, Commit
-	QueryTypeOth = "other" // syntax error
+	// QueryTypeDQL (Data Query Language) Select, MoDump, Show, ShowCreateTable, ValuesStatement, With
+	QueryTypeDQL = "DQL"
+	// QueryTypeDDL (Data Definition Language): CreateDatabase, DropDatabase, DropTable,
+	// Create/Drop/Alter/Rename Database/Table/View/Index/Function, TruncateTable,
+	QueryTypeDDL = "DDL"
+	// QueryTypeDML (Data Manipulation Language): Insert, Update, Delete, Load, Import
+	QueryTypeDML = "DML"
+	// QueryTypeDCL (Data Control Language)
+	// statement: Grant, Revoke
+	// CreateAccount, CreateUser, CreateRole, AlterAccount, AlterUser, DropAccount, DropUser, DropRole
+	QueryTypeDCL = "DCL"
+	// QueryTypeTCL (Transaction Control Language): BeginTransaction, RollbackTransaction, CommitTransaction, Savepoint(Not Support)
+	QueryTypeTCL = "TCL"
+	// QueryTypeOth (Other.)
+	// statement: AnalyzeStmt(Not Support), ExplainStmt, ExplainAnalyze, ExplainFor,
+	// SetVar, SetDefaultRole, SetRole, SetPassword, Declare, Do, TableFunction, Use, PrepareStmt, Execute, Deallocate, Kill
+	QueryTypeOth = "Other"
 )
