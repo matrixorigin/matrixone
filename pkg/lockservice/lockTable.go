@@ -22,21 +22,28 @@ import (
 )
 
 type lockTable struct {
-	mu sync.Mutex
+	mu sync.RWMutex
 
 	// txnID -> tableID -> lockKeys
-	//locks sync.Map
+	// locks sync.Map
 	locks map[string]map[uint64][][]byte
+	// waitingLocks waitting locks, map[txnid]map[lockKey]*waiter
+	waitingLocks map[string]*waiter
 	// tableID -> LockStorage
 	//seqStorage [32]sync.Map
-	seqStorage map[uint64]LockStorage
+	seqStorage       map[uint64]LockStorage
+	deadlockDetector *detector
 }
 
 func NewLockService() LockService {
-	return &lockTable{
-		locks:      make(map[string]map[uint64][][]byte),
-		seqStorage: make(map[uint64]LockStorage),
+	l := &lockTable{
+		locks:        make(map[string]map[uint64][][]byte),
+		seqStorage:   make(map[uint64]LockStorage),
+		waitingLocks: make(map[string]*waiter),
 	}
+	l.deadlockDetector = newDeadlockDetector(l.fetchTxnWaitingList,
+		l.abortDeadlockTxn)
+	return l
 }
 
 func (l *lockTable) Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) (bool, error) {
@@ -67,7 +74,6 @@ func (l *lockTable) acquireLock(ctx context.Context, tableID uint64, rows [][]by
 	for {
 		ok, err := l.doAcquireLock(ctx, waiter, tableID, rows, txnID, options)
 		if err != nil {
-			waiter.close()
 			return err
 		}
 		if ok {
@@ -75,7 +81,6 @@ func (l *lockTable) acquireLock(ctx context.Context, tableID uint64, rows [][]by
 		}
 
 		if err := waiter.wait(ctx); err != nil {
-			waiter.close()
 			return err
 		}
 		waiter.resetWait()
@@ -100,23 +105,73 @@ func (l *lockTable) doAcquireLock(ctx context.Context, waiter *waiter, tableID u
 	}
 }
 
-func (l *lockTable) acquireRowLock(ctx context.Context, waiter *waiter, tableID uint64, row []byte, txnID []byte, options LockOptions) (bool, error) {
+func (l *lockTable) acquireRowLock(ctx context.Context, w *waiter, tableID uint64, row []byte, txnID []byte, options LockOptions) (bool, error) {
+	txnKey := unsafeByteSliceToString(txnID)
 	storage := l.seqStorage[tableID]
 	key, lock, ok := storage.Seek(row)
 	if ok && (bytes.Equal(key, row) || lock.isLockRangeEnd()) {
-		if err := lock.add(waiter); err != nil {
+		if err := lock.add(w); err != nil {
 			return false, err
+		}
+		// add txn's waiting lock
+		l.waitingLocks[txnKey] = w
+
+		// add to deadlock detector to check dead lock
+		if err := l.deadlockDetector.check(lock.txnID); err != nil {
+			panic(err)
 		}
 		return false, nil
 	} else {
-		addRowLock(storage, txnID, row, waiter, options)
+		addRowLock(storage, txnID, row, w, options)
 	}
-	l.locks[unsafeByteSliceToString(txnID)][tableID] = append(l.locks[unsafeByteSliceToString(txnID)][tableID], row)
+	l.locks[txnKey][tableID] = append(l.locks[txnKey][tableID], row)
 	return true, nil
 }
 
 func (l *lockTable) acquireRangeLock(waiter *waiter, tableID uint64, start, end []byte, txnID []byte, options LockOptions) (bool, error) {
 	panic("not supported")
+}
+
+func (l *lockTable) fetchTxnWaitingList(txnID []byte, waiters *waiters) bool {
+	txnKey := unsafeByteSliceToString(txnID)
+
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	for tableID, lockKeys := range l.locks[txnKey] {
+		s := l.seqStorage[tableID]
+		for _, lockKey := range lockKeys {
+			if lock, ok := s.Get(lockKey); ok {
+				hasDeadLock := false
+				lock.waiter.waiters.IterTxns(func(id []byte) bool {
+					if !waiters.add(id) {
+						hasDeadLock = true
+						return false
+					}
+					return true
+				})
+				if hasDeadLock {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func (l *lockTable) abortDeadlockTxn(txnID []byte) {
+	txnKey := unsafeByteSliceToString(txnID)
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	// if a deadlock occurs, then the transaction must have a waiter that is
+	// currently waiting and has been blocked inside the Lock.
+	w, ok := l.waitingLocks[txnKey]
+	if !ok {
+		panic("BUG: abort a non-waiting txn")
+	}
+	if !w.notify(ErrDeadlockDetectorClosed) {
+		panic("BUG: can not notify deadlock failed")
+	}
 }
 
 func addRowLock(storage LockStorage, txnID []byte, row []byte, waiter *waiter, options LockOptions) {

@@ -86,6 +86,68 @@ func TestMultipleLocks(t *testing.T) {
 	assert.Equal(t, sum, iter)
 }
 
+func TestDeadLock(t *testing.T) {
+	l := NewLockService()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	option := LockOptions{
+		granularity: Row,
+		mode:        Exclusive,
+		policy:      Wait,
+	}
+
+	txn1 := []byte("txn1")
+	txn2 := []byte("txn2")
+	txn3 := []byte("txn3")
+	row1 := []byte("row1")
+	row2 := []byte("row2")
+	row3 := []byte("row3")
+
+	ok, err := l.Lock(ctx, 1, [][]byte{row1}, txn1, option)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+
+	ok, err = l.Lock(ctx, 1, [][]byte{row2}, txn2, option)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+
+	ok, err = l.Lock(ctx, 1, [][]byte{row3}, txn3, option)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// txn1 will wait txn2
+		ok, err = l.Lock(ctx, 1, [][]byte{row2}, txn1, option)
+		assert.NoError(t, err)
+		assert.True(t, ok)
+	}()
+	time.Sleep(time.Second)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// txn2 will wait txn3
+		ok, err = l.Lock(ctx, 1, [][]byte{row3}, txn2, option)
+		assert.NoError(t, err)
+		assert.True(t, ok)
+	}()
+	time.Sleep(time.Second)
+
+	// txn3 will wait txn1, dead lock
+	ok, err = l.Lock(ctx, 1, [][]byte{row1}, txn3, option)
+	assert.Equal(t, ErrDeadlockDetectorClosed, err)
+	assert.False(t, ok)
+	assert.NoError(t, l.Unlock(ctx, txn3))
+
+	wg.Wait()
+	assert.NoError(t, l.Unlock(ctx, txn1))
+	assert.NoError(t, l.Unlock(ctx, txn2))
+}
+
 func BenchmarkMultipleLock(b *testing.B) {
 	l := NewLockService()
 	ctx := context.Background()
