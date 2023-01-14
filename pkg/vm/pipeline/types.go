@@ -96,6 +96,18 @@ func (p *Pipeline) cleanup(proc *process.Process, pipelineFailed bool) {
 		}
 		proc.SetInputBatch(nil)
 	}
+	for _, receiver := range proc.Reg.MergeReceivers {
+		for {
+			bat, ok := <-receiver.Ch
+			if !ok {
+				break
+			}
+			if bat == nil {
+				break
+			}
+			bat.Clean(proc.Mp())
+		}
+	}
 	// clean operator hold memory.
 	for i := range p.instructions {
 		p.instructions[i].Arg.Free(proc, pipelineFailed)
