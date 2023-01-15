@@ -66,8 +66,7 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 	}
 	// before first execution, no metadata.
 	if totalBlockCnt == 0 {
-		return 10, 10000, nil
-		//return 100, 1000000, nil
+		return 100, 1000000, nil
 	}
 	return int32(blockNum), outcnt, nil
 }
@@ -86,8 +85,7 @@ func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
 	}
 	// before first execution, no metadata.
 	if totalBlockCnt == 0 {
-		return 10, 10000, nil
-		//return 100, 1000000, nil
+		return 100, 1000000, nil
 	}
 	return int32(totalBlockCnt), rows, nil
 }

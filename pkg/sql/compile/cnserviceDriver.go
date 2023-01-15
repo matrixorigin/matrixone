@@ -1313,6 +1313,7 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 		ConnectionID: sei.ConnectionId,
 		Database:     sei.Database,
 		Version:      sei.Version,
+		Account:      sei.Account,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
