@@ -17,6 +17,8 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/fagongzi/goetty/v2"
+	"io"
 	"os"
 	"strconv"
 	"testing"
@@ -1233,5 +1235,53 @@ func Test_getSqlType(t *testing.T) {
 		sql = "/* json */ use db"
 		ses.getSqlType(sql)
 		convey.So(ses.sqlSourceType, convey.ShouldEqual, externSql)
+	})
+}
+
+func TestProcessLoadLocal(t *testing.T) {
+	convey.Convey("call processLoadLocal func", t, func() {
+		param := &tree.ExternParam{Filepath: "test.csv"}
+		proc := testutil.NewProc()
+		var writer *io.PipeWriter
+		proc.LoadLocalReader, writer = io.Pipe()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		cnt := 0
+		ioses.EXPECT().Read(gomock.Any()).DoAndReturn(func(options goetty.ReadOptions) (pkt any, err error) {
+			if cnt == 0 {
+				pkt = &Packet{Length: 5, Payload: []byte("hello"), SequenceID: 1}
+			} else if cnt == 1 {
+				pkt = &Packet{Length: 5, Payload: []byte("world"), SequenceID: 2}
+			} else {
+				err = moerr.NewInvalidInput(proc.Ctx, "length 0")
+			}
+			cnt++
+			return
+		}).AnyTimes()
+		proto := &FakeProtocol{
+			ioses: ioses,
+		}
+
+		mce := NewMysqlCmdExecutor()
+		ses := &Session{
+			protocol: proto,
+		}
+		mce.ses = ses
+		buffer := make([]byte, 4096)
+		go func(buf []byte) {
+			tmp := buf
+			for {
+				n, err := proc.LoadLocalReader.Read(tmp)
+				if err != nil {
+					break
+				}
+				tmp = tmp[n:]
+			}
+		}(buffer)
+		err := mce.processLoadLocal(proc.Ctx, param, writer)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
+		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
 	})
 }

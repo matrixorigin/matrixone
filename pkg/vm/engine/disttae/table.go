@@ -177,7 +177,7 @@ func (tbl *table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error
 				//init the tableVal
 				init = true
 
-				for i := range columns {
+				for i := range blkVal {
 					tableVal[i][0] = blkVal[i][0]
 					tableVal[i][1] = blkVal[i][1]
 					dataTypes[i] = types.T(blkTypes[i]).ToType()
@@ -185,7 +185,7 @@ func (tbl *table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error
 
 				tableTypes = blkTypes
 			} else {
-				for i := range columns {
+				for i := range blkVal {
 					if compute.CompareGeneric(blkVal[i][0], tableVal[i][0], dataTypes[i]) < 0 {
 						tableVal[i][0] = blkVal[i][0]
 					}

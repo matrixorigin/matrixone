@@ -30,7 +30,7 @@ func (node *AnalyzeStmt) Format(ctx *FmtCtx) {
 }
 
 func (node *AnalyzeStmt) GetStatementType() string { return "Analyze Table" }
-func (node *AnalyzeStmt) GetQueryType() string     { return QueryTypeDQL }
+func (node *AnalyzeStmt) GetQueryType() string     { return QueryTypeOth }
 
 func NewAnalyzeStmt(tbl *TableName, cols IdentifierList) *AnalyzeStmt {
 	return &AnalyzeStmt{Table: tbl, Cols: cols}
