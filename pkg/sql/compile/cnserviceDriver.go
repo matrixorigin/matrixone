@@ -188,7 +188,7 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	if err != nil {
 		return nil, err
 	}
-	refactorScope(c, c.ctx, s)
+	s = refactorScope(c, c.ctx, s)
 
 	err = s.ParallelRun(c, s.IsRemote)
 	if err != nil {
@@ -208,6 +208,9 @@ const maxMessageSizeToMoRpc = 64 * mpool.MB
 
 // sendBackBatchToCnClient send back the result batch to cn client.
 func sendBackBatchToCnClient(ctx context.Context, b *batch.Batch, messageId uint64, mHelper *messageHandleHelper, cs morpc.ClientSession) error {
+	if b == nil {
+		return nil
+	}
 	encodeData, errEncode := types.Encode(b)
 	if errEncode != nil {
 		return errEncode
@@ -249,6 +252,9 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyz
 		case <-c.ctx.Done():
 			return moerr.NewRPCTimeout(c.ctx)
 		case val = <-mChan:
+		}
+		if val == nil {
+			return nil
 		}
 		m := val.(*pipeline.Message)
 
@@ -441,17 +447,14 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (*processHelper, e
 	return result, nil
 }
 
-func refactorScope(c *Compile, _ context.Context, s *Scope) {
-	// adjust Remote to Parallel
-	s.Magic = Parallel
-	// refactor the scope, set an output instruction at the last of scope.
-	s.Instructions = append(s.Instructions, vm.Instruction{
+func refactorScope(c *Compile, _ context.Context, s *Scope) *Scope {
+	rs := c.newMergeScope([]*Scope{s})
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  vm.Output,
 		Idx: -1, // useless
 		Arg: &output.Argument{Data: nil, Func: c.fill},
 	})
-	c.proc = s.Proc
-	c.scope = s
+	return rs
 }
 
 // fillPipeline convert the scope to pipeline.Pipeline structure through 2 iterations.
@@ -1310,6 +1313,7 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 		ConnectionID: sei.ConnectionId,
 		Database:     sei.Database,
 		Version:      sei.Version,
+		Account:      sei.Account,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
