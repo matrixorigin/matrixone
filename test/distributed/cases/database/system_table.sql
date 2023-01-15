@@ -1,7 +1,7 @@
 SELECT * FROM `information_schema`.`character_sets` LIMIT 0,1000;
 SELECT * FROM `information_schema`.`columns` where TABLE_NAME = 'mo_tables' order by ORDINAL_POSITION LIMIT 2;
 SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
-SELECT * FROM `information_schema`.`PROCESSLIST` LIMIT 0,1000;
+SELECT * FROM `information_schema`.`processlist` LIMIT 0,1000;
 SELECT * FROM `information_schema`.`profiling` LIMIT 0,1000;
 SELECT * FROM `information_schema`.`schemata` where schema_name = 'information_schema';
 SELECT * FROM `information_schema`.`triggers` LIMIT 0,1000;
@@ -23,7 +23,7 @@ show tables;
 show columns from `KEY_COLUMN_USAGE`;
 show columns from `COLUMNS`;
 show columns from `PROFILING`;
-show columns from `PROCESSLIST`;
+show columns from `processlist`;
 show columns from `USER_PRIVILEGES`;
 show columns from `SCHEMATA`;
 show columns from `CHARACTER_SETS`;

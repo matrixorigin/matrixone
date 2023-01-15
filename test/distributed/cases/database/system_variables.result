@@ -109,7 +109,7 @@ tables_in_information_schema
 key_column_usage
 columns
 profiling
-PROCESSLIST
+processlist
 user_privileges
 schemata
 character_sets
@@ -188,7 +188,7 @@ source_line    INT    YES        null
 source_file    VARCHAR(20)    YES        null
 select seq, state from profiling;
 seq    state
-desc `PROCESSLIST`;
+desc `processlist`;
 Field    Type    Null    Key    Default    Extra    Comment
 command    VARCHAR(16)    NO        ''
 db    VARCHAR(64)    YES        null
@@ -198,7 +198,7 @@ info    TEXT    YES        NULL
 state    VARCHAR(64)    YES        null
 time    INT    NO        '0'
 user    VARCHAR(32)    NO        ''        
-select * from `PROCESSLIST` limit 2;
+select * from `processlist` limit 2;
 id    user    host    db    command    time    state    info
 desc user_privileges;
 Field    Type    Null    Key    Default    Extra    Comment

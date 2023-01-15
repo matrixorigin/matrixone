@@ -190,7 +190,7 @@ drop table if exists COLUMNS;
 internal error: do not have privilege to execute the statement
 drop table if exists PROFILING;
 internal error: do not have privilege to execute the statement
-drop table if exists `PROCESSLIST`;
+drop table if exists `processlist`;
 internal error: do not have privilege to execute the statement
 drop table if exists USER_PRIVILEGES;
 internal error: do not have privilege to execute the statement
@@ -210,7 +210,7 @@ drop table if exists INFORMATION_SCHEMA.COLUMNS;
 internal error: do not have privilege to execute the statement
 drop table if exists INFORMATION_SCHEMA.PROFILING;
 internal error: do not have privilege to execute the statement
-drop table if exists INFORMATION_SCHEMA.`PROCESSLIST`;
+drop table if exists INFORMATION_SCHEMA.`processlist`;
 internal error: do not have privilege to execute the statement
 drop table if exists INFORMATION_SCHEMA.USER_PRIVILEGES;
 internal error: do not have privilege to execute the statement

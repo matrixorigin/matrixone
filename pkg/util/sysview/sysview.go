@@ -232,7 +232,7 @@ var (
 			"SOURCE_FILE varchar(20) DEFAULT NULL," +
 			"SOURCE_LINE int DEFAULT NULL" +
 			");",
-		"CREATE TABLE IF NOT EXISTS `PROCESSLIST` (" +
+		"CREATE TABLE IF NOT EXISTS `processlist` (" +
 			"ID bigint unsigned NOT NULL DEFAULT '0'," +
 			"USER varchar(32) NOT NULL DEFAULT ''," +
 			"HOST varchar(261) NOT NULL DEFAULT ''," +

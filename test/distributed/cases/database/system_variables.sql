@@ -78,8 +78,8 @@ select table_name, column_name from columns where table_schema = 'mo_catalog' or
 desc profiling;
 select seq, state from profiling;
 
-desc `PROCESSLIST`;
-select * from `PROCESSLIST` limit 2;
+desc `processlist`;
+select * from `processlist` limit 2;
 
 desc user_privileges;
 select grantee, table_catalog from user_privileges limit 2;

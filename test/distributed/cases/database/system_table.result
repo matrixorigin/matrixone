@@ -6,7 +6,7 @@ def    mo_catalog    mo_tables    rel_id    0    null    NO    BIGINT UNSIGNED  
 def    mo_catalog    mo_tables    relname    1    null    NO    VARCHAR    94    94    0    0    0    utf8    utf8_bin    VARCHAR(5000)            select,insert,update,references            0
 SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
 constraint_catalog    constraint_schema    constraint_name    table_catalog    table_schema    table_name    column_name    ordinal_position    position_in_unique_constraint    referenced_table_schema    referenced_table_name    referenced_column_name
-SELECT * FROM `information_schema`.`PROCESSLIST` LIMIT 0,1000;
+SELECT * FROM `information_schema`.`processlist` LIMIT 0,1000;
 id    user    host    db    command    time    state    info
 SELECT * FROM `information_schema`.`profiling` LIMIT 0,1000;
 query_id    seq    state    duration    cpu_user    cpu_system    context_voluntary    context_involuntary    block_ops_in    block_ops_out    messages_sent    messages_received    page_faults_major    page_faults_minor    swaps    source_function    source_file    source_line
@@ -152,7 +152,7 @@ tables_in_information_schema
 key_column_usage
 columns
 profiling
-PROCESSLIST
+processlist
 user_privileges
 schemata
 character_sets
@@ -168,7 +168,7 @@ show columns from `COLUMNS`;
 no such table information_schema.COLUMNS
 show columns from `PROFILING`;
 no such table information_schema.PROFILING
-show columns from `PROCESSLIST`;
+show columns from `processlist`;
 Field    Type    Null    Key    Default    Extra    Comment
 command    VARCHAR(16)    NO        ''
 db    VARCHAR(64)    YES        null
