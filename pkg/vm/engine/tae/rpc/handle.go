@@ -623,10 +623,9 @@ func (h *Handle) HandlePreCommitWrite(
 				panic(err)
 			}
 			req := &db.WriteReq{
-				Type:       db.EntryType(pe.EntryType),
-				DatabaseId: pe.GetDatabaseId(),
-				TableID:    pe.GetTableId(),
-				//SegID:        pe.GetSegmentId(),
+				Type:         db.EntryType(pe.EntryType),
+				DatabaseId:   pe.GetDatabaseId(),
+				TableID:      pe.GetTableId(),
 				DatabaseName: pe.GetDatabaseName(),
 				TableName:    pe.GetTableName(),
 				FileName:     pe.GetFileName(),

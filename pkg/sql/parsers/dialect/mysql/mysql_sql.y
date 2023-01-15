@@ -284,7 +284,7 @@ import (
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN
 
 // Alter
-%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP
+%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATBILITY_MODE
 
 // Time
 %token <str> SECOND ASCII COALESCE COLLATION HOUR MICROSECOND MINUTE MONTH QUARTER REPEAT
@@ -318,7 +318,7 @@ import (
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS
-%token <str> TABLE_NUMBER TABLE_SIZE COLUMN_NUMBER TABLE_VALUES
+%token <str> TABLE_NUMBER COLUMN_NUMBER TABLE_VALUES
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
@@ -373,12 +373,12 @@ import (
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
-%type <statement> show_table_num_stmt show_column_num_stmt show_table_size_stmt show_table_values_stmt
+%type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt
@@ -2111,6 +2111,7 @@ analyze_stmt:
 alter_stmt:
     alter_user_stmt
 |   alter_account_stmt
+|   alter_database_config_stmt
 |   alter_view_stmt
 // |    alter_ddl_stmt
 
@@ -2129,15 +2130,23 @@ alter_view_stmt:
 alter_account_stmt:
     ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
     {
-    $$ = &tree.AlterAccount{
-        IfExists:$3,
-        Name:$4,
-        AuthOption:$5,
-        StatusOption:$6,
-        Comment:$7,
-    }
+        $$ = &tree.AlterAccount{
+            IfExists:$3,
+            Name:$4,
+            AuthOption:$5,
+            StatusOption:$6,
+            Comment:$7,
+        }
     }
 
+alter_database_config_stmt:
+     ALTER DATABASE db_name SET MYSQL_COMPATBILITY_MODE '=' expression
+     {
+        $$ = &tree.AlterDataBaseConfig{
+            DbName:$3,
+            UpdateConfig: $7,
+        }
+     }
 alter_account_auth_option:
 {
     $$ = tree.AlterAccountAuthOption{
@@ -2303,8 +2312,8 @@ show_stmt:
 |   show_locks_stmt
 |   show_table_num_stmt
 |   show_column_num_stmt
-|   show_table_size_stmt
 |   show_table_values_stmt
+|   show_accounts_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -2383,12 +2392,6 @@ show_column_num_stmt:
     SHOW COLUMN_NUMBER table_column_name database_name_opt
     {
        $$ = &tree.ShowColumnNumber{Table: $3, DbName: $4}
-    }
-
-show_table_size_stmt:
-    SHOW TABLE_SIZE table_column_name database_name_opt
-    {
-       $$ = &tree.ShowTableSize{Table: $3, DbName: $4}
     }
 
 show_table_values_stmt:
@@ -2579,6 +2582,12 @@ show_columns_stmt:
             Like: $7,
             Where: $8,
         }
+    }
+
+show_accounts_stmt:
+    SHOW ACCOUNTS like_opt
+    {
+        $$ = &tree.ShowAccounts{Like: $3}
     }
 
 like_opt:
@@ -8129,13 +8138,12 @@ reserved_keyword:
 |   PRECEDING
 |   FOLLOWING
 |   GROUPS
-|   NODE
 |   LOCKS
 |   TABLE_NUMBER
-|   TABLE_SIZE
 |   COLUMN_NUMBER
 |   TABLE_VALUES
 |   RETURNS
+|   MYSQL_COMPATBILITY_MODE
 
 non_reserved_keyword:
     ACCOUNT
@@ -8318,6 +8326,8 @@ non_reserved_keyword:
 |   LOW_CARDINALITY
 |   S3OPTION
 |   EXTENSION
+|   NODE
+|   UUID
 
 func_not_keyword:
     DATE_ADD

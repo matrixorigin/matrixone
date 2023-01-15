@@ -962,7 +962,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	if err != nil {
 		return nil, err
 	}
-	c := rule.GetConstantValue(vec)
+	c := rule.GetConstantValue(vec, false)
 	vec.Free(proc.Mp())
 	if c == nil {
 		return e, nil

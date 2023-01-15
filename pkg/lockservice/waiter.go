@@ -16,8 +16,10 @@ package lockservice
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/util/ring"
 )
@@ -37,6 +39,9 @@ var (
 func acquireWaiter(txnID []byte) *waiter {
 	w := waiterPool.Get().(*waiter)
 	w.txnID = txnID
+	if w.ref() != 1 {
+		panic("BUG: invalid ref count")
+	}
 	return w
 }
 
@@ -49,8 +54,15 @@ func newWaiter(maxWaiters uint64) *waiter {
 		waiters: ring.NewRingBuffer[*waiter](maxWaiters),
 	}
 	w.setFinalizer()
+	w.status.Store(waitNotifyStatus)
 	return w
 }
+
+const (
+	waitNotifyStatus int32 = iota
+	notifyAddedStatus
+	waitCompletedStatus
+)
 
 // waiter is used to allow locking operations to wait for the previous
 // lock to be released if a conflict is encountered.
@@ -74,37 +86,131 @@ func newWaiter(maxWaiters uint64) *waiter {
 // 16. s1.Unlock()
 // 17. waiter-k1-B.wait() returned and get the lock
 type waiter struct {
-	txnID   []byte
-	c       chan error
-	waiters *ring.RingBuffer[*waiter]
+	txnID    []byte
+	status   atomic.Int32
+	c        chan error
+	waiters  *ring.RingBuffer[*waiter]
+	refCount atomic.Int32
+
+	// just used for testing
+	beforeSwapStatusAdjustFunc func()
 }
 
 func (w *waiter) setFinalizer() {
-	// close the channal if gc
+	// close the channel if gc
 	runtime.SetFinalizer(w, func(w *waiter) {
 		close(w.c)
 	})
 }
 
-func (w *waiter) add(waiter *waiter) error {
-	return w.waiters.Put(waiter)
+func (w *waiter) ref() int32 {
+	return w.refCount.Add(1)
 }
 
-func (w *waiter) wait(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case err := <-w.c:
-			return err
-		}
+func (w *waiter) unref() {
+	n := w.refCount.Add(-1)
+	if n < 0 {
+		panic("BUG: invalid ref count")
+	}
+	if n == 0 {
+		w.reset()
 	}
 }
 
-func (w *waiter) notify() {
+func (w *waiter) add(waiter *waiter) error {
+	err := w.waiters.Put(waiter)
+	if err != nil {
+		return err
+	}
+	waiter.ref()
+	return nil
+}
+
+func (w *waiter) getStatus() int32 {
+	return w.status.Load()
+}
+
+func (w *waiter) setCompleted() {
+	w.status.Store(waitCompletedStatus)
+}
+
+func (w *waiter) mustGetNotifiedValue() error {
 	select {
-	case w.c <- nil:
+	case err := <-w.c:
+		return err
 	default:
+		panic("BUG: must can get result from channel")
+	}
+}
+
+func (w *waiter) resetWait() {
+	if !w.status.CompareAndSwap(waitCompletedStatus, waitNotifyStatus) {
+		panic("invalid reset wait")
+	}
+}
+
+func (w *waiter) wait(ctx context.Context) error {
+	status := w.getStatus()
+	switch status {
+	case notifyAddedStatus:
+		w.setCompleted()
+		return w.mustGetNotifiedValue()
+	case waitNotifyStatus:
+	default:
+		panic(fmt.Sprintf("BUG: invalid status to call wait, %d", status))
+	}
+
+	var err error
+	select {
+	case <-ctx.Done():
+		err = ctx.Err()
+	case err = <-w.c:
+		w.setCompleted()
+		return err
+	}
+
+	if w.beforeSwapStatusAdjustFunc != nil {
+		w.beforeSwapStatusAdjustFunc()
+	}
+
+	// context is timeout, and status not changed, no concurrent happen
+	if w.status.CompareAndSwap(status, waitCompletedStatus) {
+		return err
+	}
+
+	// notify and timeout are concurrently issued, we use real result to replace
+	// timeout error
+	w.setCompleted()
+	return w.mustGetNotifiedValue()
+}
+
+// notify return false means this waiter is completed, cannot be used to notify
+func (w *waiter) notify(value error) bool {
+	for {
+		status := w.getStatus()
+		switch status {
+		case waitNotifyStatus:
+		case notifyAddedStatus:
+			panic("already notified")
+		case waitCompletedStatus:
+			// wait already completed, wait timeout or wait a result.
+			return false
+		}
+
+		if w.beforeSwapStatusAdjustFunc != nil {
+			w.beforeSwapStatusAdjustFunc()
+		}
+
+		// if status changed, notify and timeout are concurrently issued, need
+		// try.
+		if w.status.CompareAndSwap(status, notifyAddedStatus) {
+			select {
+			case w.c <- value:
+			default:
+				panic("bug")
+			}
+			return true
+		}
 	}
 }
 
@@ -112,25 +218,39 @@ func (w *waiter) notify() {
 // into the next waiter.
 func (w *waiter) close() *waiter {
 	var nextWaiter *waiter
-	// no new waiters can added during close.
+	// no new waiters can be added during close.
 	if w.waiters.Len() > 0 {
 		nextWaiter = w.mustNotifyFirstWaiter()
+		if nextWaiter != nil {
+			nextWaiter.unref()
+		}
 	}
-	w.reset()
+	w.unref()
 	return nextWaiter
 }
 
 func (w *waiter) mustNotifyFirstWaiter() *waiter {
-	waiter := w.waiters.MustGet()
-	w.changeWaitersToWaitNew(waiter)
-	waiter.notify()
-	return waiter
+	prevWaiter := w
+	for {
+		nextWaiter := prevWaiter.waiters.MustGet()
+		prevWaiter.changeWaitersToWaitNew(nextWaiter)
+		if nextWaiter.notify(nil) {
+			return nextWaiter
+		}
+		if nextWaiter.waiters.Len() == 0 {
+			return nil
+		}
+		prevWaiter = nextWaiter
+	}
 }
 
 func (w *waiter) changeWaitersToWaitNew(newWaiter *waiter) {
 	// make all waiters to waiting newWaiter
-	for i := uint64(0); i < w.waiters.Len(); i++ {
-		newWaiter.add(w.waiters.MustGet())
+	l := w.waiters.Len()
+	for i := uint64(0); i < l; i++ {
+		if err := newWaiter.add(w.waiters.MustGet()); err != nil {
+			panic(err)
+		}
 	}
 }
 
@@ -139,8 +259,10 @@ func (w *waiter) reset() {
 		panic("invalid waiters")
 	}
 	if len(w.c) > 0 {
-		panic("invalid notify channal")
+		panic("invalid notify channel")
 	}
+	w.beforeSwapStatusAdjustFunc = nil
+	w.status.Store(waitNotifyStatus)
 	w.waiters.Reset()
 	waiterPool.Put(w)
 }

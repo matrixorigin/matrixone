@@ -65,6 +65,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 				ap.Free(proc, true)
 				return false, err
 			}
+			if ap.ctr.mp != nil {
+				anal.Alloc(ap.ctr.mp.Size())
+			}
 			ctr.state = End
 		default:
 			if ctr.bat != nil {
@@ -107,7 +110,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return nil
 	}
 	ctr.cleanEvalVectors(proc.Mp())
-	if err = ctr.evalJoinCondition(ctr.bat, ap.Conditions, proc); err != nil {
+	if err = ctr.evalJoinCondition(ctr.bat, ap.Conditions, proc, anal); err != nil {
 		return err
 	}
 
@@ -165,7 +168,7 @@ func (ctr *container) indexBuild() error {
 	return nil
 }
 
-func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
+func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, analyze process.Analyze) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
@@ -180,6 +183,9 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 				ctr.evecs[i].needFree = false
 				break
 			}
+		}
+		if ctr.evecs[i].needFree && vec != nil {
+			analyze.Alloc(int64(vec.Size()))
 		}
 
 		// 1. multiple equivalent conditions are not considered currently

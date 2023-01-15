@@ -31,4 +31,4 @@ func (node *TruncateTable) Format(ctx *FmtCtx) {
 }
 
 func (node *TruncateTable) GetStatementType() string { return "Truncate" }
-func (node *TruncateTable) GetQueryType() string     { return QueryTypeDCL }
+func (node *TruncateTable) GetQueryType() string     { return QueryTypeDDL }
