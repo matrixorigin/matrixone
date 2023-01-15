@@ -1,5 +1,6 @@
 use mo_catalog;
 create cluster table t1(a int);
+drop table if exists t1;
 use information_schema;
 create cluster table t1(a int);
 use system;
