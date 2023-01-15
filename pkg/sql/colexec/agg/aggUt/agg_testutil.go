@@ -173,6 +173,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		agg1, _ := agg.New(c.op, c.isDistinct, c.inputTyp)
 		unmarshalErr := agg1.UnmarshalBinary(d)
 		require.NoError(t, unmarshalErr)
+		agg1.WildAggReAlloc(m)
 
 		// Fill() after marshal and unmarshal
 		if l > 0 && vec != nil {
@@ -219,6 +220,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		mAgg, _ := agg.New(c.op, c.isDistinct, c.inputTyp)
 		unmarshalErr := mAgg.UnmarshalBinary(d)
 		require.NoError(t, unmarshalErr)
+		mAgg.WildAggReAlloc(m)
 
 		// Merge()
 		mAgg.Merge(agg1, 0, 0)
