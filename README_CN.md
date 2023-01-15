@@ -202,7 +202,7 @@ MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装或�
     该启动方式会在终端的前台运行 `mo-service` 进行，实时打印系统日志。如果你想停止 MatrixOne 服务器，只需按 CTRL+C 或关闭当前终端。
 
     ```
-    # Start mo-service in the backend
+    # Start mo-service in the frontend
     ./mo-service -launch ./etc/quickstart/launch.toml
     ```
 
