@@ -314,8 +314,8 @@ func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, v
 
 func (a *UnaryDistAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 	defer func() {
-		a.Free(m)
 		a.da = nil
+		a.Free(m)
 		a.vs = nil
 		a.es = nil
 		for _, mp := range a.maps {
