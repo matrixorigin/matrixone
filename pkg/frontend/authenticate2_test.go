@@ -77,14 +77,6 @@ func Test_verifyLightPrivilege(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	type arg struct {
-		realUser         bool
-		db               string
-		directDb         bool
-		clusterTable     bool
-		clusterOperation clusterTableOperationType
-	}
-
 	ses := newTestSession(t, ctrl)
 	defer ses.Dispose()
 
