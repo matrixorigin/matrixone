@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -132,6 +133,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 // if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
+	{
+		fmt.Printf("+++++++remote run: %v, c.addr: %v\n", s.NodeInfo.Addr, c.addr)
+	}
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
 		len(c.addr) == 0 || strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
 		return s.ParallelRun(c, s.IsRemote)

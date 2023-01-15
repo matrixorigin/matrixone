@@ -54,6 +54,9 @@ const (
 // New is used to new an object of compile
 func New(addr, db string, sql string, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
+	{
+		fmt.Printf("+++++run sql: %v\n", sql)
+	}
 	return &Compile{
 		e:    e,
 		db:   db,
