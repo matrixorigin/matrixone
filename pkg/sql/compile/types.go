@@ -37,7 +37,7 @@ type (
 )
 
 const (
-	MinBlockNum = 100
+	MinBlockNum = 200
 )
 
 // type of scope
