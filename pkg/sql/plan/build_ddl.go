@@ -1210,8 +1210,6 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	if err != nil {
 		return nil, err
 	}
-	selectPlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_INSERT
-	SetPlanLoadTag(selectPlan)
 
 	// build insert plan
 	indexTableDef := index.IndexTables[0]
@@ -1219,7 +1217,10 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		SchemaName: createIndex.Database,
 		ObjName:    indexTableDef.Name,
 	}
+
+	SetPlanLoadTag(selectPlan)
 	sourceColDefs := GetResultColumnsFromPlan(selectPlan)
+	selectPlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_INSERT
 
 	insertExprs := make([]*Expr, len(sourceColDefs))
 	for i := range insertExprs {
@@ -1236,7 +1237,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	qry := selectPlan.Plan.(*plan.Plan_Query).Query
 	insertNode := &Node{
 		ObjRef:      indexObjRef,
-		TableDef:    tableDef,
+		TableDef:    indexTableDef,
 		NodeType:    plan.Node_INSERT,
 		NodeId:      int32(len(qry.Nodes)),
 		Children:    []int32{qry.Steps[len(qry.Steps)-1]},
