@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -128,6 +129,17 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	return cs.Write(ctx, backMessage)
 }
 
+func fillEngineForInsert(s *Scope, e engine.Engine) {
+	for i := range s.Instructions {
+		if s.Instructions[i].Op == vm.Insert {
+			s.Instructions[i].Arg.(*insert.Argument).Engine = e
+		}
+	}
+	for i := range s.PreScopes {
+		fillEngineForInsert(s.PreScopes[i], e)
+	}
+}
+
 func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession, messageHelper *messageHandleHelper, cli client.TxnClient) (anaData []byte, err error) {
 	var c *Compile
 	var s *Scope
@@ -143,20 +155,20 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		var dataBuffer []byte
 		var ok bool
 		for {
-			v, ok = srv.chanBufMp.Load(m.GetUuid())
+			v, ok = colexec.Srv.ChanBufMp.Load(m.GetUuid())
 			if !ok {
 				runtime.Gosched()
 			} else {
 				break
 			}
 		}
-		if dataBuffer, ok := srv.chanBufMp.Load(m.GetID()); !ok {
-			srv.chanBufMp.Store(m.GetID(), dataBuffer)
+		if dataBuffer, ok := colexec.Srv.ChanBufMp.Load(m.GetID()); !ok {
+			colexec.Srv.ChanBufMp.Store(m.GetID(), dataBuffer)
 		}
 		wg := v.(*process.WaitRegister)
 		if m.IsEndMessage() {
 			wg.Ch <- nil
-			srv.chanBufMp.Delete(m.GetID())
+			colexec.Srv.ChanBufMp.Delete(m.GetID())
 			return nil, err
 		} else {
 			if len(dataBuffer) == 0 {
@@ -172,7 +184,7 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 				return nil, err
 			}
 			wg.Ch <- bat
-			srv.chanBufMp.Store(m.GetID(), []byte{})
+			colexec.Srv.ChanBufMp.Store(m.GetID(), []byte{})
 			return nil, nil
 		}
 	}
@@ -185,6 +197,9 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 
 	// decode and run the scope.
 	s, err = decodeScope(m.GetData(), c.proc, true)
+	// remote insert operator need to have engine
+	fillEngineForInsert(s, c.e)
+
 	if err != nil {
 		return nil, err
 	}
@@ -637,14 +652,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		if len(s.uuids[i]) == 0 {
 			continue
 		}
-		v, ok := srv.chanBufMp.Load(s.uuids[i])
-		if !ok {
-			srv.chanBufMp.Store(s.uuids[i], s.Proc.Reg.MergeReceivers[i])
-		} else {
-			wg := v.(*process.WaitRegister)
-			wg.Ctx = s.Proc.Ctx
-			srv.chanBufMp.Store(s.uuids[i], wg)
-		}
+		colexec.Srv.ChanBufMp.Store(s.uuids[i], s.Proc.Reg.MergeReceivers[i])
 	}
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
@@ -691,6 +699,20 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 
 	in := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
 	switch t := opr.Arg.(type) {
+	case *insert.Argument:
+		in.Insert = &pipeline.Insert{
+			TargetColDefs:  t.TargetColDefs,
+			Affected:       t.Affected,
+			TableID:        t.TableID,
+			CPkeyColDef:    t.CPkeyColDef,
+			DBName:         t.DBName,
+			TableName:      t.TableName,
+			ClusterTable:   t.ClusterTable,
+			ClusterByDef:   t.ClusterByDef,
+			UniqueIndexDef: t.UniqueIndexDef,
+			IsRmote:        t.IsRmote,
+			HasAutoCol:     t.HasAutoCol,
+		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
 			Ibucket:   t.Ibucket,
@@ -709,7 +731,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		for i := range t.Regs {
 			idx, ctx0 := ctx.root.findRegister(t.Regs[i])
 			if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
-				id := srv.RegistConnector(t.Regs[i])
+				id := colexec.Srv.RegistConnector(t.Regs[i])
 				if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
 					return ctxId, nil, err
 				}
@@ -863,7 +885,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *connector.Argument:
 		idx, ctx0 := ctx.root.findRegister(t.Reg)
 		if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
-			id := srv.RegistConnector(t.Reg)
+			id := colexec.Srv.RegistConnector(t.Reg)
 			if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
 				return ctxId, nil, err
 			}
@@ -924,6 +946,21 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.Instruction, error) {
 	v := vm.Instruction{Op: int(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
 	switch opr.Op {
+	case vm.Insert:
+		t := opr.GetInsert()
+		v.Arg = &insert.Argument{
+			TargetColDefs:  t.TargetColDefs,
+			Affected:       t.Affected,
+			TableID:        t.TableID,
+			CPkeyColDef:    t.CPkeyColDef,
+			DBName:         t.DBName,
+			TableName:      t.TableName,
+			UniqueIndexDef: t.UniqueIndexDef,
+			ClusterTable:   t.ClusterTable,
+			ClusterByDef:   t.ClusterByDef,
+			IsRmote:        t.IsRmote,
+			HasAutoCol:     t.HasAutoCol,
+		}
 	case vm.Anti:
 		t := opr.GetAnti()
 		v.Arg = &anti.Argument{
@@ -1414,7 +1451,7 @@ func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32) (int3
 	ds.Proc = process.NewWithAnalyze(ctx.scope.Proc, ctx.scope.Proc.Ctx, 0, nil)
 	ds.DataSource = &Source{
 		PushdownId:   id,
-		PushdownAddr: cnAddr,
+		PushdownAddr: colexec.CnAddr,
 	}
 	ds.appendInstruction(vm.Instruction{
 		Op: vm.Connector,
@@ -1429,7 +1466,7 @@ func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32) (int3
 	ctxId++
 	p.DataSource = &pipeline.Source{
 		PushdownId:   id,
-		PushdownAddr: cnAddr,
+		PushdownAddr: colexec.CnAddr,
 	}
 	p.InstructionList = append(p.InstructionList, &pipeline.Instruction{
 		Op: vm.Connector,

@@ -15,14 +15,20 @@
 package main
 
 import (
+	"context"
+	"os"
 	"reflect"
 	"testing"
 
+	"github.com/BurntSushi/toml"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseDNConfig(t *testing.T) {
@@ -178,4 +184,22 @@ service-addresses = [
 	assert.NoError(t, cfg.resolveGossipSeedAddresses())
 	assert.Equal(t, 1, len(cfg.LogService.GossipSeedAddresses))
 	assert.Equal(t, "127.0.0.1:32002", cfg.LogService.GossipSeedAddresses[0])
+}
+
+func TestMe(t *testing.T) {
+	cfg := &Config{}
+	data, err := os.ReadFile("/home/jacktan/go_workspace/matrixone/etc/launch-tae-CN-tae-DN/launch.toml")
+	require.Nil(t, err)
+	toml.Decode(string(data), cfg)
+	fs, err := cfg.createFileService(defines.LocalFileServiceName)
+	require.Nil(t, err)
+	// use s3 as main fs
+	fs2, err := fileservice.Get[fileservice.FileService](fs, defines.SharedFileServiceName)
+	require.Nil(t, err)
+	reader, err := objectio.NewObjectReader("800000390000000000042843.seg", fs2)
+	require.Nil(t, err)
+	pool, err := mpool.NewMPool("abc", 2000, []int{2000})
+	require.Nil(t, err)
+	obs, err := reader.ReadMeta(context.Background(), []objectio.Extent{objectio.NewExtent(0, 130, 192, 192)}, pool)
+	require.NotZero(t, len(obs), 0)
 }

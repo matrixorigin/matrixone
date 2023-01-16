@@ -110,6 +110,8 @@ type Partition struct {
 	columnsIndexDefs []ColumnsIndexDef
 	// last updated timestamp
 	ts timestamp.Timestamp
+	// used for block read in PartitionReader
+	txn *Transaction
 }
 
 // Transaction represents a transaction
@@ -160,8 +162,6 @@ type Entry struct {
 	databaseName string
 	// blockName for s3 file
 	fileName string
-	// blockId for s3 file
-	blockId uint64
 	// update or delete tuples
 	bat     *batch.Batch
 	dnStore DNStore

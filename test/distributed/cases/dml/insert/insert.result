@@ -239,3 +239,177 @@ drop table if exists t1;
 create table t1 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key num_phone(col2),key num_id(col4));
 insert into t1 values (67834,'13456789872',20.23,'4090'),(56473,'13456789872',100.00,'5678');
 Duplicate entry '13456789872' for key '__mo_index_idx_col'
+
+drop table if exists t;
+create table t(a int);
+insert into t values(1);
+insert into t select * from t;
+select count(*) from t;
+count(*)
+2
+insert into t select * from t;
+select count(*) from t;
+count(*)
+4
+insert into t select * from t;
+select count(*) from t;
+count(*)
+8
+insert into t select * from t;
+select count(*) from t;
+count(*)
+16
+insert into t select * from t;
+select count(*) from t;
+count(*)
+32
+insert into t select * from t;
+select count(*) from t;
+count(*)
+64
+insert into t select * from t;
+select count(*) from t;
+count(*)
+128
+insert into t select * from t;
+select count(*) from t;
+count(*)
+256
+insert into t select * from t;
+select count(*) from t;
+count(*)
+512
+insert into t select * from t;
+select count(*) from t;
+count(*)
+1024
+insert into t select * from t;
+select count(*) from t;
+count(*)
+2048
+insert into t select * from t;
+select count(*) from t;
+count(*)
+4096
+insert into t select * from t;
+select count(*) from t;
+count(*)
+8192
+insert into t select * from t;
+select count(*) from t;
+count(*)
+16384
+insert into t select * from t;
+select count(*) from t;
+count(*)
+32768
+insert into t select * from t;
+select count(*) from t;
+count(*)
+65536
+insert into t select * from t;
+select count(*) from t;
+count(*)
+131072
+insert into t select * from t;
+select count(*) from t;
+count(*)
+262144
+insert into t select * from t;
+select count(*) from t;
+count(*)
+524288
+insert into t select * from t;
+select count(*) from t;
+count(*)
+1048576
+insert into t select * from t;
+select count(*) from t;
+count(*)
+2097152
+insert into t select * from t;
+select count(*) from t;
+count(*)
+4194304
+insert into t select * from t;
+select count(*) from t;
+count(*)
+8388608
+insert into t select * from t;
+select count(*) from t;
+# transaction test
+begin;
+insert into t select * from t;
+select count(*) from t;
+commit;
+select count(*) from t;
+drop table t;
+# 2.primary key test
+create table t(a int primary key);
+insert into t select * from generate_series(1,2000000);
+insert into t select * from generate_series(2000001,4000000);
+insert into t select * from generate_series(4000001,6000000);
+insert into t select * from generate_series(6000001,8000000);
+insert into t select * from generate_series(8000001,10000000);
+select count(*) from t;
+# abort,duplicate key
+insert into t select * from generate_series(1,2000000);
+# transaction test
+begin;
+insert into t select * from generate_series(1,2000000);
+select count(*) from t;
+commit;
+select count(*) from t;
+# not-null test
+insert into t select null from t;
+drop table t;
+# 3.compiste primary key test
+create table t(a int,b int,compositkey(a,b));
+insert into t select * from generate_series(1,2000000),(1,2000000);
+insert into t select * from generate_series(2000001,4000000),(2000001,4000000);
+insert into t select * from generate_series(4000001,6000000),(4000001,6000000);
+insert into t select * from generate_series(6000001,8000000),(6000001,8000000);
+insert into t select * from generate_series(8000001,10000000),(8000001,10000000);
+drop table t;
+select count(*) from t;
+# abort,duplicate key
+insert into t select * from generate_series(1,2000000),(1,2000000);
+# transaction test
+begin;
+insert into t select * from generate_series(1,2000000),(1,2000000);
+select count(*) from t;
+commit;
+select count(*) from t;
+# not-null test
+insert into t select null from t;
+drop table t;
+# 4.unique key test
+create table t(a int unique);
+insert into t select * from generate_series(1,2000000);
+insert into t select * from generate_series(2000001,4000000);
+insert into t select * from generate_series(4000001,6000000);
+insert into t select * from generate_series(6000001,8000000);
+insert into t select * from generate_series(8000001,10000000);
+select count(*) from t;
+# abort,duplicate key
+insert into t select * from generate_series(1,2000000);
+# transaction test
+begin;
+insert into t select * from generate_series(1,2000000);
+select count(*) from t;
+commit;
+select count(*) from t;
+# not-null test
+insert into t select null from t;
+select count(*) from t;
+drop table t;
+# 5.auto increment test
+create table t(a int auto_increment,b int);
+insert into t(b) select * from generate_series(1,2000000);
+insert into t(b) select * from generate_series(2000001,4000000);
+insert into t(b) select * from generate_series(4000001,6000000);
+insert into t(b) select * from generate_series(6000001,8000000);
+insert into t(b) select * from generate_series(8000001,10000000);
+select count(*) from t;
+select a from t where a > 9999990;
+drop table t;

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -227,7 +228,7 @@ func (s *Scope) PushdownRun(c *Compile) error {
 	var end bool // exist flag
 	var err error
 
-	reg := srv.GetConnector(s.DataSource.PushdownId)
+	reg := colexec.Srv.GetConnector(s.DataSource.PushdownId)
 	for {
 		bat := <-reg.Ch
 		if bat == nil {

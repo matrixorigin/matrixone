@@ -115,3 +115,11 @@ func (f *FileServices) Write(ctx context.Context, vector IOVector) error {
 	}
 	return fs.Write(ctx, vector)
 }
+
+func (f *FileServices) GetS3FileService() FileService {
+	s3, ok := f.mappings["shared"]
+	if !ok {
+		panic("Can't Find S3 Service")
+	}
+	return s3
+}

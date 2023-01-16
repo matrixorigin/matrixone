@@ -39,7 +39,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -48,7 +50,7 @@ import (
 )
 
 const (
-	DistributedThreshold uint64 = 10 * mpool.MB
+	DistributedThreshold uint64 = 1 * mpool.KB
 )
 
 // New is used to new an object of compile
@@ -134,6 +136,14 @@ func (c *Compile) Run(_ uint64) (err error) {
 	case Merge:
 		defer c.fillAnalyzeInfo()
 		return c.scope.MergeRun(c)
+	case MergeInsert:
+		defer c.fillAnalyzeInfo()
+		err := c.scope.MergeRun(c)
+		if err != nil {
+			return err
+		}
+		c.setAffectedRows(c.scope.Instructions[len(c.scope.Instructions)-1].Arg.(*mergeblock.Argument).AffectedRows)
+		return nil
 	case Remote:
 		defer c.fillAnalyzeInfo()
 		return c.scope.RemoteRun(c)
@@ -301,20 +311,14 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 	return c.compileApQuery(qry, ss)
 }
 
-func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
-	rs := c.newMergeScope(ss)
-	updateScopesLastFlag([]*Scope{rs})
+func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
+	var rs *Scope
 	switch qry.StmtType {
 	case plan.Query_DELETE:
+		rs = c.newMergeScope(ss)
+		updateScopesLastFlag([]*Scope{rs})
 		rs.Magic = Deletion
-	case plan.Query_INSERT:
-		rs.Magic = Insert
-	case plan.Query_UPDATE:
-		rs.Magic = Update
-	default:
-	}
-	switch qry.StmtType {
-	case plan.Query_DELETE:
+		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err
@@ -324,24 +328,132 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: scp,
 		})
 	case plan.Query_INSERT:
-		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+		insertNode := qry.Nodes[qry.Steps[0]]
+		arg, err := constructInsert(insertNode, c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Insert,
-			Arg: arg,
-		})
+
+		// nodeStats := qry.Nodes[insertNode.Children[0]].Stats
+		// if nodeStats.Outcnt > float64(DistributedThreshold) && !arg.HasConstraints() {
+
+		// nodeStats is not correct for now. We assume all write s3 first.
+		// stats is held on by ntao.
+		if !arg.HasConstraints() {
+			// use distributed-insert
+			arg.IsRmote = true
+			rs = c.newInsertMergeScope(arg, ss)
+			rs.Magic = MergeInsert
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op: vm.MergeBlock,
+				Arg: &mergeblock.Argument{
+					Tbl:         arg.TargetTable,
+					Unique_tbls: arg.UniqueIndexTables,
+				},
+			})
+		} else {
+			rs = c.newMergeScope(ss)
+			rs.Magic = Insert
+			c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.Insert,
+				Arg: arg,
+			})
+		}
 	case plan.Query_UPDATE:
 		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
+		rs = c.newMergeScope(ss)
+		updateScopesLastFlag([]*Scope{rs})
+		rs.Magic = Update
+		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Update,
 			Arg: scp,
 		})
 	default:
+		rs = c.newMergeScope(ss)
+		updateScopesLastFlag([]*Scope{rs})
+		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op: vm.Output,
+			Arg: &output.Argument{
+				Data: c.u,
+				Func: c.fill,
+			},
+		})
+	}
+	return rs, nil
+}
+
+func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
+	var rs *Scope
+	switch qry.StmtType {
+	case plan.Query_DELETE:
+		rs = c.newMergeScope(ss)
+		updateScopesLastFlag([]*Scope{rs})
+		rs.Magic = Deletion
+		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  vm.Deletion,
+			Arg: scp,
+		})
+	case plan.Query_INSERT:
+		insertNode := qry.Nodes[qry.Steps[0]]
+		arg, err := constructInsert(insertNode, c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+
+		// nodeStats := qry.Nodes[insertNode.Children[0]].Stats
+		// if nodeStats.Outcnt > float64(DistributedThreshold) && !arg.HasConstraints() {
+
+		// nodeStats is not correct for now. We assume all write s3 first.
+		// stats is held on by ntao.
+		if !arg.HasConstraints() {
+			// use distributed-insert
+			arg.IsRmote = true
+			rs = c.newInsertMergeScope(arg, ss)
+			rs.Magic = MergeInsert
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op: vm.MergeBlock,
+				Arg: &mergeblock.Argument{
+					Tbl:         arg.TargetTable,
+					Unique_tbls: arg.UniqueIndexTables,
+				},
+			})
+		} else {
+			rs = c.newMergeScope(ss)
+			rs.Magic = Insert
+			c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.Insert,
+				Arg: arg,
+			})
+		}
+	case plan.Query_UPDATE:
+		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		rs = c.newMergeScope(ss)
+		updateScopesLastFlag([]*Scope{rs})
+		rs.Magic = Update
+		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  vm.Update,
+			Arg: scp,
+		})
+	default:
+		rs = c.newMergeScope(ss)
+		updateScopesLastFlag([]*Scope{rs})
+		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op: vm.Output,
 			Arg: &output.Argument{
@@ -1149,6 +1261,23 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 		})
 	}
 	return []*Scope{c.newMergeScope(append(rs, ss...))}
+}
+
+func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
+	var ss2 []*Scope
+	for _, s := range ss {
+		if s.IsEnd {
+			continue
+		}
+		ss2 = append(ss2, s)
+	}
+	for i := range ss2 {
+		ss2[i].Instructions = append(ss2[i].Instructions, vm.Instruction{
+			Op:  vm.Insert,
+			Arg: arg,
+		})
+	}
+	return c.newMergeScope(ss2)
 }
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {

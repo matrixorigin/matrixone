@@ -37,18 +37,18 @@ type Argument struct {
 	Regs []*process.WaitRegister
 
 	// crossCN is used to treat dispatch operator as a distributed operator
-	crossCN bool
-	// nodes[IBucket].Node.Address == ""
-	nodes      []colexec.WrapperNode
-	localIndex uint64
+	CrossCN bool
+	// nodes[LocalIndex].Node.Address == ""
+	Nodes      []colexec.WrapperNode
+	LocalIndex uint64
 	// streams is the stream which connect local CN with remote CN, so
-	// but streams[localIndex] is nil, because you need to send batch locally
+	// but streams[LocalIndex] is nil, because you need to send batch locally
 	// by localChan
-	sendFunc func(streams []*WrapperStream, localIndex uint64, bat *batch.Batch, localChan *process.WaitRegister, proc *process.Process) error
+	SendFunc func(streams []*WrapperStream, localIndex uint64, bat *batch.Batch, localChan *process.WaitRegister, proc *process.Process) error
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.crossCN {
+	if arg.CrossCN {
 		arg.FreeCrossCN(proc, pipelineFailed)
 		return
 	}
@@ -78,10 +78,10 @@ func (arg *Argument) FreeCrossCN(proc *process.Process, pipelineFailed bool) {
 	// closeStreams will send nil to reciever and close streams
 	// but it won't send nil to localChan, because when pipelineFailed,
 	// and our chan buffer size is only one, if we send a nil,it will result dead lock.
-	CloseStreams(arg.ctr.streams, arg.localIndex, proc)
+	CloseStreams(arg.ctr.streams, arg.LocalIndex, proc)
 	if pipelineFailed {
-		for len(arg.Regs[arg.localIndex].Ch) > 0 {
-			bat := <-arg.Regs[arg.localIndex].Ch
+		for len(arg.Regs[arg.LocalIndex].Ch) > 0 {
+			bat := <-arg.Regs[arg.LocalIndex].Ch
 			if bat == nil {
 				break
 			}
@@ -92,7 +92,7 @@ func (arg *Argument) FreeCrossCN(proc *process.Process, pipelineFailed bool) {
 	for i := range arg.Regs {
 		// only localChan need to send nil, other chans will never be used,
 		// so ignore them
-		if i == int(arg.localIndex) {
+		if i == int(arg.LocalIndex) {
 			select {
 			case <-arg.Regs[i].Ctx.Done():
 			case arg.Regs[i].Ch <- nil:
