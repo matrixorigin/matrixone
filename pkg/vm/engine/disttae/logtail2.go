@@ -39,11 +39,11 @@ import (
 const (
 	// we check if txn is legal in a period of periodToCheckTxnTimestamp when we
 	// open a new transaction.
-	periodToCheckTxnTimestamp = 10 * time.Millisecond
+	periodToCheckTxnTimestamp = 5 * time.Millisecond
 
 	// we check if log tail is ready in a period of periodToCheckLogTailReady when we first time
 	// subscribe a table.
-	periodToCheckLogTailReady = 10 * time.Millisecond
+	periodToCheckLogTailReady = 5 * time.Millisecond
 
 	// periodToReconnectDnLogServer is a period of reconnect to log tail server if lost server message for a long time.
 	periodToReconnectDnLogServer = 20 * time.Second
@@ -113,13 +113,13 @@ func WaitUntilTxnTimeIsLegal(ctx context.Context,
 
 func txnTimeIsLegal(txnTime timestamp.Timestamp) bool {
 	cnLogTailTimestamp.RLock()
-	b := txnTime.LessEq(cnLogTailTimestamp.t)
+	t := cnLogTailTimestamp.t
 	cnLogTailTimestamp.RUnlock()
-	return b
+	return txnTime.LessEq(t)
 }
 
 // tableSubscribeRecord is records this cn node's table subscription
-// the key is table-id, value is true or false.
+// the key is table-id, value is subscribed status
 var tableSubscribeRecord = &sync.Map{}
 
 type subscribeID struct {
@@ -149,8 +149,6 @@ type TableLogTailSubscriber struct {
 
 	// engine to get table info
 	engine *Engine
-	// if dead time, we should reconnect to dn.
-	deadTime timestamp.Timestamp
 }
 
 // if we support multi dn next day. cnLogTailSubscriber should be cnLogTailSubscribers.
@@ -313,13 +311,6 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 						lt := resp.r.GetSubscribeResponse().GetLogtail()
 						logTs := lt.GetTs()
 
-						str := fmt.Sprintf("get a subscribe response, ts: %v\n", logTs)
-						for j := 0; j < len(lt.Commands); j++ {
-							str += fmt.Sprintf("\t\t tbl: %s.%s",
-								lt.Commands[j].DatabaseName, lt.Commands[j].TableName)
-						}
-						fmt.Printf("%s\n", str)
-
 						if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &lt, logTs); err != nil {
 							needReconnect = true
 							break
@@ -332,18 +323,6 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 						from := resp.r.GetUpdateResponse().GetFrom()
 
 						logList(logLists).Sort()
-
-						str := fmt.Sprintf("get a update response, from: %v, to: %v\n",
-							from, to)
-						for _, l := range logLists {
-							for j := 0; j < len(l.Commands); j++ {
-								str += fmt.Sprintf("\t\t tbl: %s.%s, tblid:%d, ts: %v\n",
-									l.Commands[j].DatabaseName, l.Commands[j].TableName,
-									l.Commands[j].TableId,
-									l.GetTs())
-							}
-						}
-						fmt.Printf("%s\n", str)
 
 						for _, l := range logLists {
 							if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &l, from); err != nil {
@@ -511,27 +490,6 @@ func (ls logList) Sort() {
 	// if contains at least 2 type of update of mo_database, mo_table, mo_column
 	// ids of Mo_database, Mo_table, Mo_column are 1, 2, 3
 	sort.Sort(ls)
-	return
-	occurAny := false
-	tableOccurs := [4]bool{false, false, false, false}
-	needSort := false
-	for _, l := range ls {
-		id := l.Table.TbId
-		if id < 4 {
-			if tableOccurs[id] {
-				continue
-			}
-			if occurAny {
-				needSort = true
-				break
-			}
-			occurAny = true
-			tableOccurs[id] = true
-		}
-	}
-	if needSort {
-		sort.Sort(ls)
-	}
 	return
 }
 

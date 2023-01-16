@@ -15,7 +15,6 @@
 package cache
 
 import (
-	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -120,6 +119,7 @@ func (cc *CatalogCache) GetTableById(databaseId, tblId uint64, ts timestamp.Time
 	key := &TableItem{
 		DatabaseId: databaseId,
 	}
+	// If account is much, the performance is very bad.
 	cc.tables.data.Ascend(key, func(item *TableItem) bool {
 		if item.Id == tblId {
 			rel = item
@@ -254,8 +254,6 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 	paritions := vector.MustStrCols(bat.GetVector(catalog.MO_TABLES_PARTITIONED_IDX + MO_OFF))
 	constraints := vector.MustBytesCols(bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF))
 
-	fmt.Printf("mo insert table account: %v, db: %v, names: %v, ids: %v\n",
-		accounts, databaseIds, names, ids)
 	for i, account := range accounts {
 		item := new(TableItem)
 		item.Id = ids[i]
