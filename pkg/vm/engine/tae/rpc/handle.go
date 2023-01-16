@@ -403,12 +403,16 @@ func (h *Handle) startLoadJobs(
 				fmt.Sprintf("load-deleted-rowid-%s", req.DeltaLocs[i]))
 		}
 	}
-	//start loading jobs
+	//start loading jobs asynchronously,should create a new context.
+	nctx := context.Background()
+	if deadline, ok := ctx.Deadline(); ok {
+		nctx, _ = context.WithTimeout(nctx, time.Until(deadline))
+	}
 	for i, v := range locations {
-		ctx := context.WithValue(ctx, db.LocationKey{}, v)
+		nctx = context.WithValue(nctx, db.LocationKey{}, v)
 		req.Jobs[i] = tasks.NewJob(
 			jobIds[i],
-			ctx,
+			nctx,
 			func(ctx context.Context) (jobR *tasks.JobResult) {
 				jobR = &tasks.JobResult{}
 				loc, ok := ctx.Value(db.LocationKey{}).(string)
