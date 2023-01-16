@@ -88,7 +88,7 @@ func (rm *RoutineManager) GetNextCacheId(colDefs []*plan.ColDef, ctx context.Con
 			if ok {
 				cur = autoincrcache.curNum
 			}
-			curNum, maxNum, stp, err := colexec.GetNextOneCache(ctx, param, bat, tableID, i, name, 1000, cur)
+			curNum, maxNum, stp, err := colexec.GetNextOneCache(ctx, param, bat, tableID, i, name, uint64(cacheSize), cur)
 			if err != nil {
 				return nil, nil, err
 			}
