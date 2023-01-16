@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -39,11 +38,11 @@ import (
 const (
 	// we check if txn is legal in a period of periodToCheckTxnTimestamp when we
 	// open a new transaction.
-	periodToCheckTxnTimestamp = 5 * time.Millisecond
+	periodToCheckTxnTimestamp = 1 * time.Millisecond
 
 	// we check if log tail is ready in a period of periodToCheckLogTailReady when we first time
 	// subscribe a table.
-	periodToCheckLogTailReady = 5 * time.Millisecond
+	periodToCheckLogTailReady = 1 * time.Millisecond
 
 	// periodToReconnectDnLogServer is a period of reconnect to log tail server if lost server message for a long time.
 	periodToReconnectDnLogServer = 20 * time.Second
@@ -96,18 +95,20 @@ func UpdateCnLogTimestamp(newTimestamp timestamp.Timestamp) {
 // WaitUntilTxnTimeIsLegal check if txnTime is legal periodically. and return if legal.
 func WaitUntilTxnTimeIsLegal(ctx context.Context,
 	txnTime timestamp.Timestamp, level sql.IsolationLevel) error {
+	return nil
+
 	// if we support the ReadCommit level, we should set the txnTime as cnLogTailTimestamp.
-	t := maxTimeToCheckTxnTimestamp
+	//t := maxTimeToCheckTxnTimestamp
 	for {
-		if t <= 0 {
-			// XXX I'm not sure if it is a good error info.
-			return moerr.NewTxnError(ctx, "start txn failed due to txn timestamp. please retry.")
-		}
+		//if t <= 0 {
+		//	// XXX I'm not sure if it is a good error info.
+		//	return moerr.NewTxnError(ctx, "start txn failed due to txn timestamp. please retry.")
+		//}
 		if txnTimeIsLegal(txnTime) {
 			return nil
 		}
 		time.Sleep(periodToCheckTxnTimestamp)
-		t -= periodToCheckTxnTimestamp
+		//t -= periodToCheckTxnTimestamp
 	}
 }
 
@@ -194,14 +195,6 @@ func (logSub *TableLogTailSubscriber) newCnLogTailClient() error {
 	}
 	// XXX we assume that we have only 1 DN now.
 	dnLogTailServerBackend := cluster.DNStores[0].LogtailServerAddress
-	{
-		// If cn client is not ready, init it here.
-		if !cnclient.IsCNClientReady() {
-			if err = cnclient.NewCNClient(&cnclient.ClientConfig{}); err != nil {
-				return err
-			}
-		}
-	}
 
 	// XXX test code.
 	codec := morpc.NewMessageCodec(func() morpc.Message {
@@ -371,13 +364,15 @@ func TryToGetTableLogTail(
 	ctx context.Context,
 	txnTimestamp timestamp.Timestamp,
 	dbId, tblId uint64) error {
-	if getTableSubscribe(dbId, tblId) {
-		return nil
+	firstTimeSubscribe := false
+	if !getTableSubscribe(dbId, tblId) {
+		if err := cnLogTailSubscriber.subscribeTable(ctx,
+			api.TableID{DbId: dbId, TbId: tblId}); err != nil {
+			return err
+		}
+		firstTimeSubscribe = true
 	}
-	if err := cnLogTailSubscriber.subscribeTable(ctx,
-		api.TableID{DbId: dbId, TbId: tblId}); err != nil {
-		return err
-	}
+
 	e := cnLogTailSubscriber.engine
 	partitions := e.db.getPartitions(dbId, tblId)
 	// wait until each partition has the legal ts (ts >= txn ts).
@@ -394,7 +389,9 @@ func TryToGetTableLogTail(
 			continue
 		}
 	}
-	setTableSubscribe(dbId, tblId)
+	if firstTimeSubscribe {
+		setTableSubscribe(dbId, tblId)
+	}
 	return nil
 }
 
