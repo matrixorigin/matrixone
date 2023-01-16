@@ -760,13 +760,13 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			}
 		}
 		if t.CrossCN {
-			in.Dispatch.RemoteConnector = make([]*pipeline.WrapNodes, len(t.RemoteRegs))
+			in.Dispatch.RemoteConnector = make([]*pipeline.WrapNode, len(t.RemoteRegs))
 			for i, r := range t.RemoteRegs {
 				udata := make([][]byte, len(r.Uuids))
 				for j, u := range r.Uuids {
 					udata[j] = u[:]
 				}
-				wn := &pipeline.WrapNodes{
+				wn := &pipeline.WrapNode{
 					NodeAddr: r.NodeAddr,
 					Uuids:    udata,
 				}

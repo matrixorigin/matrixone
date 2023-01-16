@@ -43,7 +43,9 @@ message Connector {
 
 message Dispatch {
   bool all = 1;
-  repeated Connector connector = 2;
+  bool cross_cn = 2;
+  repeated Connector connector = 3;
+  repeated WrapNode remote_connector = 4;
 }
 
 message Aggregate {
@@ -278,6 +280,11 @@ message Pipeline {
   int32 children_count = 11;
 
   repeated UuidToRegIdx uuids_to_reg_idx = 12;
+}
+
+message WrapNode {
+  string node_addr = 1;
+  repeated bytes uuids = 2;
 }
 
 message UuidToRegIdx {
