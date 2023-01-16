@@ -107,3 +107,21 @@ show create table t11;
 Table    Create Table
 t11    CREATE TABLE `t11` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `a` (`a`) COMMENT `a`,\nUNIQUE KEY `x` (`a`) COMMENT `x`,\nKEY `xx` (`a`) COMMENT `xx`\n)
 drop table t11;
+create table t12(a text);
+create unique index x on t12(a);
+not supported: TEXT column 'a' cannot be in index
+create index x2 on t12(a);
+not supported: TEXT column 'a' cannot be in index
+drop table t12;
+create table t13(a blob);
+create unique index x on t13(a);
+not supported: BLOB column 'a' cannot be in index
+create index x2 on t13(a);
+not supported: BLOB column 'a' cannot be in index
+drop table t13;
+create table t14(a json);
+create unique index x on t14(a);
+not supported: JSON column 'a' cannot be in index
+create index x2 on t14(a);
+not supported: JSON column 'a' cannot be in index
+drop table t14;
