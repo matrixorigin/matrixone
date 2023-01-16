@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -887,7 +888,8 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 			fmt.Printf("s[%d] IsEnd = true, continue ...\n", i)
 			continue
 		}
-		if len(s.NodeInfo.Addr) == 0 || s.NodeInfo.Addr == currentCNAddr {
+		if len(s.NodeInfo.Addr) == 0 || s.NodeInfo.Addr == currentCNAddr ||
+			len(currentCNAddr) == 0 || strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
 			fmt.Printf("s[%d] is local\n", i)
 			// Local reg.
 			// Put them into arg.Regs
