@@ -217,7 +217,7 @@ KEY `org_no` (`org_no`)
 );
 show create table t_code_rule;
 Table    Create Table
-t_code_rule    CREATE TABLE `t_code_rule` (\n`code_id` BIGINT NOT NULL,\n`code_no` VARCHAR(50) NOT NULL,\n`org_no` VARCHAR(50) NOT NULL,\n`org_name` VARCHAR(50) NOT NULL,\n`ancestors` VARCHAR(255) NOT NULL,\n`code_rule_no` VARCHAR(50) NOT NULL,\n`code_rule_name` VARCHAR(50) NOT NULL,\n`code_name` VARCHAR(50) NOT NULL,\n`code_type` INT DEFAULT NULL,\n`split` VARCHAR(50) DEFAULT null,\n`remark` VARCHAR(255) DEFAULT NULL,\n`create_time` DATETIME NOT NULL,\n`create_user` VARCHAR(50) DEFAULT null,\n`last_update_time` DATETIME DEFAULT null,\n`last_update_user` VARCHAR(50) DEFAULT null,\n`is_system_code` VARCHAR(20) DEFAULT 'N',\nPRIMARY KEY (`code_id`),\nUNIQUE KEY`code_type`(`code_type`)\n)
+t_code_rule    CREATE TABLE `t_code_rule` (\n`code_id` BIGINT NOT NULL,\n`code_no` VARCHAR(50) NOT NULL,\n`org_no` VARCHAR(50) NOT NULL,\n`org_name` VARCHAR(50) NOT NULL,\n`ancestors` VARCHAR(255) NOT NULL,\n`code_rule_no` VARCHAR(50) NOT NULL,\n`code_rule_name` VARCHAR(50) NOT NULL,\n`code_name` VARCHAR(50) NOT NULL,\n`code_type` INT DEFAULT NULL,\n`split` VARCHAR(50) DEFAULT null,\n`remark` VARCHAR(255) DEFAULT NULL,\n`create_time` DATETIME NOT NULL,\n`create_user` VARCHAR(50) DEFAULT null,\n`last_update_time` DATETIME DEFAULT null,\n`last_update_user` VARCHAR(50) DEFAULT null,\n`is_system_code` VARCHAR(20) DEFAULT 'N',\nPRIMARY KEY (`code_id`),\nUNIQUE KEY `code_type` (`code_type`),\nKEY `code_no` (`code_no`),\nKEY `code_rule_no` (`code_rule_no`),\nKEY `org_no` (`org_no`)\n)
 load data infile  '$resources/load_data/unique_index_file.csv' into table t_code_rule ;
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 code_id    code_type    code_no    code_rule_no    org_no
@@ -336,7 +336,7 @@ write    null
 create table index_table_07 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key col10(col10),key num_id(col4));
 invalid input: column 'col10' is not exist
 create table index_table_07 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key col2(col2),key num_id(col40));
-[unknown result because it is related to issue#7384]
+invalid input: column 'col40' is not exist
 create table create_index_01 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50));
 create unique index varchar_index on create_index_01(col2) comment 'create varchar index';
 insert into create_index_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.00,'23'),(3,NULL,100.00,'23');
@@ -534,35 +534,37 @@ drop index m1_index on create_index_18;
 create unique index m2_index on create_index_18(col2,col3,col4);
 truncate table create_index_18;
 insert into create_index_18(col2,col3,col4)  select 'apple',1,'10';
-[unknown result because it is related to issue#7554]
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'11';
-[unknown result because it is related to issue#7554]
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
-[unknown result because it is related to issue#7554]
 insert into create_index_18(col2,col3,col4)  select NULL,NULL,'13';
-[unknown result because it is related to issue#7554]
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
-[unknown result because it is related to issue#7554]
+Duplicate entry '46016170706c65003a15024601313200' for key '__mo_index_idx_col'
 select * from create_index_18;
-[unknown result because it is related to issue#7554]
+col1    col2    col3    col4
+1    apple    1    10
+2    apple    2    11
+3    apple    2    12
+4    null    null    13
 drop index m2_index on create_index_18;
-[unknown result because it is related to issue#7554]
 create unique index m3_index on create_index_18(col2);
-[unknown result because it is related to issue#7554]
+Duplicate entry 'apple' for key '__mo_index_idx_col'
 create unique index m4_index on create_index_18(col3);
-[unknown result because it is related to issue#7554]
+Duplicate entry '2' for key '__mo_index_idx_col'
 create unique index m5_index on create_index_18(col4);
-[unknown result because it is related to issue#7554]
 select * from create_index_18;
-[unknown result because it is related to issue#7554]
+col1    col2    col3    col4
+1    apple    1    10
+2    apple    2    11
+3    apple    2    12
+4    null    null    13
 show create table create_index_18;
-[unknown result because it is related to issue#7554]
+Table    Create Table
+create_index_18    CREATE TABLE `create_index_18` (\n`col1` BIGINT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `m5_index` (`col4`)\n)
 drop index m3_index on create_index_18;
-[unknown result because it is related to issue#7554]
+internal error: not found index: m3_index
 drop index m4_index on create_index_18;
-[unknown result because it is related to issue#7554]
+internal error: not found index: m4_index
 drop index m5_index on create_index_18;
-[unknown result because it is related to issue#7554]
 drop table create_index_18;
 create table create_index_18(col1 int,col2 char(15));
 insert into create_index_18 values(2,'20');
@@ -601,7 +603,7 @@ col1    col2    col3    col4
 2    chart    2    11
 truncate table create_index_19;
 insert into create_index_19(col2,col3,col4) values ('apple',1,'10'),('store',2,'11'),('apple',3,'12');
-
+Duplicate entry 'apple' for key '__mo_index_idx_col'
 select * from create_index_19;
 col1    col2    col3    col4
 drop table create_index_19;
