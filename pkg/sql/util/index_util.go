@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func BuildIndexTableName(ctx context.Context, unique bool, indexName string) (string, error) {
+func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {
 	var name string
 	name = catalog.PrefixIndexTableName
 	if unique {
@@ -35,12 +35,10 @@ func BuildIndexTableName(ctx context.Context, unique bool, indexName string) (st
 	} else {
 		name += "secondary_"
 	}
-	name += indexName
 	id, err := uuid.NewUUID()
 	if err != nil {
 		return "", moerr.NewInternalError(ctx, "newuuid failed")
 	}
-	name += "_"
 	name += id.String()
 	return name, nil
 }

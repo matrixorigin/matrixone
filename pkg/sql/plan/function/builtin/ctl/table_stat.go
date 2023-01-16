@@ -17,6 +17,7 @@ package ctl
 import (
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -143,6 +144,14 @@ func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 	defer e.Rollback(proc.Ctx, txn)
 
 	for i := 0; i < count; i++ {
+		col := cols[i]
+		if col == "__mo_rowid" {
+			return nil, moerr.NewInvalidArg(proc.Ctx, "mo_table_col_max has bad input column", col)
+		}
+		if tbls[i] == "mo_database" || tbls[i] == "mo_tables" || tbls[i] == "mo_columns" || tbls[i] == "sys_async_task" {
+			return nil, moerr.NewInvalidArg(proc.Ctx, "mo_table_col_max has bad input table", tbls[i])
+		}
+
 		db, err := e.Database(proc.Ctx, dbs[i], txn)
 		if err != nil {
 			return nil, err
@@ -152,8 +161,6 @@ func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 			return nil, err
 		}
 		rel.Ranges(proc.Ctx, nil)
-
-		col := cols[i]
 
 		tableColumns, err := rel.TableColumns(proc.Ctx)
 		if err != nil {
@@ -169,6 +176,7 @@ func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 		for j := 0; j < len(tableColumns); j++ {
 			if tableColumns[j].Name == col {
 				resultValues[i] = getVlaueInStr(tableVal[j][1])
+				break
 			}
 		}
 	}
@@ -208,6 +216,14 @@ func MoTableColMin(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 	defer e.Rollback(proc.Ctx, txn)
 
 	for i := 0; i < count; i++ {
+		col := cols[i]
+		if col == "__mo_rowid" {
+			return nil, moerr.NewInvalidArg(proc.Ctx, "mo_table_col_min has bad input column", col)
+		}
+		if tbls[i] == "mo_database" || tbls[i] == "mo_tables" || tbls[i] == "mo_columns" || tbls[i] == "sys_async_task" {
+			return nil, moerr.NewInvalidArg(proc.Ctx, "mo_table_col_min has bad input table:", tbls[i])
+		}
+
 		db, err := e.Database(proc.Ctx, dbs[i], txn)
 		if err != nil {
 			return nil, err
@@ -217,8 +233,6 @@ func MoTableColMin(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 			return nil, err
 		}
 		rel.Ranges(proc.Ctx, nil)
-
-		col := cols[i]
 
 		tableColumns, err := rel.TableColumns(proc.Ctx)
 		if err != nil {
@@ -234,6 +248,7 @@ func MoTableColMin(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 		for j := 0; j < len(tableColumns); j++ {
 			if tableColumns[j].Name == col {
 				resultValues[i] = getVlaueInStr(tableVal[j][0])
+				break
 			}
 		}
 	}

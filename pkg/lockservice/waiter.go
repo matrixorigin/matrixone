@@ -54,13 +54,14 @@ func newWaiter(maxWaiters uint64) *waiter {
 		waiters: ring.NewRingBuffer[*waiter](maxWaiters),
 	}
 	w.setFinalizer()
+	w.status.Store(waitNotifyStatus)
 	return w
 }
 
-var (
-	waitNotifyStatus    int32 = 0
-	notifyAddedStatus   int32 = 1
-	waitCompletedStatus int32 = 2
+const (
+	waitNotifyStatus int32 = iota
+	notifyAddedStatus
+	waitCompletedStatus
 )
 
 // waiter is used to allow locking operations to wait for the previous
@@ -86,28 +87,28 @@ var (
 // 17. waiter-k1-B.wait() returned and get the lock
 type waiter struct {
 	txnID    []byte
-	status   int32
+	status   atomic.Int32
 	c        chan error
 	waiters  *ring.RingBuffer[*waiter]
-	refCount int32
+	refCount atomic.Int32
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
 }
 
 func (w *waiter) setFinalizer() {
-	// close the channal if gc
+	// close the channel if gc
 	runtime.SetFinalizer(w, func(w *waiter) {
 		close(w.c)
 	})
 }
 
 func (w *waiter) ref() int32 {
-	return atomic.AddInt32(&w.refCount, 1)
+	return w.refCount.Add(1)
 }
 
 func (w *waiter) unref() {
-	n := atomic.AddInt32(&w.refCount, -1)
+	n := w.refCount.Add(-1)
 	if n < 0 {
 		panic("BUG: invalid ref count")
 	}
@@ -126,11 +127,11 @@ func (w *waiter) add(waiter *waiter) error {
 }
 
 func (w *waiter) getStatus() int32 {
-	return atomic.LoadInt32(&w.status)
+	return w.status.Load()
 }
 
 func (w *waiter) setCompleted() {
-	atomic.StoreInt32(&w.status, waitCompletedStatus)
+	w.status.Store(waitCompletedStatus)
 }
 
 func (w *waiter) mustGetNotifiedValue() error {
@@ -143,7 +144,7 @@ func (w *waiter) mustGetNotifiedValue() error {
 }
 
 func (w *waiter) resetWait() {
-	if !atomic.CompareAndSwapInt32(&w.status, waitCompletedStatus, waitNotifyStatus) {
+	if !w.status.CompareAndSwap(waitCompletedStatus, waitNotifyStatus) {
 		panic("invalid reset wait")
 	}
 }
@@ -173,7 +174,7 @@ func (w *waiter) wait(ctx context.Context) error {
 	}
 
 	// context is timeout, and status not changed, no concurrent happen
-	if atomic.CompareAndSwapInt32(&w.status, status, waitCompletedStatus) {
+	if w.status.CompareAndSwap(status, waitCompletedStatus) {
 		return err
 	}
 
@@ -183,7 +184,7 @@ func (w *waiter) wait(ctx context.Context) error {
 	return w.mustGetNotifiedValue()
 }
 
-// notify return false means this waiter is completed, can not used to notify
+// notify return false means this waiter is completed, cannot be used to notify
 func (w *waiter) notify(value error) bool {
 	for {
 		status := w.getStatus()
@@ -202,7 +203,7 @@ func (w *waiter) notify(value error) bool {
 
 		// if status changed, notify and timeout are concurrently issued, need
 		// try.
-		if atomic.CompareAndSwapInt32(&w.status, status, notifyAddedStatus) {
+		if w.status.CompareAndSwap(status, notifyAddedStatus) {
 			select {
 			case w.c <- value:
 			default:
@@ -217,7 +218,7 @@ func (w *waiter) notify(value error) bool {
 // into the next waiter.
 func (w *waiter) close() *waiter {
 	var nextWaiter *waiter
-	// no new waiters can added during close.
+	// no new waiters can be added during close.
 	if w.waiters.Len() > 0 {
 		nextWaiter = w.mustNotifyFirstWaiter()
 		if nextWaiter != nil {
@@ -261,7 +262,7 @@ func (w *waiter) reset() {
 		panic("invalid notify channel")
 	}
 	w.beforeSwapStatusAdjustFunc = nil
-	atomic.StoreInt32(&w.status, 0)
+	w.status.Store(waitNotifyStatus)
 	w.waiters.Reset()
 	waiterPool.Put(w)
 }
