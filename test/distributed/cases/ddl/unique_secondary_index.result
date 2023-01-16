@@ -148,7 +148,7 @@ col1    col2
 create table index_16 (col1 bigint primary key,col2 blob,col3 blob,unique key d1(col2),key d2(col3));
 not supported: blob type in index
 create table index_17 (col1 bigint primary key,col2 json,col3 json,unique key d1(col2),key d2(col3));
-not supported: JSON column 'col3' cannot be in index
+not supported: JSON column 'col2' cannot be in index
 create table index_18 (col1 bigint primary key,col2 text,col3 text,unique key d1(col2),key d2(col3));
 not supported: text type in index
 create table index_name (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key 123(col2),key num_id(col4));

@@ -403,7 +403,7 @@ func getDistAggStrVs(strUnaryDistAgg any) []string {
 	return result
 }
 
-func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte, m *mpool.MPool) error {
+func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	decode := new(EncodeAggDistinct[T1])
 	if err := types.Decode(data, decode); err != nil {
 		return err
@@ -414,15 +414,13 @@ func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte, m *mpool.MPool) erro
 	a.ityps = decode.InputType
 	a.otyp = decode.OutputType
 	a.es = decode.Es
-	data, err := m.Alloc(len(decode.Da))
-	if err != nil {
-		return err
-	}
+	data = make([]byte, len(decode.Da))
 	copy(data, decode.Da)
 	a.da = data
 	setDistAggValues[T1, T2](a, a.otyp)
 	a.srcs = decode.Srcs
 	a.maps = make([]*hashmap.StrHashMap, len(a.srcs))
+	m := mpool.MustNewZero()
 	for i, src := range a.srcs {
 		mp, err := hashmap.NewStrMap(true, 0, 0, m)
 		if err != nil {

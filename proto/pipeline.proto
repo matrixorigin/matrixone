@@ -254,6 +254,7 @@ message SessionInfo {
   string database = 5;
   string version = 6;
   bytes  time_zone = 7;
+  string  account = 8;
 }
 
 message Pipeline {
