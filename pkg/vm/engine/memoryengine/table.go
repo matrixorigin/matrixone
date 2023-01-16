@@ -362,3 +362,7 @@ func (t *Table) GetHideKeys(ctx context.Context) (attrs []*engine.Attribute, err
 func (t *Table) GetTableID(ctx context.Context) uint64 {
 	return uint64(t.id)
 }
+
+func (t *Table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
+	return nil, nil, nil
+}

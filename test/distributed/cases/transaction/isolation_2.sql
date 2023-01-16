@@ -262,7 +262,6 @@ commit;
 use iso_db_02;
 select * from iso_table_0001;
 
--- @bvt:issue#6028
 use isolation_2;
 create table dis_table_04(a int,b varchar(25) not null,c datetime,primary key(a),unique key bstr (b),key cdate (c));
 insert into dis_table_04 values (6666,'kkkk','2010-11-25');
@@ -284,7 +283,6 @@ update dis_table_04 set b=(select 'kkkk')  where a=879;
 -- @session:id=1{
 select * from dis_table_04;
 -- @session}
--- @bvt:issue
 ----------------------------
 begin ;
 use isolation_2;

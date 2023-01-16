@@ -44,8 +44,8 @@ a	b
 {"t1": "b"}	2
 select * from t1 into outfile '$resources/json/export_2.csv' fields terminated by '\t';
 a	b
-load data local infile '$resources/json/export_2.csv' into table t1 fields terminated by '\t' ignore 1 lines;
-load data local infile '$resources/json/export_2.csv' into table t2 fields terminated by '\t' ignore 1 lines;
+load data  infile '$resources/json/export_2.csv' into table t1 fields terminated by '\t' ignore 1 lines;
+load data  infile '$resources/json/export_2.csv' into table t2 fields terminated by '\t' ignore 1 lines;
 select * from t1;
 a	b
 {"t1": "a"}	1
@@ -65,12 +65,12 @@ a	b
 {"t1": "a"}	1
 {"t1": "b"}	2
 delete from t1;
-load data local infile '$resources/json/data_1.csv' into table t1 fields terminated by '\t';
+load data  infile '$resources/json/data_1.csv' into table t1 fields terminated by '\t';
 select * from t1;
 a	b
 {"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1
 [1, true, false, null, "aaa", 1.1, {"t": false}]	2
-load data local infile '$resources/json/data_2.csv' into table t1;
+load data  infile '$resources/json/data_2.csv' into table t1;
 select * from t1;
 a	b
 {"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1
@@ -78,7 +78,7 @@ a	b
 {"a": 1, "b": [1, 2, {"c": 1.5}, null, true, false]}	1
 drop table if exists t3;
 create table t3 (a json,b json);
-load data local infile '$resources/json/data_3.csv' into table t3;
+load data  infile '$resources/json/data_3.csv' into table t3;
 select * from t3;
 a	b
 {"a": 1, "b": [1, 2, {"c": 1.5}, null, true, false]}	{"b": 1}

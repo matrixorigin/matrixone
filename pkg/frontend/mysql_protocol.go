@@ -173,6 +173,8 @@ type MysqlProtocol interface {
 	//the OK or EOF packet thread safe
 	sendEOFOrOkPacket(warnings uint16, status uint16) error
 
+	sendLocalInfileRequest(filename string) error
+
 	ResetStatistics()
 
 	GetStats() string
@@ -1569,6 +1571,19 @@ func (mp *MysqlProtocolImpl) makeOKPayloadWithEof(affectedRows, lastInsertId uin
 		return data[:pos]
 	}
 	return data[:pos]
+}
+
+func (mp *MysqlProtocolImpl) makeLocalInfileRequestPayload(filename string) []byte {
+	data := make([]byte, HeaderOffset+1+len(filename)+1)
+	pos := HeaderOffset
+	pos = mp.io.WriteUint8(data, pos, defines.LocalInFileHeader)
+	pos = mp.writeStringFix(data, pos, filename, len(filename))
+	return data[:pos]
+}
+
+func (mp *MysqlProtocolImpl) sendLocalInfileRequest(filename string) error {
+	req := mp.makeLocalInfileRequestPayload(filename)
+	return mp.writePackets(req)
 }
 
 func (mp *MysqlProtocolImpl) sendOKPacketWithEof(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {

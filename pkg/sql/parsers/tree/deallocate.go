@@ -31,7 +31,7 @@ func (node *Deallocate) Format(ctx *FmtCtx) {
 }
 
 func (node *Deallocate) GetStatementType() string { return "Deallocate" }
-func (node *Deallocate) GetQueryType() string     { return QueryTypeDCL }
+func (node *Deallocate) GetQueryType() string     { return QueryTypeOth }
 
 func NewDeallocate(name Identifier, isDrop bool) *Deallocate {
 	return &Deallocate{

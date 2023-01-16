@@ -54,7 +54,7 @@ func (sm *SessionManager) GetSession(
 	rootCtx context.Context,
 	logger *log.MOLogger,
 	sendTimeout time.Duration,
-	pooler ResponsePooler,
+	responses ResponsePool,
 	notifier SessionErrorNotifier,
 	stream morpcStream,
 	poisionTime time.Duration,
@@ -64,7 +64,7 @@ func (sm *SessionManager) GetSession(
 
 	if _, ok := sm.clients[stream]; !ok {
 		sm.clients[stream] = NewSession(
-			rootCtx, logger, sendTimeout, pooler, notifier, stream, poisionTime,
+			rootCtx, logger, sendTimeout, responses, notifier, stream, poisionTime,
 		)
 	}
 	return sm.clients[stream]
@@ -97,8 +97,11 @@ type message struct {
 
 // morpcStream describes morpc stream.
 type morpcStream struct {
-	id uint64
-	cs morpc.ClientSession
+	streamID uint64
+	limit    int
+	logger   *log.MOLogger
+	cs       morpc.ClientSession
+	segments SegmentPool
 }
 
 // Close closes morpc client session.
@@ -106,12 +109,42 @@ func (s *morpcStream) Close() error {
 	return s.cs.Close()
 }
 
-// write sets response ID before writing via morpc client session.
+// write sends response by segment.
 func (s *morpcStream) write(
 	ctx context.Context, response *LogtailResponse,
 ) error {
-	response.SetID(s.id)
-	return s.cs.Write(ctx, response)
+	size := response.ProtoSize()
+	buf := make([]byte, size)
+	n, err := response.MarshalToSizedBuffer(buf[:size])
+	if err != nil {
+		return err
+	}
+	chunks := Split(buf[:n], s.limit)
+
+	s.logger.Debug("start to send response by segment",
+		zap.Int("chunk-number", len(chunks)),
+		zap.Int("chunk-limit", s.limit),
+		zap.Int("message-size", size),
+	)
+
+	for index, chunk := range chunks {
+		seg := s.segments.Acquire()
+		seg.SetID(s.streamID)
+		seg.MessageSize = int32(size)
+		seg.Sequence = int32(index + 1)
+		seg.MaxSequence = int32(len(chunks))
+		n := copy(seg.Payload, chunk)
+		seg.Payload = seg.Payload[:n]
+
+		s.logger.Debug("real segment proto size", zap.Int("ProtoSize", seg.ProtoSize()))
+
+		if err := s.cs.Write(ctx, seg); err != nil {
+			s.segments.Release(seg)
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Session manages subscription for logtail client.
@@ -122,7 +155,7 @@ type Session struct {
 
 	logger      *log.MOLogger
 	sendTimeout time.Duration
-	pooler      ResponsePooler
+	responses   ResponsePool
 	notifier    SessionErrorNotifier
 
 	stream      morpcStream
@@ -137,17 +170,12 @@ type SessionErrorNotifier interface {
 	NotifySessionError(*Session, error)
 }
 
-type ResponsePooler interface {
-	AcquireResponse() *LogtailResponse
-	ReleaseResponse(*LogtailResponse)
-}
-
 // NewSession constructs a session for logtail client.
 func NewSession(
 	rootCtx context.Context,
 	logger *log.MOLogger,
 	sendTimeout time.Duration,
-	pooler ResponsePooler,
+	responses ResponsePool,
 	notifier SessionErrorNotifier,
 	stream morpcStream,
 	poisionTime time.Duration,
@@ -158,7 +186,7 @@ func NewSession(
 		cancelFunc:  cancel,
 		logger:      logger,
 		sendTimeout: sendTimeout,
-		pooler:      pooler,
+		responses:   responses,
 		notifier:    notifier,
 		stream:      stream,
 		poisionTime: poisionTime,
@@ -181,12 +209,13 @@ func NewSession(
 					return
 				}
 
-				ss.logger.Debug("send response via morpc client session")
+				sendFunc := func() error {
+					defer ss.responses.Release(msg.response)
+					return ss.stream.write(msg.sendCtx, msg.response)
+				}
 
-				// TODO: split response here
-				if err := ss.stream.write(msg.sendCtx, msg.response); err != nil {
+				if err := sendFunc(); err != nil {
 					ss.logger.Error("fail to send logtail response", zap.Error(err))
-					ss.pooler.ReleaseResponse(msg.response)
 					ss.notifier.NotifySessionError(ss, err)
 					return
 				}
@@ -289,7 +318,7 @@ func (ss *Session) AdvanceState(id TableID) {
 func (ss *Session) SendErrorResponse(
 	sendCtx context.Context, table api.TableID, code uint16, message string,
 ) error {
-	resp := ss.pooler.AcquireResponse()
+	resp := ss.responses.Acquire()
 	resp.Response = newErrorResponse(table, code, message)
 	return ss.SendResponse(sendCtx, resp)
 }
@@ -298,7 +327,7 @@ func (ss *Session) SendErrorResponse(
 func (ss *Session) SendSubscriptionResponse(
 	sendCtx context.Context, tail logtail.TableLogtail,
 ) error {
-	resp := ss.pooler.AcquireResponse()
+	resp := ss.responses.Acquire()
 	resp.Response = newSubscritpionResponse(tail)
 	return ss.SendResponse(sendCtx, resp)
 }
@@ -307,7 +336,7 @@ func (ss *Session) SendSubscriptionResponse(
 func (ss *Session) SendUnsubscriptionResponse(
 	sendCtx context.Context, table api.TableID,
 ) error {
-	resp := ss.pooler.AcquireResponse()
+	resp := ss.responses.Acquire()
 	resp.Response = newUnsubscriptionResponse(table)
 	return ss.SendResponse(sendCtx, resp)
 }
@@ -316,7 +345,7 @@ func (ss *Session) SendUnsubscriptionResponse(
 func (ss *Session) SendUpdateResponse(
 	sendCtx context.Context, from, to timestamp.Timestamp, tails ...logtail.TableLogtail,
 ) error {
-	resp := ss.pooler.AcquireResponse()
+	resp := ss.responses.Acquire()
 	resp.Response = newUpdateResponse(from, to, tails...)
 	return ss.SendResponse(sendCtx, resp)
 }
@@ -331,11 +360,11 @@ func (ss *Session) SendResponse(
 	select {
 	case <-ss.sessionCtx.Done():
 		ss.logger.Error("session context done", zap.Error(ss.sessionCtx.Err()))
-		ss.pooler.ReleaseResponse(response)
+		ss.responses.Release(response)
 		return ss.sessionCtx.Err()
 	case <-sendCtx.Done():
 		ss.logger.Error("send context done", zap.Error(sendCtx.Err()))
-		ss.pooler.ReleaseResponse(response)
+		ss.responses.Release(response)
 		return sendCtx.Err()
 	default:
 	}
@@ -343,7 +372,7 @@ func (ss *Session) SendResponse(
 	select {
 	case <-time.After(ss.poisionTime):
 		ss.logger.Error("poision morpc client session detected, close it")
-		ss.pooler.ReleaseResponse(response)
+		ss.responses.Release(response)
 		if err := ss.stream.Close(); err != nil {
 			ss.logger.Error("fail to close poision morpc client session", zap.Error(err))
 		}
