@@ -1171,6 +1171,8 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return constVal >= 0
 		case types.T_varchar:
 			return true
+		case types.T_float64, types.T_float32:
+			return true
 		default:
 			return false
 		}
@@ -1196,6 +1198,8 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		case types.T_uint32:
 			return constVal <= math.MaxUint32
 		case types.T_uint64:
+			return true
+		case types.T_float64, types.T_float32:
 			return true
 		default:
 			return false
