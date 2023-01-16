@@ -62,6 +62,7 @@ func New(addr, db string, sql string, uid string, ctx context.Context,
 		sql:  sql,
 		proc: proc,
 		stmt: stmt,
+		addr: addr,
 	}
 }
 
@@ -275,8 +276,16 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 	if err != nil {
 		return nil, err
 	}
-	if c.info.Typ == plan2.ExecTypeTP {
-		c.cnList = engine.Nodes{engine.Node{Mcpu: 1}}
+	blkNum := 0
+	for _, n := range qry.Nodes {
+		if n.NodeType == plan.Node_TABLE_SCAN {
+			if n.Stats != nil {
+				blkNum += int(n.Stats.BlockNum)
+			}
+		}
+	}
+	if blkNum < MinBlockNum {
+		c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
 	} else {
 		if len(c.cnList) == 0 {
 			c.cnList = append(c.cnList, engine.Node{Mcpu: c.NumCPU()})
@@ -289,62 +298,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 	if err != nil {
 		return nil, err
 	}
-	if c.info.Typ == plan2.ExecTypeTP {
-		return c.compileTpQuery(qry, ss)
-	}
 	return c.compileApQuery(qry, ss)
-}
-
-func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
-	rs := c.newMergeScope(ss)
-	updateScopesLastFlag([]*Scope{rs})
-	switch qry.StmtType {
-	case plan.Query_DELETE:
-		rs.Magic = Deletion
-	case plan.Query_INSERT:
-		rs.Magic = Insert
-	case plan.Query_UPDATE:
-		rs.Magic = Update
-	default:
-	}
-	switch qry.StmtType {
-	case plan.Query_DELETE:
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Deletion,
-			Arg: scp,
-		})
-	case plan.Query_INSERT:
-		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Insert,
-			Arg: arg,
-		})
-	case plan.Query_UPDATE:
-		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Update,
-			Arg: scp,
-		})
-	default:
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Output,
-			Arg: &output.Argument{
-				Data: c.u,
-				Func: c.fill,
-			},
-		})
-	}
-	return rs, nil
 }
 
 func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
