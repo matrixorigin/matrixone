@@ -132,8 +132,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 			remote := ""
 			for _, u := range s.UuidToRegIdx {
 				if u.Idx == i {
-					s := string(u.Uuid[:])
-					remote = fmt.Sprintf("(%s)", s)
+					remote = fmt.Sprintf("(%s)", u.Uuid)
 					break
 				}
 			}
@@ -195,7 +194,6 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 						chs += "unknown"
 					}
 				}
-
 				if arg.All {
 					str += fmt.Sprintf(" to all of MergeReceiver [%s].", chs)
 				} else {
@@ -210,7 +208,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 						}
 						uuids := ""
 						for _, u := range reg.Uuids {
-							uuids += fmt.Sprintf("%s, ", string(u[:]))
+							uuids += fmt.Sprintf("%s, ", u)
 						}
 						remoteChs += fmt.Sprintf("addr: %s, uuids[%s]", reg.NodeAddr, uuids)
 					}

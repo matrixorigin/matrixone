@@ -16,7 +16,7 @@ package compile
 
 import (
 	"context"
-	"strings"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -132,10 +132,13 @@ func (s *Scope) MergeRun(c *Compile) error {
 // if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
+	// TODO: add strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0]
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
-		len(c.addr) == 0 || strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
+		len(c.addr) == 0 || c.addr == s.NodeInfo.Addr {
+		fmt.Printf("Local parallel run\n")
 		return s.ParallelRun(c, s.IsRemote)
 	}
+	fmt.Printf("Remote run -> addr: %s\n", s.NodeInfo.Addr)
 
 	err := s.remoteRun(c)
 	// tell connect operator that it's over
@@ -217,6 +220,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
 	newScope := newParallelScope(c, s, ss)
+	fmt.Printf("[parallel run]: %s\n", DebugShowScopes([]*Scope{newScope}))
 	return newScope.MergeRun(c)
 }
 

@@ -27,9 +27,12 @@ import (
 var srv *Server
 var cnAddr string
 
-func NewServer() *Server {
+func NewServer(addr string) *Server {
 	if srv != nil {
 		return srv
+	}
+	if len(cnAddr) == 0 {
+		cnAddr = addr
 	}
 	srv = &Server{
 		mp:        make(map[uint64]*process.WaitRegister),

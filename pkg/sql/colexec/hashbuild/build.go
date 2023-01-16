@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -92,6 +93,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[0].Ch
 		anal.WaitStop(start)
+
+		fmt.Printf("[hashbuild] received batch\n")
 
 		if bat == nil {
 			break

@@ -130,7 +130,7 @@ func NewService(
 		opt(srv)
 	}
 
-	compile.NewServer()
+	compile.NewServer(cfg.ServiceAddress)
 
 	return srv, nil
 }

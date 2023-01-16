@@ -42,8 +42,10 @@ func Prepare(proc *process.Process, arg any) error {
 			if errStream != nil {
 				return errStream
 			}
-			fmt.Printf("stream[%d] get success.\n", i)
-			ap.ctr.streams = append(ap.ctr.streams, &WrapperStream{stream, ap.RemoteRegs[i].Uuids})
+			fmt.Printf("stream[%d] get success. proc = %p\n", i, proc)
+			ap.ctr.streams = append(ap.ctr.streams, &WrapperStream{
+				Stream: stream,
+				Uuids:  ap.RemoteRegs[i].Uuids})
 		}
 	}
 	return nil
@@ -121,18 +123,28 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 }
 
 func CloseStreams(streams []*WrapperStream, proc *process.Process) error {
+	fmt.Printf("[CloseStreams] proc = %p", proc)
+	fmt.Printf("close streams. stream len = %d\n", len(streams))
 	for i, stream := range streams {
+		if len(stream.Uuids) == 0 {
+			fmt.Printf("no uuid in stream[%d]\n", i)
+			return moerr.NewInternalErrorNoCtx("no uuid in stream[%d]", i)
+		}
 		for _, uuid := range stream.Uuids {
 			message := cnclient.AcquireMessage()
 			{
 				message.Id = streams[i].Stream.ID()
-				message.Cmd = 1
+				message.Cmd = 12345
 				message.Sid = pipeline.MessageEnd
 				message.Uuid = uuid[:]
 			}
+			fmt.Printf("uuid %s close message begin to send ...\n", uuid)
 			if err := streams[i].Stream.Send(proc.Ctx, message); err != nil {
+				fmt.Printf("uuid %s close message send failed", uuid)
 				return err
 			}
+
+			fmt.Printf("uuid %s close message send\n", uuid)
 		}
 	}
 	for i := range streams {

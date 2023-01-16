@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -888,8 +887,8 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 			fmt.Printf("s[%d] IsEnd = true, continue ...\n", i)
 			continue
 		}
-		if len(s.NodeInfo.Addr) == 0 || s.NodeInfo.Addr == currentCNAddr ||
-			len(currentCNAddr) == 0 || strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
+		// TODO: add strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0]
+		if len(s.NodeInfo.Addr) == 0 || s.NodeInfo.Addr == currentCNAddr || len(currentCNAddr) == 0 {
 			fmt.Printf("s[%d] is local\n", i)
 			// Local reg.
 			// Put them into arg.Regs
@@ -932,19 +931,21 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 		{
 			fmt.Printf("[dispatch.SendFunc()] stream send begin ...\n")
 			// TODO: handle refCountAdd of batch's hashmap and batch?
-			encodeBatch, err := bat.MarshalBinary()
+
+			encodeBatch, err := types.Encode(bat)
 			if err != nil {
 				return err
 			}
+			fmt.Printf("[dispatch.SendFunc()] encodeBatch's len = %d\n", len(encodeBatch))
 			for i, stream := range streams {
-				fmt.Printf("[dispatch.SendFunc()] stream sender[%d]. \n", i)
+				fmt.Printf("[dispatch.SendFunc()] stream sender[%d] proc = %p. \n", i, proc)
 				// seperate different uuid into different message
 				// TODO: gather them in same message and handle in receiver?
 				for _, uuid := range stream.Uuids {
 					message := cnclient.AcquireMessage()
 					{
 						message.Id = stream.Stream.ID()
-						message.Cmd = 1
+						message.Cmd = 12345
 						message.Data = encodeBatch
 						message.Uuid = uuid[:]
 					}
