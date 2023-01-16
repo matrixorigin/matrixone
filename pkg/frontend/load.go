@@ -156,6 +156,10 @@ type ThreadInfo struct {
 	startTime atomic.Value
 }
 
+type GetRm interface {
+	GetRm() Rmcache
+}
+
 func (t *ThreadInfo) SetTime(tmp time.Time) {
 	t.startTime.Store(tmp)
 }
@@ -1703,7 +1707,8 @@ func writeBatchToStorage(handler *WriteBatchHandler, proc *process.Process, forc
 		tableHandler := handler.tableHandler
 		initSes := handler.ses
 		// XXX run backgroup session using initSes.Mp, is this correct thing?
-		tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), GSysVariables)
+		ses := proc.SessionInfo.Ses.(GetRm)
+		tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), GSysVariables, ses.GetRm())
 		if e, ok := initSes.storage.(*engine.EntireEngine); ok {
 			tmpSes.storage = e
 			tmpSes.txnHandler = initSes.txnHandler
@@ -1859,7 +1864,8 @@ func writeBatchToStorage(handler *WriteBatchHandler, proc *process.Process, forc
 				// dbHandler := handler.dbHandler
 				initSes := handler.ses
 				// XXX: Using initSes.Mp
-				tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), GSysVariables)
+				ses := proc.SessionInfo.Ses.(GetRm)
+				tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), GSysVariables, ses.GetRm())
 				if e, ok := initSes.storage.(*engine.EntireEngine); ok {
 					tmpSes.storage = e
 					tmpSes.txnHandler = initSes.txnHandler

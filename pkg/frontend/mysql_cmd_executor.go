@@ -3271,6 +3271,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		TimeZone:      ses.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
 		LastInsertID:  ses.GetLastInsertID(),
+		Ses:           ses,
 	}
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
@@ -4072,6 +4073,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
 		TimeZone:      ses.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
+		Ses:           ses,
 	}
 
 	if ses.GetTenantInfo() != nil {

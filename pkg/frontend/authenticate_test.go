@@ -209,7 +209,10 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		convey.So(exists, convey.ShouldBeTrue)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = InitSysTenant(ctx)
+		// A mock rm.
+		rm := &RoutineManager{}
+
+		err = InitSysTenant(ctx, rm)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

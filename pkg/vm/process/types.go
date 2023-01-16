@@ -92,6 +92,7 @@ type SessionInfo struct {
 	StorageEngine  engine.Engine
 	QueryId        []string
 	ResultColTypes []types.Type
+	Ses            any
 }
 
 // AnalyzeInfo  analyze information for query

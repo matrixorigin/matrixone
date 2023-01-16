@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -202,6 +203,48 @@ type Session struct {
 	curResultSize float64 // MB
 
 	planCache *planCache
+
+	rm Rmcache
+}
+
+type Rmcache interface {
+	GetNextCacheId([]*plan.ColDef, context.Context, *colexec.AutoIncrParam, *batch.Batch, uint64) ([]uint64, []uint64, error)
+	DeleteCache(string)
+	RenameCache(string, string)
+}
+
+func (ses *Session) RenameCache(oldname, newname string) {
+	ses.rm.RenameCache(oldname, newname)
+}
+
+func (ses *Session) DeleteCache(name string) {
+	ses.rm.DeleteCache(name)
+}
+
+func (ses *Session) Iscached() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.rm != nil
+}
+
+func (ses *Session) GetNextCacheId(colDefs []*plan.ColDef, ctx context.Context, incrParam *colexec.AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
+	offset, step, err := ses.rm.GetNextCacheId(colDefs, ctx, incrParam, bat, tableID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return offset, step, nil
+}
+
+func (ses *Session) SetRoutineManager(rm Rmcache) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.rm = rm
+}
+
+func (ses *Session) GetRm() Rmcache {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.rm
 }
 
 const saveQueryIdCnt = 10
@@ -313,9 +356,10 @@ type BackgroundSession struct {
 }
 
 // NewBackgroundSession generates an independent background session executing the sql
-func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *BackgroundSession {
+func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables, rm Rmcache) *BackgroundSession {
 	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars, false)
 	ses.SetOutputCallback(fakeDataSetFetcher)
+	ses.SetRoutineManager(rm)
 	if stmt := motrace.StatementFromContext(ctx); stmt != nil {
 		logutil.Infof("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
 	}
@@ -528,7 +572,7 @@ func (ses *Session) InvalidatePrivilegeCache() {
 
 // GetBackgroundExec generates a background executor
 func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
-	return NewBackgroundHandler(ctx, ses.GetMemPool(), ses.GetParameterUnit())
+	return NewBackgroundHandler(ctx, ses.GetMemPool(), ses.GetParameterUnit(), ses.rm)
 }
 
 func (ses *Session) GetIsInternal() bool {
@@ -1287,7 +1331,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	pu := ses.GetParameterUnit()
 	mp := ses.GetMemPool()
 	logDebugf(sessionProfile, "check tenant %s exists", tenant)
-	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, mp, pu, sqlForCheckTenant)
+	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, mp, pu, sqlForCheckTenant, ses.rm)
 	if err != nil {
 		return nil, err
 	}
@@ -1320,7 +1364,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	logDebugf(sessionProfile, "check user of %s exists", tenant)
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
-	rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForPasswordOfUser)
+	rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForPasswordOfUser, ses.rm)
 	if err != nil {
 		return nil, err
 	}
@@ -1363,7 +1407,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		logDebugf(sessionProfile, "check default role of user %s.", tenant)
 		//step4 : check role exists or not
 		sqlForCheckRoleExists := getSqlForRoleIdOfRole(tenant.GetDefaultRole())
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForCheckRoleExists)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForCheckRoleExists, ses.rm)
 		if err != nil {
 			return nil, err
 		}
@@ -1375,7 +1419,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		logDebugf(sessionProfile, "check granted role of user %s.", tenant)
 		//step4.2 : check the role has been granted to the user or not
 		sqlForRoleOfUser := getSqlForRoleOfUser(userID, tenant.GetDefaultRole())
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForRoleOfUser)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForRoleOfUser, ses.rm)
 		if err != nil {
 			return nil, err
 		}
@@ -1393,7 +1437,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		logDebugf(sessionProfile, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sql)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sql, ses.rm)
 		if err != nil {
 			return nil, err
 		}
@@ -2337,8 +2381,8 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 // executeSQLInBackgroundSession executes the sql in an independent session and transaction.
 // It sends nothing to the client.
-func executeSQLInBackgroundSession(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, sql string) ([]ExecResult, error) {
-	bh := NewBackgroundHandler(ctx, mp, pu)
+func executeSQLInBackgroundSession(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, sql string, rm Rmcache) ([]ExecResult, error) {
+	bh := NewBackgroundHandler(ctx, mp, pu, rm)
 	defer bh.Close()
 	logutil.Debugf("background exec sql:%v", sql)
 	err := bh.Exec(ctx, sql)
@@ -2368,10 +2412,10 @@ type BackgroundHandler struct {
 	ses *BackgroundSession
 }
 
-var NewBackgroundHandler = func(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit) BackgroundExec {
+var NewBackgroundHandler = func(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, rm Rmcache) BackgroundExec {
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
-		ses: NewBackgroundSession(ctx, mp, pu, GSysVariables),
+		ses: NewBackgroundSession(ctx, mp, pu, GSysVariables, rm),
 	}
 	return bh
 }
