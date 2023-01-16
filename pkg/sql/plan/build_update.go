@@ -59,10 +59,15 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 		bindCtx.results = rewriteInfo.projectList
 
 	} else {
-		rewriteInfo.rootId, err = updateToSelect(builder, bindCtx, stmt, tblInfo, false)
+		bindCtx.groupTag = builder.genNewTag()
+		bindCtx.aggregateTag = builder.genNewTag()
+		bindCtx.projectTag = builder.genNewTag()
+
+		err = initUpdateStmt(builder, bindCtx, rewriteInfo, stmt)
 		if err != nil {
 			return nil, err
 		}
+
 	}
 
 	builder.qry.Steps = append(builder.qry.Steps, rewriteInfo.rootId)

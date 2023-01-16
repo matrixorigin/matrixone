@@ -15,10 +15,12 @@
 package plan
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -263,10 +265,10 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 		Limit:   stmt.Limit,
 		With:    stmt.With,
 	}
-	// ftCtx := tree.NewFmtCtx(dialect.MYSQL)
-	// selectAst.Format(ftCtx)
-	// sql := ftCtx.String()
-	// fmt.Print(sql)
+	ftCtx := tree.NewFmtCtx(dialect.MYSQL)
+	selectAst.Format(ftCtx)
+	sql := ftCtx.String()
+	fmt.Print(sql)
 	return builder.buildSelect(selectAst, bindCtx, false)
 }
 
@@ -405,7 +407,7 @@ func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, stmt *tree.Update) error {
 	var err error
 	subCtx := NewBindContext(builder, bindCtx)
-	info.rootId, err = updateToSelect(builder, subCtx, stmt, nil, true)
+	info.rootId, err = updateToSelect(builder, subCtx, stmt, info.tblInfo, true)
 	if err != nil {
 		return err
 	}
@@ -420,20 +422,112 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 	info.idx = int32(len(info.tblInfo.objRef))
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
 	info.derivedTableId = info.rootId
+
+	indexOfUpdateCol, err := getIndexOfUpdateCol(info.tblInfo, builder.compCtx)
+	if err != nil {
+		return err
+	}
+
 	for idx, expr := range builder.qry.Nodes[info.rootId].ProjectList {
 		// reset project with update value
 		// reset project with hidden column
-		info.projectList = append(info.projectList, &plan.Expr{
-			Typ: expr.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: tag,
-					ColPos: int32(idx),
+		if updateExpr, ok := indexOfUpdateCol[idx]; ok {
+			err := modifyPlanExprTag(updateExpr, tag)
+			if err != nil {
+				return err
+			}
+			info.projectList = append(info.projectList, updateExpr)
+		} else {
+			info.projectList = append(info.projectList, &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: tag,
+						ColPos: int32(idx),
+					},
 				},
-			},
-		})
+			})
+		}
+
 	}
 	return nil
+}
+
+// Modify the tag of the table column which used in the update expression
+func modifyPlanExprTag(updateExpr *plan.Expr, tag int32) error {
+	switch expr := updateExpr.Expr.(type) {
+	case *plan.Expr_Col:
+		expr.Col.RelPos = tag
+	case *plan.Expr_F:
+		args := expr.F.GetArgs()
+		for _, arg := range args {
+			err := modifyPlanExprTag(arg, tag)
+			if err != nil {
+				return err
+			}
+		}
+	default:
+		return nil
+	}
+	return nil
+}
+
+// Get the map of index location to update plan expression
+func getIndexOfUpdateCol(tblInfo *dmlTableInfo, ctx CompilerContext) (map[int]*plan.Expr, error) {
+	indexToPlanExpr := make(map[int]*plan.Expr)
+	pos := 0
+	for i := 0; i < len(tblInfo.tableDefs); i++ {
+		tableDef := tblInfo.tableDefs[i]
+		updateCols := tblInfo.updateKeys[i]
+
+		updatePlanCols, err := bindUpdateCol(ctx, updateCols, tableDef)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, col := range tableDef.Cols {
+			if expr, ok := updatePlanCols[col.Name]; ok {
+				indexToPlanExpr[pos] = expr
+			}
+			pos++
+		}
+	}
+	return indexToPlanExpr, nil
+}
+
+// According to the definition of the table, use the projectbinder to bind the column expression and generate plan expression
+func bindUpdateCol(ctx CompilerContext, updateCols map[string]tree.Expr, tableDef *TableDef) (map[string]*plan.Expr, error) {
+	colMap := make(map[string]*plan.Expr)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	bindContext := NewBindContext(builder, nil)
+
+	nodeID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		Stats:       nil,
+		ObjRef:      nil,
+		TableDef:    tableDef,
+		BindingTags: []int32{builder.genNewTag()},
+	}, bindContext)
+
+	err := builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
+	if err != nil {
+		return nil, err
+	}
+
+	projectionBinder := NewProjectionBinder(builder, bindContext, nil)
+	for colName, updateCol := range updateCols {
+		astExpr, err := bindContext.qualifyColumnNames(updateCol, nil, false)
+		if err != nil {
+			return nil, err
+		}
+
+		expr, err := projectionBinder.BindExpr(astExpr, 0, true)
+		if err != nil {
+			return nil, err
+		}
+		colMap[colName] = expr
+	}
+	return colMap, nil
 }
 
 func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, tableDef *TableDef, baseNodeId int32) error {
