@@ -20,6 +20,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"golang.org/x/sync/errgroup"
+	"io"
 	"math"
 	"os"
 	"reflect"
@@ -28,8 +33,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -2002,6 +2005,11 @@ func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, aa *tree.Al
 	return doAlterAccount(ctx, mce.GetSession(), aa)
 }
 
+// handleAlterDatabaseConfig alter a database's mysql_compatbility_mode
+func (mce *MysqlCmdExecutor) handleAlterDataBaseConfig(ctx context.Context, ad *tree.AlterDataBaseConfig) error {
+	return doAlterDatabaseConfig(ctx, mce.GetSession(), ad)
+}
+
 // handleCreateUser creates the user for the tenant
 func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.CreateUser) error {
 	ses := mce.GetSession()
@@ -2305,6 +2313,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		return nil, err
 	}
 	cwft.ses.p = cwft.plan
+	if ids := isResultQuery(cwft.plan); ids != nil {
+		if err = checkPrivilege(ids, requestCtx, cwft.ses); err != nil {
+			return nil, err
+		}
+	}
 	if _, ok := cwft.stmt.(*tree.Execute); ok {
 		executePlan := cwft.plan.GetDcl().GetExecute()
 		stmtName := executePlan.GetName()
@@ -3239,6 +3252,86 @@ func (ses *Session) getSqlType(sql string) {
 	}
 }
 
+func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
+	defer func() {
+		err2 := writer.Close()
+		if err == nil {
+			err = err2
+		}
+	}()
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = external.InitInfileParam(param)
+	if err != nil {
+		return
+	}
+	err = proto.sendLocalInfileRequest(param.Filepath)
+	if err != nil {
+		return
+	}
+	start := time.Now()
+	var msg interface{}
+	msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+			err = moerr.NewFileNotFound(ctx, param.Filepath)
+		}
+		proto.SetSequenceID(proto.GetSequenceId() + 1)
+		return
+	}
+
+	packet, ok := msg.(*Packet)
+	if !ok {
+		proto.SetSequenceID(proto.GetSequenceId() + 1)
+		err = moerr.NewInvalidInput(ctx, "invalid packet")
+		return
+	}
+
+	proto.SetSequenceID(uint8(packet.SequenceID + 1))
+	seq := uint8(packet.SequenceID + 1)
+	length := packet.Length
+	if length == 0 {
+		return
+	}
+	_, err = writer.Write(packet.Payload)
+	if err != nil {
+		return
+	}
+	nowStart := time.Now()
+	for {
+		logutil.Infof("last time cost %f seconds", time.Since(nowStart).Seconds())
+		nowStart = time.Now()
+		msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
+		logutil.Infof("read tcp cost %f seconds", time.Since(nowStart).Seconds())
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+				seq += 1
+				proto.SetSequenceID(seq)
+				err = nil
+			}
+			break
+		}
+		packet, ok = msg.(*Packet)
+		if !ok {
+			err = moerr.NewInvalidInput(ctx, "invalid packet")
+			seq += 1
+			proto.SetSequenceID(seq)
+			break
+		}
+		seq = uint8(packet.SequenceID + 1)
+		proto.SetSequenceID(seq)
+
+		writeStart := time.Now()
+		_, err = writer.Write(packet.Payload)
+		logutil.Infof("write pipe cost %f seconds", time.Since(writeStart).Seconds())
+		if err != nil {
+			return
+		}
+	}
+	logutil.Infof("processLocalInfile cost:%f seconds", time.Since(start).Seconds())
+	return
+}
+
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) (retErr error) {
 	beginInstant := time.Now()
@@ -3318,11 +3411,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var columns []interface{}
 	var mrs *MysqlResultSet
 	canCache := true
+	var loadLocalErrGroup *errgroup.Group
+	var loadLocalWriter *io.PipeWriter
 
 	singleStatement := len(cws) == 1
 	for i, cw := range cws {
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {
 			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL ||
+				cwft.stmt.GetQueryType() == tree.QueryTypeOth ||
 				cwft.stmt.GetQueryType() == tree.QueryTypeTCL {
 				if _, ok := cwft.stmt.(*tree.SetVar); !ok {
 					ses.cleanCache()
@@ -3534,6 +3630,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleAlterAccount(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.AlterDataBaseConfig:
+			ses.InvalidatePrivilegeCache()
+			selfHandle = true
+			if err = mce.handleAlterDataBaseConfig(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.CreateUser:
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
@@ -3608,6 +3710,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			selfHandle = true
 			if err = mce.handleShowAccounts(requestCtx, st); err != nil {
 				goto handleFailed
+			}
+		case *tree.Load:
+			if st.Local {
+				proc.LoadLocalReader, loadLocalWriter = io.Pipe()
 			}
 		}
 
@@ -3787,8 +3893,24 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			/*
 				Step 1: Start
 			*/
+
+			if st, ok := cw.GetAst().(*tree.Load); ok {
+				if st.Local {
+					loadLocalErrGroup = new(errgroup.Group)
+					loadLocalErrGroup.Go(func() error {
+						return mce.processLoadLocal(proc.Ctx, st.Param, loadLocalWriter)
+					})
+				}
+			}
+
 			if err = runner.Run(0); err != nil {
 				goto handleFailed
+			}
+
+			if loadLocalErrGroup != nil {
+				if err = loadLocalErrGroup.Wait(); err != nil {
+					goto handleFailed
+				}
 			}
 
 			logInfof(ses.GetConciseProfile(), "time of Exec.Run : %s", time.Since(runBegin).String())
@@ -3901,7 +4023,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CreateTable, *tree.DropTable,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.Load, *tree.MoDump,
-			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
+			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig,
 			*tree.CreateFunction, *tree.DropFunction,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
@@ -4307,7 +4429,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 		//show
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowDatabases,
 		*tree.ShowVariables, *tree.ShowColumns, *tree.ShowErrors, *tree.ShowIndex, *tree.ShowProcessList,
-		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowWarnings:
+		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowWarnings, *tree.ShowAccounts:
 		return true, nil
 		//others
 	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:

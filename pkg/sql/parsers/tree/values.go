@@ -79,4 +79,4 @@ func (node *ValuesStatement) Format(ctx *FmtCtx) {
 	}
 }
 func (node *ValuesStatement) GetStatementType() string { return "Values" }
-func (node *ValuesStatement) GetQueryType() string     { return QueryTypeDML }
+func (node *ValuesStatement) GetQueryType() string     { return QueryTypeDQL }

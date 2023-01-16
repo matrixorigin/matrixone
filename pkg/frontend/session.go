@@ -202,6 +202,10 @@ type Session struct {
 
 	curResultSize float64 // MB
 
+	createdTime time.Time
+
+	expiredTime time.Time
+
 	planCache *planCache
 
 	rm Rmcache
