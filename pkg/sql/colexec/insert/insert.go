@@ -79,6 +79,7 @@ func GetMetaLocBat(bats []*batch.Batch, n *Argument, proc *process.Process) (*ba
 		}
 		WriteEndBlocks(n, proc, metaLocBat)
 	}
+
 	// send it to connector operator.
 	// vitually, first it will be recieved by output,
 	// then transfer it to connector by rpc
@@ -88,15 +89,15 @@ func GetMetaLocBat(bats []*batch.Batch, n *Argument, proc *process.Process) (*ba
 
 func GenerateWriter(ap *Argument, proc *process.Process) error {
 	segId, err := colexec.Srv.GenerateSegment()
+
 	if err != nil {
 		return err
 	}
-	objName := fmt.Sprintf("%x.seg", (*segId)[:])
 	s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return err
 	}
-	ap.container.writer, err = objectio.NewObjectWriter(objName, s3)
+	ap.container.writer, err = objectio.NewObjectWriter(segId, s3)
 	ap.container.lengths = ap.container.lengths[:0]
 	if err != nil {
 		return err
@@ -109,7 +110,6 @@ func GenerateWriter(ap *Argument, proc *process.Process) error {
 	for i := range ap.UniqueIndexDef.TableExists {
 		if ap.UniqueIndexDef.TableExists[i] {
 			segId, err := colexec.Srv.GenerateSegment()
-			objName := fmt.Sprintf("%x.seg", string((*segId)[:]))
 			if err != nil {
 				return err
 			}
@@ -117,7 +117,7 @@ func GenerateWriter(ap *Argument, proc *process.Process) error {
 			if err != nil {
 				return err
 			}
-			writer, err := objectio.NewObjectWriter(objName, s3)
+			writer, err := objectio.NewObjectWriter(segId, s3)
 			if err != nil {
 				return err
 			}

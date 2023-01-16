@@ -225,17 +225,17 @@ select count(*) from t;
 drop table t;
 # 2.primary key test
 create table t(a int primary key);
-insert into t select * from generate_series(1,2000000);
-insert into t select * from generate_series(2000001,4000000);
-insert into t select * from generate_series(4000001,6000000);
-insert into t select * from generate_series(6000001,8000000);
-insert into t select * from generate_series(8000001,10000000);
+insert into t select * from generate_series(1,2000000) g;
+insert into t select * from generate_series(2000001,4000000) g;
+insert into t select * from generate_series(4000001,6000000) g;
+insert into t select * from generate_series(6000001,8000000) g;
+insert into t select * from generate_series(8000001,10000000) g;
 select count(*) from t;
 # abort,duplicate key
-insert into t select * from generate_series(1,2000000);
+insert into t select * from t;
 # transaction test
 begin;
-insert into t select * from generate_series(1,2000000);
+insert into t select * from t;
 select count(*) from t;
 commit;
 select count(*) from t;
@@ -243,38 +243,40 @@ select count(*) from t;
 insert into t select null from t;
 drop table t;
 # 3.compiste primary key test
-create table t(a int,b int,compositkey(a,b));
-insert into t select * from generate_series(1,2000000),(1,2000000);
-insert into t select * from generate_series(2000001,4000000),(2000001,4000000);
-insert into t select * from generate_series(4000001,6000000),(4000001,6000000);
-insert into t select * from generate_series(6000001,8000000),(6000001,8000000);
-insert into t select * from generate_series(8000001,10000000),(8000001,10000000);
-drop table t;
+create table t(a int,b int,primary key(a,b));
+create table temp(c int);
+insert into temp select * from generate_series(1,2000000) g;
+insert into temp select * from generate_series(2000001,4000000) g;
+insert into temp select * from generate_series(4000001,6000000) g;
+insert into temp select * from generate_series(6000001,8000000) g;
+insert into temp select * from generate_series(8000001,10000000) g;
+insert into t select c,c from temp;
 select count(*) from t;
 # abort,duplicate key
-insert into t select * from generate_series(1,2000000),(1,2000000);
+insert into t select * from t;
 # transaction test
 begin;
-insert into t select * from generate_series(1,2000000),(1,2000000);
+insert into t select * from t;
 select count(*) from t;
 commit;
 select count(*) from t;
 # not-null test
-insert into t select null from t;
+insert into t select null,null from t;
 drop table t;
+drop table temp;
 # 4.unique key test
 create table t(a int unique);
-insert into t select * from generate_series(1,2000000);
-insert into t select * from generate_series(2000001,4000000);
-insert into t select * from generate_series(4000001,6000000);
-insert into t select * from generate_series(6000001,8000000);
-insert into t select * from generate_series(8000001,10000000);
+insert into t select * from generate_series(1,2000000) g;
+insert into t select * from generate_series(2000001,4000000) g;
+insert into t select * from generate_series(4000001,6000000) g;
+insert into t select * from generate_series(6000001,8000000) g;
+insert into t select * from generate_series(8000001,10000000) g;
 select count(*) from t;
 # abort,duplicate key
-insert into t select * from generate_series(1,2000000);
+insert into t select * from t;
 # transaction test
 begin;
-insert into t select * from generate_series(1,2000000);
+insert into t select * from t;
 select count(*) from t;
 commit;
 select count(*) from t;
@@ -284,11 +286,11 @@ select count(*) from t;
 drop table t;
 # 5.auto increment test
 create table t(a int auto_increment,b int);
-insert into t(b) select * from generate_series(1,2000000);
-insert into t(b) select * from generate_series(2000001,4000000);
-insert into t(b) select * from generate_series(4000001,6000000);
-insert into t(b) select * from generate_series(6000001,8000000);
-insert into t(b) select * from generate_series(8000001,10000000);
+insert into t(b) select * from generate_series(1,2000000) g;
+insert into t(b) select * from generate_series(2000001,4000000) g;
+insert into t(b) select * from generate_series(4000001,6000000) g;
+insert into t(b) select * from generate_series(6000001,8000000) g;
+insert into t(b) select * from generate_series(8000001,10000000) g;
 select count(*) from t;
 select a from t where a > 9999990;
 drop table t;

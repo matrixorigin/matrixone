@@ -17,6 +17,7 @@ package colexec
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"math"
 	"time"
 
@@ -58,20 +59,20 @@ func (srv *Server) HandleRequest(ctx context.Context, req morpc.Message, _ uint6
 	return nil
 }
 
-func (srv *Server) GenerateSegment() (*[12]byte, error) {
+func (srv *Server) GenerateSegment() (string, error) {
 	srv.Lock()
 	defer srv.Unlock()
 	if srv.InitSegmentId {
 		if err := srv.incrementSegmentId(); err != nil {
-			return nil, err
+			return "", err
 		}
 	} else {
 		if err := srv.getNewSegmentId(); err != nil {
-			return nil, err
+			return "", err
 		}
 		srv.InitSegmentId = true
 	}
-	return &srv.CNSegmentId, nil
+	return fmt.Sprintf("%x.seg", (srv.CNSegmentId)[:]), nil
 }
 
 func (srv *Server) incrementSegmentId() error {
