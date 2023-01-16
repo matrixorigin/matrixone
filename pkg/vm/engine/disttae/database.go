@@ -78,21 +78,23 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	if v, ok := db.txn.tableMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
 		return v.(*table), nil
 	}
-	if name == catalog.MO_DATABASE {
-		id := uint64(catalog.MO_DATABASE_ID)
-		defs := catalog.MoDatabaseTableDefs
-		return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
-	}
-	if name == catalog.MO_TABLES {
-		id := uint64(catalog.MO_TABLES_ID)
-		defs := catalog.MoTablesTableDefs
-		return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
-	}
-	if name == catalog.MO_COLUMNS {
-		id := uint64(catalog.MO_COLUMNS_ID)
-		defs := catalog.MoColumnsTableDefs
-		return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+	if db.databaseName == "mo_catalog" {
+		if name == catalog.MO_DATABASE {
+			id := uint64(catalog.MO_DATABASE_ID)
+			defs := catalog.MoDatabaseTableDefs
+			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+		}
+		if name == catalog.MO_TABLES {
+			id := uint64(catalog.MO_TABLES_ID)
+			defs := catalog.MoTablesTableDefs
+			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+		}
+		if name == catalog.MO_COLUMNS {
+			id := uint64(catalog.MO_COLUMNS_ID)
+			defs := catalog.MoColumnsTableDefs
+			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
 
+		}
 	}
 	key := &cache.TableItem{
 		Name:       name,
