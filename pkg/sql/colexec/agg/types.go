@@ -71,8 +71,8 @@ type Aggregate struct {
 // Agg agg interface
 type Agg[T any] interface {
 	encoding.BinaryMarshaler
-	//encoding.BinaryUnmarshaler
-	UnmarshalBinary(data []byte, m *mpool.MPool) error
+	encoding.BinaryUnmarshaler
+	//UnmarshalBinary(data []byte, m *mpool.MPool) error
 
 	// Dup will duplicate a new agg with the same type.
 	Dup() Agg[any]
