@@ -22,9 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -258,14 +256,4 @@ func hashBuildWithBatch(t *testing.T, tc joinTestCase, bat *batch.Batch) *batch.
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
-}
-
-func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
-	idx, err := index.New(v.Typ, m)
-	require.NoError(t, err)
-
-	err = idx.InsertBatch(v)
-	require.NoError(t, err)
-
-	v.SetIndex(idx)
 }
