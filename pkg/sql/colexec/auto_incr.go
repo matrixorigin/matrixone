@@ -259,6 +259,7 @@ func getRangeExpr(colName string) *plan.Expr {
 				},
 				Args: []*plan.Expr{
 					{
+						Typ: new(plan.Type),
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								Name: AUTO_INCR_TABLE_COLNAME[1],
@@ -266,6 +267,7 @@ func getRangeExpr(colName string) *plan.Expr {
 						},
 					},
 					{
+						Typ: new(plan.Type),
 						Expr: &plan.Expr_C{
 							C: &plan.Const{
 								Value: &plan.Const_Sval{
