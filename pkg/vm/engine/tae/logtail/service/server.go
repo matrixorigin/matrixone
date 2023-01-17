@@ -477,6 +477,10 @@ func (s *LogtailServer) collector(ctx context.Context) {
 						risk += 1
 						return
 					}
+					// skip empty logtail
+					if tail.CkpLocation == "" && len(tail.Commands) == 0 {
+						continue
+					}
 					wraps = append(wraps, wrapLogtail{id: t.id, tail: tail})
 				}
 
