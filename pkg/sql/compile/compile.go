@@ -311,79 +311,6 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 	return c.compileApQuery(qry, ss)
 }
 
-func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
-	var rs *Scope
-	switch qry.StmtType {
-	case plan.Query_DELETE:
-		rs = c.newMergeScope(ss)
-		updateScopesLastFlag([]*Scope{rs})
-		rs.Magic = Deletion
-		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Deletion,
-			Arg: scp,
-		})
-	case plan.Query_INSERT:
-		insertNode := qry.Nodes[qry.Steps[0]]
-		arg, err := constructInsert(insertNode, c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
-		if nodeStats.GetCost() > float64(DistributedThreshold) && !arg.HasConstraints() {
-			// use distributed-insert
-			arg.IsRemote = true
-			insertNode.NotCacheable = true
-			rs = c.newInsertMergeScope(arg, ss)
-			rs.Magic = MergeInsert
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op: vm.MergeBlock,
-				Arg: &mergeblock.Argument{
-					Tbl:         arg.TargetTable,
-					Unique_tbls: arg.UniqueIndexTables,
-				},
-			})
-		} else {
-			rs = c.newMergeScope(ss)
-			rs.Magic = Insert
-			c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op:  vm.Insert,
-				Arg: arg,
-			})
-		}
-	case plan.Query_UPDATE:
-		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		rs = c.newMergeScope(ss)
-		updateScopesLastFlag([]*Scope{rs})
-		rs.Magic = Update
-		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Update,
-			Arg: scp,
-		})
-	default:
-		rs = c.newMergeScope(ss)
-		updateScopesLastFlag([]*Scope{rs})
-		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Output,
-			Arg: &output.Argument{
-				Data: c.u,
-				Func: c.fill,
-			},
-		})
-	}
-	return rs, nil
-}
-
 func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	var rs *Scope
 	switch qry.StmtType {
@@ -407,7 +334,8 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			return nil, err
 		}
 		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
-		if nodeStats.GetCost() > float64(DistributedThreshold) {
+		// fmt.Println("nodeStats: cost ", nodeStats.GetCost(), "blockNumber", nodeStats.GetBlockNum())
+		if nodeStats.GetCost() > float64(DistributedThreshold) || qry.LoadTag {
 			// use distributed-insert
 			arg.IsRemote = true
 			rs = c.newInsertMergeScope(arg, ss)
