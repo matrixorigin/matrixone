@@ -648,10 +648,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", str)
 		}
 		if colMap[str].Typ.Id == int32(types.T_blob) {
-			return moerr.NewNotSupported(ctx.GetContext(), "blob type in index")
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", str))
 		}
 		if colMap[str].Typ.Id == int32(types.T_text) {
-			return moerr.NewNotSupported(ctx.GetContext(), "text type in index")
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", str))
 		}
 		if colMap[str].Typ.Id == int32(types.T_json) {
 			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
@@ -730,6 +730,15 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			name := keyPart.ColName.Parts[0]
 			if _, ok := colMap[name]; !ok {
 				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", name)
+			}
+			if colMap[name].Typ.Id == int32(types.T_blob) {
+				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", name))
+			}
+			if colMap[name].Typ.Id == int32(types.T_text) {
+				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", name))
+			}
+			if colMap[name].Typ.Id == int32(types.T_json) {
+				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
 			}
 			field.Parts = append(field.Parts, name)
 		}
@@ -845,6 +854,15 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			name := keyPart.ColName.Parts[0]
 			if _, ok := colMap[name]; !ok {
 				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", name)
+			}
+			if colMap[name].Typ.Id == int32(types.T_blob) {
+				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", name))
+			}
+			if colMap[name].Typ.Id == int32(types.T_text) {
+				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", name))
+			}
+			if colMap[name].Typ.Id == int32(types.T_json) {
+				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
 			}
 			field.Parts = append(field.Parts, name)
 		}
