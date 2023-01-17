@@ -168,12 +168,14 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if err != nil {
 			return err
 		}
+		s.NodeInfo.Data = nil
 	case s.NodeInfo.Rel != nil:
 		var err error
 
 		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
 		}
+		s.NodeInfo.Data = nil
 	default:
 		var err error
 		var db engine.Database
@@ -202,6 +204,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if rds, err = rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
 		}
+		s.NodeInfo.Data = nil
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
