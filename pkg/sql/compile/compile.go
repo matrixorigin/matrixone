@@ -333,15 +333,11 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
-
-		// nodeStats := qry.Nodes[insertNode.Children[0]].Stats
-		// if nodeStats.Outcnt > float64(DistributedThreshold) && !arg.HasConstraints() {
-
-		// nodeStats is not correct for now. We assume all write s3 first.
-		// stats is held on by ntao.
-		if !arg.HasConstraints() {
+		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
+		if nodeStats.GetCost() > float64(DistributedThreshold) && !arg.HasConstraints() {
 			// use distributed-insert
 			arg.IsRmote = true
+			insertNode.NotCacheable = true
 			rs = c.newInsertMergeScope(arg, ss)
 			rs.Magic = MergeInsert
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
@@ -410,13 +406,8 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
-
-		// nodeStats := qry.Nodes[insertNode.Children[0]].Stats
-		// if nodeStats.Outcnt > float64(DistributedThreshold) && !arg.HasConstraints() {
-
-		// nodeStats is not correct for now. We assume all write s3 first.
-		// stats is held on by ntao.
-		if !arg.HasConstraints() {
+		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
+		if nodeStats.GetCost() > float64(DistributedThreshold) {
 			// use distributed-insert
 			arg.IsRmote = true
 			rs = c.newInsertMergeScope(arg, ss)
