@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
 )
 
 type internalVector interface {
@@ -43,17 +42,19 @@ type vector[T any] struct {
 	roStorage []byte
 }
 
-func NewVector[T any](typ types.Type, nullable bool, opts ...Options) *vector[T] {
-	vec := &vector[T]{
-		stlvec: containers.NewVector[T](opts...),
-		typ:    typ,
-	}
-	if nullable {
-		vec.impl = newNullableVecImpl(vec)
-	} else {
-		vec.impl = newVecImpl(vec)
-	}
-	return vec
+func NewVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTaeVector[T] {
+	//vec := &vector[T]{
+	//	stlvec: containers.NewVector[T](opts...),
+	//	typ:    typ,
+	//}
+	//if nullable {
+	//	vec.impl = newNullableVecImpl(vec)
+	//} else {
+	//	vec.impl = newVecImpl(vec)
+	//}
+	//return vec
+
+	return NewTaeVector[T](typ, nullable, opts...)
 }
 
 // func NewEmptyVector[T any](typ types.Type, opts ...*Options) *vector[T] {
@@ -141,23 +142,23 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 		opts.Allocator = allocator[0]
 	}
 	cloned := NewVector[T](vec.typ, vec.Nullable(), opts)
-	if vec.nulls != nil {
-		if offset == 0 || length == vec.Length() {
-			cloned.nulls = vec.nulls.Clone()
-			if length < vec.Length() {
-				cloned.nulls.RemoveRange(uint64(length), uint64(vec.Length()))
-			}
-		} else {
-			cloned.nulls = roaring64.New()
-			for i := offset; i < offset+length; i++ {
-				if vec.nulls.ContainsInt(i) {
-					cloned.nulls.AddInt(i - offset)
-				}
-			}
-		}
-	}
-	cloned.stlvec.Close()
-	cloned.stlvec = vec.stlvec.Clone(offset, length, allocator...)
+	//if vec.nulls != nil {
+	//	if offset == 0 || length == vec.Length() {
+	//		cloned.nulls = vec.nulls.Clone()
+	//		if length < vec.Length() {
+	//			cloned.nulls.RemoveRange(uint64(length), uint64(vec.Length()))
+	//		}
+	//	} else {
+	//		cloned.nulls = roaring64.New()
+	//		for i := offset; i < offset+length; i++ {
+	//			if vec.nulls.ContainsInt(i) {
+	//				cloned.nulls.AddInt(i - offset)
+	//			}
+	//		}
+	//	}
+	//}
+	//cloned.stlvec.Close()
+	//cloned.stlvec = vec.stlvec.Clone(offset, length, allocator...)
 	return cloned
 }
 func (vec *vector[T]) fastSlice() []T {
