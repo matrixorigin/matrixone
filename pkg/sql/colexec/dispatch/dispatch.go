@@ -84,6 +84,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		atomic.AddInt64(&bat.Cnt, refCountAdd)
 		if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
 			jm.IncRef(refCountAdd)
+			jm.SetDupCount(int64(len(ap.Regs)))
 		}
 
 		for _, reg := range ap.Regs {

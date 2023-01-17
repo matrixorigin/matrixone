@@ -217,3 +217,9 @@ SELECT COUNT(*) FROM (SELECT * FROM tables LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM tables LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM tables LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM tables LIMIT 10) AS temp;
+
+-- tables in mo_catalog
+USE mo_catalog;
+SHOW CREATE TABLE mo_columns;
+SHOW CREATE TABLE mo_database;
+SHOW CREATE TABLE mo_tables;
